@@ -1963,7 +1963,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadrs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bevy",
  "cadrs_app",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bevy",
  "cadrs_core",
@@ -1997,7 +1997,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadrs_drawing",
  "cadrs_fea",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_drawing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadrs_kernel",
  "cadrs_sketch",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_fea"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "faer",
  "rayon",
@@ -2042,7 +2042,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_harness"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bevy",
  "cadrs_ui",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_idf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "proptest",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_kernel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam 0.24.2",
  "nalgebra",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_onshape"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "cadrs_core",
@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_pcb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadrs_core",
  "cadrs_idf",
@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "image",
  "rayon",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_sketch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cadrs_kernel",
  "earcutr",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bevy",
  "icon-rs",
