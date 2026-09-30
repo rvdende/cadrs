@@ -1,0 +1,110 @@
+// P3G.2 (external-references.md ER4.1–ER4.8; lesson-update-all-references.png): Update all
+// references through a chain A → B → C. A "Block source" (Block, V1); B "Block sub", whose
+// assembly Sub holds A@V1 (version V1); C "Block consumer", whose Assembly 1 holds Sub@V1
+// (`linked-block chain`).
+// 01 C's Assembly 1: "Sub <1>" with the plain version icon; its tooltip names Block sub › Sub
+//    (V1).
+// 02 (ER4.1, ER4.2) A edited (depth 40) and V2 made: B has no newer version, but the block inside
+//    it has, so C's row shows the transitive icon (a blue ring with an arrow) and the tab its
+//    badge; the tooltip "A reference inside it has a newer version".
+// 03 (ER4.3) the toolbar's Update all references button.
+// 04 (ER4.4, ER4.8) the Reference manager: "Newer versions available for 1 document", "Block
+//    sub" "V1 ⇒ new version", and the warning that a new version of Block sub will be made and
+//    that undo doesn't remove versions.
+// 05 (ER4.5) Update all: B's workspace updated to A@V2 and its auto version V2 made; C points at
+//    B@V2: the block is 40 high; the toast "Updated 1 reference", show more details.
+// 06 (ER4.6) the details: "Created V2 of Block sub (auto version)", "Block sub: V1 ⇒ new version".
+// 07 mass properties of the whole assembly: 50 · 30 · 40 = 60 000 mm³.
+// 08 (ER4.8) Ctrl+Z: C back at B@V1 (25 high, the transitive icon again).
+// 09 (ER4.7, ER4.8) Insert → Other documents → Block sub → Version graph: V2 is still there, an
+//    auto version (open square, "Auto version" in the legend and its subtitle).
+// 10 (ER4.7) Block sub opened (`linked-block open-sub`), its History panel: V2 with the auto
+//    version marker.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        Custom("linked-block chain"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        Hover(ui("instance-row-1-linked")),
+        Wait(40),
+        Screenshot("01-chain-plain-icon"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Custom("linked-block edit"),
+        Wait(40),
+        Hover(ui("instance-row-1-linked")),
+        Wait(40),
+        Screenshot("02-transitive-indicator"),
+        Hover(ui("update-all-references")),
+        Wait(40),
+        Screenshot("03-update-all-button"),
+        Click(ui("update-all-references")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-reference-manager-new-version"),
+        Click(ui("refman-update")),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-updated-through-the-chain"),
+        Click(ui("refman-details")),
+        WaitFor("update-details"),
+        Wait(10),
+        Screenshot("06-details-auto-version"),
+        Click(ui("update-details-close")),
+        Wait(5),
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-mass-60000"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        Key("Ctrl+Z"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-undo-keeps-the-version"),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-source-1")),
+        WaitFor("insert-other-loc-mine"),
+        Wait(5),
+        Click(ui("insert-other-loc-mine")),
+        WaitFor("insert-other-doc-block-sub"),
+        Wait(5),
+        Click(ui("insert-other-doc-block-sub")),
+        WaitFor("insert-other-header"),
+        Wait(10),
+        Click(ui("insert-other-graph")),
+        WaitFor("insert-graph"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-auto-version-in-graph"),
+        Click(ui("insert-dialog-cancel")),
+        Wait(10),
+        Custom("linked-block open-sub"),
+        Wait(60),
+        Click(ui("rail-history")),
+        WaitFor("history-panel"),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-history-auto-version"),
+    ],
+)

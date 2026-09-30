@@ -1,0 +1,50 @@
+// T1: tools cadrs does not have yet are disabled, not silent no-ops
+// (intro-to-sketching-gaps.md). In the Part Studio toolbar the tools not there yet (Draft,
+// hovered here; Fillet moved on to working in P3.6) are greyed; a disabled tool still shows its
+// tooltip. In the sketch toolbar, Intersection, Insert image, Pattern and Insert DXF are
+// greyed out, while Offset and Mirror (and, since T3, Polygon, Point and Fillet; since T4,
+// Trim; since T5, Use and Text) are enabled. Final re-audit: the Spline button draws Bézier
+// curves (its ▾ keeps Onshape's fit-point Spline, disabled), Shift+U is the Curvature tool and
+// Constraints ▾ has every row enabled (Curvature joins Bézier curves); every tool with a key
+// is there now.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Hover(ui("draft")),
+        Wait(40),
+        Screenshot("01-part-studio-disabled-tool-tooltip"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("N"),
+        Wait(40),
+        Hover(ui("sketch-spline")),
+        Wait(40),
+        Screenshot("02-sketch-spline-bezier-tooltip"),
+        Hover(ui("sketch-pattern")),
+        Wait(40),
+        Screenshot("03-sketch-pattern-disabled-tooltip"),
+        Hover(ui("sketch-offset")),
+        Wait(40),
+        Screenshot("04-offset-enabled-tooltip"),
+        MoveWorld(20, 20),
+        Wait(2),
+        Key("Shift+U"),
+        Wait(2),
+        ClickWorld(20, 20),
+        Wait(3),
+        Screenshot("05-shift-u-curvature-tool"),
+        Click(ui("sketch-constraints-caret")),
+        WaitFor("sketch-constraint-symmetric"),
+        Wait(3),
+        Hover(ui("sketch-constraint-curvature")),
+        Wait(3),
+        Screenshot("06-constraints-menu-curvature-enabled"),
+        Key("Escape"),
+        Wait(2),
+    ],
+)

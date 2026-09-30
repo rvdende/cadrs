@@ -1,0 +1,6 @@
+[env]
+# Link libstdc++ statically into Windows (MinGW) builds, so C++ dependencies such as OCCT
+# (cadrs_kernel feature "occt") don't need libstdc++-6.dll next to the exe.
+CXXSTDLIB_x86_64_pc_windows_gnu = "static:-bundle=stdc++"
+# OCCT's CMakeLists declares cmake_minimum_required < 3.5, which CMake 4 rejects without this.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

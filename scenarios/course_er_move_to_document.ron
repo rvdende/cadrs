@@ -1,0 +1,189 @@
+// P3G.3 (external-references.md ER7.1–ER7.6, ER8.2–ER8.7, DV4.1; lesson-move-to-document.png,
+// ex2-step2.png–ex2-step7.png): Move to document on ER Ex2's stand-in "Exercise: Move to
+// Document" (`move-doc setup`: Hexapod, Pneumatic Piston, Piston Assembly, Topplate, Baseplate;
+// cadrs_core::samples::piston).
+// 01 the Hexapod: Baseplate <1>, Topplate <1>, Piston Assembly <1>–<6>; five tabs.
+// 02 (ER7.1, ER8.2) right-click the Piston Assembly tab → "Move to document…" hovered.
+// 03 (ER7.2, ER8.3) the dialog: New document | Other documents, "Document name" typed "Pneumatic
+//    Piston", "2 referenced tabs will be moved", Show details; "Moving 2 tabs to Pneumatic
+//    Piston", Move, Cancel.
+// 04 (ER7.3) Show details: Pneumatic Piston (referenced, ticked) and Piston Assembly (picked).
+// 05 (ER7.4) Move hovered.
+// 06 (ER7.5, ER8.4) moved: the Hexapod's six piston rows show the version icon; only Hexapod,
+//    Topplate and Baseplate are left; the toast "Moved 2 tabs to Pneumatic Piston. This
+//    document now references its V1." with "Open Pneumatic Piston".
+// 07 (DV4.1) the tooltip of Piston Assembly <1>'s icon: "Linked document: Pneumatic Piston ›
+//    Piston Assembly (V1)".
+// 08 (DV4.1) mass properties of the whole Hexapod: 589 534.041 mm³ (unchanged), centroid
+//    (0, 0, 50.348).
+// 09 Ctrl+Z: the two tabs are back here and the pistons at the workspace (the new document and
+//    its version stay).
+// 10 Ctrl+Y: moved again.
+// 11 (ER8.5) the documents page, Created by me, sorted by name (the two documents share a
+//    modified time, and a new document's id is random): "Pneumatic Piston" is listed.
+// 12 (ER8.6) Pneumatic Piston opened: the tabs Pneumatic Piston and Piston Assembly.
+// 13 (ER8.7) Piston Assembly, all instances → mass properties: 13 956.271 mm³, centroid
+//    (0, 0, 32.263).
+// 14 its History panel: V1, an auto version "Created by Move to document" (the tooltip).
+// 15 (ER7.6) the exercise document set up again, V1 of it made and the six pistons pointed at it
+//    (`move-doc version-ref`, as Change to version… does): the version icons.
+// 16 Piston Assembly and Pneumatic Piston moved to "Piston (moved)": the six rows keep V1 of this
+//    document; their icons are blue (their tab moved).
+// 17 (ER7.6) a piston's icon clicked: the Reference manager's row "Piston Assembly moved to
+//    Piston (moved)", "V1 ⇒ Piston (moved) V1", **Update to the new document** hovered.
+// 18 updated: the plain icons, the rows link to Piston (moved) V1; the toast.
+// 19 mass properties again: 589 534.041 mm³.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("move-doc setup"),
+        Wait(90),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-hexapod"),
+        RightClick(ui("tab-piston-assembly")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Hover(ui("tab-move")),
+        Wait(20),
+        Screenshot("02-tab-menu-move"),
+        Click(ui("tab-move")),
+        WaitFor("move-to-document-dialog"),
+        Wait(10),
+        Key("Ctrl+A"),
+        Type("Pneumatic Piston"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-move-dialog"),
+        Click(ui("move-details")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-show-details"),
+        Hover(ui("move-confirm")),
+        Wait(20),
+        Screenshot("05-move-hovered"),
+        Click(ui("move-confirm")),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-moved"),
+        Hover(ui("instance-row-3-linked")),
+        Wait(40),
+        Screenshot("07-link-tooltip"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "589534.041"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-hexapod-mass"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(5),
+        Key("Ctrl+Z"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-undo-tabs-back"),
+        Key("Ctrl+Y"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-redo-moved-again"),
+        Click(ui("back-to-documents")),
+        WaitFor("landing"),
+        Wait(20),
+        Click(ui("filter-created")),
+        Wait(30),
+        // Sorted by name: documents made in the same minute would otherwise be ordered by
+        // their (random) ids.
+        Click(ui("col-name")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-created-by-me"),
+        Custom("move-doc open Pneumatic Piston"),
+        WaitFor("document-shell"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("12-new-document"),
+        Click(ui("tab-piston-assembly")),
+        Wait(40),
+        Key("F"),
+        Wait(30),
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "13956.271"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("13-piston-mass"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(5),
+        Click(ui("rail-history")),
+        WaitFor("history-panel"),
+        Wait(20),
+        Hover(ui("history-version-1")),
+        Wait(40),
+        Screenshot("14-history-auto-v1"),
+        Click(ui("rail-history")),
+        Wait(10),
+        Custom("move-doc setup"),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        Custom("move-doc version-ref"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("15-pistons-at-v1"),
+        RightClick(ui("tab-piston-assembly")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Click(ui("tab-move")),
+        WaitFor("move-to-document-dialog"),
+        Wait(10),
+        Key("Ctrl+A"),
+        Type("Piston (moved)"),
+        Wait(5),
+        Click(ui("move-confirm")),
+        Wait(90),
+        MoveTo(1420, 780),
+        Wait(40),
+        Screenshot("16-moved-keeps-v1"),
+        Click(ui("instance-row-3-linked")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        Hover(ui("refman-new-document-1")),
+        Wait(20),
+        Screenshot("17-update-to-new-document"),
+        Click(ui("refman-new-document-1")),
+        Wait(90),
+        MoveTo(1420, 780),
+        Wait(40),
+        Screenshot("18-updated-to-new-document"),
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "589534.041"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("19-hexapod-mass-after"),
+    ],
+)

@@ -1,0 +1,89 @@
+// P3F.2 (`essential-tips.md` T8.1, T8.2, X5): importing a STEP assembly, with the choice of how
+// it comes in. The file is `target/imports/bracket_pair.step`, written by
+// `Custom("step-fixture …")` (`cadrs_core::samples::bracket_pair`): two brackets facing each
+// other 200 mm apart and a Ø24 shaft through their uprights; 2 parts, 3 instances, in an
+// assembly "Bracket pair".
+// 01 the documents page: Create ▾ open, Import files… hovered.
+// 02 the file picker (STEP and IGES files), in target/imports, bracket_pair.step picked.
+// 03 the Import dialog: "STEP file: an assembly of 2 parts with 3 instances", the parts
+//    (Bracket, Shaft), Import as: Keep assembly structure chosen, into a new document.
+// 04 Import: the new document "bracket_pair" opens on its Assembly tab "Bracket pair": three
+//    instances where the file puts them (Bracket <1>, Bracket <2>, Shaft <1>), the first fixed.
+// 05 its Part Studio "bracket_pair": the two parts once each, from the Import 1 feature (the
+//    file-import icon), each where its first occurrence is (P3F.2 judge: the shaft through the
+//    first bracket, not at the origin on top of it).
+// 06 + ▸ Import… in the document, the same file: the dialog now says "into new tabs of this
+//    document"; Part Studio (flatten) chosen.
+// 07 Import: a new Part Studio "bracket_pair (2)" with three parts where the instances were
+//    (Bracket <1>, Bracket <2>, Shaft), one undo step.
+// 08 Undo removes the flattened tab again.
+Scenario(
+    start: Some("landing"),
+    steps: [
+        Wait(10),
+        Custom("step-fixture target/imports/bracket_pair.step"),
+        Wait(5),
+        Click(ui("create")),
+        WaitFor("import-files"),
+        Hover(ui("import-files")),
+        Wait(5),
+        Screenshot("01-create-import-files"),
+        Click(ui("import-files")),
+        WaitFor("import-picker"),
+        Wait(3),
+        Click(ui("import-picker-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("target/imports"),
+        Key("Enter"),
+        WaitFor("import-picker-row-bracket_pair.step"),
+        Click(ui("import-picker-row-bracket_pair.step")),
+        Wait(5),
+        Screenshot("02-file-picker"),
+        Click(ui("import-picker-open")),
+        WaitFor("import-dialog"),
+        Wait(10),
+        Screenshot("03-import-dialog-keep-assembly"),
+        Click(ui("import-ok")),
+        WaitFor("document-shell"),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        Screenshot("04-assembly-instances"),
+        // The Part Studio "bracket_pair" keeps the plain node name; the Assembly "Bracket
+        // pair" (the same slug) is `tab-bracket-pair-assembly` (P3F.5 judge).
+        Click(ui("tab-bracket-pair")),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        Screenshot("05-part-studio-parts"),
+        Click(ui("insert-tab")),
+        WaitFor("import-files"),
+        Click(ui("import-files")),
+        WaitFor("import-picker"),
+        Wait(3),
+        Click(ui("import-picker-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("target/imports"),
+        Key("Enter"),
+        WaitFor("import-picker-row-bracket_pair.step"),
+        Click(ui("import-picker-row-bracket_pair.step")),
+        Wait(3),
+        Click(ui("import-picker-open")),
+        WaitFor("import-dialog"),
+        Wait(5),
+        Click(ui("import-as-studio")),
+        Wait(5),
+        Screenshot("06-import-here-flatten"),
+        Click(ui("import-ok")),
+        WaitFor("import-toast"),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        Screenshot("07-flattened-studio"),
+        Key("Ctrl+Z"),
+        Wait(30),
+        Screenshot("08-undo-removes-it"),
+    ],
+)

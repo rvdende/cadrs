@@ -1,0 +1,58 @@
+// P3H.5 (PCB9.7–9.9): Export ECAD files, IDF 2.0 and 3.0, on the Board Exercise's board
+// (`fixtures/phone_case_standin.cadrs` with PCB6 steps 2–8 done by `phone-case-board`, synced
+// into a PCB Studio: 66 × 136 R8 with two keep-outs). Compare
+// `ex1-step17-export-ecad-dialog.png` and `ex1-step18-exported-emn.png`.
+// 01 the Export ECAD files dialog (IDF 3.0 chosen); 02 IDF 2.0 chosen; 03 exported: the toast
+//    with the zip's path ("Cell phone.zip" in the exports folder) and Open .emn; 04 the IDF 2.0
+//    .emn: BOARD_FILE 2.0, the outline, no keep-outs; 05 IDF 3.0 again: "Cell phone (2).zip";
+// 06 its .emn: BOARD_FILE 3.0, the outline and two .PLACE_KEEPOUT sections.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(10),
+        Custom("fixture phone_case_standin"),
+        Wait(30),
+        Custom("phone-case-board"),
+        Wait(40),
+        Click(ui("tab-cell-phone")),
+        Wait(20),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Wait(20),
+        Click(ui("pcb-sync")),
+        WaitFor("pcb-sync-dialog"),
+        Wait(5),
+        Click(ui("pcb-sync-ok")),
+        WaitFor("pcb-sync-toast"),
+        Wait(40),
+        Click(ui("pcb-export")),
+        WaitFor("pcb-export-dialog"),
+        Wait(10),
+        Screenshot("01-export-dialog-idf3"),
+        Click(ui("pcb-export-idf2")),
+        Wait(5),
+        Screenshot("02-idf2-chosen"),
+        Click(ui("pcb-export-ok")),
+        WaitFor("pcb-export-toast"),
+        Wait(10),
+        Screenshot("03-exported-idf2"),
+        Click(ui("pcb-export-open-emn")),
+        WaitFor("pcb-emn-viewer"),
+        Wait(10),
+        Screenshot("04-idf2-emn-no-keepouts"),
+        Click(ui("pcb-emn-close")),
+        Wait(10),
+        Click(ui("pcb-export")),
+        WaitFor("pcb-export-dialog"),
+        Wait(5),
+        Click(ui("pcb-export-ok")),
+        WaitFor("pcb-export-toast"),
+        Wait(10),
+        Screenshot("05-exported-idf3-second-name"),
+        Click(ui("pcb-export-open-emn")),
+        WaitFor("pcb-emn-viewer"),
+        Wait(10),
+        Screenshot("06-idf3-emn-keepouts"),
+    ],
+)

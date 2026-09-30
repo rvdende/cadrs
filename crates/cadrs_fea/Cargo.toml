@@ -1,0 +1,12 @@
+[package]
+name = "cadrs_fea"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Linear static finite-element analysis for cadrs: tetrahedral meshing, quadratic tetrahedra, a sparse Cholesky solve, displacement and von Mises stress (no Bevy)."
+
+[dependencies]
+faer.workspace = true
+robust.workspace = true
+rayon.workspace = true

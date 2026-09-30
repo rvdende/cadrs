@@ -1,0 +1,11 @@
+[package]
+name = "cadrs_render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Photorealistic rendering for cadrs (P3F.6): a small CPU path tracer over the tessellation, with procedural studio and sky environments, a shadow-catching ground and a denoiser (no Bevy)."
+
+[dependencies]
+rayon.workspace = true
+image.workspace = true

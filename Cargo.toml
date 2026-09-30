@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/cadrs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rvdende/cadrs"
+
+[workspace.dependencies]
+bevy = { version = "0.19.1", features = ["bevy_dev_tools"] }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }
+slotmap = { version = "1", features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+resvg = "0.45"
+icon-rs = "0.3.9"
+directories = "6"
+earcutr = "0.4"
+proptest = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+ttf-parser = "0.25"
+glam = "0.24"
+tiny-skia = "0.11"
+flate2 = "1"
+# P3F.5 (simulation): sparse Cholesky (MIT), exact geometric predicates (MIT/Apache-2.0),
+# data parallelism (MIT/Apache-2.0).
+faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg", "rayon"] }
+robust = "1.2"
+rayon = "1"
+serde_json = "1"
+base64 = "0.22"
+opencascade = { git = "https://github.com/rvdende/opencascade-rs", branch = "main" }
+
+cadrs_core = { path = "crates/cadrs_core" }
+cadrs_sketch = { path = "crates/cadrs_sketch" }
+cadrs_ui = { path = "crates/cadrs_ui" }
+cadrs_app = { path = "crates/cadrs_app" }
+cadrs_harness = { path = "crates/cadrs_harness" }
+cadrs_kernel = { path = "crates/cadrs_kernel" }
+cadrs_drawing = { path = "crates/cadrs_drawing" }
+cadrs_idf = { path = "crates/cadrs_idf" }
+cadrs_pcb = { path = "crates/cadrs_pcb" }
+cadrs_fea = { path = "crates/cadrs_fea" }
+cadrs_render = { path = "crates/cadrs_render" }
+cadrs_onshape = { path = "crates/cadrs_onshape" }
+
+# Small optimization for our own code, full optimization for dependencies (Bevy is slow in pure debug).
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# The FEA solver's element loops are too slow at opt-level 1 (P3F.5).
+[profile.dev.package.cadrs_fea]
+opt-level = 3
+# The path tracer too (P3F.6).
+[profile.dev.package.cadrs_render]
+opt-level = 3

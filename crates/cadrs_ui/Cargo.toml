@@ -1,0 +1,13 @@
+[package]
+name = "cadrs_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true
+
+[build-dependencies]
+resvg.workspace = true
+icon-rs.workspace = true

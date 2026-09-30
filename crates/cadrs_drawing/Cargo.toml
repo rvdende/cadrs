@@ -1,0 +1,22 @@
+[package]
+name = "cadrs_drawing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The drawing model (P3C): sheets, templates, title blocks, drawing properties, views. No Bevy.
+# cadrs_kernel is used for its plain data types only (view frames and projections), without a backend.
+[dependencies]
+cadrs_sketch.workspace = true
+cadrs_kernel.workspace = true
+nalgebra.workspace = true
+ttf-parser.workspace = true
+serde.workspace = true
+uuid.workspace = true
+tiny-skia.workspace = true
+flate2.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+ron.workspace = true

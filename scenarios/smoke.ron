@@ -1,0 +1,17 @@
+// M0 gate: headless, click a UI button that changes state; the last screenshot shows the 3D
+// viewport (default planes) and bevy_ui (document shell) together.
+Scenario(
+    start: Some("landing"),
+    steps: [
+        Screenshot("01-landing"),
+        Click(ui("create")),
+        WaitFor("new-document"),
+        Screenshot("02-create-menu"),
+        Click(ui("new-document")),
+        WaitFor("new-document-create"),
+        Click(ui("new-document-create")),
+        WaitFor("document-shell"),
+        Wait(30),
+        Screenshot("03-document"),
+    ],
+)

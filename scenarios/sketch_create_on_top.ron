@@ -1,0 +1,34 @@
+// M3: create a sketch on the Top plane (compare reference/onshape/screens/07, 08, 09 and 20).
+// Sketch opens the dialog with the plane field waiting, the "Select a sketch plane" toast, the
+// greyed-out sketch toolbar and a red "Sketch 1" in the feature list. Hovering the Top plane
+// highlights it; clicking it fills the field without rotating the view. N turns the view normal
+// to Top; ✓ accepts and brings the part-studio toolbar back.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-sketch-dialog-select-plane"),
+        MoveTo(560, 575),
+        Wait(3),
+        Screenshot("02-hover-top-plane"),
+        ClickAt(560, 575),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-top-plane-selected-no-rotation"),
+        Key("N"),
+        Wait(30),
+        Screenshot("04-normal-to-top"),
+        Click(ui("sketch-dialog-accept")),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-sketch-accepted"),
+    ],
+)

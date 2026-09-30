@@ -1,0 +1,72 @@
+// P3B.9 / X15 Replace instances on the flange stand-in with two more Part Studios
+// (`fixtures/flange_replace.cadrs`: Flange <1> fixed, Screw <1> Fastened in the centre hole; a
+// "Long Screw" with the same Ø0.25 in rim under a Ø0.4 in head and a 1.5 in shank; a plain Ø0.3 in
+// "Dowel").
+// 01 The Flange Assembly: Flange <1>, Screw <1>, Fastened 1.
+// 02 Screw <1>'s menu: Replace instances…
+// 03 The Replace instances dialog: Screw <1> to replace; every part of the document to choose from,
+//    with thumbnails.
+// 04 Long Screw chosen: "Mates kept: 1" (its rim under the head matches the screw's).
+// 05 ✓: Long Screw <1> where the screw was, its longer shank under the flange; Fastened 1 kept
+//    (its connector is now on the Long Screw's rim).
+// 06 Replace again with the Dowel: "Mates kept: 0 · removed (no matching geometry): Fastened 1".
+// 07 ✓: Dowel <1>; Fastened 1 removed, as the toast says.
+// 08 Undo, undo: the screw is back with Fastened 1.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture flange_replace"),
+        Wait(20),
+        Click(ui("tab-flange-assembly")),
+        Wait(10),
+        Custom("view 25 25 0 0 -5 0.13"),
+        Wait(20),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01-x15-flange-assembly"),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-replace"),
+        Hover(ui("asm-replace")),
+        Wait(3),
+        Screenshot("02-x15-replace-instances-menu"),
+        Click(ui("asm-replace")),
+        WaitFor("replace-dialog"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-x15-replace-dialog"),
+        Click(ui("replace-part-long-screw")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("04-x15-long-screw-mates-kept"),
+        Click(ui("replace-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05-x15-replaced-mate-kept"),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-replace"),
+        Click(ui("asm-replace")),
+        WaitFor("replace-dialog"),
+        Wait(5),
+        Click(ui("replace-part-dowel")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("06-x15-dowel-mate-removed"),
+        Click(ui("replace-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("07-x15-dowel-no-mate"),
+        Key("Ctrl+Z"),
+        Wait(5),
+        Key("Ctrl+Z"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("08-x15-undone-screw-back"),
+    ],
+)

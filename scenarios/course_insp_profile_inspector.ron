@@ -1,0 +1,93 @@
+// P3D.2 (IR1, IR6.5–IR6.8, X1, X2): the Profile inspector on the inspection stand-in
+// (`inspection` set-up command; see course_insp_constraint_manager). Its Sketch 2 has a spur
+// line whose far end joins nothing and a tab outline left 0.02 in (0.508 mm) open, so Extrude 2
+// has lost its region. Equal 1 is deleted first in the Constraint manager (IR6.5, not shown).
+// 01 the footer's diagnostics menu with "Profile inspector…" hovered (IR1.2, IR6.6).
+// 02 the Profile inspector under the dialog, the Part Studio rolled back to Sketch 2 (Extrude 2
+//    grey and italic, not built) (IR1.3, IR6.7): "Loose ends" with two rows, "Loose
+//    end" (the spur's end) and "Loose ends (2)" (the gap's two ends, grouped), Previous / Next
+//    and the "?"; every loose end marked with a red dot in the view.
+// 03 "Loose ends (2)" clicked: the row is selected (semibold) and the view zooms to the gap (IR1.4,
+//    IR6.7): the two red dots 0.508 mm apart.
+// 04 Next: the next row (wrapping to "Loose end"), the view zoomed to the spur's end.
+// 05 Previous: back to the gap.
+// 06 Coincident (I), the gap's two ends clicked (IR6.8): they merge, the tab closes into a
+//    region (its grey fill) and its row is gone at once (IR1.5): only "Loose end" is left.
+// 07 the sketch accepted: no errors left, no "!" on the header; the tab is built again.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("inspection"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-edit")),
+        WaitFor("sketch-dialog"),
+        Wait(10),
+        Custom("view 0 90 13 3 0 0.055"),
+        Wait(40),
+        // IR6.3–IR6.5: Equal 1 deleted in the Constraint manager first.
+        Click(ui("sketch-diagnostics")),
+        WaitFor("sketch-diag-menu"),
+        Wait(3),
+        Click(ui("sketch-diag-constraints")),
+        WaitFor("constraint-manager"),
+        Wait(5),
+        Click(ui("cm-status-errors")),
+        Wait(5),
+        Click(ui("cm-row-equal-1-delete")),
+        Wait(10),
+        Click(ui("constraint-manager-close")),
+        Wait(10),
+        Click(ui("sketch-diagnostics")),
+        WaitFor("sketch-diag-menu"),
+        Wait(3),
+        Hover(ui("sketch-diag-profile")),
+        Wait(3),
+        Screenshot("01-diagnostics-menu"),
+        Click(ui("sketch-diag-profile")),
+        WaitFor("profile-inspector"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-profile-inspector"),
+        Click(ui("loose-end-1")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-zoomed-to-the-gap"),
+        Click(ui("profile-inspector-next")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-next"),
+        Click(ui("profile-inspector-previous")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-previous"),
+        Key("I"),
+        Wait(3),
+        ClickWorld(16, -5),
+        Wait(5),
+        ClickWorld(16, -4.492),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-gap-closed-row-gone"),
+        Click(ui("sketch-dialog-accept")),
+        Wait(30),
+        Key("Shift+7"),
+        Wait(20),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-no-errors"),
+    ],
+)

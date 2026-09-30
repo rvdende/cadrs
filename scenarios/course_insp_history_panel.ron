@@ -1,0 +1,111 @@
+// P3D.3 (IR5.6, X7, basic; T9, TD12): the document history on the Conrod stand-in
+// (`fixtures/conrod_standin.cadrs`, shipped broken with its history,
+// `fixtures/conrod_standin.history.ron`).
+// 01 the left rail's History (pressed) opens "Versions and history" beside the feature list:
+//    Main (the workspace, open circle; its last change's author and time), the stand-in
+//    author's changes grouped as "13 changes" (closed), Start (filled dot) at the bottom; the header's Repair
+//    icon (wrench) and ×; "Right-click a row for actions" at the bottom.
+// 02 "13 changes" opened: every change, newest first, named tab :: action : feature
+//    ("Conrod :: Edit : Sketch 2" is the break, then "Conrod :: Insert : Fillet 1", …,
+//    "Conrod :: Assign material Steel", "Conrod :: Rename part to Conrod", …).
+// 03 right-click "Conrod :: Insert : Circular pattern 1" (selected): Restore, View in repair.
+// 04 Restore: the Part Studio as it was then (Sketch 3, Extrude 5 and Fillet 1 gone; no errors,
+//    Sketch 2 whole, the notches cut); a new group "1 change" by me at the top.
+// 05 Ctrl+Z undoes the Restore in one step (the broken rod is back: Sketch 2, Extrude 4 and
+//    Circular pattern 1 red) and is an entry of its own: my group, opened, reads "2 changes":
+//    "Conrod :: Undo : Restore to Conrod :: Insert : Circular pattern 1", then "Restore :
+//    Conrod :: Insert : Circular pattern 1".
+// 06 Versions: the header's Create version icon: "Create version" with the name "V1" and an
+//    optional description, "Shipped, broken", typed.
+// 07 accepted: V1 on the rail (a square) under Main, with who, when and its description;
+//    the changes before it stay in their groups under it.
+// 08 Ctrl+Y redoes the Restore: a new change above V1 ("1 change" by me); V1 still points at
+//    the broken state.
+// 09 right-click V1: Open read-only, Restore.
+// 10 Open read-only: the view-only panel shows the document at V1 ("Viewing V1": the broken
+//    rod with the slot) beside the restored Part Studio; nothing in it can be edited.
+// 11 the read-only view and the panel closed; the rail button no longer pressed.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("fixture conrod_standin"),
+        Wait(60),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(20),
+        Key("F"),
+        Wait(40),
+        Click(ui("rail-history")),
+        WaitFor("history-panel"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-history-panel"),
+        Click(ui("history-group-1")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-changes-open"),
+        RightClick(ui("history-entry-9")),
+        WaitFor("history-row-menu"),
+        Wait(5),
+        Screenshot("03-row-menu"),
+        Click(ui("history-restore")),
+        Wait(60),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-restored"),
+        Key("Ctrl+Z"),
+        Wait(60),
+        Key("F"),
+        Wait(40),
+        Click(ui("history-group-14")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-undo-restore"),
+        // Versions.
+        Click(ui("history-create-version")),
+        WaitFor("version-popup"),
+        Wait(5),
+        Click(ui("version-popup-description")),
+        Wait(3),
+        Type("Shipped, broken"),
+        Wait(5),
+        Screenshot("06-create-version"),
+        Click(ui("version-popup-accept")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-version"),
+        Key("Ctrl+Y"),
+        Wait(60),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-change-after-version"),
+        RightClick(ui("history-version-1")),
+        WaitFor("history-version-menu"),
+        Wait(5),
+        Screenshot("09-version-menu"),
+        Click(ui("history-open-read-only")),
+        WaitFor("repair-panel"),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-open-read-only"),
+        Click(ui("repair-close")),
+        Wait(10),
+        Click(ui("history-close")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("11-closed"),
+    ],
+)

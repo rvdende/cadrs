@@ -1,0 +1,138 @@
+// P3D.1 (IR5.1–IR5.4, IR4.6, IR6.9, X3): feature error states, on the bracket stand-in
+// (`bracket` set-up command: Sketch 1 / Extrude 1 a plate, ten bosses in the closed "Bosses"
+// folder, Fillet 1 on the plate's corners, Fillet 2 on its rim), then the inspection stand-in in
+// a second Part Studio (`inspection`).
+// 01 the healthy bracket.
+// 02 Sketch 1 edited (IR5.4): the Part Studio rolled back to it (nothing after it is built or
+//    drawn, the bosses' sketches included: P3F.3–P3F.4 judge), the rollback bar under it, every
+//    feature and the closed Bosses folder below grey and italic; Final in the dialog's footer.
+// 03 Ctrl+A, Delete (IR6.9): the plate's rectangle gone.
+// 04 accepted (IR5.1, X3): Extrude 1 (its region is gone), Fillet 1 and Fillet 2 (their edges
+//    are gone) red with their ⓘ; the bosses, which don't use them, build as they were (ten
+//    separate parts now); the Features header shows the red "!".
+// 05 hovering Extrude 1's ⓘ: why it failed.
+// 06 the header's "!" clicked (IR4.6): the first failing feature, Extrude 1, is selected.
+// 07 Extrude 1 edited (IR5.2): its lost region stays in the field as "Missing Face of Sketch 1"
+//    in red, in a red-tinted field; the title is red; the features below it are rolled back.
+// 08 Fillet 1 edited (IR5.2): "Missing Edge of Extrude 1" four times, red.
+// 09 Ctrl+Z undoes the sketch edit: every error clears.
+// 10 Sketch 2 (in the Bosses folder) edited, Offset on a Ø12 boss picked from inside and
+//    placed 3 mm in, then 10 typed (IR5.3): "Offset could not be created at this distance." in
+//    yellow beside the dialog; the offset keeps the distance it was placed at (3.025 mm).
+// 11 a new Part Studio with the inspection stand-in; its Sketch 2 (unsolvable: Equal on two
+//    circles Ø30 and Ø18) edited (IR5.3, IR6.2): "Sketch could not be solved." beside the red
+//    dialog title; Extrude 2 below it rolled back, grey and italic.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("bracket"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-bracket"),
+        RightClick(ui("feature-sketch-1")),
+        WaitFor("feature-context-menu"),
+        Wait(2),
+        Click(ui("feature-edit")),
+        WaitFor("sketch-dialog"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-sketch-1-edited"),
+        Key("Ctrl+A"),
+        Wait(3),
+        Key("Delete"),
+        Wait(10),
+        Screenshot("03-entities-deleted"),
+        Click(ui("sketch-dialog-accept")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-dependants-red"),
+        Hover(ui("feature-extrude-1-info")),
+        Wait(40),
+        Screenshot("05-reason"),
+        Click(ui("features-error")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-first-failing-selected"),
+        DoubleClick(ui("feature-extrude-1")),
+        WaitFor("extrude-dialog"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-missing-face"),
+        Click(ui("extrude-dialog-cancel")),
+        Wait(10),
+        DoubleClick(ui("feature-fillet-1")),
+        WaitFor("fillet-dialog"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-missing-edge"),
+        Click(ui("fillet-dialog-cancel")),
+        Wait(10),
+        Key("Ctrl+Z"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("09-undone"),
+        Click(ui_at("feature-folder-bosses", 0.06, 0.5)),
+        Wait(5),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-context-menu"),
+        Wait(2),
+        Click(ui("feature-edit")),
+        WaitFor("sketch-dialog"),
+        Wait(10),
+        Custom("view 0 90 -30 -18 0 0.05"),
+        Wait(40),
+        Key("O"),
+        Wait(3),
+        // Picked just inside the boss circle: the offset goes inward.
+        ClickWorld(-34.1, -18),
+        Wait(5),
+        MoveWorld(-39, -16),
+        Wait(5),
+        MoveWorld(-40, -15),
+        Wait(5),
+        // Placed 3 mm inside (clear of the flip arrow at the circle's right), then 10 typed.
+        ClickWorld(-40, -15),
+        Wait(10),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Enter"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-offset-toast"),
+        Click(ui("sketch-dialog-cancel")),
+        Wait(10),
+        Click(ui("insert-tab")),
+        WaitFor("create-part-studio"),
+        Click(ui("create-part-studio")),
+        Wait(10),
+        Custom("inspection"),
+        Wait(10),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-context-menu"),
+        Wait(2),
+        Click(ui("feature-edit")),
+        WaitFor("sketch-dialog"),
+        Wait(10),
+        Custom("view 0 90 12 2 0 0.06"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("11-sketch-not-solved"),
+    ],
+)

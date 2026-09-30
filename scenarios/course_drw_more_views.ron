@@ -1,0 +1,130 @@
+// P3C.8 / D4.8 (Show threads), D4.12, X14: crop, broken-out and break views and thread display on
+// the P3C.8 bar (`Custom("bar-drawing")`, `cadrs_core::samples::drawing_bar`: 200 × 20 × 10, a
+// Ø6 hole at x 30, an M6×1 hole tapped 8 deep at x 170, a chamfered end at x 0 and R8 rounds at
+// x 200). ANSI A in mm, 1:1: Front's model origin at sheet (30, 112), Top's at (30, 158), Right's
+// at (254, 112); sheet points are `world(x, y)` in sheet mm.
+// 01 the bar's drawing: Front (hidden lines, the 200.00 length), Top, Right.
+// 02 Top's menu: Show threads hovered. 03 Top shows the tapped hole's thread: a thin 3/4
+//    circle of the major Ø6 around the Ø5 tap drill. 04 Front too: the thread's major diameter
+//    as thin dashed lines 8 deep beside the hole's hidden lines. 04b a close-up of both.
+// 05 the view group's ▾: Detail, Crop, Crop (spline), Broken-out section, Break; Crop hovered.
+// 06 Crop view on Top: the rectangle following the cursor around the tapped end. 07 cropped.
+// 08 Broken-out section on Front: a closed spline around the Ø6 hole being drawn.
+// 09 closed (Enter): the depth dialog (0 mm: through the hole's axis). 10 the broken-out
+//    section: the hole cut in half, the cut faces hatched inside the boundary.
+// 11 Break view on Front: the two break lines at x 60 and 150 following the cursor. 12 the
+//    break: the middle removed, break lines at the gap, the length still reads 200.00.
+// 13 zoomed on Front.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("bar-drawing"),
+        Wait(120),
+        Key("F"),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("01-bar-drawing"),
+        // Show threads on Top and Front.
+        RightClick(world(110, 167.5)),
+        WaitFor("view-menu-threads"),
+        Hover(ui("view-menu-threads")),
+        Wait(5),
+        Screenshot("02-view-menu-show-threads"),
+        Click(ui("view-menu-threads")),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("03-threads-top"),
+        RightClick(world(110, 111.5)),
+        WaitFor("view-menu-threads"),
+        Click(ui("view-menu-threads")),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("04-threads-front"),
+        // A close-up of the tapped hole in both views (P3C.8's delta).
+        Scroll(world(200, 135), 4.0),
+        Wait(15),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("04b-threads-zoomed"),
+        Key("F"),
+        Wait(10),
+        // Crop Top to the tapped end.
+        Hover(ui("drawing-detail-view-caret")),
+        Wait(3),
+        Click(ui("drawing-detail-view-caret")),
+        WaitFor("drawing-view-crop"),
+        Hover(ui("drawing-view-crop")),
+        Wait(5),
+        Screenshot("05-view-kinds-menu"),
+        Click(ui("drawing-view-crop")),
+        Wait(3),
+        ClickWorld(176, 144),
+        Wait(3),
+        MoveWorld(237, 172),
+        Wait(5),
+        Screenshot("06-crop-rectangle-preview"),
+        ClickWorld(237, 172),
+        Wait(20),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("07-cropped"),
+        // Broken-out section around the Ø6 hole in Front.
+        Hover(ui("drawing-detail-view-caret")),
+        Wait(3),
+        Click(ui("drawing-detail-view-caret")),
+        WaitFor("drawing-view-broken-out"),
+        Click(ui("drawing-view-broken-out")),
+        Wait(3),
+        ClickWorld(51, 99),
+        Wait(2),
+        ClickWorld(69, 98.5),
+        Wait(2),
+        ClickWorld(71, 110),
+        Wait(2),
+        ClickWorld(60, 115),
+        Wait(2),
+        MoveWorld(49, 111),
+        Wait(5),
+        Screenshot("08-broken-out-boundary"),
+        ClickWorld(49, 111),
+        Wait(2),
+        Key("Enter"),
+        WaitFor("broken-out-dialog"),
+        Wait(5),
+        Hover(ui("broken-out-ok")),
+        Wait(3),
+        Screenshot("09-broken-out-depth-dialog"),
+        Click(ui("broken-out-ok")),
+        Wait(40),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("10-broken-out-section"),
+        // Break Front between x 60 and 150.
+        Hover(ui("drawing-detail-view-caret")),
+        Wait(3),
+        Click(ui("drawing-detail-view-caret")),
+        WaitFor("drawing-view-break"),
+        Click(ui("drawing-view-break")),
+        Wait(3),
+        ClickWorld(90, 107),
+        Wait(3),
+        MoveWorld(180, 107),
+        Wait(5),
+        Screenshot("11-break-lines-preview"),
+        ClickWorld(180, 107),
+        Wait(20),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("12-break-view"),
+        Scroll(world(100, 105), 3),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("13-front-zoomed"),
+    ],
+)

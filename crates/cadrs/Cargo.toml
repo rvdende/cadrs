@@ -1,0 +1,16 @@
+[package]
+name = "cadrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true
+cadrs_app.workspace = true
+cadrs_core.workspace = true
+cadrs_harness.workspace = true
+cadrs_ui.workspace = true
+
+[dev-dependencies]
+image.workspace = true

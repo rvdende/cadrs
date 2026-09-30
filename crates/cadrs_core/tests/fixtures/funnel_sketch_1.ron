@@ -1,0 +1,355 @@
+(
+    points: [
+        (
+            value: None,
+            version: 0,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 0.0000000000000000000007299868907667881,
+                    y: -0.000000000000000000016592888286922686,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 76.19999999999999,
+                    y: -0.00000000000000009165339802416644,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 55.50727587454923,
+                    y: 34.8034629502354,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 114.3,
+                    y: 19.049999999999997,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 114.3,
+                    y: -19.049999999999997,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 55.50727587454923,
+                    y: -34.8034629502354,
+                ),
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                pos: (
+                    x: 114.3,
+                    y: -0.00000000000000000005928323408016162,
+                ),
+            )),
+            version: 1,
+        ),
+    ],
+    curves: [
+        (
+            value: None,
+            version: 0,
+        ),
+        (
+            value: Some((
+                kind: Ellipse(
+                    center: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    major: (
+                        idx: 2,
+                        version: 1,
+                    ),
+                    minor: 50.8,
+                ),
+                construction: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: EllipseOffset(
+                    center: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    major: (
+                        idx: 2,
+                        version: 1,
+                    ),
+                    minor: 50.8,
+                    distance: -3.175,
+                ),
+                construction: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Line(
+                    a: (
+                        idx: 3,
+                        version: 1,
+                    ),
+                    b: (
+                        idx: 4,
+                        version: 1,
+                    ),
+                ),
+                construction: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Line(
+                    a: (
+                        idx: 4,
+                        version: 1,
+                    ),
+                    b: (
+                        idx: 5,
+                        version: 1,
+                    ),
+                ),
+                construction: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Line(
+                    a: (
+                        idx: 5,
+                        version: 1,
+                    ),
+                    b: (
+                        idx: 6,
+                        version: 1,
+                    ),
+                ),
+                construction: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Line(
+                    a: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    b: (
+                        idx: 7,
+                        version: 1,
+                    ),
+                ),
+                construction: true,
+            )),
+            version: 1,
+        ),
+    ],
+    dimensions: [
+        (
+            value: None,
+            version: 0,
+        ),
+        (
+            value: Some((
+                kind: EllipseRadius(
+                    curve: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    major: true,
+                ),
+                value: 152.39999999999998,
+                offset: 61.95101547241211,
+                along: 0.000000001,
+                driven: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: EllipseRadius(
+                    curve: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    major: false,
+                ),
+                value: 101.6,
+                offset: 87.92230224609375,
+                along: -0.12668919563293457,
+                driven: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Offset(
+                    source: (
+                        idx: 1,
+                        version: 1,
+                    ),
+                    target: (
+                        idx: 2,
+                        version: 1,
+                    ),
+                ),
+                value: 3.175,
+                offset: 1.0688956110215946,
+                along: 2.463851116598195,
+                driven: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Aligned(
+                    a: (
+                        idx: 4,
+                        version: 1,
+                    ),
+                    b: (
+                        idx: 5,
+                        version: 1,
+                    ),
+                ),
+                value: 38.099999999999994,
+                offset: -11.655410766601563,
+                along: -11.275338172912598,
+                driven: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: PointLine(
+                    p: Point((
+                        idx: 1,
+                        version: 1,
+                    )),
+                    line: Curve((
+                        idx: 4,
+                        version: 1,
+                    )),
+                ),
+                value: 114.3,
+                offset: 60.68412399291992,
+                along: -0.12668991088867188,
+                driven: false,
+            )),
+            version: 1,
+        ),
+        (
+            value: Some((
+                kind: Angle(
+                    a: Curve((
+                        idx: 4,
+                        version: 1,
+                    )),
+                    b: Curve((
+                        idx: 3,
+                        version: 1,
+                    )),
+                    flip_a: false,
+                    flip_b: true,
+                ),
+                value: 105.0,
+                offset: 11.778096313194048,
+                along: 0.0,
+                driven: false,
+            )),
+            version: 1,
+        ),
+    ],
+    constraints: [
+        (
+            value: None,
+            version: 0,
+        ),
+        (
+            value: Some(Coincident(Point((
+                idx: 1,
+                version: 1,
+            )), Origin)),
+            version: 1,
+        ),
+        (
+            value: Some(PointOnCurve(Point((
+                idx: 3,
+                version: 1,
+            )), Curve((
+                idx: 1,
+                version: 1,
+            )))),
+            version: 1,
+        ),
+        (
+            value: Some(Vertical(Line(Curve((
+                idx: 4,
+                version: 1,
+            ))))),
+            version: 1,
+        ),
+        (
+            value: Some(PointOnCurve(Point((
+                idx: 6,
+                version: 1,
+            )), Curve((
+                idx: 1,
+                version: 1,
+            )))),
+            version: 1,
+        ),
+        (
+            value: Some(Midpoint(Point((
+                idx: 7,
+                version: 1,
+            )), Curve((
+                idx: 4,
+                version: 1,
+            )))),
+            version: 1,
+        ),
+        (
+            value: Some(SymmetricCurves(Curve((
+                idx: 3,
+                version: 1,
+            )), Curve((
+                idx: 5,
+                version: 1,
+            )), Curve((
+                idx: 6,
+                version: 1,
+            )))),
+            version: 1,
+        ),
+    ],
+)

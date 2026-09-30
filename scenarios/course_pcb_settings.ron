@@ -1,0 +1,80 @@
+// P3H.3–P3H.4 (PCB2.1–PCB2.3, X6): the PCB Studio settings dialog (the toolbar's gear), now
+// workspace-level. Compare `v2-settings-select-folder-poster.png`: a field per setting with a
+// browse icon at its right end, the "Select a folder…" placeholder, the hint, a build string at
+// the bottom, Update / Close, and the Select a folder picker. The documents page has a folder
+// "PCB Components" (`Custom("pcb-folder …")`).
+// 01 the dialog: Component library document "Default library", the folder unset;
+// 02 the library's button: Select a library document (Default library and the stored
+//    documents); 03 New library document: a blank "PCB Component Library" document (one PCB
+//    Studio tab) is made and chosen; 04 Select, then the folder's button: Select a folder with
+//    the documents page's folders; 05 both chosen, the library's tooltip says where it is;
+// 06 Update, then a second PCB Studio's gear: the same library and folder (workspace-level);
+// 07 Ctrl+Z twice (the second tab, then Update): the defaults again; 08 the ? button: the help.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-folder PCB Components"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Wait(10),
+        Click(ui("pcb-settings")),
+        WaitFor("pcb-settings-dialog"),
+        Wait(10),
+        ExpectText("pcb-settings-library", "Default library"),
+        Screenshot("01-settings"),
+        Click(ui("pcb-settings-library-browse")),
+        WaitFor("pcb-library-picker"),
+        Wait(10),
+        Screenshot("02-select-a-library-document"),
+        Click(ui("pcb-library-picker-new")),
+        WaitFor("pcb-library-picker-row-pcb-component-library"),
+        Wait(10),
+        Screenshot("03-new-library-document"),
+        Click(ui("pcb-library-picker-select")),
+        Wait(10),
+        ExpectText("pcb-settings-library", "PCB Component Library"),
+        Click(ui("pcb-settings-folder-browse")),
+        WaitFor("pcb-folder-picker"),
+        Wait(5),
+        Click(ui("pcb-folder-picker-row-pcb-components")),
+        Wait(5),
+        Hover(ui("pcb-folder-picker-select")),
+        Wait(5),
+        Screenshot("04-select-a-folder"),
+        Click(ui("pcb-folder-picker-select")),
+        Wait(10),
+        ExpectText("pcb-settings-folder", "PCB Components"),
+        Hover(ui("pcb-settings-library-input")),
+        Wait(60),
+        Screenshot("05-chosen-library-tooltip"),
+        Click(ui("pcb-settings-update")),
+        Wait(10),
+        Custom("pcb-studio"),
+        Wait(20),
+        Click(ui("pcb-settings")),
+        WaitFor("pcb-settings-dialog"),
+        Wait(10),
+        ExpectText("pcb-settings-library", "PCB Component Library"),
+        ExpectText("pcb-settings-folder", "PCB Components"),
+        Screenshot("06-second-pcb-studio-same-settings"),
+        Click(ui("pcb-settings-close")),
+        Wait(10),
+        Key("Ctrl+Z"),
+        Wait(10),
+        Key("Ctrl+Z"),
+        Wait(10),
+        Click(ui("pcb-settings")),
+        WaitFor("pcb-settings-dialog"),
+        Wait(10),
+        ExpectText("pcb-settings-library", "Default library"),
+        Screenshot("07-undone"),
+        Click(ui("pcb-settings-close")),
+        Wait(10),
+        Click(ui("pcb-help")),
+        WaitFor("pcb-help-dialog"),
+        Wait(10),
+        Screenshot("08-help"),
+    ],
+)

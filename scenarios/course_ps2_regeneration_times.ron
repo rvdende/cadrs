@@ -1,0 +1,39 @@
+// P3.9 / PS2.6: Show regeneration times, on the Gear Cover stand-in (`gear-cover`,
+// `fixtures/gear_cover_standin.cadrs`).
+// 01 the header's stopwatch hovered: "Show regeneration times".
+// 02 clicked (it stays pressed): with "Base Features" opened, every row shows how long it took
+//    to regenerate, the sketches too (P3.11: finding their regions). A scripted run shows fixed
+//    times, "10 ms" for a part feature and "<1 ms" for a sketch, so the frame is the same on
+//    every run (P3.11, P3.9 judge); the real times are measured (core test
+//    `regeneration_times_are_measured_per_feature`).
+// 03 clicked again: the times are gone.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("gear-cover"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Click(ui_at("feature-folder-base-features", 0.06, 0.5)),
+        Wait(5),
+        Hover(ui("feature-timer")),
+        Wait(60),
+        Screenshot("01-stopwatch-tooltip"),
+        Click(ui("feature-timer")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-regeneration-times"),
+        Click(ui("feature-timer")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-times-off"),
+    ],
+)

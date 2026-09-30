@@ -1,0 +1,55 @@
+// T3 / S8: "Ellipse: three clicks: the center, the major axis end, then the minor axis extent."
+// (`reference/onshape/entity_tools/ellipse-02.png`, `ellipse-04.png`) Circle ▾ → Ellipse. After
+// the center, the preview is already an ellipse with its major radius; after the major axis it
+// follows the cursor with both radii. Placing it opens the major axis box (90), then the
+// minor one (40): axis dimensions drawn across the whole axes, as in ellipse-04 (the help calls
+// them the axis diameters). Only its center is a point. Accepted and selected, its region reads
+// π·45·20 = 2827.433 mm².
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("N"),
+        Wait(40),
+        Click(ui("sketch-circle-caret")),
+        WaitFor("sketch-variant-ellipse"),
+        Wait(2),
+        Click(ui("sketch-variant-ellipse")),
+        Wait(2),
+        ClickWorld(0, 0),
+        MoveWorld(20, 10),
+        MoveWorld(38, 12),
+        Wait(3),
+        Screenshot("01-major-axis"),
+        ClickWorld(38, 12),
+        MoveWorld(15, 20),
+        MoveWorld(8, 22),
+        Wait(3),
+        Screenshot("02-minor-axis"),
+        ClickWorld(8, 22),
+        Wait(4),
+        Screenshot("03-major-radius-box"),
+        Type("90"),
+        Key("Enter"),
+        Wait(4),
+        Type("40"),
+        Key("Enter"),
+        Wait(4),
+        Key("Escape"),
+        Wait(2),
+        MoveTo(1350, 850),
+        Wait(3),
+        Screenshot("04-axes-90-40"),
+        Click(ui("sketch-dialog-accept")),
+        Wait(10),
+        ClickWorld(-10, 5),
+        Wait(4),
+        Screenshot("05-region-area"),
+    ],
+)

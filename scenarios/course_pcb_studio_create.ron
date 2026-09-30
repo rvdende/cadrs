@@ -1,0 +1,51 @@
+// P3H.3 (PCB1.2, PCB2.5, PCB2.6, PCB3.2, PCB3.4, PCB3.7): adding a PCB Studio from the tab bar's
+// **+** menu. Compare `v3-interface-poster.png` / `ex1-step10-sync-dialog.png` (toolbar: upload,
+// download │ sync, create assembly │ Search, magnifier, ✕, gear, ?; Export and Create assembly
+// greyed with no board) and `ex2-step4-import-ecad-dialog.png` (the empty studio's hint).
+// 01 the + menu with Create PCB Studio enabled (its icon); 02 the new "PCB Studio 1" tab: the
+//    toolbar, the Boards and Components sections (empty), the centred hint, the view cube and the
+//    two right-edge toggles; 03 the greyed Export tooltip; 04 the tab's context menu (Delete,
+//    Rename…, Properties…; Open in new window and Move to document… disabled as for other tabs);
+// 05 Properties… (type PCB Studio); 06 undo (Ctrl+Z) removes the tab, 07 redo brings it back.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("insert-tab")),
+        WaitFor("create-pcb-studio"),
+        Hover(ui("create-pcb-studio")),
+        Wait(20),
+        Screenshot("01-insert-menu"),
+        Click(ui("create-pcb-studio")),
+        WaitFor("pcb-tree"),
+        Wait(30),
+        MoveTo(900, 600),
+        Wait(10),
+        Screenshot("02-empty-pcb-studio"),
+        ExpectText("tab-pcb-studio-1", "PCB Studio 1"),
+        ExpectText("pcb-boards", "Boards"),
+        ExpectText("pcb-components", "Components"),
+        Hover(ui("pcb-export")),
+        Wait(60),
+        Screenshot("03-export-greyed-tooltip"),
+        RightClick(ui("tab-pcb-studio-1")),
+        WaitFor("tab-context-menu"),
+        Wait(10),
+        Screenshot("04-tab-menu"),
+        Click(ui("tab-properties")),
+        WaitFor("tab-properties-dialog"),
+        Wait(10),
+        Screenshot("05-properties"),
+        Click(ui("tab-properties-cancel")),
+        Wait(10),
+        Key("Ctrl+Z"),
+        Wait(20),
+        Screenshot("06-undone"),
+        Key("Ctrl+Y"),
+        Wait(20),
+        WaitFor("pcb-tree"),
+        Wait(10),
+        Screenshot("07-redone"),
+    ],
+)

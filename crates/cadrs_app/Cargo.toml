@@ -1,0 +1,24 @@
+[package]
+name = "cadrs_app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true
+cadrs_core.workspace = true
+cadrs_sketch.workspace = true
+cadrs_ui.workspace = true
+chrono.workspace = true
+image.workspace = true
+cadrs_drawing.workspace = true
+cadrs_kernel.workspace = true
+cadrs_pcb.workspace = true
+cadrs_idf.workspace = true
+cadrs_fea.workspace = true
+cadrs_render.workspace = true
+nalgebra.workspace = true
+uuid.workspace = true
+serde.workspace = true
+ron.workspace = true

@@ -1,0 +1,62 @@
+// P3.9 / PS11.2: Show dependencies, on the bracket stand-in (`bracket` set-up command; see
+// course_ps3_filter). Default geometry is closed so the whole list fits.
+// 01 right-click Extrude 1: the menu's "Show dependencies".
+// 02 Extrude 1's dependencies: the feature itself highlighted, its parent above (Sketch 1,
+//    amber) and its children below (green): the closed Bosses folder, tinted because the ten
+//    boss extrudes in it are children (P3.11: Adds whose merge scope they found by themselves
+//    join the plate Extrude 1 made), and Fillet 1 and Fillet 2 (their edges are Extrude 1's).
+//    Each dependency row has a stripe in the legend's swatch colour (P3.11: stronger swatches);
+//    the legend under the header says which is which.
+// 03 Sketch 2's, with the Bosses folder open: its children are the ten boss extrudes.
+// 04 Fillet 2's: its parents Extrude 1 and Fillet 1 (P3.11: it is picked on the plate's rim,
+//    and its tangent chain runs round Fillet 1's corner faces), no children.
+// 05 Esc: back to the plain list.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("bracket"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Click(ui_at("feature-default-geometry", 0.05, 0.5)),
+        Wait(3),
+        RightClick(ui("feature-extrude-1")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Hover(ui("feature-dependencies")),
+        Wait(3),
+        Screenshot("01-show-dependencies-menu"),
+        Click(ui("feature-dependencies")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-extrude-1-parents-children"),
+        Click(ui_at("feature-folder-bosses", 0.06, 0.5)),
+        Wait(5),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-dependencies")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-sketch-2-children"),
+        RightClick(ui("feature-fillet-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-dependencies")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-fillet-2-parent"),
+        Key("Escape"),
+        Wait(5),
+        Screenshot("05-cleared"),
+    ],
+)

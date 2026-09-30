@@ -1,0 +1,47 @@
+(
+    version: 5,
+    meta: (
+        created: 1790553600,
+        modified: 1790553600,
+        created_by: "cadrs",
+        modified_by: "cadrs",
+        owned_by: "cadrs",
+        last_opened: None,
+        trashed: None,
+    ),
+    document: (
+        id: ("3a610000-0000-0000-0000-000000000800"),
+        name: "Block derived",
+        elements: [
+            (
+                id: ("3a610000-0000-0000-0000-000000000801"),
+                name: "Part Studio 1",
+                kind: PartStudio(
+                    features: [
+                        (
+                            id: ("3a610000-0000-0000-0000-000000000803"),
+                            name: "Mate connector 1",
+                            kind: MateConnector((
+                                origin: Some(Origin),
+                                move_on: true,
+                                flip_primary: false,
+                                reorient: 0,
+                                offset: (0.0, 0.0, 100.0),
+                                offset_expr: ("0 mm", "0 mm", "100 mm"),
+                                rotation: 0.0,
+                                rotation_expr: "0 deg",
+                                alignment: None,
+                            )),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+        units: (
+            length: Millimeter,
+            mass: Kilogram,
+            decimals: 3,
+            angle_decimals: 3,
+        ),
+    ),
+)

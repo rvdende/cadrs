@@ -1,0 +1,64 @@
+// P3B.9 / X15 Check interference on the interference stand-in (`fixtures/interference_standin.cadrs`:
+// two 50 × 30 × 20 mm Blocks, the second at (40, 10, 5), sharing 10 × 20 × 15 = 3000 mm³; a
+// 10 mm Plate with a Ø8 hole and a Ø10 Pin through it, sharing π(5² − 4²)·10 = 282.743 mm³).
+// 01 The Interference Assembly: Block <1> (fixed), Block <2>, Plate <1> (fixed), Pin <1>.
+// 02 Block <2>'s menu: Check interference.
+// 03 Checked: "1 interference", Block <1> × Block <2> · 3000.000 mm³; the shared volume red on
+//    Block <1> (Block <2>, the menu's instance, stays selected, orange).
+// 04 The empty-space menu's Check interference (every pair): 2 interferences, the pin and plate
+//    282.743 mm³ too.
+// 05 The pin's row clicked: the Plate and the Pin selected.
+// 06 Block <2> dragged up and to the right, off Block <1>: checked again, 1 interference left
+//    (Plate × Pin; both still selected from 05, so the volume inside the plate is not seen).
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture interference_standin"),
+        Wait(20),
+        Click(ui("tab-interference-assembly")),
+        Wait(10),
+        Custom("view 30 30 80 20 5 0.2"),
+        Wait(20),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01-x15-interference-assembly"),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-interference"),
+        Hover(ui("asm-interference")),
+        Wait(3),
+        Screenshot("02-x15-check-interference-menu"),
+        Click(ui("asm-interference")),
+        WaitFor("interference-dialog"),
+        Wait(40),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-x15-blocks-3000mm3"),
+        Click(ui("interference-dialog-cancel")),
+        Wait(5),
+        RightClick(xyz(60, 80, 0)),
+        WaitFor("asm-interference-all"),
+        Click(ui("asm-interference-all")),
+        WaitFor("interference-dialog"),
+        Wait(40),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("04-x15-all-pairs-two-interferences"),
+        Click(ui("interference-row-2")),
+        Wait(8),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05-x15-pin-row-selects-plate-and-pin"),
+        Press(xyz(78, 30, 25)),
+        Wait(3),
+        Hover(xyz(78, 50, 25)),
+        Wait(3),
+        Hover(xyz(78, 75, 25)),
+        Wait(3),
+        Release,
+        Wait(40),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("06-x15-block-moved-one-left"),
+    ],
+)

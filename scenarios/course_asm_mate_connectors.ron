@@ -1,0 +1,85 @@
+// P3B.2 / A6.4–A6.6, A3.2: implicit mate connector points, on the Top Cap of the Ex2 stand-in
+// (`fixtures/pneumatic_cylinder_standin.cadrs`) at its studio position, with a Fastened mate
+// dialog open.
+// 01 (A6.4) hovering the top face: its points show as dots (the centroid, the centres of its 11
+//    holes, the midpoints and corners of its edges); the one nearest the pointer, a flange hole's
+//    centre, as the connector glyph.
+// 02 (A6.6) hovering a hole's circular edge: its centre is its only point.
+// 03 (A6.5) Shift held on the top face, the pointer moved over the side face: the top face stays
+//    locked (its dots; the glyph's ring blue).
+// 04 (A6.4) looking down the centre bore, its wall hovered, then the pointer moved in over the
+//    empty bore: the wall's points stay (its end circles' centres and the middle of its axis, the
+//    centre of the cut space) and the glyph sits at the axis middle.
+// 05 (A3.2) the triad's relocate drag uses the same points: dots on the face under the pointer.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture pneumatic_cylinder_standin"),
+        Wait(10),
+        Click(ui("insert-tab")),
+        WaitFor("create-assembly"),
+        Click(ui("create-assembly")),
+        Wait(5),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-part-top-cap")),
+        Wait(3),
+        Click(ui("insert-dialog-accept")),
+        Wait(5),
+        Key("Shift+7"),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        Click(ui("mate-fastened")),
+        WaitFor("mate-dialog"),
+        Wait(3),
+        Hover(xyz(16, -14, 165.1)),
+        Wait(5),
+        Screenshot("01-a6.4-face-points"),
+        Hover(xyz(28.8925, -24.13, 165.1)),
+        Wait(5),
+        Screenshot("02-a6.6-circle-one-point"),
+        Hover(xyz(0, -12, 165.1)),
+        Wait(3),
+        KeyDown("Shift"),
+        Wait(3),
+        Hover(xyz(20, -31.75, 150)),
+        Wait(5),
+        Screenshot("03-a6.5-shift-locks-the-face"),
+        KeyUp("Shift"),
+        Wait(3),
+        // Looking down the bore (three 15° turns), so the middle of its axis can be seen.
+        Key("ArrowDown"),
+        Wait(20),
+        Key("ArrowDown"),
+        Wait(20),
+        Key("ArrowDown"),
+        Wait(30),
+        // Fitted first, so the zoom below lands on the bore (it zoomed into the plate's edge).
+        Key("F"),
+        Wait(40),
+        Scroll(xyz(0, 0, 165.1), 5),
+        Wait(30),
+        Hover(xyz(-4.49, 4.49, 156)),
+        Wait(5),
+        Hover(xyz(0, 0, 155.6)),
+        Wait(5),
+        Screenshot("04-a6.4-hole-axis-middle"),
+        Click(ui("mate-dialog-cancel")),
+        Wait(5),
+        Key("F"),
+        Wait(30),
+        Click(xyz(-10, 10, 165.1)),
+        Wait(5),
+        Press(ui("triad-origin")),
+        Hover(xyz(-5, 5, 165.1)),
+        Wait(2),
+        Hover(xyz(20, -18, 165.1)),
+        Wait(5),
+        Screenshot("05-a3.2-triad-relocate-dots"),
+        Release,
+        Wait(3),
+    ],
+)

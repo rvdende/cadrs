@@ -1,0 +1,129 @@
+// P3F.3 (`essential-tips.md` T1.2, T4.2, X7): working at Onshape's scale budgets. A generated
+// document (`Custom("scale-fixture")`, `cadrs_core::samples::scale`) of 40 tabs; its first tab,
+// "Plates", is a Part Studio of 250 features and 10 parts (10 plates, each a Variable #t_N for
+// its thickness, its sketch and extrude, and 11 blind holes, each a sketch and an extrude).
+// Measured (perf-*.txt beside the PNGs; the frame times of each section, and the rebuilds'):
+// `open` (the document opened with the interactive budget: the tabs and list at once, the 250
+// features rebuilt in the background; `perf-open-rebuilds.txt` has the rebuild's own time),
+// `edit-last`, `background` (#t_1 changed, so everything below the first plate rebuilds, while
+// frames wait at most 30 ms: none freezes), `switch` (a tab chosen from the Tab manager).
+// 01 the 250 features and 10 parts: "Features (250)", no notice (at the budget).
+// 02 the feature list scrolled to its end (the list scrolls, with its scrollbar).
+// 03 a Variable added: 251 features, the gentle notice under the header.
+// 04 the last feature (Hole 10.11) edited, 6 mm deep: only it rebuilds; the last plate seen
+//    from below, where its pockets are.
+// 05 #t_1 = 12 mm in the Variable table: the first plate thicker; everything after it rebuilt in
+//    the background.
+// 06 the 40 tabs: the strip scrolls by whole tabs, a chevron and a fade at the end with more
+//    tabs; the Tab manager (left of the tabs) lists them all.
+// 07 Tab manager (the P3G.3 panel): its list of tabs at most about two thirds of the window
+//    tall, scrolled to its end: every tab, the current one in bold, Studio 38 hovered.
+// 08 "Studio 38" chosen, the manager closed: selected and scrolled into view (on a tab's edge;
+//    fades at both ends).
+// 09 the tabs scrolled back with the wheel, a whole tab at a time.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        // Opened with the interactive rebuild budget: the tabs and the feature list show at
+        // once and the 250 features rebuild in the background (no frame freezes).
+        Custom("rebuild-budget 30"),
+        MeasureStart("open"),
+        Custom("scale-fixture 40"),
+        Wait(300),
+        MeasureEnd,
+        Custom("rebuild-budget off"),
+        Custom("scale-report open"),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-250-features-10-parts"),
+        Scroll(ui("feature-scroll"), -400),
+        Wait(10),
+        Screenshot("02-feature-list-scrolled"),
+        Click(ui("variable")),
+        WaitFor("variable-dialog"),
+        Wait(10),
+        ExpectText("features-scale-notice", "251 features"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-notice-past-250"),
+        Click(ui("variable-dialog-cancel")),
+        Wait(10),
+        Custom("scale-report load"),
+        MeasureStart("edit-last"),
+        DoubleClick(ui("feature-hole-10-11")),
+        WaitFor("extrude-dialog"),
+        Wait(5),
+        Click(ui("extrude-depth-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("6"),
+        Click(ui("extrude-dialog-title")),
+        Wait(10),
+        Click(ui("extrude-dialog-accept")),
+        Wait(10),
+        MeasureEnd,
+        Custom("scale-report edit-last"),
+        // The holes are pockets drilled up from each plate's underside: seen from below, the
+        // last plate's eleven, Hole 10.11 (the right one of the third row) now 6 mm deep.
+        Custom("view 20 -40 655 20 0 0.1"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-last-feature-edited"),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Click(ui("panel-variables")),
+        WaitFor("variables-panel"),
+        Wait(10),
+        Custom("rebuild-budget 30"),
+        Wait(2),
+        Click(ui("variable-row-t_1-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("12 mm"),
+        MeasureStart("background"),
+        Key("Enter"),
+        Wait(240),
+        MeasureEnd,
+        Custom("rebuild-budget off"),
+        Custom("scale-report background"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-first-plate-rebuilt"),
+        Click(ui("variables-panel-close")),
+        Wait(5),
+        Hover(ui("tab-manager")),
+        Wait(40),
+        Screenshot("06-40-tabs"),
+        Click(ui("tab-manager")),
+        WaitFor("tab-manager-panel"),
+        Wait(5),
+        // The Tab manager's list is capped at about two thirds of the window: the wheel scrolls it.
+        Scroll(ui("tab-manager-rows"), -40),
+        Wait(5),
+        Hover(ui("tab-manager-row-38")),
+        Wait(3),
+        Screenshot("07-tab-manager"),
+        MeasureStart("switch"),
+        Click(ui("tab-manager-row-38")),
+        Wait(20),
+        MeasureEnd,
+        Custom("scale-report switch"),
+        Click(ui("tab-manager-close")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-tab-38-in-view"),
+        Scroll(ui("tab-studio-38"), 40),
+        Wait(10),
+        Screenshot("09-tabs-scrolled-back"),
+    ],
+)

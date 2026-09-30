@@ -1,0 +1,30 @@
+[package]
+name = "cadrs_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Rebuild parts through the OpenCascade kernel (cadrs_kernel "occt"). Without it, extrudes fall
+# back to the triangulated prism of `solid::extrude`.
+default = ["occt"]
+occt = ["cadrs_kernel/occt"]
+
+[dependencies]
+cadrs_sketch.workspace = true
+cadrs_kernel.workspace = true
+cadrs_fea.workspace = true
+cadrs_render.workspace = true
+cadrs_drawing.workspace = true
+cadrs_idf.workspace = true
+nalgebra.workspace = true
+serde.workspace = true
+uuid.workspace = true
+ron.workspace = true
+image.workspace = true
+directories.workspace = true
+slotmap.workspace = true
+
+[dev-dependencies]
+tiny-skia.workspace = true

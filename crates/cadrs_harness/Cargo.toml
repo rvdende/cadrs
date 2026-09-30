@@ -1,0 +1,13 @@
+[package]
+name = "cadrs_harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true
+cadrs_ui.workspace = true
+serde.workspace = true
+ron.workspace = true
+image.workspace = true

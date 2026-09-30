@@ -1,0 +1,88 @@
+// P3C.1 / D1.2–D1.9, D2.1–D2.4, X1–X3: create a drawing from the ANSI_A_INCH template.
+// 01 "+" menu with Create Drawing… enabled (ex1-step2.png).
+// 02 Create Drawing: Drawing 1 (lesson-create-drawing-dialog.png): Existing templates tab,
+//    source list (Built-in selected), All filter, Template / Document / Owner table, Options
+//    with Four views (unavailable from "+": nothing is referenced yet) and No views.
+// 03 The ISO filter: ISO_A4 … ISO_A0 only.
+// 04 The ANSI filter with ANSI_A_INCH.dwt picked (ex1-step3.png).
+// 05 OK: Drawing 1 opens on an 11 × 8.5 in sheet on a grey ground, border with zones 2 | 1 and
+//    B / A, the title block bottom right (scale 1:1, third-angle symbol, SIZE A, SHEET 1 OF 1,
+//    drawn by / date filled, empty properties as dashes), the drawing toolbar (every group,
+//    tools not yet available disabled) and the drawing tab icon. D1.7 (P3C.2): Insert view
+//    starts at once (its card and the part browser); Esc closes it.
+// 06 Wheel zoom into the title block (about the cursor).
+// 07 Right-drag pans (no rotation).
+// 08 F fits the sheet again.
+// 09 A tool's tooltip with its shortcut: Note (N). (Every drawing tool is enabled since P3C.8;
+//    this frame showed a disabled tool's reason before.)
+// 10 Custom template tab (D1.4, D1.5): ISO, A3, landscape, millimetres, projection switched to
+//    Third angle; the template's name follows.
+// 11 OK: Drawing 2 on an ISO A3 sheet whose title block shows the third-angle symbol.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("insert-tab")),
+        Wait(5),
+        Hover(ui("create-drawing")),
+        Wait(5),
+        Screenshot("01-plus-menu-create-drawing"),
+        Click(ui("create-drawing")),
+        WaitFor("create-drawing-dialog"),
+        Wait(10),
+        MoveTo(1400, 950),
+        Wait(3),
+        Screenshot("02-create-drawing-dialog-all"),
+        Click(ui("template-filter-2")),
+        Wait(8),
+        MoveTo(1400, 950),
+        Wait(3),
+        Screenshot("03-iso-filter"),
+        Click(ui("template-filter-1")),
+        Wait(8),
+        Click(ui("template-row-ANSI_A_INCH.dwt")),
+        Wait(8),
+        Screenshot("04-ansi-filter-ansi-a-inch-picked"),
+        Click(ui("create-drawing-ok")),
+        Wait(30),
+        MoveTo(1590, 990),
+        Wait(3),
+        Screenshot("05-ansi-a-sheet-title-block"),
+        Key("Escape"),
+        Wait(5),
+        Scroll(at(1300, 820), 6),
+        Wait(10),
+        Screenshot("06-zoomed-title-block"),
+        RightDrag(at(1000, 500), at(700, 350)),
+        Wait(10),
+        Screenshot("07-panned"),
+        Key("F"),
+        Wait(10),
+        Screenshot("08-fit-sheet"),
+        Hover(ui("drawing-note")),
+        Wait(50),
+        Screenshot("09-note-tooltip"),
+        Click(ui("insert-tab")),
+        Wait(5),
+        Click(ui("create-drawing")),
+        WaitFor("create-drawing-dialog"),
+        Wait(8),
+        Click(ui("create-drawing-tabs-1")),
+        Wait(8),
+        Click(ui("custom-projection")),
+        Wait(5),
+        Click(ui("custom-projection-option-1")),
+        Wait(8),
+        MoveTo(1400, 950),
+        Wait(3),
+        Screenshot("10-custom-template-third-angle"),
+        Click(ui("create-drawing-ok")),
+        Wait(30),
+        Key("Escape"),
+        Wait(5),
+        MoveTo(1590, 990),
+        Wait(3),
+        Screenshot("11-custom-iso-a3-third-angle-sheet"),
+    ],
+)

@@ -1,0 +1,82 @@
+// P3.9 / PS3.4–PS3.6: filtering the feature list, on the bracket stand-in (`bracket` set-up
+// command, `cadrs_core::samples::bracket`: the course's 43-feature Part Studio isn't public; ours
+// has Extrude 1 … Extrude 11, the ten bosses in a closed "Bosses" folder, and two fillets).
+// 01 the list unfiltered: Default geometry, Sketch 1, Extrude 1, the closed "Bosses (11)" folder,
+//    Fillet 1, Fillet 2.
+// 02 hovering the filter field: the help card with the special prefixes (PS3.6).
+// 03 "Extrude" (PS3.4): every extrude, whatever its name; the folder opens to show its matches,
+//    with how many of its features match ("Bosses (10 of 11)", P3.11); Default geometry is
+//    hidden; the field's ✕ clears it (P3.11).
+// 04 "Extrude 1" unquoted: Extrude 1, Extrude 10 and Extrude 11.
+// 05 "\"Extrude 1\"" in quotes (PS3.5): the exact name only.
+// 06 ":type Fillet" (PS3.6): the fillets (Fillet 2 renamed "Rim round" first, so it matches by
+//    type, not by name).
+// 07 ":folder bosses": the folder's features.
+// 08 the filter cleared with the field's ✕ (P3.11, P3.9 judge): the list as before, the folder
+//    closed again.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("bracket"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-unfiltered"),
+        Hover(ui("feature-filter")),
+        Wait(60),
+        Screenshot("02-filter-help"),
+        Click(ui("feature-filter")),
+        Wait(2),
+        Type("Extrude"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-extrude-by-type"),
+        Type(" 1"),
+        Wait(5),
+        Screenshot("04-extrude-1-unquoted"),
+        Key("Ctrl+A"),
+        Type("\"Extrude 1\""),
+        Wait(5),
+        Screenshot("05-extrude-1-quoted"),
+        Key("Escape"),
+        Wait(3),
+        RightClick(ui("feature-fillet-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-rename")),
+        Wait(3),
+        Key("Ctrl+A"),
+        Type("Rim round"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("feature-filter")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type(":type Fillet"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-type-fillet"),
+        Click(ui("feature-filter")),
+        Key("Ctrl+A"),
+        Type(":folder bosses"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-folder-bosses"),
+        Click(ui("feature-filter-clear")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-cleared"),
+    ],
+)

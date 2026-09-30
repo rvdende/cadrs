@@ -1,0 +1,55 @@
+// Onshape import: the Derived feature (since the merge with phase3c, the P3G.4 Derived dialog,
+// `derived_ui`). The Control Arm (the course's two extrudes) in Part Studio 1, then Part
+// Studio 2 derives its parts.
+// 01 Part Studio 2, Derived (toolbar) → Current document → Part Studio 1 picked: the source
+//    card, Derive: Part Studio (everything), Locations, Placement, Include mate connectors.
+// 02 Part Studio unticked, Part 1 ticked: only Part 1 comes in.
+// 03 accepted: Derived 1 in the feature list with its icon, the part in the Parts list with
+//    the source's name.
+// 04 the source studio changed (Part 1 renamed Arm): the derived part follows.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("control-arm"),
+        Wait(60),
+        Key("F"),
+        Wait(10),
+        Click(ui("insert-tab")),
+        WaitFor("create-part-studio"),
+        Click(ui("create-part-studio")),
+        Wait(20),
+        Click(ui("derived")),
+        WaitFor("derived-dialog"),
+        Wait(20),
+        Click(ui("derived-studio-part-studio-1")),
+        Wait(60),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-derived-all-parts"),
+        Click(ui("derived-all-checkbox")),
+        Wait(30),
+        Click(ui("derived-part-part-1-checkbox")),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-derived-one-part"),
+        Click(ui("derived-dialog-accept")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-accepted"),
+        Click(ui("tab-part-studio-1")),
+        Wait(20),
+        Custom("rename-part Part 1 = Arm"),
+        Wait(20),
+        Click(ui("tab-part-studio-2")),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-source-renamed"),
+    ],
+)

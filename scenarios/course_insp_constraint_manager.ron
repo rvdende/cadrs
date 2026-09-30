@@ -1,0 +1,132 @@
+// P3D.2 (IR2, IR6.2–IR6.5, X1, X2): the Constraint manager on the inspection stand-in
+// (`inspection` set-up command, `cadrs_core::samples::inspection`: a ring (Sketch 1 /
+// Extrude 1, Fillet 1) and a tab (Sketch 2 / Extrude 2) whose Sketch 2 uses the ring's outer
+// bottom edge (Ø30) and has a circle dimensioned Ø18 made concentric and Equal to it, and
+// doesn't close).
+// 01 the broken Part Studio (IR5.1, IR6.1): Sketch 2 and Extrude 2 red with their ⓘ, the red "!"
+//    on the Features header.
+// 02 Sketch 2 edited (IR6.2, IR5.3, IR5.4): the yellow "Sketch could not be solved." beside the
+//    dialog, whose title is red; the conflicting circle red; the Part Studio rolled back to
+//    Sketch 2 (Extrude 2 grey, italic and not built, the rollback bar under Sketch 2); Final
+//    next to the diagnostics icon.
+// 03 the footer's "Show sketch diagnostic tools" icon: Profile inspector… / Constraint
+//    manager… (IR1.2, IR6.3).
+// 04 the Constraint manager under the dialog (IR2.1–IR2.5): Filters (the "Automatically select
+//    constraints" switch, the Type grid, Mode, Status), Sort by constraint / Sort by entity, and
+//    every constraint with its entities under it: the shared corners (Coincident 1–3, their
+//    trash greyed: coincident by construction; Coincident 4 the circles' shared center, "[Extrude
+//    1]" as one is projected), Use 1 with its source in brackets, Diameter 1, Concentric 1,
+//    Equal 1 …; the list takes the panel's height and scrolls; Delete all.
+// 05 Status → Errors (IR6.4, IR2.6): the whole conflicting set, bold red: "Equal 1 [Extrude 1]"
+//    and "Diameter 1" (removing either lets the sketch solve).
+// 06 hovering Equal 1 lights up its two circles with a thick orange band over the red, and its
+//    two glyphs turn orange (IR2.6).
+// 07 Sort by entity (IR2.4): Circle 1 and Circle 2, each with its conflicting constraints under
+//    it.
+// 08 back to Sort by constraint; Equal 1's trash (IR6.5): the list is empty, Delete all greys
+//    out, the Ø18 holds, the circles turn black, the toast goes and the title is black again.
+// 09 Errors off, Type → Coincident only: the three shared corners.
+// 10 "Automatically select constraints" off with the tab's top line selected: only the
+//    constraints of the selection (the two corners on that line) (IR2.3).
+// 11 switch back on, Type → Use and Diameter: Use 1 and Diameter 1; Delete all removes both in
+//    one step (IR2.7): the projected circle turns blue (free), the Ø18 goes.
+// 12 Ctrl+Z: both are back (one undo step).
+// 13 the × closes the panel.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("inspection"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-broken"),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-edit")),
+        WaitFor("sketch-dialog"),
+        Wait(10),
+        Custom("view 0 90 13 3 0 0.055"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-sketch-not-solved"),
+        Click(ui("sketch-diagnostics")),
+        WaitFor("sketch-diag-menu"),
+        Wait(3),
+        Hover(ui("sketch-diag-constraints")),
+        Wait(3),
+        Screenshot("03-diagnostics-menu"),
+        Click(ui("sketch-diag-constraints")),
+        WaitFor("constraint-manager"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-constraint-manager"),
+        Click(ui("cm-status-errors")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-errors-filter"),
+        Hover(ui("cm-row-equal-1")),
+        Wait(10),
+        Screenshot("06-hover-highlights"),
+        Click(ui("cm-sort-1")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-sort-by-entity"),
+        Click(ui("cm-sort-0")),
+        Wait(10),
+        Click(ui("cm-row-equal-1-delete")),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-equal-deleted"),
+        Click(ui("cm-status-errors")),
+        Wait(5),
+        Click(ui("cm-type-coincident")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("09-type-coincident"),
+        ClickWorld(26, 5),
+        Wait(5),
+        Click(ui("cm-auto-select")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-selection-only"),
+        Click(ui("cm-auto-select")),
+        Wait(5),
+        Click(ui("cm-type-coincident")),
+        Wait(5),
+        Click(ui("cm-type-use")),
+        Wait(3),
+        Click(ui("cm-type-diameter")),
+        Wait(10),
+        Click(ui("cm-delete-all")),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("11-delete-all"),
+        Key("Ctrl+Z"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("12-undone"),
+        Click(ui("constraint-manager-close")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("13-closed"),
+    ],
+)

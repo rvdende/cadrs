@@ -1,0 +1,16 @@
+Item,Quantity,Part number,Name,Description,Material,Mass
+,26,,Cylinder assembly,,,3.083 lb
+1,1,,Rear Cap mount,,Aluminum - 6061,0.038 lb
+2,1,,Barrel,"Tube, 1.5"" bore, anodized",Polycarbonate,0.160 lb
+3,1,,Rear Cap subassembly,,,0.509 lb
+3.1,1,,Rear Cap,,Aluminum - 6061,0.503 lb
+3.2,2,,O-Ring 0.125,,Nitrile Rubber,0.003 lb
+4,1,,Top Cap subassembly,,,0.484 lb
+4.1,1,,Retaining Plate,,Aluminum - 6061,0.015 lb
+4.2,1,,Top Cap,,Aluminum - 6061,0.463 lb
+4.3,2,,O-Ring 0.125,,Nitrile Rubber,0.003 lb
+5,4,,Structural Rod,,Steel,0.235 lb
+6,1,,Piston & Rod,,Steel,0.710 lb
+7,3,,O-Ring 0.185,,Nitrile Rubber,0.004 lb
+8,6,HCS-1/4-28-0.75-SS,Hex cap screw 1/4-28 x 0.75,Hex cap screw 1/4-28 x 0.75 Stainless Steel,Stainless Steel - 304,0.018 lb
+9,8,HN-3/8-16-SS,Hex nut 3/8-16,Hex nut 3/8-16 Stainless Steel,Stainless Steel - 304,0.015 lb

@@ -1,0 +1,98 @@
+// P3D.4 (IR3.1–IR3.8, IR5.5, X4, X6): Repair from a broken feature, on the Conrod stand-in as
+// shipped (`fixtures/conrod_standin.cadrs`: Sketch 2 broken, Extrude 4 and Circular pattern 1
+// red; its history holds the healthy states).
+// 01 right-click Extrude 4: "Edit healthy moment of Extrude 4…" is enabled (it has a last
+//    healthy regeneration in the history) (IR3.3, IR5.5).
+// 02 chosen: the Repair panel shows the Part Studio at that regeneration ("Viewing Main ::
+//    Conrod :: Insert : Fillet 1": the three notches and the slot), beside the main view,
+//    which is split in two; Extrude 4's dialog is open with "Missing Face of Sketch 2"; the
+//    right strip has the Repair icon (IR3.4, IR3.8).
+// 03 the pointer on "Missing Face of Sketch 2": the notch it was, outlined in yellow in the
+//    Repair panel (IR3.6); the item's Replace reference icon shows.
+// 03b right-click the missing item: "Edit healthy moment of Extrude 4…" there too (IR3.3);
+//    chosen, the panel stays on that entry.
+// 04 the main view orbited (right-drag): the Repair view turns with it (Synchronize view on,
+//    IR3.5).
+// 05 Synchronize view off, the Repair view orbited: the main view stays.
+// 06 right-click in the Repair panel: Zoom to fit, Isometric (IR3.7).
+// 07 Isometric.
+// 08 Zoom to fit.
+// 09 the Repair panel's own view cube, its Top face clicked: the Repair view from above.
+// 10 the right strip's Repair icon closes the panel; the main view has the whole width again.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("fixture conrod_standin"),
+        Wait(60),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(20),
+        Key("F"),
+        Wait(40),
+        RightClick(ui("feature-extrude-4")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Hover(ui("feature-edit-healthy")),
+        Wait(5),
+        Screenshot("01-edit-healthy-moment"),
+        Click(ui("feature-edit-healthy")),
+        WaitFor("repair-panel"),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-repair-panel"),
+        Hover(ui("extrude-regions-field-item-0")),
+        Wait(20),
+        Screenshot("03-missing-reference-hovered"),
+        RightClick(ui("extrude-regions-field-item-0")),
+        WaitFor("missing-item-menu"),
+        Wait(5),
+        Screenshot("03b-missing-item-menu"),
+        Click(ui("missing-edit-healthy")),
+        Wait(20),
+        Click(ui("extrude-dialog-cancel")),
+        Wait(20),
+        RightDrag(at(560, 800), at(640, 760)),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-synchronized"),
+        Click(ui("repair-sync")),
+        Wait(5),
+        RightDrag(at(1250, 800), at(1150, 820)),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-unsynchronized"),
+        RightClick(at(1250, 850)),
+        WaitFor("repair-view-menu"),
+        Wait(5),
+        Screenshot("06-repair-menu"),
+        Click(ui("repair-isometric")),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-isometric"),
+        RightClick(at(1250, 850)),
+        WaitFor("repair-view-menu"),
+        Wait(5),
+        Click(ui("repair-zoom-fit")),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-zoom-to-fit"),
+        Click(ui_at("repair-view-cube", 0.5, 0.35)),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("09-repair-cube-top"),
+        Click(ui("panel-repair")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-closed"),
+    ],
+)

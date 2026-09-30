@@ -1,0 +1,101 @@
+// P3G.2 (external-references.md ER2.7, ER4.3, ER4.4, ER5.5, ER X1, ER X3; derived-and-linking.md
+// DV1.10; lesson-update-all-references.png): the Reference manager, on the linked-documents block:
+// document B "Block consumer" with two instances of A@V1 (`linked-block consumer 2`); A then gets
+// V2 (depth 40).
+// 01 (ER4.3) the toolbar's "Update all references to latest versions" (right of undo and redo),
+//    its tooltip; both rows have the blue badge.
+// 02 (ER4.4) the Reference manager from it: title and ✕, Update to latest | Selective update, the
+//    group "Newer versions available for 1 document", "Block source" "V1 ⇒ V2", the "?" and
+//    Update all.
+// 03 the group collapsed (the caret).
+// 04 Update all: both at V2 (40 high, no badges).
+// 05 (ER5.4) Part 1 <1>'s version icon clicked: the manager for it, Update to latest: "All
+//    references are up to date".
+// 06 (ER2.7) Selective update: its row ticked, "Part 1 <1> · Block source", "V2 ⇒ V2", the
+//    version graph button.
+// 07 (ER X3) the version graph: Main (another document: not selectable), V2, V1, Start.
+// 08 V1 picked: "V2 ⇒ V1".
+// 09 the "?" tooltip.
+// 10 Update selected: Part 1 <1> back at V1 (25 high) with the blue badge (V2 is newer).
+// 11 its mass properties: 37 500 mm³.
+// 12 (ER5.5) the toolbar's button again → Selective update: one row per reference, Part 1 <1>
+//    (V1, ticked: it has an update) and Part 1 <2> (V2, not ticked).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        Custom("linked-block consumer 2"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        Custom("linked-block edit"),
+        Wait(40),
+        Hover(ui("update-all-references")),
+        Wait(40),
+        Screenshot("01-update-all-button"),
+        Click(ui("update-all-references")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("02-reference-manager"),
+        Click(ui("refman-collapse")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-group-collapsed"),
+        Click(ui("refman-collapse")),
+        Wait(5),
+        Click(ui("refman-update")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-updated-all"),
+        Click(ui("instance-row-1-linked")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-icon-opens-manager"),
+        Click(ui("refman-tabs-1")),
+        Wait(10),
+        Screenshot("06-selective-update"),
+        Click(ui("refman-graph-1")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-version-graph"),
+        Click(ui("refman-graph-node-2")),
+        Wait(10),
+        Screenshot("08-v1-picked"),
+        Hover(ui("refman-help")),
+        Wait(40),
+        Screenshot("09-help"),
+        Click(ui("refman-update")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-back-at-v1"),
+        Click(ui("instance-row-1")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-mass-37500"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        Click(ui("update-all-references")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        Click(ui("refman-tabs-1")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("12-selective-checkboxes"),
+    ],
+)

@@ -1,0 +1,37 @@
+// P3H.2 (X5, PCB8): the Vision PCB fixture (`fixtures/idf/vision controller/Vision PCB.emn`/`.emp`,
+// 4 × 3 in, four Ø125 thou corner holes, 29 components) turned into B-rep by `cadrs_pcb` and put
+// into the Part Studio as parts through the command layer (`Custom("pcb-board …")`, until the
+// PCB Studio tab of P3H.3 shows it). Compare `v4-import-idf-poster.png` / `v3-interface-poster.png`:
+// a green board with its holes, coloured component boxes (ICs dark grey, passives tan, headers
+// blue, the crystal silver, diodes and the transistor darker grey), two parts on the bottom.
+// The default planes are hidden (P) so zoom to fit frames the board.
+// 01 isometric, zoomed to fit; 02 from the top (U1, "component A", in the middle); 03 from below
+// (C10 and D3 under the board).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-board vision controller/Vision PCB"),
+        Wait(20),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-vision-iso"),
+        Key("Shift+5"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Screenshot("02-vision-top"),
+        Key("Shift+6"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Screenshot("03-vision-bottom"),
+    ],
+)

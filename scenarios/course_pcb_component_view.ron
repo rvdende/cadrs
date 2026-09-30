@@ -1,0 +1,42 @@
+// P3H.4 (PCB4.5, PCB11.7b, PCB11.8): the component view. Compare
+// `v8-component-properties-poster.png`: the component alone on an isometric grid floor with a
+// blue Z axis, the view cube top right, the generic box dark red on top with bright red sides,
+// and the Component pane.
+// 01 click the board under Components: its packages are listed; 02 click QFP100_600MIL: the
+//    component view with the Component pane; 03 another package (the 20-pin header); 04 click
+//    the board under Components again: back to the board view as it was.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Custom("pcb-import vision controller/Vision PCB"),
+        WaitFor("pcb-board-vision-pcb"),
+        Wait(40),
+        Click(ui("pcb-components-vision-pcb")),
+        WaitFor("pcb-component-vision-pcb-qfp100-600mil"),
+        Wait(10),
+        MoveTo(1100, 900),
+        Screenshot("01-components-listed"),
+        Click(ui("pcb-component-vision-pcb-qfp100-600mil")),
+        WaitFor("pcb-component-pane"),
+        Wait(40),
+        ExpectText("pcb-part-name", "QFP100_600MIL"),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("02-component-view"),
+        Click(ui("pcb-component-vision-pcb-hdr-1x20")),
+        Wait(40),
+        ExpectText("pcb-part-name", "HDR_1X20"),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("03-another-component"),
+        Click(ui("pcb-components-vision-pcb")),
+        Wait(40),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("04-back-to-the-board"),
+    ],
+)

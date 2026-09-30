@@ -1,0 +1,73 @@
+// P3.10 / X7: the Mass and section properties panel's Override mass, reference mate connector
+// and Face tab, on a 100 mm cube (values asserted in `cadrs_core/tests/part_studio_options.rs`:
+// `mass_properties_override_and_reference`, `face_areas_are_exact`).
+// 01 no material: Mass, Center of mass and inertia blank (the part's name red), as Onshape.
+// 02 Override mass 10 kg: the uniform cube's centre (50, 50, 50) and inertia m(a² + a²)/12 =
+//    16 666.667 kg·mm² on each axis.
+// 03 Mate connector for reference frame = the top face's implicit connector (its centre, Z up):
+//    the centre of mass is (0, 0, −50) in its frame.
+// 04 the Face tab: the top and right faces: Area 20 000 mm², Centroid (75, 50, 75).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("sketch top rect 0 0 100 100"),
+        Wait(5),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Wait(3),
+        Click(xyz(50, 50, 0)),
+        Wait(3),
+        Click(ui("extrude-depth-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("100"),
+        Key("Enter"),
+        Wait(10),
+        Key("F"),
+        Wait(40),
+        Click(ui("part-row-part-1")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-no-material-blank"),
+        Click(ui("mass-override")),
+        Wait(10),
+        Click(ui("mass-override-value-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Tab"),
+        Wait(10),
+        // The typed mass survives the Tab out of the field (a lost value showed 1 kg).
+        ExpectText("mass-override-value", "10.000 kg"),
+        ExpectText("mass-dialog", "16666.667"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-override-10-kg"),
+        Click(ui("mass-mate-connector")),
+        Wait(5),
+        Click(xyz(50, 50, 100)),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-reference-top-face-connector"),
+        Click(ui("mass-tabs-1")),
+        Wait(10),
+        Click(xyz(50, 50, 100)),
+        Wait(5),
+        Click(xyz(100, 50, 50)),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-face-tab-two-faces"),
+    ],
+)

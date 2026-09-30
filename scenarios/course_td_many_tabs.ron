@@ -1,0 +1,107 @@
+// P3E.2 (essential-tips.md T1.2, X1; test-drive.md TD5.3, TD5.4): a document of 60 tabs
+// (`tab-fixture 60`: small Part Studios "Studio 2" …, every fifth an Assembly, every twelfth a
+// Drawing). The strip scrolls (wheel, chevrons), ▾ lists the tabs out of sight, the selected
+// tab is kept in view, the Tab manager lists and filters all 60, and folders shorten the strip.
+// 01 the 60 tabs: the strip starts at Studio 2; the right chevron, a fade and ▾ show there are
+//    more.
+// 02 the wheel over the strip: scrolled a few whole tabs (fades at both ends).
+// 03 ▾: the tabs out of sight listed (a scrollbar; a separator between those before and after
+//    the view; the active tab checked), the 12th hovered.
+// 04 it is picked: selected and scrolled into view.
+// 05 "+" → Create Part Studio: the new tab ("Part Studio 1", right of it) selected and in view.
+// 06 the Tab manager: 61 tabs, its list scrolled to the end.
+// 07 the Drawings filter: the 5 drawings ("5 of 61 tabs").
+// 08 Clear; rows 1–12 selected (click, Shift+click) and put in a new folder, "First twelve"
+//    typed into its row.
+// 09 the strip after it: the folder tab first, then Studio 14 …; the manager shows the folder
+//    row.
+// 10 the folder opened in the tab bar: Home, "First twelve", its 12 tabs.
+// 11 the last tab (Drawing 5) chosen in the Tab manager: the bar leaves the folder for the top
+//    level and scrolls the tab into view; the tab cut at the left end is veiled by the fade.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("tab-fixture 60"),
+        Wait(90),
+        Key("F"),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-sixty-tabs"),
+        Scroll(ui("tab-strip"), -4),
+        Wait(15),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("02-wheel-scrolled"),
+        Click(ui("tab-overflow")),
+        WaitFor("tab-overflow-menu"),
+        Wait(10),
+        Hover(ui("tab-overflow-12")),
+        Wait(20),
+        Screenshot("03-overflow-list"),
+        Click(ui("tab-overflow-12")),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-picked-in-view"),
+        Click(ui("insert-tab")),
+        WaitFor("insert-tab-menu"),
+        Wait(5),
+        Click(ui("create-part-studio")),
+        Wait(40),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-new-tab-in-view"),
+        Click(ui("tab-manager")),
+        WaitFor("tab-manager-panel"),
+        Wait(10),
+        Scroll(ui("tab-manager-rows"), -60),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-tab-manager-61"),
+        Click(ui("tab-manager-filter-drawings")),
+        Wait(10),
+        ExpectText("tab-manager-count", "5 of 61 tabs"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-drawings-filter"),
+        Click(ui("tab-manager-clear")),
+        Wait(10),
+        Scroll(ui("tab-manager-rows"), 80),
+        Wait(10),
+        Click(ui("tab-manager-row-1")),
+        Wait(5),
+        KeyDown("Shift"),
+        Click(ui("tab-manager-row-12")),
+        KeyUp("Shift"),
+        Wait(5),
+        Click(ui("tab-manager-new-folder")),
+        WaitFor("tab-manager-folder-rename-field"),
+        Wait(10),
+        Key("Ctrl+A"),
+        Type("First twelve"),
+        Wait(3),
+        Screenshot("08-new-folder-of-twelve"),
+        Key("Enter"),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-strip-with-folder"),
+        Click(ui("tab-folder-first-twelve")),
+        WaitFor("tab-folder-home"),
+        Wait(15),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-folder-open"),
+        Scroll(ui("tab-manager-rows"), -80),
+        Wait(10),
+        Click(ui("tab-manager-row-61")),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-last-tab-in-view"),
+    ],
+)

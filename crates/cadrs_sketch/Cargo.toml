@@ -1,0 +1,20 @@
+[package]
+name = "cadrs_sketch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Persistent face and edge names only (no kernel backend).
+cadrs_kernel.workspace = true
+serde.workspace = true
+slotmap.workspace = true
+earcutr.workspace = true
+nalgebra.workspace = true
+uuid.workspace = true
+ttf-parser.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+ron.workspace = true

@@ -1,0 +1,37 @@
+// M2: planes in the viewport. Hovering the Top plane turns its outline orange; hovering a row
+// in the feature list highlights that plane; clicking selects it (orange); N turns the view
+// normal to the selected plane.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        MoveTo(560, 575),
+        Wait(3),
+        Screenshot("01-hover-top-plane"),
+        Hover(ui("feature-front")),
+        Wait(3),
+        Screenshot("02-hover-front-row"),
+        ClickAt(706, 271),
+        Wait(3),
+        Screenshot("03-click-selects-front"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-front-selected"),
+        Key("N"),
+        Wait(30),
+        Screenshot("05-normal-to-front"),
+        ClickAt(1420, 780),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("N"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("06-normal-to-top"),
+        Key("Shift+7"),
+        Wait(30),
+        Screenshot("07-isometric-top-selected"),
+    ],
+)

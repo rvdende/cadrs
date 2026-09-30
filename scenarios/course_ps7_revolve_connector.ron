@@ -1,0 +1,50 @@
+// P3.10 / PS7.2: the Revolve axis from a mate connector. A 10 × 30 rectangle 10 mm off the
+// origin on Front (revolved about the origin's Z: the tube r 10..20 × 30, 9000π mm³, asserted in
+// `cadrs_core/tests/part_studio_options.rs`: `revolve_about_a_mate_connector`).
+// 01 the Revolve axis field's mate connector button on (selected): the next pick is a mate
+//    connector; the origin hovered (its implicit connector).
+// 02 the origin picked: the axis is its mate connector ("Mate connector", Onshape's name for an
+//    implicit one), its Z axis; Full: the tube.
+// 03 accepted; Mass and section properties: 28274.334 mm³ (9000π).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("sketch front rect 10 0 20 30"),
+        Wait(5),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Key("Shift+W"),
+        WaitFor("revolve-dialog"),
+        Wait(5),
+        Click(xyz(15, 0, 15)),
+        Wait(5),
+        Click(ui("revolve-axis-mate-connector")),
+        Wait(10),
+        Hover(xyz(0, 0, 0)),
+        Wait(10),
+        Screenshot("01-connector-button-origin-hovered"),
+        Click(xyz(0, 0, 0)),
+        Wait(30),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-axis-origin-connector-full"),
+        Click(ui("revolve-dialog-accept")),
+        Wait(20),
+        Click(ui("part-row-part-1")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-accepted-mass-9000-pi"),
+    ],
+)

@@ -1,0 +1,62 @@
+// Every cadrs_ui component in its states. Forced states (hover/pressed/disabled/selected) are
+// pinned in the gallery; the steps below also exercise live hover, press, typing, the menu,
+// the tooltip and the dialog.
+Scenario(
+    start: Some("gallery"),
+    steps: [
+        Screenshot("01-gallery"),
+
+        // Live hover, press and click on a button, plus hover on a list row.
+        Hover(ui("gallery-live-button")),
+        Screenshot("02-button-hover"),
+        Press(ui("gallery-live-button")),
+        Screenshot("03-button-pressed"),
+        Release,
+        Hover(ui("gallery-row-live")),
+        Screenshot("04-list-hover-and-click-count"),
+
+        // Text input: click, select all, type, move the caret, select with Shift+Arrow.
+        Click(ui("gallery-input-empty")),
+        Type("Bracket v2"),
+        Key("Home"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Key("Shift+ArrowRight"),
+        Screenshot("05-input-selection"),
+        Key("Backspace"),
+        Type("Hinge"),
+        Key("End"),
+        Screenshot("06-input-edited"),
+
+        // Menu with separator, disabled item, submenu arrow; hover the submenu item.
+        Click(ui("gallery-menu-button")),
+        WaitFor("gallery-menu"),
+        Hover(ui("menu-folder")),
+        Screenshot("07-menu-open"),
+        Hover(ui("menu-import-from")),
+        WaitFor("menu-import-drive"),
+        Screenshot("08-submenu"),
+        Click(ui("menu-import-drive")),
+        Screenshot("09-menu-chosen"),
+
+        // Tooltip after the hover delay.
+        Hover(ui("gallery-tooltip-button")),
+        Wait(40),
+        Screenshot("10-tooltip"),
+
+        // Dialog: opens with the name selected; type over it; Escape closes.
+        Click(ui("gallery-open-dialog")),
+        WaitFor("gallery-dialog"),
+        Wait(3),
+        Screenshot("11-dialog"),
+        Type("My part"),
+        Screenshot("12-dialog-typed"),
+        Key("Escape"),
+        Wait(2),
+        Screenshot("13-dialog-closed"),
+    ],
+)

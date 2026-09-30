@@ -1,0 +1,19 @@
+[package]
+name = "cadrs_kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Solid-modeling layer for cadrs: our own API over swappable B-rep kernel backends"
+
+[dependencies]
+nalgebra = { workspace = true, features = ["serde-serialize"] }
+serde.workspace = true
+uuid.workspace = true
+opencascade = { workspace = true, optional = true }
+glam = { workspace = true, optional = true }
+
+[features]
+default = []
+# OpenCascade backend (builds OCCT 7.8.1 from source, about 6 min cold).
+occt = ["dep:opencascade", "dep:glam"]

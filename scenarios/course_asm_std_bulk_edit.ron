@@ -1,0 +1,107 @@
+// P3B.5 / A19.9: bulk edit of standard content (intro-to-assemblies.md A19.9), on the Ex2 end
+// state (`fixtures/pneumatic_cylinder_ex2.cadrs`) with six hex cap screws 1/4-20 x 0.75 placed on
+// the Retaining Plate (as `course_asm_std_batch` places them).
+// 01 three screws selected, right-click → Select instances with same configuration (A19.9):
+//    all six.
+// 02 three screws selected → right-click → Edit standard content instance…
+// 03 the Edit standard content dialog, titled "Edit standard content (3)": Standard, Category, Class and Component
+//    fixed; Size 1/4-28 and Length 1.25 chosen (the same heads, so nothing collides on the
+//    plate's hole circle).
+// 04 Update, ✓: the three change at once (Hex cap screw 1/4-28 x 1.25 <1>–<3>, longer shanks
+//    down the holes), their Fastened mates kept; the first one's row hovered: its tooltip shows
+//    the new name.
+// 05 ✓: the list with both configurations.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture pneumatic_cylinder_ex2"),
+        Wait(10),
+        Click(ui("tab-cylinder-assembly")),
+        Wait(10),
+        Hover(ui("instance-row-14")),
+        Wait(3),
+        Click(ui("instance-row-14-eye")),
+        Wait(5),
+        RightClick(ui("instance-row-3")),
+        WaitFor("asm-zoom-selection"),
+        Click(ui("asm-zoom-selection")),
+        Wait(30),
+        Key("Escape"),
+        Wait(3),
+        Click(at(262, 100)),
+        Wait(3),
+        Click(xyz(17.348, 0.0, 168.275)),
+        Wait(3),
+        Click(xyz(8.674, 15.024, 168.275)),
+        Wait(3),
+        Click(xyz(-8.674, 15.024, 168.275)),
+        Wait(3),
+        Click(xyz(-17.348, 0.0, 168.275)),
+        Wait(3),
+        Click(xyz(-8.674, -15.024, 168.275)),
+        Wait(3),
+        Click(xyz(8.674, -15.024, 168.275)),
+        Wait(3),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(3),
+        Click(ui("insert-source-2")),
+        Wait(10),
+        Click(ui("std-insert")),
+        Wait(15),
+        Click(ui("insert-dialog-accept")),
+        Wait(10),
+        // A19.9: Select instances with same configuration.
+        RightClick(ui("instance-row-18")),
+        WaitFor("asm-select-same-config"),
+        Click(ui("asm-select-same-config")),
+        Wait(5),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01-a19.9-select-same-configuration"),
+        // Space clears the selection (all six from 01), so the three clicks add three screws
+        // (a click on a row toggles it; with the six still selected they toggled off).
+        MoveTo(1300, 250),
+        Key("Space"),
+        Wait(3),
+        Click(ui("instance-row-18")),
+        Wait(2),
+        Click(ui("instance-row-19")),
+        Wait(2),
+        Click(ui("instance-row-20")),
+        Wait(2),
+        RightClick(ui("instance-row-19")),
+        WaitFor("asm-std-edit"),
+        Hover(ui("asm-std-edit")),
+        Wait(3),
+        Screenshot("02-a19.9-edit-standard-content-instance"),
+        Click(ui("asm-std-edit")),
+        WaitFor("std-edit-dialog"),
+        Wait(5),
+        Click(ui("std-size")),
+        Wait(3),
+        Click(ui("std-size-option-1")),
+        Wait(5),
+        Click(ui("std-length")),
+        Wait(3),
+        Click(ui("std-length-option-5")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-a19.9-size-and-length"),
+        Click(ui("std-update")),
+        Wait(15),
+        Click(ui("std-edit-dialog-accept")),
+        Wait(10),
+        // The rows cut the names short: an edited screw's tooltip shows its new size.
+        Hover(ui("instance-row-18")),
+        Wait(70),
+        Screenshot("04-a19.9-updated-three-at-once"),
+        Click(at(262, 100)),
+        Wait(3),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05-a19.9-two-configurations"),
+    ],
+)

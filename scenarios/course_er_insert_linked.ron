@@ -1,0 +1,294 @@
+// P3G.1 (external-references.md ER1, ER2.1, ER6.4, ER6.5, ER6.7, ER6.18, ER X5, ER X6; DV1.1,
+// DV1.7, DV1.8, DV1.11, DV2.1–DV2.3): inserting a part from another document at a version, on
+// the linked-documents block (`cadrs_core::samples::linked_block`): document A "Block source"
+// (Part Studio "Block", 50 × 30 × 25 = 37 500 mm³, version V1, in the library folder "Linked
+// parts"), and document B "Block consumer" with an empty "Assembly 1".
+// 01 B's Assembly 1, empty.
+// 02 Insert (ex1-step4 A): Current document | Other documents | Standard content; the pointer on
+//    Other documents.
+// 03 Other documents (lesson-inserting-linked-documents.png): the filter button, "Search or paste
+//    document id", and the locations My documents, Recently opened, Created by me and the folder
+//    "Linked parts".
+// 04 the folder: its documents, "Block source" with its thumbnail and newest version "V1", and
+//    "Block copy" (no versions, greyed); the back row "‹ Linked parts".
+// 05 (ER1.3, ex1-step4 B) A's id pasted into the search: only "Block source" is listed.
+// 06 (ER1.6, ex1-step4 C) Block source opened: its name and "↳ V1" under it, the back arrow, the
+//    Create version and Version graph buttons; Part Studios | Assemblies; the studio "Block" and
+//    its part with thumbnails.
+// 07 (ER1.7) the Version graph: Workspace / Version legend, Main (greyed: another document is
+//    linked at a version), V1 (selected), Start.
+// 08 (ER1.8) V1 picked again, the part picked up and following the pointer in the graphics area.
+// 09 placed: "Inserted: 1".
+// 10 (ER1.9, ER6.5, `ex1-step5.png`) accepted: "Part 1 <1>" with the version (link) icon in a
+//    column at the right end of its row; its tooltip "Linked document: Block source › Block (V1)".
+// 11 (ER6.18, ER X6) its mass properties: 37 500 mm³ (50 · 30 · 25), Aluminum 6061: 0.101 kg,
+//    centre of mass (25, 15, 12.5) where it was placed.
+// 11b (ER2.3) A edited in its own document (Extrude 1 25 → 40) and V2 made there
+//    (`linked-block edit`): Part 1 <1> gets the blue update badge, its tooltip "V2 is available";
+//    the tab Assembly 1 its badge too.
+// 12 (ER2.1, DV1.11) B unchanged: the instance still 37 500 mm³.
+// 13 Insert → Other documents → Block source again: the newest version is now "↳ V2".
+// 14 V2's part placed beside the V1 instance and accepted: "Part 1 <2>" (numbered with the V1
+//    instance), 60 000 mm³ (50 · 30 · 40), the V1 instance still 25 high.
+// 15 (ER X5, ER6.7) Ctrl+C / Ctrl+V with both instances selected: "Part 1 <3>" (V1) and
+//    "Part 1 <4>" (V2) keep their links; the tooltip of <4> names V2.
+// 15b (ER6.7) the linked instance's menu: Update linked document… (hovered), Open linked
+//    document (enabled since P3G.4) and Pin reference.
+// 16 (DV1.8, ER1.5) Insert → Other documents → Linked parts → Block copy: "No versions", the
+//    message and its Create version button.
+// 17 Create version: the "Create version from Main" dialog (Name V1, Description, Create,
+//    Create version and edit properties, Cancel).
+// 18 Created: Block copy opens at its new "↳ V1" with its studio listed. Cancelled (nothing
+//    inserted).
+// 18a B versioned from the top bar (Create version → Create): the versions counter goes 0 → 1
+//    (the pointer on it).
+// 18b (DV1.5) "Cycle partner" (whose assembly Top holds B's Assembly 1 at that version) opened
+//    in Other documents → Assemblies.
+// 18c Top picked and clicked into the view: refused, the red error toast "Circular reference:
+//    Block consumer › Assembly 1 → Cycle partner › Top → Block consumer"; nothing inserted.
+// 19 (DV1.7, ER1.10) A moved to the trash (`linked-block trash`): the link icons turn red, the
+//    tooltip "Cannot open a document in the trash. Restore the document from Trash."; the
+//    geometry stays.
+// 20 A deleted for good (`linked-block purge`): "Resource does not exist"; the four instances
+//    still 2 · 37 500 + 2 · 60 000 = 195 000 mm³ (the whole assembly's mass properties).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-block-consumer-assembly"),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Hover(ui("insert-source-1")),
+        Wait(10),
+        Screenshot("02-insert-other-documents-tab"),
+        Click(ui("insert-source-1")),
+        WaitFor("insert-other-loc-mine"),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-other-documents-locations"),
+        WaitFor("insert-other-loc-folder-linked-parts"),
+        Click(ui("insert-other-loc-folder-linked-parts")),
+        WaitFor("insert-other-doc-block-source"),
+        Wait(10),
+        Hover(ui("insert-other-doc-block-source")),
+        Wait(3),
+        Screenshot("04-folder-documents"),
+        Click(ui("insert-other-search-field")),
+        Wait(3),
+        Type("3a610000-0000-0000-0000-000000000100"),
+        Wait(10),
+        Screenshot("05-pasted-id"),
+        Click(ui("insert-other-doc-block-source")),
+        WaitFor("insert-other-header"),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-block-source-at-v1"),
+        Click(ui("insert-other-graph")),
+        WaitFor("insert-graph"),
+        Wait(5),
+        Hover(ui("insert-graph-node-1")),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-version-graph"),
+        Click(ui("insert-graph-node-1")),
+        Wait(10),
+        Click(ui("insert-part-part-1")),
+        Wait(3),
+        Hover(world(80, 40)),
+        Wait(5),
+        Screenshot("08-part-follows-pointer"),
+        Click(world(80, 40)),
+        Wait(10),
+        Hover(ui("insert-count")),
+        Wait(3),
+        Screenshot("09-inserted-1"),
+        Click(ui("insert-dialog-accept")),
+        Wait(10),
+        Key("F"),
+        Wait(20),
+        Hover(ui("instance-row-1-linked")),
+        Wait(40),
+        Screenshot("10-linked-instance-icon"),
+        Click(ui("instance-row-1")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-mass-37500"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        Custom("linked-block edit"),
+        Wait(20),
+        Hover(ui("instance-row-1-linked")),
+        Wait(40),
+        Screenshot("11b-source-edited-badge"),
+        // Part 1 <1> is still selected.
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("12-source-edited-still-37500"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-source-1")),
+        WaitFor("insert-other-loc-mine"),
+        Wait(5),
+        Click(ui("insert-other-loc-mine")),
+        WaitFor("insert-other-doc-block-source"),
+        Wait(5),
+        Click(ui("insert-other-doc-block-source")),
+        WaitFor("insert-other-header"),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("13-newest-is-v2"),
+        Click(ui("insert-part-part-1")),
+        Wait(3),
+        Hover(world(80, -60)),
+        Wait(3),
+        Click(world(80, -60)),
+        Wait(10),
+        Click(ui("insert-dialog-accept")),
+        Wait(10),
+        Key("F"),
+        Wait(20),
+        // A row click toggles it: <1> off, <2> on.
+        Click(ui("instance-row-1")),
+        Wait(3),
+        Click(ui("instance-row-2")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("14-v2-instance-60000"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        // A row click adds to the selection: with <2> still selected, <1> joins it.
+        Click(ui("instance-row-1")),
+        Wait(3),
+        Key("Ctrl+C"),
+        Wait(3),
+        MoveTo(1100, 300),
+        Wait(3),
+        Key("Ctrl+V"),
+        Wait(20),
+        Key("F"),
+        Wait(20),
+        Hover(ui("instance-row-4-linked")),
+        Wait(40),
+        Screenshot("15-pasted-keeps-link"),
+        // ER6.7: the linked instance's menu: its P3G.2 / P3G.3 items, disabled with their tooltips.
+        RightClick(ui("instance-row-1")),
+        WaitFor("assembly-context-menu"),
+        Wait(5),
+        Hover(ui("asm-update-linked")),
+        Wait(40),
+        Screenshot("15b-linked-instance-menu"),
+        Key("Escape"),
+        Wait(5),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-source-1")),
+        WaitFor("insert-other-loc-mine"),
+        Wait(3),
+        WaitFor("insert-other-loc-folder-linked-parts"),
+        Click(ui("insert-other-loc-folder-linked-parts")),
+        WaitFor("insert-other-doc-block-copy"),
+        Wait(5),
+        Click(ui("insert-other-doc-block-copy")),
+        WaitFor("insert-other-no-version"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("16-no-versions"),
+        Click(ui("insert-other-no-version-create")),
+        WaitFor("create-version-dialog"),
+        Wait(10),
+        Screenshot("17-create-version-dialog"),
+        Click(ui("create-version-create")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("18-created-v1-opened"),
+        Click(ui("insert-dialog-cancel")),
+        Wait(10),
+        // DV1.5: B gets a version; "Cycle partner" links B's Assembly 1 at it; inserting Cycle
+        // partner's Top into B's Assembly 1 is refused.
+        Click(ui("document-create-version")),
+        WaitFor("create-version-dialog"),
+        Wait(5),
+        Click(ui("create-version-create")),
+        Wait(10),
+        Hover(ui("document-versions")),
+        Wait(40),
+        Screenshot("18a-consumer-versioned"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Custom("linked-block cycle"),
+        Wait(10),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-source-1")),
+        WaitFor("insert-other-loc-mine"),
+        Wait(3),
+        Click(ui("insert-other-loc-mine")),
+        WaitFor("insert-other-doc-cycle-partner"),
+        Wait(5),
+        Click(ui("insert-other-doc-cycle-partner")),
+        WaitFor("insert-other-header"),
+        Wait(10),
+        Click(ui("insert-kind-1")),
+        Wait(10),
+        Screenshot("18b-cycle-partner-assemblies"),
+        Click(ui("insert-assembly-top")),
+        Wait(3),
+        Hover(world(60, 200)),
+        Wait(3),
+        Click(world(60, 200)),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("18c-circular-insert-refused"),
+        // The error toast stays until closed.
+        Click(ui("toast-close")),
+        Wait(5),
+        Click(ui("insert-dialog-cancel")),
+        Wait(10),
+        Custom("linked-block trash"),
+        Wait(240),
+        Hover(ui("instance-row-4-linked")),
+        Wait(40),
+        Screenshot("19-source-trashed"),
+        Custom("linked-block purge"),
+        Wait(240),
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        Hover(ui("instance-row-1-linked")),
+        Wait(40),
+        Screenshot("20-source-deleted-mass-kept"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+    ],
+)

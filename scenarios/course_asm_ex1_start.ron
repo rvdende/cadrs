@@ -1,0 +1,131 @@
+// P3B.1 / A5: "Exercise: Start an Assembly" (intro-to-assemblies.md A5, ex1-step1..10) on the
+// stand-in `fixtures/motor_mount_standin.cadrs` (Onshape's public document can't be copied; see
+// intro-to-assemblies-gaps.md "Ex1 Start an Assembly"), every step through the UI:
+// 01 (A5.1, ex1-step1) the copied document: Part Studio "Motor Mount", one part, inch / pound.
+// 02 (A5.2, ex1-step2) + → Create Assembly, renamed "Mount Assembly".
+// 03 (A5.3, ex1-step3) Insert → Current document → Part Studios → the part, clicked into the
+//    graphics area off the origin ("Inserted: 1"); 04 accepted.
+// 05 (A5.4, ex1-step4) seen from below: a click on the edge of the hole on the underside puts
+//    the triad there, along the hole's axis.
+// 06 (A5.5, ex1-step5) the triad's origin dragged onto the hole's centre (it snaps; the readout
+//    shows "Diameter: 0.563 in").
+// 07 (A5.6, ex1-step6) right-click the triad origin: Move to origin; 08 moved.
+// 09 (A5.7, ex1-step7) right-click the Z arrow: Anti-align with Z; 10 (A5.8, ex1-step8) the
+//    bracket upside down, the base on top, the upright hanging below.
+// 11 (A5.9, ex1-step9) right-click the instance in the list: Fix; 12 the fixed icon.
+// 13 (A5.10, ex1-step10) the top-level Mount Assembly → Mass properties: 0.866 lb, 8.876 in³,
+//    CoM (0.000, −0.380, −1.137) in (asserted in cadrs_core/tests/course_assemblies.rs).
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture motor_mount_standin"),
+        Wait(10),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Screenshot("01-a5.1-motor-mount-studio"),
+        // A5.2: + → Create Assembly, rename it "Mount Assembly".
+        Click(ui("insert-tab")),
+        WaitFor("create-assembly"),
+        Click(ui("create-assembly")),
+        Wait(5),
+        RightClick(ui("tab-assembly-1")),
+        WaitFor("tab-rename"),
+        Click(ui("tab-rename")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("Mount Assembly"),
+        Key("Enter"),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("02-a5.2-mount-assembly-tab"),
+        // A5.3: Insert → Current document → Part Studios → the part; a click in the graphics
+        // area places it off the origin; ✓.
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-part-dc-motor-mount-stand-in")),
+        Wait(3),
+        Hover(world(90, -40)),
+        Wait(3),
+        Click(world(90, -40)),
+        Wait(5),
+        Hover(ui("insert-count")),
+        Wait(3),
+        Screenshot("03-a5.3-insert-placed"),
+        Click(ui("insert-dialog-accept")),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("04-a5.3-inserted"),
+        // A5.4: seen from below, click the edge of the hole on the underside.
+        Key("Shift+7"),
+        Wait(30),
+        Key("Shift+ArrowUp"),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        Click(xyz(84.944, -38.706, 0)),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("05-a5.4-triad-on-hole-edge"),
+        // A5.5: drag the triad origin onto the hole's centre.
+        Drag(ui("triad-origin"), xyz(90, -33.65, 0)),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("06-a5.5-triad-on-hole-centre"),
+        // A5.6: right-click the triad origin → Move to origin.
+        RightClick(ui("triad-origin")),
+        WaitFor("asm-move-to-origin"),
+        Hover(ui("asm-move-to-origin")),
+        Wait(3),
+        Screenshot("07-a5.6-triad-origin-menu"),
+        Click(ui("asm-move-to-origin")),
+        Wait(5),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("08-a5.6-moved-to-origin"),
+        // A5.7: right-click the Z arrow → Anti-align with Z.
+        RightClick(ui("triad-arrow-z")),
+        WaitFor("asm-anti-align-z"),
+        Hover(ui("asm-anti-align-z")),
+        Wait(3),
+        Screenshot("09-a5.7-z-arrow-menu"),
+        Click(ui("asm-anti-align-z")),
+        Wait(5),
+        // A5.8: check the orientation (isometric).
+        Key("Shift+7"),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("10-a5.8-anti-aligned"),
+        // A5.9: right-click the instance in the list → Fix.
+        RightClick(ui("instance-row-1")),
+        WaitFor("asm-fix"),
+        Hover(ui("asm-fix")),
+        Wait(3),
+        Screenshot("11-a5.9-instance-menu-fix"),
+        Click(ui("asm-fix")),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("12-a5.9-fixed"),
+        // A5.10: the top-level assembly → Mass properties.
+        Click(ui("instance-root")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(5),
+        MoveTo(1420, 780),
+        Wait(2),
+        Screenshot("13-a5.10-mass-properties"),
+    ],
+)

@@ -1,0 +1,68 @@
+// P3.3 / PS1.1, PS1.3–PS1.5: a whole sketch as the input. Sketch 1 on Top: a 100 × 60 plate
+// outline with a Ø30 circle inside it and a Ø12 circle inside that (the sketch isn't trimmed).
+// 01 the sketch: three regions (the plate less the circle, the ring, the small disc).
+// 02 Extrude, and Sketch 1 clicked in the feature list: the field lists "Sketch 1" and the
+//    preview is the outer boundary less the loops inside it (even-odd: the plate with a hole,
+//    and the boss inside the hole), 10 mm.
+// 03 accepted: two parts (the plate, the boss); Sketch 1 hidden (greyed).
+// 04 one master sketch, several features (PS1.3): Sketch 1 shown again with its eye; Extrude 2
+//    takes only the ring between the circles, 4 mm (it touches the plate and the boss: Add).
+// 05 accepted: the ring joins the plate and the boss into one part.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("sketch top rect 0 0 100 60 circle 50 30 15 circle 50 30 6"),
+        Wait(5),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-sketch-three-regions"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Wait(3),
+        Click(ui("feature-sketch-1")),
+        Wait(3),
+        Click(ui("extrude-depth-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("10"),
+        Click(ui("extrude-dialog-title")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-whole-sketch-previewed"),
+        Key("Enter"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-plate-and-boss"),
+        Hover(ui("feature-sketch-1")),
+        Wait(3),
+        Click(ui("feature-sketch-1-visibility")),
+        Wait(5),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Wait(3),
+        Click(xyz(50, 40, 0)),
+        Wait(5),
+        Click(ui("extrude-depth-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("4"),
+        Click(ui("extrude-dialog-title")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-ring-from-the-same-sketch"),
+        Key("Enter"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-one-part"),
+    ],
+)

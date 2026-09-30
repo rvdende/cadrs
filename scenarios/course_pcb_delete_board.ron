@@ -1,0 +1,58 @@
+// P3H.3 (PCB3.6, PCB4.4): right-click a board → Delete this board, and undo. The studio starts
+// with the Vision PCB and the secondary board imported (`Custom("pcb-import …")`, the same
+// command Import runs), the secondary board shown.
+// 01 two boards; 02 right-click the secondary board: "Delete this board"; 03 deleted: Vision PCB
+//    is shown (bold and blue) and a toast offers Undo; 04 undone with the toast's Undo: both
+//    boards back, the secondary board shown again; 05 both boards deleted: the empty studio's
+//    hint, Export and Create assembly greyed; 06 Ctrl+Z twice: both boards back.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Custom("pcb-import vision controller/Vision PCB"),
+        WaitFor("pcb-board-vision-pcb"),
+        Custom("pcb-import secondary board/secondary board"),
+        WaitFor("pcb-board-secondary-board"),
+        Wait(40),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("01-two-boards"),
+        RightClick(ui("pcb-board-secondary-board")),
+        WaitFor("pcb-delete-board"),
+        Hover(ui("pcb-delete-board")),
+        Wait(10),
+        Screenshot("02-board-menu"),
+        Click(ui("pcb-delete-board")),
+        Wait(40),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("03-deleted"),
+        Click(ui("toast-undo")),
+        WaitFor("pcb-board-secondary-board"),
+        Wait(40),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("04-undone"),
+        RightClick(ui("pcb-board-secondary-board")),
+        WaitFor("pcb-delete-board"),
+        Click(ui("pcb-delete-board")),
+        Wait(10),
+        RightClick(ui("pcb-board-vision-pcb")),
+        WaitFor("pcb-delete-board"),
+        Click(ui("pcb-delete-board")),
+        Wait(20),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("05-all-deleted"),
+        Key("Ctrl+Z"),
+        Wait(10),
+        Key("Ctrl+Z"),
+        WaitFor("pcb-board-secondary-board"),
+        Wait(40),
+        Screenshot("06-both-back"),
+        ExpectText("pcb-board-vision-pcb", "Vision PCB"),
+    ],
+)

@@ -1,0 +1,58 @@
+// The feature list and the Parts list scroll on their own, and the divider between them resizes
+// them, as in Onshape. `blocks 22`: 22 separate blocks, each a sketch and a New extrude (44
+// features, 22 parts).
+// 01 The top of the list: a scrollbar at the feature list's right edge and at the Parts list's,
+//    the rows ending clear of them.
+// 02 The wheel over the feature list scrolls it to the end: the last extrudes and the rollback
+//    bar; the header and the filter stay put.
+// 03 Hovering Extrude 21 there, scrolled: its block outlined in the hover orange.
+// 04 Dragging the rollback bar up above Sketch 21, scrolled: the last two blocks rolled back.
+// 05 The wheel over the Parts list scrolls it (the feature list stays where it was).
+// 06 Hovering the divider: the row-resize cursor.
+// 07 The divider dragged up: a shorter feature list, a taller Parts list.
+// 08 Dragged down: the other way; the feature list keeps its minimum below the divider.
+// 09 After another tab and back: the split is kept for this Part Studio.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("blocks 22"),
+        Wait(20),
+        Key("F"),
+        Wait(40),
+        MoveTo(900, 900),
+        Wait(3),
+        Screenshot("01-top"),
+        Scroll(ui("feature-scroll"), -40),
+        Wait(5),
+        Screenshot("02-scrolled-to-end"),
+        Hover(ui("feature-extrude-21")),
+        Wait(10),
+        Screenshot("03-hover-scrolled-row"),
+        Drag(ui("rollback-bar-grip"), ui_at("feature-sketch-21", 0.5, 0.1)),
+        Wait(20),
+        MoveTo(900, 900),
+        Wait(5),
+        Screenshot("04-rollback-while-scrolled"),
+        Scroll(ui("part-rows"), -40),
+        Wait(5),
+        Screenshot("05-parts-scrolled"),
+        Hover(ui("features-splitter")),
+        Wait(5),
+        Screenshot("06-divider-hover"),
+        Drag(ui("features-splitter"), at(120, 350)),
+        Wait(5),
+        Screenshot("07-divider-up"),
+        Drag(ui("features-splitter"), at(120, 850)),
+        Wait(5),
+        Screenshot("08-divider-down"),
+        Click(ui("tab-assembly-1")),
+        Wait(20),
+        Click(ui("tab-part-studio-1")),
+        Wait(30),
+        MoveTo(900, 900),
+        Wait(3),
+        Screenshot("09-split-kept"),
+    ],
+)

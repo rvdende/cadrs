@@ -1,0 +1,92 @@
+# IDF 2.0 sample board authored for cadrs (see fixtures/idf/README.md).
+# Exercises 2.0-only syntax: no owner fields, lowercase keywords, a circular cut-out written as
+# two 180 degree arcs, OTHER/ROUTE/PLACE outlines without 3.0's extra records, PLACE_KEEPOUT
+# with maximum and minimum heights, 5-field drilled holes, 5-field placements with FIXED and
+# a blank status.
+.header
+board_file 2.0 "cadrs fixture generator" 1993/01/05.10:00:00 1
+v2_sample thou
+.end_header
+.BOARD_OUTLINE
+62.0
+0 0.0 0.0 0.0
+0 2000.0 0.0 0.0
+0 2000.0 1500.0 0.0
+0 0.0 1500.0 0.0
+0 0.0 0.0 0.0
+1 900.0 750.0 0.0
+1 1100.0 750.0 -180.0
+1 900.0 750.0 -180.0
+.END_BOARD_OUTLINE
+
+.OTHER_OUTLINE
+HEATSINK   40.0
+0 1200.0 200.0 0.0
+0 1800.0 200.0 0.0
+0 1800.0 600.0 0.0
+0 1200.0 600.0 0.0
+0 1200.0 200.0 0.0
+.END_OTHER_OUTLINE
+.ROUTE_OUTLINE
+0 50.0 50.0 0.0
+0 1950.0 50.0 0.0
+0 1950.0 1450.0 0.0
+0 50.0 1450.0 0.0
+0 50.0 50.0 0.0
+.END_ROUTE_OUTLINE
+.PLACE_OUTLINE
+0 100.0 100.0 0.0
+0 1900.0 100.0 0.0
+0 1900.0 1400.0 0.0
+0 100.0 1400.0 0.0
+0 100.0 100.0 0.0
+.END_PLACE_OUTLINE
+.ROUTE_KEEPOUT
+ALL
+0 1300.0 1000.0 0.0
+0 1500.0 1000.0 0.0
+0 1500.0 1200.0 0.0
+0 1300.0 1200.0 0.0
+0 1300.0 1000.0 0.0
+.END_ROUTE_KEEPOUT
+.VIA_KEEPOUT
+0 1600.0 1000.0 0.0
+0 1800.0 1000.0 0.0
+0 1800.0 1200.0 0.0
+0 1600.0 1200.0 0.0
+0 1600.0 1000.0 0.0
+.END_VIA_KEEPOUT
+.PLACE_KEEPOUT
+BOTTOM   250   0
+0 300.0 1100.0 0.0
+0 300.0 900.0 0.0
+0 700.0 900.0 0.0
+0 700.0 1100.0 0.0
+0 300.0 1100.0 0.0
+.END_PLACE_KEEPOUT
+.PLACE_REGION
+TOP      memory
+0 200.0 200.0 0.0
+0 800.0 200.0 0.0
+0 800.0 600.0 0.0
+0 200.0 600.0 0.0
+0 200.0 200.0 0.0
+.END_PLACE_REGION
+.DRILLED_HOLES
+125.0   100.0   100.0 NPTH BOARD
+125.0  1900.0   100.0 NPTH BOARD
+ 40.0   500.0  1200.0  PTH J1
+ 40.0   600.0  1200.0  PTH J1
+.END_DRILLED_HOLES
+.PLACEMENT
+cc1210  pn-cap  C1
+300.0   300.0   0.000   TOP   PLACED
+cc1210  pn-cap  C2
+500.0   300.0   90.000  BOTTOM
+conn_2  pn-conn  J1
+550.0  1200.0   0.000   TOP   FIXED
+lcc20   IDT-54fct244LB.l   U1
+0.0     0.0     0.000   TOP   UNPLACED
+extractor   pn-extractor   norefdes
+1900.0  1400.0  180.000 TOP   PLACED
+.END_PLACEMENT

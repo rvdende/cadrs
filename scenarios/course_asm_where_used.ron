@@ -1,0 +1,101 @@
+// P3B.9 / X15 Where used and Add mate connector to instance origin, and the instance menu's
+// Change to version… and Create Drawing… (enabled since P3G.2 and P3C.5), on the Ex3 end state
+// (`fixtures/pneumatic_cylinder_ex3.cadrs`: Cylinder assembly with Rear Cap and Top Cap
+// subassemblies).
+// 01 Barrel <1>'s menu: Where used…, Change to version… (hovered) and Create Drawing of Barrel…,
+//    all enabled.
+// 01b Change to version… clicked: the Reference manager for the Barrel instance, on Selective
+//    update (nothing newer to update to) with its row's version graph open: Main (where it
+//    is) and Start, no versions yet.
+// 02 Where used for the Barrel: Cylinder assembly (1 instance).
+// 03 In the Top Cap subassembly tab, Retaining Plate <1>'s Where used: Cylinder assembly (1 instance, in a
+//    subassembly) and Top Cap subassembly (1 instance).
+// 04 The Cylinder assembly row clicked: that tab opens.
+// 05 Back in Cylinder assembly: Rear Cap mount <1>'s Add mate connector to instance origin…: the
+//    Mate connector dialog with the connector at the part's origin.
+// 06 ✓: "Mate connector 1" in the Mate Features list, on the Rear Cap mount's origin.
+// 07 Export… of the Rear Cap mount: the export dialog for that instance, named "Rear Cap mount"
+//    ("Exporting: Rear Cap mount <1> (1 part)"), STEP.
+// 08 Create Drawing of Barrel… clicked: the Create drawing dialog, for the Barrel part.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture pneumatic_cylinder_ex3"),
+        Wait(20),
+        Click(ui("tab-cylinder-assembly")),
+        Wait(20),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-where-used"),
+        Hover(ui("asm-version")),
+        Wait(50),
+        Screenshot("01-x15-instance-menu-where-used"),
+        Click(ui("asm-version")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01b-x15-change-to-version"),
+        Click(ui("reference-manager-close")),
+        Wait(10),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-where-used"),
+        Wait(3),
+        Click(ui("asm-where-used")),
+        WaitFor("where-used-dialog"),
+        Wait(5),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("02-x15-where-used-barrel"),
+        Click(ui("where-used-dialog-cancel")),
+        Wait(5),
+        // In the Top Cap subassembly tab: the Retaining Plate is used there and, through it, in
+        // Cylinder assembly.
+        Click(ui("tab-top-cap-subassembly")),
+        Wait(20),
+        RightClick(ui("instance-row-1")),
+        WaitFor("asm-where-used"),
+        Click(ui("asm-where-used")),
+        WaitFor("where-used-dialog"),
+        Wait(5),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-x15-where-used-part-in-subassembly"),
+        Click(ui("where-used-row-1")),
+        Wait(20),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("04-x15-where-used-opens-cylinder-assembly"),
+        RightClick(ui("instance-row-1")),
+        WaitFor("asm-connector"),
+        Click(ui("asm-connector")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05-x15-connector-at-instance-origin"),
+        Click(ui("mate-connector-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("06-x15-connector-added"),
+        RightClick(ui("instance-row-1")),
+        WaitFor("asm-export"),
+        Click(ui("asm-export")),
+        WaitFor("export-dialog"),
+        Wait(5),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("07-x15-export-instance"),
+        Key("Escape"),
+        Wait(5),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-drawing"),
+        Click(ui("asm-drawing")),
+        WaitFor("create-drawing-dialog"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("08-x15-create-drawing-of-barrel"),
+        Key("Escape"),
+    ],
+)

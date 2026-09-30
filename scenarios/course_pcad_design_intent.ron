@@ -1,0 +1,93 @@
+// P3F.4 (`intro-to-parametric-cad.md` P5.1–P5.3, P5.6): design intent with variables. The
+// hydraulic cylinder body (`Custom("design-intent")`, `cadrs_core::samples::design_intent`):
+// #piston_d = 40 mm and #clearance = 0.5 mm at the top of the list; the master sketch on Front
+// revolved into the Body (bore Ø #piston_d + #clearance, wall 5, 100 long); one O-ring groove
+// (2 deep, 2 wide) patterned ×3; the Piston Ø #piston_d; the Clamp whose bore uses the piston's
+// edge.
+// 01 the model and its feature list: the two variables (#piston_d, #clearance) first.
+// 02 the Variables panel (right strip): #piston_d 40 mm and #clearance 0.5 mm with their
+//    descriptions.
+// 03 the Body selected, Mass properties: Volume 69869.021 mm³ (π/4·(OD² − ID²)·100 − the three
+//    grooves).
+// 04 (P3F.3–P3F.4 judge) the Body made see-through (Edit appearance, 30 % opacity): the bore,
+//    the three grooves and the Piston inside it, the Clamp around the piston.
+// 05 the master sketch opened with Show expressions on: the bore's dimension reads
+//    "Ø#piston_d + #clearance" (the wall 5, the length 100 stay values); the later sketches
+//    (rolled back while it is edited) aren't drawn.
+// 06 #piston_d typed as 50 mm in the Variable table: one edit; the body, the grooves, the piston
+//    and the clamp's bore (Use) all follow, no feature errors: seen through the Body, as 04.
+// 07 Mass properties of the Body again: 85199.993 mm³.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("design-intent"),
+        Wait(150),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-model-and-variables"),
+        Click(ui("panel-variables")),
+        WaitFor("variables-panel"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-variable-table"),
+        Click(ui("part-row-body")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "69869.021"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-body-volume-40"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(5),
+        ClickAt(1420, 900),
+        Wait(3),
+        Custom("part-look 1 #9BC1D84C"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-see-through-body-40"),
+        DoubleClick(ui("feature-master-sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(40),
+        Click(ui("sketch-show-expressions")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-master-sketch-expression"),
+        Click(ui("sketch-dialog-accept")),
+        Wait(10),
+        Key("Shift+7"),
+        Wait(40),
+        Click(ui("variable-row-piston_d-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("50 mm"),
+        Key("Enter"),
+        Wait(150),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-piston-d-50"),
+        ClickAt(1420, 900),
+        Wait(3),
+        Click(ui("part-row-body")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "85199.993"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-body-volume-50"),
+    ],
+)

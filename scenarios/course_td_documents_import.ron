@@ -1,0 +1,58 @@
+// P3E.1 (test-drive.md TD3.1 Import, X5): Create ▸ Import files… turns a CAD file into a new
+// document whose Part Studio holds its Import (the Import feature of `onshape_import`).
+// `fixtures/import_bracket.stl` is a closed mesh of an L bracket (40 × 30 profile, 8 mm thick,
+// 20 mm deep: 9 920 mm³). Image, PDF and video files as tabs are out of scope (image tabs).
+// 01 Create ▾ open, the pointer on Import files….
+// 02 the file picker (STEP and STL files), in fixtures, the STL picked.
+// 03 imported: "import_bracket" listed in Owned by me with its thumbnail, selected, its details
+//    shown; the toast "Imported “import_bracket.stl” as a new document" with Undo.
+// 04 Ctrl+Z: the document is gone (one library step).
+// 05 Ctrl+Y: back.
+// 06 double-click: the document opens on Part Studio 1 with Import 1 and the part
+//    "import_bracket".
+Scenario(
+    start: Some("landing"),
+    seed_documents: 4,
+    steps: [
+        WaitFor("doc-row-0"),
+        Click(ui("create")),
+        WaitFor("import-files"),
+        Hover(ui("import-files")),
+        Wait(3),
+        Screenshot("01-create-menu-import"),
+        Click(ui("import-files")),
+        WaitFor("import-picker"),
+        Wait(3),
+        Click(ui("import-picker-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("fixtures"),
+        Key("Enter"),
+        WaitFor("import-picker-row-import_bracket.stl"),
+        Click(ui("import-picker-row-import_bracket.stl")),
+        Wait(3),
+        Hover(ui("import-picker-open")),
+        Wait(5),
+        Screenshot("02-import-file-picker"),
+        Click(ui("import-picker-open")),
+        WaitFor("details-owner"),
+        Wait(10),
+        MoveTo(900, 900),
+        Wait(3),
+        Screenshot("03-imported-document"),
+        Key("Ctrl+Z"),
+        Wait(5),
+        Screenshot("04-import-undone"),
+        Key("Ctrl+Y"),
+        Wait(5),
+        Screenshot("05-import-redone"),
+        DoubleClick(ui("doc-name-0")),
+        WaitFor("document-shell"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-import-opened"),
+    ],
+)

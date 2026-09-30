@@ -1,0 +1,62 @@
+// P3H.5 (PCB5.1–5.4, PCB5.6): Sync a Part Studio with PCB Studio. The Part Studio "Mainboard"
+// holds a 60 × 40 × 1.6 mm Mainboard, a 10 × 10 × 3 mm Keepout on its top face and an
+// Enclosure box round both (`cadrs_pcb::sample::sync_demo_studio`). Compare
+// `ex1-step10-sync-dialog.png` and `ex1-step11-synced-board-keepouts.png`.
+// 01 the Mainboard Part Studio; 02 a PCB Studio, the Sync dialog with its source list open
+//    (Mainboard (Part Studio), Assembly 1 (Assembly)); 03 Mainboard (Part Studio) and Top Plane
+//    chosen; 04 synced: the board "Mainboard" with its keep-out (dark translucent, on top), the
+//    toast "Added Mainboard. Not translated: Enclosure"; 05 the dialog again, pre-filled with the
+//    board's source and plane; 06 the plane list; 07 synced again: "Updated Mainboard", still one
+//    board (updated in place).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-sync-demo-studio"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01-mainboard-part-studio"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Wait(20),
+        Click(ui("pcb-sync")),
+        WaitFor("pcb-sync-dialog"),
+        Wait(5),
+        Click(ui("pcb-sync-source")),
+        WaitFor("pcb-sync-source-option-0"),
+        Hover(ui("pcb-sync-source-option-0")),
+        Wait(5),
+        Screenshot("02-sync-dialog-sources"),
+        Click(ui("pcb-sync-source-option-0")),
+        Wait(5),
+        Screenshot("03-mainboard-top-plane"),
+        Click(ui("pcb-sync-ok")),
+        WaitFor("pcb-sync-toast"),
+        Wait(40),
+        ExpectText("pcb-board-mainboard", "Mainboard"),
+        MoveTo(1100, 700),
+        Wait(3),
+        Screenshot("04-synced-mainboard"),
+        Click(ui("pcb-sync")),
+        WaitFor("pcb-sync-dialog"),
+        Wait(10),
+        Screenshot("05-sync-again-prefilled"),
+        Click(ui("pcb-sync-plane")),
+        WaitFor("pcb-sync-plane-option-0"),
+        Hover(ui("pcb-sync-plane-option-0")),
+        Wait(5),
+        Screenshot("06-plane-list"),
+        Click(ui("pcb-sync-plane-option-0")),
+        Wait(5),
+        Click(ui("pcb-sync-ok")),
+        WaitFor("pcb-sync-toast"),
+        Wait(40),
+        MoveTo(1100, 700),
+        Wait(3),
+        Screenshot("07-updated-in-place"),
+    ],
+)

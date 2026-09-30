@@ -1,0 +1,36 @@
+// P3H.2 (X5, PCB6): the cell phone fixture (`fixtures/idf/cell phone/Cell phone.emn`, 81 × 146 mm
+// with R8 corners, 0.062 thick as the course's slide has it, two 1 mm place keep-outs on the
+// bottom: the battery and the antenna) turned into B-rep by `cadrs_pcb` and put into the Part
+// Studio through the command layer. Compare `ex1-step11-synced-board-keepouts.png`: a green
+// board with dark translucent keep-out patches.
+// The default planes are hidden (P) so zoom to fit frames the board.
+// 01 isometric; 02 from the top (the keep-outs show through the thin board's edges only, they
+// are below it); 03 from below (the two dark translucent keep-outs on the board).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("pcb-board cell phone/Cell phone"),
+        Wait(20),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-cellphone-iso"),
+        Key("Shift+5"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Screenshot("02-cellphone-top"),
+        Key("Shift+6"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Screenshot("03-cellphone-bottom"),
+    ],
+)

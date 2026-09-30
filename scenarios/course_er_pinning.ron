@@ -1,0 +1,136 @@
+// P3G.2 (external-references.md ER5.1–ER5.8, ER X2; lesson-pinning-references.png): pinning
+// references, in an assembly and in a drawing. Document B "Block consumer": Assembly 1 with two
+// instances of A@V1 (`linked-block consumer 2`) and "Drawing 1" with a Front view of A@V1's block
+// (`linked-block drawing`).
+// 01 Assembly 1: Part 1 <1> and <2>, plain version icons.
+// 02 (ER5.1) right-click <2> → "Pin reference" hovered.
+// 03 pinned: <2>'s icon is the thumbtack (stand-in `location`); its tooltip "Pinned: Update all
+//    skips it."
+// 04 (ER5.2) A gets V2: <1> shows the blue badge; <2> a grey ring round the pin (a newer version,
+//    but no blue alert); the tabs Assembly 1 and Drawing 1 their badges.
+// 05 (ER5.3) the toolbar's Update all references: "Block source V1 ⇒ V2" (the unpinned
+//    references only: <1> and the drawing's view).
+// 06 Update all: <1> at V2 (40 high); <2> still V1 (25 high), pinned.
+// 07 (ER5.4) <2>'s icon clicked: the manager opens on Selective update, <2> ticked, "V1 ⇒ V2".
+// 08 Update selected: <2> at V2 and still pinned (the plain thumbtack).
+// 09 (ER5.7) right-click <2> → "Unpin reference" hovered.
+// 10 unpinned: the plain version icon.
+// 11 (ER5.6) A gets V3 (depth 55); Drawing 1, the Sheets pane: the sheet's reference "Part 1" at "V2" with
+//    the blue badge, the view "Front" at "V2"; the tab badge.
+// 12 right-click the reference → "Pin reference" hovered.
+// 13 pinned: its thumbtack with the grey ring (V3 is newer).
+// 14 (ER5.6) right-click the Drawing 1 tab → "Update linked document…" hovered.
+// 15 the manager for the tab: nothing listed under Update to latest (the pinned reference is
+//    skipped) → Selective update: the drawing's reference, not ticked.
+// 16 ticked and Update selected: the view 55 high, "V3" in the Sheets pane, still pinned (the
+//    plain thumbtack).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        Custom("linked-block consumer 2"),
+        Wait(60),
+        Custom("linked-block drawing"),
+        Wait(60),
+        Click(ui("tab-assembly-1")),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-two-linked-instances"),
+        RightClick(ui("instance-row-2")),
+        WaitFor("assembly-context-menu"),
+        Wait(5),
+        Hover(ui("asm-pin")),
+        Wait(20),
+        Screenshot("02-pin-reference-menu"),
+        Click(ui("asm-pin")),
+        Wait(20),
+        Hover(ui("instance-row-2-linked")),
+        Wait(40),
+        Screenshot("03-pinned-thumbtack"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Custom("linked-block edit"),
+        Wait(40),
+        Screenshot("04-pinned-not-blue"),
+        Click(ui("update-all-references")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-update-all-skips-pinned"),
+        Click(ui("refman-update")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-pinned-stays-v1"),
+        Click(ui("instance-row-2-linked")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-pinned-icon-selective"),
+        Click(ui("refman-update")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-pinned-updated"),
+        RightClick(ui("instance-row-2")),
+        WaitFor("assembly-context-menu"),
+        Wait(5),
+        Hover(ui("asm-unpin")),
+        Wait(20),
+        Screenshot("09-unpin-menu"),
+        Click(ui("asm-unpin")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-unpinned"),
+        Custom("linked-block edit 55"),
+        Wait(40),
+        Click(ui("tab-drawing-1")),
+        Wait(40),
+        Click(ui("drawing-sheets-toggle")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-drawing-sheets-pane"),
+        RightClick(ui("sheet-ref-1")),
+        WaitFor("sheet-ref-menu"),
+        Wait(5),
+        Hover(ui("sheet-ref-pin")),
+        Wait(20),
+        Screenshot("12-drawing-pin-menu"),
+        Click(ui("sheet-ref-pin")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("13-drawing-pinned"),
+        RightClick(ui("tab-drawing-1")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Hover(ui("tab-update-linked")),
+        Wait(20),
+        Screenshot("14-drawing-tab-menu"),
+        Click(ui("tab-update-linked")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        Click(ui("refman-tabs-1")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("15-drawing-selective"),
+        Click(ui("refman-check-1")),
+        Wait(5),
+        Click(ui("refman-update")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("16-drawing-updated-pinned"),
+    ],
+)

@@ -1,0 +1,58 @@
+// T2 / S2.2: "The red ✗ cancels. After a cancel, a Restore action appears at the top of the
+// viewport for about 10–15 seconds to undo it." A sketch with a rectangle, cancelled with ✕:
+// the toast "Sketch 1 has been cancelled. Restore" (`sketch_dialog/restore.png`) is still there
+// 10 s later and gone by 16 s (it lasts 12 s). A second sketch, cancelled: Restore clicked
+// after 10 s brings it back, open for editing.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("G"),
+        Wait(2),
+        ClickWorld(-25, -15),
+        ClickWorld(25, 15),
+        Wait(3),
+        Key("Escape"),
+        Wait(2),
+        Key("Escape"),
+        Wait(2),
+        Click(ui("sketch-dialog-cancel")),
+        Wait(30),
+        MoveTo(1400, 850),
+        Screenshot("01-cancelled-restore-toast-at-0-5s"),
+        // 10 s after the cancel (60 frames a second).
+        Wait(570),
+        Screenshot("02-still-offered-at-10s"),
+        Wait(360),
+        Screenshot("03-gone-by-16s"),
+        // Again, and Restore after 10 s.
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("C"),
+        Wait(2),
+        ClickWorld(0, 0),
+        ClickWorld(30, 0),
+        Wait(3),
+        Key("Escape"),
+        Wait(2),
+        Key("Escape"),
+        Wait(2),
+        Click(ui("sketch-dialog-cancel")),
+        Wait(600),
+        Screenshot("04-second-cancel-at-10s"),
+        Click(ui("toast-restore")),
+        Wait(10),
+        MoveTo(1400, 850),
+        Wait(3),
+        Screenshot("05-restored-and-open"),
+    ],
+)

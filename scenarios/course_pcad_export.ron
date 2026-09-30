@@ -1,0 +1,106 @@
+// P3F.2 (`intro-to-parametric-cad.md` P3.2–P3.4, X7; `essential-tips.md` T8.2): the uses of CAD
+// data as files. The Control Arm (`Custom("control-arm")`, two parts) is exported; the files go
+// to `target/exports/course_pcad_export/` (typed into the Folder field), emptied first, so the
+// names are the plain ones.
+// 01 the tab menu of Part Studio 1: Export… hovered.
+// 02 the Export dialog for the whole studio: File name, Format STEP (IGES, STL, OBJ beside it;
+//    "Parasolid is not offered"), Version AP214, Y axis up, individual files, Folder.
+// 03 STL chosen: STL format (Binary), Units, Resolution (Medium (0.1 mm, 15°)).
+// 04 Resolution Custom: the chord and angle tolerance fields.
+// 05 OBJ chosen: Units and Resolution, no STL format.
+// 06 Export (STL, binary, one file): the toast names "Part Studio 1.stl".
+// 07 Sketch 1's menu in the feature list: Export as DXF/DWG… hovered.
+// 08 the DXF export of the sketch: DXF and DWG (DWG disabled without a converter, the note says
+//    what to install), the DXF version.
+// 09 Export: the toast names "Part Studio 1 - Sketch 1.dxf".
+// 10 the hub's top face right-clicked in the view: Export as DXF/DWG… (a planar face).
+// 11 its export toast.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("clear-dir target/exports/course_pcad_export"),
+        Custom("control-arm"),
+        Wait(120),
+        Key("Shift+7"),
+        Wait(40),
+        RightClick(ui("tab-part-studio-1")),
+        WaitFor("tab-export"),
+        Hover(ui("tab-export")),
+        Wait(8),
+        Screenshot("01-tab-menu-export"),
+        Click(ui("tab-export")),
+        WaitFor("export-dialog"),
+        Wait(10),
+        Click(ui("export-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("target/exports/course_pcad_export"),
+        Wait(3),
+        Hover(ui("export-format-step")),
+        Wait(3),
+        Screenshot("02-export-dialog-step"),
+        Click(ui("export-format-stl")),
+        Wait(10),
+        Screenshot("03-stl-options"),
+        Click(ui("export-resolution")),
+        Wait(5),
+        Click(ui("export-resolution-option-3")),
+        Wait(10),
+        Screenshot("04-stl-custom-tolerance"),
+        Click(ui("export-format-obj")),
+        Wait(10),
+        Screenshot("05-obj-options"),
+        Click(ui("export-format-stl")),
+        Wait(3),
+        Click(ui("export-resolution")),
+        Wait(5),
+        Click(ui("export-resolution-option-1")),
+        Wait(3),
+        Click(ui("export-individual")),
+        Wait(3),
+        Click(ui("export-ok")),
+        WaitFor("export-toast"),
+        Wait(10),
+        Screenshot("06-stl-exported"),
+        RightClick(ui("feature-sketch-1")),
+        WaitFor("feature-export-dxf"),
+        Hover(ui("feature-export-dxf")),
+        Wait(8),
+        Screenshot("07-sketch-menu-export-dxf"),
+        Click(ui("feature-export-dxf")),
+        WaitFor("export-dialog"),
+        Wait(10),
+        Click(ui("export-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("target/exports/course_pcad_export"),
+        Wait(3),
+        Hover(ui("export-format-dxf")),
+        Wait(10),
+        Screenshot("08-sketch-dxf-dialog"),
+        Click(ui("export-ok")),
+        WaitFor("export-toast"),
+        Wait(10),
+        Screenshot("09-sketch-dxf-exported"),
+        Wait(200),
+        RightClick(xyz(0, 26, 40)),
+        WaitFor("viewport-export-face"),
+        Hover(ui("viewport-export-face")),
+        Wait(8),
+        Screenshot("10-face-menu-export"),
+        Click(ui("viewport-export-face")),
+        WaitFor("export-dialog"),
+        Wait(5),
+        Click(ui("export-folder")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("target/exports/course_pcad_export"),
+        Wait(3),
+        Click(ui("export-ok")),
+        WaitFor("export-toast"),
+        Wait(10),
+        Screenshot("11-face-dxf-exported"),
+    ],
+)

@@ -1,0 +1,111 @@
+// P3B.8 / X16 Replicate on the flange stand-in (`fixtures/flange_standin.cadrs`: a Ø4 in flange
+// with seven Ø0.25 in holes, the centre one and six on a Ø3 in bolt circle, and a screw in the
+// centre hole, Fastened 1).
+// 01 The Flange Assembly: Flange <1> (fixed), Screw <1>, Fastened 1.
+// 02 The toolbar's Replicate; the screw clicked: the seed, its mate (Fastened 1) under it.
+// 03 Two rims picked on the flange: two copies previewed, translucent, on those holes.
+// 04 All matching on the part: the six bolt-circle holes, six copies previewed.
+// 05 ✓: 7 screws; "Replicate 1" is one row of the Mate Features list, and a row of the
+//    Instances list whose ▸ lists its six Screw instances (each held by a copy of Fastened 1: no
+//    DOF triad).
+// 05b Replicate 1's ▸ in Mate Features: its six mates ("Fastened 1 → Screw <2>", …).
+// 06 Replicate 1's menu (Edit…, Rename, Suppress, Delete …).
+// 07 Edit…: the six holes listed; three of the copies picked take their holes out: those copies
+//    are drawn as ghosts, the others keep their hole numbers (Hole 2, 3, 4).
+// 07b A ghost clicked: its copy comes back (Hole 6 listed again); clicked again it goes.
+// 08 ✓: three copies (then undone: six again).
+// 09 The Bill of Materials: Screw, quantity 7.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture flange_standin"),
+        Wait(20),
+        Click(ui("tab-flange-assembly")),
+        Wait(10),
+        Custom("view 25 35 0 0 0 0.16"),
+        Wait(20),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("01-x16-flange-assembly"),
+        Click(ui("replicate")),
+        WaitFor("replicate-dialog"),
+        Wait(3),
+        Click(ui("instance-row-2")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("02-x16-replicate-seed"),
+        // Two rims: the holes at 0 deg and 60 deg.
+        Hover(xyz(41.275, 0, 6.35)),
+        Wait(5),
+        Click(xyz(41.275, 0, 6.35)),
+        Wait(5),
+        Hover(xyz(22.225, 32.993, 6.35)),
+        Wait(5),
+        Click(xyz(22.225, 32.993, 6.35)),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-x16-two-holes-previewed"),
+        Click(ui("replicate-all-matching-checkbox")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("04-x16-all-matching"),
+        Click(ui("replicate-dialog-accept")),
+        Wait(10),
+        Click(ui_at("instance-replicate-replicate-1", 0.05, 0.5)),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05-x16-replicated-six"),
+        // Its ▸ in the Mate Features list: the six mates it made.
+        Click(ui_at("mate-row-2", 0.05, 0.5)),
+        Wait(8),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("05b-x16-replicate-mates"),
+        Click(ui_at("mate-row-2", 0.05, 0.5)),
+        Wait(5),
+        RightClick(ui("mate-row-2")),
+        WaitFor("mate-edit"),
+        Hover(ui("mate-edit")),
+        Wait(3),
+        Screenshot("06-x16-replicate-menu"),
+        Click(ui("mate-edit")),
+        WaitFor("replicate-dialog"),
+        Wait(5),
+        // Three of the copies picked: their holes come out.
+        Click(xyz(38.1, 0, 11.43)),
+        Wait(3),
+        Click(xyz(19.05, 32.996, 11.43)),
+        Wait(3),
+        Click(xyz(-38.1, 0, 11.43)),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("07-x16-edit-three-picked"),
+        // A ghost clicked: that copy comes back (Hole 6 listed again); clicked again: out.
+        Click(xyz(38.1, 0, 11.43)),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("07b-x16-ghost-clicked-back"),
+        Click(xyz(38.1, 0, 11.43)),
+        Wait(10),
+        Click(ui("replicate-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("08-x16-edited-three"),
+        Key("Ctrl+Z"),
+        Wait(10),
+        Click(ui("panel-bom")),
+        WaitFor("bom-panel"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("09-x16-bom-seven-screws"),
+    ],
+)

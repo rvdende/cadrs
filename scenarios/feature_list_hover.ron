@@ -1,0 +1,38 @@
+// Hovering a feature-list row highlights its geometry in the view, as Onshape does, on the
+// bracket stand-in (`bracket` set-up command; see course_ps3_filter). Default geometry is closed
+// so the whole list fits.
+// 01 Sketch 1 hovered: consumed by Extrude 1 (hidden), its curves still drawn in the hover orange
+//    over the part, and beside the row "Sketch 1 (Hidden) is fully defined" (or "is not fully
+//    defined").
+// 02 Extrude 1 hovered: the faces it made (the plate) outlined in the hover orange.
+// 03 Fillet 1 hovered: only its rounds are outlined.
+// 04 The pointer back over the view: no highlight.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("bracket"),
+        Wait(10),
+        Key("P"),
+        Wait(3),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        Click(ui_at("feature-default-geometry", 0.05, 0.5)),
+        Wait(3),
+        Hover(ui("feature-sketch-1")),
+        Wait(60),
+        Screenshot("01-sketch-1-hovered"),
+        Hover(ui("feature-extrude-1")),
+        Wait(10),
+        Screenshot("02-extrude-1-hovered"),
+        Hover(ui("feature-fillet-1")),
+        Wait(10),
+        Screenshot("03-fillet-1-hovered"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("04-no-hover"),
+    ],
+)

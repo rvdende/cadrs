@@ -1,0 +1,76 @@
+// P3.2 Persistent naming and 3D picking (intro-to-part-studios-gaps.md): edge, face and vertex
+// hover and selection on the Control Arm (PS6, added through the command layer by the
+// `control-arm` set-up command: Extrude 1 = hub ring, right web and right eye ring, 40 mm;
+// Extrude 2 = left web and left eye ring, 25 mm). Hover is pale orange; selection is the amber
+// of the course's screenshots (ex3-step3, ex3-step9), with selected faces and parts tinted.
+// The selection readout at the top left names what is selected as Onshape's feature dialogs do
+// ("Edge of Extrude 1", lesson-fillet-and-chamfer.png).
+// 01 the part (no line inside the eye hole). 02 hovering the right web's upper top edge draws it
+// orange and thicker; 03 a click selects it: amber, and "Edge of Extrude 1". 04 hovering the
+// hub's top face outlines it while the edge stays selected; 05 clicking adds the face: tinted,
+// "Face of Extrude 1". 06 hovering the corner where the web's lower edge meets the eye shows an
+// orange vertex dot; 07 clicking selects it too: "Vertex of Extrude 1". 08 an edge hidden behind
+// the part (the hub's bottom back edge) is not picked: hovering there highlights the face in
+// front. 09 clicking Part 1 in the Parts list selects the whole part, tinted (one selection
+// model for faces, edges, vertices and parts). 10 a click on empty space clears the selection.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("control-arm"),
+        // The readout is off by default since P3.3 (Onshape has none); it shows the names here.
+        Custom("selection-readout"),
+        Wait(10),
+        Key("Shift+7"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-control-arm"),
+        // The right web's upper line, at the top (z = 40): from (5.70, 34.53) to (110.35, 17.27).
+        Hover(xyz(58.0, 25.9, 40)),
+        Wait(3),
+        Screenshot("02-edge-hover"),
+        Click(xyz(58.0, 25.9, 40)),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-edge-selected"),
+        // The hub's top face (between the bore and the hub circle).
+        Hover(xyz(-2, -26, 40)),
+        Wait(3),
+        Screenshot("04-face-hover-edge-still-selected"),
+        Click(xyz(-2, -26, 40)),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-face-and-edge-selected"),
+        // Where the lower web line meets the right eye (tangent point), at the top.
+        Hover(xyz(110.35, -17.27, 40)),
+        Wait(3),
+        Screenshot("06-vertex-hover"),
+        Click(xyz(110.35, -17.27, 40)),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("07-vertex-selected"),
+        // The hub's bottom edge at the back (hidden): the face in front is picked instead.
+        Hover(xyz(-24.7, 24.7, 0)),
+        Wait(3),
+        Screenshot("08-hidden-edge-not-picked"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Click(ui("part-row-part-1")),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-part-1-selected-from-the-list"),
+        ClickAt(1300, 300),
+        Wait(3),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-click-empty-clears"),
+    ],
+)

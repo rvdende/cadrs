@@ -1,0 +1,152 @@
+// P3E.1 (test-drive.md TD3.5, TD3.6, TD3.7, TD3.8, X5; derived-and-linking ER8.5), against
+// `test-drive/lesson-documents-page.png`: 6 seeded documents plus the linked-documents block
+// (`linked-block`): "Block source" (with version V1, in the folder "Linked parts") and "Block
+// consumer", whose Assembly 1 holds an instance of the block at V1.
+// 01 "Block" searched (Block source is filed in "Linked parts", so the root doesn't list it);
+//    a click on Block source selects it (it does not open): the Details panel with its
+//    thumbnail, Owner, Document description, Document labels, Created by, Created, Modified
+//    and Location "Owned by me › Linked parts".
+// 02 the description typed ("Extended hubcap").
+// 03 Enter: saved (a library step), the field shows it.
+// 04 another row selected and Block source again: the description is kept.
+// 05 the rail's Versions tab: V1 from the document's history, with its time and author.
+// 06 the Where used tab: Block consumer's Assembly 1 uses Block (V1).
+// 07 the panel closed with ×: only the rail.
+// 08 double-click on a row (Block consumer): the document opens (loaded).
+// 09 back, the search cleared: Last opened by me, open by default: bordered cards (thumbnail
+//    left, name right), the pointer on a card's name.
+// 10 a click on the name opens that document.
+// 11 back: the Folders section; a click selects the folder "Linked parts" (its details: owner,
+//    created, 2 documents).
+// 12 double-click: the folder opens, a breadcrumb "‹ Owned by me › Linked parts" and its
+//    documents (Block copy, Block source).
+// 13 the breadcrumb's Owned by me: back at the top.
+// 14 the Type menu (All, Documents, Folders).
+// 15 Type: Folders: only the folder row.
+// 16 Type: All and the grid view: folder and document cards.
+// 17 a card selected in the grid.
+// 18 Enter opens the selected document.
+Scenario(
+    start: Some("document"),
+    seed_documents: 6,
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        Custom("linked-block consumer 1"),
+        Wait(20),
+        Click(ui("back-to-documents")),
+        WaitFor("doc-row-0"),
+        Wait(5),
+        // Block source is filed in "Linked parts" (P3E.2: listed inside its folder, not at the
+        // root): the search finds it, with Block consumer and Block copy.
+        Click(ui("search")),
+        Wait(2),
+        Type("Block"),
+        Wait(5),
+        Click(ui("col-name")),
+        Wait(3),
+        Click(ui("doc-name-2")),
+        WaitFor("details-description"),
+        Wait(5),
+        Screenshot("01-row-selected-details"),
+        Click(ui("details-description-field")),
+        Wait(2),
+        Type("Extended hubcap"),
+        Wait(3),
+        Screenshot("02-description-typed"),
+        Key("Enter"),
+        Wait(5),
+        Screenshot("03-description-saved"),
+        Click(ui("doc-name-0")),
+        Wait(3),
+        Click(ui("doc-name-2")),
+        Wait(5),
+        Screenshot("04-description-kept"),
+        Click(ui("details-versions")),
+        WaitFor("details-version-0"),
+        Wait(3),
+        Hover(ui("details-version-0")),
+        Wait(3),
+        Screenshot("05-versions-tab"),
+        Click(ui("details-where-used")),
+        WaitFor("details-used-0"),
+        Wait(3),
+        Screenshot("06-where-used-tab"),
+        Click(ui("details-toggle")),
+        Wait(3),
+        Click(ui("details-close")),
+        Wait(3),
+        Screenshot("07-details-closed"),
+        DoubleClick(ui("doc-name-0")),
+        WaitFor("document-shell"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-double-click-opens"),
+        Wait(30),
+        Click(ui("back-to-documents")),
+        WaitFor("doc-row-0"),
+        Wait(2),
+        Click(ui("search")),
+        Key("Ctrl+A"),
+        Key("Backspace"),
+        Wait(5),
+        WaitFor("recent-name-0"),
+        Wait(3),
+        Hover(ui("recent-name-0")),
+        Wait(3),
+        Screenshot("09-last-opened-strip"),
+        Click(ui("recent-name-0")),
+        WaitFor("document-shell"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-name-click-opens"),
+        Wait(30),
+        Click(ui("back-to-documents")),
+        WaitFor("doc-row-0"),
+        Wait(2),
+        Click(ui("section-folders-header")),
+        WaitFor("folder-0"),
+        Wait(2),
+        Click(ui("folder-0")),
+        WaitFor("details-folder-count"),
+        Wait(3),
+        Screenshot("11-folder-selected"),
+        DoubleClick(ui("folder-0")),
+        WaitFor("crumb-root"),
+        Wait(3),
+        Screenshot("12-folder-opened"),
+        Click(ui("crumb-root")),
+        WaitFor("section-folders-header"),
+        Wait(3),
+        Screenshot("13-back-at-top"),
+        Click(ui("type-filter")),
+        WaitFor("type-menu"),
+        Hover(ui("type-folders")),
+        Wait(3),
+        Screenshot("14-type-menu"),
+        Click(ui("type-folders")),
+        Wait(5),
+        Screenshot("15-type-folders"),
+        Click(ui("type-filter")),
+        WaitFor("type-all"),
+        Click(ui("type-all")),
+        Wait(3),
+        Click(ui("view-grid")),
+        WaitFor("doc-grid"),
+        Wait(5),
+        Screenshot("16-grid-view"),
+        Click(ui("grid-doc-1")),
+        Wait(5),
+        Screenshot("17-grid-card-selected"),
+        Key("Enter"),
+        WaitFor("document-shell"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("18-enter-opens"),
+    ],
+)

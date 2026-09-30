@@ -1,0 +1,23 @@
+[package]
+name = "cadrs_onshape"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Imports Onshape documents (scraped REST JSON) as editable cadrs documents"
+
+[[bin]]
+name = "cadrs-onshape"
+path = "src/main.rs"
+
+[dependencies]
+cadrs_core.workspace = true
+cadrs_sketch.workspace = true
+cadrs_kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ron.workspace = true
+flate2.workspace = true
+base64.workspace = true
+uuid.workspace = true
+directories.workspace = true

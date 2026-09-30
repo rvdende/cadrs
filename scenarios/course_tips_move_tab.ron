@@ -1,0 +1,131 @@
+// P3G.3 (essential-tips.md T1.3, X1; external-references.md ER7.2, ER7.3, ER7.7;
+// intro-to-drawings.md D2.10, X1): moving tabs to another document, from a drawing tab's menu and
+// from the Tab manager. "Exercise: Move to Document" (`move-doc setup`) with "Drawing 1", a Front
+// view of the Pneumatic Piston (`move-doc drawing`); "Plates library", a document with V1
+// (`move-doc plates`).
+// 01 (D2.10) right-click the Drawing 1 tab → "Move to document…" hovered.
+// 02 (ER7.3) the dialog, Show details: Drawing 1 (picked) and Pneumatic Piston (referenced).
+// 03 Pneumatic Piston unticked (left here): the note that the drawing will reference it at a
+//    new version of this document; name "Piston drawings"; "Moving 1 tab to Piston drawings".
+// 04 moved: Drawing 1 is gone here; the toast names V1 of this document, made for the tab left
+//    here.
+// 05 Piston drawings opened: Drawing 1, the Sheets pane: its reference "Pneumatic Piston" at V1
+//    with the version icon (a link back to the exercise document).
+// 06 (ER7.7) back in the exercise document: the Tab manager (the tab bar's leftmost icon) lists
+//    the tabs.
+// 07 Topplate clicked, Baseplate Ctrl+clicked: both selected; "Move 2 tabs to document…" hovered.
+// 08 (ER7.2) the dialog's Other documents: the locations.
+// 09 My documents → the documents; Plates library hovered.
+// 10 Plates library picked: its 1 version, "Version name" V2, "2 tabs will be moved", "Moving
+//    2 tabs to Plates library".
+// 11 moved: Hexapod, Pneumatic Piston, Piston Assembly left; the Hexapod's Baseplate and
+//    Topplate rows show the version icon (Plates library V2).
+// 12 Plates library opened: Part Studio 1, Assembly 1, Topplate, Baseplate; its History panel
+//    shows V2 "Moved from Exercise: Move to Document: Topplate, Baseplate".
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("move-doc setup"),
+        Wait(90),
+        Custom("move-doc plates"),
+        Wait(10),
+        Custom("move-doc drawing"),
+        Wait(60),
+        RightClick(ui("tab-drawing-1")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Hover(ui("tab-move")),
+        Wait(20),
+        Screenshot("01-drawing-tab-move"),
+        Click(ui("tab-move")),
+        WaitFor("move-to-document-dialog"),
+        Wait(10),
+        Click(ui("move-details")),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("02-drawing-details"),
+        Click(ui("move-tab-2")),
+        Wait(10),
+        Click(ui("move-name")),
+        Key("Ctrl+A"),
+        Type("Piston drawings"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-left-behind"),
+        Click(ui("move-confirm")),
+        Wait(90),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-drawing-moved"),
+        Custom("move-doc open Piston drawings"),
+        WaitFor("document-shell"),
+        Wait(60),
+        Click(ui("drawing-sheets-toggle")),
+        Wait(30),
+        Hover(ui("sheet-ref-1-linked")),
+        Wait(40),
+        Screenshot("05-link-back"),
+        Custom("move-doc open Exercise: Move to Document"),
+        Wait(60),
+        Click(ui("tab-hexapod")),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        Click(ui("tab-manager")),
+        WaitFor("tab-manager-panel"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-tab-manager"),
+        Click(ui("tab-manager-row-4")),
+        Wait(10),
+        KeyDown("Ctrl"),
+        Click(ui("tab-manager-row-5")),
+        KeyUp("Ctrl"),
+        Wait(10),
+        Hover(ui("tab-manager-move")),
+        Wait(20),
+        Screenshot("07-two-tabs-selected"),
+        Click(ui("tab-manager-move")),
+        WaitFor("move-to-document-dialog"),
+        Wait(10),
+        Click(ui("move-tabs-1")),
+        WaitFor("move-other-loc-mine"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-other-documents"),
+        Click(ui("move-other-loc-mine")),
+        WaitFor("move-other-doc-plates-library"),
+        Wait(10),
+        Hover(ui("move-other-doc-plates-library")),
+        Wait(20),
+        Screenshot("09-plates-library"),
+        Click(ui("move-other-doc-plates-library")),
+        WaitFor("move-target"),
+        Wait(10),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("10-target-and-version"),
+        Click(ui("move-confirm")),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("11-plates-moved"),
+        Custom("move-doc open Plates library"),
+        WaitFor("document-shell"),
+        Wait(60),
+        Click(ui("rail-history")),
+        WaitFor("history-panel"),
+        Wait(20),
+        Hover(ui("history-version-2")),
+        Wait(40),
+        Screenshot("12-plates-library-v2"),
+    ],
+)

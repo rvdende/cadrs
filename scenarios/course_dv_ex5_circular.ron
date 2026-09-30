@@ -1,0 +1,63 @@
+// P3G.5 ex-dv5 (derived-and-linking.md ex-dv5, DV1.5, DV3.7): a circular derive (A → B → A) is
+// refused with an error. Stand-ins as ex-dv1: B "Block derived" derives A's Block at V1
+// (`linked-ex dv1`) and is versioned; then A's Block tries to derive B's Part Studio 1.
+// 01 B: Derived 1 (A's Block at V1) in Part Studio 1.
+// 02 B's top-bar Create version: "Create version from Main", V1.
+// 03 A "Block source" opened; the icon rail's Insert: Derived 1's dialog, Other documents › My
+//    documents › Block derived at V1: its "Part Studio 1" hovered.
+// 04 Part Studio 1 picked: refused with the red toast "Circular reference: Block source ›
+//    Block → Block derived › Part Studio 1 → Block source" (B's V1 holds a copy of A's Block);
+//    the new feature waits for a source, neutral.
+// 05 ✕: nothing added (A's Features: Sketch 1, Extrude 1, Mate connector 1).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-fixture store linked_block_standin folder"),
+        Wait(5),
+        Custom("linked-fixture open linked_block_host_standin"),
+        WaitFor("document-shell"),
+        Wait(40),
+        Custom("linked-ex dv1"),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("01-b-derives-a"),
+        Click(ui("document-create-version")),
+        WaitFor("create-version-dialog"),
+        Wait(10),
+        Screenshot("02-b-create-version"),
+        Click(ui("create-version-create")),
+        Wait(30),
+        Custom("move-doc open Block source"),
+        WaitFor("document-shell"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        Click(ui("rail-insert")),
+        WaitFor("derived-dialog"),
+        Wait(20),
+        Click(ui("derived-source-tabs-1")),
+        Wait(15),
+        Click(ui("derived-other-loc-mine")),
+        Wait(15),
+        Click(ui("derived-other-doc-block-derived")),
+        Wait(20),
+        Hover(ui("derived-studio-part-studio-1")),
+        Wait(10),
+        Screenshot("03-a-derive-b"),
+        Click(ui("derived-studio-part-studio-1")),
+        Wait(40),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-circular-refused"),
+        Click(ui("derived-dialog-cancel")),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-nothing-added"),
+    ],
+)

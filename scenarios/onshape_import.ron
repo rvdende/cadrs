@@ -1,0 +1,55 @@
+// Onshape import: the Import feature. `fixtures/import_bracket.stl` is a closed mesh of an
+// L bracket (40 × 30 profile, 8 mm thick, 20 mm deep: 496 mm² × 20 = 9 920 mm³).
+// 01 Import (toolbar): the file picker, in fixtures, the STL picked.
+// 02 Import 1: the bracket, one part named after the file; the dialog shows the file.
+// 03 Specify units on: the unit select (Millimeter).
+// 04 Y axis is up: the bracket turned so the file's +Y is +Z.
+// 05 accepted: Import 1 in the feature list with its icon, the part "import_bracket"; Mass
+//    properties 9 920 mm³.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("import")),
+        WaitFor("import-picker"),
+        Wait(3),
+        Click(ui("import-picker-row-fixtures")),
+        WaitFor("import-picker-row-import_bracket.stl"),
+        Click(ui("import-picker-row-import_bracket.stl")),
+        Wait(3),
+        Hover(ui("import-picker-open")),
+        Wait(10),
+        Screenshot("01-import-file-picker"),
+        Click(ui("import-picker-open")),
+        WaitFor("import-dialog"),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-import-stl-bracket"),
+        Click(ui("import-units-checkbox")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-specify-units"),
+        Click(ui("import-y-up-checkbox")),
+        Wait(40),
+        Key("F"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-y-axis-up"),
+        Click(ui("import-dialog-accept")),
+        Wait(20),
+        Click(ui("part-row-import-bracket")),
+        Wait(3),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-accepted-mass"),
+    ],
+)

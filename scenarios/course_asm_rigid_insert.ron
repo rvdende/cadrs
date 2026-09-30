@@ -1,0 +1,105 @@
+// P3B.8 / A2.4, X3 Insert a Part Studio as one rigid instance, on the hinged step stool
+// (`fixtures/step_stool_hinged.cadrs`).
+// 01 (X3, A2.4) Insert: the "Insert the Part Studio as rigid" toggle on; the Base Frame Bar
+//    studio's row inserts all its parts as one instance.
+// 02 Inserted (at its studio position); the separate Base Frame Bar and Cross Bar instances
+//    deleted (with their mates): "Base Frame Bar <1>" is one rigid Part Studio instance whose ▸
+//    lists its three parts (Base Frame Bar, Cross Bar, Back Foot).
+// 03 It mates as one: Revolute 1 between the Large Frame Bar's connector and the Base Frame
+//    Bar's (a part of the rigid instance).
+// 04 It moves as one: dragged, the whole studio (Back Foot too) swings about the hinge.
+// 05 Its menu: Edit… (A2.4).
+// 06 Edit: a checkbox per part of the studio; Back Foot unticked.
+// 07 ✓: two parts in the instance (the list and the view).
+// 08 The studio stays live: in the Bill of Materials its parts are rows (Base Frame Bar, Cross
+//    Bar), named as in the studio.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Custom("fixture step_stool_hinged"),
+        Wait(20),
+        Click(ui("tab-step-stool-assembly")),
+        Wait(10),
+        Custom("view 70 15 0 -150 300 1.6"),
+        Wait(20),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Wait(5),
+        Click(ui("insert-rigid")),
+        Wait(5),
+        Hover(ui("insert-studio-base-frame-bar")),
+        Wait(5),
+        Screenshot("01-a2.4-insert-rigid"),
+        Click(ui("insert-studio-base-frame-bar")),
+        Wait(5),
+        Click(ui("insert-dialog-accept")),
+        Wait(10),
+        // The separate instances go (their mates with them).
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-delete"),
+        Click(ui("asm-delete")),
+        Wait(5),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-delete"),
+        Click(ui("asm-delete")),
+        Wait(10),
+        Click(ui_at("instance-row-2", 0.05, 0.5)),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("02-a2.4-rigid-instance-parts"),
+        // A2.4: it mates as one.
+        Click(ui("mate-revolute")),
+        WaitFor("mate-dialog"),
+        Wait(5),
+        Hover(xyz(0, -12.7, 584.2)),
+        Wait(5),
+        Click(xyz(0, -12.7, 584.2)),
+        Wait(8),
+        Hover(xyz(0, -12.7, 584.2)),
+        Wait(5),
+        Click(xyz(0, -12.7, 584.2)),
+        Wait(10),
+        Click(ui("mate-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("03-a2.4-mated-as-one"),
+        // It moves as one.
+        Press(xyz(0, -63.5, 114.3)),
+        Hover(xyz(0, -90, 114.3)),
+        Wait(3),
+        Hover(xyz(0, -200, 140)),
+        Wait(3),
+        Hover(xyz(0, -330, 170)),
+        Wait(8),
+        Screenshot("04-a2.4-dragged-as-one"),
+        Release,
+        Wait(8),
+        RightClick(ui("instance-row-2")),
+        WaitFor("asm-studio-edit"),
+        Hover(ui("asm-studio-edit")),
+        Wait(3),
+        Screenshot("05-a2.4-edit-menu"),
+        Click(ui("asm-studio-edit")),
+        WaitFor("studio-edit-dialog"),
+        Wait(3),
+        Click(ui("studio-edit-part-back-foot-checkbox")),
+        Wait(3),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("06-a2.4-edit-parts"),
+        Click(ui("studio-edit-dialog-accept")),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("07-a2.4-two-parts"),
+        Click(ui("panel-bom")),
+        WaitFor("bom-panel"),
+        Wait(10),
+        MoveTo(1300, 250),
+        Wait(3),
+        Screenshot("08-a2.4-bom-live-parts"),
+    ],
+)

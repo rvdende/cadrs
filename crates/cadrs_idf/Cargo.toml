@@ -1,0 +1,16 @@
+[package]
+name = "cadrs_idf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# IDF 2.0/3.0 (.emn board + .emp library) parser, writer and zip export for PCB Studio (P3H.1).
+# No Bevy. The zip container is written and read by hand on top of flate2 (deflate + CRC-32).
+[dependencies]
+serde.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+ron.workspace = true

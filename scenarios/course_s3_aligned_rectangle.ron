@@ -1,0 +1,51 @@
+// T3 / S3.3: "Aligned: two clicks set the first side's angle and length, and a third click sets
+// the perpendicular width." (`reference/onshape/entity_tools/aligned-rectangle-02.png`)
+// Rectangle ▾ lists Corner, Center point and Aligned. The first side follows the cursor with
+// its length; then the rectangle, square to it, with both live values. Placing it opens the
+// length box (60), then the width box (25): aligned dimensions along the sides. It keeps its
+// angle (one corner square, opposite sides parallel).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("N"),
+        Wait(40),
+        Click(ui("sketch-rectangle-caret")),
+        WaitFor("sketch-variant-aligned-rectangle"),
+        Wait(3),
+        Screenshot("01-rectangle-menu"),
+        Click(ui("sketch-variant-aligned-rectangle")),
+        Wait(2),
+        ClickWorld(-35, -25),
+        MoveWorld(0, -10),
+        MoveWorld(20, 5),
+        Wait(3),
+        Screenshot("02-first-side"),
+        ClickWorld(20, 5),
+        MoveWorld(10, 15),
+        MoveWorld(0, 30),
+        Wait(3),
+        Screenshot("03-width-square-to-it"),
+        ClickWorld(0, 30),
+        Wait(4),
+        Screenshot("04-length-box"),
+        Type("60"),
+        Key("Enter"),
+        Wait(4),
+        Screenshot("05-width-box"),
+        Type("25"),
+        Key("Enter"),
+        Wait(4),
+        Key("Escape"),
+        Wait(2),
+        MoveTo(1350, 850),
+        Wait(3),
+        Screenshot("06-aligned-60-by-25"),
+    ],
+)

@@ -1,0 +1,129 @@
+// P3C.8 / D4.12, X14: a section view and a detail view on the Ex1 drawing of the Universal Joint
+// Flange stand-in (`Custom("ujoint-drawing")`, `cadrs_core::samples::ujoint_drawing`: ANSI A,
+// inches, 1:2; Front's model origin at sheet (66, 65.85) mm, Top's at (66, 170.8)). Sheet points
+// are `world(x, y)` in sheet mm. The counterbored holes are at x = ±1.0305 in (sheet x 66 ± 13.09).
+// 01 the Ex1 drawing. 02 Right and Isometric deleted (their menus' Delete) to make room; then
+//    Front is dragged 30 mm down (Top stays), so the cutting line's ends clear Top's 2.061.
+// 03 Section view: the Front view hovered with the tool (hint).
+// 04 the cutting line's first point placed through the right-hand lug (x 1.65 in), the line following the cursor (snapped vertical).
+// 05 the section following the cursor to the right, aligned with Front: the lug cut through,
+//    the cut faces hatched (45°), the cutting line with arrows and "A" on Front.
+// 06 placed, its alignment suppressed and moved up so "SECTION A-A" goes under it (hidden lines
+//    off); the cutting line runs a gap past Front's outline, the letters beside the arrows. The
+//    lug is cut: its cross hole and lug holes in the hatched section.
+// 07 Detail view (the view group's button): the circle's centre on the Top view's hole, the
+//    circle following the cursor. 08 the detail (2:1 of the 1:2 parent, so 1:1) following the
+//    cursor. 09 placed: "DETAIL B" / "SCALE 1:1", the circle and "B" on Top; the hole's
+//    centermark carried into the detail.
+// 10 Dimension (D) on the detail's hole, following the cursor; 11 placed: Ø.266, as in Top's
+//    callout. 12 zoomed on the section and the detail.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("ujoint-drawing"),
+        Wait(120),
+        Key("F"),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("01-ex1-drawing"),
+        // Make room: delete Right and Isometric.
+        RightClick(world(158, 61)),
+        WaitFor("view-menu-delete"),
+        Click(ui("view-menu-delete")),
+        Wait(5),
+        RightClick(world(236, 160)),
+        WaitFor("view-menu-delete"),
+        Click(ui("view-menu-delete")),
+        Wait(5),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("02-right-and-iso-deleted"),
+        // Room between Front and Top for the cutting line's ends (P3C.8's delta): Front dragged
+        // down (Top, aligned above it, stays).
+        Press(world(66, 80)),
+        MoveWorld(66, 70),
+        Wait(3),
+        MoveWorld(66, 58),
+        Wait(3),
+        MoveWorld(66, 50),
+        Wait(5),
+        Release,
+        Wait(15),
+        // Section view A-A through the right-hand lug.
+        Click(ui("drawing-section-view")),
+        Wait(5),
+        MoveWorld(86.955, 70),
+        Wait(5),
+        Screenshot("03-section-tool-hover"),
+        ClickWorld(86.955, 30.5),
+        Wait(3),
+        MoveWorld(87.2, 94),
+        Wait(5),
+        Screenshot("04-cutting-line-preview"),
+        ClickWorld(87.1, 100),
+        Wait(3),
+        MoveWorld(170, 60),
+        Wait(40),
+        Screenshot("05-section-following-cursor"),
+        ClickWorld(170, 60),
+        Wait(30),
+        // Room for "SECTION A-A" under it: alignment suppressed, the section moved up.
+        RightClick(world(170, 65)),
+        WaitFor("view-menu-suppress-alignment"),
+        Click(ui("view-menu-suppress-alignment")),
+        Wait(10),
+        Press(world(170, 65)),
+        MoveWorld(170, 75),
+        Wait(3),
+        MoveWorld(170, 100),
+        Wait(3),
+        MoveWorld(170, 120),
+        Wait(5),
+        Release,
+        Wait(15),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("06-section-placed"),
+        // Detail view B of a counterbored hole in Top, at 2:1 of it.
+        Click(ui("drawing-detail-view")),
+        Wait(5),
+        ClickWorld(79.09, 191.64),
+        Wait(3),
+        MoveWorld(86.5, 194),
+        Wait(5),
+        Screenshot("07-detail-circle-preview"),
+        ClickWorld(87.09, 191.64),
+        Wait(3),
+        MoveWorld(236, 168),
+        Wait(40),
+        Screenshot("08-detail-following-cursor"),
+        ClickWorld(236, 168),
+        Wait(30),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("09-detail-placed"),
+        // A dimension in the detail: the hole's diameter.
+        Key("D"),
+        Wait(3),
+        ClickWorld(239.38, 168),
+        Wait(3),
+        MoveWorld(252, 182),
+        Wait(5),
+        Screenshot("10-detail-dimension-preview"),
+        ClickWorld(252, 182),
+        Wait(5),
+        Key("Escape"),
+        Wait(3),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("11-detail-dimension-placed"),
+        Scroll(world(200, 120), 3),
+        Wait(10),
+        MoveTo(1500, 960),
+        Wait(5),
+        Screenshot("12-zoomed"),
+    ],
+)

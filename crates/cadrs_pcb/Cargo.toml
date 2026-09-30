@@ -1,0 +1,20 @@
+[package]
+name = "cadrs_pcb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# PCB Studio's domain layer (stage 3H, P3H.2): IDF boards as kernel B-rep (board, keep areas,
+# components) and MCAD parts back to an IDF board (Sync). No Bevy.
+[features]
+default = ["occt"]
+occt = ["cadrs_kernel/occt", "cadrs_core/occt"]
+
+[dependencies]
+cadrs_idf.workspace = true
+cadrs_kernel.workspace = true
+cadrs_core.workspace = true
+cadrs_sketch.workspace = true
+nalgebra.workspace = true
+serde.workspace = true

@@ -1,0 +1,147 @@
+// P3G.3 (derived-and-linking.md DV1.9; external-references.md ER6.7 "Open linked document"):
+// opening a linked reference's source at its version, read-only. Document B "Block consumer"
+// with two instances of A@V1 in Assembly 1 (`linked-block consumer 2`) and "Drawing 1" (a Front
+// view of A@V1); A "Block source" then edited to 40 and versioned V2 (`linked-block edit`), so
+// its workspace is not what B references.
+// 01 (ER6.7) right-click Part 1 <1> → "Open linked document" hovered.
+// 02 (DV1.9) Block source at V1, read-only: its tab "Block" active and Part 1 selected (the Parts
+//    list, the part highlighted), 25 high (V1; its workspace is 40); the top bar reads "V1"
+//    instead of "Main"; the blue banner "Viewing V1 of Block source (read-only). Edits are
+//    turned off." with "Back to Block consumer"; the toolbar greyed.
+// 03 an edit refused: Extrude 1 double-clicked → the toast "V1 of Block source is open
+//    read-only: it can't be edited. Go back to Block consumer to edit." and no dialog.
+// 04 Ctrl+Z and the tab menu's Duplicate refused the same way.
+// 05 mass properties at V1 (reading is allowed): 37 500 mm³.
+// 06 "Back to Block consumer": Assembly 1 as it was (its two instances, the badges).
+// 07 the tab menu of Assembly 1: "Open linked document (Block source (V1))" hovered.
+// 08 a linked icon clicked → the Reference manager → Selective update: each row's "Open linked
+//    document" button (V1, read-only) hovered.
+// 09 opened from the manager: Block source at V1 again; Back.
+// 10 Drawing 1, the Sheets pane: right-click the reference → "Open linked document" hovered.
+// 11 (ER3, same document) "Exercise: Move to Document" with its six pistons at V1 of the same
+//    document (`move-doc setup`, `move-doc version-ref`): right-click Piston Assembly <1> →
+//    Open linked document.
+// 12 the same document at V1, read-only, on its "Piston Assembly" tab (a subassembly source:
+//    nothing to select); "Viewing V1 of Exercise: Move to Document".
+// 13 Back: the Hexapod again, at the workspace.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(20),
+        Custom("linked-block"),
+        Wait(60),
+        Custom("linked-block consumer 2"),
+        Wait(60),
+        Custom("linked-block drawing"),
+        Wait(60),
+        Custom("linked-block edit"),
+        Wait(40),
+        Click(ui("tab-assembly-1")),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        RightClick(ui("instance-row-1")),
+        WaitFor("assembly-context-menu"),
+        Wait(5),
+        Hover(ui("asm-open-linked")),
+        Wait(20),
+        Screenshot("01-instance-menu-open-linked"),
+        Click(ui("asm-open-linked")),
+        WaitFor("linked-session-banner"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("02-opened-read-only-v1"),
+        DoubleClick(ui("feature-extrude-1")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("03-edit-refused"),
+        Key("Ctrl+Z"),
+        Wait(10),
+        RightClick(ui("tab-block")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Click(ui("tab-duplicate")),
+        Wait(20),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("04-undo-and-duplicate-refused"),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        Wait(10),
+        ExpectText("mass-dialog", "37500.000"),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("05-mass-at-v1"),
+        Click(ui("mass-dialog-cancel")),
+        Wait(3),
+        Click(ui("linked-session-back")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("06-back"),
+        RightClick(ui("tab-assembly-1")),
+        WaitFor("tab-context-menu"),
+        Wait(5),
+        Hover(ui("tab-open-linked")),
+        Wait(20),
+        Screenshot("07-tab-menu-open-linked"),
+        Key("Escape"),
+        Wait(5),
+        Click(ui("instance-row-1-linked")),
+        WaitFor("reference-manager"),
+        Wait(10),
+        Click(ui("refman-tabs-1")),
+        Wait(10),
+        Hover(ui("refman-open-1")),
+        Wait(40),
+        Screenshot("08-manager-open-button"),
+        Click(ui("refman-open-1")),
+        WaitFor("linked-session-banner"),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-opened-from-manager"),
+        Click(ui("linked-session-back")),
+        Wait(60),
+        Click(ui("tab-drawing-1")),
+        Wait(40),
+        Click(ui("drawing-sheets-toggle")),
+        Wait(20),
+        RightClick(ui("sheet-ref-1")),
+        WaitFor("sheet-ref-menu"),
+        Wait(5),
+        Hover(ui("sheet-ref-open")),
+        Wait(20),
+        Screenshot("10-sheets-pane-open-linked"),
+        Key("Escape"),
+        Wait(5),
+        Custom("move-doc setup"),
+        Wait(90),
+        Custom("move-doc version-ref"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        RightClick(ui("instance-row-3")),
+        WaitFor("assembly-context-menu"),
+        Wait(5),
+        Hover(ui("asm-open-linked")),
+        Wait(20),
+        Screenshot("11-same-document-open-linked"),
+        Click(ui("asm-open-linked")),
+        WaitFor("linked-session-banner"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("12-same-document-at-v1"),
+        Click(ui("linked-session-back")),
+        Wait(60),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("13-back-to-workspace"),
+    ],
+)

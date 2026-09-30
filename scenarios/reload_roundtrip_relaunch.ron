@@ -1,0 +1,21 @@
+// M8: the second half of reload_roundtrip, in a new app instance: it starts on the documents
+// that scenario saved (`data_from`; run reload_roundtrip first). The documents page lists
+// "Round trip" with its sketch thumbnail; opening it shows exactly what 01 of reload_roundtrip
+// showed before closing.
+Scenario(
+    start: Some("landing"),
+    data_from: Some("reload_roundtrip"),
+    steps: [
+        WaitFor("doc-row-0"),
+        Wait(5),
+        MoveTo(1500, 900),
+        Wait(3),
+        Screenshot("01-new-app-documents-page"),
+        DoubleClick(ui("doc-name-0")),
+        WaitFor("document-shell"),
+        Wait(40),
+        MoveTo(1500, 900),
+        Wait(70),
+        Screenshot("02-reopened-after-relaunch-matches-01"),
+    ],
+)

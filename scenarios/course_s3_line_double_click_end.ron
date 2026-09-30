@@ -1,0 +1,42 @@
+// T2 / S3.1: "Click-click makes chained segments... Double-clicking the last point, or leaving
+// the tool, ends the chain." Three chained segments; double-clicking the fourth point places
+// it and ends the chain: no rubber band follows the cursor, and the Line tool stays active (the
+// next click starts a new chain).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Wait(3),
+        Click(ui("feature-top")),
+        Wait(3),
+        Key("N"),
+        Wait(40),
+        Key("L"),
+        Wait(2),
+        ClickWorld(-40, -20),
+        ClickWorld(-10, 15),
+        ClickWorld(15, -5),
+        MoveWorld(40, 20),
+        Wait(3),
+        Screenshot("01-chain-of-three-rubber-band"),
+        DoubleClick(world(40, 20)),
+        Wait(3),
+        MoveWorld(55, -25),
+        Wait(3),
+        Screenshot("02-double-click-ended-the-chain"),
+        ClickWorld(-40, -40),
+        MoveWorld(0, -45),
+        Wait(3),
+        Screenshot("03-line-tool-still-active-new-chain"),
+        Key("Escape"),
+        Wait(2),
+        Key("Escape"),
+        Wait(2),
+        MoveTo(1400, 850),
+        Wait(3),
+        Screenshot("04-done"),
+    ],
+)
