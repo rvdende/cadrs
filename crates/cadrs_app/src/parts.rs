@@ -4,8 +4,8 @@
 //! - **Shading:** light blue-grey, lit from the viewer's upper right: faces turned up toward
 //!   the viewer are light blue (`#9bc1d8`), faces turned to the right slate blue (`#88a9bc`),
 //!   to the left darker slate (`#687e8c`), as measured in `screens/24` in the isometric view.
-//!   The colours are computed per vertex from the face normal in camera space (a head light), so
-//!   they follow the view as it turns.
+//!   The colours are computed on the GPU from the face normal in camera space (a head light,
+//!   [`crate::part_shading`]), so they follow the view as it turns.
 //! - **Edges:** black lines, hidden behind the part; cylinders also get their silhouette
 //!   lines. Every edge is drawn alike (round joints, so the short segments of an arc don't
 //!   draw fainter than a straight edge).
@@ -38,6 +38,7 @@ use cadrs_sketch::region::Region;
 use cadrs_sketch::{EdgeName, FaceName, FaceOrigin, PlaneFrame, PlaneRef, VertexName};
 
 use crate::camera::{ViewState, ray_square};
+use crate::part_shading::PartShading;
 use crate::viewport::{
     PLANE_HALF, Pick, PlaneHighlight, PlaneKind, Selection, ViewportView,
 };
@@ -73,6 +74,7 @@ impl Plugin for PartsPlugin {
             .init_gizmo_group::<PickedEdgeGizmos>()
             .init_gizmo_group::<VertexGizmos>()
             .init_gizmo_group::<FreeEdgeGizmos>()
+            .add_plugins(crate::part_shading::PartShadingPlugin)
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,
@@ -1156,6 +1158,55 @@ pub fn part_mesh(part: &Part, view: &ViewState, preview: bool, bases: &[FaceBase
         .with_inserted_indices(Indices::U32(indices))
 }
 
+/// [`part_mesh`] for the viewport's [`PartShading`] material: each vertex carries its face's
+/// base colour (sRGB, 0–1) and opacity, and UV x = 1 on a selected face; the GPU lights it.
+pub fn part_base_mesh(part: &Part, preview: bool, bases: &[FaceBase]) -> Mesh {
+    let s = &part.solid;
+    let mut positions: Vec<[f32; 3]> = s.positions.iter().map(|p| v3(*p).to_array()).collect();
+    let mut normals: Vec<[f32; 3]> = s.normals.iter().map(|n| v3(*n).to_array()).collect();
+    let mut indices = s.indices.clone();
+    if two_sided(part, preview) {
+        let n = positions.len() as u32;
+        positions.extend_from_within(..);
+        normals.extend(s.normals.iter().map(|q| (-v3(*q)).to_array()));
+        for t in s.indices.chunks(3) {
+            if let [a, b, c] = t {
+                indices.extend([a + n, c + n, b + n]);
+            }
+        }
+    }
+    let (colors, sel) = base_colors(part, preview, false, bases, &[]);
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, sel)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// The vertex colours and selection flags of [`part_base_mesh`]: what [`shade`] starts from
+/// before the light (the selection's orange on a selected face, the preview's opacity).
+fn base_colors(part: &Part, preview: bool, selected: bool, bases: &[FaceBase], picked: &[usize]) -> (Vec<[f32; 4]>, Vec<[f32; 2]>) {
+    let faces = vertex_faces(part);
+    let per_face: Vec<([f32; 4], [f32; 2])> = (0..part.solid.faces.len())
+        .map(|fi| {
+            let base = bases.get(fi).copied().unwrap_or_default();
+            let sel = selected || picked.contains(&fi);
+            let rgb = match (sel, warm(base)) {
+                (true, true) => SELECTED_DEEP,
+                (true, false) => SELECTED_BASE,
+                _ => base.rgb,
+            };
+            let alpha = if preview { PREVIEW_ALPHA * base.alpha } else { base.alpha };
+            ([rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, alpha], [if sel { 1.0 } else { 0.0 }, 0.0])
+        })
+        .collect();
+    let at = |i: usize| per_face.get(faces[i]).copied().unwrap_or(([PART_BASE[0] / 255.0, PART_BASE[1] / 255.0, PART_BASE[2] / 255.0, 1.0], [0.0; 2]));
+    let copies = if two_sided(part, preview) { 2 } else { 1 };
+    let n = faces.len();
+    (0..copies * n).map(|i| at(i % n)).unzip()
+}
+
 /// The face each vertex belongs to (the kernel's tessellation gives every face its own
 /// vertices).
 fn vertex_faces(part: &Part) -> Vec<usize> {
@@ -1279,11 +1330,11 @@ pub(crate) struct PartMesh {
 
 #[derive(Resource, Default)]
 struct PartMaterials {
-    solid: Option<Handle<StandardMaterial>>,
+    solid: Option<Handle<PartShading>>,
     /// The preview and transparent appearances: blended, front faces only.
-    preview: Option<Handle<StandardMaterial>>,
+    preview: Option<Handle<PartShading>>,
     /// Surfaces: opaque, back faces culled (their mesh carries both sides).
-    surface: Option<Handle<StandardMaterial>>,
+    surface: Option<Handle<PartShading>>,
 }
 
 /// What the part meshes were last built for: the parts' generation, the edited extrude and the
@@ -1296,11 +1347,10 @@ fn sync_part_meshes(
     cache: Res<PartCache>,
     over: Res<PartOverride>,
     ghosts: Res<PartGhosts>,
-    view: Res<ViewportView>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<PartShading>>,
     mut mats: Local<PartMaterials>,
-    mut q: Query<(Entity, &mut PartMesh, &Mesh3d, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut q: Query<(Entity, &mut PartMesh, &Mesh3d, &mut MeshMaterial3d<PartShading>)>,
     mut last: Local<Option<MeshKey>>,
     mut commands: Commands,
 ) {
@@ -1311,21 +1361,15 @@ fn sync_part_meshes(
     *last = Some(key);
     let solid = mats
         .solid
-        .get_or_insert_with(|| materials.add(part_material(false)))
+        .get_or_insert_with(|| materials.add(PartShading { blend: false, cull_back: false }))
         .clone();
     let preview_mat = mats
         .preview
-        .get_or_insert_with(|| materials.add(part_material(true)))
+        .get_or_insert_with(|| materials.add(PartShading { blend: true, cull_back: true }))
         .clone();
     let surface_mat = mats
         .surface
-        .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                cull_mode: Some(bevy::render::render_resource::Face::Back),
-                double_sided: false,
-                ..part_material(false)
-            })
-        })
+        .get_or_insert_with(|| materials.add(PartShading { blend: false, cull_back: true }))
         .clone();
     let material_for = |part: &Part, preview: bool, bases: &[FaceBase]| {
         if translucent(preview, bases) {
@@ -1345,7 +1389,7 @@ fn sync_part_meshes(
         let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
         let bases = ghosted_bases(&cache, &ghosts, part);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            *m = part_mesh(part, &view.view, preview, &bases);
+            *m = part_base_mesh(part, preview, &bases);
         }
         pm.preview = preview;
         let want = material_for(part, preview, &bases);
@@ -1360,7 +1404,7 @@ fn sync_part_meshes(
         }
         let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
         let bases = ghosted_bases(&cache, &ghosts, part);
-        let mesh = meshes.add(part_mesh(part, &view.view, preview, &bases));
+        let mesh = meshes.add(part_base_mesh(part, preview, &bases));
         let mut e = commands.spawn((
             Name::new(format!("part-{}", part.name.to_lowercase().replace(' ', "-"))),
             PartMesh {
@@ -1379,21 +1423,19 @@ fn sync_part_meshes(
     }
 }
 
-/// Re-colours the parts when the view turns (the light follows the camera), and a selected
-/// part in the selection's orange.
+/// Re-colours a selected part (or face) in the selection's orange. The light is the GPU's
+/// ([`PartShading`]): turning the view changes nothing here.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn shade_parts(
     cache: Res<PartCache>,
-    view: Res<ViewportView>,
     over: Res<PartOverride>,
     ghosts: Res<PartGhosts>,
     selection: Res<Selection>,
     faces: Res<FaceSelection>,
     q: Query<(&PartMesh, &Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut last: Local<Option<(Vec3, Vec3, u64, Option<FeatureId>, Vec<PartId>, Vec<PartId>, Vec<Pick>)>>,
+    mut last: Local<Option<(u64, Option<FeatureId>, Vec<PartId>, Vec<PartId>, Vec<Pick>)>>,
 ) {
-    let v = view.view;
     let selected: Vec<PartId> = if cache.assembly.is_some() && selection.contains(Pick::Assembly) {
         // The assembly's root row: every instance (P3B.1).
         cache.parts.iter().map(|p| p.id).collect()
@@ -1413,10 +1455,8 @@ fn shade_parts(
         }
         out
     };
-    let key = (v.back(), v.up(), cache.generation, over.editing, selected.clone(), ghosts.parts.clone(), faces.0.clone());
-    if last.as_ref().is_some_and(|(b, u, g, e, s, h, f)| {
-        b.distance(key.0) < 1e-5 && u.distance(key.1) < 1e-5 && *g == key.2 && *e == key.3 && *s == key.4 && *h == key.5 && *f == key.6
-    }) {
+    let key = (cache.generation, over.editing, selected.clone(), ghosts.parts.clone(), faces.0.clone());
+    if last.as_ref() == Some(&key) {
         return;
     }
     *last = Some(key);
@@ -1435,7 +1475,9 @@ fn shade_parts(
                 .filter(|(_, f)| faces.0.contains(&Pick::Face(part.id, f.name)))
                 .map(|(i, _)| i)
                 .collect();
-            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors_with(part, &v, pm.preview, sel, &bases, &picked));
+            let (colors, flags) = base_colors(part, pm.preview, sel, &bases, &picked);
+            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, flags);
         }
     }
 }
@@ -1929,11 +1971,18 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
 pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, EdgeName, f32)> {
     let mut near: Vec<(f32, PartId, EdgeName, Vec3, Option<cadrs_core::solid::EdgeCircle>)> = Vec::new();
     for part in cache.shown() {
+        let index = part.solid.pick_index();
+        if !index.bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
+            continue;
+        }
         // A clear part's edges give way to the edges seen through it (the Pneumatic Cylinder's
         // barrel over the Rear Cap's rod holes, `ex3-step14.png`).
         let clear = cache.transparent.contains(&part.id) || cadrs_core::appearance::part_appearance(part, &cache.props).alpha < 255;
         let penalty = if clear { EDGE_PICK_PX } else { 0.0 };
-        for e in &part.solid.edges {
+        for (ei, e) in part.solid.edges.iter().enumerate() {
+            if !index.edges[ei].as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
+                continue;
+            }
             let mut best: Option<(f32, Vec3)> = None;
             for w in e.points.windows(2) {
                 let (a, b) = (v3(w[0]), v3(w[1]));
@@ -1986,6 +2035,7 @@ fn hidden_by_its_shaft(cache: &PartCache, view: &ViewState, part: PartId, p: Vec
 pub fn pick_vertex(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, VertexName, f32)> {
     let mut near: Vec<(f32, PartId, VertexName, Vec3)> = cache
         .shown()
+        .filter(|part| part.solid.pick_index().bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, VERTEX_PICK_PX)))
         .flat_map(|part| {
             part.solid.vertices.iter().map(move |v| {
                 let p = v3(v.point);
@@ -1998,6 +2048,16 @@ pub fn pick_vertex(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<
     near.into_iter()
         .find(|(_, _, _, p)| visible(cache, view, *p))
         .map(|(d, f, n, _)| (f, n, d))
+}
+
+/// True if a world box, as the (orthographic) view shows it, comes within `px` of a screen
+/// offset.
+fn near_on_screen(view: &ViewState, (lo, hi): &cadrs_core::solid::Bounds, offset: Vec2, px: f32) -> bool {
+    let (lo, hi) = (v3(*lo), v3(*hi));
+    let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+    let reach = Vec2::new(h.dot(view.right().abs()), h.dot(view.up().abs())) / view.scale + Vec2::splat(px + 1.0);
+    let d = (view.project(c) - offset).abs();
+    d.x <= reach.x && d.y <= reach.y
 }
 
 fn to64(v: Vec3) -> [f64; 3] {

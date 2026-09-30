@@ -155,6 +155,85 @@ pub struct Solid {
     /// merges neighbouring faces on one surface into one face, named after the smallest of its
     /// pieces' names; references to the other names find it through these.
     pub face_aliases: Vec<FaceAlias>,
+    /// Bounding boxes for picking, built on the first pick ([`Solid::pick_index`]).
+    pub pick_cache: PickCache,
+}
+
+/// An axis-aligned box: its lowest and highest corners.
+pub type Bounds = (Vec3, Vec3);
+
+/// A [`Solid`]'s boxes for picking: its own, and each face's and edge's (by index). A pick
+/// tests a box before the triangles or segments in it, so a ray through a big part costs about
+/// the faces it passes near, not all of its triangles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickIndex {
+    pub bounds: Option<Bounds>,
+    pub faces: Vec<Option<Bounds>>,
+    pub edges: Vec<Option<Bounds>>,
+    /// The solid's counts when this was built, to catch geometry changed afterwards.
+    shape: [usize; 4],
+}
+
+/// The [`PickIndex`] of a [`Solid`], built once. A copy starts empty (it may be moved or
+/// otherwise changed, as [`crate::assembly::transform_solid`] does); the solid's geometry is not
+/// changed in place once it has been picked (only its looks and connectors are), and an index
+/// whose counts no longer match is rebuilt for each pick instead.
+#[derive(Default)]
+pub struct PickCache(std::sync::OnceLock<PickIndex>);
+
+impl Clone for PickCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for PickCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for PickCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PickCache")
+    }
+}
+
+fn bounds_of(points: impl IntoIterator<Item = Vec3>) -> Option<Bounds> {
+    let mut it = points.into_iter();
+    let first = it.next()?;
+    let (mut lo, mut hi) = (first, first);
+    for p in it {
+        for i in 0..3 {
+            lo[i] = lo[i].min(p[i]);
+            hi[i] = hi[i].max(p[i]);
+        }
+    }
+    // A hair larger, so a ray grazing a flat face's box (zero thick) still reaches its
+    // triangles.
+    let pad = 1e-6 * (0..3).map(|i| hi[i] - lo[i]).fold(1.0, f64::max);
+    Some((lo.map(|v| v - pad), hi.map(|v| v + pad)))
+}
+
+/// True if the line `origin + t·dir` (any `t`, as [`Solid::pick`] takes it) passes through the
+/// box.
+pub fn line_hits_box(origin: Vec3, dir: Vec3, (lo, hi): &Bounds) -> bool {
+    let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+    for i in 0..3 {
+        if dir[i].abs() < 1e-15 {
+            if origin[i] < lo[i] || origin[i] > hi[i] {
+                return false;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[i] - origin[i]) / dir[i], (hi[i] - origin[i]) / dir[i]);
+        t0 = t0.max(a.min(b));
+        t1 = t1.min(a.max(b));
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Another name of a face of a [`Solid`] (a face merged into it, see [`Solid::face_aliases`]).
@@ -524,12 +603,39 @@ impl Solid {
         self.pick_where(origin, dir, |_| true)
     }
 
+    /// The solid's [`PickIndex`], built on first use.
+    pub fn pick_index(&self) -> std::borrow::Cow<'_, PickIndex> {
+        let shape = [self.positions.len(), self.indices.len(), self.faces.len(), self.edges.len()];
+        let index = self.pick_cache.0.get_or_init(|| self.build_pick_index());
+        if index.shape == shape {
+            std::borrow::Cow::Borrowed(index)
+        } else {
+            std::borrow::Cow::Owned(self.build_pick_index())
+        }
+    }
+
+    fn build_pick_index(&self) -> PickIndex {
+        let face = |f: &SolidFace| {
+            let idx = self.indices.get(3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count)).unwrap_or(&[]);
+            bounds_of(idx.iter().filter_map(|&i| self.positions.get(i as usize).copied()))
+        };
+        PickIndex {
+            bounds: bounds_of(self.positions.iter().copied()),
+            faces: self.faces.iter().map(face).collect(),
+            edges: self.edges.iter().map(|e| bounds_of(e.points.iter().copied())).collect(),
+            shape: [self.positions.len(), self.indices.len(), self.faces.len(), self.edges.len()],
+        }
+    }
+
     /// [`Solid::pick`] among the faces `keep` accepts (the others let the ray through).
     pub fn pick_where(&self, origin: Vec3, dir: Vec3, keep: impl Fn(&SolidFace) -> bool) -> Option<(usize, f64)> {
+        let index = self.pick_index();
+        if !index.bounds.as_ref().is_some_and(|b| line_hits_box(origin, dir, b)) {
+            return None;
+        }
         let mut best: Option<(usize, f64)> = None;
-        let skipped: Vec<bool> = self.faces.iter().map(|f| !keep(f)).collect();
         for (fi, f) in self.faces.iter().enumerate() {
-            if skipped[fi] {
+            if !index.faces[fi].as_ref().is_some_and(|b| line_hits_box(origin, dir, b)) || !keep(f) {
                 continue;
             }
             for tri in f.first_triangle..f.first_triangle + f.triangle_count {
@@ -1134,6 +1240,50 @@ mod tests {
         assert!(close(solid.faces[f].plane.unwrap().normal(), [0.0, -1.0, 0.0]));
         // Missing it.
         assert!(solid.pick([80.0, 15.0, 100.0], [0.0, 0.0, -1.0]).is_none());
+    }
+
+    #[test]
+    fn picking_through_the_boxes_finds_what_every_triangle_would() {
+        let mut s = Sketch::new();
+        rect(&mut s, 0.0, 0.0, 50.0, 30.0);
+        circle(&mut s, 15.0, 15.0, 6.0);
+        circle(&mut s, 36.0, 12.0, 4.0);
+        let solid = solid_of(&s, PlaneRef::Top, 25.0, false);
+        let brute = |o: Vec3, d: Vec3| {
+            let mut best: Option<(usize, f64)> = None;
+            for (fi, f) in solid.faces.iter().enumerate() {
+                for tri in f.first_triangle..f.first_triangle + f.triangle_count {
+                    let [a, b, c] = [0, 1, 2].map(|k| solid.positions[solid.indices[3 * tri + k] as usize]);
+                    if let Some(t) = ray_triangle(o, d, a, b, c)
+                        && best.is_none_or(|(_, bt)| t < bt)
+                    {
+                        best = Some((fi, t));
+                    }
+                }
+            }
+            best
+        };
+        // Rays in many directions through a grid of points around the part (some miss it,
+        // some pass behind their origin: the pick takes the whole line).
+        let dirs = [[0.0, 0.0, -1.0], [0.3, 0.8, -0.5], [-0.6, 0.2, 0.7], [1.0, 0.0, 0.0], [0.577, -0.577, 0.577]];
+        let mut hits = 0;
+        for d in dirs {
+            for i in -2..14 {
+                for j in -2..10 {
+                    let o = [i as f64 * 4.3, j as f64 * 3.9, 12.5];
+                    let (a, b) = (solid.pick(o, d), brute(o, d));
+                    assert_eq!(a.map(|x| x.0), b.map(|x| x.0), "ray from {o:?} along {d:?}");
+                    hits += a.is_some() as usize;
+                }
+            }
+        }
+        assert!(hits > 100, "most rays hit the part ({hits})");
+        // A moved copy gets its own boxes.
+        let mut moved = solid.clone();
+        moved.positions.iter_mut().for_each(|p| p[0] += 100.0);
+        assert!(moved.pick([125.0, 15.0, 100.0], [0.0, 0.0, -1.0]).is_some());
+        assert!(line_hits_box([0.0, 0.0, 5.0], [0.0, 0.0, 1.0], &([-1.0; 3], [1.0; 3])));
+        assert!(!line_hits_box([2.0, 0.0, 5.0], [0.0, 0.0, 1.0], &([-1.0; 3], [1.0; 3])));
     }
 
     #[test]

@@ -1503,21 +1503,40 @@ fn update_hover(
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
     ),
+    mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
 ) {
     // While a sketch has its plane, planes no longer react to the pointer (the sketch tools
     // own it); while it waits for one, planes highlight as pick candidates.
     let filter = pick_override.0.or(pick_filter(planes.0, session.as_deref(), extrude.as_deref(), applied.as_deref(), create.as_deref()));
     let picking = filter.is_some();
     let over = pointer_over_viewport(&hover, &q_area);
-    let viewport = match filter {
-        Some(f) if over && !drag.navigating && *kind == ActiveKind::PartStudio => {
-            crate::parts::pick_scene(&parts, &view.view, rect.offset(drag.pointer), f)
-        }
+    let query = match filter {
+        Some(f) if over && !drag.navigating && *kind == ActiveKind::PartStudio => Some(f),
         Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly => {
-            crate::parts::pick_scene(&parts, &view.view, rect.offset(drag.pointer), if pick_override.0.is_some() { f } else { crate::assembly::pick_filter() })
+            Some(if pick_override.0.is_some() { f } else { crate::assembly::pick_filter() })
         }
         _ => None,
     };
+    if query.is_none() {
+        // The parts or the view may change unseen meanwhile.
+        *last = None;
+    }
+    // Picking walks every part's edges and triangles: pick again only when the pointer, the
+    // filter, the view or the parts changed, not every frame the pointer rests over the view.
+    let viewport = query.and_then(|f| {
+        let offset = rect.offset(drag.pointer);
+        if let Some((o, lf, picked)) = *last
+            && o == offset
+            && lf == f
+            && !parts.is_changed()
+            && !view.is_changed()
+        {
+            return picked;
+        }
+        let picked = crate::parts::pick_scene(&parts, &view.view, offset, f);
+        *last = Some((offset, f, picked));
+        picked
+    });
     let viewport = hover_override.0.or(viewport);
     let list = q_rows
         .iter()

@@ -1,6 +1,9 @@
 //! cadrs_app: the Bevy plugins that make up the application (states, landing screen, document
 //! shell, viewport), built from `cadrs_ui` components.
 
+// Bevy's `AsBindGroup` derive (`part_shading`) nests deeper than the default 128.
+#![recursion_limit = "256"]
+
 pub mod appearance;
 pub mod advanced;
 pub mod assembly;
@@ -38,6 +41,7 @@ pub mod reference_manager;
 pub mod mass_props;
 pub mod material_dialog;
 pub mod panel_tab;
+pub mod part_shading;
 pub mod parts;
 pub mod pattern;
 pub mod pattern_dialog;
