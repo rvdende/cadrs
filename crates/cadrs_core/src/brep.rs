@@ -794,6 +794,8 @@ pub fn solid_of(
             center,
             axis,
             area: (area > 0.0).then_some(area),
+            kind: face_info.get(fis[0]).map(|f| f.kind),
+            radius: face_info.get(fis[0]).and_then(|f| f.radius),
         });
         // Rulings of a curved side face: through the face's own mesh points, along the sweep,
         // as far as the face reaches (a boolean may have trimmed it).

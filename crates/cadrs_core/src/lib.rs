@@ -33,6 +33,7 @@ pub mod links;
 pub mod material;
 pub mod move_doc;
 pub mod mate;
+pub mod measure;
 pub mod brep;
 pub mod parts;
 pub mod pcb;

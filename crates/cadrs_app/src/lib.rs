@@ -36,6 +36,7 @@ pub mod tab_folders;
 pub mod tab_manager;
 pub mod reference_manager;
 pub mod mass_props;
+pub mod measure;
 pub mod material_dialog;
 pub mod panel_tab;
 pub mod parts;
@@ -534,7 +535,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
-            .add_plugins(pcb::PcbPlugin)
+            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin))
             .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin))
