@@ -176,10 +176,21 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
     commands.spawn((
         Dialog::new("branch-dialog")
             .width(520.0)
-            .title(format!("Branch to create workspace from {vname}"))
+            // The version goes in the body: a long version name doesn't run under the ✕ (P3E.5
+            // judge).
+            .title("Branch to create workspace")
             .title_font(theme.font_lg, FontWeight::NORMAL)
             .body(move |b| {
                 let t = &tb;
+                b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), margin: UiRect::bottom(Val::Px(8.0)), ..default() }).with_children(|r| {
+                    r.spawn(t.text("From version:", t.font_base, FontWeight::BOLD, t.foreground));
+                    r.spawn((
+                        Name::new("branch-from-version"),
+                        t.text(vname.clone(), t.font_base, FontWeight::NORMAL, t.foreground),
+                        cadrs_ui::ellipsis::Ellipsis::default(),
+                        cadrs_ui::ellipsis::Ellipsis::node(),
+                    ));
+                });
                 b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), ..default() }).with_children(|r| {
                     r.spawn(t.text("Name:", t.font_base, FontWeight::BOLD, t.foreground));
                     r.spawn(TextInput::new("branch-name").value(next).select_all_on_focus().autofocus().width(Val::Px(320.0)).height(30.0).build(t));

@@ -304,7 +304,7 @@ The scenario **`course_td_ex1_drill`** (43 frames) runs steps 1–7 and 9 throug
 6. BOM: Generate next part number on the gasket's row (PRT-000006); **Switch to** from its row;
    its Properties show the number, a Description typed there shows in the BOM (19–24).
 7. Drawing ANSI_B_MM of FUEL AND POWER TRAIN: Front 1:2 + Right; a Structured – Top level BOM
-   snapped at the title block's left edge (narrowed by its grip); height and depth; Item No.
+   snapped at the title block's left edge (fitted to the frame); height and depth; Item No.
    callouts; the title block shows the assembly's Name and Part number (25–31).
 9. Version "FUEL AND POWER TRAIN COMPLETE" → branch "Alternate Gasket Thickness" → the gasket
    1 mm (838.324 mm³) → Main still 1676.648 → merge into Main replacing the CARBURETOR tab →
@@ -316,8 +316,9 @@ The unit test `crates/cadrs_core/tests/course_test_drive.rs` checks:
   form 2·(1200 − 115.125π) and 1·(1200 − 115.125π) computed from the dimensions;
 - that the BOM's Part number equals the part property after edits in both directions;
 - the drawing: 2 views, a 3-row Structured – Top level BOM (DRILL_BODY, CARBURETOR, Socket head
-  cap screw M5 x 25 × 2) snapped to the title block, and the title block's Title and Number
-  ("FUEL AND POWER TRAIN", PRT-000005).
+  cap screw M5 x 25 × 2) snapped to the title block and within the frame, the 148.00 height and
+  80.00 depth measured on the views, Item No. callouts 1–3, and the title block's Title and
+  Number ("FUEL AND POWER TRAIN", PRT-000005).
 
 ## Stand-in substitutions
 - **The document.** DRILL HOTD (187 features, many tabs) is replaced by the four-tab stand-in
@@ -332,8 +333,12 @@ The unit test `crates/cadrs_core/tests/course_test_drive.rs` checks:
   lines the holes up.
 - **Step 5's K** has nothing to hide: the stand-in has no explicit mate connectors and cadrs
   doesn't draw the fasteners' connectors after insertion, so the frame is taken after K.
-- **Step 7's BOM** lists all six default columns, wider than the space left of the title block;
-  it is snapped, then narrowed with its left grip (cells wrap), as `course_drw_ex2_assembly` 12.
+- **Step 7's BOM** lists all six default columns, wider than the space left of the title block:
+  placed there, its columns are fitted to the frame and the cells wrap (`fit_within`).
+- **The gasket's material** (Nylon 6/6) is assigned in step 2 so its mass properties have a mass
+  and centre of mass; the course leaves the part without one.
+- **The drawing tab** is renamed "FUEL AND POWER TRAIN Drawing" (cadrs names a new drawing
+  "Drawing 1", as Onshape does).
 - **Step 9's Restore** is picked on the version's row ("FUEL AND POWER TRAIN COMPLETE"), which
   marks the entry before the merge (Main has no change between the version and the merge).
 
@@ -376,6 +381,13 @@ sight. The Tab manager moved from `move_document.rs` to `tab_manager.rs`. Decisi
 on a primary click (a right-click only opens its menu); drag onto Home moves to the top level, onto
 a crumb into that folder; reordering in the manager is off while it is filtered or searched; a
 selected folder's tabs are what Move to document moves.
+
+**P3E.5 fix round 1 (2026-10-01).** A placed drawing BOM keeps within the frame
+(`cadrs_drawing::assembly::fit_within`); the branch dialog names the version in its body; a merge
+is its own rail row ("Merge from …"); the measure line only draws with the readout or the panel.
+Optional, not done (the main session's decision): `course_td_branch_merge` 14c (the merged
+assembly's gasket instance's mass properties; `workspaces.rs::the_merged_assemblys_gasket_instance_is_the_1_mm_part`
+checks the value) and an assembly Curvature frame in `course_td_analysis`.
 
 **P3E.5 built (2026-10-01, pre-judge).** `samples::drill` and `fixtures/drill_standin.cadrs` (the
 seventh bundled sample), the BOM row menu's Switch to (`assembly::menu::switch_to_owner`), the

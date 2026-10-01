@@ -20,7 +20,9 @@ use cadrs_core::samples::drill as dr;
 use cadrs_core::samples::gear_cover::DocHistory;
 use cadrs_core::workspace_merge::{self as wm, MergeWorkspace, TabChange};
 use cadrs_core::{Document, ElementId, History};
-use cadrs_drawing::assembly::{BomOrder, BomType, bom_table, snap_table_corner};
+use cadrs_drawing::annotation::{DimTool, EdgeRef, ModelData, Pick, Shape, dimension_display, propose};
+use cadrs_drawing::annotation::resolve as resolve_edge;
+use cadrs_drawing::assembly::{BomOrder, BomType, Border, Callout, CalloutFields, SheetModel, bom_table, callout_texts, fit_within, snap_table_corner};
 use cadrs_drawing::table::Corner;
 use cadrs_drawing::title_block::{TitleContext, TitleField, resolve};
 use cadrs_drawing::view::{Placement, projected_view};
@@ -259,7 +261,10 @@ fn step7_the_drawing() {
     let at = snap_table_corner([block.min[0] - 2.0, block.min[1] + 1.5], Corner::BottomRight, (frame.min, frame.max), Some((block.min, block.max)), 8.0).unwrap();
     assert_eq!(at, block.min, "snapped to the title block's left edge, on the frame's bottom");
     let data = da::live_bom(&doc, dr::POWER_TRAIN, BomType::TopLevel, BomOrder::TopToBottom).unwrap();
-    let table = bom_table(data.clone(), Corner::BottomRight, at, &d.style);
+    // Kept within the frame across (the six default columns are wider than the room left of
+    // the block): its left edge moves in, the cells wrapping.
+    let table = fit_within(&bom_table(data.clone(), Corner::BottomRight, at, &d.style), (frame.min, frame.max));
+    assert!(table.rect().0[0] >= frame.min[0] - 1e-9, "the table stays within the frame: {:?}", table.rect());
     d.apply(&DrawingOp::AddTable { sheet, table: table.clone() }).unwrap();
     // 2 views, the 3-row top-level BOM.
     assert_eq!(d.sheets[0].views.len(), 2);
@@ -275,6 +280,46 @@ fn step7_the_drawing() {
     assert_eq!(table.n_rows(), 4, "the header and the 3 rows");
     let (lo, _) = table.rect();
     assert!((lo[1] - block.min[1]).abs() < 1e-9, "the table stands on the frame's bottom");
+    // The height (Front: the drill body's bottom, z −90, to the carburetor's top, z 2 + 20 + 36
+    // = 58) and the depth (Right: the drill body's sides, y ±40), measured on the views' edges.
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-4;
+    let edge = |v: &View, g: &cadrs_core::views::ViewGeometry, f: &dyn Fn(&Shape) -> bool| -> EdgeRef {
+        g.projection.edges.iter().map(EdgeRef::of).find(|r| {
+            let res = resolve_edge(v, g, r);
+            f(&res.shape)
+        }).expect("an edge there")
+    };
+    let hline = |at: f64, x: f64| move |s: &Shape| matches!(*s, Shape::Line { a, b } if near(a[1], at) && near(b[1], at) && a[0].min(b[0]) <= x && x <= a[0].max(b[0]));
+    let vline = |at: f64, y: f64| move |s: &Shape| matches!(*s, Shape::Line { a, b } if near(a[0], at) && near(b[0], at) && a[1].min(b[1]) <= y && y <= a[1].max(b[1]));
+    let gf = cadrs_core::drawing_export::view_geometry(&doc, &d, &front).unwrap();
+    let gf: &cadrs_core::views::ViewGeometry = &gf;
+    let gr = cadrs_core::drawing_export::view_geometry(&doc, &d, &right).unwrap();
+    let gr: &cadrs_core::views::ViewGeometry = &gr;
+    let height = propose(DimTool::Smart, &front, gf, &[Pick::Edge(edge(&front, gf, &hline(-90.0, 0.0))), Pick::Edge(edge(&front, gf, &hline(58.0, 0.0)))], [-100.0, 0.0]).expect("a dimension");
+    let depth = propose(DimTool::Smart, &right, gr, &[Pick::Edge(edge(&right, gr, &vline(-40.0, -45.0))), Pick::Edge(edge(&right, gr, &vline(40.0, -45.0)))], [0.0, -110.0]).expect("a dimension");
+    for (v, g, dim, want, text) in [(&front, gf, &height, 148.0, "148.00"), (&right, gr, &depth, 80.0, "80.00")] {
+        let (block, m) = dimension_display(&d.style, v, g, dim).expect("it measures");
+        assert!((m.value - want).abs() < 1e-6, "{text}: {}", m.value);
+        assert_eq!(block.plain(), text);
+    }
+    // The Item No. callouts: the drill body 1, the carburetor (a part of it) 2, a screw 3.
+    let info = d.source(dr::POWER_TRAIN.0).and_then(|s| s.assembly.clone()).expect("the assembly's info");
+    let geo = ModelData::default();
+    let tables = [table.clone()];
+    let m = SheetModel { inner: &geo, assembly: Some(&info), tables: &tables };
+    let callout = |occ: cadrs_core::assembly::InstanceId| Callout {
+        occurrence: occ.0,
+        attach: [0.0, 0.0],
+        text: [50.0, 50.0],
+        border: Border::Circle,
+        size: 0,
+        text_height: 3.5,
+        fields: CalloutFields { center: "{Table: Item No.}".into(), ..Default::default() },
+        last: None,
+    };
+    let manifold = cadrs_core::assembly::structure::derive(dr::CARBURETOR_INSTANCE, dr::MANIFOLD_INSTANCE);
+    let items: Vec<String> = [dr::DRILL_INSTANCE, manifold, dr::SCREW_INSTANCES[1]].into_iter().map(|o| callout_texts(&m, &callout(o))[4].clone()).collect();
+    assert_eq!(items, ["1", "2", "3"]);
     // The title block: the sheet's reference (its first view) is the assembly: its Name and
     // Part number.
     let props = cadrs_core::drawing_export::reference_props(&doc, Some(d.sheets[0].views[0].reference));

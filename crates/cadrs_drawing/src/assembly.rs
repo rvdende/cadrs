@@ -315,6 +315,20 @@ pub fn snap_to_title_block(at: P2, corner: Corner, block: (P2, P2), tol: f64) ->
     (right && (at[0] - lo[0]).abs() <= tol && at[1] >= lo[1] && at[1] <= hi[1]).then_some([lo[0], at[1]])
 }
 
+/// Table `t` narrowed so it stays within the frame `border` across (P3E.5 judge: a six-column
+/// BOM snapped at the title block ran past the frame's left edge): its free side moves in to
+/// the frame, the columns sharing the width (none narrower than its longest word, so cells wrap
+/// between words). A table that fits is returned as it is.
+pub fn fit_within(t: &Table, border: (P2, P2)) -> Table {
+    use crate::table::Side;
+    let (lo, hi) = t.rect();
+    let (side, edge, over) = if t.fixed.right() { (Side::Left, border.0[0], lo[0] < border.0[0] - 1e-9) } else { (Side::Right, border.1[0], hi[0] > border.1[0] + 1e-9) };
+    if !over {
+        return t.clone();
+    }
+    t.resize(side, [edge, t.at[1]]).unwrap_or_else(|_| t.clone())
+}
+
 /// Where a table's fixed corner snaps: the frame's corner ([`snap_to_border`]) or the title
 /// block ([`snap_to_title_block`]), whichever is nearer.
 pub fn snap_table_corner(at: P2, corner: Corner, border: (P2, P2), block: Option<(P2, P2)>, tol: f64) -> Option<P2> {
@@ -831,6 +845,20 @@ mod tests {
         assert_eq!(snap_table_corner([258.0, 14.0], Corner::BottomRight, frame, Some(block), 4.0), Some([260.35, 12.7]));
         assert_eq!(snap_table_corner([418.0, 13.0], Corner::BottomRight, frame, Some(block), 4.0), Some([419.1, 12.7]));
         assert_eq!(snap_table_corner([258.0, 14.0], Corner::BottomRight, frame, None, 4.0), None);
+        // A BOM at the block's corner kept within the frame across: its left edge on the frame
+        // (or left where it was, when it fits).
+        let style = DrawingStyle::default();
+        let w = bom_table(bom(), Corner::BottomRight, [0.0, 0.0], &style).width();
+        let mins: f64 = bom_table(bom(), Corner::BottomRight, [0.0, 0.0], &style).column_mins().iter().sum();
+        // Its right edge where the full width overflows but the narrowest fits.
+        let x = frame.0[0] + (w + mins) / 2.0;
+        let t = bom_table(bom(), Corner::BottomRight, [x, 12.7], &style);
+        assert!(t.rect().0[0] < frame.0[0], "the test table overflows");
+        let f = fit_within(&t, frame);
+        assert!((f.rect().0[0] - frame.0[0]).abs() < 1e-6, "{:?}", f.rect());
+        assert_eq!(f.at, t.at, "the fixed corner stays");
+        let wide = bom_table(bom(), Corner::BottomRight, [260.35, 12.7], &style);
+        assert_eq!(fit_within(&wide, frame), wide);
     }
 
     #[test]

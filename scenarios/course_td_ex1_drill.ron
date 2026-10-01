@@ -8,7 +8,8 @@
 //    copy: "Copy of Drill", the CARBURETOR Part Studio.
 // Step 2: 03 Shift+E, the MANIFOLD's mounting face picked ("Face of Extrude 1"): Add is picked
 //    by itself, MANIFOLD in Merge scope; 04 New, 2 mm: Part 3; 05 renamed CARBURETOR_GASKET,
-//    Mass properties: 1676.648 mm³ (2 × (1200 − 115.125π)).
+//    given Nylon 6/6, Mass properties: 1676.648 mm³ (2 × (1200 − 115.125π)), its mass, centre of
+//    mass and inertia.
 // Step 3: 06 the CARBURETOR assembly: the gasket inserted beside it; 07 Fastened: the gasket's
 //    face locked with Shift (its points), the glyph on its bolt hole's centre; 08 the
 //    manifold's face locked, its bolt hole's centre; 09 Flip, ✓: the gasket on the manifold.
@@ -19,22 +20,23 @@
 // Step 5: 16 from the top, the manifold's two bolt hole edges selected (Diameter 5.5); 17 Insert
 //    → Standard content: ISO, Socket head cap screw, M5, 25; 18 Insert: one screw on each hole
 //    (Fastened 2, 3), seen from the front and above; K (no explicit connectors to hide here).
-// Step 6: 19 the BOM, CARBURETOR expanded (2.1–2.3); 20 the gasket's row menu: Generate next
+// Step 6: 19 the BOM (the panel widened), CARBURETOR expanded (2.1–2.3); 20 the gasket's row menu: Generate next
 //    part number; 21 its menu again: Switch to CARBURETOR (TD9.4); 22 the CARBURETOR Part
 //    Studio, the gasket selected; 23 its Properties: Part number PRT-000006, a Description
 //    typed; 24 back in FUEL AND POWER TRAIN: the BOM shows the Description.
 // Step 7: 25 "+" → Create Drawing… → ANSI_B_MM.dwt; 26 Insert view: FUEL AND POWER TRAIN, Front,
 //    1:2; 27 Front and the projected Right view placed; the title block shows the model's Name
-//    (FUEL AND POWER TRAIN, its Description) and Part number (PRT-000005); 28 Insert BOM:
-//    Structured – Top level, fixed corner bottom right, snapped to the title block's left edge
-//    (TD10.5); 28b placed, zoomed out and its left grip dragged right (narrower, wrapped);
+//    (FUEL AND POWER TRAIN, its Description) and Part number (PRT-000005); the tab then renamed
+//    "FUEL AND POWER TRAIN Drawing"; 28 Insert BOM: Structured – Top level, fixed corner bottom
+//    right, snapped to the title block's left edge (TD10.5), its columns fitted to the frame
+//    (the cells wrap); 28b placed;
 //    29 the height (148.00, Front) and depth (80.00, Right) dimensions; 30 Callout (Item No.):
 //    1 the drill body, 2 the carburetor, 3 a screw; 31 the finished drawing.
 // Step 9: 32 History → Create version "FUEL AND POWER TRAIN COMPLETE"; 33 its menu → Branch to
-//    create workspace: "Alternate Gasket Thickness"; 34 in the branch, Extrude 3 at 1 mm:
+//    create workspace: "Alternate Gasket Thickness" (the version in the body, not the title); 34 in the branch, Extrude 3 at 1 mm:
 //    838.324 mm³; 35 the header's workspace menu (under the header bar); 36 Main: still
 //    1676.648; 37 Merge into current workspace: CARBURETOR changed, Replace (the list opens
-//    upwards); 38 merged: Main's gasket 838.324; 39 the version's menu → Restore (the entry
+//    upwards); 38 merged: Main's gasket 838.324, the rail's "Merge from …" row; 39 the version's menu → Restore (the entry
 //    before the merge); 40 restored: 1676.648 again.
 Scenario(
     start: Some("landing"),
@@ -92,6 +94,20 @@ Scenario(
         Key("Ctrl+A"),
         Type("CARBURETOR_GASKET"),
         Key("Enter"),
+        Wait(10),
+        // A gasket material (Nylon 6/6), so the mass properties have a mass and centre of mass.
+        RightClick(ui("part-row-carburetor-gasket")),
+        WaitFor("part-material"),
+        Click(ui("part-material")),
+        WaitFor("material-dialog"),
+        Wait(3),
+        Click(ui("material-choose")),
+        Wait(3),
+        Type("nylon"),
+        Wait(5),
+        Click(ui("material-item-nylon-6-6")),
+        Wait(5),
+        Click(ui("material-dialog-accept")),
         Wait(10),
         Click(ui("part-row-carburetor-gasket")),
         Wait(3),
@@ -308,6 +324,9 @@ Scenario(
         // part number.
         Click(ui("panel-bom")),
         Wait(15),
+        // The panel widened (its left edge dragged), so the Description shows whole.
+        Drag(ui("bom-panel-resize"), at(560, 500)),
+        Wait(10),
         DoubleClick(ui("bom-cell-1-0")),
         Wait(10),
         MoveTo(1420, 900),
@@ -394,6 +413,14 @@ Scenario(
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("27-front-and-right-views"),
+        // The tab named after the assembly.
+        RightClick(ui("tab-drawing-1")),
+        WaitFor("tab-rename"),
+        Click(ui("tab-rename")),
+        Wait(5),
+        Type("FUEL AND POWER TRAIN Drawing"),
+        Key("Enter"),
+        Wait(10),
         // The BOM: Structured – Top level, its fixed corner bottom right, snapped to the title
         // block's left edge (the block's bottom-left corner).
         Click(ui("drawing-bom")),
@@ -414,30 +441,9 @@ Scenario(
         Wait(20),
         Key("Escape"),
         Wait(5),
-        // Zoomed out to see the whole table; selected, its left grip dragged right (narrower:
-        // the cells wrap between words).
-        Scroll(at(800, 500), -2),
-        Wait(20),
-        ClickWorld(150, 30),
-        Wait(8),
         MoveTo(1500, 960),
         Wait(5),
-        Press(world(-49.5, 26.6)),
-        MoveWorld(-30, 26.6),
-        Wait(3),
-        MoveWorld(40, 26.6),
-        Wait(3),
-        MoveWorld(95, 26.6),
-        Wait(10),
-        Release,
-        Wait(10),
-        Key("Escape"),
-        Wait(3),
-        Key("F"),
-        Wait(20),
-        MoveTo(1500, 960),
-        Wait(5),
-        Screenshot("28b-bom-narrowed"),
+        Screenshot("28b-bom-placed"),
         // Height (Front) and depth (Right).
         Key("D"),
         Wait(3),

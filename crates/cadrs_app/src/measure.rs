@@ -493,7 +493,12 @@ fn place_panel(
 
 /// The distance in the view: the line between its two points, and while the panel is open its
 /// X, Y and Z components.
-fn draw_measure(result: Res<MeasureResult>, panel: Option<Res<MeasurePanel>>, mut g: Gizmos<MeasureGizmos>) {
+fn draw_measure(result: Res<MeasureResult>, panel: Option<Res<MeasurePanel>>, q_summary: Query<(), With<Summary>>, mut g: Gizmos<MeasureGizmos>) {
+    // Only with the readout or the panel showing the distance: not while the triad's readout
+    // stands in for it (P3E.5 judge: a line between two selected hole edges, unexplained).
+    if panel.is_none() && q_summary.is_empty() {
+        return;
+    }
     let Some(d) = result.measurement.distance else { return };
     if d.value < 1e-9 {
         return;

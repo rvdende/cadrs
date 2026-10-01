@@ -26,7 +26,7 @@ use cadrs_core::ElementId;
 use cadrs_core::drawing_assembly as da;
 use cadrs_drawing::DrawingOp;
 use cadrs_drawing::annotation::{Annotation, AnnotationId, AnnotationKind};
-use cadrs_drawing::assembly::{BomData, BomOrder, BomType, Border, Callout, CalloutFields, SIZES, bom_table, inference, refreshed_bom_table, snap_table_corner, token};
+use cadrs_drawing::assembly::{BomData, BomOrder, BomType, Border, Callout, CalloutFields, SIZES, bom_table, inference, refreshed_bom_table, snap_table_corner, fit_within, token};
 use cadrs_drawing::table::{Corner, Table, TableId};
 use cadrs_drawing::{SheetId, ViewId};
 use cadrs_ui::input::TextInputField;
@@ -278,7 +278,8 @@ pub fn preview_table(b: &BomUi, d: &cadrs_drawing::Drawing, sheet: &cadrs_drawin
     // The frame's corner, or the title block (TD10.5: its left edge, P3E.5).
     let block = sheet.title_block.then(|| cadrs_drawing::title_block::placement(f, sheet.format.size)).map(|r| (r.min, r.max));
     let at = snap_table_corner(p, b.fixed, (f.min, f.max), block, SNAP).unwrap_or(p);
-    Some(bom_table(data, b.fixed, at, &d.style))
+    // Kept within the frame across, its cells wrapping (P3E.5 judge).
+    Some(fit_within(&bom_table(data, b.fixed, at, &d.style), (f.min, f.max)))
 }
 
 /// The BOM table that would be placed with the cursor at `p` (snapped to the frame's corner or

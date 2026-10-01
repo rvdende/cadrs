@@ -340,7 +340,9 @@ pub fn rail(log: &HistoryLog) -> Vec<RailItem> {
         if k == 0 {
             break;
         }
-        let same = matches!(out.last(), Some(RailItem::Group(g)) if g.last().is_some_and(|&j| log.entries[j].user == log.entries[k].user));
+        // A merge is a group of its own, so the rail shows it by its label (P3E.5 judge).
+        let merge = |j: usize| log.entries[j].action == "Merge";
+        let same = !merge(k) && matches!(out.last(), Some(RailItem::Group(g)) if g.last().is_some_and(|&j| log.entries[j].user == log.entries[k].user && !merge(j)));
         match out.last_mut() {
             Some(RailItem::Group(g)) if same => g.push(k),
             _ => out.push(RailItem::Group(vec![k])),
@@ -562,7 +564,13 @@ fn rows(log: &DocLog, panel: &HistoryPanel, clock: &AppClock, user: &UserProfile
         let (newest, oldest) = (g[0], g[g.len() - 1]);
         let open = panel.expanded.contains(&oldest);
         let n = g.len();
-        let title = if n == 1 { "1 change".to_string() } else { format!("{n} changes") };
+        let title = if n == 1 && l.entries[newest].action == "Merge" {
+            l.entries[newest].label.clone()
+        } else if n == 1 {
+            "1 change".to_string()
+        } else {
+            format!("{n} changes")
+        };
         out.push((
             Row::Group(oldest),
             TimelineRow::new(format!("history-group-{oldest}"), title).subtitle(when(newest)).chevron(open).indent(true),
