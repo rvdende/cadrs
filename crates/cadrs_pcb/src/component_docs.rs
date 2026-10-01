@@ -18,14 +18,15 @@ use std::collections::HashMap;
 
 use cadrs_core::command::CommandError;
 use cadrs_core::commands::{AddElement, NewElementKind};
-use cadrs_core::document::{Document, ElementKind, FeatureKind};
+use cadrs_core::document::{Document, ElementKind};
 use cadrs_core::external::{LinkedElement, Resolver, SourceRef};
 use cadrs_core::history_log::{HistoryLog, VersionId};
 use cadrs_core::ids::{DocumentId, ElementId, PartId};
 use cadrs_core::library::{DocumentMeta, FolderEntry, Library, Timestamp};
-use cadrs_core::pcb::FolderRef;
+use cadrs_core::pcb::{CustomPart, FolderRef};
 use cadrs_core::pcb::component_docs::{ComponentDocument, ComponentKey, ensure_folder, find_component_document};
 use cadrs_core::properties::{PropertyKey, PropertyOwner, PropertyValue, SetProperties};
+use cadrs_core::rebuild::Rebuilder;
 use cadrs_core::store::Store;
 use cadrs_core::studio::Studio;
 use cadrs_idf::Package;
@@ -62,7 +63,12 @@ pub struct ComponentDocuments {
     consumer: Document,
     library: Library,
     made: HashMap<(String, String), PackageComponent>,
+    /// The custom parts used, by package (not component documents: Sync ties them by
+    /// designator only).
+    custom_made: HashMap<String, Option<PackageComponent>>,
     links: Vec<LinkedElement>,
+    /// Builds reused documents' Part Studios to check their part (made when first needed).
+    rebuilder: Option<Rebuilder>,
     /// Every component document used, in the order first used.
     pub used: Vec<UsedDocument>,
 }
@@ -86,7 +92,9 @@ impl ComponentDocuments {
             consumer: shell,
             library,
             made: HashMap::new(),
+            custom_made: HashMap::new(),
             links: Vec::new(),
+            rebuilder: None,
             used: Vec::new(),
         })
     }
@@ -162,16 +170,79 @@ impl ComponentDocuments {
         Ok((doc.id, key, v))
     }
 
-    /// The Part Studio and part of a reused document at `version`: the key's, else (edited away)
-    /// its first Part Studio's first extrude's first part.
-    fn part_at(&mut self, document: DocumentId, version: VersionId, key: &ComponentKey) -> Result<(ElementId, PartId), CommandError> {
+    /// The Part Studio and part of a reused document at `version`, checked by building it: the
+    /// key's part when that version still makes it; else (edited away) the first part its Part
+    /// Studio makes, else the first part of any of its Part Studios; `None` when the version
+    /// makes no part at all (the caller makes a new document for the package).
+    fn part_at(&mut self, document: DocumentId, version: VersionId, key: &ComponentKey) -> Result<Option<(ElementId, PartId)>, CommandError> {
         let at = self.resolver.document_at(document, version).map_err(Self::err)?;
-        if at.element(key.studio).is_some_and(|e| matches!(e.kind, ElementKind::PartStudio { .. })) {
-            return Ok((key.studio, key.part));
+        let studios = at.elements.iter().filter(|e| matches!(e.kind, ElementKind::PartStudio { .. }));
+        // The key's studio first.
+        let mut order: Vec<&cadrs_core::document::Element> = studios.collect();
+        order.sort_by_key(|e| e.id != key.studio);
+        let rebuilder = self.rebuilder.get_or_insert_with(Rebuilder::new);
+        for el in order {
+            let build = rebuilder.rebuild(&el.active_features());
+            if el.id == key.studio && build.parts.iter().any(|p| p.id == key.part) {
+                return Ok(Some((key.studio, key.part)));
+            }
+            if let Some(p) = build.parts.first() {
+                return Ok(Some((el.id, p.id)));
+            }
         }
-        let el = at.elements.iter().find(|e| matches!(e.kind, ElementKind::PartStudio { .. })).ok_or_else(|| Self::err(format!("{} has no Part Studio", at.name)))?;
-        let f = el.features().iter().find(|f| matches!(f.kind, FeatureKind::Extrude(_)) && !el.is_suppressed(f.id)).ok_or_else(|| Self::err(format!("{} has no part", at.name)))?;
-        Ok((el.id, PartId::new(f.id, 0)))
+        Ok(None)
+    }
+
+    /// The package's component document already in the store, at its newest version (made
+    /// first when it has none), with the part to use; `None` when there is none or it makes no
+    /// part any more. Reads the library from the store again (another Create, or an edit on the
+    /// documents page, may have changed it since this Create started).
+    fn reuse(&mut self, pkg: &Package) -> Result<Option<(DocumentId, ElementId, PartId, VersionId)>, CommandError> {
+        self.library = self.store.list().0;
+        let Some((d, key)) = find_component_document(&self.library, &pkg.name, &pkg.part_number) else { return Ok(None) };
+        let v = match self.resolver.latest(d) {
+            Some(v) => v.id(),
+            None => self.resolver.create_version(d, "", &format!("Created by PCB Studio for {}", self.board), self.now, &self.user).map_err(Self::err)?,
+        };
+        Ok(self.part_at(d, v, &key)?.map(|(studio, part)| (d, studio, part, v)))
+    }
+
+    /// The component of a package mapped to a custom part (PCB11.4, X10): a version-pinned
+    /// reference to the part's document at the mapping's version (its newest, made when it has
+    /// none, for a mapping to "the document as it is now"), with the package frame where the
+    /// mapping's transform puts it. `None` (the package's own document is used) when the part is
+    /// in the board's own document or its version doesn't make that part.
+    fn custom_component(&mut self, pkg: &Package, custom: &CustomPart) -> Result<Option<PackageComponent>, CommandError> {
+        let src = &custom.source;
+        if src.document == self.consumer.id {
+            return Ok(None);
+        }
+        let version = match src.version {
+            Some(v) => v,
+            None => match self.resolver.latest(src.document) {
+                Some(v) => v.id(),
+                None => self.resolver.create_version(src.document, "", &format!("Created by PCB Studio for {}", self.board), self.now, &self.user).map_err(Self::err)?,
+            },
+        };
+        let Ok(at) = self.resolver.document_at(src.document, version) else { return Ok(None) };
+        let Some(el) = at.element(src.element).filter(|e| matches!(e.kind, ElementKind::PartStudio { .. })) else { return Ok(None) };
+        let build = self.rebuilder.get_or_insert_with(Rebuilder::new).rebuild(&el.active_features());
+        if !build.parts.iter().any(|p| p.id == src.part) {
+            return Ok(None);
+        }
+        let reference = SourceRef::version(Some(src.document), src.element, version);
+        let snap = self.resolver.resolve(reference, &self.consumer, None).map_err(Self::err)?;
+        for l in &snap.links {
+            if self.links.iter().all(|x| x.id() != l.id()) {
+                self.links.push(l.clone());
+            }
+        }
+        let (name, version_name) = snap.root_link().map(|l| (l.document_name.clone(), l.version_name.clone())).unwrap_or_default();
+        self.used.push(UsedDocument { document: src.document, name, package: pkg.name.clone(), version, version_name, created: false });
+        // The mapping puts the part into the package frame; the package frame in the part's
+        // coordinates is its inverse.
+        let frame = crate::create_assembly::pose_of(&custom.transform.motion()).inverse();
+        Ok(Some(PackageComponent { source: ComponentSource::External { reference, copy: snap.root, part: src.part }, frame }))
     }
 }
 
@@ -181,20 +252,18 @@ impl ComponentProvider for ComponentDocuments {
         if let Some(c) = self.made.get(&k) {
             return Ok(c.clone());
         }
-        let (document, studio, part, version, created) = match find_component_document(&self.library, &pkg.name, &pkg.part_number) {
-            Some((d, key)) => {
-                let v = match self.resolver.latest(d) {
-                    Some(v) => v.id(),
-                    None => self.resolver.create_version(d, "", &format!("Created by PCB Studio for {}", self.board), self.now, &self.user).map_err(Self::err)?,
-                };
-                let (studio, part) = self.part_at(d, v, &key)?;
-                (d, studio, part, v, false)
-            }
+        // Find-or-make under the store's library lock, so two Creates (or a Create and a library
+        // edit on the main thread) can't both make this package's document.
+        let lock = self.store.lock_library();
+        let found = self.reuse(pkg);
+        let (document, studio, part, version, created) = match found? {
+            Some((d, studio, part, v)) => (d, studio, part, v, false),
             None => {
                 let (d, key, v) = self.create(pkg)?;
                 (d, key.studio, key.part, v, true)
             }
         };
+        drop(lock);
         let reference = SourceRef::version(Some(document), studio, version);
         let snap = self.resolver.resolve(reference, &self.consumer, None).map_err(Self::err)?;
         for l in &snap.links {
@@ -207,6 +276,20 @@ impl ComponentProvider for ComponentDocuments {
         let c = PackageComponent { source: ComponentSource::External { reference, copy: snap.root, part }, frame: cadrs_core::assembly::Pose::IDENTITY };
         self.made.insert(k, c.clone());
         Ok(c)
+    }
+
+    fn custom(&mut self, _s: &mut dyn Studio, pkg: &Package, custom: &CustomPart) -> Option<Result<PackageComponent, CommandError>> {
+        if let Some(c) = self.custom_made.get(&pkg.name) {
+            return c.clone().map(Ok);
+        }
+        let got = self.custom_component(pkg, custom);
+        match got {
+            Ok(c) => {
+                self.custom_made.insert(pkg.name.clone(), c.clone());
+                c.map(Ok)
+            }
+            Err(e) => Some(Err(e)),
+        }
     }
 
     fn links(&mut self) -> Vec<LinkedElement> {

@@ -393,7 +393,7 @@ fn sync_edit_banner(editing: Option<Res<EditingSource>>, doc: Option<Res<ActiveD
             w.spawn((
                 Name::new("linked-edit-banner"),
                 Node {
-                    max_width: Val::Px(820.0),
+                    margin: UiRect::horizontal(Val::Px(16.0)),
                     min_height: Val::Px(34.0),
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(10.0),
@@ -406,13 +406,19 @@ fn sync_edit_banner(editing: Option<Res<EditingSource>>, doc: Option<Res<ActiveD
                 BorderColor::all(linked::UPDATE_BLUE),
             ))
             .with_children(|b| {
-                b.spawn((cadrs_ui::icon::icon("edit", 16.0, linked::UPDATE_BLUE), cadrs_ui::icon::SolidTint));
+                b.spawn((Node { flex_shrink: 0.0, ..default() }, Pickable::IGNORE)).with_children(|i| {
+                    i.spawn((cadrs_ui::icon::icon("edit", 16.0, linked::UPDATE_BLUE), cadrs_ui::icon::SolidTint));
+                });
+                // The banner is as wide as what it holds; the text wraps past 640 px (long
+                // document names), so the Back button always stays inside the border.
                 b.spawn((
                     Name::new("linked-edit-banner-text"),
                     t.text(format!("Editing Main of {}. Create a version, then update the reference in {}.", e.name, e.back.doc.name), t.font_sm, FontWeight::MEDIUM, t.foreground),
                 ))
-                .insert(TextLayout::no_wrap());
-                b.spawn(cadrs_ui::Button::new("linked-edit-back").label(format!("Back to {}", e.back.doc.name)).icon("chevron-left").primary().small().build(t));
+                .insert((Node { flex_shrink: 0.0, max_width: Val::Px(640.0), ..default() }, TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary)));
+                b.spawn((Name::new("linked-edit-back-slot"), Node { flex_shrink: 0.0, ..default() })).with_children(|s| {
+                    s.spawn(cadrs_ui::Button::new("linked-edit-back").label(format!("Back to {}", e.back.doc.name)).icon("chevron-left").primary().small().build(t));
+                });
             });
         })
         .id();

@@ -76,8 +76,11 @@ pub fn component_documents(lib: &Library) -> Vec<(DocumentId, ComponentKey)> {
 
 /// The folder new component documents go in (see the module docs): `chosen` when it exists, made
 /// again under its id when it was deleted, else [`DEFAULT_COMPONENT_FOLDER`]. Writes the
-/// library's folders when one is made.
+/// library's folders when one is made. Holds the store's library lock from reading the folders
+/// to writing them, so two callers can't both make the folder (it runs on the kernel thread, next
+/// to the main thread's library edits).
 pub fn ensure_folder(store: &Store, chosen: Option<&super::FolderRef>, user: &str, now: Timestamp) -> Result<FolderEntry, StoreError> {
+    let lock = store.lock_library();
     let (before, _) = store.list();
     let found = match chosen {
         Some(f) => before.folders.iter().find(|x| x.id == f.id).cloned(),
@@ -92,7 +95,7 @@ pub fn ensure_folder(store: &Store, chosen: Option<&super::FolderRef>, user: &st
     };
     let mut after = before.clone();
     after.folders.push(entry.clone());
-    store.sync(&before, &after)?;
+    store.sync_locked(&lock, &before, &after)?;
     Ok(entry)
 }
 
@@ -123,5 +126,44 @@ mod tests {
         assert_eq!(k.package, "SOT23");
         assert!(find_component_document(&lib, "SOT23", "other").is_none());
         assert_eq!(component_documents(&lib).len(), 1);
+    }
+
+    fn temp_store(tag: &str) -> Store {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        Store::new(std::env::temp_dir().join(format!("cadrs-compdocs-{tag}-{}-{n}", std::process::id())))
+    }
+
+    #[test]
+    fn concurrent_ensure_folder_makes_one_folder() {
+        // Eight threads at once (as Creates on the kernel thread next to the main thread): one
+        // "PCB Components" folder, the same for all.
+        let store = temp_store("ensure");
+        let ids: Vec<FolderId> = std::thread::scope(|s| {
+            let jobs: Vec<_> = (0..8).map(|_| s.spawn(|| ensure_folder(&store, None, "u", 1).unwrap().id)).collect();
+            jobs.into_iter().map(|j| j.join().unwrap()).collect()
+        });
+        assert!(ids.iter().all(|i| *i == ids[0]));
+        let lib = store.list().0;
+        assert_eq!(lib.folders.iter().filter(|f| f.name == DEFAULT_COMPONENT_FOLDER).count(), 1);
+        let _ = std::fs::remove_dir_all(store.root());
+    }
+
+    #[test]
+    fn a_stale_library_edit_keeps_the_component_folder() {
+        // The documents page read the library before Create made "PCB Components"; its New
+        // folder (from that stale copy) must not drop it.
+        let store = temp_store("stale");
+        let (before, _) = store.list();
+        let made = ensure_folder(&store, None, "u", 1).unwrap();
+        let mut after = before.clone();
+        after.folders.push(FolderEntry { id: FolderId::new(), name: "Mine".into(), created: 2, owned_by: "u".into() });
+        store.sync(&before, &after).unwrap();
+        let names: Vec<String> = store.list().0.folders.into_iter().map(|f| f.name).collect();
+        assert_eq!(names, ["Mine", DEFAULT_COMPONENT_FOLDER]);
+        // Deleting a folder (undo of New folder) from the same stale copy keeps it too.
+        store.sync(&after, &before).unwrap();
+        let lib = store.list().0;
+        assert_eq!(lib.folders.iter().map(|f| f.id).collect::<Vec<_>>(), [made.id]);
+        let _ = std::fs::remove_dir_all(store.root());
     }
 }

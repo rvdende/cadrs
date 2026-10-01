@@ -429,3 +429,178 @@ fn sync_recognises_components_through_their_link() {
     assert_eq!(p.components.len(), 20, "found inside the subassembly");
     let _ = std::fs::remove_dir_all(store.root());
 }
+
+#[test]
+fn untied_instances_match_in_the_board_frame_of_the_sync_plane() {
+    // PCB5.5 with the board standing up (its top face parallel to the Front plane): two untied
+    // instances of one package (SOT23 at X11 (32, −4) and X12 (32, −10)), inserted by hand into a
+    // "Product" assembly with the board turned +90° about X (board y → model Z, board z → model
+    // −Y), X12's first. Measured in the Front plane's frame (x = X, y = Z) each instance sits
+    // exactly on its own placement; measured in the model's X/Y (the old rule) both look nearest
+    // to X11 and the first inserted took it. The board part goes in too, so the sync runs end to
+    // end and writes X11/X12 back where the IDF had them.
+    let store = temp_store("front");
+    let (mut doc, mut h) = board_document(&store, "secondary", fixture("secondary board", "secondary board"));
+    let (g, _) = create(&store, &mut doc, &mut h, None, 2_000);
+    let up = Pose { rotation: [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]], translation: [0.0, 0.0, 0.0] };
+    let model = doc.element(g.assembly).unwrap().assembly_model().unwrap().clone();
+    let inst = |r: &str| model.instance(g.components.iter().find(|c| c.refdes == r).unwrap().instance).unwrap().clone();
+    let board = model.instances.iter().find(|i| !g.components.iter().any(|c| c.instance == i.id)).unwrap().clone();
+    let top = ElementId::from_u128(0x3a07_9003);
+    h.execute(&mut doc, &AddElement { id: top, kind: NewElementKind::Assembly, name: Some("Product".into()), after: None }).unwrap();
+    for i in [inst("X12"), inst("X11"), board] {
+        let again = Instance { id: InstanceId::new(), pose: i.pose.then(&up), ..i };
+        h.execute(&mut doc, &InsertInstance { element: top, instance: again }).unwrap();
+    }
+    let p = plan(&doc, PCB, top, SyncPlaneChoice::Front, None).unwrap();
+    let got: Vec<(&str, [f64; 3])> = p.components.iter().map(|c| (c.refdes.as_str(), c.pose.translation)).collect();
+    assert_eq!(got.len(), 2, "{got:?}");
+    let at = |r: &str| got.iter().find(|(x, _)| *x == r).unwrap_or_else(|| panic!("{r} in {got:?}")).1;
+    // X11 is the instance at model (32, ·, −4), X12 at (32, ·, −10).
+    close("X11 z", at("X11")[2], -4.0);
+    close("X12 z", at("X12")[2], -10.0);
+    assert!(p.unrecognised.is_empty(), "{:?}", p.unrecognised);
+    let o = run_now(p).unwrap();
+    for (r, x, y) in [("X11", 32.0, -4.0), ("X12", 32.0, -10.0)] {
+        let q = o.command.board.placement(r).unwrap();
+        close(&format!("{r} x"), q.x, x);
+        close(&format!("{r} y"), q.y, y);
+    }
+    let _ = std::fs::remove_dir_all(store.root());
+}
+
+/// Edits the component document of `package` in its workspace with `edit` (given the document,
+/// its history and its key) and makes the next version.
+fn edit_component(store: &Store, package: &str, part_number: &str, t: i64, edit: impl FnOnce(&mut Document, &mut History, &ComponentKey)) -> VersionId {
+    let (id, key) = find_component_document(&library(store), package, part_number).unwrap();
+    let file = store.load(id).unwrap();
+    let mut doc = file.document;
+    let mut h = History::default();
+    edit(&mut doc, &mut h, &key);
+    store.save(&doc, &file.meta).unwrap();
+    let mut log = HistoryLog::load(store, id).unwrap().unwrap();
+    log.record(&doc, Origin::Command("Edit".into()), t, USER);
+    let v = log.create_version("", "", t + 1, USER);
+    log.save(store).unwrap();
+    v
+}
+
+#[test]
+fn reuse_checks_the_part_at_the_newest_version() {
+    // PCB7.3 reuse robustness: a reused document's newest version is built and its part checked.
+    // (a) The uBGA's extrude replaced by a new one (the key's part is gone, another part is
+    // there): the next Create references that other part (2 mm high: 105.08 mm³). (b) The
+    // TSSOP_20's extrude deleted (its newest version makes no part): the next Create makes a new
+    // document for that package instead of referencing a missing part, and the Create succeeds.
+    let store = temp_store("reuse-check");
+    let (mut a, mut ha) = board_document(&store, "first", fixture("secondary board", "secondary board"));
+    create(&store, &mut a, &mut ha, None, 2_000);
+    let replaced = FeatureId::from_u128(0x3a07_0101);
+    edit_component(&store, "uBGA48_7.4X7.1", "7401048", 3_000, |d, h, key| {
+        let mut e = d.element(key.studio).unwrap().feature(key.part.feature).unwrap().extrude().unwrap().clone();
+        e.depth = 2.0;
+        e.depth_expr = "2 mm".into();
+        h.execute(d, &cadrs_core::commands::DeleteFeature { element: key.studio, feature: key.part.feature, label: "Delete".into() }).unwrap();
+        h.execute(d, &cadrs_core::commands::AddExtrude { element: key.studio, feature: replaced, extrude: e }).unwrap();
+    });
+    let (old_tssop, _) = find_component_document(&library(&store), "TSSOP_20", "2140020").unwrap();
+    edit_component(&store, "TSSOP_20", "2140020", 3_100, |d, h, key| {
+        h.execute(d, &cadrs_core::commands::DeleteFeature { element: key.studio, feature: key.part.feature, label: "Delete".into() }).unwrap();
+    });
+    let (mut b, mut hb) = board_document(&store, "second", fixture("secondary board", "secondary board"));
+    let (gb, docs) = create(&store, &mut b, &mut hb, None, 4_000);
+    assert_eq!(docs.created(), 1, "a new document for TSSOP_20 only");
+    let x2 = gb.components.iter().find(|c| c.refdes == "X2").unwrap().instance;
+    let InstanceSource::Part { part, .. } = b.element(gb.assembly).unwrap().assembly_model().unwrap().instance(x2).unwrap().source else { panic!() };
+    assert_eq!(part.feature, replaced, "the part the newest version makes");
+    close("X2 from the replaced extrude", volume_of(&b, &gb, "X2"), 7.4 * 7.1 * 2.0);
+    let (new_tssop, _) = find_component_document(&library(&store), "TSSOP_20", "2140020").unwrap();
+    assert_ne!(new_tssop, old_tssop);
+    let tssop = docs.used.iter().find(|u| u.package == "TSSOP_20").unwrap();
+    assert!(tssop.created && tssop.document == new_tssop);
+    for r in ["X3", "X4"] {
+        assert!(volume_of(&b, &gb, r) > 0.0, "{r} has its part");
+    }
+    let _ = std::fs::remove_dir_all(store.root());
+}
+
+#[test]
+fn creates_from_a_stale_library_make_one_document_per_package() {
+    // Two Creates started together (each read the library before either wrote a document): the
+    // second rechecks the store just before making a document, so every package still has one.
+    let store = temp_store("two-creates");
+    let (mut a, mut ha) = board_document(&store, "first", fixture("secondary board", "secondary board"));
+    let (mut b, mut hb) = board_document(&store, "second", fixture("secondary board", "secondary board"));
+    let name = |d: &Document| {
+        let s = d.element(PCB).unwrap().pcb().unwrap();
+        (s.active.unwrap(), s.board(s.active.unwrap()).unwrap().name().to_string())
+    };
+    let (ba, na) = name(&a);
+    let (bb, nb) = name(&b);
+    let mut da = ComponentDocuments::new(&store, None, a.id, &na, USER, 2_000).unwrap();
+    let mut db = ComponentDocuments::new(&store, None, b.id, &nb, USER, 2_000).unwrap();
+    let ca = generate_linked(&a, PCB, ba, &CreateOptions::default(), &mut da).unwrap();
+    let cb = generate_linked(&b, PCB, bb, &CreateOptions::default(), &mut db).unwrap();
+    ha.execute(&mut a, &ca).unwrap();
+    hb.execute(&mut b, &cb).unwrap();
+    assert_eq!((da.created(), db.created()), (7, 0));
+    assert_eq!(library(&store).entries.iter().filter(|e| e.meta.pcb_component.is_some()).count(), 7);
+    assert_eq!(library(&store).folders.iter().filter(|f| f.name == DEFAULT_COMPONENT_FOLDER).count(), 1);
+    let _ = std::fs::remove_dir_all(store.root());
+}
+
+#[test]
+fn a_custom_part_mapping_is_used_by_create() {
+    // PCB11.4, X10: the library maps uBGA48_7.4X7.1 to a custom part (here the TSSOP_20's
+    // component document, V1), turned 90° about Z and moved by (1, 2, 0) on the footprint. The
+    // next Create inserts X2 as a version-pinned reference to that part (its volume is the
+    // TSSOP's) where the mapping puts it: the placement (4.064182376174947, −16.5, 90°, top of the
+    // 0.84 mm board) after the mapping, so its origin is at (4.0642 − 2, −16.5 + 1, 0.84).
+    // Changing the mapping back to From ECAD data makes the next Create use the package's own
+    // document again.
+    let store = temp_store("custom");
+    let (mut a, mut ha) = board_document(&store, "first", fixture("secondary board", "secondary board"));
+    let (ga, _) = create(&store, &mut a, &mut ha, None, 2_000);
+    let (tssop, key) = find_component_document(&library(&store), "TSSOP_20", "2140020").unwrap();
+    let v1 = Resolver::new(store.clone()).latest(tssop).unwrap().id();
+    let source = cadrs_core::pcb::PartSource {
+        document: tssop,
+        document_name: "TSSOP_20".into(),
+        element: key.studio,
+        element_name: "TSSOP_20".into(),
+        part: key.part,
+        part_name: "TSSOP_20".into(),
+        version: Some(v1),
+        version_name: Some("V1".into()),
+    };
+    let transform = cadrs_core::pcb::PartTransform { translate: [1.0, 2.0, 0.0], rotate: [0.0, 0.0, 90.0] };
+    let custom = cadrs_core::pcb::Representation::Custom(Box::new(cadrs_core::pcb::CustomPart { source, transform }));
+    let (mut b, mut hb) = board_document(&store, "second", fixture("secondary board", "secondary board"));
+    hb.execute(&mut b, &cadrs_core::pcb::SetRepresentation { element: PCB, package: "uBGA48_7.4X7.1".into(), representation: custom, label: String::new() }).unwrap();
+    let (gb, docs) = create(&store, &mut b, &mut hb, None, 3_000);
+    assert_eq!(docs.created(), 0);
+    let x2 = gb.components.iter().find(|c| c.refdes == "X2").unwrap().instance;
+    let inst = b.element(gb.assembly).unwrap().assembly_model().unwrap().instance(x2).unwrap().clone();
+    assert_eq!(inst.link.unwrap().document, Some(tssop), "the custom part's document");
+    assert_eq!(inst.link.unwrap().at, RefAt::Version(v1));
+    close("X2 is the TSSOP part", volume_of(&b, &gb, "X2"), volume_of(&a, &ga, "X3"));
+    let t = inst.pose.translation;
+    close("x", t[0], 4.064182376174947 - 2.0);
+    close("y", t[1], -16.5 + 1.0);
+    close("z", t[2], 0.84);
+    // Sync reads X2 back where the IDF had it (its tie carries the mapping's frame).
+    let p = plan(&b, PCB, gb.assembly, SyncPlaneChoice::Top, None).unwrap();
+    let o = run_now(p).unwrap();
+    let q = o.command.board.placement("X2").unwrap();
+    close("X2 x", q.x, 4.064182376174947);
+    close("X2 y", q.y, -16.5);
+    close("X2 rotation", q.rotation, 90.0);
+    // The mapping back to From ECAD data: the uBGA's own document again.
+    hb.execute(&mut b, &cadrs_core::pcb::SetRepresentation { element: PCB, package: "uBGA48_7.4X7.1".into(), representation: cadrs_core::pcb::Representation::FromEcad, label: String::new() }).unwrap();
+    let (gc, _) = create(&store, &mut b, &mut hb, None, 4_000);
+    let (ubga, _) = find_component_document(&library(&store), "uBGA48_7.4X7.1", "7401048").unwrap();
+    let x2 = gc.components.iter().find(|c| c.refdes == "X2").unwrap().instance;
+    assert_eq!(b.element(gc.assembly).unwrap().assembly_model().unwrap().instance(x2).unwrap().link.unwrap().document, Some(ubga));
+    close("X2 back to the uBGA box", volume_of(&b, &gc, "X2"), 7.4 * 7.1 * 1.2);
+    let _ = std::fs::remove_dir_all(store.root());
+}

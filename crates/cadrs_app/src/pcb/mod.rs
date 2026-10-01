@@ -27,6 +27,7 @@
 
 pub mod create_assembly;
 pub mod dialogs;
+pub mod manipulator;
 pub mod panes;
 pub mod sync;
 pub mod transfer;
@@ -104,6 +105,7 @@ impl Plugin for PcbPlugin {
             .add_observer(on_search_submit)
             .add_observer(dialogs::on_path_browse);
         panes::register(app);
+        manipulator::register(app);
         dialogs::register(app);
         transfer::register(app);
         create_assembly::register(app);

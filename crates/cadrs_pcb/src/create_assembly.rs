@@ -103,6 +103,12 @@ pub trait ComponentProvider {
     /// The part for the package of `placement` (`package` is its library entry; a
     /// [`placeholder_package`] when the library lacks it).
     fn component(&mut self, s: &mut dyn Studio, package: &Package) -> Result<PackageComponent, CommandError>;
+    /// The part for a package the component library maps to a **custom part** (PCB11.4, X10),
+    /// placed on the footprint by the mapping's transform; `None` when this provider can't use it
+    /// (the package's own part is used then).
+    fn custom(&mut self, _s: &mut dyn Studio, _package: &Package, _custom: &cadrs_core::pcb::CustomPart) -> Option<Result<PackageComponent, CommandError>> {
+        None
+    }
     /// Tidies up once every component is made (folders, …).
     fn finish(&mut self, _s: &mut dyn Studio) -> Result<(), CommandError> {
         Ok(())
@@ -300,7 +306,7 @@ impl Studio for Direct<'_> {
     }
 }
 
-fn pose_of(m: &Motion) -> AsmPose {
+pub(crate) fn pose_of(m: &Motion) -> AsmPose {
     let l = &m.linear;
     AsmPose {
         rotation: [[l[(0, 0)], l[(0, 1)], l[(0, 2)]], [l[(1, 0)], l[(1, 1)], l[(1, 2)]], [l[(2, 0)], l[(2, 1)], l[(2, 2)]]],
@@ -415,9 +421,17 @@ fn generate_with(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOp
             }
         };
         let t = pcb_board.thickness();
+        // P3H stage close (PCB11.4): a package the library maps to a custom part is inserted as
+        // that part (where the provider can reference it), so a mapping change reaches the next
+        // Create; None and From ECAD data use the package's own part.
+        let mappings = doc.element(pcb).and_then(|e| e.pcb()).map(|st| st.library.clone()).unwrap_or_default();
         for (_, p) in pcb_board.components() {
             let pkg = find_package(&pcb_board, p).cloned().unwrap_or_else(|| placeholder_package(p));
-            let c = provider.component(&mut s, &pkg)?;
+            let custom = mappings.get(&pkg.name).custom().and_then(|c| provider.custom(&mut s, &pkg, c));
+            let c = match custom {
+                Some(c) => c?,
+                None => provider.component(&mut s, &pkg)?,
+            };
             let mut inst = at(c.source.instance_source(), instance_pose(p, t, &c.frame));
             linked.push(LinkedComponent { instance: inst.id, refdes: p.refdes.clone(), frame: c.frame });
             if let Some(r) = c.source.link() {
