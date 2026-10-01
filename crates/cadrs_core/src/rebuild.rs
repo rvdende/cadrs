@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -281,6 +281,21 @@ impl Default for Rebuilder {
     }
 }
 
+/// How far the rebuild thread's current rebuild is: (part features done, part features in all),
+/// for the app's "Rebuilding…" indicator. Only rebuilds on that thread count, and only the
+/// top-level one (not a Derived feature's source rebuilt inside it).
+pub fn progress() -> (usize, usize) {
+    (PROGRESS_DONE.load(Ordering::Relaxed), PROGRESS_TOTAL.load(Ordering::Relaxed))
+}
+
+static PROGRESS_DONE: AtomicUsize = AtomicUsize::new(0);
+static PROGRESS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Set on the rebuild thread: its rebuilds report [`progress`].
+    static REPORTS_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Feeds formatted text into a hasher.
 struct HashWriter<'a>(&'a mut DefaultHasher);
 
@@ -366,6 +381,12 @@ impl Rebuilder {
         // feature (the variables themselves and sketches are reported after the loop).
         // (Which unit a bare number is in changes values, not whether they evaluate.)
         let var_errors = crate::variables::check(features, &cadrs_sketch::units::Units::default());
+        let report = self.depth == 0 && REPORTS_PROGRESS.with(|r| r.get());
+        if report {
+            let total = features[..last.map_or(0, |l| l + 1)].iter().filter(|f| f.is_part_feature()).count();
+            PROGRESS_DONE.store(0, Ordering::Relaxed);
+            PROGRESS_TOTAL.store(total, Ordering::Relaxed);
+        }
         for i in 0..last.map_or(0, |l| l + 1) {
             let f = &features[i];
             key = chain_key(key, &f.kind);
@@ -408,6 +429,9 @@ impl Rebuilder {
                         last_used: generation,
                     },
                 );
+            }
+            if report {
+                PROGRESS_DONE.fetch_add(1, Ordering::Relaxed);
             }
             let entry = self.entries.get_mut(&key).expect("just inserted");
             entry.last_used = generation;
@@ -2578,6 +2602,7 @@ fn worker() -> &'static Mutex<mpsc::Sender<Job>> {
 }
 
 fn run(rx: mpsc::Receiver<Job>) {
+    REPORTS_PROGRESS.with(|r| r.set(true));
     let mut rebuilder = Rebuilder::new();
     while let Ok(job) = rx.recv() {
         match job {

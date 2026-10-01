@@ -37,6 +37,7 @@ pub mod linked_session;
 pub mod move_document;
 pub mod tab_folders;
 pub mod tab_manager;
+pub mod rebuild_indicator;
 pub mod reference_manager;
 pub mod mass_props;
 pub mod measure;
@@ -518,6 +519,7 @@ impl Plugin for CadrsAppPlugin {
                 shortcuts::ShortcutsPlugin,
                 script::ScriptPlugin,
             ))
+            .add_plugins(rebuild_indicator::RebuildIndicatorPlugin)
             .add_plugins((
                 parts::PartsPlugin,
                 parts_list::PartsListPlugin,
