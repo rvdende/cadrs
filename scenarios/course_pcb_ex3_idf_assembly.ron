@@ -148,6 +148,8 @@ Scenario(
         Wait(20),
         Key("Shift+7"),
         Wait(30),
+        Key("F"),
+        Wait(40),
         RightClick(ui("part-row-part-2")),
         WaitFor("part-rename"),
         Click(ui("part-rename")),
@@ -256,6 +258,10 @@ Scenario(
         Key("Enter"),
         Wait(10),
         ExpectText("pcb-emn-scroll", "4.064182376174947 8.9 0 90 TOP PLACED"),
+        // The keep-out (IDF 3.0): its record, height 0.125 in, and the R0.25 in corner's 90° arc.
+        ExpectText("pcb-emn-scroll", ".PLACE_KEEPOUT MCAD"),
+        ExpectText("pcb-emn-scroll", "TOP 3.175"),
+        ExpectText("pcb-emn-scroll", "0 1.14028 -13.21838 90"),
         Screenshot("14-exported-emn-ubga48"),
     ],
 )

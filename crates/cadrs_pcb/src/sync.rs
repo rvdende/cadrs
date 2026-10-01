@@ -17,6 +17,10 @@
 //!   coordinates is that placement's (the first sync that sees it records it on the board,
 //!   [`cadrs_core::pcb::McadSource::frames`], so later syncs read a moved instance from the same
 //!   frame). The placement is where the instance puts the package frame;
+//!   P3H.7: an instance of a **component document** (a version of a document Create assembly
+//!   made for a package, [`cadrs_core::pcb::GeneratedAssembly::documents`]) that isn't tied
+//!   (inserted by hand) stands for the nearest placement of its package no other instance
+//!   stands for, whatever its part or document is called;
 //! - the **board**, **keep-ins** and **keep-outs** by [`crate::names`];
 //! - everything else is **not translated** and listed ("Not translated: Enclosure, …").
 
@@ -205,6 +209,10 @@ pub fn plan(doc: &Document, pcb: ElementId, source: ElementId, plane: SyncPlaneC
         library: Library::new(IdfVersion::V3),
         unrecognised: Vec::new(),
     };
+    // P3H.7: the component documents this PCB Studio's Create assemblies used, by document.
+    let component_docs: HashMap<cadrs_core::DocumentId, (String, String)> =
+        studio.generated.iter().flat_map(|g| g.documents.iter()).map(|d| (d.document, (d.package.clone(), d.part_number.clone()))).collect();
+    let mut by_document: Vec<(String, String, AsmPose)> = Vec::new();
     for (element, part, pose, occurrence) in items {
         let name = source_part_name(doc, &InstanceSource::Part { element, part }, None);
         // P3H.6: an instance Create assembly made stands for its placement, by designator.
@@ -222,11 +230,51 @@ pub fn plan(doc: &Document, pcb: ElementId, source: ElementId, plane: SyncPlaneC
             }
             continue;
         }
+        // P3H.7 (PCB5.5): an instance of a component document (its source is in the component
+        // folder) that Create assembly didn't tie to a placement (inserted by hand, or its tie
+        // lost): matched below by its package, whatever the part or document is called now.
+        if link.is_none()
+            && let Some(k) = doc.linked_element(element).and_then(|l| l.source.document).and_then(|d| component_docs.get(&d))
+        {
+            by_document.push((k.0.clone(), k.1.clone(), pose));
+            continue;
+        }
         if role_of(&name).is_some() {
             let features = doc.element(element).map(|e| e.active_features()).unwrap_or_default();
             plan.parts.push(SyncPart { name, features, part, pose });
         } else if !plan.unrecognised.contains(&name) {
             plan.unrecognised.push(name);
+        }
+    }
+    // Each untied component instance stands for the nearest placement of its package that no
+    // other instance stands for (the board synced before first). Its package frame is the
+    // component document's own (the part is built in the package frame).
+    for (package, part_number, pose) in by_document {
+        let order: Vec<BoardId> = target.into_iter().chain(studio.boards.iter().map(|b| b.id).filter(|b| Some(*b) != target)).collect();
+        let at = pose.translation;
+        let found = order.iter().filter_map(|id| studio.board(*id)).find_map(|b| {
+            b.board
+                .components()
+                .map(|(_, p)| p)
+                .filter(|p| p.package == package && (part_number.is_empty() || p.part_number == part_number))
+                .filter(|p| !plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes)))
+                .min_by(|a, b| (a.x - at[0]).hypot(a.y - at[1]).total_cmp(&(b.x - at[0]).hypot(b.y - at[1])))
+                .map(|p| (p.clone(), b.board.library.clone()))
+        });
+        match found {
+            Some((p, lib)) => {
+                plan.components.push(SyncComponent { refdes: p.refdes.clone(), package: p.package.clone(), part_number: p.part_number.clone(), frame: AsmPose::IDENTITY, pose });
+                if let Some(pk) = lib.package(&p.package, &p.part_number)
+                    && plan.library.package(&pk.name, &pk.part_number).is_none()
+                {
+                    plan.library.packages.push(Package::clone(pk));
+                }
+            }
+            None => {
+                if !plan.unrecognised.contains(&package) {
+                    plan.unrecognised.push(package);
+                }
+            }
         }
     }
     Ok(plan)

@@ -132,7 +132,9 @@ Scenario(
         Wait(10),
         Click(ui("insert-part-composite-part-1")),
         Wait(10),
-        MoveTo(1300, 250),
+        // The picked part follows the pointer: shown in the free middle of the view (clear of
+        // the view cube).
+        MoveTo(930, 600),
         Wait(3),
         Screenshot("09-insert-composite-into-assembly-1"),
         Click(ui("insert-dialog-accept")),

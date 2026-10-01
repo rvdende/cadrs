@@ -7,12 +7,14 @@
 // 04 (step 5) Create assembly from 'Vision PCB': Board ✓, Components ✓, Keep-In and Keep-Out
 //    Areas ☐, the note, OK / Cancel; 05 OK: the progress card "Creating assembly from 'Vision
 //    PCB'…" with its spinner while the kernel thread builds (held up by `pcb-create-hold`);
-// 06 done: the toast and the new tabs Vision PCB (Part Studio), Vision PCB components, Vision PCB
-//    (Assembly); 07 the Part Studio: Sketch 1 and "Board [Vision PCB]"; 07b the components
-//    Part Studio: one part per package, side by side (P3H.7 moves them to component documents);
+// 06 done: the toast ("… and 8 component documents in PCB Components", P3H.7: one stored
+//    document per package, versioned, see `course_pcb_component_documents`) and the new tabs
+//    Vision PCB (Part Studio) and Vision PCB (Assembly); 07 the Part Studio: Sketch 1 and
+//    "Board [Vision PCB]";
 // 08 the Vision PCB assembly (Open assembly): the board and 29 components, no mates, instances
-//    named from their packages; 09 its Bill of materials: one row per part number with
-//    Quantity and Description;
+//    named from their packages, each a version-pinned reference to its component document (the
+//    link icon); 09 its Bill of materials: one row per part number with Quantity and
+//    Description (the board's "Board, Vision PCB");
 // 10 (step 6) Group, Top view, a box dragged over the board (window): what it will select is
 //    pre-highlighted;
 // 11 released: the 29 components in the Group's Instances (the board, not wholly inside,
@@ -59,6 +61,7 @@ Scenario(
         Screenshot("05-creating-progress"),
         WaitFor("pcb-create-toast"),
         Wait(10),
+        ExpectText("pcb-create-toast", "component documents in PCB Components"),
         Screenshot("06-created"),
         Click(ui("tab-vision-pcb")),
         Wait(40),
@@ -67,13 +70,6 @@ Scenario(
         MoveTo(1300, 250),
         Wait(3),
         Screenshot("07-board-part-studio"),
-        Click(ui("tab-vision-pcb-components")),
-        Wait(40),
-        Key("F"),
-        Wait(40),
-        MoveTo(1300, 250),
-        Wait(3),
-        Screenshot("07b-components-part-studio"),
         Click(ui("tab-vision-pcb-assembly")),
         Wait(60),
         Key("F"),

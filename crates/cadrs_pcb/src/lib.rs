@@ -16,11 +16,14 @@
 //!   gathered, the board made on the kernel thread, the command that adds or updates it.
 //! - [`create_assembly`] (P3H.6): Create an assembly from this ECAD data — the board's Part
 //!   Studio, its components and an Assembly, as one command.
+//! - [`component_docs`] (P3H.7): the component documents Create assembly makes (one stored
+//!   document per package in the component folder, versioned) and references by version.
 //! - [`sample`]: a PCB board built into a Part Studio through the command layer (sketch +
 //!   extrude per body), named and coloured, for the scenarios and later Create assembly.
 
 pub mod board;
 pub mod colors;
+pub mod component_docs;
 pub mod create_assembly;
 pub mod geometry;
 pub mod mcad;

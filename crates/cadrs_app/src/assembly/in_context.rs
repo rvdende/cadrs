@@ -75,7 +75,13 @@ type Key = (ElementId, StudioContext, Vec<usize>);
 
 /// Keeps the active Part Studio's context parts in the [`PartCache`] (after its rebuild), tinted;
 /// none in an assembly or a studio without a context.
-pub fn sync_context_parts(doc: Option<Res<ActiveDocument>>, mut cache: ResMut<PartCache>, mut asm_parts: ResMut<super::AssemblyParts>, mut last: Local<Option<(Key, Vec<cadrs_core::Part>)>>) {
+pub fn sync_context_parts(
+    doc: Option<Res<ActiveDocument>>,
+    applied: Option<Res<crate::applied::AppliedSession>>,
+    mut cache: ResMut<PartCache>,
+    mut asm_parts: ResMut<super::AssemblyParts>,
+    mut last: Local<Option<(Key, Vec<cadrs_core::Part>)>>,
+) {
     let Some(doc) = doc else { return };
     let Some(el) = doc.active_element() else { return };
     if el.assembly_model().is_some() {
@@ -108,7 +114,28 @@ pub fn sync_context_parts(doc: Option<Res<ActiveDocument>>, mut cache: ResMut<Pa
         }
         *last = Some((key, parts));
     }
-    let Some((_, parts)) = last.as_ref() else { return };
+    let Some((_, all)) = last.as_ref() else { return };
+    // P3H.7 (P3H.6 judge): a context part that a Transform copied in place is hidden, so its copy
+    // (in the studio's own colours) isn't washed out under the translucent context; it shows
+    // again while that Transform's dialog is open (to pick more).
+    let editing = applied.as_ref().filter(|a| a.element == el.id).map(|a| a.feature);
+    let bar = el.rollback_index();
+    let copied: Vec<cadrs_core::FeatureId> = el.features()[..bar]
+        .iter()
+        .filter(|f| Some(f.id) != editing && !el.is_suppressed(f.id))
+        .filter_map(|f| match &f.kind {
+            cadrs_core::document::FeatureKind::Transform(x) if x.transform_type == cadrs_core::transform::TransformType::CopyInPlace => Some(x.context.iter().map(|c| c.id)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let shown: Vec<cadrs_core::Part>;
+    let parts: &Vec<cadrs_core::Part> = if copied.is_empty() {
+        all
+    } else {
+        shown = all.iter().filter(|p| !copied.contains(&p.feature)).cloned().collect();
+        &shown
+    };
     let present: Vec<PartId> = cache.parts.iter().filter(|p| context::is_context(p.feature)).map(|p| p.id).collect();
     let want: Vec<PartId> = parts.iter().map(|p| p.id).collect();
     let fresh = present != want || cache.parts.iter().filter(|p| context::is_context(p.feature)).zip(parts).any(|(a, b)| !Arc::ptr_eq(&a.solid, &b.solid));

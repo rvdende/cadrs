@@ -894,6 +894,7 @@ pub fn is_script_command(s: &str) -> bool {
         || s.starts_with("pcb-import ")
         || s.starts_with("pcb-choose ")
         || s.starts_with("pcb-folder ")
+        || s.starts_with("pcb-save-as ")
 }
 
 /// Set-up commands for scenarios:
@@ -912,7 +913,9 @@ pub fn is_script_command(s: &str) -> bool {
 /// - `pcb-create-hold <frames>` (P3H.6): Create assembly's progress card stays at least that
 ///   many frames (so a scenario can photograph it);
 /// - `phone-case-board` (P3H.5): PCB6 steps 2–8 on the stand-in through the command layer
-///   ([`cadrs_core::samples::phone_case::board_in_context`]), for scenarios about what follows.
+///   ([`cadrs_core::samples::phone_case::board_in_context`]), for scenarios about what follows;
+/// - `pcb-save-as <name>` (P3H.7): the open scratch document named `<name>` and stored (as the
+///   documents page's Create does), so it can be left and opened again, and Where used finds it.
 fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Commands) {
     for m in msgs.read() {
         let s = m.0.trim();
@@ -958,6 +961,27 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
         } else if s == "pcb-sample-part-document" {
             commands.queue(dialogs::store_sample_part_document);
+        } else if let Some(name) = s.strip_prefix("pcb-save-as ") {
+            let name = name.trim().to_string();
+            commands.queue(move |w: &mut World| {
+                let Some(store) = w.get_resource::<crate::DocumentStore>().map(|s| s.0.clone()) else { return };
+                let now = w.resource::<crate::AppClock>().now();
+                let user = w.resource::<crate::UserProfile>().id.clone();
+                let Some(mut doc) = w.get_resource::<ActiveDocument>().map(|d| d.doc.clone()) else { return };
+                doc.name = name.clone();
+                let meta = cadrs_core::DocumentMeta::new(&user, now);
+                match store.create(&doc, &meta) {
+                    Ok(_) => {
+                        let active = w.resource::<ActiveDocument>().active;
+                        let mut d = ActiveDocument::stored(doc, meta);
+                        if let Some(a) = active {
+                            d.set_active(a);
+                        }
+                        w.insert_resource(d);
+                    }
+                    Err(e) => warn!("pcb-save-as: {e}"),
+                }
+            });
         } else if let Some(name) = s.strip_prefix("pcb-folder ") {
             let name = name.trim().to_string();
             commands.queue(move |w: &mut World| {

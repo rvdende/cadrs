@@ -27,11 +27,12 @@ multi-file pick, a zip writer, and cross-document references (stage 3G).
 - Stage 3E P3E.3 (Measure): the bottom-right face Area of Ex2/Ex3. P3H.6 adds a minimal planar-face
   Area readout if P3E.3 isn't on `main` by then.
 
-**Counts (67 PCB IDs + 2 quiz/survey rows + 12 X IDs + 3 exercises = 84), after P3H.6 (merged
-with main ae64487, not judged yet):** ✅ 46 · 🟡 23 · ❌ 4 · out of scope 11 (PCB: 36 / 19 / 4 / 8;
-quiz and survey: 0 / 0 / 0 / 2; X: 7 / 4 / 0 / 1; exercises: 3 / 0 / 0 / 0). PCB4.1 stays ❌ (see below); PCB7.10,
-PCB11.1, PCB11.3 and the component-document halves of PCB7.3/X7 are P3H.7 (after
-stage 3G). At `eab7bee` it was ✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PCB1.3, PCB9.1 and X12 are informational and count as
+**Counts (67 PCB IDs + 2 quiz/survey rows + 12 X IDs + 3 exercises = 84), after P3H.7 (not
+judged yet):** ✅ 54 · 🟡 18 · ❌ 1 · out of scope 11 (PCB: 43 / 15 / 1 / 8; quiz and survey:
+0 / 0 / 0 / 2; X: 8 / 3 / 0 / 1; exercises: 3 / 0 / 0 / 0). PCB4.1 stays ❌ (see below). P3H.7
+closed PCB5.5, PCB7.3, PCB7.10, PCB9.5, PCB11.1–PCB11.3 and X7 (component documents and
+version-pinned references, on stage 3G). After P3H.6 it was ✅ 46 · 🟡 23 · ❌ 4; at `eab7bee`
+✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PCB1.3, PCB9.1 and X12 are informational and count as
 ✅. PCB4.1 counts as ❌ for its IDF half; its IDX/Eagle half is out of scope for now.
 
 ## Code inventory (what PCB Studio can reuse)
@@ -112,23 +113,23 @@ stage 3G). At `eab7bee` it was ✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PC
 | PCB5.2 | Sync dialog: source dropdown "<tab> (Assembly)", "Top face of board part is parallel to" plane, OK / Cancel | ✅ | P3H.5: `pcb-sync-dialog` (Part Studio and Assembly tabs, Top/Front/Right Plane; a re-sync opens on the board's source and plane); runs on the kernel thread. Mate connectors and plane features as the plane: not offered (`SyncPlane::Custom` exists in `cadrs_pcb`). |
 | PCB5.3 | After OK the board and keep areas show and are listed | ✅ | P3H.5: the board named after the tab under Boards, shown; keep-outs under the board also drawn as dark translucent patches on its top face (display only). `course_pcb_ex1_board` 15. |
 | PCB5.4 | Non-matching parts not translated; a message says so | ✅ | P3H.5: the toast "Added Cell phone. Not translated: Enclosure, Battery, Antenna" (each name once); test `untranslated_parts_are_reported`. |
-| PCB5.5 | Syncing an assembly picks up component instances and positions | 🟡 | P3H.5: every part at any depth in assembly coordinates; component instances recognised **by name** ("`<refdes> <package>`" matching a placement of a board of the studio; the package frame recorded on the synced board so later syncs read moves from the same frame). The component-folder rule needs component documents (P3H.6, after 3G). Test `resync_keeps_board_and_keep_ids_and_reads_moved_components` (+25.4 mm → Y 8.9). |
+| PCB5.5 | Syncing an assembly picks up component instances and positions | ✅ | P3H.5: every part at any depth in assembly coordinates; part-name fallback ("`<refdes> <package>`") for boards built into a Part Studio. P3H.6: the instances Create assembly made are tied to their placements by designator. **P3H.7**: the instances are references to component documents (the component-folder rule): an untied instance of a component document (inserted by hand, or its tie lost) is recognised by its document's package (`GeneratedAssembly::documents`) at the nearest free placement, whatever the part or document is called; at depth and after an update to a new version too. Tests `sync_recognises_components_through_their_link` (renamed part in V2, delete + re-insert, inside a Product assembly), `resync_keeps_board_and_keep_ids_and_reads_moved_components` (+25.4 mm → Y 8.9), `component_documents_keep_bom_area_sync_and_export`. |
 | PCB5.6 | Re-sync updates the board in place, no duplicate | ✅ | P3H.5: `SyncBoard` (one undo step) updates the board synced from the same tab; keep areas keep their ids by part name, components by designator; the board keeps its name. |
 | PCB5.7 | Workflow: Create Part Studio in context, Use enclosure edges, Extrude, rename, Insert and go to Assembly, Update context | ✅ | P3H.5: Display states ▾ → Create Part Studio in context (Origin of new Part Studio: the assembly Origin; mate connectors not offered), the context bar's Insert and go to Assembly, the instance menu's Update context ▸ <studio>; the context records a fingerprint of its parts' studios so a resize makes it out of date (`cadrs_core::assembly::managed_context`). `course_pcb_ex1_board` 03–18. |
 
 ### PCB7 Creating an assembly from PCB Studio
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
-| PCB7.1 | Create assembly dialog: Board ✓, Components ✓, Keep-In and Keep-Out ☐, slow-build note, OK / Cancel | ✅ | P3H.6: `pcb-create-dialog` ("Create assembly from '<board>'", Board ✓, Components ✓, Keep-In and Keep-Out Areas ☐, the note, OK / Cancel); builds on the kernel thread with a progress card and a toast (`cadrs_app::pcb::create_assembly`). `course_pcb_ex2_vision` 04, 06. Fix round 1: tighter checkbox rows (19 px); the progress card photographed in `course_pcb_ex2_vision` 05 (held up by the scenario-only `pcb-create-hold <frames>`). |
+| PCB7.1 | Create assembly dialog: Board ✓, Components ✓, Keep-In and Keep-Out ☐, slow-build note, OK / Cancel | ✅ | P3H.6: `pcb-create-dialog` ("Create assembly from '<board>'", Board ✓, Components ✓, Keep-In and Keep-Out Areas ☐, the note, OK / Cancel); builds on the kernel thread with a progress card and a toast (`cadrs_app::pcb::create_assembly`). `course_pcb_ex2_vision` 04, 06. Fix round 1: tighter checkbox rows; P3H.7: the rows were still 27 px apart (19 px rows + the dialog body's 8 px row gap), now one group with no gap: **19 px pitch** as the course's (`course_pcb_ex2_vision` 04); the progress card photographed in `course_pcb_ex2_vision` 05 (held up by the scenario-only `pcb-create-hold <frames>`). |
 | PCB7.2 | Generates a Part Studio (part "Board [<name>]") and an Assembly, both named after the board | ✅ | P3H.6: `cadrs_pcb::create_assembly::generate` → `CreatePcbAssembly` (one undo step): Part Studio "<board>" (Sketch 1, "Board [<board>]"), Assembly "<board>". Test `create_assembly_makes_a_studio_and_an_assembly_named_after_the_board`. |
-| PCB7.3 | One component document per new package in the component folder; version-pinned references | 🟡 | P3H.6: components are in-document parts in a "<board> components" Part Studio behind the `ComponentSource` seam, with Part number/Description; a second Create reuses that studio and adds only new packages (`create_assembly_second_create_reuses_the_components_studio`). One document per package and version-pinned references: **deferred to P3H.7** (needs 3G ExternalRef). |
+| PCB7.3 | One component document per new package in the component folder; version-pinned references | ✅ | **P3H.7**: Create assembly writes one stored document per new package into the PCB settings' component folder (made again when deleted; "PCB Components" when none is chosen), each versioned V1, and inserts the components as version-pinned references to that version (3G `SourceRef`, frozen copies in the board document, `cadrs_pcb::component_docs`, `generate_linked`). A package that has a document already (any earlier Create, any board or document) is reused at its newest version, found by the key in its metadata (`DocumentMeta::pcb_component`: package + part number), so a renamed or moved document still matches. The board document's Create is one undo step; the component documents and versions stay (decision, as Move to document). Tests `create_assembly_makes_one_document_per_new_package`, `second_create_reuses_component_documents`; `course_pcb_component_documents` 01–03. The in-document components Part Studio (P3H.6) is kept only as the fallback with no document store (`generate`). |
 | PCB7.4 | Components unmated; Fix the board, Group the components | ✅ | P3H.6: no mates; box select in the assembly view (`assembly/box_select.rs`, window/crossing) fills Group; Fix (A3.7). `course_pcb_ex2_vision` 10–12. Fix round 1: while a box is dragged, the instances it will select are pre-highlighted (hover tint, `HoverParts.2`; ex2 10, ex3 10); selected components under the board no longer show through it (silhouette depth bias −5e-5; ex2 11, ex3 10b). |
 | PCB7.5 | Instance names from package names with `<n>` | ✅ | P3H.6: "<package> <n>" (test `create_assembly_makes_a_studio_…`; `course_pcb_ex2_vision` 08). |
-| PCB7.6 | BOM rows per ECAD part number with Description | ✅ | P3H.6: Part number + Description from `.emp` PROP (`description`); test `create_assembly_bom_has_one_row_per_part_number_with_description`; `course_pcb_ex2_vision` 09. Fix round 1: every package of the Vision PCB fixtures (mm and thou) has a DESCRIPTION PROP, so every BOM row has one (test checks all). |
+| PCB7.6 | BOM rows per ECAD part number with Description | ✅ | P3H.6: Part number + Description from `.emp` PROP (`description`); test `create_assembly_bom_has_one_row_per_part_number_with_description`; `course_pcb_ex2_vision` 09. Fix round 1: every package of the Vision PCB fixtures (mm and thou) has a DESCRIPTION PROP, so every BOM row has one (test checks all). P3H.7: the same with linked instances (the copies carry the properties), and the board row has a Description ("Board, <name>", or a Part number/Description from an IDF `.NOTES` record): `component_documents_keep_bom_area_sync_and_export`, `course_pcb_ex2_vision` 09. |
 | PCB7.7 | Subassembly BOM behavior → Show assembly only | ✅ | Generic assembly property (A20.5); applies to the generated assembly unchanged. |
 | PCB7.8 | The PCB assembly is ordinary: insert as subassembly, in-context design | ✅ | Subassembly insert (A17.2) and Edit in context (P3B.9) are generic. |
 | PCB7.9 | One part for the PCB: Part Studio in context, Transform copy in place, Composite part (Closed) | ✅ | P3H.6: main's Transform (Copy in place) takes assembly-context parts (`TransformFeature::context`/`sources`, `context_copies`; copies keep their colours) and **Composite part** (`CompositeFeature`, Closed = one part in the Parts list and one instance; `composite_ui.rs`). `course_pcb_one_part`; tests in `crates/cadrs_core/tests/composite.rs`. Fix round 1: Update context re-snapshots the Transform's context copies (matched by context id, same undo step; test `context_copies_follow_update_context`); the Large studio banner counts only the studio's own parts (Parts list and banner agree, 06: 30); dialog field "Parts and composite parts"; Parts list, Instances and BOM rows show the `composite-part` icon; the composite goes into a separate parent assembly (Assembly 1), selected, with a one-row BOM (`course_pcb_one_part` 09–10). |
-| PCB7.10 | Right-click a component → Open linked document | ❌ | Deferred to P3H.7 (needs 3G Open linked document, DV1.9). |
+| PCB7.10 | Right-click a component → Open linked document | ✅ | **P3H.7**: the instance menu's Open linked document opens the component document at the referenced version, read-only (3G `linked_session`), its part selected; the banner's new **Edit Main** opens its workspace for editing (saved as usual) with "Editing Main of <document>" and **Back to <board document>** (the board document as it was, its undo history kept). `course_pcb_component_documents` 04–07. |
 
 ## 4. Working with PCB data
 
@@ -139,7 +140,7 @@ stage 3G). At `eab7bee` it was ✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PC
 | PCB9.2 | Fix the board, Group the components | ✅ | A3.7, A13. |
 | PCB9.3 | Move: take out of Group, triad drag or typed distance, add back | ✅ | Group Edit (row ✕), triad typed "1 in" (A3.4). |
 | PCB9.4 | Keep areas: sketch on board, extrude New part, name Keep-in/Keep-out, insert and place | ✅ | Generic modelling and Insert (✓ in dialog keeps studio position, A2.3); recognition is PCB5.1. Fix round 1: a part named as a keep-out or keep-in defaults to grey (`appearance::KEEP_GREY`, via `cadrs_core::pcb::names`, which `cadrs_pcb::names` re-exports). |
-| PCB9.5 | Edit the board; create versions; update references in the assembly | 🟡 | Editing ✅, versions ✅ (P3D.3); in-document components update with the studio; cross-document update deferred to P3H.7. |
+| PCB9.5 | Edit the board; create versions; update references in the assembly | ✅ | Editing ✅, versions ✅ (P3D.3). **P3H.7**: a component document edited and versioned shows the update badge on its instances and tab in the board assembly; Update (Reference manager or Update linked document) re-points them, keeping ids, poses and designator ties. Test `edit_version_and_update_change_the_instances` (63.048 → 105.08 mm³); `course_pcb_component_documents` 08–12. |
 | PCB9.6 | Round trip: sync the edited assembly; outline and positions update | ✅ | P3H.5 sync in place; P3H.6 Ex3 end to end: tests `ex3_moved_component_is_25_4_mm_further`, `ex3_place_keepout_written`; `course_pcb_ex3_idf_assembly` 12–14. Fix round 1: the PCB view re-fits when a re-sync changes the board's extent; ex3 13 is fitted (F after Top). |
 | PCB9.7 | Export ECAD files dialog: IDF 2.0 / 3.0 radios, Export / Cancel; 2.0 has no keep areas | ✅ | P3H.5: `pcb-export-dialog` (3.0 chosen; a note that 2.0 files have no keep areas — the course's claim about Onshape's exporter, not the format, see the crate README). `course_pcb_export_idf`; test `export_idf2_has_no_keepouts`. |
 | PCB9.8 | Zip of `<board>.emn` + `<board>.emp` (outline, placements, holes, keep areas; outlines, heights) | ✅ | P3H.5: `<board>.zip` (" (2)" when taken) in the Downloads folder (`$CADRS_EXPORT_DIR`; a scenario's `exports` folder), the header dated by the app clock; the toast's Open .emn shows the board file. |
@@ -150,9 +151,9 @@ stage 3G). At `eab7bee` it was ✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PC
 ### PCB11 Electronic component and properties
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
-| PCB11.1 | One document per component (one Part Studio, one part; empty assembly) | ❌ | Deferred to P3H.7 (component documents need 3G); P3H.6 keeps one part per package in the components Part Studio. |
-| PCB11.2 | Edit a component's studio, create a version, update the assemblies | 🟡 | Editing and versions exist; updating other documents' references deferred to P3H.7 (3G). |
-| PCB11.3 | Move component documents to other folders; references stay tracked | ❌ | Deferred to P3H.7 (3G references). |
+| PCB11.1 | One document per component (one Part Studio, one part; empty assembly) | ✅ | **P3H.7**: each component document has one Part Studio (named after the package) with one part (the ECAD box, Part number, Description, PCB colour) and an empty "Assembly 1", a V1, and a thumbnail of its part for the documents page. Test `create_assembly_makes_one_document_per_new_package`; `course_pcb_component_documents` 03. |
+| PCB11.2 | Edit a component's studio, create a version, update the assemblies | ✅ | **P3H.7**: Open linked document → Edit Main → edit (e.g. the extrude depth) → Create version → Back → update badge → Update. Test `edit_version_and_update_change_the_instances` (7.4·7.1·1.2 = 63.048 → 7.4·7.1·2 = 105.08 mm³, undo back); `course_pcb_component_documents` 05–12. |
+| PCB11.3 | Move component documents to other folders; references stay tracked | ✅ | **P3H.7**: references name documents by id, so moving (and renaming) component documents keeps Where used, updates and reuse (by the metadata key). Test `moved_component_documents_stay_tracked`. |
 | PCB11.4 | Library document keeps footprint → representation mappings, shared, auto-maintained | 🟡 | P3H.4: `cadrs_core::pcb::library` (the library document's PCB Studio tab, else `<store>/pcb-component-library.ron`). |
 | PCB11.5 | Component pane: Part name, Part number, Representation None / From ECAD data (link icon) / Custom part | 🟡 | P3H.4: `SetRepresentation`; scenario `course_pcb_component_properties`. |
 | PCB11.6 | Custom part: Select custom part (document, version), Translate/Rotate, Center, ✓ | 🟡 | P3H.4: stored documents and their versions (typed values; no triad); scenario `course_pcb_custom_part`. |
@@ -193,7 +194,7 @@ stage 3G). At `eab7bee` it was ✅ 8 · 🟡 10 · ❌ 55 · out of scope 11. PC
 | X4 | Authored fixtures: (a) cell phone, (b) secondary board, (c) vision controller; round-trip tests | ✅ | P3H.1: `fixtures/idf/` cell phone, secondary board, Vision PCB (+THOU copy), 2.0 sample; round-trip + proptests. |
 | X5 | IDF → B-rep (board, cut-outs, holes, keep bodies, components with rotation/flip, colours) and MCAD → board | ✅ | P3H.2: `cadrs_pcb::{geometry,mcad,placement}` (per-package body cache, exact placement inverse, projection onto Top/Front/Right/custom planes, round trips on all fixtures). |
 | X6 | Local PCB settings: library location, component folder, Update / Close | 🟡 | P3H.4: workspace-level settings and library (see PCB2.1, PCB11.4). |
-| X7 | Create assembly: studio + assembly, component documents, version-pinned refs, no mates, options, progress, non-blocking | 🟡 | P3H.6: studio + assembly, in-document components, no mates, options, progress card, non-blocking; component documents and version-pinned refs deferred to P3H.7. |
+| X7 | Create assembly: studio + assembly, component documents, version-pinned refs, no mates, options, progress, non-blocking | ✅ | P3H.6: studio + assembly, no mates, options, progress card, non-blocking. **P3H.7**: component documents (written and versioned on the kernel thread too) and version-pinned references (see PCB7.3). |
 | X8 | Re-sync updates in place, then export | ✅ | P3H.5 (see PCB5.6, PCB9.7). |
 | X9 | Prerequisites: managed in-context design, Transform copy in place, Composite part (Closed) | ✅ | P3H.5 managed in-context ✅; P3H.6 Transform copy in place of context parts (main's Transform) and Composite part (Closed). Fix round 1: Update context refreshes the copies. |
 | X10 | Custom representation editor: part from another document/version, translate/rotate, Center, stored in the mapping | 🟡 | P3H.4: see PCB11.6. |
@@ -252,6 +253,7 @@ and `uBGA48_7.4X7.1` at (4.064182376174947, −16.5), rotation 90, TOP, over the
 | P3H.4 | **Component properties, BOM, search and component view** | PCB3.8–PCB3.10, PCB4.5–PCB4.7, PCB11.4–PCB11.8, X10 | Scenarios match `v8`; custom-part mapping round-trips. |
 | P3H.5 | **Sync, export and the board exercise** | PCB5.*, PCB6, PCB9.6–PCB9.9, X8, X9 (in-context) | `course_pcb_ex1_*` passes; `.emn` test matches the course's points. |
 | P3H.6 | **Create assembly and exercises 2–3** | PCB7.*, PCB8, PCB9.1–PCB9.5, PCB10, PCB11.1–PCB11.3, X7, X9 (Transform, Composite) | Both exercises pass with their unit tests; needs 3G on `main`. **Done: judge 8.79** (r1 8.33; fix round 1 16f19c7). |
+| P3H.7 | **Component documents and version-pinned references** | PCB5.5, PCB7.3, PCB7.10, PCB9.5, PCB11.1–PCB11.3, X7 | One document per package in the component folder, versioned, referenced by version; Open linked document, edit, version, update; moves keep tracking. Tests in `crates/cadrs_pcb/tests/component_documents.rs`; `course_pcb_component_documents`. |
 
 ### P3H.1 IDF 2.0/3.0 parser and writer + fixtures
 - New bevy-free crate `crates/cadrs_idf` (depends on serde only; `cadrs_core` may depend on it).
@@ -392,7 +394,34 @@ and `uBGA48_7.4X7.1` at (4.064182376174947, −16.5), rotation 90, TOP, over the
   `ex2-step7-area-check.png`, `v7-modify-placement-poster.png`, `ex3-step6-keepout-sketch.png`,
   `ex3-step9-triad-move.png`, `ex3-step14-exported-emn-placement.png`, `course-cover.png`.
 
+### P3H.7 Component documents (after 3G on `main`)
+- Create assembly (`cadrs_app::pcb::create_assembly` → `cadrs_pcb::create_assembly::generate_linked`
+  with `cadrs_pcb::component_docs::ComponentDocuments`): one stored document per new package in
+  the PCB settings' component folder ("PCB Components" when none is chosen; a deleted chosen
+  folder is made again with its id and name), named after the package: one Part Studio (named
+  after the package) with one part (the ECAD box, Part number, Description, PCB colour), an
+  empty "Assembly 1", a V1 and a thumbnail; reused by package + part number
+  (`DocumentMeta::pcb_component`) at its newest version. The instances are version-pinned
+  references (3G `SourceRef`, frozen copies in `Document::linked`, added by
+  `CreatePcbAssembly::links`); `GeneratedAssembly::documents` records which documents are
+  components (Sync).
+- Open linked document (3G) + the banner's **Edit Main** (the source's workspace, editable) +
+  **Back to <document>**; edit → Create version → update badge → Update (3G).
+- Scenario `course_pcb_component_documents` (01–12); `course_pcb_ex2_vision` loses 07b (no
+  components Part Studio any more).
+
 ## Decisions
+- **Component documents and undo (P3H.7)**, as 3G's Move to document: the component
+  documents, their versions and the folder are library/store work, written when Create runs (on
+  the kernel thread, before the board document's command). Undoing Create removes the generated
+  tabs and the frozen copies from the board document (one step); the component documents and
+  their versions stay (versions are immutable, ER4.8) and the next Create reuses them.
+- **Which document is a package's (P3H.7)**: a key in the document's metadata (package and part
+  number, plus the Part Studio and part made), not its name or folder, so a renamed or moved
+  document still matches; a trashed one doesn't (a new one is made). Same package name with
+  another part number is another component (the fixtures' two `SOT23`s).
+- **The in-document components Part Studio (P3H.6)** stays only as the fallback with no
+  document store (`generate`, pure-core tests); the app always uses component documents.
 - **No Onshape name or logo** anywhere: the tab default is "PCB Studio 1", the IDF header source
   id is `"cadrs PCB Studio v0.1"`, the settings build string likewise.
 - **Local settings** replace the admin-only cloud settings (X6): per user, in the config dir.

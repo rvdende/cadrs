@@ -86,7 +86,8 @@ pub fn notice_row(p: &mut ChildSpawnerCommands, t: &Theme) {
 /// geometry (the origin and three planes), so the notice says so (P3F.3–P3F.4 judge).
 pub fn notice(features: usize, parts: usize) -> Option<String> {
     (features > FEATURE_BUDGET || parts > PART_BUDGET).then(|| {
-        format!("Large studio: {features} features\n(excluding default geometry),\n{parts} parts. Consider splitting it.")
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        format!("Large studio: {}\n(excluding default geometry),\n{}. Consider splitting it.", plural(features, "feature", "features"), plural(parts, "part", "parts"))
     })
 }
 
