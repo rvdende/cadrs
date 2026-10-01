@@ -1,0 +1,61 @@
+// P3E.3a (TD6.7, X3): persistent selection on the drawing bracket (`samples::drawing_bracket`),
+// every step through the UI:
+// 01 a click on the plate's top face selects it (orange; the readout reads its area).
+// 02 a click on the upright's front face adds it, with no Shift or Ctrl: both stay selected.
+// 03 a click on the plate's front face adds it too: three selected (the readout sums the areas).
+// 04 Space clears the selection: nothing is selected.
+// 05 the top face and the upright's face clicked again: both selected.
+// 06 a click on empty space clears the selection.
+// 07 a click on a selected face deselects only it (the upright's face stays).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("drawing-bracket"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        Click(xyz(40, -30, 12)),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-top-face-selected"),
+        Click(xyz(-10, -8, 30)),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-upright-face-added"),
+        Click(xyz(20, -40, 6)),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-front-face-added"),
+        Key("Space"),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-space-clears"),
+        Click(xyz(40, -30, 12)),
+        Wait(3),
+        Click(xyz(-10, -8, 30)),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-two-selected-again"),
+        ClickAt(330, 300),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-empty-click-clears"),
+        Click(xyz(40, -30, 12)),
+        Wait(3),
+        Click(xyz(-10, -8, 30)),
+        Wait(3),
+        Click(xyz(40, -30, 12)),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-click-again-deselects"),
+    ],
+)

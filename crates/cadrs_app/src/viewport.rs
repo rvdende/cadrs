@@ -210,6 +210,9 @@ pub struct ViewportView {
 impl ViewportView {
     /// Animates to `to`.
     pub fn animate_to(&mut self, to: ViewState) {
+        // The render mode and the projection are the tab's (P3E.3a): a change of view keeps
+        // them (`crate::view_options` sets them).
+        let to = ViewState { render: self.view.render, perspective: self.view.perspective, ..to };
         if self.view.approx_eq(&to) {
             return;
         }
@@ -554,17 +557,20 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     config.render_layers = RenderLayers::layer(OVERLAY_LAYER);
 }
 
+/// The viewport cameras' orthographic projection at `scale` mm per logical pixel.
+pub fn ortho_projection(scale: f32) -> Projection {
+    Projection::Orthographic(OrthographicProjection {
+        scaling_mode: ScalingMode::WindowSize,
+        scale,
+        near: 0.0,
+        far: camera::CAMERA_FAR,
+        ..OrthographicProjection::default_3d()
+    })
+}
+
 fn spawn_main_camera(mut commands: Commands, surface: Res<RenderSurface>, theme: Res<Theme>) {
     let view = ViewState::default();
-    let projection = || {
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::WindowSize,
-            scale: view.scale,
-            near: 0.0,
-            far: camera::CAMERA_FAR,
-            ..OrthographicProjection::default_3d()
-        })
-    };
+    let projection = || ortho_projection(view.scale);
     let transform =
         Transform::from_translation(view.camera_position()).with_rotation(view.rotation());
     commands.spawn((
@@ -862,10 +868,11 @@ fn viewport_pointer(
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
     ),
-    (mut focus, q_number, mut grab): (
+    (mut focus, q_number, mut grab, zoom_window): (
         ResMut<bevy::input_focus::InputFocus>,
         Query<(), With<cadrs_ui::NumberFieldEdit>>,
         ResMut<crate::assembly::ViewportGrab>,
+        Option<Res<crate::view_options::ZoomWindow>>,
     ),
     mut commands: Commands,
 ) {
@@ -909,7 +916,8 @@ fn viewport_pointer(
                 drag.buttons[i] = true;
                 match b {
                     PointerButton::Primary => {
-                        drag.primary_down = over.then_some(pos);
+                        // Zoom to window takes the drag (P3E.3a).
+                        drag.primary_down = (over && zoom_window.is_none()).then_some(pos);
                         drag.moved = 0.0;
                         // A click in the view leaves a dialog's number field (committing what
                         // was typed), as in Onshape (P3.10 judge: a caret stayed in Tip angle).
@@ -1018,6 +1026,13 @@ fn viewport_pointer(
                     };
                     view.animation = None;
                     let cursor = rect.offset(pos);
+                    // P3E.3a: in perspective, zoom about the part under the cursor.
+                    if view.view.perspective
+                        && let Some((_, _, t)) = crate::parts::pick_face(&parts, &view.view, cursor)
+                    {
+                        let (o, d) = view.view.ray(cursor);
+                        view.view = view.view.refocused(o + d * t);
+                    }
                     view.view.wheel(lines, cursor);
                 }
             }
@@ -1259,7 +1274,7 @@ fn view_shortcuts(
         };
         if let Some(s) = standard {
             let to = if s == StandardView::Isometric {
-                fitted_isometric(rect.0.size())
+                fitted_isometric_for(view.view.perspective, rect.0.size())
             } else {
                 view.target().oriented(s)
             };
@@ -1566,6 +1581,19 @@ pub fn apply_view_to_camera(
         let Some(size) = camera.logical_target_size() else {
             continue;
         };
+        // P3E.3a: the perspective view's off-centre projection, the focus at the viewport's
+        // centre (`crate::view_options::ViewportPerspective`).
+        if v.perspective {
+            let p = crate::view_options::ViewportPerspective::of(&v, rect.0.center(), size);
+            let same = matches!(&*projection, Projection::Custom(c) if c.get::<crate::view_options::ViewportPerspective>() == Some(&p));
+            if !same {
+                *projection = Projection::custom(p);
+            }
+            continue;
+        }
+        if !matches!(&*projection, Projection::Orthographic(_)) {
+            *projection = ortho_projection(v.scale);
+        }
         if let Projection::Orthographic(o) = &mut *projection {
             let c = rect.0.center();
             let origin = Vec2::new(c.x / size.x, 1.0 - c.y / size.y);
@@ -1958,7 +1986,25 @@ pub fn readable_axes(view: &ViewState, u: Vec3, v: Vec3) -> (Vec3, Vec3) {
 /// The Shift+7 view: isometric, centered on the origin and zoomed so the default planes fill
 /// about 72% of the viewport, as Onshape's isometric view does.
 pub fn fitted_isometric(viewport: Vec2) -> ViewState {
-    let mut v = ViewState::standard(StandardView::Isometric);
+    let v = ViewState::standard(StandardView::Isometric);
+    // The projection is the tab's; a perspective view is fitted on the planes' corners.
+    fitted_isometric_from(v, viewport)
+}
+
+/// [`fitted_isometric`] for a view in perspective or not.
+pub fn fitted_isometric_for(perspective: bool, viewport: Vec2) -> ViewState {
+    let v = ViewState { perspective, ..ViewState::standard(StandardView::Isometric) };
+    if !perspective {
+        return fitted_isometric_from(v, viewport);
+    }
+    let pts: Vec<Vec3> = PlaneKind::ALL
+        .into_iter()
+        .flat_map(|k| [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(a, b)| (k.u() * a + k.v() * b) * PLANE_HALF))
+        .collect();
+    v.fitted(&pts, viewport, 0.72)
+}
+
+fn fitted_isometric_from(mut v: ViewState, viewport: Vec2) -> ViewState {
     let mut lo = Vec2::splat(f32::MAX);
     let mut hi = Vec2::splat(f32::MIN);
     for k in PlaneKind::ALL {
@@ -2027,6 +2073,52 @@ fn place_origin_marker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P3E.3a (TD6.5): the render mode and the projection are per tab: they stay with a tab's
+    /// view when another tab is shown and come back with it; a tab opened for the first time
+    /// is Shaded and orthographic; a change of view (an animation) keeps them.
+    #[test]
+    fn render_mode_and_perspective_are_per_tab() {
+        use crate::camera::RenderMode;
+        let mut doc = cadrs_core::Document::empty("Tabs");
+        doc.elements.push(cadrs_core::Element::part_studio("A"));
+        doc.elements.push(cadrs_core::Element::part_studio("B"));
+        let (a, b) = (doc.elements[0].id, doc.elements[1].id);
+        let mut app = App::new();
+        app.insert_resource(ActiveDocument::new(doc))
+            .init_resource::<ActiveKind>()
+            .init_resource::<ViewportView>()
+            .init_resource::<Selection>()
+            .init_resource::<ViewportRect>()
+            .init_resource::<PlanesVisible>()
+            .add_systems(Update, track_active_element);
+        let show = |app: &mut App, el| {
+            app.world_mut().resource_mut::<ActiveDocument>().active = Some(el);
+            app.update();
+        };
+        show(&mut app, a);
+        {
+            let mut v = app.world_mut().resource_mut::<ViewportView>();
+            v.view.render = RenderMode::HiddenEdgesVisible;
+            v.view.perspective = true;
+            // A view change keeps them.
+            let to = ViewState::standard(StandardView::Top);
+            v.animate_to(to);
+            assert_eq!(v.target().render, RenderMode::HiddenEdgesVisible);
+            assert!(v.target().perspective);
+        }
+        show(&mut app, b);
+        let v = app.world().resource::<ViewportView>().view;
+        assert_eq!(v.render, RenderMode::Shaded);
+        assert!(!v.perspective);
+        app.world_mut().resource_mut::<ViewportView>().view.render = RenderMode::Translucent;
+        show(&mut app, a);
+        let v = app.world().resource::<ViewportView>().view;
+        assert_eq!(v.render, RenderMode::HiddenEdgesVisible);
+        assert!(v.perspective);
+        show(&mut app, b);
+        assert_eq!(app.world().resource::<ViewportView>().view.render, RenderMode::Translucent);
+    }
 
     #[test]
     fn affine_parts_rebuild_the_map() {

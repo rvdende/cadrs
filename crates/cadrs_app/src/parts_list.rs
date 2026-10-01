@@ -268,7 +268,7 @@ fn on_part_context_menu(
         })
         .separator()
         .item(MenuItem::new("part-comment", "Add comment").icon("comments").disabled(true))
-        .item(MenuItem::new("part-zoom", "Zoom to selection").disabled(true))
+        .item(MenuItem::new("part-zoom", "Zoom to selection"))
         .separator()
         .item(MenuItem::new("part-delete", "Delete…").icon("remove-circle"));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
@@ -284,6 +284,12 @@ fn on_part_menu_action(ev: On<MenuAction>, q_anchor: Query<&PartMenuFor, With<Co
     let part = target.0;
     match ev.item.as_str() {
         "part-rename" => commands.queue(move |world: &mut World| rename_part(world, part)),
+        // P3E.3a: the part (or the selected parts it is among).
+        "part-zoom" => commands.queue(move |world: &mut World| {
+            let parts = targets(world, part);
+            world.resource_mut::<crate::viewport::Selection>().0 = parts.into_iter().map(crate::viewport::Pick::Part).collect();
+            crate::view_options::zoom_to_selection(world);
+        }),
         "part-hide" | "part-show" => {
             let hidden = ev.item == "part-hide";
             commands.queue(move |world: &mut World| {

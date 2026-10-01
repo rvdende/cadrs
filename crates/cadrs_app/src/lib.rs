@@ -85,6 +85,9 @@ pub mod variables_ui;
 pub mod view_cube;
 pub mod viewport_menu;
 pub mod viewport;
+pub mod view_options;
+pub mod section_view;
+pub mod hidden_edges;
 
 use bevy::prelude::*;
 use cadrs_core::{Document, DocumentMeta, Element, ElementId, History, Store, Timestamp};
@@ -541,7 +544,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
-            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin))
+            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin))
             .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin))

@@ -1047,6 +1047,7 @@ fn draw_silhouettes(
     doc: Option<Res<ActiveDocument>>,
     view: Res<ViewportView>,
     mut gizmos: Gizmos<SilhouetteGizmos>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
     let Some(doc) = doc else { return };
     if super::active_assembly(&doc).is_none() {
@@ -1067,7 +1068,15 @@ fn draw_silhouettes(
                 continue;
             }
             for [a, b] in contour(part, back) {
-                gizmos.line(a, b, OUTLINE);
+                // P3E.3a: cut by a section view.
+                match section.plane {
+                    None => gizmos.line(a, b, OUTLINE),
+                    Some(plane) => {
+                        for piece in crate::section_view::clip_polyline([a, b], plane) {
+                            gizmos.linestrip(piece, OUTLINE);
+                        }
+                    }
+                }
             }
         }
     }

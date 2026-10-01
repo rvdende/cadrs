@@ -301,7 +301,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             .item(MenuItem::new("asm-hide-all", "Hide all instances"))
             .item(MenuItem::new("asm-isolate", "Isolate…"))
             .item(transparent_item)
-            .item(later("asm-section", "Section view…".into(), "Section views come with the Hands-On Test Drive stage (P3E.3)").icon("section-view"))
+            .item(MenuItem::new("asm-section", "Section view…").icon("section-view"))
             .item(if inst.suppressed { MenuItem::new("asm-unsuppress", format!("Unsuppress {part}")) } else { MenuItem::new("asm-suppress", format!("Suppress {part}")) })
             .item(fix)
             .item(MenuItem::new("asm-show-mates", "Show mates"))
@@ -649,6 +649,8 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         }
         "asm-zoom-fit" => crate::viewport::zoom_to_fit(world),
         "asm-zoom-selection" => zoom_to(world, &parts),
+        // P3E.3a (A3.3, X15): a section through the instance.
+        "asm-section" => crate::section_view::open_for_instance(world, &parts),
         "asm-show-all" => {
             show_all_instances(world, element);
             let mut cache = world.resource_mut::<PartCache>();

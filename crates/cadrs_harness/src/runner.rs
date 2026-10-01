@@ -536,6 +536,11 @@ fn resolve(world: &mut World, target: &Target) -> Result<Vec2, String> {
 fn scroll_into_view(world: &mut World, e: Entity, pos: Vec2) -> bool {
     let mut cur = e;
     loop {
+        // A node placed absolutely (a popup, a dialog over a list) isn't scrolled by the lists
+        // it sits in.
+        if world.get::<Node>(cur).is_some_and(|n| n.position_type == PositionType::Absolute) {
+            return false;
+        }
         let Some(parent) = world.get::<ChildOf>(cur).map(|c| c.parent()) else { return false };
         cur = parent;
         let Some(node) = world.get::<Node>(cur) else { continue };

@@ -183,6 +183,7 @@ impl Element {
             assembly: Default::default(),
             context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 

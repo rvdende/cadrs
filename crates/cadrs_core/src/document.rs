@@ -130,6 +130,10 @@ pub struct Element {
     /// [`crate::simulation`]).
     #[serde(default, skip_serializing_if = "crate::simulation::Simulation::is_empty")]
     pub simulation: crate::simulation::Simulation,
+    /// Cameras saved under a name (P3E.3a, TD6.5: the view cube menu's Named views…), see
+    /// [`crate::named_views`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_views: Vec<crate::named_views::NamedView>,
 }
 
 impl Element {
@@ -150,6 +154,7 @@ impl Element {
             assembly: Default::default(),
             context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -162,6 +167,7 @@ impl Element {
             assembly: Default::default(),
             context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -173,6 +179,7 @@ impl Element {
             assembly: Default::default(),
             context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -185,6 +192,7 @@ impl Element {
             assembly: Default::default(),
             context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 

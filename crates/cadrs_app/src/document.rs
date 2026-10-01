@@ -3530,7 +3530,7 @@ fn on_feature_context_menu(
     menu = menu
         .item(MenuItem::new("feature-show-all-sketches", "Show all sketches"))
         .separator()
-        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(true))
+        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(in_dialog))
         .separator()
         .item(if suppressed {
             MenuItem::new("feature-unsuppress", "Unsuppress").disabled(in_dialog)
@@ -3591,6 +3591,8 @@ fn on_feature_menu_action(
         "feature-hide" => commands.queue(move |world: &mut World| crate::feature_menu::set_sketch_visible(world, id, false)),
         "feature-show-all-sketches" => commands.queue(crate::feature_menu::show_all_sketches),
         "feature-zoom-to" => commands.queue(move |world: &mut World| crate::feature_menu::zoom_to_feature(world, id)),
+        // P3E.3a (IR5.5): a section by the feature's plane (a plane feature, a sketch).
+        "feature-section-view" => commands.queue(move |world: &mut World| crate::section_view::open_for_feature(world, id)),
         "feature-rename" => {
             commands.queue(move |world: &mut World| rename_feature(world, id));
         }

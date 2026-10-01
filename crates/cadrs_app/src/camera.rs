@@ -481,6 +481,25 @@ impl ViewState {
             && self.render == other.render
     }
 
+    /// In perspective, the same picture with the focus moved along the view axis to the depth
+    /// of `p` (the eye stays; the focus plane, and so zooming about the cursor, then passes
+    /// through `p`). Unchanged in orthographic, or for a point behind the eye.
+    pub fn refocused(self, p: Vec3) -> Self {
+        if !self.perspective {
+            return self;
+        }
+        let eye = self.camera_position();
+        let d = (eye - p).dot(self.back());
+        if d <= self.eye_distance() * 1e-3 {
+            return self;
+        }
+        Self {
+            focus: eye - self.back() * d,
+            scale: (d / FOCAL_PX).clamp(MIN_SCALE, MAX_SCALE),
+            ..self
+        }
+    }
+
     /// Zoom to window (P3E.3a): the view zoomed so the screen box from `a` to `b` (offsets from
     /// the viewport center) fills the viewport, keeping the orientation. A box smaller than a few
     /// pixels leaves the view as it is.
@@ -812,6 +831,27 @@ mod tests {
         // Orthographic is unchanged by the flag's default.
         assert!(!ViewState::default().perspective);
         assert_eq!(ViewState::default().render, RenderMode::Shaded);
+    }
+
+    /// Refocusing in perspective keeps the picture (every point projects where it did) and
+    /// puts the focus plane through the point; zooming about the cursor then keeps that point
+    /// under the cursor.
+    #[test]
+    fn refocus_keeps_the_picture() {
+        let mut v = ViewState { perspective: true, ..ViewState::default() };
+        v.pan(Vec2::new(-40.0, 25.0));
+        let p = Vec3::new(30.0, -20.0, 45.0);
+        let r = v.refocused(p);
+        for q in [Vec3::ZERO, p, Vec3::new(-50.0, 60.0, 10.0)] {
+            assert!((r.project(q) - v.project(q)).length() < 1e-2, "{q:?}");
+        }
+        assert!((p - r.focus).dot(r.back()).abs() < 1e-3);
+        let cursor = r.project(p);
+        let mut z = r;
+        z.wheel(4.0, cursor);
+        assert!((z.project(p) - cursor).length() < 1e-2);
+        // Orthographic: unchanged.
+        assert!(ViewState::default().refocused(p).approx_eq(&ViewState::default()));
     }
 
     #[test]

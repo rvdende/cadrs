@@ -33,6 +33,7 @@ pub mod links;
 pub mod material;
 pub mod move_doc;
 pub mod mate;
+pub mod named_views;
 pub mod measure;
 pub mod brep;
 pub mod parts;

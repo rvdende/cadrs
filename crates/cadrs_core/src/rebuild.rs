@@ -2716,6 +2716,11 @@ impl Rebuilder {
         &self.kernel
     }
 
+    /// The kernel, to make and query temporary bodies (P3E.3a: a section view's caps).
+    pub fn kernel_mut(&mut self) -> &mut dyn cadrs_kernel::Kernel {
+        &mut self.kernel
+    }
+
     /// The volume (mm³) two bodies share: their boolean Intersect's (0 when they don't meet).
     pub fn common_volume(&mut self, a: BodyId, b: BodyId) -> Result<f64, String> {
         use cadrs_kernel::Kernel;

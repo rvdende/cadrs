@@ -1310,6 +1310,22 @@ fn golden_course_td_many_tabs() {
     run_scenario("course_td_many_tabs");
 }
 
+// P3E.3a: render modes, perspective, zoom to window, named views; section views; selection.
+#[test]
+fn golden_course_td_render_modes() {
+    run_scenario("course_td_render_modes");
+}
+
+#[test]
+fn golden_course_td_section() {
+    run_scenario("course_td_section");
+}
+
+#[test]
+fn golden_course_td_selection() {
+    run_scenario("course_td_selection");
+}
+
 // Final part 2: the assembly course scenarios (stage 3B) and the importer/list scenarios merged
 // from main, which were not registered before.
 
