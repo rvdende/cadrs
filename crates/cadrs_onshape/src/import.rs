@@ -41,8 +41,41 @@ pub struct Options {
     pub only: Option<String>,
 }
 
+/// The skip list and progress file of the import a supervisor runs, for the imports it makes
+/// of other documents along the way ([`Options::nested`]).
+static SUPERVISED: std::sync::Mutex<Option<(std::collections::HashSet<String>, Option<std::path::PathBuf>)>> = std::sync::Mutex::new(None);
+
+impl Options {
+    /// The options of an import of another document made during this one (a Derived feature's
+    /// source, a linked instance's document): under the same supervision, so each of its
+    /// features has the time limit to itself (it isn't counted against the feature that needed
+    /// it) and a feature of it that hung is skipped next time.
+    pub fn nested(only: Option<String>) -> Self {
+        let (skip, progress) = SUPERVISED.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
+        Options { skip, progress, only }
+    }
+}
+
+/// Runs a nested import ([`Options::nested`]); afterwards the progress file names the feature
+/// that asked for it again (a hang after it must skip that one, not the nested import's last).
+pub(crate) fn nested_import<T>(f: impl FnOnce() -> T) -> T {
+    let path = SUPERVISED.lock().ok().and_then(|s| s.as_ref().and_then(|(_, p)| p.clone()));
+    let before = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+    let out = f();
+    if let (Some(p), Some(b)) = (path, before) {
+        std::fs::write(p, b).ok();
+    }
+    out
+}
+
 /// Imports `raw` as a new cadrs document (with a stable id, so a later import replaces it).
 pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Imported {
+    if options.progress.is_some()
+        && let Ok(mut s) = SUPERVISED.lock()
+        && s.is_none()
+    {
+        *s = Some((options.skip.clone(), options.progress.clone()));
+    }
     let json = raw.json().unwrap_or(Value::Null);
     let mut doc = Document::empty(raw.name.clone());
     doc.id = DocumentId::from_u128(stable_u128(&[&raw.id]));
@@ -181,7 +214,7 @@ pub(crate) fn load_source(root: &std::path::Path, doc: &str, element: &str) -> O
     }
     let raw = crate::raw::documents(root).into_iter().find(|d| d.id == doc)?;
     BUSY.lock().ok()?.push(doc.to_string());
-    let _ = import_document(&raw, "import", &Options { only: Some(element.to_string()), ..Options::default() });
+    let _ = nested_import(|| import_document(&raw, "import", &Options::nested(Some(element.to_string()))));
     BUSY.lock().ok()?.retain(|d| d != doc);
     crate::eval::source(doc, element)
 }

@@ -84,7 +84,7 @@ fn external(root: &std::path::Path, doc: &str) -> Imported {
     }
     externals().lock().ok()?.insert(doc.to_string(), None);
     let raw = crate::raw::documents(root).into_iter().find(|d| d.id == doc)?;
-    let imported = crate::import::import_document(&raw, "import", &crate::import::Options::default());
+    let imported = crate::import::nested_import(|| crate::import::import_document(&raw, "import", &crate::import::Options::nested(None)));
     let d = Some(Arc::new(imported.doc));
     externals().lock().ok()?.insert(doc.to_string(), d.clone());
     d
