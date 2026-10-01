@@ -216,10 +216,14 @@ impl Bend {
         self.value.unwrap_or_else(|| BendValue::from_params(p))
     }
 
-    /// The bend region's flat width (`None` when the value can't apply: a deduction on a bend of
-    /// 180° or more).
+    /// The bend region's flat width. A deduction has no meaning from 180° on (hems): such bends
+    /// use the model's K factor instead (`None` only for a bend's own deduction there).
     pub fn allowance(&self, p: &Params) -> Option<f64> {
-        self.value_or_model(p).allowance(self.radius, p.thickness, self.angle)
+        let v = self.value_or_model(p);
+        v.allowance(self.radius, p.thickness, self.angle).or_else(|| {
+            (self.value.is_none() && matches!(v, BendValue::Deduction(_)))
+                .then(|| bend::bend_allowance(self.radius, p.thickness, self.angle, p.k_factor))
+        })
     }
 }
 
@@ -334,8 +338,54 @@ impl BendGeom {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelError {
     pub joint: JointId,
-    pub reason: String,
+    pub kind: ModelErrorKind,
 }
+
+/// What is wrong with a joint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModelErrorKind {
+    MissingWall,
+    /// The bend's two tangent lines differ in length.
+    LengthMismatch,
+    /// The bend's first wall isn't planar.
+    NotPlanar,
+    /// The joint's segment doesn't run along its wall's edge (`wall` is the joint's `a` or `b`).
+    NotOnEdge { second: bool },
+    /// The second wall's tangent line isn't where the bend puts it.
+    Misplaced,
+    /// The second wall's material side doesn't follow the bend.
+    MaterialSide,
+    /// The second wall doesn't run on from the bend.
+    NotRunningOn,
+    /// A tangent joint's edges don't meet.
+    TangentApart,
+    /// A tangent joint's walls don't meet smoothly.
+    NotSmooth,
+}
+
+impl ModelError {
+    pub fn message(&self) -> &'static str {
+        match self.kind {
+            ModelErrorKind::MissingWall => "A wall of this joint doesn't exist",
+            ModelErrorKind::LengthMismatch => "The bend's tangent lines differ in length",
+            ModelErrorKind::NotPlanar => "The bend's first wall isn't flat",
+            ModelErrorKind::NotOnEdge { .. } => "The joint doesn't run along its wall's edge",
+            ModelErrorKind::Misplaced => "The second wall isn't where the bend puts it",
+            ModelErrorKind::MaterialSide => "The second wall's material side doesn't follow the bend",
+            ModelErrorKind::NotRunningOn => "The second wall doesn't run on from the bend",
+            ModelErrorKind::TangentApart => "The tangent joint's edges don't meet",
+            ModelErrorKind::NotSmooth => "The walls don't meet smoothly at the tangent joint",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ModelError {}
 
 /// One Sheet metal model's definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -414,9 +464,10 @@ impl Model {
         })
     }
 
-    /// Checks that the walls and joints agree in 3D: each bend's second wall is where its first
-    /// wall's tangent line lands when turned about the bend axis by the bend angle, tangent joints
-    /// meet smoothly, and every joint's walls exist. Empty when consistent.
+    /// Checks that the walls and joints agree in 3D: each joint's segments run along their
+    /// walls' edges over their whole length, each bend's second wall is where its first wall's
+    /// tangent line lands when turned about the bend axis by the bend angle, tangent joints meet
+    /// smoothly, and every joint's walls exist. Empty when consistent.
     pub fn validate(&self) -> Vec<ModelError> {
         let mut out = Vec::new();
         let size = self
@@ -426,59 +477,70 @@ impl Model {
             .map(|(lo, hi)| (hi - lo).norm())
             .fold(1.0, f64::max);
         let tol = 1e-6 * size;
+        // How far a joint may run past its wall near a corner: a bend's setback plus a rip's trim.
+        let t = self.params.thickness;
+        let reach = self
+            .joints
+            .iter()
+            .filter_map(|j| j.bend())
+            .map(|b| (b.radius + t) * (b.angle.min(std::f64::consts::PI * 0.99) / 2.0).tan())
+            .fold(0.0, f64::max)
+            + t
+            + self.params.minimal_gap
+            + tol;
         for j in &self.joints {
+            let err = |kind| ModelError { joint: j.id, kind };
             let (Some(wa), Some(wb)) = (self.wall(j.a), self.wall(j.b)) else {
-                out.push(ModelError {
-                    joint: j.id,
-                    reason: "a wall of this joint doesn't exist".into(),
-                });
+                out.push(err(ModelErrorKind::MissingWall));
                 continue;
             };
-            let mut bad = |reason: &str| {
-                out.push(ModelError {
-                    joint: j.id,
-                    reason: reason.into(),
-                })
-            };
+            if !matches!(j.kind, JointKind::Rip { .. }) {
+                let (sa, sb) = (j.segment_on(j.a).expect("a"), j.segment_on(j.b).expect("b"));
+                if !along_edge(&wa.outline, sa, size, reach) {
+                    out.push(err(ModelErrorKind::NotOnEdge { second: false }));
+                    continue;
+                }
+                if !along_edge(&wb.outline, sb, size, reach) {
+                    out.push(err(ModelErrorKind::NotOnEdge { second: true }));
+                    continue;
+                }
+            }
             match &j.kind {
                 JointKind::Bend(b) => {
                     if (b.on_a.len() - b.on_b.len()).abs() > tol {
-                        bad("the bend's tangent lines differ in length");
+                        out.push(err(ModelErrorKind::LengthMismatch));
                         continue;
                     }
                     let Some(g) = self.bend_geometry(j.id) else {
-                        bad("the bend's first wall isn't planar, or its tangent line isn't on the wall's edge");
+                        out.push(err(ModelErrorKind::NotPlanar));
                         continue;
                     };
                     let turn = |p: P3| g.rotate(p, g.sweep);
                     let (pa, pb) = (wa.surface.point(b.on_a.a), wa.surface.point(b.on_a.b));
                     let (qa, qb) = (wb.surface.point(b.on_b.a), wb.surface.point(b.on_b.b));
                     if (turn(pa) - qa).norm() > tol || (turn(pb) - qb).norm() > tol {
-                        bad("the second wall's tangent line isn't where the bend puts it");
+                        out.push(err(ModelErrorKind::Misplaced));
                         continue;
                     }
                     let na = wa.surface.normal_at(b.on_a.a);
                     let nb = wb.surface.normal_at(b.on_b.a);
                     if (g.rotate_vec(na, g.sweep) - nb).norm() > 1e-6 {
-                        bad("the second wall's material side doesn't follow the bend");
+                        out.push(err(ModelErrorKind::MaterialSide));
                         continue;
                     }
-                    let Some(ib) = crate::poly::inward_normal(&wb.outline, b.on_b) else {
-                        bad("the bend's tangent line isn't on its second wall's edge");
-                        continue;
-                    };
-                    let ia = crate::poly::inward_normal(&wa.outline, b.on_a).expect("checked by bend_geometry");
+                    let ia = crate::poly::inward_normal(&wa.outline, b.on_a).expect("checked above");
+                    let ib = crate::poly::inward_normal(&wb.outline, b.on_b).expect("checked above");
                     let c = -wa.surface.direction_at(b.on_a.a, ia);
                     if (g.rotate_vec(c, g.sweep) - wb.surface.direction_at(b.on_b.a, ib)).norm() > 1e-6 {
-                        bad("the second wall doesn't run on from the bend");
+                        out.push(err(ModelErrorKind::NotRunningOn));
                     }
                 }
                 JointKind::Tangent { on_a, on_b } => {
                     let close = |p: P2, q: P2| (wa.surface.point(p) - wb.surface.point(q)).norm() <= tol;
                     if !close(on_a.a, on_b.a) || !close(on_a.b, on_b.b) {
-                        bad("the tangent joint's edges don't meet");
+                        out.push(err(ModelErrorKind::TangentApart));
                     } else if (wa.surface.normal_at(on_a.a) - wb.surface.normal_at(on_b.a)).norm() > 1e-6 {
-                        bad("the walls don't meet smoothly at the tangent joint");
+                        out.push(err(ModelErrorKind::NotSmooth));
                     }
                 }
                 JointKind::Rip { .. } => {}
@@ -530,6 +592,8 @@ pub struct SharpWall {
     pub u: V3,
     pub v: V3,
     pub outline: Polygon,
+    /// A persistent id from the feature that made the wall (`None`: numbered automatically).
+    pub id: Option<WallId>,
 }
 
 /// A joint along the virtual sharp `edge` (a 3D segment on both walls' outlines).
@@ -539,6 +603,12 @@ pub struct SharpJoint {
     pub b: usize,
     pub edge: (P3, P3),
     pub kind: SharpJointKind,
+    /// A persistent id and table name from the feature that made the joint (`None`: numbered
+    /// and named automatically, "Bend A", "Rip 1", …).
+    pub id: Option<JointId>,
+    pub name: Option<String>,
+    /// Creation order among joints and hems (the table order).
+    pub seq: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -566,6 +636,9 @@ pub enum BuildError {
     TooSharp { joint: usize },
     /// A hem with no length, or a hem edge that isn't on its wall.
     BadHem { hem: usize },
+    /// Two walls or two joints were given the same id.
+    DuplicateWallId { id: WallId },
+    DuplicateJointId { id: JointId },
 }
 
 impl BuildError {
@@ -579,6 +652,8 @@ impl BuildError {
             BuildError::WallTrimmedAway { .. } => "The bend is too large for its wall".into(),
             BuildError::TooSharp { .. } => "Bends of 180° or more must be hems".into(),
             BuildError::BadHem { .. } => "The hem has no length or isn't on an edge of its wall".into(),
+            BuildError::DuplicateWallId { id } => format!("Two walls have the id {}", id.0),
+            BuildError::DuplicateJointId { id } => format!("Two joints have the id {}", id.0),
         }
     }
 }
@@ -602,7 +677,7 @@ pub enum HemAlignment {
 }
 
 /// A hem folded back 180° from a wall's edge.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SharpHem {
     pub wall: usize,
     pub edge: (P3, P3),
@@ -613,6 +688,19 @@ pub struct SharpHem {
     /// Fold over the material side (onto the wall) rather than the other side.
     pub toward_material: bool,
     pub alignment: HemAlignment,
+    /// Persistent ids of the hem's bend and of its folded-back wall, and the bend's name.
+    pub id: Option<JointId>,
+    pub wall_id: Option<WallId>,
+    pub name: Option<String>,
+    /// Creation order among joints and hems (the table order).
+    pub seq: usize,
+}
+
+/// The builder's hem length (from the hem's tangent line to its end) for Onshape's **Total
+/// length** of a straight hem, which is measured from the hem's outermost edge: the bend sticks
+/// out `radius + thickness` beyond its tangent line.
+pub fn hem_length_from_total(total: f64, radius: f64, thickness: f64) -> f64 {
+    total - (radius + thickness)
 }
 
 /// Builds a [`Model`] from walls meeting at virtual sharps.
@@ -622,6 +710,8 @@ pub struct SharpBuilder {
     pub walls: Vec<SharpWall>,
     pub joints: Vec<SharpJoint>,
     pub hems: Vec<SharpHem>,
+    /// The next creation-order number.
+    pub seq: usize,
 }
 
 struct Side {
@@ -642,8 +732,33 @@ impl SharpBuilder {
     }
 
     pub fn wall(&mut self, origin: P3, u: V3, v: V3, outline: Polygon) -> usize {
-        self.walls.push(SharpWall { origin, u, v, outline });
+        self.walls.push(SharpWall {
+            origin,
+            u,
+            v,
+            outline,
+            id: None,
+        });
         self.walls.len() - 1
+    }
+
+    /// Gives wall `i` a persistent id (features key their walls so ids survive edits).
+    pub fn set_wall_id(&mut self, i: usize, id: WallId) {
+        self.walls[i].id = Some(id);
+    }
+
+    /// Gives joint `i` a persistent id and, optionally, its table name.
+    pub fn set_joint_id(&mut self, i: usize, id: JointId, name: Option<String>) {
+        self.joints[i].id = Some(id);
+        self.joints[i].name = name;
+    }
+
+    /// Gives hem `i` persistent ids for its bend and its wall and, optionally, the bend's name.
+    pub fn set_hem_id(&mut self, i: usize, id: JointId, wall_id: WallId, name: Option<String>) {
+        let h = &mut self.hems[i];
+        h.id = Some(id);
+        h.wall_id = Some(wall_id);
+        h.name = name;
     }
 
     pub fn bend(&mut self, a: usize, b: usize, edge: (P3, P3)) -> usize {
@@ -655,7 +770,16 @@ impl SharpBuilder {
     }
 
     pub fn joint(&mut self, a: usize, b: usize, edge: (P3, P3), kind: SharpJointKind) -> usize {
-        self.joints.push(SharpJoint { a, b, edge, kind });
+        self.joints.push(SharpJoint {
+            a,
+            b,
+            edge,
+            kind,
+            id: None,
+            name: None,
+            seq: self.seq,
+        });
+        self.seq += 1;
         self.joints.len() - 1
     }
 
@@ -668,7 +792,12 @@ impl SharpBuilder {
             radius: None,
             toward_material,
             alignment,
+            id: None,
+            wall_id: None,
+            name: None,
+            seq: self.seq,
         });
+        self.seq += 1;
         self.hems.len() - 1
     }
 
@@ -842,7 +971,8 @@ impl SharpBuilder {
             let w = &self.walls[h.wall];
             let n = w.u.cross(&w.v).normalize();
             let r = h.radius.unwrap_or(p.bend_radius);
-            let (lo, hi_) = on_line_interval(&after_rips[h.wall], &side.edge).ok_or(bad.clone())?;
+            // The hem runs along what is left of the edge after the bends' trims.
+            let (lo, hi_) = on_line_interval(&outlines[h.wall], &side.edge).ok_or(bad.clone())?;
             let sub = Seg2::new(side.edge.a + (side.edge.b - side.edge.a) * lo, side.edge.a + (side.edge.b - side.edge.a) * hi_);
             // Outer: the hem's outside (r + t beyond its tangent line) lands on the edge.
             let trim = match h.alignment {
@@ -888,45 +1018,80 @@ impl SharpBuilder {
             hem_walls.push((surf_b, outline));
         }
 
-        let mut walls: Vec<Wall> = self
-            .walls
-            .iter()
-            .zip(outlines)
-            .enumerate()
-            .map(|(i, (w, outline))| Wall {
-                id: WallId(i as u32),
+        // Walls: given ids, the rest numbered from the first free id.
+        let given_walls: Vec<WallId> = self.walls.iter().filter_map(|w| w.id).chain(self.hems.iter().filter_map(|h| h.wall_id)).collect();
+        if let Some(d) = first_duplicate(&given_walls) {
+            return Err(BuildError::DuplicateWallId { id: d });
+        }
+        let mut free_wall = (0u32..).map(WallId).filter(|w| !given_walls.contains(w));
+        let mut walls: Vec<Wall> = Vec::new();
+        for (w, outline) in self.walls.iter().zip(outlines) {
+            walls.push(Wall {
+                id: w.id.unwrap_or_else(|| free_wall.next().expect("ids")),
                 surface: Surface::Planar {
                     origin: w.origin,
                     u: w.u,
                     v: w.v,
                 },
                 outline,
-            })
-            .collect();
-        for (surface, outline) in hem_walls {
-            walls.push(Wall {
-                id: WallId(walls.len() as u32),
-                surface,
-                outline,
             });
         }
-        let mut all: Vec<(usize, usize, JointKind)> = self
+        let hem_wall_ids: Vec<WallId> = self.hems.iter().map(|h| h.wall_id.unwrap_or_else(|| free_wall.next().expect("ids"))).collect();
+        for ((surface, outline), id) in hem_walls.into_iter().zip(&hem_wall_ids) {
+            walls.push(Wall { id: *id, surface, outline });
+        }
+        let wall_id = |i: usize| walls[i].id;
+
+        // Joints and hems in creation order, with given ids and names or automatic ones.
+        struct Entry {
+            seq: usize,
+            a: WallId,
+            b: WallId,
+            kind: JointKind,
+            id: Option<JointId>,
+            name: Option<String>,
+        }
+        let mut entries: Vec<Entry> = self
             .joints
             .iter()
             .zip(joints)
-            .map(|(j, kind)| (j.a, j.b, kind.expect("every joint resolved")))
+            .map(|(j, kind)| Entry {
+                seq: j.seq,
+                a: wall_id(j.a),
+                b: wall_id(j.b),
+                kind: kind.expect("every joint resolved"),
+                id: j.id,
+                name: j.name.clone(),
+            })
             .collect();
-        all.extend(hem_joints.into_iter().map(|(a, b, bend)| (a, b, JointKind::Bend(bend))));
-        let mut names = JointNamer::default();
-        let joints = all
+        for ((h, (a, _, bend)), bw) in self.hems.iter().zip(hem_joints).zip(&hem_wall_ids) {
+            entries.push(Entry {
+                seq: h.seq,
+                a: wall_id(a),
+                b: *bw,
+                kind: JointKind::Bend(bend),
+                id: h.id,
+                name: h.name.clone(),
+            });
+        }
+        entries.sort_by_key(|e| e.seq);
+        let given: Vec<JointId> = entries.iter().filter_map(|e| e.id).collect();
+        if let Some(d) = first_duplicate(&given) {
+            return Err(BuildError::DuplicateJointId { id: d });
+        }
+        let mut free = (0u32..).map(JointId).filter(|j| !given.contains(j));
+        let mut names = JointNamer {
+            taken: entries.iter().filter_map(|e| e.name.clone()).collect(),
+            ..Default::default()
+        };
+        let joints: Vec<Joint> = entries
             .into_iter()
-            .enumerate()
-            .map(|(i, (a, b, kind))| Joint {
-                id: JointId(i as u32),
-                name: names.name(&kind),
-                a: WallId(a as u32),
-                b: WallId(b as u32),
-                kind,
+            .map(|e| Joint {
+                id: e.id.unwrap_or_else(|| free.next().expect("ids")),
+                name: e.name.unwrap_or_else(|| names.name(&e.kind)),
+                a: e.a,
+                b: e.b,
+                kind: e.kind,
             })
             .collect();
         Ok(Model {
@@ -938,6 +1103,35 @@ impl SharpBuilder {
             bend_relief_overrides: Vec::new(),
         })
     }
+}
+
+/// Whether segment `s` runs along the boundary of `outline`: somewhere along it, just off it on
+/// one side is inside the wall and just off it on the other side outside; and none of it is more
+/// than `reach` from the wall. (Near a corner a bend can run on past its wall's edge, where the
+/// other bend at the corner took the wall away: the corner relief settles that, so the rest only
+/// has to be close.)
+fn along_edge(outline: &Polygon, s: Seg2, size: f64, reach: f64) -> bool {
+    let Some(n) = crate::poly::inward_normal(outline, s) else { return false };
+    let d = 1e-5 * size.max(s.len());
+    let samples: Vec<P2> = (0..=20).map(|i| s.a + (s.b - s.a) * (i as f64 / 20.0)).collect();
+    let on = samples.iter().any(|p| outline.contains(p + n * d) && !outline.contains(p - n * d));
+    on && samples.iter().all(|p| distance_to(outline, *p) <= reach)
+}
+
+/// Distance from `p` to the polygon (0 inside).
+fn distance_to(poly: &Polygon, p: P2) -> f64 {
+    if poly.contains(p) {
+        return 0.0;
+    }
+    std::iter::once(&poly.outer)
+        .chain(poly.holes.iter())
+        .flat_map(|l| (0..l.len()).map(move |i| (l[i], l[(i + 1) % l.len()])))
+        .map(|(a, b)| {
+            let d = b - a;
+            let t = ((p - a).dot(&d) / d.norm_squared().max(1e-300)).clamp(0.0, 1.0);
+            (a + d * t - p).norm()
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Removes the band `[0, depth)` into the wall along the side's edge (or, for a negative depth,
@@ -978,31 +1172,43 @@ fn trim_band(outline: &Polygon, side: &Side, depth: f64) -> Option<Polygon> {
         .map(|p| crate::poly::snap_to(&p, &exact, 10.0 * crate::poly::GRID))
 }
 
-/// Table names in order of creation: "Bend A", "Bend B", …; "Rip 1", …; "Tangent 1", ….
+/// Table names in order of creation: "Bend A", "Bend B", …; "Rip 1", …; "Tangent 1", …,
+/// skipping names already taken.
 #[derive(Clone, Debug, Default)]
 pub struct JointNamer {
     bends: usize,
     rips: usize,
     tangents: usize,
+    pub taken: Vec<String>,
 }
 
 impl JointNamer {
     pub fn name(&mut self, kind: &JointKind) -> String {
-        match kind {
-            JointKind::Bend(_) => {
-                self.bends += 1;
-                format!("Bend {}", letters(self.bends - 1))
-            }
-            JointKind::Rip { .. } => {
-                self.rips += 1;
-                format!("Rip {}", self.rips)
-            }
-            JointKind::Tangent { .. } => {
-                self.tangents += 1;
-                format!("Tangent {}", self.tangents)
+        loop {
+            let n = match kind {
+                JointKind::Bend(_) => {
+                    self.bends += 1;
+                    format!("Bend {}", letters(self.bends - 1))
+                }
+                JointKind::Rip { .. } => {
+                    self.rips += 1;
+                    format!("Rip {}", self.rips)
+                }
+                JointKind::Tangent { .. } => {
+                    self.tangents += 1;
+                    format!("Tangent {}", self.tangents)
+                }
+            };
+            if !self.taken.contains(&n) {
+                self.taken.push(n.clone());
+                return n;
             }
         }
     }
+}
+
+fn first_duplicate<T: PartialEq + Copy>(ids: &[T]) -> Option<T> {
+    ids.iter().enumerate().find(|(i, a)| ids[..*i].contains(a)).map(|(_, a)| *a)
 }
 
 /// The parameter interval `[t0, t1]` (along `edge`, 0 at `edge.a`, 1 at `edge.b`) of the

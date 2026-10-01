@@ -166,12 +166,16 @@ fn hem_lays_flat_with_its_allowance() {
     let m = ok(samples::hem(params()));
     assert!(close(size(&m).0, 50.0 + PI * (R + K * T) + 10.0));
     assert!(!table(&m).bends[0].editable, "hems aren't editable in the table");
-    // With bend deduction the hem can't be laid flat: deduction is undefined at 180°.
+    // In bend deduction mode a hem has no deduction (undefined at 180°): the table shows "–" and
+    // the flat uses the model's K factor.
     let mut d = m.clone();
     d.params.bend_calc = BendCalc::BendDeduction;
-    let f = flatten(&d);
-    assert!(matches!(f.errors.as_slice(), [FlatError::BadJoint { .. }]), "{:?}", f.errors);
+    assert!(flatten(&d).is_ok());
     assert_eq!(table(&d).bends[0].value, None, "shown as –");
+    // A bend's own deduction there can't apply.
+    let JointKind::Bend(b) = &mut d.joints[0].kind else { panic!() };
+    b.value = Some(BendValue::Deduction(1.0));
+    assert!(matches!(flatten(&d).errors.as_slice(), [FlatError::BadJoint { .. }]));
 }
 
 #[test]
@@ -654,4 +658,120 @@ fn model_and_flat_round_trip_through_ron() {
     // Settings saved by an older version (fields missing) load with defaults.
     let p: Params = ron::from_str("(thickness: 1.5)").unwrap();
     assert_eq!((p.thickness, p.k_factor), (1.5, 0.45));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round 2: corners only where bends meet, hems in every mode, persistent ids, exact outputs
+
+/// A 100 × 60 base with a full north flange and an east flange covering only y 0..`east`.
+fn north_and_short_east(east: f64) -> Model {
+    let mut b = SharpBuilder::new(params());
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), rect(100.0, 60.0));
+    let e = b.wall(P3::new(100.0, 0.0, 0.0), V3::z(), V3::y(), rect(20.0, east));
+    let n = b.wall(P3::new(100.0, 60.0, 0.0), V3::z(), -V3::x(), rect(20.0, 100.0));
+    b.bend(base, e, (P3::new(100.0, 0.0, 0.0), P3::new(100.0, east, 0.0)));
+    b.bend(base, n, (P3::new(100.0, 60.0, 0.0), P3::new(0.0, 60.0, 0.0)));
+    ok(b.build())
+}
+
+#[test]
+fn a_corner_needs_the_bends_to_meet() {
+    for east in [10.0, 20.0, 30.0, 40.0, 50.0] {
+        let part = one_part(&north_and_short_east(east));
+        assert!(part.corners.is_empty(), "east {east}: the east bend stops well short of the north one");
+        // The east bend's far end gets a bend relief instead; the north bend region is whole.
+        assert!(part.cuts.iter().any(|c| c.source == ReliefSource::BendEnd { bend: JointId(0), end: BendEnd::End }), "east {east}");
+        let north = part.piece(PieceSource::Bend(JointId(1))).unwrap();
+        assert!((north.cut.iter().map(Polygon::area).sum::<f64>() - north.polygon.area()).abs() < 1e-6, "east {east}");
+    }
+    // Running right up to the north wall (55 = where the north bend region begins) it is a corner.
+    let part = one_part(&north_and_short_east(60.0));
+    assert_eq!(part.corners.len(), 1);
+}
+
+#[test]
+fn hems_lay_flat_in_every_calculation_mode() {
+    let hem = PI * (R + K * T); // a hem's allowance from the model K factor
+    for (calc, value, bend_allowance) in [
+        (BendCalc::KFactor, K, hem),
+        (BendCalc::BendAllowance, 9.0, 9.0),
+        // Deduction has no meaning at 180°: the hem uses the model's K factor.
+        (BendCalc::BendDeduction, 4.0, hem),
+    ] {
+        let mut p = params();
+        p.bend_calc = calc;
+        p.k_factor = K;
+        p.bend_allowance = value;
+        p.bend_deduction = value;
+        let m = ok(samples::hem(p));
+        assert!(close(size(&m).0, 50.0 + bend_allowance + 10.0), "{calc:?}");
+    }
+}
+
+#[test]
+fn ids_and_names_follow_creation_order_and_can_be_given() {
+    // A hem made before a bend comes first in the table.
+    let mut b = SharpBuilder::new(params());
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), rect(50.0, 40.0));
+    let h = b.hem(base, (P3::new(0.0, 40.0, 0.0), P3::new(0.0, 0.0, 0.0)), 8.0, true, HemAlignment::InPlace);
+    let f = b.wall(P3::new(50.0, 0.0, 0.0), V3::z(), V3::y(), rect(30.0, 40.0));
+    let j = b.bend(base, f, (P3::new(50.0, 0.0, 0.0), P3::new(50.0, 40.0, 0.0)));
+    let m = ok(b.build());
+    let t = table(&m);
+    assert_eq!(t.bends[0].name, "Bend A");
+    assert_eq!(t.bends[0].joint, m.joints[0].id);
+    assert!(m.joints[0].bend().unwrap().hem);
+    // Features give persistent ids and names; the rest are numbered around them.
+    b.set_joint_id(j, JointId(70), Some("Flange 1 bend".into()));
+    b.set_hem_id(h, JointId(71), WallId(90), None);
+    b.set_wall_id(f, WallId(80));
+    let m = ok(b.build());
+    assert_eq!(m.joints.iter().map(|j| (j.id, j.name.as_str())).collect::<Vec<_>>(), [(JointId(71), "Bend A"), (JointId(70), "Flange 1 bend")]);
+    let ids: Vec<WallId> = m.walls.iter().map(|w| w.id).collect();
+    assert_eq!(ids, [WallId(0), WallId(80), WallId(90)]);
+    // Duplicates are refused.
+    b.set_wall_id(base, WallId(80));
+    assert_eq!(b.build().unwrap_err(), BuildError::DuplicateWallId { id: WallId(80) });
+}
+
+#[test]
+fn hems_stop_where_their_wall_does() {
+    // An L whose base also gets a hem along its y = 0 edge: the bend trimmed that edge to x 0..45.
+    let mut b = SharpBuilder::new(params());
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), rect(50.0, 40.0));
+    let f = b.wall(P3::new(50.0, 0.0, 0.0), V3::z(), V3::y(), rect(30.0, 40.0));
+    b.bend(base, f, (P3::new(50.0, 0.0, 0.0), P3::new(50.0, 40.0, 0.0)));
+    b.hem(base, (P3::new(0.0, 0.0, 0.0), P3::new(50.0, 0.0, 0.0)), 8.0, true, HemAlignment::InPlace);
+    let m = ok(b.build());
+    let hem = m.joints.iter().find_map(|j| j.bend().filter(|b| b.hem)).unwrap();
+    assert!(close(hem.on_a.len(), 50.0 - OSSB), "{}", hem.on_a.len());
+}
+
+#[test]
+fn validate_checks_joints_along_their_whole_length() {
+    use cadrs_sheetmetal::model::ModelErrorKind;
+    let mut m = ok(samples::l_bracket(params(), true));
+    // Stretch the bend's tangent line far past the base's edge (the flange keeps up).
+    let JointKind::Bend(b) = &mut m.joints[0].kind else { panic!() };
+    b.on_a.b.y += 30.0;
+    b.on_b.b.y += 30.0;
+    let errs = m.validate();
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0].kind, ModelErrorKind::NotOnEdge { second: false });
+    assert_eq!(errs[0].to_string(), "The joint doesn't run along its wall's edge");
+}
+
+#[test]
+fn flat_outputs_have_exact_coordinates() {
+    let m = ok(samples::open_box(params(), RipStyle::EdgeJoint));
+    let part = one_part(&m);
+    // Every outline vertex is a piece corner or a cut corner, to the last bit.
+    let exact: Vec<P2> = part.pieces.iter().flat_map(|p| p.polygon.outer.clone()).chain(part.cuts.iter().flat_map(|c| c.shapes.iter().flat_map(|s| s.outer.clone()))).collect();
+    for o in &part.outline {
+        for v in &o.outer {
+            assert!(exact.iter().any(|e| e == v), "{v:?} isn't exact");
+        }
+    }
+    let (lo, _) = part.bounds().unwrap();
+    assert!((lo.x + (20.0 - 2.0 * OSSB + ba90())).abs() < 1e-12, "{}", lo.x);
 }

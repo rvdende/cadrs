@@ -13,6 +13,12 @@
 //! - Closed: nothing removed; the two bend regions are mitred along `Q`'s diagonal so the
 //!   corner closes as far as it can.
 //!
+//! Onshape's help gives the relief types, the scale ranges and the bend relief depth rule, but
+//! not every size: these are **cadrs's assumptions** until checked against Onshape itself:
+//! corner reliefs centred on `Q`'s centre; Round – Scaled's diameter as `scale × max(allowances)`;
+//! Rectangle – Scaled as `Q` scaled; sized bend reliefs one thickness wide; Closed as a mitre
+//! with the minimal gap (no walls extended).
+//!
 //! **Bend reliefs.** Where a bend ends but one of its walls carries on along the bend line (a
 //! partial flange, a bend across part of a face), a slot is cut just past the bend's end, across
 //! the bend region and `extra` deep into the wall that carries on:

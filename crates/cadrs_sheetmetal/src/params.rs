@@ -210,9 +210,9 @@ impl Default for Params {
 
 /// A field outside its range: the dialog or table cell turns red with this as its tooltip
 /// (SM13.3, X5).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RangeError {
-    pub field: &'static str,
+    pub field: String,
     pub value: f64,
     pub min: f64,
     pub max: f64,
@@ -232,6 +232,14 @@ impl RangeError {
     }
 }
 
+impl std::fmt::Display for RangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for RangeError {}
+
 fn fmt_num(v: f64) -> String {
     let s = format!("{v:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
@@ -249,10 +257,10 @@ pub mod range {
     pub const BEND_RELIEF_WIDTH_SCALE: (f64, f64) = (0.0625, 2.0);
 }
 
-fn check(out: &mut Vec<RangeError>, field: &'static str, value: f64, (min, max): (f64, f64)) {
+fn check(out: &mut Vec<RangeError>, field: &str, value: f64, (min, max): (f64, f64)) {
     if !(value >= min && value <= max) {
         out.push(RangeError {
-            field,
+            field: field.into(),
             value,
             min,
             max,
@@ -261,10 +269,10 @@ fn check(out: &mut Vec<RangeError>, field: &'static str, value: f64, (min, max):
     }
 }
 
-fn check_positive(out: &mut Vec<RangeError>, field: &'static str, value: f64) {
+fn check_positive(out: &mut Vec<RangeError>, field: &str, value: f64) {
     if !(value > 0.0 && value.is_finite()) {
         out.push(RangeError {
-            field,
+            field: field.into(),
             value,
             min: 0.0,
             max: f64::INFINITY,
@@ -273,10 +281,10 @@ fn check_positive(out: &mut Vec<RangeError>, field: &'static str, value: f64) {
     }
 }
 
-fn check_non_negative(out: &mut Vec<RangeError>, field: &'static str, value: f64) {
+fn check_non_negative(out: &mut Vec<RangeError>, field: &str, value: f64) {
     if !(value >= 0.0 && value.is_finite()) {
         out.push(RangeError {
-            field,
+            field: field.into(),
             value,
             min: 0.0,
             max: f64::INFINITY,
@@ -345,7 +353,7 @@ mod tests {
         p.corner_relief.scale = 2.5;
         p.bend_relief.width_scale = 0.01;
         let errs = p.validate();
-        let fields: Vec<_> = errs.iter().map(|e| e.field).collect();
+        let fields: Vec<_> = errs.iter().map(|e| e.field.as_str()).collect();
         assert_eq!(fields, ["Thickness", "Default bend K Factor", "Corner relief scale", "Bend relief width scale"]);
         assert_eq!(errs[1].message(), "Default bend K Factor must be between 0 and 1");
         assert_eq!(errs[3].message(), "Bend relief width scale must be between 0.0625 and 2");
