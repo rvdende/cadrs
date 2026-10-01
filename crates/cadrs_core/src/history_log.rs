@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Command, CommandError, Scope};
-use crate::document::{Document, Element};
+use crate::document::{Document, Element, ElementKind, Feature};
 use crate::ids::{DocumentId, ElementId, FeatureId};
 use crate::library::Timestamp;
 use crate::store::{Store, StoreError};
@@ -43,12 +43,16 @@ pub const SNAPSHOT_EVERY: usize = 16;
 /// The file the log is stored in, in the document's directory.
 pub const HISTORY_FILE: &str = "history.ron";
 
-/// The current `history.ron` schema version.
-pub const HISTORY_VERSION: u32 = 1;
+/// The current `history.ron` schema version: 2 stores a Part Studio's changes as
+/// [`StudioPatch`]es (only the features that changed). Version 1 logs (whole elements only)
+/// still read, and are rewritten as version 2 when loaded ([`HistoryLog::load_path`]).
+pub const HISTORY_VERSION: u32 = 2;
 
 /// What one change did to the document: the new contents of the elements it changed or
 /// added, the new list of elements when that changed, and the rest of the document (name,
-/// units, libraries, …) when that changed.
+/// units, libraries, …) when that changed. A Part Studio that was there before is a
+/// [`StudioPatch`] rather than a whole copy (its features are most of a document, and a change
+/// usually touches one of them).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Delta {
     /// The document without its elements, if anything but the elements changed.
@@ -60,6 +64,74 @@ pub struct Delta {
     /// The elements whose contents or name changed, and the new ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elements: Vec<Element>,
+    /// The Part Studios that changed, as patches of their state before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub studios: Vec<StudioPatch>,
+}
+
+/// The change to a Part Studio: its features that changed or were added, their order when that
+/// changed, and the rest of the element (name, parts, appearances, folders, …) when that changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StudioPatch {
+    pub id: ElementId,
+    /// The element with no features, if anything but its features changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<Box<Element>>,
+    /// The ids of the features in order, if features were added, removed or reordered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<Vec<FeatureId>>,
+    /// The features whose contents changed, and the new ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<Feature>,
+}
+
+impl StudioPatch {
+    /// The change from Part Studio `before` to Part Studio `after` (same id).
+    fn between(before: &Element, after: &Element) -> Self {
+        let shell = (shell_of(before) != shell_of(after)).then(|| Box::new(shell_of(after)));
+        let ids = |e: &Element| e.features().iter().map(|f| f.id).collect::<Vec<_>>();
+        let order = (ids(before) != ids(after)).then(|| ids(after));
+        let features = after
+            .features()
+            .iter()
+            .filter(|f| before.features().iter().find(|b| b.id == f.id) != Some(*f))
+            .cloned()
+            .collect();
+        Self { id: after.id, shell, order, features }
+    }
+
+    /// Applies the change to `element` (the Part Studio it was made from).
+    fn apply(&self, element: &mut Element) {
+        let mut old = element.features_mut().map(std::mem::take).unwrap_or_default();
+        if let Some(shell) = &self.shell {
+            *element = (**shell).clone();
+        }
+        let order = self.order.clone().unwrap_or_else(|| old.iter().map(|f| f.id).collect());
+        let mut features = Vec::with_capacity(order.len());
+        for id in order {
+            if let Some(f) = self.features.iter().find(|f| f.id == id) {
+                features.push(f.clone());
+            } else if let Some(i) = old.iter().position(|f| f.id == id) {
+                features.push(old.swap_remove(i));
+            }
+        }
+        if let Some(fs) = element.features_mut() {
+            *fs = features;
+        }
+    }
+}
+
+/// A Part Studio without its features.
+fn shell_of(e: &Element) -> Element {
+    let mut shell = e.clone();
+    if let Some(fs) = shell.features_mut() {
+        fs.clear();
+    }
+    shell
+}
+
+fn is_studio(e: &Element) -> bool {
+    matches!(e.kind, ElementKind::PartStudio { .. })
 }
 
 impl Delta {
@@ -68,18 +140,21 @@ impl Delta {
         let head = (head_of(before) != head_of(after)).then(|| Box::new(head_of(after)));
         let ids = |d: &Document| d.elements.iter().map(|e| e.id).collect::<Vec<_>>();
         let order = (ids(before) != ids(after)).then(|| ids(after));
-        let elements = after
-            .elements
-            .iter()
-            .filter(|e| before.elements.iter().find(|b| b.id == e.id) != Some(*e))
-            .cloned()
-            .collect();
-        Self { head, order, elements }
+        let mut elements = Vec::new();
+        let mut studios = Vec::new();
+        for e in &after.elements {
+            match before.elements.iter().find(|b| b.id == e.id) {
+                Some(b) if b == e => {}
+                Some(b) if is_studio(b) && is_studio(e) => studios.push(StudioPatch::between(b, e)),
+                _ => elements.push(e.clone()),
+            }
+        }
+        Self { head, order, elements, studios }
     }
 
     /// True if it changes nothing.
     pub fn is_empty(&self) -> bool {
-        self.head.is_none() && self.order.is_none() && self.elements.is_empty()
+        self.head.is_none() && self.order.is_none() && self.elements.is_empty() && self.studios.is_empty()
     }
 
     /// Applies the change to `doc` (the state it was made from).
@@ -98,7 +173,11 @@ impl Delta {
             if let Some(e) = self.elements.iter().find(|e| e.id == id) {
                 doc.elements.push(e.clone());
             } else if let Some(i) = old.iter().position(|e| e.id == id) {
-                doc.elements.push(old.swap_remove(i));
+                let mut e = old.swap_remove(i);
+                if let Some(p) = self.studios.iter().find(|p| p.id == id) {
+                    p.apply(&mut e);
+                }
+                doc.elements.push(e);
             }
         }
     }
@@ -225,6 +304,9 @@ pub struct HistoryLog {
     /// The current state (the last entry's), kept so appending doesn't rebuild it.
     #[serde(skip)]
     head: Option<Document>,
+    /// Read from an older schema and rewritten in memory: save it to keep the new form.
+    #[serde(skip)]
+    upgraded: bool,
 }
 
 /// How a change was made, for its action.
@@ -261,6 +343,7 @@ impl HistoryLog {
             healthy: Vec::new(),
             versions: Vec::new(),
             head: Some(doc.clone()),
+            upgraded: false,
         }
     }
 
@@ -468,14 +551,51 @@ impl HistoryLog {
     /// Reads a log file.
     pub fn load_path(path: &Path) -> Result<Self, StoreError> {
         let text = std::fs::read_to_string(path)?;
-        let log: Self = ron::from_str(&text).map_err(|e| StoreError::Parse(e.to_string()))?;
+        let mut log: Self = ron::from_str(&text).map_err(|e| StoreError::Parse(e.to_string()))?;
         if log.version > HISTORY_VERSION {
             return Err(StoreError::UnsupportedVersion(log.version));
         }
         if log.entries.is_empty() || !log.snapshots.iter().any(|(i, _)| *i == 0) {
             return Err(StoreError::Parse("a history needs its Start entry".into()));
         }
+        if log.version < HISTORY_VERSION {
+            log.upgrade();
+        }
         Ok(log)
+    }
+
+    /// True if it was read from an older schema and rewritten ([`Self::upgrade`]): saving it
+    /// keeps the new form.
+    pub fn upgraded(&self) -> bool {
+        self.upgraded
+    }
+
+    /// Rewrites a version 1 log's deltas in the current form (Part Studios as
+    /// [`StudioPatch`]es). Every new delta must give exactly the state the old one gave, and
+    /// the states must match the full copies (a past state is rebuilt from the nearest one);
+    /// otherwise the log is left as it was (still readable, only larger).
+    fn upgrade(&mut self) {
+        let Some(mut before) = self.state_at(0) else { return };
+        let mut deltas = Vec::with_capacity(self.entries.len());
+        for k in 1..self.entries.len() {
+            let mut after = before.clone();
+            self.entries[k].delta.apply(&mut after);
+            let delta = Delta::between(&before, &after);
+            let mut check = before.clone();
+            delta.apply(&mut check);
+            let snapshot = self.snapshots.iter().find(|(i, _)| *i == k).map(|(_, d)| d);
+            if check != after || snapshot.is_some_and(|d| *d != after) {
+                return;
+            }
+            deltas.push(delta);
+            before = after;
+        }
+        for (e, d) in self.entries[1..].iter_mut().zip(deltas) {
+            e.delta = d;
+        }
+        self.version = HISTORY_VERSION;
+        self.head = Some(before);
+        self.upgraded = true;
     }
 
     /// Makes the log end at `doc`: opened with a log whose last state isn't the document (it

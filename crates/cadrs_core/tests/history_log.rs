@@ -183,3 +183,46 @@ fn a_version_is_immutable_and_persists() {
     assert_eq!(back.document_at_version(v1).unwrap(), want);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_part_studio_change_stores_only_its_features() {
+    let s = two_hundred_steps();
+    let edit = &s.log.entries[2];
+    assert_eq!(edit.label, "Part Studio 1 :: Edit : Sketch 1");
+    let d = &edit.delta;
+    assert!(d.elements.is_empty(), "the studio is a patch, not a copy");
+    assert_eq!(d.studios.len(), 1);
+    let p = &d.studios[0];
+    assert_eq!(p.id, s.doc.elements[0].id);
+    assert!(p.shell.is_none() && p.order.is_none(), "only a feature changed");
+    assert_eq!(p.features.len(), 1, "just the edited sketch");
+    // A rename changes the element's shell, not its features.
+    let rename = s.log.entries.iter().find(|e| e.label.contains(":: Rename")).unwrap();
+    assert!(rename.delta.studios.iter().all(|p| p.shell.is_some() && p.features.is_empty()));
+}
+
+#[test]
+fn a_version_1_log_is_rewritten_with_patches_on_load() {
+    let s = two_hundred_steps();
+    // The log as version 1 wrote it: every changed Part Studio as a whole copy.
+    let mut old = s.log.clone();
+    old.version = 1;
+    for (k, e) in old.entries.iter_mut().enumerate().skip(1) {
+        for p in std::mem::take(&mut e.delta.studios) {
+            e.delta.elements.push(s.states[k].element(p.id).unwrap().clone());
+        }
+    }
+    assert!(old.entries.iter().all(|e| e.delta.studios.is_empty()));
+    let dir = std::env::temp_dir().join(format!("cadrs-history-v1-{}", std::process::id()));
+    let store = cadrs_core::Store::new(&dir);
+    old.save(&store).unwrap();
+    let back = HistoryLog::load(&store, old.document).unwrap().expect("the log is there");
+    assert!(back.upgraded());
+    assert_eq!(back.version, cadrs_core::history_log::HISTORY_VERSION);
+    let deltas = |l: &HistoryLog| l.entries.iter().map(|e| e.delta.clone()).collect::<Vec<_>>();
+    assert_eq!(deltas(&back), deltas(&s.log), "the same deltas as written today");
+    for (k, want) in s.states.iter().enumerate() {
+        assert_eq!(back.state_at(k).as_ref(), Some(want), "entry {k}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

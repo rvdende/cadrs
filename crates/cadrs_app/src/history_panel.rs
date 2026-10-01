@@ -174,16 +174,17 @@ fn track_history(world: &mut World) {
     if opened {
         let doc = world.resource::<ActiveDocument>();
         let created = doc.meta.as_ref().map_or(now, |m| m.created);
-        let mut log = store
-            .as_ref()
-            .filter(|_| stored)
-            .and_then(|s| HistoryLog::load(s, id).ok().flatten())
-            .unwrap_or_else(|| HistoryLog::start(&doc.doc, created, &user));
-        let d = doc.doc.clone();
-        if log.head() != &d {
+        let loaded = store.as_ref().filter(|_| stored).and_then(|s| HistoryLog::load(s, id).ok().flatten());
+        // Written only when the log was started or caught up: rewriting an unchanged (possibly
+        // large) history on every open stalled the first frame.
+        let mut changed = loaded.as_ref().is_none_or(HistoryLog::upgraded);
+        let mut log = loaded.unwrap_or_else(|| HistoryLog::start(&doc.doc, created, &user));
+        if log.head() != &doc.doc {
+            let d = doc.doc.clone();
             log.catch_up(&d, now, &user);
+            changed = true;
         }
-        if let Some(s) = store.as_ref().filter(|_| stored) {
+        if changed && let Some(s) = store.as_ref().filter(|_| stored) {
             let _ = log.save(s);
         }
         let mut l = world.resource_mut::<DocLog>();
