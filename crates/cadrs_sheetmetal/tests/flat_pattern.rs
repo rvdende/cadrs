@@ -817,3 +817,14 @@ fn validate_tolerance_isnt_widened_by_hems() {
     bend.on_b.b.y += 30.0;
     assert_eq!(m.validate().first().map(|e| e.kind), Some(ModelErrorKind::NotOnEdge { second: false }));
 }
+
+#[test]
+fn the_table_shows_what_the_flat_uses_for_hems() {
+    let p = Params {
+        bend_calc: BendCalc::BendAllowance,
+        bend_allowance: 9.0,
+        ..params()
+    };
+    let m = ok(samples::hem(p));
+    assert_eq!(table(&m).bends[0].value, Some(BendValue::Allowance(PI * (R + K * T))));
+}

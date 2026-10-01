@@ -99,7 +99,13 @@ pub fn table(m: &Model) -> Table {
                     radius: b.radius,
                     angle_deg: b.angle.to_degrees(),
                     direction: if up { BendDirection::Up } else { BendDirection::Down },
-                    value: b.value_or_model(&m.params).to_calc(calc, b.radius, m.params.thickness, b.angle),
+                    // What the flat actually uses: hems without their own value use the model's K
+                    // factor ([`crate::model::Bend::allowance`]), so show that, in this column's form.
+                    value: {
+                        let hem_k = b.value.is_none() && b.angle >= std::f64::consts::PI - 1e-9;
+                        let v = if hem_k { BendValue::KFactor(m.params.k_factor) } else { b.value_or_model(&m.params) };
+                        v.to_calc(calc, b.radius, m.params.thickness, b.angle)
+                    },
                     value_overridden: b.value.is_some(),
                     editable: !b.hem,
                 });

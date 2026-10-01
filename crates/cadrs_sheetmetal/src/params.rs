@@ -299,10 +299,10 @@ impl Params {
         let mut out = Vec::new();
         check_positive(&mut out, "Thickness", self.thickness);
         check_non_negative(&mut out, "Bend radius", self.bend_radius);
+        // The K factor always matters: hems use it whatever the calculation.
+        check(&mut out, "Default bend K Factor", self.k_factor, range::K_FACTOR);
         match self.bend_calc {
-            BendCalc::KFactor => {
-                check(&mut out, "Default bend K Factor", self.k_factor, range::K_FACTOR);
-            }
+            BendCalc::KFactor => {}
             BendCalc::BendAllowance => check_positive(&mut out, "Bend allowance", self.bend_allowance),
             BendCalc::BendDeduction => check_non_negative(&mut out, "Bend deduction", self.bend_deduction),
         }
@@ -366,8 +366,11 @@ mod tests {
         p.corner_relief.scale = 9.0; // Simple: no scale
         p.bend_relief.kind = BendReliefKind::Tear;
         p.bend_relief.depth_scale = 9.0; // Tear: no scale
-        p.k_factor = 7.0;
-        p.bend_calc = BendCalc::BendAllowance; // K unused
+        p.bend_calc = BendCalc::BendAllowance;
+        p.bend_allowance = 2.0;
         assert!(p.validate().is_empty());
+        // The K factor is still checked: hems use it in every mode.
+        p.k_factor = 7.0;
+        assert_eq!(p.validate().len(), 1);
     }
 }
