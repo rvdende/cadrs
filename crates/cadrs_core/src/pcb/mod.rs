@@ -21,6 +21,7 @@ pub mod bom;
 pub mod generated;
 pub mod import;
 pub mod library;
+pub mod names;
 pub mod search;
 pub mod sync;
 

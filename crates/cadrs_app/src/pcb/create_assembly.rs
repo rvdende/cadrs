@@ -28,8 +28,13 @@ use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
 pub fn register(app: &mut App) {
-    app.add_systems(Update, finish_create.run_if(in_state(AppState::Document)));
+    app.init_resource::<CreateHold>().add_systems(Update, finish_create.run_if(in_state(AppState::Document)));
 }
+
+/// Scenarios only (`pcb-create-hold <frames>`): the progress card stays at least this many
+/// frames, so a headless run can photograph it (the build is often done in a frame or two).
+#[derive(Resource, Default)]
+pub struct CreateHold(pub u32);
 
 #[derive(Component)]
 struct CreateDialog {
@@ -41,6 +46,8 @@ struct CreateDialog {
 #[derive(Component)]
 struct RunningCreate {
     board_name: String,
+    /// Frames since it started (see [`CreateHold`]).
+    frames: u32,
     pending: PendingJob<Result<CreatePcbAssembly, String>>,
 }
 
@@ -75,9 +82,9 @@ pub fn open_create_dialog(world: &mut World) {
                     t.text("Select features to include in the assembly:", t.font_sm, FontWeight::NORMAL, t.foreground),
                     Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(4.0), Val::Px(6.0)), ..default() },
                 ));
-                b.spawn(Checkbox::new("pcb-create-board").label("Board").checked(true).height(24.0).build(t));
-                b.spawn(Checkbox::new("pcb-create-components").label("Components").checked(true).height(24.0).build(t));
-                b.spawn(Checkbox::new("pcb-create-keeps").label("Keep-In and Keep-Out Areas").height(24.0).build(t));
+                b.spawn(Checkbox::new("pcb-create-board").label("Board").checked(true).height(19.0).build(t));
+                b.spawn(Checkbox::new("pcb-create-components").label("Components").checked(true).height(19.0).build(t));
+                b.spawn(Checkbox::new("pcb-create-keeps").label("Keep-In and Keep-Out Areas").height(19.0).build(t));
                 b.spawn((
                     Name::new("pcb-create-note"),
                     t.text(
@@ -86,7 +93,7 @@ pub fn open_create_dialog(world: &mut World) {
                         FontWeight::NORMAL,
                         t.foreground,
                     ),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(6.0)), width: Val::Px(420.0), ..default() },
+                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(10.0), Val::Px(6.0)), width: Val::Px(420.0), ..default() },
                 ))
                 .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
             })
@@ -141,7 +148,7 @@ pub fn start(world: &mut World, element: ElementId, board: BoardId, opts: Create
         }
         Ok(cmd)
     });
-    world.spawn((Name::new("pcb-create-running"), RunningCreate { board_name: name.clone(), pending }, DespawnOnExit(AppState::Document)));
+    world.spawn((Name::new("pcb-create-running"), RunningCreate { board_name: name.clone(), frames: 0, pending }, DespawnOnExit(AppState::Document)));
     show_progress(world, &name);
 }
 
@@ -179,8 +186,12 @@ fn show_progress(world: &mut World, board: &str) {
     world.entity_mut(area).add_child(card);
 }
 
-fn finish_create(q: Query<(Entity, &RunningCreate)>, mut commands: Commands) {
-    for (e, run) in &q {
+fn finish_create(mut q: Query<(Entity, &mut RunningCreate)>, hold: Res<CreateHold>, mut commands: Commands) {
+    for (e, mut run) in &mut q {
+        run.frames += 1;
+        if run.frames < hold.0 {
+            continue;
+        }
         let Some(result) = run.pending.poll() else { continue };
         let result = result.unwrap_or_else(|| Err("The kernel thread stopped".into()));
         let name = run.board_name.clone();

@@ -191,6 +191,12 @@ impl Triad {
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
     }
+
+    /// A drag, or its value box, is in progress (the view doesn't pre-highlight under the
+    /// pointer meanwhile, P3H.6 judge).
+    pub fn busy(&self) -> bool {
+        self.drag.is_some() || self.edit.is_some()
+    }
 }
 
 /// Screen sizes (px): arrow length, head length and half width, ring radius and distance past

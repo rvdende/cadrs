@@ -889,8 +889,8 @@ pub fn is_script_command(s: &str) -> bool {
         || s == "pcb-sample-part-document"
         || s == "pcb-sync-demo-studio"
         || s == "phone-case-board"
-        || s == "pcb-ex3-keepout-sketch"
         || s.starts_with("phone-case-size ")
+        || s.starts_with("pcb-create-hold ")
         || s.starts_with("pcb-import ")
         || s.starts_with("pcb-choose ")
         || s.starts_with("pcb-folder ")
@@ -909,10 +909,8 @@ pub fn is_script_command(s: &str) -> bool {
 ///   active Part Studio ([`cadrs_pcb::sample::sync_demo_studio`]) and names the tab "Mainboard";
 /// - `phone-case-size <W> <L>` (P3H.5, PCB6 step 12): sets the Board Exercise stand-in's
 ///   Width and Length (the Enclosure's Case outline dimensions, one undo step each);
-/// - `pcb-ex3-keepout-sketch` (P3H.6, PCB10 step 6): in the active Part Studio (the board's,
-///   made by Create assembly) a sketch on the board's top face with the 0.5 × 0.375 in R0.25
-///   corner profile at its bottom-left corner, dimensioned ([`cadrs_pcb::sample::ex3_keepout_sketch`];
-///   one undo step);
+/// - `pcb-create-hold <frames>` (P3H.6): Create assembly's progress card stays at least that
+///   many frames (so a scenario can photograph it);
 /// - `phone-case-board` (P3H.5): PCB6 steps 2–8 on the stand-in through the command layer
 ///   ([`cadrs_core::samples::phone_case::board_in_context`]), for scenarios about what follows.
 fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Commands) {
@@ -937,18 +935,6 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
                 }
                 let _ = doc.execute(&cadrs_core::commands::RenameElement { id: el, name: "Mainboard".into() });
             });
-        } else if s == "pcb-ex3-keepout-sketch" {
-            commands.queue(|w: &mut World| {
-                let Some(mut doc) = w.get_resource_mut::<ActiveDocument>() else { return };
-                let Some(el) = doc.active_element().filter(|e| matches!(e.kind, cadrs_core::document::ElementKind::PartStudio { .. })).map(|e| e.id) else { return };
-                let mark = doc.history.undo_len();
-                match cadrs_pcb::sample::ex3_keepout_sketch(&mut *doc, el, cadrs_core::FeatureId::new()) {
-                    Ok(()) => {
-                        doc.squash_since(mark, "Add sketch");
-                    }
-                    Err(e) => warn!("pcb-ex3-keepout-sketch: {e}"),
-                }
-            });
         } else if s == "phone-case-board" {
             commands.queue(|w: &mut World| {
                 let Some(mut doc) = w.get_resource_mut::<ActiveDocument>() else { return };
@@ -965,6 +951,10 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
                         warn!("phone-case-size: {e}");
                     }
                 });
+            }
+        } else if let Some(n) = s.strip_prefix("pcb-create-hold ") {
+            if let Ok(n) = n.trim().parse::<u32>() {
+                commands.insert_resource(create_assembly::CreateHold(n));
             }
         } else if s == "pcb-sample-part-document" {
             commands.queue(dialogs::store_sample_part_document);

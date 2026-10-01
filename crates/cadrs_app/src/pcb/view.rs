@@ -207,6 +207,8 @@ pub struct PcbScene {
     pub bounds: Option<([f32; 3], [f32; 3])>,
     /// What the view was last fitted to.
     fitted: Option<SceneKey>,
+    /// The box it was fitted to (a re-sync that changes the board's outline fits again).
+    fitted_bounds: Option<([f32; 3], [f32; 3])>,
     /// The board view as it was when a component view opened (restored when it closes).
     board_view: Option<ViewState>,
     /// The bodies the entities show.
@@ -589,13 +591,28 @@ pub fn draw_pcb_edges(scene: Res<PcbScene>, q: Query<&PcbBodyMesh>, mut gizmos: 
 /// delete, the tab opened, the component view opened or closed). The component view opens in
 /// the isometric view; closing it restores the board view as it was.
 pub fn fit_on_switch(mut scene: ResMut<PcbScene>, mut view: ResMut<ViewportView>, rect: Res<ViewportRect>) {
-    if scene.shown.is_none() || scene.shown == scene.fitted || scene.bounds.is_none() {
+    if scene.shown.is_none() || scene.bounds.is_none() {
         return;
     }
     // The tab's view must already be the PCB tab's (the viewport swaps views per tab).
     if view.element != scene.shown.as_ref().map(|k| k.element()) {
         return;
     }
+    if scene.shown == scene.fitted {
+        // The same board, but its outline changed (a re-sync from a changed assembly): fit again,
+        // keeping the orientation (P3H.6 judge).
+        let moved = match (scene.bounds, scene.fitted_bounds) {
+            (Some((lo, hi)), Some((flo, fhi))) => (0..2).any(|i| (lo[i] - flo[i]).abs() > 0.5 || (hi[i] - fhi[i]).abs() > 0.5),
+            _ => false,
+        };
+        if moved && matches!(scene.shown, Some(SceneKey::Board(..))) {
+            scene.fitted_bounds = scene.bounds;
+            let to = view.target().fitted(&scene.fit_points(), rect.0.size(), crate::viewport::FIT_FILL);
+            view.animate_to(to);
+        }
+        return;
+    }
+    scene.fitted_bounds = scene.bounds;
     let was_component = matches!(scene.fitted, Some(SceneKey::Component(..)));
     let same_board = scene.fitted.as_ref().map(|k| (k.element(), k.board())) == scene.shown.as_ref().map(|k| (k.element(), k.board()));
     scene.fitted = scene.shown.clone();

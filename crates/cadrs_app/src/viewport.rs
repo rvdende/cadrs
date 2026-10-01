@@ -1496,12 +1496,13 @@ fn update_hover(
     session: Option<Res<crate::sketch::SketchSession>>,
     planes: Res<PlanesVisible>,
     hover_override: Res<HoverOverride>,
-    (parts, extrude, applied, create, pick_override): (
+    (parts, extrude, applied, create, pick_override, triad): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
+        Option<Res<crate::assembly::triad::Triad>>,
     ),
     mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
 ) {
@@ -1512,7 +1513,8 @@ fn update_hover(
     let over = pointer_over_viewport(&hover, &q_area);
     let query = match filter {
         Some(f) if over && !drag.navigating && *kind == ActiveKind::PartStudio => Some(f),
-        Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly => {
+        // No pre-highlight while a triad drag or its value box is active (P3H.6 judge).
+        Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly && !triad.as_deref().is_some_and(|t| t.busy()) => {
             Some(if pick_override.0.is_some() { f } else { crate::assembly::pick_filter() })
         }
         _ => None,

@@ -90,6 +90,13 @@ pub fn notice(features: usize, parts: usize) -> Option<String> {
     })
 }
 
+/// The studio's own parts, as its Parts list shows them (P3H.6 judge): an assembly context's
+/// parts are not the studio's, and a closed composite's members are not in the build's parts
+/// (the composite is one part).
+pub fn listed_parts(parts: &[cadrs_core::Part]) -> usize {
+    parts.iter().filter(|p| !cadrs_core::assembly::context::is_context(p.feature)).count()
+}
+
 fn sync_scale_notice(
     doc: Option<Res<ActiveDocument>>,
     cache: Res<crate::parts::PartCache>,
@@ -97,7 +104,7 @@ fn sync_scale_notice(
     mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
 ) {
     let want = doc.as_ref().and_then(|d| d.active_element()).and_then(|e| match e.kind {
-        ElementKind::PartStudio { .. } => notice(e.features().len(), cache.parts.len()),
+        ElementKind::PartStudio { .. } => notice(e.features().len(), listed_parts(&cache.parts)),
         _ => None,
     });
     for mut n in &mut q_row {
