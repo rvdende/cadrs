@@ -42,6 +42,12 @@ pub struct SolidFace {
     /// Its exact area (mm²), from the kernel (P3.10, X7: the Mass properties Face tab). `None`
     /// for prism meshes.
     pub area: Option<f64>,
+    /// The kind of surface it lies on, from the kernel (the Measure tool). `None` for prism
+    /// meshes.
+    pub kind: Option<cadrs_kernel::SurfaceKind>,
+    /// The radius of a cylindrical or spherical face (a cone's reference radius), from the
+    /// kernel (the Measure tool). `None` for other faces and for prism meshes.
+    pub radius: Option<f64>,
 }
 
 /// An edge of a [`Solid`]: a polyline (one or more kernel edges that continue each other
@@ -306,7 +312,7 @@ impl SurfaceGrid {
 }
 
 /// The point of triangle `abc` nearest `p` (Ericson, Real-Time Collision Detection 5.1.5).
-fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+pub(crate) fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
     let (d1, d2) = (dot(ab, ap), dot(ac, ap));
     if d1 <= 0.0 && d2 <= 0.0 {
@@ -794,6 +800,8 @@ pub fn extrude(op: OpId, frame: &PlaneFrame, regions: &[(u64, Region)], depth: f
                 center: None,
                 axis: None,
                 area: None,
+                kind: None,
+                radius: None,
             });
         }
 
@@ -970,6 +978,8 @@ fn side_faces(
             center: None,
             axis: None,
             area: None,
+            kind: None,
+            radius: None,
         });
         for end in [false, true] {
             let shift = if end { offset } else { [0.0; 3] };

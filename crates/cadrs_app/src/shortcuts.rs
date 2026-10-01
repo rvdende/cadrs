@@ -43,7 +43,7 @@ pub const SHORTCUTS: &[(usize, &str, &str, u8)] = &[
     (0, "Delete / Backspace", "Delete selection", LOCKED),
     (0, "Shift+D", "Dihedral analysis", OFF),
     (0, "Shift+/", "Keyboard shortcuts", 0),
-    (0, "[", "Measure", OFF),
+    (0, "[", "Measure", 0),
     (0, "Ctrl+V", "Paste", LOCKED | OFF),
     (0, "Ctrl+Y / Ctrl+Shift+Z", "Redo", LOCKED),
     (0, "`", "Select other", OFF),

@@ -9,9 +9,8 @@
 //!   dialog's region highlight, [`crate::extrude`]), and the bottom right of the viewport reads
 //!   "Area: … mm²": the total area of the selected regions, holes excluded, computed exactly
 //!   from the curves ([`cadrs_sketch::Region::area`]).
-//! - P3H.6: with no region selected, selected **planar faces** of parts (or assembly
-//!   instances) read "Area: …" too, from the kernel's exact face area
-//!   ([`selected_face_area`]).
+//! - Selected faces of parts are measured by the Measure tool's readout (`crate::measure`),
+//!   which replaced the P3H.6 planar-face stand-in here.
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -174,37 +173,13 @@ fn update_selected_regions(
     }
 }
 
-/// P3H.6 (PCB8 step 7, PCB10 step 9): the exact area of the selected planar faces of parts or
-/// instances (a minimal stand-in for the Measure tool's face area). `None` when no planar face
-/// is selected (or one has no exact area).
-pub fn selected_face_area(selection: &Selection, cache: &PartCache) -> Option<f64> {
-    let mut total = 0.0;
-    let mut any = false;
-    for p in &selection.0 {
-        let Pick::Face(part, name) = p else { continue };
-        let face = cache.part(*part)?.solid.face(name)?;
-        face.plane?;
-        total += face.area?;
-        any = true;
-    }
-    any.then_some(total)
-}
-
-/// The dialogs whose picks are references, not faces to measure.
-type MeasureBlockers<'w> = (Option<Res<'w, SketchSession>>, Option<Res<'w, crate::applied::AppliedSession>>, Option<Res<'w, crate::extrude::ExtrudeSession>>);
-
 fn sync_area_readout(
     selected: Res<SelectedRegions>,
-    selection: Res<Selection>,
-    sessions: MeasureBlockers,
     cache: Res<PartCache>,
     units: Res<crate::WorkspaceUnits>,
     mut q: Query<(&mut Text, &mut Node), With<AreaReadout>>,
 ) {
-    // A feature dialog's picks are its references, not faces picked to measure.
-    let busy = sessions.0.is_some() || sessions.1.is_some() || sessions.2.is_some();
-    let faces = || if busy { None } else { selected_face_area(&selection, &cache) };
-    let text = if !selected.0.is_empty() { Some(area_text(selected.area(&cache), &units.0)) } else { faces().map(|a| area_text(a, &units.0)) };
+    let text = (!selected.0.is_empty()).then(|| area_text(selected.area(&cache), &units.0));
     for (mut t, mut node) in &mut q {
         let display = if text.is_some() {
             Display::Flex
