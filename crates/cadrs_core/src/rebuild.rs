@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -253,10 +253,26 @@ struct Entry {
     time: Duration,
     /// The rebuild that last used it.
     last_used: u64,
+    /// For a Derived feature: the cache keys of its source's outputs (nested sources' too).
+    /// They are used whenever it is ([`Rebuilder::rebuild`]), so they live as long as it does:
+    /// a later sketch on a derived face, or a change below it, finds the source still built
+    /// instead of importing a STEP file again.
+    sources: Vec<u64>,
 }
 
-/// Cached outputs are dropped when this many rebuilds went by without using them.
+/// Cached outputs are dropped when this many rebuilds went by without using them (by default;
+/// see [`keep_unused_for`]).
 const KEEP_REBUILDS: u64 = 48;
+
+static KEEP_UNUSED: AtomicU64 = AtomicU64::new(KEEP_REBUILDS);
+
+/// Keeps cached outputs until `rebuilds` rebuilds went by without using them (still at most
+/// [`MAX_ENTRIES`]). The Onshape importer rebuilds twice a feature and builds a Derived
+/// feature's source tab long before the Derived feature: with the app's 48 the source (a STEP
+/// import of seconds) was gone again by then.
+pub fn keep_unused_for(rebuilds: u64) {
+    KEEP_UNUSED.store(rebuilds, Ordering::Relaxed);
+}
 /// And the oldest are dropped beyond this many.
 const MAX_ENTRIES: usize = 1024;
 
@@ -337,6 +353,24 @@ pub fn chain_keys(features: &[Feature]) -> Vec<u64> {
     keys
 }
 
+/// The cache keys of the outputs the Derived features among `features` build their sources
+/// from, nested sources' too.
+fn derived_source_keys(features: &[Feature]) -> Vec<u64> {
+    fn go(features: &[Feature], out: &mut Vec<u64>, depth: usize) {
+        for f in features {
+            if let FeatureKind::Derived(d) = &f.kind
+                && depth < 8
+            {
+                out.extend(chain_keys(&d.studio));
+                go(&d.studio, out, depth + 1);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    go(features, &mut out, 0);
+    out
+}
+
 /// The chain key before the first feature.
 const CHAIN_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
@@ -394,6 +428,10 @@ impl Rebuilder {
         let stage_for = self.stage_for;
         let last = self.last.clone();
         let times = self.sketch_times.clone();
+        // A source built in another session (another document imported earlier, a document
+        // opened before) comes back from its snapshot instead of being rebuilt.
+        #[cfg(feature = "occt")]
+        self.restore_snapshot(features);
         self.depth += 1;
         let build = self.rebuild(features);
         self.depth -= 1;
@@ -469,12 +507,17 @@ impl Rebuilder {
                     },
                     None => self.compute(&features[..i], f, &state),
                 };
+                let sources = match &f.kind {
+                    FeatureKind::Derived(_) => derived_source_keys(std::slice::from_ref(f)),
+                    _ => Vec::new(),
+                };
                 self.entries.insert(
                     key,
                     Entry {
                         output,
                         time: t0.elapsed(),
                         last_used: generation,
+                        sources,
                     },
                 );
             }
@@ -483,6 +526,15 @@ impl Rebuilder {
             }
             let entry = self.entries.get_mut(&key).expect("just inserted");
             entry.last_used = generation;
+            if !entry.sources.is_empty() {
+                let sources = entry.sources.clone();
+                for k in sources {
+                    if let Some(e) = self.entries.get_mut(&k) {
+                        e.last_used = generation;
+                    }
+                }
+            }
+            let entry = self.entries.get(&key).expect("just inserted");
             state = entry.output.state.clone();
             out.times.push((f.id, entry.time));
             self.trail.push((f.id, state.clone()));
@@ -599,18 +651,8 @@ impl Rebuilder {
     /// its Derived features' sources' outputs, which it doesn't touch while the Derived output
     /// itself is cached (an edit of the Derived feature then needs them).
     pub fn snapshot_keys(&self, features: &[Feature]) -> Vec<u64> {
-        fn sources(features: &[Feature], out: &mut Vec<u64>, depth: usize) {
-            for f in features {
-                if let FeatureKind::Derived(d) = &f.kind
-                    && depth < 8
-                {
-                    out.extend(chain_keys(&d.studio));
-                    sources(&d.studio, out, depth + 1);
-                }
-            }
-        }
         let mut keys = self.used_keys();
-        sources(features, &mut keys, 0);
+        keys.extend(derived_source_keys(features));
         keys
     }
 
@@ -621,7 +663,7 @@ impl Rebuilder {
         let mut stale: Vec<u64> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.last_used + KEEP_REBUILDS < generation)
+            .filter(|(_, e)| e.last_used.saturating_add(KEEP_UNUSED.load(Ordering::Relaxed)) < generation)
             .map(|(k, _)| *k)
             .collect();
         if self.entries.len() - stale.len() > MAX_ENTRIES {
@@ -2793,6 +2835,21 @@ pub fn run_on_worker<T: Send + 'static>(f: impl FnOnce(&mut Rebuilder) -> T + Se
     }));
     let _ = worker().lock().map(|tx| tx.send(job));
     PendingJob { rx: Mutex::new(rx) }
+}
+
+/// Rebuilds `features` (from the cache, mostly) and writes their session snapshot now, instead
+/// of once the rebuild thread goes idle: the Onshape importer runs each document in its own
+/// process, and a later document's Derived feature restores this one's Part Studio from it.
+/// Nothing is written without a snapshot store ([`session::set_store`]).
+#[cfg(feature = "occt")]
+pub fn save_snapshot_now(features: Vec<Feature>) {
+    run_on_worker(move |r| {
+        r.rebuild(&features);
+        if let Some(save) = r.plan_save(&features) {
+            r.save_snapshot(save);
+        }
+    })
+    .wait();
 }
 
 /// P3B.9: kernel bodies of placed parts, for work across Part Studios (an assembly's

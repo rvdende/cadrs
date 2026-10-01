@@ -373,7 +373,7 @@ impl OcctKernel {
         let infos: Vec<crate::FaceInfo> = faces_of(&shape)
             .iter()
             .enumerate()
-            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f, &shape))
+            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f))
             .collect();
         for (t, info) in tags.iter_mut().zip(&infos) {
             if t.is_none() {
@@ -604,7 +604,7 @@ fn near_pieces((shape, tags): Tagged, o: Point3<f64>, dir: Vector3<f64>) -> Resu
             })
             .collect();
         let touches = faces.iter().enumerate().any(|(i, f)| {
-            let info = super::face_info(crate::FaceId(i as u64), f, &solid);
+            let info = super::face_info(crate::FaceId(i as u64), f);
             info.plane.is_some_and(|pl| {
                 pl.normal.dot(&dir).abs() > 1.0 - 1e-9 && ((info.center - o).dot(&dir)).abs() < 1e-7 * (1.0 + info.center.coords.norm())
             })

@@ -669,17 +669,22 @@ fn segment_distance(p: Point3<f64>, a: Point3<f64>, b: Point3<f64>) -> f64 {
 
 /// Fuses solids that each carry a per-face tag, carrying the tags through the fusions' histories
 /// (a face keeps its tag when trimmed or split; the first tag wins where two faces merge).
-fn union_tagged<T: Copy>(solids: Vec<(Shape, Vec<Option<T>>)>) -> Result<(Shape, Vec<Option<T>>)> {
-    let mut solids = solids.into_iter();
-    let (mut acc, mut tags) = solids
-        .next()
-        .ok_or_else(|| KernelError::InvalidProfile("the profile has no regions".into()))?;
-    for (shape, more) in solids {
-        let (fused, h) = acc.try_union_h(&shape).map_err(occt)?;
-        tags = carry(&h, &[&tags, &more], face_count(&fused)?);
-        acc = fused;
+///
+/// The two halves are fused first, each the same way: fusing one solid at a time into the
+/// growing result made a profile of many regions quadratic (825 holes of a perfboard: 28 s).
+fn union_tagged<T: Copy>(mut solids: Vec<(Shape, Vec<Option<T>>)>) -> Result<(Shape, Vec<Option<T>>)> {
+    match solids.len() {
+        0 => Err(KernelError::InvalidProfile("the profile has no regions".into())),
+        1 => Ok(solids.pop().expect("one solid")),
+        n => {
+            let right = solids.split_off(n / 2);
+            let (a, a_tags) = union_tagged(solids)?;
+            let (b, b_tags) = union_tagged(right)?;
+            let (fused, h) = a.try_union_h(&b).map_err(occt)?;
+            let tags = carry(&h, &[&a_tags, &b_tags], face_count(&fused)?);
+            Ok((fused, tags))
+        }
     }
-    Ok((acc, tags))
 }
 
 /// The tags of a result's faces from its inputs' tags (`inputs` in the operation's order).
@@ -1996,15 +2001,46 @@ impl Kernel for OcctKernel {
         if open > 0 {
             return Err(failed(format!("the mesh is not closed ({open} open edges)")));
         }
-        let refs: Vec<&Shape> = faces.iter().collect();
-        let solid = Shape::try_sew_solid(&refs, tol).map_err(|e| failed(e.to_string()))?;
+        // Consistently wound (every edge crossed once each way): the solid is built from the
+        // welded triangles directly, sharing their vertices and edges. Sewing them, which also
+        // turns badly wound triangles, took minutes for an STL of 27 000 triangles.
+        let mut index: HashMap<[i64; 3], i32> = HashMap::new();
+        let mut points: Vec<f64> = Vec::new();
+        let mut tris: Vec<i32> = Vec::new();
+        let mut directed: HashMap<(i32, i32), u32> = HashMap::new();
+        for t in triangles {
+            let k = [key(&t[0]), key(&t[1]), key(&t[2])];
+            if k[0] == k[1] || k[1] == k[2] || k[2] == k[0] {
+                continue;
+            }
+            let ids = [0, 1, 2].map(|i| {
+                *index.entry(k[i]).or_insert_with(|| {
+                    points.extend([t[i].x, t[i].y, t[i].z]);
+                    (points.len() / 3 - 1) as i32
+                })
+            });
+            for (a, b) in [(ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])] {
+                *directed.entry((a, b)).or_default() += 1;
+            }
+            tris.extend(ids);
+        }
+        let wound = directed.iter().all(|(&(a, b), n)| *n == 1 && directed.get(&(b, a)) == Some(&1));
+        let solid = match wound.then(|| Shape::try_mesh_solid(&points, &tris, tol)) {
+            Some(Ok(s)) => s,
+            _ => {
+                let refs: Vec<&Shape> = faces.iter().collect();
+                Shape::try_sew_solid(&refs, tol).map_err(|e| failed(e.to_string()))?
+            }
+        };
         let v = solid.mass_properties().volume;
         if !v.is_finite() || v <= 0.0 {
             return Err(failed("the triangles do not enclose a volume".into()));
         }
         // Coplanar neighbours merged into one face (a CAD model's flat faces come back whole;
-        // a curved surface's facets stay). Skipped for big meshes, where it gets slow.
-        const UNIFY_MAX: usize = 20_000;
+        // a curved surface's facets stay). Skipped for huge meshes. (It was skipped above 20 000
+        // triangles while it was slow; a 27 000-triangle baseplate now merges in about a second
+        // and every later feature on it is faster for it.)
+        const UNIFY_MAX: usize = 200_000;
         let solid = match (triangles.len() <= UNIFY_MAX).then(|| solid.try_clean()) {
             Some(Ok(u)) if (u.mass_properties().volume - v).abs() <= v * 1e-9 && u.sub_count(SubKind::Solid).map_err(occt)? == 1 => u,
             _ => solid,
@@ -2463,12 +2499,12 @@ fn face_infos(shape: &Shape) -> Vec<FaceInfo> {
                 })
             }),
             radius: axes.get(i).copied().flatten().map(|a| a.radius).filter(|r| *r > 0.0),
-            ..face_info(FaceId(i as u64), face, shape)
+            ..face_info(FaceId(i as u64), face)
         })
         .collect()
 }
 
-fn face_info(id: FaceId, face: &Face, shape: &Shape) -> FaceInfo {
+fn face_info(id: FaceId, face: &Face) -> FaceInfo {
     let area = face.surface_area();
     let center = Point3::from(to_na(face.center_of_mass()));
     let kind = match face.surface_type() {
@@ -2481,11 +2517,10 @@ fn face_info(id: FaceId, face: &Face, shape: &Shape) -> FaceInfo {
     };
     let plane = (kind == SurfaceKind::Plane)
         .then(|| {
-            // Any point of the boundary: projecting it onto the plane can't fail.
-            let p = face
-                .edges()
-                .find_map(|e| e.polyline(shape, 0.1, 0.1).ok()?.first().copied())?;
-            let n = to_na(face.normal_at(p));
+            // The area centroid lies in the plane, and projecting onto a plane can't fail. (A
+            // point of the boundary searched the whole shape for the edge: minutes for a
+            // 27 000-face STL.)
+            let n = to_na(face.normal_at(to_glam(center.coords)));
             if n.norm() < 0.5 {
                 return None;
             }

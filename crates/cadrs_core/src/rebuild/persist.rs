@@ -561,7 +561,7 @@ impl Rebuilder {
                 continue;
             }
             match Output::load(saved, &mut r) {
-                Ok(output) => read.push((key, Entry { output, time: Duration::from_nanos(nanos), last_used: generation })),
+                Ok(output) => read.push((key, Entry { output, time: Duration::from_nanos(nanos), last_used: generation, sources: Vec::new() })),
                 Err(e) => {
                     for b in r.added {
                         r.kernel.release(b);

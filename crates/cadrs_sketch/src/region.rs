@@ -673,11 +673,6 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
     srcs
 }
 
-/// True for the id of an imprinted edge (not a curve the user drew).
-fn imprinted(s: &Sketch, c: CurveId) -> bool {
-    s.imprint.iter().any(|i| i.id == c)
-}
-
 /// Every closed region of the sketch.
 /// [`regions`], remembered for the last few sketches: the view, the Part Studio's region list
 /// and the dimension knockouts all ask for the same sketch's regions in a frame, and finding
@@ -704,8 +699,12 @@ pub fn regions_shared(s: &Sketch) -> std::sync::Arc<Vec<Region>> {
 }
 
 pub fn regions(s: &Sketch) -> Vec<Region> {
+    // The imprinted curves, looked up for every edge and region below (a face of a perfboard
+    // imprints a thousand edges: searching the list each time took 36 s).
+    let imprint: std::collections::HashSet<CurveId> = s.imprint.iter().map(|i| i.id).collect();
+    let imprinted = |c: CurveId| imprint.contains(&c);
     let srcs = carriers(s);
-    if srcs.iter().all(|(c, _)| imprinted(s, *c)) {
+    if srcs.iter().all(|(c, _)| imprinted(*c)) {
         return Vec::new();
     }
     // Points closer than this are one vertex (relative to the sketch's size).
@@ -853,7 +852,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
                     && k.path.iter().map(|p| p.distance(mid(&e))).fold(f64::MAX, f64::min) < tol * 10.0
             });
             match same {
-                Some(i) if imprinted(s, keep[i].curve) && !imprinted(s, e.curve) => keep[i] = e,
+                Some(i) if imprinted(keep[i].curve) && !imprinted(e.curve) => keep[i] = e,
                 Some(_) => {}
                 None => keep.push(e),
             }
@@ -1074,10 +1073,10 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             })
             .filter_map(|p| s.points.get(p).map(|p| p.pos))
             .collect();
-        let drawn_bound = |r: &Region| r.outer_curves.iter().chain(r.hole_curves.iter().flatten()).any(|c| !imprinted(s, *c));
+        let bound: Vec<bool> = out.iter().map(|r| r.outer_curves.iter().chain(r.hole_curves.iter().flatten()).any(|c| !imprinted(*c))).collect();
         // Only when the sketch's own curves bound no region (a lone line from a rim): where they
         // do, the face's outline stays out, as before.
-        let lone = !out.iter().any(drawn_bound);
+        let lone = !bound.contains(&true);
         // A face outline inside a loop of sketch geometry is a region of it in Onshape too. The
         // loop is of drawn curves alone: a hole through the face that drawn lines merely cross
         // near is no region (its grey fill hid the hole while sketching on the face).
@@ -1093,10 +1092,10 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                drawn_bound(r)
+                bound[i]
                     || lone && std::iter::once(&r.outer).chain(r.holes.iter()).any(|poly| drawn_points.iter().any(|p| polyline_distance(poly, *p) < tol))
                     || inner_point(r).is_some_and(|p| {
-                        out.iter().enumerate().any(|(j, q)| j != i && drawn_bound(q) && point_in_polygon(p, &q.outer))
+                        out.iter().enumerate().any(|(j, q)| j != i && bound[j] && point_in_polygon(p, &q.outer))
                             && drawn_loops().iter().any(|q| point_in_polygon(p, &q.outer))
                     })
             })
@@ -1120,12 +1119,37 @@ fn polyline_distance(poly: &[Vec2], p: Vec2) -> f64 {
         .fold(f64::MAX, f64::min)
 }
 
-/// A point inside a region (the centroid of its first triangle).
+/// A point inside a region: on a horizontal line across it, the middle of the widest stretch
+/// inside the outer polygon and outside the holes (even-odd over all its polygons). Linear in
+/// its edges: triangulating it instead took seconds for a board with 825 holes (ear clipping
+/// bridges each hole into the outline).
 fn inner_point(r: &Region) -> Option<Vec2> {
-    let (pts, tris) = r.triangulate();
-    let t = tris.get(0..3)?;
-    let (a, b, c) = (pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]);
-    Some(Vec2::new((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0))
+    let (lo, hi) = r.outer.iter().fold((f64::MAX, f64::MIN), |(l, h), p| (l.min(p.y), h.max(p.y)));
+    if hi.partial_cmp(&lo) != Some(std::cmp::Ordering::Greater) {
+        return None;
+    }
+    // Lines at other heights when one only grazes the region (through vertices, along an edge).
+    for k in [0.5, 0.37, 0.63, 0.21, 0.79, 0.11, 0.89] {
+        let y = lo + (hi - lo) * k;
+        let mut xs: Vec<f64> = Vec::new();
+        for poly in std::iter::once(&r.outer).chain(r.holes.iter()) {
+            let n = poly.len();
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                if (a.y > y) != (b.y > y) {
+                    xs.push(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y));
+                }
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        let widest = xs.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)));
+        if let Some((x0, x1)) = widest
+            && x1 - x0 > 1e-9
+        {
+            return Some(Vec2::new(0.5 * (x0 + x1), y));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
