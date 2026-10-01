@@ -856,7 +856,7 @@ fn update_part_cache(
     };
     // An Assembly tab: its instances, as parts in assembly coordinates (P3B.1).
     if el.assembly_model().is_some() {
-        crate::assembly::update_assembly_parts(&doc, el, &mut cache, &mut asm);
+        crate::assembly::update_assembly_parts(&doc, el, &mut cache, &mut asm, budget.0);
         return;
     }
     let features = el.features();

@@ -63,6 +63,7 @@ impl Plugin for ViewportPlugin {
                 Update,
                 (
                     track_active_element,
+                    fit_assembly_when_built,
                     track_viewport_rect,
                     track_dialog_inset,
                     viewport_pointer,
@@ -205,6 +206,10 @@ pub struct ViewportView {
     /// Saved views of the other tabs.
     pub per_element: HashMap<ElementId, ViewState>,
     pub element: Option<ElementId>,
+    /// An Assembly tab shown for the first time before its parts were built: the view it started
+    /// with, fitted to the instances once they are there ([`fit_assembly_when_built`]) unless the
+    /// view moved meanwhile.
+    pub fit_pending: Option<(ElementId, ViewState)>,
 }
 
 impl ViewportView {
@@ -748,7 +753,7 @@ fn track_active_element(
     mut view: ResMut<ViewportView>,
     mut selection: ResMut<Selection>,
     rect: Res<ViewportRect>,
-    planes: Res<PlanesVisible>,
+    cache: Res<crate::parts::PartCache>,
 ) {
     let Some(doc) = doc else {
         return;
@@ -771,13 +776,21 @@ fn track_active_element(
             v.per_element.insert(old, current);
         }
         v.animation = None;
+        v.fit_pending = None;
         v.view = match v.per_element.get(&el.id).copied() {
             Some(saved) => saved,
             // An Assembly tab opened for the first time (a new subassembly's): its instances
-            // framed with the assembly margin (`ex3-step5.png`).
+            // framed with the assembly margin (`ex3-step5.png`), once they are built: the
+            // rebuild of their Part Studios goes on in the background (a big one takes seconds).
             None if k == ActiveKind::Assembly && el.assembly_model().is_some_and(|a| !a.instances.is_empty()) => {
-                let pts = scene_points(Some(&doc), k, planes.0);
-                ViewState::default().fitted(&pts, rect.0.size(), ASM_FIT_FILL)
+                let start = ViewState::default();
+                match assembly_points(&cache, el.id) {
+                    Some(pts) => start.fitted(&pts, rect.0.size(), ASM_FIT_FILL),
+                    None => {
+                        v.fit_pending = Some((el.id, start));
+                        start
+                    }
+                }
             }
             None => ViewState::default(),
         };
@@ -785,6 +798,38 @@ fn track_active_element(
         if !selection.0.is_empty() {
             selection.0.clear();
         }
+    }
+}
+
+/// The points of the shown instances of Assembly tab `element` as built in the part cache;
+/// `None` while they are being built.
+fn assembly_points(cache: &crate::parts::PartCache, element: ElementId) -> Option<Vec<Vec3>> {
+    if cache.assembly != Some(element) || cache.rebuilding {
+        return None;
+    }
+    let pts: Vec<Vec3> = cache
+        .shown()
+        .flat_map(|p| p.solid.positions.iter().map(|q| Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)))
+        .collect();
+    Some(if pts.is_empty() { vec![Vec3::ZERO] } else { pts })
+}
+
+/// Fits an Assembly tab's first view to its instances once their parts are built
+/// ([`ViewportView::fit_pending`]).
+fn fit_assembly_when_built(mut view: ResMut<ViewportView>, cache: Res<crate::parts::PartCache>, rect: Res<ViewportRect>) {
+    let Some((el, start)) = view.fit_pending else {
+        return;
+    };
+    if view.element != Some(el) {
+        view.fit_pending = None;
+        return;
+    }
+    let Some(pts) = assembly_points(&cache, el) else {
+        return;
+    };
+    view.fit_pending = None;
+    if view.animation.is_none() && view.view.approx_eq(&start) {
+        view.view = start.fitted(&pts, rect.0.size(), ASM_FIT_FILL);
     }
 }
 

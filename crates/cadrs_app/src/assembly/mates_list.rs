@@ -115,6 +115,13 @@ pub fn type_icon(t: Option<MateType>) -> &'static str {
     }
 }
 
+/// True once the part cache shows Assembly tab `element` with its source studios built: the
+/// checks that need their solids wait for the rebuild instead of blocking a frame on it.
+fn parts_built(world: &World, element: ElementId) -> bool {
+    let cache = world.resource::<PartCache>();
+    cache.assembly == Some(element) && !cache.rebuilding
+}
+
 fn update_dofs(world: &mut World) {
     let Some((element, model)) = world
         .get_resource::<ActiveDocument>()
@@ -123,7 +130,7 @@ fn update_dofs(world: &mut World) {
         return;
     };
     let dofs = world.resource::<InstanceDofs>();
-    if dofs.key.as_ref().is_some_and(|(e, m)| *e == element && *m == model) {
+    if dofs.key.as_ref().is_some_and(|(e, m)| *e == element && *m == model) || !parts_built(world, element) {
         return;
     }
     let Some((flat, solids)) = super::mate_dialog::model_and_solids(world) else { return };
@@ -151,6 +158,9 @@ fn update_mate_errors(world: &mut World) {
     };
     let Some(tick) = world.get_resource_change_ticks::<ActiveDocument>().map(|t| t.changed.get()) else { return };
     if world.resource::<MateErrors>().key == Some((element, tick)) {
+        return;
+    }
+    if !parts_built(world, element) {
         return;
     }
     let Some((flat, solids)) = super::mate_dialog::model_and_solids(world) else { return };
