@@ -160,8 +160,19 @@ fn rebuild(world: &mut World) {
         .collect();
     let pending = world.get_resource::<PendingName>().copied();
     let focus = world.get_resource::<DriverFocus>().and_then(|f| f.0);
-    let key = PanelKey(format!("{:?}{:?}{:?}{:?}", list, cols.iter().map(|c| &c.2).collect::<Vec<_>>(), pending.map(|p| p.0), focus));
+    // Not keyed by the pending name: a rebuild once it is taken would otherwise respawn the
+    // panel and drop the name editor it just opened (any document change the frame after Add).
+    let key = PanelKey(format!("{:?}{:?}{:?}", list, cols.iter().map(|c| &c.2).collect::<Vec<_>>(), focus));
     if panels.iter().any(|(_, k)| *k == key) {
+        // The panel is up to date: a position just added opens for its name in its row.
+        if let Some(PendingName(id)) = pending {
+            let mut q_rows = world.query::<(Entity, &PositionRow)>();
+            if let Some(row) = q_rows.iter(world).find(|(_, r)| r.0 == id).map(|(e, _)| e) {
+                world.remove_resource::<PendingName>();
+                let name = asm.named_position(id).map(|p| p.name.clone()).unwrap_or_default();
+                begin_rename(world, row, name);
+            }
+        }
         return;
     }
     for (e, _) in panels {
