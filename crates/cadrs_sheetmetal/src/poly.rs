@@ -175,6 +175,12 @@ pub struct Affine2 {
 }
 
 impl Affine2 {
+    /// The map undoing this one (`None` if it is degenerate).
+    pub fn inverse(&self) -> Option<Affine2> {
+        let m = self.m.try_inverse()?;
+        Some(Affine2 { m, t: -(m * self.t) })
+    }
+
     pub fn identity() -> Affine2 {
         Affine2 {
             m: Matrix2::identity(),
@@ -225,6 +231,82 @@ impl Seg2 {
     }
 }
 
+/// The unit normal of `s` pointing into `poly`: the side where a point just off the segment's
+/// middle is inside (`None` if neither or both sides are).
+pub fn inward_normal(poly: &Polygon, s: Seg2) -> Option<V2> {
+    if s.len() < 1e-12 {
+        return None;
+    }
+    let n = perp(s.dir());
+    let mid = P2::from((s.a.coords + s.b.coords) / 2.0);
+    let size = poly.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0);
+    for step in [1e-5, 1e-4, 1e-3] {
+        let d = step * size.max(s.len());
+        match (poly.contains(mid + n * d), poly.contains(mid - n * d)) {
+            (true, false) => return Some(n),
+            (false, true) => return Some(-n),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Moves every vertex of `poly` that lies within `tol` of one of `exact` onto it: polygon booleans
+/// round their output to [`GRID`], and the inputs' exact coordinates are better.
+pub fn snap_to(poly: &Polygon, exact: &[P2], tol: f64) -> Polygon {
+    let fix = |p: P2| exact.iter().copied().find(|q| (q - p).norm() <= tol).unwrap_or(p);
+    Polygon {
+        outer: poly.outer.iter().map(|p| fix(*p)).collect(),
+        holes: poly.holes.iter().map(|h| h.iter().map(|p| fix(*p)).collect()).collect(),
+    }
+}
+
+/// The parts of segment `s` inside `polys` (material), as sub-segments in order along `s`.
+pub fn clip_segment(s: Seg2, polys: &[Polygon]) -> Vec<Seg2> {
+    let d = s.b - s.a;
+    let len = d.norm();
+    if len < 1e-12 {
+        return Vec::new();
+    }
+    // Every crossing with any loop's edges, as a parameter along s.
+    let mut ts = vec![0.0, 1.0];
+    for p in polys {
+        for l in std::iter::once(&p.outer).chain(p.holes.iter()) {
+            for i in 0..l.len() {
+                let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                let e = b - a;
+                let den = d.perp(&e);
+                if den.abs() < 1e-15 {
+                    continue;
+                }
+                let w = a - s.a;
+                let t = w.perp(&e) / den;
+                let u = w.perp(&d) / den;
+                if (0.0..=1.0).contains(&t) && (-1e-12..=1.0 + 1e-12).contains(&u) {
+                    ts.push(t);
+                }
+            }
+        }
+    }
+    ts.sort_by(f64::total_cmp);
+    ts.dedup_by(|a, b| (*a - *b).abs() * len < 1e-9);
+    let mut out: Vec<Seg2> = Vec::new();
+    for w in ts.windows(2) {
+        if (w[1] - w[0]) * len < 1e-9 {
+            continue;
+        }
+        let mid = s.a + d * ((w[0] + w[1]) / 2.0);
+        if polys.iter().any(|p| p.contains(mid)) {
+            let (a, b) = (s.a + d * w[0], s.a + d * w[1]);
+            match out.last_mut() {
+                Some(last) if (last.b - a).norm() < 1e-9 => last.b = b,
+                _ => out.push(Seg2::new(a, b)),
+            }
+        }
+    }
+    out
+}
+
 /// The left-hand normal of a direction.
 pub fn perp(v: V2) -> V2 {
     V2::new(-v.y, v.x)
@@ -258,6 +340,22 @@ pub fn difference(a: &[Polygon], cuts: &[Polygon]) -> Vec<Polygon> {
         acc = acc.difference(&geo::MultiPolygon(vec![c.to_geo()]));
     }
     acc.0.iter().map(Polygon::from_geo).collect()
+}
+
+/// The region two polygons share.
+pub fn intersection(a: &Polygon, b: &Polygon) -> Vec<Polygon> {
+    if a.is_empty() || b.is_empty() {
+        return Vec::new();
+    }
+    a.to_geo().intersection(&b.to_geo()).0.iter().map(Polygon::from_geo).filter(|p| p.area() > 0.0).collect()
+}
+
+/// Total length of the polygon's loops.
+pub fn perimeter(p: &Polygon) -> f64 {
+    std::iter::once(&p.outer)
+        .chain(p.holes.iter())
+        .map(|l| (0..l.len()).map(|i| (l[(i + 1) % l.len()] - l[i]).norm()).sum::<f64>())
+        .sum()
 }
 
 /// The area two polygons share.

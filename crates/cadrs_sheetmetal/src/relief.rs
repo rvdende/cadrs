@@ -16,10 +16,11 @@
 //! **Bend reliefs.** Where a bend ends but one of its walls carries on along the bend line (a
 //! partial flange, a bend across part of a face), a slot is cut just past the bend's end, across
 //! the bend region and `extra` deep into the wall that carries on:
-//! - width: `thickness × width scale` for the scaled types, the thickness for the sized ones, the
-//!   minimal gap for Tear (a rip, almost no material removed);
+//! - width: `thickness × width scale` for the scaled types, the thickness for the sized ones;
 //! - extra depth: `(depth scale − 1) × bend radius` for the scaled types (1 makes an obround's
-//!   round end just touch the bend), the given depth for the sized ones, none for Tear;
+//!   round end just touch the bend), the given depth for the sized ones;
+//! - Tear removes no material: the sheet is only slit along the bend's end (the flat solver
+//!   records the slit);
 //! - Rectangle and Square end square; Obround ends in a half circle reaching the same depth;
 //! - "Extend bend relief" runs the cut on along the bend line to the end of the sheet.
 
@@ -79,7 +80,7 @@ pub fn bend_relief_size(relief: &BendRelief, p: &Params, bend_radius: f64) -> (f
             (t * relief.width_scale, (relief.depth_scale - 1.0).max(0.0) * bend_radius)
         }
         BendReliefKind::SquareSized | BendReliefKind::ObroundSized => (t, relief.depth),
-        BendReliefKind::Tear => (p.minimal_gap.max(1e-3), 0.0),
+        BendReliefKind::Tear => (0.0, 0.0),
     }
 }
 

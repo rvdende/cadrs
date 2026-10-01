@@ -39,7 +39,7 @@ fn main() {
         ("01-l-bracket-up", ok(samples::l_bracket(base(), true))),
         ("02-l-bracket-down", ok(samples::l_bracket(base(), false))),
         ("03-u-channel", ok(samples::u_channel(base()))),
-        ("04-hem", samples::hem(base())),
+        ("04-hem", ok(samples::hem(base()))),
         ("05-tube", samples::tube(base())),
         ("06-wall-into-half-tube", samples::wall_into_half_tube(base())),
         ("07-box-butt-direction-1", ok(samples::open_box(base(), RipStyle::ButtDirection1))),
@@ -53,7 +53,7 @@ fn main() {
         let name: &'static str = Box::leak(format!("20-partial-flange-{label}{}", if extend { "-extended" } else { "" }).into_boxed_str());
         cases.push((name, ok(samples::partial_flange(with_bend_relief(kind, extend)))));
     }
-    cases.push(("30-collision", samples::hook_collision(base())));
+    cases.push(("30-collision", ok(samples::hook_collision(base()))));
     cases.push(("31-bend-loop", ok(samples::bend_loop(base()))));
 
     let mut opt = resvg::usvg::Options::default();

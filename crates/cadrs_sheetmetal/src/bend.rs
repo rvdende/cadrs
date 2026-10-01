@@ -86,6 +86,14 @@ impl BendValue {
     /// The same bend stated as `calc` (`None` where that form is undefined: a deduction from
     /// 180° on, or a K factor of a bend with no angle).
     pub fn to_calc(self, calc: BendCalc, r: f64, t: f64, theta: f64) -> Option<BendValue> {
+        if self.calc() == calc {
+            // Already in that form: exactly as stated (no round trip through the allowance),
+            // though a deduction still needs a bend under 180°.
+            return match self {
+                BendValue::Deduction(_) => outside_setback(r, t, theta).map(|_| self),
+                _ => Some(self),
+            };
+        }
         let ba = self.allowance(r, t, theta)?;
         match calc {
             BendCalc::BendAllowance => Some(BendValue::Allowance(ba)),

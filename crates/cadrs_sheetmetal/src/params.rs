@@ -123,6 +123,7 @@ impl BendReliefKind {
 /// A corner relief: its type, the scale (scaled types) and the size (sized types: the square's
 /// side or the circle's diameter).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CornerRelief {
     pub kind: CornerReliefKind,
     pub scale: f64,
@@ -142,13 +143,13 @@ impl Default for CornerRelief {
 /// A bend relief: its type, the depth and width scales (scaled types) and the depth (sized
 /// types).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BendRelief {
     pub kind: BendReliefKind,
     pub depth_scale: f64,
     pub width_scale: f64,
     pub depth: f64,
     /// Bend relief feature only (SM8.3): run the cut the other way, to the end of the sheet.
-    #[serde(default)]
     pub extend: bool,
 }
 
@@ -166,6 +167,7 @@ impl Default for BendRelief {
 
 /// The Sheet metal model's General, Material and Relief sections.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Params {
     /// Sheet thickness (mm).
     pub thickness: f64,

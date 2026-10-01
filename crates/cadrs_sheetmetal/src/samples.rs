@@ -2,9 +2,9 @@
 //! with (an L, a U-channel, an open box with ripped corners, a partial flange, a hem, a rolled
 //! tube) plus two that must fail (overlapping walls, bends closing a loop).
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::PI;
 
-use crate::model::{Bend, BuildError, Joint, JointId, JointKind, Model, P3, RipStyle, SharpBuilder, Surface, V3, Wall, WallId};
+use crate::model::{BuildError, HemAlignment, Joint, JointId, JointKind, Model, P3, RipStyle, SharpBuilder, Surface, V3, Wall, WallId};
 use crate::params::Params;
 use crate::poly::{P2, Polygon, Seg2};
 
@@ -65,59 +65,13 @@ pub fn partial_flange(p: Params) -> Result<Model, BuildError> {
     b.build()
 }
 
-fn planar(origin: P3) -> Surface {
-    Surface::Planar {
-        origin,
-        u: V3::x(),
-        v: V3::y(),
-    }
-}
-
-fn bend(on_a: Seg2, on_b: Seg2, angle: f64, p: &Params) -> Bend {
-    Bend {
-        on_a,
-        on_b,
-        angle,
-        toward_material: true,
-        radius: p.bend_radius,
-        model_radius: true,
-        value: None,
-        hem: false,
-    }
-}
-
-/// A 50 × 20 wall with a 10 long hem folded back 180° at its x = 50 edge.
-pub fn hem(p: Params) -> Model {
-    let mut h = bend(
-        Seg2::new(P2::new(50.0, 0.0), P2::new(50.0, 20.0)),
-        Seg2::new(P2::new(0.0, 0.0), P2::new(0.0, 20.0)),
-        PI,
-        &p,
-    );
-    h.hem = true;
-    Model {
-        params: p,
-        walls: vec![
-            Wall {
-                id: WallId(0),
-                surface: planar(P3::origin()),
-                outline: rect(50.0, 20.0),
-            },
-            Wall {
-                id: WallId(1),
-                surface: planar(P3::origin()),
-                outline: rect(10.0, 20.0),
-            },
-        ],
-        joints: vec![Joint {
-            id: JointId(0),
-            name: "Bend A".into(),
-            a: WallId(0),
-            b: WallId(1),
-            kind: JointKind::Bend(h),
-        }],
-        ..Default::default()
-    }
+/// A 50 × 20 wall with a 10 long hem folded back 180° over its material side at its x = 50 edge
+/// (the hem's bend starting at the edge: In place).
+pub fn hem(p: Params) -> Result<Model, BuildError> {
+    let mut b = SharpBuilder::new(p);
+    let a = b.wall(P3::origin(), V3::x(), V3::y(), rect(50.0, 20.0));
+    b.hem(a, (P3::new(50.0, 0.0, 0.0), P3::new(50.0, 20.0, 0.0)), 10.0, true, HemAlignment::InPlace);
+    b.build()
 }
 
 /// A rolled wall: a piece of a cylinder of definition radius `radius` (the inner face) about
@@ -145,17 +99,32 @@ pub fn tube(p: Params) -> Model {
     }
 }
 
-/// A 20 × 30 flat wall running smoothly into a half cylinder of inner radius 10.
+/// A 20 × 30 flat wall (XY plane, material above) running smoothly into a half cylinder of inner
+/// radius 10 that curls down from its x = 20 edge.
 pub fn wall_into_half_tube(p: Params) -> Model {
     Model {
         params: p,
         walls: vec![
             Wall {
                 id: WallId(0),
-                surface: planar(P3::origin()),
+                surface: Surface::Planar {
+                    origin: P3::origin(),
+                    u: V3::x(),
+                    v: V3::y(),
+                },
                 outline: rect(20.0, 30.0),
             },
-            rolled_wall(1, 10.0, PI * 10.0, 30.0),
+            Wall {
+                id: WallId(1),
+                surface: Surface::Rolled {
+                    axis_origin: P3::new(20.0, 0.0, -10.0),
+                    axis: V3::y(),
+                    start: V3::z(),
+                    radius: 10.0,
+                    material_outside: true,
+                },
+                outline: rect(PI * 10.0, 30.0),
+            },
         ],
         joints: vec![Joint {
             id: JointId(0),
@@ -171,54 +140,27 @@ pub fn wall_into_half_tube(p: Params) -> Model {
     }
 }
 
-/// Must fail: wall C, hinged on A's top edge, hooks back down into where B lies flat.
-pub fn hook_collision(p: Params) -> Model {
+/// Must fail: a 10 × 10 base with 30 high walls bent up on its x = 10 and y = 10 edges; the
+/// second wall has a hook that reaches round below the base, so flat it lands on the first wall.
+pub fn hook_collision(p: Params) -> Result<Model, BuildError> {
+    let mut b = SharpBuilder::new(p);
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), rect(10.0, 10.0));
+    let east = b.wall(P3::new(10.0, 0.0, 0.0), V3::z(), V3::y(), rect(30.0, 10.0));
+    // Plane y = 10, local (height, 10 − x): material towards −y.
     let hook = Polygon::new(vec![
         P2::new(0.0, 0.0),
-        P2::new(10.0, 0.0),
-        P2::new(10.0, 2.0),
-        P2::new(25.0, 2.0),
-        P2::new(25.0, -8.0),
-        P2::new(35.0, -8.0),
-        P2::new(35.0, 20.0),
-        P2::new(0.0, 20.0),
+        P2::new(0.0, 10.0),
+        P2::new(20.0, 10.0),
+        P2::new(20.0, -25.0),
+        P2::new(-8.0, -25.0),
+        P2::new(-8.0, -15.0),
+        P2::new(2.0, -15.0),
+        P2::new(2.0, 0.0),
     ]);
-    let wall = |id: u32, outline: Polygon| Wall {
-        id: WallId(id),
-        surface: planar(P3::origin()),
-        outline,
-    };
-    Model {
-        params: p,
-        walls: vec![wall(0, rect(10.0, 10.0)), wall(1, rect(30.0, 10.0)), wall(2, hook)],
-        joints: vec![
-            Joint {
-                id: JointId(0),
-                name: "Bend A".into(),
-                a: WallId(0),
-                b: WallId(1),
-                kind: JointKind::Bend(bend(
-                    Seg2::new(P2::new(10.0, 0.0), P2::new(10.0, 10.0)),
-                    Seg2::new(P2::new(0.0, 0.0), P2::new(0.0, 10.0)),
-                    FRAC_PI_2,
-                    &p,
-                )),
-            },
-            Joint {
-                id: JointId(1),
-                name: "Bend B".into(),
-                a: WallId(0),
-                b: WallId(2),
-                kind: JointKind::Bend(bend(
-                    Seg2::new(P2::new(0.0, 10.0), P2::new(10.0, 10.0)),
-                    Seg2::new(P2::new(0.0, 0.0), P2::new(10.0, 0.0)),
-                    FRAC_PI_2,
-                    &p,
-                )),
-            },
-        ],
-        ..Default::default()
-    }
+    let north = b.wall(P3::new(10.0, 10.0, 0.0), V3::z(), -V3::x(), hook);
+    b.bend(base, east, (P3::new(10.0, 0.0, 0.0), P3::new(10.0, 10.0, 0.0)));
+    b.bend(base, north, (P3::new(10.0, 10.0, 0.0), P3::new(0.0, 10.0, 0.0)));
+    b.build()
 }
 
 /// Must fail: two walls bent up from a corner of a base and bent to each other as well.

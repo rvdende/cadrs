@@ -57,6 +57,38 @@ impl Surface {
         }
     }
 
+    /// The unit normal on the material side at local point `p`.
+    pub fn normal_at(&self, p: P2) -> V3 {
+        match *self {
+            Surface::Planar { u, v, .. } => u.cross(&v).normalize(),
+            Surface::Rolled {
+                axis, start, radius, material_outside, ..
+            } => {
+                let a = axis.normalize();
+                let x = start.normalize();
+                let y = a.cross(&x);
+                let phi = p.x / radius;
+                let radial = x * phi.cos() + y * phi.sin();
+                if material_outside { radial } else { -radial }
+            }
+        }
+    }
+
+    /// A local 2D direction `d` at local point `p`, in 3D (unit length).
+    pub fn direction_at(&self, p: P2, d: V2) -> V3 {
+        match *self {
+            Surface::Planar { u, v, .. } => (u * d.x + v * d.y).normalize(),
+            Surface::Rolled { axis, start, radius, .. } => {
+                let a = axis.normalize();
+                let x = start.normalize();
+                let y = a.cross(&x);
+                let phi = p.x / radius;
+                let tangent = -x * phi.sin() + y * phi.cos();
+                (tangent * d.x + a * d.y).normalize()
+            }
+        }
+    }
+
     /// Local 2D → 3D.
     pub fn point(&self, p: P2) -> P3 {
         match *self {
@@ -265,6 +297,46 @@ pub struct BendReliefOverride {
     pub relief: BendRelief,
 }
 
+/// A bend in 3D (for the folded solid, highlighting and drawings). The bend region is the part of
+/// the cylinders about the axis from `ends.0` to `ends.1`, between `inner_radius` and
+/// `outer_radius`, from the direction `start` (axis to the first wall's tangent line) turning
+/// right-handed about `axis` by `sweep`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BendGeom {
+    /// The axis points level with the tangent lines' two ends.
+    pub ends: (P3, P3),
+    /// Unit axis; positive rotation about it turns the first wall into the second.
+    pub axis: V3,
+    pub inner_radius: f64,
+    pub outer_radius: f64,
+    /// The definition surface's radius (outer when the bend turns towards the material).
+    pub def_radius: f64,
+    /// Unit direction from the axis to the first wall's tangent line.
+    pub start: V3,
+    pub sweep: f64,
+}
+
+impl BendGeom {
+    /// Rodrigues rotation of a vector about the axis.
+    pub fn rotate_vec(&self, v: V3, angle: f64) -> V3 {
+        let k = self.axis;
+        v * angle.cos() + k.cross(&v) * angle.sin() + k * k.dot(&v) * (1.0 - angle.cos())
+    }
+
+    /// A point turned about the axis.
+    pub fn rotate(&self, p: P3, angle: f64) -> P3 {
+        let o = self.ends.0;
+        o + self.rotate_vec(p - o, angle)
+    }
+}
+
+/// A joint that doesn't agree with its walls in 3D ([`Model::validate`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelError {
+    pub joint: JointId,
+    pub reason: String,
+}
+
 /// One Sheet metal model's definition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Model {
@@ -293,17 +365,126 @@ impl Model {
         self.joints.iter_mut().find(|j| j.id == id)
     }
 
-    /// Move a joint up (`-1`) or down (`+1`) in the table (SM13.4). Returns whether it moved.
+    /// Move a joint up (`by < 0`) or down (`by > 0`) past the previous or next joint of the same
+    /// table (bends among bends, rips and tangent joints among themselves; SM13.4). Returns
+    /// whether it moved.
     pub fn move_joint(&mut self, id: JointId, by: isize) -> bool {
         let Some(i) = self.joints.iter().position(|j| j.id == id) else {
             return false;
         };
-        let to = i as isize + by;
-        if to < 0 || to as usize >= self.joints.len() {
-            return false;
-        }
-        self.joints.swap(i, to as usize);
+        let is_bend = self.joints[i].bend().is_some();
+        let same = |j: &Joint| j.bend().is_some() == is_bend;
+        let to = if by < 0 {
+            self.joints[..i].iter().rposition(same)
+        } else if by > 0 {
+            self.joints[i + 1..].iter().position(same).map(|k| i + 1 + k)
+        } else {
+            None
+        };
+        let Some(to) = to else { return false };
+        let j = self.joints.remove(i);
+        self.joints.insert(to, j);
         true
+    }
+
+    /// A bend's 3D geometry: its axis, radii and sweep (`None` for a joint that isn't a bend or
+    /// whose first wall isn't planar).
+    pub fn bend_geometry(&self, id: JointId) -> Option<BendGeom> {
+        let j = self.joint(id)?;
+        let b = j.bend()?;
+        let wa = self.wall(j.a)?;
+        if !matches!(wa.surface, Surface::Planar { .. }) {
+            return None;
+        }
+        let t = self.params.thickness;
+        let n = wa.surface.normal_at(b.on_a.a);
+        let into_a = crate::poly::inward_normal(&wa.outline, b.on_a)?;
+        let c = -wa.surface.direction_at(b.on_a.a, into_a); // a's continuation past the bend
+        let (side, def_radius) = if b.toward_material { (n, b.radius + t) } else { (-n, b.radius) };
+        let shift = side * if b.toward_material { b.radius + t } else { b.radius };
+        let (pa, pb) = (wa.surface.point(b.on_a.a), wa.surface.point(b.on_a.b));
+        Some(BendGeom {
+            ends: (pa + shift, pb + shift),
+            axis: c.cross(&side).normalize(),
+            inner_radius: b.radius,
+            outer_radius: b.radius + t,
+            def_radius,
+            start: -side,
+            sweep: b.angle,
+        })
+    }
+
+    /// Checks that the walls and joints agree in 3D: each bend's second wall is where its first
+    /// wall's tangent line lands when turned about the bend axis by the bend angle, tangent joints
+    /// meet smoothly, and every joint's walls exist. Empty when consistent.
+    pub fn validate(&self) -> Vec<ModelError> {
+        let mut out = Vec::new();
+        let size = self
+            .walls
+            .iter()
+            .filter_map(|w| w.outline.bounds())
+            .map(|(lo, hi)| (hi - lo).norm())
+            .fold(1.0, f64::max);
+        let tol = 1e-6 * size;
+        for j in &self.joints {
+            let (Some(wa), Some(wb)) = (self.wall(j.a), self.wall(j.b)) else {
+                out.push(ModelError {
+                    joint: j.id,
+                    reason: "a wall of this joint doesn't exist".into(),
+                });
+                continue;
+            };
+            let mut bad = |reason: &str| {
+                out.push(ModelError {
+                    joint: j.id,
+                    reason: reason.into(),
+                })
+            };
+            match &j.kind {
+                JointKind::Bend(b) => {
+                    if (b.on_a.len() - b.on_b.len()).abs() > tol {
+                        bad("the bend's tangent lines differ in length");
+                        continue;
+                    }
+                    let Some(g) = self.bend_geometry(j.id) else {
+                        bad("the bend's first wall isn't planar, or its tangent line isn't on the wall's edge");
+                        continue;
+                    };
+                    let turn = |p: P3| g.rotate(p, g.sweep);
+                    let (pa, pb) = (wa.surface.point(b.on_a.a), wa.surface.point(b.on_a.b));
+                    let (qa, qb) = (wb.surface.point(b.on_b.a), wb.surface.point(b.on_b.b));
+                    if (turn(pa) - qa).norm() > tol || (turn(pb) - qb).norm() > tol {
+                        bad("the second wall's tangent line isn't where the bend puts it");
+                        continue;
+                    }
+                    let na = wa.surface.normal_at(b.on_a.a);
+                    let nb = wb.surface.normal_at(b.on_b.a);
+                    if (g.rotate_vec(na, g.sweep) - nb).norm() > 1e-6 {
+                        bad("the second wall's material side doesn't follow the bend");
+                        continue;
+                    }
+                    let Some(ib) = crate::poly::inward_normal(&wb.outline, b.on_b) else {
+                        bad("the bend's tangent line isn't on its second wall's edge");
+                        continue;
+                    };
+                    let ia = crate::poly::inward_normal(&wa.outline, b.on_a).expect("checked by bend_geometry");
+                    let c = -wa.surface.direction_at(b.on_a.a, ia);
+                    if (g.rotate_vec(c, g.sweep) - wb.surface.direction_at(b.on_b.a, ib)).norm() > 1e-6 {
+                        bad("the second wall doesn't run on from the bend");
+                    }
+                }
+                JointKind::Tangent { on_a, on_b } => {
+                    let close = |p: P2, q: P2| (wa.surface.point(p) - wb.surface.point(q)).norm() <= tol;
+                    if !close(on_a.a, on_b.a) || !close(on_a.b, on_b.b) {
+                        bad("the tangent joint's edges don't meet");
+                    } else if (wa.surface.normal_at(on_a.a) - wb.surface.normal_at(on_b.a)).norm() > 1e-6 {
+                        bad("the walls don't meet smoothly at the tangent joint");
+                    }
+                }
+                JointKind::Rip { .. } => {}
+            }
+        }
+        out
     }
 
     pub fn corner_relief(&self, a: JointId, b: JointId) -> CornerRelief {
@@ -367,8 +548,9 @@ pub enum SharpJointKind {
     Rip { style: RipStyle },
 }
 
-/// Why a sharp definition couldn't be built.
-#[derive(Clone, Debug, PartialEq)]
+/// Why a sharp definition couldn't be built. `joint` and `wall` index the builder's lists (hems
+/// count after the joints).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum BuildError {
     /// The joint's edge isn't on the edge of one of its walls.
     EdgeNotOnWall { joint: usize, wall: usize },
@@ -382,6 +564,55 @@ pub enum BuildError {
     WallTrimmedAway { joint: usize, wall: usize },
     /// A bend of 180° or more: build hems with [`SharpBuilder::hem`] instead.
     TooSharp { joint: usize },
+    /// A hem with no length, or a hem edge that isn't on its wall.
+    BadHem { hem: usize },
+}
+
+impl BuildError {
+    /// The feature error text.
+    pub fn message(&self) -> String {
+        match self {
+            BuildError::EdgeNotOnWall { .. } => "The joint's edge isn't on the edge of its wall".into(),
+            BuildError::NoAngle { .. } => "The walls are in line: there is nothing to bend".into(),
+            BuildError::InconsistentSide { .. } => "The walls' material sides don't match across the joint".into(),
+            BuildError::ButtNot90 { .. } => "Only 90° joints can be butt joints".into(),
+            BuildError::WallTrimmedAway { .. } => "The bend is too large for its wall".into(),
+            BuildError::TooSharp { .. } => "Bends of 180° or more must be hems".into(),
+            BuildError::BadHem { .. } => "The hem has no length or isn't on an edge of its wall".into(),
+        }
+    }
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for BuildError {}
+
+/// Where a hem's bend goes relative to the edge it is made on (SM4.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HemAlignment {
+    /// The hem's outside lies on the original edge (the wall gets shorter).
+    #[default]
+    Outer,
+    /// The hem's bend starts at the original edge.
+    InPlace,
+}
+
+/// A hem folded back 180° from a wall's edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SharpHem {
+    pub wall: usize,
+    pub edge: (P3, P3),
+    /// Length of the folded-back part, from its tangent line to its end.
+    pub length: f64,
+    /// Inner radius; `None` uses the model's.
+    pub radius: Option<f64>,
+    /// Fold over the material side (onto the wall) rather than the other side.
+    pub toward_material: bool,
+    pub alignment: HemAlignment,
 }
 
 /// Builds a [`Model`] from walls meeting at virtual sharps.
@@ -390,6 +621,7 @@ pub struct SharpBuilder {
     pub params: Params,
     pub walls: Vec<SharpWall>,
     pub joints: Vec<SharpJoint>,
+    pub hems: Vec<SharpHem>,
 }
 
 struct Side {
@@ -427,21 +659,38 @@ impl SharpBuilder {
         self.joints.len() - 1
     }
 
+    /// A hem on `wall`'s edge `edge` (SM4): the edge folded back 180°, `length` long.
+    pub fn hem(&mut self, wall: usize, edge: (P3, P3), length: f64, toward_material: bool, alignment: HemAlignment) -> usize {
+        self.hems.push(SharpHem {
+            wall,
+            edge,
+            length,
+            radius: None,
+            toward_material,
+            alignment,
+        });
+        self.hems.len() - 1
+    }
+
     fn side(&self, joint: usize, wall: usize) -> Result<Side, BuildError> {
+        self.side_of(self.joints[joint].edge, wall).ok_or(BuildError::EdgeNotOnWall { joint, wall })
+    }
+
+    fn side_of(&self, edge3: (P3, P3), wall: usize) -> Option<Side> {
         let w = &self.walls[wall];
         let s = Surface::Planar {
             origin: w.origin,
             u: w.u,
             v: w.v,
         };
-        let (p0, p1) = self.joints[joint].edge;
+        let (p0, p1) = edge3;
         let edge = Seg2::new(s.local(p0), s.local(p1));
         let size = w.outline.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0).max(1e-9);
         let tol = 1e-6 * size;
         // Both ends must lie in the wall's plane and on its outline's boundary.
         let n = s.normal().expect("planar");
         if ((p0 - w.origin).dot(&n)).abs() > tol || ((p1 - w.origin).dot(&n)).abs() > tol || edge.len() < tol {
-            return Err(BuildError::EdgeNotOnWall { joint, wall });
+            return None;
         }
         let mid = P2::from((edge.a.coords + edge.b.coords) / 2.0);
         let nrm = perp(edge.dir());
@@ -451,10 +700,10 @@ impl SharpBuilder {
         } else if w.outline.contains(mid - nrm * step) && !w.outline.contains(mid + nrm * step) {
             -nrm
         } else {
-            return Err(BuildError::EdgeNotOnWall { joint, wall });
+            return None;
         };
         let into3 = (w.u * into.x + w.v * into.y).normalize();
-        Ok(Side { edge, into, into3 })
+        Some(Side { edge, into, into3 })
     }
 
     /// The walls trimmed and the joints resolved. Rips are applied first, then bends in order.
@@ -535,15 +784,17 @@ impl SharpBuilder {
             });
         }
 
-        // Bends: the extent where both walls still reach the sharp, then trim by the setback.
+        // Bends: the extent where both walls reach the sharp (after the rips, before any bend
+        // trims, so it doesn't depend on the order of the bends), then trim by the setback.
+        let after_rips = outlines.clone();
         for (ji, j) in self.joints.iter().enumerate() {
             let SharpJointKind::Bend { radius, value } = j.kind else { continue };
             let g = &geos[ji];
             let r = radius.unwrap_or(p.bend_radius);
             let setback = if g.toward { bend::outside_setback(r, t, g.theta) } else { bend::inside_setback(r, g.theta) };
             let sb = setback.ok_or(BuildError::TooSharp { joint: ji })?;
-            let ia = on_line_interval(&outlines[j.a], &g.sa.edge);
-            let ib = on_line_interval(&outlines[j.b], &g.sb.edge);
+            let ia = on_line_interval(&after_rips[j.a], &g.sa.edge);
+            let ib = on_line_interval(&after_rips[j.b], &g.sb.edge);
             let (Some((a0, a1)), Some((b0, b1))) = (ia, ib) else {
                 return Err(BuildError::EdgeNotOnWall { joint: ji, wall: j.a });
             };
@@ -579,7 +830,65 @@ impl SharpBuilder {
             }));
         }
 
-        let walls = self
+        // Hems: a new wall folded back 180° from the (trimmed) edge.
+        let mut hem_walls: Vec<(Surface, Polygon)> = Vec::new();
+        let mut hem_joints: Vec<(usize, usize, Bend)> = Vec::new();
+        for (hi, h) in self.hems.iter().enumerate() {
+            let bad = BuildError::BadHem { hem: hi };
+            let side = self.side_of(h.edge, h.wall).ok_or(bad.clone())?;
+            if h.length.is_nan() || h.length <= 0.0 {
+                return Err(bad);
+            }
+            let w = &self.walls[h.wall];
+            let n = w.u.cross(&w.v).normalize();
+            let r = h.radius.unwrap_or(p.bend_radius);
+            let (lo, hi_) = on_line_interval(&after_rips[h.wall], &side.edge).ok_or(bad.clone())?;
+            let sub = Seg2::new(side.edge.a + (side.edge.b - side.edge.a) * lo, side.edge.a + (side.edge.b - side.edge.a) * hi_);
+            // Outer: the hem's outside (r + t beyond its tangent line) lands on the edge.
+            let trim = match h.alignment {
+                HemAlignment::Outer => r + t,
+                HemAlignment::InPlace => 0.0,
+            };
+            let ts = Side {
+                edge: sub,
+                into: side.into,
+                into3: side.into3,
+            };
+            outlines[h.wall] = trim_band(&outlines[h.wall], &ts, trim).ok_or(BuildError::WallTrimmedAway { joint: self.joints.len() + hi, wall: h.wall })?;
+            let on_a = sub.offset(side.into * trim);
+            let surf_a = Surface::Planar {
+                origin: w.origin,
+                u: w.u,
+                v: w.v,
+            };
+            // The definition surface turns about an axis on the material side (radius r + t) or
+            // the other side (radius r); 180° later it is 2 × that radius further over.
+            let off = if h.toward_material { n * (2.0 * (r + t)) } else { -n * (2.0 * r) };
+            let (qa, qb) = (surf_a.point(on_a.a) + off, surf_a.point(on_a.b) + off);
+            let nb = -n;
+            let u = side.into3; // the hem runs back over the wall
+            let v = nb.cross(&u);
+            let surf_b = Surface::Planar { origin: qa, u, v };
+            let on_b = Seg2::new(surf_b.local(qa), surf_b.local(qb));
+            let outline = Polygon::new(vec![on_b.a, on_b.b, on_b.b + V2::x() * h.length, on_b.a + V2::x() * h.length]);
+            hem_joints.push((
+                h.wall,
+                self.walls.len() + hem_walls.len(),
+                Bend {
+                    on_a,
+                    on_b,
+                    angle: std::f64::consts::PI,
+                    toward_material: h.toward_material,
+                    radius: r,
+                    model_radius: h.radius.is_none(),
+                    value: None,
+                    hem: true,
+                },
+            ));
+            hem_walls.push((surf_b, outline));
+        }
+
+        let mut walls: Vec<Wall> = self
             .walls
             .iter()
             .zip(outlines)
@@ -594,32 +903,30 @@ impl SharpBuilder {
                 outline,
             })
             .collect();
-        let (mut nb, mut nr) = (0, 0);
-        let joints = self
+        for (surface, outline) in hem_walls {
+            walls.push(Wall {
+                id: WallId(walls.len() as u32),
+                surface,
+                outline,
+            });
+        }
+        let mut all: Vec<(usize, usize, JointKind)> = self
             .joints
             .iter()
             .zip(joints)
+            .map(|(j, kind)| (j.a, j.b, kind.expect("every joint resolved")))
+            .collect();
+        all.extend(hem_joints.into_iter().map(|(a, b, bend)| (a, b, JointKind::Bend(bend))));
+        let mut names = JointNamer::default();
+        let joints = all
+            .into_iter()
             .enumerate()
-            .map(|(i, (j, kind))| {
-                let kind = kind.expect("every joint resolved");
-                let name = match kind {
-                    JointKind::Bend(_) => {
-                        nb += 1;
-                        format!("Bend {}", letters(nb - 1))
-                    }
-                    JointKind::Rip { .. } => {
-                        nr += 1;
-                        format!("Rip {nr}")
-                    }
-                    JointKind::Tangent { .. } => format!("Tangent {}", i + 1),
-                };
-                Joint {
-                    id: JointId(i as u32),
-                    name,
-                    a: WallId(j.a as u32),
-                    b: WallId(j.b as u32),
-                    kind,
-                }
+            .map(|(i, (a, b, kind))| Joint {
+                id: JointId(i as u32),
+                name: names.name(&kind),
+                a: WallId(a as u32),
+                b: WallId(b as u32),
+                kind,
             })
             .collect();
         Ok(Model {
@@ -642,12 +949,60 @@ fn trim_band(outline: &Polygon, side: &Side, depth: f64) -> Option<Polygon> {
     let e = side.edge;
     let band = Polygon::new(vec![e.a, e.b, e.b + side.into * depth, e.a + side.into * depth]);
     let out = if depth > 0.0 {
-        crate::poly::difference(std::slice::from_ref(outline), &[band])
+        crate::poly::difference(std::slice::from_ref(outline), std::slice::from_ref(&band))
     } else {
-        crate::poly::union(&[outline.clone(), band])
+        crate::poly::union(&[outline.clone(), band.clone()])
     };
-    // Keep the biggest piece (a trim never splits a sane wall; slivers can appear).
-    out.into_iter().filter(|p| p.area() > 1e-12).max_by(|a, b| a.area().total_cmp(&b.area()))
+    // Keep the biggest piece (a trim never splits a sane wall; slivers can appear), with its
+    // vertices put back on the exact inputs the booleans rounded.
+    let mut exact: Vec<P2> = outline.outer.iter().chain(outline.holes.iter().flatten()).copied().collect();
+    exact.extend(band.outer.iter().copied());
+    // Where the band's sides cross the outline's edges.
+    let (n, d) = (side.into, e.b - e.a);
+    let l = &outline.outer;
+    for i in 0..l.len() {
+        let (p, q) = (l[i], l[(i + 1) % l.len()]);
+        for (o, dir) in [(e.a, side.into), (e.b, side.into), (e.a + n * depth, d), (e.a, d)] {
+            let den = (q - p).perp(&dir);
+            if den.abs() > 1e-15 {
+                let t = (o - p).perp(&dir) / den;
+                if (0.0..=1.0).contains(&t) {
+                    exact.push(p + (q - p) * t);
+                }
+            }
+        }
+    }
+    out.into_iter()
+        .filter(|p| p.area() > 1e-12)
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .map(|p| crate::poly::snap_to(&p, &exact, 10.0 * crate::poly::GRID))
+}
+
+/// Table names in order of creation: "Bend A", "Bend B", …; "Rip 1", …; "Tangent 1", ….
+#[derive(Clone, Debug, Default)]
+pub struct JointNamer {
+    bends: usize,
+    rips: usize,
+    tangents: usize,
+}
+
+impl JointNamer {
+    pub fn name(&mut self, kind: &JointKind) -> String {
+        match kind {
+            JointKind::Bend(_) => {
+                self.bends += 1;
+                format!("Bend {}", letters(self.bends - 1))
+            }
+            JointKind::Rip { .. } => {
+                self.rips += 1;
+                format!("Rip {}", self.rips)
+            }
+            JointKind::Tangent { .. } => {
+                self.tangents += 1;
+                format!("Tangent {}", self.tangents)
+            }
+        }
+    }
 }
 
 /// The parameter interval `[t0, t1]` (along `edge`, 0 at `edge.a`, 1 at `edge.b`) of the

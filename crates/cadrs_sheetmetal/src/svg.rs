@@ -58,22 +58,40 @@ pub fn flat_svg(flat: &FlatPattern, title: &str, px: f64) -> String {
             let _ = writeln!(s, r##"<path d="{}" fill="#c9cdd2" fill-rule="evenodd" stroke="#333" stroke-width="1"/>"##, path(o, flip));
         }
         for c in &part.cuts {
-            let _ = writeln!(s, r##"<path d="{}" fill="none" stroke="#7a7a7a" stroke-width="0.6" stroke-dasharray="2,2"/>"##, path(c, flip));
+            for shape in &c.shapes {
+                let _ = writeln!(s, r##"<path d="{}" fill="none" stroke="#7a7a7a" stroke-width="0.6" stroke-dasharray="2,2"/>"##, path(shape, flip));
+            }
+            if let Some(slit) = c.slit {
+                let ((x1, y1), (x2, y2)) = (flip(slit.a), flip(slit.b));
+                let _ = writeln!(s, r##"<line x1="{x1:.2}" y1="{y1:.2}" x2="{x2:.2}" y2="{y2:.2}" stroke="#333" stroke-width="1"/>"##);
+            }
         }
         for pc in part.pieces.iter().filter(|pc| colliding.contains(&pc.source)) {
-            let _ = writeln!(s, r##"<path d="{}" fill="#e53935" fill-opacity="0.35" stroke="#c62828" stroke-width="1"/>"##, path(&pc.polygon, flip));
+            for c in &pc.cut {
+                let _ = writeln!(s, r##"<path d="{}" fill="#e53935" fill-opacity="0.2" stroke="#c62828" stroke-width="0.8"/>"##, path(c, flip));
+            }
+        }
+        for e in &flat.errors {
+            if let FlatError::Collision { region, .. } = e {
+                for r in region {
+                    let _ = writeln!(s, r##"<path d="{}" fill="#c62828" fill-opacity="0.75" stroke="none"/>"##, path(r, flip));
+                }
+            }
         }
         for b in &part.bends {
             let colour = if b.up { "#263238" } else { "#e65100" };
-            for t in [b.tangent_a, b.tangent_b] {
+            for t in &b.tangent_visible {
                 let ((x1, y1), (x2, y2)) = (flip(t.a), flip(t.b));
                 let _ = writeln!(s, r##"<line x1="{x1:.2}" y1="{y1:.2}" x2="{x2:.2}" y2="{y2:.2}" stroke="#555" stroke-width="0.5"/>"##);
             }
+            for c in &b.center_visible {
+                let ((x1, y1), (x2, y2)) = (flip(c.a), flip(c.b));
+                let _ = writeln!(
+                    s,
+                    r#"<line x1="{x1:.2}" y1="{y1:.2}" x2="{x2:.2}" y2="{y2:.2}" stroke="{colour}" stroke-width="1" stroke-dasharray="6,3"/>"#
+                );
+            }
             let ((x1, y1), (x2, y2)) = (flip(b.center.a), flip(b.center.b));
-            let _ = writeln!(
-                s,
-                r#"<line x1="{x1:.2}" y1="{y1:.2}" x2="{x2:.2}" y2="{y2:.2}" stroke="{colour}" stroke-width="1" stroke-dasharray="6,3"/>"#
-            );
             let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
             let _ = writeln!(
                 s,
