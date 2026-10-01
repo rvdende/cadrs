@@ -2195,6 +2195,31 @@ pub fn sweep_along_paths(k: &mut dyn Kernel) {
     assert!(volume(k, joined) > volume(k, body));
 }
 
+/// A Ø6 circle swept around a closed R40 circle is a torus (the trimmer document's Sweep 1):
+/// V = 2π²·R·r² = 720π². Its side faces all lie on the one toroidal surface, and merging them
+/// leaves a face with no edges, which OCCT can't mesh (and in OCCT 7.8.1 used to crash in
+/// ShapeUpgrade_UnifySameDomain): the body keeps its seams and tessellates. The path as one
+/// circle (the profile at its start) or as two half arcs gives the same body.
+pub fn sweep_around_a_circle(k: &mut dyn Kernel) {
+    let plane = Plane::top();
+    let across_y = Profile::new(
+        Plane { origin: Point3::origin(), x_dir: Vector3::x_axis(), normal: Vector3::y_axis() },
+        vec![Region { outer: circle(p(0.0, 0.0), 3.0), holes: vec![], source: Some(7) }],
+    );
+    let circle_path = vec![PathCurve::Sketch { plane, curve: Curve2::Circle { center: p(-40.0, 0.0), radius: 40.0, source: None } }];
+    let arcs_path = vec![
+        PathCurve::Sketch { plane, curve: arc(p(0.0, 40.0), 40.0, -PI / 2.0, PI) },
+        PathCurve::Sketch { plane, curve: arc(p(0.0, 40.0), 40.0, PI / 2.0, PI) },
+    ];
+    for (profile, path) in [(across_y, circle_path), (circle_across_x(Point3::origin(), 3.0), arcs_path)] {
+        let spec = SweepSpec { body: BodyKind::Solid, path, control: SweepControl::None, faces: vec![] };
+        let torus = one(k.sweep_with(&profile, &spec).unwrap());
+        close(volume(k, torus), 2.0 * PI * PI * 40.0 * 9.0, 1e-5);
+        let mesh = k.tessellate(torus, Tessellation::default()).unwrap();
+        assert!(!mesh.indices.is_empty());
+    }
+}
+
 /// P3.11 (PS20.4): Normal direction and Tangent direction, a picked vector in place of the
 /// profile's normal. Along +Z (the profiles' normal) they are Normal to profile and Tangent to
 /// profile: the 10 × 10 squares 20 apart give the prism, 2000; the r 10 → r 5 circles the same
@@ -3073,7 +3098,7 @@ macro_rules! conformance {
                 revolve_up_to, revolve_surface_and_thin, face_axes_and_edge_circles, revolve_a_face,
                 inertia_tensor, fillet_cube_all_edges, fillet_width, fillet_overflow,
                 chamfer_options, shell_options, shell_around_a_counterbore, edge_face_radius,
-                fillet_sections, full_round, offset_ellipse_profiles, sweep_along_paths,
+                fillet_sections, full_round, offset_ellipse_profiles, sweep_along_paths, sweep_around_a_circle,
                 loft_sections_and_conditions, split_by_plane_and_face, mirror_and_motions,
                 face_tools, classify_points, split_faces_by_plane, project_view, section_cut,
                 draft_cube_sides, offset_solids, fillet_variable_radius, fillet_asymmetric,

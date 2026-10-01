@@ -512,7 +512,7 @@ impl OcctKernel {
 ///
 /// Surface bodies are left as they are. The merge is dropped (the shape kept as it was, seams and
 /// all) when it merges nothing, or when it would change the volume, make an invalid solid out of
-/// a valid one, or lose track of a face.
+/// a valid one, leave a face with no edges, or lose track of a face.
 fn merge_same_domain(shape: Shape, history: History) -> Result<(Shape, History)> {
     if shape.sub_count(SubKind::Solid).map_err(occt)? == 0 {
         return Ok((shape, history));
@@ -557,7 +557,12 @@ fn merge_same_domain(shape: Shape, history: History) -> Result<(Shape, History)>
     if !merged.is_valid().unwrap_or(false) && shape.is_valid().unwrap_or(false) {
         return Ok((shape, history));
     }
-    let to = |f: FaceId| FaceId(h.faces[f.0 as usize][0] as u64);
+    // A face that closes on itself (a torus swept as two halves) merges into one face with no
+    // edges: valid, but OCCT can't mesh a face without a wire.
+    if merged.faces().any(|f| f.edges().next().is_none()) {
+        return Ok((shape, history));
+    }
+    let to =|f: FaceId| FaceId(h.faces[f.0 as usize][0] as u64);
     let in_range = |f: &FaceId| (f.0 as usize) < before[0];
     let mut seen_generated = std::collections::HashSet::new();
     let mut seen_modified = std::collections::HashSet::new();
