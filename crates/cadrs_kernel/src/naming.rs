@@ -166,7 +166,7 @@ impl VertexName {
 }
 
 /// The names of a body's faces, edges and vertices, indexed by their kernel ids.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BodyNames {
     /// By [`FaceId`].
     pub faces: Vec<FaceName>,

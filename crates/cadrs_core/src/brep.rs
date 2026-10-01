@@ -22,6 +22,7 @@
 //! are left out, as the prism mesh of [`crate::solid`] did. Planar faces get the same
 //! [`PlaneFrame`]s the prism gave them, so sketches on faces keep their coordinates.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use cadrs_kernel::naming::{self, BodyNames};
@@ -307,7 +308,7 @@ pub fn extrude(
 }
 
 /// One extruded sketch, as the naming and the display see it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupGeom {
     frame: PlaneFrame,
     /// The plane's unit normal.
@@ -319,7 +320,7 @@ pub struct GroupGeom {
 
 /// What an extrude swept, for naming faces the kernel's history leaves unnamed, for the planar
 /// frames of its caps and sides, and for the silhouettes of its curved sides.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpGeom {
     groups: Vec<GroupGeom>,
     /// The unit direction of the sweep.
@@ -340,7 +341,7 @@ impl OpGeom {
 
 /// Where a revolve turns: about the unit `axis` through `origin`, from `start` radians (from the
 /// sketch plane, counter-clockwise about the axis) through `sweep`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Revolution {
     origin: Vec3,
     axis: Vec3,

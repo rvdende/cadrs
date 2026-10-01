@@ -50,7 +50,11 @@ Scenario(
         Wait(40),
         Key("C"),
         Wait(2),
+        // Shift: no inference. Unshifted, the centre snaps to the midpoint of the face's right
+        // edge (snapping to part edges), which fixes it, and the 50 below would be driven.
+        KeyDown("Shift"),
         ClickWorld(50, 15),
+        KeyUp("Shift"),
         ClickWorld(60, 15),
         Wait(3),
         Type("20"),

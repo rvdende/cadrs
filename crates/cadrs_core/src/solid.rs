@@ -16,6 +16,7 @@
 //! - Triangles wind counter-clockwise seen from outside; normals point out. Each face has its
 //!   own vertices (flat shading), except that a curved face shares normals along its curve.
 
+use serde::{Deserialize, Serialize};
 use cadrs_kernel::naming::{self, Lost, Match};
 use cadrs_sketch::region::Region;
 pub use cadrs_sketch::{EdgeName, EdgeTag, FaceName, FaceOrigin, OpId, VertexName};
@@ -23,7 +24,7 @@ use cadrs_sketch::{CurveId, PlaneFrame, Vec2, Vec3};
 use slotmap::Key;
 
 /// A face of a [`Solid`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SolidFace {
     pub name: FaceName,
     /// The face's plane (outward normal `u × v`), if it is planar.
@@ -52,7 +53,7 @@ pub struct SolidFace {
 
 /// An edge of a [`Solid`]: a polyline (one or more kernel edges that continue each other
 /// between the same two faces).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SolidEdge {
     pub name: EdgeName,
     pub points: Vec<Vec3>,
@@ -66,7 +67,7 @@ pub struct SolidEdge {
 }
 
 /// A circle in space: its center, the unit normal of its plane and its radius.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EdgeCircle {
     pub center: Vec3,
     pub normal: Vec3,
@@ -117,7 +118,7 @@ pub enum Dihedral {
 }
 
 /// A vertex of a [`Solid`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SolidVertex {
     pub name: VertexName,
     pub point: Vec3,
@@ -125,7 +126,7 @@ pub struct SolidVertex {
 
 /// A line along a curved side face (from the start cap to the end cap) with the face's outward
 /// normal there: where the normal turns from facing the viewer to facing away is a silhouette.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Ruling {
     pub start: Vec3,
     pub end: Vec3,
@@ -139,7 +140,7 @@ pub struct Ruling {
 }
 
 /// A triangulated solid with face and edge identity.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Solid {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
@@ -162,6 +163,7 @@ pub struct Solid {
     /// pieces' names; references to the other names find it through these.
     pub face_aliases: Vec<FaceAlias>,
     /// Bounding boxes for picking, built on the first pick ([`Solid::pick_index`]).
+    #[serde(skip)]
     pub pick_cache: PickCache,
 }
 
@@ -243,7 +245,7 @@ pub fn line_hits_box(origin: Vec3, dir: Vec3, (lo, hi): &Bounds) -> bool {
 }
 
 /// Another name of a face of a [`Solid`] (a face merged into it, see [`Solid::face_aliases`]).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FaceAlias {
     /// The merged-away name.
     pub name: FaceName,
@@ -256,7 +258,7 @@ pub struct FaceAlias {
 
 /// An explicit mate connector carried by a part ([`Solid::connectors`]): the Mate connector
 /// feature that made it and its frame (the part's coordinates; X `u`, Y `v`, Z `u × v`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SolidConnector {
     pub feature: crate::ids::FeatureId,
     pub frame: PlaneFrame,
@@ -266,7 +268,7 @@ pub struct SolidConnector {
 /// meridians, one row per angle) with the outward normal at each. A silhouette runs where the
 /// normal turns from facing the viewer to facing away, found cell by cell ([`Self::silhouette`]),
 /// since it may cross the rows in any direction (a torus seen from above runs round it).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurfaceGrid {
     /// The index of the face in [`Solid::faces`].
     pub face: usize,

@@ -149,8 +149,7 @@ pub(crate) fn update_analysis(
     mut analysis: ResMut<SketchAnalysis>,
     mut errors: ResMut<SketchErrors>,
     (mut under, mut faces_lost): (ResMut<SketchUnderDefined>, ResMut<SketchFacesLost>),
-    mut badges: Local<BadgeAnalyses>,
-    mut lost: Local<LostFaces>,
+    (mut badges, mut lost): (Local<BadgeAnalyses>, Local<LostFaces>),
 ) {
     // The colours stay as they were while dragging (the solve keeps the structure).
     if draw.drag.is_some() {
@@ -201,10 +200,14 @@ pub(crate) fn update_analysis(
     // sketch and waiting for it (seconds on the main thread while a document opened).
     let key = (parts.generation, doc.active_element().map(|el| el.id));
     let stale = lost.done.as_ref().is_none_or(|(k, _)| *k != key);
+    // Only on parts built from these features: before the first rebuild of a tab is done
+    // there are none, every face sketch would look lost, and the check would rebuild the
+    // features before each one, ahead of the rebuild itself (and of its snapshot).
     if stale
         && !parts.rebuilding
         && lost.running.is_none()
         && let Some(el) = doc.active_element()
+        && parts.settled().is_some_and(|(e, f, _)| e == el.id && f == el.features())
     {
         let features = el.features().to_vec();
         let solids = parts.parts.clone();

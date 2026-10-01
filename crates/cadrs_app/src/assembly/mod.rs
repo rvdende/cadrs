@@ -224,6 +224,9 @@ pub struct ViewportGrab(pub bool);
 pub struct AssemblyParts {
     /// Each source Part Studio's features and their rebuild.
     builds: HashMap<ElementId, (Vec<Feature>, Arc<Build>)>,
+    /// Rebuilds still running on the kernel thread (a big studio takes seconds; the view
+    /// carries on meanwhile, [`Self::build_within`]).
+    pending: HashMap<ElementId, (Vec<Feature>, cadrs_core::rebuild::Pending)>,
     key: Option<AssemblyKey>,
     /// Poses shown instead of the document's (a triad drag in progress).
     pub preview: HashMap<InstanceId, Pose>,
@@ -299,27 +302,49 @@ pub fn first_part_of(doc: &ActiveDocument, instance: InstanceId) -> Option<(Inst
 impl AssemblyParts {
     /// The current rebuild of the Part Studio `element` (rebuilt if its features changed).
     pub fn build(&mut self, doc: &cadrs_core::Document, element: ElementId) -> Option<Arc<Build>> {
-        let el = doc
+        self.build_within(doc, element, None).0
+    }
+
+    /// The rebuild of the Part Studio `element`, waiting at most `budget` for it (`None`: until
+    /// it is done). A longer one goes on in the background: this gives the last rebuild (if
+    /// any) and `false` until it is done.
+    pub fn build_within(&mut self, doc: &cadrs_core::Document, element: ElementId, budget: Option<std::time::Duration>) -> (Option<Arc<Build>>, bool) {
+        let Some(el) = doc
             .element(element)
             .or_else(|| self.extra.iter().find(|e| e.id == element))
-            .or_else(|| self.linked_extra.iter().find(|l| l.id() == element).map(|l| &l.element))?;
-        el.assembly_model().is_none().then_some(())?;
-        let features = el.features().to_vec();
-        let features = features.as_slice();
-        match self.builds.get(&element) {
-            Some((f, b)) if f.as_slice() == features => Some(b.clone()),
-            _ => {
-                let b = cadrs_core::rebuild::build(features);
+            .or_else(|| self.linked_extra.iter().find(|l| l.id() == element).map(|l| &l.element))
+        else {
+            return (None, true);
+        };
+        if el.assembly_model().is_some() {
+            return (None, true);
+        }
+        let features = el.features();
+        if let Some((f, b)) = self.builds.get(&element)
+            && f.as_slice() == features
+        {
+            return (Some(b.clone()), true);
+        }
+        if !self.pending.get(&element).is_some_and(|(f, _)| f.as_slice() == features) {
+            // Restored from the session snapshot when the document was opened before.
+            let p = cadrs_core::rebuild::request_persisted(features.to_vec());
+            self.pending.insert(element, (features.to_vec(), p));
+        }
+        let done = self.pending.get_mut(&element).and_then(|(_, p)| p.wait(budget));
+        match done {
+            Some(b) => {
+                self.pending.remove(&element);
                 self.builds.insert(element, (features.to_vec(), b.clone()));
-                Some(b)
+                (Some(b), true)
             }
+            None => (self.builds.get(&element).map(|(_, b)| b.clone()), false),
         }
     }
 }
 
 /// The instances of the active Assembly tab `el`, with the overrides, as parts of the
 /// [`PartCache`] (called by the part cache's update while an Assembly tab is active).
-pub fn update_assembly_parts(doc: &ActiveDocument, el: &Element, cache: &mut PartCache, asm: &mut AssemblyParts) {
+pub fn update_assembly_parts(doc: &ActiveDocument, el: &Element, cache: &mut PartCache, asm: &mut AssemblyParts, budget: Option<std::time::Duration>) {
     let Some(model) = el.assembly_model() else {
         return;
     };
@@ -356,8 +381,11 @@ pub fn update_assembly_parts(doc: &ActiveDocument, el: &Element, cache: &mut Par
     sources.sort();
     sources.dedup();
     let mut srcs = Vec::new();
+    let mut waiting = false;
     for s in &sources {
-        if let Some(b) = asm.build(d, *s) {
+        let (b, current) = asm.build_within(d, *s, budget);
+        waiting |= !current;
+        if let Some(b) = b {
             let e = d.element(*s);
             srcs.push((
                 *s,
@@ -369,6 +397,9 @@ pub fn update_assembly_parts(doc: &ActiveDocument, el: &Element, cache: &mut Par
     }
     let key = (el.id, occ.clone(), srcs, view.instances.clone());
     if cache.assembly == Some(el.id) && asm.key.as_ref() == Some(&key) {
+        if cache.rebuilding != waiting {
+            cache.rebuilding = waiting;
+        }
         return;
     }
     let by_part: HashMap<PartId, InstanceId> = occ.iter().filter(|o| o.id != o.top).map(|o| (o.view_part, o.id)).collect();
@@ -387,6 +418,8 @@ pub fn update_assembly_parts(doc: &ActiveDocument, el: &Element, cache: &mut Par
         }
     }
     cache.set_assembly_parts(el.id, parts, props, appearances);
+    // Sources still rebuilding: the Rebuilding… pill, and the first view's fit waits for them.
+    cache.rebuilding = waiting;
     asm.key = Some(key);
 }
 

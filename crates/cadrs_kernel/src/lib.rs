@@ -312,6 +312,18 @@ pub trait Kernel {
 
     fn release(&mut self, _body: BodyId) {}
 
+    /// A body as bytes (the backend's own exact format), which [`Self::read_body`] gives back
+    /// with the same faces, edges and vertices in the same order: names indexed by them stay
+    /// valid (cadrs caches built bodies, and they may travel between peers).
+    fn write_body(&self, _body: BodyId) -> Result<Vec<u8>> {
+        Err(KernelError::Unsupported("write body"))
+    }
+
+    /// Reads a body written by [`Self::write_body`] into this session.
+    fn read_body(&mut self, _bytes: &[u8]) -> Result<BodyId> {
+        Err(KernelError::Unsupported("read body"))
+    }
+
     // Queries.
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>>;
     fn edges(&self, body: BodyId) -> Result<Vec<EdgeInfo>>;

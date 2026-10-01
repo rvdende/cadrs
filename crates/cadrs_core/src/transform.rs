@@ -435,7 +435,7 @@ pub fn is_composite_part(doc: &Document, element: ElementId, part: PartId) -> bo
 }
 
 /// A composite part a rebuild made: its part, its members and whether it is closed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Composite {
     pub part: PartId,
     pub members: Vec<PartId>,

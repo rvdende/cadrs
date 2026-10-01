@@ -63,6 +63,30 @@ pub fn set_source(doc: &str, element: &str, ctx: SourceCtx) {
     }
 }
 
+/// Onshape part id → (cadrs part, its offset in mm).
+pub type PartMap = HashMap<String, (cadrs_core::ids::PartId, [f64; 3])>;
+
+type PartMaps = std::sync::Mutex<HashMap<(String, String), std::sync::Arc<PartMap>>>;
+
+fn part_maps() -> &'static PartMaps {
+    static S: std::sync::OnceLock<PartMaps> = std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Which cadrs part each Onshape part (by part id) of an imported Part Studio became (the parts
+/// matched by volume and box, see the Part Studio's `name_parts`), and how far (mm) the cadrs part
+/// sits from Onshape's, if it was imported in this run.
+pub fn part_map(doc: &str, element: &str) -> Option<std::sync::Arc<PartMap>> {
+    part_maps().lock().ok()?.get(&(doc.to_string(), element.to_string())).cloned()
+}
+
+/// Records [`part_map`] for an imported Part Studio.
+pub fn set_part_map(doc: &str, element: &str, map: PartMap) {
+    if let Ok(mut s) = part_maps().lock() {
+        s.insert((doc.to_string(), element.to_string()), std::sync::Arc::new(map));
+    }
+}
+
 /// The `<feature>.derived.*.merge.` prefix of the first operation id in `q` that has one.
 fn derived_prefix(q: &Value) -> Option<String> {
     match q {

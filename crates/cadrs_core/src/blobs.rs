@@ -68,10 +68,11 @@ pub fn file_name(hash: &str, ext: &str) -> String {
     if ext.is_empty() { hash.to_string() } else { format!("{hash}.{ext}") }
 }
 
-/// The blobs a document's features use: (hash, extension), each once.
+/// The blobs a document's features use: (hash, extension), each once. A linked copy's features
+/// count too (P3G.1): the copy rebuilds in this document, from this document's files.
 pub fn used_by(doc: &Document) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
-    let all = doc.elements.iter().chain(doc.standard_content.iter().map(|s| &s.element));
+    let all = doc.elements.iter().chain(doc.standard_content.iter().map(|s| &s.element)).chain(doc.linked.iter().map(|l| &l.element));
     for el in all {
         for f in el.features() {
             if let FeatureKind::Import(x) = &f.kind

@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use cadrs_kernel::BodyId;
+use serde::{Deserialize, Serialize};
 use cadrs_sketch::geom::BezierGeom;
 use cadrs_sketch::region::{Piece, Region};
 use cadrs_sketch::{CurveId, CurveKind, Sketch, Vec2, Vec3};
@@ -47,6 +48,10 @@ use crate::parts::{Part, PartKind};
 
 /// Import and export jobs on the worker (P3F.2).
 pub mod exchange;
+#[cfg(feature = "occt")]
+pub mod persist;
+#[cfg(feature = "occt")]
+pub mod session;
 
 /// The result of rebuilding a feature list.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -116,14 +121,14 @@ pub enum FeatureStatus {
 }
 
 /// The parts before an Add extrude and the body it adds to them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stage {
     pub before: Vec<Part>,
     pub tool: Arc<crate::solid::Solid>,
 }
 
 /// The parts an extrude's new body meets (before its boolean).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Contacts {
     /// Parts it touches or overlaps (joined by Add).
     pub touches: Vec<PartId>,
@@ -179,7 +184,7 @@ impl Build {
 }
 
 /// A part as the rebuild carries it: the part, its kernel body and its names.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct PartState {
     part: Part,
     body: Option<BodyId>,
@@ -187,7 +192,7 @@ struct PartState {
 }
 
 /// The parts after a feature.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct State {
     parts: Vec<PartState>,
     /// The number the next new part gets ("Part N") and the next surface ("Surface N").
@@ -218,6 +223,7 @@ impl State {
 }
 
 /// What a feature produced.
+#[derive(Serialize, Deserialize)]
 struct Output {
     state: Arc<State>,
     error: Option<String>,
@@ -273,6 +279,9 @@ pub struct Rebuilder {
     sketch_times: HashMap<FeatureId, (u64, Duration)>,
     /// P3G.4: how deep the Derived features' source rebuilds nest.
     depth: usize,
+    /// The generation of the last top-level rebuild: the outputs it used (its Derived sources'
+    /// too) have `last_used` at or after it ([`Self::used_keys`]).
+    top_generation: u64,
 }
 
 impl Default for Rebuilder {
@@ -295,6 +304,41 @@ thread_local! {
     /// Set on the rebuild thread: its rebuilds report [`progress`].
     static REPORTS_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+
+/// The geometry fingerprint this build was made with: a hash of the source that decides what a
+/// rebuild makes, the locked OpenCASCADE and the compiler (see `build.rs`). Built geometry kept
+/// across sessions is keyed by it, so a fix never reuses what older code built.
+pub const GEOMETRY_FINGERPRINT: &str = env!("CADRS_GEOMETRY_FINGERPRINT");
+
+/// The cache key [`Rebuilder::rebuild`] gives the last part feature of `features`: the chain of
+/// every feature up to it (a snapshot of a rebuild is kept under it, [`session`]).
+pub fn final_key(features: &[Feature]) -> u64 {
+    chain_keys(features).last().copied().unwrap_or(CHAIN_SEED)
+}
+
+/// The cache keys [`Rebuilder::rebuild`] gives the part features of `features`, in order.
+pub fn chain_keys(features: &[Feature]) -> Vec<u64> {
+    let last = features.iter().rposition(Feature::is_part_feature);
+    let var_errors = crate::variables::check(features, &cadrs_sketch::units::Units::default());
+    let mut key = CHAIN_SEED;
+    let mut keys = Vec::new();
+    for i in 0..last.map_or(0, |l| l + 1) {
+        let f = &features[i];
+        key = chain_key(key, &f.kind);
+        if !f.is_part_feature() {
+            continue;
+        }
+        let below = parent_below(features, i).or_else(|| var_errors.iter().find(|(id, _)| *id == f.id).map(|(_, w)| w.clone()));
+        if let Some(why) = &below {
+            key = chain_key_str(key, why);
+        }
+        keys.push(key);
+    }
+    keys
+}
+
+/// The chain key before the first feature.
+const CHAIN_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
 /// Feeds formatted text into a hasher.
 struct HashWriter<'a>(&'a mut DefaultHasher);
@@ -334,6 +378,7 @@ impl Rebuilder {
             last: Arc::default(),
             sketch_times: HashMap::new(),
             depth: 0,
+            top_generation: 0,
         }
     }
 
@@ -370,11 +415,14 @@ impl Rebuilder {
         let start = Instant::now();
         self.generation += 1;
         let generation = self.generation;
+        if self.depth == 0 {
+            self.top_generation = generation;
+        }
         let mut out = Build::default();
         // Nothing after the last part feature affects a part, so it isn't even hashed (a sketch
         // being drawn at the end of the list costs nothing here).
         let last = features.iter().rposition(Feature::is_part_feature);
-        let mut key = 0x51_7c_c1_b7_27_22_0a_95;
+        let mut key = CHAIN_SEED;
         let mut state = Arc::new(State::default());
         self.trail.clear();
         // P3F.4: expressions naming a variable defined below them, or nowhere, fail their
@@ -534,11 +582,36 @@ impl Rebuilder {
         }
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
+        debug_assert!(self.depth != 0 || key == final_key(features), "final_key must follow the rebuild's keys");
         self.trail.clear();
         self.last = state;
         self.evict();
         out.elapsed = start.elapsed();
         out
+    }
+
+    /// The cache keys of the outputs the last top-level rebuild used.
+    pub fn used_keys(&self) -> Vec<u64> {
+        self.entries.iter().filter(|(_, e)| e.last_used >= self.top_generation).map(|(k, _)| *k).collect()
+    }
+
+    /// What a snapshot of rebuilding `features` holds: the outputs the last rebuild used, and
+    /// its Derived features' sources' outputs, which it doesn't touch while the Derived output
+    /// itself is cached (an edit of the Derived feature then needs them).
+    pub fn snapshot_keys(&self, features: &[Feature]) -> Vec<u64> {
+        fn sources(features: &[Feature], out: &mut Vec<u64>, depth: usize) {
+            for f in features {
+                if let FeatureKind::Derived(d) = &f.kind
+                    && depth < 8
+                {
+                    out.extend(chain_keys(&d.studio));
+                    sources(&d.studio, out, depth + 1);
+                }
+            }
+        }
+        let mut keys = self.used_keys();
+        sources(features, &mut keys, 0);
+        keys
     }
 
     /// Drops outputs no recent rebuild used, and releases the kernel bodies no remaining output
@@ -2566,6 +2639,9 @@ enum Job {
         features: Vec<Feature>,
         reply: mpsc::Sender<Arc<Build>>,
         cancelled: Arc<AtomicBool>,
+        /// The app's rebuild of a Part Studio: restored from and saved to the session
+        /// snapshots ([`session`]); not a rebuild of part of a list (a lost-face check).
+        persist: bool,
     },
     Export {
         features: Vec<Feature>,
@@ -2604,12 +2680,34 @@ fn worker() -> &'static Mutex<mpsc::Sender<Job>> {
 fn run(rx: mpsc::Receiver<Job>) {
     REPORTS_PROGRESS.with(|r| r.set(true));
     let mut rebuilder = Rebuilder::new();
-    while let Ok(job) = rx.recv() {
+    // The snapshot of the last app rebuild, written once the thread has been idle a while.
+    #[cfg(feature = "occt")]
+    let mut pending_save: Option<session::PendingSave> = None;
+    loop {
+        #[cfg(feature = "occt")]
+        let job = match rx.recv_timeout(session::SAVE_AFTER) {
+            Ok(job) => job,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(save) = pending_save.take() {
+                    let _ = catch_unwind(AssertUnwindSafe(|| rebuilder.save_snapshot(save)));
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        #[cfg(not(feature = "occt"))]
+        let Ok(job) = rx.recv() else { break };
         match job {
-            Job::Rebuild { features, reply, cancelled } => {
+            Job::Rebuild { features, reply, cancelled, persist } => {
                 if cancelled.load(Ordering::Relaxed) {
                     continue;
                 }
+                #[cfg(feature = "occt")]
+                if persist {
+                    let _ = catch_unwind(AssertUnwindSafe(|| rebuilder.restore_snapshot(&features)));
+                }
+                #[cfg(not(feature = "occt"))]
+                let _ = persist;
                 let result = catch_unwind(AssertUnwindSafe(|| rebuilder.rebuild(&features)));
                 let build = match result {
                     Ok(b) => b,
@@ -2619,6 +2717,10 @@ fn run(rx: mpsc::Receiver<Job>) {
                         Build::failed(&features, "Internal error while rebuilding")
                     }
                 };
+                #[cfg(feature = "occt")]
+                if persist && build.computed > 0 {
+                    pending_save = rebuilder.plan_save(&features);
+                }
                 let _ = reply.send(Arc::new(build));
             }
             Job::Export { features, request, reply } => {
@@ -2811,12 +2913,24 @@ impl Drop for Pending {
 
 /// Starts rebuilding `features` on the worker thread.
 pub fn request(features: Vec<Feature>) -> Pending {
+    request_with(features, false)
+}
+
+/// Starts the app's rebuild of a Part Studio's `features` on the worker thread: restored from
+/// a session snapshot when the session doesn't have their outputs, and snapshotted afterwards
+/// ([`session`]).
+pub fn request_persisted(features: Vec<Feature>) -> Pending {
+    request_with(features, true)
+}
+
+fn request_with(features: Vec<Feature>, persist: bool) -> Pending {
     let (reply, rx) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let job = Job::Rebuild {
         features,
         reply,
         cancelled: cancelled.clone(),
+        persist,
     };
     let sent = worker().lock().map(|tx| tx.send(job).is_ok()).unwrap_or(false);
     let mut pending = Pending {
