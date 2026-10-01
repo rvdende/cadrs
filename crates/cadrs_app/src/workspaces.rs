@@ -22,7 +22,7 @@ use bevy::ui_widgets::Activate;
 use cadrs_core::history_log::{HistoryLog, VersionId, WorkspaceId};
 use cadrs_core::workspace_merge::{self as wm, ChangedTab, MergeWorkspace, TabChange};
 use cadrs_core::{DocumentId, ElementId};
-use cadrs_ui::menu::{Menu, MenuAction, MenuItem, open_menu};
+use cadrs_ui::menu::{Menu, MenuAction, MenuItem, open_context_menu, open_menu};
 use cadrs_ui::{Dialog, DialogClose, Select, SelectState, TextInput, Theme, show_toast};
 
 use crate::history_panel::{DocLog, HistoryPanel, editing};
@@ -120,9 +120,25 @@ pub fn open_switcher(world: &mut World, anchor: Entity) {
     for (i, ws) in l.workspace_ids().into_iter().enumerate() {
         menu = menu.item(MenuItem::new(format!("workspace-item-{i}"), l.workspace_name(ws)).icon(if ws.is_main() { "location" } else { "branches" }).checked(ws == current));
     }
+    // Under the header bar (not over the name it was opened from), lined up with the name.
+    let at = (|| {
+        let node = |e: Entity| -> Option<(Vec2, Vec2)> {
+            let n = world.get::<ComputedNode>(e)?;
+            let tf = world.get::<UiGlobalTransform>(e)?;
+            let s = n.inverse_scale_factor();
+            Some(((tf.translation - n.size() / 2.0) * s, (tf.translation + n.size() / 2.0) * s))
+        };
+        let (lo, _) = node(anchor)?;
+        let bar = world.get::<ChildOf>(anchor)?.parent();
+        let (_, hi) = node(bar)?;
+        Some(Vec2::new(lo.x, hi.y + 4.0))
+    })();
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let e = open_menu(&mut commands, anchor, menu.build(&theme));
+    let e = match at {
+        Some(at) => open_context_menu(&mut commands, at, menu.build(&theme)),
+        None => open_menu(&mut commands, anchor, menu.build(&theme)),
+    };
     commands.entity(e).insert(DespawnOnExit(AppState::Document));
     world.flush();
 }
@@ -282,7 +298,7 @@ pub fn open_merge_dialog(world: &mut World, source: WorkspaceId) {
 }
 
 fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &str, dest: &str) {
-    let intro = format!("The tabs {source} changed. Replace each with {source}'s, or keep {dest}'s.");
+    let intro = format!("{source} changed these tabs. For each, replace it with the branch's version or keep {dest}'s.");
     b.spawn(Node { margin: UiRect::bottom(Val::Px(10.0)), max_width: Val::Px(620.0), ..default() }).with_children(|p| {
         p.spawn(t.text(intro, t.font_base, FontWeight::NORMAL, t.foreground)).insert(TextLayout::default());
     });
@@ -333,6 +349,8 @@ fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &
                         .option(format!("Replace with {source}"), true)
                         .option(format!("Keep {dest}"), true)
                         .selected(0)
+                        // Up, so the list doesn't cover the dialog's Merge and Cancel.
+                        .open_up()
                         .width(Val::Px(292.0))
                         .build(t),
                 );
@@ -351,6 +369,14 @@ fn commit_merge(world: &mut World) {
     };
     close::<MergeFrom>(world);
     let replace: Vec<ElementId> = from.tabs.iter().enumerate().filter(|(i, _)| choices.get(&format!("merge-tab-{i}")).copied().unwrap_or(0) == 0).map(|(_, id)| *id).collect();
+    // Keep for every tab: there is nothing to merge, so no (empty) "Merge from …" entry.
+    if replace.is_empty() {
+        let theme = world.resource::<Theme>().clone();
+        let mut commands = world.commands();
+        show_toast(&mut commands, &theme, "Nothing to merge");
+        world.flush();
+        return;
+    }
     let Some((source, name)) = log(world).and_then(|l| Some((l.workspace_head(from.source)?, l.workspace_name(from.source)))) else {
         return;
     };
@@ -373,5 +399,52 @@ fn on_button(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
             commands.queue(move |world: &mut World| open_switcher(world, e));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadrs_core::samples::gasket as g;
+
+    fn depth(world: &World, el: ElementId, f: cadrs_core::FeatureId) -> f64 {
+        world.resource::<ActiveDocument>().doc.element(el).and_then(|e| e.feature(f)).and_then(|f| f.extrude()).map(|e| e.depth).unwrap()
+    }
+
+    /// P3E.4 judge: each workspace keeps its own undo across switches: back in Main, an undo
+    /// undoes Main's last edit (not the branch's).
+    #[test]
+    fn an_undo_in_main_after_switching_back_undoes_mains_last_edit() {
+        let mut world = World::new();
+        let doc = g::document().unwrap();
+        let mut log = HistoryLog::start(&doc, 1_000, "me");
+        let v1 = log.create_version("V1", "", 1_010, "me");
+        let branch = log.branch(v1, "Alternate Gasket Thickness", "", 1_020, "me").unwrap();
+        world.insert_resource(ActiveDocument::new(doc));
+        let mut doc_log = DocLog::default();
+        doc_log.log = Some(log);
+        world.insert_resource(doc_log);
+        world.init_resource::<WorkspaceUndos>();
+        world.init_resource::<HistoryPanel>();
+        // Main: the Manifold 20 → 25 mm.
+        g::set_depth(world.resource_mut::<ActiveDocument>().as_mut(), g::MANIFOLD, g::MANIFOLD_EXTRUDE, 25.0).unwrap();
+        // The branch: the gasket 2 → 1 mm.
+        switch_workspace(&mut world, branch);
+        assert_eq!(current_name(&world), "Alternate Gasket Thickness");
+        assert_eq!(depth(&world, g::MANIFOLD, g::MANIFOLD_EXTRUDE), g::MANIFOLD_T, "the branch starts at V1");
+        assert_eq!(world.resource::<ActiveDocument>().history.undo_len(), 0, "the branch has no undo of Main's");
+        g::set_depth(world.resource_mut::<ActiveDocument>().as_mut(), g::GASKET, g::GASKET_EXTRUDE, g::THIN_GASKET_T).unwrap();
+        // Back to Main: its undo undoes the Manifold's edit; the gasket is Main's 2 mm.
+        switch_workspace(&mut world, WorkspaceId::MAIN);
+        assert_eq!(depth(&world, g::MANIFOLD, g::MANIFOLD_EXTRUDE), 25.0);
+        assert_eq!(depth(&world, g::GASKET, g::GASKET_EXTRUDE), g::GASKET_T);
+        assert!(world.resource_mut::<ActiveDocument>().undo().is_some());
+        assert_eq!(depth(&world, g::MANIFOLD, g::MANIFOLD_EXTRUDE), g::MANIFOLD_T, "Main's last edit undone");
+        assert_eq!(depth(&world, g::GASKET, g::GASKET_EXTRUDE), g::GASKET_T);
+        // And the branch kept its own: switching to it and undoing takes its gasket back to 2.
+        switch_workspace(&mut world, branch);
+        assert_eq!(depth(&world, g::GASKET, g::GASKET_EXTRUDE), g::THIN_GASKET_T);
+        assert!(world.resource_mut::<ActiveDocument>().undo().is_some());
+        assert_eq!(depth(&world, g::GASKET, g::GASKET_EXTRUDE), g::GASKET_T);
     }
 }

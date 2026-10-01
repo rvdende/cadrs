@@ -65,6 +65,12 @@ pub const SAMPLES: &[SampleDoc] = &[
         course: "Inspection and Repair",
         description: "A jackhammer gear cover with features to inspect and repair.",
     },
+    SampleDoc {
+        key: "drill_standin",
+        title: "Drill",
+        course: "Test Drive",
+        description: "A drill's carburetor and drill body: the starting document of the Test Drive exercise.",
+    },
 ];
 
 impl SampleDoc {

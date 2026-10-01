@@ -58,6 +58,9 @@ What is left is the 3E-only work:
 
 | | ✅ | 🟡 | ❌ | out of scope |
 |---|---|---|---|---|
+| After P3E.5 (2026-10-01, the stage wrap-up, pre-judge) | 66 | 0 | 0 | 9 |
+| P3E.5: TD | 57 | 0 | 0 | 9 |
+| P3E.5: X | 9 | 0 | 0 | 0 |
 | After P3E.2 (2026-09-30, pre-judge) | 50 | 11 | 5 | 9 |
 | P3E.2: TD | 43 | 9 | 5 | 9 |
 | P3E.2: X | 7 | 2 | 0 | 0 |
@@ -73,6 +76,11 @@ What is left is the 3E-only work:
 
 Rows with an out-of-scope part keep their status for the rest: TD3.1, TD3.3, TD3.6, TD3.8, TD3.9
 and TD5.1. The 10 exercise-step rows are tracked separately.
+
+**Status changes in P3E.5 (2026-10-01, the stage wrap-up, pre-judge):** TD8.8, TD9.4, TD10.4,
+TD10.5 and TD10.6 🟡 → ✅ (P3E.5). With the evidence of P3E.3 and P3E.4, which this file hadn't
+recorded: TD3.7, TD6.5, TD6.7, TD12.8, X3 and X9 🟡 → ✅; TD6.6 and TD12.4–TD12.7 ❌ → ✅. Every
+TD and X row is now ✅ or out of scope, and so is every exercise step.
 
 **Status changes in P3E.2 (2026-09-30, pre-judge):** TD5.3 ❌ → ✅; TD5.4 and X6 🟡 → ✅. The
 cross-stage rows T1.2 and X1 (essential tips, already ✅ from P3F.3/P3G.3) gain the P3E.2 evidence;
@@ -122,7 +130,7 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD3.4 | Trash with recovery | ✅ | Move to trash, Restore, Delete permanently, all undoable library commands (`landing_many_documents` 10–18; `trash_restore_with_undo`, `purge_only_trashed_with_undo`). |
 | TD3.5 | Last opened by me strip; click name or double-click thumbnail | ✅ | The strip of up to 6 thumbnail cards (`landing_create_document` 06). **P3E.1**: a click on a card's name (a link) or a double click on its thumbnail opens the document (`course_td_documents_details` 09–10). |
 | TD3.6 | Folders | ✅ | Create folder, the "Folders" section, Move to ▸ a folder (`landing_create_document` 07–08, `landing_many_documents` 22; `create_folder_with_undo`). **P3E.1**: a click selects a folder (card or row; its details: owner, created, contents), a double click (or Enter) opens it under a breadcrumb "‹ Owned by me › folder" with Back (`course_td_documents_details` 11–13). Folder sharing is out of scope. |
-| TD3.7 | Documents list: thumbnail, Name + workspace, labels, Modified, Modified by, owner; Type filter; list/grid toggle | 🟡 | Thumbnail, Name, Modified, Modified by and Owned by columns, sortable (`landing_many_documents` 01, 05–06; `sort_by_each_column`). **P3E.1**: a **Labels** column of colour chips once labels exist (`course_td_documents_labels` 07, 09), the **Type** filter (All / Documents / Folders, `ItemType`) and the **list/grid** toggle (`course_td_documents_details` 14–17). Left: the workspace tag reads a hard-coded "Main"; the real last-opened workspace comes with P3E.4. |
+| TD3.7 | Documents list: thumbnail, Name + workspace, labels, Modified, Modified by, owner; Type filter; list/grid toggle | ✅ | Thumbnail, Name, Modified, Modified by and Owned by columns, sortable (`landing_many_documents` 01, 05–06; `sort_by_each_column`). **P3E.1**: a **Labels** column of colour chips once labels exist (`course_td_documents_labels` 07, 09), the **Type** filter (All / Documents / Folders, `ItemType`) and the **list/grid** toggle (`course_td_documents_details` 14–17). **P3E.4**: the Name column shows the last-opened workspace beside the name ("Alternate Gasket Thickness", `course_td_branch_merge` 07; `DocumentMeta::workspace`). |
 | TD3.8 | Details flyout: thumbnail, owner, description, labels, created by; tabs info / versions and history / where used | ✅ | **P3E.1**: a click selects a row (a double click or Enter opens it) and opens the **Details** panel with a rail of Info, Versions and history, Where used. Info: thumbnail, Owner, an editable Document description (saved on Enter or blur, `SetDescription`), Document labels (search field, checkboxes, the chips, "Create new label"), Created by, Created, Modified, Location (`course_td_documents_labels` 05–07, `course_td_documents_details` 01–04, 07). Versions: the history's versions (`documents_page::versions`, `course_td_documents_details` 05; `documents_page.rs::the_versions_list_matches_the_history`). Where used (`link_update::where_used`, 06). The sharing tab is out of scope. Closes **ER8.5** (derived-and-linking). |
 | TD3.9 | Top-right icons: Action items, App Store, Learning Center, Help, Account menu | ✅ | Help ▾ → Keyboard shortcuts works (`keyboard_shortcuts` 01). Action items (collaboration), App Store, Learning Center and the Account menu are out of scope (account and learning-site features); cadrs shows the local user's avatar only. |
 | TD3.10 | Enterprise toolbar and Projects | out of scope | Paid tier. |
@@ -130,7 +138,7 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 ### TD4–TD5 Copying documents, document interface
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
-| TD4.1 | Make a copy of a course document | ✅ | Copy… works and is undoable (`landing_many_documents` 19–21, `course_er_ex2_move` 01–02). **P3E.1**: Explore cadrs lists the bundled **samples** (six course stand-ins, `documents_page::SAMPLES`) with thumbnails and details; **Open a copy** (details button, row menu, double click) adds an editable copy to Owned by me and opens it (`course_td_documents_samples` 01–07; `documents_page.rs::a_sample_copy_has_the_fixtures_volume`: 50·30·25 = 37 500 mm³). The drill stand-in joins the list in P3E.5. |
+| TD4.1 | Make a copy of a course document | ✅ | Copy… works and is undoable (`landing_many_documents` 19–21, `course_er_ex2_move` 01–02). **P3E.1**: Explore cadrs lists the bundled **samples** (six course stand-ins, `documents_page::SAMPLES`) with thumbnails and details; **Open a copy** (details button, row menu, double click) adds an editable copy to Owned by me and opens it (`course_td_documents_samples` 01–07; `documents_page.rs::a_sample_copy_has_the_fixtures_volume`: 50·30·25 = 37 500 mm³). **P3E.5**: the drill stand-in ("Drill", Test Drive, `fixtures/drill_standin.cadrs`) is the seventh sample; exercise step 1 opens a copy of it (`course_td_ex1_drill` 01–02). |
 | TD5.1 | Tabs: Part Studios, Assemblies, Drawings, imported files | ✅ | Part Studio, Assembly and Drawing tabs from "+" (`tabs_create_assembly` 01, 02, 08; `course_drw_create` 01). **Imported files (PDF, images, video) as tabs: out of scope** ("niche; out of scope by user decision 2026-09-29", image tabs; see the scope decision above). |
 | TD5.2 | "+" adds a tab | ✅ | `tabs_create_assembly` 01–02, 08. |
 | TD5.3 | Tab folders with a Home button | ✅ | **P3E.2**: "+" → **Create folder** makes "Folder N" right of the active tab, renamed in place; a folder is a tab with a folder icon, and a click **opens** it: the bar shows its tabs after a **Home** button and the folder's path (a breadcrumb; each crumb opens that folder). Tabs are **dragged** into a folder (a blue box), out onto Home or a crumb, and along the bar (a blue line); the tab menu's **Move to folder ▸** (folders, Top level, New folder); the folder's menu Open / Rename… / **Delete folder…**, whose dialog asks about its tabs (Delete folder only / Delete folder and tabs). Each is one undo step and survives a reload (`course_td_tab_folders` 01–18; `course_td_many_tabs` 08–11). Model: `cadrs_core::tab_tree` (`Document::tab_tree`, additive, empty without folders; `tests/tab_folders.rs`: one undo step each, reload, element ids and contents kept, references between tabs (instances, a drawing, a Derived feature and its linked copy) resolve after moves, with the Hexapod's and the block's closed-form volumes). |
@@ -145,16 +153,16 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD6.2 | Wheel zoom, right-drag rotate, middle-drag pan | ✅ | `viewport_orbit` 02–06; `camera.rs` tests `zoom_keeps_the_point_under_the_cursor`, `pan_moves_the_scene_with_the_pointer`. |
 | TD6.3 | F fit, Shift+7 isometric | ✅ | `viewport_orbit` 07, 12; `keyboard_shortcuts` 07. |
 | TD6.4 | Shortcut list from Help | ✅ | Help ▾ → Keyboard shortcuts or Shift+/ (`keyboard_shortcuts` 01–03; `shortcuts.rs::tabs_and_search`). |
-| TD6.5 | View cube; camera and render options menu | 🟡 | View cube, arrows, corners and view menu (`viewport_orbit` 08–11, `course_p6_cube_corner`). In the menu, render modes are shown as fixed checks. Perspective, Named views, Previous view, Zoom to window and Section view… are disabled (`view_cube.rs:633-675`). P3E.3. |
-| TD6.6 | Measure and analysis tools | ❌ | The bottom-right Measure and Section icons have no handler; Analysis doesn't exist. Mass properties works (P3.3, `course_x7_mass_options`). P3E.3. |
-| TD6.7 | Persistent selection; empty click or Space clears | 🟡 | Works in code: additive clicks, empty-space click clears (`viewport.rs:405, 1094-1121`), Space clears (`viewport.rs:1278`). No frame or test shows the Space or empty-click clear: `course_td_selection` in P3E.3. |
+| TD6.5 | View cube; camera and render options menu | ✅ | View cube, arrows, corners and view menu (`viewport_orbit` 08–11, `course_p6_cube_corner`). **P3E.3a**: the six render modes, Perspective, Zoom to window, Previous view, Named views (per tab) and Zoom to selection (`course_td_render_modes` 01–25); Section view (`course_td_section` 01–17). |
+| TD6.6 | Measure and analysis tools | ✅ | Mass properties (P3.3, `course_x7_mass_options`). **P3E.3b**: Measure (readout and panel, Minimum and Maximum, in Part Studios and assemblies: `course_td_measure` 01–09; `measure_analysis.rs`), Analysis: draft analysis, curvature, curvature combs and zebra stripes (`course_td_analysis` 01–14). |
+| TD6.7 | Persistent selection; empty click or Space clears | ✅ | Additive clicks, a click on empty space or Space clears (`viewport.rs`). **P3E.3a**: `course_td_selection` 01–07 (Space clears at 04, an empty click at 06). |
 
 ### TD7 Creating a part
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
 | TD7.1 | Extrude a planar face directly | ✅ | P3.3 (PS4.2): `course_ps4_end_types` 07–08; conformance `extrude_a_face`. |
 | TD7.2 | Solid/Surface/Thin × New/Add/Remove/Intersect | ✅ | P3.3–P3.4: `course_ps4_surface_thin` 01–06, `course_ps5_boolean` 01–04; `remove_intersect_add_two_boxes`, `surface_and_thin`. |
-| TD7.3 | Face of an existing part defaults to Add with that part in Merge scope | ✅ | P3.3 (PS5.2, PS5.4): Add is picked by itself on contact, with the touched parts in Merge scope, until a tab is clicked (`course_ps4_end_types` 07, `course_ps6_control_arm` 07; New when it no longer touches, `course_ps4_end_types` 09; test `merge_scope`). The exercise shows face → Add → **New** (`course_td_ex1_drill`, P3E.5). |
+| TD7.3 | Face of an existing part defaults to Add with that part in Merge scope | ✅ | P3.3 (PS5.2, PS5.4): Add is picked by itself on contact, with the touched parts in Merge scope, until a tab is clicked (`course_ps4_end_types` 07, `course_ps6_control_arm` 07; New when it no longer touches, `course_ps4_end_types` 09; test `merge_scope`). The exercise's face → Add → **New**: `course_td_ex1_drill` 03–04 (P3E.5). |
 | TD7.4 | Dialog field order; "Features (n)" | ✅ | All fields in the course's order: Blind, Depth, Direction, Starting offset, Symmetric, Draft, Second end position, Merge with all, Merge scope (`course_ps4_end_types` 01, 03, 05, 09, 10; `course_ps4_draft`; `course_ps6_control_arm` 04). Rollback slider: `course_ps13_rollback_final`. Features (n) header: `course_ps3_filter` 01. |
 | TD7.5 | New part in the Parts list, renamed there | ✅ | `course_ps2_parts_list` 05, `course_ps6_control_arm` 09–10. |
 
@@ -168,7 +176,7 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD8.5 | Shift locks the hovered face | ✅ | A6.5: `course_asm_mate_connectors` 03. |
 | TD8.6 | Insert an assembly via the Assemblies tab | ✅ | P3B.4 (A17.2): `course_asm_subassemblies` 16–17. |
 | TD8.7 | Flip / Reorient; Solve | ✅ | A6.8, A6.11: `course_asm_ex2_pneumatic` 12; `course_asm_mate_dialog_options` 07–08. |
-| TD8.8 | Standard content ISO 4762 M5 × 25 on two holes | 🟡 | P3B.5: the library has ISO 4762 (M5, length 25; `standard_content.ron`), batch placement on selected holes (`course_asm_std_batch` 01, 04, with ANSI screws), and an ISO 4762 preview (`course_asm_std_batch` 12). Missing: a frame of M5 × 25 placed on two holes, which is `course_td_ex1_drill` step 5 (P3E.5). |
+| TD8.8 | Standard content ISO 4762 M5 × 25 on two holes | ✅ | P3B.5: the library has ISO 4762 (M5, length 25; `standard_content.ron`) and batch placement on selected holes (`course_asm_std_batch` 01, 04). **P3E.5**: two ISO 4762 M5 × 25 on the manifold's two bolt hole edges, each with its Fastened mate, in a subassembly's occurrence (`course_td_ex1_drill` 16–18; `course_test_drive.rs` step 7: "Socket head cap screw M5 x 25" × 2 in the BOM). |
 | TD8.9 | Standard content connectors; K hides them | ✅ | Standard content carries its connectors (A19); K hides connectors (`course_asm_ex4_connectors` 10). |
 
 ### TD9 Properties and BOM
@@ -177,7 +185,7 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD9.1 | BOM panel | ✅ | P3B.6 (A20.1): `course_asm_bom` 01. |
 | TD9.2 | Fill properties, add/reorder columns, export CSV | ✅ | `course_asm_bom` 09–11, 17; `course_asm_bom_template` 08 (Export to CSV); `assembly_bom.rs::csv_export_matches_the_golden_file`. |
 | TD9.3 | Two-way BOM ↔ part properties | ✅ | A20.10: `course_asm_bom` 17–19; `assembly_bom.rs::bom_cells_and_properties_are_the_same_data`. |
-| TD9.4 | Generate next part number; Switch to | 🟡 | The BOM row menu's Generate next part number (`bom_panel.rs:764`) and Generate missing part numbers (`course_asm_bom_template` 09–10). **Switch to** isn't in the BOM row menu (only in the instance menu, A4.6: `course_asm_hide_show` 14–15): P3E.5. |
+| TD9.4 | Generate next part number; Switch to | ✅ | The BOM row menu's Generate next part number and Generate missing part numbers (`course_asm_bom_template` 09–10). **P3E.5**: the row menu's **Switch to <tab>** opens the row's Part Studio with its part selected, or its subassembly's tab (`course_td_ex1_drill` 20–22: the gasket's row inside the expanded CARBURETOR; disabled for standard content and items). |
 | TD9.5 | Parts list → Properties dialog | ✅ | Parts list right-click → Properties… (`parts_list.rs:247`) with Part number, Description and Generate (`course_asm_bom_template` 11–12 "td9.5"). |
 
 ### TD10 Drawings
@@ -186,10 +194,10 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD10.1 | Drawings linked to the model | ✅ | P3C.6 (D X11): `course_drw_ex3_update` 12d–15. |
 | TD10.2 | Create drawing, ANSI_B_MM; custom templates | ✅ | P3C.1: "+" → Create Drawing… with built-in ANSI/ISO templates in every size and unit (ANSI_B_MM among them, `cadrs_drawing/src/template.rs:135-150`) and custom templates (`course_drw_create` 01–05, 10–11). The exercise picks ANSI_B_MM (P3E.5). |
 | TD10.3 | Rename the tab | ✅ | `course_drw_ex2_assembly` 08, `tabs_create_assembly` 03–04. |
-| TD10.4 | Insert view Front 1:2 + Right projected | 🟡 | Front 1:2 + projected views of a part (`course_drw_ex1_ujoint` 04–05); an assembly's Isometric 1:2 (`course_drw_ex2_assembly` 06–07); assembly projection is tested (`drawing_assembly.rs::assembly_views_project_every_occurrence`). Missing: a frame of an assembly Front + Right projected view: `course_td_ex1_drill` step 7 (P3E.5). |
-| TD10.5 | Structured – Top level BOM anchored bottom-right at the title block | 🟡 | Insert BOM with type Structured – Top level (`BomType::TopLevel`, `drawing_assembly.rs`) and a fixed corner (`course_drw_ex2_assembly` 10–11). `snap_to_border` snaps only to the frame corners, **not to the title block's left edge**: P3E.5. |
-| TD10.6 | Height and depth dimensions; item-number callouts | 🟡 | Dimensions on part views (`course_drw_ex1_ujoint` 16; `ex1_dimensions_and_callouts_match_the_model`). Callouts with the Table: Item No. field (D11.4, `course_drw_ex2_assembly` 14–16) and item balloons (`course_drw_ex3_update` 02). Not shown: dimensions and item-number callouts together on an assembly's views: `course_td_ex1_drill` step 7 (P3E.5). |
-| TD10.7 | Title-block fields linked to the model's Name and Part number | ✅ | The title block's Title and Number resolve from the sheet reference's Name and Part number through the property model (`cadrs_drawing/src/title_block.rs:95-110`, test `fields_resolve_from_properties`); parametric notes bound to properties (P3C.4, D X3, `course_drw_notes`). cadrs links the fields by default, so the course's "switch the field, then delete the unused annotations" isn't needed. The part number shown in a title block: `course_td_ex1_drill` (P3E.5). |
+| TD10.4 | Insert view Front 1:2 + Right projected | ✅ | Front 1:2 + projected views of a part (`course_drw_ex1_ujoint` 04–05). **P3E.5**: an assembly's Front 1:2 and its projected Right view (`course_td_ex1_drill` 26–27; `course_test_drive.rs::step7_the_drawing`). |
+| TD10.5 | Structured – Top level BOM anchored bottom-right at the title block | ✅ | Insert BOM with type Structured – Top level and a fixed corner (`course_drw_ex2_assembly` 10–11). **P3E.5**: a table's fixed corner snaps to the title block too (`snap_table_corner`, `snap_to_title_block`): a right-hand corner to the block's left edge (its corners, or level along it), a bottom corner onto its top (`course_td_ex1_drill` 28–28b; `assembly.rs::a_table_corner_snaps_to_the_title_block`). |
+| TD10.6 | Height and depth dimensions; item-number callouts | ✅ | Dimensions on part views (`course_drw_ex1_ujoint` 16) and item callouts (`course_drw_ex2_assembly` 14–16). **P3E.5**: on an assembly's views, the height (148.00, Front) and depth (80.00, Right) and the Item No. callouts 1–3 (`course_td_ex1_drill` 29–31). |
+| TD10.7 | Title-block fields linked to the model's Name and Part number | ✅ | The title block's Title and Number resolve from the sheet reference's Name and Part number through the property model (`cadrs_drawing/src/title_block.rs:95-110`, test `fields_resolve_from_properties`); parametric notes bound to properties (P3C.4, D X3, `course_drw_notes`). cadrs links the fields by default, so the course's "switch the field, then delete the unused annotations" isn't needed. The assembly's Name and Part number in the title block: `course_td_ex1_drill` 27 ("FUEL AND POWER TRAIN", PRT-000005; `course_test_drive.rs::step7_the_drawing`). |
 | TD10.8 | Update from this workspace | ✅ | P3C.6 (D13.2): `course_drw_ex3_update` 13–15, 29. |
 
 ## 3. Collaboration and data management
@@ -207,11 +215,11 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD12.1 | Versions and history panel; Restore from any point | ✅ basic | P3D.3: the basic History panel, whose Restore is an undoable entry (`course_insp_history_panel` 01–05; `history_log.rs::restoring_an_entry_reproduces_it_and_is_undoable`). The detailed panel (graph, legend, filters, columns) is **out of scope** ("niche; out of scope by user decision 2026-09-29"). |
 | TD12.2 | Workspace shown as an open circle | ✅ | "Main" with an open circle (`TimelineMarker::Workspace`; `course_insp_history_panel` 01). |
 | TD12.3 | Create version with a name | ✅ | P3D.3 / P3G.1: Create version (name, description) (`course_insp_history_panel` 06–07; `course_er_versions_in_document` 03–04; `a_version_is_immutable_and_persists`). |
-| TD12.4 | Branch from a version → new workspace | ❌ | One workspace only ("Copy workspace…" is disabled). P3E.4. |
-| TD12.5 | Edit in the branch; Main unchanged | ❌ | P3E.4. |
-| TD12.6 | Merge into current workspace; per-tab replace or keep | ❌ | P3E.4. |
-| TD12.7 | Merge is a history entry; undo via Restore | ❌ | P3E.4 (Restore exists, P3D.3). |
-| TD12.8 | Priority: versions and restore first, then branches and merge | 🟡 | Versions and Restore are done (P3D.3). Branches and merge are P3E.4. |
+| TD12.4 | Branch from a version → new workspace | ✅ | **P3E.4**: "Branch to create workspace…" on a version's menu; the branch is a copy of the version and opens (`course_td_branch_merge` 02–04; `workspaces.rs::a_branch_starts_as_its_version`). The exercise's branch: `course_td_ex1_drill` 32–33. |
+| TD12.5 | Edit in the branch; Main unchanged | ✅ | **P3E.4**: `course_td_branch_merge` 05–09; `workspaces.rs::an_edit_in_a_branch_leaves_main_unchanged`. The exercise: the gasket 1 mm in the branch, 2 mm in Main (`course_td_ex1_drill` 34–36; `course_test_drive.rs::step9_gasket_volumes_in_each_workspace`). |
+| TD12.6 | Merge into current workspace; per-tab replace or keep | ✅ | **P3E.4**: the merge dialog lists the changed tabs, each Replace (default) or Keep (`course_td_branch_merge` 11–14; `workspaces.rs::merge_replaces_exactly_the_chosen_tabs`); `course_td_ex1_drill` 37–38. |
+| TD12.7 | Merge is a history entry; undo via Restore | ✅ | **P3E.4**: one "Merge from …" entry, undone by Restore (`course_td_branch_merge` 14–15; `workspaces.rs::a_merge_is_one_entry_and_restore_undoes_it`); `course_td_ex1_drill` 39–40. |
+| TD12.8 | Priority: versions and restore first, then branches and merge | ✅ | Versions and Restore (P3D.3), then branches and merge (P3E.4). |
 
 ### TD13–TD14 Release management, what's next
 | ID | Requirement | Status | Notes |
@@ -221,20 +229,20 @@ real last-opened workspace name is P3E.4). The cross-stage rows ER1.2 and ER8.5
 | TD14.1 | Links to further learning | out of scope | Learning-site feature. |
 
 ## Exercise
-Every mechanism the exercise needs exists except the stand-in, branches and merge, and the small
-TD8.8, TD9.4, TD10.4–TD10.6 pieces. The walkthrough itself is P3E.5.
+P3E.5 runs the walkthrough on the drill stand-in (`course_td_ex1_drill`, every step through the
+UI) and closed the small TD8.8, TD9.4, TD10.4–TD10.6 pieces.
 
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
-| Step 1 | Copy the Initial document | 🟡 | Copy exists; the `drill_standin` sample (P3E.5) opened as a copy via Samples (P3E.1). |
-| Step 2 | Extrude the manifold face New 2 mm → CARBURETOR_GASKET | 🟡 | Mechanism ✅ (P3.3); run in `course_td_ex1_drill` (P3E.5). |
-| Step 3 | Insert the gasket; Fastened with Shift-locked hole centres | 🟡 | Mechanism ✅ (P3B.2, A6.5); P3E.5. |
-| Step 4 | Insert the CARBURETOR assembly; Fastened, Flip/Reorient, Solve | 🟡 | Mechanism ✅ (P3B.4, A6.8, A6.11); P3E.5. |
-| Step 5 | Two ISO 4762 M5×25 screws; K | 🟡 | Mechanism ✅ (P3B.5, K); P3E.5. |
-| Step 6 | BOM part number ↔ Properties | 🟡 | Mechanism ✅ (P3B.6); Switch to from the BOM row: P3E.5. |
-| Step 7 | Drawing ANSI_B_MM, Front + Right, structured BOM, dimensions, callouts, linked title fields | 🟡 | Mechanism ✅ (P3C.1–P3C.5); BOM snap to the title block: P3E.5. |
+| Step 1 | Copy the Initial document | ✅ | The `drill_standin` sample opened as a copy (`course_td_ex1_drill` 01–02). |
+| Step 2 | Extrude the manifold face New 2 mm → CARBURETOR_GASKET | ✅ | `course_td_ex1_drill` 03–05: 1676.648 mm³; `course_test_drive.rs::step2_the_gasket_is_the_mounting_face_2_mm_thick` (1676.6483). |
+| Step 3 | Insert the gasket; Fastened with Shift-locked hole centres | ✅ | `course_td_ex1_drill` 06–09 (Flip puts it on the manifold rather than in it). |
+| Step 4 | Insert the CARBURETOR assembly; Fastened, Flip/Reorient, Solve | ✅ | `course_td_ex1_drill` 10–15 (Flip; Reorient isn't needed: the hole pattern is symmetric). |
+| Step 5 | Two ISO 4762 M5×25 screws; K | ✅ | `course_td_ex1_drill` 16–18. |
+| Step 6 | BOM part number ↔ Properties | ✅ | `course_td_ex1_drill` 19–24; `course_test_drive.rs::step6_part_number_syncs_both_ways`. |
+| Step 7 | Drawing ANSI_B_MM, Front + Right, structured BOM, dimensions, callouts, linked title fields | ✅ | `course_td_ex1_drill` 25–31; `course_test_drive.rs::step7_the_drawing`. |
 | Step 8 | Share, follow mode, comment with markup | out of scope | Collaboration. |
-| Step 9 | Version → branch → 1 mm gasket → merge | ❌ | Version ✅ (P3D.3); branch and merge P3E.4. |
+| Step 9 | Version → branch → 1 mm gasket → merge | ✅ | `course_td_ex1_drill` 32–40; `course_test_drive.rs::step9_gasket_volumes_in_each_workspace` (1676.6483 / 838.3241 / 838.3241 / 1676.6483). |
 | Step 10 | Revision table, Release | out of scope | Release management (the table itself: P3C.8). |
 
 (The exercise rows aren't requirement IDs of their own; they aren't in the counts above.)
@@ -244,13 +252,13 @@ TD8.8, TD9.4, TD10.4–TD10.6 pieces. The walkthrough itself is P3E.5.
 |---|---|---|---|
 | X1 | Auto-save, no Save button | ✅ | See TD1.1 (`reload_roundtrip` 03, `history_survives_save_and_reload`). |
 | X2 | Camera controls, F, Shift+7, view cube, shortcut list | ✅ | `viewport_orbit` 02–12, `keyboard_shortcuts` 01, 07. |
-| X3 | Persistent additive selection; Space clears | 🟡 | See TD6.7: the frame comes with P3E.3. |
+| X3 | Persistent additive selection; Space clears | ✅ | See TD6.7 (`course_td_selection`). |
 | X4 | Extrude from a planar face | ✅ | `course_ps4_end_types` 07–08. |
 | X5 | Start screen: create, import, search, recent, folders, trash, details | ✅ | Create, search, recent, folders and trash; **P3E.1**: labels, the details panel, opening folders, samples and Import files… (`course_td_documents_labels`, `_details`, `_samples`, `_import`). |
 | X6 | Tab folders and vertical tab manager | ✅ | See TD5.3 and TD5.4 (P3E.2: `course_td_tab_folders`, `course_td_tab_manager`, `course_td_many_tabs`; `tests/tab_folders.rs`). |
 | X7 | Single-source part properties; BOM CSV export | ✅ | `course_asm_bom` 17–19, `course_asm_bom_template` 08; `bom_cells_and_properties_are_the_same_data`, `csv_export_matches_the_golden_file`. |
 | X8 | Title-block fields linked to model properties | ✅ | See TD10.7 (`fields_resolve_from_properties`). |
-| X9 | Versions, branches and merge | 🟡 | Versions ✅ (P3D.3, P3G.1); branches and merge P3E.4. |
+| X9 | Versions, branches and merge | ✅ | Versions (P3D.3, P3G.1); branches and merge (P3E.4, `course_td_branch_merge`); the exercise's step 9 (`course_td_ex1_drill` 32–40). |
 
 ## Cross-stage rows assigned to stage 3E
 These rows live in other gap lists and close with a P3E milestone. The milestone table names
@@ -273,37 +281,61 @@ them in its Covers column.
 
 ## What each exercise needs
 The tour is one walkthrough on a large public document (DRILL HOTD, 187 features), with **no
-numeric self-check**. It runs on a stand-in, `fixtures/drill_standin.cadrs` (mm), which **doesn't
-exist yet**. P3E.5 builds it: a `samples::drill` module, the fixture, and a
-`drill_fixture_is_current` test. It ships as a bundled sample (P3E.1's Samples). Its contents:
-- Part Studio **CARBURETOR** with a **MANIFOLD** part. The MANIFOLD's mounting face is a
-  40 × 30 mm rectangle with a Ø20 bore and two Ø5.5 holes, so the face area is
-  40·30 − π(10² + 2·2.75²) = 1200 − 115.125π = **838.3241 mm²**.
-- Assemblies **CARBURETOR** (manifold + a carburetor body) and **FUEL AND POWER TRAIN** (a base
-  part), both Aluminium.
+numeric self-check**. It runs on a stand-in, `fixtures/drill_standin.cadrs` (mm), built by
+`samples::drill` (P3E.5; `course_test_drive.rs::drill_fixture_is_current`). It ships as a bundled
+sample ("Drill", Test Drive). Its contents, every part Aluminum 6061 with a part number:
+- Part Studio **CARBURETOR**: **MANIFOLD** (Extrude 1, z 0..20), a 40 × 30 mm plate with a Ø20
+  bore and two Ø5.5 bolt holes at x = ±15.5, all through. Its top face is the mounting face:
+  40·30 − π(10² + 2·2.75²) = 1200 − 115.125π = **838.3241 mm²**. **CARBURETOR_BODY**
+  (Extrude 2, a 22 × 30 block z −36..0 under it, clear of the bolt holes).
+- Assembly **CARBURETOR**: MANIFOLD <1> fixed, CARBURETOR_BODY <1> fastened under it.
+- Part Studio **DRILL BODY**: **DRILL_BODY**, a 160 × 80 × 90 block (z −90..0) with a Ø20 port
+  and two Ø4.2 tapping holes on the manifold's pattern.
+- Assembly **FUEL AND POWER TRAIN**: DRILL_BODY <1> fixed (the base part).
 
-The scenario **`course_td_ex1_drill`** runs steps 1–7 and 9:
-1. Samples → drill stand-in → Open a copy.
-2. Select the mounting face → Extrude (Add is picked by itself) → click **New**, 2 mm → rename
-   the part **CARBURETOR_GASKET**. Check V = **1676.6483 mm³** (2 × the face area).
-3. Insert the gasket into CARBURETOR, Fastened (Shift-locked hole centres).
-4. Insert the CARBURETOR assembly into FUEL AND POWER TRAIN (Assemblies tab), Fastened, Flip,
-   Solve.
-5. Two ISO 4762 M5 × 25 screws on the manifold's holes; K hides the connectors.
-6. BOM: Generate next part number for the gasket; Switch to; open the part's Properties and see
-   the number; fill Description there and see it in the BOM.
-7. Drawing ANSI_B_MM "FUEL AND POWER TRAIN": Front 1:2 + Right; a Structured – Top level BOM
-   snapped at the title block; height and depth dimensions; item-number callouts; the title block
-   showing the model's Name and Part number.
-9. Create version "FUEL AND POWER TRAIN COMPLETE" → branch "Alternate Gasket Thickness" → edit
-   the gasket to 1 mm (V = **838.3241 mm³**) → Main still reads 1676.6483 → merge into Main,
-   replacing the CARBURETOR tab → Main's gasket reads 838.3241 mm³ → Restore the entry before the
-   merge → 1676.6483 again.
+The scenario **`course_td_ex1_drill`** (43 frames) runs steps 1–7 and 9 through the UI:
+1. Samples → Drill → Open a copy (01–02).
+2. The mounting face → Extrude (Add is picked by itself) → **New**, 2 mm → renamed
+   **CARBURETOR_GASKET**: 1676.648 mm³ (03–05).
+3. The gasket inserted in CARBURETOR; Fastened on Shift-locked hole centres, Flip (06–09).
+4. CARBURETOR inserted in FUEL AND POWER TRAIN (Assemblies tab); Fastened between the gasket's
+   bore centre and the drill body's port centre (both faces Shift-locked), Flip, Solve (10–15).
+5. Two ISO 4762 M5 × 25 on the manifold's bolt hole edges; K (16–18).
+6. BOM: Generate next part number on the gasket's row (PRT-000006); **Switch to** from its row;
+   its Properties show the number, a Description typed there shows in the BOM (19–24).
+7. Drawing ANSI_B_MM of FUEL AND POWER TRAIN: Front 1:2 + Right; a Structured – Top level BOM
+   snapped at the title block's left edge (narrowed by its grip); height and depth; Item No.
+   callouts; the title block shows the assembly's Name and Part number (25–31).
+9. Version "FUEL AND POWER TRAIN COMPLETE" → branch "Alternate Gasket Thickness" → the gasket
+   1 mm (838.324 mm³) → Main still 1676.648 → merge into Main replacing the CARBURETOR tab →
+   838.324 → Restore the entry before the merge (the version marks it) → 1676.648 (32–40).
 
 The unit test `crates/cadrs_core/tests/course_test_drive.rs` checks:
-- the three gasket volumes, to 1e−6 relative, against the closed form 2·(1200 − 115.125π) and
-  1·(1200 − 115.125π), computed from the dimensions (not from the kernel);
-- that the BOM's Part number equals the part property after edits in both directions.
+- the gasket volumes 1676.6483 (Main), 838.3241 (the branch; Main still 1676.6483), 838.3241
+  (Main after the merge) and 1676.6483 (after the Restore), to 1e−6 relative, against the closed
+  form 2·(1200 − 115.125π) and 1·(1200 − 115.125π) computed from the dimensions;
+- that the BOM's Part number equals the part property after edits in both directions;
+- the drawing: 2 views, a 3-row Structured – Top level BOM (DRILL_BODY, CARBURETOR, Socket head
+  cap screw M5 x 25 × 2) snapped to the title block, and the title block's Title and Number
+  ("FUEL AND POWER TRAIN", PRT-000005).
+
+## Stand-in substitutions
+- **The document.** DRILL HOTD (187 features, many tabs) is replaced by the four-tab stand-in
+  above; the gasket's face is the manifold's mounting face, sized so the course's volumes come
+  out in closed form. The base part of FUEL AND POWER TRAIN is a plain DRILL_BODY block.
+- **No scenario shortcuts.** Every step of `course_td_ex1_drill` is clicked through the UI,
+  including the mates (implicit connectors on Shift-locked faces), Flip and Solve, the standard
+  content and the drawing; no `Custom(...)` set-up command runs after the sample is copied.
+- **Step 3 inserts the gasket beside the carburetor** (a click in the view) rather than at its
+  studio position, so the Fastened mate visibly brings it onto the manifold.
+- **Step 4's Reorient** isn't clicked: the stand-in's hole pattern is symmetric, so Flip alone
+  lines the holes up.
+- **Step 5's K** has nothing to hide: the stand-in has no explicit mate connectors and cadrs
+  doesn't draw the fasteners' connectors after insertion, so the frame is taken after K.
+- **Step 7's BOM** lists all six default columns, wider than the space left of the title block;
+  it is snapped, then narrowed with its left grip (cells wrap), as `course_drw_ex2_assembly` 12.
+- **Step 9's Restore** is picked on the version's row ("FUEL AND POWER TRAIN COMPLETE"), which
+  marks the entry before the merge (Main has no change between the version and the merge).
 
 ## Proposed milestones (stage 3E, revised 2026-09-29)
 Every milestone ships `course_td_*` scenarios and a fresh-judge round against `test-drive/` and the
@@ -344,6 +376,12 @@ sight. The Tab manager moved from `move_document.rs` to `tab_manager.rs`. Decisi
 on a primary click (a right-click only opens its menu); drag onto Home moves to the top level, onto
 a crumb into that folder; reordering in the manager is off while it is filtered or searched; a
 selected folder's tabs are what Move to document moves.
+
+**P3E.5 built (2026-10-01, pre-judge).** `samples::drill` and `fixtures/drill_standin.cadrs` (the
+seventh bundled sample), the BOM row menu's Switch to (`assembly::menu::switch_to_owner`), the
+title-block snap of a drawing BOM's fixed corner (`cadrs_drawing::assembly::snap_table_corner`),
+the scenario `course_td_ex1_drill` (43 frames) and `crates/cadrs_core/tests/course_test_drive.rs`
+(5 tests). See "What each exercise needs" and "Stand-in substitutions".
 
 **P3E.1 details:**
 - Labels in `cadrs_core::library` (a `Label { id, name, colour }` list in the library index, and

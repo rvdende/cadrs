@@ -221,6 +221,7 @@ pub mod conrod;
 pub mod design_intent;
 pub mod flange;
 pub mod drawing_bracket;
+pub mod drill;
 pub mod gasket;
 pub mod gear_cover;
 pub mod hand_brake;

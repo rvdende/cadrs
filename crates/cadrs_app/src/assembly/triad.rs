@@ -500,7 +500,7 @@ fn hit(sc: &Screen, p: Vec2) -> Option<TriadHandle> {
 /// The triad handle at a screen position (for the right-click menu), with its instance.
 pub fn handle_at(world: &World, at: Vec2) -> Option<(InstanceId, TriadHandle)> {
     let t = world.resource::<Triad>();
-    if t.hidden {
+    if t.hidden || world.contains_resource::<crate::measure::MeasurePanel>() {
         return None;
     }
     let f = t.frame?;
@@ -829,9 +829,11 @@ fn draw_triad(
     mut halo: Gizmos<TriadHaloGizmos>,
     mut line: Gizmos<TriadGizmos>,
     mut dots: (Gizmos<super::connectors::ConnectorHaloGizmos>, Gizmos<super::connectors::ConnectorGizmos>),
+    measuring: Option<Res<crate::measure::MeasurePanel>>,
 ) {
     let Some(doc) = doc else { return };
-    if triad.hidden {
+    // Not over the faces Measure is measuring (P3E.3b judge: measure 08).
+    if triad.hidden || measuring.is_some() {
         return;
     }
     let Some(f) = triad.drag.as_ref().and_then(|d| d.frame).or(triad.frame) else { return };

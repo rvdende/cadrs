@@ -77,8 +77,11 @@ pub struct MeasureGizmos;
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (config, _) = store.config_mut::<MeasureGizmos>();
-    config.line.width = 2.0;
+    config.line.width = 3.0;
     config.depth_bias = -1.0;
+    // On top of the parts (depth off): a distance between faces often runs inside a part
+    // (P3E.3b judge: measure 08, two blocks' top faces 5 mm apart).
+    config.render_layers = bevy::camera::visibility::RenderLayers::layer(crate::viewport::OVERLAY_LAYER);
 }
 
 /// The bottom-right readout.

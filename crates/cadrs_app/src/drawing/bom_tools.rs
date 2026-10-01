@@ -26,7 +26,7 @@ use cadrs_core::ElementId;
 use cadrs_core::drawing_assembly as da;
 use cadrs_drawing::DrawingOp;
 use cadrs_drawing::annotation::{Annotation, AnnotationId, AnnotationKind};
-use cadrs_drawing::assembly::{BomData, BomOrder, BomType, Border, Callout, CalloutFields, SIZES, bom_table, inference, refreshed_bom_table, snap_to_border, token};
+use cadrs_drawing::assembly::{BomData, BomOrder, BomType, Border, Callout, CalloutFields, SIZES, bom_table, inference, refreshed_bom_table, snap_table_corner, token};
 use cadrs_drawing::table::{Corner, Table, TableId};
 use cadrs_drawing::{SheetId, ViewId};
 use cadrs_ui::input::TextInputField;
@@ -202,7 +202,7 @@ fn spawn_bom_card(world: &mut World, title: &str, prefix: &'static str, accept: 
                     });
                     if b.editing.is_none() {
                         body.spawn((
-                            t.text("Click the sheet to place the table; it snaps to the border's corner.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                            t.text("Click the sheet to place the table; it snaps to the border's corner or the title block.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
                             Node { max_width: Val::Px(218.0), ..default() },
                         ))
                         .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
@@ -271,15 +271,18 @@ fn on_select(ev: On<SelectChange>, q: Query<&Name>, mut commands: Commands) {
 }
 
 /// The BOM table the card's settings place with the cursor at `p` on `sheet` of `d` (snapped
-/// to the frame's corner).
+/// to the frame's corner or the title block).
 pub fn preview_table(b: &BomUi, d: &cadrs_drawing::Drawing, sheet: &cadrs_drawing::Sheet, p: [f64; 2]) -> Option<Table> {
     let data = b.data.clone()?;
     let f = cadrs_drawing::standard::frame(sheet.format).inner;
-    let at = snap_to_border(p, b.fixed, (f.min, f.max), SNAP).unwrap_or(p);
+    // The frame's corner, or the title block (TD10.5: its left edge, P3E.5).
+    let block = sheet.title_block.then(|| cadrs_drawing::title_block::placement(f, sheet.format.size)).map(|r| (r.min, r.max));
+    let at = snap_table_corner(p, b.fixed, (f.min, f.max), block, SNAP).unwrap_or(p);
     Some(bom_table(data, b.fixed, at, &d.style))
 }
 
-/// The BOM table that would be placed with the cursor at `p` (snapped to the frame's corner).
+/// The BOM table that would be placed with the cursor at `p` (snapped to the frame's corner or
+/// the title block).
 pub fn bom_preview(world: &World, p: [f64; 2]) -> Option<Table> {
     let doc = world.get_resource::<ActiveDocument>()?;
     let (id, d) = active_drawing(doc)?;

@@ -219,3 +219,48 @@ fn an_old_main_only_log_loads_and_saves_unchanged() {
     assert_eq!(meta.workspace_name(), "Main");
     assert!(!ron::to_string(&meta).unwrap().contains("workspace"));
 }
+
+/// P3E.4 judge: after a merge that replaces the Gasket tab, the kept assembly's gasket
+/// instance resolves (through the assembly's occurrences) to the branch's 1 mm part:
+/// V = (60·40 − π(10² + 2·4²))·1 = 2400 − 132π = 1985.31 mm³, written out again here.
+#[test]
+fn the_merged_assemblys_gasket_instance_is_the_1_mm_part() {
+    let mut s = Session::new();
+    let b = branched(&mut s);
+    let source = s.doc.clone();
+    s.switch(WorkspaceId::MAIN);
+    let merged = wm::merge(&s.doc, &source, &[g::GASKET]);
+    s.run(&MergeWorkspace { state: Box::new(merged), source: s.log.workspace_name(b) });
+    let asm = s.doc.element(g::ASSEMBLY).unwrap().assembly_model().unwrap().clone();
+    let occ = cadrs_core::assembly::structure::occurrences(&s.doc, &asm).into_iter().find(|o| o.id == g::GASKET_INSTANCE).expect("the gasket occurrence");
+    let build = cadrs_core::rebuild::build(s.doc.element(occ.element).unwrap().features());
+    let part = build.part(occ.part).expect("the instance's part resolves");
+    let want = 2400.0 - 132.0 * std::f64::consts::PI;
+    let v = part.mass.as_ref().map(|m| m.volume).expect("a kernel");
+    assert!((v - want).abs() < 1e-3, "{v} vs {want}");
+    assert_eq!(format!("{v:.2}"), "1985.31");
+    // The solid the assembly draws (its tessellation) encloses the same volume.
+    let doc = s.doc.clone();
+    let solids = cadrs_core::assembly::occurrence_solids(&doc, &asm, |e| Some(cadrs_core::rebuild::build(doc.element(e)?.features())));
+    let tess = solids.get(&g::GASKET_INSTANCE).expect("drawn").volume();
+    assert!((tess - want).abs() / want < 1e-2, "{tess}");
+}
+
+/// P3E.4 judge: a Main-only log written in schema 2 before workspaces existed
+/// (`fixtures/main_only_v2.history.ron`, saved by the app before P3E.4) loads and saves
+/// byte-identical: no workspace fields appear.
+#[test]
+fn a_schema_2_main_only_log_saves_byte_identical() {
+    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/main_only_v2.history.ron"));
+    let original = std::fs::read_to_string(path).unwrap();
+    assert!(original.starts_with("(version:2,"), "a schema-2 log");
+    let log = HistoryLog::load_path(path).unwrap();
+    assert!(!log.upgraded());
+    assert_eq!(log.current_workspace(), WorkspaceId::MAIN);
+    assert!(log.branches().is_empty());
+    let out = std::env::temp_dir().join(format!("cadrs-v2-log-{}-{}.ron", std::process::id(), uuid::Uuid::new_v4()));
+    log.save_path(&out).unwrap();
+    let saved = std::fs::read_to_string(&out).unwrap();
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(saved, original, "saved byte-identical");
+}

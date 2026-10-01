@@ -697,6 +697,22 @@ fn zoom_to(world: &mut World, parts: &[cadrs_core::PartId]) {
     view.animate_to(to);
 }
 
+/// **Switch to** from a BOM row (TD9.4, P3E.5): the row's Part Studio, its part selected, or
+/// its subassembly's tab.
+pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::PropertyOwner) {
+    use cadrs_core::properties::PropertyOwner;
+    let (element, picks) = match owner {
+        PropertyOwner::Part { element, part } => (element, vec![Pick::Part(part)]),
+        PropertyOwner::Assembly { element } => (element, Vec::new()),
+        PropertyOwner::Item { .. } => return,
+    };
+    if world.resource::<ActiveDocument>().doc.element(element).is_none() {
+        return;
+    }
+    world.resource_mut::<ActiveDocument>().set_active(element);
+    world.insert_resource(super::PendingSelection(Some((element, picks))));
+}
+
 /// **Switch to** (A4.6, X11): the instance's Part Studio becomes the active tab with its part
 /// selected (highlighted); a subassembly's tab opens.
 pub fn switch_to(world: &mut World, instance: InstanceId) {

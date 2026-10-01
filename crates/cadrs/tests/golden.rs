@@ -1348,6 +1348,12 @@ fn golden_course_td_branch_merge() {
     run_scenario("course_td_branch_merge");
 }
 
+// P3E.5: the test drive walkthrough on the drill stand-in.
+#[test]
+fn golden_course_td_ex1_drill() {
+    run_scenario("course_td_ex1_drill");
+}
+
 // Final part 2: the assembly course scenarios (stage 3B) and the importer/list scenarios merged
 // from main, which were not registered before.
 
