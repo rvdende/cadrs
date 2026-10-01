@@ -67,8 +67,7 @@ impl Plugin for ReferenceManagerPlugin {
 
 /// The newest version of each document: the open document's from its log, another's from the
 /// store.
-fn latest_fn(world: &mut World) -> impl FnMut(DocumentId) -> Option<(VersionId, String)> + '_ {
-    let this = world.resource::<ActiveDocument>().doc.id;
+fn latest_fn(world: &mut World, this: DocumentId) -> impl FnMut(DocumentId) -> Option<(VersionId, String)> + '_ {
     let own = world.resource::<DocLog>().log.as_ref().and_then(|l| l.versions().last()).map(|v| (v.id(), v.name().to_string()));
     let mut res = linked::resolver(world);
     move |d| if d == this { own.clone() } else { res.0.latest(d).map(|v| (v.id(), v.name().to_string())) }
@@ -88,14 +87,19 @@ pub fn refresh_ref_states(world: &mut World, mut last: Local<Option<(u64, f64)>>
         return;
     }
     *last = Some((key, now));
-    let doc = world.resource::<ActiveDocument>().doc.clone();
+    // Borrowed in place: cloning a big document every few seconds stalled frames.
+    world.resource_scope(|world, active: Mut<ActiveDocument>| update_ref_states(world, &active.doc, &uses));
+}
+
+/// [`refresh_ref_states`]' work, for `doc` (taken out of the world meanwhile).
+fn update_ref_states(world: &mut World, doc: &cadrs_core::Document, uses: &[RefUse]) {
     let mut icons = std::collections::HashMap::new();
     let mut tabs: std::collections::HashMap<ElementId, LinkIcon> = std::collections::HashMap::new();
     // P3G.3 (ER7.6): references to a tab that moved to another document.
-    let moved = moved_uses(world, &doc, &uses);
+    let moved = moved_uses(world, doc, uses);
     {
-        let mut latest = latest_fn(world);
-        for u in &uses {
+        let mut latest = latest_fn(world, doc.id);
+        for u in uses {
             if let Some((_, m)) = moved.iter().find(|(x, _)| x.site == u.site) {
                 let icon = if u.reference.pinned { LinkIcon::PinnedStale } else { LinkIcon::Update };
                 if icon.is_update() {
@@ -104,7 +108,7 @@ pub fn refresh_ref_states(world: &mut World, mut last: Local<Option<(u64, f64)>>
                 icons.insert(u.site, (icon, format!("Its tab moved to {}", m.document_name)));
                 continue;
             }
-            let st = lu::staleness(&doc, u, &mut latest);
+            let st = lu::staleness(doc, u, &mut latest);
             let icon = match (u.reference.pinned, st.newer.is_some(), st.nested) {
                 (true, false, false) => LinkIcon::Pinned,
                 (true, _, _) => LinkIcon::PinnedStale,
@@ -136,10 +140,10 @@ pub fn refresh_ref_states(world: &mut World, mut last: Local<Option<(u64, f64)>>
 }
 
 /// The uses of `uses` whose referenced tab moved to another document since (ER7.6).
-pub fn moved_uses(world: &World, doc: &cadrs_core::Document, uses: &[RefUse]) -> Vec<(RefUse, MovedElement)> {
-    let store = world.resource::<crate::DocumentStore>().0.clone();
-    let mut cache: std::collections::HashMap<DocumentId, Option<cadrs_core::Document>> = std::collections::HashMap::new();
-    let mut load = |d: DocumentId| cache.entry(d).or_insert_with(|| store.load(d).ok().map(|f| f.document)).clone();
+pub fn moved_uses(world: &mut World, doc: &cadrs_core::Document, uses: &[RefUse]) -> Vec<(RefUse, MovedElement)> {
+    // The resolver keeps each document read until its file changes.
+    let mut r = linked::resolver(world);
+    let mut load = |d: DocumentId| r.0.current(d);
     uses.iter().filter_map(|u| move_doc::moved_record(doc, u, &mut load).map(|m| (*u, m))).collect()
 }
 

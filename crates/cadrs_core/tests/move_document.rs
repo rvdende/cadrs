@@ -272,7 +272,7 @@ fn a_same_document_version_reference_to_a_moved_tab_offers_the_new_document() {
     let u = lu::use_at(&doc, site).unwrap();
     assert_eq!(u.reference, r, "it keeps pointing at V1 of this document");
     close("still 1 000 mm³", ujoint(&doc), 1000.0, 1e-6);
-    let mut load = |d: DocumentId| store.load(d).ok().map(|f| f.document);
+    let mut load = |d: DocumentId| store.load(d).ok().map(|f| std::sync::Arc::new(f.document));
     let m = md::moved_record(&doc, &u, &mut load).expect("the studio moved");
     assert_eq!((m.document, m.to), (out.target, ps::PISTON_STUDIO));
     assert_eq!(m.document_name, "Pneumatic Piston");

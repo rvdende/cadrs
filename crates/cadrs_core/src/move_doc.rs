@@ -444,7 +444,7 @@ pub fn move_tabs(store: &Store, doc: &Document, source_log: &mut Option<HistoryL
 
 /// ER7.6: where the tab `u` references went, if it was moved out of its document (and isn't
 /// there any more). `load` reads another document.
-pub fn moved_record(doc: &Document, u: &RefUse, load: &mut dyn FnMut(DocumentId) -> Option<Document>) -> Option<MovedElement> {
+pub fn moved_record(doc: &Document, u: &RefUse, load: &mut dyn FnMut(DocumentId) -> Option<std::sync::Arc<Document>>) -> Option<MovedElement> {
     let RefAt::Version(_) = u.reference.at else { return None };
     let d = u.reference.document_or(doc.id);
     let find = |src: &Document| {
@@ -453,7 +453,7 @@ pub fn moved_record(doc: &Document, u: &RefUse, load: &mut dyn FnMut(DocumentId)
         }
         src.moved.iter().find(|m| m.element == u.reference.element).cloned()
     };
-    if d == doc.id { find(doc) } else { find(&load(d)?) }
+    if d == doc.id { find(doc) } else { find(&*load(d)?) }
 }
 
 /// ER7.6: "Update to the new document": `u` pointed at the newest version of the document its

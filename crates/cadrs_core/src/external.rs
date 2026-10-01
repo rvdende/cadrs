@@ -451,6 +451,10 @@ fn stamp(path: &PathBuf) -> Stamp {
 pub struct Resolver {
     store: Store,
     logs: HashMap<DocumentId, (Stamp, Arc<HistoryLog>)>,
+    /// Other documents as they are on disk now (their state, and their workspace when it could
+    /// be read), read again only when their `document.ron` changed: the app asks every few
+    /// seconds, and parsing a big document each time stalled frames.
+    current: HashMap<DocumentId, (Stamp, LinkState, Option<Arc<Document>>)>,
     versions: HashMap<(DocumentId, VersionId), Arc<Document>>,
     /// How many times a `history.ron` was read (tests: resolving twice reads once).
     pub reads: usize,
@@ -458,16 +462,43 @@ pub struct Resolver {
 
 impl Resolver {
     pub fn new(store: Store) -> Self {
-        Self { store, logs: HashMap::new(), versions: HashMap::new(), reads: 0 }
+        Self { store, logs: HashMap::new(), current: HashMap::new(), versions: HashMap::new(), reads: 0 }
     }
 
     pub fn store(&self) -> &Store {
         &self.store
     }
 
-    /// Whether `document` can be reached.
-    pub fn state(&self, document: DocumentId) -> LinkState {
-        link_state(&self.store, document)
+    /// Whether `document` can be reached ([`link_state`], read again only when its file changed).
+    pub fn state(&mut self, document: DocumentId) -> LinkState {
+        self.read_current(document).0
+    }
+
+    /// `document`'s workspace as it is on disk (in the trash too), read again only when its file
+    /// changed; `None` when it is gone or can't be read.
+    pub fn current(&mut self, document: DocumentId) -> Option<Arc<Document>> {
+        self.read_current(document).1
+    }
+
+    fn read_current(&mut self, document: DocumentId) -> (LinkState, Option<Arc<Document>>) {
+        let path = self.store.document_path(document);
+        let now = stamp(&path);
+        if now.is_none() || !path.is_file() {
+            self.current.remove(&document);
+            return (LinkState::Gone, None);
+        }
+        if let Some((s, state, doc)) = self.current.get(&document)
+            && *s == now
+        {
+            return (*state, doc.clone());
+        }
+        let (state, doc) = match self.store.load(document) {
+            Ok(f) if f.meta.trashed.is_some() => (LinkState::Trashed, Some(Arc::new(f.document))),
+            Ok(f) => (LinkState::Ok, Some(Arc::new(f.document))),
+            Err(_) => (LinkState::Inaccessible, None),
+        };
+        self.current.insert(document, (now, state, doc.clone()));
+        (state, doc)
     }
 
     /// The history of `document`, read again only when its file changed.
@@ -496,6 +527,7 @@ impl Resolver {
     /// versions do), so the next read sees the new file whatever its time stamp.
     pub fn forget(&mut self, document: DocumentId) {
         self.logs.remove(&document);
+        self.current.remove(&document);
         self.versions.retain(|(d, _), _| *d != document);
     }
 

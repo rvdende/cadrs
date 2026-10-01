@@ -111,19 +111,25 @@ pub fn linked_documents(doc: &Document) -> Vec<DocumentId> {
     out
 }
 
-fn refresh_link_status(doc: Option<Res<ActiveDocument>>, store: Res<DocumentStore>, time: Res<Time>, mut status: ResMut<LinkStatus>) {
-    let Some(doc) = doc else { return };
+fn refresh_link_status(world: &mut World) {
+    let Some(doc) = world.get_resource::<ActiveDocument>() else { return };
     // The linked copies' ids (cheap; they change when links are added or removed).
     let mut bytes = doc.doc.id.0.as_bytes().to_vec();
     for l in &doc.doc.linked {
         bytes.extend_from_slice(l.id().0.as_bytes());
     }
     let key = cadrs_kernel_hash(&bytes);
-    let now = time.elapsed_secs_f64();
-    if status.checked.is_some_and(|(k, t)| k == key && now - t < 3.0) {
+    let now = world.resource::<Time>().elapsed_secs_f64();
+    if world.resource::<LinkStatus>().checked.is_some_and(|(k, t)| k == key && now - t < 3.0) {
         return;
     }
-    let states: HashMap<DocumentId, LinkState> = linked_documents(&doc.doc).into_iter().map(|d| (d, external::link_state(&store.0, d))).collect();
+    let documents = linked_documents(&doc.doc);
+    // The resolver reads a document again only when its file changed.
+    let states: HashMap<DocumentId, LinkState> = {
+        let mut r = resolver(world);
+        documents.into_iter().map(|d| (d, r.0.state(d))).collect()
+    };
+    let mut status = world.resource_mut::<LinkStatus>();
     if states != status.states {
         status.states = states;
     }
