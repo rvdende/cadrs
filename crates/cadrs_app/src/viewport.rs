@@ -1205,7 +1205,7 @@ fn view_shortcuts(
     doc: Option<Res<ActiveDocument>>,
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
-    (cache, asm_parts): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>),
+    (cache, asm_parts, pcb_scene): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>),
 ) {
     if kind.is_flat() {
         // No 3D views on a sheet or a render; F and Ctrl+S are handled by `crate::drawing`.
@@ -1309,6 +1309,11 @@ fn view_shortcuts(
                     if !drawn.is_empty() {
                         pts = drawn;
                     }
+                }
+                // PCB Studio: the board shown (as the zoom-to-fit button does; P3H.6 fix round 1,
+                // F framed the origin).
+                if *kind == ActiveKind::PcbStudio && let Some(scene) = pcb_scene.as_deref() {
+                    pts = scene.fit_points();
                 }
                 let to = view.target().fitted_beside(&pts, rect.0.size(), fit_fill(*kind), inset.0);
                 view.animate_to(to);

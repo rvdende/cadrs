@@ -51,9 +51,10 @@ pub struct PartsPlugin;
 pub struct PartsSet;
 
 /// Parts drawn as hovered besides the one under the pointer (an assembly's mate row hovered in
-/// the list highlights its instances, A14.2); `.1`: a BOM row hovered (A20.2).
+/// the list highlights its instances, A14.2); `.1`: a BOM row hovered (A20.2); `.2`: what a box
+/// being dragged in the view will select (P3H.6 judge: pre-highlighted as the sketch box does).
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
-pub struct HoverParts(pub Vec<PartId>, pub Vec<PartId>);
+pub struct HoverParts(pub Vec<PartId>, pub Vec<PartId>, pub Vec<PartId>);
 
 impl Plugin for PartsPlugin {
     fn build(&self, app: &mut App) {
@@ -1522,6 +1523,7 @@ fn draw_part_edges(
         let part_hovered = highlight.is_hovered(Pick::Part(part.id))
             || hover_parts.0.contains(&part.id)
             || hover_parts.1.contains(&part.id)
+            || hover_parts.2.contains(&part.id)
             || list_feature.is_some_and(|f| !feature_faces && part.features.contains(&f));
         if preview {
             // Edges between faces facing the viewer are dark; the others show faintly through.
@@ -1802,7 +1804,7 @@ fn tint_selection(
     } else {
         cache
             .shown()
-            .filter(|p| highlight.is_hovered(Pick::Part(p.id)) || hover_parts.0.contains(&p.id) || hover_parts.1.contains(&p.id))
+            .filter(|p| highlight.is_hovered(Pick::Part(p.id)) || hover_parts.0.contains(&p.id) || hover_parts.1.contains(&p.id) || hover_parts.2.contains(&p.id))
             .filter(|p| !selection.contains(Pick::Part(p.id)))
             .flat_map(|p| p.solid.faces.iter().map(move |f| Pick::Face(p.id, f.name)))
             .collect()

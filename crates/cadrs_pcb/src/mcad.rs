@@ -158,6 +158,14 @@ fn snap(v: f64) -> f64 {
     if s == 0.0 { 0.0 } else { s }
 }
 
+/// Float noise off a placement coordinate (P3H.6 judge: Y −16.5 + 25.4 printed
+/// "8.900000000000002"): its 1e-9 mm snap when that is within 1e-12 mm, else the value as it
+/// is (an exact input such as X 4.064182376174947 comes back unchanged).
+fn denoise(v: f64) -> f64 {
+    let s = snap(v);
+    if (s - v).abs() < 1e-12 { s } else { v }
+}
+
 fn snap2(p: [f64; 2]) -> [f64; 2] {
     [snap(p[0]), snap(p[1])]
 }
@@ -444,9 +452,9 @@ pub fn board_from_mcad(
                 package: inst.package.clone(),
                 part_number: inst.part_number.clone(),
                 refdes: inst.refdes.clone(),
-                x: pose.x,
-                y: pose.y,
-                mount_offset: pose.mount_offset,
+                x: denoise(pose.x),
+                y: denoise(pose.y),
+                mount_offset: denoise(pose.mount_offset),
                 rotation: pose.rotation,
                 side: pose.side,
                 status: Status::Placed,

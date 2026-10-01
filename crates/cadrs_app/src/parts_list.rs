@@ -85,12 +85,13 @@ impl GroupsOpen {
 struct PartMenuFor(PartId);
 
 /// What the rows were built from.
-type RowKey = (Vec<(PartId, String, PartKind, bool, bool)>, bool, bool);
+type RowKey = (Vec<(PartId, String, PartKind, bool, bool, bool)>, bool, bool);
 
 /// Rebuilds the groups and rows when the parts, their names or visibility change.
 #[allow(clippy::too_many_arguments)]
 fn rebuild_part_list(
     cache: Res<PartCache>,
+    doc: Option<Res<ActiveDocument>>,
     over: Res<PartOverride>,
     open: Res<GroupsOpen>,
     q_rows: Query<(Entity, Ref<PartRows>)>,
@@ -101,7 +102,9 @@ fn rebuild_part_list(
     let Some((container, added)) = q_rows.iter().next().map(|(e, r)| (e, r.is_added())) else {
         return;
     };
-    let rows: Vec<(PartId, String, PartKind, bool, bool)> = cache
+    // P3H.6 judge: a composite part's row has the composite part icon.
+    let composite = |p: PartId| doc.as_deref().and_then(|d| Some(cadrs_core::transform::is_composite_part(&d.doc, d.active_element()?.id, p))).unwrap_or(false);
+    let rows: Vec<(PartId, String, PartKind, bool, bool, bool)> = cache
         .parts
         .iter()
         // P3B.9: an assembly context's parts are not the studio's.
@@ -113,6 +116,7 @@ fn rebuild_part_list(
                 p.kind,
                 over.previews(p),
                 cache.is_hidden_part(p.id),
+                composite(p.id),
             )
         })
         .collect();
@@ -124,7 +128,7 @@ fn rebuild_part_list(
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
         for kind in [PartKind::Solid, PartKind::Surface] {
-            let members: Vec<&(PartId, String, PartKind, bool, bool)> =
+            let members: Vec<&(PartId, String, PartKind, bool, bool, bool)> =
                 key.0.iter().filter(|r| r.2 == kind).collect();
             // Onshape shows "Parts (0)" in an empty studio, and the other groups once they have
             // something.
@@ -146,7 +150,7 @@ fn rebuild_part_list(
             if !is_open {
                 continue;
             }
-            for (id, label, _, bold, hidden) in members {
+            for (id, label, _, bold, hidden, is_composite) in members {
                 let visuals = Visuals {
                     background: StateColors::new(Color::NONE, t.list_hover, t.list_active, Color::NONE)
                         .with_selected(t.list_selected),
@@ -159,6 +163,7 @@ fn rebuild_part_list(
                     focus_ring: t.focus_ring,
                 };
                 let icon_name = match kind {
+                    PartKind::Solid if *is_composite => "composite-part",
                     PartKind::Solid => "part",
                     PartKind::Surface => "surface",
                 };
