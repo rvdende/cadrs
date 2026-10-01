@@ -17,7 +17,8 @@
 //    hole fills the view.
 // 14 Previous view: back to before the zoom to window.
 // 15 Perspective off, fitted, zoomed to a window round the hole again; Named views…: the empty
-//    panel; 16 "Upright hole" typed, Add view: listed, its row selected (the view is at it).
+//    panel; 16 "Upright hole" typed, Add view: listed, its row selected (the view is at it),
+//    and the name field offers the next name, "View 2".
 // 17 the view changed: the Top view, fitted, in Hidden edges removed (the row no longer
 //    selected); 18 the row clicked: the saved camera and its Shaded mode are back (as 16).
 // 19 Zoom to selection: the upright's front face right-clicked, its menu's Zoom to selection;
@@ -26,7 +27,7 @@
 //    Cylinder parts in Hidden edges visible; 22 the Cylinder assembly tab keeps its own mode
 //    (Translucent, set there); 23 back in Cylinder parts, Hidden edges visible still applies.
 // 24 named views per tab: in Cylinder parts, Named views… and "Cylinder parts fitted" added
-//    (its row hovered: the hover tint and its "Restore …" tooltip); 25 the Cylinder assembly
+//    (its row hovered: the hover tint); 25 the Cylinder assembly
 //    tab with the panel still open: its own list, empty.
 Scenario(
     start: Some("document"),

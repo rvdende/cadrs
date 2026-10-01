@@ -7,15 +7,17 @@
 //!   (3° by default). The parts are coloured by how much draft each point of their faces has
 //!   against the pull direction, in six bands ([`cadrs_core::analysis::DraftBand`]: greens with
 //!   enough positive draft, yellows with too little, reds with negative draft), on the GPU
-//!   (`part_shading.wgsl`), with a legend at the right of the view. ✓ keeps the analysis while
+//!   (`part_shading.wgsl`), with a legend at the right of the view (marked "(flipped)" when
+//!   the pull is) and the pull direction's blue arrow at its reference. ✓ keeps the analysis while
 //!   you work; ✕ (or the menu's Exit draft analysis) ends it.
 //! - **Curvature** draws curvature combs on the parts' curved edges (the selected edges when
 //!   any are): a tooth at each point of the edge, away from its centre of curvature, as long as
 //!   the curvature, joined at their tips ([`cadrs_core::analysis::curvature_comb`]). The longest
 //!   tooth is a fixed length on screen, so the combs stay readable as you zoom.
-//! - **Zebra stripes** paints the parts with black and white stripes reflected off them from
-//!   the view direction (a stripes shader in `part_shading.wgsl`): smooth faces give smooth
-//!   stripes, and the stripes kink where faces meet without curvature continuity.
+//! - **Zebra stripes** paints the parts with black and white bands of the view ray reflected
+//!   off them ([`cadrs_core::analysis::zebra_phase`], per pixel in `part_shading.wgsl`): a flat
+//!   face is one shade (straight bands in perspective), curved faces show the bands, and the
+//!   bands kink where faces meet without curvature continuity.
 //! - Draft analysis and zebra stripes both colour the faces, so turning one on turns the other
 //!   off. Each is a view of the tab, kept per tab: nothing in the document changes and nothing
 //!   is undone. A selected face keeps its orange.
@@ -45,7 +47,7 @@ impl Plugin for AnalysisPlugin {
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,
-                (take_picks, follow_selection, sync_dialog, sync_legend, sync_shading_analysis, draw_combs)
+                (take_picks, follow_selection, sync_dialog, sync_legend, sync_shading_analysis, draw_combs, sync_pull_arrow)
                     .chain()
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
@@ -83,13 +85,15 @@ pub struct DraftState {
     pub reference: Option<PullRef>,
     pub label: String,
     pub pull: Vec3,
+    /// Where the pull direction's arrow stands (on the reference).
+    pub anchor: Vec3,
     pub flip: bool,
     pub angle: f32,
 }
 
 impl Default for DraftState {
     fn default() -> Self {
-        Self { reference: Some(PullRef::Plane(PlaneKind::Top)), label: "Top plane".into(), pull: Vec3::Z, flip: false, angle: DEFAULT_DRAFT_ANGLE }
+        Self { reference: Some(PullRef::Plane(PlaneKind::Top)), label: "Top plane".into(), pull: Vec3::Z, anchor: Vec3::ZERO, flip: false, angle: DEFAULT_DRAFT_ANGLE }
     }
 }
 
@@ -118,7 +122,7 @@ pub struct AnalysisViews {
 
 /// The active tab's face colouring for the part material (`crate::section_view::sync_shading`
 /// writes it into the material uniforms): mode (0 none, 1 zebra, 2 draft), the draft angle
-/// (degrees) and the pull direction (for zebra stripes, the eye they are seen from).
+/// (degrees) and the pull direction.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
 pub struct ShadingAnalysis {
     pub mode: u32,
@@ -126,11 +130,8 @@ pub struct ShadingAnalysis {
     pub pull: Vec3,
 }
 
-/// The number of zebra stripes over half a turn of the reflected view ray.
-pub const ZEBRA_STRIPES: f32 = 12.0;
-
-/// How far in front of the view the zebra stripes' eye is (logical px of the view).
-pub const ZEBRA_EYE_PX: f32 = 2500.0;
+/// The number of zebra bands over half a turn of the reflected view ray.
+pub const ZEBRA_STRIPES: f32 = cadrs_core::analysis::ZEBRA_BANDS as f32;
 
 impl ShadingAnalysis {
     /// The material's `analysis` and `pull` uniforms.
@@ -293,14 +294,16 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
         let features = doc.as_ref().and_then(|d| d.active_element()).map(|e| e.features()).unwrap_or(&[]);
         crate::parts::pick_label(features, cache, pick)
     };
-    let (reference, label, pull) = match pick {
-        Pick::Plane(k) => (PullRef::Plane(k), format!("{} plane", k.name()), k.normal()),
+    let (reference, label, pull, anchor) = match pick {
+        Pick::Plane(k) => (PullRef::Plane(k), format!("{} plane", k.name()), k.normal(), Vec3::ZERO),
         Pick::Face(part, name) => {
             let p = cache.part(part)?;
             let i = p.solid.faces.iter().position(|f| f.name == name)?;
             let f = &p.solid.faces[i];
             let dir = if f.plane.is_some() { v3(p.solid.face_normal(i)?) } else { v3(f.axis?.1) };
-            (PullRef::Face(part, name), label_of(pick).unwrap_or_else(|| "Face".into()), dir)
+            let at = f.center.or_else(|| p.solid.face_point(i)).map(v3).unwrap_or(Vec3::ZERO);
+            let label = label_of(pick).filter(|l| l != "Face").or_else(|| cache.part_name(part).map(|n| format!("Face of {n}"))).unwrap_or_else(|| "Face".into());
+            (PullRef::Face(part, name), label, dir, at)
         }
         Pick::Edge(part, name) => {
             let e = cache.part(part)?.solid.edge(&name)?;
@@ -310,7 +313,7 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
             if !straight {
                 return None;
             }
-            (PullRef::Edge(part, name), label_of(pick).unwrap_or_else(|| "Edge".into()), dir)
+            (PullRef::Edge(part, name), label_of(pick).unwrap_or_else(|| "Edge".into()), dir, (a + b) / 2.0)
         }
         Pick::Feature(f) => {
             let doc = world.get_resource::<ActiveDocument>()?;
@@ -319,12 +322,12 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
                 Some(frame) => *frame,
                 None => feature.sketch()?.plane?.frame(),
             };
-            (PullRef::Feature(f), feature.name.clone(), v3(frame.normal()))
+            (PullRef::Feature(f), feature.name.clone(), v3(frame.normal()), v3(frame.origin))
         }
         _ => return None,
     };
     let pull = pull.normalize_or_zero();
-    (pull != Vec3::ZERO).then(|| DraftState { reference: Some(reference), label, pull, ..default() })
+    (pull != Vec3::ZERO).then(|| DraftState { reference: Some(reference), label, pull, anchor, ..default() })
 }
 
 /// The dialog's picks in the view (the pick filter is overridden, so they don't reach the
@@ -487,7 +490,7 @@ fn sync_legend(views: Res<AnalysisViews>, doc: Option<Res<ActiveDocument>>, kind
     let Some(area) = q_area.iter().next() else { return };
     let t = theme.clone();
     let required = d.angle as f64;
-    let subtitle = format!("{} · {}", d.label, degrees_text(d.angle));
+    let subtitle = format!("{}{} · {}", d.label, if d.flip { " (flipped)" } else { "" }, degrees_text(d.angle));
     let legend = commands
         .spawn((
             Name::new("draft-legend"),
@@ -534,21 +537,46 @@ fn sync_legend(views: Res<AnalysisViews>, doc: Option<Res<ActiveDocument>>, kind
 }
 
 /// What the part material colours the faces by on the active tab.
-fn sync_shading_analysis(views: Res<AnalysisViews>, doc: Option<Res<ActiveDocument>>, kind: Res<ActiveKind>, view: Res<ViewportView>, mut out: ResMut<ShadingAnalysis>) {
+fn sync_shading_analysis(views: Res<AnalysisViews>, doc: Option<Res<ActiveDocument>>, kind: Res<ActiveKind>, mut out: ResMut<ShadingAnalysis>) {
     let modeling = matches!(*kind, ActiveKind::PartStudio | ActiveKind::Assembly);
     let st = doc.as_ref().and_then(|d| d.active).filter(|_| modeling).and_then(|el| views.per.get(&el));
     let want = match st {
         Some(AnalysisState { draft: Some(d), .. }) => ShadingAnalysis { mode: 2, angle: d.angle, pull: d.direction() },
-        // The stripes are reflected towards an eye in front of the view (`ZEBRA_EYE_PX` away),
-        // so a flat face shows them too, as with a real light box.
-        Some(AnalysisState { zebra: true, .. }) => {
-            let v = view.view;
-            ShadingAnalysis { mode: 1, pull: v.focus + v.back() * ZEBRA_EYE_PX * v.scale, ..default() }
-        }
+        Some(AnalysisState { zebra: true, .. }) => ShadingAnalysis { mode: 1, ..default() },
         _ => ShadingAnalysis::default(),
     };
     if *out != want {
         *out = want;
+    }
+}
+
+/// The pull direction's arrow (the shared 3D drag arrow, [`crate::manipulator`]) at its
+/// reference while the draft analysis is on; it turns round with the flip.
+#[derive(Component)]
+struct PullArrow;
+
+/// The pull arrow's length on screen (logical px).
+const PULL_ARROW_PX: f32 = 72.0;
+
+fn sync_pull_arrow(views: Res<AnalysisViews>, doc: Option<Res<ActiveDocument>>, kind: Res<ActiveKind>, mut q: Query<(Entity, &mut crate::manipulator::Arrow3d), With<PullArrow>>, mut commands: Commands) {
+    let modeling = matches!(*kind, ActiveKind::PartStudio | ActiveKind::Assembly);
+    let draft = doc.as_ref().and_then(|d| d.active).filter(|_| modeling).and_then(|el| views.per.get(&el)).and_then(|s| s.draft.clone());
+    let Some(d) = draft else {
+        for (e, _) in &q {
+            commands.entity(e).try_despawn();
+        }
+        return;
+    };
+    let a = crate::manipulator::Arrow3d { base: d.anchor, dir: d.direction(), length_px: PULL_ARROW_PX, hot: false };
+    match q.iter_mut().next() {
+        Some((_, mut cur)) => {
+            if *cur != a {
+                *cur = a;
+            }
+        }
+        None => {
+            commands.spawn((crate::manipulator::arrow("draft-pull-arrow", a), PullArrow, DespawnOnExit(AppState::Document)));
+        }
     }
 }
 

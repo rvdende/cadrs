@@ -1,6 +1,6 @@
 //! The local preferences (P3E.3, TD6.2, D2.2): the account menu's **Preferences…** opens a
 //! dialog with the **3D view mouse controls** preset (Onshape, SolidWorks, Inventor, Creo) and
-//! what its gestures do (Rotate, Pan, Zoom). OK keeps the choice in the store root's
+//! what its gestures do (Rotate, Rotate without roll, Pan, Zoom). OK keeps the choice in the store root's
 //! `preferences.ron` ([`cadrs_core::preferences`]); it is this machine's, not a document's, so
 //! nothing is undone. The Part Studio and Assembly viewports (`crate::viewport`) and the
 //! drawing sheet (`crate::drawing`) read it for their drags.
@@ -106,7 +106,12 @@ struct PreferencesDialog;
 #[derive(Component)]
 struct GestureText(ViewAction);
 
-const ACTIONS: [(ViewAction, &str); 3] = [(ViewAction::Rotate, "pref-mouse-rotate"), (ViewAction::Pan, "pref-mouse-pan"), (ViewAction::Zoom, "pref-mouse-zoom")];
+const ACTIONS: [(ViewAction, &str); 4] = [
+    (ViewAction::Rotate, "pref-mouse-rotate"),
+    (ViewAction::RotateTurntable, "pref-mouse-turntable"),
+    (ViewAction::Pan, "pref-mouse-pan"),
+    (ViewAction::Zoom, "pref-mouse-zoom"),
+];
 
 fn gesture_text(preset: MousePreset, action: ViewAction) -> String {
     let g = preset.gestures(action);
@@ -198,6 +203,8 @@ mod tests {
     #[test]
     fn gesture_rows_read_like_the_table() {
         assert_eq!(gesture_text(MousePreset::Onshape, ViewAction::Rotate), "Right drag");
+        assert_eq!(gesture_text(MousePreset::Onshape, ViewAction::RotateTurntable), "Alt+Right drag");
+        assert_eq!(gesture_text(MousePreset::SolidWorks, ViewAction::RotateTurntable), "—");
         assert_eq!(gesture_text(MousePreset::Onshape, ViewAction::Pan), "Middle drag, Ctrl+Right drag");
         assert_eq!(gesture_text(MousePreset::SolidWorks, ViewAction::Zoom), "Scroll wheel, Shift+Middle drag");
     }

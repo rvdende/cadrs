@@ -8,6 +8,11 @@
 //!   ≥ 2a and a…2a (enough positive draft, greens), 0…a and −a…0 (not enough: yellows),
 //!   −2a…−a and ≤ −2a (negative draft, reds). The view colours each point of a face by its
 //!   band, so a curved face shows where its draft runs out.
+//! - **Zebra stripes** ([`zebra_phase`]): the view ray reflected off the surface, its angle out
+//!   of a plane across a slanted screen axis cut into bands. The stripes depend on the reflected
+//!   direction only, so a flat face under an orthographic view is one shade (straight bands in
+//!   perspective, where the ray changes across it) and a curved face shows the bands, which
+//!   kink where faces meet without curvature continuity.
 //! - **Curvature combs** ([`curvature_comb`]): along an edge, a tooth at each point of its
 //!   polyline, pointing away from the centre of curvature, as long as the curvature (1 / radius)
 //!   times a scale. A straight run has none.
@@ -111,6 +116,31 @@ impl DraftBand {
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|b| *b == self).unwrap_or(0)
     }
+}
+
+/// The screen axis (right, up, back) the zebra stripes run across: slanted so a vertical and a
+/// horizontal cylinder both show bands.
+pub const ZEBRA_AXIS: Vec3 = [0.5, 0.85, 0.0];
+
+/// The number of zebra bands over half a turn of the reflected ray.
+pub const ZEBRA_BANDS: f64 = 10.0;
+
+/// The direction `d` reflected off a surface with unit normal `n`.
+pub fn reflect(d: Vec3, n: Vec3) -> Vec3 {
+    sub(d, scale(n, 2.0 * dot(d, n)))
+}
+
+/// Where the reflected view ray `reflected` (in the view's frame: x right, y up, z back) falls
+/// in the zebra pattern: 0…1 across one band pair, the white band where
+/// [`zebra_white`]. `part_shading.wgsl` does the same per pixel.
+pub fn zebra_phase(reflected: Vec3, bands: f64) -> f64 {
+    let phi = dot(normalize(reflected), normalize(ZEBRA_AXIS)).clamp(-1.0, 1.0).asin();
+    (phi * bands / std::f64::consts::PI).rem_euclid(1.0)
+}
+
+/// The white half of a band pair.
+pub fn zebra_white(phase: f64) -> bool {
+    (phase - 0.5).abs() * 2.0 > 0.5
 }
 
 /// One tooth of a curvature comb.
@@ -234,6 +264,34 @@ mod tests {
         for (i, b) in DraftBand::ALL.iter().enumerate() {
             assert_eq!(b.index(), i);
         }
+    }
+
+    #[test]
+    fn a_plane_under_an_orthographic_view_has_one_zebra_shade() {
+        // Orthographic: every pixel looks along −back, so a plane's reflected ray, and its
+        // stripe, are the same all over it, whatever way it faces.
+        let view = [0.0, 0.0, -1.0];
+        for n in [[0.0, 0.0, 1.0], normalize([0.3, -0.4, 0.8]), normalize([1.0, 0.2, 0.1])] {
+            let p = zebra_phase(reflect(view, n), ZEBRA_BANDS);
+            for _ in 0..3 {
+                assert_eq!(zebra_phase(reflect(view, n), ZEBRA_BANDS), p);
+            }
+        }
+        // A cylinder standing up (its normal turning about the up axis over the half facing the
+        // viewer) runs through several bands.
+        let mut changes = 0;
+        let mut last = None;
+        for k in 0..=180 {
+            let t = (k as f64 - 90.0).to_radians();
+            let white = zebra_white(zebra_phase(reflect(view, [t.sin(), 0.0, t.cos()]), ZEBRA_BANDS));
+            if last.is_some_and(|l| l != white) {
+                changes += 1;
+            }
+            last = Some(white);
+        }
+        assert!(changes >= 6, "{changes}");
+        // Head-on, the reflected ray is the axis-free back direction: the first band's middle.
+        close(zebra_phase(reflect(view, [0.0, 0.0, 1.0]), ZEBRA_BANDS), 0.0, 1e-12);
     }
 
     #[test]

@@ -1,24 +1,34 @@
-// P3E.3b (TD6.6, PS2.11): the Analysis tools, every step through the UI, on a 100 mm cube on
-// Top whose +X side the Draft feature drafted 5° about Top (it leans in as it rises), with its
-// front-left vertical edge filleted R12, beside a Ø40 boss extruded 30 mm with its Draft 5°
-// flipped (it widens as it rises: −5° against +Z). Values in
-// `cadrs_core/tests/measure_analysis.rs` and `cadrs_core::analysis`.
+// P3E.3b (TD6.6, PS2.11, A1.9): the Analysis tools, every step through the UI, on a 100 mm cube
+// on Top whose +X side the Draft feature drafted 5° about Top (it leans in as it rises), with
+// its front-left vertical edge filleted R12, beside a Ø40 boss extruded 30 mm with its Draft 5°
+// flipped (it widens as it rises: −5° against +Z) and its top edge filleted R10 (a face whose
+// draft runs from −5° to 90°). Values in `cadrs_core/tests/measure_analysis.rs` and
+// `cadrs_core::analysis`.
 // 01 the bottom-right Analysis tool's menu: Draft analysis…, Curvature, Zebra stripes.
-// 02 Draft analysis…: the dialog (Pull direction Top plane, Draft angle 3°) and the legend at
-//    the right: the tops +90° (dark green, 6° to 90°), the drafted +X side 5° (green, 3° to 6°),
-//    the front side and the fillet 0° (yellow, 0° to 3°), the boss's widening side −5° (light
-//    red, −6° to −3°).
-// 03 the flip: the pull runs down: the tops dark red, the +X side −5°, the boss's side +5°.
+// 02 Draft analysis…: the dialog (Pull direction Top plane, Draft angle 3°), the pull's blue
+//    arrow at the origin, and the legend at the right: the tops +90° (dark green, 6° to 90°),
+//    the drafted +X side 5° (green, 3° to 6°), the front side and the vertical fillet 0°
+//    (yellow, 0° to 3°), the boss's widening side −5° (light red, −6° to −3°).
+// 03 the flip: the arrow points down, the legend reads "Top plane (flipped)", the tops dark
+//    red, the +X side −5°, the boss's side +5°.
 // 04 flipped back, Draft angle 6°: the 5° side is no longer enough (yellow, 0° to 6°; the legend
 //    reads 12° to 90°, 6° to 12°, …), the boss's side −6° to 0°.
-// 05 ✓: the analysis stays with the dialog closed (the legend too).
+// 04b close on the boss: its top fillet runs through the bands per pixel (orange at the side,
+//    yellow, light green, dark green to the top).
+// 05 ✓: the analysis stays with the dialog closed (the legend and arrow too).
 // 06 the menu again: "Exit draft analysis"; 07 picked: the parts' own colours.
-// 08 Curvature: combs on every curved edge: the boss's circles and the fillet's arcs (taller:
-//    R12 is more curved than R20 and R22.6).
-// 09 the boss's top edge selected: the comb on it alone.
-// 10 Zebra stripes (with the combs still on): black and white bands, packed on the fillet and
-//    round the boss, broad on the flat faces.
+// 08 Curvature: combs on every curved edge: the cube's fillet arcs (R12, the tallest) and the
+//    boss's circles. 08b the menu with Curvature ticked.
+// 09 the boss's bottom edge selected: the comb on it alone.
+// 10 Zebra stripes (with the combs still on): the bands packed on the fillets and round the
+//    boss, each flat face one shade (the view is orthographic). 10b the menu: both ticked.
 // 11 both turned off from the menu: the plain parts again.
+// A1.9, in an assembly (the interference stand-in: Block <2> placed at (40, 10, 5)):
+// 12 Draft analysis with Block <2>'s top face picked as the pull direction ("Face of
+//    Block <2>"; the arrow at that face's middle, in assembly coordinates): tops dark green,
+//    sides yellow, the pin's side yellow.
+// 13 flipped: tops dark red, the legend "(flipped)", the arrow down.
+// 14 ✓, then Zebra stripes (draft off): flat faces one shade each, the pin striped.
 Scenario(
     start: Some("document"),
     steps: [
@@ -97,6 +107,20 @@ Scenario(
         Click(ui("extrude-dialog-accept")),
         Wait(20),
         Key("Space"),
+        Key("Shift+F"),
+        WaitFor("fillet-dialog"),
+        Wait(5),
+        Click(xyz(196, 34, 30)),
+        Wait(3),
+        Click(ui("fillet-size-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Tab"),
+        Wait(10),
+        Click(ui("fillet-dialog-accept")),
+        Wait(20),
+        Key("Space"),
         Key("Shift+7"),
         Wait(10),
         Key("F"),
@@ -131,6 +155,15 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-draft-angle-6deg"),
+        Custom("view 30 12 180 50 22 0.085"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04b-boss-fillet-draft-varies"),
+        Key("Shift+7"),
+        Wait(30),
+        Key("F"),
+        Wait(40),
         Click(ui("draft-analysis-dialog-accept")),
         Wait(10),
         MoveTo(1420, 900),
@@ -154,7 +187,14 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("08-curvature-combs"),
-        Click(xyz(196, 34, 30)),
+        Click(ui("view-analysis")),
+        WaitFor("analysis-curvature"),
+        Hover(ui("analysis-curvature")),
+        Wait(3),
+        Screenshot("08b-menu-curvature-ticked"),
+        Key("Escape"),
+        Wait(3),
+        Click(xyz(194, 36, 0)),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),
@@ -169,6 +209,9 @@ Scenario(
         Screenshot("10-zebra-stripes"),
         Click(ui("view-analysis")),
         WaitFor("analysis-zebra"),
+        Hover(ui("analysis-zebra")),
+        Wait(3),
+        Screenshot("10b-menu-both-ticked"),
         Click(ui("analysis-zebra")),
         Wait(5),
         Click(ui("view-analysis")),
@@ -178,5 +221,36 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("11-analysis-off"),
+        Custom("fixture interference_standin"),
+        Wait(20),
+        Click(ui("tab-interference-assembly")),
+        Wait(20),
+        Custom("view 30 30 80 20 5 0.2"),
+        Wait(20),
+        Click(ui("view-analysis")),
+        WaitFor("analysis-draft"),
+        Click(ui("analysis-draft")),
+        WaitFor("draft-analysis-dialog"),
+        Wait(5),
+        Click(xyz(70, 30, 25)),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("12-assembly-draft-pull-from-block-2"),
+        Click(ui("draft-flip")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        ExpectText("draft-legend-pull", "(flipped)"),
+        Screenshot("13-assembly-draft-flipped"),
+        Click(ui("draft-analysis-dialog-accept")),
+        Wait(5),
+        Click(ui("view-analysis")),
+        WaitFor("analysis-zebra"),
+        Click(ui("analysis-zebra")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("14-assembly-zebra"),
     ],
 )

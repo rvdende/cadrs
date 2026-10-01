@@ -3,14 +3,18 @@
 // (±45, ±25) and a 16 mm upright on the Front plane with a Ø24 hole):
 // 01 the bottom-right Section view tool: the Section view dialog, its plane field waiting.
 // 02 the Front plane picked in the feature list: the front half removed, the cut faces capped
-//    in the part's colour with their outlines (the upright's hole cut in half).
-// 03 the flip button: the other half removed (seen from inside, the caps face away).
+//    in the part's colour with their outlines (the upright's hole cut in half); the Front plane
+//    stays selected while the dialog is open (its row and square highlighted) and the blue drag
+//    arrow points to the removed side.
+// 03 the flip button: the other half removed (seen from inside, the caps face away); the arrow
+//    turns round, and the plane's outline hides behind the kept part.
 // 04 Offset 25 mm: the plane moved through the plate's front holes (cut, capped around them);
 //    the section plane drawn there (orange, round the parts) with its offset arrow.
 // 05 ✓: the section stays with the dialog closed; 06 the view menu reads "Exit section view";
 // 07 Exit section view: the whole bracket again.
 // 08 IR5.5: the feature menu of Sketch 2 (on Front) → Section view…: the dialog with
-//    "Sketch 2" as its plane (drawn orange), the bracket cut through the upright; 09 ✕ ends it.
+//    "Sketch 2" as its plane (drawn orange, its row highlighted), the bracket cut through the
+//    upright; 09 ✕ ends it.
 // 10 A3.3, X15: the Pneumatic Cylinder assembly (`fixtures/pneumatic_cylinder_ex2.cadrs`); the
 //    barrel's context menu in the view, its Section view… item; 11 picked: the assembly cut by
 //    the Front plane through the barrel's middle, the barrel, piston and rod capped; 12 ✓ (the
@@ -19,7 +23,8 @@
 //    14 picked: the section through the barrel from the triad (nothing left selected).
 // 15 IR5.5 on the drawing bracket again (in a new Part Studio tab): Sketch 2's feature menu open on Section view….
 // 16 a planar face as the section plane: the Section view tool, the plate's top face picked:
-//    the upright cut off at the plate (capped), the plane drawn orange at the face; 17 its
+//    the upright cut off at the plate (capped), the face selected and the plane drawn orange at
+//    it; 17 its
 //    arrow dragged up from its foot on the plane (z = 12) to z = 50: the plane follows the
 //    pointer 1:1 (Offset 1.5 in = 38 mm, P3E.3a judge) and the cut with it.
 Scenario(
@@ -154,7 +159,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("16-face-reference"),
-        Drag(ui_at("section-offset-arrow", 0.5, 0.97), xyz(0, 0, 50)),
+        Drag(xyz(0, 0, 12), xyz(0, 0, 50)),
         Wait(60),
         MoveTo(1420, 900),
         Wait(3),

@@ -65,13 +65,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         lin = params.bands[i].rgb * mix(1.0, b, 0.55);
     } else if (params.analysis.x > 0.5 && in.uv.x < 0.5) {
-        // Zebra stripes: the ray from an eye in front of the view (`params.pull`) reflected off
-        // the face, its angle about a slanted screen axis cut into black and white bands
-        // (smoothed over a pixel).
-        let e = normalize(params.pull.xyz - in.world_position.xyz);
+        // Zebra stripes (`cadrs_core::analysis::zebra_phase`): the view ray reflected off the
+        // face, in the view's frame, its angle out of the plane across a slanted screen axis cut
+        // into bands (smoothed over a pixel). Orthographic views look along −back everywhere;
+        // perspective ones along each pixel's ray.
+        let ortho = view.clip_from_view[3][3] > 0.5;
+        let e = select(normalize(view.world_position.xyz - in.world_position.xyz), back, ortho);
         let r = reflect(-e, n);
-        let s_dir = normalize(up * 0.85 + right * 0.5);
-        let phi = asin(clamp(dot(r, s_dir), -1.0, 1.0));
+        let rv = vec3(dot(r, right), dot(r, up), dot(r, back));
+        let phi = asin(clamp(dot(normalize(rv), normalize(vec3(0.5, 0.85, 0.0))), -1.0, 1.0));
         let x = phi * params.analysis.z / 3.14159265;
         let w = max(fwidth(x), 1e-4);
         let f = abs(fract(x) - 0.5) * 2.0;

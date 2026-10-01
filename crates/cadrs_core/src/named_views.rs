@@ -94,9 +94,10 @@ fn same_name(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
-/// The next free default name: "View 1", "View 2", …
+/// The next default name: "View n" for the n-th view of the tab ("View 2" once one is saved,
+/// whatever it was called), the next free number if that one is taken.
 pub fn next_name(views: &[NamedView]) -> String {
-    (1..).map(|i| format!("View {i}")).find(|n| !views.iter().any(|v| same_name(&v.name, n))).unwrap_or_default()
+    (views.len() + 1..).map(|i| format!("View {i}")).find(|n| !views.iter().any(|v| same_name(&v.name, n))).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -113,13 +114,23 @@ mod tests {
     /// with named views survives a save and reload; a document saved before them loads with
     /// none.
     #[test]
+    fn the_default_name_counts_on() {
+        assert_eq!(next_name(&[]), "View 1");
+        // After a save under another name, the field offers View 2.
+        assert_eq!(next_name(&[view("Upright hole", 0.0)]), "View 2");
+        // A taken number is skipped.
+        assert_eq!(next_name(&[view("View 2", 0.0)]), "View 3");
+    }
+
+    #[test]
     fn named_views_are_undone_and_persist() {
         let mut doc = Document::new("Views");
         let el = doc.elements[0].id;
         let mut h = History::default();
         h.execute(&mut doc, &AddNamedView { element: el, view: view(" Front detail ", 10.0) }).unwrap();
         h.execute(&mut doc, &AddNamedView { element: el, view: view("Back", 190.0) }).unwrap();
-        assert_eq!(next_name(&doc.elements[0].named_views), "View 1");
+        // Two views saved: the third is offered.
+        assert_eq!(next_name(&doc.elements[0].named_views), "View 3");
         // Same name: replaced, not added.
         h.execute(&mut doc, &AddNamedView { element: el, view: view("front DETAIL", 20.0) }).unwrap();
         let names: Vec<&str> = doc.elements[0].named_views.iter().map(|v| v.name.as_str()).collect();

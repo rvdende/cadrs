@@ -16,9 +16,11 @@
 //!   each part shown and cached per plane (both sides of a plane share their caps), drawn in
 //!   each part's colour with their outlines.
 //! - While the dialog is open the cutting plane is drawn where it cuts (the picked plane moved by
-//!   the offset), in the selection orange, with an **arrow manipulator** at its middle: dragging
-//!   it moves the plane along its normal, the cut following live. The plane picked for it is
-//!   not left selected (the field names it).
+//!   the offset), in the selection orange, with the blue 3D **drag arrow** at its middle
+//!   ([`crate::manipulator`], pointing to the removed side): dragging it moves the plane along
+//!   its normal, the cut following the pointer 1:1. The reference picked for it (a plane, a
+//!   sketch, a face) stays selected, highlighted in the list and the view, until the dialog
+//!   closes.
 //! - The default planes, plane features and sketches are cut too: a plane's square is clipped
 //!   by the section plane, and a sketch on the removed side is not drawn.
 //! - A section is a view, per tab: nothing in the document changes and nothing is undone.
@@ -227,9 +229,12 @@ pub fn open_with(world: &mut World, picked: Option<SectionState>) {
         *state = SectionState { flip: false, offset: 0.0, ..p };
     }
     views.dialog = Some(el);
-    // The plane is the dialog's now (drawn where it cuts): the pick is not left selected.
+    // While the dialog is open its plane's reference (a plane, a sketch, a face) is the
+    // selection, highlighted in the list and the view (P3E.3a judge); closing the dialog
+    // deselects it.
     if took {
-        world.resource_mut::<Selection>().0.clear();
+        let pick = views.per.get(&el).and_then(|s| s.reference).and_then(reference_pick);
+        world.resource_mut::<Selection>().0 = pick.into_iter().collect();
     }
     let planes = world.resource::<PlanesVisible>().0;
     let filter = if kind == ActiveKind::Assembly {
@@ -302,18 +307,22 @@ fn resolve(world: &World, pick: Pick) -> Option<SectionState> {
     Some(SectionState { reference: Some(reference), label, origin, normal: normal.normalize_or_zero(), ..default() })
 }
 
+/// The selection a section reference stands for (none for an instance's middle).
+fn reference_pick(r: SectionRef) -> Option<Pick> {
+    match r {
+        SectionRef::Plane(k) => Some(Pick::Plane(k)),
+        SectionRef::Face(p, f) => Some(Pick::Face(p, f)),
+        SectionRef::Feature(f) => Some(Pick::Feature(f)),
+        SectionRef::Instance(_) => None,
+    }
+}
+
 fn close_dialog(world: &mut World) {
     let Some(el) = world.resource_mut::<SectionViews>().dialog.take() else { return };
     world.resource_mut::<PickFilterOverride>().0 = None;
     // The plane picked for it is no longer selected.
     let reference = world.resource::<SectionViews>().per.get(&el).and_then(|s| s.reference);
-    let pick = match reference {
-        Some(SectionRef::Plane(k)) => Some(Pick::Plane(k)),
-        Some(SectionRef::Face(p, f)) => Some(Pick::Face(p, f)),
-        Some(SectionRef::Feature(f)) => Some(Pick::Feature(f)),
-        _ => None,
-    };
-    if let Some(pick) = pick {
+    if let Some(pick) = reference.and_then(reference_pick) {
         let mut selection = world.resource_mut::<Selection>();
         if selection.0.contains(&pick) {
             selection.0.retain(|p| *p != pick);
@@ -365,8 +374,12 @@ fn follow_selection(selection: Res<Selection>, views: Res<SectionViews>, mut com
         if s.reference != state.reference {
             *s = SectionState { flip: s.flip, offset: s.offset, ..state };
         }
-        // The plane is drawn where it cuts (`sync_section_plane`), not left selected.
-        world.resource_mut::<Selection>().0.clear();
+        // Only the reference stays selected (highlighted while the dialog is open).
+        let want: Vec<Pick> = s.reference.and_then(reference_pick).into_iter().collect();
+        let mut sel = world.resource_mut::<Selection>();
+        if sel.0 != want {
+            sel.0 = want;
+        }
     });
 }
 
@@ -731,6 +744,7 @@ fn sync_section_plane(
     views: Res<SectionViews>,
     doc: Option<Res<ActiveDocument>>,
     bounds: Res<ShownBounds>,
+    cache: Res<PartCache>,
     materials: Option<Res<crate::viewport::PlaneMaterials>>,
     theme: Res<Theme>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -739,7 +753,17 @@ fn sync_section_plane(
     mut outline: Gizmos<SectionPlaneGizmos>,
     mut commands: Commands,
 ) {
-    let square = dialog_state(&views, doc.as_deref()).and_then(|s| section_square(s, &bounds));
+    // A plane picked as it is (no offset) is drawn by its own square, selected while the dialog
+    // is open: no second rectangle on it.
+    let own_square = |s: &SectionState| {
+        s.offset == 0.0
+            && match s.reference {
+                Some(SectionRef::Plane(_)) => true,
+                Some(SectionRef::Feature(f)) => cache.planes.contains_key(&f),
+                _ => false,
+            }
+    };
+    let square = dialog_state(&views, doc.as_deref()).filter(|s| !own_square(s)).and_then(|s| section_square(s, &bounds));
     let (Some((c, u, v, h)), Some(m)) = (square, materials) else {
         for (e, _) in &q {
             commands.entity(e).try_despawn();
@@ -801,7 +825,7 @@ pub fn ray_axis_param(o: Vec3, d: Vec3, p: Vec3, n: Vec3) -> Option<f32> {
     Some((b * dd - c * dn) / den)
 }
 
-const ARROW_LEN: f32 = 44.0;
+const ARROW_LEN: f32 = 64.0;
 
 /// Grabs and drags the arrow: the offset follows the pointer along it (snapped like the
 /// extrude's depth, in the document's unit), and the cut with it.
@@ -890,11 +914,9 @@ fn section_arrow_pointer(
 #[derive(Component)]
 struct SectionArrowNode;
 
-#[derive(Component)]
-struct SectionArrowLine;
-
-/// Places the arrow at the section plane's middle, along its normal (the way a positive offset
-/// moves it).
+/// Places the arrow at the section plane's middle, along the removed side's normal (it turns
+/// round with Flip): the shared 3D drag arrow ([`crate::manipulator`]), orange while hovered
+/// or dragged.
 #[allow(clippy::too_many_arguments)]
 fn place_section_arrow(
     views: Res<SectionViews>,
@@ -903,77 +925,37 @@ fn place_section_arrow(
     view: Res<ViewportView>,
     rect: Res<crate::viewport::ViewportRect>,
     mut arrow: ResMut<SectionArrow>,
-    q_area: Query<Entity, With<ViewportArea>>,
-    mut q: Query<(Entity, &mut Node, &mut bevy::ui::UiTransform, &mut Visibility), With<SectionArrowNode>>,
-    mut q_line: Query<&mut ImageNode, With<SectionArrowLine>>,
+    mut q: Query<(Entity, &mut crate::manipulator::Arrow3d), With<SectionArrowNode>>,
     mut commands: Commands,
 ) {
     let state = dialog_state(&views, doc.as_deref());
-    let placed = state.and_then(|s| {
+    let want = state.and_then(|s| {
         let (c, ..) = section_square(s, &bounds)?;
-        // Along the removed side's normal: it turns round with Flip.
         let n = s.normal.normalize_or_zero();
-        let d = view.view.project_vector(if s.flip { -n } else { n });
-        (d.length() >= 0.05).then(|| {
-            let b = rect.to_screen(view.view.project(c));
-            (b, b + d.normalize() * ARROW_LEN)
-        })
+        let dir = if s.flip { -n } else { n };
+        (view.view.project_vector(dir).length() >= 0.05).then_some(crate::manipulator::Arrow3d { base: c, dir, length_px: ARROW_LEN, hot: arrow.hovered || arrow.drag.is_some() })
+    });
+    let placed = want.map(|a| {
+        let (f, t) = crate::manipulator::screen_span(&a, &view.view);
+        (rect.to_screen(f), rect.to_screen(t))
     });
     if arrow.base_tip != placed {
         arrow.base_tip = placed;
     }
-    let Some((base, tip)) = placed else {
-        for (e, ..) in &q {
+    let Some(a) = want else {
+        for (e, _) in &q {
             commands.entity(e).try_despawn();
         }
         return;
     };
-    if q.is_empty() {
-        let Some(area) = q_area.iter().next() else { return };
-        let e = commands
-            .spawn((
-                Name::new("section-offset-arrow"),
-                SectionArrowNode,
-                Node { position_type: PositionType::Absolute, width: Val::Px(ARROW_LEN), height: Val::Px(ARROW_LEN), ..default() },
-                bevy::ui::UiTransform::default(),
-                Visibility::Hidden,
-                Pickable::IGNORE,
-                ZIndex(-3),
-                DespawnOnExit(AppState::Document),
-                children![
-                    (
-                        cadrs_ui::icon::icon_in("manipulator-arrow-halo", ARROW_LEN, Color::srgba_u8(0x3c, 0x46, 0x4e, 0xb0), Node { position_type: PositionType::Absolute, ..default() }),
-                        Pickable::IGNORE,
-                    ),
-                    (
-                        SectionArrowLine,
-                        cadrs_ui::icon::icon_in("manipulator-arrow-line", ARROW_LEN, Color::WHITE, Node { position_type: PositionType::Absolute, ..default() }),
-                        Pickable::IGNORE,
-                    ),
-                ],
-            ))
-            .id();
-        commands.entity(area).add_child(e);
-        return;
-    }
-    let u = (tip - base).normalize_or_zero();
-    let center = (base + tip) / 2.0 - rect.0.min;
-    for (_, mut node, mut transform, mut vis) in &mut q {
-        let (l, t) = (Val::Px(center.x - ARROW_LEN / 2.0), Val::Px(center.y - ARROW_LEN / 2.0));
-        if node.left != l || node.top != t {
-            node.left = l;
-            node.top = t;
+    match q.iter_mut().next() {
+        Some((_, mut cur)) => {
+            if *cur != a {
+                *cur = a;
+            }
         }
-        let want = bevy::ui::UiTransform { rotation: Rot2::radians(u.x.atan2(-u.y)), ..default() };
-        if *transform != want {
-            *transform = want;
-        }
-        vis.set_if_neq(Visibility::Inherited);
-    }
-    let c = if arrow.hovered || arrow.drag.is_some() { Color::srgb_u8(0xff, 0xb4, 0x5a) } else { Color::WHITE };
-    for mut img in &mut q_line {
-        if img.color != c {
-            img.color = c;
+        None => {
+            commands.spawn((crate::manipulator::arrow("section-offset-arrow", a), SectionArrowNode, DespawnOnExit(AppState::Document)));
         }
     }
 }
@@ -1044,12 +1026,17 @@ fn clip_plane_meshes(
     done.retain(|e, _| seen.contains(e));
 }
 
+/// How far past the cutting plane (mm) a polygon or line still counts as on it, and is kept.
+const ON_PLANE: f32 = 1e-3;
+
 /// The part of a convex polygon on the kept side of a section plane.
 pub fn clip_polygon(pts: &[Vec3], (origin, normal): (Vec3, Vec3)) -> Vec<Vec3> {
     let mut out = Vec::new();
     for i in 0..pts.len() {
         let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-        let (da, db) = ((a - origin).dot(normal), (b - origin).dot(normal));
+        // A hair of tolerance: a square lying in the cutting plane (the picked plane itself)
+        // stays whole.
+        let (da, db) = ((a - origin).dot(normal) - ON_PLANE, (b - origin).dot(normal) - ON_PLANE);
         if da <= 0.0 {
             out.push(a);
         }
@@ -1089,7 +1076,7 @@ pub fn clip_polyline(pts: impl IntoIterator<Item = Vec3>, (origin, normal): (Vec
     let mut cur: Vec<Vec3> = Vec::new();
     let mut prev: Option<(Vec3, f32)> = None;
     for p in pts {
-        let d = (p - origin).dot(normal);
+        let d = (p - origin).dot(normal) - ON_PLANE;
         if let Some((q, dq)) = prev
             && (dq <= 0.0) != (d <= 0.0)
         {
@@ -1121,8 +1108,9 @@ mod tests {
         let pts = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 10.0), Vec3::new(2.0, 0.0, 0.0)];
         let pieces = clip_polyline(pts, plane);
         assert_eq!(pieces.len(), 2);
-        assert!((pieces[0][1] - Vec3::new(0.5, 0.0, 5.0)).length() < 1e-5);
-        assert!((pieces[1][0] - Vec3::new(1.5, 0.0, 5.0)).length() < 1e-5);
+        // (within the on-plane tolerance, `ON_PLANE`)
+        assert!((pieces[0][1] - Vec3::new(0.5, 0.0, 5.0)).length() < 2e-3);
+        assert!((pieces[1][0] - Vec3::new(1.5, 0.0, 5.0)).length() < 2e-3);
         // All kept, all removed.
         assert_eq!(clip_polyline(pts, (Vec3::new(0.0, 0.0, 20.0), Vec3::Z)), vec![pts.to_vec()]);
         assert!(clip_polyline(pts, (Vec3::new(0.0, 0.0, -1.0), Vec3::Z)).is_empty());

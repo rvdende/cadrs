@@ -57,7 +57,7 @@ pub struct PartShadingParams {
     /// stripes, 2 draft analysis), y the draft angle needed (degrees), z the zebra stripes per
     /// half turn.
     pub analysis: Vec4,
-    /// The draft analysis's pull direction (xyz); for zebra stripes the eye's position.
+    /// The draft analysis's pull direction (xyz).
     pub pull: Vec4,
     /// The draft bands' colours (linear), top band first ([`cadrs_core::analysis::DraftBand`]).
     pub bands: [Vec4; 6],

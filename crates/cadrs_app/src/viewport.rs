@@ -1718,6 +1718,7 @@ fn draw_plane_edges(
     selection: Res<Selection>,
     view: Res<ViewportView>,
     section: Res<crate::section_view::SectionClip>,
+    mut section_gizmos: Gizmos<crate::section_view::SectionPlaneGizmos>,
 ) {
     // P3E.3a: in a section view the planes are cut by its plane too.
     let clip = section.plane;
@@ -1758,6 +1759,10 @@ fn draw_plane_edges(
             if hovered {
                 // Hover: a thin orange outline (1.5 px, like the plane edges).
                 cut(&mut hover_gizmos, clip, a, b, theme.highlight);
+            } else if selected && clip.is_some() {
+                // In a section view (the picked plane, P3E.3b) depth-tested, so the kept part
+                // hides it where it is in front.
+                cut(&mut section_gizmos, clip, a, b, theme.selection_3d);
             } else if selected {
                 cut(&mut hl_gizmos, clip, a, b, theme.selection_3d);
             } else if edge_on {
