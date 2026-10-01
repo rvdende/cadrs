@@ -302,22 +302,25 @@ UI) and closed the small TD8.8, TD9.4, TD10.4–TD10.6 pieces.
 
 ## Cross-stage rows assigned to stage 3E
 These rows live in other gap lists and close with a P3E milestone. The milestone table names
-them in its Covers column.
+them in its Covers column. **After stage 3E (2026-10-02):** every row below is ✅ in its own
+list, checked there against the scenario frames and tests P3E built (A1.9 🟡 → ✅; PS2.9, PS2.11
+and X14 → P3E.3 → ✅; the Section view items of A3.3, X15 and IR5.5 and D2.2's preference notes
+brought up to date). This file's own counts are unchanged.
 
 | Gap list | Row | Status there | Milestone | What closes it |
 |---|---|---|---|---|
 | derived-and-linking | ER1.2 Other documents browser: Labels location | ✅ (P3E.1) | P3E.1 | The labels model; the browser lists each label as a location of its documents (`course_td_documents_labels` 17–18) |
 | derived-and-linking | ER8.5 Documents page → details panel for the new document | ✅ (P3E.1) | P3E.1 | Click-selects model and details panel (owner, description, labels, created/modified) (`course_td_documents_details` 01–07) |
 | derived-and-linking | (note) full Tab manager | ER7.7 ✅ on the minimal one | P3E.2 (done) | Search, filters, folders, reordering (`course_td_tab_manager`) |
-| essential-tips | T1.1 non-CAD files as tabs | 🟡 | out of scope | Image/PDF/video tabs are "image tabs" (niche; out of scope by user decision 2026-09-29); the rest is ✅ (drawing tabs P3C.1). Owner of that file should re-mark it. |
+| essential-tips | T1.1 non-CAD files as tabs | ✅ (image tabs out of scope) | out of scope | Image/PDF/video tabs are "image tabs" (niche; out of scope by user decision 2026-09-29); the rest is ✅ (drawing tabs P3C.1) |
 | essential-tips | T1.2 cope with ~40 tabs | ✅ (P3F.3, P3E.2) | P3E.2 | Overflow ▾ listing the tabs out of sight, folders, the full Tab manager (`course_td_many_tabs`: 60 tabs) |
 | essential-tips | X1 Tab manager search, filters, reordering | ✅ (P3G.3, P3E.2) | P3E.2 | As above (`course_td_tab_manager`) |
-| part-studios | PS2.9, X14 section view and render modes | → P3E.3 | P3E.3 | Render modes, section view |
-| part-studios | PS2.11 Measure, Analysis | → P3E.3 | P3E.3 | Measure, Analysis |
-| assemblies | A1.9 Measure, Analysis | 🟡 | P3E.3 | The same tools in assemblies (instances in assembly coordinates) |
-| assemblies | A3.3, X15 Section view item | ✅ (disabled item) | P3E.3 | The triad and instance menus' Section view enabled |
-| drawings | D2.2 mouse-mapping preference | ✅ (preference by P3E.3) | P3E.3 | A local mouse-mapping preference; drawings read it |
-| inspection | IR5.5 feature menu → Section view | ✅ (disabled item) | P3E.3 | The feature menu's Section view enabled |
+| part-studios | PS2.9, X14 section view and render modes | ✅ (P3E.3) | P3E.3 | Render modes, section view (`course_td_render_modes` 01–08, `course_td_section` 01–07) |
+| part-studios | PS2.11 Measure, Analysis | ✅ (P3E.3) | P3E.3 | Measure, Analysis (`course_td_measure` 01–07, `course_td_analysis` 01–11; `measure_analysis.rs`) |
+| assemblies | A1.9 Measure, Analysis | ✅ (P3E.3) | P3E.3 | The same tools in assemblies, instances in assembly coordinates (`course_td_measure` 08–09, `course_td_analysis` 12–14; `placed_instances_measure_in_assembly_coordinates`) |
+| assemblies | A3.3, X15 Section view item | ✅ (P3E.3, enabled) | P3E.3 | The triad and instance menus' Section view enabled (`course_td_section` 10–14) |
+| drawings | D2.2 mouse-mapping preference | ✅ (P3E.3) | P3E.3 | A local mouse-mapping preference; drawings read it (`course_td_mouse_prefs` 08b–12) |
+| inspection | IR5.5 feature menu → Section view | ✅ (P3E.3, enabled) | P3E.3 | The feature menu's Section view enabled (`course_td_section` 08, 15) |
 
 ## What each exercise needs
 The tour is one walkthrough on a large public document (DRILL HOTD, 187 features), with **no

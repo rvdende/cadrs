@@ -17,7 +17,7 @@ user decision 2026-09-29", and configurations). Related: [intro-to-part-studios-
 viewport at a history entry or a feature's last healthy regeneration), Replace reference with
 Propagate, Offset of a face region and the Conrod stand-in with its exercise. The detailed
 Versions and history panel (graph, legend, filters, Name/Modified columns, versions, branches)
-is out of scope by user decision 2026-09-29; Section view is P3E.3.
+is out of scope by user decision 2026-09-29; the feature menu's Section view was enabled in P3E.3.
 - Solver and diagnostics: `SolveReport::conflicting` names the constraints and dimensions left
   unsolved; `cadrs_sketch::diagnostics` adds loose ends (grouped), constraint rows with type,
   numbered name, entities, mode (internal / external via Use and Pierce links / in-context) and
@@ -51,6 +51,9 @@ stand-in may use it. Everything else is in P3D.3–P3D.4 or P3.x.
   X7 are ✅ for the basic history panel, their detailed parts out of scope (user decision
   2026-09-29); IR5.5's and X6's remaining disabled entries are owned elsewhere (Section view →
   P3E.3, Suppress by variable → P3F.4) or out of scope (configurations, Add comment).
+- After stage 3E (2026-10-02): unchanged, ✅ 58 · 🟡 0 · ❌ 0 · out of scope 2. IR5.5's Section
+  view item is enabled (P3E.3, `course_td_section` 08, 15); Suppress by variable is still drawn
+  disabled (variables exist since P3F.4, the suppression rule isn't built).
 
 ## 1. Sketch troubleshooting
 
@@ -106,7 +109,7 @@ stand-in may use it. Everything else is in P3D.3–P3D.4 or P3.x.
 | IR5.2 | "Missing Face of Sketch 3" / "Missing Edge of Extrude 5" kept in the field, red tint | ✅ | P3D.1: the rebuild records each failed or warned feature's unresolved inputs (`Build::missing`; regions, whole sketches and faces of extrudes and revolves, edges and faces of fillets and chamfers); their items read "Missing …", red, in a red-tinted field, never dropped. `course_insp_error_states` 07, 08; unit test `error_propagation_marks_only_dependants`. (Before: ❌.) |
 | IR5.3 | Yellow toasts "Sketch could not be solved.", "Offset could not be created at this distance."; red dialog title | ✅ | P3D.1: opening a sketch that can't be solved shows "Sketch could not be solved." beside the dialog (red title, P3.1); an Offset distance that can't be made (the solve fails, a radius goes to zero, or the offset would jump to the other side) is refused with the Offset toast. `course_insp_error_states` 10, 11; unit test `an_impossible_offset_distance_is_refused`. (Before: 🟡.) |
 | IR5.4 | Features below the one being edited greyed and italic | ✅ | P3.9 rolls back part-feature edits; P3D.1 rolls the Part Studio back to an edited sketch too (the features after it not built, their rows and closed folders grey and italic), with Final in the sketch dialog's footer. `course_insp_error_states` 02, `course_insp_constraint_manager` 02. (Before: 🟡, grey only.) |
-| IR5.5 | Feature menu: Rename, Edit, Edit healthy moment, Copy sketch, Show dimensions, Add to folder, Show, Show all sketches, Section view, Suppress, Dynamic suppression, Add comment, Zoom to selection, Show dependencies, Roll to here, Edit sketch appearance, Delete | ✅ | P3D.1: every item, in the course's order. P3D.4: Edit healthy moment works. Still disabled, owned elsewhere: Section view (P3E.3), Suppress by variable (variables exist since P3F.4; the suppression rule isn't built); out of scope: Suppress by configuration (configurations, user decision 2026-09-29) and Add comment (collaboration). `course_insp_feature_menu`, `course_insp_edit_healthy_moment` 01. (Before: 🟡.) |
+| IR5.5 | Feature menu: Rename, Edit, Edit healthy moment, Copy sketch, Show dimensions, Add to folder, Show, Show all sketches, Section view, Suppress, Dynamic suppression, Add comment, Zoom to selection, Show dependencies, Roll to here, Edit sketch appearance, Delete | ✅ | P3D.1: every item, in the course's order. P3D.4: Edit healthy moment works. **P3E.3**: Section view… is enabled and sections the Part Studio on the feature's plane (`course_td_section` 15, 08: Sketch 2's plane, capped). Still disabled: Suppress by variable (variables exist since P3F.4; the suppression rule isn't built); out of scope: Suppress by configuration (configurations, user decision 2026-09-29) and Add comment (collaboration). `course_insp_feature_menu`, `course_insp_edit_healthy_moment` 01. (Before: 🟡.) |
 | IR5.6 | Versions and history panel (header icons, search, filters, Name/Modified columns, graph with Main and "n changes", Start, legend, Repair banner) | ✅ basic | P3D.3: the basic History panel (`cadrs_app::history_panel`, widget `cadrs_ui::TimelineRow`): the rail with Main (open circle), "n changes" groups (by author, collapsible), each entry "tab :: action : feature" with who and when, Start; the Repair icon and × in the header; the Repair banner (P3D.4); "Right-click a row for actions" (Restore, View in repair); basic **versions** (Create version with a name and optional description, squares on the rail, Open read-only, Restore). **Out of scope** ("niche; out of scope by user decision 2026-09-29"): the detailed panel's search, filters, Name/Modified columns, legend, branches and compare. `course_insp_history_panel`. (Before: ❌.) |
 
 ## 3. Exercise

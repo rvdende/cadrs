@@ -156,6 +156,62 @@ fn a_5_degree_drafted_face_falls_in_the_3_to_6_band() {
     assert_eq!(DraftBand::of(b, 3.0), DraftBand::InsufficientPositive);
 }
 
+/// A1.9 in an assembly: Measure reads the instances as placed, in assembly coordinates. Two
+/// instances of the 100 × 60 × 25 box: A at identity (x 0–100, y 0–60, z 0–25); B turned 90°
+/// about Z, (x, y, z) ↦ (−y, x, z), then moved +200 in X, so it spans x 140–200, y 0–100,
+/// z 0–25. The gap between them is 40 along X; B's edge (0,0,0)–(100,0,0) lies at
+/// (200,0,0)–(200,100,0); B's top face is still 100 × 60 = 6000 mm², centred at (170, 50, 25).
+#[test]
+fn placed_instances_measure_in_assembly_coordinates() {
+    use cadrs_core::assembly::{Pose, transform_solid};
+    use std::sync::Arc;
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 100.0, 60.0, 25.0);
+    let part = d.parts()[0].clone();
+    let place = |pose: &Pose| Part { solid: Arc::new(transform_solid(&part.solid, pose)), ..part.clone() };
+    let a = place(&Pose::IDENTITY);
+    let pose_b = Pose::rotation_about([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], std::f64::consts::FRAC_PI_2).then(&Pose::translation([200.0, 0.0, 0.0]));
+    let b = place(&pose_b);
+    // The hand-worked corners are where the pose puts them.
+    for (from, to) in [([0.0, 0.0, 0.0], [200.0, 0.0, 0.0]), ([100.0, 0.0, 0.0], [200.0, 100.0, 0.0]), ([100.0, 60.0, 25.0], [140.0, 100.0, 25.0])] {
+        let p = pose_b.apply(from);
+        for k in 0..3 {
+            close(p[k], to[k], 1e-9);
+        }
+    }
+    // The minimum distance between the placed parts: 40 along X, nothing in Y or Z.
+    let m = measure::measure(&[Entity::part(&a.solid), Entity::part(&b.solid)], Mode::Minimum);
+    let dist = m.distance.unwrap();
+    close(dist.value, 40.0, 1e-6);
+    let c = dist.components();
+    close(c[0], 40.0, 1e-6);
+    close(c[1], 0.0, 1e-6);
+    close(c[2], 0.0, 1e-6);
+    close(dist.from[0], 100.0, 1e-6);
+    close(dist.to[0], 140.0, 1e-6);
+    // B's 100 mm edge, now along Y at x = 200: its length and where it is.
+    let e = edge(&b, [200.0, 0.0, 0.0], [200.0, 100.0, 0.0]);
+    close(measure::measure(std::slice::from_ref(&e), Mode::Minimum).length.unwrap(), 100.0, 1e-6);
+    // B's vertex that was (100, 60, 25) reads (140, 100, 25), as the Measure readout shows it.
+    let src = part.solid.vertices.iter().position(|v| (0..3).all(|k| (v.point[k] - [100.0, 60.0, 25.0][k]).abs() < 1e-6)).expect("the corner");
+    let v = measure::measure(&[Entity::point(b.solid.vertices[src].point)], Mode::Minimum).point.unwrap();
+    for k in 0..3 {
+        close(v[k], [140.0, 100.0, 25.0][k], 1e-9);
+    }
+    // The distance from A's +X end face to that edge is the 100 mm gap from x 100 to x 200.
+    let a_end = face(&a, [1.0, 0.0, 0.0], [100.0, 30.0, 12.5]);
+    close(measure::measure(&[a_end, e], Mode::Minimum).distance.unwrap().value, 100.0, 1e-6);
+    // B's top face is still +Z, 6000 mm², at its placed centre; A's top too.
+    let top_b = face(&b, [0.0, 0.0, 1.0], [170.0, 50.0, 25.0]);
+    close(measure::measure(std::slice::from_ref(&top_b), Mode::Minimum).area.unwrap(), 6000.0, 1e-6);
+    let top_a = face(&a, [0.0, 0.0, 1.0], [50.0, 30.0, 25.0]);
+    close(measure::measure(std::slice::from_ref(&top_a), Mode::Minimum).area.unwrap(), 6000.0, 1e-6);
+    // The two tops are coplanar: 0° apart and 40 mm apart at their nearest.
+    let both = measure::measure(&[top_a, top_b], Mode::Minimum);
+    close(both.angle.unwrap(), 0.0, 1e-6);
+    close(both.distance.unwrap().value, 40.0, 1e-6);
+}
+
 /// A1.9 in an assembly: the draft analysis reads the instance's faces as placed. With the
 /// drafted cube's instance turned 90° about X (its +Z now −Y… its top facing −Y) and moved, the
 /// pull direction taken from the instance's top face and the drafted side's normal are both
