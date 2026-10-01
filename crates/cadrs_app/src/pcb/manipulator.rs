@@ -218,6 +218,8 @@ fn manip_pointer(
     mut manip: ResMut<PcbManip>,
     mut ui: ResMut<PcbUi>,
     mut grab: ResMut<ViewportGrab>,
+    hover_map: Res<bevy::picking::hover::HoverMap>,
+    q_area: Query<Entity, With<ViewportArea>>,
 ) {
     let Some(f) = manip.frame.clone() else {
         inputs.clear();
@@ -235,6 +237,10 @@ fn manip_pointer(
         let pos = input.location.position;
         match input.action {
             PointerAction::Press(PointerButton::Primary) => {
+                // A press over a pane, menu or dialog on top of the view isn't the handle's.
+                if !crate::viewport::pointer_over_viewport(&hover_map, &q_area) {
+                    continue;
+                }
                 let Some(h) = hit(&sc, pos) else { continue };
                 let Some(from) = ui.edit.as_ref().map(|e| e.transform) else { continue };
                 let (dir_px, facing) = match h {

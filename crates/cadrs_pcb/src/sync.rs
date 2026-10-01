@@ -261,12 +261,12 @@ pub fn plan(doc: &Document, pcb: ElementId, source: ElementId, plane: SyncPlaneC
     };
     let order: Vec<BoardId> = target.into_iter().chain(studio.boards.iter().map(|b| b.id).filter(|b| Some(*b) != target)).collect();
     // (distance, instance, board rank, placement) for every free placement of the first board
-    // (in `order`) that has the instance's package.
+    // (in `order`) that has a free placement of the instance's package.
     let mut pairs: Vec<(f64, usize, usize, Placement)> = Vec::new();
     for (i, (package, part_number, pose)) in by_document.iter().enumerate() {
         let at = uv(pose.translation);
         let of_package = |p: &&Placement| &p.package == package && (part_number.is_empty() || &p.part_number == part_number);
-        let found = order.iter().enumerate().filter_map(|(rank, id)| studio.board(*id).map(|b| (rank, b))).find(|(_, b)| b.board.components().map(|(_, p)| p).any(|p| of_package(&p)));
+        let found = order.iter().enumerate().filter_map(|(rank, id)| studio.board(*id).map(|b| (rank, b))).find(|(_, b)| b.board.components().map(|(_, p)| p).any(|p| of_package(&p) && !plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes))));
         let Some((rank, b)) = found else { continue };
         for p in b.board.components().map(|(_, p)| p).filter(of_package).filter(|p| !plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes))) {
             pairs.push(((p.x - at[0]).hypot(p.y - at[1]), i, rank, p.clone()));
