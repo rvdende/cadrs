@@ -53,11 +53,19 @@ pub struct PartShadingParams {
     /// x: 1 draws the faces flat white (the hidden-line render modes); y: an opacity factor
     /// (the Translucent render mode's).
     pub style: Vec4,
+    /// P3E.3b, the analysis tools ([`crate::analysis`]): x the face colouring (0 none, 1 zebra
+    /// stripes, 2 draft analysis), y the draft angle needed (degrees), z the zebra stripes per
+    /// half turn.
+    pub analysis: Vec4,
+    /// The draft analysis's pull direction (xyz); for zebra stripes the eye's position.
+    pub pull: Vec4,
+    /// The draft bands' colours (linear), top band first ([`cadrs_core::analysis::DraftBand`]).
+    pub bands: [Vec4; 6],
 }
 
 impl Default for PartShadingParams {
     fn default() -> Self {
-        Self { clip: Vec4::ZERO, style: Vec4::new(0.0, 1.0, 0.0, 0.0) }
+        Self { clip: Vec4::ZERO, style: Vec4::new(0.0, 1.0, 0.0, 0.0), analysis: Vec4::ZERO, pull: Vec4::ZERO, bands: [Vec4::ZERO; 6] }
     }
 }
 

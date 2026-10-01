@@ -226,6 +226,9 @@ struct DragState {
     pointer: Vec2,
     /// Right or middle button held since a press over the sheet.
     panning: bool,
+    /// That button, and where it went down.
+    button: Option<PointerButton>,
+    start: Vec2,
     secondary_down: Option<Vec2>,
     moved: f32,
 }
@@ -490,12 +493,16 @@ fn drawing_pointer(
     hover: Res<HoverMap>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut ui: ResMut<DrawingUi>,
+    (keys, prefs): (Res<ButtonInput<KeyCode>>, Res<crate::preferences_ui::LocalPreferences>),
     mut commands: Commands,
 ) {
+    use cadrs_core::preferences::SheetAction;
     if *kind != ActiveKind::Drawing {
         inputs.clear();
         return;
     }
+    let mods = crate::preferences_ui::modifiers(&keys);
+    let mouse = prefs.mouse();
     let Some(doc) = doc else {
         return;
     };
@@ -516,16 +523,33 @@ fn drawing_pointer(
                 let delta = pos - drag.pointer;
                 drag.pointer = pos;
                 drag.moved += delta.length();
-                if drag.panning && delta != Vec2::ZERO {
-                    view.center -= Vec2::new(delta.x, -delta.y) / view.ppm;
-                    view.fitted = false;
+                // D2.2, P3E.3: the mouse preference's rotate and pan gestures pan the sheet,
+                // its zoom gestures zoom it about where the drag started.
+                let action = drag.panning.then_some(drag.button).flatten().and_then(|b| mouse.sheet_action(crate::preferences_ui::mouse_button(b), mods));
+                if delta != Vec2::ZERO {
+                    match action {
+                        Some(SheetAction::Pan) => {
+                            view.center -= Vec2::new(delta.x, -delta.y) / view.ppm;
+                            view.fitted = false;
+                        }
+                        Some(SheetAction::Zoom) => {
+                            let before = screen_to_sheet(view, area, drag.start);
+                            view.ppm = (view.ppm * crate::viewport::DRAG_ZOOM_PER_PX.powf(-delta.y)).clamp(0.05, 400.0);
+                            let after = screen_to_sheet(view, area, drag.start);
+                            view.center += before - after;
+                            view.fitted = false;
+                        }
+                        None => {}
+                    }
                 }
             }
             PointerAction::Press(b) => {
                 drag.pointer = pos;
                 drag.moved = 0.0;
-                if over && matches!(b, PointerButton::Secondary | PointerButton::Middle) {
+                if over && matches!(b, PointerButton::Secondary | PointerButton::Middle) && mouse.navigates_with(crate::preferences_ui::mouse_button(b)) {
                     drag.panning = true;
+                    drag.button = Some(b);
+                    drag.start = pos;
                 }
                 if b == PointerButton::Secondary {
                     drag.secondary_down = over.then_some(pos);
@@ -533,8 +557,9 @@ fn drawing_pointer(
             }
             PointerAction::Release(b) => {
                 drag.pointer = pos;
-                if matches!(b, PointerButton::Secondary | PointerButton::Middle) {
+                if drag.button == Some(b) {
                     drag.panning = false;
+                    drag.button = None;
                 }
                 if b == PointerButton::Secondary
                     && let Some(down) = drag.secondary_down.take()

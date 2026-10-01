@@ -20,7 +20,8 @@
 // 15 IR5.5 on the drawing bracket again (in a new Part Studio tab): Sketch 2's feature menu open on Section view….
 // 16 a planar face as the section plane: the Section view tool, the plate's top face picked:
 //    the upright cut off at the plate (capped), the plane drawn orange at the face; 17 its
-//    arrow dragged up: the plane and the cut follow (the upright's lower part back).
+//    arrow dragged up from its foot on the plane (z = 12) to z = 50: the plane follows the
+//    pointer 1:1 (Offset 1.5 in = 38 mm, P3E.3a judge) and the cut with it.
 Scenario(
     start: Some("document"),
     steps: [
@@ -153,7 +154,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("16-face-reference"),
-        Drag(ui("section-offset-arrow"), xyz(0, 0, 50)),
+        Drag(ui_at("section-offset-arrow", 0.5, 0.97), xyz(0, 0, 50)),
         Wait(60),
         MoveTo(1420, 900),
         Wait(3),

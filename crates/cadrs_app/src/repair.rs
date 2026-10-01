@@ -837,12 +837,19 @@ fn on_body_press(ev: On<Pointer<Press>>, mut repair: ResMut<Repair>) {
     }
 }
 
-fn on_body_drag(ev: On<Pointer<Drag>>, mut repair: ResMut<Repair>) {
+fn on_body_drag(ev: On<Pointer<Drag>>, mut repair: ResMut<Repair>, keys: Res<ButtonInput<KeyCode>>, prefs: Res<crate::preferences_ui::LocalPreferences>) {
+    use cadrs_core::preferences::ViewAction;
     let d = ev.delta;
-    match ev.button {
-        PointerButton::Secondary => repair.view.orbit(d),
-        PointerButton::Middle => repair.view.pan(d),
-        _ => {}
+    if ev.button == PointerButton::Primary {
+        return;
+    }
+    // P3E.3: the mouse preference's gestures, as in the main view.
+    match prefs.mouse().action(crate::preferences_ui::mouse_button(ev.button), crate::preferences_ui::modifiers(&keys)) {
+        Some(ViewAction::Rotate) => repair.view.orbit(d),
+        Some(ViewAction::RotateTurntable) => repair.view.orbit_turntable(d),
+        Some(ViewAction::Pan) => repair.view.pan(d),
+        Some(ViewAction::Zoom) => repair.view.zoom_at(crate::viewport::DRAG_ZOOM_PER_PX.powf(-d.y), Vec2::ZERO),
+        None => {}
     }
 }
 

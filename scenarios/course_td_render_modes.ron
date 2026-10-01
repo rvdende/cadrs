@@ -25,6 +25,9 @@
 // 21 a render mode per tab, on the Pneumatic Cylinder (`fixtures/pneumatic_cylinder_ex2.cadrs`):
 //    Cylinder parts in Hidden edges visible; 22 the Cylinder assembly tab keeps its own mode
 //    (Translucent, set there); 23 back in Cylinder parts, Hidden edges visible still applies.
+// 24 named views per tab: in Cylinder parts, Named views… and "Cylinder parts fitted" added
+//    (its row hovered: the hover tint and its "Restore …" tooltip); 25 the Cylinder assembly
+//    tab with the panel still open: its own list, empty.
 Scenario(
     start: Some("document"),
     steps: [
@@ -246,5 +249,27 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("23-parts-tab-mode-kept"),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Wait(5),
+        Click(ui("view-named")),
+        WaitFor("named-views"),
+        Wait(5),
+        Click(ui("named-view-name-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("Cylinder parts fitted"),
+        Click(ui("named-view-add")),
+        Wait(10),
+        ExpectText("named-view-0", "Cylinder parts fitted"),
+        Hover(ui("named-view-0")),
+        Wait(30),
+        Screenshot("24-parts-tab-named-view-hovered"),
+        Click(ui("tab-cylinder-assembly")),
+        Wait(30),
+        WaitFor("named-views-empty"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("25-assembly-tab-own-empty-list"),
     ],
 )

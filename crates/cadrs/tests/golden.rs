@@ -1326,6 +1326,22 @@ fn golden_course_td_selection() {
     run_scenario("course_td_selection");
 }
 
+// P3E.3b: Measure (with its assembly frames), the analysis tools, the mouse preference.
+#[test]
+fn golden_course_td_measure() {
+    run_scenario("course_td_measure");
+}
+
+#[test]
+fn golden_course_td_analysis() {
+    run_scenario("course_td_analysis");
+}
+
+#[test]
+fn golden_course_td_mouse_prefs() {
+    run_scenario("course_td_mouse_prefs");
+}
+
 // Final part 2: the assembly course scenarios (stage 3B) and the importer/list scenarios merged
 // from main, which were not registered before.
 

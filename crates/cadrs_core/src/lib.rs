@@ -6,6 +6,7 @@
 //! [`LibraryHistory`] in the same way.
 
 pub mod advanced;
+pub mod analysis;
 pub mod assembly;
 pub mod applied;
 pub mod appearance;
@@ -41,6 +42,7 @@ pub mod parts;
 pub mod pcb;
 pub mod pattern;
 pub mod plane;
+pub mod preferences;
 pub mod properties;
 pub mod rebuild;
 pub mod render;

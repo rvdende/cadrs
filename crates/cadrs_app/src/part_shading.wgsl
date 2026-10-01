@@ -9,6 +9,10 @@
 struct PartShadingParams {
     clip: vec4<f32>,
     style: vec4<f32>,
+    // P3E.3b: the analysis tools (`crate::analysis`).
+    analysis: vec4<f32>,
+    pull: vec4<f32>,
+    bands: array<vec4<f32>, 6>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: PartShadingParams;
@@ -40,5 +44,40 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (params.style.x > 0.5) {
         c = select(vec3(1.0), in.color.rgb, in.uv.x > 0.5);
     }
-    return vec4(srgb_to_linear(c), in.color.a * params.style.y);
+    var lin = srgb_to_linear(c);
+    // P3E.3b, draft analysis: the band of this point's draft against the pull direction
+    // (`cadrs_core::analysis::DraftBand::of`), lit like the faces.
+    if (params.analysis.x > 1.5 && in.uv.x < 0.5) {
+        let d = degrees(asin(clamp(dot(n, normalize(params.pull.xyz)), -1.0, 1.0)));
+        let a = abs(params.analysis.y);
+        let eps = 1e-4;
+        var i = 5;
+        if (d >= 2.0 * a - eps) {
+            i = 0;
+        } else if (d >= a - eps) {
+            i = 1;
+        } else if (d >= 0.0) {
+            i = 2;
+        } else if (d > -a + eps) {
+            i = 3;
+        } else if (d > -2.0 * a + eps) {
+            i = 4;
+        }
+        lin = params.bands[i].rgb * mix(1.0, b, 0.55);
+    } else if (params.analysis.x > 0.5 && in.uv.x < 0.5) {
+        // Zebra stripes: the ray from an eye in front of the view (`params.pull`) reflected off
+        // the face, its angle about a slanted screen axis cut into black and white bands
+        // (smoothed over a pixel).
+        let e = normalize(params.pull.xyz - in.world_position.xyz);
+        let r = reflect(-e, n);
+        let s_dir = normalize(up * 0.85 + right * 0.5);
+        let phi = asin(clamp(dot(r, s_dir), -1.0, 1.0));
+        let x = phi * params.analysis.z / 3.14159265;
+        let w = max(fwidth(x), 1e-4);
+        let f = abs(fract(x) - 0.5) * 2.0;
+        let white = smoothstep(0.5 - w, 0.5 + w, f);
+        let g = mix(0.06, 0.96, white) * mix(1.0, b, 0.2);
+        lin = srgb_to_linear(vec3(g));
+    }
+    return vec4(lin, in.color.a * params.style.y);
 }

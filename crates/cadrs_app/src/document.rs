@@ -764,6 +764,9 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
+            // P3E.3b: the Analysis tools (icon-rs has no analysis icon: the curvature glyph
+            // stands in).
+            ("view-analysis", "constraint-curvature", "Analysis tools"),
             ("view-mass", "mass-properties", "Mass properties"),
         ] {
             s.spawn(ToolButton::new(name, icon_name).icon_size(18.0).tooltip(tip).build(t));

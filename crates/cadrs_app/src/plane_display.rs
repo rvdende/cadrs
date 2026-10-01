@@ -305,8 +305,10 @@ fn place_plane_feature_labels(
     doc: Option<Res<ActiveDocument>>,
     mut q: Query<(&PlaneFeatureLabel, &Children, &mut Node, &mut UiTransform, &mut Visibility), Without<AffineInner>>,
     mut q_inner: Query<(&ComputedNode, &mut UiTransform, &mut TextColor), With<AffineInner>>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
     let v = view.view;
+    let cut = section.plane;
     // The screen boxes of the labels placed so far: a label doesn't go over another
     // (`course_ps12_planes` 14: Plane 3's moved label met Plane 1's).
     let mut placed: Vec<Rect> = Vec::new();
@@ -348,6 +350,10 @@ fn place_plane_feature_labels(
         ];
         let clear = corners.iter().find_map(|d| {
             let start = o + (w - u) * half + u * d.x - w * d.y;
+            // P3E.3a judge: not on the side a section view removed.
+            if cut.is_some_and(|(co, cn)| cn.dot(start - co) > 0.0) {
+                return None;
+            }
             let corner = rect.to_screen(v.project(start)) - rect.0.min;
             let pts = [Vec2::ZERO, Vec2::new(size.x, 0.0), Vec2::new(0.0, size.y), size].map(|q| corner + a * (pad.x + q.x) + b * (pad.y + q.y));
             if pts.iter().any(|p| !inside.contains(*p)) {
