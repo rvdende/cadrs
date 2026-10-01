@@ -3,6 +3,8 @@
 use std::f64::consts::{PI, TAU};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
+use serde::{Deserialize, Serialize};
+
 use crate::Vec2;
 
 impl Add for Vec2 {
@@ -135,7 +137,7 @@ pub fn norm_angle(a: f64) -> f64 {
 
 /// A circular arc: `sweep` radians counter-clockwise from `start_angle` (a negative sweep runs
 /// clockwise).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ArcGeom {
     pub center: Vec2,
     pub radius: f64,
@@ -250,7 +252,7 @@ impl ArcGeom {
 /// stored major point) and `b` the minor semi-axis vector, square to it (to its left). With a
 /// non-zero `offset` (P3.7, X13), the curve that far from the ellipse along its outward normal
 /// (an offset ellipse: not an ellipse, but it shares the ellipse's parameter and normals).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EllipseGeom {
     pub center: Vec2,
     /// The major semi-axis: from the center to the major point.
@@ -466,7 +468,7 @@ impl EllipseGeom {
 /// A cubic Bézier curve (Final, S12.14: the sketch's spline, which the Curvature constraint
 /// joins with G2 continuity): `p[0]` and `p[3]` are its ends, `p[1]` and `p[2]` its control
 /// points. The parameter runs 0..1.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BezierGeom {
     pub p: [Vec2; 4],
 }

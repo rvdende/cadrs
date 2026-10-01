@@ -11,6 +11,7 @@
 //! (S20.2) and keeps its last position; nothing is guessed. A reference found other than by its
 //! exact name is repaired to the current name.
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use cadrs_sketch::projection::LinkTarget;
@@ -22,14 +23,14 @@ use crate::rebuild;
 use crate::solid::Solid;
 
 /// A solid part or a surface (the Parts list's groups, PS2.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PartKind {
     Solid,
     Surface,
 }
 
 /// A part: a body the features made.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
     pub id: PartId,
     /// The feature that made it (`id.feature`).

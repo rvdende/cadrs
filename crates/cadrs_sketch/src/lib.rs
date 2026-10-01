@@ -470,7 +470,7 @@ impl PlaneRef {
 
 /// A sketch plane's coordinate frame: sketch point `(x, y)` is at `origin + x·u + y·v` in the
 /// world. `u` and `v` are orthonormal; the plane's normal is `u × v`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlaneFrame {
     pub origin: Vec3,
     pub u: Vec3,

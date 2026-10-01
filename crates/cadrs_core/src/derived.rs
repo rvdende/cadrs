@@ -389,7 +389,7 @@ pub fn derived_face(feature: FeatureId, n: &FaceName, k: usize) -> FaceName {
 
 /// What a Derived feature brought in, as the rebuild made it (the Feature list's children,
 /// DV3.5): each copy's parts, sketches, planes and mate connectors, with their names.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DerivedOutput {
     pub parts: Vec<PartId>,
     pub sketches: Vec<(FeatureId, String)>,

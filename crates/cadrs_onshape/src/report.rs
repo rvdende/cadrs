@@ -53,6 +53,17 @@ pub struct ElementReport {
     /// Problems that concern the whole element.
     pub notes: Vec<String>,
     pub imported: bool,
+    /// An assembly's instances placed and mates imported (each of how many).
+    pub assembly: Option<AssemblyCounts>,
+}
+
+/// How much of an assembly came across.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AssemblyCounts {
+    /// Instances placed, of all.
+    pub instances: (usize, usize),
+    /// Mates imported, of all (groups and mate connectors are listed as features).
+    pub mates: (usize, usize),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -92,6 +103,9 @@ impl fmt::Display for DocumentReport {
                     let matched = el.parts.iter().filter(|p| p.error().is_some_and(|e| e < 1e-3)).count();
                     write!(f, "; parts {matched}/{} match Onshape", el.parts.len())?;
                 }
+            }
+            if let Some(a) = el.assembly {
+                write!(f, ": instances {}/{} placed; mates {}/{}", a.instances.0, a.instances.1, a.mates.0, a.mates.1)?;
             }
             if !el.imported {
                 write!(f, " (not imported)")?;

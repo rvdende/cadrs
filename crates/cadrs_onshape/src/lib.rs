@@ -4,8 +4,9 @@
 //! document: `document.json`, `elements.json`, and per Part Studio `features.json`,
 //! `sketches.json`, …). The import replays each Part Studio's feature list through the cadrs
 //! command layer, so the result is a normal document with its full, editable history. What
-//! could not be translated is listed in a [`report::DocumentReport`].
+//! could not be translated is listed (assemblies: [`assembly`]) in a [`report::DocumentReport`].
 
+pub mod assembly;
 pub mod eval;
 pub mod expr;
 pub mod features;

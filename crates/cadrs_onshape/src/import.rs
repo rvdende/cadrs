@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cadrs_core::command::CommandError;
-use cadrs_core::commands::{AddElement, AddExtrude, NewElementKind, RenameFeature, RenamePart, SetExtrude, SetPartMaterial};
+use cadrs_core::appearance::Appearance;
+use cadrs_core::commands::{AddElement, AddExtrude, NewElementKind, RenameFeature, RenamePart, SetExtrude, SetPartAppearance, SetPartMaterial};
 use cadrs_core::document::{BodyType, BooleanOp, Document, EndCondition, EndType, ExtrudeFeature, Offset, ThinWall, UpTo};
 use cadrs_core::ids::{DocumentId, ElementId, FeatureId};
 use cadrs_core::library::DocumentMeta;
@@ -71,7 +72,6 @@ pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Impo
             "ASSEMBLY" => {
                 if s.run(&AddElement { id, kind: NewElementKind::Assembly, name: Some(el.name.clone()), after: None }).is_ok() {
                     er.imported = true;
-                    er.notes.push("assembly contents are not imported yet (empty tab)".into());
                 }
             }
             "BILLOFMATERIALS" | "VARIABLESTUDIO" => {
@@ -91,6 +91,10 @@ pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Impo
         let mut er = reports[i].take().unwrap_or_default();
         PartStudio::new(&mut s, id, &raw.id, el, vars.clone(), &mut er, options).run();
         reports[i] = Some(er);
+    }
+    // Assemblies once their Part Studios are there (not for a lone studio another document needs).
+    if options.only.is_none() {
+        crate::assembly::import_assemblies(&mut s, raw, &elements, &mut reports);
     }
     report.elements.extend(reports.into_iter().flatten());
     if s.doc.elements.is_empty() {
@@ -1304,6 +1308,7 @@ impl<'a> PartStudio<'a> {
         // Onshape's solid parts: id, name, volume (and its tolerance band), bounding box of
         // their vertices (the centroid is zero for parts without a material, so it can't match).
         struct Os {
+            pid: String,
             name: String,
             volume: f64,
             band: (f64, f64),
@@ -1375,7 +1380,7 @@ impl<'a> PartStudio<'a> {
                 let p = &v["point"];
                 Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
             })));
-            onshape.push(Os { name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info });
+            onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info });
         }
         let cadrs: Vec<(usize, f64, Option<[f64; 6]>)> = parts
             .iter()
@@ -1414,6 +1419,21 @@ impl<'a> PartStudio<'a> {
                 matched.insert(oi, ci);
             }
         }
+        // For assemblies: which part each Onshape part became, and how far it sits from
+        // Onshape's. A STEP import here places each part where the file's assembly puts it, while
+        // Onshape keeps a part in its own coordinates and moves it in its assemblies; the vertex
+        // boxes give that move (when they differ by a translation).
+        let map: HashMap<String, (cadrs_core::ids::PartId, [f64; 3])> = matched
+            .iter()
+            .map(|(oi, ci)| {
+                let part = &parts[cadrs[*ci].0];
+                let ours = bbox_of(part.solid.vertices.iter().map(|v| v.point));
+                (onshape[*oi].pid.clone(), (part.id, offset(onshape[*oi].bbox, ours)))
+            })
+            .collect();
+        crate::eval::set_part_map(self.doc_id, &self.raw.id, map);
+        // Onshape's part colours, one command per colour.
+        let mut colours: Vec<(Appearance, Vec<cadrs_core::ids::PartId>)> = Vec::new();
         for (oi, o) in onshape.iter().enumerate() {
             let m = matched.get(&oi).map(|ci| &cadrs[*ci]);
             let mut check = PartCheck { name: o.name.clone(), onshape_volume: o.volume, cadrs_volume: m.map(|c| c.1), bbox_note: None };
@@ -1444,10 +1464,34 @@ impl<'a> PartStudio<'a> {
                 if material.is_some() {
                     self.s.run(&SetPartMaterial { element: self.el, parts: vec![part.id], material }).ok();
                 }
+                if let Some(a) = o.info.as_ref().and_then(|i| appearance(&i["appearance"])) {
+                    match colours.iter_mut().find(|(c, _)| *c == a) {
+                        Some((_, ps)) => ps.push(part.id),
+                        None => colours.push((a, vec![part.id])),
+                    }
+                }
             }
             self.report.parts.push(check);
         }
+        for (a, parts) in colours {
+            self.s.run(&SetPartAppearance { element: self.el, parts, appearance: Some(a) }).ok();
+        }
     }
+}
+
+/// How far box `b` sits from box `a` when it is `a` moved (zero otherwise, or without both).
+fn offset(a: Option<[f64; 6]>, b: Option<[f64; 6]>) -> [f64; 3] {
+    let (Some(a), Some(b)) = (a, b) else { return [0.0; 3] };
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    if (0..3).all(|k| (b[k + 3] - a[k + 3] - d[k]).abs() < 1e-3) { d } else { [0.0; 3] }
+}
+
+/// An Onshape part appearance (`{"color": {"red", "green", "blue"}, "opacity"}`, 0–255).
+fn appearance(v: &Value) -> Option<Appearance> {
+    let c = &v["color"];
+    let ch = |k: &str| c[k].as_u64().map(|x| x.min(255) as u8);
+    let alpha = v["opacity"].as_u64().map_or(255, |x| x.min(255) as u8);
+    Some(Appearance::rgb(ch("red")?, ch("green")?, ch("blue")?).with_alpha(alpha))
 }
 
 /// The model edges a region query names (edges not made by sketch `sketch`), outermost ones:
