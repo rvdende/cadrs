@@ -106,7 +106,7 @@ pub struct TabButton(pub ElementId);
 
 /// The row the tabs are spawned into.
 #[derive(Component)]
-struct TabStrip;
+pub(crate) struct TabStrip;
 
 /// The "+" (insert new tab) button; its menu's actions bubble to it.
 #[derive(Component)]
@@ -1191,6 +1191,9 @@ fn rebuild_tabs(
             })
             .collect::<Vec<_>>(),
     );
+    // P3E.3a (P3E.2 carried delta): the folder tab that holds the active tab is marked.
+    let layout = cadrs_core::tab_tree::layout(&doc.doc);
+    let holds_active = |f: cadrs_core::ElementId| new.active.is_some_and(|a| cadrs_core::tab_tree::tabs_in(&layout, f).contains(&a));
     commands.entity(strip).with_children(|s| {
         for (entry, node) in new.tabs.iter().zip(names) {
             match entry {
@@ -1209,6 +1212,7 @@ fn rebuild_tabs(
                         Tab::new(node.replacen("tab-", "tab-folder-", 1), name.clone())
                             .icon("folder")
                             .width(150.0)
+                            .marked(holds_active(*id))
                             .build(&theme),
                         crate::tab_folders::FolderTab(*id),
                         Tooltip::new(format!("{name} ({count} tabs)")),

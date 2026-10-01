@@ -1,9 +1,15 @@
 //! Camera math for the Part Studio viewport, kept free of ECS so it can be unit-tested.
 //!
-//! The view is orthographic. It is described by an azimuth and an elevation (the direction from
-//! the focus point toward the camera), a roll about the view direction, the focus point (the
-//! world point shown at the center of the viewport) and a zoom (`scale`, world mm per logical
-//! pixel). Standard views have no roll (Z up); a right-drag rotates freely about the screen
+//! The view is orthographic by default. It is described by an azimuth and an elevation (the
+//! direction from the focus point toward the camera), a roll about the view direction, the focus
+//! point (the world point shown at the center of the viewport) and a zoom (`scale`, world mm per
+//! logical pixel).
+//!
+//! P3E.3a (TD6.5): **Perspective view** keeps the same description. The eye sits
+//! [`FOCAL_PX`]` × scale` mm in front of the focus, so the focus plane still shows `scale` mm per
+//! pixel: unprojecting onto it, panning and zooming about the cursor work as in orthographic,
+//! and nearer points are drawn larger ([`ViewState::project`]). Pick rays start at the eye and
+//! spread ([`ViewState::ray`]). A view also carries its tab's [`RenderMode`]. Standard views have no roll (Z up); a right-drag rotates freely about the screen
 //! axes, as Onshape does by default, and Alt+right-drag turns without roll.
 //!
 //! - azimuth 0, elevation 0 looks at the Front plane (from -Y), azimuth 90° from +X (Right),
@@ -26,6 +32,87 @@ pub const ORBIT_DEG_PER_PX: f32 = 0.4;
 pub const ZOOM_PER_LINE: f32 = 1.15;
 pub const MIN_SCALE: f32 = 1e-4;
 pub const MAX_SCALE: f32 = 1e3;
+/// Perspective view: the focal length in logical pixels (the eye is this many pixels' worth of
+/// the focus plane's scale in front of it; about a 30° vertical field of view in an 900 px
+/// viewport, a mild perspective like Onshape's).
+pub const FOCAL_PX: f32 = 1700.0;
+
+/// How the parts are drawn (P3E.3a, TD6.5, PS2.9, X14): the view cube menu's render modes, per
+/// tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum RenderMode {
+    /// Shaded with edges (the default).
+    #[default]
+    Shaded,
+    ShadedWithoutEdges,
+    /// Shaded, and the edges hidden behind faces drawn faintly through them.
+    ShadedWithHiddenEdges,
+    /// White faces with their visible edges: a hidden-line drawing.
+    HiddenEdgesRemoved,
+    /// White faces, the visible edges black and the hidden ones grey.
+    HiddenEdgesVisible,
+    /// See-through faces with every edge.
+    Translucent,
+}
+
+impl RenderMode {
+    pub const ALL: [RenderMode; 6] = [
+        RenderMode::Shaded,
+        RenderMode::ShadedWithoutEdges,
+        RenderMode::ShadedWithHiddenEdges,
+        RenderMode::HiddenEdgesRemoved,
+        RenderMode::HiddenEdgesVisible,
+        RenderMode::Translucent,
+    ];
+
+    /// The menu's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderMode::Shaded => "Shaded with edges",
+            RenderMode::ShadedWithoutEdges => "Shaded without edges",
+            RenderMode::ShadedWithHiddenEdges => "Shaded with hidden edges",
+            RenderMode::HiddenEdgesRemoved => "Hidden edges removed",
+            RenderMode::HiddenEdgesVisible => "Hidden edges visible",
+            RenderMode::Translucent => "Translucent",
+        }
+    }
+
+    /// The menu item's name: `view-render-<slug>`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            RenderMode::Shaded => "shaded",
+            RenderMode::ShadedWithoutEdges => "shaded-no-edges",
+            RenderMode::ShadedWithHiddenEdges => "shaded-hidden-edges",
+            RenderMode::HiddenEdgesRemoved => "hidden-removed",
+            RenderMode::HiddenEdgesVisible => "hidden-visible",
+            RenderMode::Translucent => "translucent",
+        }
+    }
+
+    /// The faces are shaded (lit by the head light) rather than white.
+    pub fn shaded(self) -> bool {
+        !matches!(self, RenderMode::HiddenEdgesRemoved | RenderMode::HiddenEdgesVisible)
+    }
+
+    /// The visible edges are drawn.
+    pub fn edges(self) -> bool {
+        self != RenderMode::ShadedWithoutEdges
+    }
+
+    /// The edges behind faces are drawn too (faintly).
+    pub fn hidden_edges(self) -> bool {
+        matches!(self, RenderMode::ShadedWithHiddenEdges | RenderMode::HiddenEdgesVisible)
+    }
+
+    pub fn translucent(self) -> bool {
+        self == RenderMode::Translucent
+    }
+
+    /// The menu group: the shaded modes (first ▸) or the hidden-line modes (second ▸).
+    pub fn line_drawing(self) -> bool {
+        !self.shaded()
+    }
+}
 
 /// The standard orientations (view cube faces, Shift+1…7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,8 +156,12 @@ pub struct ViewState {
     pub roll: f32,
     /// The world point at the center of the viewport.
     pub focus: Vec3,
-    /// World millimeters per logical pixel.
+    /// World millimeters per logical pixel (at the focus, in perspective).
     pub scale: f32,
+    /// Perspective view (P3E.3a); orthographic when false (the default).
+    pub perspective: bool,
+    /// How the parts are drawn (P3E.3a).
+    pub render: RenderMode,
 }
 
 impl Default for ViewState {
@@ -88,6 +179,8 @@ impl ViewState {
             roll: 0.0,
             focus: Vec3::ZERO,
             scale: DEFAULT_SCALE,
+            perspective: false,
+            render: RenderMode::Shaded,
         }
     }
 
@@ -173,28 +266,54 @@ impl ViewState {
         Quat::from_mat3(&Mat3::from_cols(self.right(), self.up(), self.back()))
     }
 
+    /// In perspective, how far the eye is in front of the focus (mm).
+    pub fn eye_distance(&self) -> f32 {
+        FOCAL_PX * self.scale
+    }
+
     pub fn camera_position(&self) -> Vec3 {
+        if self.perspective {
+            return self.focus + self.back() * self.eye_distance();
+        }
         self.focus + self.back() * CAMERA_DISTANCE
+    }
+
+    /// In perspective, how much larger than on the focus plane a point `p` is drawn (1 on the
+    /// focus plane, more nearer the eye); 1 in orthographic.
+    pub fn magnification(&self, p: Vec3) -> f32 {
+        if !self.perspective {
+            return 1.0;
+        }
+        let eye = self.eye_distance();
+        let depth = eye - (p - self.focus).dot(self.back());
+        eye / depth.max(eye * 1e-3)
     }
 
     /// Screen offset (px from the viewport center, y down) of a world point.
     pub fn project(&self, p: Vec3) -> Vec2 {
         let d = p - self.focus;
-        Vec2::new(d.dot(self.right()), -d.dot(self.up())) / self.scale
+        Vec2::new(d.dot(self.right()), -d.dot(self.up())) / self.scale * self.magnification(p)
     }
 
-    /// Projected screen-space vector (px, y down) of a world direction or offset.
+    /// Projected screen-space vector (px, y down) of a world direction or offset (as seen at the
+    /// focus, in perspective).
     pub fn project_vector(&self, v: Vec3) -> Vec2 {
         Vec2::new(v.dot(self.right()), -v.dot(self.up())) / self.scale
     }
 
-    /// The world point on the plane through the focus (facing the camera) under a screen offset.
+    /// The world point on the plane through the focus (facing the camera) under a screen offset
+    /// (in perspective too: the focus plane shows `scale` mm per pixel).
     pub fn unproject(&self, offset: Vec2) -> Vec3 {
         self.focus + (self.right() * offset.x - self.up() * offset.y) * self.scale
     }
 
-    /// The pick ray through a screen offset: origin (on the camera plane) and direction.
+    /// The pick ray through a screen offset: origin (on the camera plane, or the eye in
+    /// perspective) and unit direction.
     pub fn ray(&self, offset: Vec2) -> (Vec3, Vec3) {
+        if self.perspective {
+            let eye = self.camera_position();
+            return (eye, (self.unproject(offset) - eye).normalize());
+        }
         (
             self.unproject(offset) + self.back() * CAMERA_DISTANCE,
             -self.back(),
@@ -286,11 +405,32 @@ impl ViewState {
         let extent = (hi - lo).max(Vec2::splat(1e-3));
         let avail = (viewport * fill.clamp(0.05, 1.0)).max(Vec2::ONE);
         let scale = (extent.x / avail.x).max(extent.y / avail.y).clamp(MIN_SCALE, MAX_SCALE);
-        Self {
+        let mut out = Self {
             focus: self.focus + self.right() * center.x + self.up() * center.y,
             scale,
             ..self
+        };
+        if self.perspective {
+            // The focus on the points' middle in depth too, then a few rounds of measuring the
+            // drawn (magnified) box and correcting the zoom and centre.
+            let depths = points.iter().map(|p| (*p - out.focus).dot(out.back()));
+            let (dlo, dhi) = depths.fold((f32::MAX, f32::MIN), |(a, b), d| (a.min(d), b.max(d)));
+            out.focus += out.back() * (dlo + dhi) / 2.0;
+            for _ in 0..6 {
+                let (mut plo, mut phi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+                for p in points {
+                    let q = out.project(*p);
+                    plo = plo.min(q);
+                    phi = phi.max(q);
+                }
+                let size = (phi - plo).max(Vec2::splat(1e-3));
+                let k = (size.x / avail.x).max(size.y / avail.y);
+                let mid = (plo + phi) / 2.0;
+                out.focus += (out.right() * mid.x - out.up() * mid.y) * out.scale;
+                out.scale = (out.scale * k).clamp(MIN_SCALE, MAX_SCALE);
+            }
         }
+        out
     }
 
     /// [`Self::fitted`] into the part of the viewport right of `left_inset` px (a feature
@@ -325,6 +465,8 @@ impl ViewState {
             roll: wrap_degrees(self.roll + droll * t),
             focus: self.focus.lerp(to.focus, t),
             scale,
+            perspective: to.perspective,
+            render: to.render,
         }
     }
 
@@ -335,6 +477,25 @@ impl ViewState {
             && wrap_degrees(self.roll - other.roll).abs() < 0.01
             && self.focus.distance(other.focus) < 1e-3
             && (self.scale / other.scale - 1.0).abs() < 1e-4
+            && self.perspective == other.perspective
+            && self.render == other.render
+    }
+
+    /// Zoom to window (P3E.3a): the view zoomed so the screen box from `a` to `b` (offsets from
+    /// the viewport center) fills the viewport, keeping the orientation. A box smaller than a few
+    /// pixels leaves the view as it is.
+    pub fn zoomed_to_box(self, a: Vec2, b: Vec2, viewport: Vec2) -> Self {
+        let size = (b - a).abs();
+        if size.x < 4.0 || size.y < 4.0 {
+            return self;
+        }
+        let center = (a + b) / 2.0;
+        let k = (size.x / viewport.x.max(1.0)).max(size.y / viewport.y.max(1.0));
+        Self {
+            focus: self.unproject(center),
+            scale: (self.scale * k).clamp(MIN_SCALE, MAX_SCALE),
+            ..self
+        }
     }
 }
 
@@ -599,6 +760,71 @@ mod tests {
         let m = a.lerp(&b, 0.5);
         assert!((m.azimuth.abs() - 180.0).abs() < 1e-3);
         assert!(a.lerp(&b, 1.0).approx_eq(&b));
+    }
+
+    /// P3E.3a (TD6.5, Risk "perspective breaks picking and zoom"): in perspective the focus
+    /// plane keeps its scale, a point's pick ray passes through it, nearer points are drawn
+    /// larger, zoom about the cursor keeps the point under it and a fit fills the view.
+    #[test]
+    fn perspective_projection_rays_zoom_and_fit() {
+        let mut v = ViewState { perspective: true, ..ViewState::default() };
+        v.pan(Vec2::new(20.0, -10.0));
+        // On the focus plane, as in orthographic.
+        let q = v.unproject(Vec2::new(120.0, -80.0));
+        assert!((v.project(q) - Vec2::new(120.0, -80.0)).length() < 1e-2);
+        // Every point lies on the ray through its projection.
+        for p in [Vec3::new(30.0, -20.0, 45.0), Vec3::new(-60.0, 80.0, -5.0), Vec3::ZERO] {
+            let (o, d) = v.ray(v.project(p));
+            let along = (p - o).dot(d);
+            assert!((o + d * along).distance(p) < 1e-2 * p.length().max(1.0), "{p:?}");
+            assert!(along > 0.0);
+        }
+        // The eye is at the camera position; nearer is larger.
+        assert!(v.ray(Vec2::ZERO).0.distance(v.camera_position()) < 1e-3);
+        let near = v.focus + v.back() * 50.0;
+        let far = v.focus - v.back() * 50.0;
+        assert!(v.magnification(near) > 1.0 && v.magnification(far) < 1.0);
+        let l = |c: Vec3| (v.project(c + v.right() * 10.0) - v.project(c)).length();
+        assert!(l(near) > l(v.focus) && l(v.focus) > l(far));
+        // Zoom about the cursor keeps the focus-plane point under it.
+        let cursor = Vec2::new(-150.0, 90.0);
+        let p = v.unproject(cursor);
+        for lines in [2.0, -3.0, 5.0] {
+            v.wheel(lines, cursor);
+            assert!((v.project(p) - cursor).length() < 1e-2, "{:?}", v.project(p));
+        }
+        // A fit of a 100 mm cube fills 80% of the viewport, measured on the drawn corners.
+        let pts: Vec<Vec3> = (0..8)
+            .map(|i| Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32) * 100.0)
+            .collect();
+        let size = Vec2::new(1000.0, 700.0);
+        let f = v.fitted(&pts, size, 0.8);
+        let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+        for p in &pts {
+            lo = lo.min(f.project(*p));
+            hi = hi.max(f.project(*p));
+        }
+        let fill = ((hi - lo) / size).max_element();
+        assert!((fill - 0.8).abs() < 0.01, "{fill}");
+        assert!(((hi + lo) / 2.0).length() < 1.0, "centred");
+        // The eye stays outside the cube.
+        assert!(pts.iter().all(|p| (f.camera_position() - *p).dot(f.back()) > 0.0));
+        // Orthographic is unchanged by the flag's default.
+        assert!(!ViewState::default().perspective);
+        assert_eq!(ViewState::default().render, RenderMode::Shaded);
+    }
+
+    #[test]
+    fn zoom_to_window_frames_the_box() {
+        let v = ViewState::standard(StandardView::Top);
+        let (a, b) = (Vec2::new(100.0, -50.0), Vec2::new(300.0, 50.0));
+        let z = v.zoomed_to_box(a, b, Vec2::new(800.0, 600.0));
+        // The box's centre is now the view's centre, and its 200 px width fills 800 px.
+        assert!(z.project(v.unproject(Vec2::new(200.0, 0.0))).length() < 1e-2);
+        let w = (z.project(v.unproject(b)) - z.project(v.unproject(a))).x;
+        assert!((w - 800.0).abs() < 0.5, "{w}");
+        // A click (no box) leaves it alone.
+        assert!(v.zoomed_to_box(a, a + Vec2::ONE, Vec2::new(800.0, 600.0)).approx_eq(&v));
     }
 
     #[test]
