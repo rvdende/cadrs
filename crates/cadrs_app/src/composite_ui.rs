@@ -365,7 +365,7 @@ fn sync_dialog(
                     .title(f.name.clone())
                     .valid(valid)
                     .body(move |b| {
-                        b.spawn((PartsField, SelectionList::new("composite-parts-field").placeholder("Parts").items(items).active(true).build(&t)));
+                        b.spawn((PartsField, SelectionList::new("composite-parts-field").placeholder("Parts and composite parts").items(items).active(true).build(&t)));
                         b.spawn(OptionRow::new("composite-closed", "Closed").checked(closed).build(&t));
                     })
                     .footer(|f| {

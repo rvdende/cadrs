@@ -428,7 +428,10 @@ pub fn appearance(doc: &Document, owner: PropertyOwner, build: Option<&Build>) -
     let PropertyOwner::Part { element, part } = owner else { return None };
     part_props(doc, element, part)
         .and_then(|p| p.appearance)
-        .or_else(|| build.and_then(|b| b.part(part)).map(|p| crate::appearance::palette(p.palette)))
+        .or_else(|| {
+            let props = doc.element(element).map(|e| e.part_props()).unwrap_or_default();
+            build.and_then(|b| b.part(part)).map(|p| crate::appearance::default_appearance(p, props))
+        })
 }
 
 /// The mass of one of the owner (kg): its override, else a part's density × volume (`None`

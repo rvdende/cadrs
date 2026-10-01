@@ -159,7 +159,20 @@ pub fn part_appearance(part: &Part, props: &[PartProps]) -> Appearance {
         .or_else(|| own(part.source?))
         .or_else(|| part.derived.as_ref()?.appearance)
         .or_else(|| part.solid.looks.first().map(|(_, a)| *a))
-        .unwrap_or_else(|| palette(part.palette))
+        .unwrap_or_else(|| default_appearance(part, props))
+}
+
+/// A keep-out or keep-in part's default colour (PCB9.4; `ex3-step9-triad-move.png` shows the
+/// Keep-out grey).
+pub const KEEP_GREY: Appearance = Appearance::rgb(128, 128, 128);
+
+/// A part's colour when nothing sets one: grey for a part named as a keep-out or keep-in
+/// ([`crate::pcb::names::role_of`]), else its palette colour.
+pub fn default_appearance(part: &Part, props: &[PartProps]) -> Appearance {
+    match crate::pcb::names::role_of(crate::parts::display_name(part, props)) {
+        Some(crate::pcb::names::PartRole::KeepOut | crate::pcb::names::PartRole::KeepIn) => KEEP_GREY,
+        _ => palette(part.palette),
+    }
 }
 
 /// Where a face's appearance comes from (the Appearances panel shows it).

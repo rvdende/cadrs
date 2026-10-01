@@ -8,10 +8,12 @@
 //! - the **components** (PCB7.3, PCB11.1): one part per package (the `.emp` outline extruded by
 //!   its height), named after the package, with its **Part number** and a **Description** made
 //!   from the `.emp` PROP records ([`description`]). Where these parts live is the
-//!   [`ComponentProvider`] seam: now [`InDocumentComponents`] (a Part Studio "<board>
-//!   components" in this document, the packages side by side along x); P3H.7 swaps in component
-//!   documents referenced by version ([`ComponentSource::External`]) once cross-document
-//!   references (stage 3G) exist;
+//!   [`ComponentProvider`] seam: in the app, **component documents**
+//!   ([`crate::component_docs::ComponentDocuments`], P3H.7: one stored document per package in
+//!   the component folder, versioned, the instances version-pinned references to it,
+//!   [`ComponentSource::External`], [`generate_linked`]); with no document store (pure-core
+//!   tests) [`InDocumentComponents`] (P3H.6: a Part Studio "<board> components" in this
+//!   document, the packages side by side along x);
 //! - an **Assembly** named after the board: the board and keep instances where the Part Studio
 //!   has them, and one instance per placement at its IDF position, rotation and side, **no
 //!   mates** (PCB7.4), named from the package with the usual `<n>` (PCB7.5). Each component
@@ -28,7 +30,9 @@ use cadrs_core::assembly::{Instance, InstanceId, InstanceSource, Pose as AsmPose
 use cadrs_core::command::{Command, CommandError};
 use cadrs_core::commands::{AddElement, CreateFolder, NewElementKind};
 use cadrs_core::document::Document;
-use cadrs_core::ids::{DocumentId, ElementId, FeatureId, PartId};
+use cadrs_core::ids::{ElementId, FeatureId, PartId};
+use cadrs_core::external::{LinkedElement, SourceRef};
+use cadrs_core::pcb::component_docs::ComponentDocument;
 use cadrs_core::pcb::{BoardId, CreatePcbAssembly, GeneratedAssembly, GeneratedPackage, LinkedComponent};
 use cadrs_core::properties::{PropertyKey, PropertyOwner, PropertyValue, SetProperties};
 use cadrs_core::studio::Studio;
@@ -56,22 +60,32 @@ impl Default for CreateOptions {
     }
 }
 
-/// Where a component's part comes from: the seam between in-document parts (P3H.6) and
-/// component documents referenced by version (P3H.7, after stage 3G's ExternalRef).
+/// Where a component's part comes from: the seam between in-document parts (P3H.6, the
+/// fallback without a document store) and component documents referenced by version (P3H.7,
+/// [`crate::component_docs`]).
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComponentSource {
     /// A part of a Part Studio of this document.
     InDocument { studio: ElementId, part: PartId },
-    /// A part of another document at a version (P3H.7; needs cross-document references).
-    External { document: DocumentId, version: cadrs_core::history_log::VersionId, part: PartId },
+    /// A part of a component document at a version: the reference, and the id of its frozen copy
+    /// in this document (`Document::linked`).
+    External { reference: SourceRef, copy: ElementId, part: PartId },
 }
 
 impl ComponentSource {
     /// The assembly instance source for it.
-    pub fn instance_source(&self) -> Result<InstanceSource, CommandError> {
+    pub fn instance_source(&self) -> InstanceSource {
         match self {
-            ComponentSource::InDocument { studio, part } => Ok(InstanceSource::Part { element: *studio, part: *part }),
-            ComponentSource::External { .. } => Err(CommandError::Invalid("Components from other documents need cross-document references (P3H.7)".into())),
+            ComponentSource::InDocument { studio, part } => InstanceSource::Part { element: *studio, part: *part },
+            ComponentSource::External { copy, part, .. } => InstanceSource::Part { element: *copy, part: *part },
+        }
+    }
+
+    /// The version reference an instance of it carries (`Instance::link`).
+    pub fn link(&self) -> Option<SourceRef> {
+        match self {
+            ComponentSource::InDocument { .. } => None,
+            ComponentSource::External { reference, .. } => Some(*reference),
         }
     }
 }
@@ -89,9 +103,27 @@ pub trait ComponentProvider {
     /// The part for the package of `placement` (`package` is its library entry; a
     /// [`placeholder_package`] when the library lacks it).
     fn component(&mut self, s: &mut dyn Studio, package: &Package) -> Result<PackageComponent, CommandError>;
+    /// The part for a package the component library maps to a **custom part** (PCB11.4, X10),
+    /// placed on the footprint by the mapping's transform; `None` when this provider can't use it
+    /// (the package's own part is used then).
+    fn custom(&mut self, _s: &mut dyn Studio, _package: &Package, _custom: &cadrs_core::pcb::CustomPart) -> Option<Result<PackageComponent, CommandError>> {
+        None
+    }
     /// Tidies up once every component is made (folders, …).
     fn finish(&mut self, _s: &mut dyn Studio) -> Result<(), CommandError> {
         Ok(())
+    }
+    /// The frozen copies the components need in this document (component documents).
+    fn links(&mut self) -> Vec<LinkedElement> {
+        Vec::new()
+    }
+    /// The component documents used (P3H.7).
+    fn documents(&self) -> Vec<ComponentDocument> {
+        Vec::new()
+    }
+    /// The packages' parts made in this document (P3H.6's components Part Studio).
+    fn packages(&mut self) -> Vec<GeneratedPackage> {
+        Vec::new()
     }
 }
 
@@ -197,6 +229,10 @@ impl ComponentProvider for InDocumentComponents {
         self.made.insert(key, c.clone());
         Ok(c)
     }
+
+    fn packages(&mut self) -> Vec<GeneratedPackage> {
+        self.packages.clone()
+    }
 }
 
 /// A Description from a package's `.emp` PROP records (PCB7.6: "Resistor 113K OHM"): a
@@ -226,6 +262,22 @@ pub fn description(pkg: &Package) -> Option<String> {
     None
 }
 
+/// The board part's Part number and Description: from the IDF data when a `.NOTES` record
+/// carries them ("PART NUMBER: …", "P/N …", "DESCRIPTION: …"), else no Part number and the
+/// Description "Board, <name>".
+pub fn board_properties(b: &PcbBoard) -> (Option<String>, String) {
+    let field = |keys: &[&str]| {
+        b.board.notes.iter().find_map(|n| {
+            let t = n.text.trim().trim_matches('"').trim();
+            let up = t.to_ascii_uppercase();
+            keys.iter().find_map(|k| up.strip_prefix(k).map(|_| t[k.len()..].trim_start_matches([':', '=', ' ']).trim().to_string())).filter(|v| !v.is_empty())
+        })
+    };
+    let pn = field(&["PART NUMBER", "PART_NUMBER", "P/N"]);
+    let desc = field(&["DESCRIPTION"]).unwrap_or_else(|| format!("Board, {}", b.name()));
+    (pn, desc)
+}
+
 /// 113000 → "113K", 4700 → "4.7K", 2200000 → "2.2M", 16000000 → "16M", 47 → "47".
 fn engineering(v: f64) -> String {
     let (x, suffix) = if v.abs() >= 1e9 {
@@ -243,7 +295,7 @@ fn engineering(v: f64) -> String {
 
 /// A [`Studio`] over a bare document: each command applied directly (the whole generation is
 /// one undo step of its own, [`CreatePcbAssembly`]).
-struct Direct<'a>(&'a mut Document);
+pub(crate) struct Direct<'a>(pub(crate) &'a mut Document);
 
 impl Studio for Direct<'_> {
     fn run(&mut self, c: &dyn Command) -> Result<(), CommandError> {
@@ -254,7 +306,7 @@ impl Studio for Direct<'_> {
     }
 }
 
-fn pose_of(m: &Motion) -> AsmPose {
+pub(crate) fn pose_of(m: &Motion) -> AsmPose {
     let l = &m.linear;
     AsmPose {
         rotation: [[l[(0, 0)], l[(0, 1)], l[(0, 2)]], [l[(1, 0)], l[(1, 1)], l[(1, 2)]], [l[(2, 0)], l[(2, 1)], l[(2, 2)]]],
@@ -273,14 +325,26 @@ pub fn components_studio_name(board: &str) -> String {
 }
 
 /// Builds the tabs for the board `board` of the PCB Studio `pcb` (see the module docs) on a copy
-/// of `doc`, and returns the command that adds them.
+/// of `doc`, with the components as in-document parts (the fallback with no document store),
+/// and returns the command that adds them.
 pub fn generate(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOptions) -> Result<CreatePcbAssembly, CommandError> {
+    generate_with(doc, pcb, board, opts, None)
+}
+
+/// [`generate`] with the components in **component documents** (P3H.7): `docs` makes or reuses
+/// one stored document per package and the instances reference their versions.
+pub fn generate_linked(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOptions, docs: &mut crate::component_docs::ComponentDocuments) -> Result<CreatePcbAssembly, CommandError> {
+    generate_with(doc, pcb, board, opts, Some(docs))
+}
+
+fn generate_with(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOptions, docs: Option<&mut crate::component_docs::ComponentDocuments>) -> Result<CreatePcbAssembly, CommandError> {
     let sb = doc.element(pcb).and_then(|e| e.pcb()).and_then(|s| s.board(board)).ok_or_else(|| CommandError::Invalid("the board is gone".into()))?;
     let pcb_board: PcbBoard = sb.board.clone();
     let name = pcb_board.name().to_string();
     // A components Part Studio an earlier Create made (still there) is reused, with the packages
     // it already has (PCB7.3: the component documents are reused).
-    let reused: Option<(ElementId, Vec<GeneratedPackage>)> = doc.element(pcb).and_then(|e| e.pcb()).and_then(|st| {
+    let external = docs.is_some();
+    let reused: Option<(ElementId, Vec<GeneratedPackage>)> = if external { None } else { doc.element(pcb).and_then(|e| e.pcb()).and_then(|st| {
         let c = st.generated.iter().rev().find_map(|g| g.components_studio.filter(|c| doc.element(*c).is_some_and(|e| matches!(e.kind, cadrs_core::ElementKind::PartStudio { .. }))))?;
         let mut packages: Vec<GeneratedPackage> = Vec::new();
         for g in st.generated.iter().filter(|g| g.components_studio == Some(c)) {
@@ -291,15 +355,16 @@ pub fn generate(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOpt
             }
         }
         Some((c, packages))
-    });
+    }) };
     let mut scratch = doc.clone();
     let mut s = Direct(&mut scratch);
     let (studio, assembly) = (ElementId::new(), ElementId::new());
     let components = reused.as_ref().map_or_else(ElementId::new, |(c, _)| *c);
     let salt = name_hash(&format!("{name}\u{0}{}", studio.0));
     let with_components = opts.components && !pcb_board.board.placements.is_empty();
+    let in_document = with_components && !external;
     s.run(&AddElement { id: studio, kind: NewElementKind::PartStudio, name: Some(name.clone()), after: None })?;
-    if with_components && reused.is_none() {
+    if in_document && reused.is_none() {
         s.run(&AddElement { id: components, kind: NewElementKind::PartStudio, name: Some(components_studio_name(&name)), after: None })?;
     }
     s.run(&AddElement { id: assembly, kind: NewElementKind::Assembly, name: Some(name.clone()), after: None })?;
@@ -315,7 +380,15 @@ pub fn generate(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOpt
         && let Some(plan) = board_plan(&pcb_board)
     {
         let (sk, ex) = next();
-        studio_parts.push(build_plan(&mut s, studio, &plan, sk, ex)?);
+        let part = build_plan(&mut s, studio, &plan, sk, ex)?;
+        // The board's BOM row: its Part number and Description (P3H.6 judge).
+        let (pn, desc) = board_properties(&pcb_board);
+        let mut values = vec![(PropertyKey::Description, PropertyValue::Text(desc))];
+        if let Some(pn) = pn {
+            values.insert(0, (PropertyKey::PartNumber, PropertyValue::Text(pn)));
+        }
+        s.run(&SetProperties { owners: vec![PropertyOwner::Part { element: studio, part }], values, label: "Board properties".into() })?;
+        studio_parts.push(part);
     }
     if opts.keep_areas {
         let mut keep_features = Vec::new();
@@ -336,22 +409,52 @@ pub fn generate(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOpt
     // The components (PCB7.3–7.5).
     let mut linked = Vec::new();
     let mut packages = Vec::new();
+    let mut links: Vec<LinkedElement> = Vec::new();
+    let mut documents = Vec::new();
     if with_components {
-        let mut provider = InDocumentComponents::seeded(components, salt, reused.as_ref().map_or(&[][..], |(_, p)| &p[..]));
+        let mut in_doc: InDocumentComponents;
+        let provider: &mut dyn ComponentProvider = match docs {
+            Some(d) => d,
+            None => {
+                in_doc = InDocumentComponents::seeded(components, salt, reused.as_ref().map_or(&[][..], |(_, p)| &p[..]));
+                &mut in_doc
+            }
+        };
         let t = pcb_board.thickness();
+        // P3H stage close (PCB11.4): a package the library maps to a custom part is inserted as
+        // that part (where the provider can reference it), so a mapping change reaches the next
+        // Create; None and From ECAD data use the package's own part.
+        let mappings = doc.element(pcb).and_then(|e| e.pcb()).map(|st| st.library.clone()).unwrap_or_default();
         for (_, p) in pcb_board.components() {
             let pkg = find_package(&pcb_board, p).cloned().unwrap_or_else(|| placeholder_package(p));
-            let c = provider.component(&mut s, &pkg)?;
-            let inst = at(c.source.instance_source()?, instance_pose(p, t, &c.frame));
+            let custom = mappings.get(&pkg.name).custom().and_then(|c| provider.custom(&mut s, &pkg, c));
+            let c = match custom {
+                Some(c) => c?,
+                None => provider.component(&mut s, &pkg)?,
+            };
+            let mut inst = at(c.source.instance_source(), instance_pose(p, t, &c.frame));
             linked.push(LinkedComponent { instance: inst.id, refdes: p.refdes.clone(), frame: c.frame });
+            if let Some(r) = c.source.link() {
+                // The copies first (the instance's name comes from its part there).
+                for l in provider.links() {
+                    if s.0.linked_element(l.id()).is_none() {
+                        s.0.linked.push(l.clone());
+                    }
+                    if links.iter().all(|x: &LinkedElement| x.id() != l.id()) {
+                        links.push(l);
+                    }
+                }
+                inst.link = Some(r);
+            }
             s.run(&InsertInstance { element: assembly, instance: inst })?;
         }
         provider.finish(&mut s)?;
-        packages = provider.packages;
+        documents = provider.documents();
+        packages = provider.packages();
     }
 
-    let fresh_components = with_components && reused.is_none();
-    let replaced = reused.filter(|_| with_components).and_then(|(c, _)| scratch.element(c).cloned()).into_iter().collect();
+    let fresh_components = in_document && reused.is_none();
+    let replaced = reused.filter(|_| in_document).and_then(|(c, _)| scratch.element(c).cloned()).into_iter().collect();
     let elements = [Some(studio), fresh_components.then_some(components), Some(assembly)]
         .into_iter()
         .flatten()
@@ -362,6 +465,7 @@ pub fn generate(doc: &Document, pcb: ElementId, board: BoardId, opts: &CreateOpt
         board_name: name,
         elements,
         replaced,
-        generated: GeneratedAssembly { board, studio, components_studio: with_components.then_some(components), assembly, components: linked, packages },
+        generated: GeneratedAssembly { board, studio, components_studio: in_document.then_some(components), assembly, components: linked, packages, documents },
+        links,
     })
 }

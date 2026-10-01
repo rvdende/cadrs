@@ -340,9 +340,23 @@ impl Store {
         self.save(&file.document, &file.meta)
     }
 
+    /// Holds the library lock (see [`LibraryLock`]) until the guard is dropped.
+    pub fn lock_library(&self) -> LibraryLock {
+        LibraryLock(LIBRARY_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
     /// Writes every entry that differs between `before` and `after` (after a library command,
-    /// undo or redo).
+    /// undo or redo). Takes the library lock; see [`Self::sync_locked`].
     pub fn sync(&self, before: &Library, after: &Library) -> Result<(), StoreError> {
+        let lock = self.lock_library();
+        self.sync_locked(&lock, before, after)
+    }
+
+    /// [`Self::sync`] for a caller that holds the library lock. The folders and labels are
+    /// merged with what is on disk now: what `before` → `after` added, changed or removed is
+    /// applied to the current `folders.ron`, so a folder another thread wrote since `before`
+    /// was read (Create assembly's component folder, P3H) isn't lost.
+    pub fn sync_locked(&self, _lock: &LibraryLock, before: &Library, after: &Library) -> Result<(), StoreError> {
         // Permanently deleted: move aside (undo moves it back).
         for e in &before.entries {
             if after.get(e.id).is_none() && self.doc_dir(e.id).is_dir() {
@@ -363,10 +377,12 @@ impl Store {
             }
         }
         if before.folders != after.folders || before.labels != after.labels {
+            // Unreadable: as before the merge (`before` stands for the disk, so `after` is written).
+            let disk = self.read_folders().unwrap_or_else(|_| FoldersFile { version: SCHEMA_VERSION, folders: before.folders.clone(), labels: before.labels.clone() });
             let file = FoldersFile {
                 version: SCHEMA_VERSION,
-                folders: after.folders.clone(),
-                labels: after.labels.clone(),
+                folders: merge_by_id(&before.folders, &after.folders, &disk.folders, |f| f.id),
+                labels: merge_by_id(&before.labels, &after.labels, &disk.labels, |l| l.id),
             };
             let text = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default())
                 .map_err(|e| StoreError::Parse(e.to_string()))?;
@@ -374,6 +390,13 @@ impl Store {
             write_atomic(&self.root.join(FOLDERS_FILE), text.as_bytes())?;
         }
         Ok(())
+    }
+
+    /// The current `folders.ron` (an error when there is none).
+    fn read_folders(&self) -> Result<FoldersFile, StoreError> {
+        let path = self.root.join(FOLDERS_FILE);
+        let text = std::fs::read_to_string(&path)?;
+        ron::from_str(&text).map_err(|e| StoreError::Parse(e.to_string()))
     }
 
     /// Writes a copy of document `source` as a new document `id` called `name`, owned and
@@ -489,6 +512,38 @@ impl Store {
         }
         Ok(())
     }
+}
+
+/// The process-wide lock on the library's shared files (`folders.ron`) and on find-or-create
+/// decisions over the library: held by [`Store::sync`] and by work that reads the library and
+/// then writes it (Create assembly's component folder and documents, on the kernel thread, P3H),
+/// so a read-modify-write can't interleave with another. Not reentrant.
+pub struct LibraryLock(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+static LIBRARY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `disk` with the change from `before` to `after` applied (by id): items `after` removed are
+/// dropped, items it added or changed take `after`'s value; the result is in `after`'s order,
+/// then the items only `disk` has (added by someone else since `before` was read).
+fn merge_by_id<T: Clone + PartialEq, K: PartialEq>(before: &[T], after: &[T], disk: &[T], id: impl Fn(&T) -> K) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for a in after {
+        let unchanged = before.iter().any(|b| b == a);
+        let on_disk = disk.iter().find(|d| id(d) == id(a));
+        match (unchanged, on_disk) {
+            // Unchanged here: keep what is on disk (changed or not); removed there: stays removed.
+            (true, Some(d)) => out.push(d.clone()),
+            (true, None) => {}
+            (false, _) => out.push(a.clone()),
+        }
+    }
+    for d in disk {
+        let known = before.iter().any(|b| id(b) == id(d)) || after.iter().any(|a| id(a) == id(d));
+        if !known {
+            out.push(d.clone());
+        }
+    }
+    out
 }
 
 /// A stable seed for a placeholder thumbnail (FNV-1a of the name and creation time), so the

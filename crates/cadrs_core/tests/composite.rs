@@ -157,3 +157,45 @@ fn transform_copies_context_parts_into_a_closed_composite() {
     h.execute(&mut doc, &InsertInstance { element: asm, instance: Instance::new(one, InstanceSource::Part { element: ctx, part: c }, Pose::IDENTITY) }).unwrap();
     assert_eq!(doc.element(asm).unwrap().assembly_model().unwrap().instances.len(), 3);
 }
+
+#[test]
+fn context_copies_follow_update_context() {
+    // A Part Studio made in the context of an assembly copies a context part in place; the
+    // instance is then moved 30 mm along Y in the assembly. Update context re-snapshots the
+    // Transform (matched by context id) in the same undo step, so the copy moves too; Undo puts
+    // both back.
+    let mut doc = Document::new("Follow context");
+    let mut h = History::default();
+    let studio = doc.elements[0].id;
+    let asm = doc.elements[1].id;
+    let a = block(&mut doc, &mut h, studio, 1, [0.0, 0.0, 10.0, 20.0], 0.0, 30.0);
+    let inst = InstanceId::from_u128(0x7a4f_1100);
+    h.execute(&mut doc, &InsertInstance { element: asm, instance: Instance::new(inst, InstanceSource::Part { element: studio, part: a }, Pose::translation([50.0, 0.0, 0.0])) }).unwrap();
+    let ctx = ElementId::from_u128(0x7a4f_2100);
+    h.execute(&mut doc, &CreateStudioInContext { assembly: asm, studio: ctx, name: Some("Copy".into()) }).unwrap();
+    let picked: Vec<PartId> = doc.element(ctx).unwrap().context.as_ref().unwrap().parts.iter().map(|c| PartId::new(c.id, 0)).collect();
+    let mut t = TransformFeature::new(TransformType::CopyInPlace);
+    t.set_picked(&doc, ctx, &picked);
+    assert_eq!(t.context.len(), 1);
+    h.execute(&mut doc, &transform(ctx, 1, t)).unwrap();
+    let min_y = |doc: &Document| {
+        let b = build(doc, ctx);
+        assert!(b.errors.is_empty(), "{:?}", b.errors);
+        let p = &b.parts[0];
+        (min_x(&b, p.id), p.solid.positions.iter().map(|q| q[1]).fold(f64::INFINITY, f64::min))
+    };
+    assert_eq!(min_y(&doc), (50.0, 0.0));
+    // Move the instance in the assembly.
+    h.execute(&mut doc, &cadrs_core::assembly::commands::MoveInstances { element: asm, poses: vec![(inst, Pose::translation([50.0, 30.0, 0.0]))], label: "Move".into() }).unwrap();
+    assert_eq!(min_y(&doc), (50.0, 0.0), "the copy stays until Update context");
+    // Update context.
+    let old = doc.element(ctx).unwrap().context.clone().unwrap();
+    let now = cadrs_core::assembly::managed_context::resnapshot(&doc, ctx, &old).unwrap();
+    let undo_len = h.undo_len();
+    h.execute(&mut doc, &cadrs_core::assembly::context::SetStudioContext { studio: ctx, context: Some(now) }).unwrap();
+    assert_eq!(h.undo_len(), undo_len + 1, "one undo step");
+    let (x, y) = min_y(&doc);
+    assert!((x - 50.0).abs() < 1e-9 && (y - 30.0).abs() < 1e-9, "the copy follows: {x}, {y}");
+    h.undo(&mut doc).expect("undo");
+    assert_eq!(min_y(&doc), (50.0, 0.0), "undo puts the copy back");
+}

@@ -5,7 +5,8 @@
 // 02 version V1 and the part chosen; 03 OK: U1 shows the part as modelled (off the footprint);
 // 04 Translate X 5 mm (a live preview); 05 Center, then Rotate Z 90 deg: in the middle of the
 //    footprint, the heatsink turned; 06 ✓ Accept: the library keeps it;
-// 07 the component view of QFP100_600MIL shows the custom part on the grid;
+// 07 the component view of QFP100_600MIL shows the custom part on the grid; 07b–07d the
+//    manipulator: the X arrow dragged, the Z ring turned a quarter turn, Accept;
 // 08 a second PCB Studio with the Vision PCB: its U1 shows the same custom part (the mapping is
 //    the workspace library's, so every PCB Studio and every instance of the package follows).
 Scenario(
@@ -76,6 +77,24 @@ Scenario(
         MoveTo(1100, 900),
         Wait(5),
         Screenshot("07-component-view-custom"),
+        // Stage close (PCB11.6, X10): the manipulator. Drag the X arrow about 60 px along it
+        // (Translate X follows, in zoom steps), then the Z ring a quarter turn counter-clockwise
+        // as seen from above (Rotate Z +90 deg), then Accept.
+        Drag(ui("pcb-manip-arrow-x"), ui_at("pcb-manip-arrow-x", 9.2, 5.5)),
+        Wait(20),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("07b-manipulator-arrow-x"),
+        Drag(ui("pcb-manip-ring-z"), ui_at("pcb-manip-origin", -10.5, 0.5)),
+        Wait(20),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("07c-manipulator-ring-z"),
+        Click(ui("pcb-custom-accept")),
+        Wait(20),
+        MoveTo(1100, 900),
+        Wait(5),
+        Screenshot("07d-manipulator-accepted"),
         Custom("pcb-studio"),
         Wait(20),
         Custom("pcb-import vision controller/Vision PCB"),
