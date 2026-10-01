@@ -185,6 +185,9 @@ pub enum JointProblem {
     TangentLengths { a: f64, b: f64 },
     /// The joint's segment isn't on an edge of its first (`false`) or second wall.
     NotOnEdge { second: bool },
+    /// The bend's allowance comes out negative (a deduction or K factor too large for this
+    /// bend): the bend region would have no width.
+    NegativeAllowance { allowance: f64 },
     /// The joint's geometry is degenerate.
     Degenerate,
 }
@@ -196,6 +199,9 @@ impl JointProblem {
             JointProblem::TangentLengths { a, b } => format!("The bend's tangent lines are {a:.4} and {b:.4} long"),
             JointProblem::NotOnEdge { second: false } => "The joint isn't on the edge of its first wall".into(),
             JointProblem::NotOnEdge { second: true } => "The joint isn't on the edge of its second wall".into(),
+            JointProblem::NegativeAllowance { allowance } => {
+                format!("The bend's allowance is negative ({allowance:.4}): its deduction or K factor is too large for it")
+            }
             JointProblem::Degenerate => "The joint is degenerate".into(),
         }
     }
@@ -232,7 +238,10 @@ fn local_seg(m: &Model, w: WallId, s: Seg2) -> Seg2 {
 /// The flat width of a connecting joint (bend allowance; 0 for a tangent joint).
 fn joint_width(m: &Model, j: &Joint) -> Result<f64, JointProblem> {
     match &j.kind {
-        JointKind::Bend(b) => b.allowance(&m.params).filter(|w| w.is_finite()).ok_or(JointProblem::DeductionUndefined),
+        JointKind::Bend(b) => {
+            let w = b.allowance(&m.params).filter(|w| w.is_finite()).ok_or(JointProblem::DeductionUndefined)?;
+            if w < 0.0 { Err(JointProblem::NegativeAllowance { allowance: w }) } else { Ok(w) }
+        }
         JointKind::Tangent { .. } => Ok(0.0),
         JointKind::Rip { .. } => Err(JointProblem::Degenerate),
     }
@@ -558,18 +567,25 @@ fn apply_reliefs(m: &Model, part: &mut FlatPart, tree: &[(JointId, WallId)], pla
             };
             let q = Polygon::new(pts.clone());
             let c = P2::from(pts.iter().fold(V2::zeros(), |acc, p| acc + p.coords) / 4.0);
-            // A corner only where each bend region, at its real extent, reaches the zone: at most a
-            // rip's trim (the thickness plus the minimal gap) short of it.
-            let reach = p.thickness + p.minimal_gap + 1e-6 * size;
+            // A corner only where each bend region, at its real extent, reaches the zone. It may stop
+            // a rip's trim (the thickness plus the minimal gap) short of it, but only where the
+            // shared wall stops with it; where the wall carries on past the bend's end, that end
+            // needs a bend relief, not a corner.
+            let wall_poly = piece_poly(part, PieceSource::Wall(w));
+            let probe = 1e-4 * size;
             let end_of = |s: &Strip| -> Option<BendEnd> {
                 let ts: Vec<f64> = pts.iter().map(|q| along(s, *q)).collect();
                 let (q0, q1) = (ts.iter().copied().fold(f64::INFINITY, f64::min), ts.iter().copied().fold(f64::NEG_INFINITY, f64::max));
                 let len = s.line.len();
+                let end = if along(s, c) >= len * 0.5 { BendEnd::End } else { BendEnd::Start };
+                let (point, outward) = match end {
+                    BendEnd::End => (s.line.b, s.line.dir()),
+                    BendEnd::Start => (s.line.a, -s.line.dir()),
+                };
+                let carries_on = wall_poly.as_ref().is_some_and(|wp| wp.contains(point + outward * probe - s.out * probe));
+                let slack = if carries_on { 0.0 } else { p.thickness + p.minimal_gap };
                 let gap = (q0 - len).max(-q1).max(0.0);
-                if gap > reach {
-                    return None;
-                }
-                Some(if along(s, c) >= len * 0.5 { BendEnd::End } else { BendEnd::Start })
+                (gap <= slack + 1e-6 * size).then_some(end)
             };
             let (Some(e1), Some(e2)) = (end_of(&s1), end_of(&s2)) else { continue };
             cornered.insert((s1.joint, e1));

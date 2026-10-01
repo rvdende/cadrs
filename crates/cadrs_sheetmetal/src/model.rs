@@ -216,14 +216,16 @@ impl Bend {
         self.value.unwrap_or_else(|| BendValue::from_params(p))
     }
 
-    /// The bend region's flat width. A deduction has no meaning from 180° on (hems): such bends
-    /// use the model's K factor instead (`None` only for a bend's own deduction there).
+    /// The bend region's flat width. The model's allowance or deduction is stated for its
+    /// ordinary bends: a deduction has no meaning from 180° on and an allowance meant for 90°
+    /// bends would be far off for a hem, so hems (and other bends of 180° or more) without their
+    /// own value use the model's K factor. (`None` only for a bend's own deduction there.)
+    /// An assumption until checked against Onshape, which doesn't document hems in these modes.
     pub fn allowance(&self, p: &Params) -> Option<f64> {
-        let v = self.value_or_model(p);
-        v.allowance(self.radius, p.thickness, self.angle).or_else(|| {
-            (self.value.is_none() && matches!(v, BendValue::Deduction(_)))
-                .then(|| bend::bend_allowance(self.radius, p.thickness, self.angle, p.k_factor))
-        })
+        if self.value.is_none() && self.angle >= std::f64::consts::PI - 1e-9 && p.bend_calc != crate::params::BendCalc::KFactor {
+            return Some(bend::bend_allowance(self.radius, p.thickness, self.angle, p.k_factor));
+        }
+        self.value_or_model(p).allowance(self.radius, p.thickness, self.angle)
     }
 }
 
@@ -477,18 +479,20 @@ impl Model {
             .map(|(lo, hi)| (hi - lo).norm())
             .fold(1.0, f64::max);
         let tol = 1e-6 * size;
-        // How far a joint may run past its wall near a corner: a bend's setback plus a rip's trim.
         let t = self.params.thickness;
-        let reach = self
-            .joints
-            .iter()
-            .filter_map(|j| j.bend())
-            .map(|b| (b.radius + t) * (b.angle.min(std::f64::consts::PI * 0.99) / 2.0).tan())
-            .fold(0.0, f64::max)
-            + t
-            + self.params.minimal_gap
-            + tol;
         for j in &self.joints {
+            // How far this joint may run past its wall near a corner: the setback of another
+            // (non-hem) bend on the same walls, which took the wall away there, plus a rip's trim.
+            let reach = self
+                .joints
+                .iter()
+                .filter(|k| k.id != j.id && [k.a, k.b].iter().any(|w| *w == j.a || *w == j.b))
+                .filter_map(|k| k.bend().filter(|b| !b.hem && b.angle < std::f64::consts::PI - 1e-9))
+                .map(|b| (b.radius + t) * (b.angle / 2.0).tan())
+                .fold(0.0, f64::max)
+                + t
+                + self.params.minimal_gap
+                + tol;
             let err = |kind| ModelError { joint: j.id, kind };
             let (Some(wa), Some(wb)) = (self.wall(j.a), self.wall(j.b)) else {
                 out.push(err(ModelErrorKind::MissingWall));

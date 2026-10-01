@@ -684,6 +684,13 @@ fn a_corner_needs_the_bends_to_meet() {
         let north = part.piece(PieceSource::Bend(JointId(1))).unwrap();
         assert!((north.cut.iter().map(Polygon::area).sum::<f64>() - north.polygon.area()).abs() < 1e-6, "east {east}");
     }
+    // Close to the zone (it starts at 55) but with the base carrying on past the bend's end: still
+    // a bend relief, not a corner.
+    for east in [52.9, 53.0, 54.9] {
+        let part = one_part(&north_and_short_east(east));
+        assert!(part.corners.is_empty(), "east {east}");
+        assert!(part.cuts.iter().any(|c| c.source == ReliefSource::BendEnd { bend: JointId(0), end: BendEnd::End }), "east {east}");
+    }
     // Running right up to the north wall (55 = where the north bend region begins) it is a corner.
     let part = one_part(&north_and_short_east(60.0));
     assert_eq!(part.corners.len(), 1);
@@ -694,7 +701,8 @@ fn hems_lay_flat_in_every_calculation_mode() {
     let hem = PI * (R + K * T); // a hem's allowance from the model K factor
     for (calc, value, bend_allowance) in [
         (BendCalc::KFactor, K, hem),
-        (BendCalc::BendAllowance, 9.0, 9.0),
+        // The model's allowance is for its ordinary bends: hems use the model's K factor.
+        (BendCalc::BendAllowance, 9.0, hem),
         // Deduction has no meaning at 180°: the hem uses the model's K factor.
         (BendCalc::BendDeduction, 4.0, hem),
     ] {
@@ -774,4 +782,38 @@ fn flat_outputs_have_exact_coordinates() {
     }
     let (lo, _) = part.bounds().unwrap();
     assert!((lo.x + (20.0 - 2.0 * OSSB + ba90())).abs() < 1e-12, "{}", lo.x);
+}
+
+#[test]
+fn negative_allowances_are_reported_as_such() {
+    let p = Params {
+        bend_calc: BendCalc::BendDeduction,
+        bend_deduction: 4.0,
+        ..params()
+    };
+    let mut b = SharpBuilder::new(p);
+    let a = b.wall(P3::origin(), V3::x(), V3::y(), rect(50.0, 40.0));
+    let theta = 10f64.to_radians();
+    let f = b.wall(P3::new(50.0, 0.0, 0.0), V3::new(theta.cos(), 0.0, theta.sin()), V3::y(), rect(30.0, 40.0));
+    b.bend(a, f, (P3::new(50.0, 0.0, 0.0), P3::new(50.0, 40.0, 0.0)));
+    let errs = flatten(&ok(b.build())).errors;
+    assert!(
+        matches!(errs.as_slice(), [FlatError::BadJoint { problem: cadrs_sheetmetal::flat::JointProblem::NegativeAllowance { .. }, .. }]),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn validate_tolerance_isnt_widened_by_hems() {
+    use cadrs_sheetmetal::model::ModelErrorKind;
+    let mut b = SharpBuilder::new(params());
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), rect(50.0, 40.0));
+    let f = b.wall(P3::new(50.0, 0.0, 0.0), V3::z(), V3::y(), rect(30.0, 40.0));
+    b.bend(base, f, (P3::new(50.0, 0.0, 0.0), P3::new(50.0, 40.0, 0.0)));
+    b.hem(base, (P3::new(0.0, 40.0, 0.0), P3::new(0.0, 0.0, 0.0)), 8.0, true, HemAlignment::InPlace);
+    let mut m = ok(b.build());
+    let JointKind::Bend(bend) = &mut m.joints[0].kind else { panic!() };
+    bend.on_a.b.y += 30.0;
+    bend.on_b.b.y += 30.0;
+    assert_eq!(m.validate().first().map(|e| e.kind), Some(ModelErrorKind::NotOnEdge { second: false }));
 }
