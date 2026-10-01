@@ -251,7 +251,7 @@ and `uBGA48_7.4X7.1` at (4.064182376174947, −16.5), rotation 90, TOP, over the
 | P3H.3 | **PCB Studio element and tab** | PCB1.1, PCB1.2, PCB2.1–PCB2.3, PCB2.5, PCB2.6, PCB3.1–PCB3.7, PCB4.1 (IDF), PCB4.3, PCB4.4, X1, X6 | Scenarios match the interface and dialog images. |
 | P3H.4 | **Component properties, BOM, search and component view** | PCB3.8–PCB3.10, PCB4.5–PCB4.7, PCB11.4–PCB11.8, X10 | Scenarios match `v8`; custom-part mapping round-trips. |
 | P3H.5 | **Sync, export and the board exercise** | PCB5.*, PCB6, PCB9.6–PCB9.9, X8, X9 (in-context) | `course_pcb_ex1_*` passes; `.emn` test matches the course's points. |
-| P3H.6 | **Create assembly and exercises 2–3** | PCB7.*, PCB8, PCB9.1–PCB9.5, PCB10, PCB11.1–PCB11.3, X7, X9 (Transform, Composite) | Both exercises pass with their unit tests; needs 3G on `main`. |
+| P3H.6 | **Create assembly and exercises 2–3** | PCB7.*, PCB8, PCB9.1–PCB9.5, PCB10, PCB11.1–PCB11.3, X7, X9 (Transform, Composite) | Both exercises pass with their unit tests; needs 3G on `main`. **Done: judge 8.79** (r1 8.33; fix round 1 16f19c7). |
 
 ### P3H.1 IDF 2.0/3.0 parser and writer + fixtures
 - New bevy-free crate `crates/cadrs_idf` (depends on serde only; `cadrs_core` may depend on it).
