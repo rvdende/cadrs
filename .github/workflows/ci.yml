@@ -34,10 +34,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config \
+            cmake g++ pkg-config clang mold \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The nightly pinned in rust-toolchain.toml (.cargo/config.toml links with mold and uses a
+      # nightly flag).
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc -V
 
       # OpenCASCADE is built from source on the first run (several minutes); the cache keeps it.
       - uses: Swatinem/rust-cache@v2
