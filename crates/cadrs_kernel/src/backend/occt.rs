@@ -70,6 +70,10 @@ fn occt(e: opencascade::Error) -> KernelError {
 #[derive(Default)]
 pub struct OcctKernel {
     bodies: HashMap<BodyId, Shape>,
+    /// Each body's faces as [`Kernel::faces`] gives them, worked out once: a body never changes
+    /// once stored, and a face's area and centroid are exact integrals over its surface (seconds
+    /// for a model of B-spline faces), asked for again by every feature that looks at the body.
+    face_infos: std::sync::Mutex<HashMap<BodyId, std::sync::Arc<Vec<FaceInfo>>>>,
     next_id: u64,
 }
 
@@ -1589,6 +1593,9 @@ impl Kernel for OcctKernel {
 
     fn release(&mut self, body: BodyId) {
         self.bodies.remove(&body);
+        if let Ok(mut c) = self.face_infos.lock() {
+            c.remove(&body);
+        }
     }
 
     fn write_body(&self, body: BodyId) -> Result<Vec<u8>> {
@@ -1601,7 +1608,14 @@ impl Kernel for OcctKernel {
     }
 
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>> {
-        Ok(face_infos(self.body(body)?))
+        if let Some(f) = self.face_infos.lock().ok().and_then(|c| c.get(&body).cloned()) {
+            return Ok(f.as_ref().clone());
+        }
+        let infos = std::sync::Arc::new(face_infos(self.body(body)?));
+        if let Ok(mut c) = self.face_infos.lock() {
+            c.insert(body, infos.clone());
+        }
+        Ok(infos.as_ref().clone())
     }
 
     fn edges(&self, body: BodyId) -> Result<Vec<EdgeInfo>> {
