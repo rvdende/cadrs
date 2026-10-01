@@ -1,0 +1,16 @@
+[package]
+name = "cadrs_sheetmetal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+nalgebra = { workspace = true, features = ["serde-serialize"] }
+geo.workspace = true
+
+[dev-dependencies]
+resvg.workspace = true
+proptest.workspace = true
+ron.workspace = true

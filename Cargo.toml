@@ -25,6 +25,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }
 ttf-parser = "0.25"
 glam = "0.24"
+# Sheet metal flat patterns (P3I.1): 2D polygon booleans for the flat outline, reliefs and the
+# collision check (MIT/Apache-2.0).
+geo = "0.32"
 tiny-skia = "0.11"
 flate2 = "1"
 # P3F.5 (simulation): sparse Cholesky (MIT), exact geometric predicates (MIT/Apache-2.0),
@@ -50,6 +53,7 @@ cadrs_pcb = { path = "crates/cadrs_pcb" }
 cadrs_fea = { path = "crates/cadrs_fea" }
 cadrs_render = { path = "crates/cadrs_render" }
 cadrs_onshape = { path = "crates/cadrs_onshape" }
+cadrs_sheetmetal = { path = "crates/cadrs_sheetmetal" }
 
 # Small optimization for our own code, full optimization for dependencies (Bevy is slow in pure debug).
 [profile.dev]
