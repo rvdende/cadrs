@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 resvg = "0.45"
-icon-rs = "0.3.9"
+icon-rs = "0.3.10"
 directories = "6"
 earcutr = "0.4"
 proptest = "1"

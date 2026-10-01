@@ -18,6 +18,7 @@
 //! Lengths are millimetres and angles radians unless a name says otherwise.
 
 pub mod bend;
+pub mod construct;
 pub mod flat;
 pub mod model;
 pub mod params;

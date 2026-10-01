@@ -557,6 +557,7 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem().is_none(),
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
         }
     }
 
@@ -588,6 +589,7 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem(),
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
+            FeatureKind::SheetMetalModel(x) => x.problem(),
         }
     }
 
@@ -712,6 +714,7 @@ impl Feature {
             FeatureKind::Thicken(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -847,6 +850,8 @@ pub enum FeatureKind {
     Fill(crate::surfacing::FillFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
+    /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).
+    SheetMetalModel(crate::sheetmetal::SheetMetalModelFeature),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

@@ -309,6 +309,26 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Radius", &mut x.radius_expr, &mut x.radius, L);
             s("Start angle", &mut x.start_angle_expr, &mut x.start_angle, A);
         }
+        FeatureKind::SheetMetalModel(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Bend allowance", &mut e.bend_allowance, &mut p.bend_allowance, L);
+            s("Bend deduction", &mut e.bend_deduction, &mut p.bend_deduction, L);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+            s("Corner relief scale", &mut e.corner_relief_scale, &mut p.corner_relief.scale, C);
+            s("Corner relief size", &mut e.corner_relief_size, &mut p.corner_relief.size, L);
+            s("Bend relief depth scale", &mut e.bend_relief_depth_scale, &mut p.bend_relief.depth_scale, C);
+            s("Bend relief width scale", &mut e.bend_relief_width_scale, &mut p.bend_relief.width_scale, C);
+            s("Clearance from input", &mut x.clearance_expr, &mut x.clearance, L);
+            s("Depth", &mut x.depth_expr, &mut x.depth, L);
+            if let Some(c) = &mut x.second {
+                s("Second depth", &mut c.depth_expr, &mut c.depth, L);
+            }
+        }
         FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)

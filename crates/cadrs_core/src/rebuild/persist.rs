@@ -35,7 +35,7 @@ use crate::parts::{Part, PartKind};
 use crate::solid::Solid;
 
 /// The blob format: bump when [`Snapshot`] or a `Saved` form changes.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 const MAGIC: &[u8; 8] = b"CADRSNAP";
 
@@ -334,12 +334,15 @@ pub struct SavedState {
     curves: Vec<(FeatureId, crate::surfacing::HelixGeom)>,
     derived: u32,
     derived_sketches: u32,
+    /// P3I.2.
+    #[serde(default)]
+    sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
 }
 
 impl SavedState {
     fn of(s: &State, w: &mut Writer) -> Self {
         // Every field is named here, so a new field of State can't be left out unnoticed.
-        let State { parts, next_part, next_surface, geoms, planes, connectors, connector_owners, composites, curves, derived, derived_sketches } = s;
+        let State { parts, next_part, next_surface, geoms, planes, connectors, connector_owners, composites, curves, derived, derived_sketches, sheet_metal } = s;
         SavedState {
             parts: parts.save(w),
             next_part: *next_part,
@@ -352,6 +355,7 @@ impl SavedState {
             curves: curves.save(w),
             derived: derived.save(w),
             derived_sketches: derived_sketches.save(w),
+            sheet_metal: (**sheet_metal).clone(),
         }
     }
 
@@ -368,6 +372,7 @@ impl SavedState {
             curves: Persist::load(self.curves, r)?,
             derived: Persist::load(self.derived, r)?,
             derived_sketches: Persist::load(self.derived_sketches, r)?,
+            sheet_metal: Arc::new(self.sheet_metal),
         })
     }
 }

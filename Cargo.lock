@@ -2025,6 +2025,7 @@ dependencies = [
  "cadrs_idf",
  "cadrs_kernel",
  "cadrs_render",
+ "cadrs_sheetmetal",
  "cadrs_sketch",
  "directories",
  "image",
@@ -3836,9 +3837,9 @@ dependencies = [
 
 [[package]]
 name = "icon-rs"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5189225839e14c847b5ec2fa917cded49da9c502557a1c8611dc45cac2835461"
+checksum = "b3a58408907e9d22eea07eb0d15a00575f83aa0772d3a23964299dc9777a7884"
 
 [[package]]
 name = "icu_collections"

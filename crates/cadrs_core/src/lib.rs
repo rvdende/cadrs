@@ -50,6 +50,7 @@ pub mod simulation;
 pub mod solid;
 pub mod store;
 pub mod studio;
+pub mod sheetmetal;
 pub mod surfacing;
 pub mod tab_tree;
 pub mod thumbnail;

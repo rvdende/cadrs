@@ -108,6 +108,10 @@ pub struct Build {
     /// P3G.4: the derived sketches, placed (each a sketch on a frame of its own, named after the
     /// Derived feature): later features take their regions like any sketch's.
     pub derived_sketches: Vec<Feature>,
+    /// P3I.2: each Sheet metal model's definition, flat pattern and parts (the "sheet metal
+    /// contexts", SM1.3), in list order; a failed model keeps its context (the flat view shows
+    /// why, SM1.5).
+    pub sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
 }
 
 /// P3D.1: how a feature came out of the last rebuild.
@@ -214,6 +218,9 @@ struct State {
     /// P3G.4: what each Derived feature so far brought in, and its sketches (placed).
     derived: Arc<HashMap<FeatureId, crate::derived::DerivedOutput>>,
     derived_sketches: Arc<Vec<Feature>>,
+    /// P3I.2: the sheet metal models so far (their definitions, flats and parts).
+    #[serde(default)]
+    sheet_metal: Arc<Vec<crate::sheetmetal::SheetMetalContext>>,
 }
 
 impl State {
@@ -582,6 +589,7 @@ impl Rebuilder {
         }
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
+        out.sheet_metal = (*state.sheet_metal).clone();
         debug_assert!(self.depth != 0 || key == final_key(features), "final_key must follow the rebuild's keys");
         self.trail.clear();
         self.last = state;
@@ -1027,6 +1035,10 @@ impl Rebuilder {
             FeatureKind::Helix(x) => self.helix(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Fill(x) => self.fill(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
@@ -1282,6 +1294,7 @@ mod kernel_ops {
     mod import;
     mod linked;
     mod pattern;
+    mod sheetmetal;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;
