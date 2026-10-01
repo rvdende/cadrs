@@ -17,12 +17,14 @@
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
+use serde::{Deserialize, Serialize};
+
 use crate::geom::{ArcGeom, BezierGeom, EllipseGeom, norm_angle, point_in_polygon, polygon_area};
 use crate::{CurveId, CurveKind, ImprintShape, Sketch, Vec2};
 
 /// One piece of a region's boundary, in the direction the boundary runs: a straight segment,
 /// or a circular arc (its `sweep` is signed: positive runs counter-clockwise).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Piece {
     Line(Vec2, Vec2),
     Arc(ArcGeom),
@@ -162,7 +164,7 @@ pub fn pieces_area(pieces: &[Piece]) -> f64 {
 
 /// A closed region: an outer boundary (counter-clockwise) and holes (clockwise), as polygons in
 /// sketch coordinates (arcs tessellated), and exactly as pieces.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Region {
     pub outer: Vec<Vec2>,
     pub holes: Vec<Vec<Vec2>>,

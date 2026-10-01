@@ -354,7 +354,7 @@ impl MirrorFeature {
 
 /// Where each instance of a pattern is shown for Skip instances (PS22.5): its grid index,
 /// where its dot goes, and whether it is skipped.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct InstanceDot {
     pub index: [u32; 2],
     pub at: Vec3,

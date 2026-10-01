@@ -76,6 +76,7 @@ impl Plugin for PartsPlugin {
             .init_gizmo_group::<FreeEdgeGizmos>()
             .add_plugins(crate::part_shading::PartShadingPlugin)
             .add_systems(Startup, configure_gizmos)
+            .add_systems(Update, set_snapshot_store.run_if(resource_changed::<crate::DocumentStore>))
             .add_systems(
                 Update,
                 (update_part_cache, crate::assembly::in_context::sync_context_parts, sync_part_meshes, shade_parts, draw_part_edges, tint_selection)
@@ -826,6 +827,19 @@ pub fn hidden_sketches(el: &cadrs_core::Element, features: &[Feature], editing: 
         .collect()
 }
 
+/// Rebuild snapshots are kept next to the documents folder (`<data>/cache/session`, see
+/// [`cadrs_core::rebuild::session`]); those nobody used for 30 days, and the least recently used
+/// beyond 2 GB, are removed in the background.
+fn set_snapshot_store(store: Res<crate::DocumentStore>) {
+    let Some(dir) = store.0.root().parent().map(|p| p.join("cache").join("session")) else {
+        cadrs_core::rebuild::session::set_store(None);
+        return;
+    };
+    let disk = cadrs_core::blob_store::DiskStore::new(dir);
+    cadrs_core::rebuild::session::set_store(Some(std::sync::Arc::new(disk.clone())));
+    std::thread::spawn(move || disk.prune(std::time::Duration::from_secs(30 * 24 * 3600), 2 << 30));
+}
+
 fn update_part_cache(
     doc: Option<Res<ActiveDocument>>,
     over: Res<PartOverride>,
@@ -891,7 +905,9 @@ fn update_part_cache(
     // The features above the rollback bar and not suppressed (P3.9).
     let effective = effective_features(&el.active_features(), &over);
     // Rebuild on the kernel thread; wait a little so quick rebuilds show in this frame.
-    let mut rebuild = cadrs_core::rebuild::request(effective.clone());
+    // Restored from the session snapshot of these features when the session doesn't have them
+    // (a document opened again), and snapshotted afterwards.
+    let mut rebuild = cadrs_core::rebuild::request_persisted(effective.clone());
     match rebuild.wait(budget.0) {
         Some(build) => {
             log.0.push((features.len(), build.computed, build.elapsed));

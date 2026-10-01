@@ -1591,6 +1591,15 @@ impl Kernel for OcctKernel {
         self.bodies.remove(&body);
     }
 
+    fn write_body(&self, body: BodyId) -> Result<Vec<u8>> {
+        self.body(body)?.try_to_bin_brep().map_err(occt)
+    }
+
+    fn read_body(&mut self, bytes: &[u8]) -> Result<BodyId> {
+        let shape = Shape::try_from_bin_brep(bytes).map_err(occt)?;
+        Ok(self.insert_raw(shape, History::default())?.bodies[0])
+    }
+
     fn faces(&self, body: BodyId) -> Result<Vec<FaceInfo>> {
         Ok(face_infos(self.body(body)?))
     }
