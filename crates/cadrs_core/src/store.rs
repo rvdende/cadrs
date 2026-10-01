@@ -232,6 +232,14 @@ impl Store {
     /// Reads a `document.ron` only (listing the documents doesn't need their files).
     fn read_path(path: &Path) -> Result<DocumentFile, StoreError> {
         let text = std::fs::read_to_string(path)?;
+        // A current file parses in one typed pass (milliseconds). Probing its version first was
+        // far slower: ron skips the fields the probe doesn't name value by value, which took
+        // seconds for a big document. So only a file that isn't current is probed and migrated.
+        if let Ok(file) = ron::from_str::<DocumentFile>(&text)
+            && file.version == SCHEMA_VERSION
+        {
+            return Ok(file);
+        }
         let probe: VersionProbe = ron::Options::default()
             .from_str(&text)
             .map_err(|e| StoreError::Parse(e.to_string()))?;
@@ -258,8 +266,8 @@ impl Store {
             .filter(|p| p.is_file())
             .collect();
         paths.sort();
-        // Most documents have a current `entry.ron`; parse the rest in full, in parallel (big
-        // documents take seconds each), and write their `entry.ron` for next time.
+        // Most documents have a current `entry.ron`; parse the rest in full, in parallel, and
+        // write their `entry.ron` for next time.
         let cached: Vec<Option<DocumentEntry>> = paths.iter().map(|p| read_entry(p)).collect();
         let missing: Vec<&PathBuf> =
             paths.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(p, _)| p).collect();
