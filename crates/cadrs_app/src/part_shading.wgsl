@@ -45,18 +45,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         c = select(vec3(1.0), in.color.rgb, in.uv.x > 0.5);
     }
     var lin = srgb_to_linear(c);
-    // P3E.3b, draft analysis: the band of this point's draft against the pull direction
-    // (`cadrs_core::analysis::DraftBand::of`), lit like the faces.
-    if (params.analysis.x > 1.5 && in.uv.x < 0.5) {
+    // P3E.3b, the analysis tools' face colouring (`crate::analysis::ShadingAnalysis`): x the mode
+    // (1 zebra, 2 draft, 3 curvature). A selected face keeps its orange.
+    let mode = i32(round(params.analysis.x));
+    if (mode == 2 && in.uv.x < 0.5) {
+        // Draft analysis: the band of this point's draft against the pull direction
+        // (`cadrs_core::analysis::DraftBand::of`, its tolerance `DRAFT_EPS` in w), lit like the
+        // faces.
         let d = degrees(asin(clamp(dot(n, normalize(params.pull.xyz)), -1.0, 1.0)));
         let a = abs(params.analysis.y);
-        let eps = 1e-4;
+        let eps = params.analysis.w;
         var i = 5;
         if (d >= 2.0 * a - eps) {
             i = 0;
         } else if (d >= a - eps) {
             i = 1;
-        } else if (d >= 0.0) {
+        } else if (d > -eps) {
             i = 2;
         } else if (d > -a + eps) {
             i = 3;
@@ -64,11 +68,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             i = 4;
         }
         lin = params.bands[i].rgb * mix(1.0, b, 0.55);
-    } else if (params.analysis.x > 0.5 && in.uv.x < 0.5) {
-        // Zebra stripes (`cadrs_core::analysis::zebra_phase`): the view ray reflected off the
+    } else if (mode == 3 && in.uv.x < 0.5) {
+        // Curvature: the band of the vertex's mean curvature (UV y, per mm) when the most curved
+        // shown is y (`cadrs_core::analysis::curvature_band`; flat at most w).
+        let k = abs(in.uv.y);
+        let mx = params.analysis.y;
+        var i = 5;
+        if (k > params.analysis.w && mx > params.analysis.w) {
+            i = 4 - i32(clamp(floor(k / mx * 5.0), 0.0, 4.0));
+        }
+        lin = params.bands[i].rgb * mix(1.0, b, 0.55);
+    } else if (mode == 1 && in.uv.x < 0.5) {
+        // Zebra stripes (`cadrs_core::analysis::zebra_phase_at`): the view ray reflected off the
         // face, in the view's frame, its angle out of the plane across a slanted screen axis cut
         // into bands (smoothed over a pixel). Orthographic views look along −back everywhere;
-        // perspective ones along each pixel's ray.
+        // perspective ones along each pixel's ray. The dark band is a dark grey, lit a little,
+        // so faces and their (grey) edges stay apart.
         let ortho = view.clip_from_view[3][3] > 0.5;
         let e = select(normalize(view.world_position.xyz - in.world_position.xyz), back, ortho);
         let r = reflect(-e, n);
@@ -78,7 +93,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let w = max(fwidth(x), 1e-4);
         let f = abs(fract(x) - 0.5) * 2.0;
         let white = smoothstep(0.5 - w, 0.5 + w, f);
-        let g = mix(0.06, 0.96, white) * mix(1.0, b, 0.2);
+        let g = mix(0.22, 0.96, white) * mix(1.0, b, 0.3);
         lin = srgb_to_linear(vec3(g));
     }
     return vec4(lin, in.color.a * params.style.y);

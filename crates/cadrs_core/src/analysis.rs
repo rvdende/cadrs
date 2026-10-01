@@ -13,6 +13,10 @@
 //!   direction only, so a flat face under an orthographic view is one shade (straight bands in
 //!   perspective, where the ray changes across it) and a curved face shows the bands, which
 //!   kink where faces meet without curvature continuity.
+//! - **Curvature** ([`vertex_mean_curvature`], [`curvature_band`]): the faces coloured by their
+//!   mean curvature (the mean of the two principal curvatures, per mm: 1/R on a sphere of
+//!   radius R, 1/(2R) on a cylinder, 0 on a plane), in six bands from flat (blue) to the most
+//!   curved shown (red), with a legend.
 //! - **Curvature combs** ([`curvature_comb`]): along an edge, a tooth at each point of its
 //!   polyline, pointing away from the centre of curvature, as long as the curvature (1 / radius)
 //!   times a scale. A straight run has none.
@@ -44,6 +48,11 @@ pub enum DraftBand {
     NegativeSteep,
 }
 
+/// The tolerance of the draft bands' edges (degrees): a face drafted exactly by the required
+/// angle passes, and a vertical wall (|draft| below it, either sign) is in the 0…a band whatever
+/// its tessellation's noise. `part_shading.wgsl` gets it as a uniform.
+pub const DRAFT_EPS: f64 = 1e-4;
+
 impl DraftBand {
     /// Top to bottom, as the legend lists them.
     pub const ALL: [DraftBand; 6] = [
@@ -58,13 +67,13 @@ impl DraftBand {
     /// The band of a draft of `draft` degrees when `required` degrees are needed.
     pub fn of(draft: f64, required: f64) -> DraftBand {
         let a = required.abs();
-        // A hair of tolerance, so a face drafted exactly by the required angle passes.
-        let eps = 1e-9;
+        let eps = DRAFT_EPS;
         if draft >= 2.0 * a - eps {
             DraftBand::PositiveSteep
         } else if draft >= a - eps {
             DraftBand::Positive
-        } else if draft >= 0.0 {
+        } else if draft > -eps {
+            // Zero draft within the tolerance either side (a vertical wall) is here.
             DraftBand::InsufficientPositive
         } else if draft > -a + eps {
             DraftBand::InsufficientNegative
@@ -138,10 +147,148 @@ pub fn zebra_phase(reflected: Vec3, bands: f64) -> f64 {
     (phi * bands / std::f64::consts::PI).rem_euclid(1.0)
 }
 
+/// [`zebra_phase`] at a point: the view's frame `view` (its right, up and back axes, world),
+/// the eye's position `eye`, the point `point` and the surface's unit normal `n` there. An
+/// orthographic view looks along −back everywhere; a perspective one along the ray from the
+/// eye. `part_shading.wgsl` does exactly this per pixel.
+pub fn zebra_phase_at(view: [Vec3; 3], eye: Vec3, point: Vec3, n: Vec3, ortho: bool) -> f64 {
+    let [right, up, back] = view;
+    let e = if ortho { back } else { normalize(sub(eye, point)) };
+    let r = reflect(scale(e, -1.0), n);
+    zebra_phase([dot(r, right), dot(r, up), dot(r, back)], ZEBRA_BANDS)
+}
+
 /// The white half of a band pair.
 pub fn zebra_white(phase: f64) -> bool {
     (phase - 0.5).abs() * 2.0 > 0.5
 }
+
+/// The mean curvature (per mm, ≥ 0: its size) at each vertex of a triangle mesh with vertex
+/// normals: the normal curvature towards each neighbour, `(n_j − n_i)·(p_j − p_i) / |p_j − p_i|²`
+/// (exact for a sphere and along a circle), fitted with the second fundamental form in the
+/// vertex's tangent plane (least squares), whose trace / 2 is the mean curvature. With too few
+/// neighbours to fit, their mean. A face's vertices are its own (the kernel's tessellation), so
+/// a face's edges don't mix in its neighbours' normals.
+pub fn vertex_mean_curvature(positions: &[Vec3], normals: &[Vec3], indices: &[u32]) -> Vec<f64> {
+    let n = positions.len().min(normals.len());
+    let mut nb: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for t in indices.as_chunks::<3>().0 {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            if (a as usize) < n && (b as usize) < n && a != b {
+                if !nb[a as usize].contains(&b) {
+                    nb[a as usize].push(b);
+                }
+                if !nb[b as usize].contains(&a) {
+                    nb[b as usize].push(a);
+                }
+            }
+        }
+    }
+    (0..n)
+        .map(|i| {
+            let ni = normalize(normals[i]);
+            // A tangent basis.
+            let helper = if ni[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            let u = normalize(cross(ni, helper));
+            let v = cross(ni, u);
+            let mut ata = [[0.0f64; 3]; 3];
+            let mut atb = [0.0f64; 3];
+            let (mut sum, mut count) = (0.0, 0usize);
+            for &j in &nb[i] {
+                let d = sub(positions[j as usize], positions[i]);
+                let dd = dot(d, d);
+                if dd < 1e-18 {
+                    continue;
+                }
+                let k = dot(sub(normalize(normals[j as usize]), ni), d) / dd;
+                let (du, dv) = (dot(d, u), dot(d, v));
+                let l = (du * du + dv * dv).sqrt();
+                if l < 1e-12 {
+                    continue;
+                }
+                let (x, y) = (du / l, dv / l);
+                let row = [x * x, 2.0 * x * y, y * y];
+                for r in 0..3 {
+                    for c in 0..3 {
+                        ata[r][c] += row[r] * row[c];
+                    }
+                    atb[r] += row[r] * k;
+                }
+                sum += k;
+                count += 1;
+            }
+            if count == 0 {
+                return 0.0;
+            }
+            let h = match solve3(ata, atb) {
+                Some([a, _, c]) if count >= 3 => 0.5 * (a + c),
+                _ => sum / count as f64,
+            };
+            h.abs()
+        })
+        .collect()
+}
+
+/// Solves a 3×3 linear system (Cramer's rule); `None` when it is (nearly) singular.
+fn solve3(m: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+    let det = |m: [[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let d = det(m);
+    let scale = m.iter().flatten().fold(0.0f64, |a, x| a.max(x.abs()));
+    if d.abs() <= 1e-9 * scale.powi(3).max(1e-300) {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for (k, o) in out.iter_mut().enumerate() {
+        let mut mk = m;
+        for r in 0..3 {
+            mk[r][k] = b[r];
+        }
+        *o = det(mk) / d;
+    }
+    Some(out)
+}
+
+/// The number of curvature bands.
+pub const CURVATURE_BANDS: usize = 6;
+
+/// A mean curvature at most this (per mm: a radius of 10 m) is flat.
+pub const CURVATURE_FLAT: f64 = 1e-4;
+
+/// The band (0 the most curved … 5 flat) of a mean curvature `k` when the most curved shown is
+/// `max`: flat on its own, the rest in five equal steps up to `max`. `part_shading.wgsl` does
+/// the same per pixel.
+pub fn curvature_band(k: f64, max: f64) -> usize {
+    let k = k.abs();
+    if k <= CURVATURE_FLAT || max <= CURVATURE_FLAT {
+        return CURVATURE_BANDS - 1;
+    }
+    let steps = (CURVATURE_BANDS - 1) as f64;
+    let i = ((k / max) * steps).floor().clamp(0.0, steps - 1.0) as usize;
+    CURVATURE_BANDS - 2 - i
+}
+
+/// A curvature band's range (per mm, low to high) when the most curved shown is `max`.
+pub fn curvature_band_range(band: usize, max: f64) -> (f64, f64) {
+    if band >= CURVATURE_BANDS - 1 {
+        return (0.0, 0.0);
+    }
+    let step = max / (CURVATURE_BANDS - 1) as f64;
+    let i = (CURVATURE_BANDS - 2 - band) as f64;
+    (i * step, (i + 1.0) * step)
+}
+
+/// A curvature band's legend text: "0.033 to 0.042 /mm", and "0 (flat)" for the last.
+pub fn curvature_band_label(band: usize, max: f64) -> String {
+    if band >= CURVATURE_BANDS - 1 {
+        return "0 (flat)".into();
+    }
+    let (lo, hi) = curvature_band_range(band, max);
+    format!("{lo:.3} to {hi:.3} /mm")
+}
+
+/// The curvature bands' colours (sRGB), most curved first: red through yellow and green to
+/// blue for flat.
+pub const CURVATURE_COLORS: [[u8; 3]; CURVATURE_BANDS] = [[0xd7, 0x30, 0x27], [0xf4, 0x8c, 0x2c], [0xf2, 0xd4, 0x3a], [0x7c, 0xc4, 0x5a], [0x3a, 0xa8, 0xb8], [0x4a, 0x72, 0xc8]];
 
 /// One tooth of a curvature comb.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -267,16 +414,8 @@ mod tests {
     }
 
     #[test]
-    fn a_plane_under_an_orthographic_view_has_one_zebra_shade() {
-        // Orthographic: every pixel looks along −back, so a plane's reflected ray, and its
-        // stripe, are the same all over it, whatever way it faces.
+    fn a_cylinder_runs_through_the_zebra_bands() {
         let view = [0.0, 0.0, -1.0];
-        for n in [[0.0, 0.0, 1.0], normalize([0.3, -0.4, 0.8]), normalize([1.0, 0.2, 0.1])] {
-            let p = zebra_phase(reflect(view, n), ZEBRA_BANDS);
-            for _ in 0..3 {
-                assert_eq!(zebra_phase(reflect(view, n), ZEBRA_BANDS), p);
-            }
-        }
         // A cylinder standing up (its normal turning about the up axis over the half facing the
         // viewer) runs through several bands.
         let mut changes = 0;
@@ -292,6 +431,118 @@ mod tests {
         assert!(changes >= 6, "{changes}");
         // Head-on, the reflected ray is the axis-free back direction: the first band's middle.
         close(zebra_phase(reflect(view, [0.0, 0.0, 1.0]), ZEBRA_BANDS), 0.0, 1e-12);
+    }
+
+    #[test]
+    fn zebra_at_points_of_a_plane_is_constant_for_ortho_and_varies_in_perspective() {
+        // A view looking down on the Top plane obliquely (right +X, up tipped, back towards the
+        // eye), the eye 300 mm away from the origin along back.
+        let back = normalize([0.0, -1.0, 1.0]);
+        let right = [1.0, 0.0, 0.0];
+        let up = cross(back, right);
+        let view = [right, up, back];
+        let eye = scale(back, 300.0);
+        let n = [0.0, 0.0, 1.0];
+        let points = [[0.0, 0.0, 0.0], [40.0, 0.0, 0.0], [0.0, 60.0, 0.0], [-50.0, -30.0, 0.0], [80.0, 80.0, 0.0]];
+        let ortho: Vec<f64> = points.iter().map(|p| zebra_phase_at(view, eye, *p, n, true)).collect();
+        for p in &ortho {
+            close(*p, ortho[0], 1e-12);
+        }
+        // The orthographic phase is that of the view's back direction reflected, in the view's
+        // frame.
+        let r = reflect(scale(back, -1.0), n);
+        close(ortho[0], zebra_phase([dot(r, right), dot(r, up), dot(r, back)], ZEBRA_BANDS), 1e-12);
+        let persp: Vec<f64> = points.iter().map(|p| zebra_phase_at(view, eye, *p, n, false)).collect();
+        let spread = persp.iter().fold(0.0f64, |m, p| m.max((p - persp[0]).abs()));
+        assert!(spread > 0.05, "perspective phases vary over the plane: {persp:?}");
+        // At the point straight below the eye's ray through the origin, both agree.
+        close(persp[0], ortho[0], 1e-9);
+    }
+
+    /// A UV sphere of radius `r`: positions, outward normals and triangles.
+    fn sphere(r: f64, rings: usize, segs: usize) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
+        let (mut p, mut nn, mut idx) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..=rings {
+            let th = std::f64::consts::PI * i as f64 / rings as f64;
+            for j in 0..segs {
+                let ph = std::f64::consts::TAU * j as f64 / segs as f64;
+                let d = [th.sin() * ph.cos(), th.sin() * ph.sin(), th.cos()];
+                p.push(scale(d, r));
+                nn.push(d);
+            }
+        }
+        for i in 0..rings {
+            for j in 0..segs {
+                let a = (i * segs + j) as u32;
+                let b = (i * segs + (j + 1) % segs) as u32;
+                let (c, d) = (a + segs as u32, b + segs as u32);
+                idx.extend([a, c, b, b, c, d]);
+            }
+        }
+        (p, nn, idx)
+    }
+
+    #[test]
+    fn a_sphere_reads_one_over_r_and_a_plane_zero() {
+        let r = 25.0;
+        let (p, n, idx) = sphere(r, 24, 48);
+        let h = vertex_mean_curvature(&p, &n, &idx);
+        // Away from the poles (whose duplicated vertices have no width).
+        for k in h.iter().skip(48).take(p.len() - 96) {
+            close(*k, 1.0 / r, 1e-9);
+        }
+        // A plane, as a grid.
+        let mut pp = Vec::new();
+        let mut idx = Vec::new();
+        for y in 0..5 {
+            for x in 0..5 {
+                pp.push([x as f64 * 10.0, y as f64 * 7.0, 3.0]);
+            }
+        }
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let a = y * 5 + x;
+                idx.extend([a, a + 1, a + 5, a + 1, a + 6, a + 5]);
+            }
+        }
+        let nn = vec![[0.0, 0.0, 1.0]; pp.len()];
+        assert!(vertex_mean_curvature(&pp, &nn, &idx).iter().all(|k| k.abs() < 1e-12));
+        // A cylinder of radius 10: the mean of 1/10 and 0.
+        let (mut cp, mut cn, mut ci) = (Vec::new(), Vec::new(), Vec::new());
+        let segs = 36;
+        for z in 0..4 {
+            for j in 0..segs {
+                let t = std::f64::consts::TAU * j as f64 / segs as f64;
+                cp.push([10.0 * t.cos(), 10.0 * t.sin(), z as f64 * 4.0]);
+                cn.push([t.cos(), t.sin(), 0.0]);
+            }
+        }
+        for z in 0..3u32 {
+            for j in 0..segs as u32 {
+                let a = z * segs as u32 + j;
+                let b = z * segs as u32 + (j + 1) % segs as u32;
+                ci.extend([a, b, a + segs as u32, b, b + segs as u32, a + segs as u32]);
+            }
+        }
+        let hc = vertex_mean_curvature(&cp, &cn, &ci);
+        for k in &hc[segs..2 * segs] {
+            close(*k, 0.05, 1e-3);
+        }
+        // The bands: flat on its own, the most curved in band 0.
+        assert_eq!(curvature_band(0.0, 0.1), CURVATURE_BANDS - 1);
+        assert_eq!(curvature_band(0.1, 0.1), 0);
+        assert_eq!(curvature_band(0.05, 0.1), 2);
+        assert_eq!(curvature_band(0.001, 0.1), 4);
+        assert_eq!(curvature_band_label(0, 0.1), "0.080 to 0.100 /mm");
+        assert_eq!(curvature_band_label(5, 0.1), "0 (flat)");
+    }
+
+    #[test]
+    fn a_vertical_wall_is_in_the_zero_to_a_band_either_side_of_zero() {
+        for d in [0.0, 1e-6, -1e-6, -5e-5, 5e-5] {
+            assert_eq!(DraftBand::of(d, 3.0), DraftBand::InsufficientPositive, "{d}");
+        }
+        assert_eq!(DraftBand::of(-2.0 * DRAFT_EPS, 3.0), DraftBand::InsufficientNegative);
     }
 
     #[test]

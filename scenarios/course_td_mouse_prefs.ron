@@ -85,7 +85,8 @@ Scenario(
         MiddleDrag(at(800, 500), at(950, 560)),
         KeyUp("Ctrl"),
         Wait(10),
-        MoveTo(1420, 900),
+        // Off the part (P3E.3b judge: the cursor at 1420, 900 hovered the panned bar's edge).
+        MoveTo(1300, 300),
         Wait(3),
         Screenshot("08-ctrl-middle-drag-pans"),
         Click(ui("tab-bar-drawing")),

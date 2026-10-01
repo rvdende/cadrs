@@ -1342,6 +1342,12 @@ fn golden_course_td_mouse_prefs() {
     run_scenario("course_td_mouse_prefs");
 }
 
+// P3E.4: workspaces, branches and merge.
+#[test]
+fn golden_course_td_branch_merge() {
+    run_scenario("course_td_branch_merge");
+}
+
 // Final part 2: the assembly course scenarios (stage 3B) and the importer/list scenarios merged
 // from main, which were not registered before.
 

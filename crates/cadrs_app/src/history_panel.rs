@@ -21,15 +21,21 @@
 //!   show on the rail as squares, splitting the changes around them, and a version's right-click
 //!   has **Open read-only** (the Part Studio at it, in the view-only Repair panel) and Restore.
 //!
+//! - **Workspaces** (P3E.4, see [`crate::workspaces`]): the top row is the current workspace
+//!   (Main or a branch) and the rail its own changes; a branch's rail ends at the version it was
+//!   made from. A version's menu has **Branch to create workspace…**. The other workspaces are
+//!   listed under the rail: click one to switch to it; its menu has **Switch to workspace** and
+//!   **Merge into current workspace…**.
+//!
 //! Out of scope by user decision 2026-09-29 ("niche"): the detailed Versions and history
-//! panel: branches, compare, search and filters, the Name / Modified columns and the legend.
+//! panel: the graph, compare, search and filters, the Name / Modified columns and the legend.
 
 use std::collections::HashSet;
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::Activate;
-use cadrs_core::history_log::{HistoryLog, Origin, RestoreDocument};
+use cadrs_core::history_log::{HistoryLog, Origin, RestoreDocument, WorkspaceId};
 use cadrs_core::{ElementId, FeatureId};
 use cadrs_ui::menu::{ContextMenuAnchor, ContextMenuRequested, Menu, MenuAction, MenuItem};
 use cadrs_ui::{IconButton, Theme, TimelineMarker, TimelineRow, Tooltip, open_context_menu};
@@ -74,6 +80,13 @@ impl DocLog {
     /// The entry at which `feature` of `element` last regenerated without error.
     pub fn last_healthy(&self, element: ElementId, feature: FeatureId) -> Option<usize> {
         self.log.as_ref()?.last_healthy(element, feature)
+    }
+
+    /// P3E.4: another workspace was opened (its undo and redo stacks' lengths are `stacks`).
+    pub fn workspace_switched(&mut self, stacks: (usize, usize)) {
+        self.stacks = stacks;
+        self.noted = None;
+        self.generation += 1;
     }
 
     /// The label of entry `k` ("Conrod :: Edit : Sketch 2").
@@ -210,6 +223,8 @@ fn track_history(world: &mut World) {
         Origin::Redo(undo_label)
     } else if let Some(entry) = undo_label.strip_prefix("Restore to ") {
         Origin::Restore(entry.to_string())
+    } else if let Some(source) = undo_label.strip_prefix(cadrs_core::workspace_merge::MERGE_LABEL) {
+        Origin::Merge(source.to_string())
     } else {
         Origin::Command(undo_label)
     };
@@ -290,6 +305,8 @@ enum Row {
     Group(usize),
     Entry(usize),
     Version(usize),
+    /// P3E.4: another workspace.
+    Workspace(WorkspaceId),
 }
 
 /// The menu opened on an entry or a version.
@@ -297,6 +314,7 @@ enum Row {
 enum MenuFor {
     Entry(usize),
     Version(usize),
+    Workspace(WorkspaceId),
 }
 
 /// What the rail shows between Main and Start, newest first.
@@ -312,7 +330,8 @@ pub enum RailItem {
 /// were made (a version at entry k sits under the changes after k).
 pub fn rail(log: &HistoryLog) -> Vec<RailItem> {
     let mut out: Vec<RailItem> = Vec::new();
-    let versions_at = |k: usize| log.versions().iter().enumerate().filter(move |(_, v)| v.entry() == k).map(|(i, _)| i);
+    let here = log.current_workspace();
+    let versions_at = |k: usize| log.versions().iter().enumerate().filter(move |(_, v)| v.entry() == k && v.workspace() == here).map(|(i, _)| i);
     for k in (0..log.entries.len()).rev() {
         let vs: Vec<usize> = versions_at(k).collect();
         for i in vs.into_iter().rev() {
@@ -388,6 +407,7 @@ fn sync_panel(
     let parent = parent.parent();
     let t = theme.clone();
     let rows = rows(&log, &panel, &clock, &user);
+    let others = other_rows(&log, &clock, &user);
     let root = commands
         .spawn((Name::new("history-panel"), PanelRoot, want, DespawnOnExit(AppState::Document), panel_node(&t)))
         .with_children(|p| {
@@ -457,6 +477,22 @@ fn sync_panel(
                         e.insert(Tooltip::card(tip));
                     }
                 }
+                if !others.is_empty() {
+                    l.spawn((
+                        Name::new("history-other-workspaces"),
+                        Node {
+                            margin: UiRect::top(Val::Px(8.0)),
+                            padding: UiRect::new(Val::Px(10.0), Val::Px(6.0), Val::Px(6.0), Val::Px(2.0)),
+                            border: UiRect::top(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(t.panel_border),
+                    ))
+                    .with_child(t.text("Other workspaces", 10.5, FontWeight::BOLD, t.muted_foreground));
+                    for (row, b) in others {
+                        l.spawn((row, b.build(&t))).insert(Tooltip::new("Click to switch; right-click to merge"));
+                    }
+                }
             });
             p.spawn((
                 Node {
@@ -500,7 +536,7 @@ fn rows(log: &DocLog, panel: &HistoryPanel, clock: &AppClock, user: &UserProfile
     let head = l.head_index();
     out.push((
         Row::Main,
-        TimelineRow::new("history-main", "Main")
+        TimelineRow::new("history-main", l.current_name())
             .subtitle(when(head))
             .marker(TimelineMarker::Workspace)
             .first(true)
@@ -544,15 +580,38 @@ fn rows(log: &DocLog, panel: &HistoryPanel, clock: &AppClock, user: &UserProfile
             }
         }
     }
-    out.push((
-        Row::Entry(0),
-        TimelineRow::new("history-start", "Start")
-            .subtitle(when(0))
-            .marker(TimelineMarker::Start)
-            .last(true)
-            .selected(panel.selected == Some(0)),
-    ));
+    // A branch starts at the version it was made from (P3E.4).
+    let origin = l.branch_info(l.current_workspace()).and_then(|w| l.version(w.from_version()).map(|v| (v.clone(), w.clone())));
+    let start = match &origin {
+        Some((v, w)) => TimelineRow::new("history-start", v.name().to_string())
+            .subtitle(format!("{} · branched {}", l.workspace_name(v.workspace()), clock.format(w.time())))
+            .marker(TimelineMarker::Version),
+        None => TimelineRow::new("history-start", "Start").subtitle(when(0)).marker(TimelineMarker::Start),
+    };
+    out.push((Row::Entry(0), start.last(true).selected(panel.selected == Some(0))));
     out
+}
+
+/// P3E.4: the other workspaces, Main first: who changed each last and when, or the version a
+/// branch came from.
+fn other_rows(log: &DocLog, clock: &AppClock, user: &UserProfile) -> Vec<(Row, TimelineRow)> {
+    let Some(l) = log.log.as_ref() else { return Vec::new() };
+    let current = l.current_workspace();
+    l.workspace_ids()
+        .into_iter()
+        .filter(|w| *w != current)
+        .enumerate()
+        .map(|(i, w)| {
+            let last = l.workspace_entries(w).and_then(|e| e.last());
+            let mut sub = last.map(|e| format!("{} · {}", user.display(&e.user), clock.format(e.time))).unwrap_or_default();
+            if let Some(b) = l.branch_info(w)
+                && let Some(v) = l.version(b.from_version())
+            {
+                sub = format!("From {} · {sub}", v.name());
+            }
+            (Row::Workspace(w), TimelineRow::new(format!("history-workspace-{}", i + 1), l.workspace_name(w)).subtitle(sub).marker(TimelineMarker::Workspace).first(true).last(true))
+        })
+        .collect()
 }
 
 /// The rail's History button shows pressed while the panel is open.
@@ -636,13 +695,18 @@ pub fn create_version(world: &mut World, name: &str, description: &str) {
     world.resource_mut::<HistoryPanel>().open = true;
 }
 
-fn on_row_activate(a: On<Activate>, q: Query<&Row>, mut panel: ResMut<HistoryPanel>, mut commands: Commands) {
+fn on_row_activate(a: On<Activate>, q: Query<&Row>, button: Res<cadrs_ui::menu::LastPointerButton>, mut panel: ResMut<HistoryPanel>, mut commands: Commands) {
     let Ok(row) = q.get(a.entity) else { return };
     match *row {
         Row::Main => {
             panel.selected = None;
             panel.selected_version = None;
         }
+        // A left click switches (a right click only asks for the row's menu).
+        Row::Workspace(w) if button.0 == bevy::picking::pointer::PointerButton::Primary => {
+            commands.queue(move |world: &mut World| crate::workspaces::switch_workspace(world, w))
+        }
+        Row::Workspace(_) => {}
         Row::Version(i) => {
             panel.selected = None;
             panel.selected_version = Some(i);
@@ -684,10 +748,20 @@ fn on_row_menu(ev: On<ContextMenuRequested>, q: Query<&Row>, log: Res<DocLog>, t
                     .item_height(22.0)
                     .text_only()
                     .item(MenuItem::new("history-open-read-only", "Open read-only"))
-                    .item(MenuItem::new("history-restore", "Restore").disabled(at == head)),
+                    .item(MenuItem::new("history-restore", "Restore").disabled(at == head))
+                    .item(MenuItem::new("history-branch", "Branch to create workspace…")),
                 MenuFor::Version(i),
             )
         }
+        Ok(&Row::Workspace(w)) => (
+            Menu::new("history-workspace-menu")
+                .min_width(190.0)
+                .item_height(22.0)
+                .text_only()
+                .item(MenuItem::new("history-switch", "Switch to workspace"))
+                .item(MenuItem::new("history-merge", "Merge into current workspace…")),
+            MenuFor::Workspace(w),
+        ),
         _ => return,
     };
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
@@ -706,6 +780,9 @@ fn on_row_menu_action(ev: On<MenuAction>, q: Query<&MenuFor, With<ContextMenuAnc
         }
         ("history-view-repair", MenuFor::Entry(k)) => commands.queue(move |world: &mut World| crate::repair::open_at(world, k)),
         ("history-open-read-only", MenuFor::Version(i)) => commands.queue(move |world: &mut World| crate::repair::open_version(world, i)),
+        ("history-branch", MenuFor::Version(i)) => commands.queue(move |world: &mut World| crate::workspaces::open_branch_dialog(world, i)),
+        ("history-switch", MenuFor::Workspace(w)) => commands.queue(move |world: &mut World| crate::workspaces::switch_workspace(world, w)),
+        ("history-merge", MenuFor::Workspace(w)) => commands.queue(move |world: &mut World| crate::workspaces::open_merge_dialog(world, w)),
         _ => {}
     }
 }

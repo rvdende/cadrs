@@ -91,6 +91,7 @@ pub mod viewport;
 pub mod view_options;
 pub mod section_view;
 pub mod hidden_edges;
+pub mod workspaces;
 
 use bevy::prelude::*;
 use cadrs_core::{Document, DocumentMeta, Element, ElementId, History, Store, Timestamp};
@@ -263,6 +264,14 @@ pub struct ActiveDocument {
     pub read_only: Option<String>,
     /// How many edits were refused while read-only (the session says so each time).
     pub refused: u32,
+}
+
+/// P3E.4: a workspace's undo and redo stacks, kept while another workspace is open.
+#[derive(Default)]
+pub struct WorkspaceUndo {
+    history: History,
+    undo_active: Vec<Option<ElementId>>,
+    redo_active: Vec<Option<ElementId>>,
 }
 
 /// Why an edit of a read-only document is refused.
@@ -458,6 +467,32 @@ impl ActiveDocument {
         }
     }
 
+    /// P3E.4: opens another workspace's state `doc` with its own undo and redo `undo` (empty
+    /// the first time), and returns this workspace's. The active tab stays if it's there. The
+    /// document file follows on the next save.
+    pub fn switch_workspace(&mut self, doc: Document, undo: WorkspaceUndo) -> WorkspaceUndo {
+        self.remember_active_index();
+        let old = WorkspaceUndo {
+            history: std::mem::replace(&mut self.history, undo.history),
+            undo_active: std::mem::replace(&mut self.undo_active, undo.undo_active),
+            redo_active: std::mem::replace(&mut self.redo_active, undo.redo_active),
+        };
+        self.doc = doc;
+        self.fix_active();
+        old
+    }
+
+    /// Saves the document and its metadata now (a workspace switch: the file holds the open
+    /// workspace and the metadata its name), without touching the modified time.
+    pub fn save_now(&mut self, store: &Store) -> Result<(), cadrs_core::StoreError> {
+        let Some(meta) = &self.meta else {
+            return Ok(());
+        };
+        store.save(&self.doc, meta)?;
+        self.saved = self.doc.clone();
+        Ok(())
+    }
+
     /// True if the document changed since it was opened.
     pub fn changed_since_open(&self) -> bool {
         self.doc != self.opened
@@ -544,7 +579,7 @@ impl Plugin for CadrsAppPlugin {
                 viewport_menu::ViewportMenuPlugin,
             ))
             .add_plugins((sketch_diagnostics::SketchDiagnosticsPlugin, feature_menu::FeatureMenuPlugin))
-            .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
+            .add_plugins((history_panel::HistoryPlugin, workspaces::WorkspacesPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
             .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin))

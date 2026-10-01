@@ -48,9 +48,18 @@ pub struct DocumentMeta {
     /// The document description shown and edited in the details panel (P3E.1, TD3.8).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// The workspace last opened (P3E.4, TD3.7: shown beside the name on the documents page);
+    /// `None` for Main.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 impl DocumentMeta {
+    /// The last-opened workspace's name ("Main" unless a branch was).
+    pub fn workspace_name(&self) -> &str {
+        self.workspace.as_deref().unwrap_or(crate::history_log::MAIN_NAME)
+    }
+
     /// Metadata for a document `user` creates at `now`.
     pub fn new(user: &str, now: Timestamp) -> Self {
         Self {
@@ -64,6 +73,7 @@ impl DocumentMeta {
             folder: None,
             labels: Vec::new(),
             description: String::new(),
+            workspace: None,
         }
     }
 }

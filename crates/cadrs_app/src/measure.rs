@@ -497,15 +497,19 @@ fn draw_measure(result: Res<MeasureResult>, panel: Option<Res<MeasurePanel>>, mu
     }
     let v3 = |p: [f64; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
     let (a, b) = (v3(d.from), v3(d.to));
-    g.line(a, b, Color::srgb_u8(0x20, 0x20, 0x20));
+    // The legs first: where one is the whole distance (a minimum straight along an axis, P3E.3b
+    // judge: measure 04) it shows in its colour, not hidden under the black line.
     if panel.is_some() {
         let x = Vec3::new(b.x, a.y, a.z);
         let y = Vec3::new(b.x, b.y, a.z);
         let c = |[r, gr, bl]: [u8; 3]| Color::srgb_u8(r, gr, bl);
-        g.line(a, x, c(RED));
-        g.line(x, y, c(GREEN));
-        g.line(y, b, c(BLUE));
+        for (p, q, col) in [(a, x, RED), (x, y, GREEN), (y, b, BLUE)] {
+            if p.distance(q) > 1e-6 {
+                g.line(p, q, c(col));
+            }
+        }
     }
+    g.line(a, b, Color::srgb_u8(0x20, 0x20, 0x20));
 }
 
 #[cfg(test)]

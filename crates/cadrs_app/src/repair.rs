@@ -298,7 +298,7 @@ fn close_on_exit(mut repair: ResMut<Repair>, mut commands: Commands, q: Query<En
 /// Opens the Repair panel on history entry `k` of the active Part Studio (IR3.2).
 pub fn open_at(world: &mut World, k: usize) {
     let label = world.get_resource::<DocLog>().and_then(|l| l.label(k)).unwrap_or_default();
-    open_entry(world, k, format!("Main :: {label}"));
+    open_entry(world, k, format!("{} :: {label}", crate::workspaces::current_name(world)));
     world.resource_mut::<Repair>().tab = "Repair";
 }
 

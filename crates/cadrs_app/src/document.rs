@@ -487,6 +487,8 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
             t.text(doc_name, t.font_xl, FontWeight::BOLD, t.foreground),
             Pickable::IGNORE,
         ));
+        // P3E.4: the open workspace's name; a click lists the workspaces to switch to
+        // (see [`crate::workspaces`]).
         bar.spawn((
             Name::new("branch-label"),
             t.text("Main", t.font_md, FontWeight::NORMAL, t.subtle_foreground),
@@ -494,6 +496,9 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
                 margin: UiRect::new(Val::Px(4.0), Val::Px(10.0), Val::Px(3.0), Val::ZERO),
                 ..default()
             },
+            bevy::ui_widgets::Button,
+            bevy::picking::hover::Hovered::default(),
+            Tooltip::new("Workspaces"),
         ));
         // Placeholder counters (link, public, versions, branches, likes).
         for (name, icon_name, count, tip) in [

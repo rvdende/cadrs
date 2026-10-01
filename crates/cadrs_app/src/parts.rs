@@ -1281,9 +1281,18 @@ fn base_colors(part: &Part, preview: bool, selected: bool, bases: &[FaceBase], p
         })
         .collect();
     let at = |i: usize| per_face.get(faces[i]).copied().unwrap_or(([PART_BASE[0] / 255.0, PART_BASE[1] / 255.0, PART_BASE[2] / 255.0, 1.0], [0.0; 2]));
+    // P3E.3b: UV y is the vertex's mean curvature (per mm), for the Curvature analysis.
+    let s = &part.solid;
+    let curvature = cadrs_core::analysis::vertex_mean_curvature(&s.positions, &s.normals, &s.indices);
     let copies = if two_sided(part, preview) { 2 } else { 1 };
     let n = faces.len();
-    (0..copies * n).map(|i| at(i % n)).unzip()
+    (0..copies * n)
+        .map(|i| {
+            let (c, mut uv) = at(i % n);
+            uv[1] = curvature.get(i % n).copied().unwrap_or(0.0) as f32;
+            (c, uv)
+        })
+        .unzip()
 }
 
 /// The face each vertex belongs to (the kernel's tessellation gives every face its own
@@ -1588,7 +1597,7 @@ fn draw_part_edges(
     dialog: Option<Res<crate::extrude::ExtrudeSession>>,
     mut vertices: Gizmos<VertexGizmos>,
     mut free_edges: Gizmos<FreeEdgeGizmos>,
-    (failed, ghosts): (Res<FailedReferences>, Res<PartGhosts>),
+    (failed, ghosts, analysis): (Res<FailedReferences>, Res<PartGhosts>, Res<crate::analysis::ShadingAnalysis>),
     hover_parts: Res<HoverParts>,
     section: Res<crate::section_view::SectionClip>,
 ) {
@@ -1597,6 +1606,8 @@ fn draw_part_edges(
     let clip = section.plane;
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
+    // P3E.3b: under the zebra stripes the edges are mid-grey, apart from both bands.
+    let edge_color = if analysis.mode == 1 { Color::srgb_u8(0x8a, 0x8a, 0x8a) } else { Color::srgb_u8(0x14, 0x14, 0x14) };
     // A failing feature: the parts its references are on are drawn red (`ex4-step10.png`).
     let failed_parts: &[PartId] = &failed.1;
     let v = view.view;
@@ -1659,11 +1670,11 @@ fn draw_part_edges(
             let outlined = part_hovered || part_selected || (failed_parts.contains(&part.id) && failed.2.is_empty());
             if !outlined && mode.edges() {
                 for line in part_lines_culled(part, &v, opaque && !mode.translucent()) {
-                    strip(&mut edges, clip, line, Color::srgb_u8(0x14, 0x14, 0x14));
+                    strip(&mut edges, clip, line, edge_color);
                 }
             }
             for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1] && mode.edges()) {
-                strip(&mut free_edges, clip, e.points.iter().map(|p| v3(*p)), Color::srgb_u8(0x14, 0x14, 0x14));
+                strip(&mut free_edges, clip, e.points.iter().map(|p| v3(*p)), edge_color);
             }
         }
         // Base colours only when a face of the part is selected (the per-frame cost).

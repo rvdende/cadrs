@@ -60,6 +60,7 @@ pub mod time;
 pub mod variables;
 pub mod transform;
 pub mod views;
+pub mod workspace_merge;
 
 pub use command::{Command, CommandError, History, Scope};
 pub use document::{

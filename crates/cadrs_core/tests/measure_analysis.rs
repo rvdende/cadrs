@@ -155,3 +155,42 @@ fn a_5_degree_drafted_face_falls_in_the_3_to_6_band() {
     close(b, 0.0, 1e-6);
     assert_eq!(DraftBand::of(b, 3.0), DraftBand::InsufficientPositive);
 }
+
+/// A1.9 in an assembly: the draft analysis reads the instance's faces as placed. With the
+/// drafted cube's instance turned 90° about X (its +Z now −Y… its top facing −Y) and moved, the
+/// pull direction taken from the instance's top face and the drafted side's normal are both
+/// carried by the pose: the side still reads +5° against that pull, and not against world +Z.
+#[test]
+fn a_rotated_instance_carries_its_pull_direction_and_normals() {
+    use cadrs_core::assembly::{Pose, transform_solid};
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 100.0, 100.0, 100.0);
+    let cube = d.parts()[0].clone();
+    let i = face_index(&cube, [1.0, 0.0, 0.0], [100.0, 50.0, 50.0]);
+    let side = FaceRef { part: cube.id, face: cube.solid.faces[i].name, seed: [100.0, 50.0, 50.0] };
+    let x = DraftFeature { neutral: Some(MirrorPlane::Plane(PlaneRef::Top)), faces: vec![side], angle: 5.0, angle_expr: "5 deg".into(), ..DraftFeature::default() };
+    d.h.execute(&mut d.d, &AddFeature::draft(d.el, FeatureId::new(), x)).unwrap();
+    let drafted = d.parts()[0].clone();
+    let top = face_index(&drafted, [0.0, 0.0, 1.0], [50.0, 50.0, 100.0]);
+    let f = (0..drafted.solid.faces.len()).find(|&k| drafted.solid.faces[k].name == side.face).unwrap();
+    let pose = Pose::rotation_about([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], std::f64::consts::FRAC_PI_2).then(&Pose::translation([40.0, 10.0, 5.0]));
+    let placed = transform_solid(&drafted.solid, &pose);
+    // The pull from the placed top face: the rotated +Z.
+    let pull = placed.face_normal(top).unwrap();
+    let want = pose.rotate([0.0, 0.0, 1.0]);
+    for k in 0..3 {
+        close(pull[k], want[k], 1e-9);
+    }
+    assert!(pull[2].abs() < 1e-9, "the top no longer faces +Z: {pull:?}");
+    // The drafted side against it: still +5°, the 3°–6° band.
+    let n = placed.face_normal(f).unwrap();
+    let a = draft_angle(n, pull);
+    close(a, 5.0, 1e-6);
+    assert_eq!(DraftBand::of(a, 3.0), DraftBand::Positive);
+    // Against world +Z the turned side reads otherwise (the analysis must use the placed pull).
+    assert!((draft_angle(n, [0.0, 0.0, 1.0]) - 5.0).abs() > 1.0);
+    // The per-vertex normals the shader colours by are turned too.
+    let tri = placed.faces[f].first_triangle;
+    let vi = placed.indices[3 * tri] as usize;
+    close(draft_angle(placed.normals[vi], pull), 5.0, 1e-3);
+}

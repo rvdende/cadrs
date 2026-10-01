@@ -651,7 +651,7 @@ fn sync_shading(clip: Res<SectionClip>, view: Res<ViewportView>, kind: Res<Activ
     let mode = view.view.render;
     // P3E.3b: the analysis tools' face colouring.
     let (analysis_v, pull) = analysis.uniforms();
-    let bands = crate::analysis::band_colors();
+    let bands = analysis.band_colors();
     let key = (plane, !mode.shaded(), mode.translucent(), materials.len(), analysis_v.to_array().map(f32::to_bits), pull.to_array().map(f32::to_bits));
     if last.as_ref() == Some(&key) {
         return;

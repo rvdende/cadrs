@@ -4,7 +4,8 @@
 // flipped (it widens as it rises: −5° against +Z) and its top edge filleted R10 (a face whose
 // draft runs from −5° to 90°). Values in `cadrs_core/tests/measure_analysis.rs` and
 // `cadrs_core::analysis`.
-// 01 the bottom-right Analysis tool's menu: Draft analysis…, Curvature, Zebra stripes.
+// 01 the bottom-right Analysis tool's menu: Draft analysis…, Curvature, Curvature combs, Zebra
+//    stripes (text only; the tools on show ticked).
 // 02 Draft analysis…: the dialog (Pull direction Top plane, Draft angle 3°), the pull's blue
 //    arrow at the origin, and the legend at the right: the tops +90° (dark green, 6° to 90°),
 //    the drafted +X side 5° (green, 3° to 6°), the front side and the vertical fillet 0°
@@ -17,11 +18,16 @@
 //    yellow, light green, dark green to the top).
 // 05 ✓: the analysis stays with the dialog closed (the legend and arrow too).
 // 06 the menu again: "Exit draft analysis"; 07 picked: the parts' own colours.
-// 08 Curvature: combs on every curved edge: the cube's fillet arcs (R12, the tallest) and the
-//    boss's circles. 08b the menu with Curvature ticked.
+// 08 Curvature: the faces by mean curvature, with the legend (per mm, in six bands up to the
+//    most curved shown): the flat faces blue, the cube's vertical R12 fillet 1/24 (yellow), the
+//    boss's side R20 1/40 (green), its top R10 fillet the most curved (orange to red).
+// 08b the menu with Curvature ticked; picked again: off.
+// 08c Curvature combs: on every curved edge (none selected): the cube's fillet arcs and the
+//    boss's circles, short teeth that don't run into the next ring.
 // 09 the boss's bottom edge selected: the comb on it alone.
 // 10 Zebra stripes (with the combs still on): the bands packed on the fillets and round the
-//    boss, each flat face one shade (the view is orthographic). 10b the menu: both ticked.
+//    boss, each flat face one shade (the view is orthographic); the dark band a dark grey and
+//    the edges mid-grey, so faces and edges stay apart. 10b the menu: both ticked.
 // 11 both turned off from the menu: the plain parts again.
 // A1.9, in an assembly (the interference stand-in: Block <2> placed at (40, 10, 5)):
 // 12 Draft analysis with Block <2>'s top face picked as the pull direction ("Face of
@@ -183,17 +189,25 @@ Scenario(
         Click(ui("view-analysis")),
         WaitFor("analysis-curvature"),
         Click(ui("analysis-curvature")),
-        Wait(10),
+        Wait(20),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("08-curvature-combs"),
+        ExpectText("curvature-legend-title", "Curvature"),
+        Screenshot("08-curvature-map"),
         Click(ui("view-analysis")),
         WaitFor("analysis-curvature"),
         Hover(ui("analysis-curvature")),
         Wait(3),
         Screenshot("08b-menu-curvature-ticked"),
-        Key("Escape"),
+        Click(ui("analysis-curvature")),
+        Wait(5),
+        Click(ui("view-analysis")),
+        WaitFor("analysis-combs"),
+        Click(ui("analysis-combs")),
+        Wait(10),
+        MoveTo(1420, 900),
         Wait(3),
+        Screenshot("08c-curvature-combs"),
         Click(xyz(194, 36, 0)),
         Wait(10),
         MoveTo(1420, 900),
@@ -215,8 +229,8 @@ Scenario(
         Click(ui("analysis-zebra")),
         Wait(5),
         Click(ui("view-analysis")),
-        WaitFor("analysis-curvature"),
-        Click(ui("analysis-curvature")),
+        WaitFor("analysis-combs"),
+        Click(ui("analysis-combs")),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),

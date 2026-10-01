@@ -50,6 +50,8 @@
 //!   (degrees, as the view cube's camera: azimuth from the Front view toward the Right view),
 //!   optionally centred on the point `X Y Z` at `SCALE` mm per pixel, as orbiting would; for
 //!   picking edges only visible from one side (a pocket's corners).
+//! - `gasket` (P3E.4): stores and opens the branch-and-merge stand-in "Carburetor (stand-in)"
+//!   ([`cadrs_core::samples::gasket`]).
 //! - `fixture <name>`: opens the stand-in document `fixtures/<name>.cadrs` as a fresh copy in
 //!   the scenario's document store (the course's "Make a copy", P3B.1), with an empty undo
 //!   history: e.g. `fixture motor_mount_standin` (Ex1 of the assemblies course).
@@ -173,6 +175,11 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
         if let Some(rest) = m.0.strip_prefix("linked-ex ") {
             let arg = rest.trim().to_string();
             commands.queue(move |world: &mut World| crate::linked_exercises::script(world, &arg));
+            continue;
+        }
+        // P3E.4: the branch-and-merge stand-in.
+        if m.0.trim() == "gasket" {
+            commands.queue(open_gasket);
             continue;
         }
         if let Some(name) = m.0.strip_prefix("fixture ") {
@@ -1045,6 +1052,30 @@ pub(crate) fn fixtures_dir() -> std::path::PathBuf {
         return local;
     }
     std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures"))
+}
+
+/// `gasket` (P3E.4): stores and opens the branch-and-merge stand-in "Carburetor (stand-in)"
+/// ([`cadrs_core::samples::gasket`]: the Part Studios Gasket and Manifold and Assembly 1), with
+/// an empty history.
+fn open_gasket(world: &mut World) {
+    let doc = match cadrs_core::samples::gasket::document() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("gasket: {e}");
+            return;
+        }
+    };
+    let mut file = cadrs_core::samples::gear_cover::file(doc);
+    // Made by the user two hours ago (so its Start sorts before what the scenario does).
+    let now = world.get_resource::<crate::AppClock>().map_or(0, |c| c.now());
+    let user = world.get_resource::<crate::UserProfile>().map(|u| u.id.clone()).unwrap_or_default();
+    file.meta = cadrs_core::DocumentMeta::new(&user, now - 7_200);
+    if let Some(store) = world.get_resource::<crate::DocumentStore>()
+        && let Err(e) = store.0.save(&file.document, &file.meta)
+    {
+        warn!("gasket: {e}");
+    }
+    world.insert_resource(crate::ActiveDocument::stored(file.document, file.meta));
 }
 
 /// Opens `fixtures/<name>.cadrs` as the active document, saved in the document store.
