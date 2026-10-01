@@ -5,14 +5,22 @@
 // 02 the Front plane picked in the feature list: the front half removed, the cut faces capped
 //    in the part's colour with their outlines (the upright's hole cut in half).
 // 03 the flip button: the other half removed (seen from inside, the caps face away).
-// 04 Offset 25 mm: the plane moved through the plate's front holes (cut, capped around them).
+// 04 Offset 25 mm: the plane moved through the plate's front holes (cut, capped around them);
+//    the section plane drawn there (orange, round the parts) with its offset arrow.
 // 05 ✓: the section stays with the dialog closed; 06 the view menu reads "Exit section view";
 // 07 Exit section view: the whole bracket again.
 // 08 IR5.5: the feature menu of Sketch 2 (on Front) → Section view…: the dialog with
-//    "Sketch 2" as its plane, the bracket cut through the upright; 09 ✕ ends it.
+//    "Sketch 2" as its plane (drawn orange), the bracket cut through the upright; 09 ✕ ends it.
 // 10 A3.3, X15: the Pneumatic Cylinder assembly (`fixtures/pneumatic_cylinder_ex2.cadrs`); the
 //    barrel's context menu in the view, its Section view… item; 11 picked: the assembly cut by
-//    the Front plane through the barrel's middle, the barrel, piston and rod capped; 12 ✓.
+//    the Front plane through the barrel's middle, the barrel, piston and rod capped; 12 ✓ (the
+//    barrel no longer selected: no orange on its cut).
+// 13 Exit section view, the barrel clicked: its triad; the triad origin's menu, Section view…;
+//    14 picked: the section through the barrel from the triad (nothing left selected).
+// 15 IR5.5 on the drawing bracket again (in a new Part Studio tab): Sketch 2's feature menu open on Section view….
+// 16 a planar face as the section plane: the Section view tool, the plate's top face picked:
+//    the upright cut off at the plate (capped), the plane drawn orange at the face; 17 its
+//    arrow dragged up: the plane and the cut follow (the upright's lower part back).
 Scenario(
     start: Some("document"),
     steps: [
@@ -102,5 +110,53 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("12-assembly-section-accepted"),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Wait(5),
+        Click(ui("view-section-item")),
+        Wait(10),
+        Click(at(900, 520)),
+        Wait(10),
+        RightClick(ui("triad-origin")),
+        WaitFor("asm-section"),
+        Hover(ui("asm-section")),
+        Wait(3),
+        Screenshot("13-triad-menu"),
+        Click(ui("asm-section")),
+        WaitFor("section-dialog"),
+        Wait(90),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("14-triad-section"),
+        Click(ui("section-dialog-accept")),
+        Wait(10),
+        Click(ui("insert-tab")),
+        WaitFor("create-part-studio"),
+        Click(ui("create-part-studio")),
+        Wait(10),
+        Custom("drawing-bracket"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        RightClick(ui("feature-sketch-2")),
+        WaitFor("feature-section-view"),
+        Hover(ui("feature-section-view")),
+        Wait(5),
+        Screenshot("15-feature-menu-section-item"),
+        Key("Escape"),
+        Wait(5),
+        Click(ui("view-section")),
+        WaitFor("section-dialog"),
+        Wait(5),
+        Click(xyz(-50, 0, 12)),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("16-face-reference"),
+        Drag(ui("section-offset-arrow"), xyz(0, 0, 50)),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("17-arrow-dragged"),
     ],
 )

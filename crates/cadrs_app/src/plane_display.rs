@@ -180,6 +180,7 @@ fn sync_plane_quads(
 }
 
 /// The squares' outlines: thin blue-grey, orange when hovered, blue when selected.
+#[allow(clippy::too_many_arguments)]
 fn draw_plane_feature_edges(
     mut gizmos: Gizmos,
     mut hl_gizmos: Gizmos<HighlightGizmos>,
@@ -188,7 +189,11 @@ fn draw_plane_feature_edges(
     theme: Res<Theme>,
     highlight: Res<PlaneHighlight>,
     selection: Res<Selection>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
+    // P3E.3a: cut by a section view's plane.
+    let clip = section.plane;
+    use crate::section_view::clipped_line as cut;
     for pq in &q {
         let [o, u, v] = pq.frame;
         let h = pq.half;
@@ -198,11 +203,11 @@ fn draw_plane_feature_edges(
         for i in 0..4 {
             let (a, b) = (corners[i], corners[(i + 1) % 4]);
             if hovered {
-                hover_gizmos.line(a, b, theme.highlight);
+                cut(&mut hover_gizmos, clip, a, b, theme.highlight);
             } else if selected {
-                hl_gizmos.line(a, b, theme.selection_3d);
+                cut(&mut hl_gizmos, clip, a, b, theme.selection_3d);
             } else {
-                gizmos.line(a, b, theme.plane_edge);
+                cut(&mut gizmos, clip, a, b, theme.plane_edge);
             }
         }
     }

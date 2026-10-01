@@ -647,6 +647,8 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
 #[derive(Debug, Clone, Copy)]
 pub struct ViewMenuState {
     pub render: crate::camera::RenderMode,
+    /// Each render group's last mode (its row's label).
+    pub groups: (crate::camera::RenderMode, crate::camera::RenderMode),
     pub perspective: bool,
     pub previous: bool,
     pub section: bool,
@@ -658,8 +660,10 @@ impl ViewMenuState {
     pub fn of(world: &World) -> Self {
         let view = world.resource::<ViewportView>().view;
         let kind = *world.resource::<crate::viewport::ActiveKind>();
+        let element = world.resource::<ViewportView>().element;
         Self {
             render: view.render,
+            groups: world.resource::<crate::view_options::RenderGroups>().labels(element, view.render),
             perspective: view.perspective,
             previous: crate::view_options::has_previous(world),
             section: crate::section_view::active(world),
@@ -670,15 +674,14 @@ impl ViewMenuState {
 
 /// The view cube's ▾ menu, grouped like Onshape's (`reference/onshape/view/view-cube-menu4-01.png`).
 /// P3E.3a: the render modes in their two groups (the shaded modes, then the hidden-line ones;
-/// the group in use is checked and named after its mode), Perspective view, Named views…,
-/// Previous view, Zoom to window and Section view… work. What cadrs does not have yet is
-/// disabled.
+/// the group in use is checked, and each is named after the mode last picked in it),
+/// Perspective view, Named views…, Previous view, Zoom to window and Section view… work. What
+/// cadrs does not have yet is disabled.
 fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
-    use crate::camera::RenderMode;
     use cadrs_ui::MenuItem as I;
     let line = st.render.line_drawing();
-    let shaded_label = if line { RenderMode::Shaded.label() } else { st.render.label() };
-    let line_label = if line { st.render.label() } else { RenderMode::HiddenEdgesRemoved.label() };
+    // Each group's row reads the mode last picked in it.
+    let (shaded_label, line_label) = (st.groups.0.label(), st.groups.1.label());
     let check = |on: bool, item: I| if on { item.icon("check") } else { item };
     cadrs_ui::Menu::new("view-menu")
         .align_end()

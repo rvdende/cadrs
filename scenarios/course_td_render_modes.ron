@@ -17,8 +17,14 @@
 //    hole fills the view.
 // 14 Previous view: back to before the zoom to window.
 // 15 Perspective off, fitted, zoomed to a window round the hole again; Named views…: the empty
-//    panel; 16 "Upright hole" typed, Add view: listed.
-// 17 the view changed (F); 18 the row clicked: the saved camera is back (as 15).
+//    panel; 16 "Upright hole" typed, Add view: listed, its row selected (the view is at it).
+// 17 the view changed: the Top view, fitted, in Hidden edges removed (the row no longer
+//    selected); 18 the row clicked: the saved camera and its Shaded mode are back (as 16).
+// 19 Zoom to selection: the upright's front face right-clicked, its menu's Zoom to selection;
+//    20 the view fitted to that face.
+// 21 a render mode per tab, on the Pneumatic Cylinder (`fixtures/pneumatic_cylinder_ex2.cadrs`):
+//    Cylinder parts in Hidden edges visible; 22 the Cylinder assembly tab keeps its own mode
+//    (Translucent, set there); 23 back in Cylinder parts, Hidden edges visible still applies.
 Scenario(
     start: Some("document"),
     steps: [
@@ -172,8 +178,17 @@ Scenario(
         Screenshot("16-named-view-saved"),
         ClickAt(120, 560),
         Wait(3),
+        Key("Shift+5"),
+        Wait(30),
         Key("F"),
         Wait(30),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Wait(5),
+        Hover(ui("view-hidden-edges")),
+        Wait(12),
+        Click(ui("view-render-hidden-removed")),
+        Wait(10),
         MoveTo(120, 560),
         Wait(3),
         Screenshot("17-view-changed"),
@@ -182,5 +197,54 @@ Scenario(
         MoveTo(120, 560),
         Wait(3),
         Screenshot("18-named-view-restored"),
+        Click(ui("named-views-close")),
+        Wait(5),
+        Key("F"),
+        Wait(30),
+        RightClick(xyz(-22, -8, 22)),
+        WaitFor("viewport-zoom-to-selection"),
+        Hover(ui("viewport-zoom-to-selection")),
+        Wait(5),
+        Screenshot("19-zoom-to-selection-item"),
+        Click(ui("viewport-zoom-to-selection")),
+        Wait(30),
+        MoveTo(120, 560),
+        Wait(3),
+        Screenshot("20-zoomed-to-selection"),
+        Custom("fixture pneumatic_cylinder_ex2"),
+        Wait(10),
+        Click(ui("tab-cylinder-parts")),
+        Wait(30),
+        Key("F"),
+        Wait(30),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Wait(5),
+        Hover(ui("view-hidden-edges")),
+        Wait(12),
+        Click(ui("view-render-hidden-visible")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("21-parts-tab-hidden-edges-visible"),
+        Click(ui("tab-cylinder-assembly")),
+        Wait(30),
+        Key("F"),
+        Wait(40),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Wait(5),
+        Hover(ui("view-shaded")),
+        Wait(12),
+        Click(ui("view-render-translucent")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("22-assembly-tab-own-mode"),
+        Click(ui("tab-cylinder-parts")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("23-parts-tab-mode-kept"),
     ],
 )

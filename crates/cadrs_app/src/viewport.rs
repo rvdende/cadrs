@@ -1563,13 +1563,16 @@ fn update_hover(
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
     ),
+    (zoom_window, section_arrow): (Option<Res<crate::view_options::ZoomWindow>>, Res<crate::section_view::SectionArrow>),
     mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
 ) {
     // While a sketch has its plane, planes no longer react to the pointer (the sketch tools
     // own it); while it waits for one, planes highlight as pick candidates.
     let filter = pick_override.0.or(pick_filter(planes.0, session.as_deref(), extrude.as_deref(), applied.as_deref(), create.as_deref()));
     let picking = filter.is_some();
-    let over = pointer_over_viewport(&hover, &q_area);
+    // Zoom to window's box and the section plane's arrow own the pointer: nothing under it
+    // highlights (P3E.3a).
+    let over = pointer_over_viewport(&hover, &q_area) && zoom_window.is_none() && section_arrow.drag.is_none();
     let query = match filter {
         Some(f) if over && !drag.navigating && *kind == ActiveKind::PartStudio => Some(f),
         Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly => {
@@ -1696,7 +1699,11 @@ fn draw_plane_edges(
     highlight: Res<PlaneHighlight>,
     selection: Res<Selection>,
     view: Res<ViewportView>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
+    // P3E.3a: in a section view the planes are cut by its plane too.
+    let clip = section.plane;
+    use crate::section_view::clipped_line as cut;
     for (kind, t, vis) in &q {
         if !vis.get() {
             continue;
@@ -1725,25 +1732,21 @@ fn draw_plane_edges(
             } else {
                 Vec3::X
             };
-            edge_on_gizmos.line(
-                t.transform_point(-along * h),
-                t.transform_point(along * h),
-                Color::srgb_u8(0x79, 0xa1, 0xcc),
-            );
+            cut(&mut edge_on_gizmos, clip, t.transform_point(-along * h), t.transform_point(along * h), Color::srgb_u8(0x79, 0xa1, 0xcc));
             continue;
         }
         for i in 0..4 {
             let (a, b) = (corners[i], corners[(i + 1) % 4]);
             if hovered {
                 // Hover: a thin orange outline (1.5 px, like the plane edges).
-                hover_gizmos.line(a, b, theme.highlight);
+                cut(&mut hover_gizmos, clip, a, b, theme.highlight);
             } else if selected {
-                hl_gizmos.line(a, b, theme.selection_3d);
+                cut(&mut hl_gizmos, clip, a, b, theme.selection_3d);
             } else if edge_on {
                 // The sketch axes in a normal-to view: `#79a1cc` (`screens/10`).
-                edge_on_gizmos.line(a, b, Color::srgb_u8(0x79, 0xa1, 0xcc));
+                cut(&mut edge_on_gizmos, clip, a, b, Color::srgb_u8(0x79, 0xa1, 0xcc));
             } else {
-                gizmos.line(a, b, theme.plane_edge_line());
+                cut(&mut gizmos, clip, a, b, theme.plane_edge_line());
             }
         }
     }
@@ -2136,6 +2139,7 @@ mod tests {
             .init_resource::<Selection>()
             .init_resource::<ViewportRect>()
             .init_resource::<PlanesVisible>()
+            .init_resource::<crate::parts::PartCache>()
             .add_systems(Update, track_active_element);
         let show = |app: &mut App, el| {
             app.world_mut().resource_mut::<ActiveDocument>().active = Some(el);

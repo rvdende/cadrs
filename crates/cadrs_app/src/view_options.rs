@@ -43,6 +43,7 @@ pub struct ViewOptionsPlugin;
 impl Plugin for ViewOptionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreviousViews>()
+            .init_resource::<RenderGroups>()
             .add_systems(
                 Update,
                 (track_previous, zoom_window_input, sync_zoom_box, sync_named_views)
@@ -51,7 +52,8 @@ impl Plugin for ViewOptionsPlugin {
                     .run_if(in_state(AppState::Document)),
             )
             .add_systems(PostUpdate, perspective_gizmo_bias)
-            .add_systems(OnExit(AppState::Document), |mut commands: Commands| {
+            .add_systems(OnExit(AppState::Document), |mut commands: Commands, mut groups: ResMut<RenderGroups>| {
+                groups.0.clear();
                 commands.remove_resource::<ZoomWindow>();
                 commands.remove_resource::<NamedViewsPanel>();
             })
@@ -63,8 +65,36 @@ impl Plugin for ViewOptionsPlugin {
 // ---------------------------------------------------------------------------------------------
 // Render mode and perspective
 
+/// The mode last picked in each group of the view menu (the shaded modes, the hidden-line
+/// ones), per tab: each group's row reads its last mode, as Onshape's do.
+#[derive(Resource, Debug, Default)]
+pub struct RenderGroups(pub std::collections::HashMap<ElementId, (RenderMode, RenderMode)>);
+
+impl RenderGroups {
+    /// The shaded group's and the hidden-line group's modes for a tab now in `current`.
+    pub fn labels(&self, element: Option<ElementId>, current: RenderMode) -> (RenderMode, RenderMode) {
+        let (mut shaded, mut line) = element.and_then(|e| self.0.get(&e).copied()).unwrap_or((RenderMode::Shaded, RenderMode::HiddenEdgesRemoved));
+        if current.line_drawing() {
+            line = current;
+        } else {
+            shaded = current;
+        }
+        (shaded, line)
+    }
+}
+
 /// Sets the active tab's render mode (it stays with the tab's view).
 pub fn set_render_mode(world: &mut World, mode: RenderMode) {
+    let element = world.resource::<ViewportView>().element;
+    if let Some(el) = element {
+        let mut groups = world.resource_mut::<RenderGroups>();
+        let g = groups.0.entry(el).or_insert((RenderMode::Shaded, RenderMode::HiddenEdgesRemoved));
+        if mode.line_drawing() {
+            g.1 = mode;
+        } else {
+            g.0 = mode;
+        }
+    }
     let mut view = world.resource_mut::<ViewportView>();
     view.view.render = mode;
     if let Some(a) = view.animation.as_mut() {
@@ -450,13 +480,13 @@ pub fn zoom_to_selection(world: &mut World) {
 #[derive(Resource, Debug, Clone, Default)]
 pub struct NamedViewsPanel;
 
-/// The panel and what its list was last built from.
+/// The panel and what its list was last built from (the names, and the row the view is at).
 #[derive(Component, Default)]
 struct PanelRoot {
-    built: Option<Vec<String>>,
+    built: Option<(Vec<String>, Option<usize>)>,
 }
 
-const PANEL_WIDTH: f32 = 220.0;
+const PANEL_WIDTH: f32 = 248.0;
 
 pub fn open_named_views(world: &mut World) {
     world.insert_resource(NamedViewsPanel);
@@ -466,6 +496,17 @@ fn tab_views(doc: &ActiveDocument) -> Vec<NamedView> {
     doc.active_element().map(|e| e.named_views.clone()).unwrap_or_default()
 }
 
+/// The camera (and projection) a named view stands for, on top of `base`.
+fn named_camera(nv: &NamedView, base: &ViewState) -> ViewState {
+    ViewState { azimuth: nv.azimuth, elevation: nv.elevation, roll: nv.roll, focus: Vec3::from_array(nv.focus), scale: nv.scale, perspective: nv.perspective, ..*base }
+}
+
+/// The render mode a named view was saved in.
+fn named_render(nv: &NamedView) -> Option<RenderMode> {
+    let slug = nv.render.as_deref()?;
+    RenderMode::ALL.into_iter().find(|m| m.slug() == slug)
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_named_views(
     panel: Option<Res<NamedViewsPanel>>,
@@ -473,6 +514,7 @@ fn sync_named_views(
     kind: Res<ActiveKind>,
     theme: Res<Theme>,
     rect: Res<ViewportRect>,
+    view: Res<ViewportView>,
     mut q_root: Query<(Entity, &mut PanelRoot)>,
     q_body: Query<(Entity, &FloatingPanelBody)>,
     q_area: Query<Entity, With<ViewportArea>>,
@@ -487,6 +529,13 @@ fn sync_named_views(
     };
     let views = tab_views(&doc);
     let names: Vec<String> = views.iter().map(|v| v.name.clone()).collect();
+    // The row of the view on screen (once the camera rests there): shown selected.
+    let current = if view.animation.is_some() {
+        q_root.iter().next().and_then(|(_, s)| s.built.as_ref().and_then(|b| b.1))
+    } else {
+        let now = view.view;
+        views.iter().position(|nv| same_camera(&named_camera(nv, &now), &now) && nv.perspective == now.perspective)
+    };
     let Some((root, mut state)) = q_root.iter_mut().next() else {
         let Some(area) = q_area.iter().next() else { return };
         let left = (rect.0.width() - PANEL_WIDTH - 12.0).max(0.0);
@@ -496,55 +545,72 @@ fn sync_named_views(
         commands.entity(area).add_child(e);
         return;
     };
-    if state.built.as_ref() == Some(&names) {
+    let key = (names.clone(), current);
+    if state.built.as_ref() == Some(&key) {
         return;
     }
     let Some((body, _)) = q_body.iter().find(|(_, b)| b.0 == root) else { return };
-    state.built = Some(names.clone());
-    commands.entity(body).despawn_related::<Children>();
+    state.built = Some(key);
     let t = theme.clone();
     let default_name = next_name(&views);
-    commands.entity(body).with_children(move |b| {
+    let rows = commands.spawn((Name::new("named-views-list"), Node { flex_direction: FlexDirection::Column, width: Val::Percent(100.0), row_gap: Val::Px(1.0), ..default() })).id();
+    commands.entity(rows).with_children(|b| {
         if names.is_empty() {
-            b.spawn((Name::new("named-views-empty"), t.text("No named views in this tab", 11.0, FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::vertical(Val::Px(4.0)), ..default() }));
+            b.spawn((
+                Name::new("named-views-empty"),
+                t.text("No named views in this tab yet", t.font_base, FontWeight::NORMAL, t.muted_foreground),
+                Node { margin: UiRect::new(Val::Px(6.0), Val::ZERO, Val::Px(6.0), Val::Px(6.0)), ..default() },
+            ));
         }
         for (i, name) in names.iter().enumerate() {
             let n = name.clone();
-            b.spawn(Node { width: Val::Percent(100.0), align_items: AlignItems::Center, column_gap: Val::Px(2.0), ..default() }).with_children(|r| {
-                r.spawn((
-                    cadrs_ui::Button::new(format!("named-view-{i}")).label(name.clone()).ghost().small().tooltip(format!("Restore {name}")).build(&t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        let n = n.clone();
-                        commands.queue(move |world: &mut World| restore_named_view(world, &n));
-                    }),
-                ))
-                .entry::<Node>()
-                .and_modify(|mut node| {
-                    node.flex_grow = 1.0;
-                    node.flex_shrink = 1.0;
-                    node.min_width = Val::Px(0.0);
-                    node.justify_content = JustifyContent::FlexStart;
-                });
-                let n = name.clone();
-                r.spawn((
-                    cadrs_ui::IconButton::new(format!("named-view-delete-{i}"), "close").icon_size(14.0).tooltip(format!("Delete {name}")).build(&t),
-                    observe(move |_: On<Activate>, mut commands: Commands| {
-                        let n = n.clone();
-                        commands.queue(move |world: &mut World| delete_named_view(world, &n));
-                    }),
-                ));
-            });
+            let d = name.clone();
+            b.spawn((
+                cadrs_ui::ActionRow::new(format!("named-view-{i}"), name.clone())
+                    .icon("named-positions")
+                    .height(26.0)
+                    .selected(current == Some(i))
+                    .action("delete", "delete", format!("Delete {name}"), true)
+                    .build(&t),
+                observe(move |_: On<Activate>, mut commands: Commands| {
+                    let n = n.clone();
+                    commands.queue(move |world: &mut World| restore_named_view(world, &n));
+                }),
+                observe(move |_: On<cadrs_ui::ActionRowAction>, mut commands: Commands| {
+                    let d = d.clone();
+                    commands.queue(move |world: &mut World| delete_named_view(world, &d));
+                }),
+            ));
         }
-        b.spawn(Node { margin: UiRect::top(Val::Px(6.0)), column_gap: Val::Px(4.0), align_items: AlignItems::Center, ..default() }).with_children(|r| {
-            r.spawn(TextInput::new("named-view-name").value(default_name).select_all_on_focus().width(Val::Percent(100.0)).height(24.0).build(&t))
+    });
+    commands.entity(body).despawn_related::<Children>();
+    commands.entity(body).add_child(rows);
+    commands.entity(body).with_children(move |b| {
+        b.spawn(Node {
+            margin: UiRect::top(Val::Px(8.0)),
+            padding: UiRect::top(Val::Px(8.0)),
+            border: UiRect::top(Val::Px(1.0)),
+            column_gap: Val::Px(6.0),
+            align_items: AlignItems::Center,
+            width: Val::Percent(100.0),
+            ..default()
+        })
+        .insert(BorderColor::all(t.border))
+        .with_children(|r| {
+            r.spawn(TextInput::new("named-view-name").value(default_name).select_all_on_focus().width(Val::Percent(100.0)).height(26.0).build(&t))
                 .entry::<Node>()
-                .and_modify(|mut n| n.flex_grow = 1.0);
+                .and_modify(|mut n| {
+                    n.flex_grow = 1.0;
+                    n.min_width = Val::Px(0.0);
+                });
             r.spawn((
-                cadrs_ui::Button::new("named-view-add").label("Add view").small().build(&t),
+                cadrs_ui::Button::new("named-view-add").label("Add view").icon("plus").primary().small().tooltip("Save the current view under this name").build(&t),
                 observe(|_: On<Activate>, mut commands: Commands| {
                     commands.queue(add_named_view_from_field);
                 }),
-            ));
+            ))
+            .entry::<Node>()
+            .and_modify(|mut n| n.flex_shrink = 0.0);
         });
     });
 }
@@ -572,20 +638,32 @@ pub fn save_named_view(world: &mut World, name: &str) {
     let v = world.resource::<ViewportView>().target();
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
     let Some(element) = doc.active else { return };
-    let view = NamedView { name: name.to_string(), azimuth: v.azimuth, elevation: v.elevation, roll: v.roll, focus: v.focus.to_array(), scale: v.scale, perspective: v.perspective };
+    let view = NamedView {
+        name: name.to_string(),
+        azimuth: v.azimuth,
+        elevation: v.elevation,
+        roll: v.roll,
+        focus: v.focus.to_array(),
+        scale: v.scale,
+        perspective: v.perspective,
+        render: Some(v.render.slug().to_string()),
+    };
     if let Err(e) = doc.execute(&AddNamedView { element, view }) {
         warn!("Save named view: {e}");
     }
 }
 
-/// Restores the active tab's named view `name` (keeping the render mode).
+/// Restores the active tab's named view `name`: its camera, projection and render mode.
 pub fn restore_named_view(world: &mut World, name: &str) {
     let Some(nv) = world.get_resource::<ActiveDocument>().and_then(|d| tab_views(d).into_iter().find(|v| v.name.eq_ignore_ascii_case(name.trim()))) else {
         warn!("No named view {name:?}");
         return;
     };
+    if let Some(mode) = named_render(&nv) {
+        set_render_mode(world, mode);
+    }
     let mut view = world.resource_mut::<ViewportView>();
-    let to = ViewState { azimuth: nv.azimuth, elevation: nv.elevation, roll: nv.roll, focus: Vec3::from_array(nv.focus), scale: nv.scale, perspective: nv.perspective, ..view.target() };
+    let to = named_camera(&nv, &view.target());
     view.view.perspective = nv.perspective;
     view.animate_to(to);
 }

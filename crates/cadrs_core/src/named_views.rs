@@ -8,7 +8,8 @@
 //!
 //! The camera is the viewport's: an azimuth and elevation (degrees, the direction from the
 //! focus toward the eye), a roll, the focus point (mm) and a zoom (mm per logical pixel), and
-//! whether it is a perspective view. The render mode is not part of it (it stays the tab's).
+//! whether it is a perspective view, and the render mode it was saved in (the app's slug for it,
+//! `shaded`, `hidden-removed`…; views saved before it have none and keep the tab's mode).
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,9 @@ pub struct NamedView {
     pub scale: f32,
     #[serde(default)]
     pub perspective: bool,
+    /// The render mode's slug, if saved with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<String>,
 }
 
 /// Saves the camera `view` under its name in the tab `element`, replacing a view of the same
@@ -102,7 +106,7 @@ mod tests {
     use crate::document::Element;
 
     fn view(name: &str, az: f32) -> NamedView {
-        NamedView { name: name.into(), azimuth: az, elevation: 30.0, roll: 0.0, focus: [1.0, 2.0, 3.0], scale: 0.25, perspective: true }
+        NamedView { name: name.into(), azimuth: az, elevation: 30.0, roll: 0.0, focus: [1.0, 2.0, 3.0], scale: 0.25, perspective: true, render: Some("translucent".into()) }
     }
 
     /// Saving, replacing and deleting named views go through the undo layer, and a document

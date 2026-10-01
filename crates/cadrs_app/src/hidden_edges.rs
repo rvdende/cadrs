@@ -27,8 +27,16 @@ impl Plugin for HiddenEdgesPlugin {
     }
 }
 
-/// The grey of hidden edges.
+/// The grey of hidden edges over the white faces of Hidden edges visible.
 const HIDDEN_EDGE: Color = Color::srgb(0.50, 0.53, 0.57);
+/// Over shaded faces (Shaded with hidden edges) the grey would be about as light as the faces:
+/// a dark slate, so the dashes read as clearly as on white.
+const HIDDEN_EDGE_SHADED: Color = Color::srgb(0.10, 0.13, 0.18);
+
+/// The hidden edges' colour in a render mode.
+fn hidden_edge_color(mode: crate::camera::RenderMode) -> Vec4 {
+    if mode.shaded() { HIDDEN_EDGE_SHADED } else { HIDDEN_EDGE }.to_linear().to_vec4()
+}
 /// The dash period on screen (px).
 const DASH_PX: f32 = 7.0;
 
@@ -148,7 +156,7 @@ fn sync_hidden_edges(
     }
 }
 
-/// The dash length follows the zoom; the clip plane the section view.
+/// The dash length follows the zoom; the clip plane the section view; the colour the mode.
 fn sync_params(view: Res<ViewportView>, clip: Res<crate::section_view::SectionClip>, mut materials: ResMut<Assets<HiddenLineMaterial>>) {
     if !view.view.render.hidden_edges() {
         return;
@@ -157,13 +165,15 @@ fn sync_params(view: Res<ViewportView>, clip: Res<crate::section_view::SectionCl
     // As the part edges' gizmo bias, grown in perspective (`crate::view_options`).
     let k = crate::view_options::bias_factor(&view.view);
     let dash = Vec4::new(DASH_PX * view.view.scale, (6e-5 * k).min(0.05), 0.0, 0.0);
+    let color = hidden_edge_color(view.view.render);
     let ids: Vec<AssetId<HiddenLineMaterial>> = materials.ids().collect();
     for id in ids {
-        if materials.get(id).is_some_and(|m| m.params.clip != clip || m.params.dash != dash)
+        if materials.get(id).is_some_and(|m| m.params.clip != clip || m.params.dash != dash || m.params.color != color)
             && let Some(mut m) = materials.get_mut(id)
         {
             m.params.clip = clip;
             m.params.dash = dash;
+            m.params.color = color;
         }
     }
 }
