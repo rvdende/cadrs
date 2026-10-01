@@ -16,6 +16,46 @@ Most of this tour repeats the core courses, so many rows cite their scenarios:
 - [inspection-and-repair-gaps.md](inspection-and-repair-gaps.md) (P3D.3 history and versions);
 - [derived-and-linking-gaps.md](derived-and-linking-gaps.md) (P3G links, Tab manager, Move to document).
 
+**Stage 3E passed (2026-10-02).** Every TD and X row is ✅ (66) or out of scope (9), and so is
+every exercise step (1–7 and 9 ✅; 8 and 10 out of scope). The exercise runs through the UI in
+`course_td_ex1_drill` with no scenario shortcuts, and `crates/cadrs_core/tests/course_test_drive.rs`
+checks the gasket volumes 1676.6483 / 838.3241 / 838.3241 / 1676.6483 mm³ (Main, branch, merged
+Main, restored) to 1e−6 against 2·/1·(1200 − 115.125π), the two-way Part number sync and the
+drawing (2 views, 3-row BOM, 148/80 dimensions, callouts 1–3, title block).
+
+| Milestone | Judge | Rounds |
+|---|---|---|
+| P3E.1 Documents page | 8.67 | r1 |
+| P3E.2 Tabs | 8.53 | r2 (r1 8.29) |
+| P3E.3a Render modes, perspective, named views, Section view | 8.9 | r3 (r1 7.8, r2 8.3) |
+| P3E.3b Measure, Analysis, mouse preference | 8.9 | r3 (r1 8.1, r2 8.4) |
+| P3E.4 Branches and merge | 8.6 | r1 |
+| P3E.5 Walkthrough and drill stand-in | 8.9 | r2 (r1 8.45) |
+
+**Remaining deltas (all minor; for the final regression pass):**
+- P3E.5: a connector-style hover glyph on a bolt hole's edge point with two edges selected
+  (`course_td_ex1_drill` 16, moderate); the drawing tab is "FUEL AND POWER TRAIN Drawing" (the
+  course names it "FUEL AND POWER TRAIN") and no frame shows the rename; the drawing BOM keeps six
+  columns and wraps cells instead of dropping optional columns; the assembly BOM panel squeezes the
+  viewport (19–24); the Restore row reads "1 change"; a single-entry merge group repeats its entry;
+  the upward merge dropdown covers a column header (37, `course_td_branch_merge` 12); two selected
+  edges show only "Diameter: 5.500 mm"; no unit test for BOM Switch to or step 5's screw
+  placement; `fit_within` returns an overflowing table if the resize fails; K has nothing to hide
+  (standard content has no explicit connectors).
+- P3E.4: workspaces can't be renamed or deleted ("Copy workspace…" disabled); a merge between
+  two branches has no common base and lists every differing tab.
+- P3E.3b: the curvature scale follows the largest vertex value (use a percentile), |H| is
+  unsigned, band edges are jagged; no zoomed zebra frame of a fillet joint; mouse_prefs 12 repeats
+  08b; the Preferences dialog has an empty band above OK.
+- P3E.3a: Named views has no thumbnails or rename; hidden-line modes still show planes and
+  sketches; a sketch crossing the section plane at an angle is not clipped; extrude/transform
+  manipulators still use the flat arrow (the section and draft arrows use `manipulator.rs`).
+- Icons: icon-rs has no analysis, zebra or mouse icon; stand-ins are used.
+- **Optional, not done** (main session decision 2026-10-01, after a permission refusal of a
+  scenario edit): a `course_td_branch_merge` 14c frame with Mass properties on the merged
+  assembly's 1 mm gasket (covered by `the_merged_assemblys_gasket_instance_is_the_1_mm_part`),
+  and an assembly Curvature frame in `course_td_analysis`.
+
 **Summary (re-audit 2026-09-29).** The part, assembly, BOM and drawing rows landed in other
 stages:
 - P3.3 extrude from a face, booleans and Parts list;
@@ -58,7 +98,7 @@ What is left is the 3E-only work:
 
 | | ✅ | 🟡 | ❌ | out of scope |
 |---|---|---|---|---|
-| After P3E.5 (2026-10-01, the stage wrap-up, pre-judge) | 66 | 0 | 0 | 9 |
+| After P3E.5 (2026-10-02, stage passed, judge 8.9) | 66 | 0 | 0 | 9 |
 | P3E.5: TD | 57 | 0 | 0 | 9 |
 | P3E.5: X | 9 | 0 | 0 | 0 |
 | After P3E.2 (2026-09-30, pre-judge) | 50 | 11 | 5 | 9 |
