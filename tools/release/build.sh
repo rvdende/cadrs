@@ -26,7 +26,9 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
 fi
 
 # The container runs as you, with its own CARGO_HOME (the host's has a config the container
-# can't use) holding the host's crate downloads.
+# can't use) holding the host's crate downloads. The repo's .cargo/config.toml links with mold and
+# passes a nightly flag, and rust-toolchain.toml asks for nightly; the container has none of
+# these, so the linker, flags and toolchain are reset to its own (stable).
 cargo_home="$root/target/linux-release/cargo-home"
 mkdir -p "$cargo_home/registry" "$cargo_home/git" "$HOME/.cargo/registry" "$HOME/.cargo/git"
 docker run --rm \
@@ -37,6 +39,9 @@ docker run --rm \
     -e HOME=/tmp \
     -e CARGO_HOME=/src/target/linux-release/cargo-home \
     -e CARGO_TARGET_DIR=/src/target/linux-release \
+    -e CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc \
+    -e RUSTFLAGS= \
+    -e RUSTUP_TOOLCHAIN=stable \
     "$image" cargo build --release --locked -p cadrs
 
 cargo build --release --locked --target x86_64-pc-windows-gnu -p cadrs

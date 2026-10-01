@@ -4,3 +4,10 @@
 CXXSTDLIB_x86_64_pc_windows_gnu = "static:-bundle=stdc++"
 # OCCT's CMakeLists declares cmake_minimum_required < 3.5, which CMake 4 rejects without this.
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
+# Faster Linux builds (https://bevy.org/learn/quick-start/getting-started/setup/): link with mold,
+# and share monomorphized generics between crates (nightly). The release container builds on
+# stable without mold: tools/release/build.sh turns both off there.
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y"]

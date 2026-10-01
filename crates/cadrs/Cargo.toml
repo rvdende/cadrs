@@ -12,5 +12,9 @@ cadrs_core.workspace = true
 cadrs_harness.workspace = true
 cadrs_ui.workspace = true
 
+[features]
+# Faster dev builds: Bevy as a shared library (`cargo run -F dev`). Not for shipped builds.
+dev = ["bevy/dynamic_linking"]
+
 [dev-dependencies]
 image.workspace = true

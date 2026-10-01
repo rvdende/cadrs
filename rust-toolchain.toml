@@ -1,0 +1,6 @@
+# Nightly for the faster builds in .cargo/config.toml (-Zshare-generics). The Windows target is
+# for the MinGW release build. The Linux release container builds on stable (tools/release).
+[toolchain]
+channel = "nightly-2026-10-01"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-gnu"]
