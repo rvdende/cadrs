@@ -2879,9 +2879,10 @@ fn rebuild_feature_rows(
     mut q_error: Query<&mut Node, With<FeatureErrorIcon>>,
     theme: Res<Theme>,
     mut last: Local<Option<FeatureRowsKey>>,
-    (errors, under, atlas): (
+    (errors, under, faces_lost, atlas): (
         Res<crate::sketch_constrain::SketchErrors>,
         Res<crate::sketch_constrain::SketchUnderDefined>,
+        Res<crate::sketch_constrain::SketchFacesLost>,
         Res<cadrs_ui::IconAtlas>,
     ),
     (cache, extrude, applied): (
@@ -2916,9 +2917,8 @@ fn rebuild_feature_rows(
     });
     let features: Vec<FeatureRowKey> = all
         .iter()
-        .enumerate()
         // A sketch with conflicting constraints shows as an error too (`screens/15`).
-        .map(|(i, f)| {
+        .map(|f| {
             let kind = match &f.kind {
                 cadrs_core::FeatureKind::Extrude(_) => RowKind::Extrude,
                 cadrs_core::FeatureKind::Revolve(_) => RowKind::Revolve,
@@ -2957,7 +2957,7 @@ fn rebuild_feature_rows(
             let pending = pending_derived == Some(f.id);
             let failed = cache.errors.get(&f.id).cloned().filter(|_| !pending).or_else(|| {
                 f.sketch()?;
-                if cadrs_core::parts::sketch_face_lost_in(all, i, &cache.parts) {
+                if faces_lost.0.contains(&f.id) {
                     Some("The face this sketch is on no longer exists".to_string())
                 } else if errors.0.contains(&f.id) {
                     Some("The sketch has conflicting constraints or broken references".to_string())
@@ -3364,12 +3364,12 @@ pub fn first_failing_feature(world: &World) -> Option<FeatureId> {
     let el = doc.active_element()?;
     let cache = world.resource::<crate::parts::PartCache>();
     let sketch_errors = world.get_resource::<crate::sketch_constrain::SketchErrors>();
-    let all = el.features();
-    all.iter().enumerate().find_map(|(i, f)| {
+    let faces_lost = world.get_resource::<crate::sketch_constrain::SketchFacesLost>();
+    el.features().iter().find_map(|f| {
         let failed = cache.errors.contains_key(&f.id)
             || !f.is_valid()
             || sketch_errors.is_some_and(|e| e.0.contains(&f.id))
-            || (f.sketch().is_some() && cadrs_core::parts::sketch_face_lost_in(all, i, &cache.parts));
+            || faces_lost.is_some_and(|l| l.0.contains(&f.id));
         failed.then_some(f.id)
     })
 }

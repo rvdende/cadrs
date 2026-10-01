@@ -40,6 +40,7 @@ impl Plugin for SketchConstrainPlugin {
         app.init_resource::<SketchAnalysis>()
             .init_resource::<SketchErrors>()
             .init_resource::<SketchUnderDefined>()
+            .init_resource::<SketchFacesLost>()
             .add_systems(
                 Update,
                 (update_analysis, constraint_activation, normal_to_plane, sync_conflict_banner)
@@ -81,20 +82,75 @@ impl SketchAnalysis {
 #[derive(Resource, Debug, Default, PartialEq)]
 pub struct SketchErrors(pub HashSet<FeatureId>);
 
+/// The sketch features (of the active Part Studio) whose face is gone or no longer resolves
+/// (S20.2), worked out in the background by [`update_analysis`] whenever the parts change.
+#[derive(Resource, Debug, Default, PartialEq)]
+pub struct SketchFacesLost(pub HashSet<FeatureId>);
+
 /// The sketch features (of the active Part Studio) that have geometry but are not fully
 /// defined (their feature-list icon gets the blue "−" badge).
 #[derive(Resource, Debug, Default, PartialEq)]
 pub struct SketchUnderDefined(pub HashSet<FeatureId>);
 
+/// A sketch's badge state: (sketch, the geometry analysed, conflicting, under-defined).
+type SketchStatus = (FeatureId, Sketch, bool, bool);
+
+/// The feature-list badges' analyses of the active Part Studio's sketches, worked out on a
+/// background thread: big (imported) sketches take seconds to analyse, which on the main thread
+/// froze the app while a document opened. A badge keeps its last state until its new one lands.
+#[derive(Default)]
+pub(crate) struct BadgeAnalyses {
+    done: Vec<SketchStatus>,
+    running: Option<Pending<Vec<SketchStatus>>>,
+}
+
+/// The sketches of the active Part Studio whose face is lost, keyed by the parts' generation
+/// and the tab they were worked out for, and the background thread working them out again.
+#[derive(Default)]
+pub(crate) struct LostFaces {
+    done: Option<LostKey>,
+    running: Option<(PartsKey, Pending<HashSet<FeatureId>>)>,
+}
+
+type PartsKey = (u64, Option<cadrs_core::ElementId>);
+type LostKey = (PartsKey, HashSet<FeatureId>);
+
+/// A result being worked out on a background thread (taken once it is there).
+type Pending<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
+
+/// Runs `f` on a background thread, or right here when `wait` (scripted runs).
+fn run_or_spawn<T: Send + 'static>(wait: bool, f: impl FnOnce() -> T + Send + 'static) -> Pending<T> {
+    if wait {
+        return std::sync::Arc::new(std::sync::Mutex::new(Some(f())));
+    }
+    let slot: Pending<T> = Default::default();
+    let out = slot.clone();
+    std::thread::spawn(move || {
+        let v = f();
+        if let Ok(mut s) = out.lock() {
+            *s = Some(v);
+        }
+    });
+    slot
+}
+
+/// Whether `g` has conflicts (or a broken link, S20.2) and whether it is under-defined.
+fn sketch_status(g: &Sketch) -> (bool, bool) {
+    let a = solve::analyze(g);
+    let under = !g.curves.is_empty() && !a.fully_constrained();
+    (a.has_conflicts() || !g.broken.is_empty(), under)
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) fn update_analysis(
     doc: Option<Res<ActiveDocument>>,
     session: Option<Res<SketchSession>>,
-    (draw, parts): (Res<SketchDraw>, Res<crate::parts::PartCache>),
+    (draw, parts, budget): (Res<SketchDraw>, Res<crate::parts::PartCache>, Res<crate::parts::RebuildBudget>),
     mut analysis: ResMut<SketchAnalysis>,
     mut errors: ResMut<SketchErrors>,
-    mut under: ResMut<SketchUnderDefined>,
-    mut cache: Local<Vec<(FeatureId, Sketch, bool, bool)>>,
+    (mut under, mut faces_lost): (ResMut<SketchUnderDefined>, ResMut<SketchFacesLost>),
+    mut badges: Local<BadgeAnalyses>,
+    mut lost: Local<LostFaces>,
 ) {
     // The colours stay as they were while dragging (the solve keeps the structure).
     if draw.drag.is_some() {
@@ -103,43 +159,71 @@ pub(crate) fn update_analysis(
     let Some(doc) = doc else {
         return;
     };
+    // Scripted runs wait for every rebuild (RebuildBudget(None)): they work these out at once
+    // too, so screenshots never show a badge from before an edit.
+    let wait = budget.0.is_none();
     let mut live = HashSet::new();
+    let mut todo: Vec<(FeatureId, Sketch)> = Vec::new();
     if let Some(el) = doc.active_element() {
         for f in el.features() {
             let Some(sk) = f.sketch() else { continue };
             live.insert(f.id);
-            let status = |g: &Sketch| {
-                let a = solve::analyze(g);
-                let under = !g.curves.is_empty() && !a.fully_constrained();
-                // A link whose source is gone is an error too (S20.2).
-                (a.has_conflicts() || !g.broken.is_empty(), under)
-            };
-            match cache.iter_mut().find(|(id, ..)| *id == f.id) {
-                Some((_, g, ..)) if *g == sk.geometry => {}
-                Some(entry) => {
-                    entry.1 = sk.geometry.clone();
-                    (entry.2, entry.3) = status(&sk.geometry);
-                }
-                None => {
-                    let (bad, u) = status(&sk.geometry);
-                    cache.push((f.id, sk.geometry.clone(), bad, u));
-                }
+            if !badges.done.iter().any(|(id, g, ..)| *id == f.id && *g == sk.geometry) {
+                todo.push((f.id, sk.geometry.clone()));
             }
         }
     }
-    cache.retain(|(id, ..)| live.contains(id));
-    // A sketch whose face is gone (or no longer resolves: a lost reference) is in error too
-    // (S20.2).
-    let lost: HashSet<FeatureId> = doc
-        .active_element()
-        .map(|el| {
-            let fs = el.features();
-            (0..fs.len())
-                .filter(|i| cadrs_core::parts::sketch_face_lost_in(fs, *i, &parts.parts))
-                .map(|i| fs[i].id)
+    // One batch at a time; a sketch changed meanwhile is analysed again by the next one.
+    if badges.running.is_none() && !todo.is_empty() {
+        badges.running = Some(run_or_spawn(wait, move || {
+            todo.into_iter()
+                .map(|(id, g)| {
+                    let (bad, u) = sketch_status(&g);
+                    (id, g, bad, u)
+                })
                 .collect()
-        })
-        .unwrap_or_default();
+        }));
+    }
+    if let Some(results) = badges.running.as_ref().and_then(|r| r.lock().ok()?.take()) {
+        badges.running = None;
+        for r in results {
+            match badges.done.iter_mut().find(|d| d.0 == r.0) {
+                Some(d) => *d = r,
+                None => badges.done.push(r),
+            }
+        }
+    }
+    badges.done.retain(|(id, ..)| live.contains(id));
+    let cache = &badges.done;
+    // A sketch whose face is gone (or no longer resolves: a lost reference) is in error too
+    // (S20.2). Worked out on a background thread when the parts changed, never while a rebuild
+    // runs: a face missing from the parts falls back to rebuilding the features before the
+    // sketch and waiting for it (seconds on the main thread while a document opened).
+    let key = (parts.generation, doc.active_element().map(|el| el.id));
+    let stale = lost.done.as_ref().is_none_or(|(k, _)| *k != key);
+    if stale
+        && !parts.rebuilding
+        && lost.running.is_none()
+        && let Some(el) = doc.active_element()
+    {
+        let features = el.features().to_vec();
+        let solids = parts.parts.clone();
+        let found = run_or_spawn(wait, move || {
+            (0..features.len())
+                .filter(|i| cadrs_core::parts::sketch_face_lost_in(&features, *i, &solids))
+                .map(|i| features[i].id)
+                .collect()
+        });
+        lost.running = Some((key, found));
+    }
+    if let Some(found) = lost.running.as_ref().and_then(|(k, r)| Some((*k, r.lock().ok()?.take()?))) {
+        lost.running = None;
+        lost.done = Some(found);
+    }
+    let lost = lost.done.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
+    if faces_lost.0 != lost {
+        faces_lost.0 = lost.clone();
+    }
     let want = SketchErrors(
         cache
             .iter()
