@@ -19,6 +19,7 @@ pub mod documents_page;
 pub mod drawing_assembly;
 pub mod drawing_export;
 pub mod drawing_source;
+pub mod flat_drawing;
 pub mod draft;
 pub mod export;
 pub mod external;

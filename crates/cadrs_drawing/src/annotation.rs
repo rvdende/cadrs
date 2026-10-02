@@ -170,6 +170,10 @@ pub trait ViewModel {
     fn boms(&self) -> Vec<&crate::assembly::BomData> {
         Vec::new()
     }
+    /// A flat pattern view's bends (P3I.7).
+    fn flat(&self) -> Option<&crate::flat_view::FlatData> {
+        None
+    }
 }
 
 /// A plain [`ViewModel`] (tests, and what `cadrs_core` stores).
