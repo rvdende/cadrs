@@ -76,7 +76,7 @@ fn flange_on(def: &mut SharpDef, edges: Vec<(EdgePick, f64, bool, f64, Option<(f
         .enumerate()
         .map(|(i, (pick, angle, toward, distance, partial))| FlangeEdge { pick, key: 100 + i as u64, angle, toward, distance, partial })
         .collect();
-    edit::flange(def, &fe, &FlangeOpts { alignment, radius: None, miter, hold_adjacent: hold }).expect("flange");
+    edit::flange(def, &fe, &FlangeOpts { alignment, radius: None, miter, hold_adjacent: hold, per_chain: false }).expect("flange");
 }
 
 #[test]

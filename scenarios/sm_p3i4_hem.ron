@@ -33,7 +33,7 @@ Scenario(
         Click(ui("sheet-metal-menu-hem")),
         WaitFor("sheet-metal-hem-dialog"),
         Wait(10),
-        Custom("view 20 10 55 20 4 0.3"),
+        Custom("view 20 10 55 20 4 0.05"),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),

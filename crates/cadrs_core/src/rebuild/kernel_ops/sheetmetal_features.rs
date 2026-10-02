@@ -22,7 +22,7 @@ use cadrs_sheetmetal::{Model, WallId, flatten};
 use crate::applied::EdgeOrFace;
 use crate::document::DirectionRef;
 use crate::sheetmetal::{PieceKey, SheetMetalContext};
-use crate::sheetmetal_features::{AngleControl, Bound, FlangeEnd, FlangeFeature, HemFeature, MakeJointFeature, MakeJointType, SheetMetalFeature, SmTarget};
+use crate::sheetmetal_features::{AngleControl, ChainType, Bound, FlangeEnd, FlangeFeature, HemFeature, MakeJointFeature, MakeJointType, SheetMetalFeature, SmTarget};
 
 /// A picked edge or side face: its part, its points and a stable key.
 struct Picked {
@@ -200,6 +200,7 @@ impl Rebuilder {
                     radius: (!f.use_model_radius).then_some(f.radius),
                     miter: (!f.auto_miter).then_some(f.miter_angle.to_radians()),
                     hold_adjacent: f.hold_adjacent,
+                    per_chain: f.partial && f.chain == ChainType::PerChain,
                 };
                 Job::Flange(edges, opts)
             }

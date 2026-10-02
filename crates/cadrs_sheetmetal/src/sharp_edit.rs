@@ -375,6 +375,9 @@ pub struct FlangeOpts {
     /// Hold adjacent edges: a partial flange moves only its own stretch of the wall's edge
     /// (false: the whole edge).
     pub hold_adjacent: bool,
+    /// Per chain: a partial flange's bounds apply at the ends of each chain of edges meeting end
+    /// to end (else at each edge's ends).
+    pub per_chain: bool,
 }
 
 /// What a feature added for one of its edges: the edge's key, the new wall and the joint.
@@ -417,6 +420,39 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
     if !(r >= 0.0) {
         return Err("The bend radius must be at least 0".into());
     }
+    // Per chain (SM3.7): edges meeting end to end are one chain; the bounds apply at the chain's
+    // free ends only (the first bound at the first edge's, the second at the last edge's).
+    let mut chained: Vec<FlangeEdge> = edges.to_vec();
+    if o.per_chain && edges.len() > 1 {
+        let ses: Vec<SharpEdge> = edges.iter().map(|fe| sharp_edge(def, &fe.pick)).collect::<Result<_, _>>()?;
+        let tol = 1e-6 * ses.iter().map(|x| x.len()).fold(1.0, f64::max);
+        let end = |x: &SharpEdge, i: usize| if i == 0 { x.at(0.0, 0.0) } else { x.at(x.len(), 0.0) };
+        let shared = |k: usize, i: usize| (0..ses.len()).any(|l| l != k && (0..2).any(|j| (end(&ses[k], i) - end(&ses[l], j)).norm() < tol));
+        let (first, second) = edges[0].partial.unwrap_or((0.0, 0.0));
+        let last = edges.len() - 1;
+        for (k, fe) in chained.iter_mut().enumerate() {
+            if fe.partial.is_none() {
+                continue;
+            }
+            let mut d = [0.0, 0.0];
+            for (i, di) in d.iter_mut().enumerate() {
+                if shared(k, i) {
+                    continue;
+                }
+                if k == 0 && !(k == last && i == 1) {
+                    *di = first;
+                } else if k == last {
+                    *di = second;
+                }
+            }
+            // The first edge's free end takes the first bound; a lone end of the last edge the second.
+            if k == 0 && !shared(0, 0) && !shared(0, 1) {
+                d = [first, second];
+            }
+            fe.partial = Some((d[0], d[1]));
+        }
+    }
+    let edges = &chained[..];
     let mut pend: Vec<Pending> = Vec::new();
     for fe in edges {
         if fe.pick.joined {
@@ -812,9 +848,34 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
             }
         }
     }
+    // Hems on two walls in one plane (flanges mitred into each other) meeting end to end at an
+    // inside corner: the later one starts clear of the earlier one's bend.
+    let mut spans: Vec<(f64, f64)> = ses.iter().map(|s| (0.0, s.len())).collect();
+    for k in 0..ses.len() {
+        for l in 0..k {
+            let (a, b) = (&ses[k], &ses[l]);
+            if a.wall == b.wall || a.n.dot(&b.n).abs() < 1.0 - 1e-9 || (a.origin - b.origin).dot(&a.n).abs() > tol {
+                continue;
+            }
+            for (i, pk) in [(0usize, a.at(0.0, 0.0)), (1, a.at(a.len(), 0.0))] {
+                // (Mitred flanges' edges end the minimal gap apart.)
+                if [b.at(0.0, 0.0), b.at(b.len(), 0.0)].iter().any(|q| (q - pk).norm() < tol + 2.0 * p.minimal_gap) {
+                    let clear = o.radius + t + p.minimal_gap;
+                    if i == 0 {
+                        spans[k].0 = clear;
+                    } else {
+                        spans[k].1 = a.len() - clear;
+                    }
+                }
+            }
+        }
+    }
     let mut out = Vec::new();
-    for ((he, se), cl) in edges.iter().zip(&ses).zip(clips) {
-        let edge = (se.at(0.0, 0.0), se.at(se.len(), 0.0));
+    for (((he, se), cl), span) in edges.iter().zip(&ses).zip(clips).zip(spans) {
+        if span.1 - span.0 < 1e-6 {
+            return Err("A hem is too short to clear the hem it meets".into());
+        }
+        let edge = (se.at(span.0, 0.0), se.at(span.1, 0.0));
         let h = def.builder.hem(se.wall, edge, length, he.toward, o.alignment);
         let id = WallId(stable_id(he.key));
         let jid = JointId(stable_id(he.key.rotate_left(13) ^ 0x4845_4d00));

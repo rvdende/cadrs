@@ -856,6 +856,8 @@ pub(crate) fn commit_number(world: &mut World, entity: Entity, role: Role, text:
         }
     }
     let Some((v, expr)) = parsed else { return };
+    // A plain number typed for an angle reads "90 deg", as Onshape shows it.
+    let expr = if quantity(n) == Quantity::Angle && text.trim().parse::<f64>().is_ok() { units.with_unit(v, Quantity::Angle) } else { expr };
     crate::applied::change_kind(world, label(n), |k| {
         if let Some(x) = sm_mut(k)
             && let Some((value, e)) = slot(x, n)

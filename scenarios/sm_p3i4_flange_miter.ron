@@ -1,7 +1,7 @@
 // Flange on several edges with an automatic miter (P3I.4, SM3.1, SM3.5): two flanges of one
 // feature on the east and north edges of a 60 × 40 × 1 plate meet at its corner: a rip (an edge
 // joint, "Joint C") between them, the minimal gap apart; then Automatic miter off with a 45 deg
-// miter angle cuts each end instead; then a 135 deg bend angle and Outer alignment.
+// miter angle cuts each end instead; then a 60 deg bend angle and Outer alignment.
 Scenario(
     start: Some("document"),
     steps: [
@@ -34,7 +34,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("01-two-flanges-mitred"),
-        Custom("view 30 30 60 40 10 0.3"),
+        Custom("view 30 30 60 40 10 0.04"),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),
@@ -49,7 +49,7 @@ Scenario(
         Click(ui("smf-bend-angle-field")),
         Wait(2),
         Key("Ctrl+A"),
-        Type("135"),
+        Type("60"),
         Key("Tab"),
         Wait(10),
         Click(ui("smf-alignment")),
@@ -60,7 +60,7 @@ Scenario(
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("04-135-outer"),
+        Screenshot("04-60-outer"),
         Click(ui("sheet-metal-flange-dialog-accept")),
         Wait(30),
         MoveTo(1420, 900),
