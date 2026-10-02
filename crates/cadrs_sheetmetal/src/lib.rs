@@ -19,6 +19,7 @@
 
 pub mod bend;
 pub mod construct;
+pub mod edit;
 pub mod flat;
 pub mod model;
 pub mod params;
