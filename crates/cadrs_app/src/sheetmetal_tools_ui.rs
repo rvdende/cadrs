@@ -789,12 +789,15 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalTool, field: AppliedF
             list(c, t, "sm-finish-parts-field", "Sheet metal parts", F_PARTS, item(F_PARTS), active == F_PARTS);
             c.spawn((
                 Name::new("sm-finish-warning"),
-                Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(6.0), margin: UiRect::new(Val::Px(2.0), Val::Px(2.0), Val::Px(6.0), Val::Px(2.0)), ..default() },
+                Node { flex_direction: FlexDirection::Row, align_items: AlignItems::FlexStart, column_gap: Val::Px(6.0), margin: UiRect::new(Val::Px(2.0), Val::Px(2.0), Val::Px(6.0), Val::Px(4.0)), ..default() },
             ))
             .with_children(|r| {
-                r.spawn(icon("warning", 14.0, Color::srgb_u8(0xd9, 0x8a, 0x00)));
-                r.spawn((t.text(FINISH_WARNING, t.font_sm, bevy::text::FontWeight::NORMAL, t.foreground), Node { max_width: Val::Px(186.0), ..default() }))
-                    .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                r.spawn((icon("warning-filled", 14.0, Color::srgb_u8(0xd9, 0x8c, 0x00)), Node { flex_shrink: 0.0, margin: UiRect::top(Val::Px(1.0)), ..default() }));
+                r.spawn((
+                    t.text(FINISH_WARNING, t.font_sm, bevy::text::FontWeight::NORMAL, t.foreground),
+                    Node { flex_grow: 1.0, flex_basis: Val::Px(0.0), min_width: Val::Px(0.0), ..default() },
+                ))
+                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
             });
         }),
     }
