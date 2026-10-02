@@ -12,6 +12,8 @@
 //!   corner and bend reliefs, the outline, and the collision and bend-loop checks (SM1.5).
 //! - [`relief`]: the relief cut shapes (SM7, SM8).
 //! - [`table`]: the Bends and Other joints tables (SM13).
+//! - [`edit`]: joint edits (Modify joint, the table) and the recipe a model is rebuilt from;
+//!   [`view`]: meshes, picking and label spots for the table and flat view panel (P3I.3).
 //! - [`samples`]: small models (an L, a U-channel, an open box, a hem, a tube, …) for tests,
 //!   previews and scenarios; [`svg`]: a flat pattern as an SVG picture.
 //!
@@ -19,6 +21,7 @@
 
 pub mod bend;
 pub mod construct;
+pub mod edit;
 pub mod flat;
 pub mod model;
 pub mod params;
@@ -27,6 +30,7 @@ pub mod relief;
 pub mod samples;
 pub mod svg;
 pub mod table;
+pub mod view;
 
 pub use bend::BendValue;
 pub use flat::{FlatError, FlatPattern, flatten};

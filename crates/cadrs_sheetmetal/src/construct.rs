@@ -26,6 +26,7 @@ use crate::model::{
 };
 use crate::params::Params;
 use crate::poly::{P2, Polygon, Seg2, V2};
+use serde::{Deserialize, Serialize};
 
 /// A 32-bit id from a 64-bit key (a hash of a face or edge name).
 pub fn stable_id(key: u64) -> u32 {
@@ -36,7 +37,7 @@ pub fn stable_id(key: u64) -> u32 {
 // Inputs
 
 /// A planar face of a part (Convert, Thicken) or a sketch region (Thicken).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FaceIn {
     /// A stable key (a hash of the face's name).
     pub key: u64,
@@ -64,7 +65,7 @@ impl FaceIn {
 }
 
 /// A cylindrical face (a fillet's round) between two planar faces it runs into tangentially.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CylIn {
     pub key: u64,
     pub axis_origin: P3,
@@ -82,7 +83,7 @@ pub struct CylIn {
 }
 
 /// A straight edge two faces share.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EdgeIn {
     pub key: u64,
     pub a: P3,
@@ -91,7 +92,7 @@ pub struct EdgeIn {
 }
 
 /// How [`from_faces`] lays the walls.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FaceOpts {
     /// The thickness goes against the faces' normals (into the part for Convert).
     pub material_inside: bool,
@@ -102,6 +103,9 @@ pub struct FaceOpts {
     pub include_bends: bool,
     /// Edges (by key) and cylinders (by key) to bend, in the order they were picked.
     pub bends: Vec<u64>,
+    /// Joints changed after the model was made (Modify joint, the table: [`crate::edit`]).
+    #[serde(default)]
+    pub edits: Vec<crate::edit::JointEdit>,
 }
 
 /// What was built, with where each wall and joint came from.
@@ -471,6 +475,7 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
         b.set_joint_id(j, JointId(stable_id(e.key)), Some(names.joint()));
         keys.push(e.key);
     }
+    crate::edit::apply(&mut b, &o.edits);
     let mut model = b.build().map_err(|error| {
         let key = match &error {
             BuildError::EdgeNotOnWall { joint, .. }
@@ -523,7 +528,7 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
 // Extrude
 
 /// A piece of a sketch chain, in sketch coordinates.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Seg {
     Line { a: P2, b: P2, key: u64 },
     /// From `start` (radians) through `sweep` (counter-clockwise when positive).
@@ -562,14 +567,14 @@ impl Seg {
 }
 
 /// A chain of sketch curves joined end to start.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChainIn {
     pub segs: Vec<Seg>,
     pub closed: bool,
 }
 
 /// Where and how far the chains are extruded.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChainOpts {
     /// The sketch plane: origin and orthonormal axes (`x × y` its normal).
     pub origin: P3,
@@ -584,6 +589,9 @@ pub struct ChainOpts {
     pub flip_side: bool,
     /// Arcs (by key) to make bends of instead of rolled walls.
     pub arcs_as_bends: Vec<u64>,
+    /// Joints changed after the model was made (Modify joint, the table: [`crate::edit`]).
+    #[serde(default)]
+    pub edits: Vec<crate::edit::JointEdit>,
 }
 
 enum Piece {
@@ -822,6 +830,7 @@ pub fn from_chains(p: Params, chains: &[ChainIn], o: &ChainOpts) -> Result<Built
             }
         }
     }
+    crate::edit::apply(&mut b, &o.edits);
     let mut model = b.build().map_err(|error| {
         let key = match &error {
             BuildError::EdgeNotOnWall { joint, .. }
@@ -1027,7 +1036,7 @@ mod tests {
     }
 
     fn chain_opts(depth: f64) -> ChainOpts {
-        ChainOpts { origin: P3::origin(), x: V3::x(), y: V3::y(), z0: 0.0, z1: depth, dir: V3::z(), flip_side: false, arcs_as_bends: vec![] }
+        ChainOpts { origin: P3::origin(), x: V3::x(), y: V3::y(), z0: 0.0, z1: depth, dir: V3::z(), flip_side: false, arcs_as_bends: vec![], edits: vec![] }
     }
 
     #[test]

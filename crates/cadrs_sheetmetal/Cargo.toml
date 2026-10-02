@@ -9,6 +9,7 @@ repository.workspace = true
 serde.workspace = true
 nalgebra = { workspace = true, features = ["serde-serialize"] }
 geo.workspace = true
+earcutr.workspace = true
 
 [dev-dependencies]
 resvg.workspace = true
