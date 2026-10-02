@@ -407,6 +407,7 @@ fn layout_of(kind: &FeatureKind) -> String {
             )
         }
         FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::layout(x),
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::layout(x),
         k => crate::advanced_dialog::layout(k).unwrap_or_default(),
     }
 }
@@ -535,7 +536,13 @@ fn dialog(
         FeatureKind::Shell(_) => "shell",
         FeatureKind::Hole(_) => "hole",
         FeatureKind::SheetMetalModel(_) => "sheet-metal-model",
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::dialog_name(x),
         k => crate::advanced_dialog::name(k)?,
+    };
+    // P3I.5: the sheet metal features' lists.
+    let sm_items = match &kind {
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::items(features, cache, x),
+        _ => Vec::new(),
     };
     let lists: Vec<(Role, Vec<String>)> = [
         Role::Entities,
@@ -606,6 +613,7 @@ fn dialog(
                 "hole" => 246.0,
                 // P3I.2: Onshape's sheet metal dialog is a little wider than most.
                 "sheet-metal-model" => 262.0,
+                n if n.starts_with("sheet-metal-") => 228.0,
                 "chamfer" | "sweep" | "loft" | "plane" | "draft" | "transform" => 216.0,
                 "linear-pattern" | "circular-pattern" | "curve-pattern" | "mirror" | "mate-connector" => 216.0,
                 _ => 202.0,
@@ -771,6 +779,7 @@ fn dialog(
                         });
                     }
                     FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::body(b, t, x, field, &items_of, sections),
+                    FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::body(b, t, x, field, &sm_items),
                     k => crate::advanced_dialog::body(b, t, k, field, &items_of),
                 }
                 b.spawn((
@@ -1739,6 +1748,6 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
-        _ => None,
+        n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }
 }
