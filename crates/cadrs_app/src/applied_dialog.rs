@@ -868,7 +868,9 @@ pub(crate) fn sync_applied_dialog(
         }
     }
     for (_, _, mut st) in &mut q_dialog {
-        let want = FeatureDialogState { title: feature.name.clone(), valid, error: failed };
+        // P3I.4: a Flange, Hem or Make joint with nothing picked yet isn't shown as failed.
+        let empty_sm = matches!(&kind, FeatureKind::SheetMetal(x) if x.entities().is_empty());
+        let want = FeatureDialogState { title: feature.name.clone(), valid, error: failed && !empty_sm };
         if *st != want {
             *st = want;
         }
@@ -876,6 +878,8 @@ pub(crate) fn sync_applied_dialog(
     // P3I.2: a new sheet metal model with nothing picked yet shows that in its red Selections,
     // as Onshape does, not as an error line.
     let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty());
+    // P3I.4: likewise a Flange, Hem or Make joint with no edges picked yet.
+    let incomplete = incomplete || matches!(&kind, FeatureKind::SheetMetal(x) if x.entities().is_empty());
     let why = if incomplete { String::new() } else { cache.errors.get(&s.feature).cloned().unwrap_or_default() };
     for (mut text, mut node) in &mut q_error {
         if text.0 != why {

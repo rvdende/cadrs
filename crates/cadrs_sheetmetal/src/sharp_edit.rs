@@ -372,7 +372,8 @@ pub struct FlangeOpts {
     pub radius: Option<f64>,
     /// `None`: automatic miter; else the miter angle (radians) of flange ends at a corner.
     pub miter: Option<f64>,
-    /// A partial flange moves the wall's whole edge (true) or only the flange's stretch.
+    /// Hold adjacent edges: a partial flange moves only its own stretch of the wall's edge
+    /// (false: the whole edge).
     pub hold_adjacent: bool,
 }
 
@@ -580,7 +581,9 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
     let mut out = Vec::new();
     let mut new_walls: Vec<usize> = Vec::new();
     for (fe, x) in edges.iter().zip(&pend) {
-        let (b0, b1) = if fe.partial.is_some() && !o.hold_adjacent { x.span } else { (0.0, x.se.len()) };
+        // Hold adjacent edges: the rest of the edge stays where it is (only the flange's stretch
+        // moves to its sharp); off, the whole edge moves.
+        let (b0, b1) = if fe.partial.is_some() && o.hold_adjacent { x.span } else { (0.0, x.se.len()) };
         let seg = Seg2::new(x.se.seg.a + x.se.seg.dir() * b0, x.se.seg.a + x.se.seg.dir() * b1);
         let wall = &mut def.builder.walls[x.se.wall];
         if x.x_d.abs() > 1e-12 {
