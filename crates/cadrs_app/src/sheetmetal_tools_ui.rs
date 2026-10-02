@@ -792,7 +792,10 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalTool, field: AppliedF
                 Node { flex_direction: FlexDirection::Row, align_items: AlignItems::FlexStart, column_gap: Val::Px(6.0), margin: UiRect::new(Val::Px(2.0), Val::Px(2.0), Val::Px(6.0), Val::Px(4.0)), ..default() },
             ))
             .with_children(|r| {
-                r.spawn((icon("warning-filled", 14.0, Color::srgb_u8(0xd9, 0x8c, 0x00)), Node { flex_shrink: 0.0, margin: UiRect::top(Val::Px(1.0)), ..default() }));
+                r.spawn(icon("warning-filled", 14.0, Color::srgb_u8(0xd9, 0x8c, 0x00))).entry::<Node>().and_modify(|mut n| {
+                    n.flex_shrink = 0.0;
+                    n.margin = UiRect::top(Val::Px(1.0));
+                });
                 r.spawn((
                     t.text(FINISH_WARNING, t.font_sm, bevy::text::FontWeight::NORMAL, t.foreground),
                     Node { flex_grow: 1.0, flex_basis: Val::Px(0.0), min_width: Val::Px(0.0), ..default() },
