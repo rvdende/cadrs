@@ -867,4 +867,49 @@ mod tests {
         v.flat.as_mut().unwrap().bend_lines_hidden = true;
         assert!(bend_lines(&v, &data).is_empty());
     }
+
+    struct FlatModel(Hlr, HashMap<EdgeName, ModelEdge>, FlatData);
+
+    impl crate::annotation::ViewModel for FlatModel {
+        fn projection(&self) -> &Hlr {
+            &self.0
+        }
+        fn model_edge(&self, name: &EdgeName) -> Option<&ModelEdge> {
+            self.1.get(name)
+        }
+        fn hole(&self, _: &uuid::Uuid) -> Option<&crate::annotation::HoleInfo> {
+            None
+        }
+        fn flat(&self) -> Option<&FlatData> {
+            Some(&self.2)
+        }
+    }
+
+    #[test]
+    fn the_dxf_export_has_the_bend_lines_and_notes() {
+        use crate::export::{Item, Layer, PageContext, ViewInput, sheet_page};
+        let mut d = crate::Drawing::from_template(&crate::template::builtin("ANSI_A_MM.dwt").unwrap(), None);
+        let mut v = view();
+        v.flat.as_mut().unwrap().up.color = [0xd0, 0x30, 0x20];
+        let id = v.id;
+        d.sheets[0].views.push(v);
+        let (hlr, edges, data) = flat_projection(uuid::Uuid::nil(), &rect_input(), &NamedView::Top.frame());
+        let m = FlatModel(hlr, edges, data);
+        let r = crate::ReferenceProps::default();
+        let f = crate::rich::DrawingContext::default();
+        let mut views = HashMap::new();
+        views.insert(id, ViewInput { model: &m, shaded: Vec::new(), sketches: Vec::new() });
+        let page = sheet_page(&d, 0, &PageContext { reference: &r, fields: &f, views });
+        let bends: Vec<&Item> = page.items.iter().filter(|i| matches!(i, Item::Stroke(_, p) if p.layer == Layer::BendUp)).collect();
+        assert_eq!(bends.len(), 1);
+        assert!(page.strings().contains(&"UP 90.0° R1.5"), "{:?}", page.strings());
+        let dxf = crate::dxf::write_dxf(&page);
+        assert!(dxf.contains("BEND_UP"));
+        assert!(dxf.contains("CENTER"));
+        // The bend line from (120, 100) to (120, 125) on the sheet, in its red.
+        let at = dxf.find("\n  8\nBEND_UP\n").expect("an entity on BEND_UP");
+        let entity = &dxf[at..at + 400];
+        assert!(entity.contains("420\n13643808"), "{entity}");
+        assert!(entity.contains("120"), "{entity}");
+    }
 }

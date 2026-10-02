@@ -65,7 +65,7 @@ below).
 | SM13.1–SM13.5 | Bend and joint table | ❌ | P3I.3. Table widget exists. |
 | SM14.1–SM14.4 | Modeling in the flat view | ❌ | P3I.6. |
 | SM15.1–SM15.3 | Flat DXF/DWG export | 🟡 | DXF/DWG writing exists for sketches and faces (P3F.2); the flat dialog, scopes and bend layers are P3I.6. Email and "store as tab" follow the existing export dialog's options. |
-| SM16.1–SM16.6 | Drawings of flat patterns | ❌ | P3I.7. Drawings, Insert view and view menus exist. |
+| SM16.1–SM16.6 | Drawings of flat patterns | ✅ | P3I.7: flat pattern views from Insert view → Flat patterns (`cadrs_drawing::flat_view`, `cadrs_core::flat_drawing`, `cadrs_app` `drawing/flat_views.rs`): outline, holes as circles, tear slits, tangent edges (Hidden/Solid/Phantom), bend lines with up/down pens (View properties), bend notes ("DOWN 90.0° R1.5") that drag off with a leader and reattach when dropped near their line, Show/hide bend lines and notes, dimensions on named flat edges, projected (edge-on) views, Update with the model, DXF layers BEND_UP/BEND_DOWN. Create drawing of flat pattern: `flat_views::open_create_drawing_of_flat` (Parts list menu; the P3I.3 flat view menu should call it). Not yet: form outlines and centermarks, counterbore/countersink outer diameters (no forms or holes in the flat yet), arcs in outlines as arcs (they are line segments). Scenarios `sm_p3i7_e3`, `sm_p3i7_options`. |
 | SM17.1–SM17.3 | Legacy import via Thicken + tangent propagation + bend cylinders | ❌ | P3I.8. |
 | SM18.1–SM18.4 | Top-down design (Derived master model, contexts named after features) | 🟡 | Derived and in-context studios exist; sheet metal through Derived is P3I.8. |
 | SM19.1 | Jog | ❌ | P3I.5. |
