@@ -463,6 +463,8 @@ impl Feature {
             FeatureKind::Hole(h) => h.sketch_ids(),
             FeatureKind::Sweep(s) => s.sketches(),
             FeatureKind::Loft(l) => l.sketches(),
+            // P3I.2: an Extrude's or Thicken's sketches (hidden once used, like an extrude's).
+            FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }

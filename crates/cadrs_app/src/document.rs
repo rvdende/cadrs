@@ -1491,7 +1491,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }),
     ));
     tb.spawn(toolbar_separator(t));
-    let groups: [&[(&str, &str, bool, &str)]; 4] = [
+    let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
             ("extrude", "extrude", false, "Extrude (Shift+E)"),
             ("revolve", "revolve", false, "Revolve (Shift+W)"),
@@ -1518,8 +1518,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("plane", "plane", true, "Plane"),
             ("mate-connector", "mate-connector", true, "Mate connector"),
             ("variable", "variables", false, "Variable"),
-            ("custom-feature", "custom-feature", false, "Add custom features"),
         ],
+        // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
+        // general tools, before custom features).
+        &[("sheet-metal-model", "sheet-metal-model", true, "Sheet metal model")],
+        &[("custom-feature", "custom-feature", false, "Add custom features")],
         &[
             ("import", "file-import", false, "Import (a STEP or STL file)"),
             ("derived", "link", false, "Derived (parts of another Part Studio)"),
@@ -1578,6 +1581,37 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                         },
                     ),
                 ));
+                continue;
+            }
+            if *name == "sheet-metal-model" {
+                // P3I.2 (X1): the button starts a Sheet metal model; its ▾ lists the other
+                // sheet metal tools in Onshape's order.
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|world: &mut World| crate::applied::begin(world, crate::applied::AppliedKind::SheetMetal));
+                    }),
+                ));
+                tb.spawn((
+                    cadrs_ui::IconButton::new("sheet-metal-model-caret", "chevron-down").icon_size(14.0).build(t),
+                    observe(
+                        |a: On<Activate>, q: Query<(&ComputedNode, &UiGlobalTransform)>, theme: Res<Theme>, mut commands: Commands| {
+                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
+                                let s = n.inverse_scale_factor();
+                                let size = n.size() * s;
+                                // Under the Sheet metal model button, to its left.
+                                t.translation * s + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
+                            });
+                            cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
+                        },
+                    ),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| {
+                    n.width = Val::Px(16.0);
+                    n.height = Val::Px(32.0);
+                    n.margin = UiRect::left(Val::Px(-3.0));
+                });
                 continue;
             }
             if *name == "thicken" {
@@ -1680,6 +1714,16 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
         .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
         .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
+}
+
+/// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,
+/// greyed until they are built.
+fn sheet_metal_menu() -> Menu {
+    let mut m = Menu::new("sheet-metal-menu").min_width(220.0);
+    for (name, label, icon) in crate::sheetmetal_ui::OTHER_TOOLS {
+        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(true));
+    }
+    m
 }
 
 /// The pattern button's menu (PS22.1): Mirror has its own button, as in Onshape's toolbar.
@@ -2828,6 +2872,8 @@ enum RowKind {
     Fill,
     /// P3F.4: a Variable.
     Variable,
+    /// P3I.2: a Sheet metal model.
+    SheetMetalModel,
 }
 
 impl RowKind {
@@ -2861,6 +2907,7 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
+            RowKind::SheetMetalModel => "sheet-metal-model",
             _ => "sketch",
         }
     }
@@ -2949,6 +2996,7 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Helix(_) => RowKind::Helix,
                 cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                 cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
+                cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,

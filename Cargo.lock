@@ -2004,6 +2004,7 @@ dependencies = [
  "cadrs_kernel",
  "cadrs_pcb",
  "cadrs_render",
+ "cadrs_sheetmetal",
  "cadrs_sketch",
  "cadrs_ui",
  "chrono",

@@ -433,3 +433,44 @@ fn undo_and_redo_the_model_and_cut_the_folded_part_after_it() {
     assert!(close(volume(&box_part) - volume(after), 20.0 * 10.0 * 2.0, 1e-6), "{}", volume(&box_part) - volume(after));
     assert!(cut.sheet_metal[0].active);
 }
+
+#[test]
+fn convert_a_filleted_block_rolls_or_bends_the_round() {
+    let mut st = Studio::new();
+    let block = st.block();
+    // A radius 8 round on the top front edge.
+    let fillet = cadrs_core::applied::FilletFeature {
+        entities: vec![EdgeOrFace::Edge(edge_near(&block, [50.0, 0.0, 40.0]))],
+        size: 8.0,
+        size_expr: "8 mm".into(),
+        ..Default::default()
+    };
+    let fid = FeatureId::new();
+    st.h.execute(&mut st.d, &AddFeature { element: st.el, feature: fid, base_name: "Fillet".into(), kind: FeatureKind::Fillet(fillet) }).unwrap();
+    let rounded = st.ok().parts[0].clone();
+    // The round's middle: its axis runs along x at y = 8, z = 32.
+    let h = 8.0 * std::f64::consts::FRAC_1_SQRT_2;
+    let round = face_near(&rounded, [50.0, 8.0 - h, 32.0 + h]);
+    let mut x = feature(SheetMetalOp::Convert);
+    x.parts = vec![rounded.id];
+    let f = st.add(FeatureKind::SheetMetalModel(x.clone()));
+    let b = st.ok();
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == f).unwrap();
+    // Not picked: a rolled wall joined to the top and the front by tangent joints.
+    assert_eq!(ctx.model.walls.len(), 7, "{:?}", ctx.model.walls.iter().map(|w| w.id).collect::<Vec<_>>());
+    assert_eq!(ctx.model.joints.iter().filter(|j| matches!(j.kind, JointKind::Tangent { .. })).count(), 2);
+    for p in &b.parts {
+        assert!(close(volume(p), predicted(&b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
+    }
+    // Picked to bend: a bend of the round's radius between the top and the front.
+    x.bends = vec![EdgeOrFace::Face(round)];
+    st.set(f, FeatureKind::SheetMetalModel(x));
+    let b = st.ok();
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == f).unwrap();
+    assert_eq!(ctx.model.walls.len(), 6);
+    let bend = ctx.model.joints.iter().find_map(|j| j.bend()).expect("a bend");
+    assert!((bend.radius - 8.0).abs() < 1e-6, "{}", bend.radius);
+    for p in &b.parts {
+        assert!(close(volume(p), predicted(&b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
+    }
+}

@@ -69,7 +69,8 @@ impl Plugin for AppliedDialogPlugin {
             .add_observer(on_list_move)
             .add_observer(crate::draft_ui::on_entry_group_activate)
             .add_observer(crate::draft_ui::on_entry_group_action)
-            .add_observer(crate::draft_ui::on_entry_remove);
+            .add_observer(crate::draft_ui::on_entry_remove)
+            .add_observer(crate::sheetmetal_ui::on_section_toggled);
     }
 }
 
@@ -283,6 +284,47 @@ pub(crate) enum Role {
     HelixHandedness,
     FillEdges,
     FillContinuity,
+    // P3I.2: the Sheet metal model (`crate::sheetmetal_ui`). Tabs:
+    SmOpTab,
+    // Lists
+    SmParts,
+    SmExclude,
+    SmBends,
+    SmCurves,
+    SmArcs,
+    SmFaces,
+    SmUpTo,
+    SmSecondUpTo,
+    // Selects
+    SmEndType,
+    SmSecondEndType,
+    SmBendCalc,
+    SmCornerType,
+    SmBendReliefType,
+    // Numbers
+    SmNumber(SmNum),
+    // Buttons
+    SmExtrudeFlip,
+    SmThicknessFlip,
+}
+
+/// The Sheet metal model dialog's numbers (P3I.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmNum {
+    Clearance,
+    Depth,
+    SecondDepth,
+    Thickness,
+    BendRadius,
+    KFactor,
+    RolledK,
+    Allowance,
+    Deduction,
+    MinimalGap,
+    CornerScale,
+    CornerSize,
+    BendDepthScale,
+    BendWidthScale,
 }
 
 fn name_of(features: &[Feature], op: cadrs_sketch::OpId) -> String {
@@ -324,6 +366,7 @@ fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind, role: Role
             };
             list.iter().map(|f| entity_label(features, &EdgeOrFace::Face(*f))).collect()
         }
+        (FeatureKind::SheetMetalModel(x), r) => crate::sheetmetal_ui::items(features, cache, x, r).unwrap_or_default(),
         _ => crate::advanced_dialog::items(features, cache, kind, role).unwrap_or_default(),
     }
 }
@@ -363,6 +406,7 @@ fn layout_of(kind: &FeatureKind) -> String {
                 cadrs_core::hole::StyleTolerance::ALL.map(|w| s.style_tol(w).kind)
             )
         }
+        FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::layout(x),
         k => crate::advanced_dialog::layout(k).unwrap_or_default(),
     }
 }
@@ -471,12 +515,14 @@ pub(crate) fn body_column(b: &mut ChildSpawner, f: impl FnOnce(&mut ChildSpawner
     .with_children(f);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dialog(
     theme: &Theme,
     f: &Feature,
     valid: bool,
     field: AppliedField,
     show_final: bool,
+    sections: [bool; 4],
     features: &[Feature],
     cache: &PartCache,
 ) -> Option<impl Bundle> {
@@ -488,6 +534,7 @@ fn dialog(
         FeatureKind::Chamfer(_) => "chamfer",
         FeatureKind::Shell(_) => "shell",
         FeatureKind::Hole(_) => "hole",
+        FeatureKind::SheetMetalModel(_) => "sheet-metal-model",
         k => crate::advanced_dialog::name(k)?,
     };
     let lists: Vec<(Role, Vec<String>)> = [
@@ -535,6 +582,14 @@ fn dialog(
         Role::TransformTo,
         Role::TransformAxis,
         Role::TransformScalePoint,
+        Role::SmParts,
+        Role::SmExclude,
+        Role::SmBends,
+        Role::SmCurves,
+        Role::SmArcs,
+        Role::SmFaces,
+        Role::SmUpTo,
+        Role::SmSecondUpTo,
     ]
         .into_iter()
         .map(|r| (r, items(features, cache, &kind, r)))
@@ -549,6 +604,8 @@ fn dialog(
             .valid(valid)
             .width(match name {
                 "hole" => 246.0,
+                // P3I.2: Onshape's sheet metal dialog is a little wider than most.
+                "sheet-metal-model" => 262.0,
                 "chamfer" | "sweep" | "loft" | "plane" | "draft" | "transform" => 216.0,
                 "linear-pattern" | "circular-pattern" | "curve-pattern" | "mirror" | "mate-connector" => 216.0,
                 _ => 202.0,
@@ -713,6 +770,7 @@ fn dialog(
                             }
                         });
                     }
+                    FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::body(b, t, x, field, &items_of, sections),
                     k => crate::advanced_dialog::body(b, t, k, field, &items_of),
                 }
                 b.spawn((
@@ -785,7 +843,7 @@ pub(crate) fn sync_applied_dialog(
                 commands.entity(e).try_despawn();
             }
             let Some(area) = q_area.iter().next() else { return };
-            if let Some(bundle) = dialog(&theme, feature, valid, s.field, s.show_final, el.features(), &cache) {
+            if let Some(bundle) = dialog(&theme, feature, valid, s.field, s.show_final, s.sections, el.features(), &cache) {
                 let d = commands.spawn(bundle).id();
                 commands.entity(area).add_child(d);
             }
@@ -807,7 +865,10 @@ pub(crate) fn sync_applied_dialog(
             *st = want;
         }
     }
-    let why = cache.errors.get(&s.feature).cloned().unwrap_or_default();
+    // P3I.2: a new sheet metal model with nothing picked yet shows that in its red Selections,
+    // as Onshape does, not as an error line.
+    let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty());
+    let why = if incomplete { String::new() } else { cache.errors.get(&s.feature).cloned().unwrap_or_default() };
     for (mut text, mut node) in &mut q_error {
         if text.0 != why {
             text.0 = why.clone();
@@ -831,6 +892,7 @@ pub(crate) fn sync_applied_dialog(
             Role::HoleUpTo => s.field == AppliedField::HoleUpTo,
             Role::FilletVertices => s.field == AppliedField::FilletVertices,
             Role::FilletEdgePoints => s.field == AppliedField::FilletEdgePoints,
+            r if crate::sheetmetal_ui::list_field(*r).is_some() => crate::sheetmetal_ui::list_field(*r) == Some(s.field),
             r => match crate::advanced_dialog::list_field(*r) {
                 Some(f) => s.field == f,
                 None => continue,
@@ -907,6 +969,7 @@ pub(crate) fn sync_applied_dialog(
             (FeatureKind::Hole(x), Role::Start) => index_of(&HoleStart::ALL, &x.spec.start),
             (FeatureKind::Hole(x), Role::TipAngle) => crate::draft_ui::tip_angles(&x.spec).1,
             (FeatureKind::Hole(x), Role::End) => index_of(&HoleEnd::ALL, &x.spec.end),
+            (FeatureKind::SheetMetalModel(x), r) if crate::sheetmetal_ui::owns_select(*r) => crate::sheetmetal_ui::select_index(x, *r).unwrap_or(0),
             (k, r) => match crate::advanced_dialog::select_index(k, *r) {
                 Some(i) => i,
                 None => continue,
@@ -942,6 +1005,8 @@ fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
             }
         }
         (FeatureKind::Fillet(_), r) if crate::draft_ui::owns_number(r) => return crate::draft_ui::number_text(kind, r),
+        // P3I.2: kept in step by `sheetmetal_ui::sync_numbers` (with their range tooltips).
+        (FeatureKind::SheetMetalModel(_), _) => return None,
         (k, r) => return crate::advanced_dialog::number_text(k, r),
     })
 }
@@ -1008,6 +1073,19 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Role>, mut commands: Commands) {
                 s.style = HoleStyle::ALL[i.min(2)];
             }
         }),
+        Ok(Role::SmOpTab) => {
+            let op = cadrs_core::sheetmetal::SheetMetalOp::ALL[i.min(2)];
+            change(&mut commands, "Operation", move |k| {
+                if let FeatureKind::SheetMetalModel(x) = k {
+                    x.operation = op;
+                }
+            });
+            commands.queue(move |world: &mut World| {
+                if let Some(mut s) = world.get_resource_mut::<AppliedSession>() {
+                    s.field = crate::sheetmetal_ui::first_field(op);
+                }
+            });
+        }
         Ok(Role::SplitTypeTab) => change(&mut commands, "Split type", move |k| {
             if let FeatureKind::Split(x) = k {
                 x.split_type = cadrs_core::advanced::SplitType::ALL[i.min(1)];
@@ -1031,6 +1109,22 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Role>, mut commands: Commands) {
 fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
     let i = ev.index;
     let Ok(role) = q.get(ev.entity).copied() else { return };
+    // P3I.2: the Sheet metal model's selects.
+    if crate::sheetmetal_ui::owns_select(role) {
+        commands.queue(move |world: &mut World| {
+            let Some(f) = current(world) else { return };
+            let FeatureKind::SheetMetalModel(mut x) = f.kind.clone() else { return };
+            let (label, field) = crate::sheetmetal_ui::set_select(&mut x, role, i);
+            let k = FeatureKind::SheetMetalModel(x);
+            if k != f.kind {
+                set(world, k, label);
+            }
+            if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+                s.field = field;
+            }
+        });
+        return;
+    }
     // P3.11: a partial fillet's Boundary type keeps the bounds where they are on the edge.
     if role == Role::PartialBound {
         commands.queue(move |world: &mut World| {
@@ -1151,6 +1245,23 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
 fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) {
     let Ok(name) = q.get(ev.entity) else { return };
     let on = ev.checked;
+    // P3I.2: the Sheet metal model's.
+    if crate::sheetmetal_ui::is_checkbox(name.as_str()) {
+        let n = name.to_string();
+        commands.queue(move |world: &mut World| {
+            let Some(f) = current(world) else { return };
+            let FeatureKind::SheetMetalModel(mut x) = f.kind.clone() else { return };
+            let Some((label, field)) = crate::sheetmetal_ui::checkbox(&mut x, &n, on) else { return };
+            let k = FeatureKind::SheetMetalModel(x);
+            if k != f.kind {
+                set(world, k, label);
+            }
+            if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+                s.field = field;
+            }
+        });
+        return;
+    }
     // P3.10: the Draft's, the fillet's new options and the hole's.
     if crate::draft_ui::is_checkbox(name.as_str()) {
         let n = name.to_string();
@@ -1221,6 +1332,12 @@ fn on_number(
 ) {
     let Ok(role) = q.get(ev.entity).copied() else { return };
     let text = ev.text.trim().to_string();
+    // P3I.2: the Sheet metal model's numbers (zero allowed; out of range kept, shown red).
+    if let Role::SmNumber(n) = role {
+        let (entity, enter) = (ev.entity, ev.enter);
+        commands.queue(move |world: &mut World| crate::sheetmetal_ui::commit_number(world, entity, n, text, enter));
+        return;
+    }
     // P3.10: the Draft angle, the fillet's second radius and variable radii, the hole's tap
     // clearance, offset and tolerances.
     if crate::draft_ui::owns_number(role) {
@@ -1435,6 +1552,15 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
             FeatureKind::Hole(x) => x.flip = !x.flip,
             k => crate::advanced_dialog::flip(k, Role::Flip),
         }),
+        Ok(r @ (Role::SmExtrudeFlip | Role::SmThicknessFlip)) => {
+            let r = *r;
+            let label = if r == Role::SmExtrudeFlip { "Opposite direction" } else { "Flip thickness direction" };
+            change(&mut commands, label, move |k| {
+                if let FeatureKind::SheetMetalModel(x) = k {
+                    crate::sheetmetal_ui::flip(x, r);
+                }
+            });
+        }
         Ok(Role::PartialFlip) => change(&mut commands, "Flip direction", |k| {
             if let FeatureKind::Fillet(x) = k {
                 x.flip_partial = !x.flip_partial;
@@ -1543,6 +1669,7 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Role>, mut commands: Co
         (FeatureKind::Fillet(x), Role::Side1) => x.side1.clear(),
         (FeatureKind::Fillet(x), Role::Center) => x.center.clear(),
         (FeatureKind::Fillet(x), Role::Side2) => x.side2.clear(),
+        (FeatureKind::SheetMetalModel(x), r) => crate::sheetmetal_ui::remove(x, r, i),
         (k, r) => crate::advanced_dialog::remove(k, r, i),
     });
 }
@@ -1568,6 +1695,7 @@ fn on_list_activate(ev: On<SelectionListActivate>, q: Query<&Role>, mut commands
         Ok(Role::HoleUpTo) => AppliedField::HoleUpTo,
         Ok(Role::FilletVertices) => AppliedField::FilletVertices,
         Ok(Role::FilletEdgePoints) => AppliedField::FilletEdgePoints,
+        Ok(r) if crate::sheetmetal_ui::list_field(*r).is_some() => crate::sheetmetal_ui::list_field(*r).expect("checked"),
         Ok(r) => match crate::advanced_dialog::list_field(*r) {
             Some(f) => f,
             None => return,
@@ -1610,6 +1738,7 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "thicken" => Some(AppliedKind::Thicken),
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
+        "sheet-metal-model" => Some(AppliedKind::SheetMetal),
         _ => None,
     }
 }

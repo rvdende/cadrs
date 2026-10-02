@@ -15,6 +15,7 @@
 //! - `sketch <plane> <shape>…`: adds a sketch on `top`, `front` or `right` with the shapes
 //!   `rect x0 y0 x1 y1` (a rectangle with its constraints), `tri x0 y0 x1 y1 x2 y2`,
 //!   `chain x0 y0 x1 y1 …` (an open polyline), `poly x0 y0 x1 y1 …` (a closed one, P3.5),
+//!   `arc cx cy sx sy ex ey` (counter-clockwise from s to e, P3I.2),
 //!   `circle cx cy r`, `centreline x0 y0 x1 y1` (a construction line, P3.4) and `point x y`
 //!   (P3.8), in the plane's
 //!   coordinates
@@ -496,6 +497,22 @@ fn add_sketch(world: &mut World, spec: &str) {
                     closed: true,
                     construction: false,
                     label: "Add triangle",
+                });
+                i += 7;
+            }
+            "arc" => {
+                // P3I.2: an arc about cx cy, counter-clockwise from sx sy to ex ey (its ends join
+                // the curves already there).
+                let v: Vec<f64> = (1..=6).filter_map(|k| num(rest.get(i + k))).collect();
+                if v.len() != 6 {
+                    warn!("sketch: bad arc in {spec:?}");
+                    return;
+                }
+                ops.push(SketchOp::AddArc {
+                    center: SVec2::new(v[0], v[1]),
+                    start: SVec2::new(v[2], v[3]),
+                    end: SVec2::new(v[4], v[5]),
+                    construction: false,
                 });
                 i += 7;
             }

@@ -48,6 +48,7 @@ pub mod parts;
 pub mod pattern;
 pub mod pattern_dialog;
 pub mod pcb;
+pub mod sheetmetal_ui;
 pub mod surfacing_ui;
 pub mod transform_ui;
 pub mod properties_dialog;

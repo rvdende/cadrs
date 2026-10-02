@@ -59,6 +59,8 @@ pub struct Collapsible {
     open: bool,
     highlight: bool,
     header_height: f32,
+    section: bool,
+    error: bool,
     content: Option<SpawnFn>,
 }
 
@@ -72,6 +74,8 @@ impl Collapsible {
             open: false,
             highlight: false,
             header_height: 33.0,
+            section: false,
+            error: false,
             content: None,
         }
     }
@@ -103,6 +107,22 @@ impl Collapsible {
         self
     }
 
+    /// A feature dialog's section (Onshape's Selections, General, Material, Relief): a low header
+    /// with a small chevron and the label in the regular weight, the rows under it indented past a
+    /// thin guide line that runs down from the chevron.
+    pub fn section(mut self) -> Self {
+        self.section = true;
+        self.header_height = 26.0;
+        self
+    }
+
+    /// Shows the header in the error colour (a section whose required selection is missing, as
+    /// Onshape's red "Selections").
+    pub fn error(mut self, e: bool) -> Self {
+        self.error = e;
+        self
+    }
+
     pub fn content(mut self, f: impl FnOnce(&mut ChildSpawner) + Send + Sync + 'static) -> Self {
         self.content = Some(Box::new(f));
         self
@@ -118,6 +138,8 @@ impl Collapsible {
             open,
             highlight,
             header_height,
+            section,
+            error,
             content,
         } = self;
         let header_name = format!("{name}-header");
@@ -132,7 +154,7 @@ impl Collapsible {
             },
             Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
                 let root = p.target_entity();
-                let fg = theme.foreground;
+                let fg = if error { theme.feature_error } else { theme.foreground };
                 let base_bg = if highlight {
                     theme.list_hover
                 } else {
@@ -145,10 +167,14 @@ impl Collapsible {
                     Hovered::default(),
                     Node {
                         height: Val::Px(header_height),
-                        padding: UiRect::horizontal(Val::Px(theme.space[4])),
+                        padding: if section {
+                            UiRect::horizontal(Val::Px(4.0))
+                        } else {
+                            UiRect::horizontal(Val::Px(theme.space[4]))
+                        },
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(theme.space[4]),
-                        border_radius: BorderRadius::all(Val::Px(theme.radius_lg)),
+                        column_gap: Val::Px(if section { 6.0 } else { theme.space[4] }),
+                        border_radius: BorderRadius::all(Val::Px(if section { 0.0 } else { theme.radius_lg })),
                         ..default()
                     },
                     Visuals {
@@ -167,7 +193,7 @@ impl Collapsible {
                     h.spawn((
                         icon(
                             if open { "chevron-down" } else { "chevron-right" },
-                            14.0,
+                            if section { 12.0 } else { 14.0 },
                             fg,
                         ),
                         CollapsibleChevron(root),
@@ -192,15 +218,25 @@ impl Collapsible {
                             h.spawn((icon(i, 16.0, fg), InheritFg, Pickable::IGNORE));
                         }
                     }
+                    let weight = if section { FontWeight::NORMAL } else { FontWeight::BOLD };
                     h.spawn((
-                        theme.text(label, theme.font_base, FontWeight::BOLD, fg),
+                        theme.text(label, theme.font_base, weight, fg),
                         InheritFg,
                         Pickable::IGNORE,
                     ));
                 });
-                let mut c = p.spawn((
-                    Name::new(content_name),
-                    CollapsibleContent(root),
+                let node = if section {
+                    // The guide line under the chevron's middle, the rows a little past it.
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        margin: UiRect::left(Val::Px(9.0)),
+                        padding: UiRect::new(Val::Px(7.0), Val::ZERO, Val::ZERO, Val::Px(4.0)),
+                        border: UiRect::left(Val::Px(1.0)),
+                        row_gap: Val::Px(0.0),
+                        display: if open { Display::Flex } else { Display::None },
+                        ..default()
+                    }
+                } else {
                     Node {
                         flex_direction: FlexDirection::Column,
                         padding: UiRect::new(
@@ -212,8 +248,10 @@ impl Collapsible {
                         row_gap: Val::Px(theme.space[3]),
                         display: if open { Display::Flex } else { Display::None },
                         ..default()
-                    },
-                ));
+                    }
+                };
+                let line = if section { Color::srgb_u8(0xd4, 0xd4, 0xd8) } else { Color::NONE };
+                let mut c = p.spawn((Name::new(content_name), CollapsibleContent(root), node, BorderColor::all(line)));
                 if let Some(f) = content {
                     c.with_children(|c| f(c));
                 }

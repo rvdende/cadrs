@@ -164,7 +164,15 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
                 continue;
             }
         }
+        // P3I.2 (X1): the sheet metal tools of the Sheet metal model button's ▾ (greyed until
+        // they are built).
+        let sheet_metal = id == "sheet-metal-model";
         out.push(ToolEntry { id, label, icon, shortcut, enabled, launch: Launch::Button(e) });
+        if sheet_metal {
+            for (tid, tlabel, ticon) in crate::sheetmetal_ui::OTHER_TOOLS {
+                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: false, launch: Launch::Button(e) });
+            }
+        }
     }
     out
 }

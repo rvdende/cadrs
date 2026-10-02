@@ -241,11 +241,11 @@ impl SheetMetalModelFeature {
         if !self.params.validate().is_empty() {
             return Some("A value is out of range");
         }
-        if !(self.clearance >= 0.0 && self.clearance.is_finite()) {
+        if self.clearance.is_nan() || self.clearance < 0.0 || self.clearance.is_infinite() {
             return Some("The clearance must be at least 0");
         }
         if self.operation == SheetMetalOp::Extrude {
-            if self.end == EndType::Blind && !(self.depth > 0.0) {
+            if self.end == EndType::Blind && (self.depth.is_nan() || self.depth <= 0.0) {
                 return Some("The depth must be greater than zero");
             }
             if self.end.needs_target() && self.up_to.is_none() {

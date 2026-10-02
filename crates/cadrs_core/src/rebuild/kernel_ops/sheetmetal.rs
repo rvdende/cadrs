@@ -245,8 +245,15 @@ fn face_index<'a>(state: &'a State, f: &crate::document::FaceRef) -> Option<(&'a
     Some((part, i))
 }
 
-/// A sketch's curves joined into chains (only the picked ones, unless the whole sketch is).
-fn chains_of(before: &[Feature], x: &SheetMetalModelFeature) -> Result<(Vec<(cadrs_sketch::PlaneFrame, Vec<ChainIn>)>, usize), String> {
+/// Each sketch's picked curves as chains, on its plane.
+type SketchChains = Vec<(cadrs_sketch::PlaneFrame, Vec<ChainIn>)>;
+
+/// One folded flat-pattern part: its walls, body and names, and its pieces' volume.
+type Folded = (Vec<WallId>, BodyId, BodyNames, f64);
+
+/// A sketch's curves joined into chains (only the picked ones, unless the whole sketch is),
+/// with how many picked curves are gone.
+fn chains_of(before: &[Feature], x: &SheetMetalModelFeature) -> Result<(SketchChains, usize), String> {
     let mut sketches: Vec<FeatureId> = x.sketches.clone();
     for c in &x.curves {
         if !sketches.contains(&c.sketch) {
@@ -392,7 +399,7 @@ fn flat_error(flat: &FlatPattern) -> Option<String> {
 impl Rebuilder {
     /// The folded bodies of a model's flat-pattern parts: each with its walls, body, names and
     /// the sum of its pieces' volumes.
-    fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<(Vec<WallId>, BodyId, BodyNames, f64)>, String> {
+    fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         let release = |k: &mut cadrs_kernel::backend::occt::OcctKernel, made: &[(BodyId, BodyNames, f64)]| {
