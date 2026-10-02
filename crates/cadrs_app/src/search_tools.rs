@@ -61,6 +61,8 @@ pub enum Launch {
     /// Activate this toolbar button.
     Button(Entity),
     Pattern(cadrs_core::pattern::PatternKind),
+    /// P3I.4: a sheet metal tool of the Sheet metal model's ▾.
+    Applied(crate::applied::AppliedKind),
     /// A variant in a sketch tool button's ▾ menu (P3.11): made the button's and the active
     /// tool, as the menu does.
     SketchVariant(Entity, crate::sketch::SketchTool),
@@ -170,7 +172,11 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
         out.push(ToolEntry { id, label, icon, shortcut, enabled, launch: Launch::Button(e) });
         if sheet_metal {
             for (tid, tlabel, ticon) in crate::sheetmetal_ui::OTHER_TOOLS {
-                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: false, launch: Launch::Button(e) });
+                let launch = match crate::sheetmetal_features_ui::SmTool::of_name(tid) {
+                    Some(t) => Launch::Applied(crate::applied::AppliedKind::SmFeature(t)),
+                    None => Launch::Button(e),
+                };
+                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: enabled && crate::sheetmetal_features_ui::built(tid), launch });
             }
         }
     }
@@ -232,6 +238,7 @@ fn launch(world: &mut World, i: usize) {
             }
         }
         Launch::Pattern(k) => crate::applied::begin(world, crate::applied::AppliedKind::Pattern(k)),
+        Launch::Applied(k) => crate::applied::begin(world, k),
         Launch::SketchVariant(e, t) => {
             if world.get_entity(e).is_ok() {
                 crate::sketch::choose_variant(world, e, t);

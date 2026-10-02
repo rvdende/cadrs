@@ -306,6 +306,8 @@ pub(crate) enum Role {
     // Buttons
     SmExtrudeFlip,
     SmThicknessFlip,
+    /// P3I.4: Flange, Hem and Make joint (`crate::sheetmetal_features_ui`).
+    Smf(crate::sheetmetal_features_ui::SmfRole),
 }
 
 /// The Sheet metal model dialog's numbers (P3I.2).
@@ -367,6 +369,7 @@ fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind, role: Role
             list.iter().map(|f| entity_label(features, &EdgeOrFace::Face(*f))).collect()
         }
         (FeatureKind::SheetMetalModel(x), r) => crate::sheetmetal_ui::items(features, cache, x, r).unwrap_or_default(),
+        (FeatureKind::SheetMetal(_), r) => crate::sheetmetal_features_ui::items(features, kind, r).unwrap_or_default(),
         _ => crate::advanced_dialog::items(features, cache, kind, role).unwrap_or_default(),
     }
 }
@@ -407,6 +410,7 @@ fn layout_of(kind: &FeatureKind) -> String {
             )
         }
         FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::layout(x),
+        k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::layout(k).unwrap_or_default(),
         k => crate::advanced_dialog::layout(k).unwrap_or_default(),
     }
 }
@@ -535,6 +539,7 @@ fn dialog(
         FeatureKind::Shell(_) => "shell",
         FeatureKind::Hole(_) => "hole",
         FeatureKind::SheetMetalModel(_) => "sheet-metal-model",
+        k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::name(k)?,
         k => crate::advanced_dialog::name(k)?,
     };
     let lists: Vec<(Role, Vec<String>)> = [
@@ -592,6 +597,7 @@ fn dialog(
         Role::SmSecondUpTo,
     ]
         .into_iter()
+        .chain(crate::sheetmetal_features_ui::LIST_ROLES)
         .map(|r| (r, items(features, cache, &kind, r)))
         .collect();
     let items_of = move |r: Role| lists.iter().find(|(x, _)| *x == r).map(|(_, v)| v.clone()).unwrap_or_default();
@@ -606,6 +612,7 @@ fn dialog(
                 "hole" => 246.0,
                 // P3I.2: Onshape's sheet metal dialog is a little wider than most.
                 "sheet-metal-model" => 262.0,
+                "sheet-metal-flange" | "sheet-metal-hem" | "sheet-metal-make-joint" => 222.0,
                 "chamfer" | "sweep" | "loft" | "plane" | "draft" | "transform" => 216.0,
                 "linear-pattern" | "circular-pattern" | "curve-pattern" | "mirror" | "mate-connector" => 216.0,
                 _ => 202.0,
@@ -771,6 +778,7 @@ fn dialog(
                         });
                     }
                     FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::body(b, t, x, field, &items_of, sections),
+                    k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::body(b, t, k, field, &items_of),
                     k => crate::advanced_dialog::body(b, t, k, field, &items_of),
                 }
                 b.spawn((
@@ -893,6 +901,7 @@ pub(crate) fn sync_applied_dialog(
             Role::FilletVertices => s.field == AppliedField::FilletVertices,
             Role::FilletEdgePoints => s.field == AppliedField::FilletEdgePoints,
             r if crate::sheetmetal_ui::list_field(*r).is_some() => crate::sheetmetal_ui::list_field(*r) == Some(s.field),
+            r if crate::sheetmetal_features_ui::list_field(*r).is_some() => crate::sheetmetal_features_ui::list_field(*r) == Some(s.field),
             r => match crate::advanced_dialog::list_field(*r) {
                 Some(f) => s.field == f,
                 None => continue,
@@ -970,6 +979,10 @@ pub(crate) fn sync_applied_dialog(
             (FeatureKind::Hole(x), Role::TipAngle) => crate::draft_ui::tip_angles(&x.spec).1,
             (FeatureKind::Hole(x), Role::End) => index_of(&HoleEnd::ALL, &x.spec.end),
             (FeatureKind::SheetMetalModel(x), r) if crate::sheetmetal_ui::owns_select(*r) => crate::sheetmetal_ui::select_index(x, *r).unwrap_or(0),
+            (k @ FeatureKind::SheetMetal(_), r) if crate::sheetmetal_features_ui::owns(*r) => match crate::sheetmetal_features_ui::select_index(k, *r) {
+                Some(i) => i,
+                None => continue,
+            },
             (k, r) => match crate::advanced_dialog::select_index(k, *r) {
                 Some(i) => i,
                 None => continue,
@@ -1007,6 +1020,7 @@ fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
         (FeatureKind::Fillet(_), r) if crate::draft_ui::owns_number(r) => return crate::draft_ui::number_text(kind, r),
         // P3I.2: kept in step by `sheetmetal_ui::sync_numbers` (with their range tooltips).
         (FeatureKind::SheetMetalModel(_), _) => return None,
+        (k @ FeatureKind::SheetMetal(_), r) => return crate::sheetmetal_features_ui::number_text(k, r),
         (k, r) => return crate::advanced_dialog::number_text(k, r),
     })
 }
@@ -1109,6 +1123,21 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Role>, mut commands: Commands) {
 fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
     let i = ev.index;
     let Ok(role) = q.get(ev.entity).copied() else { return };
+    // P3I.4: Flange, Hem and Make joint.
+    if crate::sheetmetal_features_ui::owns(role) {
+        commands.queue(move |world: &mut World| {
+            let Some(f) = current(world) else { return };
+            let mut k = f.kind.clone();
+            let (label, field) = crate::sheetmetal_features_ui::set_select(&mut k, role, i);
+            if k != f.kind {
+                set(world, k, label);
+            }
+            if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+                s.field = field;
+            }
+        });
+        return;
+    }
     // P3I.2: the Sheet metal model's selects.
     if crate::sheetmetal_ui::owns_select(role) {
         commands.queue(move |world: &mut World| {
@@ -1245,6 +1274,22 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
 fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) {
     let Ok(name) = q.get(ev.entity) else { return };
     let on = ev.checked;
+    // P3I.4: Flange, Hem and Make joint.
+    if crate::sheetmetal_features_ui::is_checkbox(name.as_str()) {
+        let n = name.to_string();
+        commands.queue(move |world: &mut World| {
+            let Some(f) = current(world) else { return };
+            let mut k = f.kind.clone();
+            let Some((label, field)) = crate::sheetmetal_features_ui::checkbox(&mut k, &n, on) else { return };
+            if k != f.kind {
+                set(world, k, label);
+            }
+            if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+                s.field = field;
+            }
+        });
+        return;
+    }
     // P3I.2: the Sheet metal model's.
     if crate::sheetmetal_ui::is_checkbox(name.as_str()) {
         let n = name.to_string();
@@ -1332,6 +1377,12 @@ fn on_number(
 ) {
     let Ok(role) = q.get(ev.entity).copied() else { return };
     let text = ev.text.trim().to_string();
+    // P3I.4: Flange, Hem and Make joint.
+    if matches!(role, Role::Smf(_)) {
+        let (entity, enter) = (ev.entity, ev.enter);
+        commands.queue(move |world: &mut World| crate::sheetmetal_features_ui::commit_number(world, entity, role, text, enter));
+        return;
+    }
     // P3I.2: the Sheet metal model's numbers (zero allowed; out of range kept, shown red).
     if let Role::SmNumber(n) = role {
         let (entity, enter) = (ev.entity, ev.enter);
@@ -1561,6 +1612,16 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
                 }
             });
         }
+        Ok(r @ Role::Smf(_)) => {
+            let r = *r;
+            commands.queue(move |world: &mut World| {
+                let Some(f) = current(world) else { return };
+                let mut k = f.kind.clone();
+                if let Some(label) = crate::sheetmetal_features_ui::flip(&mut k, r) {
+                    set(world, k, label);
+                }
+            });
+        }
         Ok(Role::PartialFlip) => change(&mut commands, "Flip direction", |k| {
             if let FeatureKind::Fillet(x) = k {
                 x.flip_partial = !x.flip_partial;
@@ -1670,6 +1731,7 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Role>, mut commands: Co
         (FeatureKind::Fillet(x), Role::Center) => x.center.clear(),
         (FeatureKind::Fillet(x), Role::Side2) => x.side2.clear(),
         (FeatureKind::SheetMetalModel(x), r) => crate::sheetmetal_ui::remove(x, r, i),
+        (k @ FeatureKind::SheetMetal(_), r) => crate::sheetmetal_features_ui::remove(k, r, i),
         (k, r) => crate::advanced_dialog::remove(k, r, i),
     });
 }
@@ -1696,6 +1758,7 @@ fn on_list_activate(ev: On<SelectionListActivate>, q: Query<&Role>, mut commands
         Ok(Role::FilletVertices) => AppliedField::FilletVertices,
         Ok(Role::FilletEdgePoints) => AppliedField::FilletEdgePoints,
         Ok(r) if crate::sheetmetal_ui::list_field(*r).is_some() => crate::sheetmetal_ui::list_field(*r).expect("checked"),
+        Ok(r) if crate::sheetmetal_features_ui::list_field(*r).is_some() => crate::sheetmetal_features_ui::list_field(*r).expect("checked"),
         Ok(r) => match crate::advanced_dialog::list_field(*r) {
             Some(f) => f,
             None => return,

@@ -1602,7 +1602,13 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                                 // Under the Sheet metal model button, to its left.
                                 t.translation * s + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
                             });
-                            cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
+                            let anchor = cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
+                            // P3I.4: the built tools start their features.
+                            commands.entity(anchor).observe(|ev: On<MenuAction>, mut commands: Commands| {
+                                if let Some(t) = crate::sheetmetal_features_ui::SmTool::of_name(ev.item.as_str()) {
+                                    commands.queue(move |world: &mut World| crate::applied::begin(world, crate::applied::AppliedKind::SmFeature(t)));
+                                }
+                            });
                         },
                     ),
                 ))
@@ -1721,7 +1727,7 @@ fn surfacing_menu() -> Menu {
 fn sheet_metal_menu() -> Menu {
     let mut m = Menu::new("sheet-metal-menu").min_width(220.0);
     for (name, label, icon) in crate::sheetmetal_ui::OTHER_TOOLS {
-        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(true));
+        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(!crate::sheetmetal_features_ui::built(name)));
     }
     m
 }
@@ -2874,6 +2880,8 @@ enum RowKind {
     Variable,
     /// P3I.2: a Sheet metal model.
     SheetMetalModel,
+    /// P3I.4: Flange, Hem, Make joint (their icon).
+    SheetMetal(&'static str),
 }
 
 impl RowKind {
@@ -2908,6 +2916,7 @@ impl RowKind {
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
+            RowKind::SheetMetal(icon) => icon,
             _ => "sketch",
         }
     }
@@ -2997,6 +3006,7 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                 cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                 cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+                cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,
