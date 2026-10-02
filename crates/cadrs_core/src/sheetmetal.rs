@@ -324,12 +324,34 @@ pub struct SheetMetalContext {
     /// features and the views can find them.
     pub wall_keys: Vec<(u64, WallId)>,
     pub joint_keys: Vec<(u64, JointId)>,
+    /// The definition the model is built from (P3I.4, SM1.6): features after the Sheet metal
+    /// model (Flange, Hem, Make joint, …) add to it and the model is built again from it
+    /// (`Rebuilder::edit_sheet_metal`, `rebuild/kernel_ops/sheetmetal_features.rs`). `None` for
+    /// a context kept from before definitions were kept.
+    #[serde(default)]
+    pub def: Option<cadrs_sheetmetal::sharp_edit::SharpDef>,
+    /// The feature that added each wall and joint after the model (its faces are named by that
+    /// feature, so they read "Face of Flange 1"); the rest are the model's.
+    #[serde(default)]
+    pub owners: Vec<(PieceKey, FeatureId)>,
+}
+
+/// A wall or joint of a model's definition (for [`SheetMetalContext::owners`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PieceKey {
+    Wall(WallId),
+    Joint(JointId),
 }
 
 impl SheetMetalContext {
     /// The part a wall is in.
     pub fn part_of_wall(&self, w: WallId) -> Option<PartId> {
         self.parts.iter().find(|(_, ws)| ws.contains(&w)).map(|(p, _)| *p)
+    }
+
+    /// The feature that made a wall or joint (its faces are named by it).
+    pub fn owner(&self, k: PieceKey) -> FeatureId {
+        self.owners.iter().rev().find(|(x, _)| *x == k).map_or(self.feature, |(_, f)| *f)
     }
 }
 

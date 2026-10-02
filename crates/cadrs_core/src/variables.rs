@@ -329,6 +329,11 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s("Second depth", &mut c.depth_expr, &mut c.depth, L);
             }
         }
+        FeatureKind::SheetMetal(x) => {
+            for (label, expr, value, angle) in x.exprs_mut() {
+                s(label, expr, value, if angle { A } else { L });
+            }
+        }
         FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)

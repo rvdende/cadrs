@@ -27,15 +27,15 @@ use crate::sheetmetal::{SheetMetalContext, SheetMetalModelFeature, SheetMetalOp}
 use crate::solid::Solid;
 
 /// A stable key for a face, edge or curve name.
-fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
+pub(super) fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
     naming::stable_hash(format!("{x:?}").as_bytes())
 }
 
-fn v3(a: Vec3) -> V3 {
+pub(super) fn v3(a: Vec3) -> V3 {
     V3::new(a[0], a[1], a[2])
 }
 
-fn p3(a: Vec3) -> P3 {
+pub(super) fn p3(a: Vec3) -> P3 {
     P3::new(a[0], a[1], a[2])
 }
 
@@ -239,7 +239,7 @@ fn pick_key(state: &State, b: &EdgeOrFace) -> Option<u64> {
 }
 
 /// The face of a reference on its part: (part state, face index).
-fn face_index<'a>(state: &'a State, f: &crate::document::FaceRef) -> Option<(&'a PartState, usize)> {
+pub(super) fn face_index<'a>(state: &'a State, f: &crate::document::FaceRef) -> Option<(&'a PartState, usize)> {
     let (part, _) = face_ids(state, f)?;
     let (i, _) = part.part.solid.resolve_face(&f.face, None, Some(f.seed)).ok()?;
     Some((part, i))
@@ -249,7 +249,7 @@ fn face_index<'a>(state: &'a State, f: &crate::document::FaceRef) -> Option<(&'a
 type SketchChains = Vec<(cadrs_sketch::PlaneFrame, Vec<ChainIn>)>;
 
 /// One folded flat-pattern part: its walls, body and names, and its pieces' volume.
-type Folded = (Vec<WallId>, BodyId, BodyNames, f64);
+pub(super) type Folded = (Vec<WallId>, BodyId, BodyNames, f64);
 
 /// A sketch's curves joined into chains (only the picked ones, unless the whole sketch is),
 /// with how many picked curves are gone.
@@ -388,7 +388,7 @@ fn removed_of(part: &FlatPart, s: PieceSource) -> Vec<Polygon> {
 }
 
 /// Why a sheet metal model fails flat (X6), the collision first.
-fn flat_error(flat: &FlatPattern) -> Option<String> {
+pub(super) fn flat_error(flat: &FlatPattern) -> Option<String> {
     flat.errors
         .iter()
         .find(|e| matches!(e, FlatError::Collision { .. }))
@@ -399,7 +399,8 @@ fn flat_error(flat: &FlatPattern) -> Option<String> {
 impl Rebuilder {
     /// The folded bodies of a model's flat-pattern parts: each with its walls, body, names and
     /// the sum of its pieces' volumes.
-    fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
+    /// `op_of` names each piece's faces (P3I.4: by the feature that made the wall or bend).
+    pub(super) fn fold(&mut self, op_of: &dyn Fn(PieceSource) -> cadrs_kernel::OpId, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         let release = |k: &mut cadrs_kernel::backend::occt::OcctKernel, made: &[(BodyId, BodyNames, f64)]| {
@@ -413,10 +414,10 @@ impl Rebuilder {
                 let removed = removed_of(part, piece.source);
                 let r = match piece.source {
                     PieceSource::Wall(w) => match model.wall(w) {
-                        Some(wall) => self.wall_bodies(op, wall, &removed, t),
+                        Some(wall) => self.wall_bodies(op_of(piece.source), wall, &removed, t),
                         None => continue,
                     },
-                    PieceSource::Bend(j) => self.bend_body(op, model, j, &removed),
+                    PieceSource::Bend(j) => self.bend_body(op_of(piece.source), model, j, &removed),
                 };
                 match r {
                     Ok(v) => made.extend(v),
@@ -771,6 +772,8 @@ impl Rebuilder {
             active: true,
             wall_keys: built.walls.clone(),
             joint_keys: built.joints.clone(),
+            def: Some(built.def.clone()),
+            owners: Vec::new(),
         };
         let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
             let mut next = (**state).clone();
@@ -795,7 +798,7 @@ impl Rebuilder {
             return fail_keeping_context(ctx, why);
         }
         let op = id.0;
-        let folded = self.fold(op, &model, &flat)?;
+        let folded = self.fold(&|_| op, op, &model, &flat)?;
         // Walls running into each other in 3D: the fused body is smaller than its pieces.
         for (_, body, _, sum) in &folded {
             let v = self.kernel.mass_properties(*body).map(|m| m.volume).unwrap_or(*sum);
