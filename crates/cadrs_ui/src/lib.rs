@@ -60,6 +60,7 @@ pub mod tab_strip;
 pub mod text_dialog;
 pub mod table;
 pub mod tabs;
+pub mod tag;
 pub mod theme;
 pub mod timeline;
 pub mod toast;
@@ -96,6 +97,7 @@ pub use inline_edit::{
     InlineEditLabel, InlineEditOptions, begin_inline_edit,
 };
 pub use tabs::Tab;
+pub use tag::Tag;
 pub use tab_strip::{TabStrip, TabStripSelect, TabStripState};
 pub use toolbar::{Kbd, ToolButton, toolbar_separator};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};

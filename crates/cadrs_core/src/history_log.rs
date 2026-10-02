@@ -23,6 +23,14 @@
 //!   entry at which the feature regenerated without error ([`HistoryLog::note_healthy`]);
 //!   "Edit healthy moment" shows the Part Studio at that entry.
 //!
+//! - **Workspaces** (P3E.4, TD12.4–TD12.7): Main and the **branches** made from a version
+//!   ([`HistoryLog::branch`]). Each has its own changes (a [`Track`]); the log's own entries are
+//!   the **current** workspace's (the one the document file holds), the others are kept aside
+//!   until [`HistoryLog::switch_to`] swaps them in. A branch starts as an exact copy of its
+//!   version, so its elements, features and part ids are the same as Main's. Versions belong to
+//!   the workspace they were made in ([`Version::workspace`]). A log without branches (every
+//!   log before P3E.4) is Main only and is written exactly as before.
+//!
 //! Commands are applied through snapshots (see [`crate::command`]), not replayed, so a delta
 //! is the element contents a change produced rather than the command: replaying a delta can
 //! never come out differently from the original change.
@@ -36,6 +44,10 @@ use crate::document::{Document, Element, ElementKind, Feature};
 use crate::ids::{DocumentId, ElementId, FeatureId};
 use crate::library::Timestamp;
 use crate::store::{Store, StoreError};
+
+mod workspaces;
+use workspaces::Track;
+pub use workspaces::{MAIN_NAME, Workspace, WorkspaceId};
 
 /// A full copy of the document is kept every this many entries.
 pub const SNAPSHOT_EVERY: usize = 16;
@@ -252,9 +264,16 @@ pub struct Version {
     /// the user.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     auto: bool,
+    /// The workspace it was made in (P3E.4; Main for every version before).
+    #[serde(default, skip_serializing_if = "WorkspaceId::is_main")]
+    workspace: WorkspaceId,
 }
 
 impl Version {
+    /// The workspace it was made in (P3E.4): its entry is one of that workspace's.
+    pub fn workspace(&self) -> WorkspaceId {
+        self.workspace
+    }
     /// Made automatically by Update all references (ER4.7).
     pub fn auto(&self) -> bool {
         self.auto
@@ -301,6 +320,16 @@ pub struct HistoryLog {
     /// The versions, oldest first.
     #[serde(default)]
     versions: Vec<Version>,
+    /// P3E.4: the workspace whose changes `entries` are (and whose state the document file
+    /// holds); Main unless a branch was last opened.
+    #[serde(default, skip_serializing_if = "WorkspaceId::is_main")]
+    current: WorkspaceId,
+    /// P3E.4: the branches, oldest first (Main is implied).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workspaces: Vec<Workspace>,
+    /// P3E.4: the changes of every workspace but the current one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parked: Vec<Track>,
     /// The current state (the last entry's), kept so appending doesn't rebuild it.
     #[serde(skip)]
     head: Option<Document>,
@@ -318,6 +347,8 @@ pub enum Origin {
     Redo(String),
     /// Restore to an earlier entry (its label).
     Restore(String),
+    /// P3E.4: a merge from another workspace (its name).
+    Merge(String),
 }
 
 impl HistoryLog {
@@ -342,6 +373,9 @@ impl HistoryLog {
             snapshots: vec![(0, doc.clone())],
             healthy: Vec::new(),
             versions: Vec::new(),
+            current: WorkspaceId::MAIN,
+            workspaces: Vec::new(),
+            parked: Vec::new(),
             head: Some(doc.clone()),
             upgraded: false,
         }
@@ -394,6 +428,7 @@ impl HistoryLog {
                 (action.to_string(), label)
             }
             Origin::Restore(l) => ("Restore".to_string(), format!("Restore : {l}")),
+            Origin::Merge(l) => ("Merge".to_string(), format!("Merge from {l}")),
         };
         self.entries.push(LogEntry {
             time,
@@ -426,16 +461,7 @@ impl HistoryLog {
         {
             return Some(h.clone());
         }
-        let (at, snap) = self
-            .snapshots
-            .iter()
-            .filter(|(i, _)| *i <= k)
-            .max_by_key(|(i, _)| *i)?;
-        let mut doc = snap.clone();
-        for e in &self.entries[at + 1..=k] {
-            e.delta.apply(&mut doc);
-        }
-        Some(doc)
+        track_state_at(&self.entries, &self.snapshots, k)
     }
 
     /// The indices of the entries with a full copy.
@@ -464,6 +490,7 @@ impl HistoryLog {
             time,
             user: user.to_string(),
             auto: false,
+            workspace: self.current,
         });
         id
     }
@@ -494,7 +521,8 @@ impl HistoryLog {
 
     /// The document as it was at version `id`.
     pub fn document_at_version(&self, id: VersionId) -> Option<Document> {
-        self.state_at(self.version(id)?.entry)
+        let v = self.version(id)?;
+        self.workspace_state_at(v.workspace, v.entry)
     }
 
     /// Notes that `features` of `element` regenerated without error in the current state.
@@ -603,6 +631,20 @@ impl HistoryLog {
     pub fn catch_up(&mut self, doc: &Document, time: Timestamp, user: &str) {
         self.record(doc, Origin::Command(String::new()), time, user);
     }
+}
+
+/// The document as it was after entry `k` of a workspace's changes: the nearest full copy at or
+/// before it with the deltas after that applied.
+fn track_state_at(entries: &[LogEntry], snapshots: &[(usize, Document)], k: usize) -> Option<Document> {
+    if k >= entries.len() {
+        return None;
+    }
+    let (at, snap) = snapshots.iter().filter(|(i, _)| *i <= k).max_by_key(|(i, _)| *i)?;
+    let mut doc = snap.clone();
+    for e in &entries[at + 1..=k] {
+        e.delta.apply(&mut doc);
+    }
+    Some(doc)
 }
 
 /// The tab, feature and action a change is about, worked out from the states either side.

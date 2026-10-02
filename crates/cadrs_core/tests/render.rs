@@ -21,12 +21,12 @@ fn v(x: f64, y: f64) -> Vec2 {
 }
 
 fn sketch(g: Sketch) -> Feature {
-    Feature { id: FeatureId::new(), name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }) }
+    Feature { id: FeatureId::new(), name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }), suppress_by: None }
 }
 
 fn extrude(s: &Feature, seeds: &[Vec2], depth: f64) -> Feature {
     let g = &s.sketch().unwrap().geometry;
-    Feature { id: FeatureId::new(), name: "Extrude".into(), kind: FeatureKind::Extrude(samples::extrude_of(samples::region_refs(s.id, g, seeds), depth)) }
+    Feature { id: FeatureId::new(), name: "Extrude".into(), kind: FeatureKind::Extrude(samples::extrude_of(samples::region_refs(s.id, g, seeds), depth)), suppress_by: None }
 }
 
 /// The Control Arm (PS6; both extrudes New, two parts), the first part in Aluminum - 6061 and

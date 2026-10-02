@@ -168,6 +168,11 @@ pub fn char_key(c: char) -> KeySpec {
         '/' | '?' => C::Slash,
         ';' | ':' => C::Semicolon,
         '\'' | '"' => C::Quote,
+        // P3E.3b: `[` (the Measure tool's shortcut) reached the app as an unknown key.
+        '[' | '{' => C::BracketLeft,
+        ']' | '}' => C::BracketRight,
+        '\\' | '|' => C::Backslash,
+        '`' | '~' => C::Backquote,
         _ => C::Unidentified(NativeKeyCode::Unidentified),
     };
     let logical = if c == ' ' {

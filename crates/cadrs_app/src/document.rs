@@ -106,7 +106,7 @@ pub struct TabButton(pub ElementId);
 
 /// The row the tabs are spawned into.
 #[derive(Component)]
-struct TabStrip;
+pub(crate) struct TabStrip;
 
 /// The "+" (insert new tab) button; its menu's actions bubble to it.
 #[derive(Component)]
@@ -487,6 +487,8 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
             t.text(doc_name, t.font_xl, FontWeight::BOLD, t.foreground),
             Pickable::IGNORE,
         ));
+        // P3E.4: the open workspace's name; a click lists the workspaces to switch to
+        // (see [`crate::workspaces`]).
         bar.spawn((
             Name::new("branch-label"),
             t.text("Main", t.font_md, FontWeight::NORMAL, t.subtle_foreground),
@@ -494,6 +496,9 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
                 margin: UiRect::new(Val::Px(4.0), Val::Px(10.0), Val::Px(3.0), Val::ZERO),
                 ..default()
             },
+            bevy::ui_widgets::Button,
+            bevy::picking::hover::Hovered::default(),
+            Tooltip::new("Workspaces"),
         ));
         // Placeholder counters (link, public, versions, branches, likes).
         for (name, icon_name, count, tip) in [
@@ -764,6 +769,9 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
+            // P3E.3b: the Analysis tools (icon-rs has no analysis icon: the curvature glyph
+            // stands in).
+            ("view-analysis", "constraint-curvature", "Analysis tools"),
             ("view-mass", "mass-properties", "Mass properties"),
         ] {
             s.spawn(ToolButton::new(name, icon_name).icon_size(18.0).tooltip(tip).build(t));
@@ -1191,6 +1199,9 @@ fn rebuild_tabs(
             })
             .collect::<Vec<_>>(),
     );
+    // P3E.3a (P3E.2 carried delta): the folder tab that holds the active tab is marked.
+    let layout = cadrs_core::tab_tree::layout(&doc.doc);
+    let holds_active = |f: cadrs_core::ElementId| new.active.is_some_and(|a| cadrs_core::tab_tree::tabs_in(&layout, f).contains(&a));
     commands.entity(strip).with_children(|s| {
         for (entry, node) in new.tabs.iter().zip(names) {
             match entry {
@@ -1209,6 +1220,7 @@ fn rebuild_tabs(
                         Tab::new(node.replacen("tab-", "tab-folder-", 1), name.clone())
                             .icon("folder")
                             .width(150.0)
+                            .marked(holds_active(*id))
                             .build(&theme),
                         crate::tab_folders::FolderTab(*id),
                         Tooltip::new(format!("{name} ({count} tabs)")),
@@ -3286,6 +3298,26 @@ fn rebuild_feature_rows(
                     .id();
                 row.insert_children(2, &[glyph]);
             }
+            // IR5.5: a feature with a suppression variable shows it in a tag after its name
+            // ("#withHole"), grey with the row while it suppresses.
+            if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
+                let (when, colour) = if suppressed {
+                    ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
+                } else {
+                    ("currently active", t.muted_foreground)
+                };
+                let rule = label.strip_prefix("not ").map_or_else(|| format!("{label} is 0 (false)"), |l| format!("{l} is not 0 (true)"));
+                let tag = row
+                    .commands()
+                    .spawn((
+                        cadrs_ui::Tag::new(format!("{row_name}-suppression-variable"), label.clone()).color(colour).outline().build(&t),
+                        cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
+                    ))
+                    // Hoverable for its tooltip; clicks go to the row.
+                    .insert(Pickable { should_block_lower: false, is_hoverable: true })
+                    .id();
+                row.insert_children(2, &[tag]);
+            }
             let in_folder = folder.is_some();
             // P3G.4 (DV1.3, ER X2): a Derived feature's linked icon, as an instance's.
             if let Some((_, _, _, Some((icon, tip)))) = derived {
@@ -3457,7 +3489,9 @@ fn on_feature_context_menu(
     // P3.9: suppression, the rollback bar, folders and dependencies.
     let el = doc.as_ref().and_then(|d| d.active_element());
     let name = el.and_then(|el| el.feature(row.0)).map(|f| f.name.clone()).unwrap_or_default();
-    let suppressed = el.is_some_and(|el| el.is_suppressed(row.0));
+    // Suppressed by Suppress (Unsuppress undoes that, not a variable's suppression, IR5.5).
+    let suppressed = el.is_some_and(|el| el.suppressed().contains(&row.0));
+    let by_variable = el.and_then(|el| el.feature(row.0)).is_some_and(|f| f.suppress_by.is_some());
     let can_edit = el.is_some_and(|el| crate::feature_list::editable(el, row.0));
     let bar_at_end = el.is_none_or(|el| el.rollback_index() == el.features().len());
     let below_this = el.is_some_and(|el| el.features().iter().position(|f| f.id == row.0).is_some_and(|i| el.rollback_index() == i + 1));
@@ -3526,18 +3560,22 @@ fn on_feature_context_menu(
     menu = menu
         .item(MenuItem::new("feature-show-all-sketches", "Show all sketches"))
         .separator()
-        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(true))
+        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(in_dialog))
         .separator()
         .item(if suppressed {
             MenuItem::new("feature-unsuppress", "Unsuppress").disabled(in_dialog)
         } else {
             MenuItem::new("feature-suppress", "Suppress").disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable or a configuration: cadrs has neither yet.
-        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu(vec![
-            MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(true).into(),
-            MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into(),
-        ]))
+        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu({
+            let mut items: Vec<cadrs_ui::menu::MenuEntry> = vec![MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(editing || in_dialog).into()];
+            if by_variable {
+                items.push(MenuItem::new("feature-remove-suppression-variable", "Remove suppression variable").disabled(in_dialog).into());
+            }
+            items.push(MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into());
+            items
+        }))
         .separator()
         .item(MenuItem::new("feature-add-comment", "Add comment").icon("comments").disabled(true))
         .separator()
@@ -3587,6 +3625,8 @@ fn on_feature_menu_action(
         "feature-hide" => commands.queue(move |world: &mut World| crate::feature_menu::set_sketch_visible(world, id, false)),
         "feature-show-all-sketches" => commands.queue(crate::feature_menu::show_all_sketches),
         "feature-zoom-to" => commands.queue(move |world: &mut World| crate::feature_menu::zoom_to_feature(world, id)),
+        // P3E.3a (IR5.5): a section by the feature's plane (a plane feature, a sketch).
+        "feature-section-view" => commands.queue(move |world: &mut World| crate::section_view::open_for_feature(world, id)),
         "feature-rename" => {
             commands.queue(move |world: &mut World| rename_feature(world, id));
         }
@@ -3619,6 +3659,9 @@ fn on_feature_menu_action(
             }
         }),
         "feature-suppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, true)),
+        // IR5.5: Dynamic suppression ▸ Suppress by variable.
+        "feature-suppress-by-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::open(world, id)),
+        "feature-remove-suppression-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id)),
         "feature-unsuppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),
         "feature-add-to-folder" => commands.queue(move |world: &mut World| crate::feature_folders::add_selection_to_folder(world, id)),
         "feature-roll-here" => commands.queue(move |world: &mut World| crate::feature_list::roll_to(world, Some(id))),

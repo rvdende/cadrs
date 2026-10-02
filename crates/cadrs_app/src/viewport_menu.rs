@@ -125,7 +125,8 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             .item(MenuItem::new("viewport-export-face", "Export as DXF/DWG…").icon("file-export").disabled(!planar_face))
             .separator()
             .item(MenuItem::new("viewport-normal-to", "View normal to face").disabled(!planar_face))
-            .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit")),
+            .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
+            .item(MenuItem::new("viewport-zoom-to-selection", "Zoom to selection")),
         MenuTarget::Sketch(s) => {
             let name = feature_name(world, s);
             menu.item(MenuItem::new("viewport-edit-sketch", format!("Edit {name}…")).icon("edit"))
@@ -142,6 +143,7 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
                 .separator()
                 .item(MenuItem::new("viewport-normal-to", "View normal to sketch plane"))
                 .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
+                .item(MenuItem::new("viewport-zoom-to-selection", "Zoom to selection"))
         }
         MenuTarget::Empty | MenuTarget::Sketching => menu
             .text_only()
@@ -237,6 +239,8 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         ("viewport-toggle-planes", _) => world.resource_mut::<PlanesVisible>().toggle_all(),
         ("viewport-create-selection", _) => crate::create_selection::open(world),
         ("viewport-zoom-to-fit", _) => crate::viewport::zoom_to_fit(world),
+        // P3E.3a: whatever is selected (what was right-clicked is).
+        ("viewport-zoom-to-selection", _) => crate::view_options::zoom_to_selection(world),
         ("viewport-normal-to", MenuTarget::Sketching) => crate::viewport::normal_to_sketch(world),
         ("viewport-normal-to", _) => {
             let normal = match target {

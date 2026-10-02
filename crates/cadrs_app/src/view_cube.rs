@@ -618,11 +618,16 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
                 .icon_size(16.0)
                 .tooltip("View options")
                 .build(theme),
-            cadrs_ui::prelude::observe(
-                |a: On<Activate>, theme: Res<Theme>, mut commands: Commands| {
-                    cadrs_ui::open_menu(&mut commands, a.entity, view_menu().build(&theme));
-                },
-            ),
+            cadrs_ui::prelude::observe(|a: On<Activate>, mut commands: Commands| {
+                let anchor = a.entity;
+                commands.queue(move |world: &mut World| {
+                    let state = ViewMenuState::of(world);
+                    let theme = world.resource::<Theme>().clone();
+                    let mut commands = world.commands();
+                    cadrs_ui::open_menu(&mut commands, anchor, view_menu(state).build(&theme));
+                    world.flush();
+                });
+            }),
             cadrs_ui::prelude::observe(on_view_menu),
         ))
         .insert(Node {
@@ -638,10 +643,46 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
     });
 }
 
-/// The view cube's ▾ menu, grouped like Onshape's; what cadrs does not have yet is disabled,
-/// and the render options it always uses are shown checked.
-fn view_menu() -> cadrs_ui::Menu {
+/// What the view menu shows checked or enabled.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewMenuState {
+    pub render: crate::camera::RenderMode,
+    /// Each render group's last mode (its row's label).
+    pub groups: (crate::camera::RenderMode, crate::camera::RenderMode),
+    pub perspective: bool,
+    pub previous: bool,
+    pub section: bool,
+    /// A Part Studio or an Assembly (not a PCB Studio): named views and section views.
+    pub modeling: bool,
+}
+
+impl ViewMenuState {
+    pub fn of(world: &World) -> Self {
+        let view = world.resource::<ViewportView>().view;
+        let kind = *world.resource::<crate::viewport::ActiveKind>();
+        let element = world.resource::<ViewportView>().element;
+        Self {
+            render: view.render,
+            groups: world.resource::<crate::view_options::RenderGroups>().labels(element, view.render),
+            perspective: view.perspective,
+            previous: crate::view_options::has_previous(world),
+            section: crate::section_view::active(world),
+            modeling: matches!(kind, crate::viewport::ActiveKind::PartStudio | crate::viewport::ActiveKind::Assembly),
+        }
+    }
+}
+
+/// The view cube's ▾ menu, grouped like Onshape's (`reference/onshape/view/view-cube-menu4-01.png`).
+/// P3E.3a: the render modes in their two groups (the shaded modes, then the hidden-line ones;
+/// the group in use is checked, and each is named after the mode last picked in it),
+/// Perspective view, Named views…, Previous view, Zoom to window and Section view… work. What
+/// cadrs does not have yet is disabled.
+fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
     use cadrs_ui::MenuItem as I;
+    let line = st.render.line_drawing();
+    // Each group's row reads the mode last picked in it.
+    let (shaded_label, line_label) = (st.groups.0.label(), st.groups.1.label());
+    let check = |on: bool, item: I| if on { item.icon("check") } else { item };
     cadrs_ui::Menu::new("view-menu")
         .align_end()
         .min_width(222.0)
@@ -652,35 +693,23 @@ fn view_menu() -> cadrs_ui::Menu {
         .separator()
         .item(I::new("view-graphics", "Graphics preferences…").icon("settings").disabled(true))
         .separator()
-        .item(I::new("view-named", "Named views…").disabled(true))
-        .item(I::new("view-previous", "Previous view").disabled(true))
+        .item(I::new("view-named", "Named views…").disabled(!st.modeling))
+        .item(I::new("view-previous", "Previous view").disabled(!st.previous))
         .separator()
         .item(I::new("view-zoom-to-fit", "Zoom to fit").shortcut("F"))
-        .item(I::new("view-zoom-window", "Zoom to window").disabled(true))
+        .item(I::new("view-zoom-window", "Zoom to window"))
         .separator()
-        .item(I::new("view-perspective", "Perspective view").disabled(true))
+        .item(check(st.perspective, I::new("view-perspective", "Perspective view")))
         .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
         .separator()
-        .item(
-            I::new("view-shaded", "Shaded with edges")
-                .icon("check")
-                .submenu(vec![]),
-        )
-        .item(
-            I::new("view-hidden-edges", "Hidden edges removed")
-                .icon("check")
-                .submenu(vec![]),
-        )
-        .item(
-            I::new("view-tangent-edges", "Tangent edges visible")
-                .icon("check")
-                .submenu(vec![]),
-        )
+        .item(check(!line, I::new("view-shaded", shaded_label)).submenu(crate::view_options::render_items(st.render, false)))
+        .item(check(line, I::new("view-hidden-edges", line_label)).submenu(crate::view_options::render_items(st.render, true)))
+        .item(I::new("view-tangent-edges", "Tangent edges visible").icon("check").submenu(vec![]))
         .separator()
         .item(I::new("view-high-quality", "View in high quality").disabled(true))
         .item(I::new("view-boundary", "Highlight boundary edges").disabled(true))
         .separator()
-        .item(I::new("view-section", "Section view…").icon("section-view").disabled(true))
+        .item(I::new("view-section-item", if st.section { "Exit section view" } else { "Section view…" }).icon("section-view").disabled(!st.modeling))
 }
 
 fn on_view_menu(
@@ -690,8 +719,14 @@ fn on_view_menu(
     mut commands: Commands,
 ) {
     let target = view.target();
+    if let Some(slug) = ev.item.strip_prefix("view-render-") {
+        if let Some(mode) = crate::camera::RenderMode::ALL.into_iter().find(|m| m.slug() == slug) {
+            commands.queue(move |world: &mut World| crate::view_options::set_render_mode(world, mode));
+        }
+        return;
+    }
     let to = match ev.item.as_str() {
-        "view-isometric" => crate::viewport::fitted_isometric(rect.0.size()),
+        "view-isometric" => crate::viewport::fitted_isometric_for(view.view.perspective, rect.0.size()),
         // Dimetric: two axes foreshortened equally; trimetric: Onshape's default view.
         "view-dimetric" => ViewState {
             azimuth: DIMETRIC.0,
@@ -701,6 +736,27 @@ fn on_view_menu(
         "view-trimetric" => target.oriented(crate::camera::StandardView::Default),
         "view-zoom-to-fit" => {
             commands.queue(crate::viewport::zoom_to_fit);
+            return;
+        }
+        "view-zoom-window" => {
+            commands.queue(crate::view_options::start_zoom_window);
+            return;
+        }
+        "view-previous" => {
+            commands.queue(crate::view_options::previous_view);
+            return;
+        }
+        "view-named" => {
+            commands.queue(crate::view_options::open_named_views);
+            return;
+        }
+        "view-perspective" => {
+            let on = !view.view.perspective;
+            commands.queue(move |world: &mut World| crate::view_options::set_perspective(world, on));
+            return;
+        }
+        "view-section-item" => {
+            commands.queue(crate::section_view::toggle);
             return;
         }
         _ => return,

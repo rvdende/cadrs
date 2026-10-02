@@ -301,7 +301,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             .item(MenuItem::new("asm-hide-all", "Hide all instances"))
             .item(MenuItem::new("asm-isolate", "Isolate…"))
             .item(transparent_item)
-            .item(later("asm-section", "Section view…".into(), "Section views come with the Hands-On Test Drive stage (P3E.3)").icon("section-view"))
+            .item(MenuItem::new("asm-section", "Section view…").icon("section-view"))
             .item(if inst.suppressed { MenuItem::new("asm-unsuppress", format!("Unsuppress {part}")) } else { MenuItem::new("asm-suppress", format!("Suppress {part}")) })
             .item(fix)
             .item(MenuItem::new("asm-show-mates", "Show mates"))
@@ -649,6 +649,8 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
         }
         "asm-zoom-fit" => crate::viewport::zoom_to_fit(world),
         "asm-zoom-selection" => zoom_to(world, &parts),
+        // P3E.3a (A3.3, X15): a section through the instance.
+        "asm-section" => crate::section_view::open_for_instance(world, &parts),
         "asm-show-all" => {
             show_all_instances(world, element);
             let mut cache = world.resource_mut::<PartCache>();
@@ -693,6 +695,22 @@ fn zoom_to(world: &mut World, parts: &[cadrs_core::PartId]) {
     let mut view = world.resource_mut::<crate::viewport::ViewportView>();
     let to = view.target().fitted(&pts, size, crate::viewport::ASM_FIT_FILL);
     view.animate_to(to);
+}
+
+/// **Switch to** from a BOM row (TD9.4, P3E.5): the row's Part Studio, its part selected, or
+/// its subassembly's tab.
+pub fn switch_to_owner(world: &mut World, owner: cadrs_core::properties::PropertyOwner) {
+    use cadrs_core::properties::PropertyOwner;
+    let (element, picks) = match owner {
+        PropertyOwner::Part { element, part } => (element, vec![Pick::Part(part)]),
+        PropertyOwner::Assembly { element } => (element, Vec::new()),
+        PropertyOwner::Item { .. } => return,
+    };
+    if world.resource::<ActiveDocument>().doc.element(element).is_none() {
+        return;
+    }
+    world.resource_mut::<ActiveDocument>().set_active(element);
+    world.insert_resource(super::PendingSelection(Some((element, picks))));
 }
 
 /// **Switch to** (A4.6, X11): the instance's Part Studio becomes the active tab with its part

@@ -254,7 +254,7 @@ Not scheduled: nothing. Out of scope: P1.4 (multi-user, cloud) and the quiz (lea
   mate's Offset Z).
 
 **Not done in P3F.4:** mate limits and relation ratios don't take expressions (only offsets);
-Suppress by variable stays disabled (see [inspection-and-repair-gaps.md](inspection-and-repair-gaps.md));
+Suppress by variable stayed disabled here (built later, 2026-10-02: IR5.5 in [inspection-and-repair-gaps.md](inspection-and-repair-gaps.md));
 variables across documents (Variable Studios) are stage 3G.
 
 ## P3F.5 status

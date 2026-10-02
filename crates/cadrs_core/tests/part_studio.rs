@@ -70,7 +70,7 @@ impl Doc {
     fn push(&mut self, name: &str, kind: FeatureKind) -> FeatureId {
         let f = FeatureId::new();
         let el = self.d.element_mut(self.el).unwrap();
-        el.features_mut().unwrap().push(Feature { id: f, name: name.into(), kind });
+        el.features_mut().unwrap().push(Feature { id: f, name: name.into(), kind, suppress_by: None });
         f
     }
 

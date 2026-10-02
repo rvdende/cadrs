@@ -5,8 +5,9 @@
 //    dimensions | Add selection to folder… | Hide, Show all sketches | Section view… (disabled)
 //    | Suppress, Dynamic suppression ▸ | Add comment (disabled: collaboration) | Zoom to
 //    selection | Show dependencies… | Roll to here | Edit sketch appearance… | Delete.
-// 02 Dynamic suppression ▸: suppression by a variable or a configuration (both disabled:
-//    cadrs has neither yet).
+// 02 Dynamic suppression ▸: Suppress by variable… (IR5.5, see
+//    `course_insp_suppress_by_variable`) and Suppress by configuration… (disabled:
+//    configurations are out of scope).
 // 03 Show dimensions, seen from the top: Sketch 1's dimensions drawn although it isn't being
 //    edited.
 // 04 the menu again: the item now reads "Hide dimensions".

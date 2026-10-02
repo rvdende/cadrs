@@ -34,7 +34,7 @@ fn sketch(fid: FeatureId, name: String, ops: Vec<SketchOp>) -> Feature {
     for op in ops {
         op.apply(&mut g).expect("fixture sketch");
     }
-    Feature { id: fid, name, kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }) }
+    Feature { id: fid, name, kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }), suppress_by: None }
 }
 
 fn region(sketch: &Feature, seed: Vec2) -> RegionRef {
@@ -67,6 +67,7 @@ pub fn studio_features(parts: usize, holes: usize) -> Vec<Feature> {
             id: id(base + 1),
             name: format!("#{name}"),
             kind: FeatureKind::Variable(VariableFeature::length(&name, &format!("{THICKNESS} mm"))),
+            suppress_by: None,
         });
         let x0 = i as f64 * PITCH;
         let (w, h) = PLATE;
@@ -87,6 +88,7 @@ pub fn studio_features(parts: usize, holes: usize) -> Vec<Feature> {
                 op: BooleanOp::New,
                 ..ExtrudeFeature::default()
             }),
+            suppress_by: None,
         });
         for j in 0..holes {
             let c = hole_center(i, j);
@@ -104,6 +106,7 @@ pub fn studio_features(parts: usize, holes: usize) -> Vec<Feature> {
                     merge_scope: vec![plate_part(i)],
                     ..ExtrudeFeature::default()
                 }),
+                suppress_by: None,
             });
         }
     }
@@ -148,6 +151,7 @@ pub fn document(tabs: usize) -> Document {
             id: id(base + 1),
             name: "Extrude 1".into(),
             kind: FeatureKind::Extrude(ExtrudeFeature { regions: vec![r], depth: 10.0, depth_expr: "10 mm".into(), ..ExtrudeFeature::default() }),
+            suppress_by: None,
         };
         if let ElementKind::PartStudio { features, .. } = &mut e.kind {
             *features = vec![s, x];
