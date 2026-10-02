@@ -56,6 +56,7 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Fill(_) => "Fill",
         FeatureKind::Variable(_) => "Variable",
         FeatureKind::SheetMetalModel(_) => "Sheet metal model",
+        FeatureKind::FlatExtrude(_) => "Extrude",
     }
 }
 

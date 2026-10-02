@@ -388,7 +388,7 @@ fn removed_of(part: &FlatPart, s: PieceSource) -> Vec<Polygon> {
 }
 
 /// Why a sheet metal model fails flat (X6), the collision first.
-fn flat_error(flat: &FlatPattern) -> Option<String> {
+pub(super) fn flat_error(flat: &FlatPattern) -> Option<String> {
     flat.errors
         .iter()
         .find(|e| matches!(e, FlatError::Collision { .. }))
@@ -399,7 +399,7 @@ fn flat_error(flat: &FlatPattern) -> Option<String> {
 impl Rebuilder {
     /// The folded bodies of a model's flat-pattern parts: each with its walls, body, names and
     /// the sum of its pieces' volumes.
-    fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
+    pub(super) fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         let release = |k: &mut cadrs_kernel::backend::occt::OcctKernel, made: &[(BodyId, BodyNames, f64)]| {
@@ -516,8 +516,10 @@ impl Rebuilder {
         let total = len.abs();
         let eps = 1e-3 * model.params.thickness.max(0.01);
         let mut tools: Vec<BodyId> = Vec::new();
-        for cut in removed {
-            let Some((lo, hi)) = cut.bounds() else { continue };
+        // P3I.6: a cut that isn't a rectangle in (s, u) (a flat cut's circle or slanted edge) is
+        // taken out as thin wedges, each as long as the cut is over its slice.
+        let boxes: Vec<(P2, P2)> = removed.iter().flat_map(|c| super::sheetmetal_flat::wedge_boxes(c, allowance)).collect();
+        for (lo, hi) in boxes {
             let (s0, s1) = (lo.x.max(0.0), hi.x.min(total));
             let (u0, u1) = (lo.y.max(0.0), hi.y.min(allowance));
             if s1 - s0 < 1e-9 || u1 - u0 < 1e-9 {
@@ -774,6 +776,7 @@ impl Rebuilder {
         };
         let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
             let mut next = (**state).clone();
+            super::sheetmetal_flat::register_flat_planes(&mut next, &ctx);
             let mut all = (*next.sheet_metal).clone();
             all.retain(|c| c.feature != id);
             all.push(ctx);
@@ -830,6 +833,7 @@ impl Rebuilder {
         let mut o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
         ctx.parts = walls_of;
         let mut next = (*o.state).clone();
+        super::sheetmetal_flat::register_flat_planes(&mut next, &ctx);
         let mut all = (*next.sheet_metal).clone();
         all.retain(|c| c.feature != id);
         all.push(ctx);
