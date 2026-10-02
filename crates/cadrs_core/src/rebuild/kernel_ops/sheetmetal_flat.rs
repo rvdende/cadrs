@@ -116,7 +116,7 @@ impl Rebuilder {
             }
         }
         let geoms = state.geoms.clone();
-        let mut next = State { geoms: geoms.clone(), ..(**state).clone() };
+        let next = State { geoms: geoms.clone(), ..(**state).clone() };
         let mut placed: Vec<Placed> = Vec::new();
         let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
         for (walls, body, names, _) in folded {
