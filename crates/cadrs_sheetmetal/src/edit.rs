@@ -212,7 +212,39 @@ fn half_plane(p: P2, n: V2, size: f64) -> Polygon {
 /// The pieces of `poly` where `(x − p)·n ≥ 0`.
 fn half(poly: &Polygon, p: P2, n: V2) -> Vec<Polygon> {
     let size = size_of(poly) + (p.coords.norm());
-    poly::intersection(poly, &half_plane(p, n, size)).into_iter().filter(|q| q.area() > 1e-9).collect()
+    let hp = half_plane(p, n, size);
+    let out: Vec<Polygon> = poly::intersection(poly, &hp).into_iter().filter(|q| q.area() > 1e-9).collect();
+    exact(out, &[poly, &hp])
+}
+
+/// Boolean results put back on the exact points they came from: the inputs' vertices and where
+/// their edges cross. (The booleans round to a 1 nm grid; a wall's edge a hair off its bend's
+/// tangent line would leave the folded wall and bend apart.)
+fn exact(result: Vec<Polygon>, inputs: &[&Polygon]) -> Vec<Polygon> {
+    let edges = |q: &Polygon| -> Vec<(P2, P2)> {
+        std::iter::once(&q.outer).chain(q.holes.iter()).flat_map(|l| (0..l.len()).map(move |i| (l[i], l[(i + 1) % l.len()]))).collect()
+    };
+    let mut pts: Vec<P2> = inputs.iter().flat_map(|q| q.outer.iter().chain(q.holes.iter().flatten()).copied()).collect();
+    let all: Vec<Vec<(P2, P2)>> = inputs.iter().map(|q| edges(q)).collect();
+    for i in 0..all.len() {
+        for k in i + 1..all.len() {
+            for (a, b) in &all[i] {
+                for (c, d) in &all[k] {
+                    let (r, s2) = (b - a, d - c);
+                    let den = r.perp(&s2);
+                    if den.abs() < 1e-15 {
+                        continue;
+                    }
+                    let t = (c - a).perp(&s2) / den;
+                    let u = (c - a).perp(&r) / den;
+                    if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
+                        pts.push(a + r * t);
+                    }
+                }
+            }
+        }
+    }
+    result.iter().map(|q| poly::snap_to(q, &pts, 10.0 * poly::GRID)).collect()
 }
 
 /// Parameter intervals (along `d` from `o`) of the line `o + d·s` inside `poly`.
@@ -857,7 +889,8 @@ pub fn grow(p: &Polygon, by: f64) -> Polygon {
             parts.push(poly::circle(a, by, 24));
         }
     }
-    poly::union(&parts).into_iter().max_by(|a, b| a.area().total_cmp(&b.area())).unwrap_or_else(|| p.clone())
+    let refs: Vec<&Polygon> = parts.iter().collect();
+    exact(poly::union(&parts), &refs).into_iter().max_by(|a, b| a.area().total_cmp(&b.area())).unwrap_or_else(|| p.clone())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -882,7 +915,7 @@ pub fn add_tab(m: &mut Model, regions: &[Region3], walls: &[WallId]) -> Result<V
                 continue;
             }
             let tab = r.on_wall(w);
-            let u = poly::union(&[w.outline.clone(), tab]);
+            let u = exact(poly::union(&[w.outline.clone(), tab.clone()]), &[&w.outline, &tab]);
             if u.len() != 1 {
                 continue;
             }
@@ -927,7 +960,8 @@ fn merge_walls(m: &mut Model, a: WallId, b: WallId) {
     let wa = m.wall(a).expect("a").clone();
     let wb = m.wall(b).expect("b").clone();
     let to_a = |p: P2| wa.surface.local(wb.surface.point(p));
-    let u = poly::union(&[wa.outline.clone(), wb.outline.map(to_a)]);
+    let bb = wb.outline.map(to_a);
+    let u = exact(poly::union(&[wa.outline.clone(), bb.clone()]), &[&wa.outline, &bb]);
     if let Some(big) = u.into_iter().max_by(|x, y| x.area().total_cmp(&y.area())) {
         m.walls.iter_mut().find(|w| w.id == a).expect("a").outline = big;
     }
@@ -1014,7 +1048,9 @@ pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> R
         if shapes.is_empty() || shapes.iter().all(|s| poly::overlap_area(&w.outline, s) < 1e-9) {
             continue;
         }
-        let left = poly::difference(std::slice::from_ref(&w.outline), &shapes);
+        let mut inputs: Vec<&Polygon> = vec![&w.outline];
+        inputs.extend(shapes.iter());
+        let left = exact(poly::difference(std::slice::from_ref(&w.outline), &shapes), &inputs);
         let Some(big) = left.into_iter().filter(|p| p.area() > 1e-9).max_by(|a, b| a.area().total_cmp(&b.area())) else {
             return Err(EditError::WallCutAway);
         };
@@ -1385,10 +1421,9 @@ pub fn copy_walls(m: &mut Model, seeds: &[WallId], place: &Placement, seed: u64)
             }
             joints.push(c);
         }
-        // The base gives up what the copy's bend takes (its setback past the new tangent line),
-        // as it did for the original bend.
-        let t = m.params.thickness;
-        for (seg, orig, b) in trims {
+        // The base gives up what lies past the copy's tangent line, as it did for the original
+        // bend.
+        for (seg, orig, _) in trims {
             let Some(into) = poly::inward_normal(&base_wall.outline, orig) else { continue };
             let s0 = m.wall(base).expect("base").surface;
             let into3 = s0.direction_at(orig.a, into);
@@ -1397,20 +1432,15 @@ pub fn copy_walls(m: &mut Model, seeds: &[WallId], place: &Placement, seed: u64)
                 let q = base_wall.surface.local(base_wall.surface.point(seg.a) + new_into3);
                 (q - seg.a).normalize()
             };
-            let setback = if b.angle >= std::f64::consts::PI - 1e-9 {
-                0.0
-            } else if b.toward_material {
-                crate::bend::outside_setback(b.radius, t, b.angle).unwrap_or(0.0)
-            } else {
-                crate::bend::inside_setback(b.radius, b.angle).unwrap_or(0.0)
-            };
-            if poly::inward_normal(&base_wall.outline, seg).is_some() || setback <= 0.0 {
+            if poly::inward_normal(&base_wall.outline, seg).is_some() {
                 continue;
             }
-            let back = setback * (1.0 + 1e-9) + 1e-9;
+            // Everything of the base past the copy's tangent line, along its span, goes.
+            let back = 4.0 * size_of(&base_wall.outline);
             let band = Polygon::new(vec![seg.a, seg.b, seg.b - into_new * back, seg.a - into_new * back]);
             let bw = m.walls.iter_mut().find(|w| w.id == base).expect("base");
-            if let Some(big) = poly::difference(std::slice::from_ref(&bw.outline), &[band]).into_iter().max_by(|a, b| a.area().total_cmp(&b.area())) {
+            let left = exact(poly::difference(std::slice::from_ref(&bw.outline), std::slice::from_ref(&band)), &[&bw.outline, &band]);
+            if let Some(big) = left.into_iter().max_by(|a, b| a.area().total_cmp(&b.area())) {
                 bw.outline = big;
             }
         }
