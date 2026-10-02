@@ -802,32 +802,21 @@ fn spawn_tables(
                     .cell({
                         let th = th.clone();
                         move |c| {
-                            let s = if tangent {
-                                Select::new(format!("smt-joint-{i}-type")).option("Tangent", true).selected(0)
-                            } else {
-                                Select::new(format!("smt-joint-{i}-type")).option("Rip", true).option("Bend", true).selected(0)
-                            };
-                            c.spawn((Node { width: Val::Percent(100.0), padding: UiRect::horizontal(Val::Px(4.0)), ..default() },))
-                                .observe(stop_click)
-                                .with_children(|w| {
-                                    w.spawn((s.width(Val::Percent(100.0)).build(&th), JointSelect::Type(joint)));
-                                });
+                            let label = if tangent { "Tangent" } else { "Rip" };
+                            let options = if tangent { vec![("Tangent".to_string(), true)] } else { vec![("Rip".to_string(), true), ("Bend".to_string(), true)] };
+                            dropdown(c, &th, format!("smt-joint-{i}-type"), label, Dropdown { select: JointSelect::Type(joint), options, disabled: tangent });
                         }
                     })
                     .cell(move |c| {
                         if tangent {
                             return;
                         }
-                        let s = Select::new(format!("smt-joint-{i}-style"))
-                            .option(RipStyle::EdgeJoint.label(), true)
-                            .option(RipStyle::ButtDirection1.label(), ninety)
-                            .option(RipStyle::ButtDirection2.label(), ninety)
-                            .selected(RipStyle::ALL.iter().position(|s| *s == style).unwrap_or(0));
-                        c.spawn((Node { width: Val::Percent(100.0), padding: UiRect::horizontal(Val::Px(4.0)), ..default() },))
-                            .observe(stop_click)
-                            .with_children(|w| {
-                                w.spawn((s.width(Val::Percent(100.0)).build(&th), JointSelect::Style(joint)));
-                            });
+                        let options = vec![
+                            (RipStyle::EdgeJoint.label().to_string(), true),
+                            (RipStyle::ButtDirection1.label().to_string(), ninety),
+                            (RipStyle::ButtDirection2.label().to_string(), ninety),
+                        ];
+                        dropdown(c, &th, format!("smt-joint-{i}-style"), style.label(), Dropdown { select: JointSelect::Style(joint), options, disabled: false });
                     });
                 tbl.spawn((tr.build(t), RowRef { joint, bend: false, index: i }));
             }
@@ -836,9 +825,63 @@ fn spawn_tables(
     let _ = bold;
 }
 
-/// A click on a row's select isn't a click on the row.
-fn stop_click(mut c: On<Pointer<Click>>) {
+/// A select in a table cell (the Select widget's menu would be clipped by the cell): the value
+/// with a caret, opening its options under it.
+#[derive(Component, Clone)]
+struct Dropdown {
+    select: JointSelect,
+    options: Vec<(String, bool)>,
+    disabled: bool,
+}
+
+/// The dropdown a menu is open for, with its name (its items are `<name>-option-<i>`).
+#[derive(Component, Clone)]
+struct DropdownFor(JointSelect, String);
+
+fn dropdown(c: &mut ChildSpawner, t: &Theme, name: String, label: &str, d: Dropdown) {
+    let fg = if d.disabled { t.muted_foreground } else { t.foreground };
+    c.spawn((
+        Name::new(name),
+        d,
+        Hovered::default(),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(24.0),
+            margin: UiRect::horizontal(Val::Px(4.0)),
+            padding: UiRect::horizontal(Val::Px(4.0)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            border: UiRect::bottom(Val::Px(1.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BorderColor::all(t.input_border),
+    ))
+    .observe(on_dropdown_click)
+    .with_children(|r| {
+        r.spawn((t.text(label, 12.0, FontWeight::NORMAL, fg), Pickable::IGNORE));
+        r.spawn((cadrs_ui::icon("caret-down-filled", 10.0, t.tool_foreground), Pickable::IGNORE));
+    });
+}
+
+fn on_dropdown_click(mut c: On<Pointer<Click>>, q: Query<(&Dropdown, &Name, &ComputedNode, &UiGlobalTransform)>, theme: Res<Theme>, mut commands: Commands) {
+    // A click on a row's select isn't a click on the row.
     c.propagate(false);
+    if c.button != PointerButton::Primary {
+        return;
+    }
+    let Ok((d, name, node, tr)) = q.get(c.entity) else { return };
+    if d.disabled {
+        return;
+    }
+    let s = node.inverse_scale_factor();
+    let at = Vec2::new(tr.translation.x - node.size().x / 2.0, tr.translation.y + node.size().y / 2.0) * s;
+    let mut menu = Menu::new(format!("{name}-menu")).min_width((node.size().x * s).max(120.0)).item_height(24.0).text_only();
+    for (i, (label, enabled)) in d.options.iter().enumerate() {
+        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled));
+    }
+    let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
+    commands.entity(anchor).insert((DropdownFor(d.select, name.to_string()), DespawnOnExit(AppState::Document)));
 }
 
 /// Rows show selected while their joint is (in any view).
@@ -986,20 +1029,7 @@ fn on_activate(a: On<Activate>, q_row: Query<&RowRef>, q_name: Query<&Name>, mut
     }
 }
 
-fn on_select_change(ev: On<SelectChange>, q_sel: Query<&JointSelect>, q_name: Query<&Name>, mut commands: Commands) {
-    if let Ok(s) = q_sel.get(ev.entity) {
-        let (s, i) = (*s, ev.index);
-        commands.queue(move |world: &mut World| match s {
-            JointSelect::Type(j) if i == 1 => edit_joint(world, j, TableEdit::ConvertToBend),
-            JointSelect::Style(j) => {
-                if let Some(style) = RipStyle::ALL.get(i) {
-                    edit_joint(world, j, TableEdit::RipStyle(*style));
-                }
-            }
-            _ => {}
-        });
-        return;
-    }
+fn on_select_change(ev: On<SelectChange>, q_name: Query<&Name>, mut commands: Commands) {
     if q_name.get(ev.entity).is_ok_and(|n| n.as_str() == "smt-context") {
         let i = ev.index;
         commands.queue(move |world: &mut World| {
@@ -1103,7 +1133,27 @@ fn on_context_menu(ev: On<ContextMenuRequested>, q_row: Query<&RowRef>, q_flat: 
     });
 }
 
-fn on_menu_action(ev: On<MenuAction>, q: Query<&MenuFor, With<ContextMenuAnchor>>, q_flat: Query<(), (With<FlatViewMenu>, With<ContextMenuAnchor>)>, mut commands: Commands) {
+fn on_menu_action(
+    ev: On<MenuAction>,
+    q: Query<&MenuFor, With<ContextMenuAnchor>>,
+    q_drop: Query<&DropdownFor, With<ContextMenuAnchor>>,
+    q_flat: Query<(), (With<FlatViewMenu>, With<ContextMenuAnchor>)>,
+    mut commands: Commands,
+) {
+    if let Ok(DropdownFor(sel, name)) = q_drop.get(ev.entity) {
+        let Some(i) = ev.item.strip_prefix(&format!("{name}-option-")).and_then(|n| n.parse::<usize>().ok()) else { return };
+        let sel = *sel;
+        commands.queue(move |world: &mut World| match sel {
+            JointSelect::Type(j) if i == 1 => edit_joint(world, j, TableEdit::ConvertToBend),
+            JointSelect::Style(j) => {
+                if let Some(style) = RipStyle::ALL.get(i) {
+                    edit_joint(world, j, TableEdit::RipStyle(*style));
+                }
+            }
+            _ => {}
+        });
+        return;
+    }
     if q_flat.contains(ev.entity) {
         if ev.item.as_str() == "smt-zoom-fit" {
             commands.queue(zoom_to_fit);
@@ -1261,7 +1311,8 @@ fn sync_meshes(
     });
     if want_scene != t.scene_of {
         t.scene = ctx.as_ref().map(|c| Arc::new(FlatScene::new(&c.model, &c.flat)));
-        if t.scene_of.is_some_and(|(f, _)| Some(f) != want_scene.map(|(f, _)| f)) {
+        // A new flat (another model, or a joint changed): fitted again.
+        if t.scene_of.is_some() && want_scene.is_some() {
             t.fit_in = Some(1);
         }
         t.scene_of = want_scene;
