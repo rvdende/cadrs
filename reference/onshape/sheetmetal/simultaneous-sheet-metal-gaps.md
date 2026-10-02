@@ -48,32 +48,32 @@ below).
 | SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
 | SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ❌ | P3I.3 (the rebuild already keeps each model's definition and flat as its context). |
 | SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
-| SM1.6 | Active-model behaviour | 🟡 | P3I.2: contexts record their parts and `active`; ordinary features after it work on the folded part (Extrude Remove tested). Perpendicular cuts and the flat following them: P3I.5. |
+| SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. P3I.5: sheet metal features after the model edit its definition and refold it (parts keep their ids); Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat. Extrude Add on an active model isn't refused yet (it acts on the solid and is lost at the next refold). |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | 🟡 | Contexts are keyed by the feature, so its name names them; the context dropdown is P3I.3. |
 | SM3.1–SM3.8 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ❌ | P3I.4. Move face (SM3.8) doesn't exist in cadrs (direct edit); noted, not required by the exercises. |
 | SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ❌ | P3I.4. |
-| SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ❌ | P3I.5. |
+| SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ✅ | P3I.5: profiles added to parallel walls they touch (auto when *Flange to merge* is empty; bridged coplanar walls merge), clearance pockets (profile grown by the offset) cut from sheet metal walls or ordinary parts in the scope; in the flat. |
 | SM6.1–SM6.4 | Make joint, Modify joint | ❌ | P3I.4 (Make joint), P3I.3 (Modify joint from table edits). |
-| SM7.1–SM7.3 | Corner | ❌ | P3I.5. |
-| SM8.1–SM8.3 | Bend relief | ❌ | P3I.5. |
-| SM9.1–SM9.7 | Bend | ❌ | P3I.5. |
-| SM10.1–SM10.2 | Finish sheet metal model | ❌ | P3I.5. |
-| SM11.1, SM11.3, SM11.4 | Corner break (fillet radius/width, chamfers, table lock) | ❌ | P3I.5. Fillet and chamfer kernel ops exist. |
+| SM7.1–SM7.3 | Corner | ✅ | P3I.5: a face, edge or vertex picks the nearest corner (`FlatCorner`); its `CornerOverride`. |
+| SM8.1–SM8.3 | Bend relief | ✅ | P3I.5: the nearest bend end; its `BendReliefOverride` (all five types, Extend bend relief). |
+| SM9.1–SM9.7 | Bend | ✅ | P3I.5: `cadrs_sheetmetal::edit::bend_wall`: line projected and extended, face filled in, the smaller side moves (Hold opposite side swaps), six alignments, angle / Align to geometry / Angle from direction, custom radius and K; the flat never changes size (tests). A line across cut-outs makes one bend per stretch. |
+| SM10.1–SM10.2 | Finish sheet metal model | ✅ | P3I.5: marks the models of the picked parts finished (warning in the dialog); later features act on the solids and don't touch the flat; rolling back, suppressing or deleting it makes them active again (tested). |
+| SM11.1, SM11.3, SM11.4 | Corner break (fillet radius/width, chamfers, table lock) | 🟡 | P3I.5: corner edges or vertices in the folded view; Fillet Radius/Width (Distance), Chamfer Offset/Tangent with all three types; in the wall outline, so in the flat; `SheetMetalContext::corner_broken` for the table's lock (P3I.3 to read). Gaps: picks in the flat view (P3I.3/6), corners made by relief cuts, Asymmetric and Allow edge overflow; Tangent measures like Offset; the round is a polyline (7.5° steps). |
 | SM11.2 (Conic, Curvature) | Corner break conic/curvature fillets | **out of scope** | niche; out of scope by user decision 2026-09-29. Radius/Width with Distance control and Asymmetric stay in scope. |
-| SM12.1–SM12.3 | Other features on sheet metal (perpendicular cuts, fillets, part/face patterns and mirrors) | ❌ | P3I.5. Patterns exist; making them sheet-metal-aware is new. |
+| SM12.1–SM12.3 | Other features on sheet metal (perpendicular cuts, fillets, part/face patterns and mirrors) | 🟡 | P3I.5: Extrude → Remove (perpendicular, in the flat), Fillet/Chamfer of corner edges (as corner breaks), Face pattern and Face mirror of walls with their bends. Part pattern copies the solid as ordinary parts (not added to the model); cuts across bend regions aren't taken out of the bends. |
 | SM13.1–SM13.5 | Bend and joint table | ❌ | P3I.3. Table widget exists. |
 | SM14.1–SM14.4 | Modeling in the flat view | ❌ | P3I.6. |
 | SM15.1–SM15.3 | Flat DXF/DWG export | 🟡 | DXF/DWG writing exists for sketches and faces (P3F.2); the flat dialog, scopes and bend layers are P3I.6. Email and "store as tab" follow the existing export dialog's options. |
 | SM16.1–SM16.6 | Drawings of flat patterns | ❌ | P3I.7. Drawings, Insert view and view menus exist. |
 | SM17.1–SM17.3 | Legacy import via Thicken + tangent propagation + bend cylinders | ❌ | P3I.8. |
 | SM18.1–SM18.4 | Top-down design (Derived master model, contexts named after features) | 🟡 | Derived and in-context studios exist; sheet metal through Derived is P3I.8. |
-| SM19.1 | Jog | ❌ | P3I.5. |
+| SM19.1 | Jog | ✅ | P3I.5: two opposite bends sized for the offset (Blind, Up to entity with offset, Thickness factor; anchors Inside/Nominal/Outside), Preserve material off stretches the sheet so the far end stays (tests). |
 | SM19.2 | Sheet metal Loft | ❌ | P3I.9 (later). |
 | SM20.1–SM20.3 | Form, Tag (Form), forms library | ❌ | P3I.9 (later); cadrs ships its own small forms library (louver, lance, dimple, emboss), never Onshape's. |
 | E1–E4 | Exercises | ❌ | Stand-ins and scenarios in P3I.8 (E2 earlier, as each phase's acceptance). |
-| X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. |
-| X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; the others come with their features. |
+| X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. P3I.5: Finish, Tab, Bend, Jog, Corner, Bend relief and Corner break enabled in both. |
+| X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model. P3I.5: its seven features' icons. |
 | X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
 | X3, X7 | Parts list, stand-ins | ❌ | P3I.8. |
 | Forms course lessons | "Creating a Tag (Form)", "Form Feature" | not read | Paid Learning Center content; the help page stands in. |
@@ -237,3 +237,28 @@ against the stand-ins' expected values.
 - **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
   between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
   Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
+
+### Decisions (P3I.5)
+
+- **One feature kind** (`FeatureKind::SheetMetalTool`, `cadrs_core::sheetmetal_tools`) for Finish,
+  Tab, Bend, Jog, Corner, Bend relief and Corner break; their dialogs in
+  `cadrs_app::sheetmetal_tools_ui` (own row component, observers and sync), hooked into the
+  applied-feature session.
+- **Edit and refold**: every sheet metal feature after the model edits a copy of the active
+  model's definition (`cadrs_sheetmetal::edit`) and `rebuild/kernel_ops/sheetmetal/tools.rs`
+  refolds it (validate, flatten, fold, parts matched by their walls so ids and names stay).
+  Picks are matched to the definition by position (the refold renames faces). New walls and
+  joints get ids hashed from the feature id, so later features can rely on them.
+- **Bend**: the bend region (as wide as the allowance at the bend's own radius and K) is taken
+  out of the flat wall where the alignment puts it, so the flat keeps its size; the moving side
+  is the smaller one; the bend turns towards the picked face (the face under a sketch line on the
+  plate's plane is its bottom, so it bends down; the opposite angle arrow flips it). Folded
+  alignments solve for the band position that puts the chosen face of the bent wall on the line.
+- **Jog**: Up to entity measures from the picked face to the entity along the jog direction,
+  then applies the anchor; a jog whose middle wall would vanish fails ("too small").
+- **Boolean exactness**: polygon booleans round to 1 nm; their results are snapped back to the
+  inputs' vertices and crossings, else a wall and its bend could be fused as two solids.
+- **Gaps**: Extrude Add on an active model isn't refused; ordinary edits of a sheet metal part
+  are lost at the next refold; cuts don't cut bend regions; Part pattern instances aren't sheet
+  metal; Tangent chamfer measures like Offset; corner breaks in the flat view wait for P3I.3/6;
+  bridging tabs need the walls coplanar with the same material side.

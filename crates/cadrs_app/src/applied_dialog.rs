@@ -876,7 +876,9 @@ pub(crate) fn sync_applied_dialog(
     }
     // P3I.2: a new sheet metal model with nothing picked yet shows that in its red Selections,
     // as Onshape does, not as an error line.
-    let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty());
+    let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty())
+        // P3I.5: so does a sheet metal feature still waiting for its picks (the active field).
+        || matches!(&kind, FeatureKind::SheetMetalTool(x) if x.problem().is_some_and(|p| p.starts_with("Select")));
     let why = if incomplete { String::new() } else { cache.errors.get(&s.feature).cloned().unwrap_or_default() };
     for (mut text, mut node) in &mut q_error {
         if text.0 != why {
