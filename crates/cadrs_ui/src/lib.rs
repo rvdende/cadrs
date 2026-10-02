@@ -90,7 +90,7 @@ pub use dialog_fields::{
 pub use entry_list::{
     Entry, EntryGroup, EntryGroupAction, EntryGroupActivate, EntryGroupState, EntryRemove, EntryState, EntryToggled,
 };
-pub use dock::{DockPanel, DockPanelState, DockPanelToggled, ToggleDockPanel};
+pub use dock::{DockGrip, DockPanel, DockPanelResized, DockPanelState, DockPanelToggled, ToggleDockPanel};
 pub use inline_edit::{
     DoubleClick, DoubleClickable, InlineEdit, InlineEditCancel, InlineEditCommit,
     InlineEditLabel, InlineEditOptions, begin_inline_edit,

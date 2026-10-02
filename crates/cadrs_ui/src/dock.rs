@@ -3,7 +3,12 @@
 //! halfway down. Clicking the tab (or triggering [`ToggleDockPanel`] on the panel) collapses the
 //! panel to just the tab; the panel then triggers [`DockPanelToggled`].
 //!
-//! The panel root gets the builder's name, the body `<name>-body` and the tab `<name>-toggle`.
+//! Its right edge is a divider: hovering it shows the column-resize cursor and dragging it sets
+//! the panel's width (within its minimum and maximum), so long names fit; a finished drag
+//! triggers [`DockPanelResized`].
+//!
+//! The panel root gets the builder's name, the body `<name>-body`, the tab `<name>-toggle` and
+//! the divider `<name>-resize`.
 
 use std::borrow::Cow;
 
@@ -22,6 +27,9 @@ impl Plugin for DockPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_tab_activate)
             .add_observer(on_toggle)
+            .add_observer(on_grip_drag_start)
+            .add_observer(on_grip_drag)
+            .add_observer(on_grip_drag_end)
             .add_systems(PostUpdate, sync_docks.before(bevy::ui::UiSystems::Prepare));
     }
 }
@@ -55,6 +63,32 @@ pub struct ToggleDockPanel {
 pub struct DockPanelToggled {
     pub entity: Entity,
     pub open: bool,
+}
+
+/// A dock panel's width was dragged to `width` px. Triggered on the panel root.
+#[derive(EntityEvent, Clone, Copy, Debug)]
+pub struct DockPanelResized {
+    pub entity: Entity,
+    pub width: f32,
+}
+
+/// The least and greatest width (px) a dock panel can be dragged to.
+pub const MIN_WIDTH: f32 = 150.0;
+pub const MAX_WIDTH: f32 = 640.0;
+
+/// The divider on a dock panel's right edge: the panel it resizes, and the drag in progress.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct DockGrip {
+    panel: Entity,
+    start: f32,
+    dragging: bool,
+}
+
+impl DockGrip {
+    /// Whether the divider is being dragged.
+    pub fn dragging(&self) -> bool {
+        self.dragging
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -118,6 +152,7 @@ impl DockPanel {
         } = self;
         let body_name = format!("{name}-body");
         let tab_name = format!("{name}-toggle");
+        let grip_name = format!("{name}-resize");
         (
             Name::new(name.into_owned()),
             DockPanelState { open, width },
@@ -145,6 +180,31 @@ impl DockPanel {
                 ));
                 if let Some(f) = content {
                     body.with_children(|b| f(b));
+                }
+                // The divider over the body's right border (1 px), a few px wider to grab.
+                {
+                    p.spawn((
+                        Name::new(grip_name),
+                        DockGrip {
+                            panel: root,
+                            start: 0.0,
+                            dragging: false,
+                        },
+                        crate::splitter::HoverCursor(crate::cursor::CursorKind::ColResize),
+                        Hovered::default(),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(0.0),
+                            bottom: Val::Px(0.0),
+                            right: Val::Px(-4.0),
+                            width: Val::Px(7.0),
+                            display: if open { Display::Flex } else { Display::None },
+                            ..default()
+                        },
+                        // Transparent, but picked (a node without a background is still hit).
+                        Pickable::default(),
+                        ZIndex(10),
+                    ));
                 }
                 p.spawn((
                     Name::new(tab_name),
@@ -202,12 +262,86 @@ fn on_toggle(ev: On<ToggleDockPanel>, mut q: Query<&mut DockPanelState>, mut com
     }
 }
 
+fn on_grip_drag_start(
+    mut ev: On<Pointer<DragStart>>,
+    mut q: Query<&mut DockGrip>,
+    q_state: Query<&DockPanelState>,
+) {
+    let Ok(mut g) = q.get_mut(ev.entity) else {
+        return;
+    };
+    ev.propagate(false);
+    let Ok(s) = q_state.get(g.panel) else { return };
+    g.start = s.width;
+    g.dragging = true;
+}
+
+fn on_grip_drag(
+    mut ev: On<Pointer<Drag>>,
+    q: Query<&DockGrip>,
+    mut q_state: Query<&mut DockPanelState>,
+) {
+    let Ok(g) = q.get(ev.entity) else { return };
+    ev.propagate(false);
+    if !g.dragging {
+        return;
+    }
+    let w = (g.start + ev.distance.x)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+        .round();
+    if let Ok(mut s) = q_state.get_mut(g.panel)
+        && s.width != w
+    {
+        s.width = w;
+    }
+}
+
+fn on_grip_drag_end(
+    mut ev: On<Pointer<DragEnd>>,
+    mut q: Query<&mut DockGrip>,
+    q_state: Query<&DockPanelState>,
+    mut commands: Commands,
+) {
+    let Ok(mut g) = q.get_mut(ev.entity) else {
+        return;
+    };
+    ev.propagate(false);
+    if !g.dragging {
+        return;
+    }
+    g.dragging = false;
+    if let Ok(s) = q_state.get(g.panel) {
+        commands.trigger(DockPanelResized {
+            entity: g.panel,
+            width: s.width,
+        });
+    }
+}
+
+/// A grip's node, kept apart from the panel's and the body's.
+type GripNodes<'w, 's> = Query<
+    'w,
+    's,
+    (&'static DockGrip, &'static mut Node),
+    (Without<DockPanelState>, Without<DockBody>),
+>;
+
 fn sync_docks(
     mut q: Query<(Entity, &DockPanelState, &mut Node), Changed<DockPanelState>>,
     mut q_body: Query<(&DockBody, &mut Node), Without<DockPanelState>>,
+    mut q_grip: GripNodes,
 ) {
     for (root, state, mut node) in &mut q {
         node.width = Val::Px(if state.open { state.width } else { 0.0 });
+        for (g, mut n) in &mut q_grip {
+            if g.panel == root {
+                n.display = if state.open {
+                    Display::Flex
+                } else {
+                    Display::None
+                };
+            }
+        }
         for (b, mut n) in &mut q_body {
             if b.0 == root {
                 n.width = Val::Px(state.width);

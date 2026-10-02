@@ -50,6 +50,8 @@ impl Plugin for InstanceListPlugin {
                 .run_if(in_state(AppState::Document)),
         )
         .init_resource::<InstanceConnectorHover>()
+        .init_resource::<PanelWidths>()
+        .add_observer(on_panel_resized)
         .add_systems(Update, (sync_connector_hover, list_width).run_if(in_state(AppState::Document)))
         .add_observer(on_row_menu)
         .add_observer(on_replicate_menu)
@@ -723,16 +725,52 @@ fn spawn_replicate_row(c: &mut ChildSpawnerCommands, t: &Theme, id: cadrs_core::
     });
 }
 
+/// The widths the list panel was dragged to (its right edge), by the kind of tab it shows: a
+/// Part Studio's feature list, an assembly's Instances, … (for this session).
+#[derive(Resource, Debug, Default, Clone)]
+pub struct PanelWidths(pub std::collections::HashMap<&'static str, f32>);
+
+/// The kind of tab the list panel's width goes with.
+fn width_key(kind: crate::viewport::ActiveKind) -> &'static str {
+    match kind {
+        crate::viewport::ActiveKind::Assembly => "assembly",
+        crate::viewport::ActiveKind::PcbStudio => "pcb",
+        crate::viewport::ActiveKind::Render => "render",
+        _ => "studio",
+    }
+}
+
+/// The list panel's right edge was dragged: that width for this kind of tab.
+pub fn on_panel_resized(
+    ev: On<cadrs_ui::dock::DockPanelResized>,
+    q: Query<&Name>,
+    kind: Res<crate::viewport::ActiveKind>,
+    mut widths: ResMut<PanelWidths>,
+) {
+    if q.get(ev.entity).is_ok_and(|n| n.as_str() == "feature-panel") {
+        widths.0.insert(width_key(*kind), ev.width);
+    }
+}
+
 /// The list panel of an assembly is wider than a Part Studio's feature list, so instance names
-/// ("Base Frame Bar <1>") fit beside their state icons (P3B.8 judge).
-fn list_width(kind: Res<crate::viewport::ActiveKind>, mut q: Query<(&Name, &mut cadrs_ui::dock::DockPanelState)>) {
-    let want = match *kind {
+/// ("Base Frame Bar <1>") fit beside their state icons (P3B.8 judge); a width dragged to wins.
+fn list_width(
+    kind: Res<crate::viewport::ActiveKind>,
+    widths: Res<PanelWidths>,
+    mut q: Query<(&Name, &mut cadrs_ui::dock::DockPanelState)>,
+    q_grip: Query<&cadrs_ui::DockGrip>,
+) {
+    // While its edge is dragged, the panel follows the pointer.
+    if q_grip.iter().any(|g| g.dragging()) {
+        return;
+    }
+    let want = widths.0.get(width_key(*kind)).copied().unwrap_or(match *kind {
         crate::viewport::ActiveKind::Assembly => ASSEMBLY_LIST_W,
         // P3H.3: the PCB Studio's Boards/Components panel.
         crate::viewport::ActiveKind::PcbStudio => crate::pcb::PANEL_W,
         crate::viewport::ActiveKind::Render => crate::render_ui::PANEL_W,
         _ => 190.0,
-    };
+    });
     for (n, mut st) in &mut q {
         if n.as_str() == "feature-panel" && st.width() != want {
             st.set_width(want);
