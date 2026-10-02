@@ -875,7 +875,7 @@ pub(crate) fn sync_applied_dialog(
     }
     // P3I.2: a new sheet metal model with nothing picked yet shows that in its red Selections,
     // as Onshape does, not as an error line.
-    let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty());
+    let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty()) || crate::sheetmetal_p3i9_ui::incomplete(&kind);
     let why = if incomplete { String::new() } else { cache.errors.get(&s.feature).cloned().unwrap_or_default() };
     for (mut text, mut node) in &mut q_error {
         if text.0 != why {

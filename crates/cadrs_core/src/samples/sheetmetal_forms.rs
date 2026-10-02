@@ -10,8 +10,8 @@
 //! - **Tag 1**: the Tag (Form) feature naming them.
 //!
 //! The forms (our own shapes, none of Onshape's library):
-//! - **Louver**: a hood pressed up out of a slot, rising along a quarter sine from one long side
-//!   of the slot to its open lip at the Height;
+//! - **Louver**: a hood pressed up out of a slot, an arc rising from one long side of the slot to
+//!   its open lip, level at the Height;
 //! - **Bridge lance**: a strip cut free along both long sides and raised the Height as a bridge
 //!   with 45° ramps;
 //! - **Dimple**: a round, flat-topped boss, hollow underneath;
@@ -21,7 +21,6 @@
 //! [`studio`] builds one form's features for given variables and thickness (what the Form
 //! feature rebuilds from); [`document`] is the whole library as a document.
 
-use std::f64::consts::{FRAC_PI_2, PI};
 
 use cadrs_sketch::{PlaneRef, SketchOp, Vec2};
 
@@ -166,18 +165,28 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId, form: LibraryForm, vars: &[Fo
         LibraryForm::Louver => {
             let (l, w, h) = (v("Length"), v("Width"), v("Height").max(t * 1.05));
             sketch(s, el, profile_sketch(form), PlaneRef::Top, vec![rect(-l / 2.0, -w / 2.0, l / 2.0, w / 2.0, true)])?;
-            // The hood's section on Right (y, z), extruded along x.
-            let n = 16;
-            let rise = |y: f64| h * (FRAC_PI_2 * (y + w / 2.0) / w).sin();
-            let ys: Vec<f64> = (0..=n).map(|i| -w / 2.0 + w * i as f64 / n as f64).collect();
-            let mut pts: Vec<Vec2> = ys.iter().map(|y| Vec2::new(*y, rise(*y))).collect();
-            pts.extend(ys.iter().rev().map(|y| Vec2::new(*y, rise(*y) - t)));
-            sketch(s, el, sk_add, PlaneRef::Right, vec![poly(pts)])?;
-            extrude(s, el, sk_add, add, &[Vec2::new(0.0, rise(0.0) - t / 2.0)], symmetric(l))?;
-            // The opening: from where the hood clears the sheet to its lip.
-            let c = w * (2.0 / PI) * (t / h).min(1.0).asin() + 0.02 * w;
+            // The hood's section on Right (y, z), extruded along x: a band between two arcs about
+            // one centre, level at its lip (y = w/2, z = h) and meeting the sheet at y = −w/2.
+            let r = (w * w + h * h) / (2.0 * h);
+            let (cy, cz) = (w / 2.0, h - r);
+            let ts = (r - h).atan2(-w);
+            let ri = r - t;
+            let inner_end = Vec2::new(cy + ri * ts.cos(), cz + ri * ts.sin());
+            let at = |rad: f64, a: f64| Vec2::new(cy + rad * a.cos(), cz + rad * a.sin());
+            let hood = vec![
+                SketchOp::AddArc { center: Vec2::new(cy, cz), start: Vec2::new(w / 2.0, h), end: Vec2::new(-w / 2.0, 0.0), construction: false },
+                SketchOp::AddArc { center: Vec2::new(cy, cz), start: Vec2::new(w / 2.0, h - t), end: inner_end, construction: false },
+                SketchOp::AddPolyline { points: vec![Vec2::new(w / 2.0, h), Vec2::new(w / 2.0, h - t)], closed: false, construction: false, label: "Add line" },
+                SketchOp::AddPolyline { points: vec![Vec2::new(-w / 2.0, 0.0), inner_end], closed: false, construction: false, label: "Add line" },
+            ];
+            sketch(s, el, sk_add, PlaneRef::Right, hood)?;
+            let mid = (std::f64::consts::FRAC_PI_2 + ts) / 2.0;
+            extrude(s, el, sk_add, add, &[at(r - t / 2.0, mid)], symmetric(l))?;
+            // The opening: from where the hood's underside clears the sheet to its lip.
+            let clear = std::f64::consts::PI - ((r - h) / ri).clamp(-1.0, 1.0).asin();
+            let c = (cy + ri * clear.cos()) + w / 2.0 + 0.02 * w;
             sketch(s, el, sk_rem, PlaneRef::Top, vec![rect(-l / 2.0, -w / 2.0 + c, l / 2.0, w / 2.0, false)])?;
-            extrude(s, el, sk_rem, rem, &[Vec2::new(0.0, (c + w) / 2.0 - w / 2.0 + 0.001)], between(-t - gap, 0.0))?;
+            extrude(s, el, sk_rem, rem, &[Vec2::new(0.0, (c + w) / 2.0 - w / 2.0)], between(-t - gap, 0.0))?;
         }
         LibraryForm::Lance => {
             let (l, w) = (v("Length"), v("Width"));

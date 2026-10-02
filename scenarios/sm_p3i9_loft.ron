@@ -26,7 +26,7 @@ Scenario(
         Screenshot("02-dialog"),
         Click(xyz(40, -35, 0)),
         Wait(10),
-        Click(xyz(0, 0, 60)),
+        Click(xyz(18, -12, 60)),
         Wait(60),
         MoveTo(1420, 900),
         Wait(3),

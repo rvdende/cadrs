@@ -490,6 +490,16 @@ pub fn lists(features: &[Feature], cache: &PartCache, kind: &FeatureKind) -> Vec
 // ---------------------------------------------------------------------------------------------
 // The dialogs
 
+/// Nothing picked yet: the dialog shows no error line (as Onshape's).
+pub fn incomplete(kind: &FeatureKind) -> bool {
+    match kind {
+        FeatureKind::SheetMetalLoft(x) => x.profile1.is_empty() && x.profile2.is_empty(),
+        FeatureKind::Form(x) => x.is_empty(),
+        FeatureKind::TagForm(x) => x.add.is_empty() && x.remove.is_empty() && x.origin.is_none(),
+        _ => false,
+    }
+}
+
 /// The dialog's name (`<name>-dialog`) and width.
 pub fn name(kind: &FeatureKind) -> Option<(&'static str, f32)> {
     Some(match kind {
