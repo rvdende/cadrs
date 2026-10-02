@@ -5,14 +5,20 @@
 //    configuration stays disabled: configurations are out of scope).
 // 03 Suppress by variable…: the dialog lists the variables above Extrude 2 (#withHole (1)), with
 //    "Suppress when true (not 0)" unchecked; the hint says Extrude 2 is suppressed while it is 0.
+// 03b the box ticked: the hint reads the inverted rule ("… while the variable is not 0 (true).");
+//    unticked again before OK.
 // 04 OK: Extrude 2's row carries a "#withHole" tag; #withHole is 1, so the hole is still cut.
 // 05 #withHole typed as 0 in the Variable table: Extrude 2 greys and is struck through like a
 //    suppressed feature, and the hole is gone.
-// 06 the tag's tooltip: "Suppressed by variable while #withHole is 0 (false); now suppressed".
+// 06 the tag's tooltip: "Suppressed while #withHole is 0 (false) · currently suppressed".
 // 07 #withHole back to 1: Extrude 2 builds again, the hole is back.
+// 07b right-click Extrude 2 ▸ Dynamic suppression: with a binding set, the submenu adds
+//    "Remove suppression variable" (closed again with Escape).
 // 08 #withHole 0 again, then Dynamic suppression ▸ Remove suppression variable: the tag is gone
 //    and the hole is cut although #withHole is 0.
 // 09 Ctrl+Z undoes the removal (one step): the binding is back, Extrude 2 suppressed, no hole.
+// 10 Extrude 2 renamed to a long name: the name ends in "…" before the tag, which stays whole
+//    inside the list.
 Scenario(
     start: Some("document"),
     steps: [
@@ -44,6 +50,13 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("03-dialog"),
+        Click(ui("suppress-variable-invert")),
+        Wait(5),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03b-dialog-inverted"),
+        Click(ui("suppress-variable-invert")),
+        Wait(5),
         Click(ui("suppress-variable-ok")),
         Wait(20),
         MoveTo(1420, 900),
@@ -70,6 +83,16 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("07-with-hole-1"),
+        RightClick(ui("feature-extrude-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Hover(ui("feature-dynamic-suppression")),
+        Wait(10),
+        Hover(ui("feature-remove-suppression-variable")),
+        Wait(3),
+        Screenshot("07b-remove-item"),
+        Key("Escape"),
+        Wait(5),
         Click(ui("variable-row-withHole-field")),
         Wait(2),
         Key("Ctrl+A"),
@@ -91,5 +114,17 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("09-undo-removal"),
+        RightClick(ui("feature-extrude-2")),
+        WaitFor("feature-context-menu"),
+        Wait(3),
+        Click(ui("feature-rename")),
+        Wait(5),
+        Key("Ctrl+A"),
+        Type("Through hole for the mounting bolt"),
+        Key("Enter"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-long-name"),
     ],
 )

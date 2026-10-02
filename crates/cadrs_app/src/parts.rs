@@ -1010,7 +1010,7 @@ fn update_part_cache(
             features
                 .iter()
                 .enumerate()
-                .filter(|(i, f)| f.sketch().is_some() && (*i >= bar || el.is_suppressed(f.id)))
+                .filter(|(i, f)| f.sketch().is_some() && (*i >= bar || active.0.contains(&f.id)))
                 .map(|(_, f)| f.id),
         );
     }

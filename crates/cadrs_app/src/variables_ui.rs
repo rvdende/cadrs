@@ -741,6 +741,7 @@ fn sync_variable_table(
     });
     let rows: Vec<(FeatureId, String, String, String, String, Option<String>)> = asm_rows.unwrap_or_else(|| el
         .map(|e| {
+            let off = e.all_suppressed();
             e.features()
                 .iter()
                 .filter_map(|f| match &f.kind {
@@ -750,7 +751,7 @@ fn sync_variable_table(
                         v.expr.clone(),
                         v.display(&units.0),
                         v.description.clone(),
-                        cache.errors.get(&f.id).cloned().or_else(|| e.is_suppressed(f.id).then(|| "Suppressed".to_string())),
+                        cache.errors.get(&f.id).cloned().or_else(|| off.contains(&f.id).then(|| "Suppressed".to_string())),
                     )),
                     _ => None,
                 })

@@ -14,7 +14,7 @@ use cadrs_core::commands::SetSuppressByVariable;
 use cadrs_core::variables::{self, SuppressByVariable};
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{Button, Checkbox, CheckboxState, DialogClose, Select, SelectState, form_row};
+use cadrs_ui::{Button, Checkbox, CheckboxChange, CheckboxState, DialogClose, Select, SelectState, form_row};
 
 use crate::{ActiveDocument, AppState};
 
@@ -23,6 +23,16 @@ use crate::{ActiveDocument, AppState};
 struct SuppressVariableDialog {
     feature: FeatureId,
     names: Vec<String>,
+}
+
+/// The hint under the choices: the rule as it stands ("Extrude 2 is suppressed while the
+/// variable is 0 (false).").
+fn hint(feature: &str, invert: bool) -> String {
+    if invert {
+        format!("{feature} is suppressed while the variable is not 0 (true).")
+    } else {
+        format!("{feature} is suppressed while the variable is 0 (false).")
+    }
 }
 
 /// A variable's value as the picker shows it ("1", "40 mm", "30 deg").
@@ -78,10 +88,21 @@ pub fn open(world: &mut World, feature: FeatureId) {
                     select = select.option(o.clone(), true);
                 }
                 b.spawn(form_row(t, "suppress-variable-row", "Variable", 110.0)).with_child(select.selected(selected).build(t));
-                b.spawn(Checkbox::new("suppress-variable-invert").label("Suppress when true (not 0)").checked(invert).build(t));
+                // The hint follows the box (fix round 1: it read the default rule whatever).
+                let name = feature_name.clone();
+                b.spawn((
+                    Checkbox::new("suppress-variable-invert").label("Suppress when true (not 0)").checked(invert).build(t),
+                    observe(move |ev: On<CheckboxChange>, mut q: Query<(&Name, &mut Text)>| {
+                        for (n, mut text) in &mut q {
+                            if n.as_str() == "suppress-variable-hint" {
+                                text.0 = hint(&name, ev.checked);
+                            }
+                        }
+                    }),
+                ));
                 b.spawn((
                     Name::new("suppress-variable-hint"),
-                    t.text(format!("{feature_name} is suppressed while the variable is 0 (false)."), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    t.text(hint(&feature_name, invert), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
                     Node { margin: UiRect::top(Val::Px(6.0)), ..default() },
                 ));
             })

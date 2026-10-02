@@ -252,8 +252,11 @@ impl Element {
     }
 
     /// True if the feature is suppressed: by Suppress, or by its suppression variable (IR5.5).
+    /// Only a feature with a suppression variable evaluates the variables (once, the list's);
+    /// for many features, take [`Self::all_suppressed`] once instead.
     pub fn is_suppressed(&self, feature: FeatureId) -> bool {
-        self.suppressed().contains(&feature) || self.suppressed_by_variable().contains(&feature)
+        self.suppressed().contains(&feature)
+            || (self.feature(feature).is_some_and(|f| f.suppress_by.is_some()) && self.suppressed_by_variable().contains(&feature))
     }
 
     /// The features their suppression variable suppresses (IR5.5), with the variables' values

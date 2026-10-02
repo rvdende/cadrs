@@ -3302,16 +3302,16 @@ fn rebuild_feature_rows(
             // ("#withHole"), grey with the row while it suppresses.
             if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
                 let (when, colour) = if suppressed {
-                    ("suppressed", crate::feature_list::ROLLED_BACK_FG)
+                    ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
                 } else {
-                    ("not suppressed", t.muted_foreground)
+                    ("currently active", t.muted_foreground)
                 };
                 let rule = label.strip_prefix("not ").map_or_else(|| format!("{label} is 0 (false)"), |l| format!("{l} is not 0 (true)"));
                 let tag = row
                     .commands()
                     .spawn((
                         cadrs_ui::Tag::new(format!("{row_name}-suppression-variable"), label.clone()).color(colour).outline().build(&t),
-                        cadrs_ui::Tooltip::new(format!("Suppressed by variable while {rule}; now {when}")),
+                        cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
                     ))
                     // Hoverable for its tooltip; clicks go to the row.
                     .insert(Pickable { should_block_lower: false, is_hoverable: true })

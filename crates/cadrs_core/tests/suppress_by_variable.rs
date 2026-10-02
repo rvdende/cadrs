@@ -189,3 +189,25 @@ fn a_suppressed_variable_defines_nothing_below() {
     let FeatureKind::Variable(v) = &features[2].kind else { unreachable!() };
     assert_eq!(v.value, 2.0);
 }
+
+#[test]
+fn renaming_the_variable_leaves_the_binding_on_the_old_name() {
+    // Renames don't propagate to `#name` uses (P3F.4: nor to dimensions' and fields'
+    // expressions), so the binding keeps naming #withHole and the feature fails until it is
+    // bound again.
+    let mut d = Doc::new();
+    d.bind(Some(SuppressByVariable::variable("withHole")));
+    let v = cadrs_core::variables::VariableFeature { name: "hasHole".into(), ..wh::with_hole("0") };
+    d.h.execute(&mut d.d, &SetFeature { element: d.el, feature: WITH_HOLE, kind: FeatureKind::Variable(v), label: "Variable name".into() }).unwrap();
+    let el = d.d.element(d.el).unwrap();
+    assert_eq!(el.feature(WITH_HOLE).unwrap().name, "#hasHole");
+    assert_eq!(el.feature(HOLE).unwrap().suppress_by, Some(SuppressByVariable::variable("withHole")));
+    assert!(!d.hole_suppressed());
+    let b = d.build();
+    assert_eq!(b.error(HOLE), Some("Suppression: #withHole is not defined"));
+    rel(b.part(PLATE_PART).unwrap().mass.unwrap().volume, PLATE_VOLUME, 1e-6);
+    // Bound to the new name: #hasHole = 0 suppresses it.
+    d.bind(Some(SuppressByVariable::variable("hasHole")));
+    assert!(d.hole_suppressed());
+    rel(d.volume(), PLATE_VOLUME, 1e-6);
+}
