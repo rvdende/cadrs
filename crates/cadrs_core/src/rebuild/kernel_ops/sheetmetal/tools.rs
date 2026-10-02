@@ -511,6 +511,15 @@ impl Rebuilder {
             return None;
         }
         match &f.kind {
+            // SM1.6: Extrude Add isn't allowed onto an active model (Tab or Flange add material).
+            FeatureKind::Extrude(e)
+                if e.op == BooleanOp::Add
+                    && e.body == crate::document::BodyType::Solid
+                    && (e.merge_all || !e.merge_scope.is_empty())
+                    && state.parts.iter().any(|p| (e.merge_all || e.merge_scope.contains(&p.part.id)) && context_of(state, p.part.id).is_some()) =>
+            {
+                Some(Err("Extrude can't add to an active sheet metal part: use Tab or Flange, or Finish sheet metal model first".into()))
+            }
             FeatureKind::Extrude(e) => self.sheet_metal_cut(before, f.id, e, state),
             FeatureKind::Fillet(x) if x.kind == crate::applied::FilletType::Edge && !x.asymmetric && !x.variable && !x.partial => {
                 let picks = corner_picks(state, &x.entities)?;

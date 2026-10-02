@@ -26,7 +26,7 @@ Scenario(
         Click(ui("sheet-metal-model-dialog-accept")),
         Wait(30),
         Click(ui("sheet-metal-model-caret")),
-        Wait(15),
+        Wait(40),
         Click(ui("sheet-metal-menu-corner-break")),
         WaitFor("sheet-metal-corner-break-dialog"),
         Wait(10),

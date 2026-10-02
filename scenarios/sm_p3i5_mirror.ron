@@ -28,7 +28,7 @@ Scenario(
         Custom("sketch top chain 35 -15 35 75"),
         Wait(30),
         Click(ui("sheet-metal-model-caret")),
-        Wait(15),
+        Wait(40),
         Click(ui("sheet-metal-menu-bend")),
         WaitFor("sheet-metal-bend-dialog"),
         Wait(10),

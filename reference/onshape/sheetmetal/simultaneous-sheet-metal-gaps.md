@@ -48,7 +48,7 @@ below).
 | SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
 | SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ❌ | P3I.3 (the rebuild already keeps each model's definition and flat as its context). |
 | SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
-| SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. P3I.5: sheet metal features after the model edit its definition and refold it (parts keep their ids); Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat. Extrude Add on an active model isn't refused yet (it acts on the solid and is lost at the next refold). |
+| SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. P3I.5: sheet metal features after the model edit its definition and refold it (parts keep their ids); Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat. Extrude Add with a merge scope of active sheet metal is refused (use Tab or Flange). |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | 🟡 | Contexts are keyed by the feature, so its name names them; the context dropdown is P3I.3. |
 | SM3.1–SM3.8 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ❌ | P3I.4. Move face (SM3.8) doesn't exist in cadrs (direct edit); noted, not required by the exercises. |
@@ -258,7 +258,7 @@ against the stand-ins' expected values.
   then applies the anchor; a jog whose middle wall would vanish fails ("too small").
 - **Boolean exactness**: polygon booleans round to 1 nm; their results are snapped back to the
   inputs' vertices and crossings, else a wall and its bend could be fused as two solids.
-- **Gaps**: Extrude Add on an active model isn't refused; ordinary edits of a sheet metal part
+- **Gaps**: Extrude Add with an automatic merge scope isn't refused; ordinary edits of a sheet metal part
   are lost at the next refold; cuts don't cut bend regions; Part pattern instances aren't sheet
   metal; Tangent chamfer measures like Offset; corner breaks in the flat view wait for P3I.3/6;
   bridging tabs need the walls coplanar with the same material side.

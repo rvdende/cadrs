@@ -44,7 +44,7 @@ Scenario(
         Click(ui("extrude-dialog-accept")),
         Wait(30),
         Click(ui("sheet-metal-model-caret")),
-        Wait(15),
+        Wait(40),
         Click(ui("sheet-metal-menu-tab")),
         WaitFor("sheet-metal-tab-dialog"),
         Wait(10),

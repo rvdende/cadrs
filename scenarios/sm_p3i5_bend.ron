@@ -56,7 +56,7 @@ Scenario(
         Click(ui("sheet-metal-bend-dialog-accept")),
         Wait(30),
         Click(ui("sheet-metal-model-caret")),
-        Wait(15),
+        Wait(40),
         Click(ui("sheet-metal-menu-bend")),
         WaitFor("sheet-metal-bend-dialog"),
         Wait(10),

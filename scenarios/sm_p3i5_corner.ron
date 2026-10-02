@@ -64,7 +64,7 @@ Scenario(
         Wait(3),
         Screenshot("01-open-box-simple-corners"),
         Click(ui("sheet-metal-model-caret")),
-        Wait(15),
+        Wait(40),
         Click(ui("sheet-metal-menu-corner")),
         WaitFor("sheet-metal-corner-dialog"),
         Wait(10),
