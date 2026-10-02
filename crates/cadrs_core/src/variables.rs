@@ -17,6 +17,13 @@
 //!   so changing `#piston_d` in the Variable table is one undo step that updates every use.
 //! - **Uses.** [`uses`] lists the variables a feature's expressions name (the feature list's
 //!   `:variable` filter, Show dependencies).
+//! - **Suppress by variable** (IR5.5). A feature can carry a [`SuppressByVariable`]: an
+//!   expression (`#withHole`) evaluated with the variables above the feature. It is suppressed
+//!   while the value is 0 (false), or while it isn't when inverted. [`refresh`] skips it like a
+//!   suppressed feature (so a suppressed Variable defines nothing below it),
+//!   [`suppressed_by_variables`] gives the features left out of the rebuild
+//!   ([`crate::document::Element::active_features`]), and [`check`] fails a feature whose
+//!   expression names a variable that isn't defined above it (it then builds, with the error).
 
 use cadrs_sketch::units::{self, ParseError, Quantity, Units, VarValue};
 use cadrs_sketch::SketchOp;
@@ -24,6 +31,91 @@ use serde::{Deserialize, Serialize};
 
 use crate::document::{Feature, FeatureKind};
 use crate::ids::FeatureId;
+
+/// A feature's suppression variable (IR5.5, the feature menu's Dynamic suppression ▸ Suppress
+/// by variable…).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SuppressByVariable {
+    /// The expression, as picked: `#withHole`.
+    pub expr: String,
+    /// Suppressed while the value is non-zero (true) instead of while it is 0 (false).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
+}
+
+impl SuppressByVariable {
+    /// Suppression by `#name` (suppressed while it is 0).
+    pub fn variable(name: &str) -> Self {
+        Self { expr: format!("#{name}"), invert: false }
+    }
+
+    /// Whether it suppresses its feature with the variables above it (`env`); why not, when the
+    /// expression can't be evaluated there (`later`: the variables defined below the feature).
+    pub fn suppresses(&self, env: &[(String, VarValue)], later: &[String]) -> Result<bool, String> {
+        for n in units::variable_names(&self.expr) {
+            if !env.iter().any(|(k, _)| *k == n) {
+                return Err(if later.contains(&n) {
+                    format!("Suppression: #{n} is used before it is defined; move its Variable above this feature")
+                } else {
+                    format!("Suppression: #{n} is not defined")
+                });
+            }
+        }
+        // Whether a bare number is in mm or inches doesn't change whether it is 0.
+        let v = units::eval_any(&self.expr, 1.0, &env).map_err(|e| format!("Suppression: {e}"))?;
+        Ok((v.value.abs() < 1e-9) != self.invert)
+    }
+
+    /// How the feature list shows it: "#withHole", "not #withHole" when inverted.
+    pub fn label(&self) -> String {
+        if self.invert { format!("not {}", self.expr.trim()) } else { self.expr.trim().to_string() }
+    }
+}
+
+/// The features (of a whole list, in order) their suppression variable suppresses (IR5.5),
+/// with the Variables' values as last evaluated; `suppressed` are the ones suppressed by
+/// Suppress. One whose expression can't be evaluated isn't suppressed ([`check`] fails it).
+pub fn suppressed_by_variables(features: &[Feature], suppressed: &[FeatureId]) -> Vec<FeatureId> {
+    let mut out = Vec::new();
+    if features.iter().all(|f| f.suppress_by.is_none()) {
+        return out;
+    }
+    let mut env: Vec<(String, VarValue)> = Vec::new();
+    for f in features {
+        if suppressed.contains(&f.id) {
+            continue;
+        }
+        if let Some(rule) = &f.suppress_by
+            && rule.suppresses(&env, &[]) == Ok(true)
+        {
+            out.push(f.id);
+            continue;
+        }
+        if let FeatureKind::Variable(v) = &f.kind
+            && v.problem().is_none()
+        {
+            env.push((v.name.clone(), v.var_value()));
+        }
+    }
+    out
+}
+
+/// The variables a feature's suppression variable can name (IR5.5's picker): those defined
+/// above it among `features` (the ones that build), with their values.
+pub fn in_scope(features: &[Feature], feature: FeatureId, units: &Units) -> Vec<(String, VarValue)> {
+    let end = features.iter().position(|f| f.id == feature).unwrap_or(features.len());
+    let mut env = defined(&features[..end], units);
+    // The last definition of a name wins: list each name once.
+    let mut seen: Vec<String> = Vec::new();
+    env.reverse();
+    env.retain(|(n, _)| {
+        let first = !seen.contains(n);
+        seen.push(n.clone());
+        first
+    });
+    env.reverse();
+    env
+}
 
 /// A Variable's type (Onshape's Length, Angle, Number and Any).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -423,6 +515,13 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
                 _ => None,
             })
             .collect();
+        // IR5.5: a suppression variable that isn't defined above (it would have left the
+        // feature out of `features` if it suppressed it).
+        if let Some(rule) = &f.suppress_by
+            && let Err(w) = rule.suppresses(&env, &later)
+        {
+            out.push((f.id, w));
+        }
         match &f.kind {
             FeatureKind::Variable(v) => {
                 if let Some(p) = v.problem() {
@@ -499,6 +598,12 @@ pub fn refresh(features: &mut [Feature], suppressed: &[FeatureId], units: &Units
     let mut env: Vec<(String, VarValue)> = Vec::new();
     for f in features.iter_mut() {
         if suppressed.contains(&f.id) {
+            continue;
+        }
+        // IR5.5: suppressed by its variable (with the values just evaluated above it).
+        if let Some(rule) = &f.suppress_by
+            && rule.suppresses(&env, &[]) == Ok(true)
+        {
             continue;
         }
         match &mut f.kind {

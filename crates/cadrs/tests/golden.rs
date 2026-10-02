@@ -1011,6 +1011,12 @@ fn golden_course_insp_feature_menu() {
     run_scenario("course_insp_feature_menu");
 }
 
+// IR5.5: Dynamic suppression ▸ Suppress by variable.
+#[test]
+fn golden_course_insp_suppress_by_variable() {
+    run_scenario("course_insp_suppress_by_variable");
+}
+
 #[test]
 fn golden_course_insp_profile_inspector() {
     run_scenario("course_insp_profile_inspector");

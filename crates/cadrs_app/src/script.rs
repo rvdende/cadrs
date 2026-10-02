@@ -72,6 +72,9 @@
 //!   working folder), for the import scenarios to pick.
 //! - `design-intent` (P3F.4): the course's hydraulic cylinder body driven by `#piston_d` and
 //!   `#clearance` ([`cadrs_core::samples::design_intent`]) in the active Part Studio.
+//! - `with-hole` (IR5.5): a 60 × 40 × 10 plate with a Ø16 hole (Extrude 2, Remove) and a
+//!   Number Variable `#withHole` = 1 ([`cadrs_core::samples::with_hole`]), for Suppress by
+//!   variable.
 //! - `simulation-beam` (P3F.5): the simulation's cantilever, 100 × 10 × 10 mm in Steel - A36
 //!   ([`cadrs_core::samples::simulation`]), in the active Part Studio.
 //! - `clear-dir <path>` (P3F.2 judge): empties a folder under `target/` (an export scenario's
@@ -327,6 +330,10 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             (Some("design-intent"), None) => {
                 commands.queue(design_intent);
+            }
+            // IR5.5: the plate whose hole `#withHole` switches (`cadrs_core::samples::with_hole`).
+            (Some("with-hole"), None) => {
+                commands.queue(with_hole);
             }
             // P3F.5: the simulation's beam (`cadrs_core::samples::simulation`).
             (Some("simulation-beam"), None) => {
@@ -852,6 +859,20 @@ fn design_intent(world: &mut World) {
     };
     if let Err(e) = cadrs_core::samples::design_intent::build_in(&mut *doc, element) {
         warn!("design-intent: {e}");
+    }
+}
+
+/// IR5.5: the plate with a hole and `#withHole` ([`cadrs_core::samples::with_hole`]) in the
+/// active Part Studio.
+fn with_hole(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::with_hole::build_in(&mut *doc, element) {
+        warn!("with-hole: {e}");
     }
 }
 

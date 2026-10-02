@@ -153,7 +153,7 @@ impl Rebuilder {
                 let mut copy = sk.clone();
                 copy.plane = Some(PlaneRef::Feature(FeaturePlane::new(id.0, frame)));
                 let name = label(&f.name);
-                sketches.push(Feature { id: sid, name: name.clone(), kind: FeatureKind::Sketch(copy) });
+                sketches.push(Feature { id: sid, name: name.clone(), kind: FeatureKind::Sketch(copy), suppress_by: None });
                 out.sketches.push((sid, name));
             }
             // Planes.

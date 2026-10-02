@@ -90,6 +90,7 @@ pub mod viewport_menu;
 pub mod viewport;
 pub mod view_options;
 pub mod section_view;
+pub mod suppress_variable;
 pub mod hidden_edges;
 pub mod workspaces;
 

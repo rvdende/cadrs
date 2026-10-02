@@ -1037,5 +1037,5 @@ fn remap_feature(f: &Feature, ops: &HashMap<uuid::Uuid, uuid::Uuid>, m: &Motion)
         FeatureKind::Sketch(_) => f.kind.clone(),
         _ => return Err(format!("{} can't be reapplied; turn Reapply features off", f.name)),
     };
-    Ok(Feature { id, name: f.name.clone(), kind })
+    Ok(Feature { id, name: f.name.clone(), kind, suppress_by: None })
 }

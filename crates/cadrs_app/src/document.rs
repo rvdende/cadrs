@@ -3298,6 +3298,26 @@ fn rebuild_feature_rows(
                     .id();
                 row.insert_children(2, &[glyph]);
             }
+            // IR5.5: a feature with a suppression variable shows it in a tag after its name
+            // ("#withHole"), grey with the row while it suppresses.
+            if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
+                let (when, colour) = if suppressed {
+                    ("suppressed", crate::feature_list::ROLLED_BACK_FG)
+                } else {
+                    ("not suppressed", t.muted_foreground)
+                };
+                let rule = label.strip_prefix("not ").map_or_else(|| format!("{label} is 0 (false)"), |l| format!("{l} is not 0 (true)"));
+                let tag = row
+                    .commands()
+                    .spawn((
+                        cadrs_ui::Tag::new(format!("{row_name}-suppression-variable"), label.clone()).color(colour).outline().build(&t),
+                        cadrs_ui::Tooltip::new(format!("Suppressed by variable while {rule}; now {when}")),
+                    ))
+                    // Hoverable for its tooltip; clicks go to the row.
+                    .insert(Pickable { should_block_lower: false, is_hoverable: true })
+                    .id();
+                row.insert_children(2, &[tag]);
+            }
             let in_folder = folder.is_some();
             // P3G.4 (DV1.3, ER X2): a Derived feature's linked icon, as an instance's.
             if let Some((_, _, _, Some((icon, tip)))) = derived {
@@ -3469,7 +3489,9 @@ fn on_feature_context_menu(
     // P3.9: suppression, the rollback bar, folders and dependencies.
     let el = doc.as_ref().and_then(|d| d.active_element());
     let name = el.and_then(|el| el.feature(row.0)).map(|f| f.name.clone()).unwrap_or_default();
-    let suppressed = el.is_some_and(|el| el.is_suppressed(row.0));
+    // Suppressed by Suppress (Unsuppress undoes that, not a variable's suppression, IR5.5).
+    let suppressed = el.is_some_and(|el| el.suppressed().contains(&row.0));
+    let by_variable = el.and_then(|el| el.feature(row.0)).is_some_and(|f| f.suppress_by.is_some());
     let can_edit = el.is_some_and(|el| crate::feature_list::editable(el, row.0));
     let bar_at_end = el.is_none_or(|el| el.rollback_index() == el.features().len());
     let below_this = el.is_some_and(|el| el.features().iter().position(|f| f.id == row.0).is_some_and(|i| el.rollback_index() == i + 1));
@@ -3545,11 +3567,15 @@ fn on_feature_context_menu(
         } else {
             MenuItem::new("feature-suppress", "Suppress").disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable or a configuration: cadrs has neither yet.
-        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu(vec![
-            MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(true).into(),
-            MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into(),
-        ]))
+        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu({
+            let mut items: Vec<cadrs_ui::menu::MenuEntry> = vec![MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(editing || in_dialog).into()];
+            if by_variable {
+                items.push(MenuItem::new("feature-remove-suppression-variable", "Remove suppression variable").disabled(in_dialog).into());
+            }
+            items.push(MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into());
+            items
+        }))
         .separator()
         .item(MenuItem::new("feature-add-comment", "Add comment").icon("comments").disabled(true))
         .separator()
@@ -3633,6 +3659,9 @@ fn on_feature_menu_action(
             }
         }),
         "feature-suppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, true)),
+        // IR5.5: Dynamic suppression ▸ Suppress by variable.
+        "feature-suppress-by-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::open(world, id)),
+        "feature-remove-suppression-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id)),
         "feature-unsuppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),
         "feature-add-to-folder" => commands.queue(move |world: &mut World| crate::feature_folders::add_selection_to_folder(world, id)),
         "feature-roll-here" => commands.queue(move |world: &mut World| crate::feature_list::roll_to(world, Some(id))),

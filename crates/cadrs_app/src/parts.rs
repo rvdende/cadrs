@@ -859,11 +859,11 @@ fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<Feature> {
 }
 
 /// What of the Part Studio decides which features are built besides the features themselves
-/// (P3.9): the suppressed ones and the rollback bar.
+/// (P3.9): the suppressed ones (by a variable too, IR5.5) and the rollback bar.
 type ActiveKey = (Vec<FeatureId>, usize);
 
 fn active_key(el: &cadrs_core::Element) -> ActiveKey {
-    (el.suppressed().to_vec(), el.rollback_index())
+    (el.all_suppressed(), el.rollback_index())
 }
 
 /// Sketches used by extrudes and revolves other than `editing`.

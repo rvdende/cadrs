@@ -242,4 +242,5 @@ pub mod step_stool;
 pub mod ujoint;
 pub mod ujoint_assembly;
 pub mod ujoint_drawing;
+pub mod with_hole;
 pub mod drawing_bar;
