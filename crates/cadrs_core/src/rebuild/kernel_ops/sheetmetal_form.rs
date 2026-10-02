@@ -37,7 +37,7 @@ fn moved(m: &Motion, p: [f64; 3]) -> P3 {
 fn construction_lines(sk: &crate::document::SketchFeature) -> Vec<(Vec<[f64; 3]>, bool)> {
     let Some(frame) = sk.plane.map(|p| p.frame()) else { return Vec::new() };
     let g = &sk.geometry;
-    let mut out = Vec::new();
+    let mut out: Vec<(Vec<[f64; 3]>, bool)> = Vec::new();
     for (id, c) in g.curves.iter().filter(|(_, c)| c.construction) {
         let pts: (Vec<cadrs_sketch::Vec2>, bool) = match c.kind {
             cadrs_sketch::CurveKind::Line { a, b } => (vec![g.pos(a), g.pos(b)], false),
@@ -57,7 +57,27 @@ fn construction_lines(sk: &crate::document::SketchFeature) -> Vec<(Vec<[f64; 3]>
         out.push((pts.0.into_iter().map(|q| frame.to_world(q)).collect(), pts.1));
     }
     // Lines that meet end to end make one outline (a rectangle's four sides).
-    out
+    let size = out.iter().flat_map(|(l, _)| l.iter()).map(|p| v(*p).norm()).fold(1.0, f64::max);
+    let tol = 1e-6 * size;
+    let (mut closed, mut open): (Vec<_>, Vec<_>) = out.into_iter().partition(|(_, c)| *c);
+    while !open.is_empty() {
+        let mut line: Vec<[f64; 3]> = open.remove(0).0;
+        loop {
+            let end = v(line[line.len() - 1]);
+            let Some(i) = open.iter().position(|(l, _)| (v(l[0]) - end).norm() <= tol || (v(l[l.len() - 1]) - end).norm() <= tol) else { break };
+            let (mut l, _) = open.remove(i);
+            if (v(l[0]) - end).norm() > tol {
+                l.reverse();
+            }
+            line.extend(l.into_iter().skip(1));
+        }
+        let is_loop = line.len() > 2 && (v(line[0]) - v(line[line.len() - 1])).norm() <= tol;
+        if is_loop {
+            line.pop();
+        }
+        closed.push((line, is_loop));
+    }
+    closed
 }
 
 /// The frames of a Form's locations.

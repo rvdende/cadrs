@@ -779,13 +779,29 @@ pub fn wall_slab(m: &Model, wall: WallId, removed: &[Polygon]) -> Option<Vec<[P3
     }
     let t = m.params.thickness;
     let n = u.cross(&v).normalize();
-    let l = &w.outline.outer;
-    let k = l.len();
-    if k < 3 {
-        return None;
-    }
     let size = w.outline.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0).max(1e-9);
     let tol = 1e-6 * size;
+    // No repeated points and no points in the middle of a straight edge (they'd make side
+    // faces of no area).
+    let mut pts: Vec<P2> = w.outline.outer.clone();
+    loop {
+        let n = pts.len();
+        if n < 3 {
+            return None;
+        }
+        let drop = (0..n).find(|&i| {
+            let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+            (b - a).norm() < tol || ((c - a).norm() > tol && (b - a).perp(&(c - a)).abs() / (c - a).norm() < tol && (b - a).dot(&(c - b)) > 0.0)
+        });
+        match drop {
+            Some(i) => {
+                pts.remove(i);
+            }
+            None => break,
+        }
+    }
+    let l = &pts;
+    let k = l.len();
     // Each edge's side direction (in the side plane, away from the definition surface).
     let pt = |q: P2| w.surface.point(q);
     let mut side: Vec<V3> = vec![n; k];
@@ -957,5 +973,22 @@ mod tests {
         let b = loft(Params::default(), &circle(0.0, 30.0, 0.5), &ProfileIn::point(P3::new(0.0, 0.0, 40.0)), &LoftOpts::default()).unwrap();
         assert!(flatten(&b.model).is_ok());
     }
+    #[test]
+    fn rectangle_to_circle_with_bends_on_flattens() {
+        for (offset, tol, bends) in [(0.0, 1.0, true), (std::f64::consts::FRAC_PI_4, 1.0, true), (0.0, 4.0, false), (0.0, 4.0, true)] {
+            let n = arc_pieces(30.0, std::f64::consts::TAU, tol);
+            let c = ProfileIn {
+                points: (0..n).map(|i| {
+                    let a = i as f64 / n as f64 * std::f64::consts::TAU + offset;
+                    P3::new(30.0 * a.cos(), 30.0 * a.sin(), 60.0)
+                }).collect(),
+                closed: true,
+            };
+            let p = Params { thickness: 1.5, bend_radius: 2.0, ..Default::default() };
+            let b = loft(p, &rect(0.0, 100.0, 80.0), &c, &LoftOpts { bends, ..Default::default() }).unwrap();
+            let flat = flatten(&b.model);
+            let names: Vec<_> = b.model.joints.iter().filter(|j| !matches!(j.kind, JointKind::Tangent { .. })).map(|j| j.name.clone()).collect();
+            assert!(flat.is_ok(), "offset {offset} tol {tol} bends {bends}: {:?} joints {names:?} warnings {:?}", flat.errors.iter().map(|e| e.message()).collect::<Vec<_>>(), b.warnings);
+        }
+    }
 }
-

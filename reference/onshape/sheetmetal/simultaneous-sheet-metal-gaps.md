@@ -69,11 +69,11 @@ below).
 | SM17.1–SM17.3 | Legacy import via Thicken + tangent propagation + bend cylinders | ❌ | P3I.8. |
 | SM18.1–SM18.4 | Top-down design (Derived master model, contexts named after features) | 🟡 | Derived and in-context studios exist; sheet metal through Derived is P3I.8. |
 | SM19.1 | Jog | ❌ | P3I.5. |
-| SM19.2 | Sheet metal Loft | ❌ | P3I.9 (later). |
-| SM20.1–SM20.3 | Form, Tag (Form), forms library | ❌ | P3I.9 (later); cadrs ships its own small forms library (louver, lance, dimple, emboss), never Onshape's. |
+| SM19.2 | Sheet metal Loft | ✅ | P3I.9: New/Add (one active model), Profile 1/2 (region, face, edges, point), Connections with draggable handles and Rip, Chordal tolerance, General/Material/Relief; planar facet walls along the tessellation (facet joints, steep non-fanning edges bent), a closed loft ripped at its matched start, mitred folded walls; flat × T matches the folded volume (tests). |
+| SM20.1–SM20.3 | Form, Tag (Form), forms library | ✅ | P3I.9: Tag (Form) (add/remove parts, flat sketch, origin connector); Form with Select Part Studio (Current document / Other documents / Libraries), the form's variables (Variable features; `thickness` driven by the model), locations (sketch points, a sketch's points, vertices, mate connectors), target faces, opposite direction; touching joints, rips, corners or edges is an error; outlines and centermarks in `FlatPart.forms`. cadrs's own library: louver, bridge lance, dimple, emboss, extruded hole (`samples::sheetmetal_forms`). |
 | E1–E4 | Exercises | ❌ | Stand-ins and scenarios in P3I.8 (E2 earlier, as each phase's acceptance). |
 | X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. |
-| X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; the others come with their features. |
+| X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; P3I.9: Loft, Form, Tag; the others come with their features. |
 | X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
 | X3, X7 | Parts list, stand-ins | ❌ | P3I.8. |
 | Forms course lessons | "Creating a Tag (Form)", "Form Feature" | not read | Paid Learning Center content; the help page stands in. |
@@ -237,3 +237,29 @@ against the stand-ins' expected values.
 - **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
   between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
   Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
+
+### Decisions (P3I.9)
+
+- **Loft layout**: the profiles are cut by the chordal tolerance (arcs) and joined by the strip
+  of least area between connections (a rectangle's sides each meet one circle point, its corners
+  fan): the classic square-to-round. Coplanar neighbours make one planar wall; walls meet at
+  **facet joints** (a `JointKind::Tangent` between two planar walls: no bend region, laid edge to
+  edge flat, mitred in 3D). An edge where walls meet at 30° or more, sharing no end with another
+  such edge, becomes a **bend** of the model radius (a frustum's corners); fanning bends would
+  overlap at their common point, so fans stay faceted. A closed loft rips at its first connection
+  (the matched start) unless a connection is ripped. Connections are stored as positions along
+  each profile (0..1 of its length), which the view's handles drag.
+- **Folded loft walls** are mitred slabs made by the kernel's existing `mesh_solid` (no new kernel
+  operation, so no conformance case), fused per part; bends reuse the model's shells.
+- **Forms**: cadrs has no configurations, so a form's "configuration variables" are its Part
+  Studio's Variable features, overridden by the Form feature for its copy (`thickness` follows the
+  model). Library forms are generated from their variables (`samples::sheetmetal_forms::studio`).
+  The add parts are united before the remove parts are cut. A location is projected onto its
+  target face (Z out of the face; the opposite direction places it from the other face, pointing
+  the other way). The footprint (the tool parts' hull seen along Z) must keep clear of every
+  joint segment and free edge of its wall.
+- **Gaps left**: the flat view panel (P3I.3) isn't in this branch, so the flats with form outlines
+  are rendered by a test (`target/scenarios/sm_p3i9_flats`); forms applied to the folded part
+  aren't re-applied if a later feature re-folds the model from its definition (the SM1.6 hook);
+  form previews in the picker; Other documents lists stored documents' form studios (no version
+  picker); the form's sketch visibility toggle in the flat view.

@@ -116,7 +116,8 @@ pub fn check_footprint(m: &Model, wall: WallId, footprint: &Polygon, clearance: 
         }
     }
     let inside = poly::intersection(footprint, &w.outline).iter().map(Polygon::area).sum::<f64>();
-    if inside < footprint.area() * (1.0 - 1e-9) - 1e-12 {
+    // (Booleans snap to their grid: allow that much along the footprint's edge.)
+    if inside < footprint.area() - 4.0 * poly::GRID * poly::perimeter(footprint) - 1e-12 {
         return Err(FormProblem::OffWall);
     }
     // The free edges.

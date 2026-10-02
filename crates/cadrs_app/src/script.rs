@@ -153,6 +153,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             commands.queue(move |world: &mut World| linked_block(world, &arg));
             continue;
         }
+        // P3I.9: the sheet metal loft and form set-ups (see [`crate::sheetmetal_p3i9_ui::script`]).
+        if let Some(rest) = m.0.strip_prefix("sm9 ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::sheetmetal_p3i9_ui::script(world, &arg));
+            continue;
+        }
         // P3G.4: the Derived feature's set-ups (see [`crate::derived_ui::script`]).
         if let Some(rest) = m.0.strip_prefix("derived ") {
             let arg = rest.trim().to_string();

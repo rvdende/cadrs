@@ -407,6 +407,7 @@ fn layout_of(kind: &FeatureKind) -> String {
             )
         }
         FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::layout(x),
+        k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::layout(k).unwrap_or_default(),
         k => crate::advanced_dialog::layout(k).unwrap_or_default(),
     }
 }
@@ -535,6 +536,7 @@ fn dialog(
         FeatureKind::Shell(_) => "shell",
         FeatureKind::Hole(_) => "hole",
         FeatureKind::SheetMetalModel(_) => "sheet-metal-model",
+        k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::name(k)?.0,
         k => crate::advanced_dialog::name(k)?,
     };
     let lists: Vec<(Role, Vec<String>)> = [
@@ -595,6 +597,8 @@ fn dialog(
         .map(|r| (r, items(features, cache, &kind, r)))
         .collect();
     let items_of = move |r: Role| lists.iter().find(|(x, _)| *x == r).map(|(_, v)| v.clone()).unwrap_or_default();
+    // P3I.9's lists.
+    let sm9_items = crate::sheetmetal_p3i9_ui::lists(features, cache, &kind);
     Some((
         AppliedDialog,
         Layout(layout_of(&kind)),
@@ -606,6 +610,7 @@ fn dialog(
                 "hole" => 246.0,
                 // P3I.2: Onshape's sheet metal dialog is a little wider than most.
                 "sheet-metal-model" => 262.0,
+                "sheet-metal-loft" | "tag" => 230.0,
                 "chamfer" | "sweep" | "loft" | "plane" | "draft" | "transform" => 216.0,
                 "linear-pattern" | "circular-pattern" | "curve-pattern" | "mirror" | "mate-connector" => 216.0,
                 _ => 202.0,
@@ -771,6 +776,9 @@ fn dialog(
                         });
                     }
                     FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::body(b, t, x, field, &items_of, sections),
+                    k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => {
+                        crate::sheetmetal_p3i9_ui::body(b, t, k, field, &sm9_items, [sections[1], sections[2], sections[3]])
+                    }
                     k => crate::advanced_dialog::body(b, t, k, field, &items_of),
                 }
                 b.spawn((
