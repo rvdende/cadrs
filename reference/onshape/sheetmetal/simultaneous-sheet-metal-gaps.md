@@ -63,15 +63,15 @@ below).
 | SM11.2 (Conic, Curvature) | Corner break conic/curvature fillets | **out of scope** | niche; out of scope by user decision 2026-09-29. Radius/Width with Distance control and Asymmetric stay in scope. |
 | SM12.1–SM12.3 | Other features on sheet metal (perpendicular cuts, fillets, part/face patterns and mirrors) | ❌ | P3I.5. Patterns exist; making them sheet-metal-aware is new. |
 | SM13.1–SM13.5 | Bend and joint table | ❌ | P3I.3. Table widget exists. |
-| SM14.1–SM14.4 | Modeling in the flat view | ❌ | P3I.6. |
-| SM15.1–SM15.3 | Flat DXF/DWG export | 🟡 | DXF/DWG writing exists for sketches and faces (P3F.2); the flat dialog, scopes and bend layers are P3I.6. Email and "store as tab" follow the existing export dialog's options. |
+| SM14.1–SM14.4 | Modeling in the flat view | 🟡 | P3I.6: flat pattern planes (sketches in the flat's coordinates), the abbreviated Extrude (Add / Remove) editing the definition in the flat (cuts wrap across bends at their exact flat size, tabs grow walls), the SM14.3 error, visible flat sketches in the DXF. New sketch is on the Sheet metal model's and its parts' context menus until the flat view (P3I.3); in 3D the flat plane lies on the anchor wall. |
+| SM15.1–SM15.3 | Flat DXF/DWG export | ✅ | P3I.6: Export as DXF/DWG (file name, DXF/DWG, version 2000/2013, the three scopes, Download into a folder, the eight options); layers OUTLINE, CUTOUTS, TEAR_SLITS, BEND_UP, BEND_DOWN, BEND_TANGENT, FLAT_SKETCH; several parts side by side or one file each. Export rules, email and store-as-tab: the existing export dialog has none. |
 | SM16.1–SM16.6 | Drawings of flat patterns | ❌ | P3I.7. Drawings, Insert view and view menus exist. |
 | SM17.1–SM17.3 | Legacy import via Thicken + tangent propagation + bend cylinders | ❌ | P3I.8. |
 | SM18.1–SM18.4 | Top-down design (Derived master model, contexts named after features) | 🟡 | Derived and in-context studios exist; sheet metal through Derived is P3I.8. |
 | SM19.1 | Jog | ❌ | P3I.5. |
 | SM19.2 | Sheet metal Loft | ❌ | P3I.9 (later). |
 | SM20.1–SM20.3 | Form, Tag (Form), forms library | ❌ | P3I.9 (later); cadrs ships its own small forms library (louver, lance, dimple, emboss), never Onshape's. |
-| E1–E4 | Exercises | ❌ | Stand-ins and scenarios in P3I.8 (E2 earlier, as each phase's acceptance). |
+| E1–E4 | Exercises | 🟡 | E1's import: sketch Insert DXF or DWG (P3I.6) with the tray fixture `fixtures/sheetmetal/flat_pattern_e1.dxf` and Thicken of its 7 regions; its Bends are P3I.5. Other stand-ins in P3I.8. |
 | X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. |
 | X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; the others come with their features. |
 | X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
@@ -237,3 +237,29 @@ against the stand-ins' expected values.
 - **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
   between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
   Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
+
+### Decisions (P3I.6)
+
+- **Flat pattern planes**: each flat-pattern part registers a Plane-feature frame (id: the
+  model's own for its first part, derived for the others) on its anchor wall (the wall its flat is
+  laid out from), so a sketch on it is in the flat's coordinates and follows the flat. Until the
+  flat view (P3I.3) the sketch shows in 3D over that wall.
+- **Flat extrude** is its own feature kind (`FlatExtrude`, listed as "Extrude", applied-dialog
+  `flat-extrude`): Remove keeps the regions in the model as flat cuts in the anchor wall's
+  coordinates, applied by the flat solver like relief cuts on every piece (flat outline, bend lines
+  and each piece's removed material, `(s, u)` on bend regions); Add grows the wall whose edge the
+  new material runs along. The parts are refolded in place (same ids and names). A cut on a bend
+  region that isn't a rectangle in `(s, u)` is taken out as 24 slices (exact for rectangles, like
+  the lesson's slot). A new one starts on Remove when every region lies on material.
+- **SM14.3**: an ordinary Extrude of a flat-pattern sketch fails with Onshape's message.
+- **Flat DXF**: our DXF writer with seven new layers; round holes (polygon circles) are written as
+  CIRCLE; bend up/down by layer, linetype (phantom / hidden) and colour.
+- **Insert DXF or DWG**: the dialog lists the DXF/DWG files of the import folder (cadrs has no file
+  tabs) with dark thumbnails, Units (the document's unit to start with) and Use file origin
+  position; one undo step "Insert DXF/DWG". The reader keeps the file's numbers; Units scales them.
+- **E1 fixture**: our own flat export of `cadrs_sheetmetal::samples::e1_tray` (7 walls, 6 bends, 9
+  cut-outs): imported, its bend lines split the sheet into the exercise's 7 regions.
+- **Gaps left**: the flat view's menu (P3I.3 calls `flat_ui::begin_flat_sketch` and
+  `flat_export_dialog::open`); features after the model that changed the folded part are rebuilt
+  away by a later flat extrude (a warning says so); rolled walls ignore flat cuts in the folded
+  solid; counterbore/countersink and form options add nothing yet (forms are P3I.9).

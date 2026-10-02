@@ -306,6 +306,8 @@ pub(crate) enum Role {
     // Buttons
     SmExtrudeFlip,
     SmThicknessFlip,
+    /// P3I.6: the flat pattern extrude's regions (`crate::flat_ui`).
+    FlatRegions,
 }
 
 /// The Sheet metal model dialog's numbers (P3I.2).
@@ -590,6 +592,7 @@ fn dialog(
         Role::SmFaces,
         Role::SmUpTo,
         Role::SmSecondUpTo,
+        Role::FlatRegions,
     ]
         .into_iter()
         .map(|r| (r, items(features, cache, &kind, r)))

@@ -49,6 +49,9 @@ pub mod pattern;
 pub mod pattern_dialog;
 pub mod pcb;
 pub mod sheetmetal_ui;
+pub mod flat_ui;
+pub mod flat_export_dialog;
+pub mod sketch_dxf;
 pub mod surfacing_ui;
 pub mod transform_ui;
 pub mod properties_dialog;
@@ -539,6 +542,8 @@ impl Plugin for CadrsAppPlugin {
                 viewport_menu::ViewportMenuPlugin,
             ))
             .add_plugins((sketch_diagnostics::SketchDiagnosticsPlugin, feature_menu::FeatureMenuPlugin))
+            // P3I.6: the flat pattern export and the sketch's Insert DXF or DWG.
+            .add_plugins((flat_export_dialog::FlatExportDialogPlugin, sketch_dxf::SketchDxfPlugin))
             .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))

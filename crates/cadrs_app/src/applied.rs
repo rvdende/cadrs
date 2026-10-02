@@ -94,6 +94,8 @@ pub enum AppliedKind {
     Fill,
     /// P3I.2: the Sheet metal model (`crate::sheetmetal_ui`).
     SheetMetal,
+    /// P3I.6: the flat pattern extrude (`crate::flat_ui`).
+    FlatExtrude,
 }
 
 impl AppliedKind {
@@ -116,6 +118,7 @@ impl AppliedKind {
             FeatureKind::Helix(_) => Some(Self::Helix),
             FeatureKind::Fill(_) => Some(Self::Fill),
             FeatureKind::SheetMetalModel(_) => Some(Self::SheetMetal),
+            FeatureKind::FlatExtrude(_) => Some(Self::FlatExtrude),
             _ => None,
         }
     }
@@ -207,6 +210,8 @@ pub enum AppliedField {
     SmFaces,
     SmUpTo,
     SmSecondUpTo,
+    /// P3I.6: the flat pattern extrude's regions.
+    FlatRegions,
 }
 
 /// The applied feature whose dialog is open.
@@ -345,6 +350,7 @@ impl AppliedSession {
             AppliedField::ThickenEntities => PickFilter { faces: true, regions: true, ..none },
             AppliedField::HelixEntity => PickFilter { faces: true, edges: true, sketch_curves: true, connectors: true, ..none },
             AppliedField::FillEdges => PickFilter { edges: true, sketch_curves: true, ..none },
+            AppliedField::FlatRegions => PickFilter { regions: true, ..none },
             f => crate::sheetmetal_ui::pick_filter(f, cadrs_core::document::EndType::Blind, none).unwrap_or(none),
         }
     }
@@ -400,7 +406,8 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
     let advanced = crate::advanced::initial(world, kind, &picked)
         .or_else(|| crate::pattern::initial(world, kind, &picked))
         .or_else(|| crate::surfacing_ui::initial(world, kind, &picked))
-        .or_else(|| (kind == AppliedKind::SheetMetal).then(|| crate::sheetmetal_ui::initial(world, &picked)).flatten());
+        .or_else(|| (kind == AppliedKind::SheetMetal).then(|| crate::sheetmetal_ui::initial(world, &picked)).flatten())
+        .or_else(|| (kind == AppliedKind::FlatExtrude).then(|| crate::flat_ui::initial(world, &picked)).flatten());
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -457,7 +464,8 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::Thicken
         | AppliedKind::Helix
         | AppliedKind::Fill
-        | AppliedKind::SheetMetal => {
+        | AppliedKind::SheetMetal
+        | AppliedKind::FlatExtrude => {
             let Some((base, kind, field)) = advanced else { return };
             (AddFeature { element, feature, base_name: base.into(), kind }, field)
         }
@@ -521,6 +529,7 @@ pub fn edit(world: &mut World, feature: FeatureId) {
             FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::first_field(x.operation),
             _ => AppliedField::SmParts,
         },
+        AppliedKind::FlatExtrude => AppliedField::FlatRegions,
     };
     start(world, element, feature, kind, false, mark, Some(before), field);
 }
@@ -802,6 +811,11 @@ fn applied_picks(
                 }
                 (k @ FeatureKind::SheetMetalModel(_), _) => {
                     if !crate::sheetmetal_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::FlatExtrude(_), _) => {
+                    if !crate::flat_ui::pick(world, k, field, pick) {
                         return;
                     }
                 }

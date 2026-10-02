@@ -127,6 +127,7 @@ fn a_flat_cut_across_a_bend_keeps_its_flat_size_folded() {
     // The lesson's slot: 0.5 × 6.0 in (12.7 × 152.4 mm would be longer than the part: 12.7 × 50
     // here), across the first bend, square to it, centred on its centreline.
     let bend = b.sheet_metal[0].flat.parts[0].bends[0].clone();
+    eprintln!("channel flat: bounds {:?} bends {:?} plane {:?}", b.sheet_metal[0].flat.parts[0].bounds(), b.sheet_metal[0].flat.parts[0].bends.iter().map(|b| b.center).collect::<Vec<_>>(), b.planes.get(&FeatureId(flat_plane_id(model, 0))));
     let c = P2::from((bend.center.a.coords + bend.center.b.coords) / 2.0);
     let (d, n) = (bend.center.dir(), perp(bend.center.dir()));
     let (w, l) = (12.7, 50.0);
