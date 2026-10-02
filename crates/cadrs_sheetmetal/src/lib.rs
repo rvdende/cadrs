@@ -12,6 +12,8 @@
 //!   corner and bend reliefs, the outline, and the collision and bend-loop checks (SM1.5).
 //! - [`relief`]: the relief cut shapes (SM7, SM8).
 //! - [`table`]: the Bends and Other joints tables (SM13).
+//! - [`loft`]: the Sheet metal Loft's tessellated walls and mitred folded solid (P3I.9, SM19.2);
+//!   [`forms`]: where forms may go and how the flat shows them (P3I.9, SM20).
 //! - [`samples`]: small models (an L, a U-channel, an open box, a hem, a tube, …) for tests,
 //!   previews and scenarios; [`svg`]: a flat pattern as an SVG picture.
 //!
@@ -20,6 +22,8 @@
 pub mod bend;
 pub mod construct;
 pub mod flat;
+pub mod forms;
+pub mod loft;
 pub mod model;
 pub mod params;
 pub mod poly;

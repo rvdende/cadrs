@@ -55,6 +55,25 @@ fn main() {
     }
     cases.push(("30-collision", ok(samples::hook_collision(base()))));
     cases.push(("31-bend-loop", ok(samples::bend_loop(base()))));
+    // P3I.9: sheet metal lofts (a rectangle to a circle; a frustum with bends at its corners).
+    {
+        use cadrs_sheetmetal::loft::{LoftOpts, ProfileIn, arc_pieces, loft};
+        use cadrs_sheetmetal::model::P3;
+        let rect = |z: f64, w: f64, h: f64| ProfileIn {
+            points: vec![P3::new(-w / 2.0, -h / 2.0, z), P3::new(w / 2.0, -h / 2.0, z), P3::new(w / 2.0, h / 2.0, z), P3::new(-w / 2.0, h / 2.0, z)],
+            closed: true,
+        };
+        let n = arc_pieces(30.0, std::f64::consts::TAU, 1.0);
+        let circle = ProfileIn {
+            points: (0..n).map(|i| {
+                let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                P3::new(30.0 * a.cos(), 30.0 * a.sin(), 60.0)
+            }).collect(),
+            closed: true,
+        };
+        cases.push(("40-loft-rect-to-circle", loft(base(), &rect(0.0, 100.0, 80.0), &circle, &LoftOpts::default()).expect("loft").model));
+        cases.push(("41-loft-frustum", loft(base(), &rect(0.0, 100.0, 100.0), &rect(50.0, 50.0, 50.0), &LoftOpts { bends: true, ..Default::default() }).expect("loft").model));
+    }
 
     let mut opt = resvg::usvg::Options::default();
     // The project's Inter (CLAUDE.md), else whatever sans-serif the system has.

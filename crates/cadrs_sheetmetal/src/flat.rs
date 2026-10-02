@@ -110,6 +110,10 @@ pub struct FlatPart {
     pub cuts: Vec<ReliefCut>,
     /// The flat outline: the cut pieces' union (usually one polygon, with holes for cut-outs).
     pub outline: Vec<Polygon>,
+    /// P3I.9 (SM20.3): the forms placed on this part's walls (outlines and centermarks), filled
+    /// in by the Form features after the model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forms: Vec<crate::forms::FlatForm>,
 }
 
 impl FlatPart {
