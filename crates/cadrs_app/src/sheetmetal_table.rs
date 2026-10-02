@@ -647,10 +647,7 @@ fn sync_panel(world: &mut World) {
 
 /// A table title with its caret.
 fn caret_header(b: &mut ChildSpawnerCommands, t: &Theme, name: &'static str, title: &str, open: bool) {
-    b.spawn((
-        Name::new(name),
-        cadrs_ui::Button::new(name).ghost().build(t),
-    ))
+    b.spawn(cadrs_ui::Button::new(name).ghost().build(t))
     .insert(Node {
         height: Val::Px(32.0),
         flex_shrink: 0.0,

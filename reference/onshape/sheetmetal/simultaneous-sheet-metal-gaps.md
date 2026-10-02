@@ -46,15 +46,16 @@ below).
 | IDs | What | Status | Notes |
 |---|---|---|---|
 | SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
-| SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ❌ | P3I.3 (the rebuild already keeps each model's definition and flat as its context). |
+| SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ✅ | P3I.3: right-strip toggle, docked panel (context dropdown, tables, flat view with its own camera and cube); rows ↔ model faces ↔ flat pieces select and hover each other, a model pick scrolls to its row. |
 | SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
 | SM1.6 | Active-model behaviour | 🟡 | P3I.2: contexts record their parts and `active`; ordinary features after it work on the folded part (Extrude Remove tested). Perpendicular cuts and the flat following them: P3I.5. |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
-| SM2.8 | One model per part; rename names the context | 🟡 | Contexts are keyed by the feature, so its name names them; the context dropdown is P3I.3. |
+| SM2.8 | One model per part; rename names the context | ✅ | Contexts are keyed by the feature; P3I.3's context dropdown lists the features by name. |
 | SM3.1–SM3.8 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ❌ | P3I.4. Move face (SM3.8) doesn't exist in cadrs (direct edit); noted, not required by the exercises. |
 | SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ❌ | P3I.4. |
 | SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ❌ | P3I.5. |
-| SM6.1–SM6.4 | Make joint, Modify joint | ❌ | P3I.4 (Make joint), P3I.3 (Modify joint from table edits). |
+| SM6.1–SM6.3 | Make joint | ❌ | P3I.4. |
+| SM6.4 | Modify joint | ✅ | P3I.3: made by table edits, edited from the feature list (Joint, Bend/Rip/Tangent, rip style, model radius, model K → calculation + value, red out of range). |
 | SM7.1–SM7.3 | Corner | ❌ | P3I.5. |
 | SM8.1–SM8.3 | Bend relief | ❌ | P3I.5. |
 | SM9.1–SM9.7 | Bend | ❌ | P3I.5. |
@@ -62,7 +63,7 @@ below).
 | SM11.1, SM11.3, SM11.4 | Corner break (fillet radius/width, chamfers, table lock) | ❌ | P3I.5. Fillet and chamfer kernel ops exist. |
 | SM11.2 (Conic, Curvature) | Corner break conic/curvature fillets | **out of scope** | niche; out of scope by user decision 2026-09-29. Radius/Width with Distance control and Asymmetric stay in scope. |
 | SM12.1–SM12.3 | Other features on sheet metal (perpendicular cuts, fillets, part/face patterns and mirrors) | ❌ | P3I.5. Patterns exist; making them sheet-metal-aware is new. |
-| SM13.1–SM13.5 | Bend and joint table | ❌ | P3I.3. Table widget exists. |
+| SM13.1–SM13.5 | Bend and joint table | ✅ | P3I.3: Bends / Other joints with carets; double-click radius and calculation cells; Move up/down, Convert to rip/bend; rip Type and Style selects; hems reorder only; rows toggle and multi-select. |
 | SM14.1–SM14.4 | Modeling in the flat view | ❌ | P3I.6. |
 | SM15.1–SM15.3 | Flat DXF/DWG export | 🟡 | DXF/DWG writing exists for sketches and faces (P3F.2); the flat dialog, scopes and bend layers are P3I.6. Email and "store as tab" follow the existing export dialog's options. |
 | SM16.1–SM16.6 | Drawings of flat patterns | ❌ | P3I.7. Drawings, Insert view and view menus exist. |
@@ -72,7 +73,7 @@ below).
 | SM19.2 | Sheet metal Loft | ❌ | P3I.9 (later). |
 | SM20.1–SM20.3 | Form, Tag (Form), forms library | ❌ | P3I.9 (later); cadrs ships its own small forms library (louver, lance, dimple, emboss), never Onshape's. |
 | E1–E4 | Exercises | ❌ | Stand-ins and scenarios in P3I.8 (E2 earlier, as each phase's acceptance). |
-| X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. |
+| X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is in the right strip (P3I.3). |
 | X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; the others come with their features. |
 | X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
 | X3, X7 | Parts list, stand-ins | ❌ | P3I.8. |
@@ -237,3 +238,29 @@ against the stand-ins' expected values.
 - **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
   between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
   Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
+
+### Decisions (P3I.3)
+
+- **Modify joint rebuilds the model** from a *recipe* kept with its context (the Convert/Thicken
+  faces, edges and cylinders, or the Extrude chains; `cadrs_sheetmetal::edit::Recipe`), with the
+  joint edits applied to the walls at their virtual sharps before trimming, so a new radius moves
+  the tangent lines and a rip leaves the minimal gap. The parts are refolded **in place** (same
+  part ids, named with the model's operation) so later features keep their references.
+- **Where a new Modify joint goes**: right after the Sheet metal model and its other Modify
+  joints, not at the end of the list as Onshape puts it: in cadrs ordinary features after the
+  model act on the folded part, so they must come after the joint change. A second edit of the
+  same joint edits its Modify joint (one per joint).
+- **Move up / Move down** reorder the table only (manufacturing order): kept on the Sheet metal
+  model feature (`table_order`), one undoable command, not a Modify joint.
+- **Out-of-range table values** (K outside −1.5..1, allowance ≤ 0, deduction < 0) are kept in
+  the Modify joint, which fails with the range; the cell shows the typed value red with the
+  range as its tooltip, until undone or corrected.
+- **Picking a joint** in the model is geometric (`cadrs_sheetmetal::view::joint_at`): a point of
+  a bend's region, or of a rip's two side faces, with a tolerance for the tessellation.
+- **Flat view**: the flat-pattern parts laid side by side along X, seen from the top (Flip
+  direction up shows the other side), drawn as a thin solid with the outline, dashed centrelines,
+  tangent lines and bend labels; it reuses the Repair panel's second-camera set-up (own image,
+  own cube) rather than the PCB view, which draws through the main camera.
+- **Gaps left**: labels float next to bends in the flat view only (not in the folded view);
+  Tangent can't be set on a joint that isn't tangent; a bend's own value of a Bend feature (P3I.5)
+  and hems' values aren't editable; the flat view doesn't show sketches on the flat (P3I.6).
