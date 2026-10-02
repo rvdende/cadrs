@@ -26,6 +26,10 @@ use crate::document::{EndCondition, EndType, UpTo};
 use crate::sheetmetal::{SheetMetalContext, SheetMetalModelFeature, SheetMetalOp};
 use crate::solid::Solid;
 
+/// P3I.5: the sheet metal features after the model (`crate::sheetmetal_tools`) and the
+/// sheet-metal-aware cuts, fillets and face patterns.
+mod tools;
+
 /// A stable key for a face, edge or curve name.
 fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
     naming::stable_hash(format!("{x:?}").as_bytes())
@@ -771,6 +775,7 @@ impl Rebuilder {
             active: true,
             wall_keys: built.walls.clone(),
             joint_keys: built.joints.clone(),
+            corner_broken: false,
         };
         let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
             let mut next = (**state).clone();

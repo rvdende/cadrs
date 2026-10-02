@@ -324,6 +324,10 @@ pub struct SheetMetalContext {
     /// features and the views can find them.
     pub wall_keys: Vec<(u64, WallId)>,
     pub joint_keys: Vec<(u64, JointId)>,
+    /// P3I.5 (SM11.4): a Corner break was made on it: its joints' type and style can't be edited
+    /// in the table any more.
+    #[serde(default)]
+    pub corner_broken: bool,
 }
 
 impl SheetMetalContext {

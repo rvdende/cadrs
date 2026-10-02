@@ -329,6 +329,41 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s("Second depth", &mut c.depth_expr, &mut c.depth, L);
             }
         }
+        // P3I.5: the sheet metal features after the model.
+        FeatureKind::SheetMetalTool(t) => {
+            use crate::sheetmetal_tools::SheetMetalTool as T;
+            let bend = |b: &mut crate::sheetmetal_tools::BendFeature, s: &mut dyn FnMut(&'static str, &mut String, &mut f64, Quantity)| {
+                s("Bend angle", &mut b.angle_expr, &mut b.angle, A);
+                s("Bend radius", &mut b.radius_expr, &mut b.radius, L);
+                s("K Factor", &mut b.k_expr, &mut b.k_factor, C);
+            };
+            match t {
+                T::Bend(b) => bend(b, &mut s),
+                T::Jog(j) => {
+                    bend(&mut j.bend, &mut s);
+                    s("Jog offset", &mut j.offset_expr, &mut j.offset, L);
+                    s("Offset distance", &mut j.up_to_offset_expr, &mut j.up_to_offset, L);
+                    s("Thickness factor", &mut j.factor_expr, &mut j.factor, C);
+                }
+                T::Tab(x) => s("Subtraction offset", &mut x.offset_expr, &mut x.offset, L),
+                T::Corner(x) => {
+                    s("Corner relief scale", &mut x.scale_expr, &mut x.relief.scale, C);
+                    s("Corner relief size", &mut x.size_expr, &mut x.relief.size, L);
+                }
+                T::BendRelief(x) => {
+                    s("Bend relief depth scale", &mut x.depth_scale_expr, &mut x.relief.depth_scale, C);
+                    s("Bend relief width scale", &mut x.width_scale_expr, &mut x.relief.width_scale, C);
+                    s("Bend relief depth", &mut x.depth_expr, &mut x.relief.depth, L);
+                }
+                T::CornerBreak(x) => {
+                    s("Radius", &mut x.size_expr, &mut x.size, L);
+                    s("Distance", &mut x.distance_expr, &mut x.distance, L);
+                    s("Distance 2", &mut x.distance2_expr, &mut x.distance2, L);
+                    s("Angle", &mut x.angle_expr, &mut x.angle, A);
+                }
+                T::Finish(_) => {}
+            }
+        }
         FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)

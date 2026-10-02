@@ -51,6 +51,7 @@ pub mod solid;
 pub mod store;
 pub mod studio;
 pub mod sheetmetal;
+pub mod sheetmetal_tools;
 pub mod surfacing;
 pub mod tab_tree;
 pub mod thumbnail;

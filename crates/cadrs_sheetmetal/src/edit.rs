@@ -582,6 +582,16 @@ fn resolve(m: &Model, spec: &BendSpec) -> Result<Fold, EditError> {
     Ok(f)
 }
 
+/// A bend's frame on its wall (SM9.5, Align to geometry and Angle from direction): the unit
+/// direction the moving side runs in, in the wall's plane away from the line, and the unit
+/// direction it turns towards. Bent by θ, the wall runs along `cos θ·c + sin θ·side`.
+pub fn bend_frame(m: &Model, spec: &BendSpec) -> Result<(V3, V3), EditError> {
+    let f = resolve(m, &BendSpec { angle: std::f64::consts::FRAC_PI_2, alignment: BendAlignment::HoldLine, ..*spec })?;
+    let w = m.wall(spec.wall).ok_or(EditError::NoWall)?;
+    let n = w.surface.normal().ok_or(EditError::NotPlanar)?;
+    Ok((w.surface.direction_at(f.a, f.nn), if f.toward { n } else { -n }))
+}
+
 /// **Bend** (SM9): folds wall `spec.wall` along the line. The new wall gets an id from `seed`,
 /// and the bend joints too.
 pub fn bend_wall(m: &mut Model, spec: &BendSpec, seed: u64) -> Result<BendMade, EditError> {
@@ -1247,6 +1257,8 @@ pub enum Placement {
     Rigid(Rigid),
     /// Mirrored in the plane through `point` with unit normal `normal`.
     Mirror { point: P3, normal: V3 },
+    /// Any rigid motion or reflection: `p ↦ linear·p + t` (`linear` orthogonal).
+    Affine { linear: nalgebra::Matrix3<f64>, t: V3 },
 }
 
 impl Placement {
@@ -1254,6 +1266,7 @@ impl Placement {
         match self {
             Placement::Rigid(r) => r.point(p),
             Placement::Mirror { point, normal } => p - normal * (2.0 * (p - point).dot(normal)),
+            Placement::Affine { linear, t } => P3::from(linear * p.coords + t),
         }
     }
 
@@ -1261,11 +1274,16 @@ impl Placement {
         match self {
             Placement::Rigid(r) => r.vec(v),
             Placement::Mirror { normal, .. } => v - normal * (2.0 * v.dot(normal)),
+            Placement::Affine { linear, .. } => linear * v,
         }
     }
 
     fn mirrors(&self) -> bool {
-        matches!(self, Placement::Mirror { .. })
+        match self {
+            Placement::Rigid(_) => false,
+            Placement::Mirror { .. } => true,
+            Placement::Affine { linear, .. } => linear.determinant() < 0.0,
+        }
     }
 }
 

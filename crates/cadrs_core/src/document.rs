@@ -465,6 +465,7 @@ impl Feature {
             FeatureKind::Loft(l) => l.sketches(),
             // P3I.2: an Extrude's or Thicken's sketches (hidden once used, like an extrude's).
             FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
+            FeatureKind::SheetMetalTool(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }
@@ -560,6 +561,7 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
             FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalTool(x) => x.problem().is_none(),
         }
     }
 
@@ -592,6 +594,7 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
             FeatureKind::SheetMetalModel(x) => x.problem(),
+            FeatureKind::SheetMetalTool(x) => x.problem(),
         }
     }
 
@@ -717,6 +720,7 @@ impl Feature {
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalTool(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -854,6 +858,9 @@ pub enum FeatureKind {
     Variable(crate::variables::VariableFeature),
     /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).
     SheetMetalModel(crate::sheetmetal::SheetMetalModelFeature),
+    /// P3I.5: a sheet metal feature after the model: Finish, Tab, Bend, Jog, Corner, Bend relief
+    /// or Corner break ([`crate::sheetmetal_tools`]).
+    SheetMetalTool(crate::sheetmetal_tools::SheetMetalTool),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

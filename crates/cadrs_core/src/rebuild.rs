@@ -956,6 +956,12 @@ impl Rebuilder {
             dots: None,
             uses: Vec::new(),
         };
+        // P3I.5 (SM1.6, SM12): Extrude → Remove, Fillet, Chamfer and Face patterns on an active
+        // sheet metal model edit its definition.
+        #[cfg(feature = "occt")]
+        if let Some(r) = self.sheet_metal_aware(before, f, state) {
+            return r.unwrap_or_else(fail);
+        }
         match &f.kind {
             FeatureKind::Sketch(_) | FeatureKind::Variable(_) => fail(String::new()),
             FeatureKind::DeletePart(d) => {
@@ -1039,6 +1045,10 @@ impl Rebuilder {
             FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalTool(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
