@@ -45,8 +45,12 @@ below).
 
 | IDs | What | Status | Notes |
 |---|---|---|---|
-| SM1.1–SM1.6 | Simultaneous model: multi-part, three synced views, panel, cross-highlight, collision check, active-model behaviour | ❌ | Core of P3I.1–P3I.3. |
-| SM2.1–SM2.8 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ❌ | P3I.2. Thicken/Extrude/booleans exist as building blocks. |
+| SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
+| SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ❌ | P3I.3 (the rebuild already keeps each model's definition and flat as its context). |
+| SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
+| SM1.6 | Active-model behaviour | 🟡 | P3I.2: contexts record their parts and `active`; ordinary features after it work on the folded part (Extrude Remove tested). Perpendicular cuts and the flat following them: P3I.5. |
+| SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
+| SM2.8 | One model per part; rename names the context | 🟡 | Contexts are keyed by the feature, so its name names them; the context dropdown is P3I.3. |
 | SM3.1–SM3.8 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ❌ | P3I.4. Move face (SM3.8) doesn't exist in cadrs (direct edit); noted, not required by the exercises. |
 | SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ❌ | P3I.4. |
 | SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ❌ | P3I.5. |
@@ -68,7 +72,10 @@ below).
 | SM19.2 | Sheet metal Loft | ❌ | P3I.9 (later). |
 | SM20.1–SM20.3 | Form, Tag (Form), forms library | ❌ | P3I.9 (later); cadrs ships its own small forms library (louver, lance, dimple, emboss), never Onshape's. |
 | E1–E4 | Exercises | ❌ | Stand-ins and scenarios in P3I.8 (E2 earlier, as each phase's acceptance). |
-| X1–X7 | Toolbar group, feature list, parts list, undo, units, errors, stand-ins | ❌ | Spread over the phases; X4 (undo) is mandatory in each. |
+| X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. |
+| X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; the others come with their features. |
+| X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
+| X3, X7 | Parts list, stand-ins | ❌ | P3I.8. |
 | Forms course lessons | "Creating a Tag (Form)", "Form Feature" | not read | Paid Learning Center content; the help page stands in. |
 | Quiz, completion survey | | **out of scope** | Learning-site features. |
 
@@ -184,3 +191,49 @@ against the stand-ins' expected values.
 | The flat view doubles rendering and picking work | Reuse the PCB viewer setup; render the flat as one mesh per part. |
 | Exercise documents are Onshape public docs we don't have | Stand-ins built by `cadrs_core::samples` from the slides' dimensions; E1 needs our own flat DXF. |
 | Forms course lessons unread (paid) | Help page covers the feature; Forms are the last milestone. |
+
+### Decisions (P3I.2)
+
+- **Construction** lives in `cadrs_sheetmetal::construct` (no kernel): Convert/Thicken make one wall per
+  planar face offset by the clearance on the material side; the **pick order is the spanning-tree
+  order** (a picked edge whose walls bends already join stays a rip and is reported in
+  `loop_picks`); unpicked shared straight edges are rips (edge joints). Cylinders (fillet rounds)
+  picked to bend become a bend of the cylinder's radius between their flat neighbours; unpicked,
+  a rolled wall with tangent joints. Other curved faces are left out with a warning.
+- **Convert default side**: the material goes outward (the sheet encloses the part); the
+  Thickness arrow puts it inside. *Include bends* moves walls out by `r − (r − c)·cos(θ/2)` so the
+  bends' inside clears the input edge by the clearance. Thicken's material goes along the face or
+  sketch normal.
+- **Extrude**: each line a planar wall, touching lines bend with the model radius, collinear lines
+  merge, arcs roll (tangent joints) or, picked in *Arcs to extrude as bends* and sitting between
+  two lines, become a bend with the arc's inner radius. The default material side is the side the
+  chain turns toward (inside a U), left for a straight chain. A closed chain rips where its first
+  and last lines meet. Splines and ellipses are refused (error). Up to next/face/part/vertex are
+  resolved to a depth along the extrude direction (Up to next: the nearest part point ahead —
+  an approximation of Onshape's face-shaped end).
+- **Folded solid** (`rebuild/kernel_ops/sheetmetal.rs`) composes existing kernel ops (extrude and
+  boolean): planar walls extruded by T, rolled walls and bends as annular sectors extruded along
+  their axes, bend relief cuts as wedges of their (along, across) extent (exact for the
+  rectangular corner cuts; an approximation for obround/round cuts on a bend region), fused per
+  flat part. A fused volume short of the pieces' sum fails the feature ("Sheet metal walls
+  intersect") — the 3D intersection check the P3I.1 judge asked for. No new kernel operation, so no
+  new conformance case.
+- **Numbers checked**: folded volume = Σ walls' flat area × T + Σ bends' flat area × T·(R + T/2)/(R + K·T),
+  to 1e-6 relative (`cadrs_core/tests/sheetmetal.rs`), plus closed forms for the block box and the
+  extruded hook (rolled and bent give the same sheet).
+- **Persistent ids**: walls and joints are keyed by the hashes of the input face, edge and curve
+  names (`SheetMetalContext::{wall_keys, joint_keys}`); joint names follow Onshape ("Bend A",
+  "Joint B", … one letter sequence).
+- **Defaults**: thickness 1 mm, bend radius 1 mm, K 0.45, rolled K 0.5, minimal gap 0.2 mm,
+  Simple corner relief, Obround – Scaled bend relief with depth and width scales 2 (as the help
+  dialogs show).
+- **Toolbar placement**: after Variable, before custom features, as the lesson frames show
+  (`02-sheet-metal-model/t0072.0.png`). The icon starts the feature, its own ▾ opens the menu.
+- **Dialog**: all four sections open by default (as the help dialogs); their state is kept while
+  the dialog is open. While *Faces to exclude* or *Edges or cylinders to bend* is active the view
+  shows the parts before the feature, so the consumed part's faces and edges can be picked (as
+  the chamfer's Direction overrides do). A new model with nothing picked shows a red
+  *Selections* header rather than an error line.
+- **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
+  between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
+  Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
