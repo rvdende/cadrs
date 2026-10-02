@@ -20,8 +20,9 @@
 //!   Update context and Delete context.
 //! - **Arrows** (MC2.6, MC2.15, MC3.1, MC4.4): a feature that references a context has an arrow
 //!   on its row, yellow when it references the active context; an instance whose Part Studio has
-//!   a context in the assembly has one in the Instance list, solid on the primary instance,
-//!   dashed (outlined) on the others; a blue dot beside it when an update is available.
+//!   a context in the assembly has a grey one in the Instance list (as Onshape's), solid on the
+//!   primary instance, dashed (outlined) on the others; a blue dot beside it when an update is
+//!   available.
 //!
 //! Names: `context-bar`, `context-title`, `context-update`, `context-eye`, `context-go`
 //! (menu `context-go-menu-assembly`, `context-go-menu-insert`), `context-done`,
@@ -55,7 +56,7 @@ impl Plugin for InContextPlugin {
             .init_resource::<Statuses>()
             .add_systems(
                 Update,
-                (leave_contexts, update_statuses, sync_context_bar, sync_contexts_row, sync_feature_arrows, sync_instance_arrows)
+                (open_contexts, leave_contexts, update_statuses, sync_context_bar, sync_contexts_row, sync_feature_arrows, sync_instance_arrows)
                     .chain()
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
@@ -115,6 +116,21 @@ fn reset(mut active: ResMut<ActiveContexts>, mut statuses: ResMut<Statuses>, doc
     }
     active.0.clear();
     *statuses = Statuses::default();
+}
+
+/// A document just opened: its Part Studios start in the context they open in
+/// ([`cadrs_core::Element::open_context`]).
+fn open_contexts(doc: Option<Res<ActiveDocument>>, mut active: ResMut<ActiveContexts>, mut last: Local<Option<cadrs_core::DocumentId>>) {
+    let Some(doc) = doc else { return };
+    if *last == Some(doc.doc.id) && !doc.is_added() {
+        return;
+    }
+    *last = Some(doc.doc.id);
+    for e in &doc.doc.elements {
+        if let Some(c) = e.open_context.filter(|c| e.context(*c).is_some()) {
+            active.0.entry(e.id).or_insert(c);
+        }
+    }
 }
 
 /// The context `id` of the Part Studio `studio`: in the document, or pending.
@@ -413,7 +429,6 @@ fn sync_context_bar(
     active: Res<ActiveContexts>,
     statuses: Res<Statuses>,
     view: Res<ContextView>,
-    theme: Res<Theme>,
     q: Query<(Entity, &ContextBar)>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut commands: Commands,
@@ -454,7 +469,9 @@ fn sync_context_bar(
     }
     let Some(w) = want else { return };
     let Some(area) = q_area.iter().next() else { return };
-    let t = theme.clone();
+    // The bar is the in-context yellow (as the arrows of the active context's features), with
+    // the light theme's text and controls on it in either theme.
+    let t = Theme::light();
     let (studio, id, external) = (w.studio, w.id, w.external);
     // Centred in the viewport by a full-width row, kept clear of the view cube on both sides.
     let row = commands
@@ -487,8 +504,8 @@ fn sync_context_bar(
                 row_gap: Val::Px(2.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.97)),
-            BorderColor::all(t.primary),
+            BackgroundColor(BAR_YELLOW),
+            BorderColor::all(ACTIVE_ARROW),
             BoxShadow::new(t.shadow, Val::Px(0.0), Val::Px(1.0), Val::Px(0.0), Val::Px(4.0)),
         ))
         .id();
@@ -856,6 +873,8 @@ pub fn commit_pending(world: &mut World, studio: ElementId) {
 
 /// The yellow of the active context's arrows (MC2.15).
 const ACTIVE_ARROW: Color = Color::srgb(0.91, 0.64, 0.0);
+/// The context bar's background (MCC1).
+const BAR_YELLOW: Color = Color::srgb(0.99, 0.80, 0.22);
 const OTHER_ARROW: Color = Color::srgb(0.62, 0.62, 0.62);
 
 /// The in-context arrow on a row: what it shows, and its node.
@@ -997,7 +1016,7 @@ fn sync_instance_arrows(
             if *stale {
                 tip.push_str(" · an update is available");
             }
-            place_arrow(&mut commands, &theme, row, name.as_str(), have, Some(ArrowState { solid: *primary, color: ACTIVE_ARROW, stale: *stale, tip }));
+            place_arrow(&mut commands, &theme, row, name.as_str(), have, Some(ArrowState { solid: *primary, color: theme.muted_foreground, stale: *stale, tip }));
             continue;
         }
         let want = context::studio_of(&doc.doc, assembly, ir.0).and_then(|studio| {
@@ -1015,7 +1034,7 @@ fn sync_instance_arrows(
             if stale {
                 tip.push_str(" · an update is available");
             }
-            Some(ArrowState { solid, color: ACTIVE_ARROW, stale, tip })
+            Some(ArrowState { solid, color: theme.muted_foreground, stale, tip })
         });
         place_arrow(&mut commands, &theme, row, name.as_str(), have, want);
     }

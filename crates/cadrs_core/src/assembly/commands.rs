@@ -149,7 +149,7 @@ impl Command for DeleteInstances {
         });
         // A Replicate whose seed mate went goes too.
         let mates: Vec<MateId> = asm.mates.iter().map(|m| m.id).collect();
-        asm.mates.retain(|f| !matches!(&f.kind, MateKind::Replicate(r) if !mates.contains(&r.seed_mate)));
+        asm.retain_mates(|f| !matches!(&f.kind, MateKind::Replicate(r) if !mates.contains(&r.seed_mate)));
         // P3B.9: a relation goes with its mates.
         asm.drop_orphan_relations();
         super::folders::tidy(asm);
@@ -366,9 +366,12 @@ impl Command for SetLocalConnector {
             return Err(CommandError::Invalid(format!("instance {owner} not found")));
         }
         let asm = assembly_mut(doc, self.element)?;
+        let after = asm.mates.len();
         match asm.connectors.iter_mut().find(|c| c.id == self.connector.id) {
-            Some(slot) => *slot = self.connector.clone(),
-            None => asm.connectors.push(self.connector.clone()),
+            // An edit keeps its place in the list.
+            Some(slot) => *slot = super::connector::LocalConnector { listed_after: self.connector.listed_after.or(slot.listed_after), ..self.connector.clone() },
+            // A new one comes after the mate features there are.
+            None => asm.connectors.push(super::connector::LocalConnector { listed_after: self.connector.listed_after.or(Some(after)), ..self.connector.clone() }),
         }
         Ok(())
     }
@@ -395,7 +398,7 @@ impl Command for DeleteLocalConnector {
         }
         asm.connectors.retain(|c| c.id != self.id);
         let id = self.id;
-        asm.mates.retain(|f| {
+        asm.retain_mates(|f| {
             !f.mate().is_some_and(|m| m.all_connectors().any(|c| matches!(c.anchor, super::connector::ConnectorAnchor::Local { id: x } if x == id)))
         });
         super::folders::tidy(asm);
@@ -431,7 +434,7 @@ impl Command for DeleteMateFeatures {
                 copies.extend(r.instances.iter().copied());
             }
         }
-        asm.mates.retain(|m| !self.mates.contains(&m.id) && !matches!(&m.kind, MateKind::Replicate(r) if self.mates.contains(&r.seed_mate)));
+        asm.retain_mates(|m| !self.mates.contains(&m.id) && !matches!(&m.kind, MateKind::Replicate(r) if self.mates.contains(&r.seed_mate)));
         // P3B.9: a relation goes with its mates.
         asm.drop_orphan_relations();
         if !copies.is_empty() {
@@ -537,7 +540,7 @@ impl Command for SetStudioParts {
             .map(|p| super::structure::derive(self.instance, super::structure::studio_part_key(*p)))
             .collect();
         inst.parts = self.parts.clone();
-        asm.mates.retain(|f| !f.mate().is_some_and(|m| m.all_connectors().any(|c| removed.contains(&c.instance))));
+        asm.retain_mates(|f| !f.mate().is_some_and(|m| m.all_connectors().any(|c| removed.contains(&c.instance))));
         super::folders::tidy(asm);
         Ok(())
     }

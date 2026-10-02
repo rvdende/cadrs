@@ -350,6 +350,35 @@ pub fn explicit_connectors(doc: &ActiveDocument, parts: &mut super::AssemblyPart
         c.anchor = ConnectorAnchor::Local { id: l.id };
         out.push((c, local.moved(&pose)));
     }
+    // The subassemblies' own connectors (as Onshape shows them), on their occurrences here.
+    if let Some(m) = doc.active_element().and_then(|e| e.assembly_model()) {
+        for (owner, l) in nested_connectors(&doc.doc, m, 0) {
+            let Some((pose, s)) = solid(parts, owner) else { continue };
+            if cache.is_hidden(super::occurrence_part(owner)) {
+                continue;
+            }
+            let local = l.connector.local_frame(Some(&s));
+            out.push((MateConnector::at(owner, local), local.moved(&pose)));
+        }
+    }
+    out
+}
+
+/// The own mate connectors of the subassemblies of `asm` at any depth, each with its owner's
+/// occurrence id in `asm` (suppressed instances left out).
+fn nested_connectors(doc: &cadrs_core::Document, asm: &cadrs_core::assembly::Assembly, depth: usize) -> Vec<(InstanceId, LocalConnector)> {
+    let mut out = Vec::new();
+    if depth > 8 {
+        return out;
+    }
+    for inst in asm.instances.iter().filter(|i| !i.suppressed) {
+        let cadrs_core::assembly::InstanceSource::Assembly { element } = inst.source else { continue };
+        let Some(child) = doc.element(element).and_then(|e| e.assembly_model()) else { continue };
+        let mine = child.connectors.iter().map(|l| (l.connector.instance, l.clone()));
+        for (owner, l) in mine.chain(nested_connectors(doc, child, depth + 1)) {
+            out.push((cadrs_core::assembly::structure::derive(inst.id, owner), l));
+        }
+    }
     out
 }
 
@@ -385,7 +414,7 @@ pub fn accept(world: &mut World) {
                     c.frame = c.base_frame(Some(&solid));
                 }
             });
-            super::run(world, &SetLocalConnector { element: s.element, connector: LocalConnector { id, name: s.name.clone(), connector: c } })
+            super::run(world, &SetLocalConnector { element: s.element, connector: LocalConnector { id, name: s.name.clone(), connector: c, listed_after: None } })
         }
         Target::Mate { mate, index } => {
             let Some((feature, poses)) = solve_mate(world, mate, index, c, false) else { return };

@@ -168,6 +168,8 @@ pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Impo
             let Some(k) = s.doc.element_index(id) else { continue };
             let mut fresh = cadrs_core::Element::part_studio(el.name.clone());
             fresh.id = id;
+            // Onshape opens it in that context (the workspace's active one).
+            fresh.open_context = Some(ctx.id);
             fresh.contexts = vec![ctx];
             s.doc.elements[k] = fresh;
             let mut er = ElementReport { name: el.name.clone(), kind: el.kind.clone(), imported: true, ..Default::default() };
@@ -942,6 +944,9 @@ impl<'a> PartStudio<'a> {
         if is_in_context(f) {
             parts.extend(self.context.iter().cloned());
             fr.notes.push("in context of an assembly".into());
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                eprintln!("IN-CONTEXT {}: {} parts, {} of them the context's", f["name"].as_str().unwrap_or_default(), parts.len(), self.context.len());
+            }
         }
         let map = sketch::import(self.s, self.el, id, f, &solved, plane, &parts, fr)?;
         let g = sketch::sketch_of(self.s, self.el, id)?;

@@ -242,7 +242,17 @@ fn import_assembly(s: &mut DocStudio, raw: &RawDocument, el: &RawElement, er: &m
             }
         }
         let result = match &src.link {
-            Some((r, snap)) => s.run(&InsertLinked { element: asm, snapshot: snap.clone(), instances: vec![instance], reference: *r }),
+            Some((r, snap)) => {
+                // Deeper than the subassembly's own instances (which the overrides above place),
+                // its tabs are the scraped workspace's; the version used here may place their
+                // instances elsewhere, as Onshape's occurrences show.
+                let mut snap = snap.clone();
+                if let Some((d, e)) = &src.sub {
+                    let root = snap.root;
+                    place_nested(&mut snap, root, (d, e), std::slice::from_ref(&oid), &occ, &subs, 0);
+                }
+                s.run(&InsertLinked { element: asm, snapshot: snap, instances: vec![instance], reference: *r })
+            }
             None => s.run(&InsertInstance { element: asm, instance }),
         };
         match result {
@@ -311,7 +321,7 @@ fn import_assembly(s: &mut DocStudio, raw: &RawDocument, el: &RawElement, er: &m
                 let path = path_of(&data["occurrence"]);
                 let owner = occurrence(&path).ok_or("its instance was not imported")?;
                 let frame = local(&path, frame_of(&data["mateConnectorCS"]).ok_or("no frame")?);
-                let c = LocalConnector { id: LocalConnectorId(mid.0), name: name.clone(), connector: MateConnector::at(owner, frame) };
+                let c = LocalConnector { id: LocalConnectorId(mid.0), name: name.clone(), connector: MateConnector::at(owner, frame), listed_after: None };
                 s.run(&SetLocalConnector { element: asm, connector: c }).map_err(|e| e.to_string())
             })(),
             "mateGroup" => (|| {
@@ -396,6 +406,43 @@ fn import_assembly(s: &mut DocStudio, raw: &RawDocument, el: &RawElement, er: &m
         er.notes.push(if n > 1 { format!("{n} instances: {why}") } else { format!("an instance: {why}") });
     }
     er.assembly = Some(crate::report::AssemblyCounts { instances: (placed, instances.len()), mates: (mates_done, mates) });
+}
+
+/// Places the instances of the nested subassembly tabs of linked copy `tab` (the copy of Onshape
+/// subassembly `sub`, at Onshape occurrence `path`) as Onshape's occurrences put them, relative
+/// to their parents. `depth` 0 is the linked subassembly itself: its own instances are left to
+/// the instance's overrides.
+fn place_nested(
+    snap: &mut cadrs_core::external::LinkSnapshot,
+    tab: ElementId,
+    sub: (&str, &str),
+    path: &[String],
+    occ: &HashMap<Vec<String>, (Pose, bool, bool)>,
+    subs: &HashMap<(String, String), Vec<Value>>,
+    depth: usize,
+) {
+    let Some(parent) = occ.get(path).map(|x| x.0) else { return };
+    let (d, e) = sub;
+    for child in subs.get(&(d.to_string(), e.to_string())).into_iter().flatten() {
+        let Some(cid) = child["id"].as_str() else { continue };
+        let mut cpath = path.to_vec();
+        cpath.push(cid.to_string());
+        let id = instance_id(d, e, cid);
+        let Some(model) = snap.links.iter_mut().find(|l| l.id() == tab).and_then(|l| l.element.assembly_model_mut()) else { return };
+        let Some(inst) = model.instance_mut(id) else { continue };
+        if depth > 0
+            && let Some((world, ..)) = occ.get(&cpath)
+        {
+            let local = world.then(&parent.inverse());
+            inst.pose = if child["type"].as_str() == Some("Assembly") { local } else { corrected(local, part_offset(child)) };
+        }
+        if child["type"].as_str() == Some("Assembly")
+            && let InstanceSource::Assembly { element } = inst.source
+            && let (Some(cd), Some(ce)) = (child["documentId"].as_str(), child["elementId"].as_str())
+        {
+            place_nested(snap, element, (cd, ce), &cpath, occ, subs, depth + 1);
+        }
+    }
 }
 
 /// The instance folders (`folders.json`, read from Onshape's instance list by

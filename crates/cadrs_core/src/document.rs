@@ -126,6 +126,11 @@ pub struct Element {
     /// geometry. Documents from before several contexts have a single `context`.
     #[serde(default, alias = "context", deserialize_with = "crate::assembly::context::deserialize_contexts", skip_serializing_if = "Vec::is_empty")]
     pub contexts: Vec<crate::assembly::context::StudioContext>,
+    /// The context the Part Studio opens in (one of `contexts`): Onshape keeps the active
+    /// context with the workspace, and an import of it sets this. The app's active context is
+    /// view state; this only starts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_context: Option<crate::assembly::context::ContextNo>,
     /// A Part Studio's or Assembly's simulation setup: its Loads list and mesh (P3F.5,
     /// [`crate::simulation`]).
     #[serde(default, skip_serializing_if = "crate::simulation::Simulation::is_empty")]
@@ -149,6 +154,7 @@ impl Element {
             },
             assembly: Default::default(),
             contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
         }
     }
@@ -161,6 +167,7 @@ impl Element {
             kind: ElementKind::Render(Box::new(crate::render::RenderStudio::new(source))),
             assembly: Default::default(),
             contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
         }
     }
@@ -172,6 +179,7 @@ impl Element {
             kind: ElementKind::Assembly,
             assembly: Default::default(),
             contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
         }
     }
@@ -184,6 +192,7 @@ impl Element {
             kind: ElementKind::Drawing(Box::new(drawing)),
             assembly: Default::default(),
             contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
         }
     }

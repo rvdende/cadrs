@@ -69,20 +69,25 @@ pub fn file_name(hash: &str, ext: &str) -> String {
 }
 
 /// The blobs a document's features use: (hash, extension), each once. A linked copy's features
-/// count too (P3G.1): the copy rebuilds in this document, from this document's files.
+/// count too (P3G.1): the copy rebuilds in this document, from this document's files; so do a
+/// Derived feature's source studio's (it rebuilds here too).
 pub fn used_by(doc: &Document) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let all = doc.elements.iter().chain(doc.standard_content.iter().map(|s| &s.element)).chain(doc.linked.iter().map(|l| &l.element));
     for el in all {
-        for f in el.features() {
-            if let FeatureKind::Import(x) = &f.kind
-                && !out.iter().any(|(h, _)| *h == x.blob)
-            {
-                out.push((x.blob.clone(), x.extension()));
-            }
-        }
+        used_in(el.features(), &mut out);
     }
     out
+}
+
+fn used_in(features: &[crate::document::Feature], out: &mut Vec<(String, String)>) {
+    for f in features {
+        match &f.kind {
+            FeatureKind::Import(x) if !out.iter().any(|(h, _)| *h == x.blob) => out.push((x.blob.clone(), x.extension())),
+            FeatureKind::Derived(x) => used_in(&x.studio, out),
+            _ => {}
+        }
+    }
 }
 
 /// Writes the blobs `doc` uses that `dir` (a document's blobs folder) doesn't have yet. Blobs

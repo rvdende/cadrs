@@ -20,8 +20,10 @@ impl Rebuilder {
         let model = self.kernel.import_model(format, bytes).map_err(|e| format!("Import failed: {e}"))?;
         let plan = self.plan_of(x.format, &model);
         let originals: Vec<BodyId> = model.parts.iter().map(|p| p.body).collect();
-        // Where each body goes: a part at its first occurrence, or every occurrence.
+        // Where each body goes: a part at its first occurrence or its own origin, or every
+        // occurrence.
         let wanted: Vec<(usize, Motion, String)> = match mode {
+            ImportMode::AtOrigin => (0..originals.len()).map(|i| (i, Motion::identity(), format!("part {}", i + 1))).collect(),
             ImportMode::Parts => (0..originals.len())
                 .map(|i| {
                     let first = model.occurrences.iter().find(|o| o.part == i).map_or(Motion::identity(), |o| o.placement);

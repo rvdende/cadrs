@@ -216,7 +216,7 @@ fn an_assembly_connector_stays_in_the_assembly_and_takes_a_mate() {
     let f = c.local_frame(Some(s));
     close3("midway", inch(f.origin), [0.0, -0.5, 23.0]);
     let id = LocalConnectorId::from_u128(0x55);
-    h.execute(&mut doc, &SetLocalConnector { element: ss::ASSEMBLY, connector: LocalConnector { id, name: "Mate connector 1".into(), connector: c } }).unwrap();
+    h.execute(&mut doc, &SetLocalConnector { element: ss::ASSEMBLY, connector: LocalConnector { id, name: "Mate connector 1".into(), connector: c, listed_after: None } }).unwrap();
     assert_eq!(doc.element(ss::BASE_STUDIO).unwrap().features().len(), features_before);
     let mut asm = doc.element(ss::ASSEMBLY).unwrap().assembly_model().unwrap().clone();
     asm.mates.retain(|m| m.id != ss::HINGE);

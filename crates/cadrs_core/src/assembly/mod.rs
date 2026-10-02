@@ -411,7 +411,20 @@ impl Assembly {
     /// Drops the relations whose mates are gone (after a delete).
     pub fn drop_orphan_relations(&mut self) {
         let ids: Vec<mate::MateId> = self.mates.iter().map(|f| f.id).collect();
-        self.mates.retain(|f| f.relation().is_none_or(|r| r.mates.iter().all(|m| ids.contains(m))));
+        self.retain_mates(|f| f.relation().is_none_or(|r| r.mates.iter().all(|m| ids.contains(m))));
+    }
+
+    /// Keeps the mate features `keep` says to, the assembly's own mate connectors staying where
+    /// they were among the rest ([`connector::LocalConnector::listed_after`]).
+    pub fn retain_mates(&mut self, mut keep: impl FnMut(&mate::MateFeature) -> bool) {
+        let kept: Vec<bool> = self.mates.iter().map(&mut keep).collect();
+        for c in &mut self.connectors {
+            if let Some(n) = c.listed_after.as_mut() {
+                *n = kept.iter().take(*n).filter(|k| **k).count();
+            }
+        }
+        let mut k = kept.into_iter();
+        self.mates.retain(|_| k.next().unwrap_or(true));
     }
 
     pub fn mate(&self, id: mate::MateId) -> Option<&mate::MateFeature> {

@@ -182,6 +182,7 @@ impl Element {
             kind: ElementKind::PcbStudio(Box::default()),
             assembly: Default::default(),
             contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
         }
     }

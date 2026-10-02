@@ -498,21 +498,50 @@ fn model_edges(
 ) -> Result<HashMap<String, CurveId>, CommandError> {
     // Per edge id: the points on it, and the points at its middle.
     let mut hints: std::collections::BTreeMap<String, (Vec<Vec2>, Vec<Vec2>)> = Default::default();
+    // Per edge id: the centres of the circles concentric with it.
+    let mut centres: HashMap<String, Vec<Vec2>> = HashMap::new();
     let point_of = |v: &str| map.points.get(v).and_then(|p| g.points.get(*p)).map(|p| p.pos);
+    // Points on a curve: a line's ends, three points round a circle, an arc's ends and middle
+    // (counterclockwise from its start).
     let curve_points = |v: &str| -> Vec<Vec2> {
+        let pos = |p: PointId| g.points.get(p).map(|p| p.pos);
         match map.curves.get(v).and_then(|c| g.curves.get(*c)).map(|c| c.kind) {
-            Some(CurveKind::Line { a, b }) => [a, b].iter().filter_map(|p| g.points.get(*p)).map(|p| p.pos).collect(),
+            Some(CurveKind::Line { a, b }) => [a, b].iter().filter_map(|p| pos(*p)).collect(),
+            Some(CurveKind::Circle { center, radius }) => pos(center)
+                .map(|c| (0..3).map(|k| f64::from(k) * std::f64::consts::TAU / 3.0).map(|t| Vec2::new(c.x + radius * t.cos(), c.y + radius * t.sin())).collect())
+                .unwrap_or_default(),
+            Some(CurveKind::Arc { center, start, end }) => {
+                let (Some(c), Some(a), Some(b)) = (pos(center), pos(start), pos(end)) else { return Vec::new() };
+                let (t0, mut t1) = ((a.y - c.y).atan2(a.x - c.x), (b.y - c.y).atan2(b.x - c.x));
+                if t1 <= t0 {
+                    t1 += std::f64::consts::TAU;
+                }
+                let (r, t) = (a.distance(c), (t0 + t1) / 2.0);
+                vec![a, b, Vec2::new(c.x + r * t.cos(), c.y + r * t.sin())]
+            }
             _ => Vec::new(),
+        }
+    };
+    // A circle's or arc's centre (a CONCENTRIC constraint's local entity).
+    let centre_of = |v: &str| -> Option<Vec2> {
+        match map.curves.get(v).and_then(|c| g.curves.get(*c)).map(|c| c.kind) {
+            Some(CurveKind::Circle { center, .. } | CurveKind::Arc { center, .. }) => g.points.get(center).map(|p| p.pos),
+            _ => point_of(v),
         }
     };
     for c in feature["constraints"].as_array().into_iter().flatten() {
         let params = c["parameters"].as_array().cloned().unwrap_or_default();
         let midpoint = c["constraintType"].as_str() == Some("MIDPOINT");
+        let concentric = c["constraintType"].as_str() == Some("CONCENTRIC");
         let mut local_points = Vec::new();
         for p in &params {
             if p["parameterId"].as_str().is_some_and(|i| i.starts_with("local"))
                 && let Some(v) = p["value"].as_str()
             {
+                if concentric {
+                    local_points.extend(centre_of(v));
+                    continue;
+                }
                 local_points.extend(point_of(v));
                 if !midpoint {
                     local_points.extend(curve_points(v));
@@ -529,7 +558,9 @@ fn model_edges(
                 continue;
             }
             let h = hints.entry(eid.to_string()).or_default();
-            if midpoint {
+            if concentric {
+                centres.entry(eid.to_string()).or_default().extend(local_points.iter().copied());
+            } else if midpoint {
                 h.1.extend(local_points.iter().copied());
             } else {
                 h.0.extend(local_points.iter().copied());
@@ -541,7 +572,11 @@ fn model_edges(
     let mut out = HashMap::new();
     let mut unmatched = 0;
     for (eid, (on, mids)) in hints {
-        if on.is_empty() && mids.is_empty() {
+        let centred = centres.get(&eid).cloned().unwrap_or_default();
+        if on.is_empty() && mids.is_empty() && centred.is_empty() {
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                eprintln!("EDGE {eid}: no points to find it by");
+            }
             unmatched += 1;
             continue;
         }
@@ -569,6 +604,16 @@ fn model_edges(
                     }
                     err += d.min(1.0);
                 }
+                for p in &centred {
+                    let d = match shape {
+                        cadrs_sketch::projection::Projected::Circle(c, _) | cadrs_sketch::projection::Projected::Arc { center: c, .. } => p.distance(c),
+                        _ => f64::MAX,
+                    };
+                    if d < tol {
+                        hits += 1;
+                    }
+                    err += d.min(1.0);
+                }
                 if hits == 0 {
                     continue;
                 }
@@ -578,14 +623,39 @@ fn model_edges(
             }
         }
         let Some((hits, _, shape, link)) = best else {
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                // The nearest any edge comes to the hints.
+                let mut near = f64::MAX;
+                for part in parts {
+                    for e in &part.solid.edges {
+                        let Some(shape) = cadrs_core::links::edge_curve(e).and_then(|c| cadrs_core::links::project(c, &frame)) else { continue };
+                        for p in on.iter().chain(&mids) {
+                            near = near.min(cadrs_core::links::projected_distance(&shape, *p).unwrap_or(f64::MAX));
+                        }
+                    }
+                }
+                eprintln!("EDGE {eid}: {} hints, nearest edge {near:.6} mm, {} parts", on.len() + mids.len(), parts.len());
+            }
             unmatched += 1;
             continue;
         };
-        if hits < on.len() + mids.len() {
-            report.notes.push(format!("model edge {eid}: {hits} of {} constrained points on it", on.len() + mids.len()));
+        if hits < on.len() + mids.len() + centred.len() {
+            report.notes.push(format!("model edge {eid}: {hits} of {} constrained points on it", on.len() + mids.len() + centred.len()));
         }
-        let before: std::collections::HashSet<CurveId> = sketch_of(s, el, id)?.curves.keys().collect();
-        if s.run(&EditSketch { element: el, feature: id, op: SketchOp::Use { items: vec![(shape, link)] } }).is_err() {
+        let current = sketch_of(s, el, id)?;
+        // Used already (by another reference to the same edge, or to one of its ends): that curve.
+        if let Some(c) = current.constraints.values().find_map(|c| match *c {
+            cadrs_sketch::constraint::ConstraintOf::Use(CurveRef::Curve(k), l) if l == link => Some(k),
+            _ => None,
+        }) {
+            out.insert(eid, c);
+            continue;
+        }
+        let before: std::collections::HashSet<CurveId> = current.curves.keys().collect();
+        if let Err(e) = s.run(&EditSketch { element: el, feature: id, op: SketchOp::Use { items: vec![(shape, link)] } }) {
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                eprintln!("EDGE {eid}: found ({hits} hits), but Use failed: {e}");
+            }
             unmatched += 1;
             continue;
         }

@@ -37,6 +37,10 @@ pub enum ImportMode {
     /// Each distinct part once, where its first occurrence is (Keep assembly structure: an
     /// assembly places them).
     Parts,
+    /// Each distinct part once, in its own coordinates (where the file defines it, not where
+    /// it is used): Onshape's Import without *Flatten*, whose Part Studio holds the parts that
+    /// way and whose assembly places them.
+    AtOrigin,
 }
 
 /// A part of the file: its name and how many solids it has.
@@ -75,7 +79,7 @@ impl ImportPlan {
     /// How many parts the Part Studio gets in `mode`.
     pub fn part_count(&self, mode: ImportMode) -> usize {
         match mode {
-            ImportMode::Parts => self.parts.iter().map(|p| p.solids.max(1)).sum(),
+            ImportMode::Parts | ImportMode::AtOrigin => self.parts.iter().map(|p| p.solids.max(1)).sum(),
             ImportMode::Flatten => self.occurrences.iter().map(|o| self.parts.get(o.part).map_or(1, |p| p.solids.max(1))).sum(),
         }
     }
@@ -96,7 +100,7 @@ impl ImportPlan {
             }
         };
         match mode {
-            ImportMode::Parts => (0..self.parts.len()).for_each(|i| push(base(i), solids(i), &mut out)),
+            ImportMode::Parts | ImportMode::AtOrigin => (0..self.parts.len()).for_each(|i| push(base(i), solids(i), &mut out)),
             ImportMode::Flatten => {
                 let mut seen = vec![0usize; self.parts.len()];
                 for o in &self.occurrences {
