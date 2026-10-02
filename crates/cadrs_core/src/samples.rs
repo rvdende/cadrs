@@ -223,6 +223,7 @@ pub mod flange;
 pub mod drawing_bracket;
 pub mod gear_cover;
 pub mod hand_brake;
+pub mod in_context;
 pub mod inspection;
 pub mod linked_block;
 pub mod motor_mount;

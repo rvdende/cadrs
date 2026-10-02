@@ -315,6 +315,20 @@ impl ActiveDocument {
                 let extra = self.undo_active.len() - keep;
                 self.undo_active.drain(..extra);
             }
+            // MC2.5: a pending assembly context is created by the first command that references
+            // it, in that command's undo step.
+            if let Some((studio, context)) = cadrs_core::assembly::context::pending_to_commit(&self.doc)
+                && self.history.execute(&mut self.doc, &cadrs_core::assembly::context::AddContext { studio, context }).is_ok()
+            {
+                // The document has it now (deleting it later must not bring it back).
+                cadrs_core::assembly::context::set_pending(self.doc.id, studio, None);
+                self.history.squash_element_since(undo0.min(self.history.undo_len()), studio, cmd.label());
+                let keep = self.history.undo_len();
+                while self.undo_active.len() < keep {
+                    self.undo_active.push(before);
+                }
+                self.undo_active.truncate(keep);
+            }
         }
         self.fix_active();
         r

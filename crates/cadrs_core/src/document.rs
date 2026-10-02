@@ -121,11 +121,11 @@ pub struct Element {
     /// An Assembly tab's instances (P3B.1, [`crate::assembly`]); empty for a Part Studio.
     #[serde(default, skip_serializing_if = "crate::assembly::Assembly::is_empty")]
     pub assembly: crate::assembly::Assembly,
-    /// A Part Studio edited **in the context** of an assembly (P3B.9, X15,
-    /// [`crate::assembly::context`]): the other instances around its part, as reference
-    /// geometry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<crate::assembly::context::StudioContext>,
+    /// A Part Studio's **assembly contexts** (P3B.9, X15, `managed-in-context-design.md`;
+    /// [`crate::assembly::context`]): snapshots of assemblies around its parts, as reference
+    /// geometry. Documents from before several contexts have a single `context`.
+    #[serde(default, alias = "context", deserialize_with = "crate::assembly::context::deserialize_contexts", skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<crate::assembly::context::StudioContext>,
     /// A Part Studio's or Assembly's simulation setup: its Loads list and mesh (P3F.5,
     /// [`crate::simulation`]).
     #[serde(default, skip_serializing_if = "crate::simulation::Simulation::is_empty")]
@@ -148,7 +148,7 @@ impl Element {
                 rollback: None,
             },
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
             simulation: Default::default(),
         }
     }
@@ -160,7 +160,7 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Render(Box::new(crate::render::RenderStudio::new(source))),
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
             simulation: Default::default(),
         }
     }
@@ -171,7 +171,7 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Assembly,
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
             simulation: Default::default(),
         }
     }
@@ -183,7 +183,7 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Drawing(Box::new(drawing)),
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
             simulation: Default::default(),
         }
     }
@@ -1238,6 +1238,10 @@ pub struct ExtrudeFeature {
     /// plane. Solids only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<crate::draft::ExtrudeDraft>,
+    /// MC1.3: the assembly-context parts its ends go up to, frozen as the context has them
+    /// (kept up to date by [`crate::commands::refresh_studio`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::assembly::context::ContextTarget>,
 }
 
 /// Onshape's default extrude depth.
@@ -1265,6 +1269,7 @@ impl Default for ExtrudeFeature {
             direction: None,
             second: None,
             draft: None,
+            context: Vec::new(),
         }
     }
 }
@@ -1470,6 +1475,9 @@ pub struct RevolveFeature {
     /// Second end position: an end turning the other way (`depth` is its angle in degrees).
     #[serde(default)]
     pub second: Option<EndCondition>,
+    /// MC1.3: the assembly-context parts its ends go up to (see [`ExtrudeFeature::context`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::assembly::context::ContextTarget>,
 }
 
 impl Default for RevolveFeature {
@@ -1491,6 +1499,7 @@ impl Default for RevolveFeature {
             offset: None,
             flip: false,
             second: None,
+            context: Vec::new(),
         }
     }
 }

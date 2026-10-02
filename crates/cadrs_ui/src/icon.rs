@@ -34,6 +34,12 @@ impl Plugin for IconPlugin {
     }
 }
 
+/// Whether the icon-rs build has an icon by this name (for icons newer than the release a build
+/// uses, with a stand-in until then).
+pub fn has_icon(name: &str) -> bool {
+    data::ICON_DATA.iter().any(|(n, ..)| *n == name)
+}
+
 /// The accent colour of icon-rs icons.
 pub fn accent_color() -> Color {
     let [r, g, b] = data::ACCENT;

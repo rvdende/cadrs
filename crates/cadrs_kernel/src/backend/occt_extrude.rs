@@ -182,6 +182,11 @@ impl OcctKernel {
                     if m.dot(&dir).abs() > 1.0 - 1e-9 {
                         return check_depth("the face", (pl.origin - o).dot(&dir) - offset);
                     }
+                    // A plane along the extrude direction is never reached (and the sweep below
+                    // would be endless: OCCT's fuse of such prisms never returns).
+                    if m.dot(&dir).abs() < 1e-6 {
+                        return Err(KernelError::InvalidParameter("the face is parallel to the extrude direction".into()));
+                    }
                     // An oblique plane: how far the sweep must go to cross it everywhere.
                     let point = pl.origin - dir * offset;
                     let samples = profile_samples(self, profile, spec, o)?;
@@ -191,6 +196,9 @@ impl OcctKernel {
                         .fold(f64::NEG_INFINITY, f64::max);
                     if far.is_nan() || far <= MIN_DEPTH {
                         return Err(too_thin("the face", far));
+                    }
+                    if far > 1e6 {
+                        return Err(KernelError::InvalidParameter("the face is too nearly parallel to the extrude direction".into()));
                     }
                     Ok(Reach::Trim {
                         kind: TrimKind::Plane { point, normal: m },

@@ -256,7 +256,7 @@ fn snap(source: &Document, r: SourceRef, version_name: &str, id: ElementId, out:
         // P3F.6: a Render Studio renders its source here; it isn't linked elsewhere.
         ElementKind::Render(_) => return Err(LinkError::NotLinkable(format!("The Render Studio {}", el.name))),
         ElementKind::PartStudio { .. } => {
-            copy.context = None;
+            copy.contexts.clear();
             // P3G.4: the copies its Derived features need come too, and their same-document
             // references now name the source document.
             for dep in dependencies(el) {

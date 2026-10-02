@@ -128,6 +128,64 @@ pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Impo
     // Assemblies once their Part Studios are there (not for a lone studio another document needs).
     if options.only.is_none() {
         crate::assembly::import_assemblies(&mut s, raw, &elements, &mut reports);
+        // Part Studios Onshape designed in the context of an assembly here: each gets a context
+        // of that assembly (around its instance, where Onshape places it) and is imported again
+        // with it; then the assemblies again, for the parts that only build now.
+        let mut again = false;
+        // The frozen context entities each in-context studio names: a copy of a studio (a
+        // duplicated tab) names the same ones, and has its context, though it isn't in the
+        // assembly itself.
+        let foreign: Vec<(usize, ElementId, std::collections::HashSet<String>)> = studios
+            .iter()
+            .filter_map(|&(i, id)| {
+                let ids = in_context_entities(&elements[i]);
+                (!ids.is_empty()).then_some((i, id, ids))
+            })
+            .collect();
+        for (i, id, ids) in &foreign {
+            let (i, id) = (*i, *id);
+            let el = &elements[i];
+            // Its own instance, else that of a studio naming the same context entities (whose
+            // parts are then left out, as Onshape's context of it had them).
+            let anchor = crate::assembly::context_anchor(raw, &elements, &el.id).map(|a| (a, id)).or_else(|| {
+                foreign.iter().filter(|(j, _, other)| *j != i && !other.is_disjoint(ids)).find_map(|(j, other_id, _)| crate::assembly::context_anchor(raw, &elements, &elements[*j].id).map(|a| (a, *other_id)))
+            });
+            let Some(((asm, inst, pose), left_out)) = anchor else {
+                if let Some(er) = reports[i].as_mut() {
+                    er.notes.push("made in context of an assembly that isn't in this document: its in-context features have no context".into());
+                }
+                continue;
+            };
+            let ctx = match cadrs_core::assembly::context::snapshot_with(&s.doc, asm, left_out, inst, pose.inverse(), 0) {
+                Ok(c) => c,
+                Err(e) => {
+                    if let Some(er) = reports[i].as_mut() {
+                        er.notes.push(format!("its assembly context: {e}"));
+                    }
+                    continue;
+                }
+            };
+            let Some(k) = s.doc.element_index(id) else { continue };
+            let mut fresh = cadrs_core::Element::part_studio(el.name.clone());
+            fresh.id = id;
+            fresh.contexts = vec![ctx];
+            s.doc.elements[k] = fresh;
+            let mut er = ElementReport { name: el.name.clone(), kind: el.kind.clone(), imported: true, ..Default::default() };
+            PartStudio::new(&mut s, id, &raw.id, el, vars.clone(), &mut er, options).run();
+            reports[i] = Some(er);
+            again = true;
+        }
+        if again {
+            for e in s.doc.elements.iter_mut().filter(|e| e.assembly_model().is_some()) {
+                e.assembly = Default::default();
+            }
+            for (i, el) in elements.iter().enumerate() {
+                if el.kind == "ASSEMBLY" {
+                    reports[i] = Some(ElementReport { name: el.name.clone(), kind: el.kind.clone(), imported: true, ..Default::default() });
+                }
+            }
+            crate::assembly::import_assemblies(&mut s, raw, &elements, &mut reports);
+        }
     }
     report.elements.extend(reports.into_iter().flatten());
     if s.doc.elements.is_empty() {
@@ -378,6 +436,9 @@ pub(crate) struct PartStudio<'a> {
     options: &'a Options,
     /// Its Derived features' sources (to resolve queries on derived parts).
     pub(crate) derived: crate::eval::DerivedSources,
+    /// The parts of its assembly contexts (`managed-in-context-design.md`), for the features
+    /// Onshape made in context.
+    context: Vec<Part>,
 }
 
 impl<'a> PartStudio<'a> {
@@ -390,7 +451,8 @@ impl<'a> PartStudio<'a> {
         report: &'a mut ElementReport,
         options: &'a Options,
     ) -> Self {
-        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new() }
+        let context = cadrs_core::assembly::context::parts(&s.doc, el, |_, f| Some(cadrs_core::rebuild::build(f))).0;
+        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new(), context }
     }
 
     /// A query model of `parts` with this studio's features, sketches and derived sources.
@@ -861,14 +923,26 @@ impl<'a> PartStudio<'a> {
                         }
                     }
                 }
+                // Made in context: the face of the assembly context it lies on.
+                let in_context = is_in_context(f);
                 by_query
-                    .or_else(|| self.face_plane(&solved))
+                    .or_else(|| self.face_plane(&solved, in_context))
                     .or(near)
-                    .ok_or_else(|| CommandError::Invalid("sketch plane is not a default plane or a planar face of the model".into()))?
+                    .ok_or_else(|| {
+                        CommandError::Invalid(if in_context {
+                            "sketch plane is a face of an assembly context that isn't there (or has moved since)".into()
+                        } else {
+                            "sketch plane is not a default plane or a planar face of the model".into()
+                        })
+                    })?
             }
         };
         let id = self.feature_id(fid);
-        let parts = self.parts();
+        let mut parts = self.parts();
+        if is_in_context(f) {
+            parts.extend(self.context.iter().cloned());
+            fr.notes.push("in context of an assembly".into());
+        }
         let map = sketch::import(self.s, self.el, id, f, &solved, plane, &parts, fr)?;
         let g = sketch::sketch_of(self.s, self.el, id)?;
         self.features.insert(fid.to_string(), id);
@@ -876,10 +950,14 @@ impl<'a> PartStudio<'a> {
         Ok(())
     }
 
-    /// A planar face of the model the sketch lies on (same plane, facing the same way).
-    fn face_plane(&mut self, solved: &sketch::Solved) -> Option<PlaneRef> {
+    /// A planar face of the model the sketch lies on (same plane, facing the same way); with
+    /// `in_context`, of the assembly context's parts too.
+    fn face_plane(&mut self, solved: &sketch::Solved, in_context: bool) -> Option<PlaneRef> {
         let (n, o) = sketch::world_plane(solved)?;
-        let parts = self.parts();
+        let mut parts = self.parts();
+        if in_context {
+            parts.extend(self.context.iter().cloned());
+        }
         let feats = self.s.doc.element(self.el)?.features().to_vec();
         // Of the faces on that plane, the one the sketch's geometry is on.
         let pts = sketch::world_points(solved);
@@ -1181,6 +1259,28 @@ impl<'a> PartStudio<'a> {
                 fr.notes.push("up to face imported as a blind depth (the profile goes past the face's edges)".into());
             }
         }
+        // Still failing: the other faces the query could mean, as they are (a curved face the
+        // profile lands on), the first that builds.
+        if self.rebuild_error(id).is_some() && x.end == EndType::UpToFace {
+            let tried = x.up_to.clone();
+            for face in self.up_to_candidates(f) {
+                if tried.as_ref().is_some_and(|t| matches!(t, UpTo::Face(r) if r.part == face.part && r.face == face.face)) {
+                    continue;
+                }
+                let mut y = x.clone();
+                y.up_to = Some(UpTo::Face(face));
+                self.s.run(&SetExtrude { element: self.el, feature: id, extrude: y, label: "Extrude".into() })?;
+                self.parts();
+                if self.rebuild_error(id).is_none() {
+                    fr.notes.push("up to another face the query names (the first one didn't build)".into());
+                    break;
+                }
+            }
+            if self.rebuild_error(id).is_some() {
+                self.s.run(&SetExtrude { element: self.el, feature: id, extrude: x.clone(), label: "Extrude".into() })?;
+                self.parts();
+            }
+        }
         if let Some(e) = self.rebuild_error(id) {
             fr.notes.push(format!("rebuild error: {e}"));
         }
@@ -1197,17 +1297,8 @@ impl<'a> PartStudio<'a> {
         if x.end != EndType::UpToFace {
             return None;
         }
+        let faces = self.up_to_candidates(f);
         let parts = self.parts();
-        let mut faces = Vec::new();
-        for p in refs::picks(param(f, "endBoundEntityFace")) {
-            let Pick::Query(q) = p else { continue };
-            for e in self.model(&parts).eval(&q) {
-                if let crate::eval::Ent::Face(pi, fi) = e {
-                    let part = &parts[pi];
-                    faces.push(cadrs_core::document::FaceRef { part: part.id, face: part.solid.faces[fi].name, seed: part.solid.face_point(fi).unwrap_or([0.0; 3]) });
-                }
-            }
-        }
         if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
             for fc in &faces {
                 let pl = parts.iter().find(|p| p.id == fc.part).and_then(|p| p.solid.face(&fc.face)).and_then(|x| x.plane);
@@ -1219,6 +1310,22 @@ impl<'a> PartStudio<'a> {
             y.up_to = Some(UpTo::Face(face));
             self.up_to_as_blind(&y)
         })
+    }
+
+    /// The faces an extrude's "up to face" query could mean.
+    fn up_to_candidates(&mut self, f: &Value) -> Vec<cadrs_core::document::FaceRef> {
+        let parts = self.parts();
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "endBoundEntityFace")) {
+            let Pick::Query(q) = p else { continue };
+            for e in self.model(&parts).eval(&q) {
+                if let crate::eval::Ent::Face(pi, fi) = e {
+                    let part = &parts[pi];
+                    faces.push(cadrs_core::document::FaceRef { part: part.id, face: part.solid.faces[fi].name, seed: part.solid.face_point(fi).unwrap_or([0.0; 3]) });
+                }
+            }
+        }
+        faces
     }
 
     /// An "Up to face" extrude to a planar face parallel to its sketch as the blind extrude
@@ -1616,6 +1723,29 @@ fn imprint_distance(shape: &cadrs_sketch::ImprintShape, p: cadrs_sketch::Vec2) -
 /// feature that made the face if it is a part feature, else the part's; the face's frame and a
 /// point on it). Unlike `parts::face_plane` it doesn't rebuild up to that feature, so a face a
 /// later feature split (and renamed) still works.
+/// The frozen context entities (`foreignId`s of "In context entity" subfeatures) the features of
+/// Part Studio `el` name.
+fn in_context_entities(el: &RawElement) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Some(json) = el.features() else { return out };
+    for f in json["features"].as_array().into_iter().flatten() {
+        for sf in f["subFeatures"].as_array().into_iter().flatten() {
+            if param(sf, "isInContext").and_then(|p| p["value"].as_bool()) == Some(true)
+                && let Some(id) = param(sf, "foreignId").and_then(|p| p["foreignId"].as_str())
+            {
+                out.insert(id.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Whether Onshape made feature `f` in the context of an assembly: it has "In context entity"
+/// subfeatures (`importForeign` with `isInContext`), whose frozen geometry isn't exported.
+pub(crate) fn is_in_context(f: &Value) -> bool {
+    f["subFeatures"].as_array().into_iter().flatten().any(|sf| param(sf, "isInContext").and_then(|p| p["value"].as_bool()) == Some(true))
+}
+
 fn plane_on(features: &[cadrs_core::document::Feature], part: &Part, fi: usize) -> Option<PlaneRef> {
     let face = &part.solid.faces[fi];
     let frame = face.plane?;

@@ -1319,6 +1319,7 @@ mod kernel_ops {
 
     mod advanced;
     mod applied;
+    mod context;
     mod derived;
     mod draft;
     mod import;
@@ -1353,6 +1354,24 @@ mod kernel_ops {
             id: FeatureId,
             e: &ExtrudeFeature,
             state: &Arc<State>,
+        ) -> Result<Output, String> {
+            // MC1.3: its ends may go up to assembly-context parts (released once it's built).
+            let (ends, context) = self.with_context_targets(state, &e.context)?;
+            let out = self.extrude_with(before, id, e, state, &ends);
+            for b in context {
+                self.kernel.release(b);
+            }
+            out
+        }
+
+        /// [`Self::extrude`], its ends resolved in `ends`.
+        fn extrude_with(
+            &mut self,
+            before: &[Feature],
+            id: FeatureId,
+            e: &ExtrudeFeature,
+            state: &Arc<State>,
+            ends: &Arc<State>,
         ) -> Result<Output, String> {
             if let Some(p) = e.problem() {
                 return Err(p.into());
@@ -1392,9 +1411,9 @@ mod kernel_ops {
                 .direction
                 .map(|d| self.direction(before, state, &d))
                 .transpose()?;
-            let first = self.end_of(state, e.end, e.depth, &e.up_to, &e.offset)?;
+            let first = self.end_of(ends, e.end, e.depth, &e.up_to, &e.offset)?;
             let second = match (&e.second, e.symmetric) {
-                (Some(s), false) => Some(self.end_of(state, s.end, s.depth, &s.up_to, &s.offset)?),
+                (Some(s), false) => Some(self.end_of(ends, s.end, s.depth, &s.up_to, &s.offset)?),
                 _ => None,
             };
             let start_offset = e.start_offset.as_ref().map_or(0.0, Offset::signed);
@@ -2041,6 +2060,24 @@ mod kernel_ops {
             r: &RevolveFeature,
             state: &Arc<State>,
         ) -> Result<Output, String> {
+            // MC1.3: its ends may go up to assembly-context parts (released once it's built).
+            let (ends, context) = self.with_context_targets(state, &r.context)?;
+            let out = self.revolve_with(before, id, r, state, &ends);
+            for b in context {
+                self.kernel.release(b);
+            }
+            out
+        }
+
+        /// [`Self::revolve`], its ends resolved in `ends`.
+        fn revolve_with(
+            &mut self,
+            before: &[Feature],
+            id: FeatureId,
+            r: &RevolveFeature,
+            state: &Arc<State>,
+            ends: &Arc<State>,
+        ) -> Result<Output, String> {
             if let Some(p) = r.problem() {
                 return Err(p.into());
             }
@@ -2083,7 +2120,7 @@ mod kernel_ops {
             };
             let to_end = |this: &Self, end: EndType, angle: f64, up_to: &Option<UpTo>, offset: &Option<Offset>| {
                 let offset = offset.as_ref().map_or(0.0, |o| rad(o.signed()));
-                Ok::<_, String>(match this.end_of(state, end, 1.0, up_to, &None)? {
+                Ok::<_, String>(match this.end_of(ends, end, 1.0, up_to, &None)? {
                     ExtrudeEnd::UpToNext { .. } => RevolveEnd::UpToNext { offset },
                     ExtrudeEnd::UpToFace { body, face, .. } => RevolveEnd::UpToFace { body, face, offset },
                     ExtrudeEnd::UpToPart { body, .. } => RevolveEnd::UpToPart { body, offset },

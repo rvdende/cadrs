@@ -97,7 +97,8 @@ fn sync_scale_notice(
     mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
 ) {
     let want = doc.as_ref().and_then(|d| d.active_element()).and_then(|e| match e.kind {
-        ElementKind::PartStudio { .. } => notice(e.features().len(), cache.parts.len()),
+        // An assembly context's ghost parts aren't the studio's (MC2.4).
+        ElementKind::PartStudio { .. } => notice(e.features().len(), cache.parts.iter().filter(|p| !cadrs_core::assembly::context::is_context(p.feature)).count()),
         _ => None,
     });
     for mut n in &mut q_row {

@@ -429,9 +429,10 @@ pub fn regenerate(features: &mut [Feature]) {
     regenerate_with(features, &[]);
 }
 
-/// [`regenerate`] with extra reference solids by feature id (P3B.9: a Part Studio's assembly
-/// context, [`crate::assembly::context`]), which sketch faces and links may name.
-pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, std::sync::Arc<Solid>)]) {
+/// [`regenerate`] with extra reference solids by feature id and the assembly context they are in
+/// (P3B.9: a Part Studio's assembly contexts, [`crate::assembly::context`]), which sketch faces
+/// and links may name.
+pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, u32, std::sync::Arc<Solid>)]) {
     for i in 0..features.len() {
         let needs_parts = features[i].sketch().is_some_and(|sk| {
             matches!(sk.plane, Some(PlaneRef::Face(_) | PlaneRef::Feature(_)))
@@ -451,7 +452,7 @@ pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, std::syn
             .parts
             .iter()
             .map(|p| (p.feature, &*p.solid))
-            .chain(context.iter().map(|(f, s)| (*f, &**s)))
+            .chain(context.iter().map(|(f, _, s)| (*f, &**s)))
             .collect();
         // The face it is on (a lost face leaves the sketch where it was).
         if let Some(PlaneRef::Face(fp)) = sk.plane
@@ -484,8 +485,18 @@ pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, std::syn
         let Some(plane) = sk.plane else { continue };
         let frame = plane.frame();
         // Imprints.
+        // MC1.7: on a context face, the geometry of that context only (another context's ghost
+        // may lie in the same plane); else the studio's own parts.
         let imprint = match plane {
-            PlaneRef::Face(_) if !sk.disable_imprinting => crate::links::imprint(&refs, &frame),
+            PlaneRef::Face(fp) if !sk.disable_imprinting => {
+                let on = context.iter().find(|(f, ..)| f.0 == fp.feature).map(|(_, c, _)| *c);
+                let own: Vec<(FeatureId, &Solid)> = refs
+                    .iter()
+                    .copied()
+                    .filter(|(f, _)| !crate::assembly::context::is_context(*f) || on.is_some_and(|n| context.iter().any(|(g, c, _)| g == f && *c == n)))
+                    .collect();
+                crate::links::imprint(&own, &frame)
+            }
             _ => Vec::new(),
         };
         if sk.geometry.imprint != imprint {

@@ -192,9 +192,10 @@ fn rows(doc: &ActiveDocument, cache: &PartCache, dofs: &super::mates_list::Insta
             .part_name(i.id.part_id())
             .map(str::to_string)
             .or_else(|| {
-                // Suppressed: not in the view; the source's name.
-                let build = doc.doc.element(i.source.element()).map(|e| cadrs_core::rebuild::build(e.features()));
-                Some(i.name(&cadrs_core::assembly::source_part_name(&doc.doc, &i.source, build.as_deref())))
+                // Suppressed, or not in the view yet (still rebuilding): the source's name as the
+                // document has it (waiting for the rebuild here froze the app; the rows are made
+                // again when the parts come).
+                Some(i.name(&cadrs_core::assembly::source_part_name(&doc.doc, &i.source, None)))
             })
             .unwrap_or_else(|| format!("Missing part <{}>", i.index))
     };
@@ -268,8 +269,7 @@ fn rows(doc: &ActiveDocument, cache: &PartCache, dofs: &super::mates_list::Insta
             for part in &i.parts {
                 // The source part's name (also while the Edit dialog hides it from the view).
                 let el = i.source.element();
-                let build = doc.doc.element(el).map(|e| cadrs_core::rebuild::build(e.features()));
-                let name = cadrs_core::assembly::source_part_name(&doc.doc, &cadrs_core::assembly::InstanceSource::Part { element: el, part: *part }, build.as_deref());
+                let name = cadrs_core::assembly::source_part_name(&doc.doc, &cadrs_core::assembly::InstanceSource::Part { element: el, part: *part }, None);
                 let out_now = editing.is_some_and(|(id, ticked)| *id == i.id && !ticked.contains(part));
                 out.push(RowSpec::StudioPart { top: i.id, part: *part, name, out: out_now });
             }

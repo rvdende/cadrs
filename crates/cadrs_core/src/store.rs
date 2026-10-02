@@ -641,7 +641,7 @@ mod migrate {
                 id: e.id,
                 name: e.name,
                 assembly: Default::default(),
-                context: None,
+                contexts: Vec::new(),
                 simulation: Default::default(),
                 kind: match e.kind {
                     ElementKindV1::PartStudio { features } => cur::ElementKind::PartStudio {

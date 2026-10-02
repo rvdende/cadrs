@@ -128,6 +128,26 @@ fn part_offset(inst: &Value) -> [f64; 3] {
 }
 
 /// Imports every assembly of `raw`, subassembly tabs before the tabs that use them.
+/// Where an assembly of this document holds an instance of the Part Studio `studio` (an Onshape
+/// element id) at its top level: the cadrs assembly, the instance's cadrs id and its pose
+/// (Onshape's occurrence transform). The anchor of the studio's assembly context.
+pub fn context_anchor(raw: &RawDocument, elements: &[RawElement], studio: &str) -> Option<(ElementId, InstanceId, Pose)> {
+    for el in elements.iter().filter(|e| e.kind == "ASSEMBLY") {
+        let def = read_json(&el.dir.join("definition.json"))?;
+        let root = &def["rootAssembly"];
+        for inst in root["instances"].as_array().into_iter().flatten() {
+            if inst["elementId"].as_str() != Some(studio) || inst["documentId"].as_str() != Some(raw.id.as_str()) || inst["suppressed"].as_bool() == Some(true) {
+                continue;
+            }
+            let oid = inst["id"].as_str()?;
+            let occ = root["occurrences"].as_array().into_iter().flatten().find(|o| o["path"].as_array().is_some_and(|p| p.len() == 1 && p[0].as_str() == Some(oid)))?;
+            let pose = pose_of(&occ["transform"])?;
+            return Some((ElementId::from_u128(stable_u128(&[&raw.id, &el.id])), instance_id(&raw.id, &el.id, oid), pose));
+        }
+    }
+    None
+}
+
 pub fn import_assemblies(s: &mut DocStudio, raw: &RawDocument, elements: &[RawElement], reports: &mut [Option<ElementReport>]) {
     let asms: Vec<usize> = (0..elements.len()).filter(|&i| elements[i].kind == "ASSEMBLY").collect();
     // Same-document subassemblies first.

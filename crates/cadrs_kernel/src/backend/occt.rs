@@ -1784,7 +1784,9 @@ impl Kernel for OcctKernel {
 
         let mut out = TriMesh::default();
         for (fi, face) in faces_of(shape).iter().enumerate() {
-            let mesh = face.triangulation().map_err(occt)?;
+            // A face neither mesher could triangulate (a degenerate sliver in an imported STEP)
+            // is left out of the display mesh rather than failing the whole body.
+            let Ok(mesh) = face.triangulation() else { continue };
             let base = out.positions.len() as u32;
             out.positions
                 .extend(mesh.positions.iter().map(|v| Point3::from(to_na(*v))));

@@ -425,6 +425,8 @@ pub struct PartCache {
     /// P3B.9: parts drawn in another colour: an assembly's interfering parts (red), a Part
     /// Studio's assembly context (translucent grey). Change with [`PartCache::set_tints`].
     pub tints: HashMap<PartId, FaceBase>,
+    /// Shown parts that picks go through (an assembly context's, MC2.3).
+    pub unpickable: HashSet<PartId>,
 }
 
 impl PartCache {
@@ -488,6 +490,12 @@ impl PartCache {
     /// The parts on screen (not hidden).
     pub fn shown(&self) -> impl Iterator<Item = &Part> {
         self.parts.iter().filter(|p| !self.is_hidden(p.id))
+    }
+
+    /// The shown parts that can be picked (MC2.3: not an assembly context's while Select
+    /// transparent geometry is off).
+    pub fn pickable(&self) -> impl Iterator<Item = &Part> {
+        self.shown().filter(|p| !self.unpickable.contains(&p.id))
     }
 
     /// A shown part, or the Add preview's body, by id (what the part meshes draw).
@@ -1282,6 +1290,14 @@ pub fn part_material(preview: bool) -> StandardMaterial {
     }
 }
 /// The edge lines of a part in this view: its edges plus the silhouettes of curved faces.
+/// The lines [`draw_part_edges`] drew for each part (by solid and culling) at the view direction
+/// `back`.
+#[derive(Default)]
+pub struct LinesCache {
+    back: Vec3,
+    lines: HashMap<(usize, bool), std::sync::Arc<Vec<Vec<Vec3>>>>,
+}
+
 pub fn part_lines(part: &Part, view: &ViewState) -> Vec<Vec<Vec3>> {
     part_lines_culled(part, view, false)
 }
@@ -1515,9 +1531,20 @@ fn draw_part_edges(
     mut vertices: Gizmos<VertexGizmos>,
     mut free_edges: Gizmos<FreeEdgeGizmos>,
     failed: Res<FailedReferences>,
-    ghosts: Res<PartGhosts>,
-    hover_parts: Res<HoverParts>,
+    (ghosts, hover_parts, mut lines_cache): (Res<PartGhosts>, Res<HoverParts>, Local<LinesCache>),
 ) {
+    // Each part's lines for this view direction, kept while neither changes (working them out for
+    // every part every frame cost a large assembly most of its frame).
+    let back = view.view.back();
+    if lines_cache.back != back {
+        lines_cache.back = back;
+        lines_cache.lines.clear();
+    }
+    let alive: std::collections::HashSet<usize> = cache.parts.iter().chain(cache.tool.iter()).map(|p| std::sync::Arc::as_ptr(&p.solid) as usize).collect();
+    lines_cache.lines.retain(|(k, _), _| alive.contains(k));
+    let mut lines_of = |part: &Part, v: &ViewState, cull: bool| -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        lines_cache.lines.entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull)).or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull))).clone()
+    };
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
     // A failing feature: the parts its references are on are drawn red (`ex4-step10.png`).
@@ -1581,8 +1608,8 @@ fn draw_part_edges(
             // colour below, at the same depth: not black under them too.
             let outlined = part_hovered || part_selected || (failed_parts.contains(&part.id) && failed.2.is_empty());
             if !outlined {
-                for line in part_lines_culled(part, &v, opaque) {
-                    edges.linestrip(line, Color::srgb_u8(0x14, 0x14, 0x14));
+                for line in lines_of(part, &v, opaque).iter() {
+                    edges.linestrip(line.iter().copied(), Color::srgb_u8(0x14, 0x14, 0x14));
                 }
             }
             for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1]) {
@@ -1646,8 +1673,8 @@ fn draw_part_edges(
             // A see-through tint (a Part Studio's assembly context) shows its back edges, as a
             // transparent part does.
             let opaque = !ghosts.parts.contains(&part.id) && !cache.transparent.contains(&part.id) && cache.tints.get(&part.id).is_none_or(|t| t.alpha >= 1.0);
-            for line in part_lines_culled(part, &v, opaque) {
-                outline_edges.linestrip(line, color);
+            for line in lines_of(part, &v, opaque).iter() {
+                outline_edges.linestrip(line.iter().copied(), color);
             }
         }
         // Edges: hovered or selected.
@@ -1986,7 +2013,7 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
 /// (px).
 pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, EdgeName, f32)> {
     let mut near: Vec<(f32, PartId, EdgeName, Vec3, Option<cadrs_core::solid::EdgeCircle>)> = Vec::new();
-    for part in cache.shown() {
+    for part in cache.pickable() {
         let index = part.solid.pick_index();
         if !index.bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
             continue;
@@ -2050,7 +2077,7 @@ fn hidden_by_its_shaft(cache: &PartCache, view: &ViewState, part: PartId, p: Vec
 /// The nearest visible part vertex within [`VERTEX_PICK_PX`] of a screen offset.
 pub fn pick_vertex(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, VertexName, f32)> {
     let mut near: Vec<(f32, PartId, VertexName, Vec3)> = cache
-        .shown()
+        .pickable()
         .filter(|part| part.solid.pick_index().bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, VERTEX_PICK_PX)))
         .flat_map(|part| {
             part.solid.vertices.iter().map(move |v| {
@@ -2095,7 +2122,7 @@ pub fn pick_face_skipping(
 ) -> Option<(PartId, FaceName, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(PartId, FaceName, f32)> = None;
-    for part in cache.shown() {
+    for part in cache.pickable() {
         if let Some((f, t)) = part.solid.pick_where(to64(o), to64(d), |f| Some(f.name.op) != skip) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {

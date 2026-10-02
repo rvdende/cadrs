@@ -1072,23 +1072,66 @@ pub fn dof_counts(asm: &Assembly, frame: &dyn Fn(&MateConnector) -> ConnectorFra
     }
     let pivots = p.pivots();
     let jac = p.jacobian(&pivots, true);
-    // Columns scaled so rotations weigh like L mm (the same metric as the solve).
-    let mut j = DMatrix::<f64>::zeros(jac.len().max(1), p.n);
-    for (i, row) in jac.iter().enumerate() {
-        for (b, vals) in row {
-            if let Some(o) = p.bodies[*b].var {
-                for k in 0..6 {
-                    j[(i, o + k)] = vals[k];
-                }
+    // The free bodies the mates couple, in groups (bodies sharing a row): a body in no mate keeps
+    // its 6 DOF, and each group's DOF come from its own Jacobian. One matrix over every body cost
+    // O(n³) in all the assembly's bodies (thousands with flexible subassemblies: it never
+    // finished).
+    let free: Vec<usize> = (0..p.bodies.len()).filter(|b| p.bodies[*b].var.is_some()).collect();
+    let mut group: HashMap<usize, usize> = free.iter().map(|b| (*b, *b)).collect();
+    fn find(g: &mut HashMap<usize, usize>, b: usize) -> usize {
+        let parent = g[&b];
+        if parent == b {
+            return b;
+        }
+        let root = find(g, parent);
+        g.insert(b, root);
+        root
+    }
+    for row in &jac {
+        let bodies: Vec<usize> = row.iter().map(|(b, _)| *b).filter(|b| group.contains_key(b)).collect();
+        for w in bodies.windows(2) {
+            let (a, c) = (find(&mut group, w[0]), find(&mut group, w[1]));
+            if a != c {
+                group.insert(a, c);
             }
         }
     }
-    let null = null_space(&j);
-    for b in &p.bodies {
-        let Some(o) = b.var else { continue };
-        let dof = if null.ncols() == 0 { 0 } else { rank(&null.rows(o, 6).into_owned()) as u32 };
-        for (m, _) in &b.members {
-            out.insert(*m, dof);
+    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &b in &free {
+        let r = find(&mut group, b);
+        members.entry(r).or_default().push(b);
+    }
+    let mut rows_of: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, row) in jac.iter().enumerate() {
+        if let Some((b, _)) = row.iter().find(|(b, _)| group.contains_key(b)) {
+            let r = find(&mut group, *b);
+            rows_of.entry(r).or_default().push(i);
+        }
+    }
+    for (root, bodies) in &members {
+        let rows = rows_of.get(root).map(Vec::as_slice).unwrap_or(&[]);
+        let dofs: Vec<u32> = if rows.is_empty() {
+            vec![6; bodies.len()]
+        } else {
+            // Columns scaled so rotations weigh like L mm (the same metric as the solve).
+            let col: HashMap<usize, usize> = bodies.iter().enumerate().map(|(k, b)| (*b, k * 6)).collect();
+            let mut j = DMatrix::<f64>::zeros(rows.len(), bodies.len() * 6);
+            for (i, r) in rows.iter().enumerate() {
+                for (b, vals) in &jac[*r] {
+                    if let Some(o) = col.get(b) {
+                        for k in 0..6 {
+                            j[(i, o + k)] = vals[k];
+                        }
+                    }
+                }
+            }
+            let null = null_space(&j);
+            (0..bodies.len()).map(|k| if null.ncols() == 0 { 0 } else { rank(&null.rows(k * 6, 6).into_owned()) as u32 }).collect()
+        };
+        for (b, dof) in bodies.iter().zip(dofs) {
+            for (m, _) in &p.bodies[*b].members {
+                out.insert(*m, dof);
+            }
         }
     }
     out

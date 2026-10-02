@@ -120,8 +120,8 @@ fn transform_copies_context_parts_into_a_closed_composite() {
         h.execute(&mut doc, &InsertInstance { element: asm, instance: inst }).unwrap();
     }
     let ctx = ElementId::from_u128(0x7a4f_2000);
-    h.execute(&mut doc, &CreateStudioInContext { assembly: asm, studio: ctx, name: Some("One part".into()) }).unwrap();
-    let picked: Vec<PartId> = doc.element(ctx).unwrap().context.as_ref().unwrap().parts.iter().map(|c| PartId::new(c.id, 0)).collect();
+    h.execute(&mut doc, &CreateStudioInContext { assembly: asm, studio: ctx, name: Some("One part".into()), origin: cadrs_core::assembly::Pose::IDENTITY }).unwrap();
+    let picked: Vec<PartId> = doc.element(ctx).unwrap().contexts[0].parts.iter().map(|c| PartId::new(c.id, 0)).collect();
     assert_eq!(picked.len(), 2);
     let (own, copies, sources) = context_copies(&doc, ctx, &picked);
     assert!(own.is_empty());

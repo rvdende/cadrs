@@ -308,13 +308,30 @@ fn entity_label(cache: &PartCache, i: InstanceId, e: &EntityRef) -> String {
 /// The explicit connectors in the view: each instance's Part Studio connectors and the
 /// assembly's own, as mate connectors with their frames in the assembly.
 pub fn explicit_connectors(doc: &ActiveDocument, parts: &mut super::AssemblyParts, cache: &PartCache) -> Vec<(MateConnector, ConnectorFrame)> {
+    // Every occurrence's placement and source once (looking each part's up walked the whole
+    // assembly per part, every frame: quadratic in a large assembly's occurrences).
+    let occ: std::collections::HashMap<InstanceId, (Pose, cadrs_core::ElementId, cadrs_core::PartId)> = doc
+        .active_element()
+        .and_then(|e| e.assembly_model())
+        .map(|m| cadrs_core::assembly::structure::occurrences(&doc.doc, m).into_iter().map(|o| (o.id, (o.pose, o.element, o.part))).collect())
+        .unwrap_or_default();
+    // The source's last finished rebuild (never waiting: this is drawn every frame).
+    let solid = |parts: &mut super::AssemblyParts, i: InstanceId| -> Option<(Pose, Arc<Solid>)> {
+        let (pose, element, part) = match parts.ghosts.iter().find(|g| g.id == i) {
+            Some(g) => (g.pose, g.source.element(), g.source.part()?),
+            None => *occ.get(&i)?,
+        };
+        let pose = parts.preview.get(&i).copied().unwrap_or(pose);
+        let b = parts.build_within(&doc.doc, element, Some(std::time::Duration::ZERO)).0?;
+        Some((pose, b.part(part)?.solid.clone()))
+    };
     let mut out = Vec::new();
     for p in &cache.parts {
         if cache.is_hidden(p.id) || p.solid.connectors.is_empty() {
             continue;
         }
         let i = super::occurrence_of(p.id);
-        let Some((pose, _)) = solid_of(doc, parts, i) else { continue };
+        let Some((pose, _)) = solid(parts, i) else { continue };
         let back = pose.inverse();
         for sc in &p.solid.connectors {
             let w = ConnectorFrame::new(sc.frame.origin, sc.frame.normal(), sc.frame.u);
@@ -324,11 +341,11 @@ pub fn explicit_connectors(doc: &ActiveDocument, parts: &mut super::AssemblyPart
     }
     let locals: Vec<LocalConnector> = doc.active_element().and_then(|e| e.assembly_model()).map(|m| m.connectors.clone()).unwrap_or_default();
     for l in locals {
-        let Some((pose, solid)) = solid_of(doc, parts, l.connector.instance) else { continue };
+        let Some((pose, s)) = solid(parts, l.connector.instance) else { continue };
         if cache.is_hidden(super::occurrence_part(l.connector.instance)) {
             continue;
         }
-        let local = l.connector.local_frame(Some(&solid));
+        let local = l.connector.local_frame(Some(&s));
         let mut c = MateConnector::at(l.connector.instance, local);
         c.anchor = ConnectorAnchor::Local { id: l.id };
         out.push((c, local.moved(&pose)));

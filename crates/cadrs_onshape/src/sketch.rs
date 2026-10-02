@@ -121,24 +121,12 @@ impl<'a> Solved<'a> {
     }
 }
 
-/// The plane an Onshape sketch lies on, as the default plane it names, if it is one.
+/// The plane an Onshape sketch lies on, as the default plane it names, if it is one (by
+/// deterministic id or, in older documents that have none, by query: `Top.planeOp`, …).
 pub fn default_plane(feature: &Value) -> Option<PlaneRef> {
-    let ids = sketch_plane_ids(feature);
-    match ids.first().map(String::as_str) {
-        Some(TOP_ID) => Some(PlaneRef::Top),
-        Some(FRONT_ID) => Some(PlaneRef::Front),
-        Some(RIGHT_ID) => Some(PlaneRef::Right),
-        _ => None,
-    }
-}
-
-fn sketch_plane_ids(feature: &Value) -> Vec<String> {
-    param(feature, "sketchPlane")
-        .and_then(|p| p["queries"].as_array())
-        .into_iter()
-        .flatten()
-        .flat_map(|q| q["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from))
-        .collect()
+    let p = param(feature, "sketchPlane")?;
+    let ids = p["queries"][0]["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+    crate::refs::Pick::Opaque(ids).default_plane().or_else(|| crate::refs::picks(Some(p)).first()?.default_plane())
 }
 
 /// A feature parameter by id.

@@ -16,45 +16,32 @@
 //!   of date just as moving an instance does.
 
 use super::commands::InsertInstance;
-use super::context::{ContextPart, StudioContext, context_id, snapshot, sources_fingerprint};
-use super::structure::occurrences;
+use super::context::{ContextNo, StudioContext, snapshot_with};
 use super::{Instance, InstanceId, InstanceSource};
 use crate::command::{Command, CommandError, Scope};
 use crate::document::{Document, Element};
 use crate::ids::{ElementId, PartId};
 
 /// The context of the Part Studio `studio` created in `assembly` at the assembly's Origin: every
-/// part of the assembly (at any depth) that isn't from `studio`, in assembly coordinates.
+/// part of the assembly (at any depth) that isn't from `studio`, in assembly coordinates. Numbered
+/// 0 (see [`snapshot_origin_as`]).
 pub fn snapshot_origin(doc: &Document, assembly: ElementId, studio: ElementId) -> Result<StudioContext, CommandError> {
-    let asm = doc.element(assembly).and_then(|e| e.assembly_model()).ok_or(CommandError::ElementNotFound(assembly))?;
-    let parts: Vec<ContextPart> = occurrences(doc, asm)
-        .into_iter()
-        .filter(|o| o.element != studio)
-        .map(|o| ContextPart {
-            id: context_id(o.id),
-            element: o.element,
-            part: o.part,
-            pose: o.pose,
-            name: format!("{} <{}>", super::source_part_name(doc, &InstanceSource::Part { element: o.element, part: o.part }, None), o.index),
-        })
-        .collect();
-    let sources = sources_fingerprint(doc, &parts);
-    Ok(StudioContext { assembly, instance: InstanceId::ORIGIN, parts, hidden: false, sources })
+    snapshot_origin_as(doc, assembly, studio, 0, super::Pose::IDENTITY)
 }
 
-/// The context of `studio` (whose current context is `ctx`) as the assembly is now: Update
-/// context. Keeps the eye's state.
-pub fn resnapshot(doc: &Document, studio: ElementId, ctx: &StudioContext) -> Result<StudioContext, CommandError> {
-    let mut now = if ctx.instance == InstanceId::ORIGIN { snapshot_origin(doc, ctx.assembly, studio)? } else { snapshot(doc, ctx.assembly, ctx.instance)? };
-    now.hidden = ctx.hidden;
-    Ok(now)
+/// [`snapshot_origin`] as the studio's context `id`, the studio's origin at `origin` in the
+/// assembly (the Origin, or a mate connector's frame, MC2.9).
+pub fn snapshot_origin_as(doc: &Document, assembly: ElementId, studio: ElementId, id: ContextNo, origin: super::Pose) -> Result<StudioContext, CommandError> {
+    snapshot_with(doc, assembly, studio, InstanceId::ORIGIN, origin.inverse(), id)
 }
+
+pub use super::context::resnapshot;
 
 /// Where the context's origin is in the assembly: the Origin's identity, or the edited
 /// instance's placement.
 pub fn origin_pose(doc: &Document, ctx: &StudioContext) -> Option<super::Pose> {
     if ctx.instance == InstanceId::ORIGIN {
-        return Some(super::Pose::IDENTITY);
+        return Some(ctx.origin);
     }
     Some(doc.element(ctx.assembly)?.assembly_model()?.instance(ctx.instance)?.pose)
 }
@@ -77,6 +64,9 @@ pub struct CreateStudioInContext {
     pub studio: ElementId,
     /// `None`: the next "Part Studio n".
     pub name: Option<String>,
+    /// Where the new studio's origin is in the assembly (MC2.9): the Origin
+    /// ([`super::Pose::IDENTITY`]) or a mate connector's frame.
+    pub origin: super::Pose,
 }
 
 impl Command for CreateStudioInContext {
@@ -97,10 +87,10 @@ impl Command for CreateStudioInContext {
             Some(n) if !n.trim().is_empty() => n.trim().to_string(),
             _ => doc.next_element_name("Part Studio"),
         };
-        let ctx = snapshot_origin(doc, self.assembly, self.studio)?;
+        let ctx = snapshot_origin_as(doc, self.assembly, self.studio, 0, self.origin)?;
         let mut el = Element::part_studio(name);
         el.id = self.studio;
-        el.context = Some(ctx);
+        el.contexts = vec![ctx];
         let at = doc.element_index(self.assembly).map_or(doc.elements.len(), |i| i + 1);
         doc.elements.insert(at, el);
         crate::commands::refresh_studio(doc, self.studio);
@@ -122,7 +112,7 @@ pub struct InsertFromStudio {
 impl InsertFromStudio {
     /// The assembly the parts go into.
     pub fn assembly(&self, doc: &Document) -> Option<ElementId> {
-        doc.element(self.studio)?.context.as_ref().map(|c| c.assembly)
+        doc.element(self.studio)?.contexts.first().map(|c| c.assembly)
     }
 }
 
@@ -137,7 +127,7 @@ impl Command for InsertFromStudio {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         let ctx = doc
             .element(self.studio)
-            .and_then(|e| e.context.clone())
+            .and_then(|e| e.contexts.first().cloned())
             .ok_or_else(|| CommandError::Invalid("the Part Studio has no assembly context".into()))?;
         if self.parts.is_empty() {
             return Err(CommandError::Invalid("pick the parts to insert".into()));
@@ -149,6 +139,15 @@ impl Command for InsertFromStudio {
         for (part, id) in self.parts.iter().zip(&self.instances) {
             let insert = InsertInstance { element: ctx.assembly, instance: Instance::new(*id, InstanceSource::Part { element: self.studio, part: *part }, pose) };
             insert.apply(doc)?;
+        }
+        // MC3.3: the first part of the studio in the assembly becomes the primary instance of
+        // the contexts that had the Origin; it is where the Origin was, so nothing moves.
+        if let Some(first) = self.instances.first()
+            && let Some(el) = doc.element_mut(self.studio)
+        {
+            for c in el.contexts.iter_mut().filter(|c| c.assembly == ctx.assembly && c.instance == InstanceId::ORIGIN) {
+                c.instance = *first;
+            }
         }
         Ok(())
     }

@@ -183,10 +183,40 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
     let parts_only = targets.iter().all(|t| {
         world.resource::<ActiveDocument>().active_element().and_then(|e| e.assembly_model()?.instance(*t)).is_some_and(|i| i.source.part().is_some())
     });
-    let in_context = MenuItem::new("asm-edit-in-context", "Edit in context").icon("part-studio").disabled(is_sub || is_std || is_linked);
-    // P3H.5 (X9, PCB6 step 13): Update context ▸ the Part Studio made in context of this assembly.
-    let update_context = super::managed_context::context_studio_of(world.resource::<ActiveDocument>(), element, instance)
-        .map(|(_, n)| MenuItem::new("asm-update-context", "Update context").icon("restore").submenu(vec![MenuItem::new("asm-update-context-studio", n).icon("part-studio").into()]));
+    // MC2.14, MC4.1, MC4.6, MC3.3: Edit in context (▸ its contexts in this assembly and New
+    // context), Update context ▸ its contexts, Set as primary instance.
+    // MC5: an instance of a part from another document (a version reference) is edited in
+    // context in its own document.
+    let external = cadrs_core::assembly::context::linked_studio_of(&world.resource::<ActiveDocument>().doc, element, instance).is_some();
+    let contexts = if external { super::linked_context::contexts_of(world, element, instance) } else { super::managed_context::contexts_of(world.resource::<ActiveDocument>(), element, instance) };
+    let no_edit = is_sub || is_std || (is_linked && !external);
+    let in_context = if contexts.is_empty() || no_edit {
+        let mut item = MenuItem::new("asm-edit-in-context", "Edit in context").icon("part-studio").disabled(no_edit);
+        if is_linked && !external {
+            item = item.tooltip("A version of this document is edited at its tab");
+        }
+        item
+    } else {
+        let mut items: Vec<cadrs_ui::MenuEntry> = contexts.iter().map(|c| MenuItem::new(format!("asm-edit-in-context-{}", c.id), c.label.clone()).icon("part-studio").into()).collect();
+        items.push(MenuItem::new("asm-edit-in-context-new", "New context").icon("plus").into());
+        MenuItem::new("asm-edit-in-context", "Edit in context").icon("part-studio").submenu(items)
+    };
+    let update_context = (!contexts.is_empty()).then(|| {
+        let items = contexts
+            .iter()
+            .map(|c| {
+                let mut item = MenuItem::new(format!("asm-update-context-{}", c.id), c.label.clone()).icon("part-studio").disabled(c.no_primary);
+                if c.no_primary {
+                    item = item.tooltip(cadrs_core::assembly::context::NO_PRIMARY);
+                } else if c.stale {
+                    item = item.dot(Color::srgb(0.17, 0.49, 0.91)).tooltip("An update is available");
+                }
+                item.into()
+            })
+            .collect();
+        MenuItem::new("asm-update-context", "Update context").icon("restore").submenu(items)
+    });
+    let set_primary = (!external && contexts.iter().any(|c| !c.primary)).then(|| MenuItem::new("asm-set-primary", "Set as primary instance").icon("origin"));
     let mut menu = Menu::new("assembly-context-menu").min_width(210.0).item_height(20.0);
     match handle {
         TriadHandle::Origin => menu = menu.item(MenuItem::new("asm-move-to-origin", "Move to origin")),
@@ -222,6 +252,9 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         menu = std_items(menu).item(in_context.clone());
         if let Some(u) = update_context.clone() {
             menu = menu.item(u);
+        }
+        if let Some(p) = set_primary.clone() {
+            menu = menu.item(p);
         }
         menu = menu
             .item(switch.clone())
@@ -320,6 +353,9 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         menu = std_items(menu).item(in_context);
         if let Some(u) = update_context {
             menu = menu.item(u);
+        }
+        if let Some(p) = set_primary {
+            menu = menu.item(p);
         }
         menu = menu
             .item(switch)
@@ -553,16 +589,40 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
             }
         }
         "asm-replace" => super::replace_dialog::open(world, targets.clone()),
-        "asm-update-context-studio" => {
-            if let Some(i) = menu.instance
-                && let Some((studio, _)) = super::managed_context::context_studio_of(world.resource::<ActiveDocument>(), element, i)
-            {
-                super::in_context::update_context(world, studio);
+        x if x.starts_with("asm-update-context-") && menu.instance.is_some_and(|i| cadrs_core::assembly::context::linked_studio_of(&world.resource::<ActiveDocument>().doc, element, i).is_some()) => {
+            if let (Some(i), Ok(id)) = (menu.instance, x.trim_start_matches("asm-update-context-").parse()) {
+                super::linked_context::update_from_assembly(world, element, i, id);
             }
         }
-        "asm-edit-in-context" => {
-            if let Some(i) = menu.instance {
-                super::in_context::edit_in_context(world, element, i);
+        x if x.starts_with("asm-update-context-") => {
+            if let Some(i) = menu.instance
+                && let Some(studio) = cadrs_core::assembly::context::studio_of(&world.resource::<ActiveDocument>().doc, element, i)
+                && let Ok(id) = x.trim_start_matches("asm-update-context-").parse()
+            {
+                super::in_context::update_context(world, studio, id);
+            }
+        }
+        x if x.starts_with("asm-edit-in-context") => {
+            let Some(i) = menu.instance else { return };
+            let which = match x.trim_start_matches("asm-edit-in-context").trim_start_matches('-') {
+                "" | "new" => super::in_context::Which::New,
+                n => match n.parse() {
+                    Ok(id) => super::in_context::Which::Context(id),
+                    Err(_) => return,
+                },
+            };
+            if cadrs_core::assembly::context::linked_studio_of(&world.resource::<ActiveDocument>().doc, element, i).is_some() {
+                super::linked_context::edit_linked(world, element, i, which);
+            } else {
+                super::in_context::edit_in_context(world, element, i, which);
+            }
+        }
+        "asm-set-primary" => {
+            if let Some(i) = menu.instance
+                && let Some(studio) = cadrs_core::assembly::context::studio_of(&world.resource::<ActiveDocument>().doc, element, i)
+            {
+                let contexts = super::managed_context::contexts_of(world.resource::<ActiveDocument>(), element, i).into_iter().filter(|c| !c.primary).map(|c| c.id).collect();
+                super::run(world, &cadrs_core::assembly::context::SetPrimaryInstance { studio, contexts, instance: i });
             }
         }
         // P3G.2: the Reference manager for the instances acted on, and pinning.
