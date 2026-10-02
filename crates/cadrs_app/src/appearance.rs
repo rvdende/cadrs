@@ -828,6 +828,8 @@ pub enum SidePanel {
     ExplodedViews,
     /// P3F.5: the Simulation panel ([`crate::simulation_ui`]).
     Simulation,
+    /// P3I.3: the Sheet metal table and flat view ([`crate::sheetmetal_table`]).
+    SheetMetal,
 }
 
 #[derive(Component)]
@@ -855,6 +857,7 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
         "panel-bom" | "assembly-bom" => toggle(&mut open, SidePanel::Bom),
         "panel-named-positions" => toggle(&mut open, SidePanel::NamedPositions),
         "panel-exploded-views" => toggle(&mut open, SidePanel::ExplodedViews),
+        "panel-sheet-metal" => toggle(&mut open, SidePanel::SheetMetal),
         "appearance-panel-close"
         | "variables-panel-close"
         | "custom-tables-panel-close"
@@ -897,6 +900,7 @@ fn sync_panel_buttons(open: Res<SidePanel>, q: Query<(Entity, &Name, Has<cadrs_u
             "panel-named-positions" => *open == SidePanel::NamedPositions,
             "panel-exploded-views" => *open == SidePanel::ExplodedViews,
             "panel-simulation" => *open == SidePanel::Simulation,
+            "panel-sheet-metal" => *open == SidePanel::SheetMetal,
             _ => continue,
         };
         if want && !selected {

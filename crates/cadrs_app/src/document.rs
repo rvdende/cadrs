@@ -732,6 +732,8 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
             ("panel-appearance", "appearance", "Appearances", true),
             ("panel-custom-tables", "custom-table", "Custom tables", true),
             ("panel-configurations", "configurations", "Configurations (not available)", false),
+            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
+            ("panel-sheet-metal", "sheet-metal-table", "Sheet metal table and flat view", true),
             ("panel-variables", "variables", "Variables", true),
             // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
             // icon: Thicken's deformed sheet stands in).
@@ -2874,6 +2876,8 @@ enum RowKind {
     Variable,
     /// P3I.2: a Sheet metal model.
     SheetMetalModel,
+    /// P3I.3.
+    ModifyJoint,
 }
 
 impl RowKind {
@@ -2908,6 +2912,7 @@ impl RowKind {
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
             RowKind::SheetMetalModel => "sheet-metal-model",
+            RowKind::ModifyJoint => "sheet-metal-modify-joint",
             _ => "sketch",
         }
     }
@@ -2997,6 +3002,7 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                 cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
                 cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+                cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,
@@ -3457,6 +3463,9 @@ pub fn edit_feature(world: &mut World, id: FeatureId) {
         crate::boolean::edit_boolean(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Composite(_)) {
         crate::composite_ui::edit(world, id);
+    } else if matches!(kind, cadrs_core::FeatureKind::ModifyJoint(_)) {
+        // P3I.3.
+        crate::sheetmetal_joint_ui::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Import(_)) {
         crate::import_dialog::edit_import(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Extrude(_)) {

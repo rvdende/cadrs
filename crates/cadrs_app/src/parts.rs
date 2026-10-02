@@ -369,6 +369,8 @@ pub struct PartCache {
     /// rebuild.
     pub derived: HashMap<FeatureId, cadrs_core::derived::DerivedOutput>,
     pub derived_sketches: Vec<Feature>,
+    /// P3I.3: the sheet metal models' contexts from the last rebuild (the table and flat view).
+    pub sheet_metal: Vec<cadrs_core::sheetmetal::SheetMetalContext>,
     /// The curves of every visible sketch (P3.4: a revolve axis is picked among them).
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
@@ -741,6 +743,9 @@ impl PartCache {
         if self.derived != build.derived {
             self.derived = build.derived.clone();
             self.generation += 1;
+        }
+        if self.sheet_metal != build.sheet_metal {
+            self.sheet_metal = build.sheet_metal.clone();
         }
         self.contacts = build.contacts.clone();
         self.axes = build.axes.clone();
