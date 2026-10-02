@@ -138,11 +138,12 @@ impl ModifyJointFeature {
 
     /// The joint's own value, if it has one.
     pub fn bend_value(&self) -> Option<BendValue> {
-        (!self.use_model_value).then(|| match self.calc {
+        let v = match self.calc {
             BendCalc::KFactor => BendValue::KFactor(self.value),
             BendCalc::BendAllowance => BendValue::Allowance(self.value),
             BendCalc::BendDeduction => BendValue::Deduction(self.value),
-        })
+        };
+        (!self.use_model_value).then_some(v)
     }
 
     /// What it does to its joint (`None` for Tangent, which leaves a tangent joint as it is).
