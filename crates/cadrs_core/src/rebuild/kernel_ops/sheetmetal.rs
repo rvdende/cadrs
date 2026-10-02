@@ -249,7 +249,7 @@ fn face_index<'a>(state: &'a State, f: &crate::document::FaceRef) -> Option<(&'a
 type SketchChains = Vec<(cadrs_sketch::PlaneFrame, Vec<ChainIn>)>;
 
 /// One folded flat-pattern part: its walls, body and names, and its pieces' volume.
-type Folded = (Vec<WallId>, BodyId, BodyNames, f64);
+pub(super) type Folded = (Vec<WallId>, BodyId, BodyNames, f64);
 
 /// A sketch's curves joined into chains (only the picked ones, unless the whole sketch is),
 /// with how many picked curves are gone.
@@ -388,7 +388,7 @@ fn removed_of(part: &FlatPart, s: PieceSource) -> Vec<Polygon> {
 }
 
 /// Why a sheet metal model fails flat (X6), the collision first.
-fn flat_error(flat: &FlatPattern) -> Option<String> {
+pub(super) fn flat_error(flat: &FlatPattern) -> Option<String> {
     flat.errors
         .iter()
         .find(|e| matches!(e, FlatError::Collision { .. }))
@@ -399,7 +399,7 @@ fn flat_error(flat: &FlatPattern) -> Option<String> {
 impl Rebuilder {
     /// The folded bodies of a model's flat-pattern parts: each with its walls, body, names and
     /// the sum of its pieces' volumes.
-    fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
+    pub(super) fn fold(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         let release = |k: &mut cadrs_kernel::backend::occt::OcctKernel, made: &[(BodyId, BodyNames, f64)]| {
@@ -595,6 +595,8 @@ impl Rebuilder {
         let p = x.params;
         let mut consumed: Vec<PartId> = Vec::new();
         let mut warning: Option<String> = None;
+        // P3I.3: kept with the context, for Modify joint to build the model again.
+        let recipe: Option<cadrs_sheetmetal::edit::Recipe>;
         let built = match x.operation {
             SheetMetalOp::Convert | SheetMetalOp::Thicken => {
                 let mut g = Gathered::default();
@@ -695,8 +697,10 @@ impl Rebuilder {
                 if bends.len() < x.bends.len() {
                     warning = Some("A selected edge to bend no longer exists".into());
                 }
-                let o = FaceOpts { material_inside: x.flip_thickness, clearance: x.clearance, include_bends: x.include_bends, bends };
-                construct::from_faces(p, &g.faces, &g.cyls, &g.edges, &o).map_err(|e| e.message())?
+                let o = FaceOpts { material_inside: x.flip_thickness, clearance: x.clearance, include_bends: x.include_bends, bends, ..Default::default() };
+                let built = construct::from_faces(p, &g.faces, &g.cyls, &g.edges, &o).map_err(|e| e.message())?;
+                recipe = Some(cadrs_sheetmetal::edit::Recipe::Faces { params: p, faces: g.faces, cyls: g.cyls, edges: g.edges, opts: o });
+                built
             }
             SheetMetalOp::Extrude => {
                 let (groups, missing) = chains_of(before, x)?;
@@ -708,6 +712,7 @@ impl Rebuilder {
                 }
                 // One sketch at a time (each its own plane), into one model.
                 let mut all: Option<construct::Built> = None;
+                let mut recipe_groups = Vec::new();
                 for (frame, chains) in &groups {
                     let origin = p3(frame.origin);
                     let (fx, fy) = (v3(frame.u).normalize(), v3(frame.v).normalize());
@@ -735,8 +740,9 @@ impl Rebuilder {
                             naming::stable_hash(&bytes)
                         })
                         .collect();
-                    let o = ChainOpts { origin, x: fx, y: fy, z0, z1, dir, flip_side: x.flip_thickness, arcs_as_bends: arcs };
+                    let o = ChainOpts { origin, x: fx, y: fy, z0, z1, dir, flip_side: x.flip_thickness, arcs_as_bends: arcs, edits: Vec::new() };
                     let b = construct::from_chains(p, chains, &o).map_err(|e| e.message())?;
+                    recipe_groups.push((chains.clone(), o));
                     if let Some(w) = b.warnings.first() {
                         warning = Some(w.clone());
                     }
@@ -751,13 +757,15 @@ impl Rebuilder {
                         }
                     });
                 }
+                recipe = Some(cadrs_sheetmetal::edit::Recipe::Chains { params: p, groups: recipe_groups });
                 all.ok_or("Nothing to extrude")?
             }
         };
         if !built.loop_picks.is_empty() && warning.is_none() {
             // Not a problem: the pick order decided (SM2.2). Nothing to report.
         }
-        let model = built.model;
+        let mut model = built.model;
+        cadrs_sheetmetal::edit::reorder(&mut model, &x.table_order);
         // The definition must hold together in 3D.
         if let Some(e) = model.validate().first() {
             return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
@@ -771,6 +779,9 @@ impl Rebuilder {
             active: true,
             wall_keys: built.walls.clone(),
             joint_keys: built.joints.clone(),
+            recipe,
+            edits: Vec::new(),
+            table_order: x.table_order.clone(),
         };
         let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
             let mut next = (**state).clone();

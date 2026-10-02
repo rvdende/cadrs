@@ -172,6 +172,10 @@ pub struct SheetMetalModelFeature {
     pub flip_thickness: bool,
     #[serde(default)]
     pub exprs: SheetMetalExprs,
+    /// The Sheet metal table's order (Move up / Move down, SM13.4; P3I.3): joint ids, the
+    /// others keeping their places.
+    #[serde(default)]
+    pub table_order: Vec<JointId>,
 }
 
 fn zero_mm() -> String {
@@ -207,6 +211,7 @@ impl Default for SheetMetalModelFeature {
             params,
             flip_thickness: false,
             exprs: SheetMetalExprs::of(&params),
+            table_order: Vec::new(),
         }
     }
 }
@@ -324,6 +329,14 @@ pub struct SheetMetalContext {
     /// features and the views can find them.
     pub wall_keys: Vec<(u64, WallId)>,
     pub joint_keys: Vec<(u64, JointId)>,
+    /// P3I.3: what the model was built from, so a Modify joint can build it again with its
+    /// edit ([`cadrs_sheetmetal::edit`]), the edits so far, and the table order.
+    #[serde(default)]
+    pub recipe: Option<cadrs_sheetmetal::edit::Recipe>,
+    #[serde(default)]
+    pub edits: Vec<cadrs_sheetmetal::edit::JointEdit>,
+    #[serde(default)]
+    pub table_order: Vec<JointId>,
 }
 
 impl SheetMetalContext {

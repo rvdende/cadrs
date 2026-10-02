@@ -329,6 +329,11 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s("Second depth", &mut c.depth_expr, &mut c.depth, L);
             }
         }
+        FeatureKind::ModifyJoint(x) => {
+            s("Bend radius", &mut x.radius_expr, &mut x.radius, L);
+            let q = if x.calc == cadrs_sheetmetal::BendCalc::KFactor { C } else { L };
+            s(x.calc.label(), &mut x.value_expr, &mut x.value, q);
+        }
         FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)
