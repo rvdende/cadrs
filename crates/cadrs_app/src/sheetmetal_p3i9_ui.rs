@@ -30,7 +30,7 @@ use cadrs_sheetmetal::params::{BendCalc, BendReliefKind, CornerReliefKind};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
-    CheckboxChange, Collapsible, CollapsibleToggled, FloatingPanel, FloatingPanelClose, NumberField, NumberFieldCommit, NumberFieldState, OptionRow, Select, SelectChange, SelectState,
+    CheckboxChange, Collapsible, CollapsibleToggled, FloatingPanel, FloatingPanelClose, NumberField, NumberFieldCommit, NumberFieldState, OptionRow, Select, SelectChange,
     SelectionList, SelectionListActivate, SelectionListRemove, SelectionListState, TabStrip, TabStripSelect,
 };
 
@@ -603,7 +603,7 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, kind: &FeatureKind, field: AppliedF
             c.spawn((t.text("Form Part Studio", 11.0, bevy::text::FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::new(Val::Px(4.0), Val::ZERO, Val::Px(4.0), Val::Px(2.0)), ..default() }));
             let label = x.form.as_ref().map_or("Select Part Studio...".to_string(), |f| f.name.clone());
             let picked = x.form.is_some();
-            c.spawn((Sm9Role::FormStudio, Button::new("form-studio-field").label(label).icon("part-studio").outline().width(Val::Percent(100.0)).tooltip("Select Part Studio").build(t)))
+            c.spawn((Sm9Role::FormStudio, cadrs_ui::Button::new("form-studio-field").label(label).icon("part-studio").outline().width(Val::Percent(100.0)).tooltip("Select Part Studio").build(t)))
                 .entry::<Node>()
                 .and_modify(move |mut n| {
                     n.justify_content = JustifyContent::FlexStart;
@@ -614,7 +614,7 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, kind: &FeatureKind, field: AppliedF
                 });
             c.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(2.0), ..default() }).with_children(|r| {
                 r.spawn(Node { flex_grow: 1.0, flex_direction: FlexDirection::Column, ..default() }).with_children(|l| list(l, t, "form-locations-field", "Location(s)", Sm9Field::FormLocations, items, field));
-                r.spawn((Sm9Role::FormConnectorIcon, IconButton::new("form-connector", "mate-connector").icon_size(18.0).tooltip("Mate connector: pick an implicit one in the view").build(t)))
+                r.spawn((Sm9Role::FormConnectorIcon, cadrs_ui::IconButton::new("form-connector", "mate-connector").icon_size(18.0).tooltip("Mate connector: pick an implicit one in the view").build(t)))
                     .entry::<Node>()
                     .and_modify(|mut n| {
                         n.width = Val::Px(22.0);
@@ -668,7 +668,7 @@ fn loft_body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalLoftFeature, field: 
                     list(m, t, &format!("sm-loft-connection-{i}-field"), "Vertices or edges", Sm9Field::LoftConnection(i), &items, field);
                     check(m, t, &format!("sm9-rip-{i}"), "Rip", c.rip);
                 }
-                m.spawn((Sm9Role::AddConnection, Button::new("sm-loft-add-connection").label("Add connection").ghost().small().build(t)));
+                m.spawn((Sm9Role::AddConnection, cadrs_ui::Button::new("sm-loft-add-connection").label("Add connection").ghost().small().build(t)));
             });
         }
         number(c, t, "sm-loft-chordal-tolerance", "Chordal tolerance", Sm9Num::Chordal, &x.chordal_tolerance_expr, None);
@@ -1301,7 +1301,7 @@ fn sync_picker(world: &mut World) {
             }
         })
         .footer(move |f| {
-            f.spawn((Sm9Role::PickerDone, Button::new("form-picker-done").label("Done").outline().build(&tf)));
+            f.spawn((Sm9Role::PickerDone, cadrs_ui::Button::new("form-picker-done").label("Done").outline().build(&tf)));
         })
         .build(&theme);
     let e = world.spawn(panel).id();
@@ -1528,7 +1528,7 @@ fn draw_connections(world: &mut World) {
     let Some((x, g)) = loft_state(world) else { return };
     let pts = handle_points(&x, &g, world.resource::<ConnDrag>());
     let mut sys = bevy::ecs::system::SystemState::<Gizmos<crate::parts::PickedEdgeGizmos>>::new(world);
-    let mut gz = sys.get_mut(world);
+    let Ok(mut gz) = sys.get_mut(world) else { return };
     let magenta = Color::srgb_u8(0xc8, 0x3c, 0xd8);
     for i in 0..x.connections.len() {
         let a = pts.iter().find(|(c, s, _)| *c == i && *s == 1).map(|p| p.2);
@@ -1561,7 +1561,7 @@ pub fn script(world: &mut World, arg: &str) {
         construction: false,
         label: "Add rectangle",
     };
-    let mut run = |doc: &mut ActiveDocument, c: &dyn cadrs_core::Command| {
+    let run = |doc: &mut ActiveDocument, c: &dyn cadrs_core::Command| {
         if let Err(e) = doc.execute(c) {
             warn!("sm9 set-up: {e}");
         }

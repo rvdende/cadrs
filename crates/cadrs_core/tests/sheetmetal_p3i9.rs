@@ -148,12 +148,12 @@ fn a_rectangle_to_circle_loft_flattens_and_its_flat_matches_its_volume() {
         (0..k).map(|i| d(pts[i], pts[i + 1])).sum::<f64>() / total
     };
     let (s1, s2) = (t_of(&p1, a), t_of(&p2, bb));
-    // A ripped connection splits it in two parts.
+    // Two ripped connections split it in two parts (one rip only opens the closed loft).
     st.set(
         f,
         FeatureKind::SheetMetalLoft(SheetMetalLoftFeature {
             connections_on: true,
-            connections: vec![LoftConnection { t1: s1, t2: s2, rip: false }, LoftConnection { t1: (s1 + 0.5).fract(), t2: (s2 + 0.5).fract(), rip: true }],
+            connections: vec![LoftConnection { t1: s1, t2: s2, rip: true }, LoftConnection { t1: (s1 + 0.5).fract(), t2: (s2 + 0.5).fract(), rip: true }],
             ..x
         }),
     );

@@ -443,8 +443,21 @@ fn auto_rip(s: &Strip) -> usize {
         .unwrap_or(0)
 }
 
-/// Lays the loft out as sheet metal (see the module docs).
+/// Lays the loft out as sheet metal (see the module docs). Bends that would make the flat
+/// pattern fail (their regions colliding with facets) are left sharp instead.
 pub fn loft(params: Params, p1: &ProfileIn, p2: &ProfileIn, opts: &LoftOpts) -> Result<LoftBuilt, LoftError> {
+    let built = loft_once(params, p1, p2, opts)?;
+    if opts.bends && built.model.joints.iter().any(|j| j.bend().is_some()) && !crate::flat::flatten(&built.model).is_ok() {
+        let mut sharp = loft_once(params, p1, p2, &LoftOpts { bends: false, ..opts.clone() })?;
+        if crate::flat::flatten(&sharp.model).is_ok() {
+            sharp.warnings.push("The loft's steep edges stay sharp: bent, its flat pattern would collide".into());
+            return Ok(sharp);
+        }
+    }
+    Ok(built)
+}
+
+fn loft_once(params: Params, p1: &ProfileIn, p2: &ProfileIn, opts: &LoftOpts) -> Result<LoftBuilt, LoftError> {
     let s = strip(p1, p2, &opts.connections)?;
     let size = s.triangles.iter().flatten().map(|p| p.coords.norm()).fold(1.0, f64::max);
     let lin = 1e-7 * size;
