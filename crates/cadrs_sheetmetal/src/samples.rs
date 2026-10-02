@@ -174,3 +174,56 @@ pub fn bend_loop(p: Params) -> Result<Model, BuildError> {
     b.bend(east, north, (P3::new(40.0, 40.0, 0.0), P3::new(40.0, 40.0, 30.0)));
     b.build()
 }
+
+/// A slot `len` long and `w` wide centred on `c`, along x (rounded ends, 16 points each).
+fn slot(c: P2, len: f64, w: f64) -> Vec<P2> {
+    let r = w / 2.0;
+    let half = len / 2.0 - r;
+    let mut pts = Vec::new();
+    for (cx, a0) in [(c.x + half, -PI / 2.0), (c.x - half, PI / 2.0)] {
+        for k in 0..=16 {
+            let a = a0 + PI * k as f64 / 16.0;
+            pts.push(P2::new(cx + r * a.cos(), c.y + r * a.sin()));
+        }
+    }
+    pts
+}
+
+/// A loop's points (a polygon's outer loop).
+fn ring(p: Polygon) -> Vec<P2> {
+    p.outer
+}
+
+/// P3I.6: the stand-in for exercise E1's enclosure tray (`ex1-importing-dxf-bend`), whose flat
+/// pattern is the DXF the exercise imports: a 200 × 120 base with a fan hole and four mounting
+/// holes; 50 high side walls bent up along its long edges (slots in one, a rectangular cut-out in
+/// the other), each with a 12 wide lip bent inwards; and 15 high end flanges along the middle 100
+/// of its short edges. Seven walls, six bends.
+pub fn e1_tray(p: Params) -> Result<Model, BuildError> {
+    let (x, y, h, lip, end) = (200.0, 120.0, 50.0, 12.0, 15.0);
+    let mut b = SharpBuilder::new(p);
+    let mut holes = vec![ring(crate::poly::circle(P2::new(100.0, 60.0), 30.0, 64))];
+    for (hx, hy) in [(15.0, 15.0), (185.0, 15.0), (185.0, 105.0), (15.0, 105.0)] {
+        holes.push(ring(crate::poly::circle(P2::new(hx, hy), 2.0, 32)));
+    }
+    let base = b.wall(P3::origin(), V3::x(), V3::y(), Polygon::with_holes(rect(x, y).outer, holes));
+    // South (y = 0): local (height, x), material towards +y; three slots.
+    let slots = [60.0, 100.0, 140.0].map(|c| slot(P2::new(25.0, c), 30.0, 6.0)).to_vec();
+    let south = b.wall(P3::new(0.0, 0.0, 0.0), V3::z(), V3::x(), Polygon::with_holes(rect(h, x).outer, slots));
+    // North (y = 120): local (height, 200 − x), material towards −y; a 40 × 20 cut-out.
+    let cut = rect(20.0, 20.0).map(|q| P2::new(q.x + 15.0, q.y * 2.0 + 80.0)).outer;
+    let north = b.wall(P3::new(x, y, 0.0), V3::z(), -V3::x(), Polygon::with_holes(rect(h, x).outer, vec![cut]));
+    // The lips, at the walls' tops, bent inwards (material down).
+    let lip_s = b.wall(P3::new(0.0, 0.0, h), V3::y(), V3::x(), rect(lip, x));
+    let lip_n = b.wall(P3::new(0.0, y, h), V3::x(), -V3::y(), rect(x, lip));
+    // The end flanges on the middle 100 of the short edges.
+    let east = b.wall(P3::new(x, 10.0, 0.0), V3::z(), V3::y(), rect(end, 100.0));
+    let west = b.wall(P3::new(0.0, 110.0, 0.0), V3::z(), -V3::y(), rect(end, 100.0));
+    b.bend(base, south, (P3::new(x, 0.0, 0.0), P3::new(0.0, 0.0, 0.0)));
+    b.bend(base, north, (P3::new(0.0, y, 0.0), P3::new(x, y, 0.0)));
+    b.bend(south, lip_s, (P3::new(0.0, 0.0, h), P3::new(x, 0.0, h)));
+    b.bend(north, lip_n, (P3::new(0.0, y, h), P3::new(x, y, h)));
+    b.bend(base, east, (P3::new(x, 10.0, 0.0), P3::new(x, 110.0, 0.0)));
+    b.bend(base, west, (P3::new(0.0, 110.0, 0.0), P3::new(0.0, 10.0, 0.0)));
+    b.build()
+}

@@ -47,10 +47,20 @@ pub enum Layer {
     Image,
     /// Section hatching, thread marks, break lines and cutting lines (P3C.8).
     Hatch,
+    /// P3I.6 (SM15): a sheet metal flat pattern's outer outline, its cut-outs, its tear
+    /// reliefs' slits, its up and down bend centrelines, its bend tangent lines and the
+    /// sketches on it.
+    FlatOutline,
+    FlatCutout,
+    FlatSlit,
+    BendUp,
+    BendDown,
+    BendTangent,
+    FlatSketch,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 14] = [
+    pub const ALL: [Layer; 21] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -65,6 +75,13 @@ impl Layer {
         Layer::Shaded,
         Layer::Image,
         Layer::Hatch,
+        Layer::FlatOutline,
+        Layer::FlatCutout,
+        Layer::FlatSlit,
+        Layer::BendUp,
+        Layer::BendDown,
+        Layer::BendTangent,
+        Layer::FlatSketch,
     ];
 
     pub fn name(self) -> &'static str {
@@ -83,6 +100,13 @@ impl Layer {
             Layer::Shaded => "SHADED",
             Layer::Image => "IMAGES",
             Layer::Hatch => "HATCH",
+            Layer::FlatOutline => "OUTLINE",
+            Layer::FlatCutout => "CUTOUTS",
+            Layer::FlatSlit => "TEAR_SLITS",
+            Layer::BendUp => "BEND_UP",
+            Layer::BendDown => "BEND_DOWN",
+            Layer::BendTangent => "BEND_TANGENT",
+            Layer::FlatSketch => "FLAT_SKETCH",
         }
     }
 
@@ -91,7 +115,23 @@ impl Layer {
         match self {
             Layer::Hidden => "HIDDEN",
             Layer::Phantom => "PHANTOM",
+            // P3I.6: bend lines dashed, up and down told apart by pattern (and colour).
+            Layer::BendUp => "PHANTOM",
+            Layer::BendDown => "HIDDEN",
             _ => "CONTINUOUS",
+        }
+    }
+
+    /// The layer's AutoCAD colour index (7: black/white).
+    pub fn aci(self) -> i32 {
+        match self {
+            Layer::FlatCutout => 5,
+            Layer::FlatSlit => 6,
+            Layer::BendUp => 3,
+            Layer::BendDown => 1,
+            Layer::BendTangent => 8,
+            Layer::FlatSketch => 4,
+            _ => 7,
         }
     }
 }

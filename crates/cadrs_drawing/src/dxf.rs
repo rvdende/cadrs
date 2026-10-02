@@ -281,7 +281,7 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
     };
     layer_rec(&mut o, "0", "CONTINUOUS", 7);
     for l in Layer::ALL {
-        layer_rec(&mut o, l.name(), l.linetype(), 7);
+        layer_rec(&mut o, l.name(), l.linetype(), l.aci());
     }
     o.pair(0, "ENDTAB");
     // STYLE: Standard, and INTER for our texts.

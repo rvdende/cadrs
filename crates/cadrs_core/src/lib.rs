@@ -27,6 +27,8 @@ pub mod ids;
 pub mod hole;
 pub mod import;
 pub mod dxf_export;
+pub mod dxf_import;
+pub mod flat_export;
 pub mod history_log;
 pub mod library;
 pub mod link_update;
