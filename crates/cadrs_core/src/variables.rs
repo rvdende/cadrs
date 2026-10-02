@@ -329,7 +329,33 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s("Second depth", &mut c.depth_expr, &mut c.depth, L);
             }
         }
-        FeatureKind::Variable(_)
+        // P3I.9.
+        FeatureKind::SheetMetalLoft(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Chordal tolerance", &mut x.chordal_tolerance_expr, &mut x.chordal_tolerance, L);
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+        }
+        FeatureKind::Form(x) => {
+            for v in &mut x.variables {
+                let q = if v.angle { Quantity::Angle } else { L };
+                let label: &'static str = match v.name.as_str() {
+                    "Length" => "Length",
+                    "Width" => "Width",
+                    "Height" => "Height",
+                    "Diameter" => "Diameter",
+                    "Angle" => "Angle",
+                    _ => "Form variable",
+                };
+                s(label, &mut v.expr, &mut v.value, q);
+            }
+        }
+        FeatureKind::TagForm(_)
+        | FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)
         | FeatureKind::DeletePart(_)

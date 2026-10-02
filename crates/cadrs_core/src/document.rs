@@ -465,6 +465,8 @@ impl Feature {
             FeatureKind::Loft(l) => l.sketches(),
             // P3I.2: an Extrude's or Thicken's sketches (hidden once used, like an extrude's).
             FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
+            // P3I.9.
+            FeatureKind::SheetMetalLoft(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }
@@ -560,6 +562,9 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
             FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalLoft(x) => x.problem().is_none(),
+            FeatureKind::Form(x) => x.problem().is_none(),
+            FeatureKind::TagForm(x) => x.problem().is_none(),
         }
     }
 
@@ -592,6 +597,9 @@ impl Feature {
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
             FeatureKind::SheetMetalModel(x) => x.problem(),
+            FeatureKind::SheetMetalLoft(x) => x.problem(),
+            FeatureKind::Form(x) => x.problem(),
+            FeatureKind::TagForm(x) => x.problem(),
         }
     }
 
@@ -717,6 +725,9 @@ impl Feature {
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Form(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::TagForm(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -854,6 +865,12 @@ pub enum FeatureKind {
     Variable(crate::variables::VariableFeature),
     /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).
     SheetMetalModel(crate::sheetmetal::SheetMetalModelFeature),
+    /// P3I.9: a Sheet metal loft (SM19.2; [`crate::sheetmetal_loft`]).
+    SheetMetalLoft(crate::sheetmetal_loft::SheetMetalLoftFeature),
+    /// P3I.9: a sheet metal Form (SM20.1; [`crate::sheetmetal_form`]).
+    Form(crate::sheetmetal_form::FormFeature),
+    /// P3I.9: a Tag (Form), in a form's Part Studio (SM20.2).
+    TagForm(crate::sheetmetal_form::TagFormFeature),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

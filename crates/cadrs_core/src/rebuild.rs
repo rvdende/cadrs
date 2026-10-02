@@ -1039,6 +1039,15 @@ impl Rebuilder {
             FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.9.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalLoft(x) => self.sheet_metal_loft(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::Form(x) => self.sheet_metal_form(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::TagForm(x) => self.tag_form(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
@@ -1295,6 +1304,8 @@ mod kernel_ops {
     mod linked;
     mod pattern;
     mod sheetmetal;
+    mod sheetmetal_form;
+    mod sheetmetal_loft;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;
