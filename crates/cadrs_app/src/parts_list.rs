@@ -233,6 +233,7 @@ fn on_part_context_menu(
     q: Query<&PartRow>,
     cache: Res<PartCache>,
     theme: Res<Theme>,
+    doc: Option<Res<ActiveDocument>>,
     mut commands: Commands,
 ) {
     let Ok(row) = q.get(ev.entity) else {
@@ -250,7 +251,18 @@ fn on_part_context_menu(
         .separator()
         .item(MenuItem::new("part-copy-here", "Copy here…").disabled(true))
         .item(MenuItem::new("part-copy", format!("Copy {name}")).icon("copy").disabled(true))
-        .item(MenuItem::new("part-drawing", format!("Create Drawing of {name}…")).icon("file-new"))
+        .item(MenuItem::new("part-drawing", format!("Create Drawing of {name}…")).icon("file-new"));
+    // P3I.7 (SM16.1): a sheet metal part's flat pattern.
+    let sheet_metal = doc
+        .as_deref()
+        .and_then(|d| d.active_element().map(|e| e.id).map(|e| crate::drawing::flat_views::is_sheet_metal_part(&d.doc, e, row.0)))
+        .unwrap_or(false);
+    let menu = if sheet_metal {
+        menu.item(MenuItem::new("part-flat-drawing", "Create drawing of flat pattern…").icon("flat-pattern"))
+    } else {
+        menu
+    };
+    let menu = menu
         .item(MenuItem::new("part-export", "Export…").icon("file-export"))
         .item(MenuItem::new("part-where-used", "Where used…").icon("tab-manager").disabled(true))
         .item(MenuItem::new("part-task", "Create task…").disabled(true))
@@ -319,6 +331,13 @@ fn on_part_menu_action(ev: On<MenuAction>, q_anchor: Query<&PartMenuFor, With<Co
             };
             let r = cadrs_drawing::ObjectRef { element: element.0, part: Some((part.feature.0, part.index)) };
             crate::drawing::create_dialog::open_create_drawing(world, Some(r));
+        }),
+        "part-flat-drawing" => commands.queue(move |world: &mut World| {
+            let Some(element) = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element().map(|e| e.id)) else {
+                return;
+            };
+            let r = cadrs_drawing::ObjectRef { element: element.0, part: Some((part.feature.0, part.index)) };
+            crate::drawing::flat_views::open_create_drawing_of_flat(world, r);
         }),
         "part-export" => commands.queue(move |world: &mut World| {
             let parts = targets(world, part);

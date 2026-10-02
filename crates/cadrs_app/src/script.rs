@@ -153,6 +153,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             commands.queue(move |world: &mut World| linked_block(world, &arg));
             continue;
         }
+        // P3I.7: flat pattern drawings (see [`crate::drawing::flat_views::script`]).
+        if let Some(rest) = m.0.strip_prefix("flat-drawing ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::drawing::flat_views::script(world, &arg));
+            continue;
+        }
         // P3G.4: the Derived feature's set-ups (see [`crate::derived_ui::script`]).
         if let Some(rest) = m.0.strip_prefix("derived ") {
             let arg = rest.trim().to_string();
