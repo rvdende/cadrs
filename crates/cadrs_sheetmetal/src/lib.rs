@@ -8,6 +8,7 @@
 //! - [`model`]: walls and joints (bends, rips, tangent joints), relief overrides, and
 //!   [`model::SharpBuilder`], which turns walls meeting at virtual sharps into real walls trimmed
 //!   to their bends and rips.
+//! - [`flat_edit`] (P3I.6): material added or removed in the flat (SM14).
 //! - [`flat`]: the flat pattern: walls unfolded about their bends, bend lines with Up/Down,
 //!   corner and bend reliefs, the outline, and the collision and bend-loop checks (SM1.5).
 //! - [`relief`]: the relief cut shapes (SM7, SM8).
@@ -20,6 +21,7 @@
 pub mod bend;
 pub mod construct;
 pub mod flat;
+pub mod flat_edit;
 pub mod model;
 pub mod params;
 pub mod poly;

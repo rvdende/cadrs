@@ -78,6 +78,8 @@ pub struct FlatCorner {
 pub enum ReliefSource {
     Corner { bends: (JointId, JointId) },
     BendEnd { bend: JointId, end: BendEnd },
+    /// P3I.6: the model's `index`-th flat cut (SM14, [`crate::flat_edit`]).
+    Flat { index: usize },
 }
 
 /// One relief cut.
@@ -707,6 +709,8 @@ fn apply_reliefs(m: &Model, part: &mut FlatPart, tree: &[(JointId, WallId)], pla
         }
     }
 
+    // P3I.6: material removed in the flat (SM14).
+    cuts.extend(crate::flat_edit::part_cuts(m, part));
     // What each cut removes from each of its pieces, in the piece's own coordinates (snapped to
     // the exact points, mapped the same way).
     let exact = exact_points(part.pieces.iter().map(|p| &p.polygon).chain(cuts.iter().flat_map(|c| c.shapes.iter())));
