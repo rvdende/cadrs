@@ -210,7 +210,11 @@ against the stand-ins' expected values.
   merge, arcs roll (tangent joints) or, picked in *Arcs to extrude as bends* and sitting between
   two lines, become a bend with the arc's inner radius. The default material side is the side the
   chain turns toward (inside a U), left for a straight chain. A closed chain rips where its first
-  and last lines meet. Splines and ellipses are refused (error). Up to next/face/part/vertex are
+  and last lines meet. Splines and ellipses (judge fix) roll too: each is approximated by tangent
+  arcs, an equal-distance biarc per span (8 spans per Bézier piece, one per 22.5° of ellipse), each
+  arc its own rolled wall joined to the next by a tangent joint (a straight span is a line); the
+  folded volume matches the curve's mid-surface to ~0.1 %. Onshape makes one rolled B-spline wall;
+  ours shows the arc seams as tangent joints in the table. Up to next/face/part/vertex are
   resolved to a depth along the extrude direction (Up to next: the nearest part point ahead —
   an approximation of Onshape's face-shaped end).
 - **Folded solid** (`rebuild/kernel_ops/sheetmetal.rs`) composes existing kernel ops (extrude and
@@ -233,10 +237,24 @@ against the stand-ins' expected values.
   (`02-sheet-metal-model/t0072.0.png`). The icon starts the feature, its own ▾ opens the menu.
 - **Dialog**: all four sections open by default (as the help dialogs); their state is kept while
   the dialog is open. While *Faces to exclude* or *Edges or cylinders to bend* is active the view
-  shows the parts before the feature, so the consumed part's faces and edges can be picked (as
-  the chamfer's Direction overrides do). A new model with nothing picked shows a red
+  shows the parts before the feature, pickable, with the folded model drawn translucent over
+  them and rebuilt at every pick (judge fix, `t0101.0.png`): the rebuild keeps the model's
+  *stage* (parts before, folded bodies) and `PartOverride::staged` shows it. The thickness side
+  has a white arrow on the model (the largest wall's centre, along the material normal) for all
+  three tabs; a click flips it ("Flip thickness direction", one undo step) as the dialog's
+  button does. The edited feature's preview parts share one colour, so the model reads as one
+  sheet. An out-of-range value's tooltip sits beside its field, not over the next section. A new model with nothing picked shows a red
   *Selections* header rather than an error line.
-- **Gaps left**: flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
+- **SM1.6 (judge fix)**: Extrude *Intersect* onto active sheet metal is refused like *Add* ("Extrude
+  can't intersect an active sheet metal part: use Tab or Flange, or Finish sheet metal model
+  first"); its targets are the merge scope, else every solid when all are active sheet metal.
+- **X6 (judge fix)**: the flat view of a failed model draws the collision's overlap red where
+  the colliding walls lie (the overlap now moves with its flat part when parts are laid side
+  by side); `sheetmetal_collision` 02b. Viewport plane labels that don't fit wholly inside the
+  view hide (rotated glyphs escaped the area's clip over the toolbar).
+- **Gaps left**: cone faces in Convert are still left out with a warning (the model has planar
+  and cylindrical walls only; a conical wall needs its own surface and flat development);
+  flat view and table (P3I.3); perpendicular cuts on active models (P3I.5); rips
   between planar and rolled walls aren't built (the arc ends of a rolled wall stay unjoined);
   Up to next is approximate; tangent propagation joins flat coplanar faces and cylinders only.
 

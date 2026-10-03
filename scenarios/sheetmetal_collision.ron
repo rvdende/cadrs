@@ -2,7 +2,8 @@
 // two inner edges bent: flat, both walls fold into the notch onto each other, so the feature
 // fails with "Collision in sheet metal flat pattern" (red title and feature, the reason under
 // the fields and as the feature's tooltip) and the block isn't consumed; picking only one of the
-// two edges clears it.
+// two edges clears it. The Sheet metal table and flat view panel, opened on the failed model,
+// shows the colliding flat (X6).
 Scenario(
     start: Some("document"),
     steps: [
@@ -46,6 +47,15 @@ Scenario(
         Hover(ui("feature-sheet-metal-model-1")),
         Wait(40),
         Screenshot("02-red-feature-tooltip"),
+        // X6: the flat view shows where the collision is (the failed model keeps its context).
+        Click(ui("panel-sheet-metal")),
+        WaitFor("smt-panel"),
+        Wait(30),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("02b-flat-view-collision"),
+        Click(ui("panel-sheet-metal")),
+        Wait(10),
         DoubleClick(ui("feature-sheet-metal-model-1")),
         WaitFor("sheet-metal-model-dialog"),
         Wait(10),

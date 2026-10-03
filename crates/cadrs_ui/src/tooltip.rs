@@ -57,6 +57,9 @@ pub enum TooltipStyle {
     /// A small label beside the element (to its right, centred on it), so it doesn't cover the
     /// rows below: a feature-list row's status ("Sketch 4 (Hidden) is not fully defined").
     Beside,
+    /// An error message beside its element (to its right, top-aligned), so it covers neither
+    /// the rows nor the section headers below: a dialog field's out-of-range value.
+    ErrorBeside,
     /// A help card (P3.9: the feature filter's prefixes): white, left-aligned below the element.
     /// The first line of the text is its title; each later line is a row (not wrapped), and a
     /// tab splits a row into a bold term and its description.
@@ -88,6 +91,15 @@ impl Tooltip {
             text: text.into(),
             shortcut: None,
             style: TooltipStyle::Error,
+        }
+    }
+
+    /// An error message beside its element (see [`TooltipStyle::ErrorBeside`]).
+    pub fn error_beside(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            shortcut: None,
+            style: TooltipStyle::ErrorBeside,
         }
     }
 
@@ -356,18 +368,21 @@ fn update_tooltips(
         state.bubble = Some(bubble);
         return;
     }
-    if tooltip.style == TooltipStyle::Error {
+    if matches!(tooltip.style, TooltipStyle::Error | TooltipStyle::ErrorBeside) {
         // Left-aligned under the element, a little in from its left edge, and no wider. A small
         // element, such as an icon, gets a 220 px bubble below and to the right of it, clear of
         // the icon itself (gpui-component's tooltips sit offset from what they explain).
         let small = size.x < 40.0;
         let inset = 20.0f32.min(size.x / 4.0);
-        let (left, top) = if small {
+        let beside = tooltip.style == TooltipStyle::ErrorBeside;
+        let (left, top) = if beside {
+            (center.x + size.x / 2.0 + 8.0, center.y - size.y / 2.0)
+        } else if small {
             (center.x + size.x / 2.0 + 6.0, center.y + size.y / 2.0 + 8.0)
         } else {
             (center.x - size.x / 2.0 + inset, center.y + size.y / 2.0 + 4.0)
         };
-        let width = if small { 220.0 } else { (size.x - inset).max(120.0) };
+        let width = if small || beside { 220.0 } else { (size.x - inset).max(120.0) };
         let bubble = commands
             .spawn((
                 Name::new("tooltip"),

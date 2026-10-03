@@ -951,7 +951,7 @@ pub(crate) fn sync_numbers(
         match (want_tip, tip) {
             (Some(m), Some(t)) if t.text == m => {}
             (Some(m), _) => {
-                commands.entity(entity).insert(Tooltip::error(m));
+                commands.entity(entity).insert(Tooltip::error_beside(m));
             }
             (None, Some(_)) => {
                 commands.entity(entity).remove::<Tooltip>();
@@ -1020,4 +1020,206 @@ pub fn depth_arrow(features: &[Feature], x: &SheetMetalModelFeature, depth: f64)
     let base = Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
     let along = if x.symmetric { depth / 2.0 } else { depth };
     Some((base + dir * along as f32, dir))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The thickness direction's flip arrow (P3I.2 judge: `t0039.4.png`, `t0072.0.png`, `t0191.9.png`)
+
+/// The white arrow on the model that shows which side the thickness goes and flips it when
+/// clicked, as the dialog's Thickness flip button does.
+#[derive(Resource, Debug, Default)]
+pub struct SmFlipArrow {
+    /// Its base and tip on screen.
+    pub base_tip: Option<(Vec2, Vec2)>,
+    pub hovered: bool,
+    /// A press on it, waiting for its release.
+    pressed: bool,
+}
+
+const FLIP_ARROW_LEN: f32 = 44.0;
+
+/// Where the arrow stands: at the middle of the model's largest wall (of those about as large,
+/// the one nearest the viewer, so it doesn't jump between a box's top and bottom), on the
+/// side the material is laid (the definition surface's material normal), from the last
+/// rebuild's context. `back` points from the model to the viewer.
+pub fn thickness_arrow(cache: &PartCache, feature: FeatureId, back: Vec3) -> Option<(Vec3, Vec3)> {
+    let ctx = cache.sheet_metal.iter().find(|c| c.feature == feature)?;
+    let area = |w: &cadrs_sheetmetal::model::Wall| w.outline.area().abs();
+    let largest = ctx.model.walls.iter().map(area).fold(0.0, f64::max);
+    let facing = |w: &cadrs_sheetmetal::model::Wall| {
+        let p = w.surface.point(w.outline.bounds().map_or(cadrs_sheetmetal::poly::P2::origin(), |(lo, hi)| nalgebra::center(&lo, &hi)));
+        Vec3::new(p.x as f32, p.y as f32, p.z as f32).dot(back)
+    };
+    let wall = ctx
+        .model
+        .walls
+        .iter()
+        .filter(|w| area(w) >= 0.9 * largest)
+        .max_by(|a, b| facing(a).partial_cmp(&facing(b)).unwrap_or(std::cmp::Ordering::Equal))?;
+    // The outline's area centroid (the bounds' middle if it is degenerate), kept inside it.
+    let ring = &wall.outline.outer;
+    let (mut a, mut cx, mut cy) = (0.0, 0.0, 0.0);
+    for i in 0..ring.len() {
+        let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
+        let c = p.x * q.y - q.x * p.y;
+        a += c;
+        cx += (p.x + q.x) * c;
+        cy += (p.y + q.y) * c;
+    }
+    let (lo, hi) = wall.outline.bounds()?;
+    let mut c = cadrs_sheetmetal::poly::P2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+    if a.abs() > 1e-9 {
+        let g = cadrs_sheetmetal::poly::P2::new(cx / (3.0 * a), cy / (3.0 * a));
+        if wall.outline.contains(g) {
+            c = g;
+        }
+    }
+    let p = wall.surface.point(c);
+    let n = wall.surface.normal_at(c);
+    let dir = Vec3::new(n.x as f32, n.y as f32, n.z as f32).normalize_or_zero();
+    (dir != Vec3::ZERO).then(|| (Vec3::new(p.x as f32, p.y as f32, p.z as f32), dir))
+}
+
+/// Clicks on the arrow: one "Flip thickness direction" step, and not a pick in the view.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sm_flip_arrow_pointer(
+    mut inputs: MessageReader<bevy::picking::pointer::PointerInput>,
+    session: Option<Res<AppliedSession>>,
+    mut arrow: ResMut<SmFlipArrow>,
+    drag: Res<crate::viewport::ViewportDrag>,
+    mut grab: ResMut<crate::assembly::ViewportGrab>,
+    mut commands: Commands,
+) {
+    use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
+    if session.filter(|s| s.kind == crate::applied::AppliedKind::SheetMetal).is_none() {
+        inputs.clear();
+        arrow.pressed = false;
+        return;
+    }
+    let near = |p: Vec2, (a, b): (Vec2, Vec2)| {
+        let ab = b - a;
+        let t = ((p - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        p.distance(a + ab * t) <= 9.0
+    };
+    arrow.hovered = arrow.base_tip.is_some_and(|bt| near(drag.pointer(), bt));
+    for input in inputs.read() {
+        if input.pointer_id != PointerId::Mouse {
+            continue;
+        }
+        let pos = input.location.position;
+        match input.action {
+            PointerAction::Press(PointerButton::Primary) => {
+                if arrow.base_tip.is_some_and(|bt| near(pos, bt)) {
+                    arrow.pressed = true;
+                    // Not a click that picks.
+                    grab.0 = true;
+                }
+            }
+            PointerAction::Release(PointerButton::Primary) => {
+                if std::mem::take(&mut arrow.pressed) && arrow.base_tip.is_some_and(|bt| near(pos, bt)) {
+                    commands.queue(|world: &mut World| {
+                        crate::applied::change_kind(world, "Flip thickness direction", |k| {
+                            if let FeatureKind::SheetMetalModel(x) = k {
+                                flip(x, Role::SmThicknessFlip);
+                            }
+                        });
+                    });
+                }
+            }
+            PointerAction::Cancel => arrow.pressed = false,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct SmFlipArrowNode;
+
+#[derive(Component)]
+pub(crate) struct SmFlipArrowLine;
+
+/// Places the arrow on the model while the Sheet metal model dialog is open.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(crate) fn place_sm_flip_arrow(
+    session: Option<Res<AppliedSession>>,
+    cache: Res<PartCache>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    mut arrow: ResMut<SmFlipArrow>,
+    q_area: Query<Entity, With<crate::viewport::ViewportArea>>,
+    mut q: Query<(Entity, &mut Node, &mut bevy::ui::UiTransform, &mut Visibility), With<SmFlipArrowNode>>,
+    mut q_line: Query<&mut ImageNode, With<SmFlipArrowLine>>,
+    mut commands: Commands,
+) {
+    let target = session
+        .as_ref()
+        .filter(|s| s.kind == crate::applied::AppliedKind::SheetMetal)
+        .and_then(|s| thickness_arrow(&cache, s.feature, view.view.back()));
+    let placed = target.and_then(|(p, dir)| {
+        let d = view.view.project_vector(dir);
+        (d.length() >= 0.05).then(|| {
+            let b = rect.to_screen(view.view.project(p));
+            (b, b + d.normalize() * FLIP_ARROW_LEN)
+        })
+    });
+    arrow.base_tip = placed;
+    let Some((base, tip)) = placed else {
+        for (e, ..) in &q {
+            commands.entity(e).try_despawn();
+        }
+        return;
+    };
+    if q.is_empty() {
+        let Some(area) = q_area.iter().next() else { return };
+        let e = commands
+            .spawn((
+                Name::new("sm-thickness-arrow"),
+                SmFlipArrowNode,
+                Node { position_type: PositionType::Absolute, width: Val::Px(FLIP_ARROW_LEN), height: Val::Px(FLIP_ARROW_LEN), ..default() },
+                bevy::ui::UiTransform::default(),
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                ZIndex(-3),
+                DespawnOnExit(crate::AppState::Document),
+                children![
+                    (
+                        cadrs_ui::icon::icon_in(
+                            "manipulator-arrow-halo",
+                            FLIP_ARROW_LEN,
+                            Color::srgba_u8(0x3c, 0x46, 0x4e, 0xb0),
+                            Node { position_type: PositionType::Absolute, ..default() },
+                        ),
+                        Pickable::IGNORE,
+                    ),
+                    (
+                        SmFlipArrowLine,
+                        cadrs_ui::icon::icon_in("manipulator-arrow-line", FLIP_ARROW_LEN, Color::WHITE, Node { position_type: PositionType::Absolute, ..default() }),
+                        Pickable::IGNORE,
+                    ),
+                ],
+            ))
+            .id();
+        commands.entity(area).add_child(e);
+        return;
+    }
+    let u = (tip - base).normalize_or_zero();
+    let center = (base + tip) / 2.0 - rect.0.min;
+    for (_, mut node, mut transform, mut vis) in &mut q {
+        let (l, t) = (Val::Px(center.x - FLIP_ARROW_LEN / 2.0), Val::Px(center.y - FLIP_ARROW_LEN / 2.0));
+        if node.left != l || node.top != t {
+            node.left = l;
+            node.top = t;
+        }
+        let want = bevy::ui::UiTransform { rotation: Rot2::radians(u.x.atan2(-u.y)), ..default() };
+        if *transform != want {
+            *transform = want;
+        }
+        vis.set_if_neq(Visibility::Inherited);
+    }
+    let c = if arrow.hovered { Color::srgb_u8(0xff, 0xb4, 0x5a) } else { Color::WHITE };
+    for mut img in &mut q_line {
+        if img.color != c {
+            img.color = c;
+        }
+    }
 }

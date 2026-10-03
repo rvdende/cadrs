@@ -207,6 +207,10 @@ pub struct PartOverride {
     /// Leaves this feature out while set: the chamfer's Direction overrides are picked on the
     /// edges as they were before it (P3.6).
     pub rolled_back: Option<FeatureId>,
+    /// Shows this feature's stage while set: the parts as they were before it, pickable, with
+    /// what it makes drawn translucent over them. A Sheet metal model's edges to bend and faces
+    /// to exclude are picked so (P3I.2 judge, `02-sheet-metal-model/t0101.0.png`).
+    pub staged: Option<FeatureId>,
     /// Leaves out the features after this one while set: a feature before the end is being
     /// edited and its dialog's Final is off (PS21.11).
     pub rollback_to: Option<FeatureId>,
@@ -235,8 +239,19 @@ const GHOST_ALPHA: f32 = 0.22;
 pub const ACCENT_TINT: Color = Color::srgba(38.0 / 255.0, 110.0 / 255.0, 230.0 / 255.0, 0.6);
 
 /// The part's face colours, faint when the part is ghosted.
-fn ghosted_bases(cache: &PartCache, ghosts: &PartGhosts, part: &Part) -> Vec<FaceBase> {
-    let mut bases = cache.bases(part);
+fn ghosted_bases(cache: &PartCache, over: &PartOverride, ghosts: &PartGhosts, part: &Part) -> Vec<FaceBase> {
+    // P3I.2 judge: the edited feature's preview reads as one model (a Sheet metal model's
+    // several parts, as Onshape's one translucent sheet): all in its first part's colour.
+    let mut bases = match cache.parts.iter().find(|p| over.previews(p) && p.feature == part.feature) {
+        Some(first) if over.previews(part) && first.id != part.id => {
+            let b = cache.bases(first).first().copied();
+            match b {
+                Some(b) => vec![b; part.solid.faces.len()],
+                None => cache.bases(part),
+            }
+        }
+        _ => cache.bases(part),
+    };
     if ghosts.parts.contains(&part.id) {
         for b in &mut bases {
             b.alpha = b.alpha.min(GHOST_ALPHA);
@@ -423,7 +438,7 @@ pub struct PartCache {
     /// While the Extrude dialog edits an Add: the body it adds, drawn as the translucent
     /// preview over the parts as they were before it (`ex1-step4.png`). Not a part: it is not
     /// listed, measured or picked.
-    pub tool: Option<Part>,
+    pub tool: Vec<Part>,
     /// P3B.9: parts drawn in another colour: an assembly's interfering parts (red), a Part
     /// Studio's assembly context (translucent grey). Change with [`PartCache::set_tints`].
     pub tints: HashMap<PartId, FaceBase>,
@@ -496,7 +511,7 @@ impl PartCache {
     fn drawn(&self, id: PartId) -> Option<&Part> {
         self.part(id)
             .filter(|p| !self.is_hidden(p.id))
-            .or_else(|| self.tool.as_ref().filter(|t| t.id == id))
+            .or_else(|| self.tool.iter().find(|t| t.id == id))
     }
 
     /// Sets the parts drawn in another colour (P3B.9).
@@ -598,7 +613,7 @@ impl PartCache {
     /// Every face's base colour (PS9). The Add preview's body takes the colour of the part it
     /// joins (else the next palette colour), as the part it becomes.
     pub fn bases(&self, part: &Part) -> Vec<FaceBase> {
-        if self.tool.as_ref().is_some_and(|t| t.id == part.id) {
+        if self.tool.iter().any(|t| t.id == part.id) {
             let joined = self
                 .contacts
                 .get(&part.feature)
@@ -690,7 +705,7 @@ impl PartCache {
         self.connectors.clear();
         self.visibility.clear();
         self.names.clear();
-        self.tool = None;
+        self.tool.clear();
         self.generation += 1;
     }
 
@@ -701,30 +716,31 @@ impl PartCache {
         let (parts, tool) = match stage {
             Some((f, st)) => (
                 st.before.clone(),
-                Some(Part {
-                    id: PartId::new(*f, u32::MAX),
-                    feature: *f,
-                    name: String::new(),
-                    kind: cadrs_core::parts::PartKind::Solid,
-                    palette: 0,
-                    solid: st.tool.clone(),
-                    mass: None,
-                    features: vec![*f],
-                    source: None,
-                    derived: None,
-                }),
+                std::iter::once(&st.tool)
+                    .chain(&st.more)
+                    .enumerate()
+                    .map(|(k, solid)| Part {
+                        id: PartId::new(*f, u32::MAX - k as u32),
+                        feature: *f,
+                        name: String::new(),
+                        kind: cadrs_core::parts::PartKind::Solid,
+                        palette: 0,
+                        solid: solid.clone(),
+                        mass: None,
+                        features: vec![*f],
+                        source: None,
+                        derived: None,
+                    })
+                    .collect(),
             ),
-            None => (build.parts.clone(), None),
+            None => (build.parts.clone(), Vec::new()),
         };
         let same = self.parts.len() == parts.len()
             && self.parts.iter().zip(&parts).all(|(a, b)| {
                 a.id == b.id && a.name == b.name && std::sync::Arc::ptr_eq(&a.solid, &b.solid)
             })
-            && match (&self.tool, &tool) {
-                (None, None) => true,
-                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(&a.solid, &b.solid),
-                _ => false,
-            };
+            && self.tool.len() == tool.len()
+            && self.tool.iter().zip(&tool).all(|(a, b)| std::sync::Arc::ptr_eq(&a.solid, &b.solid));
         if !same {
             self.generation += 1;
             self.bounds = parts.iter().filter_map(|p| p.solid.bounds()).collect();
@@ -762,6 +778,16 @@ impl PartCache {
         self.names = build.names.clone();
         self.rebuilding = false;
     }
+}
+
+/// The feature whose stage (the parts before it and its new bodies) is shown: the one the
+/// override stages, else the edited one unless it is a Sheet metal model (its folded parts
+/// preview as parts while no edges are picked).
+fn stage_feature(features: &[Feature], o: &PartOverride) -> Option<FeatureId> {
+    o.staged.or_else(|| {
+        let e = o.editing?;
+        (!features.iter().any(|f| f.id == e && matches!(f.kind, cadrs_core::FeatureKind::SheetMetalModel(_)))).then_some(e)
+    })
 }
 
 /// The features the parts are made from: the document's, with the override applied.
@@ -902,7 +928,7 @@ fn update_part_cache(
             cache.pending = None;
             if same_element {
                 log.0.push((features.len(), build.computed, build.elapsed));
-                cache.apply(&build, over.editing);
+                cache.apply(&build, stage_feature(features, &over));
             }
         }
         return;
@@ -919,7 +945,7 @@ fn update_part_cache(
             if cache.key.as_ref().is_some_and(|(id, ..)| *id != el.id) {
                 cache.parts.clear();
             }
-            cache.apply(&build, over.editing);
+            cache.apply(&build, stage_feature(features, &over));
             cache.pending = None;
         }
         None => {
@@ -1376,7 +1402,7 @@ fn sync_part_meshes(
     mut commands: Commands,
 ) {
     let key = (cache.generation, over.editing, ghosts.parts.clone());
-    if last.as_ref() == Some(&key) && q.iter().count() == cache.shown().count() + cache.tool.iter().count() {
+    if last.as_ref() == Some(&key) && q.iter().count() == cache.shown().count() + cache.tool.len() {
         return;
     }
     *last = Some(key);
@@ -1407,8 +1433,8 @@ fn sync_part_meshes(
             commands.entity(e).try_despawn();
             continue;
         };
-        let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &ghosts, part);
+        let preview = over.previews(part) || cache.tool.iter().any(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
+        let bases = ghosted_bases(&cache, &over, &ghosts, part);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             *m = part_base_mesh(part, preview, &bases);
         }
@@ -1423,8 +1449,8 @@ fn sync_part_meshes(
         if have.contains_key(&part.id) {
             continue;
         }
-        let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &ghosts, part);
+        let preview = over.previews(part) || cache.tool.iter().any(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
+        let bases = ghosted_bases(&cache, &over, &ghosts, part);
         let mesh = meshes.add(part_base_mesh(part, preview, &bases));
         let mut e = commands.spawn((
             Name::new(format!("part-{}", part.name.to_lowercase().replace(' ', "-"))),
@@ -1487,7 +1513,7 @@ fn shade_parts(
         };
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             let sel = selected.contains(&part.id);
-            let bases = ghosted_bases(&cache, &ghosts, part);
+            let bases = ghosted_bases(&cache, &over, &ghosts, part);
             let picked: Vec<usize> = part
                 .solid
                 .faces

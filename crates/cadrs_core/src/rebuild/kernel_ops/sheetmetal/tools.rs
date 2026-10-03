@@ -456,6 +456,23 @@ impl Rebuilder {
             {
                 Some(Err("Extrude can't add to an active sheet metal part: use Tab or Flange, or Finish sheet metal model first".into()))
             }
+            // SM1.6 (P3I.2 judge): nor Intersect, which would cut the model outside the
+            // definition. Its targets: the merge scope, else every solid part when they are all
+            // active sheet metal (as the perpendicular cut decides).
+            FeatureKind::Extrude(e)
+                if e.op == BooleanOp::Intersect
+                    && e.body == crate::document::BodyType::Solid
+                    && {
+                        let solids = || state.parts.iter().filter(|p| p.part.kind == PartKind::Solid);
+                        if e.merge_all || !e.merge_scope.is_empty() {
+                            solids().any(|p| (e.merge_all || e.merge_scope.contains(&p.part.id)) && context_of(state, p.part.id).is_some())
+                        } else {
+                            solids().next().is_some() && solids().all(|p| context_of(state, p.part.id).is_some())
+                        }
+                    } =>
+            {
+                Some(Err("Extrude can't intersect an active sheet metal part: use Tab or Flange, or Finish sheet metal model first".into()))
+            }
             FeatureKind::Extrude(e) => self.sheet_metal_cut(before, f.id, &f.name, e, state),
             FeatureKind::Fillet(x) if x.kind == crate::applied::FilletType::Edge && !x.asymmetric && !x.variable && !x.partial => {
                 let picks = corner_picks(state, &x.entities)?;

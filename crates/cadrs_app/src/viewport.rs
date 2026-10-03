@@ -1939,6 +1939,14 @@ fn place_plane_labels(
             size,
         ]
         .map(|q| corner + a * (pad.x + q.x) + b * (pad.y + q.y));
+        // Clipped to the viewport: a rotated label's glyphs escape the area's clip and drew
+        // over the toolbar (P3I.2 judge, `sheetmetal_extrude`), so a label not wholly inside
+        // hides, as the Plane features' and the sketch plane's do.
+        let inside = Rect::from_corners(Vec2::ZERO, rect.0.size());
+        if label_box.iter().any(|p| !inside.contains(*p)) {
+            vis.set_if_neq(Visibility::Hidden);
+            continue;
+        }
         let label_box = label_box[1..]
             .iter()
             .fold(Rect::from_corners(label_box[0], label_box[0]), |r, p| {
