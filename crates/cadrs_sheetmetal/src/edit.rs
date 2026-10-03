@@ -1613,7 +1613,7 @@ mod tests {
         let before = m.wall(base).unwrap().outline.area();
         let tab = Region3 { origin: P3::new(0.0, 0.0, 2.0), x: V3::x(), y: V3::y(), polygon: Polygon::rect(P2::new(10.0, -15.0), P2::new(30.0, 5.0)) };
         let flange = m.walls[1].id;
-        let took = add_tab(&mut m, &[tab.clone()], &[base, flange]).unwrap();
+        let took = add_tab(&mut m, std::slice::from_ref(&tab), &[base, flange]).unwrap();
         assert_eq!(took, vec![base]);
         assert!((m.wall(base).unwrap().outline.area() - before - 300.0).abs() < 1e-6);
         assert!(m.validate().is_empty());

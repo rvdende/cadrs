@@ -632,6 +632,7 @@ fn list(b: &mut ChildSpawner, t: &Theme, name: &str, placeholder: &str, f: u8, i
 }
 
 /// A list with an arrow after it (the Bend line and its Hold opposite side arrow).
+#[allow(clippy::too_many_arguments)]
 fn list_with_flip(b: &mut ChildSpawner, t: &Theme, name: &str, placeholder: &str, f: u8, items: Vec<String>, active: bool, flip: (u8, bool, &str)) {
     b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(2.0), ..default() }).with_children(|r| {
         r.spawn(Node { flex_grow: 1.0, flex_basis: Val::Px(0.0), min_width: Val::Px(0.0), flex_direction: FlexDirection::Column, ..default() })
@@ -640,6 +641,7 @@ fn list_with_flip(b: &mut ChildSpawner, t: &Theme, name: &str, placeholder: &str
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, s: u8, options: Vec<String>, selected: usize, flip: Option<(u8, bool, &str)>) {
     let mut sel = Select::new(name.to_string());
     for o in options {
@@ -656,6 +658,7 @@ fn select(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, s: u8, optio
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn number(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, n: u8, text: &str, flip: Option<(u8, bool, &str)>) {
     b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(4.0), ..default() }).with_children(|r| {
         r.spawn((SmtRole::Number(n), NumberField::new(name.to_string(), label.to_string()).text(text.to_string()).label_width(112.0).build(t)))
@@ -858,7 +861,7 @@ fn select_index(x: &SheetMetalTool, s: u8) -> Option<usize> {
 }
 
 /// Keeps the lists, numbers and selects of the open dialog in step with the feature.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_tool_dialog(
     session: Option<Res<AppliedSession>>,
     doc: Option<Res<ActiveDocument>>,

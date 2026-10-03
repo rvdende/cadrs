@@ -11,6 +11,9 @@
 //!
 //! Lengths are mm, angles in the dialogs degrees (stored as typed and as values).
 
+// `!(x > 0.0)` on purpose: NaN fails the checks too.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 use cadrs_sheetmetal::edit::{BendAlignment, JogAnchor};
 use cadrs_sheetmetal::params::{BendRelief, CornerRelief, CornerReliefKind};
 use serde::{Deserialize, Serialize};
@@ -463,6 +466,7 @@ pub struct FinishFeature {
 pub const FINISH_WARNING: &str = "Features after this one act on the parts as ordinary solids and don't show in the flat pattern";
 
 /// One of the sheet metal features after a Sheet metal model.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SheetMetalTool {
     Finish(FinishFeature),

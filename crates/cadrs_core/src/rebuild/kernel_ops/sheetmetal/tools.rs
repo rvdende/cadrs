@@ -611,8 +611,7 @@ impl Rebuilder {
                 let ring = |l: &[cadrs_sketch::Vec2]| l.iter().map(|q| P2::new(q.x, q.y)).collect::<Vec<_>>();
                 let region = Region3 { origin: p3(f.origin), x: v3(f.u).normalize(), y: v3(f.v).normalize(), polygon: Polygon::with_holes(ring(&r.outer), r.holes.iter().map(|h| ring(h)).collect()) };
                 // Depths run along the extrude direction from the sketch plane.
-                let z = if e.flip { (z0, z1) } else { (z0, z1) };
-                tools.push(CutTool { region, dir, z: Some(z) });
+                tools.push(CutTool { region, dir, z: Some((z0, z1)) });
             }
         }
         let mut current = state.clone();
