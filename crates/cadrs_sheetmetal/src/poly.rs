@@ -261,6 +261,38 @@ pub fn snap_to(poly: &Polygon, exact: &[P2], tol: f64) -> Polygon {
     }
 }
 
+/// `a` less `cuts`, with every vertex put back on the inputs' exact coordinates: their vertices
+/// and the points where a cut's edges cross `a`'s (the booleans round to [`GRID`], which can
+/// leave an oblique edge a micrometre off the face it should meet).
+pub fn difference_exact(a: &Polygon, cuts: &[Polygon]) -> Vec<Polygon> {
+    let loops = |p: &Polygon| -> Vec<Vec<P2>> { std::iter::once(p.outer.clone()).chain(p.holes.iter().cloned()).collect() };
+    let mut exact: Vec<P2> = loops(a).into_iter().flatten().collect();
+    exact.extend(cuts.iter().flat_map(|c| loops(c).into_iter().flatten()));
+    for la in loops(a) {
+        for i in 0..la.len() {
+            let (p, q) = (la[i], la[(i + 1) % la.len()]);
+            for c in cuts {
+                for lc in loops(c) {
+                    for k in 0..lc.len() {
+                        let (r, s2) = (lc[k], lc[(k + 1) % lc.len()]);
+                        let (d, e) = (q - p, s2 - r);
+                        let den = d.perp(&e);
+                        if den.abs() < 1e-15 {
+                            continue;
+                        }
+                        let t = (r - p).perp(&e) / den;
+                        let u = (r - p).perp(&d) / den;
+                        if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
+                            exact.push(p + d * t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    difference(std::slice::from_ref(a), cuts).iter().map(|p| snap_to(p, &exact, 10.0 * GRID)).collect()
+}
+
 /// The parts of segment `s` inside `polys` (material), as sub-segments in order along `s`.
 pub fn clip_segment(s: Seg2, polys: &[Polygon]) -> Vec<Seg2> {
     let d = s.b - s.a;

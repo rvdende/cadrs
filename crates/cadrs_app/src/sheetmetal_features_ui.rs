@@ -347,7 +347,8 @@ pub fn name(kind: &FeatureKind) -> Option<&'static str> {
 pub fn layout(kind: &FeatureKind) -> Option<String> {
     Some(match sm(kind)? {
         SheetMetalFeature::Flange(f) => format!(
-            "flange {:?} {:?} {:?} {} {} {} {} {:?} {} {} {:?} {:?}",
+            "flange {} {:?} {:?} {:?} {} {} {} {} {:?} {} {} {:?} {:?}",
+            f.edges.is_empty(),
             f.alignment,
             f.end,
             f.angle_control,
@@ -540,7 +541,8 @@ pub(crate) fn body(b: &mut ChildSpawner, t: &Theme, kind: &FeatureKind, field: A
             if !f.use_model_radius {
                 number(c, t, "smf-radius", "Bend radius", SmfNum::Radius, &f.radius_expr);
             }
-            check(c, t, "smf-partial", "Partial flange", f.partial);
+            // Greyed until an edge is picked (`sheetmetalflange-dialog-01.png`).
+            c.spawn(OptionRow::new("smf-partial", "Partial flange").checked(f.partial).disabled(f.edges.is_empty()).build(t));
             if f.partial {
                 let (f1, t1) = (f.clone(), t.clone());
                 c.spawn(
@@ -719,6 +721,9 @@ pub fn checkbox(kind: &mut FeatureKind, name: &str, on: bool) -> Option<(&'stati
             ("Use model bend radius", None)
         }
         (SheetMetalFeature::Flange(f), "smf-partial-checkbox") => {
+            if f.edges.is_empty() {
+                return None;
+            }
             f.partial = on;
             ("Partial flange", None)
         }

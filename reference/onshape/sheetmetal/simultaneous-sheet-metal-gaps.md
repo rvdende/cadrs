@@ -51,7 +51,7 @@ below).
 | SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. Integration: **one definition and one pipeline** for every feature after the model (see Decisions (integration)): Flange, Hem, Make joint and Modify joint edit the walls at their virtual sharps; Bend, Jog, Tab, cuts, corner breaks, face copies, Corner, Bend relief and Loft (Add) are ordered steps replayed on the built model; forms are kept with the model and applied again at every refold; parts keep their ids. Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat; Extrude Add with a merge scope of active sheet metal is refused (use Tab or Flange). Ordinary features (fillets of non-corner edges, booleans, …) still act on the folded part only and are lost at the next refold. |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | ✅ | Contexts are keyed by the feature; P3I.3's context dropdown lists the features by name. |
-| SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain applies the bounds per edge (an approximation). |
+| SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain finds the chains of edges meeting end to end and bounds only their free ends (fix round). Open: a Per chain bound that goes Up to an entity is measured on the first edge. |
 | SM3.8 | Move face on a flange | ❌ | Move face (direct edit) doesn't exist in cadrs; not required by the exercises. |
 | SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ✅ | P3I.4: closed-form flat lengths tested; the last values are remembered for the app session (not across sessions). Hems are in the Bends table (P3I.3's table shows them). |
 | SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ✅ | P3I.5: profiles added to parallel walls they touch (auto when *Flange to merge* is empty; bridged coplanar walls merge), clearance pockets (profile grown by the offset) cut from sheet metal walls or ordinary parts in the scope; in the flat. |
@@ -316,7 +316,7 @@ against the stand-ins' expected values.
 - **Hem**: Straight (180°; Flattened = inner radius half the minimal gap), Rolled (the bend
   only; a 0.001 mm leg because every bend needs a wall after it), Tear drop (`β`, `ℓ` solved so
   the leg ends the gap off the wall and Total length from the outermost point). Corners: Simple
-  stops the later hem short of the earlier one's leg, Closed meets along the corner's bisector.
+  cuts both legs on the corner's bisector, Closed carries them on to it first.
 - **Make joint**: both edges carried to where the walls' planes meet, then a rip or bend there.
 - **Fix round (P3I.4 judge, 8.4)**: E2's steps 9–11 as the slides (a lip on the right wall's
   top edge, a flange on its vertical end edge, Make joint between their edges, butt 1). A flange
@@ -331,12 +331,18 @@ against the stand-ins' expected values.
   from the flange and changed nothing). Hems on
   flanges mitred at a box corner: the later hem stops `2R + T` plus half the gap clear of the
   earlier one (Simple and Closed alike: bend regions end square); a hem's corner cut is where
-  its plane crosses the leg's and keeps the leg's whole thickness on its side. Simple hems on one wall's corner: the
-  earlier hem runs on to the corner, the later one (bend and leg) stops clear of its leg (both
-  legs used to be cut only at the other's bend, so they crossed: "walls intersect").
+  its plane crosses the leg's and keeps the leg's whole thickness on its side. Simple hems on one wall's corner: both
+  legs are cut on the corner's bisector, half the gap off it (they used to be cut only at the
+  other's bend, so they crossed: "walls intersect"); Closed carries them on first.
   The last hem is remembered only when a new
   hem is accepted (not its flip); the hem has a flip arrow in the view. Onshape shows the red "!"
   and a red name while a new feature has nothing picked (`03-flange/t0012.6.png`), as cadrs does.
+- **Fix round 2 (judge 8.54)**: a wall's relief cuts are snapped back onto its exact edges (the
+  polygon booleans round to 1e-6 mm, which left an oblique edge off its bend's face, so a Flange
+  on the sloping edges of a sloped enclosure came out as separate parts); Make joint carries a
+  bend that ends at the moved edge on with it (no square corner under the lip in E2); Simple hem
+  corners cut both legs on the bisector; a miter-angle end that runs on moves its own corners
+  (one straight end); Partial flange is greyed until an edge is picked.
 - **Gaps left**: Move face (SM3.8); hems and flanges only on flat walls' edges (not on rolled
   walls or hem legs); the E2 stand-in replaces the R35 arc by lines (the sheet metal Extrude bends
   only between lines); Per chain Up to bounds measure on the first edge; the 12 px labels are in

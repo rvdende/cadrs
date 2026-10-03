@@ -130,7 +130,7 @@ fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
     //   outer sharp z = 16), its tip 10 in from the outer sharp (x = 115); its flat wall runs from
     //   the bend's tangent (x = 125 − (R + T) = 123) to the tip: 8 wide.
     // - Flange 3, Inner, 10: on the wall's end edge between its bends' tangent lines (z from
-    //   R + T = 2 up to 16 − 2 = 14), its inside on y = −80, its tip at x = 115.
+    //   R + T = 2 up to 16 − 2 = 14), its inside on y = −80, its tip at x = 115, 8 wide (x 115..123).
     // - Make joint, butt 1: the lip (first) carried on to where the walls' planes meet and stopped
     //   the gap short of Flange 3's inside (y = −80 + 0.025); Flange 3 runs on up to the lip's top
     //   (z = 16).
@@ -153,9 +153,9 @@ fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
     let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
     assert!(near(lip.0.0, 115.0) && near(lip.0.1, 123.0), "the lip 8 wide: {lip:?}");
     assert!(near(lip.1.0, -80.0 + 0.025) && near(lip.1.1, 0.0), "the lip stops the gap short of Flange 3: {lip:?}");
-    // (Its outline keeps the corner square past its bend's tangent at the top, x 123..125, where
-    // the joint carried its top edge on over the lip's bend.)
-    assert!(near(f3.0.0, 115.0) && f3.0.1 <= 125.0 + 1e-6, "Flange 3 from its tip at x = 115: {f3:?}");
+    // (Make joint carries Flange 3's bend on with its top edge, so no square corner is left
+    // past the bend's tangent under the lip's bend.)
+    assert!(near(f3.0.0, 115.0) && near(f3.0.1, 123.0), "Flange 3 8 wide: {f3:?}");
     assert!(near(f3.2.0, 2.0) && near(f3.2.1, 16.0), "Flange 3 from the base bend's tangent to the lip's top: {f3:?}");
     let m = mass_kg(&doc, ex::E2_STUDIO, part);
     assert!((m - v * 7850e-9).abs() < 1e-12);

@@ -657,11 +657,18 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
                     for ((i, e), x) in [(k, ek), (l, el)].into_iter().zip(ext) {
                         let s0 = if e == 0 { pend[i].span.0 } else { pend[i].span.1 };
                         let out = if e == 0 { -1.0 } else { 1.0 };
-                        if x > 0.0 {
-                            extend_end(&mut pend[i], e, x + t);
-                        }
                         let u = s0 + out * x;
-                        pend[i].outline = pend[i].outline.clip_half_plane(P2::new(u, 0.0), V2::new(-out, 0.0));
+                        if x > 0.0 {
+                            // Carried on: the end's own corners move out (one straight end, no
+                            // seam where a piece was added).
+                            for q in pend[i].outline.outer.iter_mut() {
+                                if (q.x - s0).abs() < 1e-9 {
+                                    q.x = u;
+                                }
+                            }
+                        } else {
+                            pend[i].outline = pend[i].outline.clip_half_plane(P2::new(u, 0.0), V2::new(-out, 0.0));
+                        }
                     }
                 }
             }
@@ -879,8 +886,6 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
         HemAlignment::InPlace => 0.0,
     };
     let mut clips: Vec<Vec<HemClip>> = vec![Vec::new(); edges.len()];
-    // Hems whose edge stops short of a corner: (hem, at the edge's start, where along it).
-    let mut shorten: Vec<(usize, bool, f64)> = Vec::new();
     for k in 0..ses.len() {
         for l in 0..ses.len() {
             if k == l || ses[k].wall != ses[l].wall {
@@ -892,21 +897,11 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
                     if (pk - pl).norm() > tol {
                         continue;
                     }
-                    let clip = if o.closed {
-                        // Along the corner's bisector.
-                        let nrm = (dk - dl).try_normalize(1e-9);
-                        nrm.map(|nn| HemClip { point: pk + nn * (p.minimal_gap / 2.0), normal: nn, extend: length + o.radius + 2.0 * t + trim })
-                    } else if k > l {
-                        // Simple: the later hem (bend and leg) stops short of the earlier one's
-                        // leg end (`trim + length` in from its edge), so the legs don't cross.
-                        let q = pl + ses[l].into3 * (trim + length + p.minimal_gap / 2.0);
-                        let s = (q - ses[k].origin).dot(&ses[k].e);
-                        shorten.push((k, (pk - ses[k].at(0.0, 0.0)).norm() < tol, s));
-                        None
-                    } else {
-                        // Simple: the earlier hem runs on to the corner.
-                        None
-                    };
+                    // Both legs cut on the corner's bisector, half the gap off it (Simple,
+                    // `hem-straight-simple.png`: a clean V in the flat); Closed first carries
+                    // each leg on past its bend's end so the cut closes the corner.
+                    let extend = if o.closed { length + o.radius + 2.0 * t + trim } else { 0.0 };
+                    let clip = (dk - dl).try_normalize(1e-9).map(|nn| HemClip { point: pk + nn * (p.minimal_gap / 2.0), normal: nn, extend });
                     clips[k].extend(clip);
                 }
             }
@@ -915,13 +910,6 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
     // Hems on two walls in one plane (flanges mitred into each other) meeting end to end at an
     // inside corner: the later one starts clear of the earlier one's bend.
     let mut spans: Vec<(f64, f64)> = ses.iter().map(|s| (0.0, s.len())).collect();
-    for (k, start, s) in shorten {
-        if start {
-            spans[k].0 = spans[k].0.max(s);
-        } else {
-            spans[k].1 = spans[k].1.min(s);
-        }
-    }
     for k in 0..ses.len() {
         for l in 0..k {
             let (a, b) = (&ses[k], &ses[l]);
@@ -1050,6 +1038,23 @@ pub fn make_joint(def: &mut SharpDef, first: &EdgePick, second: &EdgePick, key: 
         let wall = &mut def.builder.walls[s.wall];
         if x.abs() > 1e-12 {
             wall.outline = shift_edge(&wall.outline, s.seg, s.into, -x).ok_or("The joint cuts a wall away")?;
+            // A bend that ends at the moved edge's corner runs on with it (else the wall's
+            // corner past the bend's tangent line is left square).
+            let tol = 1e-6 * s.len().max(1.0);
+            let line = |p: P3| ((p - s.origin) - s.e * (p - s.origin).dot(&s.e)).norm() < tol;
+            for j in def.builder.joints.iter_mut().filter(|j| (j.a == s.wall || j.b == s.wall) && matches!(j.kind, SharpJointKind::Bend { .. })) {
+                let (a, b) = j.edge;
+                let d = b - a;
+                if d.norm() < tol || d.normalize().cross(&s.e).norm() < 1e-6 || d.normalize().dot(&s.into3).abs() < 1e-6 {
+                    continue;
+                }
+                let moved = |p: P3| p - s.into3 * x;
+                if line(b) {
+                    j.edge.1 = moved(b);
+                } else if line(a) {
+                    j.edge.0 = moved(a);
+                }
+            }
         }
     }
     let edge = (lo3 + ld * lo, lo3 + ld * hi);

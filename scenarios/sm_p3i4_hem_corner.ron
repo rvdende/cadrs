@@ -1,8 +1,7 @@
 // Hem corners (P3I.4, SM4.4; `help/feature-tools/hem-straight-simple.png`, `-closed.png`): a
 // 60 × 40 × 2 plate (Thicken); one Hem on its east and north top edges, which meet at the corner
-// (60, 40) (Straight, inner radius 1, 6 mm, Outer), seen from outside the corner: Simple (the
-// east hem runs on to the corner, the north one stops half the gap short of the east leg's end:
-// square ends, an open corner), then Closed (the legs carried on and cut along the corner's bisector, the
+// (60, 40) (Straight, inner radius 1, 6 mm, Outer), seen from outside the corner: Simple (both
+// legs cut on the corner's bisector, half the minimal gap off it), then Closed (the legs carried on and cut along the corner's bisector, the
 // minimal gap apart: a mitred corner); accepted.
 Scenario(
     start: Some("document"),

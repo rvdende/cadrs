@@ -517,7 +517,7 @@ impl Rebuilder {
                 let polys = if removed.is_empty() {
                     vec![wall.outline.clone()]
                 } else {
-                    poly::difference(std::slice::from_ref(&wall.outline), removed)
+                    poly::difference_exact(&wall.outline, removed)
                 };
                 let regions: Vec<cadrs_kernel::Region> = polys
                     .iter()

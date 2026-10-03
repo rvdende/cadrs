@@ -508,8 +508,9 @@ fn partial_flange_bounded_by_vertices_and_flip_sides() {
 }
 
 /// A test the bounds' orientation can't hide: the first bound up to the vertex at y = 12 alone
-/// (no second): the flange runs from y = 12 to the edge's far end (y = 40) or from y = 0 to 12,
-/// never from y = 28.
+/// (no second). Measured from the edge's start: from the y = 0 end the flange runs y 12..40;
+/// with Flip sides the bound is measured from the other end and the flange runs 0..12 (and the
+/// other way round when the edge starts at y = 40) — never 28..40.
 #[test]
 fn partial_flange_up_to_a_vertex_whichever_way_the_edge_runs() {
     let mut st = Studio::new();
@@ -517,18 +518,20 @@ fn partial_flange_up_to_a_vertex_whichever_way_the_edge_runs() {
     let (_, plate) = plate(&mut st);
     let b = st.ok();
     let v12 = vertex_at(&part_of(&b, blk), [100.0, 12.0, 0.0]);
+    let from_y0 = east_starts_at_y0(&st, &plate);
     for flip_sides in [false, true] {
         let fl = FlangeFeature {
             partial: true,
             flip_sides,
-            bound: Bound { kind: FlangeEnd::UpToEntity, up_to: Some(SmTarget::Vertex(v12.clone())), ..Default::default() },
+            bound: Bound { kind: FlangeEnd::UpToEntity, up_to: Some(SmTarget::Vertex(v12)), ..Default::default() },
             ..east_flange(&plate)
         };
         let mut s2 = Studio { d: st.d.clone(), h: History::default(), el: st.el };
         sm(&mut s2, "Flange", SheetMetalFeature::Flange(fl));
         let b = s2.ok();
         let (y, _) = east_wall(&b);
-        assert!((y.0 - 12.0).abs() < 1e-6 && (y.1 - 40.0).abs() < 1e-6 || y.0.abs() < 1e-6 && (y.1 - 12.0).abs() < 1e-6, "flip sides {flip_sides}: {y:?}");
+        let want = if flip_sides == !from_y0 { (12.0, 40.0) } else { (0.0, 12.0) };
+        assert!((y.0 - want.0).abs() < 1e-6 && (y.1 - want.1).abs() < 1e-6, "flip sides {flip_sides} (start at y = 0: {from_y0}): {y:?}, want {want:?}");
     }
 }
 
@@ -590,4 +593,46 @@ fn partial_flange_per_chain_on_adjacent_edges() {
     assert!((east.0 - 10.0).abs() < 1e-6 && (north.0 - 5.0).abs() < 1e-6, "east {east:?} north {north:?}");
     assert!(east.1 > 39.0 && north.1 > 49.0, "east {east:?} north {north:?}");
     check_volume(&b);
+}
+
+/// A Flange with Inner alignment on sloping edges (the P3I.7 fixer's E3: a sloped enclosure
+/// converted with its slope left open, 25 mm flanges on both side walls' sloping edges) stays one
+/// part with the box, and the box's volume is its flat's. (It came apart: the side wall's bend
+/// reliefs were cut by polygon booleans that round to 1e-6 mm, which left the oblique edge off
+/// the bend's face by more than the kernel's tolerance.)
+#[test]
+fn flange_on_a_sloped_enclosures_sloping_edges() {
+    use cadrs_core::samples::{extrude_of, region_refs};
+    use cadrs_sheetmetal::sharp_edit::FlangeAlignment;
+    let (w, d, hb, hf, sh) = (200.0, 250.0, 200.0, 125.0, 75.0);
+    for align in [FlangeAlignment::Inner, FlangeAlignment::HoldLine] {
+        let mut st = Studio::new();
+        let profile = [(0.0, 0.0), (d, 0.0), (d, hb), (d - sh, hb), (0.0, hf)];
+        let s = st.sketch(PlaneRef::Right, vec![SketchOp::AddPolyline { points: profile.iter().map(|(x, y)| Vec2::new(*x, *y)).collect(), closed: true, construction: false, label: "Add line" }]);
+        let g = st.d.element(st.el).unwrap().feature(s).unwrap().sketch().unwrap().geometry.clone();
+        st.extrude(extrude_of(region_refs(s, &g, &[Vec2::new(d / 2.0, hf / 2.0)]), w));
+        let b = st.ok();
+        let block = b.parts[0].clone();
+        let slope_mid = [(d - sh) / 2.0, (hf + hb) / 2.0];
+        let slope = face_near(&block, [w / 2.0, slope_mid[0], slope_mid[1]]);
+        let bends = [[w / 2.0, 0.0, 0.0], [w / 2.0, d, 0.0], [0.0, d / 2.0, 0.0], [w, d / 2.0, 0.0], [w / 2.0, d, hb]].iter().map(|q| EdgeOrFace::Edge(edge_near(&block, *q))).collect();
+        let mut x = feature(SheetMetalOp::Convert);
+        x.params.thickness = 1.5;
+        x.params.bend_radius = 1.5;
+        x.exprs = cadrs_core::sheetmetal::SheetMetalExprs::of(&x.params);
+        x.parts = vec![block.id];
+        x.exclude = vec![slope];
+        x.bends = bends;
+        st.add(FeatureKind::SheetMetalModel(x));
+        let part = sm_part(&st.ok());
+        let edges = [0.0, w].iter().map(|x| EdgeOrFace::Edge(edge_near(&part, [*x, slope_mid[0], slope_mid[1]]))).collect();
+        sm(&mut st, "Flange", SheetMetalFeature::Flange(FlangeFeature { edges, distance: 25.0, distance_expr: "25 mm".into(), alignment: align, ..Default::default() }));
+        let b = st.ok();
+        let ctx = &b.sheet_metal[0];
+        assert_eq!(ctx.parts.len(), 1, "{align:?}: one sheet metal part, not {}", ctx.parts.len());
+        assert_eq!(b.parts.len(), 1, "{align:?}: the flanges are joined to the box");
+        assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1, "{align:?}: {:?}", ctx.flat.errors);
+        assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 7, "{align:?}");
+        check_volume(&b);
+    }
 }

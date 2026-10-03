@@ -309,13 +309,10 @@ fn max_of(pts: &[P3], f: impl Fn(&P3) -> f64) -> f64 {
 }
 
 /// Two hems on one plate meeting at its corner (SM4.4). Outer: each hem's tangent line is
-/// `R + T` in from its edge, its leg runs from there back over the plate, to Total length 12.5 in
-/// from the edge. Simple: the first (east) hem runs on to the corner (y = 40), the second (north)
-/// stops, bend and leg, half the gap short of the first one's leg end (`x ≤ 50 − 12.5 − gap/2`),
-/// so the legs (at one height) don't cross;
-/// Closed: the legs are carried on and cut along the corner's bisector (through (50, 40), at 45°),
-/// half the gap off it: at its root (x = 50 − (R + T)) the east leg reaches
-/// `y = 40 − (R + T) − gap/√2`.
+/// `R + T` in from its edge, its leg runs from there back over the plate. Both corner types cut
+/// both legs on the corner's bisector (through (50, 40), at 45°), half the minimal gap off it
+/// (Simple as `hem-straight-simple.png`; Closed carries the legs on first): at its root
+/// (x = 50 − (R + T)) the east leg reaches `y = 40 − (R + T) − gap/√2`, the north leg likewise.
 #[test]
 fn hems_meeting_at_a_corner() {
     for closed in [false, true] {
@@ -328,9 +325,9 @@ fn hems_meeting_at_a_corner() {
         assert!(f.is_ok(), "closed {closed}: {:?}", f.errors);
         let (east, north) = (slab(&m, stable(200)), slab(&m, stable(201)));
         let (ey, nx) = (max_of(&east, |p| p.y), max_of(&north, |p| p.x));
-        let want = if closed { 40.0 - OSSB - GAP / 2f64.sqrt() } else { 40.0 };
+        let want = 40.0 - OSSB - GAP / 2f64.sqrt();
         assert!(close(ey, want), "closed {closed}: east leg reaches y = {ey}, want {want}");
-        let want = if closed { 50.0 - OSSB - GAP / 2f64.sqrt() } else { 50.0 - 12.5 - GAP / 2.0 };
+        let want = 50.0 - OSSB - GAP / 2f64.sqrt();
         assert!(close(nx, want), "closed {closed}: north leg reaches x = {nx}, want {want}");
         // The legs' lengths: Total length 12.5 from the outside, so 12.5 − (R + T) from the
         // tangent line at x = 45.
@@ -490,4 +487,33 @@ fn flange_on_a_walls_side_edge_then_make_joint_with_the_lip() {
     let lip = m.wall(stable(101)).unwrap();
     let lip_y = lip.outline.outer.iter().map(|q| lip.surface.point(*q).y).fold(f64::MAX, f64::min);
     assert!(close(lip_y, GAP), "{lip_y}");
+}
+
+/// A wall whose top edge slopes (the side of a sloped enclosure, E3): a flange on that sloping
+/// edge, Inner, either way, stays one part with the wall (the P3I.7 fixer's E3 came apart).
+#[test]
+fn flange_on_a_sloping_edge_stays_joined() {
+    for (align, dir) in [(FlangeAlignment::Inner, -1.0), (FlangeAlignment::Inner, 1.0), (FlangeAlignment::Outer, -1.0), (FlangeAlignment::Middle, 1.0)] {
+        let mut def = base();
+        let m = model(&def);
+        flange_along(&mut def, &m, east_edge(&m), 100, V3::z(), 30.0);
+        // Its top cut down to slope: z = 20 + y / 4 (20 high at y = 0, 30 at y = 40).
+        let wi = def.builder.walls.iter().position(|w| w.id == Some(stable(100))).unwrap();
+        let w = &mut def.builder.walls[wi];
+        let n = V3::new(0.0, -0.25, 1.0);
+        let m2 = cadrs_sheetmetal::poly::V2::new(n.dot(&w.u), n.dot(&w.v));
+        let level = 20.0 - n.dot(&w.origin.coords);
+        w.outline = w.outline.clip_half_plane(P2::from(m2 * (level / m2.norm_squared())), -m2);
+        let m = model(&def);
+        let slope = wall_edge(&m, stable(100), |p| p.z);
+        assert!(((slope.b - slope.a).normalize().z).abs() > 0.1, "the sloping edge: {slope:?}");
+        let (angle, toward) = EdgeFrame::of(&m, &slope).unwrap().angle_of(V3::x() * dir).expect("an angle");
+        let fe = FlangeEdge { pick: slope, key: 101, angle, toward, distance: 15.0, partial: None };
+        edit::flange(&mut def, &[fe], &FlangeOpts { alignment: align, radius: None, miter: None, hold_adjacent: true, per_chain: false }).expect("flange");
+        let m = model(&def);
+        let f = flatten(&m);
+        assert!(f.is_ok(), "{align:?} {dir}: {:?}", f.errors);
+        assert_eq!(f.parts.len(), 1, "{align:?} {dir}: the flange stays joined to its wall");
+        assert_eq!(m.joints.iter().filter(|j| j.bend().is_some()).count(), 2);
+    }
 }
