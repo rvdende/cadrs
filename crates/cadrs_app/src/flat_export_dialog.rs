@@ -2,10 +2,11 @@
 //! `feature-tools/sheetmetal-export-01-03.png`, lesson `15-exporting-a-flat-pattern`): the
 //! **Export as DXF/DWG** dialog, laid out as Onshape's:
 //!
-//! - **File name** ("<document> - Flat pattern of <part>") with *View export rules* (cadrs has
-//!   no export rules: greyed, saying so);
+//! - **File name** ("<document> - Flat pattern of <part>"; cadrs has no export rules, so
+//!   Onshape's *View export rules* link isn't shown);
 //! - **Format** DXF / DWG (DWG through the external converter, disabled without one);
-//!   **Version** 2018, 2013, 2010, 2007, 2004 or 2000 (the default);
+//!   **Version** Release 11-12 to 14 (disabled), 2000 (the default) to 2018, the current one
+//!   marked in the open list;
 //! - **Scope**: Single flat pattern part only / All flat pattern parts in the current model /
 //!   All flat pattern parts in the Part Studio; several parts go side by side in one file, or
 //!   one file each with *Export each part as its own file*;
@@ -17,7 +18,7 @@
 //! menu (P3I.3) calls [`open`] with the part under the pointer. Exporting doesn't change the
 //! document, so it is not an undo step.
 //!
-//! Names: `flat-export-dialog`, `flat-export-help`, `flat-export-name-field`, `flat-export-rules`,
+//! Names: `flat-export-dialog`, `flat-export-help`, `flat-export-name-field`,
 //! `flat-export-format`, `flat-export-version`, `flat-export-scope`, `flat-export-separate`,
 //! `flat-export-options`, `flat-export-folder-field`, `flat-export-browse`, the checkboxes
 //! `flat-export-splines`, `-z-zero`, `-centerlines`, `-tangents`, `-cbore`, `-form-outlines`,
@@ -54,10 +55,13 @@ pub struct FlatExportDialog {
 const WIDTH: f32 = 540.0;
 const FIELD_H: f32 = 30.0;
 
-/// The versions offered: every one the DXF writer writes (2000 to 2018; R12's older format
-/// isn't written), newest first, with 2000 the default as Onshape's.
-fn versions() -> Vec<DxfVersion> {
-    DxfVersion::WRITTEN.into_iter().rev().collect()
+/// The Version list as Onshape's (lesson 15, t0040.3), oldest first: Release 11-12, 13 and 14
+/// (shown disabled: the DXF writer writes 2000 and later only), then every version it writes,
+/// 2000 (the default) to 2018.
+fn versions() -> Vec<(&'static str, Option<DxfVersion>)> {
+    let mut v: Vec<(&'static str, Option<DxfVersion>)> = vec![("Release 11-12", None), ("Release 13", None), ("Release 14", None)];
+    v.extend(DxfVersion::WRITTEN.into_iter().map(|d| (d.year(), Some(d))));
+    v
 }
 
 /// The checkboxes: name, label, default.
@@ -145,14 +149,8 @@ pub fn open(world: &mut World, part: PartId) {
                 let t = &tb;
                 let full = || Val::Percent(100.0);
                 b.spawn(row("flat-export-name-row")).with_children(|g| {
-                    g.spawn(Node { align_items: AlignItems::Baseline, column_gap: Val::Px(6.0), ..default() }).with_children(|l| {
-                        label(l, t, "File name");
-                        l.spawn((
-                            Name::new("flat-export-rules"),
-                            t.text("View export rules", t.font_sm, FontWeight::NORMAL, Color::srgb_u8(0x8a, 0xa4, 0xc8)),
-                            Tooltip::new("cadrs has no export rules: the file name is yours to set"),
-                        ));
-                    });
+                    // (Onshape's "View export rules" link isn't shown: cadrs has no export rules.)
+                    label(g, t, "File name");
                     g.spawn(TextInput::new("flat-export-name").value(base).select_all_on_focus().autofocus().width(full()).height(FIELD_H).build(t));
                 });
                 b.spawn(row("flat-export-format-row")).with_children(|g| {
@@ -165,12 +163,12 @@ pub fn open(world: &mut World, part: PartId) {
                 });
                 b.spawn(row("flat-export-version-row")).with_children(|g| {
                     label(g, t, "Version");
-                    let mut s = Select::new("flat-export-version").bordered().width(full());
+                    let mut s = Select::new("flat-export-version").bordered().width(full()).mark_selected();
                     let all = versions();
-                    for v in &all {
-                        s = s.option(v.year(), true);
+                    for (label, v) in &all {
+                        s = s.option(*label, v.is_some());
                     }
-                    let default = all.iter().position(|v| *v == DxfVersion::R2000).unwrap_or(0);
+                    let default = all.iter().position(|(_, v)| *v == Some(DxfVersion::R2000)).unwrap_or(0);
                     g.spawn(s.selected(default).build(t));
                 });
                 b.spawn(row("flat-export-scope-row")).with_children(|g| {
@@ -293,7 +291,7 @@ fn start_export(world: &mut World) {
     let folder = field(world, "flat-export-folder-field").trim().to_string();
     let dwg = select(world, "flat-export-format") == 1;
     let all = versions();
-    let version = all[select(world, "flat-export-version").min(all.len() - 1)];
+    let version = all[select(world, "flat-export-version").min(all.len() - 1)].1.unwrap_or(DxfVersion::R2000);
     let scope = FlatScope::ALL[select(world, "flat-export-scope").min(2)];
     let separate = checked(world, "flat-export-separate") && scope != FlatScope::Single;
     let o = FlatExportOptions {

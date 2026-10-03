@@ -283,48 +283,112 @@ impl Plugin for FlatUiPlugin {
     }
 }
 
+/// What a flat sketch's session changed, to put back when it ends.
+#[derive(Debug, Clone, Copy)]
+struct FlatSession {
+    sketch: FeatureId,
+    show_constraints: bool,
+    panel: crate::appearance::SidePanel,
+    /// When the user last tried to close the panel (the note shows a few seconds).
+    note_since: Option<f32>,
+}
+
+/// The note in the flat view saying it stays open.
+#[derive(Component)]
+struct FlatSketchNote;
+
+/// How long the note shows (s).
+const NOTE_SECONDS: f32 = 4.0;
+
 /// While a sketch on the flat is edited, the flat view stays open on its model (closing the
-/// panel would leave the sketch nowhere to draw: it isn't shown in 3D); the panel toggle says
-/// so. Its constraint glyphs show on hover only, as Onshape's flat sketch starts (lesson t0052:
-/// Show constraints off); the setting is put back when the sketch closes.
+/// panel would leave the sketch nowhere to draw: it isn't shown in 3D). A try to close it opens
+/// it again with a short note in the flat view; when the sketch ends the panel goes back to how
+/// it was. Its constraint glyphs show on hover only, as Onshape's flat sketch starts (lesson
+/// t0052: Show constraints off); the setting is put back too.
 #[allow(clippy::too_many_arguments)]
 fn keep_flat_view(
     session: Option<Res<crate::sketch::SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
     kind: Res<crate::viewport::ActiveKind>,
+    time: Res<Time>,
     mut open: ResMut<crate::appearance::SidePanel>,
     mut table: ResMut<crate::sheetmetal_table::SmTable>,
     mut settings: ResMut<crate::sketch::SketchViewSettings>,
     theme: Res<Theme>,
-    mut memo: Local<Option<(FeatureId, bool)>>,
+    mut memo: Local<Option<FlatSession>>,
+    q_note: Query<(Entity, &ChildOf), With<FlatSketchNote>>,
     mut commands: Commands,
 ) {
+    use crate::appearance::SidePanel;
     let target = session.as_ref().and_then(|s| {
         let features = doc.as_ref()?.active_element()?.features();
         sketch_target(features, s.feature).map(|t| (s.feature, t))
     });
     let Some((sketch, (model, _))) = target.filter(|_| *kind == crate::viewport::ActiveKind::PartStudio) else {
-        if let Some((_, was)) = memo.take()
-            && settings.show_constraints != was
-        {
-            settings.show_constraints = was;
+        if let Some(m) = memo.take() {
+            if settings.show_constraints != m.show_constraints {
+                settings.show_constraints = m.show_constraints;
+            }
+            // The panel as it was before the sketch (unless another one was opened since).
+            if *open == SidePanel::SheetMetal && m.panel != SidePanel::SheetMetal {
+                *open = m.panel;
+            }
+        }
+        for (e, _) in &q_note {
+            commands.entity(e).try_despawn();
         }
         return;
     };
-    if memo.is_none_or(|(f, _)| f != sketch) {
-        let was = memo.map_or(settings.show_constraints, |(_, w)| w);
-        *memo = Some((sketch, was));
+    let now = time.elapsed_secs();
+    if memo.is_none_or(|m| m.sketch != sketch) {
+        // A new (or reopened) flat sketch: the flat view opens without a word.
+        let was = memo.map_or(settings.show_constraints, |m| m.show_constraints);
+        let panel = memo.map_or(*open, |m| m.panel);
+        *memo = Some(FlatSession { sketch, show_constraints: was, panel, note_since: None });
         settings.show_constraints = false;
-    }
-    if *open != crate::appearance::SidePanel::SheetMetal {
-        let closing = *open == crate::appearance::SidePanel::None;
-        *open = crate::appearance::SidePanel::SheetMetal;
-        if closing {
-            cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::info("The flat view stays open while a sketch on the flat pattern is edited").name("flat-sketch-panel-toast"));
+        if *open != SidePanel::SheetMetal {
+            *open = SidePanel::SheetMetal;
         }
+    }
+    let Some(m) = memo.as_mut() else { return };
+    if *open != SidePanel::SheetMetal {
+        // The user closed it (or opened another panel): back, with the note.
+        *open = SidePanel::SheetMetal;
+        m.note_since = Some(now);
     }
     if table.context != Some(model) {
         table.context = Some(model);
+    }
+    // The note: in the flat view's corner, clear of the sketch dialog.
+    let shown = m.note_since.is_some_and(|t| now - t < NOTE_SECONDS);
+    let body = table.body.map(|(e, _)| e);
+    for (e, parent) in &q_note {
+        if !shown || Some(parent.parent()) != body {
+            commands.entity(e).try_despawn();
+        }
+    }
+    if shown
+        && let Some(body) = body
+        && !q_note.iter().any(|(_, p)| p.parent() == body)
+    {
+        let note = commands
+            .spawn((
+                Name::new("flat-sketch-panel-note"),
+                FlatSketchNote,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(8.0),
+                    bottom: Val::Px(8.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.92)),
+                Pickable::IGNORE,
+                children![(theme.text("The flat view stays open while a sketch on the flat pattern is edited", 11.5, bevy::text::FontWeight::NORMAL, theme.foreground), Pickable::IGNORE)],
+            ))
+            .id();
+        commands.entity(body).add_child(note);
     }
 }
 

@@ -131,6 +131,10 @@ struct SelectValue(Entity);
 #[derive(Component, Debug, Clone, Copy)]
 struct SelectSide(bevy::ui_widgets::popover::PopoverSide);
 
+/// Whether the open list marks the current option (highlighted, with a check).
+#[derive(Component, Debug, Clone, Copy)]
+struct SelectMarksCurrent(bool);
+
 /// Builder for a dropdown select.
 pub struct Select {
     name: Cow<'static, str>,
@@ -139,6 +143,7 @@ pub struct Select {
     width: Val,
     side: bevy::ui_widgets::popover::PopoverSide,
     bordered: bool,
+    mark_selected: bool,
 }
 
 impl Select {
@@ -150,7 +155,15 @@ impl Select {
             width: Val::Auto,
             side: bevy::ui_widgets::popover::PopoverSide::Bottom,
             bordered: false,
+            mark_selected: false,
         }
+    }
+
+    /// The open list marks the current option (highlighted, with a check), as Onshape's export
+    /// dialogs' lists do.
+    pub fn mark_selected(mut self) -> Self {
+        self.mark_selected = true;
+        self
     }
 
     /// A boxed select (a 1 px grey border all round, as the Material dialog's dropdowns,
@@ -209,6 +222,7 @@ impl Select {
         (
             Name::new(self.name.into_owned()),
             SelectSide(self.side),
+            SelectMarksCurrent(self.mark_selected),
             SelectState {
                 options: self.options,
                 selected: self.selected,
@@ -268,13 +282,14 @@ impl Select {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn on_select_activate(
     a: On<Activate>,
-    q: Query<(&SelectState, &ComputedNode, &Name, Option<&SelectSide>)>,
+    q: Query<(&SelectState, &ComputedNode, &Name, Option<&SelectSide>, Option<&SelectMarksCurrent>)>,
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
-    let Ok((state, node, name, side)) = q.get(a.entity) else {
+    let Ok((state, node, name, side, marks)) = q.get(a.entity) else {
         return;
     };
     let width = node.size().x * node.inverse_scale_factor();
@@ -286,7 +301,7 @@ fn on_select_activate(
         menu = menu.side(side.0);
     }
     for (i, (label, enabled)) in state.options.iter().enumerate() {
-        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled));
+        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled).checked(marks.is_some_and(|m| m.0) && i == state.selected));
     }
     open_menu(&mut commands, a.entity, menu.build(&theme));
 }

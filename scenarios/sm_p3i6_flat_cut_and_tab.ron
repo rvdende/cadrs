@@ -4,7 +4,7 @@
 // New sketch: the sketch is drawn in the flat view (01), with the flat's bend lines to work
 // against. The lesson's slot, exactly 6.0 × 0.5 in on the flat, its left end 0.75 in from Bend A
 // (02, dimensioned in the flat view). Closing the panel while sketching leaves it open, with a
-// note (02b). Accepted; the slot's region picked in the flat view and
+// short note in the flat view (02b). Accepted; the slot's region picked in the flat view and
 // Extrude (Shift+E) opens the abbreviated Extrude, Remove chosen (all on material), the region
 // orange in the flat view and wrapped onto the folded walls in 3D (03); accepted, the slot is cut
 // at its exact flat size, wrapped round both bends (04). A second sketch on the flat: a tab over
@@ -103,8 +103,6 @@ Scenario(
         MoveWorld(110, -20),
         Wait(3),
         Screenshot("02b-panel-stays-open-while-sketching"),
-        Click(ui("toast-close")),
-        Wait(10),
         Click(ui("sketch-dialog-accept")),
         Wait(30),
         // The slot's region, picked in the flat view.

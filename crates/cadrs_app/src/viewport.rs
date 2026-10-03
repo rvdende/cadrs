@@ -345,8 +345,15 @@ pub fn plane_pick(p: PlaneRef) -> Option<Pick> {
     }
 }
 
-/// How a field names a plane: "Top plane", or a Plane feature's name ("Lower Plane").
+/// How a field names a plane: "Top plane", a Plane feature's name ("Lower Plane"), or a sheet
+/// metal flat pattern's "Face of Sheet metal model 1" (P3I.6, lesson t0052).
 pub fn plane_label(features: &[cadrs_core::Feature], p: PlaneRef) -> String {
+    if let PlaneRef::Feature(f) = p
+        && let Some((model, _)) = cadrs_core::sheetmetal_flat::flat_target(features, f.feature)
+    {
+        let name = features.iter().find(|x| x.id == model).map_or("Sheet metal model", |x| x.name.as_str());
+        return format!("Face of {name}");
+    }
     match p {
         PlaneRef::Feature(f) => features
             .iter()

@@ -171,6 +171,10 @@ pub fn open(world: &mut World) {
     }
     let mut q_area = world.query_filtered::<Entity, With<crate::viewport::ViewportArea>>();
     let Some(area) = q_area.iter(world).next() else { return };
+    // Near the view's full height, the list taking what the rest leaves (`step-03.png`: Units
+    // and Import… at the bottom).
+    let view_h = world.resource::<crate::viewport::ViewportRect>().0.height();
+    let list_h = (view_h - PANEL_AT.y - PANEL_BOTTOM - OTHER_ROWS).max(200.0);
     let theme = world.resource::<Theme>().clone();
     let tb = theme.clone();
     let mut commands = world.commands();
@@ -190,7 +194,7 @@ pub fn open(world: &mut World) {
                 b.spawn(TextInput::new("sketch-dxf-search").placeholder("Search DXF or DWG files").width(Val::Percent(100.0)).height(26.0).build(t));
                 b.spawn((
                     Name::new("sketch-dxf-list"),
-                    Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), margin: UiRect::vertical(Val::Px(6.0)), min_height: Val::Px(240.0), max_height: Val::Px(320.0), overflow: Overflow::scroll_y(), ..default() },
+                    Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), margin: UiRect::vertical(Val::Px(6.0)), height: Val::Px(list_h), overflow: Overflow::scroll_y(), ..default() },
                 ))
                 .with_children(|l| {
                     if thumbs.is_empty() {
@@ -235,6 +239,10 @@ pub fn open(world: &mut World) {
 
 /// Where the panel's top-left corner goes in the view (px).
 const PANEL_AT: Vec2 = Vec2::new(236.0, 86.0);
+
+/// The room left under the panel, and the height of everything in it but the file list (px).
+const PANEL_BOTTOM: f32 = 30.0;
+const OTHER_ROWS: f32 = 250.0;
 
 fn close_panels(world: &mut World) {
     let mut q = world.query_filtered::<Entity, With<SketchDxfDialog>>();

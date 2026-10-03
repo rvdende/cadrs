@@ -3,7 +3,8 @@
 // DWG files with their thumbnails, Units Millimeter, Use file origin position); a click on
 // flat_pattern_e1.dxf (the stand-in tray's flat pattern, our own export) inserts its outline, cut-outs
 // and bend lines into Sketch 1, closing 7 sheet regions. Accepted, then Sheet metal model ›
-// Thicken of the 7 regions, 1 mm: a flat sheet with the cut-outs (step 5).
+// Thicken of the 7 regions, 1 mm, with step 5's Minimal gap 0.025, Corner relief Closed and Bend
+// relief Tear: a flat sheet with the cut-outs (step 5).
 Scenario(
     start: Some("document"),
     steps: [
@@ -49,6 +50,21 @@ Scenario(
         Wait(3),
         Click(xyz(-6, 60, 0)),
         Wait(40),
+        // Step 5's relief: Minimal gap 0.025 mm, Corner relief Closed, Bend relief Tear.
+        Click(ui("sm-minimal-gap-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("0.025"),
+        Key("Tab"),
+        Wait(10),
+        Click(ui("sm-corner-relief-type")),
+        Wait(5),
+        Click(ui("sm-corner-relief-type-option-4")),
+        Wait(20),
+        Click(ui("sm-bend-relief-type")),
+        Wait(5),
+        Click(ui("sm-bend-relief-type-option-2")),
+        Wait(30),
         Key("Shift+7"),
         Wait(30),
         Key("F"),

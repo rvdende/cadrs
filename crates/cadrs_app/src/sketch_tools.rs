@@ -138,14 +138,17 @@ impl ScreenMap {
 
     /// The sketch point under a screen position, or `None` when the plane is seen edge-on.
     pub fn to_sketch(&self, s: Vec2) -> Option<SVec2> {
-        let det = self.x.perp_dot(self.y);
-        if det.abs() < 1e-3 * self.x.length() * self.y.length() {
+        // In f64: an f32 solve put clicked points a few 1e-6 mm off (30.0000038 in a DXF).
+        let v = |p: Vec2| (p.x as f64, p.y as f64);
+        let ((xx, xy), (yx, yy)) = (v(self.x), v(self.y));
+        let det = xx * yy - xy * yx;
+        if det.abs() < 1e-3 * (xx.hypot(xy) * yx.hypot(yy)) {
             return None;
         }
-        let d = s - self.origin;
-        let a = d.perp_dot(self.y) / det;
-        let b = self.x.perp_dot(d) / det;
-        Some(SVec2::new(a as f64, b as f64))
+        let (dx, dy) = (s.x as f64 - self.origin.x as f64, s.y as f64 - self.origin.y as f64);
+        let a = (dx * yy - dy * yx) / det;
+        let b = (xx * dy - xy * dx) / det;
+        Some(SVec2::new(a, b))
     }
 
     /// Screen pixels per sketch millimetre (along the plane's X).

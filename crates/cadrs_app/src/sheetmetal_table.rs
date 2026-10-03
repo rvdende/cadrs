@@ -1732,12 +1732,9 @@ pub fn flat_display(t: &SmTable, model: FeatureId, part: usize) -> Option<FlatDi
     Some(FlatDisplay { body, rect, view: t.view, frame })
 }
 
-/// Shows `model`'s flat in the panel (opening it), seen from the top and fitted (P3I.6: a
-/// sketch on the flat is drawn there).
+/// Shows `model`'s flat in the panel, seen from the top and fitted (P3I.6: a sketch on the
+/// flat is drawn there; `crate::flat_ui` opens the panel for it).
 pub fn show_flat(world: &mut World, model: FeatureId) {
-    if *world.resource::<SidePanel>() != SidePanel::SheetMetal {
-        *world.resource_mut::<SidePanel>() = SidePanel::SheetMetal;
-    }
     let mut t = world.resource_mut::<SmTable>();
     if t.context != Some(model) {
         t.context = Some(model);
