@@ -122,6 +122,12 @@ impl Layer {
         }
     }
 
+    /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
+    /// drawings' files stay as they were).
+    pub fn is_flat(self) -> bool {
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch)
+    }
+
     /// The layer's AutoCAD colour index (7: black/white).
     pub fn aci(self) -> i32 {
         match self {
