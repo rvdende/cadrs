@@ -57,10 +57,12 @@ pub enum Layer {
     BendDown,
     BendTangent,
     FlatSketch,
+    /// The outer diameters of counterbored and countersunk holes in a flat pattern.
+    FlatCbore,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 21] = [
+    pub const ALL: [Layer; 22] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -82,6 +84,7 @@ impl Layer {
         Layer::BendDown,
         Layer::BendTangent,
         Layer::FlatSketch,
+        Layer::FlatCbore,
     ];
 
     pub fn name(self) -> &'static str {
@@ -107,6 +110,7 @@ impl Layer {
             Layer::BendDown => "BEND_DOWN",
             Layer::BendTangent => "BEND_TANGENT",
             Layer::FlatSketch => "FLAT_SKETCH",
+            Layer::FlatCbore => "CBORE_CSINK",
         }
     }
 
@@ -123,9 +127,9 @@ impl Layer {
     }
 
     /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
-    /// drawings' files stay as they were).
+    /// drawings' files stay as they were; a flat pattern's file lists only the layers it uses).
     pub fn is_flat(self) -> bool {
-        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch)
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch | Layer::FlatCbore)
     }
 
     /// The layer's AutoCAD colour index (7: black/white).
@@ -137,6 +141,7 @@ impl Layer {
             Layer::BendDown => 1,
             Layer::BendTangent => 8,
             Layer::FlatSketch => 4,
+            Layer::FlatCbore => 2,
             _ => 7,
         }
     }

@@ -76,6 +76,7 @@ impl Plugin for SketchToolsPlugin {
             .init_resource::<SketchSelection>()
             .init_resource::<QuickDimFlow>()
             .init_resource::<ExternalSnap>()
+            .init_resource::<SketchArea>()
             .add_systems(
                 Update,
                 (
@@ -168,16 +169,65 @@ impl SketchScreen {
     }
 }
 
+/// Where the sketch being edited is drawn and edited: the 3D viewport, or (P3I.6, SM14) the
+/// flat view for a sketch on a flat pattern while the panel shows that flat.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct SketchArea {
+    pub flat: Option<crate::sheetmetal_table::FlatDisplay>,
+}
+
+impl SketchArea {
+    /// The node the sketch's labels, glyphs and boxes go in (the viewport area's otherwise),
+    /// and its rect on screen.
+    pub fn host(&self, viewport: Option<Entity>, rect: &ViewportRect) -> (Option<Entity>, Rect) {
+        match self.flat {
+            Some(f) => (Some(f.body), f.rect),
+            None => (viewport, rect.0),
+        }
+    }
+
+    /// The rect the sketch is drawn in.
+    pub fn rect(&self, rect: &ViewportRect) -> ViewportRect {
+        self.flat.map_or(*rect, |f| ViewportRect(f.rect))
+    }
+}
+
+/// The flat view's node while a sketch on the flat is edited there (`Entity::to_bits`, 0 for
+/// none): [`over_viewport`] reads it, so the tools take their clicks from that view.
+static FLAT_SKETCH_AREA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The flat view's display of the flat-pattern sketch being edited, if that is one and the
+/// panel shows its flat.
+fn flat_area(session: Option<&SketchSession>, doc: Option<&ActiveDocument>, table: &crate::sheetmetal_table::SmTable) -> Option<crate::sheetmetal_table::FlatDisplay> {
+    let s = session?;
+    let features = doc?.active_element()?.features();
+    let (model, part) = cadrs_core::sheetmetal_flat::sketch_target(features, s.feature)?;
+    crate::sheetmetal_table::flat_display(table, model, part)
+}
+
 fn update_sketch_screen(
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
     view: Res<ViewportView>,
     rect: Res<ViewportRect>,
+    table: Res<crate::sheetmetal_table::SmTable>,
+    mut area: ResMut<SketchArea>,
     mut screen: ResMut<SketchScreen>,
 ) {
     let plane = session_plane(session.as_deref(), doc.as_deref());
+    // A sketch on the flat pattern: mapped through the flat view (its plane there is the
+    // flat's coordinates moved with the part, on the sheet's top).
+    let flat = flat_area(session.as_deref(), doc.as_deref(), &table);
+    if area.flat != flat {
+        area.flat = flat;
+    }
+    FLAT_SKETCH_AREA.store(flat.map_or(0, |f| f.body.to_bits()), std::sync::atomic::Ordering::Relaxed);
+    let active = match (plane, flat) {
+        (Some(PlaneRef::Feature(fp)), Some(f)) => Some(ScreenMap::new(PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(fp.feature, f.frame)), &f.view, &ViewportRect(f.rect))),
+        (p, _) => p.map(|p| ScreenMap::new(p, &view.view, &rect)),
+    };
     let want = SketchScreen {
-        active: plane.map(|p| ScreenMap::new(p, &view.view, &rect)),
+        active,
         fallback: Some(ScreenMap::new(PlaneRef::Top, &view.view, &rect)),
     };
     if screen.active != want.active || screen.fallback != want.fallback {
@@ -215,7 +265,7 @@ impl ExternalSnap {
     }
 }
 
-fn sync_external_snap(session: Option<Res<SketchSession>>, doc: Option<Res<ActiveDocument>>, mut snap: ResMut<ExternalSnap>) {
+fn sync_external_snap(session: Option<Res<SketchSession>>, doc: Option<Res<ActiveDocument>>, cache: Res<crate::parts::PartCache>, mut snap: ResMut<ExternalSnap>) {
     let Some(sketch) = session_sketch(session.as_deref(), doc.as_deref()) else {
         if snap.made.is_some() {
             snap.made = None;
@@ -226,7 +276,18 @@ fn sync_external_snap(session: Option<Res<SketchSession>>, doc: Option<Res<Activ
     if snap.made.as_ref().is_some_and(|(f, base, _)| *f == feature && base == sketch) {
         return;
     }
-    snap.made = Some((feature, sketch.clone(), cadrs_sketch::external::External::of(sketch)));
+    // A sketch on the flat pattern snaps to the flat's outline, cut-outs and bend lines and
+    // uses the ones it touches (P3I.6, SM14), as a sketch on a face does its edges.
+    let flat = doc.as_deref().and_then(|d| crate::flat_ui::flat_imprints(d, &cache, feature));
+    let ext = match flat {
+        Some(imprint) => {
+            let mut with = sketch.clone();
+            with.imprint = imprint;
+            cadrs_sketch::external::External::of(&with)
+        }
+        None => cadrs_sketch::external::External::of(sketch),
+    };
+    snap.made = Some((feature, sketch.clone(), ext));
 }
 
 pub(crate) fn session_sketch<'a>(
@@ -592,6 +653,11 @@ pub(crate) fn over_viewport(hover: &HoverMap, q_area: &Query<Entity, With<Viewpo
     let Some(hits) = hover.get(&PointerId::Mouse) else {
         return false;
     };
+    // A sketch on the flat pattern is edited in the flat view (P3I.6), not the 3D one.
+    let flat = FLAT_SKETCH_AREA.load(std::sync::atomic::Ordering::Relaxed);
+    if flat != 0 {
+        return Entity::try_from_bits(flat).is_some_and(|e| hits.contains_key(&e));
+    }
     q_area.iter().any(|e| hits.contains_key(&e))
 }
 
@@ -2509,7 +2575,8 @@ fn open_next(world: &mut World) {
     let units = world.resource::<crate::WorkspaceUnits>().0;
     let passive = target.passive();
     let mut q = world.query_filtered::<Entity, With<ViewportArea>>();
-    let Some(area) = q.iter(world).next() else {
+    let viewport = q.iter(world).next();
+    let Some(area) = world.resource::<SketchArea>().host(viewport, world.resource::<ViewportRect>()).0 else {
         return;
     };
     let entity = world
@@ -2676,13 +2743,14 @@ fn rect_bounds(s: &Sketch, r: RectRef) -> Option<(SVec2, SVec2)> {
 }
 
 /// Positions the open box (it is hidden for its first frame, until its size is known).
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_quick_dim(
     mut flow: ResMut<QuickDimFlow>,
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
     screen: Res<SketchScreen>,
-    rect: Res<ViewportRect>,
+    viewport_rect: Res<ViewportRect>,
+    sketch_area: Res<SketchArea>,
     mut q: Query<(&mut Node, &ComputedNode, &mut Visibility), With<SketchQuickDim>>,
     mut commands: Commands,
 ) {
@@ -2708,6 +2776,7 @@ fn sync_quick_dim(
     if size.x <= 0.0 {
         return;
     }
+    let rect = sketch_area.rect(&viewport_rect);
     let local = center - rect.0.min - size / 2.0;
     let (left, top) = (Val::Px(local.x.round()), Val::Px(local.y.round()));
     if node.left != left || node.top != top {

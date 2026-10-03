@@ -6,15 +6,16 @@
 //!
 //! - `OUTLINE`: the outer boundary of the flat; `CUTOUTS`: its holes (round ones as CIRCLE);
 //! - `TEAR_SLITS`: Tear reliefs' slits (cut lines with no width);
-//! - `BEND_UP` / `BEND_DOWN`: the bend centrelines over material, by direction (phantom and
-//!   hidden linetypes, green and red) — *Include bend centerlines*;
+//! - `BEND_UP` / `BEND_DOWN`: the bend centrelines over material, by direction (both in the
+//!   CENTER linetype, green and red) — *Include bend centerlines*;
 //! - `BEND_TANGENT`: the bend tangent lines — *Include bend tangent lines*;
-//! - `FLAT_SKETCH`: the visible sketches on the flat pattern — *Include visible sketches*.
+//! - `CBORE_CSINK`: the outer diameters of counterbored and countersunk holes in the part's
+//!   walls (circles at the holes' centres) — *Include counterbore and countersink lines*;
+//! - `FLAT_SKETCH`: the visible sketches on the flat pattern — *Include visible sketches*; their
+//!   splines are SPLINE entities, or polylines with *Export splines as polylines*.
 //!
 //! *Set z-height to zero and normals to positive* holds always (the writer writes 2D entities
-//! with z 0 and the default +Z normal); *Export splines as polylines* only concerns sketch
-//! splines, which are written as polylines anyway. Counterbore/countersink lines and form
-//! features don't exist in cadrs yet (forms are P3I.9): their options are kept but add nothing.
+//! with z 0 and the default +Z normal). The file's layer table lists only the layers it uses.
 //!
 //! Several parts (scope *All flat pattern parts in the current model* or *in the Part Studio*)
 //! are laid out side by side in one file, [`GAP`] apart, or written as one file each.
@@ -24,7 +25,7 @@ use cadrs_sheetmetal::flat::FlatPart;
 use cadrs_sheetmetal::poly::{P2, Seg2};
 use cadrs_sketch::{PlaneRef, Sketch};
 
-use crate::document::Feature;
+use crate::document::{Feature, PartProps};
 use crate::ids::{FeatureId, PartId};
 use crate::rebuild::Build;
 use crate::sheetmetal_flat::flat_target;
@@ -236,6 +237,37 @@ fn line(s: &Seg2) -> Shape {
 /// One flat-pattern part as a page, in the flat's coordinates, with `sketches` (on its flat
 /// pattern plane, so in the same coordinates) when the options include them.
 pub fn flat_page(part: &FlatPart, sketches: &[&Sketch], o: &FlatExportOptions, name: &str) -> Page {
+    flat_page_with(part, sketches, &[], o, name)
+}
+
+/// A sketch's spline as a DXF SPLINE: its cubic Bézier spans as one clamped cubic B-spline
+/// (each inner joint a triple knot), its points the fit points.
+fn spline_shape(sketch: &Sketch, id: cadrs_sketch::CurveId) -> Option<Shape> {
+    let spans = sketch.spline_spans(id)?;
+    if spans.is_empty() {
+        return None;
+    }
+    let n = spans.len();
+    let mut control = vec![[spans[0][0].x, spans[0][0].y]];
+    for b in &spans {
+        control.extend(b[1..].iter().map(|q| [q.x, q.y]));
+    }
+    let mut knots = vec![0.0; 4];
+    for i in 1..n {
+        knots.extend([i as f64; 3]);
+    }
+    knots.extend([n as f64; 4]);
+    let fit = sketch.splines.get(id)?.points.iter().map(|p| {
+        let q = sketch.pos(*p);
+        [q.x, q.y]
+    });
+    let points = cadrs_sketch::spline::tessellate(&spans, 16).into_iter().map(|q| [q.x, q.y]).collect();
+    Some(Shape::Spline { knots, control, fit: fit.collect(), points })
+}
+
+/// [`flat_page`] with the outer circles (centre, radius) of counterbored and countersunk
+/// holes, written when the options include them ([`cbore_marks`]).
+pub fn flat_page_with(part: &FlatPart, sketches: &[&Sketch], cbores: &[(P2, f64)], o: &FlatExportOptions, name: &str) -> Page {
     let mut page = Page { name: name.to_string(), ..Page::default() };
     let mut push = |s: Shape, l: Layer| page.items.push(Item::Stroke(s, pen(l)));
     for poly in &part.outline {
@@ -263,11 +295,36 @@ pub fn flat_page(part: &FlatPart, sketches: &[&Sketch], o: &FlatExportOptions, n
             }
         }
     }
+    if o.cbore_lines {
+        for (c, r) in cbores {
+            push(Shape::Circle { center: [c.x, c.y], radius: *r }, Layer::FlatCbore);
+        }
+    }
     if o.sketches {
         for sk in sketches {
-            let sp = crate::dxf_export::sketch_page(sk, name);
+            // Splines as SPLINE entities unless *Export splines as polylines* (the sketch page
+            // writes them as polylines).
+            let splines: Vec<cadrs_sketch::CurveId> = if o.splines_as_polylines {
+                Vec::new()
+            } else {
+                sk.curves.iter().filter(|(_, c)| !c.construction && matches!(c.kind, cadrs_sketch::CurveKind::Spline { .. })).map(|(k, _)| k).collect()
+            };
+            let sp = if splines.is_empty() {
+                crate::dxf_export::sketch_page(sk, name)
+            } else {
+                let mut rest = (*sk).clone();
+                for k in &splines {
+                    rest.curves.remove(*k);
+                }
+                crate::dxf_export::sketch_page(&rest, name)
+            };
             for it in sp.items {
                 if let Item::Stroke(s, _) = it {
+                    push(s, Layer::FlatSketch);
+                }
+            }
+            for k in splines {
+                if let Some(s) = spline_shape(sk, k) {
                     push(s, Layer::FlatSketch);
                 }
             }
@@ -329,7 +386,20 @@ pub struct FlatPartRef {
     pub name: String,
 }
 
-/// Every flat-pattern part of a build, in list order.
+/// Every flat-pattern part of a build, in list order, named as the Parts list names them
+/// (`props`: the Part Studio's renames).
+pub fn flat_parts_named(build: &Build, props: &[PartProps]) -> Vec<FlatPartRef> {
+    let mut out = flat_parts(build);
+    for r in &mut out {
+        if let Some(n) = props.iter().find(|p| p.part == r.part).and_then(|p| p.name.clone()) {
+            r.name = n;
+        }
+    }
+    out
+}
+
+/// Every flat-pattern part of a build, in list order (with the parts' own names, "Part N"; see
+/// [`flat_parts_named`] for renamed parts).
 pub fn flat_parts(build: &Build) -> Vec<FlatPartRef> {
     let mut out = Vec::new();
     for ctx in &build.sheet_metal {
@@ -342,9 +412,10 @@ pub fn flat_parts(build: &Build) -> Vec<FlatPartRef> {
     out
 }
 
-/// The parts a scope exports, starting from `part` (a flat-pattern part of the build).
-pub fn scope_parts(build: &Build, part: PartId, scope: FlatScope) -> Vec<FlatPartRef> {
-    let all = flat_parts(build);
+/// The parts a scope exports, starting from `part` (a flat-pattern part of the build), named
+/// as the Parts list names them.
+pub fn scope_parts(build: &Build, props: &[PartProps], part: PartId, scope: FlatScope) -> Vec<FlatPartRef> {
+    let all = flat_parts_named(build, props);
     let Some(me) = all.iter().find(|r| r.part == part).cloned() else { return Vec::new() };
     match scope {
         FlatScope::Single => vec![me],
@@ -367,7 +438,67 @@ pub fn part_page(build: &Build, features: &[Feature], r: &FlatPartRef, o: &FlatE
             (flat_target(features, fp.feature) == Some((r.model, r.index))).then_some(&sk.geometry)
         })
         .collect();
-    Some(flat_page(flat, &sketches, o, &r.name))
+    let cbores = if o.cbore_lines { cbore_marks(build, features, r) } else { Vec::new() };
+    Some(flat_page_with(flat, &sketches, &cbores, o, &r.name))
+}
+
+/// The outer circles of counterbored and countersunk holes in a flat-pattern part's planar
+/// walls, in the flat's coordinates: the part's circular edges of a Hole feature's counterbore
+/// or countersink diameter that lie on a wall's face, square to it, laid out with the wall.
+pub fn cbore_marks(build: &Build, features: &[Feature], r: &FlatPartRef) -> Vec<(P2, f64)> {
+    use crate::hole::HoleStyle;
+    let radii: Vec<f64> = features
+        .iter()
+        .filter_map(|f| f.hole())
+        .filter_map(|h| match h.spec.style {
+            HoleStyle::Counterbore => Some(h.spec.cbore_diameter.value / 2.0),
+            HoleStyle::Countersink => Some(h.spec.csink_diameter.value / 2.0),
+            _ => None,
+        })
+        .filter(|r| *r > 0.0)
+        .collect();
+    let mut out: Vec<(P2, f64)> = Vec::new();
+    if radii.is_empty() {
+        return out;
+    }
+    let Some(ctx) = build.sheet_metal.iter().rev().find(|c| c.feature == r.model) else { return out };
+    let Some(flat) = ctx.flat.parts.get(r.index) else { return out };
+    let Some(part) = build.parts.iter().find(|p| p.id == r.part) else { return out };
+    let t = ctx.model.params.thickness;
+    for e in &part.solid.edges {
+        let Some(c) = e.circle.as_ref() else { continue };
+        if !radii.iter().any(|q| (q - c.radius).abs() <= 1e-6 * q.max(1.0)) {
+            continue;
+        }
+        let p = nalgebra::Point3::new(c.center[0], c.center[1], c.center[2]);
+        let axis = nalgebra::Vector3::new(c.normal[0], c.normal[1], c.normal[2]);
+        for w in &flat.walls {
+            let Some(wall) = ctx.model.wall(*w) else { continue };
+            let cadrs_sheetmetal::model::Surface::Planar { origin, u, v } = wall.surface else { continue };
+            let n = u.cross(&v);
+            if n.norm() < 1e-12 || axis.norm() < 1e-12 || n.normalize().cross(&axis.normalize()).norm() > 1e-6 {
+                continue;
+            }
+            let n = n.normalize();
+            let d = (p - origin).dot(&n);
+            // On the wall's definition face or the face a thickness away (either side).
+            if d.abs() > t + 1e-6 {
+                continue;
+            }
+            // Local 2D: origin + u·x + v·y (u, v square to each other).
+            let q = P2::new((p - origin).dot(&u) / u.norm_squared(), (p - origin).dot(&v) / v.norm_squared());
+            if !wall.outline.contains(q) {
+                continue;
+            }
+            let Some(m) = flat.placement(*w) else { continue };
+            let at = m.apply(q);
+            if !out.iter().any(|(o, rr)| (*o - at).norm() < 1e-6 && (rr - c.radius).abs() < 1e-9) {
+                out.push((at, c.radius));
+            }
+            break;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -28,6 +28,11 @@ use crate::scenario::{Scenario, Step, Target};
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct WorldToScreen(pub Option<Affine>);
 
+/// Maps the sheet metal flat view's flat millimetres to screen pixels for `flat(x, y)`
+/// targets. The app keeps it up to date; `None` while the flat view isn't shown.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct FlatToScreen(pub Option<Affine>);
+
 /// Maps 3D world millimetres to screen pixels for `xyz(x, y, z)` targets (the view is
 /// orthographic, so this is affine). The app keeps it up to date.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -125,6 +130,7 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
     }
     app.init_resource::<WorldToScreen>();
     app.init_resource::<SpaceToScreen>();
+    app.init_resource::<FlatToScreen>();
     app.insert_resource(Runner {
         name,
         out_dir,
@@ -276,7 +282,7 @@ fn drive(world: &mut World) {
 
 /// Whether the step has a target placed by the current view (`world()` or `xyz()`).
 fn uses_view(step: &Step) -> bool {
-    let view = |t: &Target| matches!(t, Target::World(..) | Target::Xyz(..));
+    let view = |t: &Target| matches!(t, Target::World(..) | Target::Xyz(..) | Target::Flat(..));
     match step {
         Step::Click(t)
         | Step::RightClick(t)
@@ -481,6 +487,10 @@ fn resolve(world: &mut World, target: &Target) -> Result<Vec2, String> {
             map.0
                 .map(|m| m.apply(Vec2::new(*x, *y)).round())
                 .ok_or_else(|| "world(..): no sketch plane mapping".to_string())
+        }
+        Target::Flat(x, y) => {
+            let map = world.get_resource::<FlatToScreen>().copied().unwrap_or_default();
+            map.0.map(|m| m.apply(Vec2::new(*x, *y)).round()).ok_or_else(|| "flat(..): the flat view isn't shown".to_string())
         }
         Target::Xyz(x, y, z) => {
             let map = world.get_resource::<SpaceToScreen>().copied().unwrap_or_default();

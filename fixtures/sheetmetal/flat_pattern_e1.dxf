@@ -73,7 +73,7 @@ $LWDISPLAY
   9
 $HANDSEED
   5
-6E
+60
   0
 ENDSEC
   0
@@ -385,7 +385,7 @@ LAYER
 100
 AcDbSymbolTable
  70
-18
+4
   0
 LAYER
   5
@@ -417,7 +417,7 @@ AcDbSymbolTableRecord
 100
 AcDbLayerTableRecord
   2
-BORDER
+OUTLINE
  70
 0
  62
@@ -437,286 +437,6 @@ AcDbSymbolTableRecord
 100
 AcDbLayerTableRecord
   2
-VISIBLE
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-28
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-HIDDEN
- 70
-0
- 62
-7
-  6
-HIDDEN
-370
--3
-  0
-LAYER
-  5
-29
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-TANGENT
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-2A
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-PHANTOM
- 70
-0
- 62
-7
-  6
-PHANTOM
-370
--3
-  0
-LAYER
-  5
-2B
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-VIEW_SKETCH
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-2C
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-ANNOTATION
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-2D
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-NOTES
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-2E
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-TABLES
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-2F
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-SHEET_SKETCH
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-30
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-IMPORT
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-31
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-SHADED
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-32
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-IMAGES
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-33
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-HATCH
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-34
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
-OUTLINE
- 70
-0
- 62
-7
-  6
-Continuous
-370
--3
-  0
-LAYER
-  5
-35
-330
-13
-100
-AcDbSymbolTableRecord
-100
-AcDbLayerTableRecord
-  2
 CUTOUTS
  70
 0
@@ -729,7 +449,7 @@ Continuous
   0
 LAYER
   5
-36
+28
 330
 13
 100
@@ -763,7 +483,7 @@ AcDbSymbolTable
   0
 STYLE
   5
-37
+29
 330
 14
 100
@@ -791,7 +511,7 @@ txt
   0
 STYLE
   5
-38
+2A
 330
 14
 100
@@ -861,7 +581,7 @@ AcDbSymbolTable
   0
 APPID
   5
-39
+2B
 330
 17
 100
@@ -891,7 +611,7 @@ AcDbDimStyleTable
   0
 DIMSTYLE
 105
-3A
+2C
 330
 18
 100
@@ -955,7 +675,7 @@ BLOCKS
   0
 BLOCK
   5
-3B
+2D
 330
 1A
 100
@@ -981,7 +701,7 @@ AcDbBlockBegin
   0
 ENDBLK
   5
-3C
+2E
 330
 1A
 100
@@ -993,7 +713,7 @@ AcDbBlockEnd
   0
 BLOCK
   5
-3D
+2F
 330
 1B
 100
@@ -1021,7 +741,7 @@ AcDbBlockBegin
   0
 ENDBLK
   5
-3E
+30
 330
 1B
 100
@@ -1041,7 +761,7 @@ ENTITIES
   0
 LINE
   5
-3F
+31
 330
 1A
 100
@@ -1067,7 +787,7 @@ AcDbLine
   0
 ARC
   5
-40
+32
 330
 1A
 100
@@ -1095,7 +815,7 @@ AcDbArc
   0
 LINE
   5
-41
+33
 330
 1A
 100
@@ -1121,7 +841,7 @@ AcDbLine
   0
 LINE
   5
-42
+34
 330
 1A
 100
@@ -1147,7 +867,7 @@ AcDbLine
   0
 LINE
   5
-43
+35
 330
 1A
 100
@@ -1173,7 +893,7 @@ AcDbLine
   0
 ARC
   5
-44
+36
 330
 1A
 100
@@ -1201,7 +921,7 @@ AcDbArc
   0
 LINE
   5
-45
+37
 330
 1A
 100
@@ -1227,7 +947,7 @@ AcDbLine
   0
 LINE
   5
-46
+38
 330
 1A
 100
@@ -1253,7 +973,7 @@ AcDbLine
   0
 LINE
   5
-47
+39
 330
 1A
 100
@@ -1279,7 +999,7 @@ AcDbLine
   0
 LINE
   5
-48
+3A
 330
 1A
 100
@@ -1305,7 +1025,7 @@ AcDbLine
   0
 LINE
   5
-49
+3B
 330
 1A
 100
@@ -1331,7 +1051,7 @@ AcDbLine
   0
 ARC
   5
-4A
+3C
 330
 1A
 100
@@ -1359,7 +1079,7 @@ AcDbArc
   0
 LINE
   5
-4B
+3D
 330
 1A
 100
@@ -1385,7 +1105,7 @@ AcDbLine
   0
 LINE
   5
-4C
+3E
 330
 1A
 100
@@ -1411,7 +1131,7 @@ AcDbLine
   0
 LINE
   5
-4D
+3F
 330
 1A
 100
@@ -1437,7 +1157,7 @@ AcDbLine
   0
 ARC
   5
-4E
+40
 330
 1A
 100
@@ -1465,7 +1185,7 @@ AcDbArc
   0
 LINE
   5
-4F
+41
 330
 1A
 100
@@ -1491,7 +1211,7 @@ AcDbLine
   0
 LINE
   5
-50
+42
 330
 1A
 100
@@ -1517,7 +1237,7 @@ AcDbLine
   0
 LINE
   5
-51
+43
 330
 1A
 100
@@ -1543,7 +1263,7 @@ AcDbLine
   0
 LINE
   5
-52
+44
 330
 1A
 100
@@ -1569,7 +1289,7 @@ AcDbLine
   0
 CIRCLE
   5
-53
+45
 330
 1A
 100
@@ -1591,7 +1311,7 @@ AcDbCircle
   0
 CIRCLE
   5
-54
+46
 330
 1A
 100
@@ -1613,7 +1333,7 @@ AcDbCircle
   0
 ARC
   5
-55
+47
 330
 1A
 100
@@ -1641,7 +1361,7 @@ AcDbArc
   0
 LINE
   5
-56
+48
 330
 1A
 100
@@ -1667,7 +1387,7 @@ AcDbLine
   0
 ARC
   5
-57
+49
 330
 1A
 100
@@ -1695,7 +1415,7 @@ AcDbArc
   0
 LINE
   5
-58
+4A
 330
 1A
 100
@@ -1721,7 +1441,7 @@ AcDbLine
   0
 CIRCLE
   5
-59
+4B
 330
 1A
 100
@@ -1743,7 +1463,7 @@ AcDbCircle
   0
 LINE
   5
-5A
+4C
 330
 1A
 100
@@ -1769,7 +1489,7 @@ AcDbLine
   0
 LINE
   5
-5B
+4D
 330
 1A
 100
@@ -1795,7 +1515,7 @@ AcDbLine
   0
 LINE
   5
-5C
+4E
 330
 1A
 100
@@ -1821,7 +1541,7 @@ AcDbLine
   0
 LINE
   5
-5D
+4F
 330
 1A
 100
@@ -1847,7 +1567,7 @@ AcDbLine
   0
 ARC
   5
-5E
+50
 330
 1A
 100
@@ -1875,7 +1595,7 @@ AcDbArc
   0
 LINE
   5
-5F
+51
 330
 1A
 100
@@ -1901,7 +1621,7 @@ AcDbLine
   0
 ARC
   5
-60
+52
 330
 1A
 100
@@ -1929,7 +1649,7 @@ AcDbArc
   0
 LINE
   5
-61
+53
 330
 1A
 100
@@ -1955,7 +1675,7 @@ AcDbLine
   0
 ARC
   5
-62
+54
 330
 1A
 100
@@ -1983,7 +1703,7 @@ AcDbArc
   0
 LINE
   5
-63
+55
 330
 1A
 100
@@ -2009,7 +1729,7 @@ AcDbLine
   0
 ARC
   5
-64
+56
 330
 1A
 100
@@ -2037,7 +1757,7 @@ AcDbArc
   0
 LINE
   5
-65
+57
 330
 1A
 100
@@ -2063,7 +1783,7 @@ AcDbLine
   0
 CIRCLE
   5
-66
+58
 330
 1A
 100
@@ -2085,7 +1805,7 @@ AcDbCircle
   0
 CIRCLE
   5
-67
+59
 330
 1A
 100
@@ -2107,7 +1827,7 @@ AcDbCircle
   0
 LINE
   5
-68
+5A
 330
 1A
 100
@@ -2135,7 +1855,7 @@ AcDbLine
   0
 LINE
   5
-69
+5B
 330
 1A
 100
@@ -2163,7 +1883,7 @@ AcDbLine
   0
 LINE
   5
-6A
+5C
 330
 1A
 100
@@ -2191,7 +1911,7 @@ AcDbLine
   0
 LINE
   5
-6B
+5D
 330
 1A
 100
@@ -2219,7 +1939,7 @@ AcDbLine
   0
 LINE
   5
-6C
+5E
 330
 1A
 100
@@ -2247,7 +1967,7 @@ AcDbLine
   0
 LINE
   5
-6D
+5F
 330
 1A
 100

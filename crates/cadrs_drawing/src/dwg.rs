@@ -109,6 +109,10 @@ pub fn dxf_to_dwg(conv: &Converter, dxf: &str, out: &Path, version: crate::dxf::
             let v = match version {
                 crate::dxf::DxfVersion::R2013 => "ACAD2013",
                 crate::dxf::DxfVersion::R2000 => "ACAD2000",
+                crate::dxf::DxfVersion::R2004 => "ACAD2004",
+                crate::dxf::DxfVersion::R2007 => "ACAD2007",
+                crate::dxf::DxfVersion::R2010 => "ACAD2010",
+                crate::dxf::DxfVersion::R2018 => "ACAD2018",
             };
             c.arg(&tmp).arg(&odir).arg(v).arg("DWG").arg("0").arg("1").arg("*.DXF");
             run(c).and_then(|_| {

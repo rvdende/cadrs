@@ -1981,8 +1981,14 @@ fn place_sketch_plane_label(
     >,
     mut commands: Commands,
 ) {
+    // Not for a sketch on a flat pattern: it is edited in the flat view (P3I.6).
     let current = session_plane(session.as_deref(), doc.as_deref())
-        .filter(|(_, p)| p.face().is_none());
+        .filter(|(_, p)| p.face().is_none())
+        .filter(|(s, _)| {
+            doc.as_ref()
+                .and_then(|d| d.active_element())
+                .is_none_or(|el| cadrs_core::sheetmetal_flat::sketch_target(el.features(), s.feature).is_none())
+        });
     let Some((s, plane)) = current else {
         for (e, ..) in &q {
             commands.entity(e).try_despawn();

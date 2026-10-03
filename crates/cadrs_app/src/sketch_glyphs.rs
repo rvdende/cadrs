@@ -1053,10 +1053,12 @@ fn glyph_visibility(rect: &ViewportRect, center: Vec2) -> Visibility {
 }
 
 /// Keeps one UI box per [`GlyphSpec`] and the snap square, placed inside the viewport area.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn sync_overlay(
     overlay: Res<SketchOverlay>,
-    rect: Res<ViewportRect>,
+    viewport_rect: Res<ViewportRect>,
+    sketch_area: Res<crate::sketch_tools::SketchArea>,
+    mut host_seen: Local<Option<Entity>>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q: Query<
         (
@@ -1078,7 +1080,21 @@ pub(crate) fn sync_overlay(
     >,
     mut commands: Commands,
 ) {
-    let Some(area) = q_area.iter().next() else {
+    // In the viewport area, or the flat view while a sketch on the flat is edited (P3I.6): a
+    // change of host starts the boxes again there.
+    let (host, r) = sketch_area.host(q_area.iter().next(), &viewport_rect);
+    let rect = ViewportRect(r);
+    if *host_seen != host {
+        for (e, ..) in &q {
+            commands.entity(e).try_despawn();
+        }
+        for (e, ..) in &q_square {
+            commands.entity(e).try_despawn();
+        }
+        *host_seen = host;
+        return;
+    }
+    let Some(area) = host else {
         return;
     };
     let origin = rect.0.min;

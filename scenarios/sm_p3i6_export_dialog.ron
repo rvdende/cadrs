@@ -1,9 +1,10 @@
 // P3I.6 (SM15): Export DXF/DWG of flat pattern. A sheet metal Extrude of an open U on Front
 // (a channel), then the Sheet metal model's context menu in the feature list: "Export DXF/DWG of
 // flat pattern…" opens Export as DXF/DWG as `help/feature-tools/sheetmetal-export-01-03.png`
-// lays it out (File name "<document> - Flat pattern of Part 1", Format, Version 2000, Scope,
-// Options, the eight checkboxes with Onshape's defaults). The scope of all parts shows
-// "Export each part as its own file". Export writes the DXF into target/exports.
+// lays it out ("?" in the header; File name "<document> - Flat pattern of <part>" with the part's
+// name as the Parts list has it: renamed "Sheet Metal Box" here; Format, Version 2000 of 2018 …
+// 2000, Scope, Options, the eight checkboxes with Onshape's defaults). The scope of all parts
+// shows "Export each part as its own file". Export writes the DXF into target/exports.
 Scenario(
     start: Some("document"),
     steps: [
@@ -34,6 +35,8 @@ Scenario(
         Wait(40),
         Key("F"),
         Wait(20),
+        Custom("rename-part Part 1 = Sheet Metal Box"),
+        Wait(20),
         RightClick(ui("feature-sheet-metal-model-1")),
         Wait(5),
         Screenshot("01-feature-menu"),
@@ -43,6 +46,11 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("02-export-dialog"),
+        Click(ui("flat-export-version")),
+        Wait(5),
+        Screenshot("02b-version-list"),
+        Key("Escape"),
+        Wait(5),
         Click(ui("flat-export-scope")),
         Wait(5),
         Screenshot("03-scope-options"),

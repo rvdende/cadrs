@@ -517,6 +517,18 @@ pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, std::syn
                 },
                 l => l,
             };
+            // A flat pattern's line (P3I.6, SM14): where the flat has it now.
+            if let cadrs_sketch::Link::FlatLine { model, part, bend } = link {
+                let shape = crate::sheetmetal_flat::flat_line(&build.sheet_metal, FeatureId(model), part as usize, bend, &at);
+                let ok = match (target, shape) {
+                    (LinkTarget::Curve(c), Some(shape)) => g.set_projected(c, shape),
+                    _ => false,
+                };
+                if !ok {
+                    broken.insert(k);
+                }
+                continue;
+            }
             let Some(current) = ctx.resolve(link, &frame, &at, pierce) else {
                 broken.insert(k);
                 continue;
