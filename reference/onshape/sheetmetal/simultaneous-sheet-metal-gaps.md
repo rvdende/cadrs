@@ -429,7 +429,24 @@ against the stand-ins' expected values.
   joints), then outermost first (a lip's line lies on its wall only while that wall is flat).
 - **Flat view menu**: New sketch, Export DXF/DWG of flat pattern, Create drawing of flat pattern,
   then Zoom to fit; the part is the one with the hovered bend, else the model's first.
-- **Gaps left**: E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
+- **P3I.8 fixes (judge 6.8)**: `sm_e4` does steps 3–9 through the dialogs (sketch on the wall
+  face with Use, Plane 1 of type Plane point, the rectangle, Sweep Add, Mirror with **Reapply
+  features**, two Fillets), one screenshot each, and `rework_after_finish` makes the same
+  features. The folded slot is a polygon (sheet metal cuts are folded from the flat), so Use
+  takes the slot sketch's curves rather than the part's edge. **Mirror → Reapply features** is
+  new: a feature mirror regenerates the features from their mirrored sketches (the frame
+  reflected with v reversed, the geometry flipped in v, regions' seeds too), Extrude, Revolve,
+  Sweep, Fillet, Chamfer and Hole. `sm_p3i8_topdown` builds the Enclosure and the Cover in the
+  dialogs from `sm_topdown_master` (Derived, Convert with Faces to exclude, bends and Keep input
+  parts, Thicken, renames) and edits the master through Extrude 1's dialog, showing both flats
+  before and after. E1 uses step 5's Relief settings (the mass doesn't move: see `E1_MASS`).
+  The legacy stand-in adds the **Case** (an open box: walls reached only through the bends,
+  round the corner gaps), and `sm_p3i8_legacy` shows the table and flat during Thicken with only
+  Tangent joints (SM17.2). Order tests: Hem/Tab and Make joint/Bend both ways.
+- **Gaps left**: the lesson's envelope is T-notched, ours is a box (a T's notch walls unfold onto
+  their neighbours in Convert: a flat collision); the Case's corners are Simple (Round corner
+  reliefs on the import leave slivers when it is thickened again); E4's fillets are 0.5 (the
+  stand-in's rim is 2 thick, the slides' 3 and 1 don't fit); E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
   clicked piece; a shown flat sketch's region fill draws a shading artefact over the folded part
   (`sm_e1` 04+); flat sketches of loft or derived contexts aren't drawn (only Sheet metal model
   flats have planes); in-context sheet metal (SM18.4) isn't sheet-metal-specific.

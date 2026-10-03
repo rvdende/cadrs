@@ -1,14 +1,21 @@
-// P3I.8 / SM17 (lesson `17-importing-legacy-sheet-metal`, t0043–t0045): a folded part imported
-// from STEP (our C-channel exported as a plain solid, `sm-legacy-step`) made active sheet metal:
-// 01 the import; 02 Sheet metal model → Thicken of the outer base face with Tangent propagation:
-// the whole outer skin picked, the flat appears; 03 the four bend cylinders picked under Edges or
-// cylinders to bend, 2 mm, R3, the thickness flipped into the part: real bends; 04 accepted;
-// 05 the import removed with Delete part; 06 the table and flat view.
-// (`cadrs_core/tests/sheetmetal_legacy.rs`: the same volume and flat as the original.)
+// P3I.8 / SM17 (lesson `17-importing-legacy-sheet-metal`, t0043–t0061): a folded part imported
+// from STEP, made active sheet metal. The part is the legacy Case (`sm-legacy-case-step`,
+// `samples::sheetmetal_legacy::case`): an open box, 2 mm, R3, its corners left open by Round –
+// Scaled reliefs, exported by cadrs as a plain solid, like the lesson's "Case".
+// 01 the import.
+// 02 Sheet metal model → Thicken, Tangent propagation, one pick on the base's outer face: the
+//    base and all four walls taken (across the bends, round the open corners); 2 mm, R3, the
+//    thickness flipped into the part. SM17.2: the Sheet metal table and flat view open during
+//    the dialog: only Tangent joints where the bends are, no bend lines (t0043.9).
+// 03 the four bend cylinders picked under Edges or cylinders to bend: real bends in the table,
+//    bend lines on the flat (t0060.7).
+// 04 accepted; 05 the import removed with Delete part; 06 the table and flat view.
+// (`cadrs_core/tests/sheetmetal_legacy.rs`: the same volume and flat as the original, for the
+// Case and for a C-channel.)
 Scenario(
     start: Some("landing"),
     steps: [
-        Custom("sm-legacy-step target/imports/channel.step"),
+        Custom("sm-legacy-case-step target/imports/case.step"),
         Wait(10),
         Click(ui("create")),
         Wait(10),
@@ -20,19 +27,19 @@ Scenario(
         Type("target/imports"),
         Key("Enter"),
         Wait(10),
-        Click(ui("import-picker-row-channel.step")),
+        Click(ui("import-picker-row-case.step")),
         Wait(5),
         Click(ui("import-picker-open")),
         Wait(10),
         Click(ui("import-ok")),
         Wait(120),
-        Click(ui("tab-channel")),
+        Click(ui("tab-case")),
         Wait(30),
-        Custom("view 30 -30 30 -50 20 0.12"),
+        Custom("view 30 30 40 30 20 0.12"),
         Wait(20),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("01-imported-channel"),
+        Screenshot("01-imported-case"),
         Click(ui("sheet-metal-model")),
         WaitFor("sheet-metal-model-dialog"),
         Wait(5),
@@ -42,11 +49,10 @@ Scenario(
         Wait(5),
         Click(ui("sm-faces-field")),
         Wait(3),
-        Click(xyz(30, -50, 0)),
+        Custom("view 30 -30 40 30 20 0.12"),
+        Wait(20),
+        Click(xyz(40, 30, -2)),
         Wait(40),
-        MoveTo(1420, 900),
-        Wait(3),
-        Screenshot("02-thicken-tangent-propagation"),
         Click(ui("sm-thickness-field")),
         Wait(2),
         Key("Ctrl+A"),
@@ -60,38 +66,46 @@ Scenario(
         Key("Tab"),
         Wait(10),
         Click(ui("sm-thickness-flip")),
-        Wait(20),
+        Wait(30),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-thicken-tangent-joints-no-bends"),
         Click(ui("sm-bends-field")),
         Wait(3),
-        Custom("view -35 5 30 -50 20 0.12"),
+        Click(xyz(40, -0.536, -0.536)),
+        Wait(5),
+        Click(xyz(80.536, 30, -0.536)),
+        Wait(5),
+        Custom("view 210 -30 40 30 20 0.12"),
         Wait(20),
-        Click(xyz(1.46, -50, 1.46)),
+        Click(xyz(40, 60.536, -0.536)),
         Wait(5),
-        Click(xyz(1.46, -50, 38.54)),
-        Wait(5),
-        Custom("view 35 5 30 -50 20 0.12"),
-        Wait(20),
-        Click(xyz(58.54, -50, 1.46)),
-        Wait(5),
-        Click(xyz(58.54, -50, 38.54)),
+        Click(xyz(-0.536, 30, -0.536)),
         Wait(40),
+        Custom("view 30 30 40 30 20 0.12"),
+        Wait(20),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("03-bend-cylinders-picked"),
         Click(ui("sheet-metal-model-dialog-accept")),
         Wait(40),
+        Click(ui("panel-sheet-metal")),
+        Wait(20),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-accepted"),
-        RightClick(ui("part-row-channel")),
+        RightClick(ui("part-row-case")),
         Wait(6),
         Click(ui("part-delete")),
         Wait(40),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("05-import-deleted"),
-        Click(ui("panel-sheet-metal")),
-        Wait(60),
+        Wait(30),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("06-table-and-flat"),

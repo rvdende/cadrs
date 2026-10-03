@@ -19,13 +19,14 @@
 //!   with its top excluded and its four bottom edges bent (1.5 mm, R1.5).
 //! - **E4 "Sheet metal rework"** ([`build_e4`]): the "Lower Enclosure": a U-channel (Front-plane
 //!   chain, 70 wide, 60 high walls, 150 long, 1.5 mm, R1.5) with an obround slot cut through both
-//!   side walls (a perpendicular cut, in the flat). [`rework_e4`] does the exercise: Finish sheet
-//!   metal model, a sketch of the slot's outline on the right wall, a plane at its lowest point
-//!   normal to it, a 2 × 8 rectangle swept round the outline (Add), mirrored about the Right
-//!   plane, and the rims' edges filleted; the flat doesn't change.
+//!   side walls (a perpendicular cut, in the flat). [`rework_e4`] does the exercise as its
+//!   slides do: Finish sheet metal model, Sketch 8 on the right wall's face with Use of the slot's
+//!   outline (its sketch's curves), Plane 1 (Plane point: a vertex of Sketch 8 and Front), a 2 × 8 rectangle on it swept
+//!   round the slot (Add), mirrored about the Right plane with Reapply features, and the rims'
+//!   edges filleted; the flat doesn't change.
 //!
-//! E1 ("Importing DXF & Bend") starts from a DXF of the flat (`fixtures/sm_e1_flat.dxf`), made by
-//! P3I.6.
+//! E1 ("Importing DXF & Bend") starts from a DXF of the flat
+//! (`fixtures/sheetmetal/flat_pattern_e1.dxf`), made by P3I.6.
 
 use cadrs_sketch::{PlaneRef, SketchOp, Vec2};
 
@@ -122,9 +123,23 @@ pub fn e1_bend(k: usize) -> FeatureId {
     e1(0x20 + k as u128)
 }
 
+/// E1's model settings (`ex1-importing-dxf-bend/step-05.png`): 1 mm, R1, K 0.45, rolled K 0.5,
+/// minimal gap 0.025, corner relief Closed, bend relief Tear.
+pub fn e1_params() -> cadrs_sheetmetal::Params {
+    let mut p = SheetMetalModelFeature::default_params();
+    p.thickness = 1.0;
+    p.bend_radius = 1.0;
+    p.k_factor = 0.45;
+    p.rolled_k_factor = 0.5;
+    p.minimal_gap = 0.025;
+    p.corner_relief.kind = cadrs_sheetmetal::CornerReliefKind::Closed;
+    p.bend_relief.kind = cadrs_sheetmetal::BendReliefKind::Tear;
+    p
+}
+
 /// Exercise E1 done in Part Studio `el` from the flat DXF's text (see the module docs): Sketch 1
 /// on Top with the DXF inserted (mm), Sheet metal model → Thicken of its seven sheet regions
-/// (1 mm, R1), then one Bend per bend line (the short end flanges' first, then outermost first, so
+/// ([`e1_params`]), then one Bend per bend line (the short end flanges' first, then outermost first, so
 /// each line still lies on a flat wall), Inner alignment, the picked face on the line's up side, the smaller side moving;
 /// Carbon Steel.
 pub fn build_e1(s: &mut dyn Studio, el: ElementId, dxf: &str) -> Result<(), CommandError> {
@@ -165,12 +180,7 @@ pub fn build_e1(s: &mut dyn Studio, el: ElementId, dxf: &str) -> Result<(), Comm
         all.iter().enumerate().any(|(j, r)| j != i && r.area() > all[i].area() && within(&r.outer))
     };
     let sheet: Vec<&cadrs_sketch::Region> = (0..all.len()).filter(|i| !inside_other(*i)).map(|i| &all[i]).collect();
-    let p = {
-        let mut p = SheetMetalModelFeature::default_params();
-        p.thickness = 1.0;
-        p.bend_radius = 1.0;
-        p
-    };
+    let p = e1_params();
     let x = SheetMetalModelFeature {
         operation: SheetMetalOp::Thicken,
         regions: sheet.iter().map(|r| crate::document::RegionRef::new(E1_SKETCH, r)).collect(),
@@ -455,18 +465,6 @@ pub fn obround(c: (f64, f64), len: f64, wid: f64) -> Vec<SketchOp> {
     ]
 }
 
-/// [`obround`] with its long side along the sketch's v axis.
-pub fn obround_v(c: (f64, f64), len: f64, wid: f64) -> Vec<SketchOp> {
-    let (hy, r) = ((len - wid) / 2.0, wid / 2.0);
-    let v = |x: f64, y: f64| Vec2::new(c.0 + x, c.1 + y);
-    vec![
-        SketchOp::AddPolyline { points: vec![v(r, -hy), v(r, hy)], closed: false, construction: false, label: "Add line" },
-        SketchOp::AddArc { center: v(0.0, hy), start: v(r, hy), end: v(-r, hy), construction: false },
-        SketchOp::AddPolyline { points: vec![v(-r, hy), v(-r, -hy)], closed: false, construction: false, label: "Add line" },
-        SketchOp::AddArc { center: v(0.0, -hy), start: v(-r, -hy), end: v(r, -hy), construction: false },
-    ]
-}
-
 /// The Lower Enclosure in Part Studio `el` (see the module docs).
 pub fn build_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     sketch(s, el, E4_SKETCH_1, PlaneRef::Front, vec![chain(&E4_CHAIN)])?;
@@ -498,7 +496,6 @@ pub fn build_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
 }
 
 pub const E4_FINISH: FeatureId = e4(0x21);
-pub const E4_WALL_PLANE: FeatureId = e4(0x28);
 pub const E4_PATH_SKETCH: FeatureId = e4(0x29);
 pub const E4_PLANE: FeatureId = e4(0x22);
 pub const E4_RIM_SKETCH: FeatureId = e4(0x23);
@@ -508,67 +505,102 @@ pub const E4_FILLET_1: FeatureId = e4(0x26);
 pub const E4_FILLET_2: FeatureId = e4(0x27);
 /// The rim the rework sweeps round the slot: 8 out of the wall, 2 thick.
 pub const E4_RIM: (f64, f64) = (8.0, 2.0);
+/// The fillets' radius on the rims' outer (Fillet 1) and inner (Fillet 2) top edges.
+pub const E4_FILLET: f64 = 0.5;
 
 /// Exercise E4 done on the Lower Enclosure in Part Studio `el` (see the module docs): Finish
-/// sheet metal model, a plane through the slot's lowest point parallel to Front, a 2 × 8
-/// rectangle on it swept (Add) along the slot's outer edges, the sweep mirrored about Right
-/// (Feature mirror), the rims' outer and inner edges filleted (0.5).
+/// sheet metal model, then [`rework_after_finish`].
 pub fn rework_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     use crate::sheetmetal_tools::FinishFeature;
     add(s, el, E4_FINISH, "Finish sheet metal model", FeatureKind::SheetMetalTool(SheetMetalTool::Finish(FinishFeature { parts: vec![E4_PART] })))?;
     rework_after_finish(s, el)
 }
 
-/// E4 steps 3–9 (after Finish sheet metal model): the slot's outline sketched, Plane 1, the
-/// rectangle, Sweep 1, Mirror 1 and the two fillets.
+/// The right wall's outer face (normal +X) round the slot: its name and the X it lies at.
+pub fn e4_wall_face(solid: &Solid) -> Option<(cadrs_sketch::FaceName, f64)> {
+    solid
+        .faces
+        .iter()
+        .filter_map(|f| {
+            let pl = f.plane?;
+            let n = pl.normal();
+            (n[0] > 0.999 && pl.origin[0] > 0.0 && f.loops.len() > 1).then_some((f.name, pl.origin[0]))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// E4 steps 3–9 after Finish sheet metal model, as the slides make them:
+/// - **Sketch 8** on the right wall's outer face, the slot's outline taken with **Use** (two
+///   lines, two arcs). The folded part's slot edges are a polygon (cadrs cuts sheet metal in the
+///   flat and folds the polygon), so Use takes the slot sketch's curves, which project to the
+///   same outline exactly;
+/// - **Plane 1**, *Plane point*: the lower line's end (a vertex of Sketch 8) and the Front plane;
+/// - **Sketch 9** on Plane 1: the [`E4_RIM`] rectangle (8 out of the wall, 2 down from the
+///   slot's edge);
+/// - **Sweep 1**, Solid, Add: Sketch 9 along Sketch 8, merged into the Lower Enclosure;
+/// - **Mirror 1**, Feature mirror of Sweep 1 about the Right plane, *Reapply features*;
+/// - **Fillet 1** on both rims' outer top edges, **Fillet 2** on their inner top edges
+///   (tangent propagation takes each rim's loop).
 pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     use crate::advanced::{PathRef, SweepFeature};
     use crate::applied::FilletFeature;
     use crate::pattern::{MirrorFeature, MirrorPlane, PatternType};
     use crate::plane::{PlaneEntity, PlaneFeature, PlaneType};
-    // Sketch 8: the slot's outline on the right wall's outer face (x = 35), as the exercise's
-    // Use of the obround's edge gives it: on a plane offset from Right.
     let (cy, cz) = E4_SLOT_CENTRE;
-    let r = E4_SLOT_SIZE.1 / 2.0;
-    let x0 = E4_CHAIN[3].0;
-    let wall = PlaneFeature { kind: PlaneType::Offset, entities: vec![PlaneEntity::Plane(PlaneRef::Right)], offset: x0, offset_expr: format!("{x0} mm"), ..Default::default() };
-    add(s, el, E4_WALL_PLANE, "Plane", FeatureKind::Plane(wall))?;
-    let wf = built(s, el).planes.get(&E4_WALL_PLANE).copied().ok_or_else(|| missing("wall plane"))?;
-    let on_wall = |p: [f64; 3]| {
-        let d = [p[0] - wf.origin[0], p[1] - wf.origin[1], p[2] - wf.origin[2]];
-        let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
-        (dot(wf.u), dot(wf.v))
-    };
-    let c = on_wall([x0, cy, cz]);
-    // The obround in the plane's coordinates (its long side along Y, whichever way u runs).
-    let along_u = wf.u[1].abs() > 0.5;
     let (len, wid) = E4_SLOT_SIZE;
-    let ops = if along_u { obround(c, len, wid) } else { obround_v(c, len, wid) };
-    sketch(s, el, E4_PATH_SKETCH, PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(E4_WALL_PLANE.0, wf)), ops)?;
-    let path = vec![PathRef::Sketch(E4_PATH_SKETCH)];
-    // Plane 1: Front through the slot's lowest point (Plane point), at y = cy.
-    let plane = PlaneFeature { kind: PlaneType::Offset, entities: vec![PlaneEntity::Plane(PlaneRef::Front)], offset: -cy, offset_expr: format!("{} mm", -cy), ..Default::default() };
-    add(s, el, E4_PLANE, "Plane", FeatureKind::Plane(plane))?;
+    let (hx, r) = ((len - wid) / 2.0, wid / 2.0);
+    // Step 3: Sketch 8 on the wall face; Use of the slot's four outside edges.
     let b = built(s, el);
-    let frame = b.planes.get(&E4_PLANE).copied().ok_or_else(|| missing("plane"))?;
-    let on = cadrs_sketch::FeaturePlane::new(E4_PLANE.0, frame);
-    // The 8 × 2 rectangle below the slot's lowest edge, out from the wall (in the plane's own
-    // coordinates).
-    let local = |p: [f64; 3]| {
-        let d = [p[0] - frame.origin[0], p[1] - frame.origin[1], p[2] - frame.origin[2]];
-        let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
-        (dot(frame.u), dot(frame.v))
+    let part = b.parts.iter().find(|p| p.id == E4_PART).ok_or_else(|| missing("part"))?;
+    let (wall, x0) = e4_wall_face(&part.solid).ok_or_else(|| missing("wall face"))?;
+    let features = s.document().element(el).map(|e| e.active_features()).unwrap_or_default();
+    let plane = crate::parts::face_plane(&features, E4_PART.feature, wall).ok_or_else(|| missing("wall face plane"))?;
+    let frame = plane.frame();
+    // The folded part's slot is a polygon (sheet metal cuts are made in the flat), so Use takes
+    // the slot sketch's four curves (two lines, two arcs), projected onto the face: the same
+    // outline, exact.
+    let slot = features.iter().find(|f| f.id == E4_SKETCH_2).and_then(|f| f.sketch()).ok_or_else(|| missing("slot sketch"))?;
+    let ctx = crate::links::LinkContext { solids: b.parts.iter().map(|p| (p.id.feature, &*p.solid)).collect(), features: &features };
+    let items = slot
+        .geometry
+        .curves
+        .keys()
+        .map(|curve| {
+            let link = cadrs_sketch::Link::SketchCurve { feature: E4_SKETCH_2.0, curve };
+            ctx.shape(link, &frame).map(|shape| (shape, link)).ok_or_else(|| missing("slot curve's projection"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let g = sketch(s, el, E4_PATH_SKETCH, plane, vec![SketchOp::Use { items }])?;
+    // Step 4: Plane 1, Plane point: the lower line's end towards +Y, and Front.
+    let corner = frame.to_sketch([x0, cy + hx, cz - r]);
+    let point = g.points.iter().min_by(|a, b| (a.1.pos - corner).length().total_cmp(&(b.1.pos - corner).length())).map(|(id, _)| id).ok_or_else(|| missing("slot vertex"))?;
+    let pf = PlaneFeature {
+        kind: PlaneType::PlanePoint,
+        entities: vec![PlaneEntity::SketchPoint { sketch: E4_PATH_SKETCH, point }, PlaneEntity::Plane(PlaneRef::Front)],
+        ..Default::default()
     };
+    add(s, el, E4_PLANE, "Plane", FeatureKind::Plane(pf))?;
+    let b = built(s, el);
+    let pframe = b.planes.get(&E4_PLANE).copied().ok_or_else(|| missing("Plane 1"))?;
+    // Step 5: Sketch 9 on Plane 1: the rim's 8 × 2 rectangle, out from the wall, under the slot.
     let (w, t) = E4_RIM;
-    let corners = [[x0, cy, cz - r - t], [x0 + w, cy, cz - r - t], [x0 + w, cy, cz - r], [x0, cy, cz - r]].map(local);
-    let g = sketch(s, el, E4_RIM_SKETCH, PlaneRef::Feature(on), vec![polygon(&corners)])?;
-    let mid = local([x0 + w / 2.0, cy, cz - r - t / 2.0]);
+    let y = cy + hx;
+    let local = |p: [f64; 3]| {
+        let q = pframe.to_sketch(p);
+        (q.x, q.y)
+    };
+    let corners = [[x0, y, cz - r - t], [x0 + w, y, cz - r - t], [x0 + w, y, cz - r], [x0, y, cz - r]].map(local);
+    let on = PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(E4_PLANE.0, pframe));
+    let g = sketch(s, el, E4_RIM_SKETCH, on, vec![polygon(&corners)])?;
+    let mid = local([x0 + w / 2.0, y, cz - r - t / 2.0]);
+    // Step 6: Sweep 1, Add, merged into the Lower Enclosure.
     let regions = super::region_refs(E4_RIM_SKETCH, &g, &[Vec2::new(mid.0, mid.1)]);
-    let sweep = SweepFeature { regions, path, op: BooleanOp::Add, merge_scope: vec![E4_PART], ..Default::default() };
+    let sweep = SweepFeature { regions, path: vec![PathRef::Sketch(E4_PATH_SKETCH)], op: BooleanOp::Add, merge_scope: vec![E4_PART], ..Default::default() };
     add(s, el, E4_SWEEP, "Sweep", FeatureKind::Sweep(sweep))?;
-    let mirror = MirrorFeature { mirror_type: PatternType::Feature, features: vec![E4_SWEEP], plane: Some(MirrorPlane::Plane(PlaneRef::Right)), ..Default::default() };
+    // Step 7: Mirror 1, Feature mirror about Right, Reapply features.
+    let mirror = MirrorFeature { mirror_type: PatternType::Feature, features: vec![E4_SWEEP], plane: Some(MirrorPlane::Plane(PlaneRef::Right)), reapply: true, ..Default::default() };
     add(s, el, E4_MIRROR, "Mirror", FeatureKind::Mirror(mirror))?;
-    // The rims' outer and inner top edges, both sides.
+    // Steps 8–9: the rims' outer, then inner top edges, both sides.
     for (id, z) in [(E4_FILLET_1, cz - r - t), (E4_FILLET_2, cz - r)] {
         let b = built(s, el);
         let part = b.parts.iter().find(|p| p.id == E4_PART).ok_or_else(|| missing("part"))?;
@@ -577,12 +609,11 @@ pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), Comm
             .map(|x| {
                 edge_near(&part.solid, part.id, [*x, cy, z]).map(EdgeOrFace::Edge).ok_or_else(|| {
                     let near = part.solid.edges.iter().map(|e| e.distance([*x, cy, z])).fold(f64::MAX, f64::min);
-                    let xs = part.solid.positions.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
-                    CommandError::Invalid(format!("the stand-in's rim edge is missing (nearest {near}, x {xs:?}, errors {:?})", b.errors))
+                    CommandError::Invalid(format!("the stand-in's rim edge is missing (nearest {near}, errors {:?})", b.errors))
                 })
             })
             .collect::<Result<_, _>>()?;
-        let f = FilletFeature { entities, size: 0.5, size_expr: "0.5 mm".into(), ..Default::default() };
+        let f = FilletFeature { entities, size: E4_FILLET, size_expr: format!("{E4_FILLET} mm"), ..Default::default() };
         add(s, el, id, "Fillet", FeatureKind::Fillet(f))?;
     }
     Ok(())
@@ -599,5 +630,5 @@ pub fn document_e4() -> Result<Document, CommandError> {
 /// Every stand-in document file (`fixtures/sheetmetal/<name>.cadrs`), dated 2026-10-03.
 pub fn files(e1_dxf: &str) -> Result<Vec<(&'static str, crate::store::DocumentFile)>, CommandError> {
     let file = |document: Document| crate::store::DocumentFile { version: crate::store::SCHEMA_VERSION, meta: crate::library::DocumentMeta::new("cadrs", 1_791_000_000), document };
-    Ok(vec![("sm_e1_completed_standin", file(document_e1(e1_dxf)?)), ("sm_e2_completed_standin", file(document_e2()?)), ("sm_e3_standin", file(document_e3()?)), ("sm_e4_standin", file(document_e4()?)), ("sm_topdown_standin", file(super::sheetmetal_topdown::document()?.0))])
+    Ok(vec![("sm_e1_completed_standin", file(document_e1(e1_dxf)?)), ("sm_e2_completed_standin", file(document_e2()?)), ("sm_e3_standin", file(document_e3()?)), ("sm_e4_standin", file(document_e4()?)), ("sm_topdown_standin", file(super::sheetmetal_topdown::document()?.0)), ("sm_topdown_master", file(super::sheetmetal_topdown::master_document()?.0))])
 }

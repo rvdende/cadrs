@@ -345,6 +345,12 @@ fn face_and_feature_mirror_of_a_pocket() {
     close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
     m.mirror_type = PatternType::Feature;
     m.features = vec![pocket];
+    d.set(mirror, FeatureKind::Mirror(m.clone()));
+    close(d.volume(), 200_000.0 - 2000.0, 1e-6);
+    close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
+    // Reapply features (P3I.8, E4 step 7): the extrude regenerated from its mirrored sketch,
+    // still cutting down from z = 15 (the mirrored frame keeps Top's normal): the same pocket.
+    m.reapply = true;
     d.set(mirror, FeatureKind::Mirror(m));
     close(d.volume(), 200_000.0 - 2000.0, 1e-6);
     close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);

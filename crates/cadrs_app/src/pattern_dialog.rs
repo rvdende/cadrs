@@ -12,7 +12,8 @@
 //! - **Curve pattern** (PS25): the type; the entities; *Path to pattern along*; *Instance
 //!   count*; *Equal spacing* (else *Distance*); *Tangent to curve*; *Skip instances*.
 //! - **Mirror** (`ex5-step12.png`): the mirror type; the entities (faces with Create selection);
-//!   *Mirror plane*; for a part mirror, New | Add | Remove | Intersect and merge.
+//!   *Mirror plane*; for a part mirror, New | Add | Remove | Intersect and merge; for a feature
+//!   mirror, *Reapply features* (`ex4-sheet-metal-rework/step-07.png`).
 //! - **Mate connector** (`ex4-step5.png`, `ex4-step8.png`; P3B.7): *Origin type* (On entity,
 //!   Between entities); *Origin entity* (faces, edges, vertices, sketch points and curves, the
 //!   origin); *Between entity*; **Realign** ✓ with *Primary axis* and *Secondary axis*; **Move**
@@ -464,6 +465,9 @@ pub(crate) fn body(b: &mut ChildSpawner, t: &Theme, kind: &FeatureKind, field: A
                     field == AppliedField::MirrorPlane,
                     ("mirror-plane-connector", Role::ConnectorButton, "mate-connector", "Select mate connector", false),
                 );
+                if x.mirror_type == PatternType::Feature {
+                    b.spawn(OptionRow::new("mirror-reapply", "Reapply features").checked(x.reapply).build(t));
+                }
                 if x.mirror_type == PatternType::Part && x.op != BooleanOp::New {
                     merge_rows(b, t, "mirror", x.merge_all, items_of(Role::MergeScope), field == AppliedField::MergeScope);
                 }
@@ -582,6 +586,10 @@ pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'st
             x.merge_all = on;
             Some("Merge with all")
         }
+        FeatureKind::Mirror(x) if base == "mirror-reapply" => {
+            x.reapply = on;
+            Some("Reapply features")
+        }
         FeatureKind::MateConnector(x) => match base {
             "mate-connector-flip" => {
                 x.flip_primary = on;
@@ -614,7 +622,7 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
             matches!(rest, "centered" | "centered2" | "second" | "equal-spacing" | "tangent" | "reapply" | "skip" | "merge-all")
         }));
     pattern
-        || matches!(base, "mirror-merge-all" | "mate-connector-flip" | "mate-connector-realign" | "mate-connector-move" | "mate-connector-owner")
+        || matches!(base, "mirror-merge-all" | "mirror-reapply" | "mate-connector-flip" | "mate-connector-realign" | "mate-connector-move" | "mate-connector-owner")
         || crate::transform_ui::is_checkbox(name)
 }
 

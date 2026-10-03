@@ -6,9 +6,10 @@
 //!   appearance and material, PS9.6) or Add/Remove/Intersect with the merge scope, as an
 //!   extrude's result.
 //! - **Feature pattern / mirror**: the features' effect copied. With **Reapply features**
-//!   (PS22.3, rigid patterns only) each instance is regenerated with its sketches moved, so
-//!   "Up to" ends stop at their own targets (PS27.5); without it, the material the features
-//!   removed and added is copied.
+//!   (PS22.3; rigid patterns, and mirrors since P3I.8) each instance is regenerated with its
+//!   sketches moved (a mirror's sketches mirrored: the plane's frame reflected and kept
+//!   right-handed, the geometry flipped in it), so "Up to" ends stop at their own targets
+//!   (PS27.5); without it, the material the features removed and added is copied.
 //! - **Face pattern / mirror**: the pocket or boss the faces bound (their free edges capped,
 //!   `Kernel::face_tool`) copied and cut or added.
 //! - Instances are numbered on a grid `(i, j)`: `i` along the first direction (or round the
@@ -329,6 +330,10 @@ pub struct MirrorFeature {
     pub merge_all: bool,
     #[serde(default)]
     pub merge_scope: Vec<PartId>,
+    /// Feature mirror: **Reapply features** (exercise E4 step 7): the features regenerated on
+    /// the other side from their mirrored sketches, instead of their material copied.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reapply: bool,
 }
 
 impl MirrorFeature {

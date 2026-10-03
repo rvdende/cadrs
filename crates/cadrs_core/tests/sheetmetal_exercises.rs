@@ -71,7 +71,12 @@ fn e1_dxf() -> String {
     std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(ex::E1_DXF)).expect("the E1 DXF")
 }
 
-/// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value.
+/// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value, 45 443.678 mm³ × 7850 kg/m³,
+/// built with step 5's settings (1 mm, R1, K 0.45, minimal gap 0.025, Closed corners, Tear
+/// bend reliefs). It is the same as with the default reliefs: the DXF's flat already has the
+/// tray's corner notches and every bend line ends on a cut-out or the outline, so no Bend needs
+/// a relief cut (Tear and Rectangle cut nothing there), no corner is closed by the bends, and no
+/// rip uses the minimal gap (K 0.45 and rolled K 0.5 are the defaults).
 pub const E1_MASS: f64 = 0.356733;
 
 #[test]
@@ -167,6 +172,15 @@ fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     let mut h = History::default();
     ex::rework_e4(&mut DocHistory(&mut doc, &mut h), ex::E4_STUDIO).unwrap();
     let b = build(&doc, ex::E4_STUDIO);
+    // The feature list reads like the slides' (steps 2–9).
+    let names: Vec<String> = doc.element(ex::E4_STUDIO).unwrap().features().iter().skip(4).map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["Finish sheet metal model 1", "Sketch 3", "Plane 1", "Sketch 4", "Sweep 1", "Mirror 1", "Fillet 1", "Fillet 2"]);
+    let el = doc.element(ex::E4_STUDIO).unwrap();
+    let sketch8 = el.feature(ex::E4_PATH_SKETCH).unwrap().sketch().unwrap();
+    assert!(matches!(sketch8.plane, Some(cadrs_sketch::PlaneRef::Face(_))), "Sketch 8 is on the wall's face");
+    assert_eq!(sketch8.geometry.curves.len(), 4, "Use took the slot's two lines and two arcs");
+    assert!(matches!(&el.feature(ex::E4_PLANE).unwrap().kind, cadrs_core::FeatureKind::Plane(p) if p.kind == cadrs_core::plane::PlaneType::PlanePoint));
+    assert!(matches!(&el.feature(ex::E4_MIRROR).unwrap().kind, cadrs_core::FeatureKind::Mirror(m) if m.reapply));
     assert_eq!(b.parts.len(), 1, "the rims are added to the Lower Enclosure");
     let ctx = &b.sheet_metal[0];
     assert!(!ctx.active, "finished");

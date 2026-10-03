@@ -4,7 +4,9 @@
 //! made around it, each named after its part (the context dropdown lists them by those names):
 //!
 //! - Part Studio **Space Envelope**: a Front-plane profile ([`PROFILE`]: 200 wide, 120 high, the
-//!   top-right corner cut at 45° by a 40 × 40 angled face) extruded [`DEPTH`] (along −Y).
+//!   top-right corner cut at 45° by a 40 × 40 angled face) extruded [`DEPTH`] (along −Y). The
+//!   lesson's envelope is T-notched (`t0044.7.png`); a T's notch walls unfold onto the walls
+//!   beside them in cadrs's Convert (a flat pattern collision), so the stand-in is a plain box.
 //! - Part Studio **Part Studio 1**: **Derived 1** (Space Envelope at the workspace, so edits of
 //!   the master follow at once), then
 //!   - **Enclosure**: Sheet metal model → Convert of the derived part, the top and the angled
@@ -14,7 +16,8 @@
 //!     them bent; its part "Cover".
 //!
 //! Both are 1.5 mm thick, inner bend radius 1.5 mm. [`set_depth`] edits the master's depth, as
-//! the lesson makes the enclosure wider.
+//! the lesson makes the enclosure wider. [`master_document`] is the document the
+//! `sm_p3i8_topdown` scenario starts from: the master and an empty Part Studio 1.
 
 use cadrs_sketch::{PlaneRef, SketchOp, Vec2};
 
@@ -131,11 +134,13 @@ fn build_studio(s: &mut dyn Studio) -> Result<(), CommandError> {
     let top = face(sol, pid, [0.0, 0.0, 1.0], [0.0, 0.0, 120.0]).ok_or_else(missing)?;
     let angled = face(sol, pid, [d1, 0.0, d2], [200.0, 0.0, 80.0]).ok_or_else(missing)?;
     let bottom = face(sol, pid, [0.0, 0.0, -1.0], [0.0, 0.0, 0.0]).ok_or_else(missing)?;
-    let sides: Vec<FaceRef> = [([-1.0, 0.0, 0.0], [0.0, 0.0, 0.0]), ([1.0, 0.0, 0.0], [200.0, 0.0, 0.0]), ([0.0, -1.0, 0.0], [0.0, -DEPTH, 0.0]), ([0.0, 1.0, 0.0], [0.0, 0.0, 0.0])]
-        .iter()
-        .map(|(n, at)| face(sol, pid, *n, *at).ok_or_else(missing))
-        .collect::<Result<_, _>>()?;
-    let bends: Vec<EdgeOrFace> = sides.iter().map(|f| edge_between(sol, pid, &bottom, f).map(EdgeOrFace::Edge).ok_or_else(missing)).collect::<Result<_, _>>()?;
+    // Every edge round the bottom.
+    let bends: Vec<EdgeOrFace> = sol
+        .face_edges(&bottom.face)
+        .into_iter()
+        .filter_map(|e| sol.edge(&e))
+        .map(|e| EdgeOrFace::Edge(EdgeRef { part: pid, edge: e.name, seed: e.points[e.points.len() / 2] }))
+        .collect();
     let mut x = sm(SheetMetalOp::Convert);
     x.parts = vec![pid];
     x.exclude = vec![top, angled];
@@ -154,8 +159,21 @@ fn build_studio(s: &mut dyn Studio) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// The document the lesson starts from: the Space Envelope master and an empty Part Studio 1.
+pub fn master_document() -> Result<(Document, History), CommandError> {
+    let (mut doc, mut h) = empty_document();
+    build_master(&mut DocHistory(&mut doc, &mut h))?;
+    Ok((doc, h))
+}
+
 /// The stand-in document, "Heating Mantle (stand-in)" (mm).
 pub fn document() -> Result<(Document, History), CommandError> {
+    let (mut doc, mut h) = master_document()?;
+    build_studio(&mut DocHistory(&mut doc, &mut h))?;
+    Ok((doc, h))
+}
+
+fn empty_document() -> (Document, History) {
     let mut doc = Document::empty("Heating Mantle (stand-in)");
     doc.id = DOCUMENT;
     let mut m = crate::document::Element::part_studio("Space Envelope");
@@ -164,8 +182,5 @@ pub fn document() -> Result<(Document, History), CommandError> {
     p.id = STUDIO;
     doc.elements.push(m);
     doc.elements.push(p);
-    let mut h = History::default();
-    build_master(&mut DocHistory(&mut doc, &mut h))?;
-    build_studio(&mut DocHistory(&mut doc, &mut h))?;
-    Ok((doc, h))
+    (doc, History::default())
 }
