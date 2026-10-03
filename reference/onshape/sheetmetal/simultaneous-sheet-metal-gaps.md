@@ -48,7 +48,7 @@ below).
 | SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
 | SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ✅ | P3I.3: right-strip toggle, docked panel (context dropdown, tables, flat view with its own camera and cube); rows ↔ model faces ↔ flat pieces select and hover each other, a model pick scrolls to its row. |
 | SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
-| SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. P3I.5: sheet metal features after the model edit its definition and refold it (parts keep their ids); Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat. Extrude Add with a merge scope of active sheet metal is refused (use Tab or Flange). |
+| SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. Integration: **one definition and one pipeline** for every feature after the model (see Decisions (integration)): Flange, Hem, Make joint and Modify joint edit the walls at their virtual sharps; Bend, Jog, Tab, cuts, corner breaks, face copies, Corner, Bend relief and Loft (Add) are ordered steps replayed on the built model; forms are kept with the model and applied again at every refold; parts keep their ids. Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat; Extrude Add with a merge scope of active sheet metal is refused (use Tab or Flange). Ordinary features (fillets of non-corner edges, booleans, …) still act on the folded part only and are lost at the next refold. |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | ✅ | Contexts are keyed by the feature; P3I.3's context dropdown lists the features by name. |
 | SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain applies the bounds per edge (an approximation). |
@@ -346,3 +346,40 @@ against the stand-ins' expected values.
   are lost at the next refold; cuts don't cut bend regions; Part pattern instances aren't sheet
   metal; Tangent chamfer measures like Offset; corner breaks in the flat view wait for P3I.3/6;
   bridging tabs need the walls coplanar with the same material side.
+
+
+### Decisions (integration: one sheet metal editing model)
+
+- **One definition** per model: `cadrs_sheetmetal::definition::Definition`, kept in the
+  context (`SheetMetalContext::def`). Its **base** is P3I.4's `SharpDef` (the walls at their
+  virtual sharps, their joints and hems), or a fixed model for a Sheet metal Loft made on its
+  own. Its **steps** are P3I.5's model edits as data (`StepEdit`: Bend, Jog, Tab, Cut, corner
+  breaks, face copies, Corner and Bend relief overrides) plus a loft's added walls, in feature
+  order, each with its feature's name for errors. `build()` builds the base, replays the steps
+  and applies the table order (Move up / Move down, `table_order`).
+- **Who edits what**: Flange, Hem and Make joint add walls and joints to the base; Modify joint
+  and the table change a joint of the base in place (`edit_joint`, P3I.3's `joint_edit::apply`),
+  or patch the radius / K factor of the Bend or Jog step that made the joint (a rip of such a
+  bend is refused); every other feature appends a step. A base edit made after steps (a Flange
+  after a Bend) goes under them and the steps replay on the changed walls: the result is the same
+  in either feature order (tested). Base edits pick their edges on the built model and
+  `Definition::pull_back` carries them back to the base wall (undoing the rigid moves of steps);
+  walls a step made (a Bend's moving side, a Jog, copies, loft walls) can't take a Flange, Hem or
+  Make joint (an error says so).
+- **One pipeline** (`rebuild/kernel_ops/sheetmetal/refold.rs`): `Rebuilder::edit_sheet_metal`
+  (the feature changes the context) then `Rebuilder::refold`: build and validate, flatten (with
+  the forms' outlines), fold (walls extruded, loft walls as mitred slabs, faces named by the
+  feature that made each wall or bend: `owners`), the walls-intersect check, the parts a loft
+  joined united (`merges`), the **forms applied again** (`SheetMetalContext::forms`: each copy
+  placed relative to its wall, so it moves with it), then the parts back under their ids (a
+  folded part takes the id of the old part it shares walls with). The Sheet metal model, a
+  Loft (New) and every later feature go through it. A flat collision or walls running into
+  each other fail the feature but keep the context, so the flat view shows the problem.
+- **Modules renamed**: P3I.3's `cadrs_sheetmetal::edit` is `joint_edit` (its `Recipe` is gone:
+  the definition replaces it), P3I.5's is `model_edit`.
+- **Modify joint placement**: after the last feature that changed the model (the context's
+  `editors`), so a Flange's bend is modified after the Flange; ordinary features after that
+  still come after it.
+- **Gaps left**: ordinary (non-sheet-metal-aware) features after the model act on the folded
+  part and are lost at the next refold; a loft's joints can't be modified; a hem's radius is set
+  in its Hem feature (not the table).
