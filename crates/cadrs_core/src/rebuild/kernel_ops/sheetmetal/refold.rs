@@ -121,6 +121,7 @@ impl Rebuilder {
     /// Makes model `ctx` again from its definition (see the module docs): its parts take the
     /// place of `old_parts` (and of `consumed`, the parts a Convert used up). `old_model` is the
     /// model before this feature (its new walls and joints are the feature's own).
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::rebuild) fn refold(
         &mut self,
         id: FeatureId,
@@ -299,6 +300,8 @@ impl Rebuilder {
             let tag = tag_of(&studio).cloned().ok_or_else(|| format!("{} has no Tag (Form) feature", step.pick.name))?;
             let (_, sstate) = self.sub_build(&studio)?;
             let op = step.feature.0;
+            // By index: each group's body is replaced while `self` is borrowed for the kernel.
+            #[allow(clippy::needless_range_loop)]
             for gi in 0..groups.len() {
                 let copies: Vec<(usize, Motion)> = step
                     .copies

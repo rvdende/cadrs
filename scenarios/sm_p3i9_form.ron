@@ -67,5 +67,13 @@ Scenario(
         Wait(5),
         Screenshot("08-search-tag"),
         Key("Escape"),
+        // P3I.8: the louvers' outlines and centermarks in the flat view (SM20.3).
+        Key("Escape"),
+        Wait(10),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("09-flat-view-with-louvers"),
     ],
 )

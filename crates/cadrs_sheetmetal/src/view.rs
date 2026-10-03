@@ -149,6 +149,11 @@ pub struct FlatScene {
     /// Where the pieces overlap (a collision, SM1.5).
     pub collisions: Vec<Polygon>,
     pub thickness: f64,
+    /// How far each flat-pattern part is moved along X (sketches on a part's flat are drawn
+    /// with it).
+    pub shifts: Vec<V2>,
+    /// Forms on the flat (SM20.3): each one's outline lines and centermark.
+    pub forms: Vec<(Vec<crate::forms::FormLine>, P2)>,
 }
 
 impl FlatScene {
@@ -164,14 +169,22 @@ impl FlatScene {
         let gap = (0.1 * size).max(5.0);
         let mut next_x: Option<f64> = None;
         for part in &flat.parts {
-            let Some((lo, hi)) = part.bounds() else { continue };
+            let Some((lo, hi)) = part.bounds() else {
+                out.shifts.push(V2::zeros());
+                continue;
+            };
             let dx = match next_x {
                 None => 0.0,
                 Some(x) => x - lo.x,
             };
             next_x = Some(hi.x + dx + gap);
             let shift = V2::new(dx, 0.0);
+            out.shifts.push(shift);
             let mv = |q: P2| q + shift;
+            for f in &part.forms {
+                let lines = f.lines.iter().map(|l| crate::forms::FormLine { points: l.points.iter().map(|q| mv(*q)).collect(), closed: l.closed }).collect();
+                out.forms.push((lines, mv(f.center)));
+            }
             let mvs = |s: &Seg2| Seg2::new(s.a + shift, s.b + shift);
             for piece in &part.pieces {
                 out.pieces.push((piece.source, piece.cut.iter().map(|p| p.map(mv)).collect()));

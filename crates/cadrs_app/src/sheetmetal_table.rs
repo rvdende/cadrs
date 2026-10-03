@@ -896,7 +896,7 @@ fn on_dropdown_click(mut c: On<Pointer<Click>>, q: Query<(&Dropdown, &Name, &Com
 }
 
 /// Rows show selected while their joint is (in any view).
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_rows(
     mut t: ResMut<SmTable>,
     cache: Res<PartCache>,
@@ -1421,8 +1421,19 @@ fn v3(p: P2, z: f64) -> Vec3 {
     Vec3::new(p.x as f32, p.y as f32, z as f32)
 }
 
-/// Outlines, dashed bend centrelines, tangent lines, and selected or hovered rips.
-fn draw_flat(t: Res<SmTable>, cache: Res<PartCache>, selection: Res<Selection>, open: Res<SidePanel>, kind: Res<ActiveKind>, mut lines: Gizmos<FlatLineGizmos>, mut hi: Gizmos<FlatHighlightGizmos>) {
+/// Outlines, dashed bend centrelines, tangent lines, forms (SM20.3), sketches on the flat
+/// (P3I.6, SM14) and selected or hovered rips.
+#[allow(clippy::too_many_arguments)]
+fn draw_flat(
+    t: Res<SmTable>,
+    cache: Res<PartCache>,
+    selection: Res<Selection>,
+    open: Res<SidePanel>,
+    kind: Res<ActiveKind>,
+    doc: Option<Res<ActiveDocument>>,
+    mut lines: Gizmos<FlatLineGizmos>,
+    mut hi: Gizmos<FlatHighlightGizmos>,
+) {
     if !is_open(&open, &kind) || t.key.is_none() {
         return;
     }
@@ -1461,6 +1472,34 @@ fn draw_flat(t: Res<SmTable>, cache: Res<PartCache>, selection: Res<Selection>, 
             lines.line(v3(s.a, z), v3(s.b, z), Color::srgb_u8(0x55, 0x55, 0x55));
         }
     }
+    // Forms: their outlines and a centermark.
+    let form = Color::srgb_u8(0x1f, 0x5f, 0xa8);
+    for (ls, c) in &scene.forms {
+        for l in ls {
+            let pts = l.points.iter().chain(l.closed.then(|| l.points.first()).flatten());
+            lines.linestrip(pts.map(|q| v3(*q, z)), form);
+        }
+        let r = 3.0 * px;
+        lines.line(v3(*c - cadrs_sheetmetal::poly::V2::new(r, 0.0), z), v3(*c + cadrs_sheetmetal::poly::V2::new(r, 0.0), z), form);
+        lines.line(v3(*c - cadrs_sheetmetal::poly::V2::new(0.0, r), z), v3(*c + cadrs_sheetmetal::poly::V2::new(0.0, r), z), form);
+    }
+    // Sketches on the flat pattern (in the flat's coordinates, moved with their part).
+    if let Some(el) = doc.as_ref().and_then(|d| d.active_element()) {
+        let features = el.active_features();
+        let sketch_color = Color::srgb_u8(0x2b, 0x6c, 0xd8);
+        for f in &features {
+            let Some(sk) = f.sketch() else { continue };
+            let Some(cadrs_sketch::PlaneRef::Feature(fp)) = sk.plane else { continue };
+            let Some((model, index)) = cadrs_core::sheetmetal_flat::flat_target(&features, fp.feature) else { continue };
+            if model != ctx.feature {
+                continue;
+            }
+            let shift = scene.shifts.get(index).copied().unwrap_or_else(cadrs_sheetmetal::poly::V2::zeros);
+            for l in sketch_polylines(&sk.geometry) {
+                lines.linestrip(l.into_iter().map(|q| v3(cadrs_sheetmetal::poly::P2::new(q.x, q.y) + shift, z + 1e-3)), sketch_color);
+            }
+        }
+    }
     for j in &scene.joints {
         let c = if selected.contains(&j.joint) {
             ORANGE
@@ -1473,6 +1512,30 @@ fn draw_flat(t: Res<SmTable>, cache: Res<PartCache>, selection: Res<Selection>, 
             hi.line(v3(s.a, z), v3(s.b, z), c);
         }
     }
+}
+
+/// A sketch's curves as polylines (its own coordinates).
+fn sketch_polylines(g: &cadrs_sketch::Sketch) -> Vec<Vec<cadrs_sketch::Vec2>> {
+    let mut out = Vec::new();
+    for (id, c) in g.curves.iter() {
+        match c.kind {
+            cadrs_sketch::CurveKind::Line { a, b } => out.push(vec![g.pos(a), g.pos(b)]),
+            cadrs_sketch::CurveKind::Circle { center, radius } => {
+                let o = g.pos(center);
+                out.push((0..=48).map(|k| {
+                    let a = k as f64 / 48.0 * std::f64::consts::TAU;
+                    cadrs_sketch::Vec2::new(o.x + radius * a.cos(), o.y + radius * a.sin())
+                }).collect());
+            }
+            cadrs_sketch::CurveKind::Arc { .. } => {
+                if let Some(a) = g.arc_geom(id) {
+                    out.push((0..=24).map(|k| a.point_at(a.start_angle + a.sweep * k as f64 / 24.0)).collect());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn draw_cube_arcs(t: Res<SmTable>, open: Res<SidePanel>, kind: Res<ActiveKind>, theme: Res<Theme>, mut arcs: Gizmos<FlatCubeArcGizmos>) {
