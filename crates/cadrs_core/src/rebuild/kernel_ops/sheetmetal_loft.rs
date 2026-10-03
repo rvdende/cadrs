@@ -7,8 +7,11 @@
 //! 2. [`cadrs_sheetmetal::loft::loft`] lays it out (planar walls, facet joints, rips, bends).
 //! 3. **New** makes a sheet metal model of its own (its context named after the loft, its
 //!    definition the laid-out model); **Add** adds the walls and joints to the definition of the
-//!    active model of the Merge scope's part as a step (its settings, its context), their part
-//!    one with the merge scope's.
+//!    active model of the Merge scope's part as a step (its settings, its context). Where a
+//!    profile runs along a free edge of one of the model's flat walls (on its definition face),
+//!    the loft wall is joined to it by a bend of the model's radius (both trimmed back from the
+//!    virtual sharp, as a flange is) or, in one plane, a tangent joint: one sheet, one flat
+//!    pattern. A loft that touches no edge is united with the merge scope's part instead.
 //! 4. Both fold through the one sheet metal pipeline (`sheetmetal/refold.rs`): each loft wall a
 //!    mitred slab ([`cadrs_sheetmetal::loft::wall_slab`], made solid by the kernel's
 //!    `mesh_solid`), bends as cylindrical shells, fused per part.
@@ -19,7 +22,7 @@
 use super::sheetmetal::key_of;
 use super::*;
 use cadrs_sheetmetal::definition::{Definition, StepEdit};
-use cadrs_sheetmetal::loft::{ConnectionIn, LoftOpts, ProfileIn, arc_pieces, loft};
+use cadrs_sheetmetal::loft::{Attach, ConnectionIn, LoftOpts, ProfileIn, arc_pieces, loft};
 use cadrs_sheetmetal::model::{JointNamer, P3};
 use cadrs_sheetmetal::{FlatPattern, WallId};
 use cadrs_sketch::region::Piece;
@@ -263,11 +266,27 @@ impl Rebuilder {
         let p1 = self.loft_profile(before, state, &x.profile1, tol)?;
         let p2 = self.loft_profile(before, state, &x.profile2, tol)?;
         let connections: Vec<ConnectionIn> = if x.connections_on {
-            x.connections.iter().map(|c| ConnectionIn { a: along(&p1, c.t1), b: along(&p2, c.t2), rip: c.rip }).collect()
+            x.connections.iter().filter(|c| c.is_complete()).map(|c| ConnectionIn { a: along(&p1, c.t1), b: along(&p2, c.t2), rip: c.rip }).collect()
         } else {
             Vec::new()
         };
-        let opts = LoftOpts { flip_side: x.flip_thickness, connections, bends: true, key: key_of(&id) };
+        // Add: the model's flat walls a profile runs along the edge of (the loft joins them).
+        let attach: Vec<Attach> = match &target {
+            Some(c) => c
+                .model
+                .walls
+                .iter()
+                .filter_map(|w| {
+                    let cadrs_sheetmetal::model::Surface::Planar { origin, u, v } = w.surface else { return None };
+                    let n = u.cross(&v).normalize();
+                    let size = w.outline.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0);
+                    let on = |p: &ProfileIn| p.points.len() >= 2 && p.points.iter().filter(|q| ((*q - origin).dot(&n)).abs() <= 1e-6 * size.max(1.0)).count() >= 2;
+                    (on(&p1) || on(&p2)).then(|| Attach { wall: w.id, origin, u, v, outline: w.outline.clone() })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let opts = LoftOpts { flip_side: x.flip_thickness, connections, bends: true, key: key_of(&id), attach };
         let built = loft(params, &p1, &p2, &opts).map_err(|e| e.message())?;
         let arrows = encode_guides(&p1, &p2, &built.strip.connections);
         let warning = built.warnings.first().cloned();
@@ -303,8 +322,19 @@ impl Rebuilder {
                     let joint_base = m.joints.iter().map(|j| j.id.0 + 1).max().unwrap_or(0);
                     let mut namer = JointNamer::default();
                     namer.taken = m.joints.iter().map(|j| j.name.clone()).collect();
+                    // The model walls it joins keep their ids (and lose the band their bend takes).
+                    let real = |id: WallId| built.attached.iter().find(|a| a.stand_in == id).map(|a| a.wall);
+                    let mut trims = Vec::new();
+                    for a in &built.attached {
+                        if let Some(w) = m.wall(a.wall) {
+                            let cut = cadrs_sheetmetal::poly::difference(std::slice::from_ref(&w.outline), std::slice::from_ref(&a.outline));
+                            if !cut.is_empty() {
+                                trims.push((a.wall, cut));
+                            }
+                        }
+                    }
                     let mut walls = Vec::new();
-                    for w in &built.model.walls {
+                    for w in built.model.walls.iter().filter(|w| real(w.id).is_none()) {
                         let mut w = w.clone();
                         let old = w.id;
                         w.id = WallId(wall_base + old.0);
@@ -318,8 +348,8 @@ impl Rebuilder {
                         let mut j = j.clone();
                         let old = j.id;
                         j.id = cadrs_sheetmetal::JointId(joint_base + old.0);
-                        j.a = WallId(wall_base + j.a.0);
-                        j.b = WallId(wall_base + j.b.0);
+                        j.a = real(j.a).unwrap_or(WallId(wall_base + j.a.0));
+                        j.b = real(j.b).unwrap_or(WallId(wall_base + j.b.0));
                         j.name = namer.name(&j.kind);
                         if let Some((k, _)) = built.joints.iter().find(|(_, id)| *id == old) {
                             ctx.joint_keys.push((*k, j.id));
@@ -328,10 +358,14 @@ impl Rebuilder {
                     }
                     let def = ctx.def.as_mut().expect("checked");
                     def.slabs.extend(walls.iter().map(|w| w.id));
-                    if let (Some(a), Some(w)) = (walls.first(), scope_wall) {
+                    // Not joined to the model by any edge: its part is united with the merge
+                    // scope's.
+                    if built.attached.is_empty()
+                        && let (Some(a), Some(w)) = (walls.first(), scope_wall)
+                    {
                         def.merges.push((a.id, w));
                     }
-                    def.push(name, StepEdit::AddWalls { walls, joints });
+                    def.push(name, StepEdit::AddWalls { walls, joints, trims });
                     Ok(None)
                 })?
             }

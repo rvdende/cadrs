@@ -224,7 +224,7 @@ impl Rebuilder {
                 to_wall(moved(&m, [w.x, w.y, w.z]))
             };
             let fp: Vec<P2> = footprint.outer.iter().map(|q| place(V3::new(q.x, q.y, 0.0))).collect();
-            check_footprint(model, wall_id, &cadrs_sheetmetal::poly::Polygon::new(fp), 1e-6 * size).map_err(|e| e.message())?;
+            check_footprint(model, wall_id, &cadrs_sheetmetal::poly::Polygon::new(fp.clone()), 1e-6 * size).map_err(|e| e.message())?;
             // The flat: outline and centermark, in the wall's 2D.
             let flines: Vec<FormLine> = lines
                 .iter()
@@ -236,7 +236,7 @@ impl Rebuilder {
             let wn = wall.surface.normal().unwrap_or_default();
             let up = (n.dot(&wn) > 0.0) != model.params.flip_direction_up;
             let local = local_to_wall(model, wall_id, &m).ok_or("Forms go on the flat faces of sheet metal walls")?;
-            let copy = FormCopy { wall: wall_id, local, center: to_wall(center), lines: flines, up };
+            let copy = FormCopy { wall: wall_id, local, center: to_wall(center), lines: flines, up, footprint: fp };
             match by_ctx.iter_mut().find(|(c, _)| *c == t.ctx) {
                 Some((_, v)) => v.push(copy),
                 None => by_ctx.push((t.ctx, vec![copy])),

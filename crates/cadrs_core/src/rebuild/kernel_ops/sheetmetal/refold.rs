@@ -26,9 +26,11 @@ use super::*;
 use cadrs_kernel::{Kernel, Motion};
 use cadrs_sheetmetal::definition::Definition;
 use cadrs_sheetmetal::flat::PieceSource;
-use cadrs_sheetmetal::forms::{FlatForm, on_flat};
+use cadrs_sheetmetal::forms::{FlatForm, FormLine, FormProblem, check_footprint, hull, on_flat};
+use cadrs_sheetmetal::model::JointKind;
+use cadrs_sheetmetal::poly::{self, P2, Polygon};
 
-use crate::sheetmetal::{FormStep, PieceKey};
+use crate::sheetmetal::{FormCopy, FormStep, PieceKey};
 use crate::sheetmetal_form::{form_studio, tag_of};
 
 /// The stable key of a feature (a step's source, a form's flat key).
@@ -142,8 +144,11 @@ impl Rebuilder {
         if let Some(e) = model.validate().iter().find(|e| !facet(e)) {
             return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
         }
+        // The forms checked again on the model as it is now (SM20.3): each copy on its wall (or
+        // the part of it a later Bend split off and turned), clear of joints and edges.
+        let forms = resolve_forms(&model, &ctx.forms)?;
         let mut flat = flatten(&model);
-        form_flats(&mut flat, &model, &ctx.forms);
+        form_flats(&mut flat, &model, &forms);
         // The walls and joints this feature made are its own (their faces are named by it).
         if id != ctx.feature {
             let had = |k: PieceKey| match (old_model, k) {
@@ -180,7 +185,7 @@ impl Rebuilder {
             }
         }
         let mut groups = self.merge_groups(op, folded, &def.merges)?;
-        if let Err(e) = self.apply_forms(&mut groups, &model, &ctx.forms) {
+        if let Err(e) = self.apply_forms(&mut groups, &model, &forms) {
             for (_, b, _) in &groups {
                 self.kernel.release(*b);
             }
@@ -376,6 +381,98 @@ impl Rebuilder {
         }
         Ok(())
     }
+}
+
+/// A form copy's footprint in its wall's 2D (its outline's hull in documents that didn't keep
+/// one).
+fn footprint_of(c: &FormCopy) -> Polygon {
+    if c.footprint.len() >= 3 {
+        return Polygon::new(c.footprint.clone());
+    }
+    let pts: Vec<P2> = c.lines.iter().flat_map(|l| l.points.iter().copied()).collect();
+    hull(&pts)
+}
+
+/// `c` moved by `d` in its wall's 2D (onto a wall whose 2D is its wall's shifted by `-d`).
+fn shift_copy(c: &FormCopy, wall: WallId, d: nalgebra::Vector2<f64>) -> FormCopy {
+    let sh = Motion { linear: nalgebra::Matrix3::identity(), translation: nalgebra::Vector3::new(-d.x, -d.y, 0.0) };
+    FormCopy {
+        wall,
+        local: compose(&sh, &c.local),
+        center: c.center - d,
+        lines: c.lines.iter().map(|l| FormLine { points: l.points.iter().map(|p| p - d).collect(), closed: l.closed }).collect(),
+        up: c.up,
+        footprint: c.footprint.iter().map(|p| p - d).collect(),
+    }
+}
+
+/// Where a copy on `wall` that has run off it went: the side a later Bend split off the wall
+/// and turned (`model_edit`'s fold keeps that side's 2D, shifted back by the bend's allowance
+/// across the bend line). The copy moved onto that wall, if its footprint lies past the bend.
+fn split_off(model: &Model, c: &FormCopy) -> Option<FormCopy> {
+    let w = model.wall(c.wall)?;
+    let fp = footprint_of(c);
+    let mid = |p: &Polygon| {
+        let n = p.outer.len().max(1) as f64;
+        P2::from(p.outer.iter().fold(nalgebra::Vector2::zeros(), |a, q| a + q.coords) / n)
+    };
+    let held = mid(&w.outline);
+    for j in model.joints.iter().filter(|j| j.a == c.wall) {
+        let JointKind::Bend(b) = &j.kind else { continue };
+        // A fold's bend: the same line on both walls.
+        if (b.on_a.a - b.on_b.a).norm() > 1e-9 || (b.on_a.b - b.on_b.b).norm() > 1e-9 {
+            continue;
+        }
+        let Some(ba) = b.allowance(&model.params) else { continue };
+        let dir = b.on_a.dir();
+        let mut nn = nalgebra::Vector2::new(-dir.y, dir.x);
+        if (held - b.on_a.a).dot(&nn) > 0.0 {
+            nn = -nn;
+        }
+        // The whole footprint beyond the bend region.
+        if fp.outer.iter().any(|p| (p - b.on_a.a).dot(&nn) < ba) {
+            continue;
+        }
+        let moved = shift_copy(c, j.b, nn * ba);
+        let nw = model.wall(j.b)?;
+        let inside = poly::intersection(&footprint_of(&moved), &nw.outline).iter().map(Polygon::area).sum::<f64>();
+        if inside > 0.5 * fp.area() {
+            return Some(split_off(model, &moved).unwrap_or(moved));
+        }
+    }
+    None
+}
+
+/// Every form copy checked against the model as it is now: its wall must still be there and
+/// its footprint keep clear of the wall's joints, rips and edges ([`check_footprint`]), else the
+/// feature fails, saying which form. A copy a later Bend split off with its side of the wall
+/// moves onto that side.
+fn resolve_forms(model: &Model, forms: &[FormStep]) -> Result<Vec<FormStep>, String> {
+    let mut out = Vec::with_capacity(forms.len());
+    for step in forms {
+        let mut copies = Vec::with_capacity(step.copies.len());
+        for c in &step.copies {
+            let Some(w) = model.wall(c.wall) else {
+                return Err(format!("{} lost its wall: the wall a {} was placed on is gone", step.name, step.pick.name));
+            };
+            let size = w.outline.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0);
+            let clearance = 1e-6 * size;
+            let c = match check_footprint(model, c.wall, &footprint_of(c), clearance) {
+                Ok(()) => c.clone(),
+                Err(FormProblem::OffWall) => match split_off(model, c) {
+                    Some(m) => m,
+                    None => return Err(format!("{}: {}", step.name, FormProblem::OffWall.message())),
+                },
+                Err(e) => return Err(format!("{}: {}", step.name, e.message())),
+            };
+            if let Err(e) = check_footprint(model, c.wall, &footprint_of(&c), clearance) {
+                return Err(format!("{}: {}", step.name, e.message()));
+            }
+            copies.push(c);
+        }
+        out.push(FormStep { copies, ..step.clone() });
+    }
+    Ok(out)
 }
 
 /// The forms' outlines and centermarks on the flat-pattern parts of their walls.

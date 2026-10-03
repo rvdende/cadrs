@@ -382,6 +382,11 @@ pub struct FormCopy {
     pub center: cadrs_sheetmetal::poly::P2,
     pub lines: Vec<cadrs_sheetmetal::forms::FormLine>,
     pub up: bool,
+    /// Its footprint (the tool parts' hull seen along the wall's normal) in the wall's local
+    /// 2D: every refold checks it against the rules again. Empty in older documents (the
+    /// outline's hull stands in).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint: Vec<cadrs_sheetmetal::poly::P2>,
 }
 
 /// A wall or joint of a model's definition (for [`SheetMetalContext::owners`]).

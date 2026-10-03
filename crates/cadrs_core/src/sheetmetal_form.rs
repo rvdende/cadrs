@@ -112,9 +112,11 @@ impl LibraryForm {
     /// Its variables and their defaults (mm, degrees): what the picker shows below the form.
     pub fn variables(self) -> Vec<FormVariable> {
         let l = |n: &str, v: f64| FormVariable::length(n, v);
+        let a = |n: &str, v: f64| FormVariable::angle(n, v);
         match self {
-            LibraryForm::Louver => vec![l("Length", 40.0), l("Width", 8.0), l("Height", 4.0)],
-            LibraryForm::Lance => vec![l("Length", 30.0), l("Width", 6.0), l("Height", 3.0)],
+            // Angle: the slope of the louver's end walls; the lance's ramps.
+            LibraryForm::Louver => vec![l("Length", 40.0), l("Width", 8.0), l("Height", 4.0), a("Angle", 35.0)],
+            LibraryForm::Lance => vec![l("Length", 30.0), l("Width", 6.0), l("Height", 3.0), a("Angle", 45.0)],
             LibraryForm::Dimple => vec![l("Diameter", 16.0), l("Height", 3.0)],
             LibraryForm::Emboss => vec![l("Length", 30.0), l("Width", 20.0), l("Height", 2.5)],
             LibraryForm::ExtrudedHole => vec![l("Diameter", 8.0), l("Height", 4.0)],
@@ -140,6 +142,10 @@ pub struct FormVariable {
 impl FormVariable {
     pub fn length(name: &str, mm: f64) -> Self {
         FormVariable { name: name.into(), expr: format!("{} mm", crate::sheetmetal::plain(mm)), value: mm, angle: false }
+    }
+
+    pub fn angle(name: &str, deg: f64) -> Self {
+        FormVariable { name: name.into(), expr: format!("{} deg", crate::sheetmetal::plain(deg)), value: deg, angle: true }
     }
 }
 
@@ -263,6 +269,51 @@ pub fn studio_variables(studio: &[Feature]) -> Vec<FormVariable> {
         .collect()
 }
 
+/// Why a document Part Studio can't be a form: Onshape's rule that it has a configuration
+/// variable named `thickness` of type Length (in cadrs, a Length Variable feature of that name)
+/// and a Tag (Form).
+pub fn studio_problem(name: &str, studio: &[Feature]) -> Option<String> {
+    if tag_of(studio).is_none() {
+        return Some(format!("{name} has no Tag (Form) feature"));
+    }
+    let thickness = studio.iter().any(|f| matches!(&f.kind, FeatureKind::Variable(v) if v.name.eq_ignore_ascii_case("thickness") && v.kind == crate::variables::VariableKind::Length));
+    (!thickness).then(|| format!("{name} has no Length variable named thickness: a form's Part Studio needs one, which the sheet metal model's thickness drives"))
+}
+
+/// Keeps every Form feature that uses a form Part Studio of its own document
+/// ([`FormSource::Current`]) live: its copy of the studio's features (and name) is brought up to
+/// date with the tab, by the tab's id, after every command, undo and redo (as same-document
+/// Derived features are, `crate::derived::refresh`), so edits to the form propagate at the next
+/// rebuild. A form whose tab is gone keeps its last copy.
+pub fn refresh(doc: &mut crate::document::Document) {
+    use crate::document::ElementKind;
+    let mut updates: Vec<(usize, usize, Vec<Feature>, String)> = Vec::new();
+    for (i, el) in doc.elements.iter().enumerate() {
+        for (j, f) in el.features().iter().enumerate() {
+            let FeatureKind::Form(x) = &f.kind else { continue };
+            let Some(pick) = &x.form else { continue };
+            let FormSource::Current { element } = pick.source else { continue };
+            if element == el.id {
+                continue;
+            }
+            let Some(src) = doc.elements.iter().find(|e| e.id == element && matches!(e.kind, ElementKind::PartStudio { .. })) else { continue };
+            let features = src.active_features();
+            if pick.studio != features || pick.name != src.name {
+                updates.push((i, j, features, src.name.clone()));
+            }
+        }
+    }
+    for (i, j, features, name) in updates {
+        if let ElementKind::PartStudio { features: list, .. } = &mut doc.elements[i].kind
+            && let FeatureKind::Form(x) = &mut list[j].kind
+            && let Some(pick) = &mut x.form
+        {
+            pick.studio = features;
+            pick.name = name;
+        }
+    }
+}
+
 /// A Part Studio's form tag, if it has one (its first Tag (Form) feature).
 pub fn tag_of(studio: &[Feature]) -> Option<&TagFormFeature> {
     studio.iter().find_map(|f| match &f.kind {
@@ -279,8 +330,8 @@ pub fn form_studio(pick: &FormPick, variables: &[FormVariable], thickness: f64) 
         FormSource::Library(form) => crate::samples::sheetmetal_forms::studio(*form, variables, thickness).map_err(|e| e.to_string()),
         _ => {
             let mut fs = pick.studio.clone();
-            if tag_of(&fs).is_none() {
-                return Err(format!("{} has no Tag (Form) feature", pick.name));
+            if let Some(why) = studio_problem(&pick.name, &fs) {
+                return Err(why);
             }
             let mm = crate::sheetmetal::plain(thickness);
             for f in &mut fs {

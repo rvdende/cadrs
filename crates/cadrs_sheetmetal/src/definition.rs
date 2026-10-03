@@ -72,8 +72,14 @@ pub enum StepEdit {
     CornerRelief(CornerOverride),
     /// **Bend relief** (SM8).
     BendRelief(BendReliefOverride),
-    /// Walls and joints added as they are (a Sheet metal Loft's Add, SM19.2).
-    AddWalls { walls: Vec<Wall>, joints: Vec<Joint> },
+    /// Walls and joints added as they are (a Sheet metal Loft's Add, SM19.2), after taking
+    /// `trims` (regions in their local 2D) off model walls the new walls bend from.
+    AddWalls {
+        walls: Vec<Wall>,
+        joints: Vec<Joint>,
+        #[serde(default)]
+        trims: Vec<(WallId, Vec<crate::poly::Polygon>)>,
+    },
     /// A flat pattern extrude (P3I.6, SM14): regions added to or cut from flat-pattern part
     /// `part` in the flat ([`crate::flat_edit`]).
     Flat { part: usize, regions: Vec<crate::poly::Polygon>, remove: bool },
@@ -278,7 +284,12 @@ fn apply_model(m: &mut Model, e: &StepEdit) -> Result<(), EditError> {
             m.bend_relief_overrides.push(*o);
             Ok(())
         }
-        StepEdit::AddWalls { walls, joints } => {
+        StepEdit::AddWalls { walls, joints, trims } => {
+            for (w, cut) in trims {
+                let wall = m.walls.iter_mut().find(|x| x.id == *w).ok_or(EditError::NoWall)?;
+                let left = crate::poly::difference(std::slice::from_ref(&wall.outline), cut);
+                wall.outline = left.into_iter().max_by(|a, b| a.area().total_cmp(&b.area())).ok_or(EditError::WallCutAway)?;
+            }
             m.walls.extend(walls.iter().cloned());
             m.joints.extend(joints.iter().cloned());
             Ok(())
