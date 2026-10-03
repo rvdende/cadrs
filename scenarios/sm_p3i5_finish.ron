@@ -54,11 +54,19 @@ Scenario(
         Screenshot("01-finish-dialog-warning"),
         Click(ui("sheet-metal-finish-dialog-accept")),
         Wait(30),
+        // Turned round to face the plate's (0, 60) corner, so its edge through the thickness (both
+        // its faces in view) takes the click.
+        Custom("view 210 30 5 55 0 0.04"),
+        Wait(15),
         Key("Shift+F"),
         WaitFor("fillet-dialog"),
         Wait(5),
-        Click(xyz(0, 0, 1)),
+        // A corner edge away from the origin (its glyph would take a click at (0, 0)).
+        Click(xyz(0, 60, 1)),
         Wait(3),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-fillet-edge-picked"),
         Click(ui("fillet-size-field")),
         Wait(2),
         Key("Ctrl+A"),
@@ -67,10 +75,10 @@ Scenario(
         Wait(30),
         Click(ui("fillet-dialog-accept")),
         Wait(30),
-        Custom("view 30 30 40 30 0 0.11"),
+        Custom("view 210 30 40 40 0 0.11"),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("02-fillet-after-finish"),
+        Screenshot("03-fillet-after-finish"),
     ],
 )

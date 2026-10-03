@@ -371,16 +371,121 @@ fn end_distance(state: &State, origin: P3, dir: V3, end: EndType, depth: f64, up
 
 /// A polygon's loops as a kernel region on `plane` (2D points mapped by `to_plane`).
 fn region_of(poly: &Polygon, source: u64, to_plane: &dyn Fn(P2) -> nalgebra::Point2<f64>) -> cadrs_kernel::Region {
-    let lp = |l: &[P2], base: u64| Loop {
-        curves: (0..l.len())
-            .map(|k| Curve2::Line { a: to_plane(l[k]), b: to_plane(l[(k + 1) % l.len()]), source: Some(base + k as u64) })
-            .collect(),
-    };
+    let lp = |l: &[P2], base: u64| Loop { curves: loop_curves(&l.iter().map(|q| to_plane(*q)).collect::<Vec<_>>(), base) };
     cadrs_kernel::Region {
         outer: lp(&poly.outer, 0),
         holes: poly.holes.iter().enumerate().map(|(h, l)| lp(l, (h as u64 + 1) << 20)).collect(),
         source: Some(source),
     }
+}
+
+/// Most a polygonised round turns at one of its points (radians).
+const ARC_STEP_MAX: f64 = 0.45;
+
+/// The circle through three points (centre, radius), if they aren't in a line.
+fn circle3(a: nalgebra::Point2<f64>, b: nalgebra::Point2<f64>, c: nalgebra::Point2<f64>) -> Option<(nalgebra::Point2<f64>, f64)> {
+    let (ab, ac) = (b - a, c - a);
+    let d = 2.0 * ab.perp(&ac);
+    if d.abs() < 1e-12 * (ab.norm_squared() + ac.norm_squared()).max(1e-300) {
+        return None;
+    }
+    let (b2, c2) = (ab.norm_squared(), ac.norm_squared());
+    let o = nalgebra::Vector2::new(ac.y * b2 - ab.y * c2, ab.x * c2 - ac.x * b2) / d;
+    Some((a + o, o.norm()))
+}
+
+/// A closed loop of points as kernel curves: runs of points on one circle (a polygonised arc:
+/// a round relief, a corner break, a slot's end, a round hole) become exact arcs, a loop all on
+/// one circle a circle, the rest lines. The arcs end on the loop's own points, so they meet the
+/// lines exactly; the folded part then has true round faces and circular edges (that Use and
+/// fillets take) where the flat's outline has its rounds.
+fn loop_curves(pts: &[nalgebra::Point2<f64>], base: u64) -> Vec<Curve2> {
+    let n = pts.len();
+    let line = |k: usize| Curve2::Line { a: pts[k], b: pts[(k + 1) % n], source: Some(base + k as u64) };
+    if n < 4 {
+        return (0..n).map(line).collect();
+    }
+    let at = |i: usize| pts[i % n];
+    // The signed turn at each point.
+    let turn = |i: usize| {
+        let (p, q, r) = (at(i + n - 1), at(i), at(i + 1));
+        let (u, v) = (q - p, r - q);
+        if u.norm() < 1e-12 || v.norm() < 1e-12 {
+            return f64::INFINITY;
+        }
+        u.perp(&v).atan2(u.dot(&v))
+    };
+    let turns: Vec<f64> = (0..n).map(turn).collect();
+    // On a circle: the points of a polygonised round are within a few nm of it (the booleans'
+    // grid).
+    let on = |c: nalgebra::Point2<f64>, r: f64, p: nalgebra::Point2<f64>| ((p - c).norm() - r).abs() <= 5e-6 + 1e-9 * r;
+    let seg = |i: usize| (at(i + 1) - at(i)).norm();
+    // A round's steps are alike; a line running into it tangentially isn't one of them.
+    let alike = |a: f64, b: f64| b <= 2.0 * a && a <= 2.0 * b;
+    let small = |t: f64| t.is_finite() && t.abs() > 1e-6 && t.abs() <= ARC_STEP_MAX;
+    // A whole circle.
+    if n >= 8
+        && turns.iter().all(|t| small(*t) && t.signum() == turns[0].signum())
+        && let Some((c, r)) = circle3(at(0), at(n / 3), at(2 * n / 3))
+        && pts.iter().all(|p| on(c, r, *p))
+    {
+        let r = if turns[0] > 0.0 { r } else { -r };
+        return vec![Curve2::Circle { center: c, radius: r, source: Some(base) }];
+    }
+    // Where to start: a point that isn't inside a run (a corner, or where a circle changes).
+    let inside = |i: usize| {
+        small(turns[i % n])
+            && small(turns[(i + 1) % n])
+            && alike(seg(i + n - 1), seg(i))
+            && alike(seg(i), seg(i + 1))
+            && turns[i % n].signum() == turns[(i + 1) % n].signum()
+            && circle3(at(i + n - 1), at(i), at(i + 1)).zip(circle3(at(i), at(i + 1), at(i + 2))).is_some_and(|((c1, r1), (c2, r2))| (c1 - c2).norm() <= 1e-4 * r1.max(1.0) && (r1 - r2).abs() <= 1e-4 * r1.max(1.0))
+    };
+    let Some(start) = (0..n).find(|i| !inside(*i + n - 1)) else { return (0..n).map(line).collect() };
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < n {
+        let i = start + k;
+        // Try an arc from point i: its first three points' circle, as far as the points stay on
+        // it and keep turning the same small way.
+        let mut end = k;
+        if k + 3 <= n
+            && small(turns[(i + 1) % n])
+            && small(turns[(i + 2) % n])
+            && turns[(i + 1) % n].signum() == turns[(i + 2) % n].signum()
+            && alike(seg(i), seg(i + 1))
+            && let Some((c, r)) = circle3(at(i), at(i + 1), at(i + 2))
+        {
+            let sign = turns[(i + 1) % n].signum();
+            let step = seg(i);
+            let mut j = k + 2;
+            while j < n && small(turns[(start + j) % n]) && turns[(start + j) % n].signum() == sign && alike(step, seg(start + j)) && on(c, r, at(start + j + 1)) {
+                j += 1;
+            }
+            // Points k..=j on the circle: j − k segments.
+            if j - k >= 3 {
+                let (a, b) = (at(i), at(start + j));
+                let a0 = (a - c).y.atan2((a - c).x);
+                let a1 = (b - c).y.atan2((b - c).x);
+                let tau = std::f64::consts::TAU;
+                let mut sweep = (a1 - a0).rem_euclid(tau);
+                if sign < 0.0 {
+                    sweep -= tau;
+                }
+                if sweep.abs() > 1e-9 && sweep.abs() < tau - 1e-6 {
+                    out.push(Curve2::Arc { center: c, radius: r, start_angle: a0, sweep, source: Some(base + (i % n) as u64) });
+                    end = j;
+                }
+            }
+        }
+        if end > k {
+            k = end;
+        } else {
+            out.push(line(i % n));
+            k += 1;
+        }
+    }
+    out
 }
 
 /// An annular sector about the plane's origin (radii `ri..ro`, angles `a0..a0 + sweep`) as a
@@ -568,62 +673,93 @@ impl Rebuilder {
         // Each cut's extent along the bend (s) and across it (u, as a share of the sweep).
         let total = len.abs();
         let eps = 1e-3 * model.params.thickness.max(0.01);
-        let mut tools: Vec<BodyId> = Vec::new();
+        let (body, names, made_volume) = made.pop().expect("one");
         // P3I.6: a cut that isn't a rectangle in (s, u) (a flat cut's circle or slanted edge) is
-        // taken out as thin wedges, each as long as the cut is over its slice.
-        let boxes: Vec<(P2, P2)> = removed.iter().flat_map(|c| super::sheetmetal_flat::wedge_boxes(c, allowance)).collect();
-        for (lo, hi) in boxes {
-            let (s0, s1) = (lo.x.max(0.0), hi.x.min(total));
-            let (u0, u1) = (lo.y.max(0.0), hi.y.min(allowance));
-            if s1 - s0 < 1e-9 || u1 - u0 < 1e-9 {
-                continue;
+        // taken out as thin wedges, each as long as the cut is over its slice. Better: such a
+        // cut goes as one tool that follows its outline (`BendGeom::cut_mesh`), so its faces are
+        // smooth rather than a staircase; the wedges if that tool fails.
+        for with_mesh in [true, false] {
+            let mut tools: Vec<BodyId> = Vec::new();
+            let mut meshed = false;
+            let mut boxes: Vec<(P2, P2)> = Vec::new();
+            for c in removed {
+                let slices = super::sheetmetal_flat::wedge_boxes(c, allowance);
+                if with_mesh
+                    && slices.len() > 1
+                    && let Some(tris) = g.cut_mesh(c, allowance, model.params.thickness)
+                {
+                    let size = tris.iter().flatten().map(|p| p.coords.norm()).fold(1.0, f64::max);
+                    if let Ok(b) = self.kernel.mesh_solid(&tris, 1e-7 * size) {
+                        tools.push(b);
+                        meshed = true;
+                        continue;
+                    }
+                }
+                boxes.extend(slices);
             }
-            // Positions along the axis from the profile's base.
-            let at = |s: f64| (g.ends.0 + span * (s / total) - base).dot(&g.axis);
-            let (mut z0, mut z1) = (at(s0).min(at(s1)), at(s0).max(at(s1)));
-            if z0 < 1e-9 {
-                z0 -= eps;
+            for (lo, hi) in boxes {
+                let (s0, s1) = (lo.x.max(0.0), hi.x.min(total));
+                let (u0, u1) = (lo.y.max(0.0), hi.y.min(allowance));
+                if s1 - s0 < 1e-9 || u1 - u0 < 1e-9 {
+                    continue;
+                }
+                // Positions along the axis from the profile's base.
+                let at = |s: f64| (g.ends.0 + span * (s / total) - base).dot(&g.axis);
+                let (mut z0, mut z1) = (at(s0).min(at(s1)), at(s0).max(at(s1)));
+                if z0 < 1e-9 {
+                    z0 -= eps;
+                }
+                if z1 > total - 1e-9 {
+                    z1 += eps;
+                }
+                let (mut a0, mut a1) = (u0 / allowance * g.sweep, u1 / allowance * g.sweep);
+                if u0 < 1e-9 {
+                    a0 -= 1e-4;
+                }
+                if u1 > allowance - 1e-9 {
+                    a1 += 1e-4;
+                }
+                let wedge = cadrs_kernel::Profile::new(
+                    kplane(base + g.axis * z0, g.start, g.axis),
+                    vec![sector((g.inner_radius - eps).max(1e-6), g.outer_radius + eps, a0, a1 - a0, 0)],
+                );
+                match self.kernel.extrude(&wedge, Extent::Blind(z1 - z0)) {
+                    Ok(r) => tools.push(r.bodies[0]),
+                    Err(_) => continue,
+                }
             }
-            if z1 > total - 1e-9 {
-                z1 += eps;
+            if tools.is_empty() {
+                return Ok(vec![(body, names, made_volume)]);
             }
-            let (mut a0, mut a1) = (u0 / allowance * g.sweep, u1 / allowance * g.sweep);
-            if u0 < 1e-9 {
-                a0 -= 1e-4;
+            let r = self.kernel.boolean(BoolOp::Subtract, body, &tools);
+            for b in &tools {
+                self.kernel.release(*b);
             }
-            if u1 > allowance - 1e-9 {
-                a1 += 1e-4;
-            }
-            let wedge = cadrs_kernel::Profile::new(
-                kplane(base + g.axis * z0, g.start, g.axis),
-                vec![sector((g.inner_radius - eps).max(1e-6), g.outer_radius + eps, a0, a1 - a0, 0)],
-            );
-            match self.kernel.extrude(&wedge, Extent::Blind(z1 - z0)) {
-                Ok(r) => tools.push(r.bodies[0]),
-                Err(_) => continue,
+            let cut = r.and_then(|res| {
+                let nb = res.bodies[0];
+                let n = naming::name_body(&self.kernel, nb, op, &res.history, &[(body, &names)])?;
+                let v = self.kernel.mass_properties(nb)?.volume;
+                Ok((nb, n, v))
+            });
+            match cut {
+                Ok(x) => {
+                    self.kernel.release(body);
+                    return Ok(vec![x]);
+                }
+                // A relief cut that takes the whole bend end away leaves nothing of it.
+                Err(cadrs_kernel::KernelError::OperationFailed(m)) if m.contains("empty") => {
+                    self.kernel.release(body);
+                    return Ok(Vec::new());
+                }
+                Err(_) if with_mesh && meshed => continue,
+                Err(e) => {
+                    self.kernel.release(body);
+                    return Err(format!("Sheet metal bend relief failed: {e}"));
+                }
             }
         }
-        if tools.is_empty() {
-            return Ok(made);
-        }
-        let (body, names, _) = made.pop().expect("one");
-        let r = self.kernel.boolean(BoolOp::Subtract, body, &tools);
-        for b in &tools {
-            self.kernel.release(*b);
-        }
-        let cut = r.and_then(|res| {
-            let nb = res.bodies[0];
-            let n = naming::name_body(&self.kernel, nb, op, &res.history, &[(body, &names)])?;
-            let v = self.kernel.mass_properties(nb)?.volume;
-            Ok((nb, n, v))
-        });
         self.kernel.release(body);
-        match cut {
-            Ok(x) => Ok(vec![x]),
-            // A relief cut that takes the whole bend end away leaves nothing of it.
-            Err(cadrs_kernel::KernelError::OperationFailed(m)) if m.contains("empty") => Ok(Vec::new()),
-            Err(e) => Err(format!("Sheet metal bend relief failed: {e}")),
-        }
+        Err("Sheet metal bend relief failed".into())
     }
 
     /// Names a new body and measures it.
@@ -827,5 +963,68 @@ impl Rebuilder {
         let mut o = self.refold(id, name, state, &[], None, ctx, &consumed)?;
         o.warning = o.warning.or(warning);
         Ok(o)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadrs_sheetmetal::model_edit::{CornerBreakKind, break_corner};
+
+    /// The area a loop of curves encloses (counter-clockwise positive).
+    fn area(curves: &[Curve2]) -> f64 {
+        let mut twice = 0.0;
+        for c in curves {
+            twice += match *c {
+                Curve2::Line { a, b, .. } => a.x * b.y - b.x * a.y,
+                Curve2::Arc { center, radius, start_angle, sweep, .. } => {
+                    let (t0, t1) = (start_angle, start_angle + sweep);
+                    radius * center.x * (t1.sin() - t0.sin()) + radius * center.y * (t0.cos() - t1.cos()) + radius * radius * sweep
+                }
+                Curve2::Circle { radius, .. } => 2.0 * std::f64::consts::PI * radius * radius.abs(),
+                _ => unreachable!(),
+            };
+        }
+        twice / 2.0
+    }
+
+    fn plate(kind: CornerBreakKind) -> Vec<nalgebra::Point2<f64>> {
+        let mut m = Model {
+            params: cadrs_sheetmetal::Params { thickness: 2.0, ..Default::default() },
+            walls: vec![Wall {
+                id: WallId(0),
+                surface: Surface::Planar { origin: P3::origin(), u: V3::x(), v: V3::y() },
+                outline: Polygon::rect(P2::new(0.0, 0.0), P2::new(100.0, 60.0)),
+            }],
+            ..Default::default()
+        };
+        break_corner(&mut m, WallId(0), P2::new(100.0, 60.0), kind).unwrap();
+        m.walls[0].outline.outer.clone()
+    }
+
+    #[test]
+    fn rounds_become_arcs_and_keep_their_area() {
+        use std::f64::consts::PI;
+        // A circular fillet: one exact arc, the closed-form area.
+        let l = plate(CornerBreakKind::Fillet { radius: 10.0 });
+        let c = loop_curves(&l, 0);
+        assert_eq!(c.iter().filter(|c| matches!(c, Curve2::Arc { .. })).count(), 1, "{c:?}");
+        assert_eq!(c.len(), 5);
+        assert!((area(&c) - (6000.0 - 100.0 * (1.0 - PI / 4.0))).abs() < 1e-6, "{}", area(&c));
+        // A quarter ellipse: arcs fitted along it, its area kept.
+        let l = plate(CornerBreakKind::Round { r1: 10.0, r2: 6.0, overflow: false });
+        let c = loop_curves(&l, 0);
+        let want = 6000.0 - 60.0 * (1.0 - PI / 4.0);
+        assert!((area(&c) - want).abs() < 0.02, "{} vs {want}: {c:?}", area(&c));
+        // A circle: one curve.
+        let ring: Vec<nalgebra::Point2<f64>> = (0..48).map(|k| {
+            let a = k as f64 / 48.0 * std::f64::consts::TAU;
+            nalgebra::Point2::new(5.0 + 3.0 * a.cos(), 7.0 + 3.0 * a.sin())
+        }).collect();
+        let c = loop_curves(&ring, 0);
+        assert!(matches!(c[..], [Curve2::Circle { radius, .. }] if (radius - 3.0).abs() < 1e-9), "{c:?}");
+        // A rectangle stays four lines.
+        let r: Vec<nalgebra::Point2<f64>> = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)].iter().map(|(x, y)| nalgebra::Point2::new(*x, *y)).collect();
+        assert_eq!(loop_curves(&r, 0).len(), 4);
     }
 }

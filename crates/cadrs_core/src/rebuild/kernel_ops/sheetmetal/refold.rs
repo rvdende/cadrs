@@ -31,6 +31,11 @@ use cadrs_sheetmetal::forms::{FlatForm, on_flat};
 use crate::sheetmetal::{FormStep, PieceKey};
 use crate::sheetmetal_form::{form_studio, tag_of};
 
+/// Flat faces meeting at less than this (radians) are facets of one round (a polygonised arc's
+/// steps: a relief circle's 15°, a corner break's under 7.5°, a mesh-cut bend's 2°): their
+/// seams aren't drawn.
+const FACET_SEAM_ANGLE: f64 = 0.45;
+
 /// The stable key of a feature (a step's source, a form's flat key).
 pub(in crate::rebuild) fn source_of(id: FeatureId) -> u64 {
     naming::stable_hash(id.0.as_bytes())
@@ -229,6 +234,17 @@ impl Rebuilder {
         // The model's parts no folded part continues are gone.
         next.parts.retain(|p| !(old_parts.iter().any(|(q, _)| *q == p.part.id) && !used.contains(&p.part.id)));
         let mut o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
+        // The rounds' facets (reliefs, corner breaks, round holes, cuts across bends) draw no
+        // edge lines between them.
+        {
+            let mut st = (*o.state).clone();
+            for p in st.parts.iter_mut().filter(|p| walls_of.iter().any(|(q, _)| *q == p.part.id)) {
+                let mut s = (*p.part.solid).clone();
+                s.mark_facet_seams(FACET_SEAM_ANGLE);
+                p.part.solid = Arc::new(s);
+            }
+            o.state = Arc::new(st);
+        }
         ctx.parts = walls_of;
         o.state = Arc::new(with_context(&o.state, ctx));
         Ok(o)

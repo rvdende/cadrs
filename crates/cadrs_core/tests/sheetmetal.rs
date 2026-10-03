@@ -459,8 +459,9 @@ fn convert_a_filleted_block_rolls_or_bends_the_round() {
     // Not picked: a rolled wall joined to the top and the front by tangent joints.
     assert_eq!(ctx.model.walls.len(), 7, "{:?}", ctx.model.walls.iter().map(|w| w.id).collect::<Vec<_>>());
     assert_eq!(ctx.model.joints.iter().filter(|j| matches!(j.kind, JointKind::Tangent { .. })).count(), 2);
+    // (The folded reliefs are exact arcs, the flat's polygons: 2e-5.)
     for p in &b.parts {
-        assert!(close(volume(p), predicted(&b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
+        assert!(close(volume(p), predicted(&b, p), 2e-5), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
     }
     // Picked to bend: a bend of the round's radius between the top and the front.
     x.bends = vec![EdgeOrFace::Face(round)];
@@ -471,6 +472,6 @@ fn convert_a_filleted_block_rolls_or_bends_the_round() {
     let bend = ctx.model.joints.iter().find_map(|j| j.bend()).expect("a bend");
     assert!((bend.radius - 8.0).abs() < 1e-6, "{}", bend.radius);
     for p in &b.parts {
-        assert!(close(volume(p), predicted(&b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
+        assert!(close(volume(p), predicted(&b, p), 2e-5), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
     }
 }

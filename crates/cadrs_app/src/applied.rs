@@ -644,6 +644,19 @@ pub fn accept(world: &mut World) {
     // the funnel's failing Shell, `ex4-step10.png`); an edit before it can fix it (PS21.11).
     let label = if s.is_new { format!("Insert {}", f.name) } else { format!("Edit {}", f.name) };
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
+        // A new sheet metal feature that uses a sketch shown by its eye (E1: Sketch 1 shown to
+        // pick a bend line) hides it again, as Onshape does: the sketch goes back to the
+        // automatic behaviour, hidden once a feature consumes it (exercise E1 step 10).
+        if s.is_new && matches!(f.kind, FeatureKind::SheetMetalTool(_)) {
+            let shown: Vec<FeatureId> = f
+                .input_sketches()
+                .into_iter()
+                .filter(|k| doc.doc.element(s.element).is_some_and(|el| el.sketch_visibility(*k) == Some(true)))
+                .collect();
+            for sketch in shown {
+                let _ = doc.execute(&cadrs_core::commands::SetSketchVisibility { element: s.element, sketch, visible: None });
+            }
+        }
         doc.squash_element_since(s.mark, s.element, label);
     }
     end(world);

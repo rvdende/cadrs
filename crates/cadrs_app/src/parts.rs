@@ -1310,7 +1310,8 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
     let mut out: Vec<Vec<Vec3>> = s
         .edges
         .iter()
-        .filter(|e| !(cull && e.name.faces[0] != e.name.faces[1] && e.name.faces.iter().all(faces_away)))
+        // A round's facet seams (sheet metal) aren't drawn.
+        .filter(|e| !e.smooth && !(cull && e.name.faces[0] != e.name.faces[1] && e.name.faces.iter().all(faces_away)))
         .map(|e| e.points.iter().map(|p| v3(*p)).collect())
         .collect();
     for w in s.rulings.windows(2) {
@@ -1553,7 +1554,7 @@ fn draw_part_edges(
                     .and_then(|f| f.plane)
                     .is_none_or(|p| v3(p.normal()).dot(back) > 1e-4)
             };
-            for e in &part.solid.edges {
+            for e in part.solid.edges.iter().filter(|e| !e.smooth) {
                 // The edges on the sketch plane lie under the selected region's outline.
                 let on_start = e
                     .name
@@ -1590,7 +1591,7 @@ fn draw_part_edges(
                     edges.linestrip(line, Color::srgb_u8(0x14, 0x14, 0x14));
                 }
             }
-            for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1]) {
+            for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1] && !e.smooth) {
                 free_edges.linestrip(e.points.iter().map(|p| v3(*p)), Color::srgb_u8(0x14, 0x14, 0x14));
             }
         }

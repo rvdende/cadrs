@@ -68,6 +68,9 @@ pub enum StepEdit {
     CornerBreaks { corners: Vec<(WallId, P2, CornerBreakKind)> },
     /// Face pattern / Face mirror of walls (SM12.2): one copy per placement.
     Copy { walls: Vec<WallId>, places: Vec<Placement>, seed: u64 },
+    /// Part pattern / Part mirror of a sheet metal part (SM12.2): the part's walls copied as a
+    /// part of its own, one per placement.
+    CopyPart { walls: Vec<WallId>, places: Vec<Placement>, seed: u64 },
     /// **Corner** (SM7).
     CornerRelief(CornerOverride),
     /// **Bend relief** (SM8).
@@ -267,6 +270,12 @@ fn apply_model(m: &mut Model, e: &StepEdit) -> Result<(), EditError> {
         StepEdit::Copy { walls, places, seed } => {
             for (k, p) in places.iter().enumerate() {
                 model_edit::copy_walls(m, walls, p, seed ^ ((k as u64) << 48))?;
+            }
+            Ok(())
+        }
+        StepEdit::CopyPart { walls, places, seed } => {
+            for (k, p) in places.iter().enumerate() {
+                model_edit::copy_part(m, walls, p, seed ^ ((k as u64) << 48))?;
             }
             Ok(())
         }

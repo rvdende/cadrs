@@ -8,7 +8,7 @@
 // beside the tab (15, as high as the right wall); 10 Flange 3 on the right wall's top edge (10);
 // 11 Make joint, Rip, Butt joint – Direction 1; 12 Corner at the rear-left corner, Round – Sized
 // 3.3; 13 Carbon Steel; 14 Mass properties: 0.111 kg (`cadrs_core/tests/sheetmetal_exercises.rs`
-// checks 0.111473 kg on the same steps).
+// checks 0.111474 kg on the same steps).
 Scenario(
     start: Some("document"),
     steps: [

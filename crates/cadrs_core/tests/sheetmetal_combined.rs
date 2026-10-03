@@ -175,9 +175,10 @@ fn close(a: f64, b: f64, rel: f64) -> bool {
     (a - b).abs() <= rel * b.abs().max(1e-9)
 }
 
+/// (The folded rounds are exact arcs, the flat's polygons: 2e-5.)
 fn all_match(b: &Build) {
     for p in &b.parts {
-        assert!(close(volume(p), predicted(b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(b, p));
+        assert!(close(volume(p), predicted(b, p), 2e-5), "{}: {} vs {}", p.name, volume(p), predicted(b, p));
     }
 }
 

@@ -282,7 +282,8 @@ fn corner_breaks_lock_the_table_and_show_in_the_flat() {
     let want = 6000.0 - (1.0 - std::f64::consts::PI / 4.0) * 100.0;
     assert!((area - want).abs() < 0.3, "{area} vs {want}");
     assert!(b.sheet_metal[0].corner_broken);
-    assert!(close(volume(&b.parts[0]), area * 2.0, 1e-6));
+    // Folded, the round is an exact arc: the closed form.
+    assert!(close(volume(&b.parts[0]), want * 2.0, 1e-8), "{} vs {}", volume(&b.parts[0]), want * 2.0);
     // The chamfer tab: 5 × 5 off the corner.
     st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(CornerBreakFeature { chamfer: true, distance: 5.0, ..cb })));
     let b = st.ok();
@@ -404,9 +405,297 @@ fn a_tab_adds_to_its_wall_and_cuts_its_subtraction_scope() {
     let sheet = b.parts.iter().find(|p| p.id == plate.id).unwrap();
     assert!(close(volume(sheet), area * 2.0, 1e-6));
     let block_after = b.parts.iter().find(|p| p.id == block.id).unwrap();
-    // The pocket: (20 + 1) × (75 − 65 + 0.5) ± (thickness + offset) about the profile (−2.5..2.5,
-    // inside the block's −5..5).
-    let pocket = 21.0 * 10.5 * 5.0;
-    assert!((v_block - volume(block_after) - pocket).abs() < 2.0, "{}", v_block - volume(block_after));
+    // The pocket: the tab grown by the offset, (20 + 1) × (75 − 65 + 0.5) in the block, through
+    // the tab's own sheet (z 0..2, the material side of the Top-plane profile) and the offset
+    // beyond each face: z −0.5..2.5, 3 deep (inside the block's −5..5).
+    let pocket = 21.0 * 10.5 * 3.0;
+    assert!((v_block - volume(block_after) - pocket).abs() < 1e-6, "{}", v_block - volume(block_after));
+    let (lo, hi) = {
+        // The pocket's floor and roof: the block's faces facing up and down inside it.
+        let s = &block_after.solid;
+        let zs: Vec<f64> = s.faces.iter().filter_map(|f| f.center).filter(|c| c[0] > 40.0 && c[0] < 60.0 && c[1] > 66.0 && c[1] < 75.0 && c[2].abs() < 4.0).map(|c| c[2]).collect();
+        (zs.iter().copied().fold(f64::MAX, f64::min), zs.iter().copied().fold(f64::MIN, f64::max))
+    };
+    assert!((lo + 0.5).abs() < 1e-6 && (hi - 2.5).abs() < 1e-6, "pocket z {lo}..{hi}");
 }
 
+/// A Thicken of a closed polyline on Top, 2 thick (material up).
+fn sheet_of(st: &mut Studio, pts: &[(f64, f64)]) -> FeatureId {
+    let s = st.sketch(PlaneRef::Top, pts, true);
+    let p = params();
+    let x = SheetMetalModelFeature { operation: SheetMetalOp::Thicken, region_sketches: vec![s], params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
+    st.add("Sheet metal model", FeatureKind::SheetMetalModel(x))
+}
+
+#[test]
+fn corner_break_asymmetric_overflow_and_tangent_chamfers() {
+    use std::f64::consts::PI;
+    let mut st = Studio::new();
+    st.plate();
+    let plate = st.ok().parts[0].clone();
+    let corner = edge_near(&plate, [100.0, 60.0, 1.0]);
+    // Asymmetric: radius 10 on the edge into the corner, 6 on the edge out: a quarter ellipse.
+    let cb = CornerBreakFeature { entities: vec![SmPick::Edge(corner)], size: 10.0, asymmetric: true, size2: 6.0, ..Default::default() };
+    let f = st.add("Corner break", FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(cb.clone())));
+    let b = st.ok();
+    let area = b.sheet_metal[0].flat.parts[0].area();
+    let want = 6000.0 - 60.0 * (1.0 - PI / 4.0);
+    assert!((area - want).abs() < 0.02, "{area} vs {want}");
+    // (The quarter ellipse folds as fine arcs.)
+    assert!(close(volume(&b.parts[0]), want * 2.0, 1e-6), "{} vs {}", volume(&b.parts[0]), want * 2.0);
+    // Flipped: the same area, the long side on the other edge.
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(CornerBreakFeature { flip_asymmetric: true, ..cb.clone() })));
+    let b = st.ok();
+    let (_, hi) = b.sheet_metal[0].flat.parts[0].bounds().unwrap();
+    assert!((b.sheet_metal[0].flat.parts[0].area() - want).abs() < 0.02 && hi.x > 99.0);
+    // Radius 70 doesn't fit the 60 edge...
+    let big = CornerBreakFeature { entities: cb.entities.clone(), size: 70.0, ..Default::default() };
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(big.clone())));
+    assert!(st.build().error(f).is_some());
+    // ...unless the edge may overflow: the round about (30, −10) trims the plate.
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(CornerBreakFeature { allow_overflow: true, ..big })));
+    let b = st.ok();
+    let below = 700.0 - (5.0 * 4800f64.sqrt() + 2450.0 * (1.0f64 / 7.0).asin());
+    let want = 6000.0 - (4900.0 * (1.0 - PI / 4.0) - below);
+    let area = b.sheet_metal[0].flat.parts[0].area();
+    assert!((area - want).abs() < 0.2, "{area} vs {want}");
+
+    // Chamfers at a 60° corner (an equilateral triangle, side 100): Tangent cuts 5 along each
+    // edge, Offset cuts where the edges offset by 5 meet, 5 / tan 30° along each.
+    let mut st = Studio::new();
+    let h = 50.0 * 3f64.sqrt();
+    sheet_of(&mut st, &[(0.0, 0.0), (100.0, 0.0), (50.0, h)]);
+    let tri = st.ok().parts[0].clone();
+    let whole = 0.5 * 100.0 * h;
+    let corner = edge_near(&tri, [0.0, 0.0, 1.0]);
+    let ch = CornerBreakFeature { entities: vec![SmPick::Edge(corner)], chamfer: true, distance: 5.0, chamfer_measurement: cadrs_core::applied::ChamferMeasurement::Tangent, ..Default::default() };
+    let f = st.add("Corner break", FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(ch.clone())));
+    let cut = whole - st.ok().sheet_metal[0].flat.parts[0].area();
+    // (The triangle's apex is on the booleans' 1 nm grid.)
+    assert!((cut - 0.5 * 25.0 * (PI / 3.0).sin()).abs() < 1e-4, "tangent {cut}");
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::CornerBreak(CornerBreakFeature { chamfer_measurement: cadrs_core::applied::ChamferMeasurement::Offset, ..ch })));
+    let cut = whole - st.ok().sheet_metal[0].flat.parts[0].area();
+    let s = 5.0 / (PI / 6.0).tan();
+    assert!((cut - 0.5 * s * s * (PI / 3.0).sin()).abs() < 1e-4, "offset {cut}");
+}
+
+#[test]
+fn a_slot_cut_across_a_bend_is_in_the_flat_and_the_folded_part() {
+    let mut st = Studio::new();
+    st.plate();
+    let plate = st.ok().parts[0].clone();
+    let top = face_near(&plate, [50.0, 30.0, 2.0]);
+    let line = st.line_at(70.0);
+    st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bend(line, top, BendAlignment::HoldLine))));
+    let bent = st.ok();
+    let area0 = bent.sheet_metal[0].flat.parts[0].area();
+    let ba = bent.sheet_metal[0].model.joints[0].bend().unwrap().allowance(&bent.sheet_metal[0].model.params).unwrap();
+    // A 12 × 10 slot from x = 60 to 72 across the bend line, cut straight down through all: 10 of
+    // the base, and of the bend (axis x = 70, mid radius 4) as far as x = 72: up to 30°, a third
+    // of its allowance.
+    let s = st.sketch(PlaneRef::Top, &[(60.0, 25.0), (72.0, 25.0), (72.0, 35.0), (60.0, 35.0)], true);
+    let e = FeatureId::new();
+    st.h.execute(&mut st.d, &AddExtrude { element: st.el, feature: e, extrude: ExtrudeFeature::default() }).unwrap();
+    let cut = ExtrudeFeature { sketches: vec![s], op: BooleanOp::Remove, end: EndType::ThroughAll, symmetric: true, ..Default::default() };
+    st.h.execute(&mut st.d, &SetExtrude { element: st.el, feature: e, extrude: cut, label: "Extrude".into() }).unwrap();
+    let b = st.ok();
+    let part = &b.sheet_metal[0].flat.parts[0];
+    let want = 10.0 * (10.0 + ba / 3.0);
+    // (The booleans work on a 1 nm grid.)
+    assert!((area0 - part.area() - want).abs() < 1e-5, "{} vs {want}", area0 - part.area());
+    let holes: Vec<_> = part.outline.iter().flat_map(|o| o.holes.iter()).collect();
+    assert_eq!(holes.len(), 1, "one slot in the flat");
+    assert!(close(volume(&b.parts[0]), predicted(&b, &b.parts[0]), 1e-6), "{} vs {}", volume(&b.parts[0]), predicted(&b, &b.parts[0]));
+}
+
+#[test]
+fn a_cut_that_splits_a_part_keeps_both_pieces() {
+    let mut st = Studio::new();
+    st.plate();
+    let s = st.sketch(PlaneRef::Top, &[(48.0, -10.0), (52.0, -10.0), (52.0, 70.0), (48.0, 70.0)], true);
+    let e = FeatureId::new();
+    st.h.execute(&mut st.d, &AddExtrude { element: st.el, feature: e, extrude: ExtrudeFeature::default() }).unwrap();
+    let cut = ExtrudeFeature { sketches: vec![s], op: BooleanOp::Remove, end: EndType::ThroughAll, symmetric: true, ..Default::default() };
+    st.h.execute(&mut st.d, &SetExtrude { element: st.el, feature: e, extrude: cut, label: "Extrude".into() }).unwrap();
+    let b = st.ok();
+    assert_eq!(b.parts.len(), 2, "both pieces are parts");
+    assert_eq!(b.sheet_metal[0].flat.parts.len(), 2, "each with its flat");
+    for p in &b.parts {
+        assert!(close(volume(p), 48.0 * 60.0 * 2.0, 1e-6), "{}", volume(p));
+    }
+}
+
+#[test]
+fn a_part_pattern_of_sheet_metal_is_sheet_metal() {
+    let mut st = Studio::new();
+    st.plate();
+    let plate = st.ok().parts[0].clone();
+    let top = face_near(&plate, [50.0, 30.0, 2.0]);
+    let line = st.line_at(85.0);
+    st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bend(line, top, BendAlignment::HoldLine))));
+    let one = st.ok().sheet_metal[0].flat.parts[0].area();
+    let mut x = cadrs_core::pattern::PatternFeature { parts: vec![plate.id], ..Default::default() };
+    x.first.direction = Some(cadrs_core::document::DirectionRef::PlaneNormal(PlaneRef::Front));
+    x.first.distance = 100.0;
+    x.first.count = 3;
+    st.add("Linear pattern", FeatureKind::Pattern(x));
+    let b = st.ok();
+    assert_eq!(b.parts.len(), 3);
+    let ctx = &b.sheet_metal[0];
+    assert_eq!(ctx.parts.len(), 3, "every copy is a part of the sheet metal model");
+    assert_eq!(ctx.flat.parts.len(), 3);
+    assert!(ctx.flat.parts.iter().all(|p| (p.area() - one).abs() < 1e-6));
+    for p in &b.parts {
+        assert!(close(volume(p), predicted(&b, p), 1e-6));
+    }
+}
+
+#[test]
+fn bend_relief_extended_to_the_end_of_the_sheet() {
+    // An L: base 100 × 30, arm 60 × 30 over x 0..60; bent along y = 30 (Hold line), the bend
+    // covers the arm and the base carries on to x = 100: its x = 60 end gets a bend relief.
+    let mut st = Studio::new();
+    sheet_of(&mut st, &[(0.0, 0.0), (100.0, 0.0), (100.0, 30.0), (60.0, 30.0), (60.0, 60.0), (0.0, 60.0)]);
+    let plate = st.ok().parts[0].clone();
+    // The top face (its centre is the L's centroid), picked over the arm.
+    let top = FaceRef { seed: [20.0, 45.0, 2.0], ..face_near(&plate, [42.5, 26.25, 2.0]) };
+    let s = st.sketch(PlaneRef::Top, &[(-10.0, 30.0), (110.0, 30.0)], false);
+    let line = LineRef::Sketch(st.first_curve(s));
+    st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bend(line, top, BendAlignment::HoldLine))));
+    let b = st.ok();
+    let part = b.parts[0].clone();
+    // Rectangle – Scaled, depth scale 2, width scale 2: 4 wide, (2 − 1) × 3 deep into the base.
+    let mut r = BendReliefFeature::default();
+    r.relief.kind = cadrs_sheetmetal::BendReliefKind::RectangleScaled;
+    r.relief.depth_scale = 2.0;
+    r.relief.width_scale = 2.0;
+    r.end = Some(SmPick::Face(face_near(&part, [61.0, 29.0, 1.0])));
+    let f = st.add("Bend relief", FeatureKind::SheetMetalTool(SheetMetalTool::BendRelief(r.clone())));
+    let b = st.ok();
+    assert_eq!(b.sheet_metal[0].model.bend_relief_overrides.len(), 1);
+    let plain = b.sheet_metal[0].flat.parts[0].area();
+    assert!(close(volume(&b.parts[0]), predicted(&b, &b.parts[0]), 1e-6));
+    // Extend: the slot runs on along the bend line to the end of the sheet (x = 100): 40 long
+    // instead of 4, 3 deep.
+    r.relief.extend = true;
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::BendRelief(r)));
+    let b = st.ok();
+    let extended = b.sheet_metal[0].flat.parts[0].area();
+    assert!((plain - extended - (40.0 - 4.0) * 3.0).abs() < 1e-6, "{plain} − {extended}");
+    assert!(close(volume(&b.parts[0]), predicted(&b, &b.parts[0]), 1e-6));
+    let (lo, _) = bounds(&b.parts[0]);
+    assert!(lo[1].abs() < 1e-6);
+}
+
+#[test]
+fn jog_up_to_entity_and_thickness() {
+    let mut st = Studio::new();
+    st.plate();
+    let plate = st.ok().parts[0].clone();
+    let top = face_near(&plate, [50.0, 30.0, 2.0]);
+    let line = st.line_at(70.0);
+    // Thickness: 4 × 2 = 8 from the top face (Inside) to the far wall's lower face: top at 12.
+    let j = JogFeature { bend: bend(line, top, BendAlignment::BendLine), bounding: JogBounding::Thickness, factor: 4.0, ..Default::default() };
+    let f = st.add("Jog", FeatureKind::SheetMetalTool(SheetMetalTool::Jog(j.clone())));
+    let b = st.ok();
+    let sheet = b.parts.iter().find(|p| p.id == plate.id).unwrap();
+    assert!((bounds(sheet).1[2] - 12.0).abs() < 1e-3, "{:?}", bounds(sheet).1);
+    // Up to entity: a block's top face at z = 20; the far wall's lower face goes up to it.
+    let bs = st.sketch(PlaneRef::Top, &[(120.0, 0.0), (140.0, 0.0), (140.0, 20.0), (120.0, 20.0)], true);
+    let e = FeatureId::new();
+    st.h.execute(&mut st.d, &AddExtrude { element: st.el, feature: e, extrude: ExtrudeFeature::default() }).unwrap();
+    let blk = ExtrudeFeature { sketches: vec![bs], depth: 20.0, depth_expr: "20 mm".into(), op: BooleanOp::New, ..Default::default() };
+    st.h.execute(&mut st.d, &SetExtrude { element: st.el, feature: e, extrude: blk, label: "Extrude".into() }).unwrap();
+    // (The block is made after the jog in the list; move the jog after it by redefining it.)
+    st.h.execute(&mut st.d, &cadrs_core::commands::DeleteFeature { element: st.el, feature: f, label: "Delete".into() }).unwrap();
+    let b = st.ok();
+    let block = b.parts.iter().find(|p| p.id != plate.id).unwrap().clone();
+    let target = face_near(&block, [130.0, 10.0, 20.0]);
+    let up = JogFeature { bounding: JogBounding::UpToEntity, up_to: Some(target), ..j.clone() };
+    let f = st.add("Jog", FeatureKind::SheetMetalTool(SheetMetalTool::Jog(up.clone())));
+    let b = st.ok();
+    let sheet = b.parts.iter().find(|p| p.id == plate.id).unwrap();
+    assert!((bounds(sheet).1[2] - 22.0).abs() < 1e-3, "{:?}", bounds(sheet).1);
+    // With an offset distance of 3 past it.
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::Jog(JogFeature { up_to_offset_on: true, up_to_offset: 3.0, ..up })));
+    let b = st.ok();
+    let sheet = b.parts.iter().find(|p| p.id == plate.id).unwrap();
+    assert!((bounds(sheet).1[2] - 25.0).abs() < 1e-3, "{:?}", bounds(sheet).1);
+    assert!(close(volume(sheet), predicted(&b, sheet), 1e-6));
+}
+
+#[test]
+fn bend_align_to_geometry_and_angle_from_direction() {
+    use std::f64::consts::PI;
+    let mut st = Studio::new();
+    st.plate();
+    // A block with a face slanted at 45° in XZ (normal (1, 0, 1)/√2), away from the plate.
+    let bs = st.sketch(PlaneRef::Front, &[(120.0, 0.0), (150.0, 0.0), (150.0, 10.0), (130.0, 30.0), (120.0, 30.0)], true);
+    let e = FeatureId::new();
+    st.h.execute(&mut st.d, &AddExtrude { element: st.el, feature: e, extrude: ExtrudeFeature::default() }).unwrap();
+    let blk = ExtrudeFeature { sketches: vec![bs], depth: 10.0, depth_expr: "10 mm".into(), symmetric: true, op: BooleanOp::New, ..Default::default() };
+    st.h.execute(&mut st.d, &SetExtrude { element: st.el, feature: e, extrude: blk, label: "Extrude".into() }).unwrap();
+    let b = st.ok();
+    let plate = b.parts.iter().find(|p| p.solid.faces.len() == 6 && bounds(p).1[2] < 2.5).unwrap().clone();
+    let block = b.parts.iter().find(|p| p.id != plate.id).unwrap().clone();
+    let slanted = face_near(&block, [140.0, 0.0, 20.0]);
+    let top = face_near(&plate, [50.0, 30.0, 2.0]);
+    let line = st.line_at(80.0);
+    // Parallel to the slanted face: the flange leans back over the plate, 135° from it.
+    let bf = BendFeature { control: AngleControl::AlignToGeometry, reference: Some(EdgeOrFace::Face(slanted)), ..bend(line, top, BendAlignment::HoldLine) };
+    let f = st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bf.clone())));
+    let b = st.ok();
+    let angle = |b: &Build| b.sheet_metal[0].model.joints.iter().find_map(|j| j.bend()).unwrap().angle;
+    assert!((angle(&b) - 3.0 * PI / 4.0).abs() < 1e-9, "{}", angle(&b).to_degrees());
+    let sheet = b.parts.iter().find(|p| p.id == plate.id).unwrap();
+    assert!(close(volume(sheet), predicted(&b, sheet), 1e-6));
+    // 10° from it: 145°.
+    st.set(f, FeatureKind::SheetMetalTool(SheetMetalTool::Bend(BendFeature { control: AngleControl::AngleFromDirection, angle: 10.0, ..bf })));
+    let b = st.ok();
+    assert!((angle(&b) - 145f64.to_radians()).abs() < 1e-9, "{}", angle(&b).to_degrees());
+}
+
+
+#[test]
+fn a_slot_cut_folds_as_two_lines_and_two_arcs() {
+    // A 20 × 10 obround slot (two lines, two R5 arcs) cut through the plate: on the folded part
+    // its outline on the top face is exactly two lines and two circular edges (Use and fillets
+    // take them), not a polyline of facets.
+    let mut st = Studio::new();
+    st.plate();
+    let f = FeatureId::new();
+    st.h.execute(&mut st.d, &AddSketch { element: st.el, feature: f, plane: Some(PlaneRef::Top) }).unwrap();
+    let v = |x: f64, y: f64| Vec2::new(x, y);
+    let ops = [
+        SketchOp::AddPolyline { points: vec![v(40.0, 25.0), v(60.0, 25.0)], closed: false, construction: false, label: "Add line" },
+        SketchOp::AddPolyline { points: vec![v(60.0, 35.0), v(40.0, 35.0)], closed: false, construction: false, label: "Add line" },
+        SketchOp::AddArc { center: v(60.0, 30.0), start: v(60.0, 25.0), end: v(60.0, 35.0), construction: false },
+        SketchOp::AddArc { center: v(40.0, 30.0), start: v(40.0, 35.0), end: v(40.0, 25.0), construction: false },
+    ];
+    for op in ops {
+        st.h.execute(&mut st.d, &EditSketch { element: st.el, feature: f, op }).unwrap();
+    }
+    let e = FeatureId::new();
+    st.h.execute(&mut st.d, &AddExtrude { element: st.el, feature: e, extrude: ExtrudeFeature::default() }).unwrap();
+    let cut = ExtrudeFeature { sketches: vec![f], op: BooleanOp::Remove, end: EndType::ThroughAll, symmetric: true, ..Default::default() };
+    st.h.execute(&mut st.d, &SetExtrude { element: st.el, feature: e, extrude: cut, label: "Extrude".into() }).unwrap();
+    let b = st.ok();
+    let part = &b.parts[0];
+    let area = b.sheet_metal[0].flat.parts[0].area();
+    let slot = 200.0 + std::f64::consts::PI * 25.0;
+    // The flat's slot is a fine polygon; the folded part's an exact obround.
+    assert!((6000.0 - area - slot).abs() < 0.05, "{}", 6000.0 - area);
+    assert!(close(volume(part), (6000.0 - slot) * 2.0, 1e-7), "{}", volume(part));
+    let top: Vec<_> = part
+        .solid
+        .edges
+        .iter()
+        .filter(|e| e.points.iter().all(|p| (p[2] - 2.0).abs() < 1e-6 && p[0] > 34.0 && p[0] < 66.0 && p[1] > 24.0 && p[1] < 36.0))
+        .collect();
+    assert_eq!(top.len(), 4, "two lines and two arcs on the top face");
+    let arcs: Vec<_> = top.iter().filter_map(|e| e.circle).collect();
+    assert_eq!(arcs.len(), 2, "two of them circular");
+    for c in arcs {
+        assert!((c.radius - 5.0).abs() < 1e-6, "{c:?}");
+    }
+}

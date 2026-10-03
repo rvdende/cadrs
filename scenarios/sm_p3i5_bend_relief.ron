@@ -56,7 +56,8 @@ Scenario(
         Wait(5),
         Click(ui("sm-bend-relief-type-option-1")),
         Wait(30),
-        Custom("view 30 -35 60 30 -5 0.04"),
+        // From above, the relief and the base edge it runs along in view (02 plain, 03 extended to x = 100).
+        Custom("view 25 55 72 28 0 0.05"),
         Wait(10),
         MoveTo(1420, 900),
         Wait(3),
