@@ -16,7 +16,7 @@
 //! `flat-extrude-regions-field`.
 
 use bevy::prelude::*;
-use cadrs_core::document::{BodyType, RegionRef, interior_point};
+use cadrs_core::document::{BodyType, RegionRef};
 use cadrs_core::sheetmetal_flat::{FlatExtrudeFeature, flat_plane_id, sketch_target};
 use cadrs_core::{Feature, FeatureId, FeatureKind};
 use cadrs_ui::prelude::*;
@@ -38,21 +38,19 @@ fn features(world: &World) -> Option<Vec<Feature>> {
 }
 
 /// Whether every picked region lies on the flat's material (a new flat extrude then starts on
-/// Remove).
+/// Remove; a region reaching off the sheet starts on Add).
 fn all_on_material(features: &[Feature], cache: &PartCache, picks: &[(FeatureId, u32)]) -> bool {
+    use cadrs_sheetmetal::poly::{P2, Polygon, overlap_area};
     let build = cadrs_core::rebuild::build(features);
     !picks.is_empty()
         && picks.iter().all(|(s, i)| {
             let Some((model, part)) = sketch_target(features, *s) else { return false };
             let Some(r) = cache.sketch_regions(*s).and_then(|r| r.regions.get(*i as usize)) else { return false };
-            let p = interior_point(r);
-            build
-                .sheet_metal
-                .iter()
-                .rev()
-                .find(|c| c.feature == model)
-                .and_then(|c| c.flat.parts.get(part))
-                .is_some_and(|f| f.outline.iter().any(|o| o.contains(cadrs_sheetmetal::poly::P2::new(p.x, p.y))))
+            let ring = |l: &[cadrs_sketch::Vec2]| l.iter().map(|q| P2::new(q.x, q.y)).collect::<Vec<_>>();
+            let poly = Polygon::with_holes(ring(&r.outer), r.holes.iter().map(|h| ring(h)).collect());
+            let Some(flat) = build.sheet_metal.iter().rev().find(|c| c.feature == model).and_then(|c| c.flat.parts.get(part)) else { return false };
+            let on: f64 = flat.outline.iter().map(|o| overlap_area(&poly, o)).sum();
+            on >= poly.area() * (1.0 - 1e-6)
         })
 }
 
@@ -68,7 +66,11 @@ pub fn initial(world: &World, picked: &[Pick]) -> Option<(&'static str, FeatureK
                 regions.push((s, i));
                 x.regions.extend(region_of(cache, s, i));
             }
-            Pick::Feature(f) if sketch_target(&features, f).is_some() => x.sketches.push(f),
+            Pick::Feature(f) if sketch_target(&features, f).is_some() => {
+                x.sketches.push(f);
+                let n = cache.sketch_regions(f).map_or(0, |r| r.regions.len());
+                regions.extend((0..n as u32).map(|i| (f, i)));
+            }
             _ => {}
         }
     }
