@@ -493,11 +493,14 @@ fn note_pointer(
 /// - `box`: the E3 Sheet Metal Box stand-in in the active Part Studio: a 200 × 125 × 150 block
 ///   converted with its bottom edges bent and its top left open (thickness 1.5 mm, bend radius
 ///   1.5 mm): one part, renamed "Sheet Metal Box".
+/// - `forms`: a 120 × 80 plate (Thicken, 1.5 mm) with two louvers (Form) and a Ø6.6 hole
+///   counterbored Ø11 through it, renamed "Formed Plate" (SM16.3).
 /// - `create <part name>`: Create drawing of flat pattern of the part (as the P3I.3 menu will).
 pub fn script(world: &mut World, arg: &str) {
     let (cmd, rest) = arg.split_once(' ').unwrap_or((arg, ""));
     match cmd {
         "box" => sheet_metal_box(world),
+        "forms" => formed_plate(world),
         "create" => {
             let name = rest.trim().to_string();
             let found = world.resource::<crate::parts::PartCache>().parts.iter().find(|p| p.name == name).map(|p| p.id);
@@ -588,4 +591,68 @@ fn sheet_metal_box(world: &mut World) {
     if let Some(part) = cadrs_core::flat_drawing::flat_parts(&build.sheet_metal).first().copied() {
         run(&mut doc, &RenamePart { element: el, part, name: "Sheet Metal Box".into() });
     }
+}
+
+fn formed_plate(world: &mut World) {
+    use cadrs_core::FeatureId;
+    use cadrs_core::applied::{HoleFeature, HolePoint};
+    use cadrs_core::commands::{AddFeature, AddSketch, EditSketch, RenamePart};
+    use cadrs_core::document::{FaceRef, FeatureKind};
+    use cadrs_core::hole::{HoleEnd, HoleSpec, HoleStart, HoleStyle, Length};
+    use cadrs_core::sheetmetal::{SheetMetalExprs, SheetMetalModelFeature, SheetMetalOp};
+    use cadrs_core::sheetmetal_form::{FormFeature, FormLocation, FormPick, FormSource, LIBRARY_NAME, LibraryForm};
+    use cadrs_sketch::{PlaneRef, SketchOp, Vec2 as SVec2};
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+    let Some(el) = doc.active else { return };
+    let run = |doc: &mut ActiveDocument, c: &dyn cadrs_core::Command| {
+        if let Err(e) = doc.execute(c) {
+            warn!("flat-drawing forms: {e}");
+        }
+    };
+    let sketch = |doc: &mut ActiveDocument, ops: Vec<SketchOp>| {
+        let f = FeatureId::new();
+        run(doc, &AddSketch { element: el, feature: f, plane: Some(PlaneRef::Top) });
+        run(doc, &EditSketch { element: el, feature: f, op: SketchOp::Batch(ops) });
+        f
+    };
+    let rect = vec![SVec2::new(0.0, 0.0), SVec2::new(120.0, 0.0), SVec2::new(120.0, 80.0), SVec2::new(0.0, 80.0)];
+    let s = sketch(&mut doc, vec![SketchOp::AddPolyline { points: rect, closed: true, construction: false, label: "Add rectangle" }]);
+    let Some(g) = doc.doc.element(el).and_then(|e| e.feature(s)).and_then(|f| f.sketch()).map(|k| k.geometry.clone()) else { return };
+    let regions = cadrs_core::samples::region_refs(s, &g, &[SVec2::new(60.0, 40.0)]);
+    let mut p = SheetMetalModelFeature::default_params();
+    p.thickness = 1.5;
+    p.bend_radius = 2.0;
+    let model = FeatureId::new();
+    let sm = SheetMetalModelFeature { operation: SheetMetalOp::Thicken, regions, params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
+    run(&mut doc, &AddFeature { element: el, feature: model, base_name: "Sheet metal model".into(), kind: FeatureKind::SheetMetalModel(sm) });
+    let Some(features) = doc.doc.element(el).map(|e| e.features().to_vec()) else { return };
+    let build = cadrs_core::rebuild::build(&features);
+    let Some(part) = build.parts.iter().find(|q| q.id.feature == model).cloned() else {
+        warn!("flat-drawing forms: no plate");
+        return;
+    };
+    let Some(top) = part.solid.faces.iter().find(|f| f.center.is_some_and(|c| (c[2] - 1.5).abs() < 1e-6)).map(|f| FaceRef { part: part.id, face: f.name, seed: f.center.unwrap_or_default() }) else { return };
+    let pts = sketch(&mut doc, [(30.0, 25.0), (30.0, 55.0)].iter().map(|(x, y)| SketchOp::AddPoint { pos: SVec2::new(*x, *y) }).collect());
+    let form = FormFeature {
+        form: Some(FormPick { source: FormSource::Library(LibraryForm::Louver), name: "Louver".into(), document_name: LIBRARY_NAME.into(), studio: vec![] }),
+        variables: LibraryForm::Louver.variables(),
+        locations: vec![FormLocation::SketchPoints(pts)],
+        targets: vec![top],
+        flip: false,
+    };
+    run(&mut doc, &AddFeature { element: el, feature: FeatureId::new(), base_name: "Form".into(), kind: FeatureKind::Form(form) });
+    let hp = sketch(&mut doc, vec![SketchOp::AddPoint { pos: SVec2::new(90.0, 40.0) }]);
+    let Some(point) = doc.doc.element(el).and_then(|e| e.feature(hp)).and_then(|f| f.sketch()).and_then(|k| k.geometry.points.keys().next()) else { return };
+    let spec = HoleSpec {
+        style: HoleStyle::Counterbore,
+        diameter: Length::mm(6.6),
+        cbore_diameter: Length::mm(11.0),
+        cbore_depth: Length::mm(0.5),
+        end: HoleEnd::ThroughAll,
+        start: HoleStart::Part,
+        ..HoleSpec::default()
+    };
+    let hole = HoleFeature { points: vec![HolePoint { sketch: hp, point }], spec, ..HoleFeature::default() };
+    run(&mut doc, &AddFeature { element: el, feature: FeatureId::new(), base_name: "Hole".into(), kind: FeatureKind::Hole(hole) });
+    run(&mut doc, &RenamePart { element: el, part: part.id, name: "Formed Plate".into() });
 }
