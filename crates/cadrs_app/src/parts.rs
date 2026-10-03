@@ -1676,9 +1676,9 @@ fn draw_part_edges(
         let rot = Quat::from_rotation_arc(Vec3::Z, v.back());
         for vx in &part.solid.vertices {
             let pick = Pick::Vertex(part.id, vx.name);
-            let color = if highlight.is_hovered(pick) {
+            let color = if hovered_pick(pick) {
                 HOVER
-            } else if selection.contains(pick) {
+            } else if selected(pick) {
                 SELECTED
             } else {
                 continue;

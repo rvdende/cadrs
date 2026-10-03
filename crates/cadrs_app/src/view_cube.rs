@@ -220,16 +220,23 @@ pub fn face_label_alpha(facing: f32) -> f32 {
 fn fade_face_labels(
     view: Res<ViewportView>,
     repair: Option<Res<crate::repair::Repair>>,
+    (sm, panel): (Option<Res<crate::sheetmetal_table::SmTable>>, Option<Res<crate::appearance::SidePanel>>),
     q: Query<(&FaceLabel, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let back = view.view.back();
     // P3D.4: the Repair panel's cube shares the faces; a label it faces shows too (a face
-    // turned away from the main view is hidden there by the cube itself).
-    let other = repair.filter(|r| r.open).map(|r| r.view.back());
+    // turned away from the main view is hidden there by the cube itself). So does the Sheet
+    // metal table's flat view cube (its Top stays labelled when the main view looks from below).
+    let mut others: Vec<Vec3> = repair.filter(|r| r.open).map(|r| r.view.back()).into_iter().collect();
+    if panel.is_some_and(|p| *p == crate::appearance::SidePanel::SheetMetal)
+        && let Some(t) = sm
+    {
+        others.push(t.view.back());
+    }
     for (label, mat) in &q {
         let n = label.0.normal();
-        let a = face_label_alpha(other.map_or(n.dot(back), |o| n.dot(back).max(n.dot(o))));
+        let a = face_label_alpha(others.iter().fold(n.dot(back), |m, o| m.max(n.dot(*o))));
         // Premultiplied: scale every channel.
         let c = Color::LinearRgba(LinearRgba::new(a, a, a, a));
         if let Some(m) = materials.get(&mat.0)

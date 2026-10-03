@@ -298,12 +298,17 @@ pub fn bend_feature_edit(feature: &Feature, joint: &Joint, params: &Params, edit
         }
         TableEdit::Value(v, expr) => {
             let k = match params.bend_calc {
-                BendCalc::KFactor => *v,
+                BendCalc::KFactor if (0.0..=1.0).contains(v) => *v,
+                BendCalc::KFactor => return Err(format!("{}'s K Factor must be between 0 and 1", feature.name)),
                 calc => {
                     let typed = if calc == BendCalc::BendAllowance { BendValue::Allowance(*v) } else { BendValue::Deduction(*v) };
+                    let what = format!("a {} of {}", calc.label().to_lowercase(), plain(*v));
                     match typed.to_calc(BendCalc::KFactor, b.radius, params.thickness, b.angle) {
-                        Some(BendValue::KFactor(k)) if k.is_finite() => k,
-                        _ => return Err(format!("No K factor gives a {} of {}", calc.label().to_lowercase(), plain(*v))),
+                        Some(BendValue::KFactor(k)) if (0.0..=1.0).contains(&k) => k,
+                        Some(BendValue::KFactor(k)) if k.is_finite() => {
+                            return Err(format!("{what} needs a K Factor of {}; {}'s must be between 0 and 1", plain((k * 1e4).round() / 1e4), feature.name));
+                        }
+                        _ => return Err(format!("No K Factor gives {what}")),
                     }
                 }
             };

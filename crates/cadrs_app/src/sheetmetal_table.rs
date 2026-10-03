@@ -182,6 +182,11 @@ pub struct SmTable {
     /// opened on, and what else lies under the pointer there (Select other).
     pub menu_part: Option<usize>,
     menu_others: Vec<FlatHit>,
+    /// Where the flat view's menu was opened (flat 2D) and the pick tolerance there.
+    menu_point: Option<(P2, f64)>,
+    /// Table edits that couldn't be made (a Bend feature's value no K factor gives): the cell
+    /// shows the typed text red with the reason, until the joint is edited again.
+    edit_errors: Vec<(JointId, CellKind, String, String)>,
     /// The flat view as last laid out, and what it was laid out from.
     pub scene: Option<Arc<FlatScene>>,
     scene_of: Option<(FeatureId, u64)>,
@@ -200,6 +205,8 @@ pub struct SmTable {
     press: Option<Vec2>,
     /// Frames until the flat view is fitted (the layout settles first).
     fit_in: Option<u32>,
+    /// Frames until the main view is fitted again beside the opened panel.
+    main_fit_in: Option<u32>,
 }
 
 impl Default for SmTable {
@@ -214,6 +221,8 @@ impl Default for SmTable {
             model_hover: None,
             menu_part: None,
             menu_others: Vec::new(),
+            menu_point: None,
+            edit_errors: Vec::new(),
             scene: None,
             scene_of: None,
             key: None,
@@ -226,6 +235,7 @@ impl Default for SmTable {
             meshed: None,
             press: None,
             fit_in: None,
+            main_fit_in: None,
         }
     }
 }
@@ -290,13 +300,15 @@ enum JointSelect {
 pub enum FlatHit {
     Joint(JointId),
     Wall(WallId),
+    /// A model edge or vertex picked at a wall outline's side or corner in the flat (SM1.4).
+    Pick(Pick),
 }
 
 impl FlatHit {
     fn joint(self) -> Option<JointId> {
         match self {
             FlatHit::Joint(j) => Some(j),
-            FlatHit::Wall(_) => None,
+            _ => None,
         }
     }
 }
@@ -512,7 +524,31 @@ fn hit_picks(cache: &PartCache, ctx: &SheetMetalContext, hit: FlatHit, both: boo
     match hit {
         FlatHit::Joint(j) => joint_picks(cache, ctx, j),
         FlatHit::Wall(w) => wall_picks(cache, ctx, w, both),
+        FlatHit::Pick(p) => vec![p],
     }
+}
+
+/// The model edge or vertex at a wall outline's side or corner in the flat: the flat point
+/// carried back onto the wall's definition face ([`cadrs_sheetmetal::view::from_flat`]), then
+/// the part's nearest edge or vertex there.
+fn model_pick_at(cache: &PartCache, ctx: &SheetMetalContext, scene: &FlatScene, hit: cadrs_sheetmetal::view::OutlineHit) -> Option<Pick> {
+    use cadrs_sheetmetal::view::OutlineHit;
+    let (w, q, corner) = match hit {
+        OutlineHit::Corner(w, q) => (w, q, true),
+        OutlineHit::Side(w, q) => (w, q, false),
+    };
+    let p = cadrs_sheetmetal::view::from_flat(&ctx.model, &ctx.flat, scene, w, q)?;
+    let p = [p.x, p.y, p.z];
+    let (pid, _) = ctx.parts.iter().find(|(_, walls)| walls.contains(&w))?;
+    let solid = &cache.parts.iter().find(|x| x.id == *pid)?.solid;
+    let tol = (0.3 * ctx.model.params.thickness).max(0.05);
+    let d = |a: [f64; 3]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2) + (a[2] - p[2]).powi(2)).sqrt();
+    if corner {
+        let v = solid.vertices.iter().map(|v| (d(v.point), v.name)).min_by(|a, b| a.0.total_cmp(&b.0))?;
+        return (v.0 <= tol).then_some(Pick::Vertex(*pid, v.1));
+    }
+    let e = solid.edges.iter().map(|e| (e.distance(p), e.name)).min_by(|a, b| a.0.total_cmp(&b.0))?;
+    (e.0 <= tol).then_some(Pick::Edge(*pid, e.1))
 }
 
 /// How a model pick shows in the flat view.
@@ -538,6 +574,7 @@ fn flat_mark(cache: &PartCache, ctx: &SheetMetalContext, scene: &FlatScene, pick
     let w = match hit {
         FlatHit::Joint(_) => return Some(FlatMark::Joint),
         FlatHit::Wall(w) => w,
+        FlatHit::Pick(_) => return None,
     };
     let solid = &cache.parts.iter().find(|p| p.id == part)?.solid;
     let to = |q: &[f64; 3]| cadrs_sheetmetal::view::to_flat(&ctx.model, &ctx.flat, scene, w, P3::new(q[0], q[1], q[2]));
@@ -555,6 +592,25 @@ fn flat_mark(cache: &PartCache, ctx: &SheetMetalContext, scene: &FlatScene, pick
         _ => return None,
     };
     Some(FlatMark::Lines(lines))
+}
+
+/// A wall or a whole part filled in the flat view.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum FillOf {
+    Wall(WallId),
+    Part(usize),
+}
+
+/// What a model pick fills in the flat: a wall's face fills its wall, a part all of its flat.
+fn fill_of(cache: &PartCache, ctx: &SheetMetalContext, pick: Pick) -> Option<FillOf> {
+    match pick {
+        Pick::Part(pid) => ctx.parts.iter().position(|(p, _)| *p == pid).map(FillOf::Part),
+        Pick::Face(pid, _) if ctx.parts.iter().any(|(p, _)| *p == pid) => match hit_of_pick(cache, pick)? {
+            (_, FlatHit::Wall(w)) => Some(FillOf::Wall(w)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The shown model's joints selected in the view.
@@ -653,7 +709,22 @@ fn sync_panel(world: &mut World) {
     let units = units(world);
     let rows = ctx.as_ref().map(|c| table::table(&c.model));
     let features: Vec<cadrs_core::Feature> = doc.active_element().map(|e| e.features().to_vec()).unwrap_or_default();
-    let mjs: Vec<CellState> = ctx.as_ref().map(|c| cell_states(doc, &features, c)).unwrap_or_default();
+    let mut mjs: Vec<CellState> = ctx.as_ref().map(|c| cell_states(doc, &features, c)).unwrap_or_default();
+    // Edits that couldn't be made show red with why.
+    for (j, kind, text, msg) in &t.edit_errors {
+        let i = match mjs.iter().position(|c| c.joint == *j) {
+            Some(i) => i,
+            None => {
+                mjs.push(CellState { joint: *j, radius_error: None, radius_text: None, value_error: None, value_text: None, made_by: None });
+                mjs.len() - 1
+            }
+        };
+        let c = &mut mjs[i];
+        match kind {
+            CellKind::Radius => (c.radius_error, c.radius_text) = (Some(msg.clone()), Some(text.clone())),
+            CellKind::Value => (c.value_error, c.value_text) = (Some(msg.clone()), Some(text.clone())),
+        }
+    }
     let key = format!("{list:?}|{:?}|{rows:?}|{mjs:?}|{}|{}|{:?}", ctx.as_ref().map(|c| (c.feature, c.corner_broken)), t.bends_open, t.joints_open, units);
     if t.key.as_deref() == Some(key.as_str()) && !old.is_empty() {
         return;
@@ -675,6 +746,8 @@ fn sync_panel(world: &mut World) {
         t.key = Some(key);
         if first_open {
             t.fit_in = Some(3);
+            // The main view is narrower now: the model is fitted into what is left of it.
+            t.main_fit_in = Some(4);
         }
     }
     let mut q_area = world.query_filtered::<(Entity, &ChildOf), With<ViewportArea>>();
@@ -958,7 +1031,7 @@ fn rip_angle(ctx: &SheetMetalContext, j: &cadrs_sheetmetal::Joint) -> Option<f64
 }
 
 /// Why a joint's Type and Style (and Convert) are locked after a Corner break (SM11.4).
-const CORNER_BREAK_LOCK: &str = "A Corner break was made on this model: joint types and styles can't be changed any more. Make Corner breaks after the joints are final.";
+const CORNER_BREAK_LOCK: &str = "Locked by a Corner break on this model.\nMake Corner breaks after the joints are final.";
 
 /// The shaded "#" column's fill.
 const NUMBER_FILL: Color = Color::srgb(0.945, 0.945, 0.945);
@@ -1277,12 +1350,26 @@ fn edit_joint(world: &mut World, joint: JointId, edit: TableEdit) {
     // A bend a Bend or Jog feature made: that feature's own radius or K factor (SM13.3).
     let features: Vec<cadrs_core::Feature> = doc.active_element().map(|e| e.features().to_vec()).unwrap_or_default();
     if let Some(f) = bend_feature_of(&features, &ctx, joint) {
+        let cell = match &edit {
+            TableEdit::Radius(_, x) => Some((CellKind::Radius, x.clone())),
+            TableEdit::Value(_, x) => Some((CellKind::Value, x.clone())),
+            _ => None,
+        };
         match bend_feature_edit(f, &j, &ctx.model.params, &edit) {
             Ok(f) => {
                 let label = edit.label(&j.name);
+                world.resource_mut::<SmTable>().edit_errors.retain(|e| e.0 != joint);
                 run(world, element, &cadrs_core::commands::ReplaceFeature { element, feature: f, label });
             }
-            Err(e) => warn!("sheet metal table: {e}"),
+            // Shown in the cell: the typed text, red, with why as its tooltip.
+            Err(e) => match cell {
+                Some((kind, text)) => {
+                    let mut t = world.resource_mut::<SmTable>();
+                    t.edit_errors.retain(|x| !(x.0 == joint && x.1 == kind));
+                    t.edit_errors.push((joint, kind, text.trim_end_matches(" mm").to_string(), e));
+                }
+                None => warn!("sheet metal table: {e}"),
+            },
         }
         return;
     }
@@ -1451,6 +1538,8 @@ fn hit_label(ctx: &SheetMetalContext, hit: FlatHit) -> String {
             let i = ctx.model.walls.iter().position(|x| x.id == w).unwrap_or(0);
             format!("Face of wall {}", i + 1)
         }
+        FlatHit::Pick(Pick::Vertex(..)) => "Vertex".into(),
+        FlatHit::Pick(_) => "Edge".into(),
     }
 }
 
@@ -1460,6 +1549,7 @@ fn on_context_menu(
     q_row: Query<&RowRef>,
     q_flat: Query<(), With<FlatBody>>,
     q_body: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
+    cache: Res<PartCache>,
     mut t: ResMut<SmTable>,
     mut commands: Commands,
 ) {
@@ -1474,6 +1564,9 @@ fn on_context_menu(
         let (part, others) = match (at, t.scene.clone()) {
             (Some((p, tol)), Some(scene)) => {
                 let mut others = Vec::new();
+                if let Some(h @ FlatHit::Pick(_)) = flat_hit(&cache, &t, p, tol) {
+                    others.push(h);
+                }
                 if let Some(j) = scene.joint_at(p, tol) {
                     others.push(FlatHit::Joint(j));
                 }
@@ -1486,6 +1579,7 @@ fn on_context_menu(
         };
         t.menu_part = part;
         t.menu_others = others;
+        t.menu_point = at;
         let position = ev.position;
         commands.queue(move |world: &mut World| open_flat_menu(world, position));
         return;
@@ -1527,57 +1621,168 @@ fn on_context_menu(
     });
 }
 
-/// The flat view's menu, as Onshape's (lesson 15, t0026.5; SM14.1, SM15.1, SM16.1): New
-/// sketch, Copy, Create drawing and Export DXF/DWG of the clicked part's flat pattern, Select
-/// other, then Zoom to fit and View normal to.
+/// The sketch on the flat pattern drawn at a flat point (within `tol`), if any.
+fn flat_sketch_at(world: &World, p: P2, tol: f64) -> Option<FeatureId> {
+    let t = world.resource::<SmTable>();
+    let scene = t.scene.as_ref()?;
+    let ctx = shown(t, world.resource::<PartCache>())?;
+    let el = world.get_resource::<ActiveDocument>()?.active_element()?;
+    let features = el.active_features();
+    for f in &features {
+        let Some(sk) = f.sketch() else { continue };
+        let Some(cadrs_sketch::PlaneRef::Feature(fp)) = sk.plane else { continue };
+        let Some((model, index)) = cadrs_core::sheetmetal_flat::flat_target(&features, fp.feature) else { continue };
+        if model != ctx.feature {
+            continue;
+        }
+        let shift = scene.shifts.get(index).copied().unwrap_or_else(cadrs_sheetmetal::poly::V2::zeros);
+        for l in sketch_polylines(&sk.geometry) {
+            for w in l.windows(2) {
+                let a = P2::new(w[0].x, w[0].y) + shift;
+                let b = P2::new(w[1].x, w[1].y) + shift;
+                let d = b - a;
+                let k = if d.norm_squared() > 0.0 { ((p - a).dot(&d) / d.norm_squared()).clamp(0.0, 1.0) } else { 0.0 };
+                if (p - (a + d * k)).norm() <= tol {
+                    return Some(f.id);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A feature's name in the active Part Studio.
+fn feature_name(world: &World, id: FeatureId) -> Option<String> {
+    world.get_resource::<ActiveDocument>()?.active_element()?.feature(id).map(|f| f.name.clone())
+}
+
+/// The flat view's menu, as Onshape's (lesson 15, t0026.5; SM14.1, SM15.1, SM16.1): Edit the
+/// sheet metal model (and the flat sketch under the pointer, with Show dimensions), Show
+/// dependencies; New sketch, Copy, Create drawing and Export DXF/DWG of the clicked part's flat
+/// pattern; Select other; Add comment; Zoom to fit, Zoom to selection, View normal to; Delete
+/// the part.
 fn open_flat_menu(world: &mut World, position: Vec2) {
-    let (part, others) = {
+    use cadrs_ui::menu::MenuEntry;
+    let (part, others, at) = {
         let t = world.resource::<SmTable>();
-        (t.menu_part, t.menu_others.clone())
+        (t.menu_part, t.menu_others.clone(), t.menu_point)
     };
     let name = part.and_then(|p| flat_name(world, p));
+    let part_name = part.and_then(|i| {
+        let cache = world.resource::<PartCache>();
+        let ctx = shown(world.resource::<SmTable>(), cache)?;
+        let (pid, _) = ctx.parts.get(i)?;
+        let p = cache.parts.iter().find(|p| p.id == *pid)?;
+        Some(cadrs_core::parts::display_name(p, &cache.props).to_string())
+    });
+    let model = shown(world.resource::<SmTable>(), world.resource::<PartCache>()).map(|c| c.feature);
+    let model_name = model.and_then(|m| feature_name(world, m));
+    let sketch = at.and_then(|(p, tol)| flat_sketch_at(world, p, tol));
+    let sketch_name = sketch.and_then(|f| feature_name(world, f));
+    let dims_shown = sketch.is_some_and(|f| world.resource::<crate::feature_menu::ShownDimensions>().0.contains(&f));
     let off = name.is_none();
     let of = name.clone().unwrap_or_else(|| "flat pattern".into());
     let tip = "Right-click a flat pattern";
     let with_tip = |i: MenuItem| if off { i.tooltip(tip) } else { i };
-    let mut entries = Vec::new();
-    let others_entries: Vec<cadrs_ui::menu::MenuEntry> = {
+    let others_entries: Vec<MenuEntry> = {
         let cache = world.resource::<PartCache>();
         let ctx = shown(world.resource::<SmTable>(), cache);
-        let mut v: Vec<cadrs_ui::menu::MenuEntry> = Vec::new();
+        let mut v: Vec<MenuEntry> = Vec::new();
         if let Some(n) = &name {
-            v.push(cadrs_ui::menu::MenuEntry::Item(MenuItem::new("smt-select-other-part", n.clone())));
+            v.push(MenuEntry::Item(MenuItem::new("smt-select-other-part", n.clone())));
         }
         if let Some(ctx) = ctx {
             for (i, h) in others.iter().enumerate() {
-                v.push(cadrs_ui::menu::MenuEntry::Item(MenuItem::new(format!("smt-select-other-{i}"), hit_label(ctx, *h))));
+                v.push(MenuEntry::Item(MenuItem::new(format!("smt-select-other-{i}"), hit_label(ctx, *h))));
             }
         }
         v
     };
-    entries.push(cadrs_ui::menu::MenuEntry::Item(with_tip(MenuItem::new("smt-flat-sketch", format!("New sketch on {of}…")).icon("sketch").disabled(off))));
-    entries.push(cadrs_ui::menu::MenuEntry::Item(with_tip(MenuItem::new("smt-flat-copy", format!("Copy {of}")).disabled(off))));
-    entries.push(cadrs_ui::menu::MenuEntry::Item(with_tip(MenuItem::new("smt-flat-drawing", format!("Create drawing of {of}…")).disabled(off))));
-    entries.push(cadrs_ui::menu::MenuEntry::Item(with_tip(MenuItem::new("smt-flat-export", format!("Export DXF/DWG of {of}…")).disabled(off))));
-    entries.push(cadrs_ui::menu::MenuEntry::Separator);
+    let mut entries = Vec::new();
+    // The model's (and the flat sketch's) own items.
+    let m = model_name.clone().unwrap_or_else(|| "sheet metal model".into());
+    let mut edit_model = MenuItem::new("smt-flat-edit-model", format!("Edit {m}…")).icon("edit").disabled(model_name.is_none());
+    if model_name.is_none() {
+        edit_model = edit_model.tooltip("The sheet metal model is derived from another Part Studio");
+    }
+    entries.push(MenuEntry::Item(edit_model));
+    if let Some(sn) = &sketch_name {
+        entries.push(MenuEntry::Item(MenuItem::new("smt-flat-edit-sketch", format!("Edit {sn}…")).icon("sketch")));
+        entries.push(MenuEntry::Item(MenuItem::new("smt-flat-dimensions", if dims_shown { "Hide dimensions" } else { "Show dimensions" }).icon("dimension")));
+    }
+    entries.push(MenuEntry::Item(MenuItem::new("smt-flat-dependencies", format!("Show dependencies of {m}…")).disabled(model_name.is_none())));
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-sketch", format!("New sketch on {of}…")).icon("sketch").disabled(off))));
+    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-copy", format!("Copy {of}")).icon("copy").disabled(off))));
+    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-drawing", format!("Create drawing of {of}…")).icon("file-new").disabled(off))));
+    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-export", format!("Export DXF/DWG of {of}…")).icon("file-export").disabled(off))));
+    entries.push(MenuEntry::Separator);
     let empty = others_entries.is_empty();
-    entries.push(cadrs_ui::menu::MenuEntry::Item(MenuItem::new("smt-flat-select-other", "Select other…").submenu(others_entries).disabled(empty)));
-    entries.push(cadrs_ui::menu::MenuEntry::Separator);
-    entries.push(cadrs_ui::menu::MenuEntry::Item(MenuItem::new("smt-zoom-fit", "Zoom to fit")));
-    entries.push(cadrs_ui::menu::MenuEntry::Item(MenuItem::new("smt-normal-to", "View normal to")));
-    let menu = Menu::new("smt-flat-menu").min_width(260.0).item_height(22.0).text_only().entries(entries);
+    entries.push(MenuEntry::Item(MenuItem::new("smt-flat-select-other", "Select other…").submenu(others_entries).disabled(empty)));
+    // Comments aren't in cadrs yet (the Parts list's Add comment is off too).
+    entries.push(MenuEntry::Item(MenuItem::new("smt-flat-comment", "Add comment").icon("comments").disabled(true)));
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::Item(MenuItem::new("smt-zoom-fit", "Zoom to fit")));
+    entries.push(MenuEntry::Item(MenuItem::new("smt-zoom-selection", "Zoom to selection").disabled(off && world.resource::<Selection>().0.is_empty())));
+    entries.push(MenuEntry::Item(MenuItem::new("smt-normal-to", "View normal to")));
+    entries.push(MenuEntry::Separator);
+    let pn = part_name.clone().unwrap_or_else(|| "part".into());
+    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-delete", format!("Delete {pn}…")).icon("remove-circle").disabled(off))));
+    let menu = Menu::new("smt-flat-menu").min_width(280.0).item_height(22.0).entries(entries);
     let theme = world.resource::<Theme>().clone();
     let mut cm = world.commands();
     let anchor = open_context_menu(&mut cm, position, menu.build(&theme));
-    cm.entity(anchor).insert((FlatViewMenu, DespawnOnExit(AppState::Document)));
+    cm.entity(anchor).insert((FlatViewMenu, MenuSketch(sketch), DespawnOnExit(AppState::Document)));
     world.flush();
+}
+
+/// The flat sketch the flat view's menu was opened on.
+#[derive(Component, Clone, Copy)]
+struct MenuSketch(Option<FeatureId>);
+
+/// Zoom to selection in the flat view: the selected walls and parts (as filled there), else
+/// the part the menu is on.
+fn zoom_to_selection(world: &mut World) {
+    let size = body_size(world);
+    let polys: Vec<cadrs_sheetmetal::poly::Polygon> = {
+        let t = world.resource::<SmTable>();
+        let cache = world.resource::<PartCache>();
+        let (Some(scene), Some(ctx)) = (t.scene.as_ref(), shown(t, cache)) else { return };
+        let mut v = Vec::new();
+        for p in &world.resource::<Selection>().0 {
+            match fill_of(cache, ctx, *p) {
+                Some(FillOf::Wall(w)) => v.extend(scene.wall_region(w)),
+                Some(FillOf::Part(i)) => v.extend(scene.part_region(i)),
+                None => {}
+            }
+            if let Some((_, FlatHit::Joint(j))) = hit_of_pick(cache, *p) {
+                v.extend(scene.bends.iter().filter(|b| b.joint == j).flat_map(|b| b.region.iter().cloned()));
+            }
+        }
+        if v.is_empty()
+            && let Some(i) = t.menu_part
+        {
+            v = scene.part_region(i);
+        }
+        v
+    };
+    let Some(size) = size else { return };
+    let mut t = world.resource_mut::<SmTable>();
+    let z = t.scene.as_ref().map_or(0.0, |s| s.thickness as f32);
+    let pts: Vec<Vec3> = polys.iter().flat_map(|p| p.outer.iter().map(move |q| Vec3::new(q.x as f32, q.y as f32, z))).collect();
+    if pts.is_empty() {
+        return;
+    }
+    let cube = crate::view_cube::CUBE_WIDGET;
+    t.view = t.view.fitted(&pts, Vec2::new((size.x - cube.x).max(1.0), size.y), 0.8);
+    t.view.pan(Vec2::new(-cube.x / 2.0, 0.0));
 }
 
 fn on_menu_action(
     ev: On<MenuAction>,
     q: Query<&MenuFor, With<ContextMenuAnchor>>,
     q_drop: Query<&DropdownFor, With<ContextMenuAnchor>>,
-    q_flat: Query<(), (With<FlatViewMenu>, With<ContextMenuAnchor>)>,
+    q_flat: Query<&MenuSketch, (With<FlatViewMenu>, With<ContextMenuAnchor>)>,
     mut commands: Commands,
 ) {
     if let Ok(DropdownFor(sel, name)) = q_drop.get(ev.entity) {
@@ -1594,11 +1799,47 @@ fn on_menu_action(
         });
         return;
     }
-    if q_flat.contains(ev.entity) {
+    if let Ok(MenuSketch(sketch)) = q_flat.get(ev.entity) {
         let item = ev.item.to_string();
+        let sketch = *sketch;
         commands.queue(move |world: &mut World| {
+            let model = shown(world.resource::<SmTable>(), world.resource::<PartCache>()).map(|c| c.feature);
             match item.as_str() {
                 "smt-zoom-fit" => zoom_to_fit(world),
+                "smt-zoom-selection" => zoom_to_selection(world),
+                "smt-flat-edit-model" => {
+                    if let Some(m) = model {
+                        crate::document::edit_feature(world, m);
+                    }
+                }
+                "smt-flat-edit-sketch" => {
+                    if let Some(f) = sketch {
+                        crate::document::edit_feature(world, f);
+                    }
+                }
+                "smt-flat-dimensions" => {
+                    if let Some(f) = sketch {
+                        crate::feature_menu::toggle_dimensions(world, f);
+                    }
+                }
+                "smt-flat-dependencies" => {
+                    if let Some(m) = model {
+                        crate::feature_list::show_dependencies(world, m);
+                    }
+                }
+                "smt-flat-delete" => {
+                    if let Some((element, part, _)) = flat_part(world) {
+                        if crate::linked_session::refuse(world) {
+                            return;
+                        }
+                        if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
+                            && let Err(e) = doc.execute(&cadrs_core::commands::AddFeature::delete_parts(element, FeatureId::new(), vec![part]))
+                        {
+                            warn!("cannot delete the part: {e}");
+                        }
+                        world.resource_mut::<Selection>().0.retain(|p| p.part() != Some(part));
+                    }
+                }
                 "smt-normal-to" => {
                     {
                         let mut t = world.resource_mut::<SmTable>();
@@ -1758,6 +1999,17 @@ pub fn zoom_to_fit(world: &mut World) {
 }
 
 fn fit_on_open(world: &mut World) {
+    {
+        let mut t = world.resource_mut::<SmTable>();
+        match t.main_fit_in {
+            Some(0) => {
+                t.main_fit_in = None;
+                crate::viewport::zoom_to_fit(world);
+            }
+            Some(n) => t.main_fit_in = Some(n - 1),
+            None => {}
+        }
+    }
     let mut t = world.resource_mut::<SmTable>();
     let Some(n) = t.fit_in else { return };
     if n > 0 || t.scene.is_none() {
@@ -1858,6 +2110,26 @@ fn sync_meshes(
     let hovered_joint = t.hovered.and_then(FlatHit::joint).or(t.model_hover.and_then(|(_, h)| h.joint()));
     // The part the flat view's menu is open on is orange all over (lesson 15, t0026.5).
     let menu_part = t.menu_part.filter(|_| !q_menu.is_empty());
+    // Walls and parts filled orange (lesson 13 t0052, lesson 15 t0026.5): selected ones (a
+    // wall's face or a part picked anywhere) in the selection orange, a hovered one paler.
+    let mut fills: Vec<(FillOf, bool)> = Vec::new();
+    if let Some(c) = &ctx {
+        for p in &selection.0 {
+            if let Some(f) = fill_of(&cache, c, *p) {
+                fills.push((f, true));
+            }
+        }
+        let hovered = match t.hovered {
+            Some(FlatHit::Wall(w)) => Some(FillOf::Wall(w)),
+            Some(FlatHit::Pick(p)) => fill_of(&cache, c, p),
+            _ => t.model_hover.and_then(|(p, _)| fill_of(&cache, c, p)),
+        };
+        if let Some(h) = hovered
+            && !fills.iter().any(|(f, _)| *f == h)
+        {
+            fills.push((h, false));
+        }
+    }
     let v = t.view;
     let key = {
         use std::hash::{Hash, Hasher};
@@ -1866,6 +2138,7 @@ fn sync_meshes(
         selected.hash(&mut h);
         hovered_joint.hash(&mut h);
         menu_part.hash(&mut h);
+        fills.hash(&mut h);
         [(v.azimuth * 2.0).round() as i32, (v.elevation * 2.0).round() as i32, (v.roll * 2.0).round() as i32].hash(&mut h);
         h.finish()
     };
@@ -1891,6 +2164,14 @@ fn sync_meshes(
     let all: Vec<_> = scene.pieces.iter().flat_map(|(_, v)| v.iter().cloned()).collect();
     spawn(cadrs_sheetmetal::view::slab(&all, 0.0, tz), [0.66, 0.66, 0.68]);
     let lift = tz * 1.0 + 1e-3 * scene.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0);
+    for (f, sel) in &fills {
+        let polys = match f {
+            FillOf::Wall(w) => scene.wall_region(*w),
+            FillOf::Part(i) => scene.part_region(*i),
+        };
+        let s = (if *sel { ORANGE_MENU } else { ORANGE_HOVER }).to_srgba();
+        spawn(cadrs_sheetmetal::view::fill(&polys, tz + 1e-4 * lift), [s.red, s.green, s.blue]);
+    }
     if let Some(i) = menu_part {
         let s = ORANGE_MENU.to_srgba();
         spawn(cadrs_sheetmetal::view::slab(&scene.part_region(i), 0.0, tz + 1e-3 * lift), [s.red, s.green, s.blue]);
@@ -2040,12 +2321,17 @@ fn draw_flat(
             }
         }
     };
+    // Faces are filled (`sync_meshes`); their outline is drawn over the fill.
     for p in &selection.0 {
         if let Some(m) = flat_mark(&cache, ctx, scene, *p) {
             mark(&mut hi, m, ORANGE);
         }
     }
-    if let Some((p, _)) = t.model_hover
+    let hovered_pick = match t.hovered {
+        Some(FlatHit::Pick(p)) => Some(p),
+        _ => t.model_hover.map(|(p, _)| p),
+    };
+    if let Some(p) = hovered_pick
         && !selection.0.contains(&p)
         && let Some(m) = flat_mark(&cache, ctx, scene, p)
     {
@@ -2112,14 +2398,27 @@ fn place_labels(
     let size = body.size() * body.inverse_scale_factor();
     let selected = shown(&t, &cache).map(|c| selected_joints(&cache, c, &selection)).unwrap_or_default();
     let hovered = t.hovered.and_then(FlatHit::joint).or(t.model_hover.and_then(|(_, h)| h.joint()));
-    for (l, mut node, mut vis, cn, children) in &mut q {
+    // Bends first (their spot is the clearer one), then rips; each label is moved further out
+    // along its own direction, or slid along the line, until it overlaps none placed before.
+    let mut items: Vec<_> = q.iter_mut().collect();
+    items.sort_by_key(|(l, ..)| (scene.bends.iter().all(|b| b.joint != l.0), l.0 .0));
+    let mut placed: Vec<Rect> = Vec::new();
+    for (l, mut node, mut vis, cn, children) in items {
         let p = t.view.project(v3(l.1, scene.thickness)) + size / 2.0;
         let lsize = cn.size() * cn.inverse_scale_factor();
         // The label's box sits on the side its direction points to, 4 px off the spot.
         let d = t.view.project_vector(Vec3::new(l.2.x as f32, l.2.y as f32, 0.0)).normalize_or_zero();
+        let along = Vec2::new(-d.y, d.x);
         let reach = (d.x.abs() * lsize.x + d.y.abs() * lsize.y) / 2.0;
-        let c = p + d * (4.0 + reach);
-        let (x, y) = (c.x - lsize.x / 2.0, c.y - lsize.y / 2.0);
+        let at = |out: f32, slide: f32| {
+            let c = p + d * (4.0 + reach + out) + along * slide;
+            Rect::from_center_size(c, lsize + Vec2::splat(2.0))
+        };
+        let step = lsize.y.max(8.0);
+        let tries = [(0.0, 0.0), (0.0, step), (0.0, -step), (step, 0.0), (0.0, 2.0 * step), (0.0, -2.0 * step), (step, step), (step, -step), (2.0 * step, 0.0)];
+        let r = tries.iter().map(|(o, sl)| at(*o, *sl)).find(|r| placed.iter().all(|q| q.intersect(*r).is_empty())).unwrap_or_else(|| at(0.0, 0.0));
+        placed.push(r);
+        let (x, y) = (r.min.x + 1.0, r.min.y + 1.0);
         if node.left != Val::Px(x) || node.top != Val::Px(y) {
             node.left = Val::Px(x);
             node.top = Val::Px(y);
@@ -2160,10 +2459,22 @@ fn place_folded_labels(
     let hovered = t.hovered.and_then(FlatHit::joint).or(t.model_hover.and_then(|(_, h)| h.joint()));
     let v = view.view;
     let size = rect.0.size();
-    for (l, mut node, mut vis, cn, children) in &mut q {
+    // Labels that would overlap one placed before move up or down a line.
+    let mut items: Vec<_> = q.iter_mut().collect();
+    items.sort_by_key(|(l, ..)| l.0 .0);
+    let mut placed: Vec<Rect> = Vec::new();
+    for (l, mut node, mut vis, cn, children) in items {
         let p = rect.to_screen(v.project(l.1)) - rect.0.min;
         let lsize = cn.size() * cn.inverse_scale_factor();
-        let (x, y) = (p.x + 6.0, p.y - lsize.y - 4.0);
+        let base = Vec2::new(p.x + 6.0, p.y - lsize.y - 4.0);
+        let step = lsize.y + 2.0;
+        let r = [0.0, -step, step, -2.0 * step, 2.0 * step]
+            .iter()
+            .map(|dy| Rect::from_corners(base + Vec2::new(0.0, *dy), base + Vec2::new(0.0, *dy) + lsize))
+            .find(|r| placed.iter().all(|q| q.intersect(*r).is_empty()))
+            .unwrap_or(Rect::from_corners(base, base + lsize));
+        placed.push(r);
+        let (x, y) = (r.min.x, r.min.y);
         if node.left != Val::Px(x) || node.top != Val::Px(y) {
             node.left = Val::Px(x);
             node.top = Val::Px(y);
@@ -2235,23 +2546,40 @@ fn on_flat_scroll(ev: On<Pointer<bevy::picking::events::Scroll>>, mut t: ResMut<
     t.view.wheel(lines, cursor);
 }
 
-/// The joint, else the wall, at a flat point.
-fn flat_hit(scene: &FlatScene, p: P2, tol: f64) -> Option<FlatHit> {
-    scene.joint_at(p, tol).map(FlatHit::Joint).or_else(|| scene.wall_at(p).map(FlatHit::Wall))
+/// What a flat point picks, as the main view does: a model vertex at a wall outline's corner,
+/// a bend or rip, a model edge along a wall outline's side, else the wall (its face).
+fn flat_hit(cache: &PartCache, t: &SmTable, p: P2, tol: f64) -> Option<FlatHit> {
+    let scene = t.scene.as_ref()?;
+    let ctx = shown(t, cache);
+    let outline = |corner: f64, side: f64| {
+        let ctx = ctx?;
+        let h = scene.outline_at(p, corner, side)?;
+        let pick = model_pick_at(cache, ctx, scene, h)?;
+        // A side that is a bend's or rip's is that joint, not a wall edge (a corner is always
+        // the vertex).
+        if matches!(pick, Pick::Vertex(..)) {
+            return Some(FlatHit::Pick(pick));
+        }
+        cadrs_sheetmetal::view::joint_at(&ctx.model, pick_point(cache, pick)?, tolerance(ctx)).is_none().then_some(FlatHit::Pick(pick))
+    };
+    outline(tol, 0.0)
+        .or_else(|| scene.joint_at(p, tol).map(FlatHit::Joint))
+        .or_else(|| outline(0.0, tol * 0.8))
+        .or_else(|| scene.wall_at(p).map(FlatHit::Wall))
 }
 
-fn on_flat_move(ev: On<Pointer<Move>>, mut t: ResMut<SmTable>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>) {
-    let hit = flat_point(&t, &q, ev.pointer_location.position).and_then(|(p, tol)| flat_hit(t.scene.as_ref()?, p, tol));
+fn on_flat_move(ev: On<Pointer<Move>>, mut t: ResMut<SmTable>, cache: Res<PartCache>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>) {
+    let hit = flat_point(&t, &q, ev.pointer_location.position).and_then(|(p, tol)| flat_hit(&cache, &t, p, tol));
     if t.flat_hover != hit {
         t.flat_hover = hit;
     }
 }
 
-fn on_flat_click(ev: On<Pointer<Click>>, t: Res<SmTable>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>, mut commands: Commands) {
+fn on_flat_click(ev: On<Pointer<Click>>, t: Res<SmTable>, cache: Res<PartCache>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>, mut commands: Commands) {
     if ev.button != PointerButton::Primary {
         return;
     }
-    if let Some(h) = flat_point(&t, &q, ev.pointer_location.position).and_then(|(p, tol)| flat_hit(t.scene.as_ref()?, p, tol)) {
+    if let Some(h) = flat_point(&t, &q, ev.pointer_location.position).and_then(|(p, tol)| flat_hit(&cache, &t, p, tol)) {
         commands.queue(move |world: &mut World| toggle_hit(world, h));
     }
 }

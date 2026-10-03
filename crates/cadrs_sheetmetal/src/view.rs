@@ -344,6 +344,63 @@ pub fn wall_at(m: &Model, p: P3, tol: f64) -> Option<WallId> {
     crate::model_edit::wall_at(m, p, tol).map(|(w, _)| w)
 }
 
+/// A flat-scene point on wall `w`, back on the folded model: on the wall's definition face (the
+/// inverse of [`to_flat`]).
+pub fn from_flat(m: &Model, flat: &FlatPattern, scene: &FlatScene, w: WallId, q: P2) -> Option<P3> {
+    let wall = m.wall(w)?;
+    let (i, part) = flat.parts.iter().enumerate().find(|(_, x)| x.placement(w).is_some())?;
+    let inv = part.placement(w)?.inverse()?;
+    let local = inv.apply(q - scene.shifts.get(i).copied().unwrap_or_else(V2::zeros));
+    let k = wall.flat_scale(&m.params);
+    Some(wall.surface.point(P2::new(local.x / k.max(1e-12), local.y)))
+}
+
+/// A wall piece's outline corner or side near a flat point, for picking a model vertex or
+/// edge in the flat.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OutlineHit {
+    /// A corner (on wall `.0`, at `.1`).
+    Corner(WallId, P2),
+    /// A side (on wall `.0`): the point on it nearest the pointer.
+    Side(WallId, P2),
+}
+
+impl FlatScene {
+    /// The wall outline corner within `corner_tol` of `p`, else the side within `side_tol`
+    /// (walls only: bend regions are joints).
+    pub fn outline_at(&self, p: P2, corner_tol: f64, side_tol: f64) -> Option<OutlineHit> {
+        let mut best_corner: Option<(f64, WallId, P2)> = None;
+        let mut best_side: Option<(f64, WallId, P2)> = None;
+        for (src, polys) in &self.pieces {
+            let PieceSource::Wall(w) = src else { continue };
+            for poly in polys {
+                for l in std::iter::once(&poly.outer).chain(&poly.holes) {
+                    let n = l.len();
+                    for i in 0..n {
+                        let (a, b) = (l[i], l[(i + 1) % n]);
+                        let d = (a - p).norm();
+                        if d <= corner_tol && best_corner.is_none_or(|(x, ..)| d < x) {
+                            best_corner = Some((d, *w, a));
+                        }
+                        let e = b - a;
+                        let l2 = e.norm_squared();
+                        if l2 < 1e-18 {
+                            continue;
+                        }
+                        let t = ((p - a).dot(&e) / l2).clamp(0.0, 1.0);
+                        let q = a + e * t;
+                        let d = (q - p).norm();
+                        if d <= side_tol && best_side.is_none_or(|(x, ..)| d < x) {
+                            best_side = Some((d, *w, q));
+                        }
+                    }
+                }
+            }
+        }
+        best_corner.map(|(_, w, q)| OutlineHit::Corner(w, q)).or(best_side.map(|(_, w, q)| OutlineHit::Side(w, q)))
+    }
+}
+
 /// A point of the folded solid on wall `w`, where it lies in the flat scene.
 pub fn to_flat(m: &Model, flat: &FlatPattern, scene: &FlatScene, w: WallId, p: P3) -> Option<P2> {
     let wall = m.wall(w)?;
@@ -550,6 +607,26 @@ mod tests {
         for x in &s.joints {
             let (at, dir) = s.label_place(x.joint).unwrap();
             assert!(!s.on_material(at + dir * 0.5), "{}: off the sheet", x.name);
+        }
+    }
+
+    #[test]
+    fn flat_points_map_back_onto_their_wall() {
+        let m = samples::open_box(crate::Params::default(), crate::RipStyle::EdgeJoint).unwrap();
+        let flat = flatten(&m);
+        let s = FlatScene::new(&m, &flat);
+        for w in &m.walls {
+            let Some(&q) = w.outline.outer.first() else { continue };
+            let p = w.surface.point(q);
+            let f = to_flat(&m, &flat, &s, w.id, p).unwrap();
+            let back = from_flat(&m, &flat, &s, w.id, f).unwrap();
+            assert!((back - p).norm() < 1e-9, "{:?}", w.id);
+            // A piece's corner is picked as a corner, a point along a side as a side.
+            let piece = &s.wall_region(w.id)[0].outer;
+            let (a, b) = (piece[0], piece[1]);
+            assert!(matches!(s.outline_at(a, 0.01, 0.01), Some(OutlineHit::Corner(_, c)) if (c - a).norm() < 1e-9));
+            let mid = P2::from((a.coords + b.coords) / 2.0);
+            assert!(matches!(s.outline_at(mid, 1e-6, 0.01), Some(OutlineHit::Side(_, q)) if (q - mid).norm() < 1e-9));
         }
     }
 }

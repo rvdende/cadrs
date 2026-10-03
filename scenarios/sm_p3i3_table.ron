@@ -117,6 +117,18 @@ Scenario(
         Hover(ui_at("smt-flat", 0.23, 0.4)),
         Wait(10),
         Screenshot("10-flat-wall-hover-lights-the-model-face"),
+        // SM1.4: on this box every free side is a rip (it picks the joint); a corner is the
+        // model's vertex (`sm_p3i3_bend_feature` shows a free edge).
+        Hover(ui_at("smt-flat", 0.037, 0.387)),
+        Wait(10),
+        Screenshot("10a-flat-rip-side-hover-lights-the-joint"),
+        Click(ui_at("smt-flat", 0.037, 0.387)),
+        Wait(10),
+        Hover(ui_at("smt-flat", 0.4772, 0.6307)),
+        Wait(10),
+        Screenshot("10b-flat-rip-selected-lid-vertex-hovered"),
+        Click(ui_at("smt-flat", 0.037, 0.387)),
+        Wait(5),
         // The flat view's menu on the separate lid (a multi-part model): its items name it, and
         // Export acts on it.
         RightClick(ui_at("smt-flat", 0.585, 0.73)),
