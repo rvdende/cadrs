@@ -458,7 +458,22 @@ against the stand-ins' expected values.
   part (2.1 % lighter than the original: the material round the import's relief holes isn't
   taken back yet). Finish sheet metal model's warning is also an info bar at the top.
   Mirror Reapply is tested where it differs from a copy (Up to next).
-- **Gaps left**: the round-relieved Case's 2.1 % (above), and in the Thicken dialog it shows no model once its four cylinders are picked (the test, built directly, is fine), so `sm_p3i8_legacy` uses the open-cornered Case; while a Thicken dialog has bend cylinders picked its live build shows no model (the table says so) though the same feature builds once accepted, so the bends show in the table after Accept; E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
+- **P3I.8 third round**: a Sheet metal model dialog taking picks no longer drops the feature
+  from the live build: a Thicken (or a Convert keeping its input) stays whole, its picks (edges
+  too, and their visibility) going through its own preview, so its preview, table and flat follow the picks; a Convert that uses its
+  input up builds its model, table and flat without parts (`SheetMetalModelFeature::picking`,
+  never saved). Derived sketches start hidden (their eyes show them, as Onshape's,
+  `18-…/t0062.6.png`). Flat-view bend labels move clear of each other and stay in view; the
+  table's Style reads "n/a" for tangent joints. Dropping fold slivers now warns.
+- **Gaps left**: the round-relieved Case thickened again is 2.1 % light. Cause: each of the
+  import's bottom face edges runs along its bend cylinder only between the round relief holes
+  (64.5 of 74 mm); the Thicken moves that part onto the sharp line and leaves the rest, so the
+  base gets ears, the walls keep the holes' arcs, the bends stop short, and the model cuts bend
+  reliefs at the 8 bend ends (8 × 69.5 mm²) the original didn't have (the folding also leaves
+  slivers there, dropped with a warning). Recognising relief holes on an import (restoring the
+  sharp corner, the hole becoming the corner relief) is the fix still to make. The garbled
+  letters near the toolbar in `sm_e4` are plane labels laid out at zero width (P3I.2 clips
+  them); E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
   clicked piece; a shown flat sketch's region fill draws a shading artefact over the folded part
   (`sm_e1` 04+); flat sketches of loft or derived contexts aren't drawn (only Sheet metal model
   flats have planes); in-context sheet metal (SM18.4) isn't sheet-metal-specific.

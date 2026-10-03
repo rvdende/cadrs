@@ -2,16 +2,17 @@
 // from STEP, made active sheet metal. The part is the legacy Case (`sm-legacy-case-step`,
 // `samples::sheetmetal_legacy::case`): an open box, 2 mm, R3, its corners open (the walls meet
 // the base only through the bends), exported by cadrs as a plain solid, like the lesson's "Case".
-// (The round-relieved Case is in the tests: the dialog loses its model while its bends are
-// picked, see the gaps doc.)
+// (The round-relieved Case is in the tests; thickened again it comes out 2.1 % light, see the
+// gaps doc.)
 // 01 the import.
 // 02 Sheet metal model → Thicken, Tangent propagation, one pick on the base's outer face: the
 //    base and all four walls taken (across the bends, round the open corners); 2 mm, R3, the
 //    thickness flipped into the part. SM17.2: the Sheet metal table and flat view open during
 //    the dialog: only Tangent joints where the bends are, drawn on the flat as thin lines, no bend
 //    lines (t0043.9); the whole picked skin highlighted.
-// 03 the four bend cylinders picked under Edges or cylinders to bend.
-// 04 accepted, the table and flat view: four real bends, bend lines on the flat (t0060.7).
+// 03 the four bend cylinders picked under Edges or cylinders to bend, the dialog still open: the
+//    table lists the four bends, the flat has their bend lines (t0060.7).
+// 04 accepted.
 // 05 the import removed with Delete part.
 // (`cadrs_core/tests/sheetmetal_legacy.rs`: the same volume and flat as the original, for the
 // Case and for a C-channel.)
@@ -92,13 +93,13 @@ Scenario(
         Wait(40),
         Custom("view 30 30 40 30 20 0.12"),
         Wait(20),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("03-bend-cylinders-picked"),
         Click(ui("sheet-metal-model-dialog-accept")),
         Wait(40),
-        Click(ui("panel-sheet-metal")),
-        Wait(60),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-accepted"),

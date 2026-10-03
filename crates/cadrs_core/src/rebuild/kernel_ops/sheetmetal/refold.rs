@@ -194,6 +194,7 @@ impl Rebuilder {
         let mut placed: Vec<Placed> = Vec::new();
         let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
         let mut groups = groups.into_iter().enumerate();
+        let mut dropped = 0usize;
         while let Some((k, (walls, body, names))) = groups.next() {
             let pieces = self.split(body, op, &[(body, &names)]);
             self.kernel.release(body);
@@ -218,6 +219,7 @@ impl Rebuilder {
             for (n, pc) in pieces.into_iter().enumerate() {
                 if n > 0 && pc.volume < sliver {
                     self.kernel.release(pc.body);
+                    dropped += 1;
                 } else {
                     kept.push(pc);
                 }
@@ -242,6 +244,10 @@ impl Rebuilder {
         // The model's parts no folded part continues are gone.
         next.parts.retain(|p| !(old_parts.iter().any(|(q, _)| *q == p.part.id) && !used.contains(&p.part.id)));
         let mut o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
+        if dropped > 0 {
+            let w = format!("{dropped} loose sliver{} left by the fold removed", if dropped == 1 { "" } else { "s" });
+            o.warning = Some(o.warning.map_or(w.clone(), |x| format!("{x}; {w}")));
+        }
         ctx.parts = walls_of;
         o.state = Arc::new(with_context(&o.state, ctx));
         Ok(o)

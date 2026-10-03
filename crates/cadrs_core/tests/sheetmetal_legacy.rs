@@ -46,6 +46,13 @@ const CASE_ROUND: Legacy = Legacy { features: legacy::case_round, step: legacy::
 
 /// The import, a Thicken of its outer base face (with or without the bends) and a Delete part.
 fn thickened(l: &Legacy, bends: bool) -> (Build, Build) {
+    let (o, b) = thickened_with(l, bends, (l.params)());
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    (o, b)
+}
+
+/// [`thickened`] with the Thicken's settings `p`, its errors left to the caller.
+fn thickened_with(l: &Legacy, bends: bool, p: cadrs_sheetmetal::Params) -> (Build, Build) {
     let original = Rebuilder::new().rebuild(&(l.features)());
     assert!(original.errors.is_empty(), "{:?}", original.errors);
     let bytes = (l.step)(&mut Rebuilder::new()).expect("the STEP file");
@@ -62,7 +69,6 @@ fn thickened(l: &Legacy, bends: bool) -> (Build, Build) {
         .filter(|i| s.faces[*i].plane.is_some_and(|p| p.normal()[2] < -0.999))
         .min_by(|a, b| s.faces[*a].plane.unwrap().origin[2].total_cmp(&s.faces[*b].plane.unwrap().origin[2]))
         .expect("the base's outer face");
-    let p = (l.params)();
     // The bends' outer cylinders (radius r + t).
     let cyls: Vec<usize> = (0..s.faces.len())
         .filter(|i| s.faces[*i].kind == Some(SurfaceKind::Cylinder) && s.faces[*i].radius.is_some_and(|r| (r - (p.bend_radius + p.thickness)).abs() < 1e-6))
@@ -82,7 +88,6 @@ fn thickened(l: &Legacy, bends: bool) -> (Build, Build) {
     let sm = Feature { id: FeatureId::new(), name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x) };
     let del = Feature { id: FeatureId::new(), name: "Delete part 1".into(), kind: FeatureKind::DeletePart(DeletePartFeature { parts: vec![part.id] }) };
     let b = Rebuilder::new().rebuild(&[import, sm, del]);
-    assert!(b.errors.is_empty(), "{:?}", b.errors);
     (original, b)
 }
 
@@ -135,9 +140,15 @@ fn an_imported_case_with_round_corner_reliefs_leaves_no_slivers() {
     let sm = original.parts.iter().find(|p| original.sheet_metal[0].parts.iter().any(|(q, _)| *q == p.id)).unwrap();
     let v0 = volume(sm);
     println!("round-relief Case: {v} vs {v0}");
-    // Not the original's exact volume yet: 31 035.9 against 31 694.4 mm³ (2.1 % less, about
-    // 165 mm³ a corner: the new bends don't take back the material round the import's relief
-    // holes). The simple-cornered Case (above) matches to 1e-6.
+    // The slivers are dropped with a warning (not silently).
+    assert!(b.warnings.iter().any(|(_, w)| w.contains("sliver")), "{:?}", b.warnings);
+    // Not the original's exact volume yet: 31 035.9 against 31 694.4 mm³ (2.1 % less). The
+    // cause: each bottom face edge of the import runs along its bend cylinder only between the
+    // round relief holes (64.5 of 74 mm); the Thicken moves that part onto the sharp line and
+    // leaves the rest, so the walls get ears and the bends stop short, and the model then cuts
+    // bend reliefs at the 8 bend ends (8 × 69.5 mm²) the original never had. Recognising the
+    // relief holes (restoring the sharp corner, the hole as the corner relief) is still to do;
+    // the simple-cornered Case (above) matches to 1e-6.
     assert!(v < v0 && v > 0.97 * v0, "{v} vs {v0}");
 }
 

@@ -785,7 +785,15 @@ fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<Feature> {
         f.kind = k.clone();
     }
     if let Some(id) = o.rolled_back {
-        out.retain(|f| f.id != id);
+        // A Sheet metal model taking picks on its input still builds its model, table and flat
+        // (no parts): the panel follows the picks (P3I.8).
+        // A Thicken (or a Convert that keeps its input) leaves its input in place: it stays
+        // whole, picks go through its own faces (the dialog's `skip_op`) and its preview shows.
+        match out.iter_mut().find(|f| f.id == id).map(|f| &mut f.kind) {
+            Some(cadrs_core::FeatureKind::SheetMetalModel(x)) if x.operation != cadrs_core::sheetmetal::SheetMetalOp::Convert || x.keep_input => {}
+            Some(cadrs_core::FeatureKind::SheetMetalModel(x)) => x.picking = true,
+            _ => out.retain(|f| f.id != id),
+        }
     }
     if let Some(id) = o.rollback_to
         && let Some(i) = out.iter().position(|f| f.id == id)
@@ -818,7 +826,8 @@ pub fn consumed_sketches(features: &[Feature], editing: Option<FeatureId>) -> Ha
 }
 
 /// The sketches hidden in the view: the ones a feature (other than `editing`) uses, unless their
-/// eye shows them, and the ones their eye hides (PS1.4, PS1.5).
+/// eye shows them, and the ones their eye hides (PS1.4, PS1.5). A Derived feature's sketches
+/// (not in the list) start hidden, as Onshape's do (`18-…/t0062.6.png`): their eyes show them.
 pub fn hidden_sketches(el: &cadrs_core::Element, features: &[Feature], editing: Option<FeatureId>) -> HashSet<FeatureId> {
     let consumed = consumed_sketches(features, editing);
     features
@@ -826,7 +835,7 @@ pub fn hidden_sketches(el: &cadrs_core::Element, features: &[Feature], editing: 
         .filter(|f| f.sketch().is_some())
         .filter(|f| match el.sketch_visibility(f.id) {
             Some(shown) => !shown,
-            None => consumed.contains(&f.id),
+            None => consumed.contains(&f.id) || el.feature(f.id).is_none(),
         })
         .map(|f| f.id)
         .collect()
@@ -1959,17 +1968,22 @@ pub const VERTEX_PICK_PX: f32 = 8.0;
 /// True if nothing of a part lies in front of the point `p` (on a part's surface) as the view
 /// sees it.
 fn visible(cache: &PartCache, view: &ViewState, p: Vec3) -> bool {
+    visible_skipping(cache, view, p, None)
+}
+
+/// [`visible`], the faces the operation `skip` made (an open dialog's own preview) not in the way.
+fn visible_skipping(cache: &PartCache, view: &ViewState, p: Vec3, skip: Option<cadrs_sketch::OpId>) -> bool {
     let (o, d) = view.ray(view.project(p));
     let depth = (p - o).dot(d);
     // Two pixels' worth of slack, plus rounding of big coordinates.
     let slack = 2.0 * view.scale + 1e-4 * p.length().max(1.0);
-    pick_opaque_face(cache, view, view.project(p)).is_none_or(|(_, _, t)| depth <= t + slack)
+    pick_opaque_face(cache, view, view.project(p), skip).is_none_or(|(_, _, t)| depth <= t + slack)
 }
 
 /// How far along the pick ray the nearest face of an opaque part is: an edge seen through a
 /// clear part (the Pneumatic Cylinder's barrel, a part made transparent) stays pickable, as the
 /// eye sees it (`ex3-step14.png` picks the Rear Cap's rod holes through the barrel).
-fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, FaceName, f32)> {
+fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2, skip: Option<cadrs_sketch::OpId>) -> Option<(PartId, FaceName, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(PartId, FaceName, f32)> = None;
     for part in cache.shown() {
@@ -1977,7 +1991,7 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
         if clear {
             continue;
         }
-        if let Some((f, t)) = part.solid.pick_where(to64(o), to64(d), |_| true) {
+        if let Some((f, t)) = part.solid.pick_where(to64(o), to64(d), |face| skip.is_none_or(|op| face.name.op != op)) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {
                 best = Some((part.id, part.solid.faces[f].name, t));
@@ -1990,6 +2004,12 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
 /// The nearest visible part edge within [`EDGE_PICK_PX`] of a screen offset, with its distance
 /// (px).
 pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, EdgeName, f32)> {
+    pick_edge_skipping(cache, view, offset, None)
+}
+
+/// [`pick_edge`] through the operation `skip`'s own edges and faces (an open dialog's preview:
+/// a Thicken's bends are picked on the faces under it, P3I.8).
+pub fn pick_edge_skipping(cache: &PartCache, view: &ViewState, offset: Vec2, skip: Option<cadrs_sketch::OpId>) -> Option<(PartId, EdgeName, f32)> {
     let mut near: Vec<(f32, PartId, EdgeName, Vec3, Option<cadrs_core::solid::EdgeCircle>)> = Vec::new();
     for part in cache.shown() {
         let index = part.solid.pick_index();
@@ -2002,6 +2022,9 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
         let penalty = if clear { EDGE_PICK_PX } else { 0.0 };
         for (ei, e) in part.solid.edges.iter().enumerate() {
             if !index.edges[ei].as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
+                continue;
+            }
+            if skip.is_some_and(|op| e.name.faces.iter().any(|x| x.op == op)) {
                 continue;
             }
             let mut best: Option<(f32, Vec3)> = None;
@@ -2023,7 +2046,7 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
     }
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near.into_iter()
-        .find(|(_, f, _, p, c)| visible(cache, view, *p) || c.is_some_and(|c| hidden_by_its_shaft(cache, view, *f, *p, &c)))
+        .find(|(_, f, _, p, c)| visible_skipping(cache, view, *p, skip) || c.is_some_and(|c| hidden_by_its_shaft(cache, view, *f, *p, &c)))
         .map(|(d, f, n, _, _)| (f, n, d))
 }
 
@@ -2032,7 +2055,7 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
 /// radius. Such an edge stays pickable all round, as Onshape lets you pick a hole edge with its
 /// rod shown (`ex3-step14.png`).
 fn hidden_by_its_shaft(cache: &PartCache, view: &ViewState, part: PartId, p: Vec3, c: &cadrs_core::solid::EdgeCircle) -> bool {
-    let Some((occluder, face, _)) = pick_opaque_face(cache, view, view.project(p)) else { return false };
+    let Some((occluder, face, _)) = pick_opaque_face(cache, view, view.project(p), None) else { return false };
     if occluder == part {
         return false;
     }
@@ -2225,9 +2248,7 @@ pub fn pick_scene(cache: &PartCache, view: &ViewState, offset: Vec2, filter: Pic
             {
                 return Some(Pick::Vertex(f, v));
             }
-            if let Some((f, e, _)) = pick_edge(cache, view, offset)
-                .filter(|(_, e, _)| filter.skip_op.is_none_or(|op| e.faces.iter().all(|x| x.op != op)))
-            {
+            if let Some((f, e, _)) = pick_edge_skipping(cache, view, offset, filter.skip_op) {
                 return Some(Pick::Edge(f, e));
             }
         }

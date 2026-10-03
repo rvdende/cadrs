@@ -785,6 +785,15 @@ impl Rebuilder {
             forms: Vec::new(),
             corner_broken: false,
         };
+        // A dialog taking picks on the input: the model, table and flat only.
+        if x.picking {
+            let mut ctx = ctx;
+            let def = ctx.def.clone().ok_or("The sheet metal model has no definition")?;
+            let model = def.build().map_err(|e| e.message(name))?;
+            ctx.flat = flatten(&model);
+            ctx.model = model;
+            return Ok(refold::plain_output(refold::with_context(state, ctx), None));
+        }
         let consumed = if x.operation == SheetMetalOp::Convert && !x.keep_input { consumed } else { Vec::new() };
         let mut o = self.refold(id, name, state, &[], None, ctx, &consumed)?;
         o.warning = o.warning.or(warning);

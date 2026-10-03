@@ -12,6 +12,13 @@ Scenario(
     steps: [
         WaitFor("document-shell"),
         Wait(30),
+        // The exercise's document, by its name (step 1).
+        Click(ui("document-name")),
+        Wait(3),
+        Key("Ctrl+A"),
+        Type("Exercise: Import DXF"),
+        Key("Enter"),
+        Wait(5),
         Custom("sketch-dxf-dir fixtures/sheetmetal"),
         Click(ui("sketch")),
         WaitFor("sketch-dialog"),

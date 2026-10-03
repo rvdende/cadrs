@@ -857,6 +857,9 @@ fn spawn_tables(
                     })
                     .cell(move |c| {
                         if tangent {
+                            // Onshape's "n/a" (`17-…/t0043.9.png`): a tangent joint has no style.
+                            c.spawn(Node { width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() })
+                                .with_child((th.text("n/a", 12.0, FontWeight::NORMAL, th.muted_foreground), Pickable::IGNORE));
                             return;
                         }
                         let options = vec![
@@ -1604,10 +1607,37 @@ fn place_labels(
     let Some(scene) = &t.scene else { return };
     let size = body.size() * body.inverse_scale_factor();
     let selected = shown(&t, &cache).map(|c| selected_joints(&cache, c, &selection)).unwrap_or_default();
+    // Labels in a steady order (by bend), each moved clear of the ones placed before it (two
+    // bends ending at one corner) and kept inside the view (left of its point near the edge).
+    let mut placed: Vec<Rect> = Vec::new();
+    let mut spots: Vec<(JointId, f32, f32)> = Vec::new();
+    {
+        let mut items: Vec<(JointId, Vec2, Vec2)> = q
+            .iter()
+            .map(|(l, _, _, cn, _)| (l.0, t.view.project(v3(l.1, scene.thickness)) + size / 2.0, cn.size() * cn.inverse_scale_factor()))
+            .collect();
+        items.sort_by_key(|(j, ..)| j.0);
+        for (j, p, lsize) in items {
+            let mut x = p.x + 4.0;
+            if x + lsize.x > size.x {
+                x = p.x - 4.0 - lsize.x;
+            }
+            let mut y = p.y - lsize.y / 2.0;
+            let mut r = Rect::from_corners(Vec2::new(x, y), Vec2::new(x + lsize.x, y + lsize.y));
+            let mut guard = 0;
+            while placed.iter().any(|o| !o.intersect(r).is_empty()) && guard < 8 {
+                y += lsize.y + 2.0;
+                r = Rect::from_corners(Vec2::new(x, y), Vec2::new(x + lsize.x, y + lsize.y));
+                guard += 1;
+            }
+            placed.push(r);
+            spots.push((j, x, y));
+        }
+    }
     for (l, mut node, mut vis, cn, children) in &mut q {
         let p = t.view.project(v3(l.1, scene.thickness)) + size / 2.0;
         let lsize = cn.size() * cn.inverse_scale_factor();
-        let (x, y) = (p.x + 4.0, p.y - lsize.y / 2.0);
+        let (x, y) = spots.iter().find(|(j, ..)| *j == l.0).map(|(_, x, y)| (*x, *y)).unwrap_or((p.x + 4.0, p.y - lsize.y / 2.0));
         if node.left != Val::Px(x) || node.top != Val::Px(y) {
             node.left = Val::Px(x);
             node.top = Val::Px(y);

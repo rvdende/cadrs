@@ -176,6 +176,12 @@ pub struct SheetMetalModelFeature {
     /// others keeping their places.
     #[serde(default)]
     pub table_order: Vec<JointId>,
+    /// Set (never saved) while a dialog takes picks on the model's input (a Convert's faces to
+    /// exclude and edges to bend, a Thicken's cylinders to bend, P3I.8): the model, its table
+    /// and its flat are built, but no part is made or used up, so the input stays pickable and
+    /// the Sheet metal panel follows the picks.
+    #[serde(skip)]
+    pub picking: bool,
 }
 
 fn zero_mm() -> String {
@@ -212,6 +218,7 @@ impl Default for SheetMetalModelFeature {
             flip_thickness: false,
             exprs: SheetMetalExprs::of(&params),
             table_order: Vec::new(),
+            picking: false,
         }
     }
 }
