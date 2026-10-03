@@ -1,7 +1,8 @@
 //! Stand-ins for the sheet metal course's exercises (P3I.8, X7; `simultaneous-sheet-metal.md`
 //! E1–E4): the documents the exercises start from (Onshape's public documents we don't have) and
 //! the finished parts, built through the same commands a user's clicks make, with fixed ids so
-//! `fixtures/sm_e*_standin.cadrs` regenerate exactly (`cadrs_core/tests/sheetmetal_exercises.rs`).
+//! `fixtures/sheetmetal/sm_*_standin.cadrs` regenerate (in their own folder: the FEA
+//! mesher's course-parts check skips thin sheet) exactly (`cadrs_core/tests/sheetmetal_exercises.rs`).
 //!
 //! - **E2 "Creating sheet metal parts"** ([`build_e2`]): the exercise done, in a new document
 //!   "Exercise: Creating sheet metal" (mm, kg). The Front-plane profile is the exercise's (15 high
@@ -99,6 +100,153 @@ fn new_document(name: &str, id: DocumentId, studio: (&str, ElementId)) -> Docume
     el.id = studio.1;
     doc.elements.push(el);
     doc
+}
+
+// ---------------------------------------------------------------------------------------------
+// E1
+
+const fn e1(n: u128) -> FeatureId {
+    FeatureId::from_u128(0x53e1_0000_0000_0000_0000_0000_0000_0000 + n)
+}
+
+pub const E1_DOCUMENT: DocumentId = DocumentId::from_u128(0x53e1_0000_0000_0000_0000_0000_0000_0100);
+pub const E1_STUDIO: ElementId = ElementId::from_u128(0x53e1_0000_0000_0000_0000_0000_0000_0101);
+pub const E1_SKETCH: FeatureId = e1(0x11);
+pub const E1_MODEL: FeatureId = e1(0x12);
+pub const E1_PART: PartId = PartId::new(E1_MODEL, 0);
+/// The DXF E1 inserts: P3I.6's flat export of the stand-in tray.
+pub const E1_DXF: &str = "fixtures/sheetmetal/flat_pattern_e1.dxf";
+
+/// E1's Bend features' ids (one per bend line, outermost first).
+pub fn e1_bend(k: usize) -> FeatureId {
+    e1(0x20 + k as u128)
+}
+
+/// Exercise E1 done in Part Studio `el` from the flat DXF's text (see the module docs): Sketch 1
+/// on Top with the DXF inserted (mm), Sheet metal model → Thicken of its seven sheet regions
+/// (1 mm, R1), then one Bend per bend line (the short end flanges' first, then outermost first, so
+/// each line still lies on a flat wall), Inner alignment, the picked face on the line's up side, the smaller side moving;
+/// Carbon Steel.
+pub fn build_e1(s: &mut dyn Studio, el: ElementId, dxf: &str) -> Result<(), CommandError> {
+    use crate::dxf_import::{DxfUnits, InsertDxf, sketch_of};
+    use crate::sheetmetal::CurveRef;
+    use crate::sheetmetal_tools::{BendFeature, LineRef};
+    let d = cadrs_drawing::dxf::read_dxf(dxf).map_err(|e| CommandError::Invalid(format!("the E1 DXF: {e}")))?;
+    let (geometry, _) = sketch_of(&d, DxfUnits::Millimeter, true);
+    s.run(&AddSketch { element: el, feature: E1_SKETCH, plane: Some(PlaneRef::Top) })?;
+    s.run(&InsertDxf { element: el, feature: E1_SKETCH, geometry })?;
+    let g = s.document().element(el).and_then(|e| e.feature(E1_SKETCH)).and_then(|f| f.sketch()).map(|k| k.geometry.clone()).ok_or_else(|| missing("sketch"))?;
+    // The bend lines (the DXF's BEND_UP / BEND_DOWN layers) and the sheet: the regions on either
+    // side of them and every region not inside another (the cut-outs are holes).
+    use cadrs_drawing::sheet_sketch::Entity;
+    let bends: Vec<([f64; 2], [f64; 2], bool)> = d
+        .entities
+        .iter()
+        .zip(&d.layers)
+        .filter_map(|(e, l)| match e {
+            Entity::Line { a, b } if l == "BEND_UP" || l == "BEND_DOWN" => Some((*a, *b, l == "BEND_UP")),
+            _ => None,
+        })
+        .collect();
+    let all = cadrs_sketch::region::regions(&g);
+    let inside_other = |i: usize| {
+        let p = crate::document::interior_point(&all[i]);
+        // Inside another region's outer loop (a cut-out is a hole of the sheet around it).
+        let within = |l: &[Vec2]| {
+            let mut inside = false;
+            for k in 0..l.len() {
+                let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                    inside = !inside;
+                }
+            }
+            inside
+        };
+        all.iter().enumerate().any(|(j, r)| j != i && r.area() > all[i].area() && within(&r.outer))
+    };
+    let sheet: Vec<&cadrs_sketch::Region> = (0..all.len()).filter(|i| !inside_other(*i)).map(|i| &all[i]).collect();
+    let p = {
+        let mut p = SheetMetalModelFeature::default_params();
+        p.thickness = 1.0;
+        p.bend_radius = 1.0;
+        p
+    };
+    let x = SheetMetalModelFeature {
+        operation: SheetMetalOp::Thicken,
+        regions: sheet.iter().map(|r| crate::document::RegionRef::new(E1_SKETCH, r)).collect(),
+        params: p,
+        exprs: SheetMetalExprs::of(&p),
+        ..Default::default()
+    };
+    add(s, el, E1_MODEL, "Sheet metal model", FeatureKind::SheetMetalModel(x))?;
+    // The flat's centre; bend lines outermost first.
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for (a, b, _) in &bends {
+        for q in [a, b] {
+            for i in 0..2 {
+                lo[i] = lo[i].min(q[i]);
+                hi[i] = hi[i].max(q[i]);
+            }
+        }
+    }
+    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let mid = |a: [f64; 2], b: [f64; 2]| [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+    let far = |a: [f64; 2], b: [f64; 2]| {
+        let m = mid(a, b);
+        (m[0] - c[0]).hypot(m[1] - c[1])
+    };
+    let mut order: Vec<usize> = (0..bends.len()).collect();
+    // The end flanges' short lines first (a long line's band would cross their joints), then
+    // the long ones outermost first (a lip's line lies on its side wall only while that is flat).
+    let len = |i: usize| (bends[i].1[0] - bends[i].0[0]).hypot(bends[i].1[1] - bends[i].0[1]);
+    order.sort_by(|i, j| {
+        let (li, lj) = (len(*i).round(), len(*j).round());
+        li.total_cmp(&lj).then(far(bends[*j].0, bends[*j].1).total_cmp(&far(bends[*i].0, bends[*i].1)))
+    });
+    for (k, i) in order.into_iter().enumerate() {
+        let (a, b, up) = bends[i];
+        let curve = g
+            .curves
+            .iter()
+            .find(|(id, cv)| {
+                let cadrs_sketch::CurveKind::Line { a: pa, b: pb } = cv.kind else { return false };
+                let _ = id;
+                let (qa, qb) = (g.pos(pa), g.pos(pb));
+                let near = |q: Vec2, r: [f64; 2]| (q.x - r[0]).hypot(q.y - r[1]) < 1e-6;
+                (near(qa, a) && near(qb, b)) || (near(qa, b) && near(qb, a))
+            })
+            .map(|(id, _)| id)
+            .ok_or_else(|| missing("bend line"))?;
+        // The face: the staying side (towards the centre), 2 mm off the line, on the up side.
+        let m = mid(a, b);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len = dx.hypot(dy);
+        let mut n = [-dy / len, dx / len];
+        if (c[0] - m[0]) * n[0] + (c[1] - m[1]) * n[1] < 0.0 {
+            n = [-n[0], -n[1]];
+        }
+        let seed = [m[0] + 2.0 * n[0], m[1] + 2.0 * n[1], if up { p.thickness } else { 0.0 }];
+        let part = sm_part(&built(s, el), E1_MODEL)?;
+        let face = FaceRef { seed, ..face_near(&part.solid, part.id, seed).ok_or_else(|| missing("face"))? };
+        let bf = BendFeature {
+            line: Some(LineRef::Sketch(CurveRef { sketch: E1_SKETCH, curve })),
+            face: Some(face),
+            alignment: cadrs_sheetmetal::model_edit::BendAlignment::Inner,
+            ..Default::default()
+        };
+        add(s, el, e1_bend(k), "Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bf)))?;
+    }
+    s.run(&SetPartMaterial { element: el, parts: vec![E1_PART], material: crate::material::library(CARBON_STEEL) })?;
+    Ok(())
+}
+
+/// The finished E1 as a document ("Exercise: Import DXF (completed stand-in)"), from the DXF's
+/// text.
+pub fn document_e1(dxf: &str) -> Result<Document, CommandError> {
+    let mut doc = new_document("Exercise: Import DXF (completed stand-in)", E1_DOCUMENT, ("Part Studio 1", E1_STUDIO));
+    let mut h = History::default();
+    build_e1(&mut DocHistory(&mut doc, &mut h), E1_STUDIO, dxf)?;
+    Ok(doc)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -440,8 +588,8 @@ pub fn document_e4() -> Result<Document, CommandError> {
     Ok(doc)
 }
 
-/// Every stand-in document file (`fixtures/<name>.cadrs`), dated 2026-10-03.
-pub fn files() -> Result<Vec<(&'static str, crate::store::DocumentFile)>, CommandError> {
+/// Every stand-in document file (`fixtures/sheetmetal/<name>.cadrs`), dated 2026-10-03.
+pub fn files(e1_dxf: &str) -> Result<Vec<(&'static str, crate::store::DocumentFile)>, CommandError> {
     let file = |document: Document| crate::store::DocumentFile { version: crate::store::SCHEMA_VERSION, meta: crate::library::DocumentMeta::new("cadrs", 1_791_000_000), document };
-    Ok(vec![("sm_e2_completed_standin", file(document_e2()?)), ("sm_e3_standin", file(document_e3()?)), ("sm_e4_standin", file(document_e4()?)), ("sm_topdown_standin", file(super::sheetmetal_topdown::document()?.0))])
+    Ok(vec![("sm_e1_completed_standin", file(document_e1(e1_dxf)?)), ("sm_e2_completed_standin", file(document_e2()?)), ("sm_e3_standin", file(document_e3()?)), ("sm_e4_standin", file(document_e4()?)), ("sm_topdown_standin", file(super::sheetmetal_topdown::document()?.0))])
 }

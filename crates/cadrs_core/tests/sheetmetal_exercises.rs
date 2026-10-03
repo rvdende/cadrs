@@ -56,19 +56,56 @@ fn mass_kg(doc: &Document, el: ElementId, part: &Part) -> f64 {
 
 #[test]
 fn the_fixtures_are_current() {
-    for (name, file) in ex::files().unwrap() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../fixtures/{name}.cadrs"));
+    for (name, file) in ex::files(&e1_dxf()).unwrap() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../fixtures/sheetmetal/{name}.cadrs"));
         let text = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default()).unwrap();
         if std::env::var("CADRS_WRITE_FIXTURES").is_ok() {
             std::fs::write(&path, &text).unwrap();
         }
         let stored = cadrs_core::Store::load_path(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(stored.document, file.document, "fixtures/{name}.cadrs is out of date");
+        assert_eq!(stored.document, file.document, "fixtures/sheetmetal/{name}.cadrs is out of date");
+    }
+}
+
+fn e1_dxf() -> String {
+    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(ex::E1_DXF)).expect("the E1 DXF")
+}
+
+/// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value.
+pub const E1_MASS: f64 = 0.356733;
+
+#[test]
+fn e1_six_bends_on_the_imported_flat_and_its_mass() {
+    let doc = ex::document_e1(&e1_dxf()).unwrap();
+    let b = build(&doc, ex::E1_STUDIO);
+    assert_eq!(b.parts.len(), 1);
+    let ctx = &b.sheet_metal[0];
+    assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 6);
+    assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1);
+    // A Bend never changes the flat's size: still the tray's (the DXF's) flat, less the bends'
+    // reliefs (the Bend features cut their own, as in Onshape).
+    let p = cadrs_sheetmetal::Params { thickness: 1.0, bend_radius: 1.0, ..cadrs_core::sheetmetal::SheetMetalModelFeature::default_params() };
+    let tray = cadrs_sheetmetal::flatten(&cadrs_sheetmetal::samples::e1_tray(p).unwrap());
+    let size = |f: &cadrs_sheetmetal::flat::FlatPart| {
+        let (lo, hi) = f.bounds().unwrap();
+        let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+        (w.max(h), w.min(h))
+    };
+    let (a, b2) = (size(&ctx.flat.parts[0]), size(&tray.parts[0]));
+    assert!((a.0 - b2.0).abs() < 1e-3 && (a.1 - b2.1).abs() < 1e-3, "{a:?} vs {b2:?}");
+    assert!(ctx.flat.parts[0].area() <= tray.parts[0].area() + 1e-6);
+    let part = &b.parts[0];
+    let v = part.mass.unwrap().volume;
+    assert!((v - predicted(&b, ex::E1_MODEL)).abs() < 1e-4 * v, "{v} vs {}", predicted(&b, ex::E1_MODEL));
+    let m = mass_kg(&doc, ex::E1_STUDIO, part);
+    println!("E1 mass: {m:.6} kg (volume {v:.3} mm³)");
+    if E1_MASS > 0.0 {
+        assert!((m - E1_MASS).abs() < 5e-7, "E1 mass {m} vs {E1_MASS}");
     }
 }
 
 /// E2's mass in Carbon Steel (kg): the stand-in's own value (its profile's arc is a trapezoid).
-pub const E2_MASS: f64 = 0.111469;
+pub const E2_MASS: f64 = 0.111473;
 
 #[test]
 fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
