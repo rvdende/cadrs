@@ -317,13 +317,29 @@ impl OcctKernel {
         };
         let trimmed = match kind {
             TrimKind::Plane { point, normal } => {
-                let side_of_o = (o - point).dot(&normal);
-                if side_of_o.abs() < LINEAR_EPS {
-                    return Err(KernelError::InvalidParameter(
-                        "the face's plane passes through the start of the extrude".into(),
-                    ));
-                }
-                let away = -normal * side_of_o.signum();
+                // Keep the side the profile is on (the sketch plane's origin may lie anywhere,
+                // even on the face's plane: an arc's radial end face through it).
+                let sides: Vec<f64> = profile_samples(self, profile, spec, o)?
+                    .iter()
+                    .map(|p| (p - point).dot(&normal))
+                    .collect();
+                let above = sides.iter().any(|s| *s > LINEAR_EPS);
+                let below = sides.iter().any(|s| *s < -LINEAR_EPS);
+                let side_of_profile = match (above, below) {
+                    (true, false) => 1.0,
+                    (false, true) => -1.0,
+                    (true, true) => {
+                        return Err(KernelError::InvalidParameter(
+                            "the face's plane crosses the profile".into(),
+                        ));
+                    }
+                    (false, false) => {
+                        return Err(KernelError::InvalidParameter(
+                            "the face's plane passes through the start of the extrude".into(),
+                        ));
+                    }
+                };
+                let away = -normal * side_of_profile;
                 let size = 4.0 * (far + profile_size(profile)) + 10.0;
                 let cutter = half_space(point, normal, away, size)?;
                 let (cut, h) = shape.try_subtract_h(&cutter).map_err(occt)?;

@@ -1105,6 +1105,35 @@ pub fn extrude_up_to_face_oblique(k: &mut dyn Kernel) {
     assert!(r.history.generated.iter().any(|(_, o)| matches!(o, Origin::EndCap { .. })));
 }
 
+/// Up to face, oblique, with the face's plane through the sketch plane's origin (an arc's
+/// radial end face): the profile, 10 × 10 over x = 15..25, is wholly on one side of the plane
+/// z = 2x, so the sweep stops at it: V = ∫∫ 2x = 10·10·40 = 4000.
+pub fn extrude_up_to_face_through_origin(k: &mut dyn Kernel) {
+    let plane = Plane {
+        origin: Point3::new(0.0, 50.0, 0.0),
+        ..front()
+    };
+    let wedge = Profile::new(
+        plane,
+        vec![region(polygon(&[p(10.0, 20.0), p(30.0, 60.0), p(30.0, 70.0), p(10.0, 70.0)]))],
+    );
+    let w = one(k.extrude(&wedge, Extent::Blind(100.0)).unwrap());
+    let slanted = k
+        .faces(w)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.plane.is_some_and(|pl| pl.normal.x > 0.5 && pl.normal.z < -0.3))
+        .expect("the slanted face")
+        .id;
+    let mut spec = ExtrudeSpec::blind(up(), 1.0);
+    spec.end = ExtrudeEnd::UpToFace { body: w, face: slanted, offset: 0.0 };
+    let r = k.extrude_with(&top(vec![region(rect(15.0, -5.0, 25.0, 5.0))]), &spec).unwrap();
+    close(volume(k, r.bodies[0]), 4000.0, 1e-6);
+    // A profile the plane crosses is refused.
+    let across = top(vec![region(rect(-5.0, -5.0, 5.0, 5.0))]);
+    assert!(matches!(k.extrude_with(&across, &spec), Err(KernelError::InvalidParameter(_))));
+}
+
 /// Up to part, conforming: a square under a cylinder of radius 10 along X at z = 30. The end
 /// follows the cylinder's underside, z = 30 − √(100 − y²):
 /// V = 10·(10·30 − ∫₋₅⁵ √(100 − y²) dy) = 10·(300 − (5√75 + 100·asin ½)) = 2043.3885.
@@ -3091,7 +3120,7 @@ macro_rules! conformance {
                 chamfer_two_distances_and_angle, tessellation_normals_and_edges,
                 extrude_history, boolean_history_and_split_names, names_survive_edits,
                 face_adjacency, tangent_chains, edges_and_vertices,
-                extrude_up_to_face_parallel, extrude_up_to_face_oblique,
+                extrude_up_to_face_parallel, extrude_up_to_face_oblique, extrude_up_to_face_through_origin,
                 extrude_up_to_part_conforms, extrude_up_to_next_from_a_face, extrude_through_all,
                 extrude_options, surface_extrude, thin_extrude, split_solids_rays_and_boxes, compound_gathers_bodies,
                 extrude_a_face, union_merges_coplanar_faces, revolve_torus, revolve_types,
