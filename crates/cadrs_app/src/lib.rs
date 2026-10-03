@@ -555,7 +555,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, sheetmetal_p3i9_ui::Sm9Plugin))
             // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
             .add_plugins((sheetmetal_table::SheetMetalTablePlugin, sheetmetal_joint_ui::ModifyJointUiPlugin))
-            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, sheetmetal_tools_ui::SheetMetalToolsPlugin))
+            .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
             .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin))

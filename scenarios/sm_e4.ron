@@ -1,0 +1,53 @@
+// P3I.8 / X7, exercise E4 "Sheet metal rework" end to end (`ex4-sheet-metal-rework/goal.png`,
+// step-02–10) on its stand-in (`fixtures/sheetmetal/sm_e4_standin.cadrs`: the Lower Enclosure, a
+// U-channel with an obround slot through both side walls, its model named "Lower Enclosure").
+// 01 the part; 02 Finish sheet metal model on it: the warning that later changes don't show in
+// the flat; 03 accepted; 04 the rework (steps 3–9: the slot's outline sketched on the wall,
+// Plane 1, a 2 × 8 rectangle swept round it (Add), mirrored about Right, its edges filleted;
+// `sm-e4-rework`); 05 the Sheet metal table and flat view, Context "Lower Enclosure": the flat
+// shows none of it (step 10; `cadrs_core/tests/sheetmetal_exercises.rs` checks the flat is
+// unchanged).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("fixture sheetmetal/sm_e4_standin"),
+        Wait(90),
+        Custom("view 40 25 0 -75 30 0.16"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-lower-enclosure"),
+        Click(ui("sheet-metal-model-caret")),
+        Wait(10),
+        Click(ui("sheet-metal-menu-finish")),
+        WaitFor("sheet-metal-finish-dialog"),
+        Wait(10),
+        Click(xyz(0, -120, 0.75)),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-finish-warning"),
+        Click(ui("sheet-metal-finish-dialog-accept")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-finished"),
+        Custom("sm-e4-rework"),
+        Wait(120),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-rework-sweeps-mirror-fillets"),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
+        Click(ui("smt-context")),
+        Wait(10),
+        Screenshot("05a-context-dropdown"),
+        Key("Escape"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-flat-without-the-rework"),
+    ],
+)

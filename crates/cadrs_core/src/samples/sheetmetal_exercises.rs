@@ -492,6 +492,8 @@ pub fn build_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     s.run(&AddExtrude { element: el, feature: E4_SLOT, extrude: ExtrudeFeature::default() })?;
     s.run(&SetExtrude { element: el, feature: E4_SLOT, extrude: x, label: "Extrude".into() })?;
     s.run(&RenamePart { element: el, part: E4_PART, name: "Lower Enclosure".into() })?;
+    // The model named after its part, so the context dropdown lists "Lower Enclosure" (E4 step 10).
+    s.run(&crate::commands::RenameFeature { element: el, feature: E4_MODEL, name: "Lower Enclosure".into() })?;
     Ok(())
 }
 
@@ -512,12 +514,18 @@ pub const E4_RIM: (f64, f64) = (8.0, 2.0);
 /// rectangle on it swept (Add) along the slot's outer edges, the sweep mirrored about Right
 /// (Feature mirror), the rims' outer and inner edges filleted (0.5).
 pub fn rework_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
+    use crate::sheetmetal_tools::FinishFeature;
+    add(s, el, E4_FINISH, "Finish sheet metal model", FeatureKind::SheetMetalTool(SheetMetalTool::Finish(FinishFeature { parts: vec![E4_PART] })))?;
+    rework_after_finish(s, el)
+}
+
+/// E4 steps 3–9 (after Finish sheet metal model): the slot's outline sketched, Plane 1, the
+/// rectangle, Sweep 1, Mirror 1 and the two fillets.
+pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     use crate::advanced::{PathRef, SweepFeature};
     use crate::applied::FilletFeature;
     use crate::pattern::{MirrorFeature, MirrorPlane, PatternType};
     use crate::plane::{PlaneEntity, PlaneFeature, PlaneType};
-    use crate::sheetmetal_tools::FinishFeature;
-    add(s, el, E4_FINISH, "Finish sheet metal model", FeatureKind::SheetMetalTool(SheetMetalTool::Finish(FinishFeature { parts: vec![E4_PART] })))?;
     // Sketch 8: the slot's outline on the right wall's outer face (x = 35), as the exercise's
     // Use of the obround's edge gives it: on a plane offset from Right.
     let (cy, cz) = E4_SLOT_CENTRE;

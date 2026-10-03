@@ -69,6 +69,13 @@
 //! - `step-fixture <path>` (P3F.2): writes the two-bracket STEP assembly
 //!   ([`cadrs_core::samples::bracket_pair`]: 2 parts, 3 instances) to `path` (relative to the
 //!   working folder), for the import scenarios to pick.
+//! - `sm-e4-rework` (P3I.8): exercise E4's steps 3–9 on its stand-in after Finish sheet metal
+//!   model: the slot's outline sketched on the right wall, Plane 1, a 2 × 8 rectangle swept
+//!   round it (Add), mirrored about Right, its edges filleted
+//!   ([`cadrs_core::samples::sheetmetal_exercises::rework_after_finish`]).
+//! - `sm-legacy-step <path>` (P3I.8, SM17): writes the legacy C-channel as a plain STEP solid
+//!   ([`cadrs_core::samples::sheetmetal_legacy`]). `sm-topdown-depth N`: the Heating Mantle
+//!   master's depth (SM18, [`cadrs_core::samples::sheetmetal_topdown::set_depth`]).
 //! - `design-intent` (P3F.4): the course's hydraulic cylinder body driven by `#piston_d` and
 //!   `#clearance` ([`cadrs_core::samples::design_intent`]) in the active Part Studio.
 //! - `simulation-beam` (P3F.5): the simulation's cantilever, 100 × 10 × 10 mm in Steel - A36
@@ -145,6 +152,21 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
         }
         if let Some(path) = m.0.strip_prefix("step-fixture ") {
             step_fixture(path.trim());
+            continue;
+        }
+        // P3I.8 (SM17): the legacy C-channel's STEP file (`samples::sheetmetal_legacy`).
+        if let Some(path) = m.0.strip_prefix("sm-legacy-step ") {
+            write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::step);
+            continue;
+        }
+        // P3I.8 (SM18): the Heating Mantle master's depth, edited in its own studio.
+        if let Some(n) = m.0.strip_prefix("sm-topdown-depth ").and_then(|n| n.trim().parse::<f64>().ok()) {
+            commands.queue(move |world: &mut World| {
+                let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+                if let Err(e) = cadrs_core::samples::sheetmetal_topdown::set_depth(&mut *doc, n) {
+                    warn!("sm-topdown-depth: {e}");
+                }
+            });
             continue;
         }
         // P3G.1: the linked-documents block (see [`linked_block`]).
@@ -334,6 +356,10 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             (Some("design-intent"), None) => {
                 commands.queue(design_intent);
             }
+            // P3I.8: exercise E4's rework after Finish (steps 3–9) on its stand-in.
+            (Some("sm-e4-rework"), None) => {
+                commands.queue(sm_e4_rework);
+            }
             // P3F.5: the simulation's beam (`cadrs_core::samples::simulation`).
             (Some("simulation-beam"), None) => {
                 commands.queue(simulation_beam);
@@ -343,6 +369,8 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             // P3H.3: `pcb-studio`, `pcb-import …` and `pcb-choose …` are `crate::pcb`'s.
             _ if crate::pcb::is_script_command(&m.0) => {}
+            // P3I.6: `crate::sketch_dxf` reads its own folder command.
+            _ if m.0.starts_with("sketch-dxf-dir ") => {}
             _ => warn!("unknown script command {:?}", m.0),
         }
     }
@@ -865,6 +893,18 @@ fn inspection(world: &mut World) {
 
 /// P3F.4: the course's design-intent model ([`cadrs_core::samples::design_intent`]) in the
 /// active Part Studio.
+fn sm_e4_rework(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::sheetmetal_exercises::rework_after_finish(&mut *doc, element) {
+        warn!("sm-e4-rework: {e}");
+    }
+}
+
 fn design_intent(world: &mut World) {
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
@@ -1111,8 +1151,13 @@ fn open_fixture(world: &mut World, name: &str) {
 
 /// `step-fixture <path>`: the bracket pair STEP file, written now (the kernel thread builds it).
 fn step_fixture(path: &str) {
+    write_step(path, cadrs_core::samples::bracket_pair::step);
+}
+
+/// Writes the STEP file `make` builds (on the kernel thread) to `path`.
+fn write_step(path: &str, make: fn(&mut cadrs_core::rebuild::Rebuilder) -> Result<Vec<u8>, String>) {
     let path = std::path::PathBuf::from(path);
-    let bytes = cadrs_core::rebuild::run_on_worker(cadrs_core::samples::bracket_pair::step).wait();
+    let bytes = cadrs_core::rebuild::run_on_worker(make).wait();
     match bytes {
         Some(Ok(b)) => {
             if let Some(dir) = path.parent() {

@@ -138,7 +138,7 @@
                         ),
                         (
                             id: ("53e40000-0000-0000-0000-000000000012"),
-                            name: "Sheet metal model 1",
+                            name: "Lower Enclosure",
                             kind: SheetMetalModel((
                                 operation: Extrude,
                                 parts: [],
