@@ -48,13 +48,14 @@ below).
 | SM1.1 | Multi-part studio, several models, one model → several parts | ✅ | P3I.2: one part per flat-pattern part, alongside ordinary parts. |
 | SM1.2–SM1.4 | Three synced views, panel, cross-highlight | ✅ | P3I.3: right-strip toggle, docked panel (context dropdown, tables, flat view with its own camera and cube); rows ↔ model faces ↔ flat pieces select and hover each other, a model pick scrolls to its row. |
 | SM1.5 | Collision check | ✅ | P3I.1 logic; P3I.2: the feature fails with "Collision in sheet metal flat pattern" (red, tooltip, dialog line), keeping its context for the flat view. |
-| SM1.6 | Active-model behaviour | 🟡 | P3I.2: contexts record their parts and `active`; ordinary features after it work on the folded part (Extrude Remove tested). Perpendicular cuts and the flat following them: P3I.5. |
+| SM1.6 | Active-model behaviour | 🟡 | P3I.2: contexts record their parts and `active`; ordinary features after it work on the folded part (Extrude Remove tested). P3I.4: the hook for sheet metal features that edit the definition (`Rebuilder::edit_sheet_metal`, the context's `SharpDef`); Flange, Hem and Make joint use it. Perpendicular cuts and the flat following them: P3I.5. |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | ✅ | Contexts are keyed by the feature; P3I.3's context dropdown lists the features by name. |
-| SM3.1–SM3.8 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ❌ | P3I.4. Move face (SM3.8) doesn't exist in cadrs (direct edit); noted, not required by the exercises. |
-| SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ❌ | P3I.4. |
+| SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain applies the bounds per edge (an approximation). |
+| SM3.8 | Move face on a flange | ❌ | Move face (direct edit) doesn't exist in cadrs; not required by the exercises. |
+| SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ✅ | P3I.4: closed-form flat lengths tested; the last values are remembered for the app session (not across sessions). Hems are in the Bends table (P3I.3's table shows them). |
 | SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ❌ | P3I.5. |
-| SM6.1–SM6.3 | Make joint | ❌ | P3I.4. |
+| SM6.1–SM6.3 | Make joint | ✅ | P3I.4: rip (edge / butt 1 / butt 2, butt only at 90°) or bend (model or own radius) between two flat walls' edges. |
 | SM6.4 | Modify joint | ✅ | P3I.3: made by table edits, edited from the feature list (Joint, Bend/Rip/Tangent, rip style, model radius, model K → calculation + value, red out of range). |
 | SM7.1–SM7.3 | Corner | ❌ | P3I.5. |
 | SM8.1–SM8.3 | Bend relief | ❌ | P3I.5. |
@@ -290,3 +291,33 @@ against the stand-ins' expected values.
   aren't re-applied if a later feature re-folds the model from its definition (the SM1.6 hook);
   form previews in the picker; Other documents lists stored documents' form studios (no version
   picker); the form's sketch visibility toggle in the flat view.
+
+### Decisions (P3I.4)
+
+- **Later features edit the definition** (SM1.6): the Sheet metal model keeps the definition it
+  was built from (`cadrs_sheetmetal::sharp_edit::SharpDef`: the walls at their virtual sharps,
+  their joints and hems, plus the rolled walls and tangent joints added after the build) in its
+  context. Flange, Hem and Make joint add walls and joints to it; `Rebuilder::edit_sheet_metal`
+  (`rebuild/kernel_ops/sheetmetal_features.rs`) builds the model again, checks it (3D, flat,
+  walls intersecting), folds it and puts the parts back under their ids. P3I.5/P3I.9 can use the
+  same hook. Faces are named by the feature that added their wall or bend ("Edge of Flange 1").
+- **Picks**: an edge or side face of a flat wall's free edge. The side it is on sets the default
+  direction: a flange or hem turns towards the face whose edge was picked (a side face: towards
+  the material); the arrows flip it.
+- **Flange**: Distance from the outer virtual sharp to the tip; the alignment puts the outer
+  sharp `T·tan(θ/2)` (Inner), `T·tan(θ/2)/2` (Middle), 0 (Outer) or `(R+T)·tan(θ/2)` (Hold line)
+  past the edge. Up to entity measures along the flange to a plane (planar face or plane) or a
+  point (vertex, edge midpoint, face centre). Align to geometry: parallel to a line, or lying in a
+  plane; Angle from direction: the direction turned about the edge. Automatic miter: flanges of
+  one feature meeting at a corner get an edge-joint rip where their planes meet, or, in one plane
+  (two walls joined by a bend), a cut along the corner's bisector the minimal gap apart; off: each
+  end cut at the miter angle. Partial flange: bounds in from the picked edge's ends (Blind, Up to
+  entity [+ offset]); Hold adjacent edges keeps the rest of the edge in place.
+- **Hem**: Straight (180°; Flattened = inner radius half the minimal gap), Rolled (the bend
+  only; a 0.001 mm leg because every bend needs a wall after it), Tear drop (`β`, `ℓ` solved so
+  the leg ends the gap off the wall and Total length from the outermost point). Corners: Simple
+  cuts a hem's leg short of the other hem's bend, Closed meets along the corner's bisector.
+- **Make joint**: both edges carried to where the walls' planes meet, then a rip or bend there.
+- **Gaps left**: Per chain is per edge; Move face (SM3.8); hems and flanges only on flat walls'
+  edges (not on rolled walls or hem legs); the E2 stand-in replaces the R35 arc by lines (the
+  sheet metal Extrude bends only between lines).

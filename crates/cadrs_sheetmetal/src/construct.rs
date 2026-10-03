@@ -122,6 +122,9 @@ pub struct Built {
     pub stray_picks: Vec<u64>,
     /// Things left out, for the feature's warning.
     pub warnings: Vec<String>,
+    /// The definition the model was built from, which later features (Flange, Hem, Make joint:
+    /// [`crate::sharp_edit`]) add to.
+    pub def: crate::sharp_edit::SharpDef,
 }
 
 impl Built {
@@ -491,6 +494,7 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
     for (k, j) in keys.iter().zip(&model.joints) {
         out.joints.push((*k, j.id));
     }
+    let built = (model.walls.len(), model.joints.len());
 
     // Cylinders left as they are: rolled walls joined to their flat neighbours by tangent joints.
     for (ci, c) in cyls.iter().enumerate() {
@@ -520,6 +524,7 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
             out.joints.push((jkey, jid));
         }
     }
+    out.def = crate::sharp_edit::SharpDef::new(b, &model, built.0, built.1);
     out.model = model;
     Ok(out)
 }
@@ -846,6 +851,7 @@ pub fn from_chains(p: Params, chains: &[ChainIn], o: &ChainOpts) -> Result<Built
     for (k, j) in bend_keys.iter().zip(&model.joints) {
         out.joints.push((*k, j.id));
     }
+    let built = (model.walls.len(), model.joints.len());
     let planar_ids: Vec<WallId> = b.walls.iter().map(|w| w.id.expect("set")).collect();
     for r in &rolled {
         model.walls.push(Wall { id: r.id, surface: r.surface, outline: r.outline.clone() });
@@ -876,6 +882,7 @@ pub fn from_chains(p: Params, chains: &[ChainIn], o: &ChainOpts) -> Result<Built
         model.joints.push(Joint { id: jid, name: names.joint(), a: wa, b: wb, kind: JointKind::Tangent { on_a, on_b } });
         out.joints.push((tj.key, jid));
     }
+    out.def = crate::sharp_edit::SharpDef::new(b, &model, built.0, built.1);
     out.model = model;
     Ok(out)
 }

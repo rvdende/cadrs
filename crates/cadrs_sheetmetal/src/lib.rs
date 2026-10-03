@@ -11,6 +11,8 @@
 //! - [`flat`]: the flat pattern: walls unfolded about their bends, bend lines with Up/Down,
 //!   corner and bend reliefs, the outline, and the collision and bend-loop checks (SM1.5).
 //! - [`relief`]: the relief cut shapes (SM7, SM8).
+//! - [`sharp_edit`]: the features after a Sheet metal model that edit its definition (P3I.4, SM1.6):
+//!   Flange, Hem and Make joint, on a [`sharp_edit::SharpDef`] kept with the model.
 //! - [`table`]: the Bends and Other joints tables (SM13).
 //! - [`edit`]: joint edits (Modify joint, the table) and the recipe a model is rebuilt from;
 //!   [`view`]: meshes, picking and label spots for the table and flat view panel (P3I.3).
@@ -24,6 +26,7 @@
 pub mod bend;
 pub mod construct;
 pub mod edit;
+pub mod sharp_edit;
 pub mod flat;
 pub mod forms;
 pub mod loft;

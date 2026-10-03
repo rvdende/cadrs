@@ -1605,11 +1605,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                                 t.translation * s + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
                             });
                             let anchor = cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
-                            // P3I.9: the built tools start their features.
+                            // P3I.4, P3I.5, P3I.9: the built tools start their features.
                             commands.entity(anchor).observe(|ev: On<MenuAction>, mut commands: Commands| {
                                 let item = ev.item.to_string();
                                 commands.queue(move |world: &mut World| {
-                                    crate::sheetmetal_p3i9_ui::menu_action(world, &item);
+                                    crate::sheetmetal_ui::start_tool(world, &item);
                                 });
                             });
                         },
@@ -1730,7 +1730,7 @@ fn surfacing_menu() -> Menu {
 fn sheet_metal_menu() -> Menu {
     let mut m = Menu::new("sheet-metal-menu").min_width(220.0);
     for (name, label, icon) in crate::sheetmetal_ui::OTHER_TOOLS {
-        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(!crate::sheetmetal_p3i9_ui::built(name)));
+        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(!crate::sheetmetal_ui::tool_built(name)));
     }
     m
 }
@@ -2887,6 +2887,8 @@ enum RowKind {
     ModifyJoint,
     /// P3I.9: a Sheet metal loft, Form or Tag (its icon).
     Sm9(&'static str),
+    /// P3I.4: Flange, Hem, Make joint (their icon).
+    SheetMetal(&'static str),
 }
 
 impl RowKind {
@@ -2923,6 +2925,7 @@ impl RowKind {
             RowKind::SheetMetalModel => "sheet-metal-model",
             RowKind::ModifyJoint => "sheet-metal-modify-joint",
             RowKind::Sm9(icon) => icon,
+            RowKind::SheetMetal(icon) => icon,
             _ => "sketch",
         }
     }
@@ -3016,6 +3019,7 @@ fn rebuild_feature_rows(
                 k @ (cadrs_core::FeatureKind::SheetMetalLoft(_) | cadrs_core::FeatureKind::Form(_) | cadrs_core::FeatureKind::TagForm(_)) => {
                     RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
                 }
+                cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,

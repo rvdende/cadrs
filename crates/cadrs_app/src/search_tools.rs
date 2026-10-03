@@ -172,9 +172,9 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
         out.push(ToolEntry { id, label, icon, shortcut, enabled, launch: Launch::Button(e) });
         if sheet_metal {
             for (tid, tlabel, ticon) in crate::sheetmetal_ui::OTHER_TOOLS {
-                // P3I.9: Loft and Form are built.
-                let built = crate::sheetmetal_p3i9_ui::built(tid);
-                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: built, launch: if built { Launch::Sm9(tid) } else { Launch::Button(e) } });
+                // P3I.4, P3I.5, P3I.9: the tools built so far start their features.
+                let built = crate::sheetmetal_ui::tool_built(tid);
+                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: enabled && built, launch: if built { Launch::Sm9(tid) } else { Launch::Button(e) } });
             }
             // P3I.9: Tag (Form), for a form's Part Studio.
             out.push(ToolEntry { id: "tag-form".into(), label: "Tag (Form)".into(), icon: "tag".into(), shortcut: None, enabled: true, launch: Launch::Sm9("tag-form") });
@@ -239,7 +239,7 @@ fn launch(world: &mut World, i: usize) {
         }
         Launch::Pattern(k) => crate::applied::begin(world, crate::applied::AppliedKind::Pattern(k)),
         Launch::Sm9(id) => {
-            crate::sheetmetal_p3i9_ui::menu_action(world, id);
+            crate::sheetmetal_ui::start_tool(world, id);
         }
         Launch::SketchVariant(e, t) => {
             if world.get_entity(e).is_ok() {

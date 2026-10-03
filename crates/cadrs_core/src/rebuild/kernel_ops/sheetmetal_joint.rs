@@ -92,7 +92,7 @@ impl Rebuilder {
         }
         // The model's own operation: the refolded faces keep their names.
         let op = ctx.feature.0;
-        let folded = self.fold(op, &model, &flat)?;
+        let folded = self.fold(&|_| op, op, &model, &flat)?;
         for (_, body, _, sum) in &folded {
             let v = self.kernel.mass_properties(*body).map(|m| m.volume).unwrap_or(*sum);
             if v < sum - (1e-6 * sum + 1e-3) {

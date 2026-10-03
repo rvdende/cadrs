@@ -60,6 +60,34 @@ pub const OTHER_TOOLS: [(&str, &str, &str); 12] = [
     ("sheet-metal-corner-break", "Corner break", "sheet-metal-corner-break"),
 ];
 
+/// Whether a tool of the Sheet metal model's ▾ is built (P3I.4, P3I.5, P3I.9): by its id
+/// (`sheet-metal-flange`) or its menu item (`sheet-metal-menu-flange`).
+pub fn tool_built(name: &str) -> bool {
+    let name = tool_id(name);
+    crate::sheetmetal_p3i9_ui::built(&name) || crate::sheetmetal_features_ui::built(&name)
+}
+
+/// A ▾ menu item's tool id (`sheet-metal-menu-flange` → `sheet-metal-flange`).
+fn tool_id(name: &str) -> String {
+    match name.strip_prefix("sheet-metal-menu-") {
+        Some(rest) => format!("sheet-metal-{rest}"),
+        None => name.to_string(),
+    }
+}
+
+/// Starts the ▾ tool `name` (an id or a menu item, as [`tool_built`]); `false` if it isn't one.
+pub fn start_tool(world: &mut World, name: &str) -> bool {
+    let name = tool_id(name);
+    if crate::sheetmetal_p3i9_ui::menu_action(world, &name) {
+        return true;
+    }
+    if let Some(t) = crate::sheetmetal_features_ui::SmTool::of_name(&name) {
+        crate::applied::begin(world, crate::applied::AppliedKind::SmFeature(t));
+        return true;
+    }
+    false
+}
+
 /// Why the other sheet metal tools are greyed.
 pub const NOT_YET: &str = "Not available yet: comes with the next sheet metal tools";
 

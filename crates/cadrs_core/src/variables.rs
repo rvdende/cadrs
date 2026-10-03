@@ -359,6 +359,12 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s(label, &mut v.expr, &mut v.value, q);
             }
         }
+        // P3I.4.
+        FeatureKind::SheetMetal(x) => {
+            for (label, expr, value, angle) in x.exprs_mut() {
+                s(label, expr, value, if angle { A } else { L });
+            }
+        }
         FeatureKind::TagForm(_)
         | FeatureKind::Variable(_)
         | FeatureKind::Fill(_)

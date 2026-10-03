@@ -96,6 +96,8 @@ pub enum AppliedKind {
     SheetMetal,
     /// P3I.9: Sheet metal loft, Form, Tag (`crate::sheetmetal_p3i9_ui`).
     Sm9(crate::sheetmetal_p3i9_ui::Sm9Kind),
+    /// P3I.4: Flange, Hem, Make joint (`crate::sheetmetal_features_ui`).
+    SmFeature(crate::sheetmetal_features_ui::SmTool),
 }
 
 impl AppliedKind {
@@ -119,6 +121,7 @@ impl AppliedKind {
             FeatureKind::Fill(_) => Some(Self::Fill),
             FeatureKind::SheetMetalModel(_) => Some(Self::SheetMetal),
             k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::Sm9Kind::of(k).map(Self::Sm9),
+            FeatureKind::SheetMetal(x) => Some(Self::SmFeature(crate::sheetmetal_features_ui::SmTool::of(x))),
             _ => None,
         }
     }
@@ -212,6 +215,8 @@ pub enum AppliedField {
     SmSecondUpTo,
     /// P3I.9's fields (`crate::sheetmetal_p3i9_ui`).
     Sm9(crate::sheetmetal_p3i9_ui::Sm9Field),
+    /// P3I.4: the Flange, Hem and Make joint fields.
+    Smf(crate::sheetmetal_features_ui::SmfField),
 }
 
 /// The applied feature whose dialog is open.
@@ -351,7 +356,9 @@ impl AppliedSession {
             AppliedField::HelixEntity => PickFilter { faces: true, edges: true, sketch_curves: true, connectors: true, ..none },
             AppliedField::FillEdges => PickFilter { edges: true, sketch_curves: true, ..none },
             AppliedField::Sm9(f) => crate::sheetmetal_p3i9_ui::pick_filter(f, none),
-            f => crate::sheetmetal_ui::pick_filter(f, cadrs_core::document::EndType::Blind, none).unwrap_or(none),
+            f => crate::sheetmetal_ui::pick_filter(f, cadrs_core::document::EndType::Blind, none)
+                .or_else(|| crate::sheetmetal_features_ui::pick_filter(f, none))
+                .unwrap_or(none),
         }
     }
 }
@@ -409,6 +416,7 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         .or_else(|| (kind == AppliedKind::SheetMetal).then(|| crate::sheetmetal_ui::initial(world, &picked)).flatten())
         .or_else(|| match kind {
             AppliedKind::Sm9(k) => crate::sheetmetal_p3i9_ui::initial(world, k, &picked),
+            AppliedKind::SmFeature(t) => crate::sheetmetal_features_ui::initial(world, t, &picked),
             _ => None,
         });
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
@@ -468,7 +476,8 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::Helix
         | AppliedKind::Fill
         | AppliedKind::SheetMetal
-        | AppliedKind::Sm9(_) => {
+        | AppliedKind::Sm9(_)
+        | AppliedKind::SmFeature(_) => {
             let Some((base, kind, field)) = advanced else { return };
             (AddFeature { element, feature, base_name: base.into(), kind }, field)
         }
@@ -533,6 +542,7 @@ pub fn edit(world: &mut World, feature: FeatureId) {
             _ => AppliedField::SmParts,
         },
         AppliedKind::Sm9(_) => crate::sheetmetal_p3i9_ui::first_field(&before.kind),
+        AppliedKind::SmFeature(_) => AppliedField::Smf(crate::sheetmetal_features_ui::SmfField::Edges),
     };
     start(world, element, feature, kind, false, mark, Some(before), field);
 }
@@ -823,6 +833,11 @@ fn applied_picks(
                         return;
                     }
                 }
+                (k @ FeatureKind::SheetMetal(_), _) => {
+                    if !crate::sheetmetal_features_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
                 // P3.8 (and a hole's mate connectors, PS15.2).
                 (k @ (FeatureKind::Pattern(_) | FeatureKind::Mirror(_) | FeatureKind::MateConnector(_)), _)
                 | (k @ FeatureKind::Hole(_), AppliedField::HoleConnectors) => {
@@ -1061,6 +1076,7 @@ fn show_references(
         k @ (FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_)) => want.extend(crate::surfacing_ui::references(k, &cache)),
         k @ FeatureKind::SheetMetalModel(_) => want.extend(crate::sheetmetal_ui::references(k, &cache)),
         k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_)) => want.extend(crate::sheetmetal_p3i9_ui::references(k, &cache)),
+        k @ FeatureKind::SheetMetal(_) => want.extend(crate::sheetmetal_features_ui::references(k, &cache)),
         _ => {}
     }
     // P3.10: a hole's start plane and Up to entity, a variable fillet's vertices.
@@ -1158,6 +1174,7 @@ fn draw_references(
         FeatureKind::Shell(x) if !x.hollow => (x.faces.iter().map(|f| EdgeOrFace::Face(*f)).collect(), false),
         FeatureKind::Draft(x) => (x.faces.iter().map(|f| EdgeOrFace::Face(*f)).collect(), false),
         k @ FeatureKind::SheetMetalModel(_) => (crate::sheetmetal_ui::drawn_references(k), false),
+        k @ FeatureKind::SheetMetal(_) => (crate::sheetmetal_features_ui::drawn_references(k), false),
         _ => return,
     };
     for e in &entities {

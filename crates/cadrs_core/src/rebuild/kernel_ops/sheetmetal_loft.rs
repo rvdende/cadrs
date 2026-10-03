@@ -362,6 +362,8 @@ impl Rebuilder {
                     recipe: None,
                     edits: Vec::new(),
                     table_order: Vec::new(),
+                    def: None,
+                    owners: Vec::new(),
                 };
                 (m, walls, ctx)
             }

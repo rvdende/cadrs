@@ -566,6 +566,7 @@ impl Feature {
             FeatureKind::SheetMetalLoft(x) => x.problem().is_none(),
             FeatureKind::Form(x) => x.problem().is_none(),
             FeatureKind::TagForm(x) => x.problem().is_none(),
+            FeatureKind::SheetMetal(x) => x.problem().is_none(),
         }
     }
 
@@ -602,6 +603,7 @@ impl Feature {
             FeatureKind::SheetMetalLoft(x) => x.problem(),
             FeatureKind::Form(x) => x.problem(),
             FeatureKind::TagForm(x) => x.problem(),
+            FeatureKind::SheetMetal(x) => x.problem(),
         }
     }
 
@@ -731,6 +733,7 @@ impl Feature {
             FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Form(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::TagForm(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetal(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -877,6 +880,9 @@ pub enum FeatureKind {
     Form(crate::sheetmetal_form::FormFeature),
     /// P3I.9: a Tag (Form), in a form's Part Studio (SM20.2).
     TagForm(crate::sheetmetal_form::TagFormFeature),
+    /// P3I.4: Flange, Hem or Make joint on an active sheet metal model (SM1.6, SM3, SM4, SM6;
+    /// [`crate::sheetmetal_features`]).
+    SheetMetal(crate::sheetmetal_features::SheetMetalFeature),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

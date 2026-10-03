@@ -590,7 +590,7 @@ pub fn letters(mut i: usize) -> String {
 // Building from virtual sharps
 
 /// A planar wall as features describe it: its outline reaching the virtual sharps.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SharpWall {
     pub origin: P3,
     pub u: V3,
@@ -601,7 +601,7 @@ pub struct SharpWall {
 }
 
 /// A joint along the virtual sharp `edge` (a 3D segment on both walls' outlines).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SharpJoint {
     pub a: usize,
     pub b: usize,
@@ -615,7 +615,7 @@ pub struct SharpJoint {
     pub seq: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SharpJointKind {
     /// `radius: None` uses the model's; `value: None` the model's K factor/allowance/deduction.
     Bend { radius: Option<f64>, value: Option<BendValue> },
@@ -680,8 +680,9 @@ pub enum HemAlignment {
     InPlace,
 }
 
-/// A hem folded back 180° from a wall's edge.
-#[derive(Clone, Debug, PartialEq)]
+/// A hem folded back from a wall's edge: 180° (a straight hem), or further (a rolled or tear
+/// drop hem, P3I.4: `angle`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SharpHem {
     pub wall: usize,
     pub edge: (P3, P3),
@@ -698,6 +699,27 @@ pub struct SharpHem {
     pub name: Option<String>,
     /// Creation order among joints and hems (the table order).
     pub seq: usize,
+    /// The hem's bend angle (radians): π for a straight hem, more for rolled and tear drop hems
+    /// (P3I.4, SM4.2; less than a full turn).
+    #[serde(default = "half_turn")]
+    pub angle: f64,
+    /// Where hems meet at a corner (P3I.4, SM4.4): the folded-back wall's end there is first
+    /// carried on by `extend`, then cut back to the side of the plane through `point` that
+    /// `normal` points to.
+    #[serde(default)]
+    pub clips: Vec<HemClip>,
+}
+
+/// A cut across the end of a hem's folded-back wall (see [`SharpHem::clips`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HemClip {
+    pub point: P3,
+    pub normal: V3,
+    pub extend: f64,
+}
+
+fn half_turn() -> f64 {
+    std::f64::consts::PI
 }
 
 /// The builder's hem length (from the hem's tangent line to its end) for Onshape's **Total
@@ -708,7 +730,7 @@ pub fn hem_length_from_total(total: f64, radius: f64, thickness: f64) -> f64 {
 }
 
 /// Builds a [`Model`] from walls meeting at virtual sharps.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SharpBuilder {
     pub params: Params,
     pub walls: Vec<SharpWall>,
@@ -800,6 +822,8 @@ impl SharpBuilder {
             wall_id: None,
             name: None,
             seq: self.seq,
+            angle: std::f64::consts::PI,
+            clips: Vec::new(),
         });
         self.seq += 1;
         self.hems.len() - 1
@@ -963,7 +987,29 @@ impl SharpBuilder {
             }));
         }
 
-        // Hems: a new wall folded back 180° from the (trimmed) edge.
+        // Hems: a new wall folded back from the (trimmed) edge. First every hem's trim (Outer:
+        // the hem's outside, r + t beyond its tangent line, lands on the edge), so hems meeting
+        // at a corner each stop where the other's trim begins; then each hem runs along what is
+        // left of its tangent line.
+        let mut tangents: Vec<Seg2> = Vec::with_capacity(self.hems.len());
+        for (hi, h) in self.hems.iter().enumerate() {
+            let bad = BuildError::BadHem { hem: hi };
+            let side = self.side_of(h.edge, h.wall).ok_or(bad.clone())?;
+            let r = h.radius.unwrap_or(p.bend_radius);
+            let (lo, hi_) = on_line_interval(&outlines[h.wall], &side.edge).ok_or(bad.clone())?;
+            let sub = Seg2::new(side.edge.a + (side.edge.b - side.edge.a) * lo, side.edge.a + (side.edge.b - side.edge.a) * hi_);
+            let trim = match h.alignment {
+                HemAlignment::Outer => r + t,
+                HemAlignment::InPlace => 0.0,
+            };
+            let ts = Side {
+                edge: sub,
+                into: side.into,
+                into3: side.into3,
+            };
+            outlines[h.wall] = trim_band(&outlines[h.wall], &ts, trim).ok_or(BuildError::WallTrimmedAway { joint: self.joints.len() + hi, wall: h.wall })?;
+            tangents.push(sub.offset(side.into * trim));
+        }
         let mut hem_walls: Vec<(Surface, Polygon)> = Vec::new();
         let mut hem_joints: Vec<(usize, usize, Bend)> = Vec::new();
         for (hi, h) in self.hems.iter().enumerate() {
@@ -975,43 +1021,60 @@ impl SharpBuilder {
             let w = &self.walls[h.wall];
             let n = w.u.cross(&w.v).normalize();
             let r = h.radius.unwrap_or(p.bend_radius);
-            // The hem runs along what is left of the edge after the bends' trims.
-            let (lo, hi_) = on_line_interval(&outlines[h.wall], &side.edge).ok_or(bad.clone())?;
-            let sub = Seg2::new(side.edge.a + (side.edge.b - side.edge.a) * lo, side.edge.a + (side.edge.b - side.edge.a) * hi_);
-            // Outer: the hem's outside (r + t beyond its tangent line) lands on the edge.
-            let trim = match h.alignment {
-                HemAlignment::Outer => r + t,
-                HemAlignment::InPlace => 0.0,
-            };
-            let ts = Side {
-                edge: sub,
-                into: side.into,
-                into3: side.into3,
-            };
-            outlines[h.wall] = trim_band(&outlines[h.wall], &ts, trim).ok_or(BuildError::WallTrimmedAway { joint: self.joints.len() + hi, wall: h.wall })?;
-            let on_a = sub.offset(side.into * trim);
+            let line = tangents[hi];
+            let (lo, hi_) = on_line_interval(&outlines[h.wall], &line).ok_or(bad.clone())?;
+            let on_a = Seg2::new(line.a + (line.b - line.a) * lo, line.a + (line.b - line.a) * hi_);
+            if on_a.len() < 1e-9 {
+                return Err(bad);
+            }
             let surf_a = Surface::Planar {
                 origin: w.origin,
                 u: w.u,
                 v: w.v,
             };
+            if !(h.angle >= std::f64::consts::PI - 1e-9 && h.angle < std::f64::consts::TAU - 1e-6) {
+                return Err(bad);
+            }
             // The definition surface turns about an axis on the material side (radius r + t) or
-            // the other side (radius r); 180° later it is 2 × that radius further over.
-            let off = if h.toward_material { n * (2.0 * (r + t)) } else { -n * (2.0 * r) };
-            let (qa, qb) = (surf_a.point(on_a.a) + off, surf_a.point(on_a.b) + off);
-            let nb = -n;
-            let u = side.into3; // the hem runs back over the wall
+            // the other side (radius r), by the hem's angle (as `Model::bend_geometry` turns it).
+            let side_n = if h.toward_material { n } else { -n };
+            let rdef = if h.toward_material { r + t } else { r };
+            let (pa, pb) = (surf_a.point(on_a.a), surf_a.point(on_a.b));
+            let axis_pt = pa + side_n * rdef;
+            let c = -side.into3; // the wall's continuation past the edge
+            let k = c.cross(&side_n).normalize();
+            let rot = |v: V3| v * h.angle.cos() + k.cross(&v) * h.angle.sin() + k * k.dot(&v) * (1.0 - h.angle.cos());
+            let (qa, qb) = (axis_pt + rot(pa - axis_pt), axis_pt + rot(pb - axis_pt));
+            let nb = rot(n);
+            let u = rot(c); // the hem runs on from its bend
             let v = nb.cross(&u);
             let surf_b = Surface::Planar { origin: qa, u, v };
             let on_b = Seg2::new(surf_b.local(qa), surf_b.local(qb));
-            let outline = Polygon::new(vec![on_b.a, on_b.b, on_b.b + V2::x() * h.length, on_b.a + V2::x() * h.length]);
+            let (y0, y1) = (on_b.a.y.min(on_b.b.y), on_b.a.y.max(on_b.b.y));
+            // Ends carried on where hems meet, then cut back.
+            let (mut e0, mut e1) = (0.0, 0.0);
+            for cl in &h.clips {
+                let y = surf_b.local(cl.point).y;
+                if (y - y0).abs() <= (y - y1).abs() {
+                    e0 = f64::max(e0, cl.extend);
+                } else {
+                    e1 = f64::max(e1, cl.extend);
+                }
+            }
+            let mut outline = Polygon::rect(P2::new(0.0, y0 - e0), P2::new(h.length, y1 + e1));
+            for cl in &h.clips {
+                outline = outline.clip_half_plane(surf_b.local(cl.point), V2::new(cl.normal.dot(&u), cl.normal.dot(&v)));
+            }
+            if outline.is_empty() || outline.area() < 1e-12 {
+                return Err(bad);
+            }
             hem_joints.push((
                 h.wall,
                 self.walls.len() + hem_walls.len(),
                 Bend {
                     on_a,
                     on_b,
-                    angle: std::f64::consts::PI,
+                    angle: h.angle,
                     toward_material: h.toward_material,
                     radius: r,
                     model_radius: h.radius.is_none(),
@@ -1138,6 +1201,14 @@ fn distance_to(poly: &Polygon, p: P2) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// Moves the stretch `edge` of a wall's outline (`into`: its unit normal pointing into the wall)
+/// `depth` into the wall, over the stretch's length only; a negative depth carries the wall on
+/// past it. `None` if nothing is left. (P3I.4: features that move a wall's edge to a new
+/// virtual sharp.)
+pub fn shift_edge(outline: &Polygon, edge: Seg2, into: V2, depth: f64) -> Option<Polygon> {
+    trim_band(outline, &Side { edge, into, into3: V3::zeros() }, depth)
+}
+
 /// Removes the band `[0, depth)` into the wall along the side's edge (or, for a negative depth,
 /// adds a band of `−depth` outside it). `None` if nothing is left.
 fn trim_band(outline: &Polygon, side: &Side, depth: f64) -> Option<Polygon> {
@@ -1217,7 +1288,7 @@ fn first_duplicate<T: PartialEq + Copy>(ids: &[T]) -> Option<T> {
 
 /// The parameter interval `[t0, t1]` (along `edge`, 0 at `edge.a`, 1 at `edge.b`) of the
 /// outline's boundary lying on the edge's line.
-fn on_line_interval(outline: &Polygon, edge: &Seg2) -> Option<(f64, f64)> {
+pub(crate) fn on_line_interval(outline: &Polygon, edge: &Seg2) -> Option<(f64, f64)> {
     let d = edge.b - edge.a;
     let len2 = d.norm_squared();
     let n = perp(d.normalize());

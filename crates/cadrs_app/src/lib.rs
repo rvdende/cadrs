@@ -48,6 +48,7 @@ pub mod parts;
 pub mod pattern;
 pub mod pattern_dialog;
 pub mod pcb;
+pub mod sheetmetal_features_ui;
 pub mod sheetmetal_ui;
 pub mod sheetmetal_joint_ui;
 pub mod sheetmetal_table;
@@ -543,7 +544,7 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((sketch_diagnostics::SketchDiagnosticsPlugin, feature_menu::FeatureMenuPlugin))
             .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
-            .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
+            .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, sheetmetal_features_ui::SheetMetalFeaturesPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
             .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, sheetmetal_p3i9_ui::Sm9Plugin))
             // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
