@@ -157,7 +157,7 @@ mod tests {
         let part = PartId::new(feature, 0);
         let walls = model.walls.iter().map(|w| w.id).collect();
         (
-            SheetMetalContext { feature, model, flat, parts: vec![(part, walls)], active: true, wall_keys: Vec::new(), joint_keys: Vec::new(), def: None, owners: Vec::new(), editors: Vec::new(), forms: Vec::new(), corner_broken: false },
+            SheetMetalContext { feature, name: String::new(), model, flat, parts: vec![(part, walls)], active: true, wall_keys: Vec::new(), joint_keys: Vec::new(), def: None, owners: Vec::new(), editors: Vec::new(), forms: Vec::new(), corner_broken: false },
             part,
         )
     }

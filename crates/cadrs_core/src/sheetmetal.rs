@@ -318,6 +318,10 @@ impl SheetMetalModelFeature {
 pub struct SheetMetalContext {
     /// The Sheet metal model feature (its name names the context).
     pub feature: FeatureId,
+    /// The model's name when it was built (the views prefer the feature's current name; a
+    /// context a Derived feature brought in has no feature of its own here).
+    #[serde(default)]
+    pub name: String,
     pub model: Model,
     pub flat: FlatPattern,
     /// Each part it made with the walls in it (in flat-pattern part order).

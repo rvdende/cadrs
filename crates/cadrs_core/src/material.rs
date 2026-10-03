@@ -169,6 +169,8 @@ pub const LIBRARY: &[LibraryMaterial] = &[
     m("Aluminum - 7075", 2810.0, 0.33, 71.7, [503.0, 572.0, 0.0, 0.0], "ASM: aluminum 7075-T6"),
     m("Brass", 8500.0, 0.31, 97.0, [124.0, 338.0, 0.0, 0.0], "MatWeb: free-cutting brass C36000, annealed"),
     m("Bronze", 8830.0, 0.34, 100.0, [125.0, 240.0, 0.0, 0.0], "MatWeb: bearing bronze C93200 (SAE 660), as cast"),
+    // P3I.8: the sheet metal exercises' (E1, E2) "Carbon steel".
+    m("Carbon Steel", 7850.0, 0.29, 205.0, [350.0, 420.0, 0.0, 0.0], "MatWeb: AISI 1020 steel, cold drawn"),
     m("Cast Iron", 7150.0, 0.26, 110.0, [0.0, 293.0, 0.0, 965.0], "MatWeb: gray cast iron ASTM A48 class 40"),
     m("Copper", 8890.0, 0.31, 115.0, [69.0, 220.0, 0.0, 0.0], "MatWeb: copper C11000, annealed"),
     m("Nylon 6/6", 1140.0, 0.41, 2.9, [0.0, 82.7, 0.0, 0.0], "MatWeb: nylon 66, unfilled, dry as molded"),

@@ -18,6 +18,7 @@ use cadrs_sketch::{FeaturePlane, PlaneFrame, PlaneRef};
 use nalgebra::{Matrix3, Vector3};
 
 use crate::derived::{DerivedFeature, DerivedOutput, DerivedPlacement, derived_entity};
+use crate::ids::PartId;
 
 fn v3(p: [f64; 3]) -> Vector3<f64> {
     Vector3::new(p[0], p[1], p[2])
@@ -178,6 +179,36 @@ impl Rebuilder {
                 out.connectors.push((cid, label(&f.name)));
             }
         }
+        // SM18.3 (P3I.8): sheet metal comes across with its parts. A copy at the source's own
+        // place stays active sheet metal (its definition as it is: features after the Derived
+        // feature can change it, the table and flat view show it); a copy placed elsewhere keeps
+        // its flat and table, moved, as finished sheet metal.
+        let mut contexts = (*next.sheet_metal).clone();
+        for (k, m) in motions.iter().enumerate() {
+            let identity = (m.linear - Matrix3::identity()).norm() < 1e-12 && m.translation.norm() < 1e-9;
+            for c in sstate.sheet_metal.iter() {
+                let parts: Vec<(PartId, Vec<cadrs_sheetmetal::WallId>)> =
+                    c.parts.iter().filter(|(p, _)| d.includes_part(*p) && sstate.part(*p).is_some()).map(|(p, w)| (d.part_of(id, *p, k), w.clone())).collect();
+                if parts.is_empty() {
+                    continue;
+                }
+                let mut x = c.clone();
+                x.feature = derived_entity(id, c.feature, k);
+                let base = d.studio.iter().find(|f| f.id == c.feature).map_or_else(|| c.name.clone(), |f| f.name.clone());
+                x.name = if several { format!("{base} ({})", k + 1) } else { base };
+                x.parts = parts;
+                x.editors = vec![id];
+                if !identity {
+                    x.model = cadrs_sheetmetal::model_edit::moved_model(&c.model, m.linear, m.translation);
+                    x.def = None;
+                    x.active = false;
+                    x.forms.clear();
+                }
+                contexts.retain(|y| y.feature != x.feature);
+                contexts.push(x);
+            }
+        }
+        next.sheet_metal = Arc::new(contexts);
         if out.parts.is_empty() && out.sketches.is_empty() && out.planes.is_empty() && out.connectors.is_empty() {
             return fail(self, &owned, format!("{source} has nothing to derive"));
         }

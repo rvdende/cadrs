@@ -181,6 +181,18 @@ impl Rigid {
     }
 }
 
+/// A model moved rigidly (`rot` a rotation, `t` a translation): its walls' surfaces move, their
+/// outlines and the joints on them (in the walls' own coordinates) stay. (P3I.8: a Derived copy
+/// of a sheet metal part placed elsewhere.)
+pub fn moved_model(m: &Model, rot: nalgebra::Matrix3<f64>, t: V3) -> Model {
+    let r = Rigid { rot: Rotation3::from_matrix_unchecked(rot), t };
+    let mut out = m.clone();
+    for w in &mut out.walls {
+        w.surface = map_surface(w.surface, &r);
+    }
+    out
+}
+
 fn map_surface(s: Surface, f: &Rigid) -> Surface {
     match s {
         Surface::Planar { origin, u, v } => Surface::Planar { origin: f.point(origin), u: f.vec(u), v: f.vec(v) },

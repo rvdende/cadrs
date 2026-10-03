@@ -315,15 +315,26 @@ fn is_open(open: &SidePanel, kind: &ActiveKind) -> bool {
     *open == SidePanel::SheetMetal && *kind == ActiveKind::PartStudio
 }
 
-/// The Sheet metal models of the active Part Studio that have a context, in list order: (the
-/// feature, its name).
+/// The sheet metal contexts of the active Part Studio, in feature-list order: (the feature,
+/// its name). A Sheet metal model or Loft is named by its feature (a rename shows at once); a
+/// context a Derived feature brought in (P3I.8, SM18) by the source model's name, where the
+/// Derived feature is.
 fn models(doc: &ActiveDocument, cache: &PartCache) -> Vec<(FeatureId, String)> {
     let Some(el) = doc.active_element() else { return Vec::new() };
-    el.features()
+    let features = el.features();
+    let mut out: Vec<(usize, FeatureId, String)> = cache
+        .sheet_metal
         .iter()
-        .filter(|f| matches!(f.kind, FeatureKind::SheetMetalModel(_)) && cache.sheet_metal.iter().any(|c| c.feature == f.id))
-        .map(|f| (f.id, f.name.clone()))
-        .collect()
+        .map(|c| match features.iter().position(|f| f.id == c.feature) {
+            Some(i) => (i, c.feature, features[i].name.clone()),
+            None => {
+                let at = c.editors.iter().find_map(|e| features.iter().position(|f| f.id == *e)).unwrap_or(usize::MAX);
+                (at, c.feature, c.name.clone())
+            }
+        })
+        .collect();
+    out.sort_by_key(|x| x.0);
+    out.into_iter().map(|(_, f, n)| (f, n)).collect()
 }
 
 /// The context shown.
@@ -1102,7 +1113,14 @@ fn on_context_menu(ev: On<ContextMenuRequested>, q_row: Query<&RowRef>, q_flat: 
         if t.press.take().is_some_and(|p| p.distance(ev.position) > 3.0) {
             return;
         }
-        let menu = Menu::new("smt-flat-menu").min_width(140.0).item_height(22.0).text_only().item(MenuItem::new("smt-zoom-fit", "Zoom to fit"));
+        // As Onshape's (SM14.1, SM15.1, SM16.1): the flat's own actions, then the view's.
+        let menu = Menu::new("smt-flat-menu")
+            .min_width(230.0)
+            .item_height(22.0)
+            .text_only()
+            .item(MenuItem::new("smt-flat-drawing", "Create drawing of flat pattern"))
+            .separator()
+            .item(MenuItem::new("smt-zoom-fit", "Zoom to fit"));
         let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
         commands.entity(anchor).insert((FlatViewMenu, DespawnOnExit(AppState::Document)));
         return;
@@ -1155,8 +1173,10 @@ fn on_menu_action(
         return;
     }
     if q_flat.contains(ev.entity) {
-        if ev.item.as_str() == "smt-zoom-fit" {
-            commands.queue(zoom_to_fit);
+        match ev.item.as_str() {
+            "smt-zoom-fit" => commands.queue(zoom_to_fit),
+            "smt-flat-drawing" => commands.queue(create_flat_drawing),
+            _ => {}
         }
         return;
     }
@@ -1168,6 +1188,20 @@ fn on_menu_action(
         "smt-convert" => commands.queue(move |world: &mut World| edit_joint(world, joint, if bend { TableEdit::ConvertToRip } else { TableEdit::ConvertToBend })),
         _ => {}
     }
+}
+
+/// The flat view's part: the shown model's first part (P3I.7's Create drawing of flat pattern).
+fn flat_part(world: &World) -> Option<(cadrs_core::ElementId, PartId)> {
+    let ctx = shown(world.resource::<SmTable>(), world.resource::<PartCache>())?;
+    let part = ctx.parts.first()?.0;
+    let el = world.get_resource::<ActiveDocument>()?.active?;
+    Some((el, part))
+}
+
+/// Create drawing of flat pattern (SM16.1), from the flat view's menu.
+fn create_flat_drawing(world: &mut World) {
+    let Some((el, part)) = flat_part(world) else { return };
+    crate::drawing::flat_views::open_create_drawing_of_flat(world, cadrs_drawing::ObjectRef { element: el.0, part: Some((part.feature.0, part.index)) });
 }
 
 // ---------------------------------------------------------------------------------------------

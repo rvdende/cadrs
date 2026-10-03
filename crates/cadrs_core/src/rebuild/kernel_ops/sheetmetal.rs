@@ -183,6 +183,32 @@ fn cyl_in(solid: &Solid, i: usize, planar: &[(usize, usize)], faces: &[FaceIn]) 
     Some(CylIn { key: key_of(&f.name), axis_origin: o, axis, radius, convex, start, sweep, z: (z0, z1), neighbours })
 }
 
+/// A face's outward normal near `p`: its mesh normal at its vertex nearest `p` (exact for planes,
+/// the surface normal at a mesh vertex for curved faces).
+fn normal_near(solid: &Solid, face: usize, p: Vec3) -> Option<V3> {
+    let f = &solid.faces[face];
+    let tri = solid.indices.get(3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count))?;
+    let d = |q: Vec3| (p3(q) - p3(p)).norm();
+    let vi = *tri.iter().min_by(|a, b| d(solid.positions[**a as usize]).total_cmp(&d(solid.positions[**b as usize])))? as usize;
+    Some(v3(*solid.normals.get(vi)?).normalize())
+}
+
+/// Whether faces `a` and `b` meet smoothly (tangent, the same side out) along edge `e`.
+fn tangent_across(solid: &Solid, a: usize, b: usize, e: &crate::solid::SolidEdge) -> bool {
+    if e.points.is_empty() {
+        return false;
+    }
+    // Planes: the same plane, facing the same way (exact).
+    if let (Some(p1), Some(p2)) = (solid.faces[a].plane, solid.faces[b].plane) {
+        return v3(p1.normal()).normalize().dot(&v3(p2.normal()).normalize()) > 1.0 - 1e-9;
+    }
+    let mid = e.points[e.points.len() / 2];
+    match (normal_near(solid, a, mid), normal_near(solid, b, mid)) {
+        (Some(na), Some(nb)) => na.dot(&nb) > 1.0 - 1e-3,
+        _ => false,
+    }
+}
+
 /// The faces, cylinders and shared straight edges of one solid's chosen faces.
 #[derive(Default)]
 struct Gathered {
@@ -661,6 +687,9 @@ impl Rebuilder {
                         let Some(part) = state.part(*pid) else { continue };
                         let solid = &part.part.solid;
                         if x.tangent_propagation {
+                            // SM17: every face that meets a chosen one smoothly (a flat face
+                            // carrying on in its plane, a bend's cylinder and the flats beyond
+                            // it), so one pick takes a whole side of an imported folded sheet.
                             let mut k = 0;
                             while k < chosen.len() {
                                 let f = &solid.faces[chosen[k]];
@@ -668,14 +697,7 @@ impl Rebuilder {
                                     let [a, b] = e.name.faces;
                                     let other = if a == f.name { b } else if b == f.name { a } else { continue };
                                     let Some(oi) = solid.faces.iter().position(|g| g.name == other) else { continue };
-                                    if chosen.contains(&oi) {
-                                        continue;
-                                    }
-                                    let same_plane = match (f.plane, solid.faces[oi].plane) {
-                                        (Some(p1), Some(p2)) => v3(p1.normal()).normalize().dot(&v3(p2.normal()).normalize()) > 1.0 - 1e-9,
-                                        _ => f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder) || solid.faces[oi].kind == Some(cadrs_kernel::SurfaceKind::Cylinder),
-                                    };
-                                    if same_plane {
+                                    if !chosen.contains(&oi) && tangent_across(solid, chosen[k], oi, e) {
                                         chosen.push(oi);
                                     }
                                 }
@@ -786,6 +808,7 @@ impl Rebuilder {
         def.table_order = x.table_order.clone();
         let ctx = SheetMetalContext {
             feature: id,
+            name: name.to_string(),
             model: built.model,
             flat: FlatPattern::default(),
             parts: Vec::new(),

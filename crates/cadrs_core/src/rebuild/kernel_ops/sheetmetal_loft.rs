@@ -278,6 +278,7 @@ impl Rebuilder {
             None => {
                 let ctx = SheetMetalContext {
                     feature: id,
+                    name: name.to_string(),
                     model: built.model.clone(),
                     flat: FlatPattern::default(),
                     parts: Vec::new(),
