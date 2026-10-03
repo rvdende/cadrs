@@ -439,6 +439,10 @@ pub struct PartCache {
     /// preview over the parts as they were before it (`ex1-step4.png`). Not a part: it is not
     /// listed, measured or picked.
     pub tool: Vec<Part>,
+    /// While a Sheet metal model's edges are picked on the parts before it (`PartOverride::staged`):
+    /// the parts it makes, which the Parts list shows (`t0101.0.png`) though the view shows
+    /// the parts before it. Empty otherwise.
+    pub staged_parts: Vec<Part>,
     /// P3B.9: parts drawn in another colour: an assembly's interfering parts (red), a Part
     /// Studio's assembly context (translucent grey). Change with [`PartCache::set_tints`].
     pub tints: HashMap<PartId, FaceBase>,
@@ -706,13 +710,19 @@ impl PartCache {
         self.visibility.clear();
         self.names.clear();
         self.tool.clear();
+        self.staged_parts.clear();
         self.generation += 1;
     }
 
     /// Takes a finished rebuild's parts and errors. While `editing` is an Add extrude (the
     /// last part feature), the parts are the ones before it and [`Self::tool`] its new body.
-    fn apply(&mut self, build: &cadrs_core::rebuild::Build, editing: Option<FeatureId>) {
+    fn apply(&mut self, build: &cadrs_core::rebuild::Build, editing: Option<FeatureId>, staged: bool) {
         let stage = build.stage.as_ref().filter(|(f, _)| Some(*f) == editing);
+        let staged_parts = if staged && stage.is_some() { build.parts.clone() } else { Vec::new() };
+        if self.staged_parts.len() != staged_parts.len() || self.staged_parts.iter().zip(&staged_parts).any(|(a, b)| a.id != b.id || a.name != b.name) {
+            self.generation += 1;
+        }
+        self.staged_parts = staged_parts;
         let (parts, tool) = match stage {
             Some((f, st)) => (
                 st.before.clone(),
@@ -928,7 +938,7 @@ fn update_part_cache(
             cache.pending = None;
             if same_element {
                 log.0.push((features.len(), build.computed, build.elapsed));
-                cache.apply(&build, stage_feature(features, &over));
+                cache.apply(&build, stage_feature(features, &over), over.staged.is_some());
             }
         }
         return;
@@ -945,7 +955,7 @@ fn update_part_cache(
             if cache.key.as_ref().is_some_and(|(id, ..)| *id != el.id) {
                 cache.parts.clear();
             }
-            cache.apply(&build, stage_feature(features, &over));
+            cache.apply(&build, stage_feature(features, &over), over.staged.is_some());
             cache.pending = None;
         }
         None => {

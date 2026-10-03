@@ -101,8 +101,11 @@ fn rebuild_part_list(
     let Some((container, added)) = q_rows.iter().next().map(|(e, r)| (e, r.is_added())) else {
         return;
     };
-    let rows: Vec<(PartId, String, PartKind, bool, bool)> = cache
-        .parts
+    // While a Sheet metal model's edges are picked, the parts it makes (`t0101.0.png`), bold
+    // as its preview.
+    let staged = !cache.staged_parts.is_empty();
+    let listed = if staged { &cache.staged_parts } else { &cache.parts };
+    let rows: Vec<(PartId, String, PartKind, bool, bool)> = listed
         .iter()
         // P3B.9: an assembly context's parts are not the studio's.
         .filter(|p| !cadrs_core::assembly::context::is_context(p.feature))
@@ -111,7 +114,7 @@ fn rebuild_part_list(
                 p.id,
                 cache.part_name(p.id).unwrap_or(&p.name).to_string(),
                 p.kind,
-                over.previews(p),
+                over.previews(p) || (staged && over.staged.is_some_and(|f| p.features.contains(&f))),
                 cache.is_hidden_part(p.id),
             )
         })

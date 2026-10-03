@@ -168,12 +168,12 @@ impl Collapsible {
                     Node {
                         height: Val::Px(header_height),
                         padding: if section {
-                            UiRect::horizontal(Val::Px(4.0))
+                            UiRect::horizontal(Val::Px(0.0))
                         } else {
                             UiRect::horizontal(Val::Px(theme.space[4]))
                         },
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(if section { 6.0 } else { theme.space[4] }),
+                        column_gap: Val::Px(if section { 2.0 } else { theme.space[4] }),
                         border_radius: BorderRadius::all(Val::Px(if section { 0.0 } else { theme.radius_lg })),
                         ..default()
                     },
@@ -193,7 +193,8 @@ impl Collapsible {
                     h.spawn((
                         icon(
                             if open { "chevron-down" } else { "chevron-right" },
-                            if section { 12.0 } else { 14.0 },
+                            // P3I.2 judge: 12 px read far smaller than Onshape's chevrons.
+                            if section { 20.0 } else { 14.0 },
                             fg,
                         ),
                         CollapsibleChevron(root),

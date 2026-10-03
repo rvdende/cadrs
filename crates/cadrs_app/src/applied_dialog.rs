@@ -1637,6 +1637,8 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
                     crate::sheetmetal_ui::flip(x, r);
                 }
             });
+            // A click leaves no focus box on it.
+            commands.queue(|world: &mut World| world.resource_mut::<InputFocus>().clear());
         }
         Ok(r @ Role::Smf(_)) => {
             let r = *r;

@@ -326,6 +326,9 @@ pub(crate) fn flip_button_any<R: Component>(r: &mut ChildSpawner, t: &Theme, nam
             .build(t),
     ))
     .insert(v)
+    // Not in the Tab order: Tab from a field goes to the next field, not to its flip (P3I.2
+    // judge: Tab out of Thickness left a focus box on the flip), as in Onshape.
+    .remove::<bevy::input_focus::tab_navigation::TabIndex>()
     .entry::<Node>()
     .and_modify(|mut n| sized(&mut n));
 }
