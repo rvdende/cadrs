@@ -169,7 +169,8 @@ impl Plugin for SheetMetalToolsPlugin {
             .add_systems(
                 Update,
                 sync_tool_dialog.after(crate::applied_dialog::sync_applied_dialog).before(crate::parts::PartsSet).run_if(in_state(AppState::Document)),
-            );
+            )
+            .add_systems(Update, finish_info_bar.run_if(in_state(AppState::Document)));
     }
 }
 
@@ -807,6 +808,25 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalTool, field: AppliedF
             });
         }),
     }
+}
+
+/// Finish sheet metal model's warning also as the info bar at the top of the view while its
+/// dialog is open (`ex4-sheet-metal-rework/step-02.png`), closed with the dialog.
+fn finish_info_bar(session: Option<Res<AppliedSession>>, theme: Res<cadrs_ui::Theme>, q: Query<(Entity, &Name)>, mut shown: Local<Option<FeatureId>>, mut commands: Commands) {
+    let finish = session.as_ref().filter(|s| matches!(s.kind, AppliedKind::SheetMetalTool(SmTool::Finish))).map(|s| s.feature);
+    if finish == *shown {
+        return;
+    }
+    if finish.is_none() {
+        for (e, n) in &q {
+            if n.as_str() == "sm-finish-info" {
+                commands.entity(e).try_despawn();
+            }
+        }
+    } else {
+        cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::info(FINISH_WARNING).autohide(false).name("sm-finish-info"));
+    }
+    *shown = finish;
 }
 
 // ---------------------------------------------------------------------------------------------

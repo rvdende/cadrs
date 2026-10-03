@@ -443,10 +443,22 @@ against the stand-ins' expected values.
   The legacy stand-in adds the **Case** (an open box: walls reached only through the bends,
   round the corner gaps), and `sm_p3i8_legacy` shows the table and flat during Thicken with only
   Tangent joints (SM17.2). Order tests: Hem/Tab and Make joint/Bend both ways.
-- **Gaps left**: the lesson's envelope is T-notched, ours is a box (a T's notch walls unfold onto
-  their neighbours in Convert: a flat collision); the Case's corners are Simple (Round corner
-  reliefs on the import leave slivers when it is thickened again); E4's fillets are 0.5 (the
-  stand-in's rim is 2 thick, the slides' 3 and 1 don't fit); E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
+- **P3I.8 second round (judge 7.6)**: E4's fillets are the slides' (step 8: 3 mm where the
+  slot meets the wall's inside face; step 9: 1 mm on the collar's top outer edge). The folded
+  slot edge is a polygon, so the collar's profile reaches 0.5 into the slot and back through the
+  wall: the sweep's exact faces line the slot and the 3 mm fillet runs on them. The Space
+  Envelope is T-notched (Side Profile, Front Cutouts): Convert already rips every edge not picked,
+  the collision came from bending every wall off the base; the Enclosure bends the notch walls
+  and the tongue's sides off their neighbours at the outside corners, as the lesson's flat lays
+  them, and the notches' inside corners stay rips. Kept inputs of Convert show translucent
+  (during the dialog the folded part shows round them). The flat view draws tangent joints as
+  thin lines (SM17.2); the Sheet metal panel stays open through a Sheet metal model dialog;
+  Thicken's highlight shows the whole propagated skin; a folded part's loose slivers (under a
+  thickness cube) are dropped, so a Case with Round – Scaled reliefs thickens again into one
+  part (2.1 % lighter than the original: the material round the import's relief holes isn't
+  taken back yet). Finish sheet metal model's warning is also an info bar at the top.
+  Mirror Reapply is tested where it differs from a copy (Up to next).
+- **Gaps left**: the round-relieved Case's 2.1 % (above), and in the Thicken dialog it shows no model once its four cylinders are picked (the test, built directly, is fine), so `sm_p3i8_legacy` uses the open-cornered Case; while a Thicken dialog has bend cylinders picked its live build shows no model (the table says so) though the same feature builds once accepted, so the bends show in the table after Accept; E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
   clicked piece; a shown flat sketch's region fill draws a shading artefact over the folded part
   (`sm_e1` 04+); flat sketches of loft or derived contexts aren't drawn (only Sheet metal model
   flats have planes); in-context sheet metal (SM18.4) isn't sheet-metal-specific.

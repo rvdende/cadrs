@@ -12,8 +12,8 @@
 //!   its top excluded and its four bottom edges bent, its corners left open: each wall stops
 //!   short of its neighbours by the minimal gap, the bends' ends relieved ([`case`]). Its walls
 //!   meet the base only through the bends: Tangent propagation has to go round the corner gaps,
-//!   base → bend → wall, to take the whole skin. (Round corner reliefs on the import leave
-//!   slivers when it is thickened again: see the gaps doc.)
+//!   base → bend → wall, to take the whole skin. [`case_round`] is the same with Round – Scaled
+//!   corner reliefs (the round holes the lesson's Case has).
 //!
 //! [`step`] / [`case_step`] export the folded solid as STEP: an imported copy has no sheet metal
 //! left in it.
@@ -88,9 +88,26 @@ pub fn case_params() -> cadrs_sheetmetal::Params {
     params()
 }
 
+/// [`case_params`] with Round – Scaled corner reliefs (round holes at the corners, as the
+/// lesson's Case has).
+pub fn case_round_params() -> cadrs_sheetmetal::Params {
+    let mut p = case_params();
+    p.corner_relief.kind = cadrs_sheetmetal::CornerReliefKind::RoundScaled;
+    p
+}
+
 /// The Case's features: Sketch 1 (the block's rectangle on Top), Extrude 1 and its Sheet metal
 /// model (Convert, the top excluded, the four bottom edges bent).
 pub fn case() -> Vec<Feature> {
+    case_of(case_params())
+}
+
+/// The Case with Round – Scaled corner reliefs.
+pub fn case_round() -> Vec<Feature> {
+    case_of(case_round_params())
+}
+
+fn case_of(p: cadrs_sheetmetal::Params) -> Vec<Feature> {
     let (w, d, h) = CASE;
     let mut g = Sketch::new();
     SketchOp::AddPolyline { points: vec![Vec2::new(0.0, 0.0), Vec2::new(w, 0.0), Vec2::new(w, d), Vec2::new(0.0, d)], closed: true, construction: false, label: "Add rectangle" }
@@ -117,7 +134,6 @@ pub fn case() -> Vec<Feature> {
         .filter_map(|e| s.edge(&e))
         .map(|e| EdgeOrFace::Edge(EdgeRef { part: part.id, edge: e.name, seed: e.points[e.points.len() / 2] }))
         .collect();
-    let p = case_params();
     let x = SheetMetalModelFeature { operation: SheetMetalOp::Convert, parts: vec![part.id], exclude: vec![top], bends, params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
     let model = Feature { id: CASE_MODEL, name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x) };
     vec![sketch, block, model]
@@ -125,7 +141,16 @@ pub fn case() -> Vec<Feature> {
 
 /// The Case's folded solid as a STEP file: a plain part named "Case".
 pub fn case_step(r: &mut Rebuilder) -> Result<Vec<u8>, String> {
-    let features = Arc::new(case());
+    case_step_of(r, case())
+}
+
+/// The round-relieved Case's folded solid as a STEP file.
+pub fn case_round_step(r: &mut Rebuilder) -> Result<Vec<u8>, String> {
+    case_step_of(r, case_round())
+}
+
+fn case_step_of(r: &mut Rebuilder, features: Vec<Feature>) -> Result<Vec<u8>, String> {
+    let features = Arc::new(features);
     let el = ElementId::from_u128(0x5317);
     let item = ExportItem { features, part: CASE_PART, name: "Case".into(), pose: None, source: (el, CASE_PART), source_name: "Case".into() };
     let req = ExportRequest::new(ModelFormat::Step, "Case", vec![item]);

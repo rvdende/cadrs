@@ -186,9 +186,21 @@ fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     assert!(!ctx.active, "finished");
     assert_eq!(ctx.flat, flat, "the flat doesn't show the rework");
     let v1 = b.parts[0].mass.unwrap().volume;
-    // Two rims of 8 × 2 round the slot's outline (less the fillets).
-    let perimeter = 2.0 * (ex::E4_SLOT_SIZE.0 - ex::E4_SLOT_SIZE.1) + std::f64::consts::PI * (ex::E4_SLOT_SIZE.1 + ex::E4_RIM.1);
-    let rims = 2.0 * perimeter * ex::E4_RIM.0 * ex::E4_RIM.1;
-    println!("E4 volume {v0:.3} → {v1:.3} (rims ≈ {rims:.3})");
-    assert!(v1 > v0 + 0.9 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, rims {rims}");
+    // Two collars round the slot's outline: 8 × 2 out of the wall plus the 0.5 lining through
+    // it (1.5), less the fillets (3 at the slot's inside entry, 1 on the collar's top outer edge).
+    let perimeter = 2.0 * (ex::E4_SLOT_SIZE.0 - ex::E4_SLOT_SIZE.1) + std::f64::consts::PI * ex::E4_SLOT_SIZE.1;
+    let section = ex::E4_RIM.0 * (ex::E4_RIM.1 + ex::E4_LINING) + ex::E4_WALL * ex::E4_LINING;
+    let rims = 2.0 * perimeter * section;
+    println!("E4 volume {v0:.3} → {v1:.3} (collars ≈ {rims:.3})");
+    assert!(v1 > v0 + 0.8 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, collars {rims}");
+    // Mirror 1 (Reapply) put a collar on the left wall too: the part reaches 8 out of both walls.
+    let part = &b.parts[0];
+    let xs = part.solid.positions.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
+    let reach = ex::E4_CHAIN[3].0 + ex::E4_RIM.0;
+    assert!((xs.0 + reach).abs() < 1e-3 && (xs.1 - reach).abs() < 1e-3, "{xs:?}: a collar on each wall");
+    // The fillets as the slides make them: 3 mm, then 1 mm.
+    for (f, r) in [(ex::E4_FILLET_1, ex::E4_FILLETS.0), (ex::E4_FILLET_2, ex::E4_FILLETS.1)] {
+        let cadrs_core::FeatureKind::Fillet(x) = &doc.element(ex::E4_STUDIO).unwrap().feature(f).unwrap().kind else { panic!("a fillet") };
+        assert_eq!((x.size, x.entities.len()), (r, 2));
+    }
 }

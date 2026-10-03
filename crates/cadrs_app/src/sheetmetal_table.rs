@@ -111,11 +111,45 @@ impl Plugin for SheetMetalTablePlugin {
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
             )
+            .add_systems(Update, kept_inputs_translucent.before(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
             .add_systems(OnExit(AppState::Document), |mut t: ResMut<SmTable>| {
                 let (image, cube) = (t.image.clone(), t.cube_image.clone());
                 *t = SmTable { image, cube_image: cube, ..SmTable::default() };
             });
     }
+}
+
+/// Convert's **Keep input parts** (P3I.8, SM18): the kept input is shown translucent, during the
+/// dialog (so the folded part around it shows as it is made) and after, as Onshape shows it
+/// (`18-…/t0055.8.png`). A view state like the Parts list's Make transparent: a part that turns
+/// a kept input is made transparent once, so Make opaque still works on it.
+fn kept_inputs_translucent(doc: Option<Res<ActiveDocument>>, mut cache: ResMut<PartCache>, mut mine: Local<(Option<cadrs_core::ElementId>, std::collections::HashSet<PartId>)>) {
+    let Some(doc) = doc else { return };
+    let Some(el) = doc.active_element() else { return };
+    if mine.0 != Some(el.id) {
+        *mine = (Some(el.id), Default::default());
+    }
+    let want: std::collections::HashSet<PartId> = el
+        .features()
+        .iter()
+        .filter_map(|f| match &f.kind {
+            FeatureKind::SheetMetalModel(x) if x.operation == cadrs_core::sheetmetal::SheetMetalOp::Convert && x.keep_input => Some(x.parts.iter().copied()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if want == mine.1 {
+        return;
+    }
+    let add: Vec<PartId> = want.iter().filter(|p| !mine.1.contains(p)).copied().collect();
+    let drop: Vec<PartId> = mine.1.iter().filter(|p| !want.contains(p)).copied().collect();
+    if !add.is_empty() {
+        cache.set_transparent(&add, true);
+    }
+    if !drop.is_empty() {
+        cache.set_transparent(&drop, false);
+    }
+    mine.1 = want;
 }
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -431,9 +465,12 @@ fn modify_joint(doc: &ActiveDocument, model: FeatureId, joint: JointId) -> Optio
 // The strip button and the panel
 
 /// The strip's button shows in a Part Studio with a sheet metal model; the panel closes when
-/// there is none.
-fn strip_button(kind: Res<ActiveKind>, cache: Res<PartCache>, mut open: ResMut<SidePanel>, mut q: Query<(&Name, &mut Node)>) {
-    let has = *kind == ActiveKind::PartStudio && !cache.sheet_metal.is_empty();
+/// there is none. While a Sheet metal model dialog is open the panel stays (P3I.8, SM17.2: the
+/// table and flat follow the picks, even through a pick that leaves the model failing for a
+/// moment).
+fn strip_button(kind: Res<ActiveKind>, cache: Res<PartCache>, session: Option<Res<crate::applied::AppliedSession>>, mut open: ResMut<SidePanel>, mut q: Query<(&Name, &mut Node)>) {
+    let editing = session.is_some_and(|s| matches!(s.kind, crate::applied::AppliedKind::SheetMetal));
+    let has = *kind == ActiveKind::PartStudio && (!cache.sheet_metal.is_empty() || editing);
     for (n, mut node) in &mut q {
         if n.as_str() == "panel-sheet-metal" {
             let want = if has { Display::Flex } else { Display::None };
@@ -1469,6 +1506,13 @@ fn draw_flat(
             }
         }
         for s in &b.tangent_visible {
+            lines.line(v3(s.a, z), v3(s.b, z), Color::srgb_u8(0x55, 0x55, 0x55));
+        }
+    }
+    // Tangent joints (SM17.2): a thin line where two walls meet smoothly (an imported part's
+    // bends before they are picked, `17-…/t0043.9.png`). Both walls share the edge: one line.
+    for j in scene.joints.iter().filter(|j| j.tangent) {
+        if let Some(s) = j.edges.first() {
             lines.line(v3(s.a, z), v3(s.b, z), Color::srgb_u8(0x55, 0x55, 0x55));
         }
     }

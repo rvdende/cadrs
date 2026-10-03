@@ -357,6 +357,41 @@ fn face_and_feature_mirror_of_a_pocket() {
 }
 
 #[test]
+fn a_reapplied_mirror_stops_at_its_own_up_to_next() {
+    // A plate (z 0..10) under two ceilings: z 30..35 over the right (x 10..40), z 40..45 over
+    // the left (x −40..−10). A 10 × 10 post from the plate's top (start offset 10) Up to next
+    // on the right reaches z = 30 (20 tall). Mirrored about Right: copying its material gives a
+    // 20-tall post on the left too; Reapply features regenerates it there, Up to next: up to the
+    // left ceiling, 30 tall (P3I.8, PS27.5).
+    let mut d = Doc::new();
+    d.block(-50.0, -20.0, 50.0, 20.0, 10.0);
+    let ceiling = |d: &mut Doc, x0: f64, x1: f64, z: f64| {
+        let s = d.sketch(PlaneRef::Top, vec![rect(x0, -20.0, x1, 20.0)]);
+        d.extrude(s, &[Vec2::new((x0 + x1) / 2.0, 0.0)], |e| {
+            e.depth = 5.0;
+            e.depth_expr = "5 mm".into();
+            e.start_offset = Some(Offset { value: z, expr: format!("{z} mm"), flip: false });
+        });
+    };
+    ceiling(&mut d, 10.0, 40.0, 30.0);
+    ceiling(&mut d, -40.0, -10.0, 40.0);
+    let s = d.sketch(PlaneRef::Top, vec![rect(20.0, -5.0, 30.0, 5.0)]);
+    let post = d.extrude(s, &[Vec2::new(25.0, 0.0)], |e| {
+        e.end = cadrs_core::document::EndType::UpToNext;
+        e.start_offset = Some(Offset { value: 10.0, expr: "10 mm".into(), flip: false });
+    });
+    let before = d.volume();
+    let mut m = MirrorFeature { mirror_type: PatternType::Feature, features: vec![post], plane: Some(MirrorPlane::Plane(PlaneRef::Right)), ..MirrorFeature::default() };
+    let mirror = d.add("Mirror", FeatureKind::Mirror(m.clone()));
+    let copied = d.volume() - before;
+    close(copied, 100.0 * 20.0, 1e-3);
+    m.reapply = true;
+    d.set(mirror, FeatureKind::Mirror(m));
+    let reapplied = d.volume() - before;
+    close(reapplied, 100.0 * 30.0, 1e-3);
+}
+
+#[test]
 fn curve_pattern_along_an_arc() {
     // A 10 mm cube centred on (50, 0) ×3 along the quarter circle R50 from (50, 0) to (0, 50),
     // equal spacing (45° apart), tangent to the curve: the copies' centres at 45° and 90° on

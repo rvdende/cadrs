@@ -210,6 +210,19 @@ impl Rebuilder {
                 }
             };
             pieces.sort_by(|a, b| b.volume.total_cmp(&a.volume));
+            // One flat-pattern part folds into one solid. Loose slivers beside it (smaller than a
+            // cube of the sheet's thickness: e.g. where an imported part's round corner reliefs
+            // meet the new bends' ends, SM17) are folding debris, not parts: dropped.
+            let sliver = model.params.thickness.powi(3);
+            let mut kept = Vec::with_capacity(pieces.len());
+            for (n, pc) in pieces.into_iter().enumerate() {
+                if n > 0 && pc.volume < sliver {
+                    self.kernel.release(pc.body);
+                } else {
+                    kept.push(pc);
+                }
+            }
+            let pieces = kept;
             let reuse = old_parts.iter().find(|(p, ws)| !used.contains(p) && ws.iter().any(|w| walls.contains(w))).map(|(p, _)| *p);
             for (n, pc) in pieces.into_iter().enumerate() {
                 let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).chain(used.iter().copied()).collect();

@@ -4,14 +4,19 @@
 //! made around it, each named after its part (the context dropdown lists them by those names):
 //!
 //! - Part Studio **Space Envelope**: a Front-plane profile ([`PROFILE`]: 200 wide, 120 high, the
-//!   top-right corner cut at 45° by a 40 × 40 angled face) extruded [`DEPTH`] (along −Y). The
-//!   lesson's envelope is T-notched (`t0044.7.png`); a T's notch walls unfold onto the walls
-//!   beside them in cadrs's Convert (a flat pattern collision), so the stand-in is a plain box.
+//!   top-right corner cut at 45° by a 40 × 40 angled face; Sketch 1 "Side Profile") extruded
+//!   [`DEPTH`] symmetric about Front, then T-notched like the lesson's (`t0041.9.png`,
+//!   `t0044.7.png`): Sketch 2 "Front Cutouts" on Top, two rectangles from past the front (x = 0)
+//!   to [`NOTCH`], from the [`TONGUE`]'s sides out well past the envelope's (so a wider envelope
+//!   stays T-shaped), removed through it.
 //! - Part Studio **Part Studio 1**: **Derived 1** (Space Envelope at the workspace, so edits of
 //!   the master follow at once), then
 //!   - **Enclosure**: Sheet metal model → Convert of the derived part, the top and the angled
-//!     face excluded, the bottom's four edges bent, Keep input part; its part renamed
-//!     "Enclosure";
+//!     face excluded, Keep input part, eight bends ([`enclosure_bends`]): the bottom's edges
+//!     under the two sides, the back and the tongue's front, and the notch walls and the
+//!     tongue's sides off their neighbours at the outside corners (as the lesson's flat lays
+//!     them, `t0091.2.png`); the other edges, the notches' inside corners among them, are rips;
+//!     its part renamed "Enclosure";
 //!   - **Cover**: Sheet metal model → Thicken of the top and the angled face, the edge between
 //!     them bent; its part "Cover".
 //!
@@ -42,6 +47,8 @@ pub const STUDIO: ElementId = ElementId::from_u128(0x5318_0000_0000_0000_0000_00
 
 pub const MASTER_SKETCH: FeatureId = id(0x11);
 pub const MASTER_EXTRUDE: FeatureId = id(0x12);
+pub const CUTOUTS_SKETCH: FeatureId = id(0x13);
+pub const CUTOUTS: FeatureId = id(0x14);
 pub const MASTER_PART: PartId = PartId::new(MASTER_EXTRUDE, 0);
 pub const DERIVED: FeatureId = id(0x21);
 pub const ENCLOSURE: FeatureId = id(0x22);
@@ -52,6 +59,10 @@ pub const COVER_PART: PartId = PartId::new(COVER, 0);
 /// The master's profile on Front (x, z).
 pub const PROFILE: [(f64, f64); 5] = [(0.0, 0.0), (200.0, 0.0), (200.0, 80.0), (160.0, 120.0), (0.0, 120.0)];
 pub const DEPTH: f64 = 150.0;
+/// The front cutouts: how deep from the front (x = 0), and the tongue's width left between them
+/// (centred on Front).
+pub const NOTCH: f64 = 50.0;
+pub const TONGUE: f64 = 70.0;
 pub const THICKNESS: f64 = 1.5;
 pub const RADIUS: f64 = 1.5;
 
@@ -95,8 +106,27 @@ fn build_master(s: &mut dyn Studio) -> Result<(), CommandError> {
     let regions = super::region_refs(MASTER_SKETCH, &g, &[Vec2::new(100.0, 60.0)]);
     let mut e = super::extrude_of(regions, DEPTH);
     e.depth_expr = format!("{DEPTH} mm");
+    e.symmetric = true;
     s.run(&AddExtrude { element: MASTER, feature: MASTER_EXTRUDE, extrude: ExtrudeFeature::default() })?;
     s.run(&SetExtrude { element: MASTER, feature: MASTER_EXTRUDE, extrude: e, label: "Extrude".into() })?;
+    // Front Cutouts: both front corners removed.
+    s.run(&AddSketch { element: MASTER, feature: CUTOUTS_SKETCH, plane: Some(PlaneRef::Top) })?;
+    let (h, far) = (TONGUE / 2.0, 1000.0);
+    let rect = |y0: f64, y1: f64| SketchOp::AddPolyline {
+        points: vec![Vec2::new(-10.0, y0), Vec2::new(NOTCH, y0), Vec2::new(NOTCH, y1), Vec2::new(-10.0, y1)],
+        closed: true,
+        construction: false,
+        label: "Add rectangle",
+    };
+    s.run(&EditSketch { element: MASTER, feature: CUTOUTS_SKETCH, op: SketchOp::Batch(vec![rect(h, far), rect(-far, -h)]) })?;
+    let g = s.document().element(MASTER).and_then(|e| e.feature(CUTOUTS_SKETCH)).and_then(|f| f.sketch()).map(|k| k.geometry.clone()).ok_or_else(|| CommandError::Invalid("no sketch".into()))?;
+    let regions = super::region_refs(CUTOUTS_SKETCH, &g, &[Vec2::new(NOTCH / 2.0, h + 1.0), Vec2::new(NOTCH / 2.0, -h - 1.0)]);
+    let mut e = super::extrude_of(regions, 130.0);
+    e.op = crate::document::BooleanOp::Remove;
+    s.run(&AddExtrude { element: MASTER, feature: CUTOUTS, extrude: ExtrudeFeature::default() })?;
+    s.run(&SetExtrude { element: MASTER, feature: CUTOUTS, extrude: e, label: "Extrude".into() })?;
+    s.run(&RenameFeature { element: MASTER, feature: MASTER_SKETCH, name: "Side Profile".into() })?;
+    s.run(&RenameFeature { element: MASTER, feature: CUTOUTS_SKETCH, name: "Front Cutouts".into() })?;
     s.run(&RenamePart { element: MASTER, part: MASTER_PART, name: "Space Envelope".into() })?;
     Ok(())
 }
@@ -110,6 +140,21 @@ pub fn set_depth(s: &mut dyn Studio, depth: f64) -> Result<(), CommandError> {
     e.depth = depth;
     e.depth_expr = format!("{depth} mm");
     s.run(&SetExtrude { element: MASTER, feature: MASTER_EXTRUDE, extrude: e, label: "Edit Extrude 1".into() })
+}
+
+/// Points on the Enclosure's eight bend edges, for an envelope `depth` deep (Y from −depth/2 to
+/// depth/2): the bottom edges under the two sides, the back (x = 200) and the tongue's front
+/// (x = 0); the outside corners where each notch wall meets its side, and where each of the
+/// tongue's sides meets its front.
+pub fn enclosure_bends(depth: f64) -> [[f64; 3]; 8] {
+    let (d, h) = (depth / 2.0, TONGUE / 2.0);
+    [[125.0, -d, 0.0], [125.0, d, 0.0], [200.0, 0.0, 0.0], [0.0, 0.0, 0.0], [NOTCH, -d, 60.0], [NOTCH, d, 60.0], [0.0, -h, 60.0], [0.0, h, 60.0]]
+}
+
+/// The edge of `part` through `p`.
+fn edge_at(s: &Solid, part: PartId, p: [f64; 3]) -> Option<EdgeRef> {
+    let e = s.edges.iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)))?;
+    (e.distance(p) < 1e-3).then_some(EdgeRef { part, edge: e.name, seed: p })
 }
 
 /// The derived part's id in Part Studio 1.
@@ -133,14 +178,8 @@ fn build_studio(s: &mut dyn Studio) -> Result<(), CommandError> {
     let missing = || CommandError::Invalid("a face of the derived part is missing".into());
     let top = face(sol, pid, [0.0, 0.0, 1.0], [0.0, 0.0, 120.0]).ok_or_else(missing)?;
     let angled = face(sol, pid, [d1, 0.0, d2], [200.0, 0.0, 80.0]).ok_or_else(missing)?;
-    let bottom = face(sol, pid, [0.0, 0.0, -1.0], [0.0, 0.0, 0.0]).ok_or_else(missing)?;
     // Every edge round the bottom.
-    let bends: Vec<EdgeOrFace> = sol
-        .face_edges(&bottom.face)
-        .into_iter()
-        .filter_map(|e| sol.edge(&e))
-        .map(|e| EdgeOrFace::Edge(EdgeRef { part: pid, edge: e.name, seed: e.points[e.points.len() / 2] }))
-        .collect();
+    let bends: Vec<EdgeOrFace> = enclosure_bends(DEPTH).iter().map(|p| edge_at(sol, pid, *p).map(EdgeOrFace::Edge).ok_or_else(missing)).collect::<Result<_, _>>()?;
     let mut x = sm(SheetMetalOp::Convert);
     x.parts = vec![pid];
     x.exclude = vec![top, angled];

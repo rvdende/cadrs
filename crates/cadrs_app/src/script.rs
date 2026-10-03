@@ -74,7 +74,7 @@
 //!   (`sm_e4` does them through the dialogs instead).
 //! - `sm-legacy-step <path>` (P3I.8, SM17): writes the legacy C-channel as a plain STEP solid
 //!   ([`cadrs_core::samples::sheetmetal_legacy`]); `sm-legacy-case-step <path>` the legacy Case
-//!   (an open box with relieved corners). `sm-topdown-depth N`: the Heating Mantle
+//!   (an open box, its corners open). `sm-topdown-depth N`: the Heating Mantle
 //!   master's depth (SM18, [`cadrs_core::samples::sheetmetal_topdown::set_depth`]).
 //! - `design-intent` (P3F.4): the course's hydraulic cylinder body driven by `#piston_d` and
 //!   `#clearance` ([`cadrs_core::samples::design_intent`]) in the active Part Studio.
@@ -159,7 +159,7 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::step);
             continue;
         }
-        // P3I.8 (SM17): the legacy Case (an open box with relieved corners).
+        // P3I.8 (SM17): the legacy Case (an open box, its corners open).
         if let Some(path) = m.0.strip_prefix("sm-legacy-case-step ") {
             write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::case_step);
             continue;

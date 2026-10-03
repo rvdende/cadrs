@@ -449,6 +449,8 @@ pub const E4_PART: PartId = PartId::new(E4_MODEL, 0);
 /// The channel on Front (x, z) and its length (along −Y).
 pub const E4_CHAIN: [(f64, f64); 4] = [(-35.0, 60.0), (-35.0, 0.0), (35.0, 0.0), (35.0, 60.0)];
 pub const E4_LENGTH: f64 = 150.0;
+/// The Lower Enclosure's sheet thickness (its walls run from x = ±(35 − 1.5) to ±35).
+pub const E4_WALL: f64 = 1.5;
 /// The slot on Right (y, z): its centre, length and width.
 pub const E4_SLOT_CENTRE: (f64, f64) = (-75.0, 30.0);
 pub const E4_SLOT_SIZE: (f64, f64) = (40.0, 12.0);
@@ -469,7 +471,7 @@ pub fn obround(c: (f64, f64), len: f64, wid: f64) -> Vec<SketchOp> {
 pub fn build_e4(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     sketch(s, el, E4_SKETCH_1, PlaneRef::Front, vec![chain(&E4_CHAIN)])?;
     let mut p = SheetMetalModelFeature::default_params();
-    p.thickness = 1.5;
+    p.thickness = E4_WALL;
     p.bend_radius = 1.5;
     let x = SheetMetalModelFeature {
         operation: SheetMetalOp::Extrude,
@@ -503,10 +505,15 @@ pub const E4_SWEEP: FeatureId = e4(0x24);
 pub const E4_MIRROR: FeatureId = e4(0x25);
 pub const E4_FILLET_1: FeatureId = e4(0x26);
 pub const E4_FILLET_2: FeatureId = e4(0x27);
-/// The rim the rework sweeps round the slot: 8 out of the wall, 2 thick.
+/// The rim (collar) the rework sweeps round the slot: 8 out of the wall, 2 thick.
 pub const E4_RIM: (f64, f64) = (8.0, 2.0);
-/// The fillets' radius on the rims' outer (Fillet 1) and inner (Fillet 2) top edges.
-pub const E4_FILLET: f64 = 0.5;
+/// How far the collar's profile reaches into the slot and back through the wall: it lines the
+/// slot (0.5 in from the cut, so the folded part's polygon slot edge is covered by the sweep's
+/// exact faces) from the wall's inside face out.
+pub const E4_LINING: f64 = 0.5;
+/// Fillet 1 (step 8): where the lined slot meets the wall's inside face; Fillet 2 (step 9): the
+/// collar's top outer edge (`ex4-sheet-metal-rework/step-08.png`, `step-09.png`).
+pub const E4_FILLETS: (f64, f64) = (3.0, 1.0);
 
 /// Exercise E4 done on the Lower Enclosure in Part Studio `el` (see the module docs): Finish
 /// sheet metal model, then [`rework_after_finish`].
@@ -535,12 +542,12 @@ pub fn e4_wall_face(solid: &Solid) -> Option<(cadrs_sketch::FaceName, f64)> {
 ///   flat and folds the polygon), so Use takes the slot sketch's curves, which project to the
 ///   same outline exactly;
 /// - **Plane 1**, *Plane point*: the lower line's end (a vertex of Sketch 8) and the Front plane;
-/// - **Sketch 9** on Plane 1: the [`E4_RIM`] rectangle (8 out of the wall, 2 down from the
-///   slot's edge);
+/// - **Sketch 9** on Plane 1: the collar's rectangle, from the wall's inside face to [`E4_RIM`]
+///   8 out of it, from 2 below the slot's edge to [`E4_LINING`] above it;
 /// - **Sweep 1**, Solid, Add: Sketch 9 along Sketch 8, merged into the Lower Enclosure;
 /// - **Mirror 1**, Feature mirror of Sweep 1 about the Right plane, *Reapply features*;
-/// - **Fillet 1** on both rims' outer top edges, **Fillet 2** on their inner top edges
-///   (tangent propagation takes each rim's loop).
+/// - **Fillet 1**, 3 mm, where each lined slot meets its wall's inside face; **Fillet 2**, 1 mm,
+///   on each collar's top outer edge (tangent propagation takes each loop).
 pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     use crate::advanced::{PathRef, SweepFeature};
     use crate::applied::FilletFeature;
@@ -589,7 +596,8 @@ pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), Comm
         let q = pframe.to_sketch(p);
         (q.x, q.y)
     };
-    let corners = [[x0, y, cz - r - t], [x0 + w, y, cz - r - t], [x0 + w, y, cz - r], [x0, y, cz - r]].map(local);
+    let (xi, zl) = (x0 - E4_WALL, cz - r + E4_LINING);
+    let corners = [[xi, y, cz - r - t], [x0 + w, y, cz - r - t], [x0 + w, y, zl], [xi, y, zl]].map(local);
     let on = PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(E4_PLANE.0, pframe));
     let g = sketch(s, el, E4_RIM_SKETCH, on, vec![polygon(&corners)])?;
     let mid = local([x0 + w / 2.0, y, cz - r - t / 2.0]);
@@ -600,11 +608,12 @@ pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), Comm
     // Step 7: Mirror 1, Feature mirror about Right, Reapply features.
     let mirror = MirrorFeature { mirror_type: PatternType::Feature, features: vec![E4_SWEEP], plane: Some(MirrorPlane::Plane(PlaneRef::Right)), reapply: true, ..Default::default() };
     add(s, el, E4_MIRROR, "Mirror", FeatureKind::Mirror(mirror))?;
-    // Steps 8–9: the rims' outer, then inner top edges, both sides.
-    for (id, z) in [(E4_FILLET_1, cz - r - t), (E4_FILLET_2, cz - r)] {
+    // Steps 8–9: the slot's entry on the wall's inside face (3), the collar's top outer edge
+    // (1), both sides.
+    for (id, x, z, size) in [(E4_FILLET_1, xi, zl, E4_FILLETS.0), (E4_FILLET_2, x0 + w, cz - r - t, E4_FILLETS.1)] {
         let b = built(s, el);
         let part = b.parts.iter().find(|p| p.id == E4_PART).ok_or_else(|| missing("part"))?;
-        let entities = [x0 + w, -(x0 + w)]
+        let entities = [x, -x]
             .iter()
             .map(|x| {
                 edge_near(&part.solid, part.id, [*x, cy, z]).map(EdgeOrFace::Edge).ok_or_else(|| {
@@ -613,7 +622,7 @@ pub fn rework_after_finish(s: &mut dyn Studio, el: ElementId) -> Result<(), Comm
                 })
             })
             .collect::<Result<_, _>>()?;
-        let f = FilletFeature { entities, size: E4_FILLET, size_expr: format!("{E4_FILLET} mm"), ..Default::default() };
+        let f = FilletFeature { entities, size, size_expr: format!("{size} mm"), ..Default::default() };
         add(s, el, id, "Fillet", FeatureKind::Fillet(f))?;
     }
     Ok(())

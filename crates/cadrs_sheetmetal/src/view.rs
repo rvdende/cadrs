@@ -133,6 +133,9 @@ pub struct SceneJoint {
     pub joint: JointId,
     pub name: String,
     pub edges: Vec<Seg2>,
+    /// A tangent joint (SM17.2: where an imported part's bend is before it is picked); the flat
+    /// view draws it as a thin line, as Onshape does (`17-…/t0043.9.png`).
+    pub tangent: bool,
 }
 
 /// The flat pattern laid out for the flat view (flat 2D; the view shows it as the XY plane, the
@@ -219,7 +222,7 @@ impl FlatScene {
                 }
                 match out.joints.iter_mut().find(|x| x.joint == j.id) {
                     Some(x) => x.edges.extend(edges),
-                    None => out.joints.push(SceneJoint { joint: j.id, name: j.name.clone(), edges }),
+                    None => out.joints.push(SceneJoint { joint: j.id, name: j.name.clone(), edges, tangent: matches!(j.kind, JointKind::Tangent { .. }) }),
                 }
             }
         }
