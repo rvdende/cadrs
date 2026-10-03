@@ -279,7 +279,52 @@ pub struct FlatUiPlugin;
 
 impl Plugin for FlatUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, draw_picked_regions.after(crate::parts::PartsSet).run_if(in_state(crate::AppState::Document)));
+        app.add_systems(Update, (keep_flat_view, draw_picked_regions.after(crate::parts::PartsSet)).run_if(in_state(crate::AppState::Document)));
+    }
+}
+
+/// While a sketch on the flat is edited, the flat view stays open on its model (closing the
+/// panel would leave the sketch nowhere to draw: it isn't shown in 3D); the panel toggle says
+/// so. Its constraint glyphs show on hover only, as Onshape's flat sketch starts (lesson t0052:
+/// Show constraints off); the setting is put back when the sketch closes.
+#[allow(clippy::too_many_arguments)]
+fn keep_flat_view(
+    session: Option<Res<crate::sketch::SketchSession>>,
+    doc: Option<Res<ActiveDocument>>,
+    kind: Res<crate::viewport::ActiveKind>,
+    mut open: ResMut<crate::appearance::SidePanel>,
+    mut table: ResMut<crate::sheetmetal_table::SmTable>,
+    mut settings: ResMut<crate::sketch::SketchViewSettings>,
+    theme: Res<Theme>,
+    mut memo: Local<Option<(FeatureId, bool)>>,
+    mut commands: Commands,
+) {
+    let target = session.as_ref().and_then(|s| {
+        let features = doc.as_ref()?.active_element()?.features();
+        sketch_target(features, s.feature).map(|t| (s.feature, t))
+    });
+    let Some((sketch, (model, _))) = target.filter(|_| *kind == crate::viewport::ActiveKind::PartStudio) else {
+        if let Some((_, was)) = memo.take()
+            && settings.show_constraints != was
+        {
+            settings.show_constraints = was;
+        }
+        return;
+    };
+    if memo.is_none_or(|(f, _)| f != sketch) {
+        let was = memo.map_or(settings.show_constraints, |(_, w)| w);
+        *memo = Some((sketch, was));
+        settings.show_constraints = false;
+    }
+    if *open != crate::appearance::SidePanel::SheetMetal {
+        let closing = *open == crate::appearance::SidePanel::None;
+        *open = crate::appearance::SidePanel::SheetMetal;
+        if closing {
+            cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::info("The flat view stays open while a sketch on the flat pattern is edited").name("flat-sketch-panel-toast"));
+        }
+    }
+    if table.context != Some(model) {
+        table.context = Some(model);
     }
 }
 

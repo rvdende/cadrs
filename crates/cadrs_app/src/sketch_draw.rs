@@ -681,6 +681,24 @@ fn draw_sketches(
         let mirror_axis = (tool.tool == crate::sketch::SketchTool::Mirror)
             .then(|| selection.0.first().copied())
             .flatten();
+        // A sketch on the flat: the flat's bend lines it uses are drawn over material only (a
+        // cut-out the line crosses shows as a gap, as the flat's own lines do; P3I.6).
+        let clipped: HashMap<cadrs_sketch::CurveId, Vec<Vec<SVec2>>> = if area.flat.is_some() {
+            sketch
+                .links()
+                .into_iter()
+                .filter_map(|(_, t, l)| match (t, l) {
+                    (cadrs_sketch::projection::LinkTarget::Curve(c), cadrs_sketch::Link::FlatLine { model, part, bend: Some(j) }) => {
+                        let flat = parts.sheet_metal.iter().rev().find(|x| x.feature.0 == model)?.flat.parts.get(part as usize)?;
+                        let b = flat.bend(cadrs_sheetmetal::model::JointId(j))?;
+                        Some((c, b.center_visible.iter().map(|s| vec![SVec2::new(s.a.x, s.a.y), SVec2::new(s.b.x, s.b.y)]).collect()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
         for (id, c) in &sketch.curves {
             let e = SketchEntity::Curve(id);
             let pts = curve_polyline(sketch, id);
@@ -744,7 +762,14 @@ fn draw_sketches(
             } else {
                 status_color(analysis.curve(id))
             };
-            stroke(&mut lines, &frame, &pts, color, c.construction, ppm);
+            match clipped.get(&id) {
+                Some(spans) => {
+                    for span in spans {
+                        stroke(&mut lines, &frame, span, color, c.construction, ppm);
+                    }
+                }
+                None => stroke(&mut lines, &frame, &pts, color, c.construction, ppm),
+            }
         }
         // A Bézier curve's handles: short dashes from each end to its control point, in the
         // curve's colour (Onshape's control polygon), the control points hollow rings below.

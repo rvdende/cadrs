@@ -314,3 +314,50 @@ fn a_renamed_part_names_its_flat_export() {
     assert_eq!(scope_parts(&b, &props, part, FlatScope::Single)[0].name, "Sheet Metal Box");
     assert_eq!(default_file_name("Doc", &all[0].name), "Doc - Flat pattern of Sheet Metal Box");
 }
+
+#[test]
+fn counterbore_outer_circles_reach_the_flat_dxf() {
+    use cadrs_core::applied::{HoleFeature, HolePoint};
+    use cadrs_core::flat_export::{FlatExportOptions, cbore_marks, flat_parts, part_page};
+    use cadrs_core::hole::{HoleEnd, HoleSpec, HoleStyle, Length};
+    use cadrs_drawing::sheet_sketch::Entity;
+    let mut st = Studio::new();
+    st.channel();
+    let b = st.ok();
+    let v0 = volume(&b.parts[0]);
+    // The base wall lies on Top: a point in its middle.
+    let ys: Vec<f64> = b.parts[0].solid.faces.iter().flat_map(|f| f.loops.iter().flatten().map(|p| p[1])).collect();
+    let ymid = (ys.iter().copied().fold(f64::MAX, f64::min) + ys.iter().copied().fold(f64::MIN, f64::max)) / 2.0;
+    let s = st.sketch(PlaneRef::Top, vec![SketchOp::AddPoint { pos: Vec2::new(30.0, ymid) }]);
+    let point = st.features().into_iter().find(|f| f.id == s).unwrap().sketch().unwrap().geometry.points.keys().next().unwrap();
+    // A counterbored through hole Ø5, counterbore Ø10 × 1 (in the 2 mm sheet).
+    let spec = HoleSpec { style: HoleStyle::Counterbore, end: HoleEnd::ThroughAll, cbore_diameter: Length::mm(10.0), cbore_depth: Length::mm(1.0), ..HoleSpec::default() };
+    let x = HoleFeature { points: vec![HolePoint { sketch: s, point }], spec, ..HoleFeature::default() };
+    let h = st.add("Hole", FeatureKind::Hole(x.clone()));
+    if volume(&st.ok().parts[0]) >= v0 - 1.0 {
+        // Drilled away from the sheet: the other way.
+        let mut f = st.features().into_iter().find(|f| f.id == h).unwrap();
+        f.kind = FeatureKind::Hole(HoleFeature { flip: true, ..x });
+        st.h.execute(&mut st.d, &cadrs_core::commands::ReplaceFeature { element: st.el, feature: f, label: "Flip".into() }).unwrap();
+    }
+    let b = st.ok();
+    assert!(volume(&b.parts[0]) < v0 - 1.0, "the hole cuts the base");
+    let features = st.features();
+    let r = flat_parts(&b).into_iter().next().unwrap();
+    let marks = cbore_marks(&b, &features, &r);
+    // One circle (the rim and the counterbore's floor are the same circle in the flat), in the
+    // middle of the base across the flat.
+    assert_eq!(marks.len(), 1, "{marks:?}");
+    let (c, radius) = marks[0];
+    assert!((radius - 5.0).abs() < 1e-6);
+    let (lo, hi) = b.sheet_metal[0].flat.parts[0].bounds().unwrap();
+    assert!((c.x - (lo.x + hi.x) / 2.0).abs() < 1e-3 && c.y > lo.y && c.y < hi.y, "{c:?} in {lo:?}–{hi:?}");
+    // In the DXF on CBORE_CSINK with the option, not without.
+    let shown = |_: FeatureId| true;
+    let on = |o: FlatExportOptions| {
+        let d = cadrs_drawing::dxf::read_dxf(&cadrs_drawing::dxf::write_dxf(&part_page(&b, &features, &r, &o, &shown).unwrap())).unwrap();
+        d.entities.iter().zip(&d.layers).filter(|(e, l)| *l == "CBORE_CSINK" && matches!(e, Entity::Circle { radius, .. } if (radius - 5.0).abs() < 1e-6)).count()
+    };
+    assert_eq!(on(FlatExportOptions { cbore_lines: true, ..Default::default() }), 1);
+    assert_eq!(on(FlatExportOptions::default()), 0);
+}

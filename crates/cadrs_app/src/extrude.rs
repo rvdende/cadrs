@@ -1051,6 +1051,7 @@ fn draw_regions(
     mut fill: Local<FillState>,
     q_fill: Query<(), With<RegionFill>>,
     failed: Res<crate::parts::FailedReferences>,
+    applied: Option<Res<crate::applied::AppliedSession>>,
     mut commands: Commands,
 ) {
     // The fill entity goes away with the document.
@@ -1090,7 +1091,30 @@ fn draw_regions(
         }
         _ => Vec::new(),
     };
-    let extruding = session.is_some();
+    // P3I.6 (exercise E1, `ex1-importing-dxf-bend/step-04.png`): the Sheet metal model's Thicken
+    // regions are picked regions too, orange like the Extrude dialog's.
+    let thicken: SelectedRegions = match (&session, &applied, &doc) {
+        (None, Some(a), Some(d)) => {
+            let el = d.doc.element(a.element);
+            match el.and_then(|e| e.feature(a.feature)).map(|f| &f.kind) {
+                Some(cadrs_core::FeatureKind::SheetMetalModel(x)) if x.operation == cadrs_core::sheetmetal::SheetMetalOp::Thicken => {
+                    let mut v: SelectedRegions = x.regions.iter().map(|r| (r.sketch, r.curves.clone(), r.seed)).collect();
+                    for sk in x.region_sketches.iter().copied() {
+                        let Some(g) = el.and_then(|el| el.feature(sk)).and_then(|f| f.sketch()) else { continue };
+                        for r in cadrs_core::rebuild::whole_sketch_regions(&g.geometry) {
+                            let rr = RegionRef::new(sk, &r);
+                            v.push((sk, rr.curves, rr.seed));
+                        }
+                    }
+                    v
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+    let extruding = session.is_some() || !thicken.is_empty();
+    let selected = if thicken.is_empty() { selected } else { thicken };
     // The selected region's outline in `screens/23`; a plain selection's in `ex1-step8`.
     // A failing feature's regions are red (P3.7, PS20.5).
     let orange = if failed.0 {

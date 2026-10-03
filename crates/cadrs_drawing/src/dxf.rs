@@ -28,9 +28,13 @@ struct Out {
     version: DxfVersion,
 }
 
-/// The DXF version written. The entities and tables are the same from 2000 on; 2007 and later
-/// write UTF-8 text and the block records' units and explodability, older ones non-ASCII text
-/// as `\U+XXXX`. (R12 has no subclass markers or lightweight polylines: not written.)
+/// The DXF version written. Every entity the writer uses (LINE, ARC, CIRCLE, LWPOLYLINE, SPLINE,
+/// TEXT and SOLID) and every table record has the same group codes from AutoCAD
+/// 2000 (AC1015) to 2018 (AC1032): later releases only added entities and optional codes the
+/// writer doesn't use, so the versions differ in `$ACADVER` and text encoding only. 2007 and
+/// later write UTF-8 text and the block records' units and explodability (codes 280/281), older
+/// ones non-ASCII text as `\U+XXXX`. (R12 has no subclass markers or lightweight polylines: not
+/// written.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DxfVersion {
     /// AutoCAD 2013 (AC1027), UTF-8 text.

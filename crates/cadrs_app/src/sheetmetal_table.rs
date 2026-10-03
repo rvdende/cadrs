@@ -72,6 +72,9 @@ pub const FLAT_CUBE_ARC_LAYER: usize = 10;
 pub const PANEL_W: f32 = 640.0;
 /// Table rows' and headers' height (px).
 const ROW_H: f32 = 30.0;
+
+/// The tables' greatest share of the panel's height (%), the flat view below getting the rest.
+const TABLES_MAX: f32 = 34.0;
 /// The selection orange (Onshape's highlight).
 const ORANGE: Color = Color::srgb(0.98, 0.62, 0.25);
 const ORANGE_HOVER: Color = Color::srgb(1.0, 0.80, 0.55);
@@ -569,10 +572,13 @@ fn sync_panel(world: &mut World) {
             Name::new("smt-tables"),
             RowsScroll,
             TableBody,
+            // As tall as their rows, up to a third of the panel: the flat view takes the rest
+            // (Onshape's flat fills the panel under a short table, lesson t0052).
             Node {
                 flex_direction: FlexDirection::Column,
-                flex_grow: 1.0,
-                flex_basis: Val::Px(0.0),
+                flex_grow: 0.0,
+                flex_shrink: 1.0,
+                max_height: Val::Percent(TABLES_MAX),
                 min_height: Val::Px(0.0),
                 overflow: Overflow::scroll_y(),
                 border: UiRect::top(Val::Px(1.0)),
@@ -1380,8 +1386,21 @@ fn sync_meshes(
     });
     if want_scene != t.scene_of {
         t.scene = ctx.as_ref().map(|c| Arc::new(FlatScene::new(&c.model, &c.flat)));
-        // A new flat (another model, or a joint changed): fitted again.
-        if t.scene_of.is_some() && want_scene.is_some() {
+        // Another model's flat is fitted; the same model's changed flat (a joint edited, a flat
+        // Extrude's preview) keeps the view unless it no longer fits (P3I.6: the Add preview
+        // re-fitted the view under the dialog).
+        let other_model = t.scene_of.map(|(f, _)| f) != want_scene.map(|(f, _)| f);
+        let fits = match (t.scene.as_ref().and_then(|s| s.bounds()), t.body) {
+            (Some((lo, hi)), Some((_, rect))) => {
+                let half = rect.size() / 2.0;
+                [(lo.x, lo.y), (hi.x, lo.y), (hi.x, hi.y), (lo.x, hi.y)].into_iter().all(|(x, y)| {
+                    let p = t.view.project(Vec3::new(x as f32, y as f32, 0.0));
+                    p.x.abs() <= half.x && p.y.abs() <= half.y
+                })
+            }
+            _ => false,
+        };
+        if t.scene_of.is_some() && want_scene.is_some() && (other_model || !fits) {
             t.fit_in = Some(1);
         }
         t.scene_of = want_scene;

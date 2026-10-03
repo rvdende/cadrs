@@ -58,6 +58,8 @@ Scenario(
         Wait(5),
         Click(ui("flat-export-ok")),
         Wait(20),
+        MoveTo(1580, 980),
+        Wait(3),
         Screenshot("04-exported"),
     ],
 )

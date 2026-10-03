@@ -222,8 +222,12 @@ fn update_sketch_screen(
         area.flat = flat;
     }
     FLAT_SKETCH_AREA.store(flat.map_or(0, |f| f.body.to_bits()), std::sync::atomic::Ordering::Relaxed);
+    // A sketch on the flat has no 3D mapping: while the flat view isn't laid out (the panel
+    // opening, `crate::flat_ui::keep_flat_view`) it is neither drawn nor edited anywhere.
+    let on_flat = session.as_deref().zip(doc.as_deref().and_then(|d| d.active_element())).is_some_and(|(s, el)| cadrs_core::sheetmetal_flat::sketch_target(el.features(), s.feature).is_some());
     let active = match (plane, flat) {
         (Some(PlaneRef::Feature(fp)), Some(f)) => Some(ScreenMap::new(PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(fp.feature, f.frame)), &f.view, &ViewportRect(f.rect))),
+        _ if on_flat => None,
         (p, _) => p.map(|p| ScreenMap::new(p, &view.view, &rect)),
     };
     let want = SketchScreen {

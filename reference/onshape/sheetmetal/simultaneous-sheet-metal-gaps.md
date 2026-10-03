@@ -437,6 +437,14 @@ against the stand-ins' expected values.
   - *Insert DXF*: a floating panel over the view (`cadrs_ui::FloatingPanel`), as Onshape's
     step-03; Show constraints turns off after an import (glyphs on hover, as Onshape's default);
     ends closer than 0.0005 mm are joined (files with rounded coordinates close their regions).
+  - *Round 2 (8.2)*: while a flat sketch is edited the panel stays open on its model (closing it
+    reopens it with a note, `flat_ui::keep_flat_view`) and the sketch never falls back to 3D;
+    Show constraints starts off in a flat sketch (restored after); the tables take their rows'
+    height up to a third of the panel, the flat view the rest; a changed flat of the same model
+    (a preview) keeps the view unless it no longer fits; used bend lines are drawn over material
+    only; the Thicken dialog's regions are orange; a `cbore_marks` test; the DXF versions' doc
+    says the entities are the same from 2000 to 2018. A single picked region reads "Face of
+    Sketch 2", as Onshape's ("Faces of Sketch 1" in t0060 is several).
 
 ### Decisions (P3I.8)
 
