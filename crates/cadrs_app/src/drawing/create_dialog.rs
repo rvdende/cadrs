@@ -120,6 +120,8 @@ pub struct CreateDrawingState {
     pub in_document: Vec<String>,
     /// The Four views option (else No views).
     pub four_views: bool,
+    /// Create drawing of flat pattern (P3I.7, SM16.1): OK arms Insert view with the flat.
+    pub flat: bool,
 }
 
 /// The Custom template tab's settings.
@@ -157,6 +159,16 @@ struct CreateDrawingBody(Option<CreateDrawingState>);
 /// Opens the dialog. `reference` is the part or assembly the drawing is of (Create Drawing of
 /// X…), or `None` from the "+" menu.
 pub fn open_create_drawing(world: &mut World, reference: Option<ObjectRef>) {
+    open_with(world, reference, false);
+}
+
+/// Create drawing of flat pattern of part `r` (P3I.7, SM16.1): the same dialog; OK opens the
+/// drawing with Insert view armed for the part's flat pattern.
+pub fn open_create_drawing_flat(world: &mut World, r: ObjectRef) {
+    open_with(world, Some(r), true);
+}
+
+fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool) {
     let Some(doc) = world.get_resource::<ActiveDocument>() else {
         return;
     };
@@ -170,6 +182,7 @@ pub fn open_create_drawing(world: &mut World, reference: Option<ObjectRef>) {
         cadrs_core::properties::text(&doc.doc, owner, cadrs_core::properties::PropertyKey::Name, None)
     });
     let title = match of.filter(|n| !n.trim().is_empty()) {
+        Some(part) if flat => format!("Create Drawing: {name} of {part} flat pattern"),
         Some(part) => format!("Create Drawing: {name} of {part}"),
         None => format!("Create Drawing: {name}"),
     };
@@ -195,6 +208,7 @@ pub fn open_create_drawing(world: &mut World, reference: Option<ObjectRef>) {
         custom: CustomChoice::default(),
         in_document,
         four_views: false,
+        flat,
     };
     let theme = world.resource::<Theme>().clone();
     let tf = theme.clone();
@@ -698,7 +712,7 @@ fn accept(world: &mut World) {
     let mut drawing = Drawing::from_template(&template, state.reference);
     drawing.title.drawn_by = Some(world.resource::<UserProfile>().display_name.clone());
     drawing.title.drawn_date = Some(today(world.resource::<AppClock>()));
-    let four = state.four_views && state.reference.is_some();
+    let four = state.four_views && state.reference.is_some() && !state.flat;
     if four
         && let Some(r) = state.reference
         && let Some(doc) = world.get_resource::<ActiveDocument>()
@@ -732,6 +746,14 @@ fn accept(world: &mut World) {
         }
     }
     world.trigger(DialogClose { entity: dialog });
+    // P3I.7 (SM16.1): Insert view armed with the flat pattern.
+    if state.flat
+        && let Some(r) = state.reference
+    {
+        world.flush();
+        super::flat_views::arm_flat(world, r);
+        return;
+    }
     // D1.7: with No views, Insert view starts at once.
     if !four {
         world.flush();

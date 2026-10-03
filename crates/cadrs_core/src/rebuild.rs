@@ -746,6 +746,10 @@ impl Rebuilder {
         req: &crate::views::ViewRequest,
     ) -> Result<crate::views::ViewGeometry, String> {
         let build = self.rebuild(features);
+        // A flat pattern view (P3I.7): the part's flat, from its sheet metal model.
+        if req.flat {
+            return crate::flat_drawing::flat_geometry(&build.sheet_metal, req);
+        }
         let state = self.last.clone();
         let parts = crate::views::view_parts(&build.parts, req.part);
         if parts.is_empty() {

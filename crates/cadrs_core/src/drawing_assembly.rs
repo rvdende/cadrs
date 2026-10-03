@@ -205,6 +205,7 @@ pub fn view_request(v: &cadrs_drawing::View) -> crate::views::ViewRequest {
         appearances: Vec::new(),
         cut: None,
         intersections: v.part_intersections,
+        flat: false,
     }
 }
 

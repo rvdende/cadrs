@@ -87,10 +87,11 @@ fn lineweight(mm: f64) -> i32 {
 }
 
 /// (name, description, pattern: dash, gap, …) of the linetypes we write.
-fn linetypes() -> [(&'static str, &'static str, Vec<f64>); 2] {
+fn linetypes() -> [(&'static str, &'static str, Vec<f64>); 3] {
     let hidden = crate::view::LineKind::Hidden.pattern().unwrap_or(&[2.0, 0.8]).to_vec();
     let phantom = crate::view::LineKind::Phantom.pattern().unwrap_or(&[4.0, 0.8, 0.8, 0.8, 0.8, 0.8]).to_vec();
-    [("HIDDEN", "Hidden __ __ __", hidden), ("PHANTOM", "Phantom ____ _ _ ____", phantom)]
+    let center = crate::flat_view::BEND_PATTERN.to_vec();
+    [("HIDDEN", "Hidden __ __ __", hidden), ("PHANTOM", "Phantom ____ _ _ ____", phantom), ("CENTER", "Center ____ _ ____ _", center)]
 }
 
 /// The drawing's extents. A page of strokes only (a sketch or a face laid flat, P3F.2 judge: one
@@ -422,6 +423,9 @@ fn entity_head(o: &mut Out, owner: &str, kind: &str, layer: Layer, pen: Option<&
     }
     if color == crate::export::DANGLING {
         o.pair(62, 1);
+    } else if color != crate::export::INK && matches!(layer, Layer::BendUp | Layer::BendDown) {
+        // A bend line's own colour (P3I.7), as a true colour.
+        o.pair(420, ((color[0] as i32) << 16) | ((color[1] as i32) << 8) | color[2] as i32);
     }
     if let Some(p) = pen {
         o.pair(370, lineweight(p.width));

@@ -159,6 +159,11 @@ pub struct InsertViewState {
     pub current: Option<crate::linked::Opened>,
     pub current_graph: bool,
     pub graph: Option<cadrs_ui::VersionGraph>,
+    /// P3I.7 (SM16.2): the reference is a sheet metal part's flat pattern; the Flat patterns
+    /// filter is on; and the document's flat patterns (studio, part, name).
+    pub flat: bool,
+    pub filter_flat: bool,
+    pub flats: Vec<(ElementId, PartId, String)>,
 }
 
 impl Default for InsertViewState {
@@ -182,6 +187,9 @@ impl Default for InsertViewState {
             current: None,
             current_graph: false,
             graph: None,
+            flat: false,
+            filter_flat: false,
+            flats: Vec::new(),
         }
     }
 }
@@ -267,11 +275,18 @@ pub fn open_insert_view(world: &mut World) {
     let expand = sheet.and_then(|s| s.reference).map(|r| ElementId(r.element));
     let mut studios = Vec::new();
     let mut assemblies = Vec::new();
+    let mut flats = Vec::new();
     for el in &doc.doc.elements {
         match &el.kind {
             ElementKind::PartStudio { .. } => {
                 let build = cadrs_core::rebuild::build(el.features());
                 let props = el.part_props();
+                // P3I.7: every sheet metal part's flat pattern.
+                for p in cadrs_core::flat_drawing::flat_parts(&build.sheet_metal) {
+                    if let Some(part) = build.part(p) {
+                        flats.push((el.id, p, format!("{} Flat pattern", cadrs_core::parts::display_name(part, props))));
+                    }
+                }
                 let parts = build
                     .parts
                     .iter()
@@ -313,6 +328,7 @@ pub fn open_insert_view(world: &mut World) {
         expanded,
         tab: if sheet_asm.is_some() { 1 } else { 0 },
         reference: sheet_asm.filter(|_| empty_sheet).map(|e| ObjectRef { element: e.0, part: None }),
+        flats,
         ..default()
     };
     let mut ui = world.resource_mut::<DrawingUi>();
@@ -334,6 +350,9 @@ struct BrowserTree;
 
 fn reference_label(state: &InsertViewState) -> Option<(String, bool)> {
     let r = state.reference?;
+    if state.flat {
+        return super::flat_views::flat_label(state, &r).map(|n| (n, true));
+    }
     if let Some((_, n)) = state.assemblies.iter().find(|(e, _)| e.0 == r.element) {
         return Some((n.clone(), true));
     }
@@ -511,6 +530,7 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
             });
             let is_asm = st.reference.is_some_and(|r| st.assemblies.iter().any(|(e, _)| e.0 == r.element));
             let (text, color, icon_name) = match &label {
+                Some((n, true)) if st.flat => (n.clone(), t.foreground, "flat-pattern"),
                 Some((n, true)) if is_asm => (n.clone(), t.foreground, "assembly"),
                 Some((n, true)) => (n.clone(), t.foreground, "part"),
                 Some((n, false)) => (n.clone(), t.foreground, "part-studio"),
@@ -707,13 +727,16 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
             ..default()
         })
         .with_children(|f| {
-            f.spawn(
+            f.spawn((
                 ToolButton::new("insert-view-filter-parts", "part")
                     .icon_size(16.0)
-                    .selected(true)
+                    .selected(!st.filter_flat)
                     .tooltip("Parts")
                     .build(t),
-            );
+                observe(|_: On<Activate>, mut s: ResMut<InsertViewState>| {
+                    s.filter_flat = false;
+                }),
+            ));
             f.spawn(
                 ToolButton::new("insert-view-filter-sketches", "sketch")
                     .icon_size(16.0)
@@ -721,6 +744,8 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     .tooltip("Sketches: views of sketches come later")
                     .build(t),
             );
+            // P3I.7 (SM16.2): sheet metal flat patterns.
+            super::flat_views::flat_filter_button(f, t, st);
         });
         c.spawn((
             Name::new("insert-view-tree"),
@@ -743,6 +768,10 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
 /// search.
 fn tree_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
     let q = st.search.trim().to_lowercase();
+    if st.tab == 0 && st.filter_flat {
+        super::flat_views::flat_rows(tree, t, st, &q);
+        return;
+    }
     if st.tab == 1 {
         if st.assemblies.is_empty() {
             tree.spawn((
@@ -769,6 +798,7 @@ fn tree_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                 Tooltip::new(a.clone()),
                 observe(move |_: On<Activate>, mut state: ResMut<InsertViewState>| {
                     state.reference = Some(r);
+                    state.flat = false;
                 }),
             ));
         }
@@ -801,6 +831,7 @@ fn tree_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     element: sid.0,
                     part: None,
                 });
+                state.flat = false;
             }),
         ));
         if !open {
@@ -821,6 +852,7 @@ fn tree_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     .build(t),
                 observe(move |_: On<Activate>, mut state: ResMut<InsertViewState>| {
                     state.reference = Some(r);
+                    state.flat = false;
                 }),
             ));
         }
@@ -1080,7 +1112,12 @@ fn update_ghost(
         match ui.tool {
             ViewTool::Insert => {
                 let r = insert.reference?;
-                let mut v = View::base(r, insert.orientation, insert.scale, cursor);
+                // P3I.7: a flat pattern view only from the Flat patterns filter (SM16.2).
+                let mut v = if insert.flat {
+                    View::flat_pattern(r, insert.orientation, insert.scale, cursor)
+                } else {
+                    View::base(r, insert.orientation, insert.scale, cursor)
+                };
                 v.id = ghost_id;
                 v.hidden_lines = d.style.hidden_lines;
                 v.tangent_edges = d.style.tangent_edges;
