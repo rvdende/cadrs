@@ -465,13 +465,16 @@ against the stand-ins' expected values.
   never saved). Derived sketches start hidden (their eyes show them, as Onshape's,
   `18-…/t0062.6.png`). Flat-view bend labels move clear of each other and stay in view; the
   table's Style reads "n/a" for tangent joints. Dropping fold slivers now warns.
-- **Gaps left**: the round-relieved Case thickened again is 2.1 % light. Cause: each of the
-  import's bottom face edges runs along its bend cylinder only between the round relief holes
-  (64.5 of 74 mm); the Thicken moves that part onto the sharp line and leaves the rest, so the
-  base gets ears, the walls keep the holes' arcs, the bends stop short, and the model cuts bend
-  reliefs at the 8 bend ends (8 × 69.5 mm²) the original didn't have (the folding also leaves
-  slivers there, dropped with a warning). Recognising relief holes on an import (restoring the
-  sharp corner, the hole becoming the corner relief) is the fix still to make. The garbled
+- **P3I.8 fourth round (relief holes on imports)**: Thicken/Convert from faces recognise an
+  imported part's relief holes (`construct::from_faces`): a picked bend cylinder cut into
+  pieces is one bend; the short edges a hole leaves on a face next to a bend are left out, so the
+  face gets its sharp corner back and the bend runs as far as both walls' edges; a round hole
+  between two bends becomes that corner's Round – Sized relief, its diameter from the arc on the
+  walls. The round-relieved Case thickened again matches the original's volume and flat area to
+  1e-7 with no slivers (the sliver drop stays as a warned safety net the test asserts never
+  fires); `sm_p3i8_legacy` uses it.
+- **Gaps left**: a bend-end relief hole (not at a corner) gets its face's corner back but the
+  model's own bend relief, not one sized from the hole. The garbled
   letters near the toolbar in `sm_e4` are plane labels laid out at zero width (P3I.2 clips
   them); E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
   clicked piece; a shown flat sketch's region fill draws a shading artefact over the folded part

@@ -122,34 +122,26 @@ fn an_imported_channel_thickened_with_its_bends_is_the_channel_again() {
 #[test]
 fn an_imported_case_is_taken_round_its_corner_gaps() {
     // The Case: the base and four walls, which meet only through the bends (the corners are
-    // open, Round – Scaled reliefs): one pick still takes all five.
+    // open): one pick still takes all five.
     same_as_original(&CASE, 5);
 }
 
 #[test]
-fn an_imported_case_with_round_corner_reliefs_leaves_no_slivers() {
-    // The round holes at the corners: where they meet the new bends' ends the fold leaves
-    // loose slivers (≈ 1.3 mm³ and ≈ 1e-8 mm³); they are dropped, one part stays.
+fn an_imported_case_with_round_corner_reliefs_is_the_case_again() {
+    // The lesson's Case has round holes at its corners. Thickened again, the holes are
+    // recognised as corner reliefs: the bends run their full length (the bend ends the holes cut
+    // off join them), the walls get their sharp corners back, and each hole becomes its
+    // corner's Round – Sized relief, so the flat and the volume are the original's.
+    same_as_original(&CASE_ROUND, 5);
     let (original, b) = thickened(&CASE_ROUND, true);
-    assert_eq!(b.parts.len(), 1, "{:?}", b.parts.iter().map(volume).collect::<Vec<_>>());
-    let ctx = &b.sheet_metal[0];
-    assert_eq!(ctx.model.walls.len(), 5);
-    assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 4);
-    assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1);
-    let v = volume(&b.parts[0]);
-    let sm = original.parts.iter().find(|p| original.sheet_metal[0].parts.iter().any(|(q, _)| *q == p.id)).unwrap();
-    let v0 = volume(sm);
-    println!("round-relief Case: {v} vs {v0}");
-    // The slivers are dropped with a warning (not silently).
-    assert!(b.warnings.iter().any(|(_, w)| w.contains("sliver")), "{:?}", b.warnings);
-    // Not the original's exact volume yet: 31 035.9 against 31 694.4 mm³ (2.1 % less). The
-    // cause: each bottom face edge of the import runs along its bend cylinder only between the
-    // round relief holes (64.5 of 74 mm); the Thicken moves that part onto the sharp line and
-    // leaves the rest, so the walls get ears and the bends stop short, and the model then cuts
-    // bend reliefs at the 8 bend ends (8 × 69.5 mm²) the original never had. Recognising the
-    // relief holes (restoring the sharp corner, the hole as the corner relief) is still to do;
-    // the simple-cornered Case (above) matches to 1e-6.
-    assert!(v < v0 && v > 0.97 * v0, "{v} vs {v0}");
+    assert!(b.warnings.is_empty(), "no folding slivers: {:?}", b.warnings);
+    let (ctx, ctx0) = (&b.sheet_metal[0], &original.sheet_metal[0]);
+    let (a, a0) = (ctx.flat.parts[0].area(), ctx0.flat.parts[0].area());
+    assert!((a - a0).abs() < 1e-6 * a0, "flat area {a} vs {a0}");
+    assert_eq!(ctx.model.corner_overrides.len(), 4, "the four holes are the corners' reliefs");
+    for o in &ctx.model.corner_overrides {
+        assert_eq!(o.relief.kind, cadrs_sheetmetal::CornerReliefKind::RoundSized);
+    }
 }
 
 #[test]

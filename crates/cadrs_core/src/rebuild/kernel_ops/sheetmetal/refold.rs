@@ -212,8 +212,9 @@ impl Rebuilder {
             };
             pieces.sort_by(|a, b| b.volume.total_cmp(&a.volume));
             // One flat-pattern part folds into one solid. Loose slivers beside it (smaller than a
-            // cube of the sheet's thickness: e.g. where an imported part's round corner reliefs
-            // meet the new bends' ends, SM17) are folding debris, not parts: dropped.
+            // cube of the sheet's thickness) are folding debris, not parts: dropped, with a
+            // warning, as a safety net (an imported part's relief holes, which used to leave
+            // them, are recognised now: `cadrs_sheetmetal::construct`, SM17).
             let sliver = model.params.thickness.powi(3);
             let mut kept = Vec::with_capacity(pieces.len());
             for (n, pc) in pieces.into_iter().enumerate() {

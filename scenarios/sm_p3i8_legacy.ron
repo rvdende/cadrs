@@ -1,9 +1,9 @@
 // P3I.8 / SM17 (lesson `17-importing-legacy-sheet-metal`, t0043–t0061): a folded part imported
 // from STEP, made active sheet metal. The part is the legacy Case (`sm-legacy-case-step`,
-// `samples::sheetmetal_legacy::case`): an open box, 2 mm, R3, its corners open (the walls meet
-// the base only through the bends), exported by cadrs as a plain solid, like the lesson's "Case".
-// (The round-relieved Case is in the tests; thickened again it comes out 2.1 % light, see the
-// gaps doc.)
+// `samples::sheetmetal_legacy::case_round`): an open box, 2 mm, R3, round holes at its corners
+// (the walls meet the base only through the bends), exported by cadrs as a plain solid, like the
+// lesson's "Case" (t0043.9). Thickened again, the holes are recognised as the corners' reliefs:
+// the same flat and volume as the original (`cadrs_core/tests/sheetmetal_legacy.rs`).
 // 01 the import.
 // 02 Sheet metal model → Thicken, Tangent propagation, one pick on the base's outer face: the
 //    base and all four walls taken (across the bends, round the open corners); 2 mm, R3, the
