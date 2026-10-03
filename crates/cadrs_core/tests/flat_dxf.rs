@@ -38,9 +38,16 @@ fn the_e1_fixture_is_our_tray_flat() {
     assert_eq!(stored, text, "fixtures/sheetmetal/flat_pattern_e1.dxf is out of date");
     // Read back: the outline, 9 cut-outs and 6 bend lines.
     let d = read_dxf(&stored).unwrap();
+    use cadrs_drawing::sheet_sketch::Entity;
     let on = |l: &str| d.layers.iter().filter(|x| *x == l).count();
-    assert_eq!(on("OUTLINE"), 1);
-    assert_eq!(on("CUTOUTS"), 9);
+    let kind_on = |l: &str, f: fn(&Entity) -> bool| d.entities.iter().zip(&d.layers).filter(|(e, x)| *x == l && f(e)).count();
+    // The outline as lines and arcs (the end flanges' bend reliefs); the cut-outs: the fan hole
+    // and four mounting holes as circles, three slots (two arcs and two lines each) and the
+    // rectangular cut-out.
+    assert!(on("OUTLINE") > 8);
+    assert_eq!(kind_on("CUTOUTS", |e| matches!(e, Entity::Circle { .. })), 5);
+    assert_eq!(kind_on("CUTOUTS", |e| matches!(e, Entity::Arc { .. })), 6);
+    assert_eq!(kind_on("CUTOUTS", |e| matches!(e, Entity::Line { .. })), 10);
     assert_eq!(on("BEND_UP") + on("BEND_DOWN"), 6);
 }
 
@@ -48,8 +55,8 @@ fn the_e1_fixture_is_our_tray_flat() {
 fn e1_import_closes_seven_sheet_regions_and_thickens() {
     let d = read_dxf(&std::fs::read_to_string(fixture()).unwrap()).unwrap();
     let (geometry, report) = sketch_of(&d, DxfUnits::Millimeter, true);
-    // The outline's and the slots' polyline segments, and the 6 bend lines.
-    assert!(report.lines > 6, "{report:?}");
+    // The outline's and cut-outs' lines and arcs, and the 6 bend lines.
+    assert!(report.lines > 6 && report.arcs >= 6, "{report:?}");
     assert_eq!(report.circles, 5, "{report:?}");
     // Through the command layer into a sketch on Top.
     let mut doc = Document::new("Exercise: Import DXF");
