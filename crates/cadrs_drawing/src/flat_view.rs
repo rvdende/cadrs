@@ -208,7 +208,8 @@ pub struct FlatData {
     pub lines: Vec<(u32, Vec<[P2; 2]>)>,
     /// Where centermarks go (view 2D, face on only): round holes, counterbores and countersinks,
     /// forms.
-    pub centers: Vec<P2>,
+    /// Each with the radius of the largest circle there (0 for a form's centre).
+    pub centers: Vec<(P2, f64)>,
     /// The outline's edges (arcs and circles as chords) in the view's 2D frame (face on only):
     /// what bend notes keep clear of.
     pub outline: Vec<[P2; 2]>,
@@ -573,7 +574,7 @@ pub fn flat_projection(op: uuid::Uuid, input: &FlatInput, frame: &Frame3) -> (Hl
             FlatLoop::Circle { center, radius, key } => {
                 let name = next(FlatEdgeKind::Hole, *key);
                 arc_edge(&mut hlr, &mut edges, Some(&mut data.outline), name, *center, *radius, ring(*center, *radius), true);
-                data.centers.push(to2(*center, 0.0));
+                data.centers.push((to2(*center, 0.0), *radius));
             }
         }
     }
@@ -582,8 +583,9 @@ pub fn flat_projection(op: uuid::Uuid, input: &FlatInput, frame: &Frame3) -> (Hl
         let name = next(FlatEdgeKind::HoleMark, *key);
         arc_edge(&mut hlr, &mut edges, None, name, *center, *radius, ring(*center, *radius), true);
         let c = to2(*center, 0.0);
-        if !data.centers.iter().any(|q| (q[0] - c[0]).hypot(q[1] - c[1]) < 1e-6) {
-            data.centers.push(c);
+        match data.centers.iter_mut().find(|(q, _)| (q[0] - c[0]).hypot(q[1] - c[1]) < 1e-6) {
+            Some((_, r)) => *r = r.max(*radius),
+            None => data.centers.push((c, *radius)),
         }
     }
     for f in &input.forms {
@@ -605,7 +607,7 @@ pub fn flat_projection(op: uuid::Uuid, input: &FlatInput, frame: &Frame3) -> (Hl
                 hlr.edges.push(line_edge(name, to2(a, 0.0), to2(b, 0.0), ProjClass::Sharp));
             }
         }
-        data.centers.push(to2(f.center, 0.0));
+        data.centers.push((to2(f.center, 0.0), 0.0));
     }
     for (s, key) in &input.slits {
         data.outline.push([to2(s[0], 0.0), to2(s[1], 0.0)]);
@@ -876,7 +878,9 @@ fn boxes_overlap(a: &[P2; 4], b: &[P2; 4]) -> bool {
 fn segs_cross(a: P2, b: P2, c: P2, d: P2) -> bool {
     let cr = |o: P2, p: P2, q: P2| (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
     let (d1, d2, d3, d4) = (cr(c, d, a), cr(c, d, b), cr(a, b, c), cr(a, b, d));
-    d1 * d2 < 0.0 && d3 * d4 < 0.0
+    // Properly crossing (not just touching: a note's corner on a line's end is clear).
+    let eps = 1e-9 * (1.0 + (b[0] - a[0]).hypot(b[1] - a[1]) * (d[0] - c[0]).hypot(d[1] - c[1]));
+    d1 * d2 < -eps && d3 * d4 < -eps
 }
 
 /// Whether segment `s` (sheet mm) touches the inside of box `b`.
@@ -907,11 +911,11 @@ fn along_line(on: P2, u: P2, side: f64, w: f64, h: f64) -> (P2, f64, [P2; 4], P2
 
 /// The bend notes `view` shows (none when hidden, or seen edge on).
 ///
-/// A note on its line sits along it, just above it, at its attach point. Notes nobody placed
-/// keep clear of each other, of the outline and of the other bend lines: where the middle of
-/// the line would overlap a note already placed or run over a line (two short bend lines
-/// meeting at a corner), the note slides along its line away from it, or goes to the line's
-/// other side, whichever moves it least.
+/// A note on its line sits along it, just above it, at its attach point; one longer than its
+/// line is set smaller to fit it. Notes nobody placed keep clear of each other, of the outline
+/// and of the other bend lines: the note slides along its line (never past its ends) or goes to
+/// the line's other side, whichever moves it least; where no spot is clear it stays centred on
+/// its line.
 pub fn bend_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<NoteGraphics> {
     let Some(fs) = &view.flat else { return Vec::new() };
     if fs.bend_notes_hidden || !data.face_on {
@@ -939,40 +943,57 @@ pub fn bend_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<Not
                 u = [-u[0], -u[1]];
             }
             let at = view.to_sheet(on);
+            // A note longer than its line is set smaller (down to half size), so it fits the line.
+            let pad = 0.7 * h;
+            let k = if w + pad > 0.95 * l { (0.95 * l / (w + pad)).max(0.5) } else { 1.0 };
+            let (w, h) = (w * k, h * k);
+            // How far the note's middle may go each way and keep the whole note on the line.
+            let (s0, s1) = {
+                let (a, c) = (view.to_sheet(seg[0]), view.to_sheet(seg[1]));
+                let t = |p: P2| (p[0] - at[0]) * u[0] + (p[1] - at[1]) * u[1];
+                let (ta, tc) = (t(a), t(c));
+                let half = w / 2.0 + 0.35 * h;
+                (ta.min(tc) + half, ta.max(tc) - half)
+            };
+            // A note put back on its line stays within the line's ends.
+            let shift = if s0 > s1 { (s0 + s1) / 2.0 } else { 0f64.clamp(s0, s1) };
+            let at = [at[0] + u[0] * shift, at[1] + u[1] * shift];
+            let (s0, s1) = (s0 - shift, s1 - shift);
             let mut best = along_line(at, u, 1.0, w, h);
             if placed.is_none() {
-                // Slide along the line or flip sides: the first spot, its middle still on the
-                // line, that clears the other notes and the lines; else the first that clears
-                // the other notes (sliding as far as past the line's end by half the note).
+                // Slide along the line, never past its ends, or go to its other side: the first
+                // spot (the least move) that clears the notes already placed, the outline and
+                // the other bend lines. With none, the note stays centred above its line, as
+                // Onshape's do.
                 let clear_notes = |bx: &[P2; 4]| !out.iter().any(|n| boxes_overlap(bx, &n.corners));
-                // The outline and the other bends' lines.
                 let others: Vec<[P2; 2]> = data
                     .lines
                     .iter()
                     .filter(|(j, _)| *j != b.joint)
                     .flat_map(|(_, ls)| ls.iter().map(|s| [view.to_sheet(s[0]), view.to_sheet(s[1])]))
                     .collect();
-                let hits = |bx: &[P2; 4]| outline.iter().chain(&others).filter(|s| seg_hits_box(**s, bx)).count();
-                let clear_outline = |bx: &[P2; 4]| hits(bx) == 0;
-                let reach = l / 2.0 + w / 2.0 + h;
+                let clear_lines = |bx: &[P2; 4]| !outline.iter().chain(&others).any(|s| seg_hits_box(*s, bx));
                 let step = h / 2.0;
-                let mut candidates = Vec::new();
-                let mut k = 0.0;
-                while k <= reach {
+                let mut found = None;
+                let mut d = 0.0;
+                'search: while d <= l {
                     for side in [1.0, -1.0] {
                         for sign in [1.0, -1.0] {
-                            if k == 0.0 && sign < 0.0 {
+                            let k = d * sign;
+                            if (d == 0.0 && sign < 0.0) || (d > 0.0 && (k < s0 - 1e-9 || k > s1 + 1e-9)) {
                                 continue;
                             }
-                            let p = [at[0] + u[0] * k * sign, at[1] + u[1] * k * sign];
-                            candidates.push((k <= l / 2.0, along_line(p, u, side, w, h)));
+                            let c = along_line([at[0] + u[0] * k, at[1] + u[1] * k], u, side, w, h);
+                            if clear_notes(&c.2) && clear_lines(&c.2) {
+                                found = Some(c);
+                                break 'search;
+                            }
                         }
                     }
-                    k += step;
+                    d += step;
                 }
-                let on_line = candidates.iter().find(|(on, c)| *on && clear_notes(&c.2) && clear_outline(&c.2));
-                if let Some((_, c)) = on_line.or_else(|| candidates.iter().find(|(_, c)| clear_notes(&c.2))) {
-                    best = *c;
+                if let Some(c) = found {
+                    best = c;
                 }
             }
             let (left, rotation, corners, node) = best;
@@ -1020,19 +1041,28 @@ pub fn note_at(notes: &[NoteGraphics], p: P2, tol: f64) -> Option<u32> {
 }
 
 /// The centermarks of a flat view (SM16.3): a cross at each round hole, counterbore,
-/// countersink and form centre, `style.centermark_size` across, turned with the view (sheet mm
-/// polylines). None seen edge on.
+/// countersink and form centre, `style.centermark_size` across, turned with the view; at a
+/// circle the cross's arms carry on as dashes past its rim (`16-drawings/t0026.7`), as part
+/// views' centermarks do. Sheet mm polylines; none seen edge on.
 pub fn centermarks(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<Vec<P2>> {
     if view.flat.is_none() || !data.face_on {
         return Vec::new();
     }
     let half = style.centermark_size / 2.0;
+    let k = view.scale.factor();
     let (ax, ay) = (crate::view::rotate([1.0, 0.0], view.rotation), crate::view::rotate([0.0, 1.0], view.rotation));
     let mut out = Vec::new();
-    for c in &data.centers {
+    for (c, r) in &data.centers {
         let c = view.to_sheet(*c);
+        let at = |d: P2, t: f64| [c[0] + d[0] * t, c[1] + d[1] * t];
         for d in [ax, ay] {
-            out.push(vec![[c[0] - d[0] * half, c[1] - d[1] * half], [c[0] + d[0] * half, c[1] + d[1] * half]]);
+            out.push(vec![at(d, -half), at(d, half)]);
+            let (from, to) = (half + 1.2, r * k + style.centerline_extension);
+            if *r > 0.0 && to > from + 0.5 {
+                for sgn in [1.0, -1.0] {
+                    out.push(vec![at(d, sgn * from), at(d, sgn * to)]);
+                }
+            }
         }
     }
     out
@@ -1177,7 +1207,9 @@ mod tests {
         assert!(p.attached);
         v.flat.as_mut().unwrap().set_note(p);
         let n = &bend_notes(&style, &v, &data)[0];
-        assert!((n.rotation - 90.0).abs() < 1e-9 && (n.node[1] - 105.0).abs() < 1e-9);
+        // There, as far along it as the note fits within the line's ends (it fills this short
+        // line: its middle).
+        assert!((n.rotation - 90.0).abs() < 1e-9 && n.corners.iter().all(|c| (100.0 - 1e-9..=125.0 + 1e-9).contains(&c[1])), "{:?}", n.corners);
         // Dragged off again, twice: the leader stays on the point it was attached at (y = 105
         // on the sheet), wherever the note goes, until it is reattached.
         for drop in [[170.0, 150.0], [60.0, 80.0]] {
@@ -1203,12 +1235,13 @@ mod tests {
 
     #[test]
     fn notes_at_a_corner_keep_clear_of_each_other() {
-        // A 40 × 40 square base with a bend on each side (an open box's flat, its walls 30 out),
-        // at 1:5: each line is 8 mm on paper, shorter than its note.
-        let base: Vec<[P2; 2]> = vec![[[0.0, 0.0], [40.0, 0.0]], [[40.0, 0.0], [40.0, 40.0]], [[40.0, 40.0], [0.0, 40.0]], [[0.0, 40.0], [0.0, 0.0]]];
+        // An open box's flat: a 200 × 125 base with a bend on each side and 150 walls, at 1:5,
+        // so the side lines (25 mm on paper) are shorter than their notes.
+        let (w, d, hgt) = (200.0, 125.0, 150.0);
+        let base: Vec<[P2; 2]> = vec![[[0.0, 0.0], [w, 0.0]], [[w, 0.0], [w, d]], [[w, d], [0.0, d]], [[0.0, d], [0.0, 0.0]]];
         let bend = |j: u32, s: [P2; 2]| FlatBendInfo { joint: j, name: format!("Bend {j}"), up: false, angle_deg: 90.0, radius: 1.5, center: s, center_visible: vec![s], tangent_visible: Vec::new() };
         let outline = vec![
-            [-30.0, 0.0], [0.0, 0.0], [0.0, -30.0], [40.0, -30.0], [40.0, 0.0], [70.0, 0.0], [70.0, 40.0], [40.0, 40.0], [40.0, 70.0], [0.0, 70.0], [0.0, 40.0], [-30.0, 40.0],
+            [-hgt, 0.0], [0.0, 0.0], [0.0, -hgt], [w, -hgt], [w, 0.0], [w + hgt, 0.0], [w + hgt, d], [w, d], [w, d + hgt], [0.0, d + hgt], [0.0, d], [-hgt, d],
         ];
         let input = FlatInput {
             loops: vec![FlatLoop::Polygon { keys: (0..outline.len() as u64).collect(), points: outline, arcs: Vec::new() }],
@@ -1219,20 +1252,31 @@ mod tests {
         let (_, _, data) = flat_projection(uuid::Uuid::nil(), &input, &NamedView::Top.frame());
         let mut v = view();
         v.scale = Scale::new(1, 5);
-        let notes = bend_notes(&DrawingStyle::default(), &v, &data);
+        let style = DrawingStyle::default();
+        let notes = bend_notes(&style, &v, &data);
         assert_eq!(notes.len(), 4);
+        let outline_sheet: Vec<[P2; 2]> = data.outline.iter().map(|s| [v.to_sheet(s[0]), v.to_sheet(s[1])]).collect();
         for (i, a) in notes.iter().enumerate() {
             for b in &notes[i + 1..] {
                 assert!(!boxes_overlap(&a.corners, &b.corners), "{} and {} overlap", a.bend, b.bend);
             }
-            // Still along its own line, beside it.
+            // Clear of the outline, along its own line, beside it and within its ends.
+            assert!(!outline_sheet.iter().any(|s| seg_hits_box(*s, &a.corners)), "{} crosses the outline", a.bend);
             let s = data.lines_of(a.bend)[0];
             let (p, q) = (v.to_sheet(s[0]), v.to_sheet(s[1]));
-            let u = [(q[0] - p[0]) / seg_len(&[p, q]), (q[1] - p[1]) / seg_len(&[p, q])];
+            let len = seg_len(&[p, q]);
+            let u = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
             let off = ((a.node[0] - p[0]) * u[1] - (a.node[1] - p[1]) * u[0]).abs();
-            assert!((off - 0.9 * DrawingStyle::default().dim_text_height).abs() < 1e-9, "{off}");
+            assert!((off - 0.9 * a.text.height).abs() < 1e-9, "{off}");
             assert!((a.rotation.to_radians().sin() - u[1].abs()).abs() < 1e-9);
+            for c in &a.corners {
+                let t = (c[0] - p[0]) * u[0] + (c[1] - p[1]) * u[1];
+                assert!((-1e-9..=len + 1e-9).contains(&t), "note {} runs past its line: {t} of {len}", a.bend);
+            }
+            // The side lines' notes are set smaller to fit them.
+            assert!(a.text.height <= style.dim_text_height + 1e-12);
         }
+        assert!(notes.iter().any(|n| n.text.height < style.dim_text_height));
     }
 
     #[test]
@@ -1282,8 +1326,11 @@ mod tests {
         assert_eq!(data.centers.len(), 2);
         let v = view();
         let marks = centermarks(&DrawingStyle::default(), &v, &data);
-        assert_eq!(marks.len(), 4);
+        // The form's cross; the hole's cross and its arms out past the Ø9 counterbore's rim.
+        assert_eq!(marks.len(), 8);
         let c = v.to_sheet([15.0, 20.0]);
+        let reach = marks.iter().flat_map(|m| m.iter()).map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).filter(|d| *d < 20.0).fold(0.0, f64::max);
+        assert!(reach > 4.5 * v.scale.factor(), "{reach}");
         assert!(marks.iter().any(|m| (m[0][1] - c[1]).abs() < 1e-9 && (m[0][0] + m[1][0]) / 2.0 - c[0] < 1e-9));
         // The DXF has the round as an ARC and the hole and mark as CIRCLEs.
         let mut d = crate::Drawing::from_template(&crate::template::builtin("ANSI_A_MM.dwt").unwrap(), None);

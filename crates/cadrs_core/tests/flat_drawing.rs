@@ -198,6 +198,12 @@ fn forms_holes_and_counterbores_in_a_flat_view() {
     };
     let hole = HoleFeature { points: vec![HolePoint { sketch: hp, point }], spec, ..HoleFeature::default() };
     h.execute(&mut d, &AddFeature { element: el, feature: FeatureId::new(), base_name: "Hole".into(), kind: FeatureKind::Hole(hole) }).unwrap();
+    // A plain Ø6.6 hole beside it: the same size, no counterbore.
+    let hp2 = sketch(&mut d, &mut h, vec![SketchOp::AddPoint { pos: Vec2::new(90.0, 15.0) }]);
+    let point2 = d.element(el).unwrap().feature(hp2).unwrap().sketch().unwrap().geometry.points.keys().next().unwrap();
+    let plain = HoleSpec { diameter: Length::mm(6.6), end: HoleEnd::ThroughAll, start: HoleStart::Part, ..HoleSpec::default() };
+    let hole2 = HoleFeature { points: vec![HolePoint { sketch: hp2, point: point2 }], spec: plain, ..HoleFeature::default() };
+    h.execute(&mut d, &AddFeature { element: el, feature: FeatureId::new(), base_name: "Hole".into(), kind: FeatureKind::Hole(hole2) }).unwrap();
     let b = rebuild::build(d.element(el).unwrap().features());
     assert!(b.errors.is_empty(), "{:?}", b.errors);
     let ctx = cadrs_core::flat_drawing::context_of(&b.sheet_metal, part.id).unwrap();
@@ -217,14 +223,23 @@ fn forms_holes_and_counterbores_in_a_flat_view() {
             _ => None,
         })
     };
-    let (hr, hc) = circle(FlatEdgeKind::Hole).expect("the hole");
+    let (hr, _) = circle(FlatEdgeKind::Hole).expect("the hole");
     let (mr, mc) = circle(FlatEdgeKind::HoleMark).expect("the counterbore");
     assert!((hr - 3.3).abs() < 1e-6 && (mr - 5.5).abs() < 1e-9, "{hr} {mr}");
-    assert!((hc - mc).norm() < 1e-6);
-    // Centermarks: the two louvers and the hole.
+    // One counterbore, on the counterbored hole (at y = 40), not on the plain one of its size.
+    assert_eq!(g.projection.edges.iter().filter(|e| kind(e) == Some(FlatEdgeKind::HoleMark)).count(), 1);
+    assert_eq!(g.projection.edges.iter().filter(|e| kind(e) == Some(FlatEdgeKind::Hole)).count(), 2);
+    let holes: Vec<_> = g.projection.edges.iter().filter(|e| kind(e) == Some(FlatEdgeKind::Hole)).filter_map(|e| match e.curve {
+        cadrs_kernel::ProjCurve::Arc { center, .. } => Some(center),
+        _ => None,
+    }).collect();
+    assert!(holes.iter().any(|c| (c - mc).norm() < 1e-6));
+    assert!((holes[0] - holes[1]).norm() > 20.0);
+    // Centermarks: the two louvers and the two holes.
     let flat = g.flat.as_ref().unwrap();
-    assert_eq!(flat.centers.len(), 3);
-    assert_eq!(cadrs_drawing::flat_view::centermarks(&dr.style, &v, flat).len(), 6);
+    assert_eq!(flat.centers.len(), 4);
+    // A cross at each; the holes' arms carry on past their rims.
+    assert_eq!(cadrs_drawing::flat_view::centermarks(&dr.style, &v, flat).len(), 16);
     // Every edge resolves (dimensions measure them), the counterbore as a circle.
     for e in &g.projection.edges {
         assert!(g.model_edge(&e.source.unwrap().edge_name.unwrap()).is_some());

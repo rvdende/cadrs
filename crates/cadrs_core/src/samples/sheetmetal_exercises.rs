@@ -17,8 +17,8 @@
 //!   Ø3.3); Carbon Steel.
 //! - **E3 "Drawings"** ([`build_e3`]): the "Sheet Metal Box", the exercise's sloped enclosure
 //!   ([`E3`]): a side profile (200 high at the back, 125 at the front, a 75 deep shelf, 250 deep)
-//!   extruded 200 and converted (1.5 mm, R1.5) with its slope left open, then flanged along both
-//!   sloping edges: seven bends, two of them oblique in the flat.
+//!   extruded 200 and converted (1.5 mm, R1.5, material inside) with its slope left open, then
+//!   flanged (35 mm) along both sloping edges: seven bends, two of them oblique in the flat.
 //! - **E4 "Sheet metal rework"** ([`build_e4`]): the "Lower Enclosure": a U-channel (Front-plane
 //!   chain, 70 wide, 60 high walls, 150 long, 1.5 mm, R1.5) with an obround slot cut through both
 //!   side walls (a perpendicular cut, in the flat). [`rework_e4`] does the exercise: Finish sheet
@@ -394,7 +394,7 @@ pub const E3_PART: PartId = PartId::new(E3_MODEL, 0);
 /// The enclosure's sizes (mm): the exercise's "Enclosure for widget" (`ex3-drawings/step-06`:
 /// 200 wide, 200 high at the back, 125 at the front, a 75 deep shelf at the top of the back, the
 /// top sloping down to the front at 23.2°; 250 deep, so the flat's 642.25 long strip in
-/// `goal.png` is 125 + 250 + 200 + 75 less three bend deductions), and its slope flanges.
+/// `goal.png` is 125 + 250 + 200 + 75 less three bend deductions), and its slope flanges (35).
 pub struct E3Size {
     pub width: f64,
     pub depth: f64,
@@ -404,13 +404,14 @@ pub struct E3Size {
     pub flange: f64,
 }
 
-pub const E3: E3Size = E3Size { width: 200.0, depth: 250.0, back: 200.0, front: 125.0, shelf: 75.0, flange: 25.0 };
+pub const E3: E3Size = E3Size { width: 200.0, depth: 250.0, back: 200.0, front: 125.0, shelf: 75.0, flange: 35.0 };
 
 /// The Sheet Metal Box in Part Studio `el` (see the module docs): the side profile on Right
-/// (front at y = 0), extruded 200 along X; converted (1.5 mm, R1.5) with the slope excluded,
-/// the front, back and both sides bent off the bottom and the shelf off the back; then a 25 mm
-/// Flange (Hold line) on each side wall's sloping edge. Seven bends, two of them
-/// oblique in the flat (`ex3-drawings/goal.png`).
+/// (front at y = 0), extruded 200 along X; converted (1.5 mm, R1.5, the material inside) with
+/// the slope excluded, the front, back and both sides bent off the bottom and the shelf off the
+/// back; then a 35 mm Flange (Hold line, folded in; `goal.png`'s top view) on each side wall's
+/// sloping edge.
+/// Seven bends, two of them oblique in the flat (`ex3-drawings/goal.png`).
 pub fn build_e3(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     let E3Size { width: w, depth: d, back: hb, front: hf, shelf: sh, flange } = E3;
     let profile = [(0.0, 0.0), (d, 0.0), (d, hb), (d - sh, hb), (0.0, hf)];
@@ -432,7 +433,11 @@ pub fn build_e3(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     let mut p = SheetMetalModelFeature::default_params();
     p.thickness = 1.5;
     p.bend_radius = 1.5;
-    let x = SheetMetalModelFeature { operation: SheetMetalOp::Convert, parts: vec![block.id], exclude: vec![slope], bends, params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
+    // Bends read DOWN seen from the flat's top, as `goal.png`'s.
+    p.flip_direction_up = true;
+    // The material inside the block (its faces are the sheet's outside), so the box's sizes are
+    // the exercise's outer ones.
+    let x = SheetMetalModelFeature { operation: SheetMetalOp::Convert, parts: vec![block.id], exclude: vec![slope], bends, params: p, exprs: SheetMetalExprs::of(&p), flip_thickness: true, ..Default::default() };
     add(s, el, E3_MODEL, "Sheet metal model", FeatureKind::SheetMetalModel(x))?;
     // Flange 1 on both side walls' sloping edges.
     let part = sm_part(&built(s, el), E3_MODEL)?;
@@ -440,8 +445,17 @@ pub fn build_e3(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
         .iter()
         .map(|x| edge_near(&part.solid, part.id, [*x, slope_mid[0], slope_mid[1]]).map(EdgeOrFace::Edge).ok_or_else(|| missing("sloping edge")))
         .collect::<Result<Vec<_>, _>>()?;
-    // Bend from the edge (Hold line): the sheet's corner stays where the block's was.
-    let fl = FlangeFeature { edges, distance: flange, distance_expr: format!("{flange} mm"), alignment: cadrs_sheetmetal::sharp_edit::FlangeAlignment::HoldLine, ..Default::default() };
+    // Folded in over the opening, the same way as the walls (all seven bends DOWN, `goal.png`).
+    // Bent from the edge (Hold line): an Inner flange folded inward runs into the front wall
+    // and the shelf at its ends here (a Flange bug on sloping edges, being fixed in P3I.4).
+    let fl = FlangeFeature {
+        edges,
+        distance: flange,
+        distance_expr: format!("{flange} mm"),
+        flip: true,
+        alignment: cadrs_sheetmetal::sharp_edit::FlangeAlignment::HoldLine,
+        ..Default::default()
+    };
     add(s, el, E3_FLANGE, "Flange", FeatureKind::SheetMetal(SheetMetalFeature::Flange(fl)))?;
     s.run(&RenamePart { element: el, part: E3_PART, name: "Sheet Metal Box".into() })?;
     Ok(())

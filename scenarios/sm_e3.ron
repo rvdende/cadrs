@@ -1,19 +1,20 @@
 // P3I.8 / X7, exercise E3 "Drawings" end to end (`ex3-drawings/goal.png`, step-02–12) on its
 // stand-in document (`fixtures/sheetmetal/sm_e3_standin.cadrs`: the Sheet Metal Box, the
-// exercise's sloped enclosure: 200 wide, 250 deep, 200 high at the back and 125 at the front, a
-// 75 deep shelf, the slope left open and flanged along both sloping edges; 1.5 mm, R1.5, seven
-// bends, two oblique in the flat).
+// exercise's sloped enclosure, material inside: 200 wide, 250 deep, 200 high at the back and 125
+// at the front, a 75 deep shelf, the slope left open and a 35 mm flange folded in along each
+// sloping edge; 1.5 mm, R1.5, seven bends, all DOWN, two oblique in the flat).
 // 01 the box; 01b the Sheet metal table and flat view, right-click on the flat: New sketch,
 // Export DXF/DWG of flat pattern, Create drawing of flat pattern (SM14.1, SM15.1, SM16.1);
-// 01c Export DXF/DWG of flat pattern (step 2–3); 02 Parts list → Create drawing; 03 ANSI_A MM,
-// Four views; 04–05 the folded views dimensioned on their outer edges (203 wide, 203 high, 253
-// deep: the faces are the sheet's inside); 06–08 Insert sheet, Insert view → Flat patterns
-// ("Flat pattern of Sheet Metal Box"), placed with its bend notes along the lines (the oblique
-// flange lines' notes turned with them); 09–10 bend notes dragged off (leaders stay on their
-// attach points) and one dropped back; 11 the flat dimensioned: its length, the shelf, the
-// width of the strip and the 113.2° between a side's front edge and its flange (`goal.png`);
-// 12 Hide bend notes; 13 undo. The measured value: the flat is 651.249 × 647.556
-// (`cadrs_core/tests/sheetmetal_exercises.rs`, closed forms).
+// 01c Export DXF/DWG of flat pattern (step 2–3); 02 Parts list → Create drawing (the tab
+// "Sheet Metal Box Drawing 1"); 03 ANSI_A MM, Four views; 04–05 the folded views dimensioned on
+// their outer edges (200 wide, 200 high, 250 deep, as `step-06`); 06–08 Insert sheet, Insert
+// view → Flat patterns ("Flat pattern of Sheet Metal Box"), placed with its bend notes along the
+// lines (the oblique flange lines' notes turned with them; tangent edges hidden: clean chain
+// lines); 09–10 bend notes dragged off (leaders stay on their attach points) and one dropped
+// back; 11 the flat dimensioned clear of the notes: its length (642.25, as `goal.png`), the
+// shelf, the strip's width and the 113.2° between a side's edge and its flange; 12 Hide bend
+// notes; 13 undo. The flat is 642.249 × 659.939 (`cadrs_core/tests/sheetmetal_exercises.rs`,
+// closed forms).
 Scenario(
     start: Some("document"),
     steps: [
@@ -61,27 +62,27 @@ Scenario(
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("04-four-views"),
-        // Dimension the folded views on their outer edges: the front's width and height (the
-        // height clear of the view), the side's depth.
+        // Dimension the folded views on their outer edges (clicked just outside them): the
+        // front's width below it and its height beside it, the side's depth below it.
         Key("D"),
         Wait(3),
-        ClickWorld(100.5, 108),
+        ClickWorld(81.85, 85),
         Wait(3),
-        ClickWorld(126.78, 108),
+        ClickWorld(122.05, 85),
         Wait(3),
-        ClickWorld(113.6, 124),
+        ClickWorld(102, 61),
         Wait(5),
-        ClickWorld(113.6, 89.53),
+        ClickWorld(102, 109.6),
         Wait(3),
-        ClickWorld(113.6, 115.36),
+        ClickWorld(102, 69.4),
         Wait(3),
-        ClickWorld(84, 102.4),
+        ClickWorld(62, 89.5),
         Wait(5),
-        ClickWorld(142.28, 95),
+        ClickWorld(140.6, 80),
         Wait(3),
-        ClickWorld(174.36, 100),
+        ClickWorld(190.8, 80),
         Wait(3),
-        ClickWorld(158.3, 80),
+        ClickWorld(165.7, 61),
         Wait(5),
         Key("Escape"),
         Wait(5),
@@ -108,12 +109,12 @@ Scenario(
         Wait(5),
         Click(ui("insert-view-scale-option-3")),
         Wait(5),
-        MoveWorld(139, 135),
+        MoveWorld(139, 128),
         Wait(40),
-        MoveWorld(140, 135),
+        MoveWorld(140, 128),
         Wait(10),
         Screenshot("07-flat-following-the-cursor"),
-        ClickWorld(140, 135),
+        ClickWorld(140, 128),
         Wait(30),
         Key("Escape"),
         Wait(5),
@@ -124,60 +125,62 @@ Scenario(
         Screenshot("08-flat-placed-bend-notes"),
         // SM16.4: drag bend notes off their lines (leaders to where they were attached): both
         // flanges' and the front bend's; then the front bend's back onto its line.
-        DragWorld(115.8, 190.7, 78, 200),
+        DragWorld(163.46, 182.4, 190, 192),
         Wait(10),
-        DragWorld(118.4, 84.1, 80, 72),
+        DragWorld(162.2, 77.7, 192, 66),
         Wait(10),
-        DragWorld(96.6, 135.5, 55, 150),
+        DragWorld(176.8, 127.9, 225, 143),
         Wait(10),
         ClickWorld(240, 190),
         Wait(5),
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("09-bend-notes-dragged"),
-        DragWorld(55, 150, 98.6, 128),
+        DragWorld(225, 143, 179.0, 133),
         Wait(10),
         ClickWorld(240, 190),
         Wait(5),
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("10-bend-note-reattached"),
-        // SM16.6: dimension the flat: its length, the shelf (a bend line to the end), the
-        // strip's width and the angle between a side's front edge and its flange's edge.
+        // SM16.6: dimension the flat, clear of its notes: its length (below it), the shelf (a
+        // bend line to the end, above it), the strip's width (beside it) and the angle between
+        // a side's edge and its flange's edge.
         Key("D"),
         Wait(3),
-        ClickWorld(74.93, 135),
+        ClickWorld(75.68, 128),
         Wait(3),
-        ClickWorld(205.08, 135),
+        ClickWorld(204.32, 128),
         Wait(3),
-        ClickWorld(140, 64),
+        ClickWorld(92, 60.2),
         Wait(5),
-        ClickWorld(190.08, 140),
+        ClickWorld(90.64, 146.9),
         Wait(3),
-        ClickWorld(205.08, 140),
+        ClickWorld(75.68, 143),
         Wait(3),
-        ClickWorld(197.6, 162),
+        ClickWorld(83, 156),
         Wait(5),
-        ClickWorld(180, 115.02),
+        ClickWorld(81, 147.8),
         Wait(3),
-        ClickWorld(180, 154.98),
+        ClickWorld(81, 108.2),
         Wait(3),
-        ClickWorld(214, 135),
+        ClickWorld(64, 128),
         Wait(5),
         Key("Escape"),
         Wait(3),
-        // The Angular dimension: a side's front edge and its flange's outer edge, 113.2°.
+        // The Angular dimension: the side's edge and its flange's outer edge, 113.2°, left of
+        // the flange and its note.
         Click(ui_at("drawing-dimension", 0.85, 0.5)),
         WaitFor("drawing-dim-angular"),
         Click(ui("drawing-dim-angular")),
         Wait(5),
-        ClickWorld(100.0, 168),
+        ClickWorld(130.13, 168),
         Wait(3),
-        ClickWorld(115.45, 192.26),
+        ClickWorld(163.8, 186.0),
         Wait(3),
-        MoveWorld(88, 189),
+        MoveWorld(125, 195),
         Wait(3),
-        ClickWorld(88, 189),
+        ClickWorld(125, 195),
         Wait(5),
         Key("Escape"),
         Wait(5),
@@ -185,7 +188,7 @@ Scenario(
         Wait(5),
         Screenshot("11-flat-dimensioned"),
         // SM16.4: right-click a bend note → Hide bend notes.
-        RightClick(world(146.6, 135.5)),
+        RightClick(world(154.5, 151.0)),
         Wait(6),
         Screenshot("12a-bend-note-menu"),
         Click(ui("flat-menu-bend-notes")),

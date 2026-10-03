@@ -147,7 +147,7 @@ Scenario(
         Wait(5),
         Screenshot("11-flat-dimensioned"),
         // SM16.4: right-click a bend note → Hide bend notes.
-        RightClick(world(130, 119.3)),
+        RightClick(world(135, 119.6)),
         Wait(6),
         Screenshot("12a-bend-note-menu"),
         Click(ui("flat-menu-bend-notes")),

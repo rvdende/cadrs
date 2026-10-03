@@ -145,6 +145,8 @@ fn e3_the_sheet_metal_box_and_its_flat() {
     // off the back, a flange on each sloping edge.
     assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 7);
     assert_eq!(fp.bends.len(), 7);
+    // All seven fold the same way: DOWN seen from the flat's top (`goal.png`).
+    assert!(fp.bends.iter().all(|b| b.up == fp.bends[0].up), "{:?}", fp.bends.iter().map(|b| b.up).collect::<Vec<_>>());
     let p = &ctx.model.params;
     let (t, r, k) = (p.thickness, p.bend_radius, p.k_factor);
     let ba = |deg: f64| deg.to_radians() * (r + k * t);
@@ -152,17 +154,21 @@ fn e3_the_sheet_metal_box_and_its_flat() {
     let (lo, hi) = fp.bounds().unwrap();
     let (along, across) = (hi.x - lo.x, hi.y - lo.y);
     println!("E3 flat: {along:.4} × {across:.4}");
-    // The faces are the sheet's inside (the material goes outside the block), so a wall's flat
-    // runs from its bend's tangent line, R in from the inside corner. Along the strip: front,
-    // bottom, back, shelf and three 90° bend allowances π/2 · (R + K·T).
-    let strip = (hf - r) + (d - 2.0 * r) + (hb - 2.0 * r) + (sh - r) + 3.0 * ba(90.0);
+    // The faces are the sheet's outside (the material is inside the block, as the exercise's
+    // part: 200 wide, 200 and 125 high, a 75 shelf), so a wall's flat runs from its bend's
+    // tangent line, R + T in from the outside corner. Along the strip: front, bottom, back and
+    // shelf less three bend deductions 2 (R + T) − π/2 (R + K·T): 650 − 3 · 2.5835 = 642.249,
+    // `goal.png`'s 642.25.
+    let bd = 2.0 * (r + t) - ba(90.0);
+    let strip = hf + d + hb + sh - 3.0 * bd;
+    assert!((strip - 642.2494).abs() < 1e-3);
     assert!((along - strip).abs() < 1e-3, "{along} vs {strip}");
     // Across: the bottom, a side's bend and its back corner each way, then the flange's far
-    // corner beyond it. A Hold line flange bends from the edge: its flat is its bend allowance
-    // and its length less R + T (its outer virtual sharp), square to the sloping edge, which
-    // leans at θ = atan(75 / 175) = 23.199° (the 23.2° of `ex3-drawings/step-06`).
+    // corner beyond it, square to the sloping edge, which leans at θ = atan(75 / 175) =
+    // 23.199° (`ex3-drawings/step-06`'s 23.2°). The flange bends from the edge (Hold line):
+    // its bend allowance and its flat, F − (R + T).
     let theta = (hb - hf).atan2(d - sh);
-    let across_want = 2.0 * ((w / 2.0 - r) + ba(90.0) + (hb - r) + theta.cos() * (ba(90.0) + flange - r - t));
+    let across_want = 2.0 * ((w / 2.0 - (r + t)) + ba(90.0) + (hb - (r + t)) + theta.cos() * (ba(90.0) + flange - (r + t)));
     assert!((across - across_want).abs() < 1e-3, "{across} vs {across_want}");
     // The two flanges' bend lines are oblique: at θ to the sides' bend lines (the angle in the
     // flat between a side's front edge and its flange's edge is 90° + θ = 113.2°, as `goal.png`).
@@ -207,4 +213,6 @@ fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     println!("E4 volume {v0:.3} → {v1:.3} (rims ≈ {rims:.3})");
     assert!(v1 > v0 + 0.9 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, rims {rims}");
 }
+
+
 

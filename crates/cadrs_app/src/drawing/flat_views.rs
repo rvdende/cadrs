@@ -118,14 +118,28 @@ pub fn flat_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewStat
             Node { margin: UiRect::all(Val::Px(10.0)), ..default() },
         ));
     }
+    // Grouped under their Part Studio (`ex3-drawings/step-08`).
+    let mut last: Option<ElementId> = None;
     for (i, (e, p, name)) in shown.into_iter().enumerate() {
+        if last != Some(*e) {
+            last = Some(*e);
+            let studio = st.studios.iter().find(|s| s.id == *e).map(|s| s.name.clone()).unwrap_or_default();
+            tree.spawn(
+                TreeItem::new(format!("browser-flat-studio-{}", i + 1), studio)
+                    .icon("part-studio", 16.0)
+                    .icon_color(t.muted_foreground)
+                    .left(4.0)
+                    .height(28.0)
+                    .build(t),
+            );
+        }
         let r = ObjectRef { element: e.0, part: Some((p.feature.0, p.index)) };
         tree.spawn((
             TreeItem::new(format!("browser-flat-{}", i + 1), name.clone())
                 .icon("flat-pattern", 20.0)
                 .icon_color(t.tool_foreground)
                 .selected(st.flat && st.reference == Some(r))
-                .left(10.0)
+                .left(24.0)
                 .height(32.0)
                 .build(t),
             Tooltip::new(name.clone()),

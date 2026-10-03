@@ -16,7 +16,8 @@
 //!
 //! Besides the outline, cut-outs, slits and bends, the view shows (SM16.3) the forms' outlines
 //! and centermarks (`FlatPart::forms`, as the Part Studio's flat view), the outer diameters of
-//! counterbored and countersunk holes ([`SheetMetalContext::hole_marks`]) and a centermark on
+//! counterbored and countersunk holes ([`SheetMetalContext::hole_marks`], at the feature's own
+//! cut-outs) and a centermark on
 //! every round hole; runs of outline edges on one circle (corner break rounds, round reliefs)
 //! are true arcs.
 
@@ -80,6 +81,13 @@ fn edge_key(part: &FlatPart, s: [P2; 2], fallback: u64) -> u64 {
     key_of(&[0xdead, fallback])
 }
 
+/// A point in wall `w`'s own 2D on the flat of `part` (as forms are placed).
+fn hole_on_flat(ctx: &SheetMetalContext, part: &FlatPart, w: cadrs_sheetmetal::WallId, q: cadrs_sheetmetal::poly::P2) -> Option<P2> {
+    let place = part.placement(w)?;
+    let wall = ctx.model.wall(w)?;
+    Some(p2(&place.apply(wall.flat_local(&ctx.model.params, q))))
+}
+
 /// The flat view input of `part` in sheet metal model `ctx`.
 pub fn flat_input(ctx: &SheetMetalContext, part: PartId) -> Option<FlatInput> {
     let walls = &ctx.parts.iter().find(|(p, _)| *p == part)?.1;
@@ -97,8 +105,13 @@ pub fn flat_input(ctx: &SheetMetalContext, part: PartId) -> Option<FlatInput> {
             if let Some((center, radius)) = circle_of(&raw) {
                 let key = edge_key(flat, [raw[0], raw[1]], li << 16);
                 input.loops.push(FlatLoop::Circle { center, radius, key });
-                // A counterbored or countersunk hole: its outer diameter too.
-                if let Some(m) = ctx.hole_marks.iter().find(|m| (m.radius - radius).abs() <= 1e-3 * m.radius.max(1.0)) {
+                // A counterbored or countersunk hole: its outer diameter too (the Hole feature's
+                // own cut-out: its centre where the feature's hole goes through the wall).
+                let mine = |m: &&crate::sheetmetal::HoleMark| {
+                    (m.radius - radius).abs() <= 1e-3 * m.radius.max(1.0)
+                        && m.at.iter().filter_map(|(w, q)| hole_on_flat(ctx, flat, *w, *q)).any(|c| (c[0] - center[0]).hypot(c[1] - center[1]) <= 1e-3 * radius.max(1.0))
+                };
+                if let Some(m) = ctx.hole_marks.iter().find(mine) {
                     input.hole_marks.push((center, m.outer, key_of(&[key, 0xC0])));
                 }
                 continue;

@@ -649,6 +649,24 @@ impl Rebuilder {
             if walls.is_empty() {
                 continue;
             }
+            // Where each hole's axis goes through a wall in the cut (the wall's own 2D).
+            let at: Vec<(cadrs_sheetmetal::WallId, P2)> = tools
+                .iter()
+                .flat_map(|t| {
+                    let o = t.region.origin;
+                    ctx.model.walls.iter().filter(|w| walls.contains(&w.id)).filter_map(move |w| {
+                        let Surface::Planar { origin, .. } = w.surface else { return None };
+                        let n = w.surface.normal()?;
+                        let along = t.dir.dot(&n);
+                        if along.abs() < 1e-6 {
+                            return None;
+                        }
+                        let hit = o + t.dir * ((origin - o).dot(&n) / along);
+                        let q = w.surface.local(hit);
+                        w.outline.contains(q).then_some((w.id, q))
+                    })
+                })
+                .collect();
             let mut model = ctx.model.clone();
             match model_edit::cut_walls(&mut model, &tools, Some(&walls)) {
                 Ok(c) if c.is_empty() => continue,
@@ -660,7 +678,7 @@ impl Rebuilder {
             let r = self.edit_sheet_metal(id, name, &current, ci, |ctx| {
                 ctx.def.as_mut().expect("checked").push(name, edit);
                 if let Some(outer) = outer {
-                    ctx.hole_marks.push(crate::sheetmetal::HoleMark { feature: id, radius, outer });
+                    ctx.hole_marks.push(crate::sheetmetal::HoleMark { feature: id, radius, outer, at });
                 }
                 Ok(None)
             });
