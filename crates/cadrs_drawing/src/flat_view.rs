@@ -909,13 +909,90 @@ fn along_line(on: P2, u: P2, side: f64, w: f64, h: f64) -> (P2, f64, [P2; 4], P2
     (left, rotation, [corner(-hw, -hh), corner(hw, -hh), corner(hw, hh), corner(-hw, hh)], mid)
 }
 
+/// A note along its line: its text's left end, its turn (degrees), its box and its node.
+type NotePlace = (P2, f64, [P2; 4], P2);
+
+/// A bend line's reading direction on the sheet (left to right, or bottom to top) and its two
+/// ends' parameters along it from `at`.
+fn line_frame(view: &View, seg: [P2; 2], at: P2) -> (P2, f64, f64) {
+    let (a, c) = (view.to_sheet(seg[0]), view.to_sheet(seg[1]));
+    let mut u = [c[0] - a[0], c[1] - a[1]];
+    let l = u[0].hypot(u[1]).max(1e-12);
+    u = [u[0] / l, u[1] / l];
+    if u[0] < -1e-9 || (u[0].abs() <= 1e-9 && u[1] < 0.0) {
+        u = [-u[0], -u[1]];
+    }
+    let t = |p: P2| (p[0] - at[0]) * u[0] + (p[1] - at[1]) * u[1];
+    let (ta, tc) = (t(a), t(c));
+    (u, ta.min(tc), ta.max(tc))
+}
+
+/// How far along its line (from `at`) a note `w` wide may sit and keep within the line's ends:
+/// `(lo, hi)`; a note longer than its line can only sit at the line's middle.
+fn note_range(t0: f64, t1: f64, w: f64, h: f64) -> (f64, f64) {
+    let half = w / 2.0 + 0.35 * h;
+    let (lo, hi) = (t0 + half, t1 - half);
+    if lo > hi {
+        let m = (t0 + t1) / 2.0;
+        (m, m)
+    } else {
+        (lo, hi)
+    }
+}
+
+/// Where the notes nobody placed sit (`(bend, along_line(…))`): each above its line (its
+/// reading side, as Onshape's), at the middle of its line's longest piece, slid along the line
+/// (never past its ends) only as far as it takes to clear the notes before it, the outline and
+/// the other bend lines; where nothing is clear, at the middle. The layout depends on the flat
+/// alone, not on where other notes were dragged, so moving one note never moves another.
+fn auto_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<(u32, NotePlace)> {
+    let h = style.dim_text_height;
+    let outline: Vec<[P2; 2]> = data.outline.iter().map(|s| [view.to_sheet(s[0]), view.to_sheet(s[1])]).collect();
+    let mut out: Vec<(u32, NotePlace)> = Vec::new();
+    for b in &data.bends {
+        let Some(place) = default_place(data, b.joint) else { continue };
+        let Some((on, seg)) = attach_point(data, &place) else { continue };
+        let w = text_width(&bend_note_text(style, b, data.shown_up(b))) * h;
+        let at = view.to_sheet(on);
+        let (u, t0, t1) = line_frame(view, seg, at);
+        let (lo, hi) = note_range(t0, t1, w, h);
+        let others: Vec<[P2; 2]> = data
+            .lines
+            .iter()
+            .filter(|(j, _)| *j != b.joint)
+            .flat_map(|(_, ls)| ls.iter().map(|s| [view.to_sheet(s[0]), view.to_sheet(s[1])]))
+            .collect();
+        let clear = |bx: &[P2; 4]| !out.iter().any(|(_, n)| boxes_overlap(bx, &n.2)) && !outline.iter().chain(&others).any(|s| seg_hits_box(*s, bx));
+        let place_at = |k: f64| along_line([at[0] + u[0] * k, at[1] + u[1] * k], u, 1.0, w, h);
+        let mid = (lo + hi) / 2.0;
+        let mut best = place_at(mid);
+        if !clear(&best.2) {
+            let step = h / 2.0;
+            let mut d = step;
+            'search: while d <= hi - lo + step {
+                for k in [mid - d, mid + d] {
+                    if k < lo - 1e-9 || k > hi + 1e-9 {
+                        continue;
+                    }
+                    let c = place_at(k);
+                    if clear(&c.2) {
+                        best = c;
+                        break 'search;
+                    }
+                }
+                d += step;
+            }
+        }
+        out.push((b.joint, best));
+    }
+    out
+}
+
 /// The bend notes `view` shows (none when hidden, or seen edge on).
 ///
-/// A note on its line sits along it, just above it, at its attach point; one longer than its
-/// line is set smaller to fit it. Notes nobody placed keep clear of each other, of the outline
-/// and of the other bend lines: the note slides along its line (never past its ends) or goes to
-/// the line's other side, whichever moves it least; where no spot is clear it stays centred on
-/// its line.
+/// A note on its line sits along it, just above it, in the drawing's text height (one longer
+/// than its line overhangs it, centred). Notes nobody placed are laid out by [`auto_notes`]; a
+/// note put back on its line sits where it was dropped along it, within the line's ends.
 pub fn bend_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<NoteGraphics> {
     let Some(fs) = &view.flat else { return Vec::new() };
     if fs.bend_notes_hidden || !data.face_on {
@@ -923,80 +1000,25 @@ pub fn bend_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<Not
     }
     let h = style.dim_text_height;
     let arrow = style.dim_arrow_length;
-    let outline: Vec<[P2; 2]> = data.outline.iter().map(|s| [view.to_sheet(s[0]), view.to_sheet(s[1])]).collect();
-    // Notes placed by the user first (they stay where they were put), then the others.
-    let mut order: Vec<&FlatBendInfo> = data.bends.iter().collect();
-    order.sort_by_key(|b| fs.note(b.joint).is_none());
+    let auto = auto_notes(style, view, data);
     let mut out: Vec<NoteGraphics> = Vec::new();
-    for b in order {
+    for b in &data.bends {
         let placed = fs.note(b.joint).copied();
-        let Some(place) = placed.or_else(|| default_place(data, b.joint)) else { continue };
-        let Some((on, seg)) = attach_point(data, &place) else { continue };
         let text = bend_note_text(style, b, data.shown_up(b));
         let w = text_width(&text) * h;
+        let Some(place) = placed else {
+            if let Some((_, (left, rotation, corners, node))) = auto.iter().find(|(j, _)| *j == b.joint) {
+                out.push(NoteGraphics { bend: b.joint, text: PlacedText { pos: *left, height: h, text }, rotation: *rotation, strokes: Vec::new(), fills: Vec::new(), corners: *corners, node: *node });
+            }
+            continue;
+        };
+        let Some((on, seg)) = attach_point(data, &place) else { continue };
         if place.attached {
-            let (a, c) = (view.to_sheet(seg[0]), view.to_sheet(seg[1]));
-            let mut u = [c[0] - a[0], c[1] - a[1]];
-            let l = u[0].hypot(u[1]).max(1e-12);
-            u = [u[0] / l, u[1] / l];
-            if u[0] < -1e-9 || (u[0].abs() <= 1e-9 && u[1] < 0.0) {
-                u = [-u[0], -u[1]];
-            }
             let at = view.to_sheet(on);
-            // A note longer than its line is set smaller (down to half size), so it fits the line.
-            let pad = 0.7 * h;
-            let k = if w + pad > 0.95 * l { (0.95 * l / (w + pad)).max(0.5) } else { 1.0 };
-            let (w, h) = (w * k, h * k);
-            // How far the note's middle may go each way and keep the whole note on the line.
-            let (s0, s1) = {
-                let (a, c) = (view.to_sheet(seg[0]), view.to_sheet(seg[1]));
-                let t = |p: P2| (p[0] - at[0]) * u[0] + (p[1] - at[1]) * u[1];
-                let (ta, tc) = (t(a), t(c));
-                let half = w / 2.0 + 0.35 * h;
-                (ta.min(tc) + half, ta.max(tc) - half)
-            };
-            // A note put back on its line stays within the line's ends.
-            let shift = if s0 > s1 { (s0 + s1) / 2.0 } else { 0f64.clamp(s0, s1) };
-            let at = [at[0] + u[0] * shift, at[1] + u[1] * shift];
-            let (s0, s1) = (s0 - shift, s1 - shift);
-            let mut best = along_line(at, u, 1.0, w, h);
-            if placed.is_none() {
-                // Slide along the line, never past its ends, or go to its other side: the first
-                // spot (the least move) that clears the notes already placed, the outline and
-                // the other bend lines. With none, the note stays centred above its line, as
-                // Onshape's do.
-                let clear_notes = |bx: &[P2; 4]| !out.iter().any(|n| boxes_overlap(bx, &n.corners));
-                let others: Vec<[P2; 2]> = data
-                    .lines
-                    .iter()
-                    .filter(|(j, _)| *j != b.joint)
-                    .flat_map(|(_, ls)| ls.iter().map(|s| [view.to_sheet(s[0]), view.to_sheet(s[1])]))
-                    .collect();
-                let clear_lines = |bx: &[P2; 4]| !outline.iter().chain(&others).any(|s| seg_hits_box(*s, bx));
-                let step = h / 2.0;
-                let mut found = None;
-                let mut d = 0.0;
-                'search: while d <= l {
-                    for side in [1.0, -1.0] {
-                        for sign in [1.0, -1.0] {
-                            let k = d * sign;
-                            if (d == 0.0 && sign < 0.0) || (d > 0.0 && (k < s0 - 1e-9 || k > s1 + 1e-9)) {
-                                continue;
-                            }
-                            let c = along_line([at[0] + u[0] * k, at[1] + u[1] * k], u, side, w, h);
-                            if clear_notes(&c.2) && clear_lines(&c.2) {
-                                found = Some(c);
-                                break 'search;
-                            }
-                        }
-                    }
-                    d += step;
-                }
-                if let Some(c) = found {
-                    best = c;
-                }
-            }
-            let (left, rotation, corners, node) = best;
+            let (u, t0, t1) = line_frame(view, seg, at);
+            let (lo, hi) = note_range(t0, t1, w, h);
+            let k = 0f64.clamp(lo, hi);
+            let (left, rotation, corners, node) = along_line([at[0] + u[0] * k, at[1] + u[1] * k], u, 1.0, w, h);
             out.push(NoteGraphics { bend: b.joint, text: PlacedText { pos: left, height: h, text }, rotation, strokes: Vec::new(), fills: Vec::new(), corners, node });
         } else {
             // Off the line: level text with a landing and a leader to its attach point.
@@ -1025,8 +1047,6 @@ pub fn bend_notes(style: &DrawingStyle, view: &View, data: &FlatData) -> Vec<Not
             });
         }
     }
-    // In the bends' order.
-    out.sort_by_key(|n| data.bends.iter().position(|b| b.joint == n.bend));
     out
 }
 
@@ -1209,7 +1229,7 @@ mod tests {
         let n = &bend_notes(&style, &v, &data)[0];
         // There, as far along it as the note fits within the line's ends (it fills this short
         // line: its middle).
-        assert!((n.rotation - 90.0).abs() < 1e-9 && n.corners.iter().all(|c| (100.0 - 1e-9..=125.0 + 1e-9).contains(&c[1])), "{:?}", n.corners);
+        assert!((n.rotation - 90.0).abs() < 1e-9 && (100.0..=125.0).contains(&n.node[1]), "{:?}", n.node);
         // Dragged off again, twice: the leader stays on the point it was attached at (y = 105
         // on the sheet), wherever the note goes, until it is reattached.
         for drop in [[170.0, 150.0], [60.0, 80.0]] {
@@ -1234,9 +1254,8 @@ mod tests {
     }
 
     #[test]
-    fn notes_at_a_corner_keep_clear_of_each_other() {
-        // An open box's flat: a 200 × 125 base with a bend on each side and 150 walls, at 1:5,
-        // so the side lines (25 mm on paper) are shorter than their notes.
+    fn notes_keep_their_side_and_size_and_dragging_one_moves_no_other() {
+        // An open box's flat: a 200 × 125 base with a bend on each side and 150 walls.
         let (w, d, hgt) = (200.0, 125.0, 150.0);
         let base: Vec<[P2; 2]> = vec![[[0.0, 0.0], [w, 0.0]], [[w, 0.0], [w, d]], [[w, d], [0.0, d]], [[0.0, d], [0.0, 0.0]]];
         let bend = |j: u32, s: [P2; 2]| FlatBendInfo { joint: j, name: format!("Bend {j}"), up: false, angle_deg: 90.0, radius: 1.5, center: s, center_visible: vec![s], tangent_visible: Vec::new() };
@@ -1250,33 +1269,43 @@ mod tests {
             ..Default::default()
         };
         let (_, _, data) = flat_projection(uuid::Uuid::nil(), &input, &NamedView::Top.frame());
-        let mut v = view();
-        v.scale = Scale::new(1, 5);
         let style = DrawingStyle::default();
-        let notes = bend_notes(&style, &v, &data);
-        assert_eq!(notes.len(), 4);
-        let outline_sheet: Vec<[P2; 2]> = data.outline.iter().map(|s| [v.to_sheet(s[0]), v.to_sheet(s[1])]).collect();
-        for (i, a) in notes.iter().enumerate() {
-            for b in &notes[i + 1..] {
-                assert!(!boxes_overlap(&a.corners, &b.corners), "{} and {} overlap", a.bend, b.bend);
+        for scale in [Scale::new(1, 2), Scale::new(1, 5)] {
+            let mut v = view();
+            v.scale = scale;
+            let notes = bend_notes(&style, &v, &data);
+            assert_eq!(notes.len(), 4);
+            for n in &notes {
+                // One text height (Onshape's), above its line (its reading side), the note's
+                // middle on the line's span.
+                assert_eq!(n.text.height, style.dim_text_height);
+                let s = data.lines_of(n.bend)[0];
+                let (p, q) = (v.to_sheet(s[0]), v.to_sheet(s[1]));
+                let len = seg_len(&[p, q]);
+                let (u, _, _) = line_frame(&v, s, p);
+                let side = (n.node[0] - p[0]) * -u[1] + (n.node[1] - p[1]) * u[0];
+                assert!((side - 0.9 * n.text.height).abs() < 1e-9, "note {} on the wrong side: {side}", n.bend);
+                let t = ((n.node[0] - p[0]) * (q[0] - p[0]) + (n.node[1] - p[1]) * (q[1] - p[1])) / len;
+                assert!((-1e-9..=len + 1e-9).contains(&t));
             }
-            // Clear of the outline, along its own line, beside it and within its ends.
-            assert!(!outline_sheet.iter().any(|s| seg_hits_box(*s, &a.corners)), "{} crosses the outline", a.bend);
-            let s = data.lines_of(a.bend)[0];
-            let (p, q) = (v.to_sheet(s[0]), v.to_sheet(s[1]));
-            let len = seg_len(&[p, q]);
-            let u = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
-            let off = ((a.node[0] - p[0]) * u[1] - (a.node[1] - p[1]) * u[0]).abs();
-            assert!((off - 0.9 * a.text.height).abs() < 1e-9, "{off}");
-            assert!((a.rotation.to_radians().sin() - u[1].abs()).abs() < 1e-9);
-            for c in &a.corners {
-                let t = (c[0] - p[0]) * u[0] + (c[1] - p[1]) * u[1];
-                assert!((-1e-9..=len + 1e-9).contains(&t), "note {} runs past its line: {t} of {len}", a.bend);
+            // At 1:2 the lines are long enough: the notes clear each other.
+            if scale == Scale::new(1, 2) {
+                for (i, a) in notes.iter().enumerate() {
+                    for b in &notes[i + 1..] {
+                        assert!(!boxes_overlap(&a.corners, &b.corners), "{} and {} overlap", a.bend, b.bend);
+                    }
+                }
             }
-            // The side lines' notes are set smaller to fit them.
-            assert!(a.text.height <= style.dim_text_height + 1e-12);
+            // Dragging one note off its line leaves every other where it was.
+            let mut moved = v.clone();
+            moved.flat.as_mut().unwrap().set_note(place_note(&v, &data, 2, [300.0, 300.0], None));
+            let after = bend_notes(&style, &moved, &data);
+            for (a, b) in notes.iter().zip(&after) {
+                if a.bend != 2 {
+                    assert_eq!(a, b);
+                }
+            }
         }
-        assert!(notes.iter().any(|n| n.text.height < style.dim_text_height));
     }
 
     #[test]

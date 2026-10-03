@@ -8,7 +8,7 @@
 //! - **Drawing**: bend lines in the view's up and down pens, bend notes along their lines (or
 //!   off them with a leader). A selected view draws them orange.
 //! - **Context menu** of a flat view (`t0112.3.png`): Show/hide ▸ (Hide/Show bend lines, Hide/Show
-//!   bend notes, Show/Hide hidden lines), View orientation ▸ (Top, Bottom), Tangent edges ▸
+//!   bend notes, Show/Hide hidden lines), View orientation ▸ (Top, Bottom, Rotate 90°), Tangent edges ▸
 //!   (Hidden, Solid, Phantom), Adjust linestyle… (greyed), View properties…, Order ▸ (greyed, as
 //!   on part views), Align view ▸, Switch to, Move to sheet…, Copy (greyed), Clear selection,
 //!   Zoom to fit, Delete. A right-click on a bend note opens Hide bend notes.
@@ -219,6 +219,8 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         .item(MenuItem::new("flat-menu-orientation", "View orientation").submenu(vec![
             orientation(NamedView::Top, "flat-menu-orientation-top"),
             orientation(NamedView::Bottom, "flat-menu-orientation-bottom"),
+            MenuEntry::Item(MenuItem::new("flat-menu-rotate-ccw", "Rotate 90° counterclockwise")),
+            MenuEntry::Item(MenuItem::new("flat-menu-rotate-cw", "Rotate 90° clockwise")),
         ]))
         .item(MenuItem::new("flat-menu-tangent-edges", "Tangent edges").submenu(vec![
             tangent(TangentEdges::Hidden, "view-menu-tangent-hidden", "Hidden"),
@@ -330,6 +332,17 @@ fn flat_menu_action(w: &mut World, id: ViewId, item: &str) {
                     }
                 });
             }
+        }
+        "flat-menu-rotate-ccw" | "flat-menu-rotate-cw" => {
+            let turn = if item == "flat-menu-rotate-ccw" { std::f64::consts::FRAC_PI_2 } else { -std::f64::consts::FRAC_PI_2 };
+            // About the view's middle, so it stays where it is on the sheet.
+            let c = w.resource::<ViewCache>().geometry(&v).and_then(|g| g.bounds).map(|(lo, hi)| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]).unwrap_or([0.0, 0.0]);
+            super::view_menu::set_view(w, id, "Rotate view", |v| {
+                let at = v.to_sheet(c);
+                v.rotation = (v.rotation + turn).rem_euclid(std::f64::consts::TAU);
+                let q = cadrs_drawing::view::rotate([c[0] * v.scale.factor(), c[1] * v.scale.factor()], v.rotation);
+                v.anchor = [at[0] - q[0], at[1] - q[1]];
+            });
         }
         other => super::view_menu::view_menu_action(w, id, other),
     }
