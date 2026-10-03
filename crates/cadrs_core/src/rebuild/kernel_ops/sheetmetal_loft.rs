@@ -371,8 +371,9 @@ impl Rebuilder {
                         let mut j = j.clone();
                         let old = j.id;
                         j.id = cadrs_sheetmetal::JointId(joint_base + old.0);
-                        j.a = real(j.a).unwrap_or(WallId(wall_base + j.a.0));
-                        j.b = real(j.b).unwrap_or(WallId(wall_base + j.b.0));
+                        // Lazily: a stand-in's id (near u32::MAX) plus the base overflows.
+                        j.a = real(j.a).unwrap_or_else(|| WallId(wall_base + j.a.0));
+                        j.b = real(j.b).unwrap_or_else(|| WallId(wall_base + j.b.0));
                         j.name = namer.name(&j.kind);
                         if let Some((k, _)) = built.joints.iter().find(|(_, id)| *id == old) {
                             ctx.joint_keys.push((*k, j.id));
