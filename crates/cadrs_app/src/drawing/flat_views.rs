@@ -2,15 +2,16 @@
 //! side of [`cadrs_drawing::flat_view`]:
 //!
 //! - **Insert view → Flat patterns** (SM16.2): the browser's type filters get a flat pattern
-//!   button; with it on, the tree lists every sheet metal part's flat pattern ("Sheet Metal Box
-//!   Flat pattern"). Picking one makes the ghost a flat pattern view (Top), placed like any view;
+//!   button; with it on, the tree lists every sheet metal part's flat pattern ("Flat pattern of
+//!   Sheet Metal Box", `ex3-drawings/step-08`). Picking one makes the ghost a flat pattern view (Top), placed like any view;
 //!   the tool then goes on to projected views of it, as Onshape's does.
 //! - **Drawing**: bend lines in the view's up and down pens, bend notes along their lines (or
 //!   off them with a leader). A selected view draws them orange.
 //! - **Context menu** of a flat view (`t0112.3.png`): Show/hide ▸ (Hide/Show bend lines, Hide/Show
-//!   bend notes, Show/Hide hidden lines), Tangent edges ▸ (Hidden, Solid, Phantom), Hide bend
-//!   notes, View properties…, Create projected view, Switch to, Move to sheet…, Align view,
-//!   Clear selection, Zoom to fit, Delete. A right-click on a bend note opens Hide bend notes.
+//!   bend notes, Show/Hide hidden lines), View orientation ▸ (Top, Bottom), Tangent edges ▸
+//!   (Hidden, Solid, Phantom), Adjust linestyle… (greyed), View properties…, Order ▸ (greyed, as
+//!   on part views), Align view ▸, Switch to, Move to sheet…, Copy (greyed), Clear selection,
+//!   Zoom to fit, Delete. A right-click on a bend note opens Hide bend notes.
 //! - **Dragging a bend note** (SM16.4): press on a note and drag its node; drop it near its bend
 //!   line and it goes back on the line, else it stays where dropped with a leader. One undoable
 //!   view edit ("Move bend note").
@@ -72,6 +73,16 @@ pub fn bend_strokes(v: &View, g: &cadrs_core::views::ViewGeometry, highlight: Op
         }
     }
     out
+}
+
+/// A flat view's centermarks (round holes, counterbores and countersinks, forms; SM16.3) as
+/// thin strokes.
+pub fn centermark_strokes(style: &cadrs_drawing::DrawingStyle, v: &View, g: &cadrs_core::views::ViewGeometry, color: Color) -> Vec<Stroke> {
+    let Some(flat) = &g.flat else { return Vec::new() };
+    fv::centermarks(style, v, flat)
+        .into_iter()
+        .map(|l| Stroke { points: l.iter().map(|p| Vec2::new(p[0] as f32, p[1] as f32)).collect(), medium: false, color })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -176,6 +187,14 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         let item = MenuItem::new(name, label);
         MenuEntry::Item(if v.tangent_edges == t { item.icon("check") } else { item })
     };
+    let orientation = |o: NamedView, name: &'static str| {
+        let item = MenuItem::new(name, o.label());
+        MenuEntry::Item(if v.frame == o.frame() { item.icon("check") } else { item })
+    };
+    // Onshape's flat view menu (`16-drawings/t0112.3.png`): Show/hide ▸, View orientation ▸,
+    // Tangent edges ▸, Adjust linestyle…, View properties…, Order ▸, Align view ▸, Switch to,
+    // Move to sheet…, Copy, Clear selection, Zoom to fit, Delete. cadrs has no line style
+    // overrides or view copy yet, so those two are greyed; Order is greyed as on part views.
     let menu = Menu::new("flat-view-context-menu")
         .min_width(220.0)
         .item(MenuItem::new("flat-menu-show-hide", "Show/hide").submenu(vec![
@@ -183,20 +202,30 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
             MenuEntry::Item(MenuItem::new("flat-menu-bend-notes-sub", if f.bend_notes_hidden { "Show bend notes" } else { "Hide bend notes" })),
             MenuEntry::Item(MenuItem::new("view-menu-hidden-lines", if v.hidden_lines { "Hide hidden lines" } else { "Show hidden lines" })),
         ]))
+        .item(MenuItem::new("flat-menu-orientation", "View orientation").submenu(vec![
+            orientation(NamedView::Top, "flat-menu-orientation-top"),
+            orientation(NamedView::Bottom, "flat-menu-orientation-bottom"),
+        ]))
         .item(MenuItem::new("flat-menu-tangent-edges", "Tangent edges").submenu(vec![
             tangent(TangentEdges::Hidden, "view-menu-tangent-hidden", "Hidden"),
             tangent(TangentEdges::Solid, "view-menu-tangent-solid", "Solid"),
             tangent(TangentEdges::Phantom, "view-menu-tangent-phantom", "Phantom"),
         ]))
-        .item(MenuItem::new("flat-menu-bend-notes", if f.bend_notes_hidden { "Show bend notes" } else { "Hide bend notes" }))
+        .item(MenuItem::new("flat-menu-linestyle", "Adjust linestyle…").disabled(true))
         .separator()
         .item(MenuItem::new("view-menu-properties", "View properties…"))
-        .item(MenuItem::new("view-menu-projected", "Create projected view"))
+        .item(MenuItem::new("flat-menu-order", "Order").submenu(vec![
+            MenuEntry::Item(MenuItem::new("view-menu-front", "Bring to front").disabled(true)),
+            MenuEntry::Item(MenuItem::new("view-menu-back", "Send to back").disabled(true)),
+        ]))
+        .item(MenuItem::new("flat-menu-align", "Align view").submenu(vec![
+            MenuEntry::Item(MenuItem::new("view-menu-align-vertical", "Align view vertical")),
+            MenuEntry::Item(MenuItem::new("view-menu-align-horizontal", "Align view horizontal")),
+        ]))
         .separator()
         .item(MenuItem::new("view-menu-switch", format!("Switch to {reference}")))
         .item(MenuItem::new("view-menu-move-to-sheet", "Move to sheet…"))
-        .item(MenuItem::new("view-menu-align-vertical", "Align view vertical"))
-        .item(MenuItem::new("view-menu-align-horizontal", "Align view horizontal"))
+        .item(MenuItem::new("flat-menu-copy", "Copy").disabled(true))
         .separator()
         .item(MenuItem::new("view-menu-clear-selection", "Clear selection"))
         .item(MenuItem::new("view-menu-zoom", "Zoom to fit"))
@@ -275,6 +304,18 @@ fn flat_menu_action(w: &mut World, id: ViewId, item: &str) {
         "flat-menu-bend-notes" | "flat-menu-bend-notes-sub" => {
             let hide = !f.bend_notes_hidden;
             set_flat(w, id, if hide { "Hide bend notes" } else { "Show bend notes" }, |s| s.bend_notes_hidden = hide);
+        }
+        "flat-menu-orientation-top" | "flat-menu-orientation-bottom" => {
+            let o = if item == "flat-menu-orientation-top" { NamedView::Top } else { NamedView::Bottom };
+            if v.frame != o.frame() {
+                // The notes' places are in the view's 2D frame: they come out by themselves again.
+                super::view_menu::set_view(w, id, "View orientation", |v| {
+                    v.frame = o.frame();
+                    if let Some(f) = v.flat.as_mut() {
+                        f.notes.clear();
+                    }
+                });
+            }
         }
         other => super::view_menu::view_menu_action(w, id, other),
     }
@@ -418,7 +459,8 @@ fn note_pointer(
                 let Some(flat) = g.flat.as_ref() else { continue };
                 let drop = [node[0] + (p.x - start.x) as f64, node[1] + (p.y - start.y) as f64];
                 let mut s = v.flat.clone().unwrap_or_default();
-                s.set_note(fv::place_note(v, flat, bend, drop));
+                let current = s.note(bend).copied();
+                s.set_note(fv::place_note(v, flat, bend, drop, current));
                 dui.flat_preview = Some((vid, s));
             }
             PointerAction::Release(PointerButton::Primary) => {

@@ -172,7 +172,6 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool) {
     let Some(doc) = world.get_resource::<ActiveDocument>() else {
         return;
     };
-    let name = doc.doc.next_element_name("Drawing");
     // Opened on a part (an instance's or the Parts list's menu): the title names it.
     let of = reference.and_then(|r| r.part.map(|(f, index)| (r.element, f, index))).map(|(e, f, index)| {
         let owner = cadrs_core::properties::PropertyOwner::Part {
@@ -181,8 +180,15 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool) {
         };
         cadrs_core::properties::text(&doc.doc, owner, cadrs_core::properties::PropertyKey::Name, None)
     });
-    let title = match of.filter(|n| !n.trim().is_empty()) {
-        Some(part) if flat => format!("Create Drawing: {name} of {part} flat pattern"),
+    let of = of.filter(|n| !n.trim().is_empty());
+    // Create drawing of flat pattern names the drawing as Onshape does (`16-drawings/t0015.3`,
+    // `t0026.7`): "Flat pattern of <part> Drawing 1", the tab "Flat pattern of <part> …".
+    let name = match &of {
+        Some(part) if flat => doc.doc.next_element_name(&format!("Flat pattern of {part} Drawing")),
+        _ => doc.doc.next_element_name("Drawing"),
+    };
+    let title = match of {
+        Some(_) if flat => format!("Create Drawing: {name}"),
         Some(part) => format!("Create Drawing: {name} of {part}"),
         None => format!("Create Drawing: {name}"),
     };

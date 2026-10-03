@@ -411,6 +411,10 @@ pub fn sheet_page(d: &Drawing, index: usize, ctx: &PageContext) -> Page {
                 let pen = Pen { width: l.style.weight, color: l.style.color, dash: Some(crate::flat_view::BEND_PATTERN.to_vec()), layer };
                 page.polyline(l.points, pen);
             }
+            // Its centermarks (SM16.3).
+            for l in crate::flat_view::centermarks(&d.style, v, flat) {
+                page.polyline(l, Pen::new(Weight::Thin.mm(), Layer::Annotation));
+            }
         }
         // Hatching, threads, breaks, cutting lines and labels (P3C.8).
         let dec = crate::view_kinds::view_decor(&d.style, &sheet.views, v, Some(input.model), &crate::view_kinds::label_avoid(sheet));

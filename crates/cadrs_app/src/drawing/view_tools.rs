@@ -284,7 +284,7 @@ pub fn open_insert_view(world: &mut World) {
                 // P3I.7: every sheet metal part's flat pattern.
                 for p in cadrs_core::flat_drawing::flat_parts(&build.sheet_metal) {
                     if let Some(part) = build.part(p) {
-                        flats.push((el.id, p, format!("{} Flat pattern", cadrs_core::parts::display_name(part, props))));
+                        flats.push((el.id, p, format!("Flat pattern of {}", cadrs_core::parts::display_name(part, props))));
                     }
                 }
                 let parts = build

@@ -357,6 +357,9 @@ impl View {
         let mut v = Self::base(reference, orientation, scale, anchor);
         v.name = "Flat pattern".to_string();
         v.flat = Some(crate::flat_view::FlatSettings::default());
+        // Onshape's flat views show the bends' chain lines clean, without their tangent lines
+        // (`ex3-drawings/goal.png`); Tangent edges → Solid or Phantom shows them.
+        v.tangent_edges = TangentEdges::Hidden;
         v
     }
 
