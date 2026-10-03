@@ -48,6 +48,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<DialogInset>()
             .init_resource::<PlaneHighlight>()
             .init_resource::<HoverOverride>()
+            .init_resource::<ExtraHighlight>()
             .init_resource::<PickFilterOverride>()
             .init_resource::<Selection>()
             .init_resource::<ViewportDrag>()
@@ -418,6 +419,16 @@ impl PlaneHighlight {
 /// dialog's Shift lock, A6.5).
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct HoverOverride(pub Option<Pick>);
+
+/// Entities a panel or dialog lights up besides the pointer's and the selection's: `hovered`
+/// draws in the hover orange (a Sheet metal table row's joint, all its faces), `selected` in the
+/// selection amber without being selected (the Modify joint dialog's joint). Each owner sets
+/// its own list and clears it when done.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct ExtraHighlight {
+    pub hovered: Vec<Pick>,
+    pub selected: Vec<Pick>,
+}
 
 /// A panel's own picking (P3F.5: the simulation's load dialog picks faces): while set, clicks
 /// and hover in the view (Part Studio or Assembly) use this filter and the picks go to that

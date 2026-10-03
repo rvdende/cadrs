@@ -9,9 +9,12 @@
 //! - [`Tris`]: triangle meshes: the flat as a thin solid ([`slab`]) and filled outlines for
 //!   highlights ([`fill`]).
 //! - [`label_spot`]: where a joint's label floats next to the folded model.
+//! - Walls (SM1.4's faces): [`wall_at`] finds the wall a point of the folded solid is on,
+//!   [`to_flat`] carries such a point into the flat scene (a face's, edge's or vertex's
+//!   highlight there), [`FlatScene::wall_at`] and [`FlatScene::part_at`] pick in the flat.
 
 use crate::flat::{FlatPattern, PieceSource};
-use crate::model::{JointId, JointKind, Model, P3, V3};
+use crate::model::{JointId, JointKind, Model, P3, V3, WallId};
 use crate::poly::{P2, Polygon, Seg2, V2};
 
 // ---------------------------------------------------------------------------------------------
@@ -152,6 +155,9 @@ pub struct FlatScene {
     /// How far each flat-pattern part is moved along X (sketches on a part's flat are drawn
     /// with it).
     pub shifts: Vec<V2>,
+    /// The flat-pattern part each of [`FlatScene::pieces`] is in (its index in the pattern,
+    /// the context's part order).
+    pub piece_part: Vec<usize>,
     /// Forms on the flat (SM20.3): each one's outline lines and centermark.
     pub forms: Vec<(Vec<crate::forms::FormLine>, P2)>,
 }
@@ -188,6 +194,7 @@ impl FlatScene {
             let mvs = |s: &Seg2| Seg2::new(s.a + shift, s.b + shift);
             for piece in &part.pieces {
                 out.pieces.push((piece.source, piece.cut.iter().map(|p| p.map(mv)).collect()));
+                out.piece_part.push(out.shifts.len() - 1);
             }
             out.outlines.extend(part.outline.iter().map(|p| p.map(mv)));
             out.slits.extend(part.slits().map(|s| mvs(&s)));
@@ -260,16 +267,90 @@ impl FlatScene {
             .map(|(j, _)| j)
     }
 
-    /// Where a joint's label goes in the flat: just past the end of a bend's centre line (or a
-    /// rip's first edge), clear of the sheet.
-    pub fn label_spot(&self, j: JointId) -> Option<P2> {
+    /// Whether a flat point is on material.
+    pub fn on_material(&self, p: P2) -> bool {
+        self.pieces.iter().any(|(_, v)| v.iter().any(|q| q.contains(p)))
+    }
+
+    /// The piece (its index in [`FlatScene::pieces`]) a flat point is on.
+    pub fn piece_at(&self, p: P2) -> Option<usize> {
+        self.pieces.iter().position(|(_, v)| v.iter().any(|q| q.contains(p)))
+    }
+
+    /// The flat-pattern part (its index, the context's part order) a flat point is on.
+    pub fn part_at(&self, p: P2) -> Option<usize> {
+        self.piece_at(p).and_then(|i| self.piece_part.get(i).copied())
+    }
+
+    /// The wall a flat point is on (not a bend region).
+    pub fn wall_at(&self, p: P2) -> Option<WallId> {
+        self.pieces.iter().find_map(|(s, v)| match s {
+            PieceSource::Wall(w) if v.iter().any(|q| q.contains(p)) => Some(*w),
+            _ => None,
+        })
+    }
+
+    /// A wall's material in the flat (for its highlight).
+    pub fn wall_region(&self, w: WallId) -> Vec<Polygon> {
+        self.pieces.iter().filter(|(s, _)| *s == PieceSource::Wall(w)).flat_map(|(_, v)| v.iter().cloned()).collect()
+    }
+
+    /// A part's material in the flat.
+    pub fn part_region(&self, part: usize) -> Vec<Polygon> {
+        self.pieces.iter().zip(&self.piece_part).filter(|(_, i)| **i == part).flat_map(|((_, v), _)| v.iter().cloned()).collect()
+    }
+
+    /// Where a joint's label goes in the flat, and the way it reads off from there (a unit
+    /// vector: the label sits on that side of the spot).
+    ///
+    /// - A bend: across from its centre line's midpoint, just past its tangent line on the side
+    ///   with more room before the next bend, so it can only be read as this bend's.
+    /// - A rip or tangent joint: at the middle of its first edge, outside the sheet.
+    pub fn label_place(&self, j: JointId) -> Option<(P2, V2)> {
+        let across = |s: &Seg2| {
+            let d = s.dir();
+            V2::new(-d.y, d.x)
+        };
         if let Some(b) = self.bends.iter().find(|b| b.joint == j) {
-            return Some(b.center.b + b.center.dir() * (0.04 * b.center.len()).max(1.0));
+            let mid = P2::from((b.center.a.coords + b.center.b.coords) / 2.0);
+            let n = across(&b.center);
+            // How far the nearest other bend is on each side (its midpoint, across this one).
+            let room = |side: V2| {
+                self.bends
+                    .iter()
+                    .filter(|o| o.joint != j)
+                    .map(|o| (P2::from((o.center.a.coords + o.center.b.coords) / 2.0) - mid).dot(&side))
+                    .filter(|d| *d > 1e-6)
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let side = if room(-n) > room(n) + 1e-6 { -n } else { n };
+            // Just past the bend region's edge (its tangent line) on that side.
+            let half = b.region.iter().flat_map(|r| r.outer.iter()).map(|q| (q - mid).dot(&side)).fold(0.0, f64::max);
+            return Some((mid + side * half, side));
         }
         let x = self.joints.iter().find(|x| x.joint == j)?;
         let s = x.edges.first()?;
-        Some(P2::from((s.a.coords + s.b.coords) / 2.0))
+        let mid = P2::from((s.a.coords + s.b.coords) / 2.0);
+        let n = across(s);
+        let eps = (0.02 * s.len()).clamp(0.05, 1.0);
+        let side = if self.on_material(mid + n * eps) && !self.on_material(mid - n * eps) { -n } else { n };
+        Some((mid, side))
     }
+}
+
+/// The wall a point of the folded solid lies on (on one of its two faces, or their edges),
+/// within `tol` mm: planar walls only.
+pub fn wall_at(m: &Model, p: P3, tol: f64) -> Option<WallId> {
+    crate::model_edit::wall_at(m, p, tol).map(|(w, _)| w)
+}
+
+/// A point of the folded solid on wall `w`, where it lies in the flat scene.
+pub fn to_flat(m: &Model, flat: &FlatPattern, scene: &FlatScene, w: WallId, p: P3) -> Option<P2> {
+    let wall = m.wall(w)?;
+    let (i, part) = flat.parts.iter().enumerate().find(|(_, x)| x.placement(w).is_some())?;
+    let place = part.placement(w)?;
+    let q = place.apply(wall.flat_local(&m.params, wall.surface.local(p)));
+    Some(q + scene.shifts.get(i).copied().unwrap_or_else(V2::zeros))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -428,5 +509,47 @@ mod tests {
         let want: f64 = s.outlines.iter().map(Polygon::area).sum();
         let got = area(&mesh, m.params.thickness as f32);
         assert!((got - want).abs() < 1e-3 * want, "top area {got} vs outline {want}");
+    }
+
+    #[test]
+    fn walls_map_into_their_flat_pieces_and_parts_are_picked_there() {
+        let m = samples::open_box(crate::Params::default(), crate::RipStyle::EdgeJoint).unwrap();
+        let flat = flatten(&m);
+        let s = FlatScene::new(&m, &flat);
+        assert_eq!(s.piece_part.len(), s.pieces.len());
+        for w in &m.walls {
+            // A point well inside the wall's outline, on its definition face.
+            let (lo, hi) = w.outline.bounds().unwrap();
+            let c = P2::from((lo.coords + hi.coords) / 2.0);
+            if !w.outline.contains(c) {
+                continue;
+            }
+            let p = w.surface.point(c);
+            assert_eq!(wall_at(&m, p, 1e-3), Some(w.id), "{:?}", w.id);
+            let q = to_flat(&m, &flat, &s, w.id, p).expect("in the flat");
+            assert_eq!(s.wall_at(q), Some(w.id), "{:?} lands on its own piece", w.id);
+            let part = s.part_at(q).expect("on a part");
+            assert!(flat.parts[part].walls.contains(&w.id));
+            assert!(!s.wall_region(w.id).is_empty());
+            assert!(s.part_region(part).iter().any(|r| r.contains(q)));
+        }
+    }
+
+    #[test]
+    fn labels_sit_beside_their_bend_and_outside_the_sheet_for_rips() {
+        let m = samples::open_box(crate::Params::default(), crate::RipStyle::EdgeJoint).unwrap();
+        let flat = flatten(&m);
+        let s = FlatScene::new(&m, &flat);
+        for b in &s.bends {
+            let (at, dir) = s.label_place(b.joint).unwrap();
+            let mid = P2::from((b.center.a.coords + b.center.b.coords) / 2.0);
+            assert!(dir.dot(&b.center.dir()).abs() < 1e-9, "{}: across the line", b.name);
+            assert!((at - mid).dot(&b.center.dir()).abs() < 1e-9, "{}: by the centre line's middle", b.name);
+            assert!((at - mid).norm() > 0.5, "{}: past the bend region", b.name);
+        }
+        for x in &s.joints {
+            let (at, dir) = s.label_place(x.joint).unwrap();
+            assert!(!s.on_material(at + dir * 0.5), "{}: off the sheet", x.name);
+        }
     }
 }

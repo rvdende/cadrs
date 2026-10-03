@@ -5,7 +5,9 @@
 // dropdown, the Bends and Other joints tables, the flat view with its cube, dashed centrelines
 // and bend labels. A row click selects the bend in the model and the flat (orange), a second
 // row adds to it, a click on a bend in the model selects its row, a click in the flat view on a
-// bend selects it too; the Bends caret collapses its table; the button closes the panel.
+// bend selects it too; the Bends caret collapses its table; a wall's face hovered or selected
+// in the model shows in the flat, a wall hovered in the flat in the model; the flat view's menu
+// on the separate lid names it and exports it; the button closes the panel.
 Scenario(
     start: Some("document"),
     steps: [
@@ -98,6 +100,35 @@ Scenario(
         Wait(3),
         Screenshot("06-bends-collapsed"),
         Click(ui("smt-bends-caret")),
+        Wait(10),
+        // SM1.4 for walls: the box's base hovered in the model is outlined in the flat; selected,
+        // it is outlined orange there.
+        Hover(xyz(50, 30, 40)),
+        Wait(10),
+        Screenshot("08-model-face-hover-outlines-its-flat-piece"),
+        Click(xyz(50, 30, 40)),
+        Wait(10),
+        MoveTo(700, 900),
+        Wait(5),
+        Screenshot("09-model-face-selected-in-the-flat"),
+        Click(xyz(50, 30, 40)),
+        Wait(5),
+        // A wall hovered in the flat lights its face in the model.
+        Hover(ui_at("smt-flat", 0.23, 0.4)),
+        Wait(10),
+        Screenshot("10-flat-wall-hover-lights-the-model-face"),
+        // The flat view's menu on the separate lid (a multi-part model): its items name it, and
+        // Export acts on it.
+        RightClick(ui_at("smt-flat", 0.585, 0.73)),
+        Wait(10),
+        Screenshot("11-flat-menu-on-the-lid"),
+        Hover(ui("smt-flat-select-other")),
+        Wait(10),
+        Screenshot("12-select-other"),
+        Click(ui("smt-flat-export")),
+        Wait(20),
+        Screenshot("13-export-of-the-lids-flat"),
+        Key("Escape"),
         Wait(10),
         Click(ui("panel-sheet-metal")),
         Wait(20),

@@ -1521,7 +1521,7 @@ fn draw_part_edges(
     mut free_edges: Gizmos<FreeEdgeGizmos>,
     failed: Res<FailedReferences>,
     ghosts: Res<PartGhosts>,
-    hover_parts: Res<HoverParts>,
+    (hover_parts, extra): (Res<HoverParts>, Res<crate::viewport::ExtraHighlight>),
 ) {
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
@@ -1595,15 +1595,17 @@ fn draw_part_edges(
             }
         }
         // Base colours only when a face of the part is selected (the per-frame cost).
-        let bases = if part.solid.faces.iter().any(|f| selection.contains(Pick::Face(part.id, f.name))) {
+        let selected = |p: Pick| selection.contains(p) || extra.selected.contains(&p);
+        let hovered_pick = |p: Pick| highlight.is_hovered(p) || extra.hovered.contains(&p);
+        let bases = if part.solid.faces.iter().any(|f| selected(Pick::Face(part.id, f.name))) {
             cache.bases(part)
         } else {
             Vec::new()
         };
         for (fi, face) in part.solid.faces.iter().enumerate() {
             let pick = Pick::Face(part.id, face.name);
-            let hovered = highlight.is_hovered(pick) || list_feature.is_some_and(|f| face.name.op == f.0);
-            if !hovered && !selection.contains(pick) {
+            let hovered = hovered_pick(pick) || list_feature.is_some_and(|f| face.name.op == f.0);
+            if !hovered && !selected(pick) {
                 continue;
             }
             for l in &face.loops {
@@ -1658,9 +1660,9 @@ fn draw_part_edges(
         // Edges: hovered or selected.
         for e in &part.solid.edges {
             let pick = Pick::Edge(part.id, e.name);
-            let color = if highlight.is_hovered(pick) {
+            let color = if hovered_pick(pick) {
                 EDGE_HOVER
-            } else if selection.contains(pick) {
+            } else if selected(pick) {
                 SELECTED
             } else {
                 continue;
@@ -1764,7 +1766,7 @@ fn tint_selection(
     over: Res<PartOverride>,
     doc: Option<Res<crate::ActiveDocument>>,
     mut face_selection: ResMut<FaceSelection>,
-    (highlight, hover_parts): (Res<PlaneHighlight>, Res<HoverParts>),
+    (highlight, hover_parts, extra): (Res<PlaneHighlight>, Res<HoverParts>, Res<crate::viewport::ExtraHighlight>),
     mut commands: Commands,
 ) {
     // The Final preview and a dialog's accent faces are Part Studio things.
@@ -1800,6 +1802,7 @@ fn tint_selection(
         .0
         .iter()
         .chain(failing)
+        .chain(extra.selected.iter())
         .filter(|p| matches!(p, Pick::Face(..)) && !accent.contains(p))
         .copied()
         .collect();

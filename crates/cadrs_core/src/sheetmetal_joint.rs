@@ -26,6 +26,7 @@ use crate::command::{Command, CommandError, Scope};
 use crate::document::{Document, ElementKind, Feature, FeatureKind};
 use crate::ids::{ElementId, FeatureId};
 use crate::sheetmetal::plain;
+use crate::sheetmetal_tools::SheetMetalTool;
 
 /// The joint type select (SM6.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -264,6 +265,57 @@ pub fn table_edit(model: FeatureId, existing: Option<&ModifyJointFeature>, joint
         }
     }
     x
+}
+
+/// The **Bend** or **Jog** feature that made a joint, if one did (SM13.3: the table edits that
+/// feature, not a Modify joint). `ctx` is the joint's model as built.
+pub fn bend_feature_of<'a>(features: &'a [Feature], ctx: &crate::sheetmetal::SheetMetalContext, joint: JointId) -> Option<&'a Feature> {
+    let owner = ctx.owner(crate::sheetmetal::PieceKey::Joint(joint));
+    if owner == ctx.feature {
+        return None;
+    }
+    features.iter().find(|f| f.id == owner && matches!(f.kind, FeatureKind::SheetMetalTool(SheetMetalTool::Bend(_) | SheetMetalTool::Jog(_))))
+}
+
+/// A table edit of a bend a Bend or Jog feature made (SM13.3): that feature with its own
+/// radius or K factor set ("Modifying this value … updates the bend radius value if using the
+/// Bend feature"). A value typed as a bend allowance or deduction (the model's calculation) is
+/// turned into the K factor that gives it, for this bend's radius, thickness and angle (a Bend
+/// takes a K factor only). Converting such a bend to a rip is refused.
+pub fn bend_feature_edit(feature: &Feature, joint: &Joint, params: &Params, edit: &TableEdit) -> Result<Feature, String> {
+    let Some(b) = joint.bend() else { return Err("Not a bend".into()) };
+    let mut f = feature.clone();
+    let bf = match &mut f.kind {
+        FeatureKind::SheetMetalTool(SheetMetalTool::Bend(x)) => x,
+        FeatureKind::SheetMetalTool(SheetMetalTool::Jog(x)) => &mut x.bend,
+        _ => return Err("Not a Bend or Jog feature".into()),
+    };
+    match edit {
+        TableEdit::Radius(r, expr) => {
+            bf.use_model_radius = false;
+            bf.radius = *r;
+            bf.radius_expr = expr.clone();
+        }
+        TableEdit::Value(v, expr) => {
+            let k = match params.bend_calc {
+                BendCalc::KFactor => *v,
+                calc => {
+                    let typed = if calc == BendCalc::BendAllowance { BendValue::Allowance(*v) } else { BendValue::Deduction(*v) };
+                    match typed.to_calc(BendCalc::KFactor, b.radius, params.thickness, b.angle) {
+                        Some(BendValue::KFactor(k)) if k.is_finite() => k,
+                        _ => return Err(format!("No K factor gives a {} of {}", calc.label().to_lowercase(), plain(*v))),
+                    }
+                }
+            };
+            bf.use_model_k = false;
+            bf.k_factor = k;
+            bf.k_expr = if params.bend_calc == BendCalc::KFactor { expr.clone() } else { plain((k * 1e6).round() / 1e6) };
+        }
+        TableEdit::ConvertToRip | TableEdit::ConvertToBend | TableEdit::RipStyle(_) => {
+            return Err(format!("{} is made by {}: it can't be made a rip", joint.name, feature.name));
+        }
+    }
+    Ok(f)
 }
 
 /// The Modify joint of `joint` in model `model`, if there is one (the last, if several).

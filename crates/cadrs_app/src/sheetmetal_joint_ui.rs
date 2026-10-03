@@ -10,6 +10,9 @@
 //!   **Bend calculation** — K Factor, Bend allowance, Bend deduction — and its value, red with
 //!   its range when out of it).
 //!
+//! While it is open its joint shows selected in the model (all of its faces, in the selection
+//! amber), as Onshape shows a dialog's picks.
+//!
 //! ✓ or Enter keeps it, ✕ or Esc reverts the edit. Every change is a command; accepting squashes
 //! them into one undo step.
 //!
@@ -40,6 +43,7 @@ pub struct ModifyJointUiPlugin;
 impl Plugin for ModifyJointUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (joint_picks, joint_keys, sync_dialog).chain().before(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
+            .add_systems(Update, show_joint.after(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
             .add_systems(OnExit(AppState::Document), |world: &mut World| {
                 if world.contains_resource::<ModifyJointSession>() {
                     finish(world);
@@ -318,6 +322,42 @@ fn on_remove(ev: On<SelectionListRemove>, q: Query<(), With<JointField>>, mut co
     if q.contains(ev.entity) {
         commands.queue(|world: &mut World| update(world, "Remove joint", |x| x.joint = None));
     }
+}
+
+/// The edited joint's faces show selected while the dialog is open
+/// ([`crate::viewport::ExtraHighlight::selected`]).
+fn show_joint(
+    doc: Option<Res<ActiveDocument>>,
+    session: Option<Res<ModifyJointSession>>,
+    cache: Res<PartCache>,
+    mut extra: ResMut<crate::viewport::ExtraHighlight>,
+    mut last: Local<Option<(cadrs_core::sheetmetal_joint::ModifyJointFeature, u64)>>,
+) {
+    let x = match (doc.as_deref(), session.as_deref()) {
+        (Some(d), Some(s)) => d.doc.element(s.element).and_then(|e| e.feature(s.feature)).and_then(|f| match &f.kind {
+            FeatureKind::ModifyJoint(x) => Some(x.clone()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let Some(x) = x else {
+        if last.take().is_some() && !extra.selected.is_empty() {
+            extra.selected.clear();
+        }
+        return;
+    };
+    let key = (x.clone(), cache.generation);
+    if last.as_ref() == Some(&key) {
+        return;
+    }
+    let picks = match (x.joint, cache.sheet_metal.iter().find(|c| c.feature == x.model)) {
+        (Some(j), Some(ctx)) => crate::sheetmetal_table::joint_picks(&cache, ctx, j),
+        _ => Vec::new(),
+    };
+    if extra.selected != picks {
+        extra.selected = picks;
+    }
+    *last = Some(key);
 }
 
 // ---------------------------------------------------------------------------------------------
