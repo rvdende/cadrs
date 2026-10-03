@@ -9,20 +9,24 @@
 //!   side with the opposite direction arrow, from the other face), X along the location's X.
 //!   The tag's origin connector goes onto it; the form's footprint (its parts seen along Z) must
 //!   keep clear of the wall's joints, rips, corners and edges ([`check_footprint`]), else the
-//!   feature fails. The add parts are united with the folded part, then the remove parts cut
-//!   from it; each copy goes into its flat-pattern part's `forms` (the tag sketch's
-//!   construction curves, or the footprint, and the centermark).
+//!   feature fails. Each copy is kept with its model (`SheetMetalContext::forms`, placed
+//!   relative to its wall) and the model refolds through the one sheet metal pipeline
+//!   (`sheetmetal/refold.rs`), which unites the add parts with the folded part, cuts the remove
+//!   parts from it and puts each copy into its flat-pattern part's `forms` (the tag sketch's
+//!   construction curves, or the footprint, and the centermark) — again at every later refold,
+//!   on the wall wherever it has moved.
 
 use super::*;
 use cadrs_kernel::{Kernel, Motion};
-use cadrs_sheetmetal::forms::{FlatForm, FormLine, check_footprint, hull, on_flat};
+use cadrs_sheetmetal::forms::{FormLine, check_footprint, hull};
 use cadrs_sheetmetal::model::{P3, Surface, V3};
 use cadrs_sheetmetal::poly::P2;
 use cadrs_sketch::PlaneFrame;
 
 use super::derived::motion_between;
 use crate::mate::ConnectorRef;
-use crate::sheetmetal::SheetMetalContext;
+use super::sheetmetal::refold::local_to_wall;
+use crate::sheetmetal::{FormCopy, FormStep};
 use crate::sheetmetal_form::{FormFeature, FormLocation, TagFormFeature, form_studio, tag_of};
 
 fn v(a: [f64; 3]) -> V3 {
@@ -123,7 +127,6 @@ impl Rebuilder {
         let pick = x.form.as_ref().ok_or("Select a form Part Studio")?;
         // The targets: faces of active sheet metal parts, by part.
         struct Target {
-            part: PartId,
             ctx: usize,
             point: P3,
             normal: V3,
@@ -140,7 +143,7 @@ impl Rebuilder {
                 .position(|c| c.active && c.parts.iter().any(|(p, _)| *p == part.part.id))
                 .ok_or("The target face isn't on an active sheet metal part")?;
             let n = pl.normal.into_inner();
-            targets.push(Target { part: part.part.id, ctx, point: P3::new(info.center.x, info.center.y, info.center.z), normal: V3::new(n.x, n.y, n.z) });
+            targets.push(Target { ctx, point: P3::new(info.center.x, info.center.y, info.center.z), normal: V3::new(n.x, n.y, n.z) });
         }
         let thickness = state.sheet_metal[targets[0].ctx].model.params.thickness;
         let studio = form_studio(pick, &x.variables, thickness)?;
@@ -172,10 +175,9 @@ impl Rebuilder {
         if frames.is_empty() {
             return Err("The locations have no points".into());
         }
-        let mut next = (**state).clone();
-        let mut contexts: Vec<SheetMetalContext> = (*state.sheet_metal).clone();
-        let mut copies: Vec<(usize, Motion)> = Vec::new(); // (target, motion)
-        for (k, fr) in frames.iter().enumerate() {
+        // Each copy on its wall, kept with the model so every refold applies it again.
+        let mut by_ctx: Vec<(usize, Vec<FormCopy>)> = Vec::new();
+        for fr in frames.iter() {
             let o = v(fr.origin);
             // The nearest target face's plane.
             let ti = (0..targets.len())
@@ -195,8 +197,7 @@ impl Rebuilder {
             let to = crate::mate::frame_from([on.x, on.y, on.z], [n.x, n.y, n.z], [ux.x, ux.y, ux.z]);
             let m = motion_between(&base, &to);
             // The wall it lands on, and the rules.
-            let ctx = &contexts[t.ctx];
-            let model = &ctx.model;
+            let model = &state.sheet_metal[t.ctx].model;
             let tt = model.params.thickness;
             let center = moved(&m, base.origin);
             let wall = model
@@ -224,7 +225,7 @@ impl Rebuilder {
             };
             let fp: Vec<P2> = footprint.outer.iter().map(|q| place(V3::new(q.x, q.y, 0.0))).collect();
             check_footprint(model, wall_id, &cadrs_sheetmetal::poly::Polygon::new(fp), 1e-6 * size).map_err(|e| e.message())?;
-            // The flat: outline and centermark.
+            // The flat: outline and centermark, in the wall's 2D.
             let flines: Vec<FormLine> = lines
                 .iter()
                 .map(|(l, closed)| FormLine {
@@ -233,113 +234,33 @@ impl Rebuilder {
                 })
                 .collect();
             let wn = wall.surface.normal().unwrap_or_default();
-            let flip_up = model.params.flip_direction_up;
-            let up = (n.dot(&wn) > 0.0) != flip_up;
-            let c2 = to_wall(center);
-            let ctxm = &mut contexts[t.ctx];
-            let model2 = ctxm.model.clone();
-            if let Some(pi) = ctxm.flat.parts.iter().position(|p| p.walls.contains(&wall_id))
-                && let Some((c, ls)) = on_flat(&ctxm.flat.parts[pi], &model2, wall_id, c2, &flines)
-            {
-                ctxm.flat.parts[pi].forms.push(FlatForm {
-                    source: super::sheetmetal::key_of(&id),
-                    name: name.to_string(),
-                    form: pick.name.clone(),
-                    wall: wall_id,
-                    center: c,
-                    lines: ls,
-                    up,
-                });
-            }
-            let _ = k;
-            copies.push((ti, m));
-        }
-        // The booleans, per target part.
-        let op = id.0;
-        let geoms = state.geoms.clone();
-        let mut placed: Vec<Placed> = Vec::new();
-        let mut owned_tmp: Vec<BodyId> = Vec::new();
-        let release = |this: &mut Self, v: &[BodyId]| {
-            for b in v {
-                this.kernel.release(*b);
-            }
-        };
-        let mut part_ids: Vec<PartId> = targets.iter().map(|t| t.part).collect();
-        part_ids.dedup();
-        for pid in part_ids {
-            let Some(ps) = next.part(pid).cloned() else { continue };
-            let Some(body) = ps.body else { continue };
-            let mut adds: Vec<(BodyId, BodyNames)> = Vec::new();
-            let mut removes: Vec<(BodyId, BodyNames)> = Vec::new();
-            for (ci, (ti, m)) in copies.iter().enumerate() {
-                if targets[*ti].part != pid {
-                    continue;
-                }
-                for (list, parts, off) in [(&mut adds, &tag.add, 0), (&mut removes, &tag.remove, 4)] {
-                    for (pi, p) in parts.iter().enumerate() {
-                        let Some(sp) = sstate.part(*p) else { continue };
-                        let Some(sbody) = sp.body else { continue };
-                        let r = self.kernel.transform_motion(sbody, m).map_err(|e| format!("Placing the form failed: {e}"));
-                        let r = match r {
-                            Ok(r) => r,
-                            Err(e) => {
-                                release(self, &owned_tmp);
-                                return Err(e);
-                            }
-                        };
-                        let b = r.bodies[0];
-                        owned_tmp.push(b);
-                        let names = self.instance_names(b, &r.history, &sp.names, op, (ci * 8 + pi + off) as u32)?;
-                        list.push((b, names));
-                    }
-                }
-            }
-            let (mut cur, mut cur_names) = (body, (*ps.names).clone());
-            let mut fresh: Option<BodyId> = None;
-            for (kind, tools) in [(BoolOp::Union, &adds), (BoolOp::Subtract, &removes)] {
-                if tools.is_empty() {
-                    continue;
-                }
-                let tb: Vec<BodyId> = tools.iter().map(|(b, _)| *b).collect();
-                let r = self.kernel.boolean(kind, cur, &tb).map_err(|e| format!("The form failed: {e}"));
-                let r = match r {
-                    Ok(r) => r,
-                    Err(e) => {
-                        release(self, &owned_tmp);
-                        if let Some(f) = fresh {
-                            self.kernel.release(f);
-                        }
-                        return Err(e);
-                    }
-                };
-                let nb = r.bodies[0];
-                let mut inputs: Vec<(BodyId, &BodyNames)> = vec![(cur, &cur_names)];
-                inputs.extend(tools.iter().map(|(b, n)| (*b, n)));
-                let names = naming::name_body(&self.kernel, nb, op, &r.history, &inputs).map_err(|e| e.to_string())?;
-                if let Some(f) = fresh {
-                    self.kernel.release(f);
-                }
-                fresh = Some(nb);
-                cur = nb;
-                cur_names = names;
-            }
-            release(self, &owned_tmp);
-            owned_tmp.clear();
-            let Some(nb) = fresh else { continue };
-            let mut pieces = self.split(nb, op, &[(nb, &cur_names)])?;
-            self.kernel.release(nb);
-            pieces.sort_by(|a, b| b.volume.total_cmp(&a.volume));
-            for (i, pc) in pieces.into_iter().enumerate() {
-                let p = if i == 0 {
-                    pid
-                } else {
-                    let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
-                    Self::new_id(id, &next, &taken)
-                };
-                placed.push((p, pc));
+            let up = (n.dot(&wn) > 0.0) != model.params.flip_direction_up;
+            let local = local_to_wall(model, wall_id, &m).ok_or("Forms go on the flat faces of sheet metal walls")?;
+            let copy = FormCopy { wall: wall_id, local, center: to_wall(center), lines: flines, up };
+            match by_ctx.iter_mut().find(|(c, _)| *c == t.ctx) {
+                Some((_, v)) => v.push(copy),
+                None => by_ctx.push((t.ctx, vec![copy])),
             }
         }
-        next.sheet_metal = Arc::new(contexts);
-        self.finish(id, placed, next, op, geoms, PartKind::Solid)
+        // Each model refolded with its copies.
+        let mut current = state.clone();
+        let mut owned = Vec::new();
+        let mut last: Option<Output> = None;
+        for (ci, copies) in by_ctx {
+            let step = FormStep { feature: id, name: name.to_string(), pick: pick.clone(), variables: x.variables.clone(), thickness, copies };
+            let o = self.edit_sheet_metal(id, name, &current, ci, |ctx| {
+                ctx.forms.push(step);
+                Ok(None)
+            })?;
+            if o.error.is_some() {
+                return Ok(o);
+            }
+            owned.extend(o.owned.iter().copied());
+            current = o.state.clone();
+            last = Some(o);
+        }
+        let mut o = last.ok_or("The locations have no points")?;
+        o.owned = owned;
+        Ok(o)
     }
 }

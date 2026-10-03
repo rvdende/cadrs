@@ -80,7 +80,8 @@ impl Studio {
         let feature = existing.map_or_else(FeatureId::new, |f| f.id);
         let x = table_edit(model, prev.as_ref(), j, &ctx.model.params, &edit);
         let label = edit.label(joint);
-        self.h.execute(&mut self.d, &PutModifyJoint { element: self.el, feature, joint: x, label }).unwrap();
+        let after = ctx.editors.clone();
+        self.h.execute(&mut self.d, &PutModifyJoint { element: self.el, feature, joint: x, after, label }).unwrap();
         feature
     }
 

@@ -1,30 +1,25 @@
-//! Rebuilding the sheet metal features that edit an active model (P3I.4: Flange, Hem, Make
-//! joint; `crate::sheetmetal_features`), and the **SM1.6 hook** they share,
-//! [`Rebuilder::edit_sheet_metal`], for any feature after a Sheet metal model that changes the
-//! model's definition (P3I.5's Tab, Bend, … can use it too):
-//!
-//! 1. find the active model ([`SheetMetalContext`]) that the picked parts belong to;
-//! 2. let the feature add to the model's definition (`SheetMetalContext::def`, a
-//!    [`cadrs_sheetmetal::sharp_edit::SharpDef`]);
-//! 3. build the model again, check it in 3D and flat (as the Sheet metal model does), fold it,
-//!    and put its parts back under the same part ids (new flat-pattern parts get new ids, parts
-//!    a joint merged away are gone);
-//! 4. record the feature as the owner of the walls and joints it added, so their faces are named
-//!    after it ("Edge of Flange 1") and keep those names while later features edit the model.
+//! Rebuilding the sheet metal features that add walls and joints at the virtual sharps of an
+//! active model (P3I.4: Flange, Hem, Make joint; `crate::sheetmetal_features`). Each finds the
+//! active model its picks are on, locates the picked free edges on the built model, carries them
+//! back onto the walls of the definition's sharp base (a later step such as a Bend may have
+//! turned them; [`cadrs_sheetmetal::definition::Definition::pull_back`]), adds its walls and
+//! joints there ([`cadrs_sheetmetal::sharp_edit`]) and refolds through the one sheet metal
+//! pipeline ([`Rebuilder::edit_sheet_metal`], `sheetmetal/refold.rs`): the steps after the base
+//! replay on the changed walls, the parts keep their ids, and the new walls and bends are named
+//! after the feature ("Edge of Flange 1").
 
 // NaN-safe checks: `!(x > 0.0)` is true for NaN too, which is what they mean.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
-use super::sheetmetal::{Folded, face_index, flat_error, key_of, p3, v3};
+use super::sheetmetal::refold::active_context;
+use super::sheetmetal::{face_index, key_of, p3, v3};
 use super::*;
-use cadrs_sheetmetal::flat::PieceSource;
 use cadrs_sheetmetal::model::{P3, V3};
 use cadrs_sheetmetal::sharp_edit::{self, EdgeFrame, EdgePick, FlangeEdge, FlangeOpts, HemEdge, HemKind, HemOpts, JointSpec, PickSide};
-use cadrs_sheetmetal::{Model, WallId, flatten};
+use cadrs_sheetmetal::Model;
 
 use crate::applied::EdgeOrFace;
 use crate::document::DirectionRef;
-use crate::sheetmetal::{PieceKey, SheetMetalContext};
 use crate::sheetmetal_features::{AngleControl, ChainType, Bound, FlangeEnd, FlangeFeature, HemFeature, MakeJointFeature, MakeJointType, SheetMetalFeature, SmTarget};
 
 /// A picked edge or side face: its part, its points and a stable key.
@@ -51,120 +46,8 @@ fn picked(state: &State, e: &EdgeOrFace) -> Option<Picked> {
     }
 }
 
-/// The walls and joints a definition has (for owners).
-fn def_ids(ctx: &SheetMetalContext) -> Vec<PieceKey> {
-    let Some(d) = &ctx.def else { return Vec::new() };
-    let mut v: Vec<PieceKey> = d.builder.walls.iter().filter_map(|w| w.id).map(PieceKey::Wall).collect();
-    v.extend(d.builder.joints.iter().filter_map(|j| j.id).map(PieceKey::Joint));
-    for h in &d.builder.hems {
-        v.extend(h.wall_id.map(PieceKey::Wall));
-        v.extend(h.id.map(PieceKey::Joint));
-    }
-    v.extend(d.extra_walls.iter().map(|w| PieceKey::Wall(w.id)));
-    v.extend(d.extra_joints.iter().map(|j| PieceKey::Joint(j.id)));
-    v
-}
-
 impl Rebuilder {
-    /// SM1.6: a feature after a Sheet metal model edits its definition (see the module docs).
-    /// `part` is a part of the model; `edit` changes the context's definition (`ctx.def`,
-    /// always `Some` when it runs) given the model as it was, and may return a warning.
-    pub(in crate::rebuild) fn edit_sheet_metal(
-        &mut self,
-        id: FeatureId,
-        state: &Arc<State>,
-        part: PartId,
-        edit: impl FnOnce(&mut SheetMetalContext) -> Result<Option<String>, String>,
-    ) -> Result<Output, String> {
-        let Some(old) = state.sheet_metal.iter().find(|c| c.parts.iter().any(|(p, _)| *p == part)) else {
-            return Err("Select edges of a sheet metal part".into());
-        };
-        if !old.active {
-            return Err("The sheet metal model is finished: it can't be changed".into());
-        }
-        if old.def.is_none() {
-            return Err("Rebuild the Sheet metal model first".into());
-        }
-        let mut ctx = old.clone();
-        let before_ids = def_ids(&ctx);
-        let warning = edit(&mut ctx)?;
-        for k in def_ids(&ctx) {
-            if !before_ids.contains(&k) {
-                ctx.owners.push((k, id));
-            }
-        }
-        let def = ctx.def.as_ref().expect("checked");
-        let mut model: Model = def.build().map_err(|e| e.message())?;
-        model.fixed = old.model.fixed;
-        model.corner_overrides = old.model.corner_overrides.clone();
-        model.bend_relief_overrides = old.model.bend_relief_overrides.clone();
-        if let Some(e) = model.validate().first() {
-            return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
-        }
-        let flat = flatten(&model);
-        if let Some(why) = flat_error(&flat) {
-            return Err(why);
-        }
-        let op = id.0;
-        let ctx_ref = &ctx;
-        let op_of = move |s: PieceSource| match s {
-            PieceSource::Wall(w) => ctx_ref.owner(PieceKey::Wall(w)).0,
-            PieceSource::Bend(j) => ctx_ref.owner(PieceKey::Joint(j)).0,
-        };
-        let folded: Vec<Folded> = self.fold(&op_of, op, &model, &flat)?;
-        for (_, body, _, sum) in &folded {
-            let v = self.kernel.mass_properties(*body).map(|m| m.volume).unwrap_or(*sum);
-            if v < sum - (1e-6 * sum + 1e-3) {
-                for (_, b, _, _) in &folded {
-                    self.kernel.release(*b);
-                }
-                return Err("Sheet metal walls intersect".into());
-            }
-        }
-        // The model's parts again, under their ids where their walls carry on.
-        let geoms = state.geoms.clone();
-        let mut next = State { geoms: geoms.clone(), ..(**state).clone() };
-        let mut used: Vec<PartId> = Vec::new();
-        let mut placed: Vec<Placed> = Vec::new();
-        let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
-        let mut pieces_all = Vec::new();
-        for (walls, body, names, _) in folded {
-            let pieces = self.split(body, op, &[(body, &names)]);
-            self.kernel.release(body);
-            pieces_all.push((walls, pieces));
-        }
-        for (walls, pieces) in pieces_all {
-            let pieces = pieces?;
-            let keep = old.parts.iter().find(|(p, ws)| !used.contains(p) && ws.iter().any(|w| walls.contains(w))).map(|(p, _)| *p);
-            for (n, pc) in pieces.into_iter().enumerate() {
-                let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
-                let pid = match keep {
-                    Some(p) if n == 0 => p,
-                    _ => Self::new_id(id, &next, &taken),
-                };
-                if n == 0 {
-                    used.push(pid);
-                    walls_of.push((pid, walls.clone()));
-                }
-                placed.push((pid, pc));
-            }
-        }
-        next.parts.retain(|p| !old.parts.iter().any(|(q, _)| *q == p.part.id) || used.contains(&p.part.id));
-        let mut o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
-        ctx.parts = walls_of;
-        ctx.model = model;
-        ctx.flat = flat;
-        let mut next = (*o.state).clone();
-        let mut all = (*next.sheet_metal).clone();
-        all.retain(|c| c.feature != ctx.feature);
-        all.push(ctx);
-        next.sheet_metal = Arc::new(all);
-        o.state = Arc::new(next);
-        o.warning = warning;
-        Ok(o)
-    }
-
-    pub(in crate::rebuild) fn sheet_metal_feature(&mut self, before: &[Feature], id: FeatureId, x: &SheetMetalFeature, state: &Arc<State>) -> Result<Output, String> {
+    pub(in crate::rebuild) fn sheet_metal_feature(&mut self, before: &[Feature], id: FeatureId, name: &str, x: &SheetMetalFeature, state: &Arc<State>) -> Result<Output, String> {
         if let Some(p) = x.problem() {
             return Err(p.into());
         }
@@ -177,11 +60,8 @@ impl Rebuilder {
         for p in &mut picks {
             p.key ^= salt;
         }
-        let ctx = state
-            .sheet_metal
-            .iter()
-            .find(|c| c.parts.iter().any(|(p, _)| *p == part))
-            .ok_or("Select edges of a sheet metal part")?;
+        let ci = active_context(state, part)?;
+        let ctx = &state.sheet_metal[ci];
         let model = ctx.model.clone();
         let mut eps: Vec<EdgePick> = Vec::new();
         for p in &picks {
@@ -213,17 +93,27 @@ impl Rebuilder {
             }
             SheetMetalFeature::MakeJoint(j) => Job::Joint(picks[0].key ^ picks[1].key.rotate_left(17), make_joint_spec(j)),
         };
-        self.edit_sheet_metal(id, state, part, move |ctx| {
+        self.edit_sheet_metal(id, name, state, ci, move |ctx| {
+            let built = ctx.model.clone();
             let def = ctx.def.as_mut().expect("checked");
+            // The picks on the built model, carried back onto the base's walls.
+            let back = |e: &EdgePick| -> Result<EdgePick, String> {
+                let pts = def.pull_back(&built, e.wall, &[e.a, e.b]).ok_or("Flange, Hem and Make joint work on the model's walls and those of flanges, not on walls a Bend, Jog, Tab, loft or pattern made")?;
+                Ok(EdgePick { a: pts[0], b: pts[1], ..*e })
+            };
+            let not_sharp = "Flange, Hem and Make joint need a model made by Convert, Extrude or Thicken";
             match job {
                 Job::Flange(edges, opts) => {
-                    sharp_edit::flange(def, &edges, &opts)?;
+                    let edges: Vec<FlangeEdge> = edges.iter().map(|e| Ok(FlangeEdge { pick: back(&e.pick)?, ..*e })).collect::<Result<_, String>>()?;
+                    sharp_edit::flange(def.sharp_mut().ok_or(not_sharp)?, &edges, &opts)?;
                 }
                 Job::Hem(edges, o) => {
-                    sharp_edit::hem(def, &edges, &o)?;
+                    let edges: Vec<HemEdge> = edges.iter().map(|e| Ok(HemEdge { pick: back(&e.pick)?, ..*e })).collect::<Result<_, String>>()?;
+                    sharp_edit::hem(def.sharp_mut().ok_or(not_sharp)?, &edges, &o)?;
                 }
                 Job::Joint(key, spec) => {
-                    sharp_edit::make_joint(def, &eps[0], &eps[1], key, spec)?;
+                    let (a, b) = (back(&eps[0])?, back(&eps[1])?);
+                    sharp_edit::make_joint(def.sharp_mut().ok_or(not_sharp)?, &a, &b, key, spec)?;
                 }
             }
             Ok(None)

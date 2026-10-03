@@ -59,6 +59,27 @@ impl SharpDef {
         }
     }
 
+    /// Adds another definition's walls, joints and hems after these (an Extrude of several
+    /// sketches builds one definition per sketch into one model).
+    pub fn merge(&mut self, other: SharpDef) {
+        let (nw, seq) = (self.builder.walls.len(), self.builder.seq);
+        self.builder.walls.extend(other.builder.walls);
+        self.builder.joints.extend(other.builder.joints.into_iter().map(|mut j| {
+            j.a += nw;
+            j.b += nw;
+            j.seq += seq;
+            j
+        }));
+        self.builder.hems.extend(other.builder.hems.into_iter().map(|mut h| {
+            h.wall += nw;
+            h.seq += seq;
+            h
+        }));
+        self.builder.seq += other.builder.seq;
+        self.extra_walls.extend(other.extra_walls);
+        self.extra_joints.extend(other.extra_joints);
+    }
+
     /// The model.
     pub fn build(&self) -> Result<Model, BuildError> {
         let mut m = self.builder.build()?;

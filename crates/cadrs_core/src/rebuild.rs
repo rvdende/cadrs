@@ -1046,16 +1046,16 @@ impl Rebuilder {
             #[cfg(feature = "occt")]
             FeatureKind::Fill(x) => self.fill(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
-            FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(feature = "occt")]
-            FeatureKind::ModifyJoint(x) => self.modify_joint(f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::ModifyJoint(x) => self.modify_joint(f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::ModifyJoint(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             // P3I.9.
             #[cfg(feature = "occt")]
-            FeatureKind::SheetMetalLoft(x) => self.sheet_metal_loft(before, f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::SheetMetalLoft(x) => self.sheet_metal_loft(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Form(x) => self.sheet_metal_form(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
@@ -1064,12 +1064,12 @@ impl Rebuilder {
             FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             // P3I.4.
             #[cfg(feature = "occt")]
-            FeatureKind::SheetMetal(x) => self.sheet_metal_feature(before, f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::SheetMetal(x) => self.sheet_metal_feature(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetal(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             // P3I.5.
             #[cfg(feature = "occt")]
-            FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetalTool(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]

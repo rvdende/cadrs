@@ -29,6 +29,8 @@ use crate::solid::Solid;
 /// P3I.5: the sheet metal features after the model (`crate::sheetmetal_tools`) and the
 /// sheet-metal-aware cuts, fillets and face patterns.
 mod tools;
+/// The one pipeline every feature that changes a sheet metal model goes through (SM1.6).
+pub(super) mod refold;
 
 /// A stable key for a face, edge or curve name.
 pub(super) fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
@@ -403,8 +405,9 @@ pub(super) fn flat_error(flat: &FlatPattern) -> Option<String> {
 impl Rebuilder {
     /// The folded bodies of a model's flat-pattern parts: each with its walls, body, names and
     /// the sum of its pieces' volumes.
-    /// `op_of` names each piece's faces (P3I.4: by the feature that made the wall or bend).
-    pub(super) fn fold(&mut self, op_of: &dyn Fn(PieceSource) -> cadrs_kernel::OpId, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern) -> Result<Vec<Folded>, String> {
+    /// `op_of` names each piece's faces (P3I.4: by the feature that made the wall or bend);
+    /// the walls in `slabs` (a loft's) are mitred slabs.
+    pub(super) fn fold(&mut self, op_of: &dyn Fn(PieceSource) -> cadrs_kernel::OpId, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern, slabs: &[WallId]) -> Result<Vec<Folded>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         let release = |k: &mut cadrs_kernel::backend::occt::OcctKernel, made: &[(BodyId, BodyNames, f64)]| {
@@ -418,6 +421,7 @@ impl Rebuilder {
                 let removed = removed_of(part, piece.source);
                 let r = match piece.source {
                     PieceSource::Wall(w) => match model.wall(w) {
+                        Some(wall) if slabs.contains(&w) => self.slab_bodies(op_of(piece.source), model, wall, &removed, t),
                         Some(wall) => self.wall_bodies(op_of(piece.source), wall, &removed, t),
                         None => continue,
                     },
@@ -452,6 +456,24 @@ impl Rebuilder {
             out.push((part.walls.clone(), fused.0, fused.1, sum));
         }
         Ok(out)
+    }
+
+    /// A loft wall's solid: a slab mitred to its facet neighbours (P3I.9,
+    /// [`cadrs_sheetmetal::loft::wall_slab`]), made solid by the kernel; the plain extrusion when
+    /// it can't be.
+    fn slab_bodies(&mut self, op: cadrs_kernel::OpId, model: &Model, wall: &Wall, removed: &[Polygon], t: f64) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
+        let Some(tris) = cadrs_sheetmetal::loft::wall_slab(model, wall.id, removed) else { return self.wall_bodies(op, wall, removed, t) };
+        let size = tris.iter().flatten().map(|p| p.coords.norm()).fold(1.0, f64::max);
+        let Ok(b) = self.kernel.mesh_solid(&tris, 1e-7 * size) else { return self.wall_bodies(op, wall, removed, t) };
+        let names = naming::name_body(&self.kernel, b, op, &cadrs_kernel::History::default(), &[]).map_err(|e| e.to_string());
+        let vol = self.kernel.mass_properties(b).map(|m| m.volume).map_err(|e| e.to_string());
+        match (names, vol) {
+            (Ok(n), Ok(v)) => Ok(vec![(b, n, v)]),
+            (Err(e), _) | (_, Err(e)) => {
+                self.kernel.release(b);
+                Err(e)
+            }
+        }
     }
 
     /// A wall's solid: its outline (less the relief cuts) thickened on its material side.
@@ -590,7 +612,7 @@ impl Rebuilder {
         }
     }
 
-    pub(in crate::rebuild) fn sheet_metal_model(&mut self, before: &[Feature], id: FeatureId, x: &SheetMetalModelFeature, state: &Arc<State>) -> Result<Output, String> {
+    pub(in crate::rebuild) fn sheet_metal_model(&mut self, before: &[Feature], id: FeatureId, name: &str, x: &SheetMetalModelFeature, state: &Arc<State>) -> Result<Output, String> {
         if let Some(e) = x.params.validate().first() {
             return Err(e.message());
         }
@@ -600,8 +622,6 @@ impl Rebuilder {
         let p = x.params;
         let mut consumed: Vec<PartId> = Vec::new();
         let mut warning: Option<String> = None;
-        // P3I.3: kept with the context, for Modify joint to build the model again.
-        let recipe: Option<cadrs_sheetmetal::joint_edit::Recipe>;
         let built = match x.operation {
             SheetMetalOp::Convert | SheetMetalOp::Thicken => {
                 let mut g = Gathered::default();
@@ -703,9 +723,7 @@ impl Rebuilder {
                     warning = Some("A selected edge to bend no longer exists".into());
                 }
                 let o = FaceOpts { material_inside: x.flip_thickness, clearance: x.clearance, include_bends: x.include_bends, bends, ..Default::default() };
-                let built = construct::from_faces(p, &g.faces, &g.cyls, &g.edges, &o).map_err(|e| e.message())?;
-                recipe = Some(cadrs_sheetmetal::joint_edit::Recipe::Faces { params: p, faces: g.faces, cyls: g.cyls, edges: g.edges, opts: o });
-                built
+                construct::from_faces(p, &g.faces, &g.cyls, &g.edges, &o).map_err(|e| e.message())?
             }
             SheetMetalOp::Extrude => {
                 let (groups, missing) = chains_of(before, x)?;
@@ -717,7 +735,6 @@ impl Rebuilder {
                 }
                 // One sketch at a time (each its own plane), into one model.
                 let mut all: Option<construct::Built> = None;
-                let mut recipe_groups = Vec::new();
                 for (frame, chains) in &groups {
                     let origin = p3(frame.origin);
                     let (fx, fy) = (v3(frame.u).normalize(), v3(frame.v).normalize());
@@ -747,7 +764,6 @@ impl Rebuilder {
                         .collect();
                     let o = ChainOpts { origin, x: fx, y: fy, z0, z1, dir, flip_side: x.flip_thickness, arcs_as_bends: arcs, edits: Vec::new() };
                     let b = construct::from_chains(p, chains, &o).map_err(|e| e.message())?;
-                    recipe_groups.push((chains.clone(), o));
                     if let Some(w) = b.warnings.first() {
                         warning = Some(w.clone());
                     }
@@ -758,103 +774,33 @@ impl Rebuilder {
                             a.model.joints.extend(b.model.joints);
                             a.walls.extend(b.walls);
                             a.joints.extend(b.joints);
+                            a.def.merge(b.def);
                             a
                         }
                     });
                 }
-                recipe = Some(cadrs_sheetmetal::joint_edit::Recipe::Chains { params: p, groups: recipe_groups });
                 all.ok_or("Nothing to extrude")?
             }
         };
-        if !built.loop_picks.is_empty() && warning.is_none() {
-            // Not a problem: the pick order decided (SM2.2). Nothing to report.
-        }
-        let mut model = built.model;
-        cadrs_sheetmetal::joint_edit::reorder(&mut model, &x.table_order);
-        // The definition must hold together in 3D.
-        if let Some(e) = model.validate().first() {
-            return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
-        }
-        let flat = flatten(&model);
-        let mut ctx = SheetMetalContext {
+        let mut def = cadrs_sheetmetal::definition::Definition::sharp(built.def);
+        def.table_order = x.table_order.clone();
+        let ctx = SheetMetalContext {
             feature: id,
-            model: model.clone(),
-            flat: flat.clone(),
+            model: built.model,
+            flat: FlatPattern::default(),
             parts: Vec::new(),
             active: true,
-            wall_keys: built.walls.clone(),
-            joint_keys: built.joints.clone(),
-            recipe,
-            edits: Vec::new(),
-            table_order: x.table_order.clone(),
-            def: Some(built.def.clone()),
+            wall_keys: built.walls,
+            joint_keys: built.joints,
+            def: Some(def),
             owners: Vec::new(),
+            editors: vec![id],
+            forms: Vec::new(),
             corner_broken: false,
         };
-        let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
-            let mut next = (**state).clone();
-            let mut all = (*next.sheet_metal).clone();
-            all.retain(|c| c.feature != id);
-            all.push(ctx);
-            next.sheet_metal = Arc::new(all);
-            Ok(Output {
-                state: Arc::new(next),
-                error: Some(why),
-                warning: None,
-                contacts: None,
-                owned: Vec::new(),
-                stage: None,
-                axis: None,
-                arrows: Vec::new(),
-                dots: None,
-                uses: Vec::new(),
-            })
-        };
-        if let Some(why) = flat_error(&flat) {
-            return fail_keeping_context(ctx, why);
-        }
-        let op = id.0;
-        let folded = self.fold(&|_| op, op, &model, &flat)?;
-        // Walls running into each other in 3D: the fused body is smaller than its pieces.
-        for (_, body, _, sum) in &folded {
-            let v = self.kernel.mass_properties(*body).map(|m| m.volume).unwrap_or(*sum);
-            if v < sum - (1e-6 * sum + 1e-3) {
-                for (_, b, _, _) in &folded {
-                    self.kernel.release(*b);
-                }
-                return fail_keeping_context(ctx, "Sheet metal walls intersect".into());
-            }
-        }
-        let geoms = state.geoms.clone();
-        let mut next = State { geoms: geoms.clone(), ..(**state).clone() };
-        if x.operation == SheetMetalOp::Convert && !x.keep_input {
-            next.parts.retain(|p| !consumed.contains(&p.part.id));
-        }
-        let mut placed: Vec<Placed> = Vec::new();
-        let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
-        for (k, (walls, body, names, _)) in folded.into_iter().enumerate() {
-            let pieces = self.split(body, op, &[(body, &names)]);
-            self.kernel.release(body);
-            let pieces = pieces?;
-            for (n, pc) in pieces.into_iter().enumerate() {
-                let want = PartId::new(id, k as u32);
-                let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
-                let pid = if n == 0 && next.part(want).is_none() && !taken.contains(&want) { want } else { Self::new_id(id, &next, &taken) };
-                if n == 0 {
-                    walls_of.push((pid, walls.clone()));
-                }
-                placed.push((pid, pc));
-            }
-        }
-        let mut o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
-        ctx.parts = walls_of;
-        let mut next = (*o.state).clone();
-        let mut all = (*next.sheet_metal).clone();
-        all.retain(|c| c.feature != id);
-        all.push(ctx);
-        next.sheet_metal = Arc::new(all);
-        o.state = Arc::new(next);
-        o.warning = warning;
+        let consumed = if x.operation == SheetMetalOp::Convert && !x.keep_input { consumed } else { Vec::new() };
+        let mut o = self.refold(id, name, state, &[], None, ctx, &consumed)?;
+        o.warning = o.warning.or(warning);
         Ok(o)
     }
 }

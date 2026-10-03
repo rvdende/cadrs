@@ -6,17 +6,15 @@
 //!   on the walls **at their virtual sharps** ([`crate::SharpBuilder`]) before they are trimmed,
 //!   so a new radius moves the tangent lines and a bend made a rip leaves a gap: the folded
 //!   solid and the flat pattern follow as if the model had been made that way.
-//! - A [`Recipe`] is what a Sheet metal model was built from (the faces, edges and cylinders of
-//!   a Convert or Thicken, the chains of an Extrude), kept with the model so features after it
-//!   can build it again with their edits ([`Recipe::build`]).
+//! - The model keeps its walls at their virtual sharps in its [`crate::definition::Definition`],
+//!   whose [`crate::definition::Definition::edit_joint`] applies an edit there (and to the bends
+//!   of Bend and Jog steps), so every later feature sees it.
 //! - [`reorder`]: the table order (Move up / Move down) as a list of joint ids.
 
 use serde::{Deserialize, Serialize};
 
 use crate::bend::BendValue;
-use crate::construct::{self, Built, ChainIn, ChainOpts, ConstructError, CylIn, EdgeIn, FaceIn, FaceOpts};
 use crate::model::{JointId, Model, RipStyle, SharpBuilder, SharpJointKind};
-use crate::params::Params;
 
 /// What a joint becomes.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -87,52 +85,12 @@ pub fn moved(m: &Model, joint: JointId, by: isize) -> Option<Vec<JointId>> {
     m.move_joint(joint, by).then(|| m.joints.iter().map(|j| j.id).collect())
 }
 
-/// What a Sheet metal model was built from.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Recipe {
-    /// Convert or Thicken.
-    Faces { params: Params, faces: Vec<FaceIn>, cyls: Vec<CylIn>, edges: Vec<EdgeIn>, opts: FaceOpts },
-    /// Extrude: one set of chains per sketch, into one model.
-    Chains { params: Params, groups: Vec<(Vec<ChainIn>, ChainOpts)> },
-}
-
-impl Recipe {
-    /// Builds the model again with `edits` (and the edits its options carry already).
-    pub fn build(&self, edits: &[JointEdit]) -> Result<Built, ConstructError> {
-        match self {
-            Recipe::Faces { params, faces, cyls, edges, opts } => {
-                let mut o = opts.clone();
-                o.edits.extend_from_slice(edits);
-                construct::from_faces(*params, faces, cyls, edges, &o)
-            }
-            Recipe::Chains { params, groups } => {
-                let mut all: Option<Built> = None;
-                for (chains, opts) in groups {
-                    let mut o = opts.clone();
-                    o.edits.extend_from_slice(edits);
-                    let b = construct::from_chains(*params, chains, &o)?;
-                    all = Some(match all {
-                        None => b,
-                        Some(mut a) => {
-                            a.model.walls.extend(b.model.walls);
-                            a.model.joints.extend(b.model.joints);
-                            a.walls.extend(b.walls);
-                            a.joints.extend(b.joints);
-                            a.warnings.extend(b.warnings);
-                            a
-                        }
-                    });
-                }
-                all.ok_or(ConstructError::NoWalls)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::construct::stable_id;
+    use crate::construct::{self, EdgeIn, FaceIn, FaceOpts, stable_id};
+    use crate::definition::Definition;
+    use crate::params::Params;
     use crate::flat::flatten;
     use crate::model::{JointKind, P3, V3};
     use crate::poly::{P2, Polygon};
@@ -143,7 +101,7 @@ mod tests {
 
     /// A 100 × 60 × 40 box's faces and edges (as `construct`'s tests), converted with its
     /// bottom's four edges bent: an open box and a separate top.
-    fn open_box() -> Recipe {
+    fn open_box() -> Definition {
         let (x, y, z) = (100.0, 60.0, 40.0);
         let f = |key, origin: P3, u: V3, v: V3, w: f64, h: f64| FaceIn { key, origin, u, v, outline: Polygon::rect(P2::origin(), P2::new(w, h)) };
         let faces = vec![
@@ -169,7 +127,17 @@ mod tests {
             e(20, P3::new(0.0, y, 0.0), P3::new(0.0, y, z), 3, 4),
             e(21, P3::new(x, y, 0.0), P3::new(x, y, z), 3, 5),
         ];
-        Recipe::Faces { params: params(), faces, cyls: vec![], edges, opts: FaceOpts { bends: vec![10, 11, 12, 13], ..Default::default() } }
+        let opts = FaceOpts { bends: vec![10, 11, 12, 13], ..Default::default() };
+        Definition::sharp(construct::from_faces(params(), &faces, &[], &edges, &opts).unwrap().def)
+    }
+
+    /// The model with `edits` made (as Modify joint features in turn).
+    fn built(d: &Definition, edits: &[JointEdit]) -> Model {
+        let mut d = d.clone();
+        for e in edits {
+            d.edit_joint(*e).unwrap();
+        }
+        d.build().unwrap()
     }
 
     fn id(key: u64) -> JointId {
@@ -179,29 +147,29 @@ mod tests {
     #[test]
     fn a_bend_made_a_rip_and_a_rip_made_a_bend() {
         let r = open_box();
-        let before = r.build(&[]).unwrap();
-        assert_eq!(flatten(&before.model).parts.len(), 2);
+        let before = built(&r, &[]);
+        assert_eq!(flatten(&before).parts.len(), 2);
         // Bend A (the bottom–south edge) becomes a rip: the south wall comes off on its own.
         let a = id(10);
         let edits = [JointEdit { joint: a, change: JointChange::Rip { style: RipStyle::EdgeJoint } }];
-        let after = r.build(&edits).unwrap();
-        let j = after.model.joint(a).unwrap();
+        let after = built(&r, &edits);
+        let j = after.joint(a).unwrap();
         assert!(matches!(j.kind, JointKind::Rip { .. }));
         assert_eq!(j.name, "Joint A");
-        assert!(after.model.validate().is_empty(), "{:?}", after.model.validate());
-        let f = flatten(&after.model);
+        assert!(after.validate().is_empty(), "{:?}", after.validate());
+        let f = flatten(&after);
         assert!(f.is_ok(), "{:?}", f.errors);
         assert_eq!(f.parts.len(), 3);
         // The top–south rip becomes a bend (model radius): the top joins the south wall.
         let top_south = id(14);
-        let name = before.model.joint(top_south).unwrap().name.clone();
+        let name = before.joint(top_south).unwrap().name.clone();
         assert!(name.starts_with("Joint "));
         let edits = [edits[0], JointEdit { joint: top_south, change: JointChange::Bend { radius: None, value: None } }];
-        let after = r.build(&edits).unwrap();
-        let j = after.model.joint(top_south).unwrap();
+        let after = built(&r, &edits);
+        let j = after.joint(top_south).unwrap();
         assert_eq!(j.bend().map(|b| b.radius), Some(3.0));
         assert_eq!(j.name, renamed(&name, true));
-        let f = flatten(&after.model);
+        let f = flatten(&after);
         assert!(f.is_ok(), "{:?}", f.errors);
         assert_eq!(f.parts.len(), 2);
         // A joint that isn't there is ignored (the feature reports it).
@@ -212,7 +180,7 @@ mod tests {
     #[test]
     fn a_new_radius_and_k_factor_change_the_flat_and_a_rip_style_holds() {
         let r = open_box();
-        let before = r.build(&[]).unwrap();
+        let before = built(&r, &[]);
         let b = id(11);
         let len = |m: &Model| {
             let f = flatten(m);
@@ -221,43 +189,35 @@ mod tests {
         };
         let k = BendValue::KFactor(0.3);
         let edits = [JointEdit { joint: b, change: JointChange::Bend { radius: Some(6.0), value: Some(k) } }];
-        let after = r.build(&edits).unwrap();
-        let bend = *after.model.joint(b).unwrap().bend().unwrap();
+        let after = built(&r, &edits);
+        let bend = *after.joint(b).unwrap().bend().unwrap();
         assert_eq!(bend.radius, 6.0);
         assert!(!bend.model_radius);
         assert_eq!(bend.value, Some(k));
-        assert!(after.model.validate().is_empty());
+        assert!(after.validate().is_empty());
         // The flat across that bend changes by the change in setbacks and allowance.
-        assert!((len(&after.model) - len(&before.model)).abs() > 1e-3);
+        assert!((len(&after) - len(&before)).abs() > 1e-3);
         // A rip's style (a 90° rip, so a butt joint is allowed).
         let rip = id(18);
         let edits = [JointEdit { joint: rip, change: JointChange::Rip { style: RipStyle::ButtDirection1 } }];
-        let after = r.build(&edits).unwrap();
-        assert!(matches!(after.model.joint(rip).unwrap().kind, JointKind::Rip { style: RipStyle::ButtDirection1, .. }));
+        let after = built(&r, &edits);
+        assert!(matches!(after.joint(rip).unwrap().kind, JointKind::Rip { style: RipStyle::ButtDirection1, .. }));
     }
 
     #[test]
     fn the_table_order_survives_a_rebuild() {
         let r = open_box();
-        let mut m = r.build(&[]).unwrap().model;
+        let mut m = built(&r, &[]);
         let order = moved(&m, id(12), -1).unwrap();
         reorder(&mut m, &order);
         let bends: Vec<&str> = m.joints.iter().filter(|j| j.bend().is_some()).map(|j| j.name.as_str()).collect();
         assert_eq!(bends, ["Bend A", "Bend C", "Bend B", "Bend D"]);
         // Rebuilt from scratch and reordered: the same order.
-        let mut again = r.build(&[]).unwrap().model;
+        let mut again = built(&r, &[]);
         reorder(&mut again, &order);
         assert_eq!(again.joints.iter().map(|j| j.id).collect::<Vec<_>>(), m.joints.iter().map(|j| j.id).collect::<Vec<_>>());
         // Moving the first bend up does nothing.
         assert!(moved(&m, id(10), -1).is_none());
-    }
-
-    #[test]
-    fn a_recipe_round_trips_through_ron() {
-        let r = open_box();
-        let s = ron::to_string(&r).unwrap();
-        let back: Recipe = ron::from_str(&s).unwrap();
-        assert_eq!(back, r);
     }
 
     #[test]

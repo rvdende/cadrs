@@ -146,7 +146,7 @@ fn namer(m: &Model) -> JointNamer {
 // Rigid maps
 
 /// A rigid motion of space: `p ↦ rot·p + t`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rigid {
     pub rot: Rotation3<f64>,
     pub t: V3,
@@ -357,7 +357,7 @@ impl BendAlignment {
 }
 
 /// A Bend's settings, resolved to the definition.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BendSpec {
     /// The wall to bend (the picked face's).
     pub wall: WallId,
@@ -661,7 +661,7 @@ impl JogAnchor {
 }
 
 /// A Jog's settings.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JogSpec {
     /// The first bend (its line, side, alignment, angle, radius and K factor; the second bend
     /// turns back by the same angle).
@@ -843,7 +843,7 @@ pub fn jog_wall(m: &mut Model, spec: &JogSpec, seed: u64) -> Result<JogMade, Edi
 // Profiles in space
 
 /// A planar region in space: `polygon` in the frame `origin + x·px + y·py`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Region3 {
     pub origin: P3,
     pub x: V3,
@@ -989,7 +989,7 @@ fn merge_walls(m: &mut Model, a: WallId, b: WallId) {
 
 /// A cutting tool: a profile swept along `dir` (unit), over `z` along it from the profile's
 /// plane (`None`: all the way through).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CutTool {
     pub region: Region3,
     pub dir: V3,
@@ -1065,7 +1065,7 @@ pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> R
 // Corner break (SM11)
 
 /// A corner break's shape (SM11.2, SM11.3).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CornerBreakKind {
     /// Rounded with this radius.
     Fillet { radius: f64 },
@@ -1288,7 +1288,7 @@ pub fn bend_end_near(m: &Model, p: P3) -> Option<((JointId, BendEnd), f64)> {
 // Face pattern and mirror (SM12.2)
 
 /// How copies are placed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Placement {
     Rigid(Rigid),
     /// Mirrored in the plane through `point` with unit normal `normal`.

@@ -13,9 +13,13 @@
 //! - [`relief`]: the relief cut shapes (SM7, SM8).
 //! - [`sharp_edit`]: the features after a Sheet metal model that edit its definition (P3I.4, SM1.6):
 //!   Flange, Hem and Make joint, on a [`sharp_edit::SharpDef`] kept with the model.
+//! - [`definition`]: the one definition of a model that every feature after it changes (SM1.6):
+//!   the sharp base (Flange, Hem, Make joint, Modify joint edit it) and the steps replayed on the
+//!   built model (Bend, Jog, Tab, cuts, corner breaks, copies, reliefs, loft walls).
+//! - [`joint_edit`]: joint edits (Modify joint, the table) and the table order;
+//!   [`model_edit`]: the edits of a built model the steps make (P3I.5).
 //! - [`table`]: the Bends and Other joints tables (SM13).
-//! - [`edit`]: joint edits (Modify joint, the table) and the recipe a model is rebuilt from;
-//!   [`view`]: meshes, picking and label spots for the table and flat view panel (P3I.3).
+//! - [`view`]: meshes, picking and label spots for the table and flat view panel (P3I.3).
 //! - [`loft`]: the Sheet metal Loft's tessellated walls and mitred folded solid (P3I.9, SM19.2);
 //!   [`forms`]: where forms may go and how the flat shows them (P3I.9, SM20).
 //! - [`samples`]: small models (an L, a U-channel, an open box, a hem, a tube, …) for tests,
@@ -25,6 +29,7 @@
 
 pub mod bend;
 pub mod construct;
+pub mod definition;
 pub mod joint_edit;
 pub mod model_edit;
 pub mod sharp_edit;

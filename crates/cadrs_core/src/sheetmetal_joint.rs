@@ -6,14 +6,15 @@
 //! ([`table_edit`], [`PutModifyJoint`]), or edits the joint's Modify joint if it has one; it can
 //! then be edited like any feature.
 //!
-//! The rebuild (`rebuild/kernel_ops/sheetmetal_joint.rs`) builds the model again from its
-//! recipe with the edits of every Modify joint of it so far ([`cadrs_sheetmetal::joint_edit`]), and
-//! refolds its parts in place (same part ids and face names).
+//! The rebuild (`rebuild/kernel_ops/sheetmetal_joint.rs`) makes the edit in the model's
+//! definition ([`cadrs_sheetmetal::definition::Definition::edit_joint`]) and refolds its parts in
+//! place through the one sheet metal pipeline (same part ids and face names).
 //!
-//! A new Modify joint goes right after the model's Sheet metal model feature and its other
-//! Modify joints, not at the end of the list as in Onshape: in cadrs the features after a
-//! Sheet metal model act on its folded parts, so they must come after the joint changes to
-//! keep acting on the refolded parts. **Move up / Move down** (the table order, SM13.4) is kept
+//! A new Modify joint goes right after the last feature that changed the model (the Sheet
+//! metal model, its Modify joints, Flanges, Bends, Tabs, …: the context's `editors`), not at the
+//! end of the list as in Onshape: in cadrs the ordinary features after a Sheet metal model act
+//! on its folded parts, so they must come after the joint changes to keep acting on the
+//! refolded parts, and a joint a Flange made only exists after the Flange. **Move up / Move down** (the table order, SM13.4) is kept
 //! on the Sheet metal model feature itself ([`SetTableOrder`]).
 
 use cadrs_sheetmetal::joint_edit::{JointChange, JointEdit};
@@ -270,9 +271,12 @@ pub fn modify_joint_of(features: &[Feature], model: FeatureId, joint: JointId) -
     features.iter().rev().find(|f| matches!(&f.kind, FeatureKind::ModifyJoint(x) if x.model == model && x.joint == Some(joint)))
 }
 
-/// Where a new Modify joint of `model` goes: after the model and its Modify joints.
-pub fn insert_index(features: &[Feature], model: FeatureId) -> Option<usize> {
-    let i = features.iter().rposition(|f| f.id == model || matches!(&f.kind, FeatureKind::ModifyJoint(x) if x.model == model))?;
+/// Where a new Modify joint of `model` goes: after the model, its Modify joints and `editors`
+/// (the other features that changed it, from its context).
+pub fn insert_index(features: &[Feature], model: FeatureId, editors: &[FeatureId]) -> Option<usize> {
+    let i = features
+        .iter()
+        .rposition(|f| f.id == model || editors.contains(&f.id) || matches!(&f.kind, FeatureKind::ModifyJoint(x) if x.model == model))?;
     Some(i + 1)
 }
 
@@ -283,6 +287,9 @@ pub struct PutModifyJoint {
     pub element: ElementId,
     pub feature: FeatureId,
     pub joint: ModifyJointFeature,
+    /// The features that changed the model so far (its context's `editors`): a new Modify joint
+    /// goes after them.
+    pub after: Vec<FeatureId>,
     pub label: String,
 }
 
@@ -303,7 +310,7 @@ impl Command for PutModifyJoint {
         if let Some(f) = features.iter_mut().find(|f| f.id == self.feature) {
             f.kind = kind;
         } else {
-            let at = insert_index(features, self.joint.model).ok_or_else(|| CommandError::Invalid("the sheet metal model is gone".into()))?;
+            let at = insert_index(features, self.joint.model, &self.after).ok_or_else(|| CommandError::Invalid("the sheet metal model is gone".into()))?;
             features.insert(at, Feature { id: self.feature, name, kind });
             if let Some(r) = rollback
                 && *r >= at

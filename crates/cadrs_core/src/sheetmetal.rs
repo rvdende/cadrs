@@ -329,28 +329,55 @@ pub struct SheetMetalContext {
     /// features and the views can find them.
     pub wall_keys: Vec<(u64, WallId)>,
     pub joint_keys: Vec<(u64, JointId)>,
-    /// P3I.3: what the model was built from, so a Modify joint can build it again with its
-    /// edit ([`cadrs_sheetmetal::joint_edit`]), the edits so far, and the table order.
+    /// The definition the model is built from (SM1.6; [`cadrs_sheetmetal::definition`]): the
+    /// walls at their virtual sharps, which Flange, Hem, Make joint and Modify joint edit, and
+    /// the steps Bend, Jog, Tab, cuts, corner breaks, face copies, reliefs and loft walls make,
+    /// replayed in order. Every feature after the model edits it and refolds the parts through
+    /// one pipeline (`Rebuilder::edit_sheet_metal`, `rebuild/kernel_ops/sheetmetal/refold.rs`).
+    /// `None` only for a context with nothing to build from.
     #[serde(default)]
-    pub recipe: Option<cadrs_sheetmetal::joint_edit::Recipe>,
-    #[serde(default)]
-    pub edits: Vec<cadrs_sheetmetal::joint_edit::JointEdit>,
-    #[serde(default)]
-    pub table_order: Vec<JointId>,
-    /// The definition the model is built from (P3I.4, SM1.6): features after the Sheet metal
-    /// model (Flange, Hem, Make joint, …) add to it and the model is built again from it
-    /// (`Rebuilder::edit_sheet_metal`, `rebuild/kernel_ops/sheetmetal_features.rs`). `None` for
-    /// a context kept from before definitions were kept.
-    #[serde(default)]
-    pub def: Option<cadrs_sheetmetal::sharp_edit::SharpDef>,
+    pub def: Option<cadrs_sheetmetal::definition::Definition>,
     /// The feature that added each wall and joint after the model (its faces are named by that
     /// feature, so they read "Face of Flange 1"); the rest are the model's.
     #[serde(default)]
     pub owners: Vec<(PieceKey, FeatureId)>,
+    /// The features that changed the model, in order (the model first): a new Modify joint goes
+    /// after the last of them (`crate::sheetmetal_joint::insert_index`).
+    #[serde(default)]
+    pub editors: Vec<FeatureId>,
+    /// Forms placed on the model (SM20), applied to the folded parts and their flats again at
+    /// every refold, after the definition's steps.
+    #[serde(default)]
+    pub forms: Vec<FormStep>,
     /// P3I.5 (SM11.4): a Corner break was made on it: its joints' type and style can't be edited
     /// in the table any more.
     #[serde(default)]
     pub corner_broken: bool,
+}
+
+/// A Form feature's copies on one model (P3I.9; kept so a refold applies them again).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormStep {
+    pub feature: FeatureId,
+    /// The feature's name ("Form 1").
+    pub name: String,
+    pub pick: crate::sheetmetal_form::FormPick,
+    pub variables: Vec<crate::sheetmetal_form::FormVariable>,
+    pub thickness: f64,
+    pub copies: Vec<FormCopy>,
+}
+
+/// One copy of a form on a wall.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormCopy {
+    pub wall: WallId,
+    /// The form's placement relative to the wall's frame (origin, u, v, normal of its definition
+    /// surface): it moves with the wall when a later feature moves it.
+    pub local: cadrs_kernel::Motion,
+    /// Its centermark and outline in the wall's local 2D, and whether it stands up from the flat.
+    pub center: cadrs_sheetmetal::poly::P2,
+    pub lines: Vec<cadrs_sheetmetal::forms::FormLine>,
+    pub up: bool,
 }
 
 /// A wall or joint of a model's definition (for [`SheetMetalContext::owners`]).
@@ -364,6 +391,11 @@ impl SheetMetalContext {
     /// The part a wall is in.
     pub fn part_of_wall(&self, w: WallId) -> Option<PartId> {
         self.parts.iter().find(|(_, ws)| ws.contains(&w)).map(|(p, _)| *p)
+    }
+
+    /// The table order (Move up / Move down, SM13.4).
+    pub fn table_order(&self) -> &[JointId] {
+        self.def.as_ref().map_or(&[], |d| &d.table_order)
     }
 
     /// The feature that made a wall or joint (its faces are named by it).

@@ -964,7 +964,7 @@ fn edit_joint(world: &mut World, joint: JointId, edit: TableEdit) {
     }
     let feature = existing.map_or_else(FeatureId::new, |(f, _)| f);
     let label = edit.label(&j.name);
-    run(world, element, &PutModifyJoint { element, feature, joint: x, label });
+    run(world, element, &PutModifyJoint { element, feature, joint: x, after: ctx.editors.clone(), label });
 }
 
 fn run(world: &mut World, _element: ElementId, cmd: &dyn cadrs_core::Command) {

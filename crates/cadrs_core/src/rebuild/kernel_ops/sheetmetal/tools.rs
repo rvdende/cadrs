@@ -3,11 +3,13 @@
 //! metal (SM1.6, SM12). A child of the Sheet metal model's rebuild, so it shares its helpers
 //! (the folded solid, the flat check).
 //!
-//! Every one of them edits the **definition** of the active model its picks are on
-//! (`cadrs_sheetmetal::model_edit`, or the model's relief overrides), then [`Rebuilder::refold`] makes
-//! the flat pattern and the folded parts again: the parts keep their ids and names (matched by
-//! their walls), parts no flat part continues go, new ones are added. Picks are matched to the
-//! definition by where they were picked (the seed point), since a refold renames the faces.
+//! Every one of them adds a **step** to the definition of the active model its picks are on
+//! (`cadrs_sheetmetal::definition`: a Bend, Jog, Tab, cut, corner break, face copy or relief
+//! override, replayed by `cadrs_sheetmetal::model_edit` on the built model), then the one sheet
+//! metal pipeline ([`Rebuilder::edit_sheet_metal`], `refold.rs`) makes the model, the flat
+//! pattern and the folded parts again: the parts keep their ids and names (matched by their
+//! walls), parts no flat part continues go, new ones are added. Picks are matched to the model by
+//! where they were picked (the seed point), since a refold renames the faces.
 //!
 //! - **Finish sheet metal model** marks the models of its parts finished: the sheet metal
 //!   features after it refuse them, the ordinary ones act on the solids, and the flat and table
@@ -20,6 +22,7 @@
 //!   to the ordinary feature.
 
 use super::*;
+use cadrs_sheetmetal::definition::StepEdit;
 use cadrs_sheetmetal::model_edit::{self as model_edit, BendSpec, CornerBreakKind, CutTool, EditError, JogSpec, Placement, Region3};
 use cadrs_sheetmetal::model::{BendReliefOverride, CornerOverride};
 
@@ -169,7 +172,7 @@ impl Rebuilder {
         Ok((ci, spec))
     }
 
-    pub(in crate::rebuild) fn sheet_metal_tool(&mut self, before: &[Feature], id: FeatureId, x: &SheetMetalTool, state: &Arc<State>) -> Result<Output, String> {
+    pub(in crate::rebuild) fn sheet_metal_tool(&mut self, before: &[Feature], id: FeatureId, name: &str, x: &SheetMetalTool, state: &Arc<State>) -> Result<Output, String> {
         if let Some(p) = x.problem() {
             return Err(p.into());
         }
@@ -199,41 +202,43 @@ impl Rebuilder {
             }
             SheetMetalTool::Bend(b) => {
                 let (ci, spec) = self.bend_spec(before, state, b)?;
-                let mut model = state.sheet_metal[ci].model.clone();
-                model_edit::bend_wall(&mut model, &spec, seed).map_err(err)?;
-                self.refold(id, state, ci, model, false)
+                self.step(id, name, state, ci, StepEdit::Bend { spec, seed })
             }
-            SheetMetalTool::Jog(j) => self.jog(before, id, j, state),
-            SheetMetalTool::Tab(t) => self.tab(before, id, t, state),
+            SheetMetalTool::Jog(j) => self.jog(before, id, name, j, state),
+            SheetMetalTool::Tab(t) => self.tab(before, id, name, t, state),
             SheetMetalTool::Corner(c) => {
                 let pick = c.corner.ok_or("Select a corner")?;
                 let ci = need_context(state, pick.part())?;
                 let ctx = &state.sheet_metal[ci];
                 let (bends, _) = model_edit::corner_near(&ctx.model, &ctx.flat, p3(pick.seed())).ok_or("Select a corner where two bends meet")?;
-                let mut model = ctx.model.clone();
-                model.corner_overrides.push(CornerOverride { bends, relief: c.relief });
-                self.refold(id, state, ci, model, false)
+                self.step(id, name, state, ci, StepEdit::CornerRelief(CornerOverride { bends, relief: c.relief }))
             }
             SheetMetalTool::BendRelief(b) => {
                 let pick = b.end.ok_or("Select a bend relief")?;
                 let ci = need_context(state, pick.part())?;
                 let ctx = &state.sheet_metal[ci];
                 let ((bend, end), _) = model_edit::bend_end_near(&ctx.model, p3(pick.seed())).ok_or("Select the end of a bend")?;
-                let mut model = ctx.model.clone();
-                model.bend_relief_overrides.push(BendReliefOverride { bend, end, relief: b.relief });
-                self.refold(id, state, ci, model, false)
+                self.step(id, name, state, ci, StepEdit::BendRelief(BendReliefOverride { bend, end, relief: b.relief }))
             }
             SheetMetalTool::CornerBreak(c) => {
                 let picks: Vec<(PartId, Vec3)> = c.entities.iter().map(|e| (e.part(), e.seed())).collect();
-                self.corner_breaks(id, &picks, &|beta| corner_kind(c, beta), state)
+                self.corner_breaks(id, name, &picks, &|beta| corner_kind(c, beta), state)
             }
         }
     }
 
+    /// Adds a step to model `ci`'s definition and refolds it.
+    fn step(&mut self, id: FeatureId, name: &str, state: &Arc<State>, ci: usize, edit: StepEdit) -> Result<Output, String> {
+        self.edit_sheet_metal(id, name, state, ci, |ctx| {
+            ctx.def.as_mut().expect("checked").push(name, edit);
+            Ok(None)
+        })
+    }
+
     /// A Jog.
-    fn jog(&mut self, before: &[Feature], id: FeatureId, j: &JogFeature, state: &Arc<State>) -> Result<Output, String> {
+    fn jog(&mut self, before: &[Feature], id: FeatureId, name: &str, j: &JogFeature, state: &Arc<State>) -> Result<Output, String> {
         let (ci, spec) = self.bend_spec(before, state, &j.bend)?;
-        let mut model = state.sheet_metal[ci].model.clone();
+        let model = &state.sheet_metal[ci].model;
         let t = model.params.thickness;
         let offset = match j.bounding {
             JogBounding::Blind => j.offset,
@@ -249,12 +254,11 @@ impl Rebuilder {
             }
         };
         let s = JogSpec { bend: spec, offset, anchor: j.anchor, preserve_material: j.preserve_material };
-        model_edit::jog_wall(&mut model, &s, seed_of(id)).map_err(err)?;
-        self.refold(id, state, ci, model, false)
+        self.step(id, name, state, ci, StepEdit::Jog { spec: s, seed: seed_of(id) })
     }
 
     /// A Tab: the profiles added to the walls, then the clearance pockets cut.
-    fn tab(&mut self, before: &[Feature], id: FeatureId, x: &TabFeature, state: &Arc<State>) -> Result<Output, String> {
+    fn tab(&mut self, before: &[Feature], id: FeatureId, name: &str, x: &TabFeature, state: &Arc<State>) -> Result<Output, String> {
         let (groups, lost) = sweep_groups(before, &x.regions, &x.sketches, crate::document::BodyType::Solid);
         let mut regions: Vec<Region3> = Vec::new();
         for g in &groups {
@@ -294,7 +298,7 @@ impl Rebuilder {
             let mut model = ctx.model.clone();
             match model_edit::add_tab(&mut model, &regions, &walls) {
                 Ok(_) => {
-                    let o = self.refold(id, &current, ci, model, false)?;
+                    let o = self.step(id, name, &current, ci, StepEdit::Tab { regions: regions.clone(), walls })?;
                     if o.error.is_some() {
                         return Ok(o);
                     }
@@ -324,7 +328,7 @@ impl Rebuilder {
                         let mut model = ctx.model.clone();
                         let cut = model_edit::cut_walls(&mut model, &tools, Some(&walls)).map_err(err)?;
                         if !cut.is_empty() {
-                            let o = self.refold(id, &current, ci, model, false)?;
+                            let o = self.step(id, name, &current, ci, StepEdit::Cut { tools: tools.clone(), walls: Some(walls) })?;
                             if o.error.is_some() {
                                 return Ok(o);
                             }
@@ -397,7 +401,7 @@ impl Rebuilder {
     }
 
     /// Corner breaks at the picked corners (grouped by model).
-    fn corner_breaks(&mut self, id: FeatureId, picks: &[(PartId, Vec3)], kind: &dyn Fn(f64) -> CornerBreakKind, state: &Arc<State>) -> Result<Output, String> {
+    fn corner_breaks(&mut self, id: FeatureId, name: &str, picks: &[(PartId, Vec3)], kind: &dyn Fn(f64) -> CornerBreakKind, state: &Arc<State>) -> Result<Output, String> {
         let mut by_ctx: Vec<(usize, Vec<Vec3>)> = Vec::new();
         for (part, seed) in picks {
             let ci = need_context(state, *part)?;
@@ -411,17 +415,22 @@ impl Rebuilder {
         for (ci, seeds) in by_ctx {
             let mut model = current.sheet_metal[ci].model.clone();
             let tol = model.params.thickness + 0.5;
-            let mut done: Vec<(cadrs_sheetmetal::WallId, P2)> = Vec::new();
+            let mut done: Vec<(cadrs_sheetmetal::WallId, P2, CornerBreakKind)> = Vec::new();
             for s in seeds {
                 let (wall, at) = model_edit::corner_vertex_at(&model, p3(s), tol).ok_or("Select a corner of a sheet metal wall")?;
-                if done.iter().any(|(w, p)| *w == wall && (p - at).norm() < 1e-9) {
+                if done.iter().any(|(w, p, _)| *w == wall && (p - at).norm() < 1e-9) {
                     continue;
                 }
                 let beta = model_edit::corner_beta(&model, wall, at).ok_or("Select a corner of a sheet metal wall")?;
+                // Broken here too, so the next pick finds the corners as they now are.
                 model_edit::break_corner(&mut model, wall, at, kind(beta)).map_err(err)?;
-                done.push((wall, at));
+                done.push((wall, at, kind(beta)));
             }
-            let o = self.refold(id, &current, ci, model, true)?;
+            let o = self.edit_sheet_metal(id, name, &current, ci, |ctx| {
+                ctx.def.as_mut().expect("checked").push(name, StepEdit::CornerBreaks { corners: done });
+                ctx.corner_broken = true;
+                Ok(None)
+            })?;
             if o.error.is_some() {
                 return Ok(o);
             }
@@ -429,79 +438,6 @@ impl Rebuilder {
             current = o.state;
         }
         Ok(output(current, owned))
-    }
-
-    /// Makes model `ci`'s flat pattern and folded parts again from `model`.
-    fn refold(&mut self, id: FeatureId, state: &Arc<State>, ci: usize, model: Model, corner_broken: bool) -> Result<Output, String> {
-        if let Some(e) = model.validate().first() {
-            return Err(format!("The sheet metal model doesn't hold together: {}", e.message()));
-        }
-        let flat = flatten(&model);
-        let old = state.sheet_metal[ci].clone();
-        let mut ctx = SheetMetalContext { model: model.clone(), flat: flat.clone(), corner_broken: old.corner_broken || corner_broken, ..old.clone() };
-        let with_ctx = |mut next: State, ctx: SheetMetalContext| {
-            let mut all = (*next.sheet_metal).clone();
-            all[ci] = ctx;
-            next.sheet_metal = Arc::new(all);
-            next
-        };
-        if let Some(why) = flat_error(&flat) {
-            let mut o = output(Arc::new(with_ctx((**state).clone(), ctx)), Vec::new());
-            o.error = Some(why);
-            return Ok(o);
-        }
-        let op = id.0;
-        let folded = self.fold(&|_| op, op, &model, &flat)?;
-        for (_, body, _, sum) in &folded {
-            let v = self.kernel.mass_properties(*body).map(|m| m.volume).unwrap_or(*sum);
-            if v < sum - (1e-6 * sum + 1e-3) {
-                for (_, b, _, _) in &folded {
-                    self.kernel.release(*b);
-                }
-                return Err("Sheet metal walls intersect".into());
-            }
-        }
-        let geoms = state.geoms.clone();
-        let mut next = (**state).clone();
-        let mut used: Vec<PartId> = Vec::new();
-        let mut placed: Vec<Placed> = Vec::new();
-        let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
-        let mut folded = folded.into_iter();
-        while let Some((walls, body, names, _)) = folded.next() {
-            let reuse = old.parts.iter().find(|(p, ws)| !used.contains(p) && ws.iter().any(|w| walls.contains(w))).map(|(p, _)| *p);
-            let pieces = self.split(body, op, &[(body, &names)]);
-            self.kernel.release(body);
-            let pieces = match pieces {
-                Ok(p) => p,
-                Err(e) => {
-                    for (_, b, _, _) in folded.by_ref() {
-                        self.kernel.release(b);
-                    }
-                    for (_, pc) in placed {
-                        self.kernel.release(pc.body);
-                    }
-                    return Err(e);
-                }
-            };
-            for (n, pc) in pieces.into_iter().enumerate() {
-                let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).chain(used.iter().copied()).collect();
-                let pid = match (n, reuse) {
-                    (0, Some(p)) => p,
-                    _ => Self::new_id(id, &next, &taken),
-                };
-                if n == 0 {
-                    walls_of.push((pid, walls.clone()));
-                    used.push(pid);
-                }
-                placed.push((pid, pc));
-            }
-        }
-        // The model's parts no folded part continues are gone.
-        next.parts.retain(|p| !(old.parts.iter().any(|(q, _)| *q == p.part.id) && !used.contains(&p.part.id)));
-        let o = self.finish(id, placed, next, op, geoms, PartKind::Solid)?;
-        ctx.parts = walls_of;
-        let next = with_ctx((*o.state).clone(), ctx);
-        Ok(Output { state: Arc::new(next), ..o })
     }
 
     /// P3I.5 (SM1.6, SM12): an ordinary feature that acts on active sheet metal as sheet metal,
@@ -520,11 +456,11 @@ impl Rebuilder {
             {
                 Some(Err("Extrude can't add to an active sheet metal part: use Tab or Flange, or Finish sheet metal model first".into()))
             }
-            FeatureKind::Extrude(e) => self.sheet_metal_cut(before, f.id, e, state),
+            FeatureKind::Extrude(e) => self.sheet_metal_cut(before, f.id, &f.name, e, state),
             FeatureKind::Fillet(x) if x.kind == crate::applied::FilletType::Edge && !x.asymmetric && !x.variable && !x.partial => {
                 let picks = corner_picks(state, &x.entities)?;
                 let (size, width) = (x.size, x.measurement == FilletMeasurement::Width);
-                Some(self.corner_breaks(f.id, &picks, &|beta| CornerBreakKind::Fillet { radius: if width { model_edit::radius_for_width(size, beta) } else { size } }, state))
+                Some(self.corner_breaks(f.id, &f.name, &picks, &|beta| CornerBreakKind::Fillet { radius: if width { model_edit::radius_for_width(size, beta) } else { size } }, state))
             }
             FeatureKind::Chamfer(x) => {
                 let picks = corner_picks(state, &x.entities)?;
@@ -537,7 +473,7 @@ impl Rebuilder {
                     flip: x.flip,
                     ..Default::default()
                 };
-                Some(self.corner_breaks(f.id, &picks, &|beta| corner_kind(&c, beta), state))
+                Some(self.corner_breaks(f.id, &f.name, &picks, &|beta| corner_kind(&c, beta), state))
             }
             FeatureKind::Mirror(x) if x.mirror_type == crate::pattern::PatternType::Face => {
                 let (ci, walls) = face_walls(state, &x.faces)?;
@@ -550,7 +486,7 @@ impl Rebuilder {
                     crate::pattern::MirrorPlane::Connector(_) => return None,
                 };
                 let place = Placement::Mirror { point: p3(frame.origin), normal: v3(frame.normal()).normalize() };
-                Some(self.copy_walls(f.id, ci, &walls, &[place], state))
+                Some(self.copy_walls(f.id, &f.name, ci, &walls, &[place], state))
             }
             FeatureKind::Pattern(x) if x.pattern_type == crate::pattern::PatternType::Face => {
                 let (ci, walls) = face_walls(state, &x.faces)?;
@@ -563,23 +499,19 @@ impl Rebuilder {
                     .filter(|i| !x.is_skipped(i.index[0], i.index[1]))
                     .map(|i| Placement::Affine { linear: i.motion.linear, t: i.motion.translation })
                     .collect();
-                Some(self.copy_walls(f.id, ci, &walls, &places, state))
+                Some(self.copy_walls(f.id, &f.name, ci, &walls, &places, state))
             }
             _ => None,
         }
     }
 
     /// Walls copied to each placement (Face pattern, Face mirror).
-    fn copy_walls(&mut self, id: FeatureId, ci: usize, walls: &[cadrs_sheetmetal::WallId], places: &[Placement], state: &Arc<State>) -> Result<Output, String> {
-        let mut model = state.sheet_metal[ci].model.clone();
-        for (k, p) in places.iter().enumerate() {
-            model_edit::copy_walls(&mut model, walls, p, seed_of(id) ^ ((k as u64) << 48)).map_err(err)?;
-        }
-        self.refold(id, state, ci, model, false)
+    fn copy_walls(&mut self, id: FeatureId, name: &str, ci: usize, walls: &[cadrs_sheetmetal::WallId], places: &[Placement], state: &Arc<State>) -> Result<Output, String> {
+        self.step(id, name, state, ci, StepEdit::Copy { walls: walls.to_vec(), places: places.to_vec(), seed: seed_of(id) })
     }
 
     /// Extrude → Remove through active sheet metal (SM1.6): the walls cut perpendicular.
-    fn sheet_metal_cut(&mut self, before: &[Feature], id: FeatureId, e: &crate::document::ExtrudeFeature, state: &Arc<State>) -> Option<Result<Output, String>> {
+    fn sheet_metal_cut(&mut self, before: &[Feature], id: FeatureId, name: &str, e: &crate::document::ExtrudeFeature, state: &Arc<State>) -> Option<Result<Output, String>> {
         if e.op != BooleanOp::Remove || !e.faces.is_empty() || e.direction.is_some() || e.body != crate::document::BodyType::Solid {
             return None;
         }
@@ -633,7 +565,7 @@ impl Rebuilder {
                 continue;
             }
             any = true;
-            match self.refold(id, &current, ci, model, false) {
+            match self.step(id, name, &current, ci, StepEdit::Cut { tools: tools.clone(), walls: Some(walls) }) {
                 Ok(o) if o.error.is_some() => return Some(Ok(o)),
                 Ok(o) => {
                     owned.extend(o.owned);
