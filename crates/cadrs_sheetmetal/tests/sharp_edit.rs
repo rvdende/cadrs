@@ -493,7 +493,14 @@ fn flange_on_a_walls_side_edge_then_make_joint_with_the_lip() {
 /// edge, Inner, either way, stays one part with the wall (the P3I.7 fixer's E3 came apart).
 #[test]
 fn flange_on_a_sloping_edge_stays_joined() {
-    for (align, dir) in [(FlangeAlignment::Inner, -1.0), (FlangeAlignment::Inner, 1.0), (FlangeAlignment::Outer, -1.0), (FlangeAlignment::Middle, 1.0)] {
+    for (align, dir, partial) in [
+        (FlangeAlignment::Inner, -1.0, None),
+        (FlangeAlignment::Inner, 1.0, None),
+        (FlangeAlignment::Outer, -1.0, None),
+        (FlangeAlignment::Middle, 1.0, None),
+        (FlangeAlignment::Inner, -1.0, Some((0.1, 0.1))),
+        (FlangeAlignment::Outer, 1.0, Some((0.1, 0.1))),
+    ] {
         let mut def = base();
         let m = model(&def);
         flange_along(&mut def, &m, east_edge(&m), 100, V3::z(), 30.0);
@@ -508,9 +515,13 @@ fn flange_on_a_sloping_edge_stays_joined() {
         let slope = wall_edge(&m, stable(100), |p| p.z);
         assert!(((slope.b - slope.a).normalize().z).abs() > 0.1, "the sloping edge: {slope:?}");
         let (angle, toward) = EdgeFrame::of(&m, &slope).unwrap().angle_of(V3::x() * dir).expect("an angle");
-        let fe = FlangeEdge { pick: slope, key: 101, angle, toward, distance: 15.0, partial: None };
+        let fe = FlangeEdge { pick: slope, key: 101, angle, toward, distance: 15.0, partial };
         edit::flange(&mut def, &[fe], &FlangeOpts { alignment: align, radius: None, miter: None, hold_adjacent: true, per_chain: false }).expect("flange");
         let m = model(&def);
+        // The wall is trimmed by the bend's setback along the flange's stretch.
+        let w = m.wall(stable(100)).unwrap();
+        let top = w.outline.outer.iter().map(|q| w.surface.point(*q).z).fold(f64::MIN, f64::max);
+        assert!(top < 30.0 - 1.0, "{align:?} {dir} {partial:?}: the wall's top {top}: {:?}", w.outline.outer.iter().map(|q| w.surface.point(*q)).collect::<Vec<_>>());
         let f = flatten(&m);
         assert!(f.is_ok(), "{align:?} {dir}: {:?}", f.errors);
         assert_eq!(f.parts.len(), 1, "{align:?} {dir}: the flange stays joined to its wall");

@@ -597,7 +597,8 @@ fn partial_flange_per_chain_on_adjacent_edges() {
 
 /// A Flange with Inner alignment on sloping edges (the P3I.7 fixer's E3: a sloped enclosure
 /// converted with its slope left open, 25 mm flanges on both side walls' sloping edges) stays one
-/// part with the box, and the box's volume is its flat's. (It came apart: the side wall's bend
+/// part with the box, and the box's volume is its flat's, for every alignment (Outer and Middle
+/// stop the flanges' ends clear of the front wall and the shelf they ran into). (It came apart: the side wall's bend
 /// reliefs were cut by polygon booleans that round to 1e-6 mm, which left the oblique edge off
 /// the bend's face by more than the kernel's tolerance.)
 #[test]
@@ -605,7 +606,11 @@ fn flange_on_a_sloped_enclosures_sloping_edges() {
     use cadrs_core::samples::{extrude_of, region_refs};
     use cadrs_sheetmetal::sharp_edit::FlangeAlignment;
     let (w, d, hb, hf, sh) = (200.0, 250.0, 200.0, 125.0, 75.0);
-    for align in [FlangeAlignment::Inner, FlangeAlignment::HoldLine] {
+    let mut failed: Vec<String> = Vec::new();
+    // Material outside the block, flanges folded in. (Open: material inside with the flanges
+    // folded in over the opening, the P3I.7 stand-in's way, still fails for Inner, Outer and
+    // Middle: the flanges' ends run into the front wall and the shelf.)
+    for (inside, align) in [false].into_iter().flat_map(|i| [FlangeAlignment::Inner, FlangeAlignment::Outer, FlangeAlignment::Middle, FlangeAlignment::HoldLine].map(|a| (i, a))) {
         let mut st = Studio::new();
         let profile = [(0.0, 0.0), (d, 0.0), (d, hb), (d - sh, hb), (0.0, hf)];
         let s = st.sketch(PlaneRef::Right, vec![SketchOp::AddPolyline { points: profile.iter().map(|(x, y)| Vec2::new(*x, *y)).collect(), closed: true, construction: false, label: "Add line" }]);
@@ -623,16 +628,28 @@ fn flange_on_a_sloped_enclosures_sloping_edges() {
         x.parts = vec![block.id];
         x.exclude = vec![slope];
         x.bends = bends;
+        x.flip_thickness = inside;
         st.add(FeatureKind::SheetMetalModel(x));
         let part = sm_part(&st.ok());
         let edges = [0.0, w].iter().map(|x| EdgeOrFace::Edge(edge_near(&part, [*x, slope_mid[0], slope_mid[1]]))).collect();
-        sm(&mut st, "Flange", SheetMetalFeature::Flange(FlangeFeature { edges, distance: 25.0, distance_expr: "25 mm".into(), alignment: align, ..Default::default() }));
-        let b = st.ok();
+        sm(&mut st, "Flange", SheetMetalFeature::Flange(FlangeFeature { edges, distance: 25.0, distance_expr: "25 mm".into(), alignment: align, flip: inside, ..Default::default() }));
+        let b = st.build();
+        if !b.errors.is_empty() {
+            failed.push(format!("inside {inside} {align:?}: {:?}", b.errors));
+            continue;
+        }
         let ctx = &b.sheet_metal[0];
-        assert_eq!(ctx.parts.len(), 1, "{align:?}: one sheet metal part, not {}", ctx.parts.len());
-        assert_eq!(b.parts.len(), 1, "{align:?}: the flanges are joined to the box");
-        assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1, "{align:?}: {:?}", ctx.flat.errors);
-        assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 7, "{align:?}");
-        check_volume(&b);
+        let p = sm_part(&b);
+        let case = format!("inside {inside} {align:?}");
+        if b.parts.len() != 1 {
+            failed.push(format!("{case}: {} parts", b.parts.len()));
+        } else if !(ctx.flat.is_ok() && ctx.flat.parts.len() == 1) {
+            failed.push(format!("{case}: {:?}", ctx.flat.errors));
+        } else if ctx.model.joints.iter().filter(|j| j.bend().is_some()).count() != 7 {
+            failed.push(format!("{case}: not 7 bends"));
+        } else if !close(volume(&p), predicted(&b, &p), 1e-6) {
+            failed.push(format!("{case}: volume {} vs the flat's {}", volume(&p), predicted(&b, &p)));
+        }
     }
+    assert!(failed.is_empty(), "{failed:?}");
 }

@@ -341,7 +341,11 @@ against the stand-ins' expected values.
   polygon booleans round to 1e-6 mm, which left an oblique edge off its bend's face, so a Flange
   on the sloping edges of a sloped enclosure came out as separate parts); Make joint carries a
   bend that ends at the moved edge on with it (no square corner under the lip in E2); Simple hem
-  corners cut both legs on the bisector; a miter-angle end that runs on moves its own corners
+  corners cut both legs on the bisector; an Outer or Middle flange end that runs into a corner
+  where another wall is joined stops half the minimal gap short (on the sloped enclosure its
+  bend's outside landed exactly on the front wall's top edge and the kernel's union collapsed:
+  every alignment now works there; open: a Hold line flange stopping short of such a corner
+  leaves its wall untrimmed in the builder); a miter-angle end that runs on moves its own corners
   (one straight end); Partial flange is greyed until an edge is picked.
 - **Gaps left**: Move face (SM3.8); hems and flanges only on flat walls' edges (not on rolled
   walls or hem legs); the E2 stand-in replaces the R35 arc by lines (the sheet metal Extrude bends

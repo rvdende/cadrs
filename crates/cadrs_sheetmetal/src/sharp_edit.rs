@@ -504,8 +504,10 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
         }
     }
     let edges = &chained[..];
+    // Where each picked edge's sharp ends are (to tell a corner this feature mitres).
+    let sharp_ends: Vec<[P3; 2]> = ses.iter().map(|x| [x.at(0.0, 0.0), x.at(x.len(), 0.0)]).collect();
     let mut pend: Vec<Pending> = Vec::new();
-    for fe in edges {
+    for (fi, fe) in edges.iter().enumerate() {
         if fe.pick.joined {
             return Err("An edge to flange is already joined to another wall".into());
         }
@@ -521,12 +523,46 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
         let x_s = o.alignment.outer_offset(t, r, theta);
         let x_d = if fe.toward { x_s } else { x_s - t * h };
         let (p0, p1) = se.pick;
-        let span = match fe.partial {
+        let mut span = match fe.partial {
             Some((d0, d1)) => (p0 + d0.max(0.0), p1 - d1.max(0.0)),
             None => (p0, p1),
         };
-        if span.1 - span.0 < 1e-6 {
-            return Err("The partial flange has no length".into());
+        // An end that runs (all but a rip's trim) into a corner of its wall where another wall is
+        // already joined: it stops half the minimal gap short, so the flange's bend can't touch
+        // that wall's edge exactly (on a sloped enclosure, Outer put the bend's outside corner on
+        // the front wall's top edge and the kernel's union failed).
+        // (Outer and Middle only: Inner and Hold line keep the bend above that edge, and a
+        // flange stopping just short of a ripped corner with Hold line leaves its wall
+        // untrimmed in the builder, which is still open.)
+        let pull = matches!(o.alignment, FlangeAlignment::Outer | FlangeAlignment::Middle);
+        for end in 0..2usize {
+            if !pull {
+                break;
+            }
+            let reach = if end == 0 { span.0 } else { se.len() - span.1 };
+            if reach > t + p.minimal_gap + 1e-9 {
+                continue;
+            }
+            let corner = se.at(if end == 0 { 0.0 } else { se.len() }, 0.0);
+            let tol = 1e-6 * se.len().max(1.0);
+            let mitred = sharp_ends.iter().enumerate().any(|(k, e)| k != fi && e.iter().any(|q| (q - corner).norm() < tol));
+            let joined = def.builder.joints.iter().any(|j| {
+                if j.a != se.wall && j.b != se.wall {
+                    return false;
+                }
+                let (a, b) = j.edge;
+                let Some(d) = (b - a).try_normalize(1e-12) else { return false };
+                let s = (corner - a).dot(&d);
+                d.cross(&se.e).norm() > 1e-6 && s > -tol && s < (b - a).norm() + tol && ((corner - a) - d * s).norm() < tol
+            });
+            if mitred || !joined {
+                continue;
+            }
+            if end == 0 {
+                span.0 += p.minimal_gap / 2.0;
+            } else {
+                span.1 -= p.minimal_gap / 2.0;
+            }
         }
         let whole = match fe.partial {
             Some((d0, d1)) => (d0 <= 1e-9, d1 <= 1e-9),
