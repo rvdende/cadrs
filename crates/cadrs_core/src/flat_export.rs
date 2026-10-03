@@ -114,11 +114,119 @@ fn circle_of(l: &[P2]) -> Option<(P2, f64)> {
     (even && spread).then_some((c, r))
 }
 
-fn loop_shape(l: &[P2]) -> Shape {
-    match circle_of(l) {
-        Some((c, r)) => Shape::Circle { center: [c.x, c.y], radius: r },
-        None => Shape::Polyline { points: l.iter().map(|p| [p.x, p.y]).collect(), closed: true },
+/// The circle through three points (centre, radius), if they aren't in line.
+fn circle3(a: P2, b: P2, c: P2) -> Option<(P2, f64)> {
+    let d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if d.abs() < 1e-12 {
+        return None;
     }
+    let (a2, b2, c2) = (a.coords.norm_squared(), b.coords.norm_squared(), c.coords.norm_squared());
+    let ux = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+    let uy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+    let o = P2::new(ux, uy);
+    Some((o, (a - o).norm()))
+}
+
+/// Whether points `l[i..=j]` (indices wrap) lie on one circular arc of small, even steps: the
+/// arcs (reliefs, slot ends) the flat's polygons stand for.
+fn arc_run(l: &[P2], i: usize, j: usize) -> Option<(P2, f64)> {
+    let n = l.len();
+    let at = |k: usize| l[k % n];
+    let len = j - i;
+    if len < 3 {
+        return None;
+    }
+    let (o, r) = circle3(at(i), at(i + len / 2), at(j))?;
+    let tol = 1e-6 * r.max(1.0);
+    let mut step0 = None;
+    for k in i..j {
+        let (p, q) = (at(k) - o, at(k + 1) - o);
+        if ((p.norm() - r).abs() > tol) || ((q.norm() - r).abs() > tol) {
+            return None;
+        }
+        let step = p.perp(&q).atan2(p.dot(&q));
+        if step.abs() > 0.6 {
+            return None;
+        }
+        match step0 {
+            None => step0 = Some(step),
+            Some(s0) if (step - s0).abs() > 0.25 * s0.abs() + 1e-9 => return None,
+            _ => {}
+        }
+    }
+    Some((o, r))
+}
+
+/// A loop as DXF entities: a whole circle as CIRCLE; otherwise its straight edges as LINEs and
+/// its runs of points on an arc as ARCs (counter-clockwise, as DXF has them).
+fn loop_shapes(l: &[P2]) -> Vec<Shape> {
+    if let Some((c, r)) = circle_of(l) {
+        return vec![Shape::Circle { center: [c.x, c.y], radius: r }];
+    }
+    // Points in the middle of straight runs (where a cut crossed a piece's edge) dropped.
+    let mut l: Vec<P2> = l.to_vec();
+    loop {
+        let n = l.len();
+        let Some(k) = (0..n).find(|&k| {
+            let (a, b, c) = (l[(k + n - 1) % n], l[k], l[(k + 1) % n]);
+            let (u, v) = (b - a, c - b);
+            n > 3 && u.perp(&v).abs() <= 1e-9 * u.norm() * v.norm() && u.dot(&v) > 0.0
+        }) else {
+            break;
+        };
+        l.remove(k);
+    }
+    let l = &l[..];
+    let n = l.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    // Start at a corner (the sharpest turn) or where a line meets an arc (the steps change
+    // length most), so no arc is split by the loop's start.
+    let turn = |k: usize| {
+        let (a, b, c) = (l[(k + n - 1) % n], l[k], l[(k + 1) % n]);
+        let (u, v) = (b - a, c - b);
+        u.perp(&v).atan2(u.dot(&v)).abs() + (u.norm().max(1e-12) / v.norm().max(1e-12)).ln().abs()
+    };
+    let start = (0..n).max_by(|a, b| turn(*a).total_cmp(&turn(*b))).unwrap_or(0);
+    let at = |k: usize| l[(start + k) % n];
+    let pts: Vec<P2> = (0..=n).map(at).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        // The longest arc run from i.
+        let mut best = None;
+        let mut j = i + 3;
+        while j <= n {
+            match arc_run(&pts, i, j) {
+                Some(c) => best = Some((j, c)),
+                None if best.is_some() => break,
+                None => {}
+            }
+            if best.is_none() && j > i + 3 {
+                break;
+            }
+            j += 1;
+        }
+        match best {
+            Some((j, (o, r))) => {
+                let ang = |p: P2| (p.y - o.y).atan2(p.x - o.x).to_degrees();
+                let (p, q) = (pts[i] - o, pts[i + 1] - o);
+                let ccw = p.perp(&q) > 0.0;
+                let (s, mut e) = if ccw { (ang(pts[i]), ang(pts[j])) } else { (ang(pts[j]), ang(pts[i])) };
+                while e <= s {
+                    e += 360.0;
+                }
+                out.push(Shape::Arc { center: [o.x, o.y], radius: r, start: s, end: e });
+                i = j;
+            }
+            None => {
+                out.push(Shape::Line { a: [pts[i].x, pts[i].y], b: [pts[i + 1].x, pts[i + 1].y] });
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 fn line(s: &Seg2) -> Shape {
@@ -131,9 +239,13 @@ pub fn flat_page(part: &FlatPart, sketches: &[&Sketch], o: &FlatExportOptions, n
     let mut page = Page { name: name.to_string(), ..Page::default() };
     let mut push = |s: Shape, l: Layer| page.items.push(Item::Stroke(s, pen(l)));
     for poly in &part.outline {
-        push(loop_shape(&poly.outer), Layer::FlatOutline);
+        for sh in loop_shapes(&poly.outer) {
+            push(sh, Layer::FlatOutline);
+        }
         for h in &poly.holes {
-            push(loop_shape(h), Layer::FlatCutout);
+            for sh in loop_shapes(h) {
+                push(sh, Layer::FlatCutout);
+            }
         }
     }
     for s in part.slits() {
@@ -301,8 +413,11 @@ mod tests {
             let up: usize = part.bends.iter().filter(|b| b.up).map(|b| b.center_visible.len()).sum();
             let down: usize = part.bends.iter().filter(|b| !b.up).map(|b| b.center_visible.len()).sum();
             let tangent: usize = part.bends.iter().map(|b| b.tangent_visible.len()).sum();
-            assert_eq!(counts.get("OUTLINE").copied().unwrap_or(0), part.outline.len());
-            assert_eq!(counts.get("CUTOUTS").copied().unwrap_or(0), holes);
+            // One outline of lines (and arcs), two cut-outs: the round hole a CIRCLE, the slot
+            // four LINEs.
+            assert_eq!(part.outline.len(), 1);
+            assert!(counts.get("OUTLINE").copied().unwrap_or(0) >= 4);
+            assert_eq!(counts.get("CUTOUTS").copied().unwrap_or(0), 5);
             assert_eq!(holes, 2);
             assert_eq!(counts.get("BEND_UP").copied().unwrap_or(0), up);
             assert_eq!(counts.get("BEND_DOWN").copied().unwrap_or(0), down);
@@ -317,8 +432,12 @@ mod tests {
                 if l != "OUTLINE" {
                     continue;
                 }
-                let Entity::Polyline { points, .. } = e else { panic!("{e:?}") };
-                for p in points {
+                let points = match e {
+                    Entity::Line { a, b } => vec![*a, *b],
+                    Entity::Arc { center, radius, start, end } => cadrs_drawing::sheet_sketch::arc_polyline(*center, *radius, *start, *end),
+                    e => panic!("{e:?}"),
+                };
+                for p in &points {
                     for k in 0..2 {
                         elo[k] = elo[k].min(p[k]);
                         ehi[k] = ehi[k].max(p[k]);
@@ -346,6 +465,29 @@ mod tests {
         assert!((lo[0] - alo[0]).abs() < 1e-9 && (lo[1] - alo[1]).abs() < 1e-9);
         let width = (ahi[0] - alo[0]) + GAP + (bhi[0] - blo[0]);
         assert!((hi[0] - lo[0] - width).abs() < 1e-9, "{} vs {width}", hi[0] - lo[0]);
+    }
+
+    #[test]
+    fn arcs_in_loops_come_back_as_arcs() {
+        // A 20 × 6 slot: two half circles of 16 steps joined by lines.
+        let mut l = Vec::new();
+        for (cx, a0) in [(7.0, -std::f64::consts::FRAC_PI_2), (-7.0, std::f64::consts::FRAC_PI_2)] {
+            for k in 0..=16 {
+                let a: f64 = a0 + std::f64::consts::PI * k as f64 / 16.0;
+                l.push(P2::new(cx + 3.0 * a.cos(), 3.0 * a.sin()));
+            }
+        }
+        let shapes = loop_shapes(&l);
+        let arcs: Vec<&Shape> = shapes.iter().filter(|s| matches!(s, Shape::Arc { .. })).collect();
+        let lines = shapes.iter().filter(|s| matches!(s, Shape::Line { .. })).count();
+        assert_eq!((arcs.len(), lines), (2, 2), "{shapes:?}");
+        for a in arcs {
+            let Shape::Arc { radius, start, end, .. } = a else { unreachable!() };
+            assert!((radius - 3.0).abs() < 1e-9 && ((end - start) - 180.0).abs() < 1e-6, "{a:?}");
+        }
+        // A rectangle stays four lines.
+        let r = [P2::new(0.0, 0.0), P2::new(4.0, 0.0), P2::new(4.0, 2.0), P2::new(0.0, 2.0)];
+        assert_eq!(loop_shapes(&r).len(), 4);
     }
 
     #[test]
