@@ -2889,6 +2889,8 @@ enum RowKind {
     Sm9(&'static str),
     /// P3I.4: Flange, Hem, Make joint (their icon).
     SheetMetal(&'static str),
+    /// P3I.5: a sheet metal feature after it (its icon).
+    SheetMetalTool(&'static str),
 }
 
 impl RowKind {
@@ -2926,6 +2928,7 @@ impl RowKind {
             RowKind::ModifyJoint => "sheet-metal-modify-joint",
             RowKind::Sm9(icon) => icon,
             RowKind::SheetMetal(icon) => icon,
+            RowKind::SheetMetalTool(icon) => icon,
             _ => "sketch",
         }
     }
@@ -3020,6 +3023,7 @@ fn rebuild_feature_rows(
                     RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
                 }
                 cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
+                cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,

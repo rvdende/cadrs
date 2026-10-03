@@ -1,6 +1,6 @@
 //! Rebuilding a **Modify joint** (`crate::sheetmetal_joint`, P3I.3; SM6.4): the Sheet metal
 //! model's definition built again from its recipe with this joint's edit added to the edits
-//! before it ([`cadrs_sheetmetal::edit`]), checked and laid flat like the model itself, and its
+//! before it ([`cadrs_sheetmetal::joint_edit`]), checked and laid flat like the model itself, and its
 //! parts refolded **in place**: each new flat-pattern part takes the id of the old part it
 //! shares walls with, and the bodies are named with the Sheet metal model's operation, so
 //! faces keep their names and the features after it keep their references. A part that no
@@ -73,7 +73,7 @@ impl Rebuilder {
             return Err("The joint no longer exists".into());
         }
         let mut model = built.model;
-        cadrs_sheetmetal::edit::reorder(&mut model, &ctx.table_order);
+        cadrs_sheetmetal::joint_edit::reorder(&mut model, &ctx.table_order);
         if let Some(e) = model.validate().first() {
             return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
         }

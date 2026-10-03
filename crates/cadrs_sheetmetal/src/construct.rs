@@ -103,9 +103,9 @@ pub struct FaceOpts {
     pub include_bends: bool,
     /// Edges (by key) and cylinders (by key) to bend, in the order they were picked.
     pub bends: Vec<u64>,
-    /// Joints changed after the model was made (Modify joint, the table: [`crate::edit`]).
+    /// Joints changed after the model was made (Modify joint, the table: [`crate::joint_edit`]).
     #[serde(default)]
-    pub edits: Vec<crate::edit::JointEdit>,
+    pub edits: Vec<crate::joint_edit::JointEdit>,
 }
 
 /// What was built, with where each wall and joint came from.
@@ -478,7 +478,7 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
         b.set_joint_id(j, JointId(stable_id(e.key)), Some(names.joint()));
         keys.push(e.key);
     }
-    crate::edit::apply(&mut b, &o.edits);
+    crate::joint_edit::apply(&mut b, &o.edits);
     let mut model = b.build().map_err(|error| {
         let key = match &error {
             BuildError::EdgeNotOnWall { joint, .. }
@@ -594,9 +594,9 @@ pub struct ChainOpts {
     pub flip_side: bool,
     /// Arcs (by key) to make bends of instead of rolled walls.
     pub arcs_as_bends: Vec<u64>,
-    /// Joints changed after the model was made (Modify joint, the table: [`crate::edit`]).
+    /// Joints changed after the model was made (Modify joint, the table: [`crate::joint_edit`]).
     #[serde(default)]
-    pub edits: Vec<crate::edit::JointEdit>,
+    pub edits: Vec<crate::joint_edit::JointEdit>,
 }
 
 enum Piece {
@@ -835,7 +835,7 @@ pub fn from_chains(p: Params, chains: &[ChainIn], o: &ChainOpts) -> Result<Built
             }
         }
     }
-    crate::edit::apply(&mut b, &o.edits);
+    crate::joint_edit::apply(&mut b, &o.edits);
     let mut model = b.build().map_err(|error| {
         let key = match &error {
             BuildError::EdgeNotOnWall { joint, .. }

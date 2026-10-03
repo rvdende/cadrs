@@ -64,7 +64,7 @@ pub const OTHER_TOOLS: [(&str, &str, &str); 12] = [
 /// (`sheet-metal-flange`) or its menu item (`sheet-metal-menu-flange`).
 pub fn tool_built(name: &str) -> bool {
     let name = tool_id(name);
-    crate::sheetmetal_p3i9_ui::built(&name) || crate::sheetmetal_features_ui::built(&name)
+    crate::sheetmetal_p3i9_ui::built(&name) || crate::sheetmetal_features_ui::built(&name) || crate::sheetmetal_tools_ui::built(&name)
 }
 
 /// A ▾ menu item's tool id (`sheet-metal-menu-flange` → `sheet-metal-flange`).
@@ -83,6 +83,10 @@ pub fn start_tool(world: &mut World, name: &str) -> bool {
     }
     if let Some(t) = crate::sheetmetal_features_ui::SmTool::of_name(&name) {
         crate::applied::begin(world, crate::applied::AppliedKind::SmFeature(t));
+        return true;
+    }
+    if let Some(t) = crate::sheetmetal_tools_ui::SmTool::named(&name) {
+        crate::applied::begin(world, crate::applied::AppliedKind::SheetMetalTool(t));
         return true;
     }
     false

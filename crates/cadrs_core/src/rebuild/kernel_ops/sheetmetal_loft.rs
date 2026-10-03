@@ -364,6 +364,7 @@ impl Rebuilder {
                     table_order: Vec::new(),
                     def: None,
                     owners: Vec::new(),
+                    corner_broken: false,
                 };
                 (m, walls, ctx)
             }

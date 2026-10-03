@@ -56,6 +56,7 @@ pub mod sheetmetal_joint;
 pub mod sheetmetal_form;
 pub mod sheetmetal_loft;
 pub mod sheetmetal_features;
+pub mod sheetmetal_tools;
 pub mod surfacing;
 pub mod tab_tree;
 pub mod thumbnail;

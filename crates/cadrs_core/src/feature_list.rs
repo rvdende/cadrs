@@ -61,6 +61,7 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Form(_) => "Form",
         FeatureKind::TagForm(_) => "Tag",
         FeatureKind::SheetMetal(x) => x.label(),
+        FeatureKind::SheetMetalTool(x) => x.label(),
     }
 }
 

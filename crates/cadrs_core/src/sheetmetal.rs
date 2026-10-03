@@ -330,11 +330,11 @@ pub struct SheetMetalContext {
     pub wall_keys: Vec<(u64, WallId)>,
     pub joint_keys: Vec<(u64, JointId)>,
     /// P3I.3: what the model was built from, so a Modify joint can build it again with its
-    /// edit ([`cadrs_sheetmetal::edit`]), the edits so far, and the table order.
+    /// edit ([`cadrs_sheetmetal::joint_edit`]), the edits so far, and the table order.
     #[serde(default)]
-    pub recipe: Option<cadrs_sheetmetal::edit::Recipe>,
+    pub recipe: Option<cadrs_sheetmetal::joint_edit::Recipe>,
     #[serde(default)]
-    pub edits: Vec<cadrs_sheetmetal::edit::JointEdit>,
+    pub edits: Vec<cadrs_sheetmetal::joint_edit::JointEdit>,
     #[serde(default)]
     pub table_order: Vec<JointId>,
     /// The definition the model is built from (P3I.4, SM1.6): features after the Sheet metal
@@ -347,6 +347,10 @@ pub struct SheetMetalContext {
     /// feature, so they read "Face of Flange 1"); the rest are the model's.
     #[serde(default)]
     pub owners: Vec<(PieceKey, FeatureId)>,
+    /// P3I.5 (SM11.4): a Corner break was made on it: its joints' type and style can't be edited
+    /// in the table any more.
+    #[serde(default)]
+    pub corner_broken: bool,
 }
 
 /// A wall or joint of a model's definition (for [`SheetMetalContext::owners`]).

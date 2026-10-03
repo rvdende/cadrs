@@ -7,7 +7,7 @@
 //! then be edited like any feature.
 //!
 //! The rebuild (`rebuild/kernel_ops/sheetmetal_joint.rs`) builds the model again from its
-//! recipe with the edits of every Modify joint of it so far ([`cadrs_sheetmetal::edit`]), and
+//! recipe with the edits of every Modify joint of it so far ([`cadrs_sheetmetal::joint_edit`]), and
 //! refolds its parts in place (same part ids and face names).
 //!
 //! A new Modify joint goes right after the model's Sheet metal model feature and its other
@@ -16,7 +16,7 @@
 //! keep acting on the refolded parts. **Move up / Move down** (the table order, SM13.4) is kept
 //! on the Sheet metal model feature itself ([`SetTableOrder`]).
 
-use cadrs_sheetmetal::edit::{JointChange, JointEdit};
+use cadrs_sheetmetal::joint_edit::{JointChange, JointEdit};
 use cadrs_sheetmetal::params::{RangeError, range};
 use cadrs_sheetmetal::{BendCalc, BendValue, Joint, JointId, JointKind, Params, RipStyle};
 use serde::{Deserialize, Serialize};

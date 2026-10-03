@@ -25,7 +25,8 @@
 
 pub mod bend;
 pub mod construct;
-pub mod edit;
+pub mod joint_edit;
+pub mod model_edit;
 pub mod sharp_edit;
 pub mod flat;
 pub mod forms;

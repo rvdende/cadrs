@@ -26,6 +26,10 @@ use crate::document::{EndCondition, EndType, UpTo};
 use crate::sheetmetal::{SheetMetalContext, SheetMetalModelFeature, SheetMetalOp};
 use crate::solid::Solid;
 
+/// P3I.5: the sheet metal features after the model (`crate::sheetmetal_tools`) and the
+/// sheet-metal-aware cuts, fillets and face patterns.
+mod tools;
+
 /// A stable key for a face, edge or curve name.
 pub(super) fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
     naming::stable_hash(format!("{x:?}").as_bytes())
@@ -597,7 +601,7 @@ impl Rebuilder {
         let mut consumed: Vec<PartId> = Vec::new();
         let mut warning: Option<String> = None;
         // P3I.3: kept with the context, for Modify joint to build the model again.
-        let recipe: Option<cadrs_sheetmetal::edit::Recipe>;
+        let recipe: Option<cadrs_sheetmetal::joint_edit::Recipe>;
         let built = match x.operation {
             SheetMetalOp::Convert | SheetMetalOp::Thicken => {
                 let mut g = Gathered::default();
@@ -700,7 +704,7 @@ impl Rebuilder {
                 }
                 let o = FaceOpts { material_inside: x.flip_thickness, clearance: x.clearance, include_bends: x.include_bends, bends, ..Default::default() };
                 let built = construct::from_faces(p, &g.faces, &g.cyls, &g.edges, &o).map_err(|e| e.message())?;
-                recipe = Some(cadrs_sheetmetal::edit::Recipe::Faces { params: p, faces: g.faces, cyls: g.cyls, edges: g.edges, opts: o });
+                recipe = Some(cadrs_sheetmetal::joint_edit::Recipe::Faces { params: p, faces: g.faces, cyls: g.cyls, edges: g.edges, opts: o });
                 built
             }
             SheetMetalOp::Extrude => {
@@ -758,7 +762,7 @@ impl Rebuilder {
                         }
                     });
                 }
-                recipe = Some(cadrs_sheetmetal::edit::Recipe::Chains { params: p, groups: recipe_groups });
+                recipe = Some(cadrs_sheetmetal::joint_edit::Recipe::Chains { params: p, groups: recipe_groups });
                 all.ok_or("Nothing to extrude")?
             }
         };
@@ -766,7 +770,7 @@ impl Rebuilder {
             // Not a problem: the pick order decided (SM2.2). Nothing to report.
         }
         let mut model = built.model;
-        cadrs_sheetmetal::edit::reorder(&mut model, &x.table_order);
+        cadrs_sheetmetal::joint_edit::reorder(&mut model, &x.table_order);
         // The definition must hold together in 3D.
         if let Some(e) = model.validate().first() {
             return Err(format!("Sheet metal model is inconsistent: {}", e.message()));
@@ -785,6 +789,7 @@ impl Rebuilder {
             table_order: x.table_order.clone(),
             def: Some(built.def.clone()),
             owners: Vec::new(),
+            corner_broken: false,
         };
         let fail_keeping_context = |ctx: SheetMetalContext, why: String| {
             let mut next = (**state).clone();

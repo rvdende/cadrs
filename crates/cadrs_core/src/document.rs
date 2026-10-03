@@ -467,6 +467,7 @@ impl Feature {
             FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
             // P3I.9.
             FeatureKind::SheetMetalLoft(x) => x.sketch_ids(),
+            FeatureKind::SheetMetalTool(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }
@@ -567,6 +568,7 @@ impl Feature {
             FeatureKind::Form(x) => x.problem().is_none(),
             FeatureKind::TagForm(x) => x.problem().is_none(),
             FeatureKind::SheetMetal(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalTool(x) => x.problem().is_none(),
         }
     }
 
@@ -604,6 +606,7 @@ impl Feature {
             FeatureKind::Form(x) => x.problem(),
             FeatureKind::TagForm(x) => x.problem(),
             FeatureKind::SheetMetal(x) => x.problem(),
+            FeatureKind::SheetMetalTool(x) => x.problem(),
         }
     }
 
@@ -734,6 +737,7 @@ impl Feature {
             FeatureKind::Form(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::TagForm(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetal(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalTool(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -883,6 +887,9 @@ pub enum FeatureKind {
     /// P3I.4: Flange, Hem or Make joint on an active sheet metal model (SM1.6, SM3, SM4, SM6;
     /// [`crate::sheetmetal_features`]).
     SheetMetal(crate::sheetmetal_features::SheetMetalFeature),
+    /// P3I.5: a sheet metal feature after the model: Finish, Tab, Bend, Jog, Corner, Bend relief
+    /// or Corner break ([`crate::sheetmetal_tools`]).
+    SheetMetalTool(crate::sheetmetal_tools::SheetMetalTool),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

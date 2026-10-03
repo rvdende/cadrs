@@ -192,7 +192,7 @@ fn move_up_and_down_keep_the_table_order_with_the_model() {
     let b = st.ok();
     let ctx = b.sheet_metal.iter().find(|c| c.feature == m).unwrap();
     let c = joint(&b, m, "Bend C").id;
-    let order = cadrs_sheetmetal::edit::moved(&ctx.model, c, -1).unwrap();
+    let order = cadrs_sheetmetal::joint_edit::moved(&ctx.model, c, -1).unwrap();
     st.h.execute(&mut st.d, &SetTableOrder { element: st.el, model: m, order, label: "Move up Bend C".into() }).unwrap();
     let names = |b: &Build| -> Vec<String> {
         b.sheet_metal[0].model.joints.iter().filter(|j| j.bend().is_some()).map(|j| j.name.clone()).collect()

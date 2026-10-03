@@ -412,6 +412,7 @@ fn layout_of(kind: &FeatureKind) -> String {
         FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::layout(x),
         k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::layout(k).unwrap_or_default(),
         k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::layout(k).unwrap_or_default(),
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::layout(x),
         k => crate::advanced_dialog::layout(k).unwrap_or_default(),
     }
 }
@@ -542,7 +543,13 @@ fn dialog(
         FeatureKind::SheetMetalModel(_) => "sheet-metal-model",
         k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::name(k)?.0,
         k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::name(k)?,
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::dialog_name(x),
         k => crate::advanced_dialog::name(k)?,
+    };
+    // P3I.5: the sheet metal features' lists.
+    let sm_items = match &kind {
+        FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::items(features, cache, x),
+        _ => Vec::new(),
     };
     let lists: Vec<(Role, Vec<String>)> = [
         Role::Entities,
@@ -618,6 +625,7 @@ fn dialog(
                 "sheet-metal-model" => 262.0,
                 "sheet-metal-loft" | "tag" => 230.0,
                 "sheet-metal-flange" | "sheet-metal-hem" | "sheet-metal-make-joint" => 222.0,
+                n if n.starts_with("sheet-metal-") => 228.0,
                 "chamfer" | "sweep" | "loft" | "plane" | "draft" | "transform" => 216.0,
                 "linear-pattern" | "circular-pattern" | "curve-pattern" | "mirror" | "mate-connector" => 216.0,
                 _ => 202.0,
@@ -787,6 +795,7 @@ fn dialog(
                         crate::sheetmetal_p3i9_ui::body(b, t, k, field, &sm9_items, [sections[1], sections[2], sections[3]])
                     }
                     k @ FeatureKind::SheetMetal(_) => crate::sheetmetal_features_ui::body(b, t, k, field, &items_of),
+                    FeatureKind::SheetMetalTool(x) => crate::sheetmetal_tools_ui::body(b, t, x, field, &sm_items),
                     k => crate::advanced_dialog::body(b, t, k, field, &items_of),
                 }
                 b.spawn((
@@ -887,7 +896,9 @@ pub(crate) fn sync_applied_dialog(
     // as Onshape does, not as an error line.
     let incomplete = matches!(&kind, FeatureKind::SheetMetalModel(x) if x.is_empty()) || crate::sheetmetal_p3i9_ui::incomplete(&kind);
     // P3I.4: likewise a Flange, Hem or Make joint with no edges picked yet.
-    let incomplete = incomplete || matches!(&kind, FeatureKind::SheetMetal(x) if x.entities().is_empty());
+    let incomplete = incomplete || matches!(&kind, FeatureKind::SheetMetal(x) if x.entities().is_empty())
+        // P3I.5: so does a sheet metal feature still waiting for its picks (the active field).
+        || matches!(&kind, FeatureKind::SheetMetalTool(x) if x.problem().is_some_and(|p| p.starts_with("Select")));
     let why = if incomplete { String::new() } else { cache.errors.get(&s.feature).cloned().unwrap_or_default() };
     for (mut text, mut node) in &mut q_error {
         if text.0 != why {
@@ -1814,6 +1825,6 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
-        _ => None,
+        n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }
 }

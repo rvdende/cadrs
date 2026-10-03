@@ -980,7 +980,7 @@ fn run(world: &mut World, _element: ElementId, cmd: &dyn cadrs_core::Command) {
 
 fn move_joint(world: &mut World, joint: JointId, by: isize) {
     let Some(ctx) = shown(world.resource::<SmTable>(), world.resource::<PartCache>()).cloned() else { return };
-    let Some(order) = cadrs_sheetmetal::edit::moved(&ctx.model, joint, by) else { return };
+    let Some(order) = cadrs_sheetmetal::joint_edit::moved(&ctx.model, joint, by) else { return };
     let Some(element) = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element()).map(|e| e.id) else { return };
     let name = ctx.model.joint(joint).map(|j| j.name.clone()).unwrap_or_default();
     let label = format!("{} {name}", if by < 0 { "Move up" } else { "Move down" });
@@ -1112,8 +1112,8 @@ fn on_context_menu(ev: On<ContextMenuRequested>, q_row: Query<&RowRef>, q_flat: 
     commands.queue(move |world: &mut World| {
         let Some(ctx) = shown(world.resource::<SmTable>(), world.resource::<PartCache>()).cloned() else { return };
         let Some(j) = ctx.model.joint(joint) else { return };
-        let up = cadrs_sheetmetal::edit::moved(&ctx.model, joint, -1).is_some();
-        let down = cadrs_sheetmetal::edit::moved(&ctx.model, joint, 1).is_some();
+        let up = cadrs_sheetmetal::joint_edit::moved(&ctx.model, joint, -1).is_some();
+        let down = cadrs_sheetmetal::joint_edit::moved(&ctx.model, joint, 1).is_some();
         let hem = j.bend().is_some_and(|b| b.hem);
         let tangent = matches!(j.kind, JointKind::Tangent { .. });
         let convert = if bend { format!("Convert {} to rip", j.name) } else { format!("Convert {} to bend", j.name) };
