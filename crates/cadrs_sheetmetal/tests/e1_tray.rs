@@ -9,14 +9,11 @@ fn the_e1_tray_lays_flat() {
     assert!(m.validate().is_empty(), "{:?}", m.validate());
     let flat = flatten(&m);
     assert!(flat.is_ok(), "{:?}", flat.errors);
-    assert_eq!(flat.parts.len(), 1, "{:?}", m.joints.iter().map(|j| (j.a, j.b, &j.kind)).collect::<Vec<_>>());
+    assert_eq!(flat.parts.len(), 1);
     let part = &flat.parts[0];
-    for pc in &part.pieces {
-        eprintln!("{:?} {:?}", pc.source, pc.polygon.bounds());
-    }
     assert_eq!(part.walls.len(), 7);
     assert_eq!(part.bends.len(), 6);
-    assert_eq!(part.outline.len(), 1, "{:?} {:?}", part.outline.iter().map(|o| (o.bounds(), o.area())).collect::<Vec<_>>(), part.pieces.iter().map(|p| (p.source, p.polygon.bounds())).collect::<Vec<_>>());
+    assert_eq!(part.outline.len(), 1);
     // The fan hole, four mounting holes, three slots and the cut-out.
     assert_eq!(part.outline[0].holes.len(), 9);
 }

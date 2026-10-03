@@ -139,6 +139,7 @@ fn a_flat_cut_across_a_bend_keeps_its_flat_size_folded() {
     let flat = &b.sheet_metal[0].flat.parts[0];
     // The flat loses exactly the slot, as one hole w × l.
     assert!((area0 - flat.area() - w * l).abs() < 1e-6, "{}", area0 - flat.area());
+    assert_eq!(flat.outline.len(), 1);
     let holes: Vec<&Vec<P2>> = flat.outline.iter().flat_map(|o| o.holes.iter()).collect();
     assert_eq!(holes.len(), 1);
     let along: Vec<f64> = holes[0].iter().map(|q| (q - c).dot(&d)).collect();

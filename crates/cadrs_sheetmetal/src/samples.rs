@@ -200,30 +200,43 @@ fn ring(p: Polygon) -> Vec<P2> {
 /// the other), each with a 12 wide lip bent inwards; and 15 high end flanges along the middle 100
 /// of its short edges. Seven walls, six bends.
 pub fn e1_tray(p: Params) -> Result<Model, BuildError> {
+    e1_tray_with(p, [true; 3])
+}
+
+/// [`e1_tray`] with or without its cut-outs, lips and end flanges.
+pub fn e1_tray_with(p: Params, opts: [bool; 3]) -> Result<Model, BuildError> {
     let (x, y, h, lip, end) = (200.0, 120.0, 50.0, 12.0, 15.0);
+    let [with_holes, with_lips, with_ends] = opts;
     let mut b = SharpBuilder::new(p);
     let mut holes = vec![ring(crate::poly::circle(P2::new(100.0, 60.0), 30.0, 64))];
     for (hx, hy) in [(15.0, 15.0), (185.0, 15.0), (185.0, 105.0), (15.0, 105.0)] {
         holes.push(ring(crate::poly::circle(P2::new(hx, hy), 2.0, 32)));
     }
+    if !with_holes {
+        holes.clear();
+    }
     let base = b.wall(P3::origin(), V3::x(), V3::y(), Polygon::with_holes(rect(x, y).outer, holes));
     // South (y = 0): local (height, x), material towards +y; three slots.
-    let slots = [60.0, 100.0, 140.0].map(|c| slot(P2::new(25.0, c), 30.0, 6.0)).to_vec();
+    let slots = if with_holes { [60.0, 100.0, 140.0].map(|c| slot(P2::new(25.0, c), 30.0, 6.0)).to_vec() } else { Vec::new() };
     let south = b.wall(P3::new(0.0, 0.0, 0.0), V3::z(), V3::x(), Polygon::with_holes(rect(h, x).outer, slots));
     // North (y = 120): local (height, 200 − x), material towards −y; a 40 × 20 cut-out.
     let cut = rect(20.0, 20.0).map(|q| P2::new(q.x + 15.0, q.y * 2.0 + 80.0)).outer;
-    let north = b.wall(P3::new(x, y, 0.0), V3::z(), -V3::x(), Polygon::with_holes(rect(h, x).outer, vec![cut]));
+    let north = b.wall(P3::new(x, y, 0.0), V3::z(), -V3::x(), Polygon::with_holes(rect(h, x).outer, if with_holes { vec![cut] } else { Vec::new() }));
     // The lips, at the walls' tops, bent inwards (material down).
-    let lip_s = b.wall(P3::new(0.0, 0.0, h), V3::y(), V3::x(), rect(lip, x));
-    let lip_n = b.wall(P3::new(0.0, y, h), V3::x(), -V3::y(), rect(x, lip));
-    // The end flanges on the middle 100 of the short edges.
-    let east = b.wall(P3::new(x, 10.0, 0.0), V3::z(), V3::y(), rect(end, 100.0));
-    let west = b.wall(P3::new(0.0, 110.0, 0.0), V3::z(), -V3::y(), rect(end, 100.0));
     b.bend(base, south, (P3::new(x, 0.0, 0.0), P3::new(0.0, 0.0, 0.0)));
     b.bend(base, north, (P3::new(0.0, y, 0.0), P3::new(x, y, 0.0)));
-    b.bend(south, lip_s, (P3::new(0.0, 0.0, h), P3::new(x, 0.0, h)));
-    b.bend(north, lip_n, (P3::new(0.0, y, h), P3::new(x, y, h)));
-    b.bend(base, east, (P3::new(x, 10.0, 0.0), P3::new(x, 110.0, 0.0)));
-    b.bend(base, west, (P3::new(0.0, 110.0, 0.0), P3::new(0.0, 10.0, 0.0)));
+    if with_lips {
+        let lip_s = b.wall(P3::new(0.0, 0.0, h), V3::y(), V3::x(), rect(lip, x));
+        let lip_n = b.wall(P3::new(0.0, y, h), V3::x(), -V3::y(), rect(x, lip));
+        b.bend(south, lip_s, (P3::new(0.0, 0.0, h), P3::new(x, 0.0, h)));
+        b.bend(north, lip_n, (P3::new(0.0, y, h), P3::new(x, y, h)));
+    }
+    if with_ends {
+        // The end flanges on the middle 100 of the short edges.
+        let east = b.wall(P3::new(x, 10.0, 0.0), V3::z(), V3::y(), rect(end, 100.0));
+        let west = b.wall(P3::new(0.0, 110.0, 0.0), V3::z(), -V3::y(), rect(end, 100.0));
+        b.bend(base, east, (P3::new(x, 10.0, 0.0), P3::new(x, 110.0, 0.0)));
+        b.bend(base, west, (P3::new(0.0, 110.0, 0.0), P3::new(0.0, 10.0, 0.0)));
+    }
     b.build()
 }
