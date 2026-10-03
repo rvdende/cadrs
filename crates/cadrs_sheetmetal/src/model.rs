@@ -1066,7 +1066,15 @@ impl SharpBuilder {
             }
             let mut outline = Polygon::rect(P2::new(0.0, y0 - e0), P2::new(h.length, y1 + e1));
             for cl in &h.clips {
-                outline = outline.clip_half_plane(surf_b.local(cl.point), V2::new(cl.normal.dot(&u), cl.normal.dot(&v)));
+                // Where the cut's plane crosses the wall's plane, moved (for a cut leaning across
+                // the wall) so the wall's whole thickness stays on its side.
+                let m2 = V2::new(cl.normal.dot(&u), cl.normal.dot(&v));
+                if m2.norm() < 1e-12 {
+                    continue;
+                }
+                let lift = (-t * nb.dot(&cl.normal)).max(0.0);
+                let level = (cl.point + cl.normal * lift - qa).dot(&cl.normal);
+                outline = outline.clip_half_plane(P2::from(m2 * (level / m2.norm_squared())), m2);
             }
             if outline.is_empty() || outline.area() < 1e-12 {
                 return Err(bad);

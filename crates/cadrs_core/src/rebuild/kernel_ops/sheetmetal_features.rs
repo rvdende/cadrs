@@ -134,9 +134,12 @@ impl Rebuilder {
                     let g = v3(self.direction(before, state, d)?.into_inner().into());
                     // A line: along it; a plane: in it, across the edge.
                     let g = if matches!(d, DirectionRef::Edge(_) | DirectionRef::SketchLine { .. }) { g } else { fr.e.cross(&g) };
-                    let g = if f.flip { -g } else { g };
-                    let pick = |g: V3| fr.angle_of(g);
-                    pick(g).or_else(|| pick(-g)).ok_or("The flange can't be parallel to that")?
+                    // Either way along it is parallel (θ to one side, 180° − θ to the other): the
+                    // flange turns to the side of the face its edge was picked on, the arrow
+                    // flips it (not the edge's or the line's own direction, which are arbitrary).
+                    let side = default_toward(e.side) != f.flip;
+                    let both = [fr.angle_of(g), fr.angle_of(-g)];
+                    both.iter().flatten().find(|(_, t)| *t == side).or(both.iter().flatten().next()).copied().ok_or("The flange can't be parallel to that")?
                 }
                 AngleControl::AngleFromDirection => {
                     let d = f.direction.as_ref().ok_or("Select a direction")?;
@@ -144,7 +147,9 @@ impl Rebuilder {
                     let g = g - fr.e * g.dot(&fr.e);
                     let g = g.try_normalize(1e-9).ok_or("The direction runs along the edge")?;
                     let a = f.direction_angle.to_radians() * if f.flip { -1.0 } else { 1.0 };
-                    let k = fr.e;
+                    // The angle turns the direction away from the wall (towards the edge's outward
+                    // direction), whichever way the edge itself runs.
+                    let k = g.cross(&fr.out).try_normalize(1e-9).unwrap_or(fr.e);
                     let rot = g * a.cos() + k.cross(&g) * a.sin() + k * k.dot(&g) * (1.0 - a.cos());
                     fr.angle_of(rot).ok_or("At that angle the flange lies flat")?
                 }

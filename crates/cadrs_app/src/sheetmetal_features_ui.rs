@@ -151,7 +151,7 @@ impl Plugin for SheetMetalFeaturesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastHem>()
             .init_resource::<SmArrows>()
-            .add_systems(Update, (remember_hem, arrows_pointer).run_if(in_state(AppState::Document)))
+            .add_systems(Update, arrows_pointer.run_if(in_state(AppState::Document)))
             .add_systems(PostUpdate, place_arrows.before(bevy::ui::UiSystems::Layout).run_if(in_state(AppState::Document)));
     }
 }
@@ -427,6 +427,10 @@ fn list(b: &mut ChildSpawner, t: &Theme, name: &str, placeholder: &str, field: S
         });
 }
 
+/// The labels' size: Onshape's labels are nearly the size of the values
+/// (`sheetmetalflange-dialog-01.png`, `ex2-creating-sheet-metal-parts/step-09.png`).
+const LABEL_PX: f32 = 12.0;
+
 /// The flip arrow's place (after a select or a number), or a spacer.
 fn flip_or_space(r: &mut ChildSpawner, t: &Theme, name: &str, flip: Option<(SmfRole, bool, &str)>) {
     match flip {
@@ -439,7 +443,7 @@ fn flip_or_space(r: &mut ChildSpawner, t: &Theme, name: &str, flip: Option<(SmfR
 
 fn number(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, num: SmfNum, text: &str) {
     b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(2.0), margin: UiRect::new(Val::Px(-16.0), Val::ZERO, Val::Px(1.0), Val::Px(1.0)), ..default() }).with_children(|r| {
-        r.spawn((Role::Smf(SmfRole::Num(num)), NumberField::new(name.to_string(), label.to_string()).text(text.to_string()).label_width(96.0).build(t)))
+        r.spawn((Role::Smf(SmfRole::Num(num)), NumberField::new(name.to_string(), label.to_string()).text(text.to_string()).label_width(96.0).label_size(LABEL_PX).build(t)))
             .entry::<Node>()
             .and_modify(|mut n| n.flex_grow = 1.0);
         flip_or_space(r, t, name, None);
@@ -456,7 +460,7 @@ fn select(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, role: SmfRol
     b.spawn(Node { height: Val::Px(30.0), margin: UiRect::new(Val::Px(2.0), Val::Px(2.0), Val::Px(1.0), Val::Px(1.0)), align_items: AlignItems::Center, column_gap: Val::Px(4.0), ..default() })
         .with_children(|r| {
             if !label.is_empty() {
-                r.spawn((t.text(label, 11.0, bevy::text::FontWeight::NORMAL, t.muted_foreground), Node { width: Val::Px(98.0), flex_shrink: 0.0, ..default() }));
+                r.spawn((t.text(label, LABEL_PX, bevy::text::FontWeight::NORMAL, t.muted_foreground), Node { width: Val::Px(100.0), flex_shrink: 0.0, ..default() }));
             }
             r.spawn((Role::Smf(role), s.selected(selected).build(t))).entry::<Node>().and_modify(|mut n| n.flex_grow = 1.0);
             flip_or_space(r, t, name, flip);
@@ -872,21 +876,17 @@ pub(crate) fn commit_number(world: &mut World, entity: Entity, role: Role, text:
     }
 }
 
-/// SM4.5: the hem being edited is what the next hem starts from.
-fn remember_hem(session: Option<Res<AppliedSession>>, doc: Option<Res<ActiveDocument>>, mut last: ResMut<LastHem>) {
-    let Some(s) = session.filter(|s| s.kind == AppliedKind::SmFeature(SmTool::Hem)) else { return };
-    let Some(FeatureKind::SheetMetal(SheetMetalFeature::Hem(h))) = doc.as_ref().and_then(|d| d.doc.element(s.element)?.feature(s.feature)).map(|f| &f.kind) else {
-        return;
-    };
-    let want = HemFeature { edges: Vec::new(), ..h.clone() };
-    if last.0.as_ref() != Some(&want) {
-        last.0 = Some(want);
+/// SM4.5: a new hem, when accepted, is what the next hem starts from (its settings, not its
+/// edges or its flip). Cancelling, or editing an older hem, leaves the memory alone.
+pub(crate) fn remember_accepted(world: &mut World, kind: &FeatureKind) {
+    if let FeatureKind::SheetMetal(SheetMetalFeature::Hem(h)) = kind {
+        world.resource_mut::<LastHem>().0 = Some(HemFeature { edges: Vec::new(), flip: false, ..h.clone() });
     }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Arrows in the view: the flange's distance and a partial flange's two bounds (SM3.3, SM3.7,
-// `sheetmetalflange-dialog-03.png`)
+// `sheetmetalflange-dialog-03.png`), dragged; the hem's direction (SM4.1), clicked to flip
 
 const ARROW_LEN: f32 = 40.0;
 
@@ -895,6 +895,8 @@ enum ArrowValue {
     Distance,
     Bound,
     Second,
+    /// The hem's side: a click flips it.
+    HemFlip,
 }
 
 impl ArrowValue {
@@ -903,6 +905,7 @@ impl ArrowValue {
             ArrowValue::Distance => "smf-distance-arrow",
             ArrowValue::Bound => "smf-bound-arrow",
             ArrowValue::Second => "smf-second-arrow",
+            ArrowValue::HemFlip => "smf-hem-flip-arrow",
         }
     }
 
@@ -911,6 +914,7 @@ impl ArrowValue {
             ArrowValue::Distance => SmfNum::Distance,
             ArrowValue::Bound => SmfNum::BoundDistance,
             ArrowValue::Second => SmfNum::SecondDistance,
+            ArrowValue::HemFlip => SmfNum::HemTotal,
         }
     }
 }
@@ -940,14 +944,13 @@ fn v(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)
 }
 
-/// Where the arrows stand: the first picked edge (on the parts before the flange), its outward
-/// direction out of the wall (the narrower face's normal) and the broad face's.
-fn arrow_targets(f: &FlangeFeature, before: &crate::applied::BeforeParts) -> Vec<(ArrowValue, Vec3, Vec3)> {
-    let Some(EdgeOrFace::Edge(e)) = f.edges.first() else { return Vec::new() };
-    let Some(part) = before.parts.iter().find(|p| p.id == e.part) else { return Vec::new() };
-    let Some(edge) = part.solid.edge(&e.edge) else { return Vec::new() };
-    let (a, b) = (v(edge.points[0]), v(*edge.points.last().expect("points")));
-    let along = (b - a).normalize_or_zero();
+/// A picked edge on the parts before the feature: its ends, the direction out of the wall (the
+/// narrower face's normal) and the broad face's normal.
+fn edge_frame(edges: &[EdgeOrFace], before: &crate::applied::BeforeParts) -> Option<(Vec3, Vec3, Vec3, Vec3)> {
+    let Some(EdgeOrFace::Edge(e)) = edges.first() else { return None };
+    let part = before.parts.iter().find(|p| p.id == e.part)?;
+    let edge = part.solid.edge(&e.edge)?;
+    let (a, b) = (v(edge.points[0]), v(*edge.points.last()?));
     // Its two faces: the side face (smaller) and the broad face.
     let mut faces: Vec<(f64, Vec3)> = e
         .edge
@@ -959,10 +962,24 @@ fn arrow_targets(f: &FlangeFeature, before: &crate::applied::BeforeParts) -> Vec
         })
         .collect();
     if faces.len() < 2 {
-        return Vec::new();
+        return None;
     }
     faces.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let (out, broad) = (faces[0].1, faces[1].1);
+    Some((a, b, faces[0].1, faces[1].1))
+}
+
+/// The hem's arrow: at the middle of its first edge, pointing to the side it folds over (the
+/// face its edge was picked on, or the other with the flip).
+fn hem_arrow_targets(h: &HemFeature, before: &crate::applied::BeforeParts) -> Vec<(ArrowValue, Vec3, Vec3)> {
+    let Some((a, b, _, broad)) = edge_frame(&h.edges, before) else { return Vec::new() };
+    let dir = if h.flip { -broad } else { broad };
+    vec![(ArrowValue::HemFlip, (a + b) / 2.0, dir)]
+}
+
+/// Where the flange's arrows stand: the first picked edge (on the parts before the flange).
+fn arrow_targets(f: &FlangeFeature, before: &crate::applied::BeforeParts) -> Vec<(ArrowValue, Vec3, Vec3)> {
+    let Some((a, b, out, broad)) = edge_frame(&f.edges, before) else { return Vec::new() };
+    let along = (b - a).normalize_or_zero();
     let theta = (f.angle as f32).to_radians();
     let side = if f.flip { -broad } else { broad };
     let dir = if f.angle_control == AngleControl::BendAngle { out * theta.cos() + side * theta.sin() } else { out };
@@ -1011,17 +1028,15 @@ fn place_arrows(
     mut q_line: Query<(&SmArrowLine, &mut ImageNode)>,
     mut commands: Commands,
 ) {
-    let f = session.as_ref().filter(|s| s.kind == AppliedKind::SmFeature(SmTool::Flange)).and_then(|s| {
-        let kind = match arrows.drag.as_ref() {
-            Some(d) => d.kind.clone(),
-            None => doc.as_ref()?.doc.element(s.element)?.feature(s.feature)?.kind.clone(),
-        };
-        match kind {
-            FeatureKind::SheetMetal(SheetMetalFeature::Flange(f)) => Some(f),
-            _ => None,
-        }
+    let kind = session.as_ref().filter(|s| matches!(s.kind, AppliedKind::SmFeature(SmTool::Flange | SmTool::Hem))).and_then(|s| match arrows.drag.as_ref() {
+        Some(d) => Some(d.kind.clone()),
+        None => Some(doc.as_ref()?.doc.element(s.element)?.feature(s.feature)?.kind.clone()),
     });
-    let targets = f.as_ref().map(|f| arrow_targets(f, &before)).unwrap_or_default();
+    let targets = match kind {
+        Some(FeatureKind::SheetMetal(SheetMetalFeature::Flange(f))) => arrow_targets(&f, &before),
+        Some(FeatureKind::SheetMetal(SheetMetalFeature::Hem(h))) => hem_arrow_targets(&h, &before),
+        _ => Vec::new(),
+    };
     arrows.arrows = targets
         .iter()
         .map(|(w, p, d)| {
@@ -1100,10 +1115,11 @@ fn arrows_pointer(
     drag: Res<crate::viewport::ViewportDrag>,
     units: Res<crate::WorkspaceUnits>,
     mut over: ResMut<crate::parts::PartOverride>,
+    mut grab: ResMut<crate::assembly::ViewportGrab>,
     mut commands: Commands,
 ) {
     use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
-    let Some(s) = session.filter(|s| s.kind == AppliedKind::SmFeature(SmTool::Flange)) else {
+    let Some(s) = session.filter(|s| matches!(s.kind, AppliedKind::SmFeature(SmTool::Flange | SmTool::Hem))) else {
         inputs.clear();
         arrows.drag = None;
         return;
@@ -1122,6 +1138,18 @@ fn arrows_pointer(
         }
         let pos = input.location.position;
         match input.action {
+            // The hem's arrow is a button: a click flips the hem (one command, as the dialog's).
+            PointerAction::Press(PointerButton::Primary) if hit(pos, &arrows).is_some_and(|h| h.0 == ArrowValue::HemFlip) => {
+                // Not a click that picks.
+                grab.0 = true;
+                commands.queue(|world: &mut World| {
+                    let Some(f) = crate::applied::current(world) else { return };
+                    let mut k = f.kind.clone();
+                    if let Some(label) = flip(&mut k, Role::Smf(SmfRole::Flip)) {
+                        crate::applied::set(world, k, label);
+                    }
+                });
+            }
             PointerAction::Press(PointerButton::Primary) => {
                 if let (Some((which, dir)), Some(k)) = (hit(pos, &arrows), kind.clone())
                     && let Some(value) = arrow_value(&k, which)
@@ -1129,6 +1157,7 @@ fn arrows_pointer(
                     let dir_px = view.view.project_vector(dir);
                     if dir_px.length() > 0.05 {
                         arrows.drag = Some(SmDrag { which, start: pos, start_value: value, dir_px, kind: k });
+                        grab.0 = true;
                     }
                 }
             }

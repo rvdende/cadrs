@@ -11,10 +11,10 @@
 //!   minimal gap 0.025, bend relief scales 1.5 × 1. Flange 1 on the two back edges (Inner, 8,
 //!   partial: per chain, hold adjacent edges, 10 in), Hem 1 on the flanges' top edges (straight,
 //!   flattened, 5, in place), Sketch 2 and Tab 1 (a 20 × 10 tongue off the right base's front
-//!   edge), Flange 2 on the rest of that front edge (15, as high as the right wall), Flange 3 on
-//!   the right wall's top edge (10), Make joint 1 between Flange 2's side and the right wall's
-//!   front edge (rip, butt joint – direction 1), Corner 1 at the rear-left corner (Round – Sized,
-//!   Ø3.3); Carbon Steel.
+//!   edge), Flange 2 (a 10 lip on the right wall's top edge, turned in), Flange 3 (10 on the right
+//!   wall's vertical front end edge, turned in), Make joint 1 between the lip's end and Flange 3's
+//!   top edge (rip, butt joint – direction 1), as the slides' steps 9–11; Corner 1 at the
+//!   rear-left corner (Round – Sized, Ø3.3); Carbon Steel.
 //! - **E3 "Drawings"** ([`build_e3`]): the "Sheet Metal Box": a 200 × 125 × 150 block converted
 //!   with its top excluded and its four bottom edges bent (1.5 mm, R1.5).
 //! - **E4 "Sheet metal rework"** ([`build_e4`]): the "Lower Enclosure": a U-channel (Front-plane
@@ -275,6 +275,12 @@ pub const E2_PART: PartId = PartId::new(E2_MODEL, 0);
 pub const E2_CHAIN: [(f64, f64); 8] = [(0.0, 15.0), (0.0, 0.0), (40.0, 0.0), (52.0, 10.0), (73.0, 10.0), (85.0, 0.0), (125.0, 0.0), (125.0, 15.0)];
 /// The extrude's depth (along −Y from Front).
 pub const E2_DEPTH: f64 = 80.0;
+/// Step 9: the right wall's top edge, on its inside face (x = 124).
+pub const E2_FLANGE_2_EDGE: [f64; 3] = [124.0, -40.0, 15.0];
+/// Step 10: the right wall's vertical front end edge, on its inside face.
+pub const E2_FLANGE_3_EDGE: [f64; 3] = [124.0, -80.0, 8.0];
+/// Step 11: the lip's front end (its top edge there) and Flange 3's top edge (its inside).
+pub const E2_JOINT_EDGES: [[f64; 3]; 2] = [[119.0, -80.0, 16.0], [119.0, -80.0, 14.0]];
 
 /// E2's model settings (`ex2-creating-sheet-metal-parts/step-03.png`).
 pub fn e2_params() -> cadrs_sheetmetal::Params {
@@ -336,18 +342,20 @@ pub fn build_e2(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     let base = face_near(&part.solid, part.id, [105.0, -40.0, 1.0]).ok_or_else(|| missing("right base"))?;
     let tab = TabFeature { regions, flanges: vec![base], ..Default::default() };
     add(s, el, E2_TAB_1, "Tab", FeatureKind::SheetMetalTool(SheetMetalTool::Tab(tab)))?;
-    // Steps 9–10: Flange 2 on the front edge beside the tab (as high as the wall), Flange 3 on
-    // the right wall's top edge.
+    // Steps 9–10 (`step-09.png`, `-10.png`): Flange 2, a 10 lip on the right wall's top edge,
+    // turned in over the base (its inside edge picked); Flange 3, 10 on the right wall's vertical
+    // end edge at the front, turned in too, as tall as the wall between its bends.
     let part = sm_part(&built(s, el), E2_MODEL)?;
-    let fl2 = FlangeFeature { edges: vec![e(&part, [120.0, -80.0, 1.0])?], distance: 15.0, distance_expr: "15 mm".into(), ..Default::default() };
+    let fl2 = FlangeFeature { edges: vec![e(&part, E2_FLANGE_2_EDGE)?], distance: 10.0, distance_expr: "10 mm".into(), ..Default::default() };
     add(s, el, E2_FLANGE_2, "Flange", FeatureKind::SheetMetal(SheetMetalFeature::Flange(fl2)))?;
     let part = sm_part(&built(s, el), E2_MODEL)?;
-    let fl3 = FlangeFeature { edges: vec![e(&part, [124.0, -40.0, 15.0])?], distance: 10.0, distance_expr: "10 mm".into(), ..Default::default() };
+    let fl3 = FlangeFeature { edges: vec![e(&part, E2_FLANGE_3_EDGE)?], distance: 10.0, distance_expr: "10 mm".into(), ..Default::default() };
     add(s, el, E2_FLANGE_3, "Flange", FeatureKind::SheetMetal(SheetMetalFeature::Flange(fl3)))?;
-    // Step 11: Make joint 1, rip, butt joint – direction 1.
+    // Step 11 (`step-11.png`): Make joint 1 between "Edge of Flange 2" (the lip's front end) and
+    // "Edge of Flange 3" (its top edge): rip, butt joint – direction 1.
     let part = sm_part(&built(s, el), E2_MODEL)?;
     let mj = MakeJointFeature {
-        edges: vec![e(&part, [123.0, -80.0, 10.0])?, e(&part, [125.0, -80.0, 8.0])?],
+        edges: vec![e(&part, E2_JOINT_EDGES[0])?, e(&part, E2_JOINT_EDGES[1])?],
         kind: MakeJointType::Rip,
         style: cadrs_sheetmetal::RipStyle::ButtDirection1,
         ..Default::default()

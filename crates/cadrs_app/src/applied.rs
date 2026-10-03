@@ -646,6 +646,10 @@ pub fn accept(world: &mut World) {
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
         doc.squash_element_since(s.mark, s.element, label);
     }
+    // SM4.5: a new hem accepted is what the next hem starts from.
+    if s.is_new {
+        crate::sheetmetal_features_ui::remember_accepted(world, &f.kind);
+    }
     end(world);
 }
 
