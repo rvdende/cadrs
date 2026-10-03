@@ -51,7 +51,7 @@ pub enum TooltipStyle {
     /// An error message: left-aligned below the element, wrapped to its width, white with a red
     /// accent.
     Error,
-    /// An information card (a list row's details, several lines): white with a border and a
+    /// An information card (a list row's details, several lines): dark like the labels, with a
     /// shadow, beside the element (to its right, top-aligned), so it doesn't cover the rows below.
     Card,
     /// A small label beside the element (to its right, centred on it), so it doesn't cover the
@@ -261,8 +261,9 @@ fn update_tooltips(
                     border_radius: BorderRadius::all(Val::Px(t.radius_sm)),
                     ..default()
                 },
-                BackgroundColor(Color::WHITE),
-                BorderColor::all(Color::srgb_u8(0xc3, 0xca, 0xd4)),
+                // One look with the label tooltips (dark), only beside its element and on several lines.
+                BackgroundColor(t.tooltip_background),
+                BorderColor::all(t.tooltip_background),
                 BoxShadow::new(
                     Color::srgba(0.0, 0.0, 0.0, 0.22),
                     Val::Px(0.0),
@@ -277,7 +278,7 @@ fn update_tooltips(
                 b.spawn((
                     Text::new(text),
                     t.font(t.font_sm, FontWeight::NORMAL),
-                    TextColor(Color::srgb_u8(0x1f, 0x23, 0x28)),
+                    TextColor(t.tooltip_foreground),
                     TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap),
                     Pickable::IGNORE,
                 ));

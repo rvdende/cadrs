@@ -315,8 +315,8 @@ impl FlatHit {
 
 /// A label in the flat view: its joint, its spot (flat 2D, on the sheet's top) and the way it
 /// reads off from there.
-#[derive(Component, Clone, Copy)]
-struct FlatLabel(JointId, P2, cadrs_sheetmetal::poly::V2);
+#[derive(Component, Clone)]
+struct FlatLabel(JointId, Vec<(P2, cadrs_sheetmetal::poly::V2)>);
 
 /// A joint's label by the folded model in the main view (SM13.1), while the panel is open.
 #[derive(Component, Clone, Copy)]
@@ -570,11 +570,17 @@ fn flat_mark(cache: &PartCache, ctx: &SheetMetalContext, scene: &FlatScene, pick
     if !ctx.parts.iter().any(|(p, _)| *p == part) {
         return None;
     }
-    let (_, hit) = hit_of_pick(cache, pick)?;
-    let w = match hit {
-        FlatHit::Joint(_) => return Some(FlatMark::Joint),
-        FlatHit::Wall(w) => w,
-        FlatHit::Pick(_) => return None,
+    // An edge or vertex shows where it lies on its wall, even along a rip.
+    let on_wall = matches!(pick, Pick::Edge(..) | Pick::Vertex(..))
+        .then(|| cadrs_sheetmetal::view::wall_at(&ctx.model, pick_point(cache, pick)?, tolerance(ctx)))
+        .flatten();
+    let w = match on_wall {
+        Some(w) => w,
+        None => match hit_of_pick(cache, pick)?.1 {
+            FlatHit::Joint(_) => return Some(FlatMark::Joint),
+            FlatHit::Wall(w) => w,
+            FlatHit::Pick(_) => return None,
+        },
     };
     let solid = &cache.parts.iter().find(|p| p.id == part)?.solid;
     let to = |q: &[f64; 3]| cadrs_sheetmetal::view::to_flat(&ctx.model, &ctx.flat, scene, w, P3::new(q[0], q[1], q[2]));
@@ -886,10 +892,13 @@ fn sync_panel(world: &mut World) {
                 // Every bend's, rip's and tangent joint's label (SM13.1).
                 let scene = FlatScene::new(&ctx.model, &ctx.flat);
                 for j in &ctx.model.joints {
-                    let Some((spot, dir)) = scene.label_place(j.id) else { continue };
+                    let places = scene.label_places(j.id);
+                    if places.is_empty() {
+                        continue;
+                    }
                     b.spawn((
                         Name::new(format!("smt-flat-label-{}", j.name)),
-                        FlatLabel(j.id, spot, dir),
+                        FlatLabel(j.id, places),
                         Node {
                             position_type: PositionType::Absolute,
                             padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
@@ -1059,7 +1068,7 @@ fn spawn_tables(
         Column::new("dir", "Bend direction").grow(1.25),
         Column::new("value", value_label).grow(1.45),
     ];
-    let joint_cols = vec![Column::new("name", "Name").width(120.0).shaded(NUMBER_FILL), Column::new("type", "Type").width(120.0), Column::new("style", "Style").width(170.0)];
+    let joint_cols = vec![Column::new("name", "Name").width(110.0).shaded(NUMBER_FILL), Column::new("type", "Type").width(110.0), Column::new("style", "Style").width(220.0)];
     let locked = ctx.corner_broken;
     caret_header(b, t, "smt-bends-caret", "Bends", bends_open);
     if bends_open {
@@ -1531,15 +1540,21 @@ fn flat_name(world: &World, part: usize) -> Option<String> {
 }
 
 /// A Select other entry's label.
-fn hit_label(ctx: &SheetMetalContext, hit: FlatHit) -> String {
+/// As Onshape names them: after the feature that made them ("Face of Flange 1", "Edge of
+/// Sheet metal model 1"); a joint by its table name.
+fn hit_label(world: &World, ctx: &SheetMetalContext, hit: FlatHit) -> String {
+    let named = |f: FeatureId| feature_name(world, f).unwrap_or_else(|| ctx.name.clone());
     match hit {
         FlatHit::Joint(j) => ctx.model.joint(j).map_or_else(|| "Joint".into(), |j| j.name.clone()),
-        FlatHit::Wall(w) => {
-            let i = ctx.model.walls.iter().position(|x| x.id == w).unwrap_or(0);
-            format!("Face of wall {}", i + 1)
+        FlatHit::Wall(w) => format!("Face of {}", named(ctx.owner(cadrs_core::sheetmetal::PieceKey::Wall(w)))),
+        FlatHit::Pick(p) => {
+            let what = if matches!(p, Pick::Vertex(..)) { "Vertex" } else { "Edge" };
+            let op = match p {
+                Pick::Edge(_, n) => n.faces[0].op,
+                _ => ctx.feature.0,
+            };
+            format!("{what} of {}", named(FeatureId(op)))
         }
-        FlatHit::Pick(Pick::Vertex(..)) => "Vertex".into(),
-        FlatHit::Pick(_) => "Edge".into(),
     }
 }
 
@@ -1668,13 +1683,6 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
         (t.menu_part, t.menu_others.clone(), t.menu_point)
     };
     let name = part.and_then(|p| flat_name(world, p));
-    let part_name = part.and_then(|i| {
-        let cache = world.resource::<PartCache>();
-        let ctx = shown(world.resource::<SmTable>(), cache)?;
-        let (pid, _) = ctx.parts.get(i)?;
-        let p = cache.parts.iter().find(|p| p.id == *pid)?;
-        Some(cadrs_core::parts::display_name(p, &cache.props).to_string())
-    });
     let model = shown(world.resource::<SmTable>(), world.resource::<PartCache>()).map(|c| c.feature);
     let model_name = model.and_then(|m| feature_name(world, m));
     let sketch = at.and_then(|(p, tol)| flat_sketch_at(world, p, tol));
@@ -1693,7 +1701,7 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
         }
         if let Some(ctx) = ctx {
             for (i, h) in others.iter().enumerate() {
-                v.push(MenuEntry::Item(MenuItem::new(format!("smt-select-other-{i}"), hit_label(ctx, *h))));
+                v.push(MenuEntry::Item(MenuItem::new(format!("smt-select-other-{i}"), hit_label(world, ctx, *h))));
             }
         }
         v
@@ -1726,8 +1734,8 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
     entries.push(MenuEntry::Item(MenuItem::new("smt-zoom-selection", "Zoom to selection").disabled(off && world.resource::<Selection>().0.is_empty())));
     entries.push(MenuEntry::Item(MenuItem::new("smt-normal-to", "View normal to")));
     entries.push(MenuEntry::Separator);
-    let pn = part_name.clone().unwrap_or_else(|| "part".into());
-    entries.push(MenuEntry::Item(with_tip(MenuItem::new("smt-flat-delete", format!("Delete {pn}…")).icon("remove-circle").disabled(off))));
+    // As Onshape's: Delete the Sheet metal model feature.
+    entries.push(MenuEntry::Item(MenuItem::new("smt-flat-delete", format!("Delete {m}")).icon("remove-circle").disabled(model_name.is_none())));
     let menu = Menu::new("smt-flat-menu").min_width(280.0).item_height(22.0).entries(entries);
     let theme = world.resource::<Theme>().clone();
     let mut cm = world.commands();
@@ -1744,12 +1752,22 @@ struct MenuSketch(Option<FeatureId>);
 /// the part the menu is on.
 fn zoom_to_selection(world: &mut World) {
     let size = body_size(world);
+    let mut extra: Vec<P2> = Vec::new();
     let polys: Vec<cadrs_sheetmetal::poly::Polygon> = {
         let t = world.resource::<SmTable>();
         let cache = world.resource::<PartCache>();
         let (Some(scene), Some(ctx)) = (t.scene.as_ref(), shown(t, cache)) else { return };
         let mut v = Vec::new();
         for p in &world.resource::<Selection>().0 {
+            // Edges and vertices: where they lie in the flat (a vertex with some room round it).
+            if matches!(p, Pick::Edge(..) | Pick::Vertex(..))
+                && let Some(FlatMark::Lines(ls)) = flat_mark(cache, ctx, scene, *p)
+            {
+                for q in ls.into_iter().flatten() {
+                    let r = 5.0 * ctx.model.params.thickness.max(1.0);
+                    extra.extend([q + cadrs_sheetmetal::poly::V2::new(-r, -r), q + cadrs_sheetmetal::poly::V2::new(r, r)]);
+                }
+            }
             match fill_of(cache, ctx, *p) {
                 Some(FillOf::Wall(w)) => v.extend(scene.wall_region(w)),
                 Some(FillOf::Part(i)) => v.extend(scene.part_region(i)),
@@ -1760,6 +1778,7 @@ fn zoom_to_selection(world: &mut World) {
             }
         }
         if v.is_empty()
+            && extra.is_empty()
             && let Some(i) = t.menu_part
         {
             v = scene.part_region(i);
@@ -1769,7 +1788,7 @@ fn zoom_to_selection(world: &mut World) {
     let Some(size) = size else { return };
     let mut t = world.resource_mut::<SmTable>();
     let z = t.scene.as_ref().map_or(0.0, |s| s.thickness as f32);
-    let pts: Vec<Vec3> = polys.iter().flat_map(|p| p.outer.iter().map(move |q| Vec3::new(q.x as f32, q.y as f32, z))).collect();
+    let pts: Vec<Vec3> = polys.iter().flat_map(|p| p.outer.iter().copied()).chain(extra).map(|q| Vec3::new(q.x as f32, q.y as f32, z)).collect();
     if pts.is_empty() {
         return;
     }
@@ -1828,17 +1847,17 @@ fn on_menu_action(
                     }
                 }
                 "smt-flat-delete" => {
-                    if let Some((element, part, _)) = flat_part(world) {
-                        if crate::linked_session::refuse(world) {
-                            return;
-                        }
-                        if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
-                            && let Err(e) = doc.execute(&cadrs_core::commands::AddFeature::delete_parts(element, FeatureId::new(), vec![part]))
-                        {
-                            warn!("cannot delete the part: {e}");
-                        }
-                        world.resource_mut::<Selection>().0.retain(|p| p.part() != Some(part));
+                    let (Some(m), Some(element)) = (model, world.get_resource::<ActiveDocument>().and_then(|d| d.active)) else { return };
+                    if crate::linked_session::refuse(world) {
+                        return;
                     }
+                    let label = format!("Delete {}", feature_name(world, m).unwrap_or_default());
+                    if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
+                        && let Err(e) = doc.execute(&cadrs_core::commands::DeleteFeature { element, feature: m, label })
+                    {
+                        warn!("cannot delete the sheet metal model: {e}");
+                    }
+                    world.resource_mut::<Selection>().0.clear();
                 }
                 "smt-normal-to" => {
                     {
@@ -2080,7 +2099,7 @@ fn shaded(base: [f32; 3], n: [f32; 3], back: Vec3) -> [f32; 4] {
 fn sync_meshes(
     mut t: ResMut<SmTable>,
     cache: Res<PartCache>,
-    selection: Res<Selection>,
+    (selection, extra): (Res<Selection>, Res<ExtraHighlight>),
     open: Res<SidePanel>,
     kind: Res<ActiveKind>,
     q: Query<Entity, With<FlatMesh>>,
@@ -2089,6 +2108,8 @@ fn sync_meshes(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
+    // The Modify joint dialog's joint (`ExtraHighlight::selected`) shows selected here too.
+    let selection = Selection(selection.0.iter().chain(extra.selected.iter()).copied().collect());
     let ctx = if is_open(&open, &kind) { shown(&t, &cache).cloned() } else { None };
     // The scene, laid out again when the model changes.
     let want_scene = ctx.as_ref().map(|c| {
@@ -2162,7 +2183,7 @@ fn sync_meshes(
         commands.spawn((Name::new("smt-flat-mesh"), FlatMesh, Mesh3d(meshes.add(tris_mesh(&tris, colors))), MeshMaterial3d(material.clone()), Transform::default(), RenderLayers::layer(FLAT_LAYER), DespawnOnExit(AppState::Document)));
     };
     let all: Vec<_> = scene.pieces.iter().flat_map(|(_, v)| v.iter().cloned()).collect();
-    spawn(cadrs_sheetmetal::view::slab(&all, 0.0, tz), [0.66, 0.66, 0.68]);
+    spawn(cadrs_sheetmetal::view::slab(&all, 0.0, tz), [0.55, 0.56, 0.58]);
     let lift = tz * 1.0 + 1e-3 * scene.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0);
     for (f, sel) in &fills {
         let polys = match f {
@@ -2202,13 +2223,15 @@ fn v3(p: P2, z: f64) -> Vec3 {
 fn draw_flat(
     t: Res<SmTable>,
     cache: Res<PartCache>,
-    selection: Res<Selection>,
+    (selection, extra): (Res<Selection>, Res<ExtraHighlight>),
     open: Res<SidePanel>,
     kind: Res<ActiveKind>,
     doc: Option<Res<ActiveDocument>>,
     mut lines: Gizmos<FlatLineGizmos>,
     mut hi: Gizmos<FlatHighlightGizmos>,
 ) {
+    // The Modify joint dialog's joint (`ExtraHighlight::selected`) shows selected here too.
+    let selection = Selection(selection.0.iter().chain(extra.selected.iter()).copied().collect());
     if !is_open(&open, &kind) || t.key.is_none() {
         return;
     }
@@ -2387,36 +2410,65 @@ fn label_color(j: JointId, selected: &[JointId], hovered: Option<JointId>, theme
 fn place_labels(
     t: Res<SmTable>,
     cache: Res<PartCache>,
-    selection: Res<Selection>,
+    (selection, extra): (Res<Selection>, Res<ExtraHighlight>),
     q_body: Query<&ComputedNode, With<FlatBody>>,
     mut q: Query<(&FlatLabel, &mut Node, &mut Visibility, &ComputedNode, &Children)>,
     mut q_text: Query<&mut TextColor>,
     theme: Res<Theme>,
 ) {
+    // The Modify joint dialog's joint (`ExtraHighlight::selected`) shows selected here too.
+    let selection = Selection(selection.0.iter().chain(extra.selected.iter()).copied().collect());
     let Some(body) = q_body.iter().next() else { return };
     let Some(scene) = &t.scene else { return };
     let size = body.size() * body.inverse_scale_factor();
     let selected = shown(&t, &cache).map(|c| selected_joints(&cache, c, &selection)).unwrap_or_default();
     let hovered = t.hovered.and_then(FlatHit::joint).or(t.model_hover.and_then(|(_, h)| h.joint()));
-    // Bends first (their spot is the clearer one), then rips; each label is moved further out
-    // along its own direction, or slid along the line, until it overlaps none placed before.
+    // The sheet's outlines on screen: labels keep off them (they would read as the edge's).
+    let z = scene.thickness;
+    let outline: Vec<(Vec2, Vec2)> = scene
+        .outlines
+        .iter()
+        .flat_map(|p| std::iter::once(&p.outer).chain(&p.holes))
+        .flat_map(|l| (0..l.len()).map(move |i| (l[i], l[(i + 1) % l.len()])))
+        .map(|(a, b)| (t.view.project(v3(a, z)) + size / 2.0, t.view.project(v3(b, z)) + size / 2.0))
+        .collect();
+    let crosses = |r: &Rect| outline.iter().any(|(a, b)| segment_hits_rect(*a, *b, *r));
+    // Bends first (their spot is the clearer one), then rips; each label tries its places (a
+    // rip has one by each of its edges), moved further out along its direction or slid along
+    // the line, for a spot inside the view that overlaps no label placed before and no outline.
     let mut items: Vec<_> = q.iter_mut().collect();
     items.sort_by_key(|(l, ..)| (scene.bends.iter().all(|b| b.joint != l.0), l.0 .0));
     let mut placed: Vec<Rect> = Vec::new();
     for (l, mut node, mut vis, cn, children) in items {
-        let p = t.view.project(v3(l.1, scene.thickness)) + size / 2.0;
         let lsize = cn.size() * cn.inverse_scale_factor();
-        // The label's box sits on the side its direction points to, 4 px off the spot.
-        let d = t.view.project_vector(Vec3::new(l.2.x as f32, l.2.y as f32, 0.0)).normalize_or_zero();
-        let along = Vec2::new(-d.y, d.x);
-        let reach = (d.x.abs() * lsize.x + d.y.abs() * lsize.y) / 2.0;
-        let at = |out: f32, slide: f32| {
-            let c = p + d * (4.0 + reach + out) + along * slide;
-            Rect::from_center_size(c, lsize + Vec2::splat(2.0))
-        };
         let step = lsize.y.max(8.0);
-        let tries = [(0.0, 0.0), (0.0, step), (0.0, -step), (step, 0.0), (0.0, 2.0 * step), (0.0, -2.0 * step), (step, step), (step, -step), (2.0 * step, 0.0)];
-        let r = tries.iter().map(|(o, sl)| at(*o, *sl)).find(|r| placed.iter().all(|q| q.intersect(*r).is_empty())).unwrap_or_else(|| at(0.0, 0.0));
+        let mut tries: Vec<(f32, f32)> = Vec::new();
+        for o in 0..4 {
+            for sl in [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0] {
+                tries.push((o as f32 * step * 0.5, sl * step));
+            }
+        }
+        let mut cands: Vec<Rect> = Vec::new();
+        for (spot, dir) in &l.1 {
+            let p = t.view.project(v3(*spot, z)) + size / 2.0;
+            // The label's box sits on the side its direction points to, 4 px off the spot.
+            let d = t.view.project_vector(Vec3::new(dir.x as f32, dir.y as f32, 0.0)).normalize_or_zero();
+            let along = Vec2::new(-d.y, d.x);
+            let reach = (d.x.abs() * lsize.x + d.y.abs() * lsize.y) / 2.0;
+            for (o, sl) in &tries {
+                let c = p + d * (4.0 + reach + o) + along * *sl;
+                cands.push(Rect::from_center_size(c, lsize + Vec2::splat(2.0)));
+            }
+        }
+        let inside = |r: &Rect| r.min.x >= 0.0 && r.min.y >= 0.0 && r.max.x <= size.x && r.max.y <= size.y;
+        let free = |r: &Rect| placed.iter().all(|q| q.intersect(*r).is_empty());
+        let Some(&first) = cands.first() else { continue };
+        let r = cands
+            .iter()
+            .find(|r| inside(r) && free(r) && !crosses(r))
+            .or_else(|| cands.iter().find(|r| inside(r) && free(r)))
+            .copied()
+            .unwrap_or(first);
         placed.push(r);
         let (x, y) = (r.min.x + 1.0, r.min.y + 1.0);
         if node.left != Val::Px(x) || node.top != Val::Px(y) {
@@ -2437,6 +2489,20 @@ fn place_labels(
             }
         }
     }
+}
+
+/// Whether segment `a`–`b` touches rectangle `r`.
+fn segment_hits_rect(a: Vec2, b: Vec2, r: Rect) -> bool {
+    if r.contains(a) || r.contains(b) {
+        return true;
+    }
+    let cross = |p: Vec2, q: Vec2, u: Vec2, v: Vec2| {
+        let d = |a: Vec2, b: Vec2, c: Vec2| (b - a).perp_dot(c - a);
+        let (d1, d2, d3, d4) = (d(u, v, p), d(u, v, q), d(p, q, u), d(p, q, v));
+        (d1 > 0.0) != (d2 > 0.0) && (d3 > 0.0) != (d4 > 0.0)
+    };
+    let c = [r.min, Vec2::new(r.max.x, r.min.y), r.max, Vec2::new(r.min.x, r.max.y)];
+    (0..4).any(|i| cross(a, b, c[i], c[(i + 1) % 4]))
 }
 
 /// The joints' labels by the folded model in the main view (SM13.1), while the panel is open:
@@ -2554,17 +2620,12 @@ fn flat_hit(cache: &PartCache, t: &SmTable, p: P2, tol: f64) -> Option<FlatHit> 
     let outline = |corner: f64, side: f64| {
         let ctx = ctx?;
         let h = scene.outline_at(p, corner, side)?;
-        let pick = model_pick_at(cache, ctx, scene, h)?;
-        // A side that is a bend's or rip's is that joint, not a wall edge (a corner is always
-        // the vertex).
-        if matches!(pick, Pick::Vertex(..)) {
-            return Some(FlatHit::Pick(pick));
-        }
-        cadrs_sheetmetal::view::joint_at(&ctx.model, pick_point(cache, pick)?, tolerance(ctx)).is_none().then_some(FlatHit::Pick(pick))
+        // A rip's side is its model edge too (the rip is in the table and Select other).
+        model_pick_at(cache, ctx, scene, h).map(FlatHit::Pick)
     };
     outline(tol, 0.0)
-        .or_else(|| scene.joint_at(p, tol).map(FlatHit::Joint))
         .or_else(|| outline(0.0, tol * 0.8))
+        .or_else(|| scene.joint_at(p, tol).map(FlatHit::Joint))
         .or_else(|| scene.wall_at(p).map(FlatHit::Wall))
 }
 

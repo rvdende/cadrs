@@ -328,13 +328,27 @@ impl FlatScene {
             let half = b.region.iter().flat_map(|r| r.outer.iter()).map(|q| (q - mid).dot(&side)).fold(0.0, f64::max);
             return Some((mid + side * half, side));
         }
-        let x = self.joints.iter().find(|x| x.joint == j)?;
-        let s = x.edges.first()?;
-        let mid = P2::from((s.a.coords + s.b.coords) / 2.0);
-        let n = across(s);
-        let eps = (0.02 * s.len()).clamp(0.05, 1.0);
-        let side = if self.on_material(mid + n * eps) && !self.on_material(mid - n * eps) { -n } else { n };
-        Some((mid, side))
+        self.label_places(j).into_iter().next()
+    }
+
+    /// Every place a joint's label may go, best first: a bend's one ([`Self::label_place`]); a
+    /// rip's beside each of its edges, off the sheet (a rip between two parts has one on each).
+    pub fn label_places(&self, j: JointId) -> Vec<(P2, V2)> {
+        if self.bends.iter().any(|b| b.joint == j) {
+            return self.label_place(j).into_iter().collect();
+        }
+        let Some(x) = self.joints.iter().find(|x| x.joint == j) else { return Vec::new() };
+        x.edges
+            .iter()
+            .map(|s| {
+                let mid = P2::from((s.a.coords + s.b.coords) / 2.0);
+                let d = s.dir();
+                let n = V2::new(-d.y, d.x);
+                let eps = (0.02 * s.len()).clamp(0.05, 1.0);
+                let side = if self.on_material(mid + n * eps) && !self.on_material(mid - n * eps) { -n } else { n };
+                (mid, side)
+            })
+            .collect()
     }
 }
 
