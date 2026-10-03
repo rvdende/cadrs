@@ -12,6 +12,9 @@
 //! 4. record the feature as the owner of the walls and joints it added, so their faces are named
 //!    after it ("Edge of Flange 1") and keep those names while later features edit the model.
 
+// NaN-safe checks: `!(x > 0.0)` is true for NaN too, which is what they mean.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 use super::sheetmetal::{Folded, face_index, flat_error, key_of, p3, v3};
 use super::*;
 use cadrs_sheetmetal::flat::PieceSource;

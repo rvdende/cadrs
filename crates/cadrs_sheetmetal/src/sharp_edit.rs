@@ -21,6 +21,9 @@
 //! Picks arrive as 3D points (an edge's polyline or a side face's boundary); [`locate`] finds the
 //! wall edge they lie along. Lengths are millimetres, angles radians.
 
+// NaN-safe checks: `!(x > 0.0)` is true for NaN too, which is what they mean.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use serde::{Deserialize, Serialize};

@@ -915,11 +915,14 @@ impl ArrowValue {
     }
 }
 
+/// One arrow: what it drags, its point and direction (world), its base and tip on screen.
+type Arrow = (ArrowValue, Vec3, Vec3, Option<(Vec2, Vec2)>);
+
 /// The arrows on screen and a drag in progress.
 #[derive(Resource, Debug, Default)]
 pub struct SmArrows {
     /// Each arrow: what it drags, its point and direction (world), its base and tip on screen.
-    arrows: Vec<(ArrowValue, Vec3, Vec3, Option<(Vec2, Vec2)>)>,
+    arrows: Vec<Arrow>,
     hovered: Option<ArrowValue>,
     drag: Option<SmDrag>,
 }

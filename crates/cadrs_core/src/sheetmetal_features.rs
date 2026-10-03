@@ -9,6 +9,9 @@
 //!
 //! Lengths are mm; angles are degrees here (as typed) and radians in `cadrs_sheetmetal`.
 
+// NaN-safe checks: `!(x > 0.0)` is true for NaN too, which is what they mean.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 use cadrs_sheetmetal::model::{HemAlignment, RipStyle};
 use cadrs_sheetmetal::sharp_edit::{FlangeAlignment, HemKind};
 use cadrs_sketch::PlaneRef;
@@ -19,6 +22,7 @@ use crate::document::{DirectionRef, EdgeRef, FaceRef, VertexRef};
 use crate::ids::FeatureId;
 
 /// One of the sheet metal features that edit an active model.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SheetMetalFeature {
     Flange(FlangeFeature),
@@ -73,10 +77,8 @@ impl SheetMetalFeature {
             add(e.part().feature);
         }
         if let SheetMetalFeature::Flange(x) = self {
-            for t in [&x.up_to, &x.bound.up_to, &x.second.as_ref().and_then(|s| s.up_to)] {
-                if let Some(t) = t {
-                    t.parent().into_iter().for_each(&mut add);
-                }
+            for t in [x.up_to, x.bound.up_to, x.second.as_ref().and_then(|s| s.up_to)].into_iter().flatten() {
+                t.parent().into_iter().for_each(&mut add);
             }
             for d in [&x.parallel_to, &x.direction].into_iter().flatten() {
                 crate::document::direction_parent(d).into_iter().for_each(&mut add);

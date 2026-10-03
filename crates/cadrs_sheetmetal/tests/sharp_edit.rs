@@ -70,6 +70,7 @@ fn east_edge(m: &Model) -> EdgePick {
     pick(m, P3::new(50.0, 0.0, T), P3::new(50.0, 40.0, T))
 }
 
+#[allow(clippy::type_complexity)]
 fn flange_on(def: &mut SharpDef, edges: Vec<(EdgePick, f64, bool, f64, Option<(f64, f64)>)>, alignment: FlangeAlignment, miter: Option<f64>, hold: bool) {
     let fe: Vec<FlangeEdge> = edges
         .into_iter()
