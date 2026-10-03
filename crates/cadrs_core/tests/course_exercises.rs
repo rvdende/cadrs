@@ -312,6 +312,7 @@ fn exercise_1_is_fully_defined_and_its_area_matches_the_drawing() {
             b: small,
             far_a: false,
             far_b: true,
+            axis: None,
         },
         35.0,
         false,

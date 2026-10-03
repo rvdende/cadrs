@@ -350,7 +350,7 @@ pub enum Kind {
     /// `[c1, radius1…, c2, radius2…]`: `|d − ρ1 − ρ2| − value`, where `d` is the distance
     /// between the centers and `ρ` is `+r` on a circle's near side and `−r` on its far side
     /// (`far1`, `far2`).
-    CircleCircleDist(Rad, Rad, bool, bool, f64),
+    CircleCircleDist(Rad, Rad, bool, bool, Option<crate::Axis>, f64),
     /// `[radius1…, radius2…]`: `|r1 − r2| − value` (an offset of a circle or arc).
     RadiusGap(Rad, Rad, f64),
     /// `[offset 1…, offset 2…]`: the second offset minus the first.
@@ -480,13 +480,17 @@ impl Kind {
                 let r = r.eval(&x[6..]);
                 if far { h + r - D::c(v) } else { (h - r).abs() - D::c(v) }
             }
-            Kind::CircleCircleDist(r1, r2, far1, far2, v) => {
+            Kind::CircleCircleDist(r1, r2, far1, far2, axis, v) => {
                 let c1 = pt(x, 0);
                 let a = r1.eval(&x[2..]);
                 let o = 2 + r1.width();
                 let c2 = pt(x, o);
                 let b = r2.eval(&x[o + 2..]);
-                let d = c1.sub(c2).len();
+                let d = match axis {
+                    None => c1.sub(c2).len(),
+                    Some(crate::Axis::Horizontal) => (c1.x - c2.x).abs(),
+                    Some(crate::Axis::Vertical) => (c1.y - c2.y).abs(),
+                };
                 let rho1 = if far1 { -a } else { a };
                 let rho2 = if far2 { -b } else { b };
                 (d - rho1 - rho2).abs() - D::c(v)
@@ -1220,12 +1224,12 @@ impl System {
                     self.push(Kind::LineCircleDist(rad, far, v), [l, c.to_vec(), r].concat(), src);
                 }
             }
-            DimensionKind::CircleCircle { a, b, far_a, far_b } => {
+            DimensionKind::CircleCircle { a, b, far_a, far_b, axis } => {
                 if let (Some((c1, r1, i1)), Some((c2, r2, i2))) =
                     (self.round(s, CurveRef::Curve(a)), self.round(s, CurveRef::Curve(b)))
                 {
                     self.push(
-                        Kind::CircleCircleDist(r1, r2, far_a, far_b, v),
+                        Kind::CircleCircleDist(r1, r2, far_a, far_b, axis, v),
                         [c1.to_vec(), i1, c2.to_vec(), i2].concat(),
                         src,
                     );

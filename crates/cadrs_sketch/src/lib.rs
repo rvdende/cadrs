@@ -619,6 +619,23 @@ pub struct Curve {
     pub construction: bool,
 }
 
+/// The sketch axis a distance is measured along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    /// Its unit direction.
+    pub fn dir(self) -> Vec2 {
+        match self {
+            Axis::Horizontal => Vec2::new(1.0, 0.0),
+            Axis::Vertical => Vec2::new(0.0, 1.0),
+        }
+    }
+}
+
 /// What a dimension measures.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum DimensionKind {
@@ -665,15 +682,18 @@ pub enum DimensionKind {
         circle: CurveId,
         far: bool,
     },
-    /// The distance between two circles or arcs along the line through their centers, each
-    /// taken on its near side (facing the other) or its far side. Concentric ones (a ring's
-    /// width) are measured radially, along the label's direction ([`Dimension::offset`] is its
-    /// angle).
+    /// The distance between two circles or arcs along the line through their centers (or,
+    /// with an `axis`, horizontally or vertically: between their left/right or top/bottom
+    /// extremes), each taken on its near side (facing the other) or its far side. Concentric
+    /// ones (a ring's width) are measured radially, along the label's direction
+    /// ([`Dimension::offset`] is its angle).
     CircleCircle {
         a: CurveId,
         b: CurveId,
         far_a: bool,
         far_b: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<Axis>,
     },
     /// How far `target` is offset from `source` (the Offset tool): the distance between two
     /// parallel lines, or the difference of two concentric radii (measured radially along the

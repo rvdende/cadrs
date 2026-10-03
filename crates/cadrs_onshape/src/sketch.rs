@@ -1018,7 +1018,7 @@ impl Ctx<'_> {
                     (l, Ent::Curve(circle)) | (Ent::Curve(circle), l) if is_round(circle) && cref(l).is_some() && !matches!(l, Ent::Curve(x) if is_round(x)) => {
                         DimensionKind::LineCircle { line: cref(l)?, circle, far: false }
                     }
-                    (Ent::Curve(a), Ent::Curve(b)) if is_round(a) && is_round(b) => DimensionKind::CircleCircle { a, b, far_a: false, far_b: false },
+                    (Ent::Curve(a), Ent::Curve(b)) if is_round(a) && is_round(b) => DimensionKind::CircleCircle { a, b, far_a: false, far_b: false, axis: None },
                     _ => return None,
                 }
             }

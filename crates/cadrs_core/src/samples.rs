@@ -178,7 +178,7 @@ pub fn control_arm_constraints(g: &Sketch) -> SketchOp {
     // The overall length, 250: from the far side of one eye to the far side of the other.
     if let (Some(a), Some(b)) = (circle_id(v(-EYE_X, 0.0), EYE_R), circle_id(v(EYE_X, 0.0), EYE_R)) {
         ops.push(dim(
-            DimensionKind::CircleCircle { a, b, far_a: true, far_b: true },
+            DimensionKind::CircleCircle { a, b, far_a: true, far_b: true, axis: None },
             2.0 * (EYE_X + EYE_R),
             -40.0,
         ));

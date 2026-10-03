@@ -1147,7 +1147,7 @@ pub fn paste(dst: &mut Sketch, src: &Sketch, offset: Vec2) -> Vec<CurveId> {
             K::Angle { a, b, flip_a, flip_b } => cref(a).zip(cref(b)).map(|(a, b)| K::Angle { a, b, flip_a, flip_b }),
             K::PointCircle { p, circle, far } => pref(p).zip(cv(circle)).map(|(p, circle)| K::PointCircle { p, circle, far }),
             K::LineCircle { line, circle, far } => cref(line).zip(cv(circle)).map(|(line, circle)| K::LineCircle { line, circle, far }),
-            K::CircleCircle { a, b, far_a, far_b } => cv(a).zip(cv(b)).map(|(a, b)| K::CircleCircle { a, b, far_a, far_b }),
+            K::CircleCircle { a, b, far_a, far_b, axis } => cv(a).zip(cv(b)).map(|(a, b)| K::CircleCircle { a, b, far_a, far_b, axis }),
             K::Offset { source, target } => cv(source).zip(cv(target)).map(|(source, target)| K::Offset { source, target }),
             K::EllipseRadius { curve, major } => cv(curve).map(|curve| K::EllipseRadius { curve, major }),
             K::Sides { circle, inscribed } => cv(circle).map(|circle| K::Sides { circle, inscribed }),
