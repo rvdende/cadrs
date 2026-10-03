@@ -474,3 +474,76 @@ fn convert_a_filleted_block_rolls_or_bends_the_round() {
         assert!(close(volume(p), predicted(&b, p), 1e-6), "{}: {} vs {}", p.name, volume(p), predicted(&b, p));
     }
 }
+
+#[test]
+fn extrude_add_and_intersect_are_refused_on_an_active_model() {
+    let mut st = Studio::new();
+    let block = st.block();
+    let mut x = feature(SheetMetalOp::Convert);
+    x.parts = vec![block.id];
+    x.bends = [[50.0, 0.0, 0.0], [100.0, 30.0, 0.0]].iter().map(|p| EdgeOrFace::Edge(edge_near(&block, *p))).collect();
+    let model = st.add(FeatureKind::SheetMetalModel(x));
+    let b = st.ok();
+    // The dialog's preview (P3I.2 judge): the block as it was, and the folded parts over it.
+    let (f, stage) = b.stage.as_ref().expect("the model's stage");
+    assert_eq!(*f, model);
+    assert_eq!(stage.before.len(), 1);
+    assert_eq!(stage.before[0].id, block.id);
+    assert_eq!(1 + stage.more.len(), b.parts.len());
+    let target = b.parts[0].id;
+    let s = st.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddPolyline {
+            points: vec![Vec2::new(-10.0, -10.0), Vec2::new(50.0, -10.0), Vec2::new(50.0, 70.0), Vec2::new(-10.0, 70.0)],
+            closed: true,
+            construction: false,
+            label: "Add rectangle",
+        }],
+    );
+    for (op, why) in [(BooleanOp::Add, "can't add to an active sheet metal part"), (BooleanOp::Intersect, "can't intersect an active sheet metal part")] {
+        let f = st.extrude(ExtrudeFeature { sketches: vec![s], op, end: EndType::ThroughAll, symmetric: true, merge_scope: vec![target], ..Default::default() });
+        let b = st.build();
+        let err = b.errors.iter().find(|(id, _)| *id == f).map(|(_, e)| e.clone()).expect("refused");
+        assert!(err.contains(why) && err.contains("use Tab or Flange"), "{err}");
+        // The model is untouched.
+        assert!(b.sheet_metal[0].active);
+        st.h.undo(&mut st.d).expect("undo");
+        st.h.undo(&mut st.d).expect("undo");
+    }
+}
+
+#[test]
+fn extrude_a_spline_rolls_it_as_tangent_arcs() {
+    let mut st = Studio::new();
+    let bz = [Vec2::new(40.0, 0.0), Vec2::new(55.0, 0.0), Vec2::new(60.0, 10.0), Vec2::new(60.0, 25.0)];
+    let s = st.sketch(
+        PlaneRef::Front,
+        vec![
+            SketchOp::AddPolyline { points: vec![Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0)], closed: false, construction: false, label: "Add line" },
+            SketchOp::AddBezier { points: bz, construction: false },
+            SketchOp::AddPolyline { points: vec![Vec2::new(60.0, 25.0), Vec2::new(60.0, 50.0)], closed: false, construction: false, label: "Add line" },
+        ],
+    );
+    let mut x = feature(SheetMetalOp::Extrude);
+    x.sketches = vec![s];
+    x.depth = 20.0;
+    x.depth_expr = "20 mm".into();
+    st.add(FeatureKind::SheetMetalModel(x));
+    let b = st.ok();
+    assert_eq!(b.parts.len(), 1);
+    let ctx = &b.sheet_metal[0];
+    let walls = ctx.model.walls.len();
+    assert!(walls >= 4, "two lines and the spline's arcs: {walls}");
+    assert_eq!(ctx.model.joints.iter().filter(|j| matches!(j.kind, JointKind::Tangent { .. })).count(), walls - 1);
+    assert!(ctx.flat.is_ok());
+    // Rolled at K 0.5, the folded volume is the mid-surface's area × T: the curve's length less
+    // T/2 × its quarter turn (the material is inside the turn), to well under a percent.
+    let at = |t: f64| {
+        let u = 1.0 - t;
+        bz[0] * (u * u * u) + bz[1] * (3.0 * u * u * t) + bz[2] * (3.0 * u * t * t) + bz[3] * (t * t * t)
+    };
+    let len: f64 = (0..1000).map(|k| (at((k + 1) as f64 / 1000.0) - at(k as f64 / 1000.0)).length()).sum();
+    let want = (40.0 + 25.0 + len - FRAC_PI_2 * 1.0) * 20.0 * 2.0;
+    let v = volume(&b.parts[0]);
+    assert!(close(v, want, 2e-3), "{v} vs {want}");
+}

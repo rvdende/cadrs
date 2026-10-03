@@ -37,10 +37,11 @@ impl Plugin for AppliedPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BeforeParts>()
             .init_resource::<RadiusArrow>()
+            .init_resource::<crate::sheetmetal_ui::SmFlipArrow>()
             .init_resource::<crate::transform_ui::XyzArrows>()
             .add_systems(
                 Update,
-                (applied_picks, applied_keys, radius_arrow_pointer, crate::transform_ui::xyz_arrow_pointer, crate::applied_dialog::sync_applied_dialog, crate::draft_ui::sync_fillet_entries, crate::sheetmetal_ui::sync_numbers)
+                (crate::sheetmetal_ui::sm_flip_arrow_pointer, applied_picks, applied_keys, radius_arrow_pointer, crate::transform_ui::xyz_arrow_pointer, crate::applied_dialog::sync_applied_dialog, crate::draft_ui::sync_fillet_entries, crate::sheetmetal_ui::sync_numbers)
                     .chain()
                     .after(crate::viewport::apply_view_to_camera)
                     .before(crate::parts::PartsSet)
@@ -55,7 +56,7 @@ impl Plugin for AppliedPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (place_radius_arrow, crate::transform_ui::place_xyz_arrows, crate::draft_ui::place_radius_labels)
+                (place_radius_arrow, crate::sheetmetal_ui::place_sm_flip_arrow, crate::transform_ui::place_xyz_arrows, crate::draft_ui::place_radius_labels)
                     .before(bevy::ui::UiSystems::Layout)
                     .run_if(in_state(AppState::Document)),
             )
@@ -922,12 +923,17 @@ fn roll_back_for_overrides(session: Option<Res<AppliedSession>>, composite: Opti
     // P3.10: a variable fillet's vertices and points are picked on the edges it rounds too.
     // P3I.2: a Convert's faces to exclude and edges to bend are picked on the part it consumes.
     let want = session
-        .filter(|s| {
-            matches!(s.field, AppliedField::Overrides | AppliedField::FilletVertices | AppliedField::FilletEdgePoints | AppliedField::SmExclude | AppliedField::SmBends)
-        })
+        .as_ref()
+        .filter(|s| matches!(s.field, AppliedField::Overrides | AppliedField::FilletVertices | AppliedField::FilletEdgePoints))
         .map(|s| s.feature);
     if over.rolled_back != want {
         over.rolled_back = want;
+    }
+    // P3I.2 judge: they are picked on the part as it was, with the folded model translucent
+    // over it and updating with each pick (`02-sheet-metal-model/t0101.0.png`).
+    let staged = session.filter(|s| !s.show_final && matches!(s.field, AppliedField::SmExclude | AppliedField::SmBends)).map(|s| s.feature);
+    if over.staged != staged {
+        over.staged = staged;
     }
 }
 

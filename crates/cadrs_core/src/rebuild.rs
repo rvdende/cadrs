@@ -129,6 +129,10 @@ pub enum FeatureStatus {
 pub struct Stage {
     pub before: Vec<Part>,
     pub tool: Arc<crate::solid::Solid>,
+    /// More bodies drawn with `tool`: a Sheet metal model's other folded parts (P3I.2), shown
+    /// translucent over the part it converts while its edges to bend are picked.
+    #[serde(default)]
+    pub more: Vec<Arc<crate::solid::Solid>>,
 }
 
 /// The parts an extrude's new body meets (before its boolean).
@@ -1522,6 +1526,7 @@ mod kernel_ops {
                 .map(|s| Stage {
                     before: state.parts.iter().map(|p| p.part.clone()).collect(),
                     tool: Arc::new(s),
+                    more: Vec::new(),
                 });
             let result = self.apply_extrude_op(id, e, tool, state, &contacts, geoms);
             result.map(|mut o| {

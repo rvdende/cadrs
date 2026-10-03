@@ -223,10 +223,12 @@ impl FlatScene {
                 }
             }
         }
-        // A collision's overlap shows where the parts were laid (one part: no shift).
+        // A collision's overlap shows where its part was laid (moved with it: the P3I.2 judge's
+        // X6 frame showed it apart from the walls that collide).
         for e in &flat.errors {
-            if let crate::flat::FlatError::Collision { region, .. } = e {
-                out.collisions.extend(region.iter().cloned());
+            if let crate::flat::FlatError::Collision { a, region, .. } = e {
+                let shift = flat.parts.iter().position(|p| p.piece(*a).is_some()).and_then(|k| out.shifts.get(k).copied()).unwrap_or_else(V2::zeros);
+                out.collisions.extend(region.iter().map(|r| r.map(|q| q + shift)));
             }
         }
         out

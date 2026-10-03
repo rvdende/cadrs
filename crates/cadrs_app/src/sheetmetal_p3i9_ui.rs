@@ -814,7 +814,7 @@ fn sync_dialog(
         match (want_tip, tip) {
             (Some(m), Some(t)) if t.text == m => {}
             (Some(m), _) => {
-                commands.entity(entity).insert(Tooltip::error(m));
+                commands.entity(entity).insert(Tooltip::error_beside(m));
             }
             (None, Some(_)) => {
                 commands.entity(entity).remove::<Tooltip>();

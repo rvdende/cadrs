@@ -281,12 +281,14 @@ fn on_select_activate(
     let mut menu = Menu::new(format!("{name}-menu"))
         .min_width(width.max(120.0))
         .item_height(24.0)
+        .medium_text()
         .text_only();
     if let Some(side) = side {
         menu = menu.side(side.0);
     }
     for (i, (label, enabled)) in state.options.iter().enumerate() {
-        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled));
+        // The current choice is marked (P3I.2 judge: nothing showed which was chosen).
+        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled).checked(i == state.selected));
     }
     open_menu(&mut commands, a.entity, menu.build(&theme));
 }

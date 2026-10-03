@@ -35,7 +35,7 @@ use crate::parts::{Part, PartKind};
 use crate::solid::Solid;
 
 /// The blob format: bump when [`Snapshot`] or a `Saved` form changes.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 const MAGIC: &[u8; 8] = b"CADRSNAP";
 
@@ -312,12 +312,12 @@ impl Persist for PartState {
 }
 
 impl Persist for Stage {
-    type Saved = (Vec<SavedPart>, u32);
+    type Saved = (Vec<SavedPart>, u32, Vec<u32>);
     fn save(&self, w: &mut Writer) -> Self::Saved {
-        (self.before.save(w), self.tool.save(w))
+        (self.before.save(w), self.tool.save(w), self.more.save(w))
     }
     fn load(s: Self::Saved, r: &mut Reader) -> Result<Self, String> {
-        Ok(Stage { before: Persist::load(s.0, r)?, tool: Persist::load(s.1, r)? })
+        Ok(Stage { before: Persist::load(s.0, r)?, tool: Persist::load(s.1, r)?, more: Persist::load(s.2, r)? })
     }
 }
 

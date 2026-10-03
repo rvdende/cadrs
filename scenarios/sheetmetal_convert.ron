@@ -1,9 +1,10 @@
 // Sheet metal model, Convert (P3I.2, SM2.2, SM2.5, X4; lesson `02-sheet-metal-model` frames
 // t0039–t0072): a 100 × 60 × 40 block picked in *Parts and surfaces to convert* becomes six
-// walls (six parts, ripped at every edge); in *Edges or cylinders to bend* the view shows the
-// block again to pick on, and three edges picked in two orders give two different models: the
-// pick that would close a loop of bends stays a rip, so first the right wall hangs off the front
-// one (a bend at the front-right corner, a gap along the top-right edge), then off the top (the
+// walls (six parts, ripped at every edge); the white thickness arrow on the model flips the
+// material inside and back; in *Edges or cylinders to bend* the view shows the block to pick on
+// with the folded model translucent over it, updating with each pick, and three edges picked
+// in two orders give two different models: the pick that would close a loop of bends stays a
+// rip, so first the right wall hangs off the front one (a bend at the front-right corner, a gap along the top-right edge), then off the top (the
 // other way round). Thickness 2 mm and bend radius 3 mm; accepted, undone and redone.
 Scenario(
     start: Some("document"),
@@ -49,6 +50,15 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("01-block-six-walls"),
+        // The thickness arrow on the model (`t0039.4.png`): a click flips the material inside
+        // the block, a second click puts it back.
+        Click(ui("sm-thickness-arrow")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01b-arrow-flips-thickness-inside"),
+        Click(ui("sm-thickness-arrow")),
+        Wait(40),
         Click(ui("sm-bends-field")),
         Wait(20),
         Click(xyz(50, 0, 40)),
