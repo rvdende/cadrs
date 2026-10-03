@@ -358,6 +358,10 @@ impl Rebuilder {
                     active: true,
                     wall_keys: built.walls.clone(),
                     joint_keys: built.joints.clone(),
+                    // A loft isn't rebuilt from a recipe: Modify joint edits don't apply to it yet.
+                    recipe: None,
+                    edits: Vec::new(),
+                    table_order: Vec::new(),
                 };
                 (m, walls, ctx)
             }
