@@ -216,7 +216,7 @@ impl Rebuilder {
                 CurveKind::Circle { center, radius } => {
                     out.push(Seg::Arc { c: w(g.pos(center)), n: v3(frame.normal()), r: radius, from: v3(frame.u), sweep: std::f64::consts::TAU })
                 }
-                CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => {
+                CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } => {
                     return Err("A curve pattern can't follow an ellipse yet".into());
                 }
                 CurveKind::Spline { .. } | CurveKind::Bezier { .. } => {

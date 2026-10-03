@@ -402,6 +402,13 @@ impl EllipseGeom {
         norm_angle(t)
     }
 
+    /// The parameter of a point on the ellipse (its eccentric angle; a point off the ellipse
+    /// gives the parameter of the point on it along the same "ray" in the ellipse's axes).
+    pub fn param_of(&self, p: Vec2) -> f64 {
+        let l = self.local(p);
+        norm_angle((l.y / self.minor).atan2(l.x / self.major().max(1e-300)))
+    }
+
     /// The nearest point of the ellipse to `p`.
     pub fn closest(&self, p: Vec2) -> Vec2 {
         self.point_at(self.nearest_t(p))
@@ -462,6 +469,89 @@ impl EllipseGeom {
             self.center - Vec2::new(hx, hy),
             self.center + Vec2::new(hx, hy),
         )
+    }
+}
+
+/// Part of an ellipse: from parameter `t0` counter-clockwise through `sweep` (0..2π) (an arc
+/// edge of a part seen at an angle, projected by Use). The ellipse's minor radius is positive,
+/// so its parameter runs counter-clockwise.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EllipseArcGeom {
+    pub e: EllipseGeom,
+    pub t0: f64,
+    pub sweep: f64,
+}
+
+impl EllipseArcGeom {
+    /// The arc of the ellipse (center, major point, minor radius) from `start` counter-clockwise
+    /// to `end` (both on the ellipse, or put onto it along their parameter).
+    pub fn ccw(center: Vec2, major: Vec2, minor: f64, start: Vec2, end: Vec2) -> Self {
+        let e = EllipseGeom::new(center, major, minor.abs());
+        let t0 = e.param_of(start);
+        let mut sweep = norm_angle(e.param_of(end) - t0);
+        if sweep < 1e-12 {
+            sweep = TAU;
+        }
+        Self { e, t0, sweep }
+    }
+
+    pub fn point_at(&self, t: f64) -> Vec2 {
+        self.e.point_at(t)
+    }
+
+    pub fn start(&self) -> Vec2 {
+        self.e.point_at(self.t0)
+    }
+
+    pub fn end(&self) -> Vec2 {
+        self.e.point_at(self.t0 + self.sweep)
+    }
+
+    pub fn mid(&self) -> Vec2 {
+        self.e.point_at(self.t0 + self.sweep / 2.0)
+    }
+
+    /// True if the parameter `t` is on the arc.
+    pub fn contains_t(&self, t: f64) -> bool {
+        norm_angle(t - self.t0) <= self.sweep + 1e-12
+    }
+
+    /// The parameter of the arc's point nearest `p` (an end, off the arc's span).
+    pub fn nearest_t(&self, p: Vec2) -> f64 {
+        let t = self.e.nearest_t(p);
+        if self.contains_t(t) {
+            return self.t0 + norm_angle(t - self.t0);
+        }
+        let (a, b) = (self.t0, self.t0 + self.sweep);
+        if self.e.point_at(a).distance(p) <= self.e.point_at(b).distance(p) { a } else { b }
+    }
+
+    pub fn closest(&self, p: Vec2) -> Vec2 {
+        self.e.point_at(self.nearest_t(p))
+    }
+
+    pub fn distance(&self, p: Vec2) -> f64 {
+        self.closest(p).distance(p)
+    }
+
+    /// The unit direction of travel at the start (into the arc) and at the end (out of it).
+    pub fn start_tangent(&self) -> Vec2 {
+        self.e.tangent_at(self.t0).normalize()
+    }
+
+    pub fn end_tangent(&self) -> Vec2 {
+        self.e.tangent_at(self.t0 + self.sweep).normalize()
+    }
+
+    /// Points from start to end, both included.
+    pub fn tessellate(&self, max_angle: f64, min_segments: usize) -> Vec<Vec2> {
+        self.e.tessellate_range(self.t0, self.t0 + self.sweep, max_angle, min_segments)
+    }
+
+    /// Bounding box `(min, max)` (of its points, sampled finely).
+    pub fn bounds(&self) -> (Vec2, Vec2) {
+        let pts = self.tessellate(PI / 180.0, 8);
+        pts.iter().fold((pts[0], pts[0]), |(lo, hi), p| (lo.min(*p), hi.max(*p)))
     }
 }
 

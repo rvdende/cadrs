@@ -69,6 +69,11 @@ pub fn sketch_page(sketch: &Sketch, name: &str) -> Page {
                     .collect();
                 Shape::Polyline { points, closed: true }
             }
+            CurveKind::EllipseArc { .. } => {
+                let Some(g) = sketch.ellipse_arc_geom(id) else { continue };
+                let points = g.tessellate(std::f64::consts::TAU / 144.0, 8).into_iter().map(|q| [q.x, q.y]).collect();
+                Shape::Polyline { points, closed: false }
+            }
             CurveKind::Spline { start, end } => {
                 let Some(spans) = sketch.spline_spans(id) else { continue };
                 let points = cadrs_sketch::spline::tessellate(&spans, 16).into_iter().map(|q| [q.x, q.y]).collect();

@@ -777,7 +777,7 @@ fn draw_sketches(
         let any_ellipse = sketch
             .curves
             .values()
-            .any(|c| matches!(c.kind, cadrs_sketch::CurveKind::Ellipse { .. } | cadrs_sketch::CurveKind::EllipseOffset { .. }));
+            .any(|c| matches!(c.kind, cadrs_sketch::CurveKind::Ellipse { .. } | cadrs_sketch::CurveKind::EllipseOffset { .. } | cadrs_sketch::CurveKind::EllipseArc { .. }));
         let hidden_touch = cadrs_sketch::entity::hidden_touch_points(sketch);
         // Hollow rings (worked out once, not per point: 500-entity sketches).
         let rings_at = ring_points(sketch);
@@ -2261,7 +2261,7 @@ fn draw_accepted(
     let any_ellipse = s
         .curves
         .values()
-        .any(|c| matches!(c.kind, cadrs_sketch::CurveKind::Ellipse { .. } | cadrs_sketch::CurveKind::EllipseOffset { .. }));
+        .any(|c| matches!(c.kind, cadrs_sketch::CurveKind::Ellipse { .. } | cadrs_sketch::CurveKind::EllipseOffset { .. } | cadrs_sketch::CurveKind::EllipseArc { .. }));
     for (id, p) in &s.points {
         if rings_at.contains(&id) {
             // A center-point rectangle's center, a virtual sharp: a small grey ring

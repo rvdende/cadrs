@@ -19,7 +19,7 @@ use std::f64::consts::TAU;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geom::{ArcGeom, BezierGeom, EllipseGeom, norm_angle, point_in_polygon, polygon_area};
+use crate::geom::{ArcGeom, BezierGeom, EllipseArcGeom, EllipseGeom, norm_angle, point_in_polygon, polygon_area};
 use crate::{CurveId, CurveKind, ImprintShape, Sketch, Vec2};
 
 /// One piece of a region's boundary, in the direction the boundary runs: a straight segment,
@@ -249,6 +249,9 @@ enum Carrier {
     Arc(ArcGeom),
     Circle(Vec2, f64),
     Ellipse(EllipseGeom),
+    /// Part of an ellipse, parametrized by the ellipse's parameter swept from its start,
+    /// 0..sweep.
+    EllipseArc(EllipseArcGeom),
     /// Parametrized 0..1.
     Bezier(BezierGeom),
 }
@@ -285,6 +288,10 @@ impl Carrier {
                 let t = g.nearest_t(p);
                 (t, g.point_at(t).distance(p))
             }
+            Carrier::EllipseArc(g) => {
+                let t = g.nearest_t(p);
+                (t - g.t0, g.point_at(t).distance(p))
+            }
             Carrier::Bezier(g) => {
                 let t = g.nearest_t(p);
                 (t, g.point_at(t).distance(p))
@@ -298,6 +305,7 @@ impl Carrier {
             Carrier::Arc(g) => g.point_at(g.start_angle + t),
             Carrier::Circle(c, r) => c + Vec2::from_angle(t) * r,
             Carrier::Ellipse(g) => g.point_at(t),
+            Carrier::EllipseArc(g) => g.point_at(g.t0 + t),
             Carrier::Bezier(g) => g.point_at(t),
         }
     }
@@ -315,6 +323,8 @@ impl Carrier {
             Carrier::Arc(g) => p.distance(g.center) - g.radius,
             Carrier::Circle(c, r) => p.distance(c) - r,
             Carrier::Ellipse(g) => g.implicit(p) * g.major().min(g.minor.abs()) / 2.0,
+            // Its whole ellipse (crossings off the arc are dropped by `project`).
+            Carrier::EllipseArc(g) => g.e.implicit(p) * g.e.major().min(g.e.minor.abs()) / 2.0,
             // Which side of the nearest point's tangent (not used for crossings, see
             // `bezier_crossings`).
             Carrier::Bezier(g) => {
@@ -344,6 +354,11 @@ impl Carrier {
                 t0,
                 sweep: t1 - t0,
             },
+            Carrier::EllipseArc(g) => Piece::Ellipse {
+                g: g.e,
+                t0: g.t0 + t0,
+                sweep: t1 - t0,
+            },
             Carrier::Bezier(g) => Piece::Bezier(g.sub(t0, t1)),
         }
     }
@@ -354,6 +369,7 @@ impl Carrier {
             Carrier::Arc(g) => g.bounds(),
             Carrier::Circle(c, r) => (c - Vec2::new(r, r), c + Vec2::new(r, r)),
             Carrier::Ellipse(g) => g.bounds(),
+            Carrier::EllipseArc(g) => g.bounds(),
             Carrier::Bezier(g) => g.bounds(),
         }
     }
@@ -475,10 +491,10 @@ impl Carrier {
         if let Carrier::Bezier(g) = o {
             return Self::bezier_crossings(g, self);
         }
-        if let Carrier::Ellipse(g) = self {
+        if let Carrier::Ellipse(g) | Carrier::EllipseArc(EllipseArcGeom { e: g, .. }) = self {
             return Self::ellipse_crossings(g, o);
         }
-        if let Carrier::Ellipse(g) = o {
+        if let Carrier::Ellipse(g) | Carrier::EllipseArc(EllipseArcGeom { e: g, .. }) = o {
             return Self::ellipse_crossings(g, self);
         }
         enum C {
@@ -489,7 +505,7 @@ impl Carrier {
             Carrier::Seg(a, b) => C::L(a, (b - a).normalize()),
             Carrier::Arc(g) => C::O(g.center, g.radius),
             Carrier::Circle(c, r) => C::O(c, r),
-            Carrier::Ellipse(_) | Carrier::Bezier(_) => unreachable!("handled above"),
+            Carrier::Ellipse(_) | Carrier::EllipseArc(_) | Carrier::Bezier(_) => unreachable!("handled above"),
         };
         match (full(self), full(o)) {
             (C::L(p, d), C::L(q, e)) => {
@@ -624,6 +640,14 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                     srcs.push((id, Carrier::Bezier(g)));
                 }
             }
+            CurveKind::EllipseArc { .. } => {
+                if let Some(g) = s.ellipse_arc_geom(id)
+                    && g.e.major() > 1e-12
+                    && g.e.minor.abs() > 1e-12
+                {
+                    srcs.push((id, Carrier::EllipseArc(g)));
+                }
+            }
         }
     }
     // Text outlines (S16): each contour's segments, one id per run between sharp corners.
@@ -725,6 +749,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             Carrier::Seg(..) => vec![0.0, 1.0],
             Carrier::Arc(g) => vec![0.0, g.sweep],
             Carrier::Bezier(_) => vec![0.0, 1.0],
+            Carrier::EllipseArc(g) => vec![0.0, g.sweep],
             Carrier::Circle(..) | Carrier::Ellipse(_) => vec![],
         })
         .collect();
@@ -734,6 +759,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             Carrier::Seg(a, b) => vec![a, b],
             Carrier::Arc(g) => vec![g.start(), g.end()],
             Carrier::Bezier(g) => vec![g.p[0], g.p[3]],
+            Carrier::EllipseArc(g) => vec![g.start(), g.end()],
             Carrier::Circle(..) | Carrier::Ellipse(_) => vec![],
         })
         .collect();

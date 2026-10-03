@@ -111,6 +111,14 @@ pub fn mirror(s: &mut Sketch, axis: CurveId, curves: &[CurveId]) -> Result<Vec<(
                 minor,
                 distance,
             },
+            // The same ellipse, turned around like an arc.
+            CurveKind::EllipseArc { center, major, minor, start, end } => CurveKind::EllipseArc {
+                center: image(s, center),
+                major: image(s, major),
+                minor,
+                start: image(s, end),
+                end: image(s, start),
+            },
             CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier {
                 a: image(s, a),
                 c1: image(s, c1),
@@ -157,7 +165,12 @@ fn free_end_near(s: &Sketch, m: Vec2, skip: &[CurveId], axis: CurveId) -> Option
                 Some(g) => ((m.distance(g.center) - g.radius).abs() < tol, g.radius),
                 None => continue,
             },
-            CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => continue,
+            CurveKind::Circle { .. }
+            | CurveKind::Ellipse { .. }
+            | CurveKind::EllipseOffset { .. }
+            | CurveKind::EllipseArc { .. }
+            | CurveKind::Spline { .. }
+            | CurveKind::Bezier { .. } => continue,
         };
         if !on_carrier {
             continue;
@@ -343,6 +356,7 @@ pub fn offset_geometry(
             }
             CurveKind::Spline { .. } => return Err("a spline can't be offset yet".into()),
             CurveKind::Bezier { .. } => return Err("a Bézier curve can't be offset".into()),
+            CurveKind::EllipseArc { .. } => return Err("an elliptical arc can't be offset yet".into()),
         });
     }
     // Where consecutive pieces meet (chains of lines and arcs).
@@ -596,7 +610,8 @@ pub fn scale_center(s: &Sketch, d: &DimensionKind) -> Vec2 {
                 CurveKind::Circle { center, .. }
                 | CurveKind::Arc { center, .. }
                 | CurveKind::Ellipse { center, .. }
-                | CurveKind::EllipseOffset { center, .. },
+                | CurveKind::EllipseOffset { center, .. }
+                | CurveKind::EllipseArc { center, .. },
             ) => {
                 return s.pos(center);
             }
@@ -1106,6 +1121,13 @@ pub fn paste(dst: &mut Sketch, src: &Sketch, offset: Vec2) -> Vec<CurveId> {
             CurveKind::EllipseOffset { center, major, minor, distance } => {
                 CurveKind::EllipseOffset { center: points[&center], major: points[&major], minor, distance }
             }
+            CurveKind::EllipseArc { center, major, minor, start, end } => CurveKind::EllipseArc {
+                center: points[&center],
+                major: points[&major],
+                minor,
+                start: points[&start],
+                end: points[&end],
+            },
             CurveKind::Spline { start, end } => CurveKind::Spline { start: points[&start], end: points[&end] },
             CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier { a: points[&a], c1: points[&c1], c2: points[&c2], b: points[&b] },
         };

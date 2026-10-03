@@ -43,7 +43,7 @@ pub use constraint::{
     Constraint, ConstraintKind, ConstraintOf, ConstraintSpec, CurveRef, CurveSpec, Fit, Orient,
     PointRef, PointSpec,
 };
-pub use geom::ArcGeom;
+pub use geom::{ArcGeom, EllipseArcGeom};
 pub use hit::{Entity as SketchEntity, Hit};
 pub use ops::SketchOp;
 pub use region::Region;
@@ -574,6 +574,17 @@ pub enum CurveKind {
         minor: f64,
         distance: f64,
     },
+    /// Part of an ellipse (Onshape's elliptical arc): the ellipse with this center, major point
+    /// and (positive) minor radius, from `start` counter-clockwise to `end`, both on it. Use
+    /// makes one from an arc edge of a part seen at an angle to the sketch plane. Older
+    /// documents simply have none.
+    EllipseArc {
+        center: PointId,
+        major: PointId,
+        minor: f64,
+        start: PointId,
+        end: PointId,
+    },
     /// An interpolated spline (Onshape's `skInterpolatedSpline`): the C2 cubic through its
     /// points, kept in [`Sketch::splines`] under the curve's id ([`spline`]). `start` and `end`
     /// are its first and last points (the same point for a closed spline).
@@ -598,7 +609,7 @@ impl CurveKind {
     pub fn scalar(&self) -> Option<f64> {
         match *self {
             CurveKind::Circle { radius, .. } => Some(radius),
-            CurveKind::Ellipse { minor, .. } => Some(minor),
+            CurveKind::Ellipse { minor, .. } | CurveKind::EllipseArc { minor, .. } => Some(minor),
             _ => None,
         }
     }
@@ -607,7 +618,7 @@ impl CurveKind {
     pub fn set_scalar(&mut self, v: f64) {
         match self {
             CurveKind::Circle { radius, .. } => *radius = v,
-            CurveKind::Ellipse { minor, .. } => *minor = v,
+            CurveKind::Ellipse { minor, .. } | CurveKind::EllipseArc { minor, .. } => *minor = v,
             _ => {}
         }
     }
@@ -1091,7 +1102,11 @@ impl Sketch {
         let mut ellipse = false;
         for (id, c) in &self.curves {
             match c.kind {
-                CurveKind::Ellipse { major, .. } | CurveKind::EllipseOffset { major, .. } if major == p => ellipse = true,
+                CurveKind::Ellipse { major, .. } | CurveKind::EllipseOffset { major, .. } | CurveKind::EllipseArc { major, .. }
+                    if major == p =>
+                {
+                    ellipse = true
+                }
                 k if self.kind_points(id, &k).contains(&p) => return false,
                 _ => {}
             }
@@ -1247,7 +1262,22 @@ impl Sketch {
             CurveKind::Arc { start, end, .. } => Some((start, end)),
             CurveKind::Spline { start, end } => (start != end).then_some((start, end)),
             CurveKind::Bezier { a, b, .. } => Some((a, b)),
+            CurveKind::EllipseArc { start, end, .. } => Some((start, end)),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => None,
+        }
+    }
+
+    /// An elliptical arc's geometry.
+    pub fn ellipse_arc_geom(&self, id: CurveId) -> Option<geom::EllipseArcGeom> {
+        match self.curves.get(id)?.kind {
+            CurveKind::EllipseArc { center, major, minor, start, end } => Some(geom::EllipseArcGeom::ccw(
+                self.pos(center),
+                self.pos(major),
+                minor,
+                self.pos(start),
+                self.pos(end),
+            )),
+            _ => None,
         }
     }
 
@@ -1303,6 +1333,10 @@ impl Sketch {
                     -spline::bez_tangent(sp.last()?, 1.0)
                 })
             }
+            CurveKind::EllipseArc { start, .. } => {
+                let g = self.ellipse_arc_geom(id)?;
+                Some(if start == p { g.start_tangent() } else { -g.end_tangent() })
+            }
             CurveKind::Spline { .. } | CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => None,
             CurveKind::Bezier { a, .. } => {
                 let g = self.bezier_geom(id)?;
@@ -1341,6 +1375,13 @@ impl Sketch {
                     major: swap(major),
                     minor,
                     distance,
+                },
+                CurveKind::EllipseArc { center, major, minor, start, end } => CurveKind::EllipseArc {
+                    center: swap(center),
+                    major: swap(major),
+                    minor,
+                    start: swap(start),
+                    end: swap(end),
                 },
                 CurveKind::Spline { start, end } => CurveKind::Spline { start: swap(start), end: swap(end) },
                 CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier {
@@ -1428,6 +1469,7 @@ pub(crate) fn curve_points(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Circle { center, .. } => vec![center],
         CurveKind::Arc { center, start, end } => vec![center, start, end],
         CurveKind::Ellipse { center, major, .. } | CurveKind::EllipseOffset { center, major, .. } => vec![center, major],
+        CurveKind::EllipseArc { center, major, start, end, .. } => vec![center, major, start, end],
         CurveKind::Spline { start, end } => if start == end { vec![start] } else { vec![start, end] },
         CurveKind::Bezier { a, c1, c2, b } => vec![a, c1, c2, b],
     }

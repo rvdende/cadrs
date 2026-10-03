@@ -210,43 +210,38 @@ fn use_hover(
             face: None,
         });
     }
-    // A face: all its edges, or a curved face's silhouettes.
+    // A face: its whole outline (all its edges), and a curved face's silhouettes too.
     let (part, tag, _) = pick_face(cache, view, rect.offset(cursor))?;
     let feature = part.feature;
     let solid = cache.part(part)?.solid.as_ref();
     solids.iter().find(|(f, _)| *f == feature)?;
     let face = solid.face(&tag)?;
-    let mut items = Vec::new();
+    let mut items: Vec<(Projected, Link)> = Vec::new();
     let mut source = Vec::new();
-    if face.plane.is_some() {
-        for edge in face_edges(solid, &tag) {
-            let link = Link::Edge {
-                feature: feature.0,
-                edge,
-            };
-            if let Some(shape) = ctx.shape(link, &frame) {
-                items.push((shape, link));
-                if let Some(e) = solid.edge(&edge) {
-                    source.push(e.points.iter().map(|p| v3(*p)).collect());
-                }
+    for edge in face_edges(solid, &tag) {
+        let link = Link::Edge {
+            feature: feature.0,
+            edge,
+        };
+        if let Some(shape) = ctx.shape(link, &frame) {
+            items.push((shape, link));
+            if let Some(e) = solid.edge(&edge) {
+                source.push(e.points.iter().map(|p| v3(*p)).collect());
             }
         }
-    } else {
-        let lines = silhouettes(solid, &tag, frame.normal());
-        let screen = |p: [f64; 3]| rect.to_screen(view.project(v3(p)));
-        let near = lines.iter().position(|(a, b)| {
-            dist_to_polyline(cursor, &[screen(*a), screen(*b)]) <= EDGE_PX
-        });
-        for (i, (a, b)) in lines.iter().enumerate() {
-            if near.is_some_and(|n| n != i) {
-                continue;
-            }
+    }
+    if face.plane.is_none() {
+        for (i, (a, b)) in silhouettes(solid, &tag, frame.normal()).iter().enumerate() {
             let link = Link::Silhouette {
                 feature: feature.0,
                 face: tag,
                 index: i as u8,
             };
-            if let Some(shape) = ctx.shape(link, &frame) {
+            // A silhouette along one of the face's edges (a cylinder's seam seen side on) is
+            // that edge.
+            if let Some(shape) = ctx.shape(link, &frame)
+                && !items.iter().any(|(k, _)| same_shape(k, &shape))
+            {
                 items.push((shape, link));
                 source.push(vec![v3(*a), v3(*b)]);
             }
@@ -258,6 +253,17 @@ fn use_hover(
         frame,
         face: Some((feature, tag)),
     })
+}
+
+/// True if two projected shapes are the same curve (a line either way round).
+fn same_shape(a: &Projected, b: &Projected) -> bool {
+    const EPS: f64 = 1e-6;
+    match (*a, *b) {
+        (Projected::Line(p, q), Projected::Line(r, s)) => {
+            (p.distance(r) < EPS && q.distance(s) < EPS) || (p.distance(s) < EPS && q.distance(r) < EPS)
+        }
+        _ => a == b,
+    }
 }
 
 /// What Pierce would take under the pointer: an edge or curve that crosses the plane.
@@ -460,6 +466,10 @@ fn draw_link_hover(pick: Res<LinkPick>, view: Res<ViewportView>, mut g: Gizmos<F
             Projected::EllipseOffset { center, major, minor, distance } => {
                 let e = cadrs_sketch::geom::EllipseGeom::new(center, major, minor).with_offset(distance);
                 g.linestrip(e.tessellate(0.05, 32).into_iter().map(w), color);
+            }
+            Projected::EllipseArc { center, major, minor, start, end } => {
+                let e = cadrs_sketch::EllipseArcGeom::ccw(center, major, minor, start, end);
+                g.linestrip(e.tessellate(0.05, 8).into_iter().map(w), color);
             }
             Projected::Point(p) => {
                 // Where the edge pierces the plane: an orange disc about 9 px across, facing the

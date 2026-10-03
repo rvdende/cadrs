@@ -373,8 +373,8 @@ pub fn side_at(s: &Sketch, chain: &[(CurveId, bool)], p: SVec2) -> bool {
             inside == ((minor > 0.0) != reversed)
         }
         Some(CurveKind::Spline { .. }) => true,
-        // Not offset (the Offset tool refuses it).
-        Some(CurveKind::Bezier { .. }) => true,
+        // Not offset (the Offset tool refuses them).
+        Some(CurveKind::Bezier { .. } | CurveKind::EllipseArc { .. }) => true,
         None => true,
     }
 }
@@ -407,6 +407,7 @@ fn piece_distance(s: &Sketch, c: CurveId, p: SVec2, bounded: bool) -> f64 {
         }
         Some(CurveKind::Circle { center, radius }) => (p.distance(s.pos(center)) - radius).abs(),
         Some(CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. }) => s.ellipse_geom(c).map_or(f64::INFINITY, |g| g.distance(p)),
+        Some(CurveKind::EllipseArc { .. }) => s.ellipse_arc_geom(c).map_or(f64::INFINITY, |g| g.distance(p)),
         Some(CurveKind::Spline { .. }) => s
             .spline_spans(c)
             .and_then(|sp| cadrs_sketch::spline::nearest(&sp, p))
@@ -463,7 +464,7 @@ fn arrow_for(
             o + (mid - o).normalize() * radius
         }
         CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => s.ellipse_geom(c)?.closest(mid),
-        CurveKind::Spline { .. } => return None,
+        CurveKind::Spline { .. } | CurveKind::EllipseArc { .. } => return None,
         CurveKind::Bezier { .. } => {
             let g = s.bezier_geom(c)?;
             g.point_at(g.nearest_t(mid))

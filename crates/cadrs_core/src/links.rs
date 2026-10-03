@@ -215,11 +215,12 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
             }
         }
         Curve3::Arc {
+            center,
             normal,
+            radius,
             start,
             mid,
             end,
-            ..
         } => {
             let cos = dot(normal, big_n).abs();
             if cos > 1.0 - PARALLEL {
@@ -234,8 +235,15 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
                 let hi = pts.iter().copied().max_by(|a, b| key(a).total_cmp(&key(b)))?;
                 Projected::Line(lo, hi)
             } else {
-                // An elliptical arc: not a curve cadrs has.
-                return None;
+                // An elliptical arc: on the circle's projection (as for a whole circle), from
+                // whichever end makes it run counter-clockwise through the middle.
+                let d = unit(cross(normal, big_n));
+                let (c, major, minor) = (s(center), s(add(center, scale(d, radius))), radius * cos);
+                let e = cadrs_sketch::geom::EllipseGeom::new(c, major, minor);
+                let (ts, tm, te) = (e.param_of(s(start)), e.param_of(s(mid)), e.param_of(s(end)));
+                let ccw = cadrs_sketch::geom::norm_angle(tm - ts) < cadrs_sketch::geom::norm_angle(te - ts);
+                let (start, end) = if ccw { (s(start), s(end)) } else { (s(end), s(start)) };
+                Projected::EllipseArc { center: c, major, minor, start, end }
             }
         }
         Curve3::Ellipse {
@@ -490,7 +498,7 @@ impl<'a> LinkContext<'a> {
                     },
                     CurveKind::Spline { .. } => return None,
                     // Not projected (Use takes lines, arcs, circles and ellipses).
-                    CurveKind::Bezier { .. } => return None,
+                    CurveKind::Bezier { .. } | CurveKind::EllipseArc { .. } => return None,
                 })
             }
         }
@@ -575,6 +583,9 @@ pub fn projected_distance(shape: &Projected, p: Vec2) -> Option<f64> {
         }
         Projected::Point(q) => p.distance(q),
         Projected::Ellipse { .. } => return None,
+        Projected::EllipseArc { center, major, minor, start, end } => {
+            cadrs_sketch::EllipseArcGeom::ccw(center, major, minor, start, end).distance(p)
+        }
         Projected::EllipseOffset { center, major, minor, distance } => {
             cadrs_sketch::geom::EllipseGeom::new(center, major, minor).with_offset(distance).distance(p)
         }
@@ -604,6 +615,10 @@ pub fn curve_samples(g: &Sketch, c: CurveId) -> Vec<Vec2> {
             .map(|a| vec![a.start(), a.mid(), a.end()])
             .unwrap_or_default(),
         CurveKind::Ellipse { .. } => Vec::new(),
+        CurveKind::EllipseArc { .. } => g
+            .ellipse_arc_geom(c)
+            .map(|e| vec![e.start(), e.mid(), e.end()])
+            .unwrap_or_default(),
         CurveKind::EllipseOffset { .. } => g
             .ellipse_geom(c)
             .map(|e| (0..4).map(|k| e.point_at(k as f64 * std::f64::consts::FRAC_PI_2)).collect())

@@ -2245,7 +2245,9 @@ mod kernel_ops {
                         CurveKind::Circle { center, .. } | CurveKind::Arc { center, .. } => {
                             make(frame.to_world(g.pos(center)), frame.normal())
                         }
-                        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => Err("An ellipse can't be a revolve axis".into()),
+                        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } => {
+                            Err("An ellipse can't be a revolve axis".into())
+                        }
                         CurveKind::Spline { .. } => Err("A spline can't be a revolve axis".into()),
                         CurveKind::Bezier { .. } => Err("A Bézier curve can't be a revolve axis".into()),
                     }
@@ -2642,7 +2644,7 @@ pub fn sketch_chains(sketch: FeatureId, g: &Sketch) -> Vec<ChainGeom> {
                 }
             }
             CurveKind::Line { a, b } | CurveKind::Bezier { a, b, .. } => open.push((id, a, b)),
-            CurveKind::Arc { start, end, .. } => open.push((id, start, end)),
+            CurveKind::Arc { start, end, .. } | CurveKind::EllipseArc { start, end, .. } => open.push((id, start, end)),
             CurveKind::Spline { start, end } if start == end => {
                 let pieces: Vec<(Piece, CurveId)> =
                     g.spline_spans(id).unwrap_or_default().into_iter().map(|b| (Piece::Bezier(BezierGeom::new(b)), id)).collect();
@@ -2657,6 +2659,10 @@ pub fn sketch_chains(sketch: FeatureId, g: &Sketch) -> Vec<ChainGeom> {
         let p = match g.curves.get(id)?.kind {
             CurveKind::Line { a, b } => vec![Piece::Line(g.pos(a), g.pos(b))],
             CurveKind::Arc { .. } => vec![Piece::Arc(g.arc_geom(id)?)],
+            CurveKind::EllipseArc { .. } => {
+                let e = g.ellipse_arc_geom(id)?;
+                vec![Piece::Ellipse { g: e.e, t0: e.t0, sweep: e.sweep }]
+            }
             CurveKind::Spline { .. } => g.spline_spans(id)?.into_iter().map(|b| Piece::Bezier(BezierGeom::new(b))).collect(),
             CurveKind::Bezier { .. } => vec![Piece::Bezier(g.bezier_geom(id)?)],
             _ => return None,

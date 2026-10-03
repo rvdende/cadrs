@@ -296,7 +296,7 @@ fn sketch_curve_polylines(g: &cadrs_sketch::Sketch, frame: &PlaneFrame) -> Vec<(
                 }
                 None => continue,
             },
-            CurveKind::Spline { .. } => cadrs_sketch::hit::curve_polyline(g, id),
+            CurveKind::Spline { .. } | CurveKind::EllipseArc { .. } => cadrs_sketch::hit::curve_polyline(g, id),
             CurveKind::Bezier { .. } => match g.bezier_geom(id) {
                 Some(b) => (0..=64).map(|k| b.point_at(k as f64 / 64.0)).collect(),
                 None => continue,

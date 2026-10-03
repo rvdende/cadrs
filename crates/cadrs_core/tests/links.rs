@@ -253,6 +253,7 @@ fn use_projects_other_sketches_arcs_circles_and_lines() {
             CurveKind::Arc { .. } => "arc",
             CurveKind::Ellipse { .. } => "ellipse",
             CurveKind::EllipseOffset { .. } => "offset ellipse",
+            CurveKind::EllipseArc { .. } => "elliptical arc",
             CurveKind::Spline { .. } => "spline",
             CurveKind::Bezier { .. } => "bezier",
         })
@@ -592,4 +593,81 @@ fn a_line_snapped_to_a_hole_centre_follows_the_hole() {
     assert!(ends.iter().any(|p| p.distance(Vec2::new(35.0, 15.0)) < 1e-6), "{ends:?}");
     assert!(ends.iter().any(|p| p.distance(Vec2::new(50.0, 30.0)) < 1e-6), "{ends:?}");
     assert!(d.g(s2).broken.is_empty());
+}
+
+/// Use of a face whose arc edge is seen at an angle: the arc projects to an elliptical arc,
+/// meeting the projected line at its ends, so the face's outline is a region (the half disc's
+/// area foreshortened by the tilt).
+#[test]
+fn an_arc_edge_seen_at_an_angle_projects_to_an_elliptical_arc() {
+    let mut d = Doc::new();
+    // A half disc of radius 10 on Top (the arc over y > 0), extruded 20 up.
+    let s1 = d.sketch(PlaneRef::Top);
+    d.edit(
+        s1,
+        SketchOp::Batch(vec![
+            SketchOp::AddArc {
+                center: Vec2::new(0.0, 0.0),
+                start: Vec2::new(10.0, 0.0),
+                end: Vec2::new(-10.0, 0.0),
+                construction: false,
+            },
+            SketchOp::AddPolyline {
+                points: vec![Vec2::new(-10.0, 0.0), Vec2::new(10.0, 0.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+        ]),
+    );
+    let ex = d.extrude(s1, 20.0, |_| true);
+    let features = d.features();
+    let solid = parts(&features).remove(0).solid;
+    let top = cap_name(&features, ex, 0, true).unwrap();
+    let ctx = cadrs_core::links::LinkContext { solids: vec![(ex, &*solid)], features: &features };
+    // A plane tilted 45° about X (both ways round: the arc runs counter-clockwise either way).
+    let h = (0.5f64).sqrt();
+    for v in [[0.0, h, h], [0.0, h, -h]] {
+        let tilted = cadrs_sketch::PlaneFrame { origin: [0.0, 0.0, 5.0], u: [1.0, 0.0, 0.0], v };
+        let items: Vec<(Projected, Link)> = cadrs_core::links::face_edges(&solid, &top)
+            .into_iter()
+            .map(|edge| {
+                let link = Link::Edge { feature: ex.0, edge };
+                (ctx.shape(link, &tilted).expect("every edge projects"), link)
+            })
+            .collect();
+        assert_eq!(items.len(), 2, "{items:?}");
+        let arc = items
+            .iter()
+            .find_map(|(p, _)| match *p {
+                Projected::EllipseArc { center, major, minor, start, end } => Some((center, major, minor, start, end)),
+                _ => None,
+            })
+            .expect("an elliptical arc");
+        let (center, major, minor, start, end) = arc;
+        assert!((center.distance(major) - 10.0).abs() < 1e-9 && (minor - 10.0 * h).abs() < 1e-9, "{arc:?}");
+        // Its ends are the line's.
+        let Some(Projected::Line(a, b)) = items.iter().map(|(p, _)| *p).find(|p| matches!(p, Projected::Line(..))) else {
+            panic!("{items:?}")
+        };
+        assert!(
+            (start.distance(a) < 1e-9 && end.distance(b) < 1e-9) || (start.distance(b) < 1e-9 && end.distance(a) < 1e-9),
+            "{arc:?} {a:?} {b:?}"
+        );
+        let mut g = Sketch::new();
+        for (shape, link) in &items {
+            g.add_projected(*shape, *link).unwrap();
+        }
+        assert!(g.curves.values().any(|c| matches!(c.kind, CurveKind::EllipseArc { .. })));
+        // Fully defined (projected), and one region: the half ellipse.
+        assert!(solve::analyze(&g).fully_constrained());
+        let rs = regions(&g);
+        assert_eq!(rs.len(), 1, "{rs:?}");
+        let want = std::f64::consts::PI * 100.0 / 2.0 * h;
+        assert!((rs[0].area() - want).abs() < 1e-6, "{} != {want}", rs[0].area());
+        // The source moves (taller): the projection follows.
+        let shape = items[0].0;
+        let c = g.curves.keys().next().unwrap();
+        assert!(g.set_projected(c, shape));
+    }
 }

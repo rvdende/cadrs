@@ -311,7 +311,8 @@ fn classify(s: &Sketch, e: SketchEntity) -> Option<Pick> {
             CurveKind::Arc { .. } => Pick::Arc(c),
             CurveKind::Ellipse { .. } => Pick::Ellipse(c),
             // An offset ellipse is dimensioned by its Offset dimension only.
-            CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } => return None,
+            // An elliptical arc (a projected part edge) is sized by its source.
+            CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } => return None,
             // A Bézier curve is sized by its points (dimension those).
             CurveKind::Bezier { .. } => return None,
         },
@@ -698,7 +699,12 @@ fn round(s: &Sketch, curve: crate::CurveId) -> Option<(Vec2, f64)> {
     match s.curves.get(curve)?.kind {
         CurveKind::Circle { center, radius } => Some((s.points.get(center)?.pos, radius)),
         CurveKind::Arc { .. } => s.arc_geom(curve).map(|g| (g.center, g.radius)),
-        CurveKind::Line { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => None,
+        CurveKind::Line { .. }
+        | CurveKind::Ellipse { .. }
+        | CurveKind::EllipseOffset { .. }
+        | CurveKind::EllipseArc { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::Bezier { .. } => None,
     }
 }
 

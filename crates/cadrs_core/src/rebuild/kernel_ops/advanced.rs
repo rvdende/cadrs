@@ -68,6 +68,18 @@ pub(super) fn sketch_curves2(g: &Sketch, id: CurveId) -> Option<Vec<Curve2>> {
                 }
             }
         }
+        CurveKind::EllipseArc { .. } => {
+            let e = g.ellipse_arc_geom(id)?;
+            Curve2::EllipseArc {
+                center: p(e.e.center),
+                major_radius: e.e.major(),
+                minor_radius: e.e.minor,
+                rotation: e.e.u().angle(),
+                start: e.t0,
+                sweep: e.sweep,
+                source,
+            }
+        }
         CurveKind::Bezier { .. } => Curve2::Bezier { poles: g.bezier_geom(id)?.p.map(p), source },
         CurveKind::Spline { .. } => return None,
     }])
@@ -179,7 +191,11 @@ impl Rebuilder {
                             start: w(g.pos(start)),
                         }
                     }
-                    CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => {
+                    CurveKind::Ellipse { .. }
+                    | CurveKind::EllipseOffset { .. }
+                    | CurveKind::EllipseArc { .. }
+                    | CurveKind::Spline { .. }
+                    | CurveKind::Bezier { .. } => {
                         let pts = cadrs_sketch::hit::curve_polyline(g, *curve);
                         RefGeom::Curve(pts.into_iter().map(w).collect())
                     }

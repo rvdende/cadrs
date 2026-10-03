@@ -21,6 +21,9 @@ pub enum Projected {
     /// The curve `distance` outside such an ellipse (P3.7: a part edge made from an offset
     /// ellipse).
     EllipseOffset { center: Vec2, major: Vec2, minor: f64, distance: f64 },
+    /// Part of such an ellipse (an arc seen at an angle), from `start` counter-clockwise to
+    /// `end`; `minor` is positive.
+    EllipseArc { center: Vec2, major: Vec2, minor: f64, start: Vec2, end: Vec2 },
     /// A point (a pierce).
     Point(Vec2),
 }
@@ -47,6 +50,9 @@ impl Projected {
             }
             Projected::Ellipse { center, major, minor } | Projected::EllipseOffset { center, major, minor, .. } => {
                 center.distance(major) < 1e-6 || minor.abs() < 1e-6
+            }
+            Projected::EllipseArc { center, major, minor, start, end } => {
+                center.distance(major) < 1e-6 || minor.abs() < 1e-6 || start.distance(end) < 1e-6
             }
             Projected::Point(_) => false,
         }
@@ -90,6 +96,13 @@ impl Sketch {
                 minor,
                 distance,
             },
+            Projected::EllipseArc { center, major, minor, start, end } => CurveKind::EllipseArc {
+                center: self.add_point(center),
+                major: self.add_point(major),
+                minor,
+                start: self.add_point(start),
+                end: self.add_point(end),
+            },
             Projected::Point(_) => return None,
         };
         let id = self.curves.insert(Curve {
@@ -127,6 +140,13 @@ impl Sketch {
             }
             (CurveKind::Ellipse { center, major, .. }, Projected::Ellipse { center: c0, major: m0, minor }) => {
                 moves = vec![(center, c0), (major, m0)];
+                scalar = Some(minor);
+            }
+            (
+                CurveKind::EllipseArc { center, major, start, end, .. },
+                Projected::EllipseArc { center: c0, major: m0, minor, start: s0, end: e0 },
+            ) => {
+                moves = vec![(center, c0), (major, m0), (start, s0), (end, e0)];
                 scalar = Some(minor);
             }
             (

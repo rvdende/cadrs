@@ -724,6 +724,26 @@ impl System {
                         ));
                     }
                 }
+                // An elliptical arc: its ellipse as above, and its ends on the ellipse.
+                CurveKind::EllipseArc { center, major, minor, start, end } => {
+                    let mut inputs = sys.point(s, PointRef::Point(center)).to_vec();
+                    inputs.extend(sys.point(s, PointRef::Point(major)));
+                    sys.guards.push((Kind::Distance(0.0), inputs));
+                    if !fixed_radius.contains(&k) {
+                        sys.radius_var.insert(k, sys.x.len());
+                        sys.x.push(minor);
+                        sys.guards.push((
+                            Kind::Radius(Rad::Scalar, 1.0, 0.0),
+                            vec![In::Var(sys.x.len() - 1)],
+                        ));
+                    }
+                    if let Some(e) = sys.ellipse(s, CurveRef::Curve(k)) {
+                        for p in [start, end] {
+                            let inputs = [sys.point(s, PointRef::Point(p)).to_vec(), e.clone()].concat();
+                            sys.eqs.push(Equation { kind: Kind::PointEllipse, inputs, source: Source::Arc(k) });
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -794,6 +814,7 @@ impl System {
             CurveKind::Line { .. }
             | CurveKind::Ellipse { .. }
             | CurveKind::EllipseOffset { .. }
+            | CurveKind::EllipseArc { .. }
             | CurveKind::Spline { .. }
             | CurveKind::Bezier { .. } => None,
         }
@@ -838,7 +859,9 @@ impl System {
         let CurveRef::Curve(id) = c else {
             return None;
         };
-        let CurveKind::Ellipse { center, major, minor } = s.curves.get(id)?.kind else {
+        let (CurveKind::Ellipse { center, major, minor } | CurveKind::EllipseArc { center, major, minor, .. }) =
+            s.curves.get(id)?.kind
+        else {
             return None;
         };
         let mut v = self.point(s, PointRef::Point(center)).to_vec();
@@ -1929,6 +1952,13 @@ pub fn analyze(s: &Sketch) -> Analysis {
             CurveKind::Ellipse { center, major, .. } => {
                 point_ok(center)
                     && point_ok(major)
+                    && sys
+                        .radius_var
+                        .get(&k)
+                        .is_none_or(|&i| determined(&[(i, 1.0)]))
+            }
+            CurveKind::EllipseArc { center, major, start, end, .. } => {
+                [center, major, start, end].into_iter().all(&point_ok)
                     && sys
                         .radius_var
                         .get(&k)
