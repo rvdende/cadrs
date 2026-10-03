@@ -90,6 +90,8 @@ pub enum Sm9Role {
     FormStudio,
     FormConnectorIcon,
     AddConnection,
+    /// A connection group's × (its index).
+    RemoveConnection(usize),
     BendCalc,
     CornerType,
     BendReliefType,
@@ -122,7 +124,7 @@ impl Plugin for Sm9Plugin {
             .init_resource::<ConnDrag>()
             .add_systems(
                 Update,
-                (sync_dialog, read_picker_search, sync_picker, place_handles, draw_connections)
+                (sync_dialog, read_picker_search, sync_picker, place_handles, draw_connections, draw_form_marks)
                     .chain()
                     .after(crate::applied_dialog::sync_applied_dialog)
                     .run_if(in_state(crate::AppState::Document)),
@@ -724,8 +726,28 @@ fn loft_body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalLoftFeature, field: 
             .with_children(|m| {
                 m.spawn(t.text("Match connections", 10.0, bevy::text::FontWeight::NORMAL, t.muted_foreground));
                 for (i, c) in x.connections.iter().enumerate() {
-                    list(m, t, &format!("sm-loft-connection-{i}-field"), "Vertices or edges", Sm9Field::LoftConnection(i), &items, field);
-                    check(m, t, &format!("sm9-rip-{i}"), "Rip", c.rip);
+                    // Each connection a group under its "N selections" header, with a × that
+                    // removes it (`sheet-metal-loft-match-01.png`).
+                    let n = usize::from(c.t1 >= 0.0) + usize::from(c.t2 >= 0.0);
+                    m.spawn((
+                        Name::new(format!("sm-loft-connection-{i}-header")),
+                        Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: Val::Px(4.0), margin: UiRect::top(Val::Px(4.0)), ..default() },
+                    ))
+                    .with_children(|h| {
+                        h.spawn(cadrs_ui::icon::icon("chevron-down", 10.0, t.foreground));
+                        h.spawn((
+                            t.text(format!("{n} selection{}", if n == 1 { "" } else { "s" }), 11.0, bevy::text::FontWeight::NORMAL, t.foreground),
+                            Node { flex_grow: 1.0, ..default() },
+                        ));
+                        h.spawn((
+                            Sm9Role::RemoveConnection(i),
+                            cadrs_ui::IconButton::new(format!("sm-loft-connection-{i}-remove"), "close").icon_size(10.0).small().tooltip("Remove connection").build(t),
+                        ));
+                    });
+                    m.spawn(Node { flex_direction: FlexDirection::Column, margin: UiRect::left(Val::Px(12.0)), ..default() }).with_children(|g| {
+                        list(g, t, &format!("sm-loft-connection-{i}-field"), "Vertices or edges", Sm9Field::LoftConnection(i), &items, field);
+                        check(g, t, &format!("sm9-rip-{i}"), "Rip", c.rip);
+                    });
                 }
                 m.spawn((Sm9Role::AddConnection, cadrs_ui::Button::new("sm-loft-add-connection").label("Add connection").ghost().small().build(t)));
             });
@@ -1081,6 +1103,16 @@ fn on_button(a: On<Activate>, q: Query<&Sm9Role>, mut commands: Commands) {
                 s.field = AppliedField::Sm9(Sm9Field::LoftConnection(i));
             }
         }),
+        Sm9Role::RemoveConnection(i) => change(&mut commands, "Remove connection", move |k| {
+            if let FeatureKind::SheetMetalLoft(x) = k
+                && i < x.connections.len()
+            {
+                x.connections.remove(i);
+                if x.connections.is_empty() {
+                    x.connections_on = false;
+                }
+            }
+        }),
         Sm9Role::FormStudio => commands.queue(open_picker),
         Sm9Role::PickerDone => commands.queue(picker_done),
         _ => {}
@@ -1271,7 +1303,7 @@ fn open_picker(world: &mut World) {
 fn refresh_picker_values(world: &mut World) {
     let mut p = world.resource_mut::<FormPicker>();
     let q = p.query.clone();
-    p.values = match p.tab {
+    p.values = match list_tab(&p) {
         2 => library_forms(p.kind, &q).get(p.form).map(|f| f.variables()).unwrap_or_default(),
         0 => doc_shown(&p.current, &q).get(p.form).map(|d| studio_variables(&d.studio)).unwrap_or_default(),
         _ => doc_shown(&p.others, &q).get(p.form).map(|d| studio_variables(&d.studio)).unwrap_or_default(),
@@ -1280,30 +1312,15 @@ fn refresh_picker_values(world: &mut World) {
 
 fn picker_done(world: &mut World) {
     let p = world.resource::<FormPicker>();
-    let q = p.query.clone();
-    let (pick, values) = match p.tab {
-        2 => {
-            let Some(f) = library_forms(p.kind, &q).get(p.form).copied() else { return };
-            (FormPick { source: FormSource::Library(f), name: f.label().into(), document_name: LIBRARY_NAME.into(), studio: Vec::new() }, p.values.clone())
-        }
-        0 => {
-            let Some(d) = doc_shown(&p.current, &q).get(p.form).copied() else { return };
-            // Onshape's rule: a form's Part Studio has a Length variable named thickness.
-            if studio_problem(&d.name, &d.studio).is_some() {
-                return;
-            }
-            let doc_name = world.get_resource::<ActiveDocument>().map(|x| x.doc.name.clone()).unwrap_or_default();
-            (FormPick { source: FormSource::Current { element: d.element }, name: d.name.clone(), document_name: doc_name, studio: d.studio.clone() }, p.values.clone())
-        }
-        _ => {
-            let Some(d) = doc_shown(&p.others, &q).get(p.form).copied() else { return };
-            if studio_problem(&d.name, &d.studio).is_some() {
-                return;
-            }
-            let Some((doc, dn)) = d.document.clone() else { return };
-            (FormPick { source: FormSource::Other { document: doc, element: d.element }, name: d.name.clone(), document_name: dn, studio: d.studio.clone() }, p.values.clone())
-        }
-    };
+    let Some(mut pick) = shown_pick(p) else { return };
+    // Onshape's rule: a form's Part Studio has a Length variable named thickness.
+    if !matches!(pick.source, FormSource::Library(_)) && studio_problem(&pick.name, &pick.studio).is_some() {
+        return;
+    }
+    let values = p.values.clone();
+    if matches!(pick.source, FormSource::Current { .. }) {
+        pick.document_name = world.get_resource::<ActiveDocument>().map(|x| x.doc.name.clone()).unwrap_or_default();
+    }
     world.resource_mut::<FormPicker>().open = false;
     crate::applied::change_kind(world, "Select Part Studio", |k| {
         if let FeatureKind::Form(x) = k {
@@ -1357,11 +1374,21 @@ fn sync_picker(world: &mut World) {
     let q = p.query.clone();
     let (cur, oth) = (doc_shown(&p.current, &q), doc_shown(&p.others, &q));
     type Rows<'a> = Vec<(&'a str, Sm9Role, Vec<String>, usize)>;
+    let libraries = vec![LIBRARY_NAME.to_string(), MY_FORMS.to_string()];
     let (rows, empty): (Rows, Option<&str>) = match tab {
-        2 if library_kinds(&q).is_empty() => (Vec::new(), Some("No form matches the search")),
+        // My sheet metal forms: this document's form Part Studios.
+        2 if p.document == 1 => {
+            let lib = ("Library", Sm9Role::PickerDocument, libraries.clone(), 1);
+            if cur.is_empty() {
+                (vec![lib], Some("No Part Studio of this document is tagged as a form"))
+            } else {
+                (vec![lib, ("Form", Sm9Role::PickerForm, cur.iter().map(|d| d.name.clone()).collect(), p.form)], None)
+            }
+        }
+        2 if library_kinds(&q).is_empty() => (vec![("Library", Sm9Role::PickerDocument, libraries.clone(), 0)], Some("No form matches the search")),
         2 => (
             vec![
-                ("Library", Sm9Role::PickerDocument, vec![LIBRARY_NAME.to_string()], 0),
+                ("Library", Sm9Role::PickerDocument, libraries.clone(), 0),
                 ("Type", Sm9Role::PickerType, library_kinds(&q).iter().map(|k| k.to_string()).collect(), p.kind),
                 ("Form", Sm9Role::PickerForm, library_forms(p.kind, &q).iter().map(|f| f.label().to_string()).collect(), p.form),
             ],
@@ -1382,7 +1409,7 @@ fn sync_picker(world: &mut World) {
         ),
     };
     // The picked document form's problem (no thickness variable): Done refuses it.
-    let refused = match tab {
+    let refused = match list_tab(p) {
         0 => cur.get(p.form).and_then(|d| studio_problem(&d.name, &d.studio)),
         1 => oth.get(p.form).and_then(|d| studio_problem(&d.name, &d.studio)),
         _ => None,
@@ -1470,10 +1497,20 @@ fn sync_picker(world: &mut World) {
     }
 }
 
+/// The name of the Libraries tab's second library: this document's Part Studios tagged as forms
+/// (Onshape's personal "My sheet metal forms" library; cadrs keeps it per document).
+const MY_FORMS: &str = "My sheet metal forms";
+
+/// Which list the panel's Form select shows: 0 this document's forms (Current document, or the
+/// Libraries tab on My sheet metal forms), 1 other documents', 2 cadrs's library.
+fn list_tab(p: &FormPicker) -> usize {
+    if p.tab == 2 && p.document == 1 { 0 } else { p.tab }
+}
+
 /// The form the panel shows (its pick), as Done would take it.
 fn shown_pick(p: &FormPicker) -> Option<FormPick> {
     let q = &p.query;
-    match p.tab {
+    match list_tab(p) {
         2 => library_forms(p.kind, q).get(p.form).map(|f| FormPick { source: FormSource::Library(*f), name: f.label().into(), document_name: LIBRARY_NAME.into(), studio: Vec::new() }),
         0 => doc_shown(&p.current, q).get(p.form).map(|d| FormPick { source: FormSource::Current { element: d.element }, name: d.name.clone(), document_name: String::new(), studio: d.studio.clone() }),
         _ => doc_shown(&p.others, q).get(p.form).and_then(|d| {
@@ -1589,12 +1626,12 @@ fn read_picker_search(q: Query<(&Name, &bevy::text::EditableText)>, mut p: ResMu
         p.kind = 0;
         p.form = 0;
         p.refocus = true;
-        let lib = p.tab == 2;
+        let lib = list_tab(&p) == 2;
         let q = p.query.clone();
         p.values = if lib {
             library_forms(0, &q).first().map(|f| f.variables()).unwrap_or_default()
         } else {
-            let list = if p.tab == 0 { &p.current } else { &p.others };
+            let list = if list_tab(&p) == 0 { &p.current } else { &p.others };
             doc_shown(list, &q).first().map(|d| studio_variables(&d.studio)).unwrap_or_default()
         };
     }
@@ -1822,6 +1859,7 @@ fn on_handle_drag_end(_: On<Pointer<DragEnd>>, mut commands: Commands) {
 fn draw_connections(world: &mut World) {
     let Some((x, g)) = loft_state(world) else { return };
     let pts = handle_points(&x, &g, world.resource::<ConnDrag>());
+    let px = view_px(world);
     let mut sys = bevy::ecs::system::SystemState::<Gizmos<crate::parts::PickedEdgeGizmos>>::new(world);
     let Ok(mut gz) = sys.get_mut(world) else { return };
     let magenta = Color::srgb_u8(0xc8, 0x3c, 0xd8);
@@ -1831,6 +1869,54 @@ fn draw_connections(world: &mut World) {
         if let (Some(a), Some(b)) = (a, b) {
             gz.line(a, b, magenta);
         }
+    }
+    // Each handle's drag arrows, along its profile both ways (`sheet-metal-loft-match-01.png`).
+    let grey = Color::srgb_u8(0x55, 0x55, 0x55);
+    for (_, side, p) in &pts {
+        let (prof, closed) = if *side == 1 { (&g.p1, g.closed.0) } else { (&g.p2, g.closed.1) };
+        let (t, _) = g.nearest_t(prof, closed, *p);
+        let step = 0.002;
+        let dir = (Guides::at(prof, closed, (t + step).min(1.0)) - Guides::at(prof, closed, (t - step).max(0.0))).normalize_or_zero();
+        if dir == Vec3::ZERO {
+            continue;
+        }
+        for s in [1.0f32, -1.0] {
+            gz.arrow(*p + dir * s * 12.0 * px, *p + dir * s * 44.0 * px, grey).with_tip_length(12.0 * px);
+        }
+    }
+    sys.apply(world);
+}
+
+/// World units per screen pixel in the view.
+fn view_px(world: &World) -> f32 {
+    world.get_resource::<crate::viewport::ViewportView>().map_or(1.0, |v| v.view.scale)
+}
+
+/// While a Form's dialog is open: an orange dot and a small triad (X red, Y green, Z blue, Z out
+/// of the face the form stands on) at each location the rebuild resolved (`form-06a.png`,
+/// `form-07.png`).
+fn draw_form_marks(world: &mut World) {
+    let Some(s) = world.get_resource::<AppliedSession>() else { return };
+    if s.kind != AppliedKind::Sm9(Sm9Kind::Form) {
+        return;
+    }
+    let Some(marks) = world.resource::<PartCache>().arrows.get(&s.feature).cloned() else { return };
+    let px = view_px(world);
+    let mut sys = bevy::ecs::system::SystemState::<Gizmos<crate::parts::PickedEdgeGizmos>>::new(world);
+    let Ok(mut gz) = sys.get_mut(world) else { return };
+    let orange = Color::srgb_u8(0xf0, 0x9a, 0x1c);
+    for m in marks.chunks(2) {
+        let [(o, z), (x, _)] = m else { continue };
+        let (o, z, x) = (v3(*o), v3(*z).normalize_or_zero(), v3(*x).normalize_or_zero());
+        let y = z.cross(x);
+        let iso = Isometry3d::new(o, Quat::from_rotation_arc(Vec3::Z, z));
+        for k in 1..=4 {
+            gz.circle(iso, k as f32 * 1.2 * px, orange);
+        }
+        let l = 16.0 * px;
+        gz.line(o, o + x * l, Color::srgb_u8(0xd0, 0x30, 0x20));
+        gz.line(o, o + y * l, Color::srgb_u8(0x20, 0x90, 0x40));
+        gz.line(o, o + z * l, Color::srgb_u8(0x20, 0x5c, 0xc8));
     }
     sys.apply(world);
 }
@@ -1846,7 +1932,7 @@ fn draw_connections(world: &mut World) {
 ///   ten points in two columns, for louvers on its top wall;
 /// - `sm9 louver-bracket`: an L bracket (Sheet metal model Extrude of a Front-plane chain: a
 ///   140 base and a 50 upright, 100 deep, 2 mm) and "Sketch 2" on Top with ten points in two
-///   columns over its base;
+///   columns over its base; a Part Studio "My dimple" holds a form of the document's own;
 /// - `sm9 form-library`: stores cadrs's forms library document (so Other documents lists it).
 pub fn script(world: &mut World, arg: &str) {
     use cadrs_core::commands::{AddFeature, AddSketch, EditSketch};
@@ -1972,6 +2058,15 @@ pub fn script(world: &mut World, arg: &str) {
                     run(&mut doc, &EditSketch { element: el, feature: p, op: SketchOp::AddPoint { pos: Vec2::new(x, y) } });
                 }
             }
+            // A form of this document's own ("My dimple", a Part Studio tagged as a form), for the
+            // Current document tab and My sheet metal forms.
+            let mine = cadrs_core::ElementId::new();
+            run(&mut doc, &cadrs_core::commands::AddElement { id: mine, kind: cadrs_core::commands::NewElementKind::PartStudio, name: Some("My dimple".into()), after: Some(el) });
+            let vars = LibraryForm::Dimple.variables();
+            if let Err(e) = cadrs_core::samples::sheetmetal_forms::build_in(&mut *doc, mine, LibraryForm::Dimple, &vars, 1.0) {
+                warn!("sm9 louver-bracket: {e}");
+            }
+            doc.active = Some(el);
         }
         "form-library" => {
             let Ok(lib) = cadrs_core::samples::sheetmetal_forms::document() else { return };

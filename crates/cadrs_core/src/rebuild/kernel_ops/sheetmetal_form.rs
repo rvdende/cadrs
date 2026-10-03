@@ -177,6 +177,8 @@ impl Rebuilder {
         }
         // Each copy on its wall, kept with the model so every refold applies it again.
         let mut by_ctx: Vec<(usize, Vec<FormCopy>)> = Vec::new();
+        // Where each copy lands (the dialog draws a triad there): per copy (origin, Z), (X, 0).
+        let mut marks: Vec<([f64; 3], [f64; 3])> = Vec::new();
         for fr in frames.iter() {
             let o = v(fr.origin);
             // The nearest target face's plane.
@@ -195,6 +197,8 @@ impl Rebuilder {
                 if w.norm() > 1e-6 { w.normalize() } else { let vv = v(fr.v); (vv - n * vv.dot(&n)).normalize() }
             };
             let to = crate::mate::frame_from([on.x, on.y, on.z], [n.x, n.y, n.z], [ux.x, ux.y, ux.z]);
+            marks.push(([on.x, on.y, on.z], [n.x, n.y, n.z]));
+            marks.push(([ux.x, ux.y, ux.z], [0.0; 3]));
             let m = motion_between(&base, &to);
             // The wall it lands on, and the rules.
             let model = &state.sheet_metal[t.ctx].model;
@@ -261,6 +265,7 @@ impl Rebuilder {
         }
         let mut o = last.ok_or("The locations have no points")?;
         o.owned = owned;
+        o.arrows = marks;
         Ok(o)
     }
 }

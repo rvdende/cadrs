@@ -1473,7 +1473,7 @@ fn draw_flat(
         }
     }
     // Forms: their outlines and a centermark. A Form hidden with its eye in the feature list
-    // hides its sketch (the outline) here, as Onshape's (`form-11.png`, `form-12.png`).
+    // is hidden here, outline and centermark, as Onshape's (`form-11.png`, `form-12.png`).
     let form = Color::srgb_u8(0x1f, 0x5f, 0xa8);
     let hidden_forms: Vec<u64> = doc
         .as_ref()
@@ -1486,8 +1486,9 @@ fn draw_flat(
                 .collect()
         })
         .unwrap_or_default();
-    for (ls, c, source) in &scene.forms {
-        for l in ls.iter().filter(|_| !hidden_forms.contains(source)) {
+    // (Nothing of a hidden Form is left on the flat, `form-12.png`.)
+    for (ls, c, _) in scene.forms.iter().filter(|(_, _, s)| !hidden_forms.contains(s)) {
+        for l in ls {
             let pts = l.points.iter().chain(l.closed.then(|| l.points.first()).flatten());
             lines.linestrip(pts.map(|q| v3(*q, z)), form);
         }

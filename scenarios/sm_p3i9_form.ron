@@ -4,11 +4,13 @@
 // dialog (Form Part Studio, Location(s) with the mate connector icon and the opposite direction
 // arrow, Target face(s)); Select Part Studio opens beside it on Libraries (cadrs sheet metal
 // forms; Type; Form; the form's Length, Width, Height and Angle); the Type menu; the search
-// "dim" leaves Raised forms / Dimple, cleared again; Louver picked with Done; "Vertices of
+// "dim" leaves Raised forms / Dimple, cleared again; Libraries ▸ My sheet metal forms lists the
+// document's own "My dimple" (back to cadrs sheet metal forms); Louver picked with Done; "Vertices of
 // Sketch 2" as locations and the base as target: ten louvers, their ends closed by sloping end
-// walls; the opposite direction; accepted; Search tools finds Tag, whose dialog opens (Form,
+// walls (an orange dot and triad on each location while the dialog is open); the opposite
+// direction; accepted; seen from +y, the louvers' open mouths; Search tools finds Tag, whose dialog opens (Form,
 // Part to add, Part to remove, Sketch for flat view, Form origin mate connector); the louvers'
-// outlines and centermarks in the flat view; the Form's eye hides the outlines there.
+// outlines and centermarks in the flat view; the Form's eye hides them there and greys its row.
 Scenario(
     start: Some("document"),
     steps: [
@@ -49,6 +51,18 @@ Scenario(
         Key("Ctrl+A"),
         Key("Backspace"),
         Wait(25),
+        // Libraries ▸ My sheet metal forms: this document's own form Part Studios.
+        Click(ui("form-picker-library")),
+        Wait(5),
+        Click(ui("form-picker-library-option-1")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03c-my-sheet-metal-forms"),
+        Click(ui("form-picker-library")),
+        Wait(5),
+        Click(ui("form-picker-library-option-0")),
+        Wait(30),
         Click(ui("form-picker-done")),
         Wait(10),
         MoveTo(1420, 900),
@@ -77,6 +91,14 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("07-accepted"),
+        // From the other side (+y): the louvers' open mouths.
+        Custom("view 210 30 75 0 15 0.12"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07b-louver-mouths"),
+        Custom("view 30 35 75 0 15 0.12"),
+        Wait(20),
         Key("Alt+C"),
         Wait(5),
         Type("tag"),
