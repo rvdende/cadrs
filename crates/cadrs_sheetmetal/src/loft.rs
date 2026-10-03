@@ -160,7 +160,7 @@ pub struct Strip {
 
 impl Strip {
     pub fn area(&self) -> f64 {
-        self.triangles.iter().map(|t| tri_area(t)).sum()
+        self.triangles.iter().map(tri_area).sum()
     }
 }
 

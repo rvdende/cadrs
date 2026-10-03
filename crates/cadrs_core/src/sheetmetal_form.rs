@@ -169,6 +169,7 @@ pub struct FormPick {
 }
 
 /// One Location(s) entry.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FormLocation {
     /// A sketch point, a vertex or a mate connector (explicit or implicit).

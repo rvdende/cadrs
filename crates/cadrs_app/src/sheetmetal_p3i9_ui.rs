@@ -1258,7 +1258,8 @@ fn sync_picker(world: &mut World) {
     let p = world.resource::<FormPicker>();
     let tab = p.tab;
     let values = p.values.clone();
-    let (rows, empty): (Vec<(&str, Sm9Role, Vec<String>, usize)>, Option<&str>) = match tab {
+    type Rows<'a> = Vec<(&'a str, Sm9Role, Vec<String>, usize)>;
+    let (rows, empty): (Rows, Option<&str>) = match tab {
         2 => (
             vec![
                 ("Library", Sm9Role::PickerDocument, vec![LIBRARY_NAME.to_string()], 0),
@@ -1628,7 +1629,6 @@ pub fn script(world: &mut World, arg: &str) {
             }
         }
         "form-library" => {
-            drop(doc);
             let Ok(lib) = cadrs_core::samples::sheetmetal_forms::document() else { return };
             if let Some(store) = world.get_resource::<crate::DocumentStore>() {
                 let meta = cadrs_core::library::DocumentMeta::new("cadrs", 1_790_553_600);

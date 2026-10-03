@@ -120,6 +120,9 @@ pub fn encode_guides(p1: &ProfileIn, p2: &ProfileIn, connections: &[ConnectionIn
     v
 }
 
+/// A folded flat-pattern part: its walls, body, names and the pieces' volume.
+type FoldedPart = (Vec<WallId>, BodyId, BodyNames, f64);
+
 impl Rebuilder {
     /// A loft profile as a polyline (or a point).
     fn loft_profile(&self, before: &[Feature], state: &State, items: &[LoftItem], tol: f64) -> Result<ProfileIn, String> {
@@ -240,7 +243,7 @@ impl Rebuilder {
 
     /// Folds the walls `which` of the parts of `flat`: per part with any of them, its walls (mitred
     /// slabs, or extruded) and bends fused, with the pieces' volume.
-    fn fold_loft(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern, which: &[WallId]) -> Result<Vec<(Vec<WallId>, BodyId, BodyNames, f64)>, String> {
+    fn fold_loft(&mut self, op: cadrs_kernel::OpId, model: &Model, flat: &FlatPattern, which: &[WallId]) -> Result<Vec<FoldedPart>, String> {
         let t = model.params.thickness;
         let mut out = Vec::new();
         for part in flat.parts.iter().filter(|p| p.walls.iter().any(|w| which.contains(w))) {
