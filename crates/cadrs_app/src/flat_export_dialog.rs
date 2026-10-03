@@ -2,10 +2,11 @@
 //! `feature-tools/sheetmetal-export-01-03.png`, lesson `15-exporting-a-flat-pattern`): the
 //! **Export as DXF/DWG** dialog, laid out as Onshape's:
 //!
-//! - **File name** ("<document> - Flat pattern of <part>") with *View export rules* (cadrs has
-//!   no export rules: greyed, saying so);
+//! - **File name** ("<document> - Flat pattern of <part>"; cadrs has no export rules, so
+//!   Onshape's *View export rules* link isn't shown);
 //! - **Format** DXF / DWG (DWG through the external converter, disabled without one);
-//!   **Version** 2000 / 2013;
+//!   **Version** Release 11-12 to 14 (disabled), 2000 (the default) to 2018, the current one
+//!   marked in the open list;
 //! - **Scope**: Single flat pattern part only / All flat pattern parts in the current model /
 //!   All flat pattern parts in the Part Studio; several parts go side by side in one file, or
 //!   one file each with *Export each part as its own file*;
@@ -17,7 +18,7 @@
 //! menu (P3I.3) calls [`open`] with the part under the pointer. Exporting doesn't change the
 //! document, so it is not an undo step.
 //!
-//! Names: `flat-export-dialog`, `flat-export-name-field`, `flat-export-rules`,
+//! Names: `flat-export-dialog`, `flat-export-help`, `flat-export-name-field`,
 //! `flat-export-format`, `flat-export-version`, `flat-export-scope`, `flat-export-separate`,
 //! `flat-export-options`, `flat-export-folder-field`, `flat-export-browse`, the checkboxes
 //! `flat-export-splines`, `-z-zero`, `-centerlines`, `-tangents`, `-cbore`, `-form-outlines`,
@@ -28,7 +29,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight, TextEdit};
 use bevy::ui_widgets::{Activate, observe};
-use cadrs_core::flat_export::{FlatExportOptions, FlatScope, default_file_name, flat_parts, part_page, scope_parts, side_by_side};
+use cadrs_core::flat_export::{FlatExportOptions, FlatScope, default_file_name, flat_parts_named, part_page, scope_parts, side_by_side};
 use cadrs_core::{FeatureId, PartId};
 use cadrs_drawing::dxf::DxfVersion;
 use cadrs_ui::prelude::*;
@@ -54,8 +55,14 @@ pub struct FlatExportDialog {
 const WIDTH: f32 = 540.0;
 const FIELD_H: f32 = 30.0;
 
-/// The versions offered, as Onshape lists them (newest first) with 2000 the default.
-const VERSIONS: [(&str, DxfVersion); 2] = [("2013", DxfVersion::R2013), ("2000", DxfVersion::R2000)];
+/// The Version list as Onshape's (lesson 15, t0040.3), oldest first: Release 11-12, 13 and 14
+/// (shown disabled: the DXF writer writes 2000 and later only), then every version it writes,
+/// 2000 (the default) to 2018.
+fn versions() -> Vec<(&'static str, Option<DxfVersion>)> {
+    let mut v: Vec<(&'static str, Option<DxfVersion>)> = vec![("Release 11-12", None), ("Release 13", None), ("Release 14", None)];
+    v.extend(DxfVersion::WRITTEN.into_iter().map(|d| (d.year(), Some(d))));
+    v
+}
 
 /// The checkboxes: name, label, default.
 const CHECKS: [(&str, &str, bool); 8] = [
@@ -80,6 +87,11 @@ fn row(name: &str) -> impl Bundle {
     )
 }
 
+/// The active Part Studio's part renames.
+fn props(world: &World) -> Vec<cadrs_core::PartProps> {
+    world.get_resource::<ActiveDocument>().and_then(|d| d.active_element()).map(|e| e.part_props().to_vec()).unwrap_or_default()
+}
+
 /// The flat-pattern parts of the active Part Studio, as the last rebuild has them.
 fn studio_build(world: &World) -> Option<(Vec<cadrs_core::Feature>, std::sync::Arc<cadrs_core::rebuild::Build>)> {
     let el = world.get_resource::<ActiveDocument>()?.active_element()?;
@@ -91,13 +103,13 @@ fn studio_build(world: &World) -> Option<(Vec<cadrs_core::Feature>, std::sync::A
 /// The first part of a Sheet metal model (for its feature list menu).
 pub fn first_part(world: &World, model: FeatureId) -> Option<PartId> {
     let (_, build) = studio_build(world)?;
-    flat_parts(&build).into_iter().find(|r| r.model == model).map(|r| r.part)
+    flat_parts_named(&build, &props(world)).into_iter().find(|r| r.model == model).map(|r| r.part)
 }
 
 /// The flat-pattern part `part` is, if it is one (its view menu offers the flat's items).
 pub fn flat_ref(world: &World, part: PartId) -> Option<cadrs_core::flat_export::FlatPartRef> {
     let (_, build) = studio_build(world)?;
-    flat_parts(&build).into_iter().find(|r| r.part == part)
+    flat_parts_named(&build, &props(world)).into_iter().find(|r| r.part == part)
 }
 
 fn toast(world: &mut World, note: Notification) {
@@ -110,7 +122,8 @@ fn toast(world: &mut World, note: Notification) {
 /// Opens the dialog on a flat-pattern part.
 pub fn open(world: &mut World, part: PartId) {
     let Some((_, build)) = studio_build(world) else { return };
-    let all = flat_parts(&build);
+    // Named as the Parts list names them (a renamed part by its new name).
+    let all = flat_parts_named(&build, &props(world));
     let Some(me) = all.iter().find(|r| r.part == part).cloned() else {
         return toast(world, Notification::warning("That part has no flat pattern"));
     };
@@ -125,18 +138,19 @@ pub fn open(world: &mut World, part: PartId) {
         Dialog::new("flat-export-dialog")
             .title("Export as DXF/DWG")
             .width(WIDTH)
+            // The header's "?" before the ✕, as Onshape's.
+            .header({
+                let th = theme.clone();
+                move |h| {
+                    h.spawn(cadrs_ui::IconButton::new("flat-export-help", "help").icon_size(14.0).tooltip("Exports the flat pattern as DXF or DWG: outline, cut-outs, bend lines by direction and the options below, each on its own layer").build(&th));
+                }
+            })
             .body(move |b| {
                 let t = &tb;
                 let full = || Val::Percent(100.0);
                 b.spawn(row("flat-export-name-row")).with_children(|g| {
-                    g.spawn(Node { align_items: AlignItems::Baseline, column_gap: Val::Px(6.0), ..default() }).with_children(|l| {
-                        label(l, t, "File name");
-                        l.spawn((
-                            Name::new("flat-export-rules"),
-                            t.text("View export rules", t.font_sm, FontWeight::NORMAL, Color::srgb_u8(0x8a, 0xa4, 0xc8)),
-                            Tooltip::new("cadrs has no export rules: the file name is yours to set"),
-                        ));
-                    });
+                    // (Onshape's "View export rules" link isn't shown: cadrs has no export rules.)
+                    label(g, t, "File name");
                     g.spawn(TextInput::new("flat-export-name").value(base).select_all_on_focus().autofocus().width(full()).height(FIELD_H).build(t));
                 });
                 b.spawn(row("flat-export-format-row")).with_children(|g| {
@@ -149,11 +163,13 @@ pub fn open(world: &mut World, part: PartId) {
                 });
                 b.spawn(row("flat-export-version-row")).with_children(|g| {
                     label(g, t, "Version");
-                    let mut s = Select::new("flat-export-version").bordered().width(full());
-                    for (v, _) in VERSIONS {
-                        s = s.option(v, true);
+                    let mut s = Select::new("flat-export-version").bordered().width(full()).mark_selected();
+                    let all = versions();
+                    for (label, v) in &all {
+                        s = s.option(*label, v.is_some());
                     }
-                    g.spawn(s.selected(1).build(t));
+                    let default = all.iter().position(|(_, v)| *v == Some(DxfVersion::R2000)).unwrap_or(0);
+                    g.spawn(s.selected(default).build(t));
                 });
                 b.spawn(row("flat-export-scope-row")).with_children(|g| {
                     label(g, t, "Scope");
@@ -274,7 +290,8 @@ fn start_export(world: &mut World) {
     let base = field(world, "flat-export-name-field").trim().to_string();
     let folder = field(world, "flat-export-folder-field").trim().to_string();
     let dwg = select(world, "flat-export-format") == 1;
-    let version = VERSIONS[select(world, "flat-export-version").min(VERSIONS.len() - 1)].1;
+    let all = versions();
+    let version = all[select(world, "flat-export-version").min(all.len() - 1)].1.unwrap_or(DxfVersion::R2000);
     let scope = FlatScope::ALL[select(world, "flat-export-scope").min(2)];
     let separate = checked(world, "flat-export-separate") && scope != FlatScope::Single;
     let o = FlatExportOptions {
@@ -296,7 +313,7 @@ fn start_export(world: &mut World) {
     let hidden = world.resource::<PartCache>().hidden_sketches.clone();
     let el = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element().cloned());
     let shown = |id: FeatureId| !hidden.contains(&id) && el.as_ref().is_none_or(|e| e.sketch_visibility(id) != Some(false));
-    let refs = scope_parts(&build, spec.part, scope);
+    let refs = scope_parts(&build, &props(world), spec.part, scope);
     let pages: Vec<(String, cadrs_drawing::export::Page)> = refs.iter().filter_map(|r| Some((r.name.clone(), part_page(&build, &features, r, &o, &shown)?))).collect();
     if pages.is_empty() {
         return toast(world, Notification::warning("Export failed: no flat pattern to export"));

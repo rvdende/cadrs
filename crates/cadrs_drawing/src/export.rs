@@ -61,10 +61,12 @@ pub enum Layer {
     /// outlines / centermarks").
     FormOutline,
     FormCentermark,
+    /// The outer diameters of counterbored and countersunk holes in a flat pattern.
+    FlatCbore,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 23] = [
+    pub const ALL: [Layer; 24] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -88,6 +90,7 @@ impl Layer {
         Layer::FlatSketch,
         Layer::FormOutline,
         Layer::FormCentermark,
+        Layer::FlatCbore,
     ];
 
     pub fn name(self) -> &'static str {
@@ -115,6 +118,7 @@ impl Layer {
             Layer::FlatSketch => "FLAT_SKETCH",
             Layer::FormOutline => "FORM_OUTLINES",
             Layer::FormCentermark => "FORM_CENTERMARKS",
+            Layer::FlatCbore => "CBORE_CSINK",
         }
     }
 
@@ -131,9 +135,9 @@ impl Layer {
     }
 
     /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
-    /// drawings' files stay as they were).
+    /// drawings' files stay as they were; a flat pattern's file lists only the layers it uses).
     pub fn is_flat(self) -> bool {
-        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch | Layer::FormOutline | Layer::FormCentermark)
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch | Layer::FormOutline | Layer::FormCentermark | Layer::FlatCbore)
     }
 
     /// The layer's AutoCAD colour index (7: black/white).
@@ -147,6 +151,7 @@ impl Layer {
             Layer::FlatSketch => 4,
             Layer::FormOutline => 30,
             Layer::FormCentermark => 2,
+            Layer::FlatCbore => 2,
             _ => 7,
         }
     }

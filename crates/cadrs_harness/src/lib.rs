@@ -36,7 +36,7 @@ use bevy::winit::WinitPlugin;
 use cadrs_ui::RenderSurface;
 use cadrs_ui::input::CaretBlinkOverride;
 
-pub use runner::{Affine, Affine3, SpaceToScreen, WorldToScreen};
+pub use runner::{Affine, Affine3, FlatToScreen, SpaceToScreen, WorldToScreen};
 pub use scenario::{Scenario, Step, Target};
 
 /// Command-line options.

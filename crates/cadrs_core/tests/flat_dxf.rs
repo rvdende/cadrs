@@ -81,6 +81,20 @@ fn e1_import_closes_seven_sheet_regions_and_thickens() {
         .collect();
     assert_eq!(regions.len(), 16, "7 sheet regions and 9 cut-outs");
     assert_eq!(sheet.len(), 7);
+    // Each region's fill triangles cover exactly its polygon (the shown sketch's fill drew fans
+    // across the part, `sm_e1` 04–12).
+    for r in &regions {
+        let (v, idx) = r.triangulate();
+        let tri: f64 = idx
+            .chunks(3)
+            .map(|t| {
+                let (a, b, c) = (v[t[0] as usize], v[t[1] as usize], v[t[2] as usize]);
+                ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs() / 2.0
+            })
+            .sum();
+        let poly = cadrs_sketch::geom::polygon_area(&r.outer).abs() - r.holes.iter().map(|h| cadrs_sketch::geom::polygon_area(h).abs()).sum::<f64>();
+        assert!((tri - poly).abs() < 1e-6 * poly.max(1.0), "region fill {tri} vs {poly} ({} holes, {} outer points)", r.holes.len(), r.outer.len());
+    }
     let area: f64 = sheet.iter().map(|r| r.area()).sum();
     // The DXF's round holes are true circles in the sketch; the flat's are 64-sided polygons.
     assert!((area - flat.parts[0].area()).abs() < 2e-4 * area, "{area} vs {}", flat.parts[0].area());

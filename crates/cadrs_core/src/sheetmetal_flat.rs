@@ -19,7 +19,8 @@
 use cadrs_sheetmetal::flat::FlatPart;
 use cadrs_sheetmetal::model::Surface;
 use cadrs_sheetmetal::Model;
-use cadrs_sketch::{PlaneFrame, PlaneRef};
+use cadrs_sketch::projection::Projected;
+use cadrs_sketch::{PlaneFrame, PlaneRef, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Feature, FeatureKind, RegionRef};
@@ -86,6 +87,45 @@ pub fn flat_frame(model: &Model, part: &FlatPart) -> Option<PlaneFrame> {
     let fu = to3(inv.m.column(0).into_owned()).normalize();
     let fv = to3(inv.m.column(1).into_owned()).normalize();
     Some(PlaneFrame { origin: [o.x, o.y, o.z], u: [fu.x, fu.y, fu.z], v: [fv.x, fv.y, fv.z] })
+}
+
+/// The lines of a flat-pattern part a sketch on it can use (snap to, constrain and dimension
+/// against): each bend's centre line (with its joint) and each edge of the outline and its
+/// cut-outs (`None`), in the flat's coordinates.
+pub fn flat_lines(part: &FlatPart) -> Vec<((Vec2, Vec2), Option<u32>)> {
+    let v = |p: cadrs_sheetmetal::poly::P2| Vec2::new(p.x, p.y);
+    let mut out: Vec<((Vec2, Vec2), Option<u32>)> = part.bends.iter().map(|b| ((v(b.center.a), v(b.center.b)), Some(b.joint.0))).collect();
+    for poly in &part.outline {
+        for ring in std::iter::once(&poly.outer).chain(&poly.holes) {
+            for (i, a) in ring.iter().enumerate() {
+                let b = ring[(i + 1) % ring.len()];
+                if (b - *a).norm() > 1e-9 {
+                    out.push(((v(*a), v(b)), None));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Where a flat pattern line a sketch on the flat uses ([`cadrs_sketch::Link::FlatLine`]) lies
+/// now: the bend's centre line, or the outline edge nearest `at` (points of the used curve as
+/// it was). `None` when the model, part or bend is gone.
+pub fn flat_line(contexts: &[crate::sheetmetal::SheetMetalContext], model: FeatureId, part: usize, bend: Option<u32>, at: &[Vec2]) -> Option<Projected> {
+    let ctx = contexts.iter().rev().find(|c| c.feature == model)?;
+    let flat = ctx.flat.parts.get(part)?;
+    let lines = flat_lines(flat);
+    let ((a, b), _) = match bend {
+        Some(j) => lines.into_iter().find(|(_, k)| *k == Some(j))?,
+        None => lines
+            .into_iter()
+            .filter(|(_, k)| k.is_none())
+            .min_by(|x, y| {
+                let far = |(a, b): (Vec2, Vec2)| at.iter().map(|p| cadrs_sketch::geom::dist_point_segment(*p, a, b)).fold(0.0, f64::max);
+                far(x.0).total_cmp(&far(y.0))
+            })?,
+    };
+    Some(Projected::Line(a, b))
 }
 
 /// A flat pattern extrude (SM14.2): regions of a flat-pattern sketch added to the sheet or cut

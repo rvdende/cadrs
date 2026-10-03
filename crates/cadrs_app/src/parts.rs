@@ -380,6 +380,9 @@ pub struct PartCache {
     pub preview_curves: HashSet<(FeatureId, cadrs_sketch::CurveId)>,
     /// The regions of every visible sketch.
     pub regions: Vec<SketchRegions>,
+    /// P3I.6: the sketches on a sheet metal flat pattern. They are drawn and picked in the flat
+    /// view (`crate::flat_ui`), not in 3D.
+    pub flat_sketches: HashSet<FeatureId>,
     /// P3G.4: what each Derived feature brought in, and its sketches (placed), from the last
     /// rebuild.
     pub derived: HashMap<FeatureId, cadrs_core::derived::DerivedOutput>,
@@ -1012,7 +1015,9 @@ fn update_part_cache(
             })
         })
         .collect();
+    let flat_sketches: HashSet<FeatureId> = effective.iter().filter(|f| cadrs_core::sheetmetal_flat::sketch_target(&effective, f.id).is_some()).map(|f| f.id).collect();
     let c = &mut *cache;
+    c.flat_sketches = flat_sketches;
     c.rolled_back_sketches = features
         .iter()
         .filter(|f| f.sketch().is_some() && Some(f.id) != over.editing && !effective.iter().any(|e| e.id == f.id))
@@ -2156,7 +2161,7 @@ pub fn pick_face_skipping(
 pub fn pick_region(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, usize, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(FeatureId, usize, f32, f64)> = None;
-    for sr in &cache.regions {
+    for sr in cache.regions.iter().filter(|sr| !cache.flat_sketches.contains(&sr.sketch)) {
         let Some(p) = sr.frame.intersect_ray(to64(o), to64(d)) else {
             continue;
         };
@@ -2182,7 +2187,7 @@ pub fn pick_region(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<
 /// The nearest sketch point within [`VERTEX_PICK_PX`] of a screen offset, not behind a part.
 pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::PointId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::PointId, Vec3)> = Vec::new();
-    for sc in &cache.sketch_curves {
+    for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
         for (id, p) in &sc.points {
             let q = v3(*p);
             let d = view.project(q).distance(offset);
@@ -2200,7 +2205,7 @@ pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> O
 /// The nearest sketch curve within [`EDGE_PICK_PX`] of a screen offset, not behind a part.
 pub fn pick_sketch_curve(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::CurveId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::CurveId, Vec3)> = Vec::new();
-    for sc in &cache.sketch_curves {
+    for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
         for (id, pts) in &sc.curves {
             let mut best: Option<(f32, Vec3)> = None;
             for w in pts.windows(2) {

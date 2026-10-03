@@ -478,6 +478,42 @@ against the stand-ins' expected values.
   `flat_export_dialog::open`); features after the model that changed the folded part are rebuilt
   away by a later flat extrude (a warning says so); rolled walls ignore flat cuts in the folded
   solid; counterbore/countersink and form options add nothing yet (forms are P3I.9).
+- **Judge fixes (7.1 → re-judge)**:
+  - *Sketching in the flat view*: a sketch on a flat pattern is drawn and edited in the panel's
+    flat view, not in 3D. `sketch_tools::SketchArea` routes the sketch's screen mapping, pointer
+    hit-test (`over_viewport`), gizmo layers (`FLAT_LAYER`), glyphs, values, quick-dimension and
+    edit boxes through the flat view's camera and node; New sketch opens the panel on the model's
+    flat (top view, fitted). Nothing of a flat sketch is drawn or picked in 3D (`PartCache::
+    flat_sketches`); the plane label isn't shown.
+  - *Flat references*: `Link::FlatLine { model, part, bend }` (cadrs_sketch) is a line of the flat:
+    a bend's centre line, or the outline / cut-out edge nearest the used curve. A new flat sketch
+    starts with the part's bend centre lines used as construction (dimension and constrain against
+    them, the lesson's slot placed from Bend A); the outline and cut-out edges are snapped to and
+    used when touched (`flat_ui::flat_imprints` through `ExternalSnap`). `parts::regenerate`
+    places them from the build's flat (`sheetmetal_flat::flat_line`), so they follow the flat.
+  - *Regions*: picked in the flat view (a click on a flat sketch's region beats the bend under
+    it); the selected ones and the flat Extrude's are orange there (outline and wash) and wrapped
+    onto the folded part's walls in 3D (outline on both faces; bend regions left out).
+  - *Fill artefact*: shown sketches' fills were pulled 1000 depth-bias units towards the viewer,
+    about 2.4 mm with the float depth buffer and the 40 m range, so a sketch under a 1 mm sheet
+    showed through it, in fans where triangles changed depth binade; now 16 units (`FILL_BIAS`),
+    the Extrude regions' wash 24 behind parts (1001 only over the edited sketch's overlay).
+  - *Export*: file names use the Parts list's names (`flat_parts_named`, renames); Export splines
+    as polylines off writes SPLINE entities; counterbore/countersink outer circles of Hole
+    features on planar walls on `CBORE_CSINK` (`flat_export::cbore_marks`); a flat pattern's file
+    lists only its layers; Version 2018, 2013, 2010, 2007, 2004, 2000 (all the writer writes; R12
+    is a different format) with 2000 the default; the dialog has the header's "?".
+  - *Insert DXF*: a floating panel over the view (`cadrs_ui::FloatingPanel`), as Onshape's
+    step-03; Show constraints turns off after an import (glyphs on hover, as Onshape's default);
+    ends closer than 0.0005 mm are joined (files with rounded coordinates close their regions).
+  - *Round 2 (8.2)*: while a flat sketch is edited the panel stays open on its model (closing it
+    reopens it with a note, `flat_ui::keep_flat_view`) and the sketch never falls back to 3D;
+    Show constraints starts off in a flat sketch (restored after); the tables take their rows'
+    height up to a third of the panel, the flat view the rest; a changed flat of the same model
+    (a preview) keeps the view unless it no longer fits; used bend lines are drawn over material
+    only; the Thicken dialog's regions are orange; a `cbore_marks` test; the DXF versions' doc
+    says the entities are the same from 2000 to 2018. A single picked region reads "Face of
+    Sketch 2", as Onshape's ("Faces of Sketch 1" in t0060 is several).
 
 ### Decisions (P3I.8)
 

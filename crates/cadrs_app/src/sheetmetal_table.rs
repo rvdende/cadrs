@@ -85,6 +85,9 @@ pub const FLAT_CUBE_ARC_LAYER: usize = 10;
 pub const PANEL_W: f32 = 640.0;
 /// Table rows' and headers' height (px).
 const ROW_H: f32 = 30.0;
+
+/// The tables' greatest share of the panel's height (%), the flat view below getting the rest.
+const TABLES_MAX: f32 = 34.0;
 /// The selection orange (Onshape's highlight).
 const ORANGE: Color = Color::srgb(0.98, 0.62, 0.25);
 const ORANGE_HOVER: Color = Color::srgb(1.0, 0.80, 0.55);
@@ -207,6 +210,9 @@ pub struct SmTable {
     fit_in: Option<u32>,
     /// Frames until the main view is fitted again beside the opened panel.
     main_fit_in: Option<u32>,
+    /// The flat view's node and its rect on screen (logical px), while it is shown: a sketch on
+    /// the flat is drawn and edited there (P3I.6, `crate::flat_ui`).
+    pub body: Option<(Entity, Rect)>,
 }
 
 impl Default for SmTable {
@@ -236,6 +242,7 @@ impl Default for SmTable {
             press: None,
             fit_in: None,
             main_fit_in: None,
+            body: None,
         }
     }
 }
@@ -797,9 +804,12 @@ fn sync_panel(world: &mut World) {
         // while they overflow (frame t0008).
         p.spawn((
             Name::new("smt-tables-frame"),
+            // As tall as their rows, up to a third of the panel: the flat view takes the rest
+            // (P3I.6: Onshape's flat fills the panel under a short table, lesson t0052).
             Node {
-                flex_grow: 1.0,
-                flex_basis: Val::Px(0.0),
+                flex_grow: 0.0,
+                flex_shrink: 1.0,
+                max_height: Val::Percent(TABLES_MAX),
                 min_height: Val::Px(0.0),
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
@@ -861,6 +871,8 @@ fn sync_panel(world: &mut World) {
                 ImageNode::new(image),
                 Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
                 Pickable::IGNORE,
+                // Under a flat sketch's glyphs and values (`crate::flat_ui`).
+                ZIndex(-20),
             ));
             b.spawn((
                 Name::new("smt-flat-cube"),
@@ -1566,9 +1578,15 @@ fn on_context_menu(
     q_body: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
     cache: Res<PartCache>,
     mut t: ResMut<SmTable>,
+    sketching: Option<Res<crate::sketch::SketchSession>>,
     mut commands: Commands,
 ) {
     if q_flat.contains(ev.entity) {
+        // While sketching on the flat, a right-click is the sketch's (P3I.6).
+        if sketching.is_some() {
+            t.press = None;
+            return;
+        }
         // The end of a right-drag (an orbit) isn't a right-click.
         let pressed = t.press.take();
         if pressed.is_some_and(|p| p.distance(ev.position) > 3.0) {
@@ -1960,11 +1978,18 @@ fn create_flat_drawing(world: &mut World) {
 fn resize_target(
     mut t: ResMut<SmTable>,
     mut images: ResMut<Assets<Image>>,
-    q_body: Query<&ComputedNode, With<FlatBody>>,
+    q_body: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<FlatBody>>,
     mut q_image: Query<&mut ImageNode, With<FlatImage>>,
     mut q_cam: Query<&mut RenderTarget, With<FlatCamera>>,
 ) {
-    let Some(node) = q_body.iter().next() else { return };
+    let body = q_body.iter().next().map(|(e, n, tr)| {
+        let s = n.inverse_scale_factor();
+        (e, Rect::from_center_size(tr.translation * s, n.size() * s))
+    });
+    if t.body != body {
+        t.body = body;
+    }
+    let Some((_, node, _)) = q_body.iter().next() else { return };
     let size = node.size().round().as_uvec2();
     if size.x < 4 || size.y < 4 {
         return;
@@ -2120,8 +2145,21 @@ fn sync_meshes(
     });
     if want_scene != t.scene_of {
         t.scene = ctx.as_ref().map(|c| Arc::new(FlatScene::new(&c.model, &c.flat)));
-        // A new flat (another model, or a joint changed): fitted again.
-        if t.scene_of.is_some() && want_scene.is_some() {
+        // Another model's flat is fitted; the same model's changed flat (a joint edited, a flat
+        // Extrude's preview) keeps the view unless it no longer fits (P3I.6: the Add preview
+        // re-fitted the view under the dialog).
+        let other_model = t.scene_of.map(|(f, _)| f) != want_scene.map(|(f, _)| f);
+        let fits = match (t.scene.as_ref().and_then(|s| s.bounds()), t.body) {
+            (Some((lo, hi)), Some((_, rect))) => {
+                let half = rect.size() / 2.0;
+                [(lo.x, lo.y), (hi.x, lo.y), (hi.x, hi.y), (lo.x, hi.y)].into_iter().all(|(x, y)| {
+                    let p = t.view.project(Vec3::new(x as f32, y as f32, 0.0));
+                    p.x.abs() <= half.x && p.y.abs() <= half.y
+                })
+            }
+            _ => false,
+        };
+        if t.scene_of.is_some() && want_scene.is_some() && (other_model || !fits) {
             t.fit_in = Some(1);
         }
         t.scene_of = want_scene;
@@ -2227,6 +2265,7 @@ fn draw_flat(
     open: Res<SidePanel>,
     kind: Res<ActiveKind>,
     doc: Option<Res<ActiveDocument>>,
+    sketching: Option<Res<crate::sketch::SketchSession>>,
     mut lines: Gizmos<FlatLineGizmos>,
     mut hi: Gizmos<FlatHighlightGizmos>,
 ) {
@@ -2300,6 +2339,11 @@ fn draw_flat(
         let sketch_color = Color::srgb_u8(0x2b, 0x6c, 0xd8);
         for f in &features {
             let Some(sk) = f.sketch() else { continue };
+            // The one being edited is drawn by the sketch (`crate::sketch_draw`); hidden and
+            // consumed ones not at all.
+            if sketching.as_ref().is_some_and(|s| s.feature == f.id) || cache.hidden_sketches.contains(&f.id) || el.sketch_visibility(f.id) == Some(false) {
+                continue;
+            }
             let Some(cadrs_sketch::PlaneRef::Feature(fp)) = sk.plane else { continue };
             let Some((model, index)) = cadrs_core::sheetmetal_flat::flat_target(&features, fp.feature) else { continue };
             if model != ctx.feature {
@@ -2379,6 +2423,10 @@ fn draw_flat(
 fn sketch_polylines(g: &cadrs_sketch::Sketch) -> Vec<Vec<cadrs_sketch::Vec2>> {
     let mut out = Vec::new();
     for (id, c) in g.curves.iter() {
+        // Construction (the flat's own lines a sketch used) isn't shown once accepted.
+        if c.construction {
+            continue;
+        }
         match c.kind {
             cadrs_sketch::CurveKind::Line { a, b } => out.push(vec![g.pos(a), g.pos(b)]),
             cadrs_sketch::CurveKind::Circle { center, radius } => {
@@ -2649,13 +2697,29 @@ fn on_flat_move(ev: On<Pointer<Move>>, mut t: ResMut<SmTable>, cache: Res<PartCa
     }
 }
 
-fn on_flat_click(ev: On<Pointer<Click>>, t: Res<SmTable>, cache: Res<PartCache>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>, mut commands: Commands) {
-    if ev.button != PointerButton::Primary {
+fn on_flat_click(
+    ev: On<Pointer<Click>>,
+    t: Res<SmTable>,
+    cache: Res<PartCache>,
+    q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
+    sketching: Option<Res<crate::sketch::SketchSession>>,
+    mut commands: Commands,
+) {
+    // While sketching on the flat, its clicks are the sketch tools' (P3I.6).
+    if ev.button != PointerButton::Primary || sketching.is_some() {
         return;
     }
-    if let Some(h) = flat_point(&t, &q, ev.pointer_location.position).and_then(|(p, tol)| flat_hit(&cache, &t, p, tol)) {
-        commands.queue(move |world: &mut World| toggle_hit(world, h));
-    }
+    let Some((p, tol)) = flat_point(&t, &q, ev.pointer_location.position) else { return };
+    let hit = flat_hit(&cache, &t, p, tol);
+    commands.queue(move |world: &mut World| {
+        // A region of a sketch on the flat (P3I.6, SM14.2: picked for the flat Extrude) wins
+        // over the bend, edge or face under it.
+        if let Some(pick) = crate::flat_ui::region_at(world, p) {
+            world.write_message(crate::viewport::PickRequest(Some(pick)));
+        } else if let Some(h) = hit {
+            toggle_hit(world, h);
+        }
+    });
 }
 
 fn on_cube_click(mut ev: On<Pointer<Click>>, mut t: ResMut<SmTable>, q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatCubeImage>>) {
@@ -2669,6 +2733,43 @@ fn on_cube_click(mut ev: On<Pointer<Click>>, mut t: ResMut<SmTable>, q: Query<(&
     if let Some(v) = crate::view_cube::view_at_spot(&t.view, ev.pointer_location.position - top_left) {
         t.view = v;
     }
+}
+
+/// Where the flat view shows a flat-pattern part, for a sketch on it (P3I.6, `crate::flat_ui`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlatDisplay {
+    /// The flat view's node and its rect on screen (logical px).
+    pub body: Entity,
+    pub rect: Rect,
+    /// Its camera.
+    pub view: crate::camera::ViewState,
+    /// The part's flat in the view's scene: the flat's 2D coordinates moved with the part, on
+    /// the sheet's top.
+    pub frame: cadrs_sketch::PlaneFrame,
+}
+
+/// The flat view's display of part `part` of `model`, while the panel shows that model's flat.
+pub fn flat_display(t: &SmTable, model: FeatureId, part: usize) -> Option<FlatDisplay> {
+    t.key.as_ref()?;
+    if t.scene_of.map(|(f, _)| f) != Some(model) {
+        return None;
+    }
+    let scene = t.scene.as_ref()?;
+    let (body, rect) = t.body?;
+    let shift = scene.shifts.get(part).copied().unwrap_or_else(cadrs_sheetmetal::poly::V2::zeros);
+    let frame = cadrs_sketch::PlaneFrame { origin: [shift.x, shift.y, scene.thickness], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
+    Some(FlatDisplay { body, rect, view: t.view, frame })
+}
+
+/// Shows `model`'s flat in the panel, seen from the top and fitted (P3I.6: a sketch on the
+/// flat is drawn there; `crate::flat_ui` opens the panel for it).
+pub fn show_flat(world: &mut World, model: FeatureId) {
+    let mut t = world.resource_mut::<SmTable>();
+    if t.context != Some(model) {
+        t.context = Some(model);
+    }
+    t.view = t.view.oriented(StandardView::Top);
+    t.fit_in = Some(2);
 }
 
 /// The ids of a model's parts (for the scenarios' set-up and tests).

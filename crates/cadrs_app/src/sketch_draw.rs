@@ -82,7 +82,8 @@ impl Plugin for SketchDrawPlugin {
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,
-                (draw_sketches, sync_fills, draw_list_hovered_sketch)
+                (sync_gizmo_layers, draw_sketches, sync_fills, draw_list_hovered_sketch)
+                    .chain()
                     .in_set(SketchDrawSet)
                     .after(crate::sketch_tools::SketchToolsSet)
                     .run_if(in_state(AppState::Document)),
@@ -104,13 +105,16 @@ fn draw_list_hovered_sketch(
     doc: Option<Res<ActiveDocument>>,
     highlight: Res<crate::viewport::PlaneHighlight>,
     session: Option<Res<SketchSession>>,
+    parts: Res<crate::parts::PartCache>,
+    area: Res<crate::sketch_tools::SketchArea>,
     mut g: Gizmos<SketchLineGizmos>,
 ) {
     let Some(crate::viewport::Pick::Feature(id)) = highlight.list else {
         return;
     };
-    // The sketch being edited draws itself.
-    if session.as_ref().is_some_and(|s| s.feature == id) {
+    // The sketch being edited draws itself; a sketch on a flat pattern isn't in 3D, and while
+    // one is edited these gizmos draw in the flat view.
+    if session.as_ref().is_some_and(|s| s.feature == id) || parts.flat_sketches.contains(&id) || area.flat.is_some() {
         return;
     }
     let Some(f) = doc.as_ref().and_then(|d| d.active_element()).and_then(|el| el.feature(id)) else {
@@ -288,6 +292,27 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     // dots got smaller and lighter).
     accepted_dots.depth_bias = -1e-3;
     accepted_dots.render_layers = RenderLayers::layer(crate::viewport::OCCLUDED_LAYER);
+}
+
+/// The edited sketch's gizmos draw in the flat view while a sketch on a flat pattern is edited
+/// there (P3I.6), else over the 3D view.
+fn sync_gizmo_layers(area: Res<crate::sketch_tools::SketchArea>, mut store: ResMut<GizmoConfigStore>) {
+    let want = match area.flat {
+        Some(_) => RenderLayers::layer(crate::sheetmetal_table::FLAT_LAYER),
+        None => RenderLayers::layer(OVERLAY_LAYER),
+    };
+    fn set<C: GizmoConfigGroup>(store: &mut GizmoConfigStore, want: &RenderLayers) {
+        if store.config::<C>().0.render_layers != *want {
+            store.config_mut::<C>().0.render_layers = want.clone();
+        }
+    }
+    set::<SketchLineGizmos>(&mut store, &want);
+    set::<SketchThinGizmos>(&mut store, &want);
+    set::<SketchRubberGizmos>(&mut store, &want);
+    set::<SketchHoverGizmos>(&mut store, &want);
+    set::<SketchWideGizmos>(&mut store, &want);
+    set::<SketchRingGizmos>(&mut store, &want);
+    set::<SketchDotGizmos>(&mut store, &want);
 }
 
 /// World position of a sketch point.
@@ -471,6 +496,7 @@ fn draw_sketches(
         ResMut<RegionCache>,
     ),
     mut labels: ResMut<SketchLabels>,
+    area: Res<crate::sketch_tools::SketchArea>,
     (parts, units, keys, mut held, entity_tools, picked_features, modify, sketch_errors, text_editing, shown_dims, external): (
         Res<crate::parts::PartCache>,
         Res<crate::WorkspaceUnits>,
@@ -496,7 +522,7 @@ fn draw_sketches(
         Gizmos<SketchAcceptedDotGizmos>,
     ),
 ) {
-    set_nudge(&view.view);
+    set_nudge(&area.flat.map_or(view.view, |f| f.view));
     let mut out = Vec::new();
     let mut new_overlay = SketchOverlay::default();
     let Some(doc) = doc else {
@@ -525,8 +551,9 @@ fn draw_sketches(
     for f in features.iter().chain(parts.derived_sketches.iter()) {
         let Some(sk) = f.sketch() else { continue };
         let Some(plane) = sk.plane else { continue };
-        // Sketches an extrude used are hidden (`screens/24`).
-        if Some(f.id) == editing || parts.hidden_sketches.contains(&f.id) || parts.rolled_back_sketches.contains(&f.id) {
+        // Sketches an extrude used are hidden (`screens/24`); sketches on a flat pattern are
+        // drawn in the flat view (P3I.6).
+        if Some(f.id) == editing || parts.hidden_sketches.contains(&f.id) || parts.rolled_back_sketches.contains(&f.id) || parts.flat_sketches.contains(&f.id) {
             continue;
         }
         let map = ScreenMap::new(plane, &view.view, &rect);
@@ -654,6 +681,24 @@ fn draw_sketches(
         let mirror_axis = (tool.tool == crate::sketch::SketchTool::Mirror)
             .then(|| selection.0.first().copied())
             .flatten();
+        // A sketch on the flat: the flat's bend lines it uses are drawn over material only (a
+        // cut-out the line crosses shows as a gap, as the flat's own lines do; P3I.6).
+        let clipped: HashMap<cadrs_sketch::CurveId, Vec<Vec<SVec2>>> = if area.flat.is_some() {
+            sketch
+                .links()
+                .into_iter()
+                .filter_map(|(_, t, l)| match (t, l) {
+                    (cadrs_sketch::projection::LinkTarget::Curve(c), cadrs_sketch::Link::FlatLine { model, part, bend: Some(j) }) => {
+                        let flat = parts.sheet_metal.iter().rev().find(|x| x.feature.0 == model)?.flat.parts.get(part as usize)?;
+                        let b = flat.bend(cadrs_sheetmetal::model::JointId(j))?;
+                        Some((c, b.center_visible.iter().map(|s| vec![SVec2::new(s.a.x, s.a.y), SVec2::new(s.b.x, s.b.y)]).collect()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
         for (id, c) in &sketch.curves {
             let e = SketchEntity::Curve(id);
             let pts = curve_polyline(sketch, id);
@@ -717,7 +762,14 @@ fn draw_sketches(
             } else {
                 status_color(analysis.curve(id))
             };
-            stroke(&mut lines, &frame, &pts, color, c.construction, ppm);
+            match clipped.get(&id) {
+                Some(spans) => {
+                    for span in spans {
+                        stroke(&mut lines, &frame, span, color, c.construction, ppm);
+                    }
+                }
+                None => stroke(&mut lines, &frame, &pts, color, c.construction, ppm),
+            }
         }
         // A Bézier curve's handles: short dashes from each end to its control point, in the
         // curve's colour (Onshape's control polygon), the control points hollow rings below.
@@ -2348,6 +2400,13 @@ struct FillCache {
 #[derive(Component)]
 struct SketchFill;
 
+/// How far a shown sketch's fill is pulled towards the viewer (depth bias units): enough to
+/// win over a part face it lies on, far too little to show through a part. The depth buffer is
+/// float, so a unit is about 2⁻²⁴ of the 40 m depth range here: 16 units are a few hundredths
+/// of a millimetre. (It was 1000, about 2.4 mm: a shown sketch on Top showed through a 1 mm
+/// sheet lying on it, in fans where its triangles' depths changed binade, `sm_e1` 04–12.)
+pub(crate) const FILL_BIAS: f32 = 16.0;
+
 /// Keeps one grey fill mesh per sketch of the active Part Studio, rebuilt when its geometry
 /// changes.
 #[allow(clippy::too_many_arguments)]
@@ -2377,8 +2436,8 @@ fn sync_fills(
                 unlit: true,
                 cull_mode: None,
                 double_sided: true,
-                // In front of a part face the sketch lies on.
-                depth_bias: 1000.0,
+                // In front of a part face the sketch lies on, by a hair: [`FILL_BIAS`].
+                depth_bias: FILL_BIAS,
                 ..default()
             })
         })
@@ -2406,7 +2465,7 @@ fn sync_fills(
                 cull_mode: None,
                 double_sided: true,
                 alpha_mode: AlphaMode::Blend,
-                depth_bias: 1000.0,
+                depth_bias: FILL_BIAS,
                 ..default()
             })
         })
@@ -2416,7 +2475,7 @@ fn sync_fills(
         for f in el.features().iter().chain(parts.derived_sketches.iter()) {
             let Some(sk) = f.sketch() else { continue };
             let Some(plane) = sk.plane else { continue };
-            if parts.hidden_sketches.contains(&f.id) || parts.preview_sketches.contains(&f.id) || parts.rolled_back_sketches.contains(&f.id) {
+            if parts.hidden_sketches.contains(&f.id) || parts.preview_sketches.contains(&f.id) || parts.rolled_back_sketches.contains(&f.id) || parts.flat_sketches.contains(&f.id) {
                 continue;
             }
             live.push(f.id);
@@ -2566,11 +2625,13 @@ pub(crate) fn fill_mesh_with(s: &Sketch, plane: PlaneRef, outlined: bool) -> Mes
 // Labels
 
 /// Keeps one UI text per [`LabelSpec`], placed in screen space inside the viewport area.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_labels(
     labels: Res<SketchLabels>,
     theme: Res<Theme>,
-    rect: Res<ViewportRect>,
+    viewport_rect: Res<ViewportRect>,
+    sketch_area: Res<crate::sketch_tools::SketchArea>,
+    mut host_seen: Local<Option<Entity>>,
     screen: Res<SketchScreen>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q: Query<(
@@ -2588,6 +2649,17 @@ fn sync_labels(
     )>,
     mut commands: Commands,
 ) {
+    // In the viewport area, or the flat view while a sketch on the flat is edited (P3I.6): a
+    // change of host starts the labels again there.
+    let (host, r) = sketch_area.host(q_area.iter().next(), &viewport_rect);
+    let rect = ViewportRect(r);
+    if *host_seen != host {
+        for (e, ..) in &q {
+            commands.entity(e).try_despawn();
+        }
+        *host_seen = host;
+        return;
+    }
     let mut have = 0;
     for (
         e,
@@ -2667,7 +2739,7 @@ fn sync_labels(
             Visibility::Hidden
         });
     }
-    let Some(area) = q_area.iter().next() else {
+    let Some(area) = host else {
         return;
     };
     for (i, spec) in labels.0.iter().enumerate().skip(have) {
@@ -2739,7 +2811,8 @@ struct BoxSelectDash;
 #[allow(clippy::type_complexity)]
 fn sync_box_select(
     draw: Res<SketchDraw>,
-    rect: Res<ViewportRect>,
+    viewport_rect: Res<ViewportRect>,
+    sketch_area: Res<crate::sketch_tools::SketchArea>,
     q_area: Query<Entity, With<ViewportArea>>,
     mut q: Query<(
         Entity,
@@ -2760,6 +2833,8 @@ fn sync_box_select(
         }
         return;
     };
+    let (host, r) = sketch_area.host(q_area.iter().next(), &viewport_rect);
+    let rect = ViewportRect(r);
     let crossing = cur.x < start.x;
     let lo = start.min(cur).round();
     let hi = start.max(cur).round();
@@ -2802,7 +2877,7 @@ fn sync_box_select(
             (e, rebuild)
         }
         None => {
-            let Some(area) = q_area.iter().next() else {
+            let Some(area) = host else {
                 return;
             };
             let e = commands

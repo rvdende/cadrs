@@ -77,8 +77,10 @@ impl ImportReport {
     }
 }
 
-/// How close two ends must be to be one sketch point (mm).
-const JOIN: f64 = 1e-6;
+/// How close two ends must be to be one sketch point (mm): loose enough for files whose
+/// ends miss each other by rounding (CAM and older CAD exports write 4–6 decimals), far below
+/// any real feature.
+const JOIN: f64 = 5e-4;
 
 struct Builder {
     s: Sketch,
@@ -267,5 +269,31 @@ mod tests {
         let (s, _) = sketch_of(&d, DxfUnits::Millimeter, false);
         let (lo, hi) = s.points.values().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.pos.x), hi.max(p.pos.x)));
         assert!((lo + 10.0).abs() < 1e-9 && (hi - 10.0).abs() < 1e-9, "{lo} {hi}");
+    }
+
+    #[test]
+    fn slightly_gapped_ends_still_close_a_region() {
+        // A 30 × 20 rectangle of four LINEs whose ends miss each other by up to 0.0003 mm
+        // (rounded coordinates), and a hole: one region with a hole, its area the rectangle's.
+        let lines = [
+            ([0.0, 0.0], [30.0003, 0.0]),
+            ([30.0, 0.0002], [30.0, 20.0]),
+            ([29.9998, 20.0001], [0.0, 20.0]),
+            ([0.0, 19.9997], [0.0001, 0.0]),
+        ];
+        let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+        for (a, b) in lines {
+            dxf += &format!("0\nLINE\n8\n0\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n", a[0], a[1], b[0], b[1]);
+        }
+        dxf += "0\nCIRCLE\n8\n0\n10\n15.0\n20\n10.0\n40\n4.0\n0\nENDSEC\n0\nEOF\n";
+        let d = cadrs_drawing::dxf::read_dxf(&dxf).unwrap();
+        let (s, r) = sketch_of(&d, DxfUnits::Millimeter, true);
+        assert_eq!((r.lines, r.circles, r.skipped), (4, 1, 0));
+        // The four corners shared (plus the circle's centre).
+        assert_eq!(s.points.len(), 5);
+        let regions = cadrs_sketch::region::regions(&s);
+        let plate = regions.iter().find(|g| !g.holes.is_empty()).expect("the plate closes round its hole");
+        let want = 30.0 * 20.0 - std::f64::consts::PI * 16.0;
+        assert!((plate.area() - want).abs() < 0.05, "{} vs {want}", plate.area());
     }
 }
