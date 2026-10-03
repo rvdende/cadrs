@@ -177,6 +177,8 @@ impl Rebuilder {
         }
         // Each copy on its wall, kept with the model so every refold applies it again.
         let mut by_ctx: Vec<(usize, Vec<FormCopy>)> = Vec::new();
+        // Where each copy lands (the dialog draws a triad there): per copy (origin, Z), (X, 0).
+        let mut marks: Vec<([f64; 3], [f64; 3])> = Vec::new();
         for fr in frames.iter() {
             let o = v(fr.origin);
             // The nearest target face's plane.
@@ -195,6 +197,8 @@ impl Rebuilder {
                 if w.norm() > 1e-6 { w.normalize() } else { let vv = v(fr.v); (vv - n * vv.dot(&n)).normalize() }
             };
             let to = crate::mate::frame_from([on.x, on.y, on.z], [n.x, n.y, n.z], [ux.x, ux.y, ux.z]);
+            marks.push(([on.x, on.y, on.z], [n.x, n.y, n.z]));
+            marks.push(([ux.x, ux.y, ux.z], [0.0; 3]));
             let m = motion_between(&base, &to);
             // The wall it lands on, and the rules.
             let model = &state.sheet_metal[t.ctx].model;
@@ -224,7 +228,7 @@ impl Rebuilder {
                 to_wall(moved(&m, [w.x, w.y, w.z]))
             };
             let fp: Vec<P2> = footprint.outer.iter().map(|q| place(V3::new(q.x, q.y, 0.0))).collect();
-            check_footprint(model, wall_id, &cadrs_sheetmetal::poly::Polygon::new(fp), 1e-6 * size).map_err(|e| e.message())?;
+            check_footprint(model, wall_id, &cadrs_sheetmetal::poly::Polygon::new(fp.clone()), 1e-6 * size).map_err(|e| e.message())?;
             // The flat: outline and centermark, in the wall's 2D.
             let flines: Vec<FormLine> = lines
                 .iter()
@@ -236,7 +240,7 @@ impl Rebuilder {
             let wn = wall.surface.normal().unwrap_or_default();
             let up = (n.dot(&wn) > 0.0) != model.params.flip_direction_up;
             let local = local_to_wall(model, wall_id, &m).ok_or("Forms go on the flat faces of sheet metal walls")?;
-            let copy = FormCopy { wall: wall_id, local, center: to_wall(center), lines: flines, up };
+            let copy = FormCopy { wall: wall_id, local, center: to_wall(center), lines: flines, up, footprint: fp };
             match by_ctx.iter_mut().find(|(c, _)| *c == t.ctx) {
                 Some((_, v)) => v.push(copy),
                 None => by_ctx.push((t.ctx, vec![copy])),
@@ -261,6 +265,7 @@ impl Rebuilder {
         }
         let mut o = last.ok_or("The locations have no points")?;
         o.owned = owned;
+        o.arrows = marks;
         Ok(o)
     }
 }

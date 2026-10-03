@@ -126,7 +126,32 @@ fn a_rectangle_to_circle_loft_flattens_and_its_flat_matches_its_volume() {
     let part = b.parts.iter().find(|q| q.id.feature == f).expect("the loft's part");
     let flat_volume = ctx.flat.parts[0].area() * p.thickness;
     let v = volume(part);
-    assert!((v - flat_volume).abs() / v < 0.02, "folded {v} vs flat × T {flat_volume}");
+    // Planar facets meet at mitred facet joints (no bends: its steep edges fan). The folded part
+    // is exactly the walls' mitred slabs...
+    assert!(ctx.model.joints.iter().all(|j| j.bend().is_none()));
+    let slabs: f64 = ctx.model.walls.iter().map(|w| cadrs_sheetmetal::loft::mesh_volume(&cadrs_sheetmetal::loft::wall_slab(&ctx.model, w.id, &[]).unwrap())).sum();
+    assert!((v - slabs).abs() / v < 1e-6, "folded {v} vs its slabs {slabs}");
+    // ...and those are the flat times T, plus at each facet joint the mitre's two wedges
+    // (L T² tan(φ/2), φ the angle the walls turn by; taken off where the walls turn towards
+    // their material), to within the T³ terms where mitres meet at a corner.
+    let mut mitres = 0.0;
+    for j in &ctx.model.joints {
+        let JointKind::Tangent { on_a, .. } = j.kind else { continue };
+        let (wa, wb) = (ctx.model.wall(j.a).unwrap(), ctx.model.wall(j.b).unwrap());
+        let (na, nb) = (wa.surface.normal().unwrap(), wb.surface.normal().unwrap());
+        let phi = na.dot(&nb).clamp(-1.0, 1.0).acos();
+        let (a3, b3) = (wa.surface.point(on_a.a), wa.surface.point(on_a.b));
+        let d = (b3 - a3).normalize();
+        let n = wb.outline.outer.len() as f64;
+        let mid_b = wb.surface.point(cadrs_sheetmetal::poly::P2::from(wb.outline.outer.iter().fold(nalgebra::Vector2::zeros(), |s, q| s + q.coords) / n));
+        let x = mid_b - a3;
+        let into_b = x - d * x.dot(&d);
+        let sign = if into_b.dot(&na) > 0.0 { -1.0 } else { 1.0 };
+        mitres += sign * (b3 - a3).norm() * p.thickness * p.thickness * (phi / 2.0).tan();
+    }
+    let corners = ctx.model.walls.iter().map(|w| w.outline.outer.len()).sum::<usize>() as f64 * p.thickness.powi(3);
+    assert!((slabs - (flat_volume + mitres)).abs() < corners, "slabs {slabs} vs flat × T {flat_volume} + mitres {mitres} (corner terms ≤ {corners})");
+    assert!((v - (flat_volume + mitres)).abs() / v < 2e-3, "{}", (v - (flat_volume + mitres)) / v);
     // Fewer pieces with a coarser chordal tolerance.
     let walls = ctx.model.walls.len();
     st.set(f, FeatureKind::SheetMetalLoft(SheetMetalLoftFeature { chordal_tolerance: 4.0, ..x.clone() }));
@@ -291,32 +316,35 @@ fn save_flat(flat: &cadrs_sheetmetal::FlatPattern, title: &str, file: &str) {
 }
 
 #[test]
-fn louvers_on_a_converted_box_and_the_flats() {
-    // A 120 × 80 × 40 block converted (2 mm, material outside), ten louvers on its top wall.
+fn louvers_on_a_bracket_and_the_flats() {
+    // An L bracket (Sheet metal model Extrude of a Front-plane chain: a 140 base and a 50
+    // upright, 100 deep, 2 mm), ten louvers on its base.
     let mut st = Studio::new();
-    let s = st.sketch(PlaneRef::Top, vec![rect(0.0, 0.0, 120.0, 80.0)]);
-    let r = st.region(s, Vec2::new(60.0, 40.0));
-    let e = FeatureId::new();
-    st.h.execute(&mut st.d, &cadrs_core::commands::AddExtrude { element: st.el, feature: e, extrude: Default::default() }).unwrap();
-    st.h.execute(&mut st.d, &cadrs_core::commands::SetExtrude { element: st.el, feature: e, extrude: cadrs_core::samples::extrude_of(vec![r], 40.0), label: "Extrude".into() }).unwrap();
-    let block = st.ok().parts[0].clone();
+    let chain = st.sketch(
+        PlaneRef::Front,
+        vec![SketchOp::AddPolyline { points: vec![Vec2::new(0.0, 50.0), Vec2::new(0.0, 0.0), Vec2::new(140.0, 0.0)], closed: false, construction: false, label: "Add line" }],
+    );
     let p = Params { thickness: 2.0, bend_radius: 2.0, ..SheetMetalModelFeature::default_params() };
-    let sm = SheetMetalModelFeature { parts: vec![block.id], params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
+    let sm = SheetMetalModelFeature { operation: SheetMetalOp::Extrude, sketches: vec![chain], depth: 100.0, depth_expr: "100 mm".into(), symmetric: true, params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
     let smf = st.add("Sheet metal model", FeatureKind::SheetMetalModel(sm));
     let b = st.ok();
-    let top_part = b.parts.iter().filter(|q| q.id.feature == smf).max_by(|a, b| {
-        let z = |q: &Part| q.solid.positions.iter().map(|p| p[2]).fold(f64::MIN, f64::max) + q.solid.positions.iter().map(|p| p[2]).fold(f64::MAX, f64::min);
-        z(a).total_cmp(&z(b))
-    }).unwrap().clone();
-    let pts: Vec<SketchOp> = [35.0, 85.0].iter().flat_map(|x| [16.0, 28.0, 40.0, 52.0, 64.0].map(|y| SketchOp::AddPoint { pos: Vec2::new(*x, y) })).collect();
+    let bracket = b.parts.iter().find(|q| q.id.feature == smf).unwrap().clone();
+    let pts: Vec<SketchOp> = [50.0, 105.0].iter().flat_map(|x| [-32.0, -16.0, 0.0, 16.0, 32.0].map(|y| SketchOp::AddPoint { pos: Vec2::new(*x, y) })).collect();
     let loc = st.sketch(PlaneRef::Top, pts);
-    let top = face_near(&top_part, [60.0, 40.0, 42.0]);
+    // The base's upper face.
+    let s = &bracket.solid;
+    let i = (0..s.faces.len())
+        .filter(|i| s.faces[*i].center.is_some_and(|c| c[0] > 20.0 && c[0] < 130.0 && c[1].abs() < 1.0))
+        .max_by(|a, b| s.faces[*a].center.unwrap()[2].total_cmp(&s.faces[*b].center.unwrap()[2]))
+        .unwrap();
+    let top = FaceRef { part: bracket.id, face: s.faces[i].name, seed: s.faces[i].center.unwrap() };
     st.add("Form", FeatureKind::Form(louver(loc, top)));
     let b = st.ok();
+    assert_eq!(b.parts.iter().filter(|q| q.id.feature == smf).count(), 1);
     let ctx = b.sheet_metal.iter().find(|c| c.feature == smf).unwrap();
     let forms: usize = ctx.flat.parts.iter().map(|p| p.forms.len()).sum();
     assert_eq!(forms, 10);
-    save_flat(&ctx.flat, "Louvers on the converted box's top wall (Form 1)", "louvers");
+    save_flat(&ctx.flat, "Louvers on the bracket's base (Form 1)", "louvers");
     // The loft's flat.
     let mut st = Studio::new();
     let (r1, r2) = rect_and_circle(&mut st);
@@ -331,4 +359,212 @@ fn louvers_on_a_converted_box_and_the_flats() {
     let b = st.ok();
     let ctx = b.sheet_metal.iter().find(|c| c.feature == f).unwrap();
     save_flat(&ctx.flat, "Sheet metal loft 1: rectangle to circle", "loft");
+}
+
+/// A Form of library `form` (its default variables) on the points of `pts`, on face `target`.
+fn library_form(form: LibraryForm, pts: FeatureId, target: FaceRef) -> FormFeature {
+    FormFeature {
+        form: Some(FormPick { source: FormSource::Library(form), name: form.label().into(), document_name: LIBRARY_NAME.into(), studio: vec![] }),
+        variables: form.variables(),
+        locations: vec![FormLocation::SketchPoints(pts)],
+        targets: vec![target],
+        flip: false,
+    }
+}
+
+#[test]
+fn forms_go_into_the_flat_dxf_on_their_own_layers() {
+    use cadrs_core::flat_export::{FlatExportOptions, centermark, flat_page};
+    use cadrs_drawing::sheet_sketch::Entity;
+    let mut st = Studio::new();
+    let (sm, pts, part) = plate(&mut st, &[(40.0, 25.0), (40.0, 55.0)]);
+    let top = face_near(&part, [60.0, 40.0, 1.5]);
+    st.add("Form", FeatureKind::Form(louver(pts, top)));
+    let dimple_at = st.sketch(PlaneRef::Top, vec![SketchOp::AddPoint { pos: Vec2::new(90.0, 40.0) }]);
+    st.add("Form", FeatureKind::Form(library_form(LibraryForm::Dimple, dimple_at, top)));
+    let b = st.ok();
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+    let flat = &ctx.flat.parts[0];
+    assert_eq!(flat.forms.len(), 3);
+    let on = FlatExportOptions { form_outlines: true, form_centermarks: true, ..Default::default() };
+    let page = flat_page(flat, &[], &on, "Plate");
+    for v in cadrs_drawing::dxf::DxfVersion::ALL {
+        let back = cadrs_drawing::dxf::read_dxf(&cadrs_drawing::dxf::write_dxf_version(&page, v)).unwrap();
+        let on_layer = |name: &str| back.entities.iter().zip(&back.layers).filter(|(_, l)| l.as_str() == name).map(|(e, _)| e.clone()).collect::<Vec<_>>();
+        // Each louver's outline is its 40 × 8 profile (four lines), the dimple's a Ø16 circle.
+        let outlines = on_layer("FORM_OUTLINES");
+        let lines: Vec<&Entity> = outlines.iter().filter(|e| matches!(e, Entity::Line { .. })).collect();
+        let circles: Vec<f64> = outlines.iter().filter_map(|e| if let Entity::Circle { radius, .. } = e { Some(*radius) } else { None }).collect();
+        assert_eq!((lines.len(), circles.len()), (8, 1), "{outlines:?}");
+        assert!((circles[0] - 8.0).abs() < 1e-6, "{circles:?}");
+        let length: f64 = lines.iter().map(|e| if let Entity::Line { a, b } = e { (a[0] - b[0]).hypot(a[1] - b[1]) } else { 0.0 }).sum();
+        assert!((length - 2.0 * (2.0 * 40.0 + 2.0 * 8.0)).abs() < 1e-6, "{length}");
+        // A cross on each form's centre.
+        let marks = on_layer("FORM_CENTERMARKS");
+        assert_eq!(marks.len(), 6);
+        for f in &flat.forms {
+            let (h, w) = centermark(f);
+            for s in [h, w] {
+                assert!(marks.iter().any(|e| matches!(e, Entity::Line { a, b } if (a[0] - s.a.x).abs() < 1e-9 && (a[1] - s.a.y).abs() < 1e-9 && (b[0] - s.b.x).abs() < 1e-9 && (b[1] - s.b.y).abs() < 1e-9)), "{s:?} in {marks:?}");
+            }
+            let c = (s_mid(&h), s_mid(&w));
+            assert!((c.0.0 - f.center.x).abs() < 1e-9 && (c.1.1 - f.center.y).abs() < 1e-9);
+        }
+    }
+    // Off (Onshape's defaults): neither layer.
+    let page = flat_page(flat, &[], &FlatExportOptions::default(), "Plate");
+    let dxf = cadrs_drawing::dxf::write_dxf(&page);
+    assert!(!dxf.contains("FORM_OUTLINES") && !dxf.contains("FORM_CENTERMARKS"));
+    // Only the outlines.
+    let page = flat_page(flat, &[], &FlatExportOptions { form_outlines: true, ..Default::default() }, "Plate");
+    let back = cadrs_drawing::dxf::read_dxf(&cadrs_drawing::dxf::write_dxf(&page)).unwrap();
+    assert!(back.layers.iter().any(|l| l == "FORM_OUTLINES") && !back.layers.iter().any(|l| l == "FORM_CENTERMARKS"));
+}
+
+fn s_mid(s: &cadrs_sheetmetal::poly::Seg2) -> (f64, f64) {
+    ((s.a.x + s.b.x) / 2.0, (s.a.y + s.b.y) / 2.0)
+}
+
+#[test]
+fn the_dimple_and_the_emboss_add_their_closed_form_volumes() {
+    use cadrs_core::samples::sheetmetal_forms::{dimple, emboss};
+    let t = params().thickness;
+    for form in [LibraryForm::Dimple, LibraryForm::Emboss] {
+        let mut st = Studio::new();
+        let (_, pts, part) = plate(&mut st, &[(60.0, 40.0)]);
+        let before = volume(&part);
+        let top = face_near(&part, [60.0, 40.0, 1.5]);
+        st.add("Form", FeatureKind::Form(library_form(form, pts, top)));
+        let b = st.ok();
+        let after = volume(b.parts.iter().find(|q| q.id == part.id).unwrap());
+        let v = |n: &str| form.variables().into_iter().find(|x| x.name == n).unwrap().value;
+        let expected = match form {
+            LibraryForm::Dimple => dimple(v("Diameter"), v("Height"), t).added_volume(),
+            _ => emboss(v("Length"), v("Width"), v("Height"), t).added_volume(),
+        };
+        let added = after - before;
+        assert!(expected > 1.0);
+        assert!((added - expected).abs() < 1e-6 * before, "{}: added {added} vs {expected}", form.label());
+    }
+}
+
+#[test]
+fn a_current_document_form_follows_its_studio_and_needs_a_thickness_variable() {
+    use cadrs_core::commands::{AddElement, NewElementKind};
+    let mut st = Studio::new();
+    let (sm, pts, part) = plate(&mut st, &[(60.0, 40.0)]);
+    let top = face_near(&part, [60.0, 40.0, 1.5]);
+    // The user's own form, in a Part Studio of this document (built as the library's emboss).
+    let el = ElementId::new();
+    st.h.execute(&mut st.d, &AddElement { id: el, kind: NewElementKind::PartStudio, name: Some("My emboss".into()), after: None }).unwrap();
+    cadrs_core::samples::sheetmetal_forms::build_in(&mut cadrs_core::studio::DocHistory(&mut st.d, &mut st.h), el, LibraryForm::Emboss, &LibraryForm::Emboss.variables(), 1.0).unwrap();
+    let studio = st.d.element(el).unwrap().features().to_vec();
+    let x = FormFeature {
+        form: Some(FormPick { source: FormSource::Current { element: el }, name: "My emboss".into(), document_name: st.d.name.clone(), studio: studio.clone() }),
+        variables: Vec::new(),
+        locations: vec![FormLocation::SketchPoints(pts)],
+        targets: vec![top],
+        flip: false,
+    };
+    let f = st.add("Form", FeatureKind::Form(x));
+    let top_z = |b: &Build| b.parts.iter().find(|q| q.id == part.id).unwrap().solid.positions.iter().map(|p| p[2]).fold(f64::MIN, f64::max);
+    let b = st.ok();
+    assert!((top_z(&b) - (1.5 + 2.5)).abs() < 1e-6, "{}", top_z(&b));
+    // The form made taller in its own Part Studio (its add part's extrude, 1 under the origin
+    // to 4 above it): the Form follows at the next rebuild.
+    let add = cadrs_core::samples::sheetmetal_forms::add_part(LibraryForm::Emboss).feature;
+    let FeatureKind::Extrude(mut e) = studio.iter().find(|g| g.id == add).unwrap().kind.clone() else { panic!("an extrude") };
+    e.depth = 5.0;
+    e.depth_expr = "5 mm".into();
+    st.h.execute(&mut st.d, &cadrs_core::commands::SetExtrude { element: el, feature: add, extrude: e, label: "Extrude".into() }).unwrap();
+    let b = st.ok();
+    assert!((top_z(&b) - (1.5 + 4.0)).abs() < 1e-6, "the edit propagated: {}", top_z(&b));
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+    assert_eq!(ctx.flat.parts[0].forms.len(), 1);
+    // Without a Length variable named thickness it is no form: a clear error.
+    let tv = studio.iter().find(|g| matches!(&g.kind, FeatureKind::Variable(v) if v.name == "thickness")).unwrap().clone();
+    let FeatureKind::Variable(mut renamed) = tv.kind.clone() else { unreachable!() };
+    renamed.name = "sheet".into();
+    st.h.execute(&mut st.d, &SetFeature { element: el, feature: tv.id, kind: FeatureKind::Variable(renamed), label: "Rename".into() }).unwrap();
+    let b = st.build();
+    let why = b.errors.iter().find(|(id, _)| *id == f).map(|(_, w)| w.clone()).unwrap_or_default();
+    assert!(why.contains("thickness") && why.contains("My emboss"), "{why:?}");
+}
+
+fn edge_near(part: &Part, p: [f64; 3]) -> cadrs_core::document::EdgeRef {
+    let e = part.solid.edges.iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p))).unwrap();
+    assert!(e.distance(p) < 1e-3, "no edge at {p:?}");
+    cadrs_core::document::EdgeRef { part: part.id, edge: e.name, seed: p }
+}
+
+#[test]
+fn a_loft_added_on_the_models_edge_bends_onto_it_as_one_part() {
+    loft_add_on_an_edge(false);
+}
+
+#[test]
+fn a_loft_added_on_the_far_faces_edge_bends_onto_it_too() {
+    loft_add_on_an_edge(true);
+}
+
+fn loft_add_on_an_edge(far: bool) {
+    use cadrs_core::sheetmetal_loft::SmLoftOp;
+    let mut st = Studio::new();
+    let (sm, _, part) = plate(&mut st, &[(10.0, 10.0)]);
+    let b = st.ok();
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+    // The edge at x = 120 on the face the model is defined on (or on the sheet's other face).
+    let cadrs_sheetmetal::model::Surface::Planar { origin, .. } = ctx.model.walls[0].surface else { panic!() };
+    let zs: Vec<f64> = part.solid.positions.iter().map(|p| p[2]).collect();
+    let (zlo, zhi) = (zs.iter().cloned().fold(f64::MAX, f64::min), zs.iter().cloned().fold(f64::MIN, f64::max));
+    let z = if !far { origin.z } else if (origin.z - zlo).abs() < 1e-6 { zhi } else { zlo };
+    let edge = edge_near(&part, [120.0, 40.0, z]);
+    // Profile 2: a 60 long line 40 above the plate's face and 30 out from its edge.
+    let frame = PlaneFrame { origin: [0.0, 0.0, origin.z + 40.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
+    let plane = cadrs_core::plane::PlaneFeature {
+        entities: vec![cadrs_core::plane::PlaneEntity::Plane(PlaneRef::Top)],
+        offset: origin.z + 40.0,
+        offset_expr: format!("{} mm", origin.z + 40.0),
+        ..Default::default()
+    };
+    let pf = st.add("Plane", FeatureKind::Plane(plane));
+    let s = st.sketch(
+        PlaneRef::Feature(FeaturePlane::new(pf.0, frame)),
+        vec![SketchOp::AddPolyline { points: vec![Vec2::new(150.0, 10.0), Vec2::new(150.0, 70.0)], closed: false, construction: false, label: "Add line" }],
+    );
+    let g = st.d.element(st.el).unwrap().feature(s).unwrap().sketch().unwrap().geometry.clone();
+    let (curve, _) = g.curves.iter().next().unwrap();
+    let x = SheetMetalLoftFeature {
+        op: SmLoftOp::Add,
+        merge_scope: vec![part.id],
+        profile1: vec![LoftItem::Edge(edge)],
+        profile2: vec![LoftItem::Curve(cadrs_core::sheetmetal::CurveRef { sketch: s, curve })],
+        params: params(),
+        exprs: SheetMetalExprs::of(&params()),
+        ..Default::default()
+    };
+    let f = st.add("Sheet metal loft", FeatureKind::SheetMetalLoft(x));
+    let b = st.ok();
+    // One part (the plate's, its id kept), one flat.
+    let parts: Vec<&Part> = b.parts.iter().filter(|q| q.id.feature == sm || q.id.feature == f).collect();
+    assert_eq!(parts.len(), 1, "{:?}", parts.iter().map(|q| q.id).collect::<Vec<_>>());
+    assert_eq!(parts[0].id, part.id);
+    let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+    assert!(ctx.flat.is_ok(), "{:?}", ctx.flat.errors);
+    assert_eq!(ctx.flat.parts.len(), 1, "the loft wall lies flat with the plate");
+    // Joined by a bend of the model's radius, not merely united.
+    let plate_wall = ctx.model.walls[0].id;
+    let bend = ctx.model.joints.iter().find(|j| (j.a == plate_wall || j.b == plate_wall) && j.bend().is_some()).expect("a bend onto the plate");
+    let r = bend.bend().unwrap();
+    assert!((r.radius - params().bend_radius).abs() < 1e-9);
+    let rise = (40.0f64).atan2(30.0);
+    assert!((r.angle - rise).abs() < 1e-6, "{} vs {rise}", r.angle);
+    // The folded part has the flat's volume (the bend region's to within its K factor).
+    let p = params();
+    let flat_volume = ctx.flat.parts[0].area() * p.thickness;
+    // (A bend of angle θ, K factor K and length L holds θ (r + T/2) T L of sheet; its flat
+    // θ (r + K T) T L.)
+    let k_err = rise * (0.5 - p.k_factor) * p.thickness * p.thickness * 80.0;
+    let v = volume(parts[0]);
+    assert!((v - flat_volume).abs() <= k_err.abs() + 1e-6 * v, "folded {v} vs flat × T {flat_volume} (K error {k_err})");
 }

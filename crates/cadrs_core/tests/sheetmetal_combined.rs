@@ -401,3 +401,82 @@ fn forms_stay_on_their_wall_through_a_later_refold() {
     let louvers = formed - 120.0 * 80.0 * 2.0;
     assert!((volume(&b.parts[0]) - plain - louvers).abs() < 1e-3 * louvers.abs().max(1.0), "{} vs {} + {louvers}", volume(&b.parts[0]), plain);
 }
+
+/// A Bend along the line `x = at` across the 120 × 80 plate's top face.
+fn bend_across(st: &mut Studio, plate: &Part, at: f64, hold_opposite: bool) -> FeatureId {
+    let s = st.sketch(PlaneRef::Top, vec![SketchOp::AddPolyline { points: vec![Vec2::new(at, -10.0), Vec2::new(at, 90.0)], closed: false, construction: false, label: "Add line" }]);
+    let g = &st.d.element(st.el).unwrap().feature(s).unwrap().sketch().unwrap().geometry;
+    let (curve, _) = g.curves.iter().next().unwrap();
+    let line = LineRef::Sketch(CurveRef { sketch: s, curve });
+    let top = face_near(plate, [60.0, 40.0, 2.0]);
+    st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(BendFeature { line: Some(line), face: Some(top), alignment: BendAlignment::Inner, hold_opposite, ..Default::default() })))
+}
+
+fn louver_at(st: &mut Studio, plate: &Part, points: &[(f64, f64)]) -> FeatureId {
+    let pts = st.sketch(PlaneRef::Top, points.iter().map(|(x, y)| SketchOp::AddPoint { pos: Vec2::new(*x, *y) }).collect());
+    let top = face_near(plate, [60.0, 40.0, 2.0]);
+    let form = FormFeature {
+        form: Some(FormPick { source: FormSource::Library(LibraryForm::Louver), name: "Louver".into(), document_name: LIBRARY_NAME.into(), studio: vec![] }),
+        variables: LibraryForm::Louver.variables(),
+        locations: vec![FormLocation::SketchPoints(pts)],
+        targets: vec![top],
+        flip: false,
+    };
+    st.add("Form", FeatureKind::Form(form))
+}
+
+#[test]
+fn a_later_bend_through_a_louver_is_an_error() {
+    let mut st = Studio::new();
+    let (_, plate) = st.plate(120.0, 80.0);
+    louver_at(&mut st, &plate, &[(60.0, 40.0)]);
+    let part = st.ok().parts[0].clone();
+    // The louver runs 40 along x from x = 40 to 80: a bend line at x = 60 cuts through it.
+    let bend = bend_across(&mut st, &part, 60.0, false);
+    let b = st.build();
+    let why = b.errors.iter().find(|(id, _)| *id == bend).map(|(_, w)| w.clone()).unwrap_or_default();
+    assert!(why.contains("Form 1") && why.contains("can't touch"), "{why:?}");
+}
+
+#[test]
+fn a_bend_that_moves_the_formed_wall_keeps_the_form_on_it() {
+    // The louver at x = 90 (from 70 to 110); the bend at x = 30, far from it. Whichever side the
+    // Bend turns, the louver stays on its piece of the plate.
+    let mut moved_once = false;
+    for hold_opposite in [false, true] {
+        let mut st = Studio::new();
+        let (sm, plate) = st.plate(120.0, 80.0);
+        louver_at(&mut st, &plate, &[(90.0, 40.0)]);
+        let b = st.ok();
+        let formed = volume(&b.parts[0]) - predicted(&b, &b.parts[0]);
+        // The formed wall's plane, and whether the hood stands the louver's height (4) above
+        // the sheet (2) there.
+        let plane = |b: &Build| {
+            let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+            let w = ctx.model.wall(ctx.flat.parts.iter().flat_map(|p| p.forms.iter()).next().unwrap().wall).unwrap();
+            let cadrs_sheetmetal::model::Surface::Planar { origin, .. } = w.surface else { panic!() };
+            (origin, w.surface.normal().unwrap())
+        };
+        let raised = |b: &Build| {
+            let (o, n) = plane(b);
+            b.parts[0].solid.positions.iter().any(|p| ((cadrs_sheetmetal::model::P3::new(p[0], p[1], p[2]) - o).dot(&n).abs() - 6.0).abs() < 0.05)
+        };
+        assert!(raised(&b));
+        let n0 = plane(&b).1;
+        let part = b.parts[0].clone();
+        bend_across(&mut st, &part, 30.0, hold_opposite);
+        let b = st.ok();
+        assert_eq!(b.parts.len(), 1);
+        let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
+        assert_eq!(ctx.flat.parts.iter().map(|p| p.forms.len()).sum::<usize>(), 1, "the louver is still in the flat");
+        // Still the louver's change of volume: it was cut and raised again.
+        let now = volume(&b.parts[0]) - predicted(&b, &b.parts[0]);
+        assert!((now - formed).abs() < 1e-3 * formed.abs().max(1.0), "{now} vs {formed}");
+        // On its wall, wherever that went.
+        assert!(raised(&b), "the hood stands on its wall");
+        if plane(&b).1.dot(&n0) < 0.99 {
+            moved_once = true;
+        }
+    }
+    assert!(moved_once, "one of the two bends moves the louver's side");
+}

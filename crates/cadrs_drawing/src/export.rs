@@ -57,10 +57,14 @@ pub enum Layer {
     BendDown,
     BendTangent,
     FlatSketch,
+    /// P3I.9 (SM20.3): a flat pattern's form outlines and centermarks ("Include form feature
+    /// outlines / centermarks").
+    FormOutline,
+    FormCentermark,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 21] = [
+    pub const ALL: [Layer; 23] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -82,6 +86,8 @@ impl Layer {
         Layer::BendDown,
         Layer::BendTangent,
         Layer::FlatSketch,
+        Layer::FormOutline,
+        Layer::FormCentermark,
     ];
 
     pub fn name(self) -> &'static str {
@@ -107,6 +113,8 @@ impl Layer {
             Layer::BendDown => "BEND_DOWN",
             Layer::BendTangent => "BEND_TANGENT",
             Layer::FlatSketch => "FLAT_SKETCH",
+            Layer::FormOutline => "FORM_OUTLINES",
+            Layer::FormCentermark => "FORM_CENTERMARKS",
         }
     }
 
@@ -125,7 +133,7 @@ impl Layer {
     /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
     /// drawings' files stay as they were).
     pub fn is_flat(self) -> bool {
-        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch)
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch | Layer::FormOutline | Layer::FormCentermark)
     }
 
     /// The layer's AutoCAD colour index (7: black/white).
@@ -137,6 +145,8 @@ impl Layer {
             Layer::BendDown => 1,
             Layer::BendTangent => 8,
             Layer::FlatSketch => 4,
+            Layer::FormOutline => 30,
+            Layer::FormCentermark => 2,
             _ => 7,
         }
     }

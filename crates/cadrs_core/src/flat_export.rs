@@ -9,12 +9,17 @@
 //! - `BEND_UP` / `BEND_DOWN`: the bend centrelines over material, by direction (phantom and
 //!   hidden linetypes, green and red) — *Include bend centerlines*;
 //! - `BEND_TANGENT`: the bend tangent lines — *Include bend tangent lines*;
-//! - `FLAT_SKETCH`: the visible sketches on the flat pattern — *Include visible sketches*.
+//! - `FLAT_SKETCH`: the visible sketches on the flat pattern — *Include visible sketches*;
+//! - `FORM_OUTLINES`: the outlines of the forms placed on the part (P3I.9, SM20.3: the form's
+//!   construction-only Tag sketch, or else its footprint; a round one as CIRCLE) — *Include form
+//!   feature outlines*;
+//! - `FORM_CENTERMARKS`: a centermark (a cross) at each form's origin — *Include form feature
+//!   centermarks*.
 //!
 //! *Set z-height to zero and normals to positive* holds always (the writer writes 2D entities
 //! with z 0 and the default +Z normal); *Export splines as polylines* only concerns sketch
-//! splines, which are written as polylines anyway. Counterbore/countersink lines and form
-//! features don't exist in cadrs yet (forms are P3I.9): their options are kept but add nothing.
+//! splines, which are written as polylines anyway. Counterbore/countersink lines don't exist in
+//! cadrs's flats yet: that option is kept but adds nothing.
 //!
 //! Several parts (scope *All flat pattern parts in the current model* or *in the Part Studio*)
 //! are laid out side by side in one file, [`GAP`] apart, or written as one file each.
@@ -229,6 +234,15 @@ fn loop_shapes(l: &[P2]) -> Vec<Shape> {
     out
 }
 
+/// A form's centermark: a cross on its centre along the flat's axes, a fifth of the outline's
+/// reach each way (1 to 6 mm).
+pub fn centermark(f: &cadrs_sheetmetal::forms::FlatForm) -> (Seg2, Seg2) {
+    let reach = f.lines.iter().flat_map(|l| l.points.iter()).map(|p| (p - f.center).norm()).fold(0.0, f64::max);
+    let h = (0.2 * reach).clamp(1.0, 6.0);
+    let c = f.center;
+    (Seg2::new(P2::new(c.x - h, c.y), P2::new(c.x + h, c.y)), Seg2::new(P2::new(c.x, c.y - h), P2::new(c.x, c.y + h)))
+}
+
 fn line(s: &Seg2) -> Shape {
     Shape::Line { a: [s.a.x, s.a.y], b: [s.b.x, s.b.y] }
 }
@@ -261,6 +275,26 @@ pub fn flat_page(part: &FlatPart, sketches: &[&Sketch], o: &FlatExportOptions, n
             for s in &b.tangent_visible {
                 push(line(s), Layer::BendTangent);
             }
+        }
+    }
+    for f in &part.forms {
+        if o.form_outlines {
+            for l in &f.lines {
+                if l.closed && l.points.len() >= 3 {
+                    for sh in loop_shapes(&l.points) {
+                        push(sh, Layer::FormOutline);
+                    }
+                } else {
+                    for w in l.points.windows(2) {
+                        push(line(&Seg2::new(w[0], w[1])), Layer::FormOutline);
+                    }
+                }
+            }
+        }
+        if o.form_centermarks {
+            let (a, b) = centermark(f);
+            push(line(&a), Layer::FormCentermark);
+            push(line(&b), Layer::FormCentermark);
         }
     }
     if o.sketches {

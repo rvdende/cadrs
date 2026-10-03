@@ -80,6 +80,21 @@ pub struct LoftConnection {
     pub rip: bool,
 }
 
+impl LoftConnection {
+    /// An end not picked yet (Add connection: the user picks a point on each profile).
+    pub const PENDING: f64 = -1.0;
+
+    /// A connection just added: neither end picked.
+    pub fn pending() -> Self {
+        LoftConnection { t1: Self::PENDING, t2: Self::PENDING, rip: false }
+    }
+
+    /// Both ends picked (only these take part in the loft).
+    pub fn is_complete(&self) -> bool {
+        self.t1 >= 0.0 && self.t2 >= 0.0
+    }
+}
+
 /// New or Add (the dialog's tabs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SmLoftOp {
