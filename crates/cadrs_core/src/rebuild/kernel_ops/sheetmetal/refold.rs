@@ -36,9 +36,10 @@ pub(in crate::rebuild) fn source_of(id: FeatureId) -> u64 {
     naming::stable_hash(id.0.as_bytes())
 }
 
-/// `state` with `ctx` as its model's context.
+/// `state` with `ctx` as its model's context (and its flat pattern planes, P3I.6).
 pub(in crate::rebuild) fn with_context(state: &State, ctx: SheetMetalContext) -> State {
     let mut next = state.clone();
+    super::super::sheetmetal_flat::register_flat_planes(&mut next, &ctx);
     let mut all = (*next.sheet_metal).clone();
     match all.iter_mut().find(|c| c.feature == ctx.feature) {
         Some(c) => *c = ctx,

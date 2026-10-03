@@ -402,6 +402,9 @@ pub struct Model {
     pub corner_overrides: Vec<CornerOverride>,
     #[serde(default)]
     pub bend_relief_overrides: Vec<BendReliefOverride>,
+    /// P3I.6: material removed in the flat (SM14, [`crate::flat_edit`]).
+    #[serde(default)]
+    pub flat_cuts: Vec<crate::flat_edit::FlatCut>,
 }
 
 impl Model {
@@ -1168,6 +1171,7 @@ impl SharpBuilder {
             fixed: None,
             corner_overrides: Vec::new(),
             bend_relief_overrides: Vec::new(),
+            flat_cuts: Vec::new(),
         })
     }
 }

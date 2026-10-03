@@ -410,7 +410,8 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         | FeatureKind::Mirror(_)
         | FeatureKind::Import(_)
         | FeatureKind::Derived(_)
-        | FeatureKind::Composite(_) => {}
+        | FeatureKind::Composite(_)
+        | FeatureKind::FlatExtrude(_) => {}
     }
 }
 

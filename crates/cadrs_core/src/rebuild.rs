@@ -992,6 +992,8 @@ impl Rebuilder {
                     uses: Vec::new(),
                 }
             }
+            // P3I.6 (SM14.3): an ordinary Extrude can't take a flat-pattern sketch.
+            FeatureKind::Extrude(e) if crate::sheetmetal_flat::on_flat(before, &e.sketches()) => fail(crate::sheetmetal_flat::MODEL_SPACE.into()),
             #[cfg(feature = "occt")]
             FeatureKind::Extrude(e) => match self.extrude(before, f.id, e, state) {
                 Ok(o) => o,
@@ -1072,6 +1074,11 @@ impl Rebuilder {
             FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, &f.name, x, state).unwrap_or_else(fail),
             #[cfg(not(feature = "occt"))]
             FeatureKind::SheetMetalTool(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.6.
+            #[cfg(feature = "occt")]
+            FeatureKind::FlatExtrude(x) => self.flat_extrude(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::FlatExtrude(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
@@ -1332,6 +1339,7 @@ mod kernel_ops {
     mod sheetmetal_form;
     mod sheetmetal_loft;
     mod sheetmetal_features;
+    mod sheetmetal_flat;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;

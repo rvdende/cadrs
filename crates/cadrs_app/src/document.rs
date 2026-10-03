@@ -3024,6 +3024,8 @@ fn rebuild_feature_rows(
                 }
                 cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
                 cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
+                // P3I.6: a flat pattern extrude is an Extrude in the list.
+                cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,
@@ -3593,6 +3595,12 @@ fn on_feature_context_menu(
         // P3F.2 (P3.2): the sketch flat, for cutting machines.
         menu = menu.item(MenuItem::new("feature-export-dxf", "Export as DXF/DWG…").icon("file-export"));
     }
+    // P3I.6 (SM14.1, SM15.1): a Sheet metal model's flat pattern, until the flat view's menu (P3I.3).
+    if el.and_then(|el| el.feature(row.0)).is_some_and(|f| matches!(f.kind, cadrs_core::FeatureKind::SheetMetalModel(_))) {
+        menu = menu
+            .item(MenuItem::new("feature-flat-sketch", "New sketch on flat pattern").icon("sketch").disabled(in_dialog))
+            .item(MenuItem::new("feature-flat-export", "Export DXF/DWG of flat pattern…").icon("flat-pattern"));
+    }
     menu = menu.separator().item(MenuItem::new("feature-add-to-folder", "Add selection to folder…")).separator();
     if is_sketch {
         menu = menu.item(if shown {
@@ -3657,6 +3665,17 @@ fn on_feature_menu_action(
         "feature-copy-sketch" => commands.queue(move |world: &mut World| crate::feature_menu::copy_sketch(world, id)),
         "feature-export-dxf" => commands.queue(move |world: &mut World| {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Sketch(id))
+        }),
+        // P3I.6.
+        "feature-flat-sketch" => commands.queue(move |world: &mut World| crate::flat_ui::begin_flat_sketch(world, id, 0)),
+        "feature-flat-export" => commands.queue(move |world: &mut World| match crate::flat_export_dialog::first_part(world, id) {
+            Some(p) => crate::flat_export_dialog::open(world, p),
+            None => {
+                let theme = world.resource::<cadrs_ui::Theme>().clone();
+                let mut commands = world.commands();
+                cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::warning("The sheet metal model has no flat pattern part").name("flat-export-toast"));
+                world.flush();
+            }
         }),
         "feature-show-dimensions" | "feature-hide-dimensions" => {
             commands.queue(move |world: &mut World| crate::feature_menu::toggle_dimensions(world, id))

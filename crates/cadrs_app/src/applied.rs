@@ -100,6 +100,8 @@ pub enum AppliedKind {
     SmFeature(crate::sheetmetal_features_ui::SmTool),
     /// P3I.5: the sheet metal features after it (`crate::sheetmetal_tools_ui`).
     SheetMetalTool(crate::sheetmetal_tools_ui::SmTool),
+    /// P3I.6: the flat pattern extrude (`crate::flat_ui`).
+    FlatExtrude,
 }
 
 impl AppliedKind {
@@ -125,6 +127,7 @@ impl AppliedKind {
             k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::Sm9Kind::of(k).map(Self::Sm9),
             FeatureKind::SheetMetal(x) => Some(Self::SmFeature(crate::sheetmetal_features_ui::SmTool::of(x))),
             FeatureKind::SheetMetalTool(x) => Some(Self::SheetMetalTool(crate::sheetmetal_tools_ui::SmTool::of(x))),
+            FeatureKind::FlatExtrude(_) => Some(Self::FlatExtrude),
             _ => None,
         }
     }
@@ -223,6 +226,8 @@ pub enum AppliedField {
     /// P3I.5: a field of the sheet metal features after the model (`crate::sheetmetal_tools_ui`
     /// numbers them).
     SmTool(u8),
+    /// P3I.6: the flat pattern extrude's regions.
+    FlatRegions,
 }
 
 /// The applied feature whose dialog is open.
@@ -362,6 +367,7 @@ impl AppliedSession {
             AppliedField::HelixEntity => PickFilter { faces: true, edges: true, sketch_curves: true, connectors: true, ..none },
             AppliedField::FillEdges => PickFilter { edges: true, sketch_curves: true, ..none },
             AppliedField::Sm9(f) => crate::sheetmetal_p3i9_ui::pick_filter(f, none),
+            AppliedField::FlatRegions => PickFilter { regions: true, ..none },
             f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),
             f => crate::sheetmetal_ui::pick_filter(f, cadrs_core::document::EndType::Blind, none)
                 .or_else(|| crate::sheetmetal_features_ui::pick_filter(f, none))
@@ -426,7 +432,8 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
             AppliedKind::SmFeature(t) => crate::sheetmetal_features_ui::initial(world, t, &picked),
             _ => None,
         })
-        .or_else(|| crate::sheetmetal_tools_ui::initial(world, kind, &picked));
+        .or_else(|| crate::sheetmetal_tools_ui::initial(world, kind, &picked))
+        .or_else(|| (kind == AppliedKind::FlatExtrude).then(|| crate::flat_ui::initial(world, &picked)).flatten());
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -486,7 +493,8 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::SheetMetal
         | AppliedKind::Sm9(_)
         | AppliedKind::SmFeature(_)
-        | AppliedKind::SheetMetalTool(_) => {
+        | AppliedKind::SheetMetalTool(_)
+        | AppliedKind::FlatExtrude => {
             let Some((base, kind, field)) = advanced else { return };
             (AddFeature { element, feature, base_name: base.into(), kind }, field)
         }
@@ -553,6 +561,7 @@ pub fn edit(world: &mut World, feature: FeatureId) {
         AppliedKind::Sm9(_) => crate::sheetmetal_p3i9_ui::first_field(&before.kind),
         AppliedKind::SmFeature(_) => AppliedField::Smf(crate::sheetmetal_features_ui::SmfField::Edges),
         AppliedKind::SheetMetalTool(t) => crate::sheetmetal_tools_ui::first_field(t),
+        AppliedKind::FlatExtrude => AppliedField::FlatRegions,
     };
     start(world, element, feature, kind, false, mark, Some(before), field);
 }
@@ -850,6 +859,11 @@ fn applied_picks(
                 }
                 (k @ FeatureKind::SheetMetalTool(_), _) => {
                     if !crate::sheetmetal_tools_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::FlatExtrude(_), _) => {
+                    if !crate::flat_ui::pick(world, k, field, pick) {
                         return;
                     }
                 }

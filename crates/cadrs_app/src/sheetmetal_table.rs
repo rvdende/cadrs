@@ -1118,6 +1118,8 @@ fn on_context_menu(ev: On<ContextMenuRequested>, q_row: Query<&RowRef>, q_flat: 
             .min_width(230.0)
             .item_height(22.0)
             .text_only()
+            .item(MenuItem::new("smt-flat-sketch", "New sketch").icon("sketch"))
+            .item(MenuItem::new("smt-flat-export", "Export DXF/DWG of flat pattern"))
             .item(MenuItem::new("smt-flat-drawing", "Create drawing of flat pattern"))
             .separator()
             .item(MenuItem::new("smt-zoom-fit", "Zoom to fit"));
@@ -1176,6 +1178,18 @@ fn on_menu_action(
         match ev.item.as_str() {
             "smt-zoom-fit" => commands.queue(zoom_to_fit),
             "smt-flat-drawing" => commands.queue(create_flat_drawing),
+            "smt-flat-export" => commands.queue(|world: &mut World| {
+                if let Some((_, part, _)) = flat_part(world) {
+                    crate::flat_export_dialog::open(world, part);
+                }
+            }),
+            "smt-flat-sketch" => commands.queue(|world: &mut World| {
+                if let Some((_, part, model)) = flat_part(world) {
+                    // P3I.6: a sketch on the flat pattern plane of the part.
+                    let index = crate::flat_export_dialog::flat_ref(world, part).map_or(0, |r| r.index);
+                    crate::flat_ui::begin_flat_sketch(world, model, index);
+                }
+            }),
             _ => {}
         }
         return;
@@ -1190,17 +1204,20 @@ fn on_menu_action(
     }
 }
 
-/// The flat view's part: the shown model's first part (P3I.7's Create drawing of flat pattern).
-fn flat_part(world: &World) -> Option<(cadrs_core::ElementId, PartId)> {
-    let ctx = shown(world.resource::<SmTable>(), world.resource::<PartCache>())?;
-    let part = ctx.parts.first()?.0;
+/// The flat view's part (the one with the hovered bend, else the shown model's first) with its
+/// Part Studio and its model: what the flat view menu's actions act on.
+fn flat_part(world: &World) -> Option<(cadrs_core::ElementId, PartId, FeatureId)> {
+    let t = world.resource::<SmTable>();
+    let ctx = shown(t, world.resource::<PartCache>())?;
+    let hovered = t.hovered.and_then(|j| ctx.model.joint(j)).map(|j| j.a);
+    let part = hovered.and_then(|w| ctx.part_of_wall(w)).or_else(|| ctx.parts.first().map(|(p, _)| *p))?;
     let el = world.get_resource::<ActiveDocument>()?.active?;
-    Some((el, part))
+    Some((el, part, ctx.feature))
 }
 
 /// Create drawing of flat pattern (SM16.1), from the flat view's menu.
 fn create_flat_drawing(world: &mut World) {
-    let Some((el, part)) = flat_part(world) else { return };
+    let Some((el, part, _)) = flat_part(world) else { return };
     crate::drawing::flat_views::open_create_drawing_of_flat(world, cadrs_drawing::ObjectRef { element: el.0, part: Some((part.feature.0, part.index)) });
 }
 

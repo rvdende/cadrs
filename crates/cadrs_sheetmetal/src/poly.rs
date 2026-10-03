@@ -326,11 +326,29 @@ pub fn circle(center: P2, radius: f64, n: usize) -> Polygon {
 
 /// The union of polygons, as separate polygons with holes.
 pub fn union(polys: &[Polygon]) -> Vec<Polygon> {
-    let mut acc = geo::MultiPolygon::<f64>(Vec::new());
-    for p in polys.iter().filter(|p| !p.is_empty()) {
-        acc = acc.union(&geo::MultiPolygon(vec![p.to_geo()]));
+    let once = |polys: &[geo::Polygon<f64>]| {
+        let mut acc = geo::MultiPolygon::<f64>(Vec::new());
+        for p in polys {
+            acc = acc.union(&geo::MultiPolygon(vec![p.clone()]));
+            // Back onto the grid: the boolean's output drifts off it by an ulp or so, and a
+            // piece added later along that edge would then only nearly touch it.
+            acc = geo::MultiPolygon(acc.0.iter().map(|g| Polygon::from_geo(g).to_geo()).collect());
+        }
+        acc.0
+    };
+    let mut out = once(&polys.iter().filter(|p| !p.is_empty()).map(Polygon::to_geo).collect::<Vec<_>>());
+    // P3I.6: adding a piece that joins two others only along their edges can leave them apart
+    // (the boolean's result depends on the order): union again until nothing more joins.
+    while out.len() > 1 {
+        // Back on the grid first: the boolean's output can be a hair off it.
+        let snapped: Vec<geo::Polygon<f64>> = out.iter().map(|g| Polygon::from_geo(g).to_geo()).collect();
+        let again = once(&snapped);
+        if again.len() >= out.len() {
+            break;
+        }
+        out = again;
     }
-    acc.0.iter().map(Polygon::from_geo).collect()
+    out.iter().map(Polygon::from_geo).collect()
 }
 
 /// `a` minus every polygon of `cuts`.
@@ -403,6 +421,19 @@ mod tests {
         assert!(overlap_area(&a, &b) < 1e-9);
         let c = Polygon::rect(P2::new(1.0, 1.0), P2::new(3.0, 3.0));
         assert!((overlap_area(&a, &c) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn union_joins_pieces_bridged_along_their_edges() {
+        // Two walls apart, then the strip between them touching both along their edges (the order
+        // the flat solver adds a U's pieces in).
+        let w0 = Polygon::rect(P2::new(0.0, 2.0), P2::new(200.0, 118.0));
+        let w1 = Polygon::rect(P2::new(0.0, -48.2776546738526), P2::new(200.0, -0.27765467385260023));
+        let w2 = Polygon::rect(P2::new(0.0, 120.2776546738526), P2::new(200.0, 168.2776546738526));
+        let b0 = Polygon::rect(P2::new(0.0, -0.27765467385260023), P2::new(200.0, 2.0));
+        let b1 = Polygon::rect(P2::new(0.0, 118.0), P2::new(200.0, 120.2776546738526));
+        let u = union(&[w0, w1, w2, b0, b1]);
+        assert_eq!(u.len(), 1, "{:?}", u.iter().map(|p| p.outer.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>()).collect::<Vec<_>>());
     }
 
     #[test]

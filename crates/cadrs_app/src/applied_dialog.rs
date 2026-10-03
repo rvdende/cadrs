@@ -308,6 +308,8 @@ pub(crate) enum Role {
     SmThicknessFlip,
     /// P3I.4: Flange, Hem and Make joint (`crate::sheetmetal_features_ui`).
     Smf(crate::sheetmetal_features_ui::SmfRole),
+    /// P3I.6: the flat pattern extrude's regions (`crate::flat_ui`).
+    FlatRegions,
 }
 
 /// The Sheet metal model dialog's numbers (P3I.2).
@@ -604,6 +606,7 @@ fn dialog(
         Role::SmFaces,
         Role::SmUpTo,
         Role::SmSecondUpTo,
+        Role::FlatRegions,
     ]
         .into_iter()
         .chain(crate::sheetmetal_features_ui::LIST_ROLES)

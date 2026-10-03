@@ -100,6 +100,12 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
         };
         world.resource_mut::<Selection>().0 = vec![p];
     }
+    // P3I.6: a sheet metal part's faces also offer its flat pattern's New sketch and DXF export
+    // (until the flat view's own menu, P3I.3).
+    let flat = match target {
+        MenuTarget::Face(part, _) => crate::flat_export_dialog::flat_ref(world, part).is_some(),
+        _ => false,
+    };
     let planes_shown = world.resource::<PlanesVisible>().any();
     let theme = world.resource::<Theme>().clone();
     let menu = Menu::new("viewport-context-menu").min_width(200.0).item_height(23.0);
@@ -114,7 +120,8 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             .separator()
             .item(MenuItem::new("viewport-normal-to", "View normal to plane"))
             .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit")),
-        MenuTarget::Face(..) => menu
+        MenuTarget::Face(..) => {
+            let m = menu
             .item(MenuItem::new("viewport-new-sketch", "New sketch").icon("sketch").disabled(!planar_face))
             .separator()
             .item(MenuItem::new("viewport-face-appearance", "Add appearance to face…").icon("appearance"))
@@ -122,10 +129,17 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             .item(MenuItem::new("viewport-part-material", "Assign material…").icon("material-library"))
             .separator()
             // P3F.2 (P3.2): a flat face as DXF or DWG, for cutting machines.
-            .item(MenuItem::new("viewport-export-face", "Export as DXF/DWG…").icon("file-export").disabled(!planar_face))
-            .separator()
-            .item(MenuItem::new("viewport-normal-to", "View normal to face").disabled(!planar_face))
-            .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit")),
+            .item(MenuItem::new("viewport-export-face", "Export as DXF/DWG…").icon("file-export").disabled(!planar_face));
+            let m = if flat {
+                m.item(MenuItem::new("viewport-flat-sketch", "New sketch on flat pattern").icon("sketch"))
+                    .item(MenuItem::new("viewport-flat-export", "Export DXF/DWG of flat pattern…").icon("flat-pattern"))
+            } else {
+                m
+            };
+            m.separator()
+                .item(MenuItem::new("viewport-normal-to", "View normal to face").disabled(!planar_face))
+                .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
+        }
         MenuTarget::Sketch(s) => {
             let name = feature_name(world, s);
             menu.item(MenuItem::new("viewport-edit-sketch", format!("Edit {name}…")).icon("edit"))
@@ -280,6 +294,13 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         ("viewport-export-face", MenuTarget::Face(part, face)) => {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Face(part, face));
         }
+        // P3I.6.
+        ("viewport-flat-sketch", MenuTarget::Face(part, _)) => {
+            if let Some(r) = crate::flat_export_dialog::flat_ref(world, part) {
+                crate::flat_ui::begin_flat_sketch(world, r.model, r.index);
+            }
+        }
+        ("viewport-flat-export", MenuTarget::Face(part, _)) => crate::flat_export_dialog::open(world, part),
         ("viewport-export-sketch", MenuTarget::Sketch(s)) => {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Sketch(s));
         }

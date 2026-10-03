@@ -569,8 +569,10 @@ impl Rebuilder {
         let total = len.abs();
         let eps = 1e-3 * model.params.thickness.max(0.01);
         let mut tools: Vec<BodyId> = Vec::new();
-        for cut in removed {
-            let Some((lo, hi)) = cut.bounds() else { continue };
+        // P3I.6: a cut that isn't a rectangle in (s, u) (a flat cut's circle or slanted edge) is
+        // taken out as thin wedges, each as long as the cut is over its slice.
+        let boxes: Vec<(P2, P2)> = removed.iter().flat_map(|c| super::sheetmetal_flat::wedge_boxes(c, allowance)).collect();
+        for (lo, hi) in boxes {
             let (s0, s1) = (lo.x.max(0.0), hi.x.min(total));
             let (u0, u1) = (lo.y.max(0.0), hi.y.min(allowance));
             if s1 - s0 < 1e-9 || u1 - u0 < 1e-9 {

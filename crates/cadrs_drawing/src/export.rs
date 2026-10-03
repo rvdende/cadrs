@@ -47,13 +47,20 @@ pub enum Layer {
     Image,
     /// Section hatching, thread marks, break lines and cutting lines (P3C.8).
     Hatch,
-    /// A flat pattern view's up and down bend lines (P3I.7).
+    /// P3I.6 (SM15): a sheet metal flat pattern's outer outline, its cut-outs, its tear
+    /// reliefs' slits, its up and down bend centrelines, its bend tangent lines and the
+    /// sketches on it.
+    FlatOutline,
+    FlatCutout,
+    FlatSlit,
     BendUp,
     BendDown,
+    BendTangent,
+    FlatSketch,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 16] = [
+    pub const ALL: [Layer; 21] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -68,8 +75,13 @@ impl Layer {
         Layer::Shaded,
         Layer::Image,
         Layer::Hatch,
+        Layer::FlatOutline,
+        Layer::FlatCutout,
+        Layer::FlatSlit,
         Layer::BendUp,
         Layer::BendDown,
+        Layer::BendTangent,
+        Layer::FlatSketch,
     ];
 
     pub fn name(self) -> &'static str {
@@ -88,8 +100,13 @@ impl Layer {
             Layer::Shaded => "SHADED",
             Layer::Image => "IMAGES",
             Layer::Hatch => "HATCH",
+            Layer::FlatOutline => "OUTLINE",
+            Layer::FlatCutout => "CUTOUTS",
+            Layer::FlatSlit => "TEAR_SLITS",
             Layer::BendUp => "BEND_UP",
             Layer::BendDown => "BEND_DOWN",
+            Layer::BendTangent => "BEND_TANGENT",
+            Layer::FlatSketch => "FLAT_SKETCH",
         }
     }
 
@@ -98,8 +115,29 @@ impl Layer {
         match self {
             Layer::Hidden => "HIDDEN",
             Layer::Phantom => "PHANTOM",
+            // Bend centrelines (the flat export, P3I.6, and flat pattern views, P3I.7): CENTER,
+            // up and down told apart by their layers' colours.
             Layer::BendUp | Layer::BendDown => "CENTER",
             _ => "CONTINUOUS",
+        }
+    }
+
+    /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
+    /// drawings' files stay as they were).
+    pub fn is_flat(self) -> bool {
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch)
+    }
+
+    /// The layer's AutoCAD colour index (7: black/white).
+    pub fn aci(self) -> i32 {
+        match self {
+            Layer::FlatCutout => 5,
+            Layer::FlatSlit => 6,
+            Layer::BendUp => 3,
+            Layer::BendDown => 1,
+            Layer::BendTangent => 8,
+            Layer::FlatSketch => 4,
+            _ => 7,
         }
     }
 }

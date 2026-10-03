@@ -183,6 +183,10 @@ pub fn begin_extrude(world: &mut World) {
     {
         return;
     }
+    // P3I.6 (SM14.2): regions of a flat-pattern sketch get the abbreviated flat extrude.
+    if crate::flat_ui::extrude_redirect(world) {
+        return;
+    }
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };

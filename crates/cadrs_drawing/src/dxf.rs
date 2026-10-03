@@ -271,7 +271,10 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
     }
     o.pair(0, "ENDTAB");
     // LAYER
-    table(&mut o, "LAYER", &h_layer_t, 1 + Layer::ALL.len());
+    // The flat pattern layers (P3I.6) only when the page uses them.
+    let used = |l: Layer| page.items.iter().any(|it| matches!(it, Item::Stroke(_, pen) if pen.layer == l));
+    let layers: Vec<Layer> = Layer::ALL.into_iter().filter(|l| !l.is_flat() || used(*l)).collect();
+    table(&mut o, "LAYER", &h_layer_t, 1 + layers.len());
     let layer_rec = |o: &mut Out, name: &str, lt: &str, color: i32| {
         record(o, "LAYER", &h_layer_t, "AcDbLayerTableRecord");
         o.pair(2, name);
@@ -281,8 +284,8 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
         o.pair(370, -3);
     };
     layer_rec(&mut o, "0", "CONTINUOUS", 7);
-    for l in Layer::ALL {
-        layer_rec(&mut o, l.name(), l.linetype(), 7);
+    for l in layers {
+        layer_rec(&mut o, l.name(), l.linetype(), l.aci());
     }
     o.pair(0, "ENDTAB");
     // STYLE: Standard, and INTER for our texts.

@@ -74,6 +74,9 @@ pub enum StepEdit {
     BendRelief(BendReliefOverride),
     /// Walls and joints added as they are (a Sheet metal Loft's Add, SM19.2).
     AddWalls { walls: Vec<Wall>, joints: Vec<Joint> },
+    /// A flat pattern extrude (P3I.6, SM14): regions added to or cut from flat-pattern part
+    /// `part` in the flat ([`crate::flat_edit`]).
+    Flat { part: usize, regions: Vec<crate::poly::Polygon>, remove: bool },
 }
 
 /// Why a definition doesn't build.
@@ -81,7 +84,7 @@ pub enum StepEdit {
 pub enum DefError {
     Base(BuildError),
     /// Step `index` (by its feature `label`) no longer fits.
-    Step { index: usize, label: String, error: EditError },
+    Step { index: usize, label: String, error: String },
 }
 
 impl DefError {
@@ -90,8 +93,8 @@ impl DefError {
     pub fn message(&self, current: &str) -> String {
         match self {
             DefError::Base(e) => e.message(),
-            DefError::Step { label, error, .. } if label == current => error.message().to_string(),
-            DefError::Step { label, error, .. } => format!("{label} no longer fits: {}", error.message()),
+            DefError::Step { label, error, .. } if label == current => error.clone(),
+            DefError::Step { label, error, .. } => format!("{label} no longer fits: {error}"),
         }
     }
 }
@@ -238,9 +241,19 @@ impl Definition {
     }
 }
 
-/// Replays one step on a model.
-fn apply(m: &mut Model, e: &StepEdit) -> Result<(), EditError> {
+/// Replays one step on a model (the error message if it no longer fits).
+fn apply(m: &mut Model, e: &StepEdit) -> Result<(), String> {
+    if let StepEdit::Flat { part, regions, remove } = e {
+        let flat = crate::flat::flatten(m);
+        let r = if *remove { crate::flat_edit::remove(m, &flat, *part, regions) } else { crate::flat_edit::add(m, &flat, *part, regions) };
+        return r.map_err(|x| x.message().to_string());
+    }
+    apply_model(m, e).map_err(|x| x.message().to_string())
+}
+
+fn apply_model(m: &mut Model, e: &StepEdit) -> Result<(), EditError> {
     match e {
+        StepEdit::Flat { .. } => Ok(()),
         StepEdit::Bend { spec, seed } => model_edit::bend_wall(m, spec, *seed).map(|_| ()),
         StepEdit::Jog { spec, seed } => model_edit::jog_wall(m, spec, *seed).map(|_| ()),
         StepEdit::Tab { regions, walls } => model_edit::add_tab(m, regions, walls).map(|_| ()),
