@@ -839,6 +839,18 @@ impl Ctx<'_> {
                     "EQUAL" => ConstraintOf::Equal(a, b),
                     _ => ConstraintOf::Concentric(a, b),
                 }),
+                // A point concentric with a circle (a circle's centre with a model edge): on its
+                // centre.
+                _ if kind == "CONCENTRIC" && matches!((first, second), (Some(Ent::Point(..)), Some(Ent::Curve(_))) | (Some(Ent::Curve(_)), Some(Ent::Point(..)))) => {
+                    let (p, cid) = match (first, second) {
+                        (Some(Ent::Point(..)), Some(Ent::Curve(c))) => (pt(first), c),
+                        (_, _) => (pt(second), if let Some(Ent::Curve(c)) = first { c } else { unreachable!() }),
+                    };
+                    match (p, self.center_of(cid)) {
+                        (Some(p), Some(c)) => one(ConstraintOf::Coincident(p, c)),
+                        _ => Dropped("no centre"),
+                    }
+                }
                 _ if kind == "CONCENTRIC" && matches!(second, Some(Ent::Origin)) => match first {
                     Some(Ent::Curve(cid)) => self.center_of(cid).map_or(Dropped("no centre"), |p| one(ConstraintOf::Coincident(p, PointSpec::Origin))),
                     _ => Dropped("unsupported references"),

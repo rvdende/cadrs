@@ -29,6 +29,12 @@ use crate::ids::{ElementId, FeatureId, PartId};
 
 use super::{ImportFeature, ImportFormat};
 
+/// The names of the `n` pieces of an imported part named `name`: the name, then
+/// "<name> (2)", "<name> (3)", ….
+pub fn piece_names(name: &str, n: usize) -> impl Iterator<Item = String> + '_ {
+    (0..n).map(move |k| if k == 0 { name.to_string() } else { format!("{name} ({})", k + 1) })
+}
+
 /// What an Import read with its structure makes ([`ImportFeature::structure`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ImportMode {
@@ -88,21 +94,26 @@ impl ImportPlan {
     /// is "Part n"; a part used more than once (flattened) is "<name> <k>"; a part of several
     /// solids gives "<name> (k)" for the second one on.
     pub fn part_names(&self, mode: ImportMode) -> Vec<String> {
+        let mut out = Vec::new();
+        for (part, name) in self.entry_names(mode) {
+            let n = self.parts.get(part).map_or(1, |p| p.solids.max(1));
+            out.extend(piece_names(&name, n));
+        }
+        out
+    }
+
+    /// The name of each part (each occurrence, flattened) the Part Studio gets in `mode`, before
+    /// it is split into pieces ([`piece_names`]), with its distinct part.
+    pub fn entry_names(&self, mode: ImportMode) -> Vec<(usize, String)> {
         let base = |i: usize| -> String {
             let n = self.parts.get(i).map(|p| p.name.trim()).unwrap_or("");
             if n.is_empty() { format!("Part {}", i + 1) } else { n.to_string() }
         };
-        let solids = |i: usize| self.parts.get(i).map_or(1, |p| p.solids.max(1));
-        let mut out = Vec::new();
-        let push = |name: String, n: usize, out: &mut Vec<String>| {
-            for k in 0..n {
-                out.push(if k == 0 { name.clone() } else { format!("{name} ({})", k + 1) });
-            }
-        };
         match mode {
-            ImportMode::Parts | ImportMode::AtOrigin => (0..self.parts.len()).for_each(|i| push(base(i), solids(i), &mut out)),
+            ImportMode::Parts | ImportMode::AtOrigin => (0..self.parts.len()).map(|i| (i, base(i))).collect(),
             ImportMode::Flatten => {
                 let mut seen = vec![0usize; self.parts.len()];
+                let mut out = Vec::new();
                 for o in &self.occurrences {
                     let uses = self.occurrences.iter().filter(|x| x.part == o.part).count();
                     let name = if uses > 1 {
@@ -111,11 +122,11 @@ impl ImportPlan {
                     } else {
                         base(o.part)
                     };
-                    push(name, solids(o.part), &mut out);
+                    out.push((o.part, name));
                 }
+                out
             }
         }
-        out
     }
 
     /// The part ids of each distinct part in [`ImportMode::Parts`] (several for a part of

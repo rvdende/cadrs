@@ -334,8 +334,10 @@ pub fn sync_context_parts(doc: Option<Res<ActiveDocument>>, active: Res<ActiveCo
             cache.parts.retain(|p| !context::is_context(p.feature));
             cache.generation += 1;
         }
-        if !cache.tints.is_empty() {
-            cache.set_tints(HashMap::new());
+        // Only the ghost's own tints (others, such as Check interference's, stay).
+        if cache.tints.keys().any(|p| context::is_context(p.feature)) {
+            let rest = cache.tints.iter().filter(|(p, _)| !context::is_context(p.feature)).map(|(p, b)| (*p, *b)).collect();
+            cache.set_tints(rest);
         }
         if !cache.unpickable.is_empty() {
             cache.unpickable.clear();
@@ -392,7 +394,8 @@ pub fn sync_context_parts(doc: Option<Res<ActiveDocument>>, active: Res<ActiveCo
         cache.generation += 1;
     }
     let base = FaceBase { rgb: CONTEXT_RGB, alpha: view.opacity.clamp(0.05, 0.95) };
-    let tints: HashMap<PartId, FaceBase> = want.iter().map(|p| (*p, base)).collect();
+    let mut tints: HashMap<PartId, FaceBase> = cache.tints.iter().filter(|(p, _)| !context::is_context(p.feature)).map(|(p, b)| (*p, *b)).collect();
+    tints.extend(want.iter().map(|p| (*p, base)));
     cache.set_tints(tints);
     let unpickable: std::collections::HashSet<PartId> = if view.select_transparent { Default::default() } else { want.iter().copied().collect() };
     if cache.unpickable != unpickable {

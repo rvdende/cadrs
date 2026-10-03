@@ -1011,6 +1011,37 @@ impl Kernel for OcctKernel {
             .collect()
     }
 
+    fn split_imported(&mut self, body: BodyId) -> Result<Vec<OpResult>> {
+        let shape = self.body(body)?;
+        let solids = shape.sub_shapes(SubKind::Solid).map_err(occt)?;
+        // The shells that aren't a solid's: their faces aren't any solid's.
+        let mut in_solids: HashMap<u64, Vec<Face>> = HashMap::new();
+        for s in &solids {
+            for f in faces_of(s) {
+                in_solids.entry(f.identity_hash()).or_default().push(f);
+            }
+        }
+        let owned = |f: &Face| in_solids.get(&f.identity_hash()).is_some_and(|v| v.iter().any(|g| g.is_same(f)));
+        let loose: Vec<Shape> = shape
+            .sub_shapes(SubKind::Shell)
+            .map_err(occt)?
+            .into_iter()
+            .filter(|sh| !faces_of(sh).iter().any(owned))
+            .collect();
+        if loose.is_empty() {
+            return self.split_solids(body);
+        }
+        let mut pieces: Vec<Shape> = solids.iter().map(clone_shape).collect();
+        for sh in loose {
+            // Closed: sewn into a solid; open (or not sewable): the surface as it is.
+            match Shape::try_sew_solid(&[&sh], 1e-6) {
+                Ok(s) if s.sub_count(SubKind::Solid).unwrap_or(0) == 1 && s.is_valid().unwrap_or(false) => pieces.push(s),
+                _ => pieces.push(clone_shape(&sh)),
+            }
+        }
+        pieces.into_iter().map(|s| self.insert_raw(s, History::default())).collect()
+    }
+
     fn revolve(&mut self, profile: &Profile, axis: Axis, angle: f64) -> Result<OpResult> {
         if !angle.is_finite() || angle.abs() < 1e-12 {
             return Err(KernelError::InvalidProfile("revolve angle is zero".into()));

@@ -1267,7 +1267,7 @@ impl<'a> PartStudio<'a> {
         // Still failing: the other faces the query could mean, as they are (a curved face the
         // profile lands on), the first that builds.
         if self.rebuild_error(id).is_some() && x.end == EndType::UpToFace {
-            let tried = x.up_to.clone();
+            let tried = x.up_to;
             for face in self.up_to_candidates(f) {
                 if tried.as_ref().is_some_and(|t| matches!(t, UpTo::Face(r) if r.part == face.part && r.face == face.face)) {
                     continue;
@@ -1459,6 +1459,8 @@ impl<'a> PartStudio<'a> {
             band: (f64, f64),
             bbox: Option<[f64; 6]>,
             info: Option<Value>,
+            /// A sheet (surface) body: matched by its box alone.
+            sheet: bool,
         }
         let mut onshape = Vec::new();
         // Composite parts (an Import with "Create composite"): Onshape's one composite against
@@ -1525,7 +1527,23 @@ impl<'a> PartStudio<'a> {
                 let p = &v["point"];
                 Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
             })));
-            onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info });
+            onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info, sheet: false });
+        }
+        // Sheet bodies (silkscreen, a PCB's soldermask, …) have no mass properties: their boxes.
+        let box_of = |pid: &str| {
+            let body = details["bodies"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_str() == Some(pid)))?;
+            bbox_of(body["vertices"].as_array()?.iter().filter_map(|v| {
+                let p = &v["point"];
+                Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
+            }))
+        };
+        for info in parts_json.as_array().into_iter().flatten().filter(|p| p["bodyType"].as_str() == Some("sheet")) {
+            let Some(pid) = info["partId"].as_str() else { continue };
+            if onshape.iter().any(|o| o.pid == pid) {
+                continue;
+            }
+            let name = info["name"].as_str().unwrap_or(pid).to_string();
+            onshape.push(Os { pid: pid.to_string(), name, volume: 0.0, band: (0.0, 0.0), bbox: box_of(pid), info: Some(info.clone()), sheet: true });
         }
         let cadrs: Vec<(usize, f64, Option<[f64; 6]>)> = parts
             .iter()
@@ -1541,16 +1559,24 @@ impl<'a> PartStudio<'a> {
                 eprintln!("PARTS cadrs: {v:.1} mm³ {bb:?}");
             }
         }
-        // Pair them best first: close boxes, close volumes.
+        // Pair them best first: close boxes, close volumes. A sheet pairs with a part without
+        // volume, by its box.
         let mut pairs = Vec::new();
         for (oi, o) in onshape.iter().enumerate() {
-            for (ci, (_, v, bb)) in cadrs.iter().enumerate() {
-                let dv = (v - o.volume).abs() / o.volume.abs().max(1e-9);
+            for (ci, (i, v, bb)) in cadrs.iter().enumerate() {
+                let surface = parts[*i].kind == cadrs_core::parts::PartKind::Surface;
                 let db = match (o.bbox, bb) {
                     (Some(a), Some(b)) => (0..6).map(|k| (a[k] - b[k]).abs()).sum::<f64>(),
                     _ => 0.0,
                 };
                 let size = o.bbox.map(|a| (a[3] - a[0]) + (a[4] - a[1]) + (a[5] - a[2])).unwrap_or(1.0).max(1e-6);
+                if o.sheet || surface {
+                    if o.sheet && surface && o.bbox.is_some() && db / size < 0.2 {
+                        pairs.push((db / size, oi, ci));
+                    }
+                    continue;
+                }
+                let dv = (v - o.volume).abs() / o.volume.abs().max(1e-9);
                 if dv < 0.5 || db / size < 0.2 {
                     pairs.push((db / size + dv, oi, ci));
                 }
@@ -1562,6 +1588,34 @@ impl<'a> PartStudio<'a> {
         for (_, oi, ci) in pairs {
             if !matched.contains_key(&oi) && used.insert(ci) {
                 matched.insert(oi, ci);
+            }
+        }
+        // Sheets Onshape gives no geometry for (its body details list solids only): by name, in
+        // order (Onshape numbers parts in the order it reads the file, as the reader here does),
+        // when as many are left on each side.
+        let mut sheets: Vec<(&str, Vec<usize>)> = Vec::new();
+        for (oi, o) in onshape.iter().enumerate().filter(|(oi, o)| o.sheet && !matched.contains_key(oi)) {
+            match sheets.iter_mut().find(|(n, _)| *n == o.name) {
+                Some((_, v)) => v.push(oi),
+                None => sheets.push((&o.name, vec![oi])),
+            }
+        }
+        for (name, ois) in sheets {
+            let cis: Vec<usize> = cadrs
+                .iter()
+                .enumerate()
+                .filter(|(ci, (i, ..))| !used.contains(ci) && parts[*i].kind == cadrs_core::parts::PartKind::Surface && same_product(&parts[*i].name, name))
+                .map(|(ci, _)| ci)
+                .collect();
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() && cis.len() != ois.len() {
+                let surfaces: Vec<&str> = cadrs.iter().filter(|(i, ..)| parts[*i].kind == cadrs_core::parts::PartKind::Surface).map(|(i, ..)| parts[*i].name.as_str()).take(8).collect();
+                eprintln!("SHEETS {name}: {} in Onshape, {} here; surfaces here e.g. {surfaces:?}", ois.len(), cis.len());
+            }
+            if cis.len() == ois.len() {
+                for (oi, ci) in ois.into_iter().zip(cis) {
+                    used.insert(ci);
+                    matched.insert(oi, ci);
+                }
             }
         }
         // For assemblies: which part each Onshape part became, and how far it sits from
@@ -1622,6 +1676,16 @@ impl<'a> PartStudio<'a> {
             self.s.run(&SetPartAppearance { element: self.el, parts, appearance: Some(a) }).ok();
         }
     }
+}
+
+/// Whether a cadrs import piece named `ours` ("<product>", "<product> (3)") is of the product
+/// Onshape named `theirs` (the product's name, which Onshape may give a suffix: "…__NONE").
+fn same_product(ours: &str, theirs: &str) -> bool {
+    let base = match ours.rsplit_once(" (") {
+        Some((b, k)) if k.strip_suffix(')').is_some_and(|k| k.parse::<u32>().is_ok()) => b,
+        _ => ours,
+    };
+    theirs == base || theirs.strip_prefix(base).is_some_and(|rest| rest.starts_with("__"))
 }
 
 /// How far box `b` sits from box `a` when it is `a` moved (zero otherwise, or without both).

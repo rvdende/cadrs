@@ -272,6 +272,13 @@ pub trait Kernel {
         Err(KernelError::Unsupported("split into solids"))
     }
 
+    /// [`Kernel::split_solids`] for an imported file's shape, which may also hold loose shells
+    /// (CAD files often write a part's solids as bare shells): each closed loose shell becomes a
+    /// solid of its own and each open one a surface body, as Onshape's import makes them.
+    fn split_imported(&mut self, body: BodyId) -> Result<Vec<OpResult>> {
+        self.split_solids(body)
+    }
+
     /// Gathers copies of `bodies` into one body without merging them (a compound: P3H.6's
     /// Composite part). Its faces are the inputs' faces in order (the first body's, then the
     /// next's); the history has each face `modified` from its input face. Volume and area are
