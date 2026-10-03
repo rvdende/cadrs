@@ -14,6 +14,8 @@
 //! - [`table`]: the Bends and Other joints tables (SM13).
 //! - [`edit`]: joint edits (Modify joint, the table) and the recipe a model is rebuilt from;
 //!   [`view`]: meshes, picking and label spots for the table and flat view panel (P3I.3).
+//! - [`loft`]: the Sheet metal Loft's tessellated walls and mitred folded solid (P3I.9, SM19.2);
+//!   [`forms`]: where forms may go and how the flat shows them (P3I.9, SM20).
 //! - [`samples`]: small models (an L, a U-channel, an open box, a hem, a tube, …) for tests,
 //!   previews and scenarios; [`svg`]: a flat pattern as an SVG picture.
 //!
@@ -23,6 +25,8 @@ pub mod bend;
 pub mod construct;
 pub mod edit;
 pub mod flat;
+pub mod forms;
+pub mod loft;
 pub mod model;
 pub mod params;
 pub mod poly;

@@ -64,6 +64,8 @@ pub enum Launch {
     /// A variant in a sketch tool button's ▾ menu (P3.11): made the button's and the active
     /// tool, as the menu does.
     SketchVariant(Entity, crate::sketch::SketchTool),
+    /// P3I.9: a sheet metal tool of `crate::sheetmetal_p3i9_ui`.
+    Sm9(&'static str),
 }
 
 /// The open search: the palette entity, the tools, the query the rows were built for, the
@@ -170,8 +172,12 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
         out.push(ToolEntry { id, label, icon, shortcut, enabled, launch: Launch::Button(e) });
         if sheet_metal {
             for (tid, tlabel, ticon) in crate::sheetmetal_ui::OTHER_TOOLS {
-                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: false, launch: Launch::Button(e) });
+                // P3I.9: Loft and Form are built.
+                let built = crate::sheetmetal_p3i9_ui::built(tid);
+                out.push(ToolEntry { id: tid.into(), label: tlabel.into(), icon: ticon.into(), shortcut: None, enabled: built, launch: if built { Launch::Sm9(tid) } else { Launch::Button(e) } });
             }
+            // P3I.9: Tag (Form), for a form's Part Studio.
+            out.push(ToolEntry { id: "tag-form".into(), label: "Tag (Form)".into(), icon: "tag".into(), shortcut: None, enabled: true, launch: Launch::Sm9("tag-form") });
         }
     }
     out
@@ -232,6 +238,9 @@ fn launch(world: &mut World, i: usize) {
             }
         }
         Launch::Pattern(k) => crate::applied::begin(world, crate::applied::AppliedKind::Pattern(k)),
+        Launch::Sm9(id) => {
+            crate::sheetmetal_p3i9_ui::menu_action(world, id);
+        }
         Launch::SketchVariant(e, t) => {
             if world.get_entity(e).is_ok() {
                 crate::sketch::choose_variant(world, e, t);

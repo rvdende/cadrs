@@ -235,6 +235,7 @@ pub mod pneumatic_ex2;
 pub mod pneumatic_ex3;
 pub mod reflector;
 pub mod scale;
+pub mod sheetmetal_forms;
 pub mod simulation;
 pub mod step_stool;
 pub mod ujoint;

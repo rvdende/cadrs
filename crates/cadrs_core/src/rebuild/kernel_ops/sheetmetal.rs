@@ -27,7 +27,7 @@ use crate::sheetmetal::{SheetMetalContext, SheetMetalModelFeature, SheetMetalOp}
 use crate::solid::Solid;
 
 /// A stable key for a face, edge or curve name.
-fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
+pub(super) fn key_of<T: std::fmt::Debug>(x: &T) -> u64 {
     naming::stable_hash(format!("{x:?}").as_bytes())
 }
 
@@ -383,7 +383,7 @@ fn kplane(origin: P3, x: V3, normal: V3) -> Plane {
 }
 
 /// Where a piece's material is removed by relief cuts (in the piece's own coordinates).
-fn removed_of(part: &FlatPart, s: PieceSource) -> Vec<Polygon> {
+pub(super) fn removed_of(part: &FlatPart, s: PieceSource) -> Vec<Polygon> {
     part.cuts.iter().flat_map(|c| c.removed.iter().filter(|(p, _)| *p == s).flat_map(|(_, v)| v.iter().cloned())).collect()
 }
 
@@ -450,7 +450,7 @@ impl Rebuilder {
     }
 
     /// A wall's solid: its outline (less the relief cuts) thickened on its material side.
-    fn wall_bodies(&mut self, op: cadrs_kernel::OpId, wall: &Wall, removed: &[Polygon], t: f64) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
+    pub(super) fn wall_bodies(&mut self, op: cadrs_kernel::OpId, wall: &Wall, removed: &[Polygon], t: f64) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
         let source = 0x5741_4c4c_0000_0000 | wall.id.0 as u64;
         let profile = match wall.surface {
             Surface::Planar { origin, u, v } => {
@@ -494,7 +494,7 @@ impl Rebuilder {
 
     /// A bend's solid: the shell between its inner and outer radii over its sweep, less the
     /// relief cuts (each as the wedge its extent covers).
-    fn bend_body(&mut self, op: cadrs_kernel::OpId, model: &Model, j: cadrs_sheetmetal::JointId, removed: &[Polygon]) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
+    pub(super) fn bend_body(&mut self, op: cadrs_kernel::OpId, model: &Model, j: cadrs_sheetmetal::JointId, removed: &[Polygon]) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
         let Some(g) = model.bend_geometry(j) else { return Ok(Vec::new()) };
         let Some(bend) = model.joint(j).and_then(|x| x.bend()) else { return Ok(Vec::new()) };
         let source = 0x4245_4e44_0000_0000 | j.0 as u64;
@@ -572,7 +572,7 @@ impl Rebuilder {
     }
 
     /// Names a new body and measures it.
-    fn named_pieces(&mut self, op: cadrs_kernel::OpId, r: cadrs_kernel::OpResult) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
+    pub(super) fn named_pieces(&mut self, op: cadrs_kernel::OpId, r: cadrs_kernel::OpResult) -> Result<Vec<(BodyId, BodyNames, f64)>, String> {
         let body = r.bodies[0];
         let names = naming::name_body(&self.kernel, body, op, &r.history, &[]).map_err(|e| e.to_string());
         let volume = self.kernel.mass_properties(body).map(|m| m.volume).map_err(|e| e.to_string());

@@ -31,3 +31,4 @@ slotmap.workspace = true
 
 [dev-dependencies]
 tiny-skia.workspace = true
+resvg.workspace = true

@@ -2031,6 +2031,7 @@ dependencies = [
  "directories",
  "image",
  "nalgebra",
+ "resvg",
  "ron",
  "serde",
  "slotmap",

@@ -100,6 +100,22 @@ pub fn flat_svg(flat: &FlatPattern, title: &str, px: f64) -> String {
                 if b.up { "UP" } else { "DOWN" }
             );
         }
+        // P3I.9: forms, as their outlines and centermarks.
+        for f in &part.forms {
+            for l in &f.lines {
+                let mut d = String::new();
+                for (i, p) in l.points.iter().enumerate() {
+                    let (x, y) = flip(*p);
+                    let _ = write!(d, "{}{x:.2},{y:.2} ", if i == 0 { "M" } else { "L" });
+                }
+                if l.closed {
+                    d.push('Z');
+                }
+                let _ = writeln!(s, r##"<path d="{d}" fill="none" stroke="#1a237e" stroke-width="0.9"/>"##);
+            }
+            let (cx, cy) = flip(f.center);
+            let _ = writeln!(s, r##"<path d="M{:.2},{cy:.2} L{:.2},{cy:.2} M{cx:.2},{:.2} L{cx:.2},{:.2}" stroke="#1a237e" stroke-width="0.7"/>"##, cx - 5.0, cx + 5.0, cy - 5.0, cy + 5.0);
+        }
     }
     s.push_str("</svg>\n");
     s
