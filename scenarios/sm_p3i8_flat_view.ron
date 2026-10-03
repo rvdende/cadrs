@@ -54,6 +54,13 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("02-sketch-on-the-flat-in-the-flat-view"),
+        // The menu on the sketch's line: Edit Sketch 2 and Show dimensions join it (lesson 15
+        // t0026.5).
+        RightClick(ui_at("smt-flat", 0.369, 0.5236)),
+        Wait(10),
+        Screenshot("02a-flat-menu-on-the-sketch"),
+        Key("Escape"),
+        Wait(5),
         RightClick(ui("smt-flat")),
         Wait(10),
         Click(ui("smt-flat-drawing")),

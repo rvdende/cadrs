@@ -51,7 +51,7 @@ pub enum TooltipStyle {
     /// An error message: left-aligned below the element, wrapped to its width, white with a red
     /// accent.
     Error,
-    /// An information card (a list row's details, several lines): white with a border and a
+    /// An information card (a list row's details, several lines): dark like the labels, with a
     /// shadow, beside the element (to its right, top-aligned), so it doesn't cover the rows below.
     Card,
     /// A small label beside the element (to its right, centred on it), so it doesn't cover the
@@ -263,6 +263,7 @@ fn update_tooltips(
             .spawn((
                 Name::new("tooltip"),
                 TooltipBubble,
+                CardOwnerLeft(center.x - size.x / 2.0),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(center.x + size.x / 2.0 + 8.0),
@@ -272,8 +273,9 @@ fn update_tooltips(
                     border_radius: BorderRadius::all(Val::Px(t.radius_sm)),
                     ..default()
                 },
-                BackgroundColor(Color::WHITE),
-                BorderColor::all(Color::srgb_u8(0xc3, 0xca, 0xd4)),
+                // One look with the label tooltips (dark), only beside its element and on several lines.
+                BackgroundColor(t.tooltip_background),
+                BorderColor::all(t.tooltip_background),
                 BoxShadow::new(
                     Color::srgba(0.0, 0.0, 0.0, 0.22),
                     Val::Px(0.0),
@@ -288,7 +290,7 @@ fn update_tooltips(
                 b.spawn((
                     Text::new(text),
                     t.font(t.font_sm, FontWeight::NORMAL),
-                    TextColor(Color::srgb_u8(0x1f, 0x23, 0x28)),
+                    TextColor(t.tooltip_foreground),
                     TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap),
                     Pickable::IGNORE,
                 ));
@@ -470,18 +472,36 @@ fn update_tooltips(
     state.bubble = Some(bubble);
 }
 
+/// A card tooltip's element's left edge (where it goes when there is no room on the right).
+#[derive(Component, Clone, Copy)]
+struct CardOwnerLeft(f32);
+
 /// A bubble that runs off the window's right edge moves left onto it (P3.6: the right-hand
 /// panel strip's tooltips).
+#[allow(clippy::type_complexity)]
 fn keep_on_screen(
     windows: Query<&Window>,
-    mut q: Query<(&mut Node, &ComputedNode, &UiGlobalTransform, Option<&TooltipOwnerLeft>), With<TooltipBubble>>,
+    mut q: Query<(&mut Node, &ComputedNode, &UiGlobalTransform, Option<&TooltipOwnerLeft>, Option<&CardOwnerLeft>), With<TooltipBubble>>,
 ) {
     let Some(w) = windows.iter().next() else { return };
     let width = w.width();
-    for (mut node, computed, t, owner_left) in &mut q {
+    for (mut node, computed, t, owner_left, card) in &mut q {
         let scale = computed.inverse_scale_factor();
         let right = (t.translation.x + computed.size().x / 2.0) * scale;
         let over = right - (width - 4.0);
+        // A card beside its element that runs off the right goes to the element's left, so it
+        // never covers the element (a disabled menu item's reason).
+        if let Some(c) = card
+            && over > 0.5
+            && computed.size().x > 0.0
+        {
+            let w = computed.size().x * scale;
+            let left = (c.0 - 8.0 - w).max(4.0);
+            if node.left != Val::Px(left) {
+                node.left = Val::Px(left);
+            }
+            continue;
+        }
         if over > 0.5
             && let Val::Px(left) = node.left
         {

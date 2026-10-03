@@ -10,6 +10,9 @@
 //!   **Bend calculation** — K Factor, Bend allowance, Bend deduction — and its value, red with
 //!   its range when out of it).
 //!
+//! While it is open its joint shows selected in the model (all of its faces, in the selection
+//! amber), as Onshape shows a dialog's picks.
+//!
 //! ✓ or Enter keeps it, ✕ or Esc reverts the edit. Every change is a command; accepting squashes
 //! them into one undo step.
 //!
@@ -40,6 +43,7 @@ pub struct ModifyJointUiPlugin;
 impl Plugin for ModifyJointUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (joint_picks, joint_keys, sync_dialog).chain().before(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
+            .add_systems(Update, show_joint.after(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
             .add_systems(OnExit(AppState::Document), |world: &mut World| {
                 if world.contains_resource::<ModifyJointSession>() {
                     finish(world);
@@ -50,6 +54,7 @@ impl Plugin for ModifyJointUiPlugin {
             .add_observer(on_checkbox)
             .add_observer(on_select)
             .add_observer(on_number)
+            .add_observer(on_slider)
             .add_observer(on_remove);
     }
 }
@@ -314,10 +319,69 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&Num>, mut commands: Commands) 
     });
 }
 
+/// The K Factor slider (`modify-joint-02.png`) runs over the joint's range, −1.5 to 1.
+const K_MIN: f64 = -1.5;
+const K_MAX: f64 = 1.0;
+
+fn k_to_slider(k: f64) -> f32 {
+    ((k - K_MIN) / (K_MAX - K_MIN)).clamp(0.0, 1.0) as f32
+}
+
+fn on_slider(ev: On<cadrs_ui::SliderChange>, q: Query<&Name>, mut commands: Commands) {
+    if !q.get(ev.entity).is_ok_and(|n| n.as_str() == "smj-k-slider") {
+        return;
+    }
+    let k = ((K_MIN + (K_MAX - K_MIN) * ev.value as f64) * 100.0).round() / 100.0;
+    commands.queue(move |world: &mut World| {
+        update(world, "K Factor", |x| {
+            if x.calc == BendCalc::KFactor {
+                x.value = k;
+                x.value_expr = value_expr(BendCalc::KFactor, k);
+            }
+        })
+    });
+}
+
 fn on_remove(ev: On<SelectionListRemove>, q: Query<(), With<JointField>>, mut commands: Commands) {
     if q.contains(ev.entity) {
         commands.queue(|world: &mut World| update(world, "Remove joint", |x| x.joint = None));
     }
+}
+
+/// The edited joint's faces show selected while the dialog is open
+/// ([`crate::viewport::ExtraHighlight::selected`]).
+fn show_joint(
+    doc: Option<Res<ActiveDocument>>,
+    session: Option<Res<ModifyJointSession>>,
+    cache: Res<PartCache>,
+    mut extra: ResMut<crate::viewport::ExtraHighlight>,
+    mut last: Local<Option<(cadrs_core::sheetmetal_joint::ModifyJointFeature, u64)>>,
+) {
+    let x = match (doc.as_deref(), session.as_deref()) {
+        (Some(d), Some(s)) => d.doc.element(s.element).and_then(|e| e.feature(s.feature)).and_then(|f| match &f.kind {
+            FeatureKind::ModifyJoint(x) => Some(x.clone()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let Some(x) = x else {
+        if last.take().is_some() && !extra.selected.is_empty() {
+            extra.selected.clear();
+        }
+        return;
+    };
+    let key = (x.clone(), cache.generation);
+    if last.as_ref() == Some(&key) {
+        return;
+    }
+    let picks = match (x.joint, cache.sheet_metal.iter().find(|c| c.feature == x.model)) {
+        (Some(j), Some(ctx)) => crate::sheetmetal_table::joint_picks(&cache, ctx, j),
+        _ => Vec::new(),
+    };
+    if extra.selected != picks {
+        extra.selected = picks;
+    }
+    *last = Some(key);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -365,6 +429,7 @@ fn sync_dialog(
     mut q_dialog: Query<(Entity, &BuiltFor, &mut FeatureDialogState), With<JointDialog>>,
     mut q_list: Query<&mut SelectionListState, With<JointField>>,
     mut q_num: Query<(Entity, &Num, &mut NumberFieldState, Option<&Tooltip>)>,
+    mut q_slider: Query<(&Name, &mut cadrs_ui::SliderState)>,
     focus: Res<bevy::input_focus::InputFocus>,
     q_edit: Query<&cadrs_ui::NumberFieldEdit>,
     mut commands: Commands,
@@ -378,7 +443,12 @@ fn sync_dialog(
     let Some(f) = doc.doc.element(s.element).and_then(|e| e.feature(s.feature)) else { return };
     let FeatureKind::ModifyJoint(x) = &f.kind else { return };
     let units = units.map(|u| u.0).unwrap_or_default();
-    let names: Vec<String> = joint_name(&cache, x).into_iter().collect();
+    // The joint as an entity chip: "Bend A of Sheet metal model 1".
+    let model_name = doc.doc.element(s.element).and_then(|e| e.feature(x.model)).map(|f| f.name.clone());
+    let names: Vec<String> = joint_name(&cache, x).map(|j| match &model_name {
+        Some(m) => format!("{j} of {m}"),
+        None => j,
+    }).into_iter().collect();
     let error = cache.errors.get(&f.id).cloned();
     let valid = f.is_valid() && error.is_none() && !cache.rebuilding;
     let ninety = ninety(&cache, x);
@@ -406,7 +476,16 @@ fn sync_dialog(
                     .title(f.name.clone())
                     .valid(valid)
                     .body(move |b| {
-                        b.spawn((JointField, SelectionList::new("smj-joint-field").placeholder("Joint").items(names).active(true).build(&t)));
+                        b.spawn((
+                            JointField,
+                            SelectionList::new("smj-joint-field")
+                                .placeholder("Joint")
+                                .items(names)
+                                .item_icon("sheet-metal-modify-joint", "Joint")
+                                .tint_filled()
+                                .active(true)
+                                .build(&t),
+                        ));
                         let types: Vec<(&str, bool)> = JointType::ALL.iter().map(|j| (j.label(), true)).collect();
                         labelled_select(b, &t, "smj-type", "", &types, JointType::ALL.iter().position(|j| *j == x.joint_type).unwrap_or(0));
                         match x.joint_type {
@@ -424,6 +503,10 @@ fn sync_dialog(
                                     let calcs: Vec<(&str, bool)> = BendCalc::ALL.iter().map(|c| (c.label(), true)).collect();
                                     labelled_select(b, &t, "smj-calc", "Bend calculation", &calcs, BendCalc::ALL.iter().position(|c| *c == x.calc).unwrap_or(0));
                                     b.spawn((Num::Value, NumberField::new("smj-value", x.calc.label()).text(value.clone()).label_width(100.0).build(&t)));
+                                    if x.calc == BendCalc::KFactor {
+                                        b.spawn(Node { padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(4.0), Val::Px(6.0)), ..default() })
+                                            .with_child(cadrs_ui::Slider::new("smj-k-slider").value(k_to_slider(x.value)).width(130.0).tooltip("K Factor").build(&t));
+                                    }
                                 }
                             }
                             JointType::Tangent => {}
@@ -477,4 +560,12 @@ fn sync_dialog(
         }
     }
     let _ = range;
+    for (n, mut st) in &mut q_slider {
+        if n.as_str() == "smj-k-slider" {
+            let v = k_to_slider(x.value);
+            if (st.value - v).abs() > 2e-3 {
+                st.value = v;
+            }
+        }
+    }
 }

@@ -134,6 +134,22 @@ fn a_radius_and_a_k_factor_from_the_table_refold_the_part_in_place() {
     let after = st.ok();
     let bend = joint(&after, m, "Bend B").bend().unwrap();
     assert_eq!((bend.radius, bend.value), (6.0, Some(cadrs_sheetmetal::BendValue::KFactor(0.3))));
+    // In closed form: the flat across Bend B loses the two setbacks' growth, (R + T) from 5 to
+    // 8 on each wall, and gains the allowance's, π/2·(R + K·T) from 3.9 to 6.6:
+    // −2·(8 − 5) + π/2·(6.6 − 3.9) ≈ −1.759 mm; the other way it keeps its size.
+    let extent = |b: &Build| {
+        let ctx = b.sheet_metal.iter().find(|c| c.feature == m).unwrap();
+        let part = ctx.flat.parts.iter().max_by_key(|p| p.walls.len()).unwrap();
+        let (lo, hi) = part.bounds().unwrap();
+        hi - lo
+    };
+    let (e0, e1) = (extent(&before), extent(&after));
+    let want = -2.0 * (8.0 - 5.0) + std::f64::consts::FRAC_PI_2 * (6.6 - 3.9);
+    assert!((want + 1.759).abs() < 1e-3);
+    let (dx, dy) = (e1.x - e0.x, e1.y - e0.y);
+    let (along, other) = if dx.abs() > dy.abs() { (dx, dy) } else { (dy, dx) };
+    assert!((along - want).abs() < 1e-6, "the flat across Bend B changed by {along}, not {want}");
+    assert!(other.abs() < 1e-6, "the flat along Bend B changed by {other}");
     // Out of range: the feature fails with the range, the model stays as it was.
     st.table(m, "Bend B", TableEdit::Value(1.2, "1.2".into()));
     let bad = st.build();

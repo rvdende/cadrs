@@ -7,13 +7,13 @@
 #![cfg(feature = "occt")]
 
 use cadrs_core::applied::EdgeOrFace;
-use cadrs_core::commands::{AddFeature, AddSketch, EditSketch, MoveFeature};
+use cadrs_core::commands::{AddFeature, AddSketch, EditSketch, MoveFeature, ReplaceFeature};
 use cadrs_core::document::{Document, EdgeRef, FaceRef, FeatureKind};
 use cadrs_core::rebuild::Build;
 use cadrs_core::sheetmetal::{CurveRef, SheetMetalExprs, SheetMetalModelFeature, SheetMetalOp};
 use cadrs_core::sheetmetal_features::{FlangeFeature, HemFeature, SheetMetalFeature};
 use cadrs_core::sheetmetal_form::{FormFeature, FormLocation, FormPick, FormSource, LIBRARY_NAME, LibraryForm};
-use cadrs_core::sheetmetal_joint::{PutModifyJoint, SetTableOrder, TableEdit, modify_joint_of, table_edit};
+use cadrs_core::sheetmetal_joint::{PutModifyJoint, SetTableOrder, TableEdit, bend_feature_edit, bend_feature_of, modify_joint_of, table_edit};
 use cadrs_core::sheetmetal_tools::{BendFeature, CornerBreakFeature, LineRef, SheetMetalTool, SmPick, TabFeature};
 use cadrs_core::{ElementId, Feature, FeatureId, History, Part, rebuild};
 use cadrs_sheetmetal::model_edit::BendAlignment;
@@ -64,8 +64,11 @@ impl Studio {
 
     /// A `w` × `h` plate, 2 thick, made by a Thicken of a Top-plane rectangle (material up).
     fn plate(&mut self, w: f64, h: f64) -> (FeatureId, Part) {
+        self.plate_with(w, h, params())
+    }
+
+    fn plate_with(&mut self, w: f64, h: f64, p: Params) -> (FeatureId, Part) {
         let s = self.sketch(PlaneRef::Top, vec![rect(0.0, 0.0, w, h)]);
-        let p = params();
         let x = SheetMetalModelFeature { operation: SheetMetalOp::Thicken, region_sketches: vec![s], params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
         let f = self.add("Sheet metal model", FeatureKind::SheetMetalModel(x));
         let part = self.ok().parts[0].clone();
@@ -86,6 +89,13 @@ impl Studio {
         let ctx = b.sheet_metal.iter().find(|c| c.feature == model).expect("context");
         let j = ctx.model.joint(joint).expect("the joint").clone();
         let features = self.features();
+        // A bend a Bend or Jog made: that feature edited (SM13.3).
+        if let Some(f) = bend_feature_of(&features, ctx, joint) {
+            let f = bend_feature_edit(f, &j, &ctx.model.params, &edit).expect("a bend feature edit");
+            let id = f.id;
+            self.h.execute(&mut self.d, &ReplaceFeature { element: self.el, feature: f, label: edit.label(&j.name) }).unwrap();
+            return id;
+        }
         let existing = modify_joint_of(&features, model, joint);
         let prev = existing.and_then(|f| match &f.kind {
             FeatureKind::ModifyJoint(x) => Some(x.clone()),
@@ -256,10 +266,15 @@ fn a_bend_on_a_flange_then_a_corner_break_and_a_modify_joint_on_the_bend() {
     assert_eq!(bends(&b).len(), 2);
     all_match(&b);
     let area = b.sheet_metal[0].flat.parts[0].area();
-    // The Bend's bend from the table: R5 goes into the Bend's step; the flat keeps its size.
-    // The flange's bend is in the base, the Bend's comes after it.
+    // The Bend's bend from the table: R5 goes into the Bend feature itself (no Modify joint);
+    // the flat keeps its size. The flange's bend is in the base, the Bend's comes after it.
     let bent = bends(&b)[1].0;
-    st.table(model, bent, TableEdit::Radius(5.0, "5 mm".into()));
+    let edited = st.table(model, bent, TableEdit::Radius(5.0, "5 mm".into()));
+    match &st.d.element(st.el).unwrap().feature(edited).unwrap().kind {
+        FeatureKind::SheetMetalTool(SheetMetalTool::Bend(x)) => assert!(!x.use_model_radius && x.radius == 5.0, "{x:?}"),
+        k => panic!("the Bend feature was edited, not {k:?}"),
+    }
+    assert!(st.features().iter().all(|f| !matches!(f.kind, FeatureKind::ModifyJoint(_))), "no Modify joint");
     let b = st.ok();
     assert!(bends(&b).contains(&(bent, 5.0)), "{:?}", bends(&b));
     assert!((b.sheet_metal[0].flat.parts[0].area() - area).abs() < 1e-6, "a Bend never changes the flat");
@@ -479,4 +494,48 @@ fn a_bend_that_moves_the_formed_wall_keeps_the_form_on_it() {
         }
     }
     assert!(moved_once, "one of the two bends moves the louver's side");
+}
+
+/// SM13.3: a bend a Bend feature made, edited from the table of a model that states bends by
+/// their **bend allowance**: the Bend takes the K factor that gives the typed allowance (it
+/// doesn't fail), the table reads the typed value back, and converting it to a rip is refused.
+#[test]
+fn a_bend_features_bend_takes_a_table_allowance_as_its_k_factor() {
+    use cadrs_sheetmetal::{BendCalc, BendValue};
+    let mut st = Studio::new();
+    let p = Params { bend_calc: BendCalc::BendAllowance, bend_allowance: 5.0, ..params() };
+    let (model, plate) = st.plate_with(100.0, 60.0, p);
+    // A Bend across the plate at x = 70 (a Top-plane line): the 30 mm beyond it turns up.
+    let s = st.sketch(PlaneRef::Top, vec![SketchOp::AddPolyline { points: vec![Vec2::new(70.0, -10.0), Vec2::new(70.0, 70.0)], closed: false, construction: false, label: "Add line" }]);
+    let g = &st.d.element(st.el).unwrap().feature(s).unwrap().sketch().unwrap().geometry;
+    let (curve, _) = g.curves.iter().next().unwrap();
+    let line = LineRef::Sketch(CurveRef { sketch: s, curve });
+    let top = face_near(&plate, [50.0, 30.0, 2.0]);
+    let bf = BendFeature { line: Some(line), face: Some(top), alignment: BendAlignment::BendLine, ..Default::default() };
+    let bend_feature = st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(bf)));
+    let b = st.ok();
+    let ctx = &b.sheet_metal[0];
+    let [(bent, _)] = bends(&b)[..] else { panic!("one bend: {:?}", bends(&b)) };
+    assert_eq!(bend_feature_of(&st.features(), ctx, bent).map(|f| f.id), Some(bend_feature));
+    // The allowance cell: 6 mm.
+    st.table(model, bent, TableEdit::Value(6.0, "6 mm".into()));
+    let b = st.ok();
+    let ctx = &b.sheet_metal[0];
+    let j = ctx.model.joint(bent).unwrap().bend().unwrap();
+    let shown = j.value_or_model(&ctx.model.params).to_calc(BendCalc::BendAllowance, j.radius, ctx.model.params.thickness, j.angle);
+    match shown {
+        Some(BendValue::Allowance(a)) => assert!((a - 6.0).abs() < 1e-5, "the table reads {a}"),
+        x => panic!("no allowance: {x:?}"),
+    }
+    assert!(st.features().iter().all(|f| !matches!(f.kind, FeatureKind::ModifyJoint(_))), "no Modify joint");
+    // The radius cell: the Bend's own radius.
+    st.table(model, bent, TableEdit::Radius(4.0, "4 mm".into()));
+    let b = st.ok();
+    assert_eq!(bends(&b), vec![(bent, 4.0)]);
+    all_match(&b);
+    // Convert to rip: refused for a Bend's bend.
+    let ctx = &b.sheet_metal[0];
+    let features = st.features();
+    let f = bend_feature_of(&features, ctx, bent).unwrap();
+    assert!(bend_feature_edit(f, ctx.model.joint(bent).unwrap(), &ctx.model.params, &TableEdit::ConvertToRip).is_err());
 }
