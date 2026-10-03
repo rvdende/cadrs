@@ -35,7 +35,7 @@ use crate::sheetmetal_form::{form_studio, tag_of};
 
 /// The stable key of a feature (a step's source, a form's flat key).
 pub(in crate::rebuild) fn source_of(id: FeatureId) -> u64 {
-    naming::stable_hash(id.0.as_bytes())
+    crate::sheetmetal_form::flat_key(id)
 }
 
 /// `state` with `ctx` as its model's context (and its flat pattern planes, P3I.6).

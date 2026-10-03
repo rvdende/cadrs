@@ -8,7 +8,7 @@
 // Sketch 2" as locations and the base as target: ten louvers, their ends closed by sloping end
 // walls; the opposite direction; accepted; Search tools finds Tag, whose dialog opens (Form,
 // Part to add, Part to remove, Sketch for flat view, Form origin mate connector); the louvers'
-// outlines and centermarks in the flat view.
+// outlines and centermarks in the flat view; the Form's eye hides the outlines there.
 Scenario(
     start: Some("document"),
     steps: [
@@ -97,5 +97,14 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("09-flat-view-with-louvers"),
+        // The Form's eye hides its sketch (the outlines) on the flat view, as Onshape's
+        // (`form-10.png`–`form-12.png`); the centermarks stay.
+        Hover(ui("feature-form-1")),
+        Wait(10),
+        Click(ui("feature-form-1-visibility")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("10-form-hidden-flat-without-outlines"),
     ],
 )

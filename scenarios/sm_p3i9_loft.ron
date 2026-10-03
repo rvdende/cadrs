@@ -49,7 +49,7 @@ Scenario(
         Screenshot("04b-add-connection-picking"),
         Click(xyz(50, -20, 0)),
         Wait(30),
-        Click(xyz(-21.2, 21.2, 60)),
+        Click(xyz(27.86, -11.14, 60)),
         Wait(40),
         Click(ui("sm9-rip-1-checkbox")),
         Wait(60),

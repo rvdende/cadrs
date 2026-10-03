@@ -499,14 +499,26 @@ fn edge_near(part: &Part, p: [f64; 3]) -> cadrs_core::document::EdgeRef {
 
 #[test]
 fn a_loft_added_on_the_models_edge_bends_onto_it_as_one_part() {
+    loft_add_on_an_edge(false);
+}
+
+#[test]
+fn a_loft_added_on_the_far_faces_edge_bends_onto_it_too() {
+    loft_add_on_an_edge(true);
+}
+
+fn loft_add_on_an_edge(far: bool) {
     use cadrs_core::sheetmetal_loft::SmLoftOp;
     let mut st = Studio::new();
     let (sm, _, part) = plate(&mut st, &[(10.0, 10.0)]);
     let b = st.ok();
     let ctx = b.sheet_metal.iter().find(|c| c.feature == sm).unwrap();
-    // The edge at x = 120 on the face the model is defined on.
+    // The edge at x = 120 on the face the model is defined on (or on the sheet's other face).
     let cadrs_sheetmetal::model::Surface::Planar { origin, .. } = ctx.model.walls[0].surface else { panic!() };
-    let edge = edge_near(&part, [120.0, 40.0, origin.z]);
+    let zs: Vec<f64> = part.solid.positions.iter().map(|p| p[2]).collect();
+    let (zlo, zhi) = (zs.iter().cloned().fold(f64::MAX, f64::min), zs.iter().cloned().fold(f64::MIN, f64::max));
+    let z = if !far { origin.z } else if (origin.z - zlo).abs() < 1e-6 { zhi } else { zlo };
+    let edge = edge_near(&part, [120.0, 40.0, z]);
     // Profile 2: a 60 long line 40 above the plate's face and 30 out from its edge.
     let frame = PlaneFrame { origin: [0.0, 0.0, origin.z + 40.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
     let plane = cadrs_core::plane::PlaneFeature {

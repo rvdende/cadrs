@@ -152,8 +152,9 @@ pub struct FlatScene {
     /// How far each flat-pattern part is moved along X (sketches on a part's flat are drawn
     /// with it).
     pub shifts: Vec<V2>,
-    /// Forms on the flat (SM20.3): each one's outline lines and centermark.
-    pub forms: Vec<(Vec<crate::forms::FormLine>, P2)>,
+    /// Forms on the flat (SM20.3): each one's outline lines, centermark and its Form feature's
+    /// key ([`crate::forms::FlatForm::source`]).
+    pub forms: Vec<(Vec<crate::forms::FormLine>, P2, u64)>,
 }
 
 impl FlatScene {
@@ -183,7 +184,7 @@ impl FlatScene {
             let mv = |q: P2| q + shift;
             for f in &part.forms {
                 let lines = f.lines.iter().map(|l| crate::forms::FormLine { points: l.points.iter().map(|q| mv(*q)).collect(), closed: l.closed }).collect();
-                out.forms.push((lines, mv(f.center)));
+                out.forms.push((lines, mv(f.center), f.source));
             }
             let mvs = |s: &Seg2| Seg2::new(s.a + shift, s.b + shift);
             for piece in &part.pieces {

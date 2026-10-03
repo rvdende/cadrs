@@ -263,8 +263,31 @@ impl Rebuilder {
         }
         let params = target.as_ref().map_or(x.params, |c| c.model.params);
         let tol = x.chordal_tolerance;
-        let p1 = self.loft_profile(before, state, &x.profile1, tol)?;
-        let p2 = self.loft_profile(before, state, &x.profile2, tol)?;
+        let mut p1 = self.loft_profile(before, state, &x.profile1, tol)?;
+        let mut p2 = self.loft_profile(before, state, &x.profile2, tol)?;
+        // Add: a profile picked on a model wall's other face (an edge of the sheet's far side)
+        // is taken onto the wall's definition face, a thickness across, so the loft joins the
+        // wall there like one picked on that face.
+        if let Some(c) = &target {
+            let t = c.model.params.thickness;
+            for prof in [&mut p1, &mut p2] {
+                let shift = c.model.walls.iter().find_map(|w| {
+                    let cadrs_sheetmetal::model::Surface::Planar { origin, u, v } = w.surface else { return None };
+                    let n = u.cross(&v).normalize();
+                    let size = w.outline.bounds().map(|(lo, hi)| (hi - lo).norm()).unwrap_or(1.0).max(1.0);
+                    let on = |d: f64| prof.points.len() >= 2 && prof.points.iter().all(|q| ((*q - origin).dot(&n) - d).abs() <= 1e-6 * size);
+                    if on(0.0) {
+                        return None;
+                    }
+                    [t, -t].into_iter().find(|d| on(*d)).map(|d| n * d)
+                });
+                if let Some(d) = shift {
+                    for q in &mut prof.points {
+                        *q -= d;
+                    }
+                }
+            }
+        }
         let connections: Vec<ConnectionIn> = if x.connections_on {
             x.connections.iter().filter(|c| c.is_complete()).map(|c| ConnectionIn { a: along(&p1, c.t1), b: along(&p2, c.t2), rip: c.rip }).collect()
         } else {

@@ -314,6 +314,12 @@ pub fn refresh(doc: &mut crate::document::Document) {
     }
 }
 
+/// The key a Form feature's copies carry in the flat pattern
+/// (`cadrs_sheetmetal::forms::FlatForm::source`).
+pub fn flat_key(id: FeatureId) -> u64 {
+    cadrs_kernel::naming::stable_hash(id.0.as_bytes())
+}
+
 /// A Part Studio's form tag, if it has one (its first Tag (Form) feature).
 pub fn tag_of(studio: &[Feature]) -> Option<&TagFormFeature> {
     studio.iter().find_map(|f| match &f.kind {

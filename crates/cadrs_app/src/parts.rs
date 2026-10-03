@@ -823,7 +823,8 @@ pub fn hidden_sketches(el: &cadrs_core::Element, features: &[Feature], editing: 
     let consumed = consumed_sketches(features, editing);
     features
         .iter()
-        .filter(|f| f.sketch().is_some())
+        // (A Form's eye too, P3I.9: its sketch on the flat view.)
+        .filter(|f| f.sketch().is_some() || matches!(f.kind, cadrs_core::FeatureKind::Form(_)))
         .filter(|f| match el.sketch_visibility(f.id) {
             Some(shown) => !shown,
             None => consumed.contains(&f.id),

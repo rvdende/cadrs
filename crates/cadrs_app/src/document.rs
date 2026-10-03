@@ -3235,7 +3235,8 @@ fn rebuild_feature_rows(
                 // P3G.4 (DV3.5): the chevron opens what it brought in.
                 item = item.disclosure(Some(*open));
             }
-            if kind.is_sketch() {
+            // P3I.9 (SM20, `form-10.png`): a Form's eye shows or hides its sketch on the flat view.
+            if kind.is_sketch() || *kind == RowKind::Sm9("sheet-metal-form") {
                 // The eye shows or hides the sketch (PS1.5); it shows while the row is hovered.
                 let tip = if *shown { format!("Hide {name}") } else { format!("Show {name}") };
                 item = item

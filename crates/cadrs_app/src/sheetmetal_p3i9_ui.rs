@@ -12,8 +12,8 @@
 //! - **Form** (`formed-03-02.png`, `forms-selectPS-dialog-01.png`): *Form Part Studio* (a field
 //!   with the Part Studio icon: "Select Part Studio…", or the form's name) opening the **Select
 //!   Part Studio** panel beside the dialog (Current document | Other documents | Libraries, a
-//!   search field that filters the forms by name, type or document, Library / Type / Form, the
-//!   form's variables, **Done**; a document Part Studio without a Length variable `thickness` is
+//!   search field that filters the forms by name, type or document, Library / Type / Form, a
+//!   shaded preview of the form, the form's variables, **Done**; a document Part Studio without a Length variable `thickness` is
 //!   refused with Onshape's rule); *Location(s)* with the
 //!   mate connector icon and the opposite direction arrow; *Target face(s)*.
 //! - **Tag** (`form-06a.png`): the type (*Form*), *Part to add*, *Part to remove*, *Sketch for
@@ -293,16 +293,27 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: Sm9Field, pick: Pi
             None => return false,
         },
         (FeatureKind::SheetMetalLoft(x), Sm9Field::LoftConnection(i)) => {
-            // A vertex or edge of a profile: the connection's end on the nearer profile.
+            // A vertex or edge of a profile: the connection's end on the nearer profile. An edge
+            // or curve gives its point under the pointer (its middle could lie nearer the other
+            // profile: a loft's slanted facet edge runs from one profile to the other).
+            let near = |pts: &[[f64; 3]]| under_pointer(world, pts);
             let point = match pick {
                 Pick::Vertex(part, v) => cache.part(part).and_then(|p| p.solid.vertex(&v)).map(|v| v.point),
-                Pick::Edge(part, e) => cache.part(part).and_then(|p| p.solid.edge(&e)).map(|e| e.midpoint()),
+                Pick::Edge(part, e) => cache.part(part).and_then(|p| p.solid.edge(&e)).and_then(|e| near(&e.points).or(Some(e.midpoint()))),
                 Pick::SketchPoint(s, p) => features.iter().find(|f| f.id == s).and_then(|f| f.sketch()).and_then(|sk| Some(sk.plane?.frame().to_world(sk.geometry.points.get(p)?.pos))),
-                Pick::SketchCurve(s, c) => features
+                Pick::SketchCurve(s, c) => cache
+                    .sketch_curves
                     .iter()
-                    .find(|f| f.id == s)
-                    .and_then(|f| f.sketch())
-                    .and_then(|sk| Some(sk.plane?.frame().to_world(curve_mid(&sk.geometry, c)?))),
+                    .find(|sc| sc.sketch == s)
+                    .and_then(|sc| sc.curves.iter().find(|(id, _)| *id == c))
+                    .and_then(|(_, pts)| near(pts))
+                    .or_else(|| {
+                        features
+                            .iter()
+                            .find(|f| f.id == s)
+                            .and_then(|f| f.sketch())
+                            .and_then(|sk| Some(sk.plane?.frame().to_world(curve_mid(&sk.geometry, c)?)))
+                    }),
                 _ => None,
             };
             let Some(point) = point else { return false };
@@ -375,6 +386,26 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: Sm9Field, pick: Pi
     true
 }
 
+/// The point of a polyline nearest the pointer on screen.
+fn under_pointer(world: &World, pts: &[[f64; 3]]) -> Option<[f64; 3]> {
+    let view = world.get_resource::<crate::viewport::ViewportView>()?.view;
+    let rect = *world.get_resource::<crate::viewport::ViewportRect>()?;
+    let at = rect.offset(world.get_resource::<crate::viewport::ViewportDrag>()?.pointer());
+    let mut best: Option<(f32, [f64; 3])> = None;
+    for w in pts.windows(2) {
+        let (a, b) = (v3(w[0]), v3(w[1]));
+        let (sa, sb) = (view.project(a), view.project(b));
+        let seg = sb - sa;
+        let t = ((at - sa).dot(seg) / seg.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        let d = at.distance(sa + seg * t);
+        if best.is_none_or(|(bd, _)| d < bd) {
+            let t = f64::from(t);
+            best = Some((d, [w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t, w[0][2] + (w[1][2] - w[0][2]) * t]));
+        }
+    }
+    best.map(|(_, p)| p).or_else(|| pts.first().copied())
+}
+
 fn curve_mid(g: &cadrs_sketch::Sketch, c: cadrs_sketch::CurveId) -> Option<cadrs_sketch::Vec2> {
     match g.curves.get(c)?.kind {
         cadrs_sketch::CurveKind::Line { a, b } => {
@@ -395,7 +426,9 @@ pub fn pick_filter(field: Sm9Field, none: PickFilter) -> PickFilter {
     match field {
         Sm9Field::LoftProfile1 | Sm9Field::LoftProfile2 => PickFilter { faces: true, edges: true, regions: true, sketch_curves: true, sketch_points: true, ..none },
         Sm9Field::LoftScope => PickFilter { faces: true, edges: true, ..none },
-        Sm9Field::LoftConnection(_) => PickFilter { edges: true, sketch_curves: true, sketch_points: true, ..none },
+        // The loft's own edges and vertices too (`skip_op: None`): its profiles' sketch lines lie
+        // under its walls (hidden from picking), its edges along them are what one clicks.
+        Sm9Field::LoftConnection(_) => PickFilter { edges: true, sketch_curves: true, sketch_points: true, skip_op: None, ..none },
         Sm9Field::FormLocations => PickFilter { edges: true, sketch_points: true, connectors: true, ..none },
         Sm9Field::FormTargets => PickFilter { faces: true, planar_only: true, ..none },
         Sm9Field::TagAdd | Sm9Field::TagRemove => PickFilter { faces: true, edges: true, ..none },
@@ -1129,6 +1162,8 @@ pub struct FormPicker {
     /// follow once typing pauses, so no key is lost while the panel is rebuilt.
     typed: String,
     still: u32,
+    /// Rendered previews of forms, by form and variables.
+    previews: std::collections::HashMap<String, Handle<Image>>,
     refocus: bool,
     current: Vec<DocForm>,
     others: Vec<DocForm>,
@@ -1353,6 +1388,22 @@ fn sync_picker(world: &mut World) {
         _ => None,
     };
     let rows: Vec<(String, Sm9Role, Vec<String>, usize)> = rows.into_iter().map(|(a, b, c, d)| (a.to_string(), b, c, d)).collect();
+    // The shown form's preview (made once per form and variables).
+    let pick = if refused.is_none() { shown_pick(p) } else { None };
+    let preview_key = pick.as_ref().map(|k| format!("{:?} {:?}", k.source, values.iter().map(|v| v.expr.clone()).collect::<Vec<_>>()));
+    let cached = preview_key.as_ref().and_then(|k| p.previews.get(k).cloned());
+    let preview = match (cached, pick, preview_key) {
+        (Some(h), ..) => Some(h),
+        (None, Some(pick), Some(key)) => {
+            let img = form_preview(&pick, &values);
+            let h = img.map(|i| world.resource_mut::<Assets<Image>>().add(i));
+            if let Some(h) = &h {
+                world.resource_mut::<FormPicker>().previews.insert(key, h.clone());
+            }
+            h
+        }
+        _ => None,
+    };
     let empty = empty.map(str::to_string);
     let t = theme.clone();
     let tf = theme.clone();
@@ -1372,6 +1423,17 @@ fn sync_picker(world: &mut World) {
             for (label, role, opts, sel) in &rows {
                 let name = format!("form-picker-{}", label.to_lowercase());
                 select(b, t, &name, label, *role, opts, *sel);
+            }
+            if let Some(img) = &preview {
+                b.spawn((
+                    Name::new("form-picker-preview"),
+                    Node { margin: UiRect::new(Val::Px(18.0), Val::Px(6.0), Val::Px(6.0), Val::Px(2.0)), border: UiRect::all(Val::Px(1.0)), ..default() },
+                    BorderColor::all(t.border),
+                    BackgroundColor(Color::WHITE),
+                ))
+                .with_children(|f| {
+                    f.spawn(ImageNode::new(img.clone()));
+                });
             }
             if let Some(why) = &refused {
                 b.spawn((
@@ -1406,6 +1468,107 @@ fn sync_picker(world: &mut World) {
             }
         });
     }
+}
+
+/// The form the panel shows (its pick), as Done would take it.
+fn shown_pick(p: &FormPicker) -> Option<FormPick> {
+    let q = &p.query;
+    match p.tab {
+        2 => library_forms(p.kind, q).get(p.form).map(|f| FormPick { source: FormSource::Library(*f), name: f.label().into(), document_name: LIBRARY_NAME.into(), studio: Vec::new() }),
+        0 => doc_shown(&p.current, q).get(p.form).map(|d| FormPick { source: FormSource::Current { element: d.element }, name: d.name.clone(), document_name: String::new(), studio: d.studio.clone() }),
+        _ => doc_shown(&p.others, q).get(p.form).and_then(|d| {
+            let (doc, dn) = d.document.clone()?;
+            Some(FormPick { source: FormSource::Other { document: doc, element: d.element }, name: d.name.clone(), document_name: dn, studio: d.studio.clone() })
+        }),
+    }
+}
+
+/// A small shaded picture of a form (its add parts blue, its remove parts red), seen from the
+/// front, right and above: the form's Part Studio built for a 1 mm sheet with the panel's
+/// variables, its tagged parts' meshes drawn with a depth buffer.
+fn form_preview(pick: &FormPick, values: &[FormVariable]) -> Option<Image> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let studio = cadrs_core::sheetmetal_form::form_studio(pick, values, 1.0).ok()?;
+    let tag = tag_of(&studio)?.clone();
+    let build = cadrs_core::rebuild::build(&studio);
+    let mut tris: Vec<([[f64; 3]; 3], bool)> = Vec::new();
+    for (list, add) in [(&tag.add, true), (&tag.remove, false)] {
+        for pid in list {
+            let Some(part) = build.parts.iter().find(|q| q.id == *pid) else { continue };
+            let sol = &part.solid;
+            for t in sol.indices.chunks(3) {
+                if t.len() == 3 {
+                    tris.push(([sol.positions[t[0] as usize], sol.positions[t[1] as usize], sol.positions[t[2] as usize]], add));
+                }
+            }
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    let (w, h) = (264u32, 120u32);
+    let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let unit = |a: [f64; 3]| {
+        let l = dot(a, a).sqrt().max(1e-12);
+        [a[0] / l, a[1] / l, a[2] / l]
+    };
+    // Towards the viewer, right and up on the picture.
+    let to_eye = unit([0.8, -1.0, 0.9]);
+    let right = unit(cross([0.0, 0.0, 1.0], to_eye));
+    let up = cross(to_eye, right);
+    let proj = |p: [f64; 3]| (dot(p, right), dot(p, up), dot(p, to_eye));
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for (t, _) in &tris {
+        for p in t {
+            let (x, y, _) = proj(*p);
+            lo = [lo[0].min(x), lo[1].min(y)];
+            hi = [hi[0].max(x), hi[1].max(y)];
+        }
+    }
+    let scale = ((w - 12) as f64 / (hi[0] - lo[0]).max(1e-9)).min((h - 12) as f64 / (hi[1] - lo[1]).max(1e-9));
+    let (ox, oy) = ((w as f64 - (hi[0] - lo[0]) * scale) / 2.0, (h as f64 - (hi[1] - lo[1]) * scale) / 2.0);
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    let mut depth = vec![f64::MIN; (w * h) as usize];
+    let light = unit([0.4, -0.5, 1.0]);
+    for (t, add) in &tris {
+        let n = unit(cross(sub(t[1], t[0]), sub(t[2], t[0])));
+        let shade = 0.45 + 0.55 * dot(n, light).abs();
+        let base: [f64; 3] = if *add { [0x8f as f64, 0xb4 as f64, 0xd8 as f64] } else { [0xe0 as f64, 0x8a as f64, 0x80 as f64] };
+        let rgb = [(base[0] * shade) as u8, (base[1] * shade) as u8, (base[2] * shade) as u8];
+        let v: Vec<(f64, f64, f64)> = t
+            .iter()
+            .map(|p| {
+                let (x, y, z) = proj(*p);
+                (ox + (x - lo[0]) * scale, h as f64 - (oy + (y - lo[1]) * scale), z)
+            })
+            .collect();
+        let area = (v[1].0 - v[0].0) * (v[2].1 - v[0].1) - (v[2].0 - v[0].0) * (v[1].1 - v[0].1);
+        if area.abs() < 1e-12 {
+            continue;
+        }
+        let (x0, x1) = (v.iter().map(|q| q.0).fold(f64::MAX, f64::min).floor().max(0.0) as u32, v.iter().map(|q| q.0).fold(f64::MIN, f64::max).ceil().min((w - 1) as f64) as u32);
+        let (y0, y1) = (v.iter().map(|q| q.1).fold(f64::MAX, f64::min).floor().max(0.0) as u32, v.iter().map(|q| q.1).fold(f64::MIN, f64::max).ceil().min((h - 1) as f64) as u32);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
+                let e = |a: (f64, f64, f64), b: (f64, f64, f64)| (b.0 - a.0) * (fy - a.1) - (fx - a.0) * (b.1 - a.1);
+                let (w0, w1, w2) = (e(v[1], v[2]) / area, e(v[2], v[0]) / area, e(v[0], v[1]) / area);
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    continue;
+                }
+                let z = w0 * v[0].2 + w1 * v[1].2 + w2 * v[2].2;
+                let k = (y * w + x) as usize;
+                if z > depth[k] {
+                    depth[k] = z;
+                    px[k * 4..k * 4 + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 0xff]);
+                }
+            }
+        }
+    }
+    Some(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, px, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
 }
 
 /// The search field's text into the picker (the lists follow it).
