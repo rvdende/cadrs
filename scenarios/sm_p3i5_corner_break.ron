@@ -1,5 +1,6 @@
 // Corner break (P3I.5, SM11): the plate's back right corner edge (through the thickness) picked;
-// Fillet, Radius 10 (Distance control); then the Chamfer tab, Equal distance 8; accepted. The corner
+// Fillet, Radius 10 (Distance control); Asymmetric 10 / 4 (01b); Allow edge overflow with radius 70
+// (01c, past the 60 edge); then the Chamfer tab, Equal distance 8; accepted. The corner
 // break is in the definition, so the flat shows it, and the model's joints lock in the table.
 Scenario(
     start: Some("document"),
@@ -43,6 +44,37 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("01-fillet-r10"),
+        // Asymmetric: second radius 4 (a quarter ellipse, 10 along the right edge, 4 along the top).
+        Click(ui("smt-asymmetric-checkbox")),
+        Wait(20),
+        Click(ui("sm-corner-break-size2-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("4"),
+        Key("Tab"),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01b-asymmetric-10-4"),
+        // Allow edge overflow with a radius of 70 (longer than the 60 edge): the round runs on
+        // past the corner at (100, 0).
+        Click(ui("smt-asymmetric-checkbox")),
+        Wait(10),
+        Click(ui("smt-allow-overflow-checkbox")),
+        Wait(10),
+        Click(ui("sm-corner-break-size-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("70"),
+        Key("Tab"),
+        Wait(30),
+        Custom("view 30 60 60 30 0 0.11"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01c-overflow-r70"),
+        Custom("view 30 30 90 55 0 0.05"),
+        Wait(10),
         Click(ui("sm-corner-break-type-1")),
         Wait(30),
         Click(ui("sm-corner-break-distance-field")),

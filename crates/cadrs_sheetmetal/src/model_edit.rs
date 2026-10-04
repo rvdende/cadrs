@@ -883,22 +883,45 @@ fn parallel(w: &Wall, n: V3) -> bool {
     w.surface.normal().is_some_and(|wn| wn.dot(&n).abs() > 1.0 - 1e-6)
 }
 
-/// A polygon grown by `by` all round (rounded corners; `by ≤ 0` returns it as it is).
+/// A polygon grown by `by` all round, its corners mitred as an offset of the outline (so a
+/// rectangle grows into a rectangle; a corner sharper than about 30° is rounded instead, so the
+/// mitre doesn't run far out). `by ≤ 0` returns it as it is.
 pub fn grow(p: &Polygon, by: f64) -> Polygon {
     if by <= 1e-12 {
         return p.clone();
     }
     let mut parts = vec![p.clone()];
     for l in std::iter::once(&p.outer).chain(p.holes.iter()) {
-        for i in 0..l.len() {
-            let (a, b) = (l[i], l[(i + 1) % l.len()]);
+        let n = l.len();
+        for i in 0..n {
+            let (a, b) = (l[i], l[(i + 1) % n]);
             let d = b - a;
             if d.norm() < 1e-12 {
                 continue;
             }
-            let n = perp(d.normalize()) * by;
-            parts.push(Polygon::new(vec![a - n, b - n, b + n, a + n]));
-            parts.push(poly::circle(a, by, 24));
+            let nn = perp(d.normalize()) * by;
+            parts.push(Polygon::new(vec![a - nn, b - nn, b + nn, a + nn]));
+            // The corner at `a`: material lies left of each edge (outer counter-clockwise, holes
+            // clockwise), so away from it is the right-hand normal. A left turn is a convex
+            // corner of the material: fill it with the mitre.
+            let prev = l[(i + n - 1) % n];
+            let e1 = a - prev;
+            if e1.norm() < 1e-12 {
+                continue;
+            }
+            let (u1, u2) = (e1.normalize(), d.normalize());
+            if u1.perp(&u2) <= 1e-12 {
+                continue;
+            }
+            let (n1, n2) = (-perp(u1), -perp(u2));
+            let c = 1.0 + n1.dot(&n2);
+            if c < 0.27 {
+                // Sharper than ~30°: rounded.
+                parts.push(poly::circle(a, by, 24));
+                continue;
+            }
+            let tip = a + (n1 + n2) * (by / c);
+            parts.push(Polygon::new(vec![a, a + n1 * by, tip, a + n2 * by]));
         }
     }
     let refs: Vec<&Polygon> = parts.iter().collect();
@@ -965,6 +988,31 @@ pub fn add_tab(m: &mut Model, regions: &[Region3], walls: &[WallId]) -> Result<V
         return Err(EditError::NoTab);
     }
     Ok(took)
+}
+
+/// The sheet a tab region lies in: the span of the material, measured along the region's normal
+/// from its plane, of the parallel wall of `walls` its profile overlaps (the Tab's clearance
+/// pocket runs through it, SM5.4). `None` if it is on none of them.
+pub fn tab_sheet(m: &Model, r: &Region3, walls: &[WallId]) -> Option<(f64, f64)> {
+    let n = r.normal();
+    let t = m.params.thickness;
+    let mut best: Option<((f64, f64), f64)> = None;
+    for w in m.walls.iter().filter(|w| walls.contains(&w.id)) {
+        let Some(wn) = w.surface.normal() else { continue };
+        if wn.dot(&n).abs() < 1.0 - 1e-6 {
+            continue;
+        }
+        let z0 = (w.surface.point(P2::origin()) - r.origin).dot(&n);
+        let z1 = z0 + t * wn.dot(&n).signum();
+        if z0.min(z1) > 1e-6 || z0.max(z1) < -1e-6 {
+            continue;
+        }
+        let over = poly::overlap_area(&w.outline, &r.on_wall(w));
+        if over > 1e-9 && best.is_none_or(|(_, a)| over > a) {
+            best = Some(((z0.min(z1), z0.max(z1)), over));
+        }
+    }
+    best.map(|(z, _)| z)
 }
 
 /// Wall `b` (coplanar with `a`, same material side) merged into `a`.
@@ -1046,11 +1094,65 @@ fn section(tool: &CutTool, w: &Wall, t: f64) -> Vec<Polygon> {
     pieces.into_iter().filter(|p| p.area() > 1e-9).collect()
 }
 
+/// What a cut did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CutMade {
+    /// The walls cut.
+    pub walls: Vec<WallId>,
+    /// Walls the cut split: each extra piece is a wall of its own (the biggest keeps the id).
+    pub split: Vec<WallId>,
+    /// The bends whose regions the cut crossed (taken out in the flat, [`crate::flat_edit::FlatCut`]).
+    pub bends: Vec<JointId>,
+}
+
+impl CutMade {
+    pub fn is_empty(&self) -> bool {
+        self.walls.is_empty() && self.bends.is_empty()
+    }
+}
+
 /// Takes the tools' cross-sections out of the planar walls they cross (perpendicular to each
-/// wall). Returns the walls cut; a wall the cut splits keeps its biggest piece.
-pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> Result<Vec<WallId>, EditError> {
+/// wall), and out of the bend regions between them (SM12.1): what a tool takes from a bend's mid
+/// surface, in the bend's `(s, u)`, goes into the model as a flat cut ([`crate::flat_edit`]), so
+/// the flat and the folded bend both lose it. A wall the cut splits keeps every piece: the
+/// biggest keeps its id, each other piece becomes a wall (with the joints along its edges), and
+/// pieces no joint holds become parts of their own.
+pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> Result<CutMade, EditError> {
     let t = m.params.thickness;
-    let mut cut = Vec::new();
+    let mut made = CutMade::default();
+    // The bends first, on the model as it is.
+    let bend_cuts = bend_sections(m, tools, only);
+    // A part whose bends the cut crosses is cut in the flat as a whole (its walls' outlines stay,
+    // so their joints still run along their edges): the walls' sections and the bends' go into
+    // one flat cut.
+    let flat = (!bend_cuts.is_empty()).then(|| crate::flat::flatten(m));
+    let mut in_flat: Vec<(usize, Vec<Polygon>)> = Vec::new();
+    if let Some(flat) = &flat {
+        for (pi, part) in flat.parts.iter().enumerate() {
+            let mut shapes: Vec<Polygon> = Vec::new();
+            for (j, su) in &bend_cuts {
+                let Some(b) = part.bend(*j) else { continue };
+                let e = b.tangent_a.dir();
+                let n = {
+                    let n = perp(e);
+                    if (b.tangent_b.a - b.tangent_a.a).dot(&n) >= 0.0 { n } else { -n }
+                };
+                shapes.extend(su.iter().map(|p| p.map(|q| b.tangent_a.a + e * q.x + n * q.y)));
+                if !made.bends.contains(j) {
+                    made.bends.push(*j);
+                }
+            }
+            if !shapes.is_empty() {
+                in_flat.push((pi, shapes));
+            }
+        }
+    }
+    let via_flat = |w: WallId| -> Option<usize> {
+        let flat = flat.as_ref()?;
+        in_flat.iter().find(|(pi, _)| flat.parts[*pi].walls.contains(&w)).map(|(pi, _)| *pi)
+    };
+    let mut flat_walls: Vec<(usize, Polygon)> = Vec::new();
+    let mut new_walls: Vec<Wall> = Vec::new();
     for wi in 0..m.walls.len() {
         let w = &m.walls[wi];
         if only.is_some_and(|o| !o.contains(&w.id)) {
@@ -1060,17 +1162,162 @@ pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> R
         if shapes.is_empty() || shapes.iter().all(|s| poly::overlap_area(&w.outline, s) < 1e-9) {
             continue;
         }
+        if let (Some(pi), Some(flat)) = (via_flat(w.id), flat.as_ref()) {
+            // Into the flat: the wall's own flat 2D placed in the part.
+            let Some(pm) = flat.parts[pi].placement(w.id) else { continue };
+            let params = m.params;
+            // Only what lies on the wall (past its edges, the flat holds other pieces).
+            for sh in shapes.iter().flat_map(|sh| poly::intersection(sh, &w.outline)) {
+                flat_walls.push((pi, sh.map(|q| pm.apply(w.flat_local(&params, q)))));
+            }
+            made.walls.push(w.id);
+            continue;
+        }
         let mut inputs: Vec<&Polygon> = vec![&w.outline];
         inputs.extend(shapes.iter());
-        let left = exact(poly::difference(std::slice::from_ref(&w.outline), &shapes), &inputs);
-        let Some(big) = left.into_iter().filter(|p| p.area() > 1e-9).max_by(|a, b| a.area().total_cmp(&b.area())) else {
+        let mut left: Vec<Polygon> = exact(poly::difference(std::slice::from_ref(&w.outline), &shapes), &inputs).into_iter().filter(|p| p.area() > 1e-9).collect();
+        if left.is_empty() {
             return Err(EditError::WallCutAway);
-        };
+        }
+        left.sort_by(|a, b| b.area().total_cmp(&a.area()));
         let id = w.id;
-        m.walls[wi].outline = big;
-        cut.push(id);
+        let surface = w.surface;
+        let size = size_of(&w.outline);
+        let mut pieces = left.into_iter();
+        m.walls[wi].outline = pieces.next().expect("one");
+        made.walls.push(id);
+        // The other pieces: new walls, ids from the wall's own (the same at every replay).
+        let mut k = 0;
+        for piece in pieces {
+            let nid = loop {
+                let c = WallId(derived_id(0x5350_4c49_5400_0000 ^ u64::from(id.0), k));
+                k += 1;
+                if m.wall(c).is_none() && !new_walls.iter().any(|w| w.id == c) {
+                    break c;
+                }
+            };
+            // The joints along this piece's edges go with it.
+            let tol = 1e-6 * size + 1e-9;
+            for j in m.joints.iter_mut() {
+                let Some(seg) = j.segment_on(id) else { continue };
+                let mid = P2::from((seg.a.coords + seg.b.coords) / 2.0);
+                if distance_to_outline(&piece, mid) <= tol {
+                    if j.a == id {
+                        j.a = nid;
+                    } else {
+                        j.b = nid;
+                    }
+                }
+            }
+            new_walls.push(Wall { id: nid, surface, outline: piece });
+            made.split.push(nid);
+        }
     }
-    Ok(cut)
+    m.walls.extend(new_walls);
+    if let Some(flat) = &flat {
+        for (pi, mut shapes) in in_flat {
+            shapes.extend(flat_walls.iter().filter(|(p, _)| *p == pi).map(|(_, s)| s.clone()));
+            // One region: the pieces of the cut meet along the tangent lines.
+            let shapes: Vec<Polygon> = poly::union(&shapes).into_iter().filter(|p| p.area() > 1e-9).collect();
+            crate::flat_edit::remove(m, flat, pi, &shapes).map_err(|_| EditError::WallCutAway)?;
+        }
+    }
+    Ok(made)
+}
+
+/// Slices across a bend region the cut through it is measured on (exact for cuts whose edges
+/// run along or across the bend; others are a staircase this fine).
+const BEND_CUT_SLICES: usize = 24;
+
+/// What the tools take out of each bend region (both of whose walls are in `only`), in the bend's
+/// `(s, u)`: `s` along the bend from its tangent lines' `a` end, `u` across from wall `a`'s
+/// tangent line. Measured on the bend's mid surface, slice by slice across it.
+fn bend_sections(m: &Model, tools: &[CutTool], only: Option<&[WallId]>) -> Vec<(JointId, Vec<Polygon>)> {
+    let t = m.params.thickness;
+    let mut out = Vec::new();
+    for j in &m.joints {
+        let Some(b) = j.bend() else { continue };
+        if b.hem || only.is_some_and(|o| !o.contains(&j.a) || !o.contains(&j.b)) {
+            continue;
+        }
+        let (Some(g), Some(ba)) = (m.bend_geometry(j.id), b.allowance(&m.params)) else { continue };
+        if ba <= 1e-9 {
+            continue;
+        }
+        let span = g.ends.1 - g.ends.0;
+        let total = span.norm();
+        if total <= 1e-9 {
+            continue;
+        }
+        let es = span / total;
+        let rm = g.inner_radius + t / 2.0;
+        let mut rects: Vec<Polygon> = Vec::new();
+        for k in 0..BEND_CUT_SLICES {
+            let (u0, u1) = (ba * k as f64 / BEND_CUT_SLICES as f64, ba * (k + 1) as f64 / BEND_CUT_SLICES as f64);
+            let a = (u0 + u1) / 2.0 / ba * g.sweep;
+            let p0 = g.ends.0 + g.rotate_vec(g.start, a) * rm;
+            for tool in tools {
+                for (s0, s1) in tool_intervals(tool, p0, es, total, t) {
+                    if s1 - s0 > 1e-9 {
+                        rects.push(Polygon::rect(P2::new(s0, u0), P2::new(s1, u1)));
+                    }
+                }
+            }
+        }
+        if rects.is_empty() {
+            continue;
+        }
+        let shapes: Vec<Polygon> = poly::union(&rects).into_iter().filter(|p| p.area() > 1e-9).collect();
+        if !shapes.is_empty() {
+            out.push((j.id, shapes));
+        }
+    }
+    out
+}
+
+/// Where the line `p0 + es·s` (`s` in `0..len`) runs inside a tool's prism (the sheet's
+/// thickness counting at its depth limits, as for walls).
+fn tool_intervals(tool: &CutTool, p0: P3, es: V3, len: f64, t: f64) -> Vec<(f64, f64)> {
+    let r = &tool.region;
+    let nr = r.normal();
+    let dn = tool.dir.dot(&nr);
+    if dn.abs() < 1e-9 {
+        return Vec::new();
+    }
+    // Along the tool onto its profile's plane, in the profile's 2D.
+    let onto = |p: P3| {
+        let tau = (r.origin - p).dot(&nr) / dn;
+        let q = p + tool.dir * tau - r.origin;
+        P2::new(q.dot(&r.x), q.dot(&r.y))
+    };
+    let (q0, q1) = (onto(p0), onto(p0 + es * len));
+    let mut ivs: Vec<(f64, f64)> = if (q1 - q0).norm() < 1e-9 * len.max(1.0) {
+        if r.polygon.contains(q0) { vec![(0.0, len)] } else { Vec::new() }
+    } else {
+        let d = q1 - q0;
+        poly::clip_segment(Seg2::new(q0, q1), std::slice::from_ref(&r.polygon))
+            .into_iter()
+            .map(|s| ((s.a - q0).dot(&d) / d.norm_squared() * len, (s.b - q0).dot(&d) / d.norm_squared() * len))
+            .map(|(a, b)| (a.min(b).max(0.0), a.max(b).min(len)))
+            .collect()
+    };
+    if let Some((z0, z1)) = tool.z {
+        // How far along the tool: affine in s.
+        let z = |s: f64| (p0 + es * s - r.origin).dot(&nr) / dn;
+        let (za, zb) = (z(0.0), z(len));
+        let (lo, hi) = (z0 - t / 2.0, z1 + t / 2.0);
+        let clip = |(a, b): (f64, f64)| -> Option<(f64, f64)> {
+            if (zb - za).abs() < 1e-12 {
+                return (za >= lo && za <= hi).then_some((a, b));
+            }
+            let (sl, sh) = ((lo - za) / (zb - za) * len, (hi - za) / (zb - za) * len);
+            let (sl, sh) = (sl.min(sh), sl.max(sh));
+            let (x, y) = (a.max(sl), b.min(sh));
+            (y > x).then_some((x, y))
+        };
+        ivs = ivs.into_iter().filter_map(clip).collect();
+    }
+    ivs
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1081,12 +1328,37 @@ pub fn cut_walls(m: &mut Model, tools: &[CutTool], only: Option<&[WallId]>) -> R
 pub enum CornerBreakKind {
     /// Rounded with this radius.
     Fillet { radius: f64 },
-    /// Cut off `d1` along the edge into the corner and `d2` along the edge out of it.
+    /// Cut off `d1` along the edge into the corner and `d2` along the edge out of it (the
+    /// setbacks from the corner, as Tangent measures them).
     Chamfer { d1: f64, d2: f64 },
+    /// A round with radius `r1` on the edge into the corner and `r2` on the edge out of it
+    /// (Asymmetric, SM11.2): it leaves the edges `rᵢ / tan(β/2)` from the corner and is the conic
+    /// through them tangent to both edges (a quarter ellipse at a square corner); equal radii make
+    /// the circular fillet. `overflow` (Allow edge overflow): a round longer than an edge runs on
+    /// over the next corner and trims what it meets, instead of failing.
+    Round { r1: f64, r2: f64, overflow: bool },
 }
 
-/// Segments per quarter turn of a fillet's arc.
-const ARC_STEPS_PER_QUARTER: f64 = 12.0;
+/// How far an arc's chord may stray from it (mm): sets how many segments a round gets.
+const ARC_SAG: f64 = 0.002;
+
+/// Segments for an arc of radius `r` turning by `turn` (radians).
+fn arc_steps(r: f64, turn: f64) -> usize {
+    let r = r.abs().max(1e-9);
+    let step = if ARC_SAG >= r { std::f64::consts::FRAC_PI_4 } else { 2.0 * (1.0 - ARC_SAG / r).acos() };
+    // At least 12 a quarter turn, at most 128.
+    let step = step.clamp(std::f64::consts::FRAC_PI_2 / 128.0, std::f64::consts::FRAC_PI_2 / 12.0);
+    (turn.abs() / step).ceil().max(2.0) as usize
+}
+
+/// The setbacks (along the edge into the corner and out of it) of an Offset chamfer: the faces
+/// offset by `d1` (the edge in) and `d2` (the edge out) meet over the chamfer's ends (SM11.2). At
+/// a square corner they are the distances themselves.
+pub fn chamfer_offset_setbacks(d1: f64, d2: f64, beta: f64) -> (f64, f64) {
+    let (s, c) = beta.sin_cos();
+    let s = s.max(1e-9);
+    ((d2 + d1 * c) / s, (d1 + d2 * c) / s)
+}
 
 /// The interior angle at outline vertex `i` of `l` (between the edges to its neighbours, 0–π),
 /// with the unit directions in (from the previous vertex) and out (to the next).
@@ -1138,6 +1410,52 @@ pub fn corner_beta(m: &Model, wall: WallId, at: P2) -> Option<f64> {
     corner_angle(l, i).map(|(b, _, _)| b)
 }
 
+/// The points of a round at corner `v` (edge directions `e1` in, `e2` out, interior angle
+/// `beta`), from its end on the edge in to its end on the edge out. Fails if it is longer than
+/// either edge (unless `overflow`).
+#[allow(clippy::too_many_arguments)]
+fn round_points(v: P2, e1: V2, e2: V2, beta: f64, r1: f64, r2: f64, len_in: f64, len_out: f64, overflow: bool) -> Result<Vec<P2>, EditError> {
+    if !(r1 > 0.0 && r2 > 0.0) {
+        return Err(EditError::CornerTooBig);
+    }
+    let tb = (beta / 2.0).tan();
+    let (s1, s2) = (r1 / tb, r2 / tb);
+    if !overflow && (s1 > len_in + 1e-9 || s2 > len_out + 1e-9) {
+        return Err(EditError::CornerTooBig);
+    }
+    let (a, b) = (v - e1 * s1, v + e2 * s2);
+    let turn = std::f64::consts::PI - beta;
+    if (r1 - r2).abs() <= 1e-12 {
+        // The circular fillet.
+        let radius = r1;
+        let bis = (e2 - e1).normalize();
+        let c = v + bis * (radius / (beta / 2.0).sin());
+        let (a0, a1) = ((a - c).y.atan2((a - c).x), (b - c).y.atan2((b - c).x));
+        let mut sweep = a1 - a0;
+        while sweep > std::f64::consts::PI {
+            sweep -= std::f64::consts::TAU;
+        }
+        while sweep < -std::f64::consts::PI {
+            sweep += std::f64::consts::TAU;
+        }
+        let steps = arc_steps(radius, turn);
+        let mut pts: Vec<P2> = (0..=steps).map(|k| c + V2::new((a0 + sweep * k as f64 / steps as f64).cos(), (a0 + sweep * k as f64 / steps as f64).sin()) * radius).collect();
+        // The ends exactly on the edges.
+        pts[0] = a;
+        pts[steps] = b;
+        return Ok(pts);
+    }
+    // The conic: a rational quadratic Bézier from `a` to `b` with control point `v` and weight
+    // sin(β/2) (the circle's when the setbacks are equal), sampled evenly in its turning.
+    let w = (beta / 2.0).sin();
+    let at = |t: f64| {
+        let (b0, b1, b2) = ((1.0 - t) * (1.0 - t), 2.0 * w * t * (1.0 - t), t * t);
+        P2::from((a.coords * b0 + v.coords * b1 + b.coords * b2) / (b0 + b1 + b2))
+    };
+    let steps = arc_steps(r1.max(r2), turn) * 2;
+    Ok((0..=steps).map(|k| at(k as f64 / steps as f64)).collect())
+}
+
 /// **Corner break** (SM11): wall `wall`'s outline corner at `at` (local 2D) rounded or cut.
 pub fn break_corner(m: &mut Model, wall: WallId, at: P2, kind: CornerBreakKind) -> Result<(), EditError> {
     let wi = m.walls.iter().position(|w| w.id == wall).ok_or(EditError::NoWall)?;
@@ -1158,33 +1476,22 @@ pub fn break_corner(m: &mut Model, wall: WallId, at: P2, kind: CornerBreakKind) 
             }
             vec![v - e1 * d1, v + e2 * d2]
         }
-        CornerBreakKind::Fillet { radius } => {
-            if radius <= 0.0 {
-                return Err(EditError::CornerTooBig);
+        CornerBreakKind::Fillet { radius } => round_points(v, e1, e2, beta, radius, radius, len_in, len_out, false)?,
+        CornerBreakKind::Round { r1, r2, overflow } => {
+            let pts = round_points(v, e1, e2, beta, r1, r2, len_in, len_out, overflow)?;
+            let (s1, s2) = ((pts[0] - v).norm(), (pts[pts.len() - 1] - v).norm());
+            if s1 > len_in + 1e-9 || s2 > len_out + 1e-9 {
+                // Overflow: the round past the corner's edges, cut from the whole outline.
+                let mut cut = vec![v];
+                cut.extend(pts);
+                let cut = Polygon::new(cut);
+                let w = &m.walls[wi];
+                let left = exact(poly::difference(std::slice::from_ref(&w.outline), std::slice::from_ref(&cut)), &[&w.outline, &cut]);
+                let big = left.into_iter().filter(|p| p.area() > 1e-9).max_by(|a, b| a.area().total_cmp(&b.area())).ok_or(EditError::CornerTooBig)?;
+                m.walls[wi].outline = big;
+                return Ok(());
             }
-            let tl = radius / (beta / 2.0).tan();
-            if tl > len_in + 1e-9 || tl > len_out + 1e-9 {
-                return Err(EditError::CornerTooBig);
-            }
-            let (a, b) = (v - e1 * tl, v + e2 * tl);
-            let bis = (e2 - e1).normalize();
-            let c = v + bis * (radius / (beta / 2.0).sin());
-            let (a0, a1) = ((a - c).y.atan2((a - c).x), (b - c).y.atan2((b - c).x));
-            let turn = std::f64::consts::PI - beta;
-            let mut sweep = a1 - a0;
-            while sweep > std::f64::consts::PI {
-                sweep -= std::f64::consts::TAU;
-            }
-            while sweep < -std::f64::consts::PI {
-                sweep += std::f64::consts::TAU;
-            }
-            let steps = ((turn / std::f64::consts::FRAC_PI_2) * ARC_STEPS_PER_QUARTER).ceil().max(2.0) as usize;
-            (0..=steps)
-                .map(|k| {
-                    let ang = a0 + sweep * k as f64 / steps as f64;
-                    c + V2::new(ang.cos(), ang.sin()) * radius
-                })
-                .collect()
+            pts
         }
     };
     l.splice(i..=i, pts);
@@ -1463,6 +1770,79 @@ pub fn copy_walls(m: &mut Model, seeds: &[WallId], place: &Placement, seed: u64)
     Ok(made)
 }
 
+/// **Part pattern / Part mirror** of a sheet metal part (SM12.2): the walls `walls` (a whole
+/// flat-pattern part), the joints between them, their flat cuts and relief overrides copied by
+/// `place` as a part of their own in the same model (no joint joins it to the original), so the
+/// copy is sheet metal too: it has its own flat pattern and takes later sheet metal features.
+/// Returns the new walls.
+pub fn copy_part(m: &mut Model, walls: &[WallId], place: &Placement, seed: u64) -> Result<Vec<WallId>, EditError> {
+    let mut kw = 0;
+    let mut kj = 0;
+    let mut ids: Vec<(WallId, WallId)> = Vec::new();
+    for w in walls {
+        if m.wall(*w).is_none() {
+            return Err(EditError::NoWall);
+        }
+        let mut id = free_wall(m, seed, &mut kw);
+        while ids.iter().any(|(_, n)| *n == id) {
+            id = free_wall(m, seed, &mut kw);
+        }
+        ids.push((*w, id));
+    }
+    let new_id = |w: WallId| ids.iter().find(|(o, _)| *o == w).map(|(_, n)| *n);
+    let swap = |p: P2| if place.mirrors() { P2::new(p.y, p.x) } else { p };
+    let mut new_walls = Vec::new();
+    for (old, nid) in &ids {
+        let ow = m.wall(*old).expect("checked");
+        let surface = match ow.surface {
+            Surface::Planar { origin, u, v } if place.mirrors() => Surface::Planar { origin: place.point(origin), u: place.vec(v), v: place.vec(u) },
+            Surface::Planar { origin, u, v } => Surface::Planar { origin: place.point(origin), u: place.vec(u), v: place.vec(v) },
+            Surface::Rolled { .. } if place.mirrors() => return Err(EditError::CantCopy),
+            Surface::Rolled { axis_origin, axis, start, radius, material_outside } => Surface::Rolled {
+                axis_origin: place.point(axis_origin),
+                axis: place.vec(axis),
+                start: place.vec(start),
+                radius,
+                material_outside,
+            },
+        };
+        new_walls.push(Wall { id: *nid, surface, outline: ow.outline.map(swap) });
+    }
+    let mut names = namer(m);
+    let mut new_joints: Vec<Joint> = Vec::new();
+    let mut joint_ids: Vec<(JointId, JointId)> = Vec::new();
+    for j in m.joints.iter().filter(|j| walls.contains(&j.a) && walls.contains(&j.b)) {
+        let mut c = j.clone();
+        let (sa, sb) = segments_mut(&mut c);
+        *sa = Seg2::new(swap(sa.a), swap(sa.b));
+        *sb = Seg2::new(swap(sb.a), swap(sb.b));
+        c.a = new_id(j.a).expect("id");
+        c.b = new_id(j.b).expect("id");
+        let mut id = free_joint(m, seed ^ 0x5041_5254, &mut kj);
+        while new_joints.iter().any(|x| x.id == id) {
+            id = free_joint(m, seed ^ 0x5041_5254, &mut kj);
+        }
+        c.id = id;
+        c.name = names.name(&c.kind);
+        joint_ids.push((j.id, id));
+        new_joints.push(c);
+    }
+    let nj = |j: JointId| joint_ids.iter().find(|(o, _)| *o == j).map(|(_, n)| *n);
+    let cuts: Vec<crate::flat_edit::FlatCut> = m
+        .flat_cuts
+        .iter()
+        .filter_map(|c| Some(crate::flat_edit::FlatCut { anchor: new_id(c.anchor)?, shapes: c.shapes.iter().map(|s| s.map(swap)).collect() }))
+        .collect();
+    let corners: Vec<crate::model::CornerOverride> = m.corner_overrides.iter().filter_map(|o| Some(crate::model::CornerOverride { bends: (nj(o.bends.0)?, nj(o.bends.1)?), ..*o })).collect();
+    let ends: Vec<crate::model::BendReliefOverride> = m.bend_relief_overrides.iter().filter_map(|o| Some(crate::model::BendReliefOverride { bend: nj(o.bend)?, ..*o })).collect();
+    m.walls.extend(new_walls);
+    m.joints.extend(new_joints);
+    m.flat_cuts.extend(cuts);
+    m.corner_overrides.extend(corners);
+    m.bend_relief_overrides.extend(ends);
+    Ok(ids.into_iter().map(|(_, n)| n).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1661,14 +2041,140 @@ mod tests {
         break_corner(&mut m, WallId(0), P2::new(100.0, 60.0), CornerBreakKind::Fillet { radius: 10.0 }).unwrap();
         let a = m.walls[0].outline.area();
         let want = 6000.0 - (1.0 - PI / 4.0) * 100.0;
-        // (The arc is a polyline of 7.5° steps.)
-        assert!((a - want).abs() < 0.3, "{a} vs {want}");
+        // (The arc is a polyline within 0.002 of the circle.)
+        assert!((a - want).abs() < 0.05, "{a} vs {want}");
         break_corner(&mut m, WallId(0), P2::new(0.0, 0.0), CornerBreakKind::Chamfer { d1: 5.0, d2: 8.0 }).unwrap();
         assert!((m.walls[0].outline.area() - a + 20.0).abs() < 1e-6);
         assert_eq!(break_corner(&mut m, WallId(0), P2::new(100.0, 0.0), CornerBreakKind::Fillet { radius: 70.0 }), Err(EditError::CornerTooBig));
         assert!(corner_vertex_at(&m, P3::new(100.0, 0.0, 1.0), 0.5).is_some());
         assert!((radius_for_width(10.0 * 2f64.sqrt(), FRAC_PI_2) - 10.0).abs() < 1e-9);
         assert!((chamfer_second(5.0, PI / 4.0, FRAC_PI_2) - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn asymmetric_rounds_overflow_and_offset_chamfers() {
+        // Asymmetric at a square corner: a quarter ellipse with semi-axes 10 and 6.
+        let mut m = plate();
+        break_corner(&mut m, WallId(0), P2::new(100.0, 60.0), CornerBreakKind::Round { r1: 10.0, r2: 6.0, overflow: false }).unwrap();
+        let want = 6000.0 - 10.0 * 6.0 * (1.0 - PI / 4.0);
+        let a = m.walls[0].outline.area();
+        assert!((a - want).abs() < 0.02, "{a} vs {want}");
+        // The 10 is on the edge into the corner (the right edge, going up), the 6 on the top edge.
+        let (_, hi) = m.walls[0].outline.bounds().unwrap();
+        assert!((hi.x - 100.0).abs() < 1e-9 && (hi.y - 60.0).abs() < 1e-9);
+        assert!(m.walls[0].outline.outer.iter().any(|p| (p - P2::new(100.0, 50.0)).norm() < 1e-9));
+        assert!(m.walls[0].outline.outer.iter().any(|p| (p - P2::new(94.0, 60.0)).norm() < 1e-9));
+        // A round longer than an edge fails without overflow...
+        let mut m = plate();
+        let big = CornerBreakKind::Round { r1: 70.0, r2: 70.0, overflow: false };
+        assert_eq!(break_corner(&mut m, WallId(0), P2::new(100.0, 60.0), big), Err(EditError::CornerTooBig));
+        // ...and with it runs over the next corner: the circle about (30, −10), radius 70, trims
+        // the plate's corner. Removed: the quarter round's corner less the part below y = 0.
+        break_corner(&mut m, WallId(0), P2::new(100.0, 60.0), CornerBreakKind::Round { r1: 70.0, r2: 70.0, overflow: true }).unwrap();
+        let below = 700.0 - (5.0 * 4800f64.sqrt() + 2450.0 * (1.0f64 / 7.0).asin());
+        let want = 6000.0 - (4900.0 * (1.0 - PI / 4.0) - below);
+        let a = m.walls[0].outline.area();
+        assert!((a - want).abs() < 0.2, "{a} vs {want}");
+        assert!(m.validate().is_empty());
+        // Offset chamfers at a 60° corner: the faces offset by d meet over points d / tan 30°
+        // from the corner (Tangent would be d).
+        let (s1, s2) = chamfer_offset_setbacks(5.0, 5.0, PI / 3.0);
+        assert!((s1 - 5.0 / (PI / 6.0).tan()).abs() < 1e-9 && (s1 - s2).abs() < 1e-12);
+        let (s1, s2) = chamfer_offset_setbacks(5.0, 8.0, FRAC_PI_2);
+        assert!((s1 - 8.0).abs() < 1e-9 && (s2 - 5.0).abs() < 1e-9);
+        let mut tri = plate();
+        tri.walls[0].outline = Polygon::new(vec![P2::new(0.0, 0.0), P2::new(100.0, 0.0), P2::new(50.0, 50.0 * 3f64.sqrt())]);
+        let before = tri.walls[0].outline.area();
+        let (s1, s2) = chamfer_offset_setbacks(5.0, 5.0, PI / 3.0);
+        break_corner(&mut tri, WallId(0), P2::new(0.0, 0.0), CornerBreakKind::Chamfer { d1: s1, d2: s2 }).unwrap();
+        let cut = before - tri.walls[0].outline.area();
+        assert!((cut - 0.5 * s1 * s2 * (PI / 3.0).sin()).abs() < 1e-6, "{cut}");
+    }
+
+    #[test]
+    fn a_cut_that_splits_a_wall_keeps_both_pieces() {
+        let mut m = plate();
+        // A 4 wide slot right across the plate.
+        let slot = Region3 { origin: P3::new(0.0, 0.0, 10.0), x: V3::x(), y: V3::y(), polygon: Polygon::rect(P2::new(48.0, -10.0), P2::new(52.0, 70.0)) };
+        let made = cut_walls(&mut m, &[CutTool { region: slot, dir: -V3::z(), z: None }], None).unwrap();
+        assert_eq!(made.walls, vec![WallId(0)]);
+        assert_eq!(made.split.len(), 1);
+        assert_eq!(m.walls.len(), 2);
+        for w in &m.walls {
+            assert!((w.outline.area() - 48.0 * 60.0).abs() < 1e-6, "{}", w.outline.area());
+        }
+        let f = flatten(&m);
+        assert!(f.errors.is_empty());
+        assert_eq!(f.parts.len(), 2, "two parts now");
+        // On a bent plate, the piece beyond the slot keeps its bend.
+        let mut m = plate();
+        bend_wall(&mut m, &spec(80.0, BendAlignment::HoldLine), 3).unwrap();
+        let slot = Region3 { origin: P3::new(0.0, 0.0, 10.0), x: V3::x(), y: V3::y(), polygon: Polygon::rect(P2::new(38.0, -10.0), P2::new(42.0, 70.0)) };
+        cut_walls(&mut m, &[CutTool { region: slot, dir: -V3::z(), z: None }], None).unwrap();
+        assert!(m.validate().is_empty(), "{:?}", m.validate());
+        let f = flatten(&m);
+        assert!(f.errors.is_empty());
+        assert_eq!(f.parts.len(), 2);
+        assert!(f.parts.iter().any(|p| p.bends.len() == 1), "the bend went with its piece");
+    }
+
+    #[test]
+    fn a_slot_across_a_bend_is_cut_from_the_bend_region_too() {
+        // Bent up at x = 70 (Hold line): axis at x = 70, z = 5; the mid surface (radius 4) runs
+        // x = 70 + 4 sin a. A slot from x = 60 to 72 (y 25..35) cut straight down takes 10 of the
+        // base and the bend region up to a = 30°: a third of its allowance.
+        let mut m = plate();
+        bend_wall(&mut m, &spec(70.0, BendAlignment::HoldLine), 3).unwrap();
+        let before = flatten(&m).parts[0].area();
+        let slot = Region3 { origin: P3::new(0.0, 0.0, 50.0), x: V3::x(), y: V3::y(), polygon: Polygon::rect(P2::new(60.0, 25.0), P2::new(72.0, 35.0)) };
+        let made = cut_walls(&mut m, &[CutTool { region: slot, dir: -V3::z(), z: None }], None).unwrap();
+        assert_eq!(made.bends.len(), 1);
+        let ba = m.joints[0].bend().unwrap().allowance(&m.params).unwrap();
+        let f = flatten(&m);
+        assert!(f.errors.is_empty(), "{:?}", f.errors);
+        let part = &f.parts[0];
+        let removed = before - part.area();
+        let want = 10.0 * (10.0 + ba / 3.0);
+        // (The booleans work on a 1 nm grid.)
+        assert!((removed - want).abs() < 1e-5, "{removed} vs {want}");
+        // One hole: the slot's flat outline, 10 wide, 10 + ba/3 long.
+        let holes: Vec<&Vec<P2>> = part.outline.iter().flat_map(|o| o.holes.iter()).collect();
+        assert_eq!(holes.len(), 1);
+        let (lo, hi) = Polygon::new(holes[0].clone()).bounds().unwrap();
+        let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+        let (long, short) = (w.max(h), w.min(h));
+        assert!((short - 10.0).abs() < 1e-6 && (long - (10.0 + ba / 3.0)).abs() < 1e-5, "{w} × {h}");
+    }
+
+    #[test]
+    fn a_part_copy_is_sheet_metal_of_its_own() {
+        let mut m = crate::samples::l_bracket(params(), true).unwrap();
+        let walls: Vec<WallId> = m.walls.iter().map(|w| w.id).collect();
+        let one = flatten(&m).parts[0].area();
+        let made = copy_part(&mut m, &walls, &Placement::Rigid(Rigid::translation(V3::new(0.0, 100.0, 0.0))), 21).unwrap();
+        assert_eq!(made.len(), walls.len());
+        assert!(m.validate().is_empty(), "{:?}", m.validate());
+        let f = flatten(&m);
+        assert_eq!(f.parts.len(), 2);
+        assert!(f.parts.iter().all(|p| (p.area() - one).abs() < 1e-6));
+        // Mirrored too.
+        let mut m = crate::samples::l_bracket(params(), true).unwrap();
+        copy_part(&mut m, &walls, &Placement::Mirror { point: P3::new(-10.0, 0.0, 0.0), normal: V3::x() }, 22).unwrap();
+        assert!(m.validate().is_empty(), "{:?}", m.validate());
+        let f = flatten(&m);
+        assert_eq!(f.parts.len(), 2);
+        assert!(f.parts.iter().all(|p| (p.area() - one).abs() < 1e-6));
+    }
+
+    #[test]
+    fn a_grown_rectangle_stays_a_rectangle() {
+        let g = grow(&Polygon::rect(P2::new(0.0, 0.0), P2::new(20.0, 10.0)), 0.5);
+        assert!((g.area() - 21.0 * 11.0).abs() < 1e-9, "{}", g.area());
+        // A concave L grows by its offset, its inner corner staying square.
+        let l = Polygon::new(vec![P2::new(0.0, 0.0), P2::new(10.0, 0.0), P2::new(10.0, 4.0), P2::new(4.0, 4.0), P2::new(4.0, 10.0), P2::new(0.0, 10.0)]);
+        let g = grow(&l, 1.0);
+        let want = Polygon::new(vec![P2::new(-1.0, -1.0), P2::new(11.0, -1.0), P2::new(11.0, 5.0), P2::new(5.0, 5.0), P2::new(5.0, 11.0), P2::new(-1.0, 11.0)]).area();
+        assert!((g.area() - want).abs() < 1e-9, "{} vs {want}", g.area());
     }
 
     #[test]

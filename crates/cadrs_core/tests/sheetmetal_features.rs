@@ -233,7 +233,8 @@ fn partial_flange_and_flange_outer_alignment() {
     sm(&mut st, "Flange", SheetMetalFeature::Flange(fl));
     let b = st.ok();
     let p = one_part(&b);
-    assert!(close(volume(p), predicted(&b, p), 1e-6), "{} vs {}", volume(p), predicted(&b, p));
+    // (Its reliefs fold as exact arcs, the flat's polygons: 2e-5.)
+    assert!(close(volume(p), predicted(&b, p), 2e-5), "{} vs {}", volume(p), predicted(&b, p));
     let (_, hi) = bounds(p);
     assert!((hi[0] - 50.0).abs() < 1e-6, "Outer: the flange's outside on the edge: {hi:?}");
 }

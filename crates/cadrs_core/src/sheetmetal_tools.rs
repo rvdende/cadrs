@@ -400,6 +400,15 @@ pub struct CornerBreakFeature {
     /// Radius or Width (mm).
     pub size: f64,
     pub size_expr: String,
+    /// Asymmetric (SM11.2): `size` on the edge into the corner, `size2` ("Second radius") on the
+    /// edge out of it; `flip_asymmetric` swaps them.
+    pub asymmetric: bool,
+    pub size2: f64,
+    pub size2_expr: String,
+    pub flip_asymmetric: bool,
+    /// Allow edge overflow (SM11.2): a round longer than the corner's edges runs on over the next
+    /// corners instead of failing.
+    pub allow_overflow: bool,
     pub chamfer_measurement: ChamferMeasurement,
     pub chamfer_type: ChamferType,
     pub distance: f64,
@@ -421,6 +430,11 @@ impl Default for CornerBreakFeature {
             fillet_measurement: FilletMeasurement::Radius,
             size: 5.0,
             size_expr: "5 mm".into(),
+            asymmetric: false,
+            size2: 3.0,
+            size2_expr: "3 mm".into(),
+            flip_asymmetric: false,
+            allow_overflow: false,
             chamfer_measurement: ChamferMeasurement::Offset,
             chamfer_type: ChamferType::EqualDistance,
             distance: 5.0,
@@ -441,6 +455,9 @@ impl CornerBreakFeature {
         }
         if !self.chamfer && !(self.size > 0.0) {
             return Some("The radius must be greater than 0");
+        }
+        if !self.chamfer && self.asymmetric && !(self.size2 > 0.0) {
+            return Some("The second radius must be greater than 0");
         }
         if self.chamfer {
             if !(self.distance > 0.0) || (self.chamfer_type == ChamferType::TwoDistances && !(self.distance2 > 0.0)) {
@@ -531,10 +548,17 @@ impl SheetMetalTool {
         }
     }
 
-    /// The sketches it takes profiles of (hidden once used, like an extrude's).
+    /// The sketches it takes profiles or bend lines of (hidden once used, like an extrude's: in
+    /// Onshape a Bend hides the sketch its line came from, exercise E1 step 10).
     pub fn sketch_ids(&self) -> Vec<FeatureId> {
+        let line = |b: &BendFeature| match b.line {
+            Some(LineRef::Sketch(c)) => vec![c.sketch],
+            _ => Vec::new(),
+        };
         match self {
             SheetMetalTool::Tab(x) => x.sketch_ids(),
+            SheetMetalTool::Bend(b) => line(b),
+            SheetMetalTool::Jog(j) => line(&j.bend),
             _ => Vec::new(),
         }
     }

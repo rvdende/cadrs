@@ -334,6 +334,100 @@ impl BendGeom {
         let o = self.ends.0;
         o + self.rotate_vec(p - o, angle)
     }
+
+    /// A tool that takes `cut` (a polygon in the bend's `(s, u)`: `s` along it from `ends.0`,
+    /// `u` across, 0 to `allowance`) out of the bend's shell, through the thickness: the
+    /// polygon's outline swept radially (each edge in steps of at most 2° of the bend), closed
+    /// by caps inside the inner radius and outside the outer one. A closed triangle mesh, for
+    /// cuts whose sides aren't along or across the bend (a round relief, a slanted slot): their
+    /// faces follow the outline instead of a staircase. `None` for polygons with holes or
+    /// spanning more than 170° of the bend.
+    pub fn cut_mesh(&self, cut: &crate::poly::Polygon, allowance: f64, thickness: f64) -> Option<Vec<[P3; 3]>> {
+        use crate::poly::P2;
+        if !cut.holes.is_empty() || cut.outer.len() < 3 || allowance <= 1e-9 || self.sweep.abs() <= 1e-9 {
+            return None;
+        }
+        let span = self.ends.1 - self.ends.0;
+        let total = span.norm();
+        if total <= 1e-9 {
+            return None;
+        }
+        let es = span / total;
+        // Past the bend's ends and sides a little, so no skin is left there.
+        let (ds, du) = (1e-3 * thickness.max(0.01), 1e-4 / self.sweep.abs() * allowance);
+        let out = |q: P2| {
+            let s = if q.x <= 1e-9 { q.x - ds } else if q.x >= total - 1e-9 { q.x + ds } else { q.x };
+            let u = if q.y <= 1e-9 { q.y - du } else if q.y >= allowance - 1e-9 { q.y + du } else { q.y };
+            (s, u / allowance * self.sweep)
+        };
+        // The outline, each edge in steps of at most 2°.
+        let n = cut.outer.len();
+        let mut lp: Vec<(f64, f64)> = Vec::new();
+        for i in 0..n {
+            let (a, b) = (out(cut.outer[i]), out(cut.outer[(i + 1) % n]));
+            let k = ((b.1 - a.1).abs() / 2f64.to_radians()).ceil().max(1.0) as usize;
+            for j in 0..k {
+                let t = j as f64 / k as f64;
+                lp.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+            }
+        }
+        let (lo, hi) = lp.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| (l.min(p.1), h.max(p.1)));
+        if hi - lo > 170f64.to_radians() {
+            return None;
+        }
+        // Just inside the inner surface (an inner cap's chords dip towards the axis, away from the
+        // material); the sides run through the sheet to just outside it, then on out to the outer
+        // cap, far enough that its chords stay clear of the material.
+        let gap = 0.05 * thickness.max(0.01);
+        let rin = (self.inner_radius - gap).max(0.5 * self.inner_radius).max(1e-4);
+        let rmid = self.outer_radius + gap;
+        let rout = (self.outer_radius + 0.5 * thickness + 0.1) / ((hi - lo) / 2.0).cos();
+        let rm = (self.inner_radius + self.outer_radius) / 2.0;
+        let flat: Vec<f64> = lp.iter().flat_map(|(s, a)| [*s, *a * rm]).collect();
+        let idx = earcutr::earcut(&flat, &[], 2).ok()?;
+        if idx.len() < 3 {
+            return None;
+        }
+        let at = |(s, a): (f64, f64), r: f64| self.ends.0 + es * s + self.rotate_vec(self.start, a) * r;
+        // Every triangle wound to face out of the tool (its faces then come out of the boolean
+        // facing the right way, not dark): the caps away from the bend's surfaces, the sides
+        // away from the outline's inside.
+        let ccw = {
+            let m = lp.len();
+            (0..m).map(|i| (lp[i].0 * lp[(i + 1) % m].1 - lp[(i + 1) % m].0 * lp[i].1)).sum::<f64>() > 0.0
+        };
+        let wound = |t: [P3; 3], out: V3| {
+            let n = (t[1] - t[0]).cross(&(t[2] - t[0]));
+            if n.dot(&out) >= 0.0 { t } else { [t[0], t[2], t[1]] }
+        };
+        let radial = |(_, a): (f64, f64)| self.rotate_vec(self.start, a);
+        let mut tris: Vec<[P3; 3]> = Vec::with_capacity(idx.len() * 2 / 3 + lp.len() * 2);
+        for t in idx.chunks(3) {
+            let (a, b, c) = (lp[t[0]], lp[t[1]], lp[t[2]]);
+            let mid = ((a.0 + b.0 + c.0) / 3.0, (a.1 + b.1 + c.1) / 3.0);
+            tris.push(wound([at(a, rin), at(b, rin), at(c, rin)], -radial(mid)));
+            tris.push(wound([at(a, rout), at(b, rout), at(c, rout)], radial(mid)));
+        }
+        let m = lp.len();
+        for i in 0..m {
+            let (a, b) = (lp[i], lp[(i + 1) % m]);
+            // Away from the inside: right of the edge for a counter-clockwise outline in (s, θ).
+            let (ds, da) = (b.0 - a.0, (b.1 - a.1) * rm);
+            let (os, oa) = if ccw { (da, -ds) } else { (-da, ds) };
+            let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            let tangent = self.axis.cross(&radial(mid));
+            let out = es * os + tangent * oa;
+            // Through the sheet in eight rings: the true side (radial lines at the outline) is
+            // twisted, so each ring's two triangles stay nearly flat to each other.
+            const RINGS: usize = 8;
+            let ring = |k: usize| if k < RINGS { rin + (rmid - rin) * k as f64 / RINGS as f64 } else if k == RINGS { rmid } else { rout };
+            for (r0, r1) in (0..=RINGS).map(|k| (ring(k), ring(k + 1))) {
+                tris.push(wound([at(a, r0), at(b, r0), at(b, r1)], out));
+                tris.push(wound([at(a, r0), at(b, r1), at(a, r1)], out));
+            }
+        }
+        Some(tris)
+    }
 }
 
 /// A joint that doesn't agree with its walls in 3D ([`Model::validate`]).

@@ -72,7 +72,7 @@ fn e1_dxf() -> String {
 }
 
 /// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value.
-pub const E1_MASS: f64 = 0.356733;
+pub const E1_MASS: f64 = 0.356725;
 
 #[test]
 fn e1_six_bends_on_the_imported_flat_and_its_mass() {
@@ -96,7 +96,8 @@ fn e1_six_bends_on_the_imported_flat_and_its_mass() {
     assert!(ctx.flat.parts[0].area() <= tray.parts[0].area() + 1e-6);
     let part = &b.parts[0];
     let v = part.mass.unwrap().volume;
-    assert!((v - predicted(&b, ex::E1_MODEL)).abs() < 1e-4 * v, "{v} vs {}", predicted(&b, ex::E1_MODEL));
+    // (Its round cut-outs fold as exact arcs, the DXF's polygons in the flat: 3e-4.)
+    assert!((v - predicted(&b, ex::E1_MODEL)).abs() < 3e-4 * v, "{v} vs {}", predicted(&b, ex::E1_MODEL));
     let m = mass_kg(&doc, ex::E1_STUDIO, part);
     println!("E1 mass: {m:.6} kg (volume {v:.3} mm³)");
     if E1_MASS > 0.0 {
@@ -105,7 +106,7 @@ fn e1_six_bends_on_the_imported_flat_and_its_mass() {
 }
 
 /// E2's mass in Carbon Steel (kg): the stand-in's own value (its profile's arc is a trapezoid).
-pub const E2_MASS: f64 = 0.111319;
+pub const E2_MASS: f64 = 0.111320;
 
 #[test]
 fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
@@ -121,8 +122,9 @@ fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
     assert!(ctx.model.joints.iter().any(|j| matches!(j.kind, cadrs_sheetmetal::JointKind::Rip { style: cadrs_sheetmetal::RipStyle::ButtDirection1, .. })));
     assert_eq!(ctx.model.corner_overrides.len(), 1);
     let v = part.mass.unwrap().volume;
-    // The Round – Sized corner relief is cut from the bends as a wedge (an approximation of its
-    // round, P3I.2), so the folded volume is within 1e-4 of the flat's.
+    // The Round – Sized corner relief is cut from the bends by a meshed tool following its round
+    // (P3I.5 fix round; before, 24 wedges: 0.111473 kg), so the folded volume is within 1e-4 of
+    // the flat's.
     assert!((v - predicted(&b, ex::E2_MODEL)).abs() < 1e-4 * v, "{v} vs {}", predicted(&b, ex::E2_MODEL));
     // Steps 9–11 in closed form (T = 1, R = 1, K 0.45, minimal gap 0.025; the right wall's
     // inside at x = 124, outside x = 125, top z = 15, front end y = −80):

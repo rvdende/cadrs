@@ -9,16 +9,20 @@
 //! - **Jog** (`sm-jog-01.png`): the Bend's rows, then *Bounding type* (Blind, Up to entity,
 //!   Thickness) with *Jog offset*, *Up to entity* and *Offset distance*, or *Thickness factor*;
 //!   *Jog offset anchor*; *Preserve material*.
-//! - **Tab** (`sheetmetaltab-dialog.png`): *Tab profile*, *Flange to merge*, *Subtraction offset*,
-//!   *Subtraction scope*.
+//! - **Tab** (`sheetmetaltab-dialog.png`): *Tab profile*, *Flange to merge* (filled in with the
+//!   walls under a picked profile), *Subtraction offset*, *Subtraction scope*.
 //! - **Corner** (`sheetmetalcorner-dialog.png`) and **Bend relief**
 //!   (`sheetmetalbendrelief-dialog.png`): the corner or bend end, the relief type and its scale,
 //!   size or depth, *Extend bend relief*.
 //! - **Corner break** (`sm-cornerbreak-01.png`): **Fillet | Chamfer**; *Entities to fillet or
-//!   chamfer*; Fillet: *Measurement* (Radius, Width), *Control* (Distance), the size; Chamfer:
+//!   chamfer*; Fillet: *Measurement* (Radius, Width), *Control* (Distance), the size, *Asymmetric*
+//!   (second size, flip arrow), *Allow edge overflow*; Chamfer:
 //!   *Measurement*, *Chamfer type*, the distances or angle with the opposite direction arrow.
 //! - **Finish sheet metal model** (`smm-finish-01.png`): *Sheet metal parts* and the warning that
 //!   later features don't show in the flat (exercise E4).
+//!
+//! Bend and Jog put arrows in the view: the bend's direction at its line (a click flips it) and
+//! a Blind jog's offset (dragged).
 //!
 //! They run in the applied features' session (`crate::applied`): one field at a time takes the
 //! view's picks, every change is a command, ✓ / Enter accepts. This module owns their rows: the
@@ -138,11 +142,13 @@ const N_SIZE: u8 = 12;
 const N_DIST: u8 = 13;
 const N_DIST2: u8 = 14;
 const N_CANGLE: u8 = 15;
+const N_SIZE2: u8 = 16;
 
 // Arrows.
 const FL_HOLD: u8 = 0;
 const FL_OPPOSITE: u8 = 1;
 const FL_CHAMFER: u8 = 2;
+const FL_ASYM: u8 = 3;
 
 /// What a row of these dialogs is for.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,10 +172,16 @@ impl Plugin for SheetMetalToolsPlugin {
             .add_observer(on_number)
             .add_observer(on_flip)
             .add_observer(on_tab)
+            .init_resource::<ToolArrows>()
             .add_systems(
                 Update,
-                sync_tool_dialog.after(crate::applied_dialog::sync_applied_dialog).before(crate::parts::PartsSet).run_if(in_state(AppState::Document)),
-            );
+                (
+                    sync_tool_dialog.after(crate::applied_dialog::sync_applied_dialog).before(crate::parts::PartsSet),
+                    tool_arrows_pointer,
+                )
+                    .run_if(in_state(AppState::Document)),
+            )
+            .add_systems(PostUpdate, place_tool_arrows.before(bevy::ui::UiSystems::Layout).run_if(in_state(AppState::Document)));
     }
 }
 
@@ -237,6 +249,7 @@ pub fn initial(world: &mut World, kind: AppliedKind, picked: &[Pick]) -> Option<
         SheetMetalTool::BendRelief(b) => b.depth_expr = len(b.relief.depth),
         SheetMetalTool::CornerBreak(c) => {
             c.size_expr = len(c.size);
+            c.size2_expr = len(c.size2);
             c.distance_expr = len(c.distance);
             c.distance2_expr = len(c.distance2);
         }
@@ -382,6 +395,58 @@ fn face_under(cache: &PartCache, ends: ([f64; 3], [f64; 3])) -> Option<FaceRef> 
     best.map(|(f, _)| f)
 }
 
+/// The sheet metal walls a tab profile is added to (SM5.2): of the active models' parts, the flat
+/// faces parallel to the profile, its sketch plane within the wall's sheet, whose outline the
+/// profile overlaps or touches; one face per wall, the one nearest the sketch plane.
+fn faces_under_profile(cache: &PartCache, frame: &cadrs_sketch::PlaneFrame, region: &cadrs_sketch::region::Region) -> Vec<FaceRef> {
+    use cadrs_sheetmetal::poly::{self, P2, Polygon};
+    let ring = |l: &[cadrs_sketch::Vec2]| l.iter().map(|q| P2::new(q.x, q.y)).collect::<Vec<_>>();
+    let profile = Polygon::with_holes(ring(&region.outer), region.holes.iter().map(|h| ring(h)).collect());
+    let n = frame.normal();
+    let mut out: Vec<(FaceRef, f64, cadrs_sheetmetal::WallId)> = Vec::new();
+    for ctx in cache.sheet_metal.iter().filter(|c| c.active) {
+        let t = ctx.model.params.thickness;
+        for (pid, walls) in &ctx.parts {
+            let Some(part) = cache.part(*pid) else { continue };
+            for (i, f) in part.solid.faces.iter().enumerate() {
+                let Some(pl) = f.plane else { continue };
+                if dot(pl.normal(), n).abs() < 1.0 - 1e-6 {
+                    continue;
+                }
+                let dist = dot(sub(pl.origin, frame.origin), n);
+                // The sketch plane within the sheet this face bounds.
+                let into = -dot(pl.normal(), n).signum();
+                let (lo, hi) = if into > 0.0 { (dist, dist + t) } else { (dist - t, dist) };
+                if lo > 1e-6 || hi < -1e-6 {
+                    continue;
+                }
+                let Some(outer) = f.loops.iter().max_by(|a, b| a.len().cmp(&b.len())) else { continue };
+                let face = Polygon::new(outer.iter().map(|p| {
+                    let q = frame.to_sketch(*p);
+                    P2::new(q.x, q.y)
+                }).collect());
+                if poly::union(&[face.clone(), profile.clone()]).len() != 1 {
+                    continue;
+                }
+                // Which wall: the model's wall at the face's middle.
+                let Some(seed) = part.solid.face_point(i) else { continue };
+                let p3 = nalgebra::Point3::new(seed[0], seed[1], seed[2]);
+                let Some((wall, _)) = cadrs_sheetmetal::model_edit::wall_at(&ctx.model, p3, 1e-3) else { continue };
+                if !walls.contains(&wall) {
+                    continue;
+                }
+                let fr = FaceRef { part: part.id, face: f.name, seed };
+                match out.iter_mut().find(|(g, _, w)| g.part == part.id && *w == wall) {
+                    Some(have) if dist.abs() < have.1 => *have = (fr, dist.abs(), wall),
+                    Some(_) => {}
+                    None => out.push((fr, dist.abs(), wall)),
+                }
+            }
+        }
+    }
+    out.into_iter().map(|(f, _, _)| f).collect()
+}
+
 /// A pick into field `f`. Returns whether it fitted.
 fn pick_into(world: &mut World, kind: &mut FeatureKind, f: u8, pick: Pick) -> bool {
     let features: Vec<Feature> = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element()).map(|e| e.features().to_vec()).unwrap_or_default();
@@ -434,13 +499,23 @@ fn pick_into(world: &mut World, kind: &mut FeatureKind, f: u8, pick: Pick) -> bo
         }
         (SheetMetalTool::Tab(t), F_PROFILE) => match pick {
             Pick::Region(s, i) => {
-                let Some(r) = cache.sketch_regions(s).and_then(|rs| rs.regions.get(i as usize).cloned()) else { return false };
-                let r = RegionRef::new(s, &r);
+                let Some(rs) = cache.sketch_regions(s) else { return false };
+                let Some(region) = rs.regions.get(i as usize).cloned() else { return false };
+                let r = RegionRef::new(s, &region);
                 match t.regions.iter().position(|y| y.sketch == r.sketch && y.curves == r.curves) {
                     Some(k) => {
                         t.regions.remove(k);
                     }
-                    None => t.regions.push(r),
+                    None => {
+                        t.regions.push(r);
+                        // SM5.2: the walls under the profile fill in Flange to merge, as Onshape
+                        // does (shown in the list and the view; remove any to leave it out).
+                        for f in faces_under_profile(cache, &rs.frame, &region) {
+                            if !t.flanges.iter().any(|g| g.part == f.part && g.face == f.face) {
+                                t.flanges.push(f);
+                            }
+                        }
+                    }
                 }
             }
             Pick::Feature(fid) if features.iter().any(|g| g.id == fid && g.sketch().is_some()) => toggle(&mut t.sketches, fid),
@@ -523,11 +598,22 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
                 Some(LineRef::Edge(e)) => v.extend(cache.parts.iter().find(|p| p.solid.edge(&e.edge).is_some()).map(|p| Pick::Edge(p.id, e.edge))),
                 None => {}
             }
+            // The face to bend and the reference stay highlighted whichever field is active
+            // (`sm-jog-02.png`).
+            v.extend(b.face.iter().filter_map(face));
+            match &b.reference {
+                Some(EdgeOrFace::Face(f)) => v.extend(face(f)),
+                Some(EdgeOrFace::Edge(e)) => v.extend(cache.parts.iter().find(|p| p.solid.edge(&e.edge).is_some()).map(|p| Pick::Edge(p.id, e.edge))),
+                None => {}
+            }
             if let SheetMetalTool::Jog(j) = x {
                 v.extend(j.up_to.iter().filter_map(face));
             }
         }
-        SheetMetalTool::Tab(t) => v.extend(t.flanges.iter().filter_map(face)),
+        SheetMetalTool::Tab(t) => {
+            v.extend(t.flanges.iter().filter_map(face));
+            v.extend(t.scope.iter().map(|p| Pick::Part(*p)));
+        }
         SheetMetalTool::Corner(c) => v.extend(c.corner.iter().filter_map(smp)),
         SheetMetalTool::BendRelief(b) => v.extend(b.end.iter().filter_map(smp)),
         SheetMetalTool::CornerBreak(c) => v.extend(c.entities.iter().filter_map(smp)),
@@ -552,7 +638,7 @@ pub fn layout(x: &SheetMetalTool) -> String {
         SheetMetalTool::Tab(_) => "sm-tab".into(),
         SheetMetalTool::Corner(c) => format!("sm-corner {:?}", c.relief.kind),
         SheetMetalTool::BendRelief(b) => format!("sm-bend-relief {:?}", b.relief.kind),
-        SheetMetalTool::CornerBreak(c) => format!("sm-corner-break {} {:?} {:?} {}", c.chamfer, c.fillet_measurement, c.chamfer_type, c.flip),
+        SheetMetalTool::CornerBreak(c) => format!("sm-corner-break {} {:?} {:?} {} {} {} {}", c.chamfer, c.fillet_measurement, c.chamfer_type, c.flip, c.asymmetric, c.flip_asymmetric, c.allow_overflow),
         SheetMetalTool::Finish(_) => "sm-finish".into(),
     }
 }
@@ -744,7 +830,10 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalTool, field: AppliedF
         }),
         SheetMetalTool::Corner(cf) => column(b, |c| {
             list(c, t, "sm-corner-field", "Corner", F_CORNER, item(F_CORNER), active == F_CORNER);
-            select(c, t, "sm-corner-type", "Corner relief type", S_CORNER_TYPE, labels(&CornerReliefKind::ALL, CornerReliefKind::label), index_of(&CornerReliefKind::ALL, &cf.relief.kind), None);
+            // The type under its label, full width (`sheetmetalcorner-dialog.png`): "Rectangle -
+            // Scaled" doesn't fit beside it.
+            c.spawn((t.text("Corner relief type", t.font_sm, bevy::text::FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::new(Val::Px(2.0), Val::ZERO, Val::Px(6.0), Val::ZERO), ..default() }));
+            select(c, t, "sm-corner-type", "", S_CORNER_TYPE, labels(&CornerReliefKind::ALL, CornerReliefKind::label), index_of(&CornerReliefKind::ALL, &cf.relief.kind), None);
             match cf.relief.kind {
                 k if k.is_scaled() => number(c, t, "sm-corner-scale", "Corner relief scale", N_CORNER_SCALE, &cf.scale_expr, None),
                 CornerReliefKind::SquareSized => number(c, t, "sm-corner-size", "Corner relief width", N_CORNER_SIZE, &cf.size_expr, None),
@@ -785,6 +874,14 @@ pub fn body(b: &mut ChildSpawner, t: &Theme, x: &SheetMetalTool, field: AppliedF
                     // Conic and Curvature are out of scope (the user's decision): Distance only.
                     select(c, t, "sm-corner-break-control", "Control", S_FILLET_CONTROL, vec!["Distance".into()], 0, None);
                     number(c, t, "sm-corner-break-size", cb.fillet_measurement.label(), N_SIZE, &cb.size_expr, None);
+                    // Asymmetric: a second radius, the flip arrow swapping the two ends
+                    // (`sm-cornerbreak-01.png`).
+                    check(c, t, "smt-asymmetric", "Asymmetric", cb.asymmetric);
+                    if cb.asymmetric {
+                        let second = if cb.fillet_measurement == FilletMeasurement::Width { "Second width" } else { "Second radius" };
+                        number(c, t, "sm-corner-break-size2", second, N_SIZE2, &cb.size2_expr, Some((FL_ASYM, cb.flip_asymmetric, "Flip asymmetric")));
+                    }
+                    check(c, t, "smt-allow-overflow", "Allow edge overflow", cb.allow_overflow);
                 }
             });
         }
@@ -828,6 +925,7 @@ fn number_text(x: &SheetMetalTool, n: u8) -> Option<String> {
         (SheetMetalTool::BendRelief(r), N_WIDTH_SCALE) => r.width_scale_expr.clone(),
         (SheetMetalTool::BendRelief(r), N_DEPTH) => r.depth_expr.clone(),
         (SheetMetalTool::CornerBreak(c), N_SIZE) => c.size_expr.clone(),
+        (SheetMetalTool::CornerBreak(c), N_SIZE2) => c.size2_expr.clone(),
         (SheetMetalTool::CornerBreak(c), N_DIST) => c.distance_expr.clone(),
         (SheetMetalTool::CornerBreak(c), N_DIST2) => c.distance2_expr.clone(),
         (SheetMetalTool::CornerBreak(c), N_CANGLE) => c.angle_expr.clone(),
@@ -1035,6 +1133,8 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
         "smt-preserve-material-checkbox" => ("Preserve material", 2),
         "smt-up-to-offset-checkbox" => ("Offset distance", 3),
         "smt-extend-bend-relief-checkbox" => ("Extend bend relief", 4),
+        "smt-asymmetric-checkbox" => ("Asymmetric", 5),
+        "smt-allow-overflow-checkbox" => ("Allow edge overflow", 6),
         _ => return,
     };
     change(&mut commands, label, move |x| {
@@ -1055,6 +1155,8 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
             (SheetMetalTool::Jog(j), 2) => j.preserve_material = on,
             (SheetMetalTool::Jog(j), 3) => j.up_to_offset_on = on,
             (SheetMetalTool::BendRelief(r), 4) => r.relief.extend = on,
+            (SheetMetalTool::CornerBreak(c), 5) => c.asymmetric = on,
+            (SheetMetalTool::CornerBreak(c), 6) => c.allow_overflow = on,
             _ => {}
         }
     });
@@ -1065,10 +1167,12 @@ fn on_flip(a: On<Activate>, q: Query<&SmtRole>, mut commands: Commands) {
     let label = match f {
         FL_HOLD => "Hold opposite side",
         FL_OPPOSITE => "Opposite angle",
+        FL_ASYM => "Flip asymmetric",
         _ => "Opposite direction",
     };
     change(&mut commands, label, move |x| match (x, f) {
         (SheetMetalTool::CornerBreak(c), FL_CHAMFER) => c.flip = !c.flip,
+        (SheetMetalTool::CornerBreak(c), FL_ASYM) => c.flip_asymmetric = !c.flip_asymmetric,
         (x, FL_HOLD) => {
             if let Some(b) = bend_mut(x) {
                 b.hold_opposite = !b.hold_opposite;
@@ -1128,6 +1232,7 @@ fn set_number(x: &mut SheetMetalTool, n: u8, v: f64, expr: String) {
         (SheetMetalTool::BendRelief(r), N_WIDTH_SCALE) => (&mut r.relief.width_scale, &mut r.width_scale_expr),
         (SheetMetalTool::BendRelief(r), N_DEPTH) => (&mut r.relief.depth, &mut r.depth_expr),
         (SheetMetalTool::CornerBreak(c), N_SIZE) => (&mut c.size, &mut c.size_expr),
+        (SheetMetalTool::CornerBreak(c), N_SIZE2) => (&mut c.size2, &mut c.size2_expr),
         (SheetMetalTool::CornerBreak(c), N_DIST) => (&mut c.distance, &mut c.distance_expr),
         (SheetMetalTool::CornerBreak(c), N_DIST2) => (&mut c.distance2, &mut c.distance2_expr),
         (SheetMetalTool::CornerBreak(c), N_CANGLE) => (&mut c.angle, &mut c.angle_expr),
@@ -1160,4 +1265,263 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&SmtRole>, mut commands: Comman
             crate::applied::accept(world);
         }
     });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Manipulators: the bend's direction arrow (a click flips it, as the Opposite angle arrow) and
+// the jog offset arrow (dragged, as Onshape's, `sm-jog-02.png`).
+
+const ARROW_LEN: f32 = 40.0;
+/// The bend direction arrow.
+const A_FLIP: u8 = 0;
+/// The jog offset arrow.
+const A_JOG: u8 = 1;
+
+/// One arrow: which, its base point and direction (world), its base and tip on screen.
+type ToolArrow = (u8, Vec3, Vec3, Option<(Vec2, Vec2)>);
+
+/// The arrows on screen and a drag in progress.
+#[derive(Resource, Default)]
+pub struct ToolArrows {
+    arrows: Vec<ToolArrow>,
+    hovered: Option<u8>,
+    drag: Option<ToolDrag>,
+}
+
+struct ToolDrag {
+    start: Vec2,
+    start_value: f64,
+    dir_px: Vec2,
+    kind: FeatureKind,
+}
+
+#[derive(Component)]
+struct ToolArrowNode(u8);
+
+#[derive(Component)]
+struct ToolArrowLine(u8);
+
+fn v3f(p: [f64; 3]) -> Vec3 {
+    Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)
+}
+
+/// Where a Bend's or a Jog's arrows go: the middle of its bend line, pointing where the bend
+/// turns (out of the picked face, or into it with the opposite angle); a Blind jog's offset arrow
+/// that far along.
+fn tool_arrow_targets(features: &[Feature], parts: &[cadrs_core::Part], x: &SheetMetalTool) -> Vec<(u8, Vec3, Vec3)> {
+    let Some(b) = bend_of(x) else { return Vec::new() };
+    let (Some(line), Some(face)) = (&b.line, &b.face) else { return Vec::new() };
+    let Some((a, e)) = (match line {
+        LineRef::Sketch(c) => {
+            let sk = features.iter().find(|f| f.id == c.sketch).and_then(|f| f.sketch());
+            sk.and_then(|sk| {
+                let frame = sk.plane?.frame();
+                let g = &sk.geometry;
+                match g.curves.get(c.curve)?.kind {
+                    cadrs_sketch::CurveKind::Line { a, b } => Some((frame.to_world(g.pos(a)), frame.to_world(g.pos(b)))),
+                    _ => None,
+                }
+            })
+        }
+        LineRef::Edge(e) => parts.iter().find_map(|p| p.solid.edge(&e.edge)).and_then(|edge| Some((*edge.points.first()?, *edge.points.last()?))),
+    }) else {
+        return Vec::new();
+    };
+    let Some(pl) = parts.iter().find(|p| p.id == face.part).and_then(|p| p.solid.face(&face.face)).and_then(|f| f.plane) else { return Vec::new() };
+    let n = v3f(pl.normal()).normalize_or_zero();
+    let side = if b.opposite { -n } else { n };
+    // On the picked face's plane, at the line's middle.
+    let mid = (v3f(a) + v3f(e)) / 2.0;
+    let mid = mid - n * (mid - v3f(pl.origin)).dot(n);
+    let mut out = vec![(A_FLIP, mid, side)];
+    if let SheetMetalTool::Jog(j) = x
+        && j.bounding == JogBounding::Blind
+    {
+        out.push((A_JOG, mid + side * j.offset as f32, side));
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn place_tool_arrows(
+    session: Option<Res<AppliedSession>>,
+    doc: Option<Res<ActiveDocument>>,
+    before: Res<crate::applied::BeforeParts>,
+    cache: Res<PartCache>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    mut arrows: ResMut<ToolArrows>,
+    q_area: Query<Entity, With<crate::viewport::ViewportArea>>,
+    mut q: Query<(Entity, &ToolArrowNode, &mut Node, &mut bevy::ui::UiTransform, &mut Visibility)>,
+    mut q_line: Query<(&ToolArrowLine, &mut ImageNode)>,
+    mut commands: Commands,
+) {
+    let targets = session
+        .as_ref()
+        .filter(|s| matches!(s.kind, AppliedKind::SheetMetalTool(SmTool::Bend | SmTool::Jog)))
+        .and_then(|s| {
+            let el = doc.as_ref()?.doc.element(s.element)?;
+            let kind = match arrows.drag.as_ref() {
+                Some(d) => d.kind.clone(),
+                None => el.feature(s.feature)?.kind.clone(),
+            };
+            let parts = if before.parts.is_empty() { &cache.parts } else { &before.parts };
+            Some(tool(&kind).map(|x| tool_arrow_targets(el.features(), parts, x)).unwrap_or_default())
+        })
+        .unwrap_or_default();
+    arrows.arrows = targets
+        .iter()
+        .map(|(w, p, d)| {
+            let dp = view.view.project_vector(*d);
+            let bt = (dp.length() >= 0.05).then(|| {
+                let b = rect.to_screen(view.view.project(*p));
+                (b, b + dp.normalize() * ARROW_LEN)
+            });
+            (*w, *p, *d, bt)
+        })
+        .collect();
+    let shown: Vec<u8> = arrows.arrows.iter().filter(|a| a.3.is_some()).map(|a| a.0).collect();
+    for (e, n, ..) in &q {
+        if !shown.contains(&n.0) {
+            commands.entity(e).try_despawn();
+        }
+    }
+    let Some(area) = q_area.iter().next() else { return };
+    for (w, _, _, bt) in arrows.arrows.clone() {
+        let Some((base, tip)) = bt else { continue };
+        if !q.iter().any(|(_, n, ..)| n.0 == w) {
+            let name = if w == A_JOG { "sm-jog-offset-arrow" } else { "sm-bend-direction-arrow" };
+            let e = commands
+                .spawn((
+                    Name::new(name),
+                    ToolArrowNode(w),
+                    Node { position_type: PositionType::Absolute, width: Val::Px(ARROW_LEN), height: Val::Px(ARROW_LEN), ..default() },
+                    bevy::ui::UiTransform::default(),
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                    ZIndex(-3),
+                    DespawnOnExit(AppState::Document),
+                    children![
+                        (cadrs_ui::icon::icon_in("manipulator-arrow-halo", ARROW_LEN, Color::srgba_u8(0x3c, 0x46, 0x4e, 0xb0), Node { position_type: PositionType::Absolute, ..default() }), Pickable::IGNORE),
+                        (ToolArrowLine(w), cadrs_ui::icon::icon_in("manipulator-arrow-line", ARROW_LEN, Color::WHITE, Node { position_type: PositionType::Absolute, ..default() }), Pickable::IGNORE),
+                    ],
+                ))
+                .id();
+            commands.entity(area).add_child(e);
+            continue;
+        }
+        let u = (tip - base).normalize_or_zero();
+        let center = (base + tip) / 2.0 - rect.0.min;
+        for (_, n, mut node, mut tr, mut vis) in &mut q {
+            if n.0 != w {
+                continue;
+            }
+            let (l, t) = (Val::Px(center.x - ARROW_LEN / 2.0), Val::Px(center.y - ARROW_LEN / 2.0));
+            if node.left != l || node.top != t {
+                node.left = l;
+                node.top = t;
+            }
+            let want = bevy::ui::UiTransform { rotation: Rot2::radians(u.x.atan2(-u.y)), ..default() };
+            if *tr != want {
+                *tr = want;
+            }
+            vis.set_if_neq(Visibility::Inherited);
+        }
+    }
+    let hot = arrows.drag.as_ref().map(|_| A_JOG).or(arrows.hovered);
+    for (l, mut img) in &mut q_line {
+        let c = if hot == Some(l.0) { Color::srgb_u8(0xff, 0xb4, 0x5a) } else { Color::WHITE };
+        if img.color != c {
+            img.color = c;
+        }
+    }
+}
+
+/// A click on the bend's arrow flips it; the jog offset arrow drags the offset (one undo step
+/// on release).
+#[allow(clippy::too_many_arguments)]
+fn tool_arrows_pointer(
+    mut inputs: MessageReader<bevy::picking::pointer::PointerInput>,
+    session: Option<Res<AppliedSession>>,
+    mut arrows: ResMut<ToolArrows>,
+    doc: Option<Res<ActiveDocument>>,
+    view: Res<crate::viewport::ViewportView>,
+    drag: Res<crate::viewport::ViewportDrag>,
+    units: Res<crate::WorkspaceUnits>,
+    mut over: ResMut<crate::parts::PartOverride>,
+    mut grab: ResMut<crate::assembly::ViewportGrab>,
+    mut commands: Commands,
+) {
+    use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
+    let Some(s) = session.filter(|s| matches!(s.kind, AppliedKind::SheetMetalTool(SmTool::Bend | SmTool::Jog))) else {
+        inputs.clear();
+        arrows.drag = None;
+        return;
+    };
+    let near = |p: Vec2, (a, b): (Vec2, Vec2)| {
+        let ab = b - a;
+        let t = ((p - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+        p.distance(a + ab * t) <= 8.0
+    };
+    let hit = |p: Vec2, arrows: &ToolArrows| arrows.arrows.iter().find(|a| a.3.is_some_and(|bt| near(p, bt))).map(|a| (a.0, a.2));
+    arrows.hovered = hit(drag.pointer(), &arrows).map(|h| h.0);
+    let kind = doc.as_ref().and_then(|d| Some(d.doc.element(s.element)?.feature(s.feature)?.kind.clone()));
+    for input in inputs.read() {
+        if input.pointer_id != PointerId::Mouse {
+            continue;
+        }
+        let pos = input.location.position;
+        match input.action {
+            PointerAction::Press(PointerButton::Primary) => match (hit(pos, &arrows), kind.clone()) {
+                (Some((A_FLIP, _)), Some(_)) => {
+                    grab.0 = true;
+                    change(&mut commands, "Opposite angle", |x| {
+                        if let Some(b) = bend_mut(x) {
+                            b.opposite = !b.opposite;
+                        }
+                    });
+                }
+                (Some((A_JOG, dir)), Some(k)) => {
+                    let Some(SheetMetalTool::Jog(j)) = tool(&k) else { continue };
+                    let dir_px = view.view.project_vector(dir);
+                    if dir_px.length() > 0.05 {
+                        grab.0 = true;
+                        arrows.drag = Some(ToolDrag { start: pos, start_value: j.offset, dir_px, kind: k });
+                    }
+                }
+                _ => {}
+            },
+            PointerAction::Move { .. } => {
+                if let Some(d) = arrows.drag.as_mut() {
+                    let along = (pos - d.start).dot(d.dir_px.normalize()) / d.dir_px.length();
+                    let step = crate::extrude::snap_step(d.dir_px.length());
+                    let value = (((d.start_value + along as f64) / step).round() * step).max(step);
+                    if let Some(SheetMetalTool::Jog(j)) = tool_mut(&mut d.kind)
+                        && (j.offset - value).abs() > 1e-9
+                    {
+                        j.offset = value;
+                        j.offset_expr = units.0.with_unit(value, Quantity::Length);
+                    }
+                    let want = Some((s.feature, d.kind.clone()));
+                    if over.applied != want {
+                        over.applied = want;
+                    }
+                }
+            }
+            PointerAction::Release(PointerButton::Primary) if arrows.drag.is_some() => {
+                commands.queue(|world: &mut World| {
+                    world.resource_mut::<crate::parts::PartOverride>().applied = None;
+                    let Some(d) = world.resource_mut::<ToolArrows>().drag.take() else { return };
+                    if crate::applied::current(world).is_some_and(|f| f.kind != d.kind) {
+                        crate::applied::set(world, d.kind, "Drag jog offset");
+                    }
+                });
+            }
+            PointerAction::Cancel => {
+                arrows.drag = None;
+                over.applied = None;
+            }
+            _ => {}
+        }
+    }
 }
