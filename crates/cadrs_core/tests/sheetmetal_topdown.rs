@@ -58,8 +58,10 @@ fn an_enclosure_and_a_cover_around_a_derived_master_follow_its_edits() {
         .collect();
     assert_eq!(names, ["Enclosure", "Cover"], "the contexts are named after their features");
     let enc = &b.sheet_metal[0];
-    assert_eq!(enc.model.walls.len(), 5, "bottom and four sides: the top and the angled face excluded");
-    assert_eq!(enc.model.joints.iter().filter(|j| j.bend().is_some()).count(), 4);
+    assert_eq!(enc.model.walls.len(), 9, "the T's bottom and its eight sides: the top and the angled face excluded");
+    assert_eq!(enc.model.joints.iter().filter(|j| j.bend().is_some()).count(), 8);
+    // The notches' inside corners are rips: their walls don't fold onto each other.
+    assert!(enc.model.joints.iter().filter(|j| matches!(j.kind, cadrs_sheetmetal::JointKind::Rip { .. })).count() >= 2);
     assert!(enc.flat.is_ok() && enc.flat.parts.len() == 1);
     let cov = &b.sheet_metal[1];
     assert_eq!((cov.model.walls.len(), cov.model.joints.iter().filter(|j| j.bend().is_some()).count()), (2, 1));

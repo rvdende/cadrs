@@ -204,6 +204,7 @@ impl Rebuilder {
         let mut placed: Vec<Placed> = Vec::new();
         let mut walls_of: Vec<(PartId, Vec<WallId>)> = Vec::new();
         let mut groups = groups.into_iter().enumerate();
+        let mut dropped = 0usize;
         while let Some((k, (walls, body, names))) = groups.next() {
             let pieces = self.split(body, op, &[(body, &names)]);
             self.kernel.release(body);
@@ -220,6 +221,21 @@ impl Rebuilder {
                 }
             };
             pieces.sort_by(|a, b| b.volume.total_cmp(&a.volume));
+            // One flat-pattern part folds into one solid. Loose slivers beside it (smaller than a
+            // cube of the sheet's thickness) are folding debris, not parts: dropped, with a
+            // warning, as a safety net (an imported part's relief holes, which used to leave
+            // them, are recognised now: `cadrs_sheetmetal::construct`, SM17).
+            let sliver = model.params.thickness.powi(3);
+            let mut kept = Vec::with_capacity(pieces.len());
+            for (n, pc) in pieces.into_iter().enumerate() {
+                if n > 0 && pc.volume < sliver {
+                    self.kernel.release(pc.body);
+                    dropped += 1;
+                } else {
+                    kept.push(pc);
+                }
+            }
+            let pieces = kept;
             let reuse = old_parts.iter().find(|(p, ws)| !used.contains(p) && ws.iter().any(|w| walls.contains(w))).map(|(p, _)| *p);
             for (n, pc) in pieces.into_iter().enumerate() {
                 let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).chain(used.iter().copied()).collect();
@@ -249,6 +265,10 @@ impl Rebuilder {
                 p.part.solid = Arc::new(s);
             }
             o.state = Arc::new(st);
+        }
+        if dropped > 0 {
+            let w = format!("{dropped} loose sliver{} left by the fold removed", if dropped == 1 { "" } else { "s" });
+            o.warning = Some(o.warning.map_or(w.clone(), |x| format!("{x}; {w}")));
         }
         ctx.parts = walls_of;
         o.state = Arc::new(with_context(&o.state, ctx));

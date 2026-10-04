@@ -176,6 +176,12 @@ pub struct SheetMetalModelFeature {
     /// others keeping their places.
     #[serde(default)]
     pub table_order: Vec<JointId>,
+    /// Set (never saved) while a dialog takes picks on the model's input (a Convert's faces to
+    /// exclude and edges to bend, a Thicken's cylinders to bend, P3I.8): the model, its table
+    /// and its flat are built, but no part is made or used up, so the input stays pickable and
+    /// the Sheet metal panel follows the picks.
+    #[serde(skip)]
+    pub picking: bool,
 }
 
 fn zero_mm() -> String {
@@ -212,6 +218,7 @@ impl Default for SheetMetalModelFeature {
             flip_thickness: false,
             exprs: SheetMetalExprs::of(&params),
             table_order: Vec::new(),
+            picking: false,
         }
     }
 }
@@ -433,6 +440,59 @@ impl SheetMetalContext {
     }
 }
 
+/// Thicken's **Tangent propagation** (SM17): `chosen` (face indices of `solid`) grown by every
+/// face that meets one of them smoothly, a flat face carrying on in its plane, a bend's cylinder
+/// and the flats beyond it, so one pick takes a whole side of an imported folded sheet. The
+/// rebuild and the dialog's highlight (the whole picked skin) both use it.
+pub fn tangent_faces(solid: &crate::solid::Solid, chosen: &mut Vec<usize>) {
+    let mut k = 0;
+    while k < chosen.len() {
+        let f = &solid.faces[chosen[k]];
+        for e in &solid.edges {
+            let [a, b] = e.name.faces;
+            let other = if a == f.name { b } else if b == f.name { a } else { continue };
+            let Some(oi) = solid.faces.iter().position(|g| g.name == other) else { continue };
+            if !chosen.contains(&oi) && tangent_across(solid, chosen[k], oi, e) {
+                chosen.push(oi);
+            }
+        }
+        k += 1;
+    }
+}
+
+/// A face's outward normal near `p`: its mesh normal at its vertex nearest `p` (exact for planes,
+/// the surface normal at a mesh vertex for curved faces).
+fn normal_near(solid: &crate::solid::Solid, face: usize, p: [f64; 3]) -> Option<[f64; 3]> {
+    let f = &solid.faces[face];
+    let tri = solid.indices.get(3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count))?;
+    let d = |q: [f64; 3]| (0..3).map(|i| (q[i] - p[i]).powi(2)).sum::<f64>();
+    let vi = *tri.iter().min_by(|a, b| d(solid.positions[**a as usize]).total_cmp(&d(solid.positions[**b as usize])))? as usize;
+    let n = *solid.normals.get(vi)?;
+    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    (l > 0.0).then(|| [n[0] / l, n[1] / l, n[2] / l])
+}
+
+/// Whether faces `a` and `b` meet smoothly (tangent, the same side out) along edge `e`.
+fn tangent_across(solid: &crate::solid::Solid, a: usize, b: usize, e: &crate::solid::SolidEdge) -> bool {
+    if e.points.is_empty() {
+        return false;
+    }
+    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let unit = |u: [f64; 3]| {
+        let l = dot(u, u).sqrt();
+        [u[0] / l, u[1] / l, u[2] / l]
+    };
+    // Planes: the same plane, facing the same way (exact).
+    if let (Some(p1), Some(p2)) = (solid.faces[a].plane, solid.faces[b].plane) {
+        return dot(unit(p1.normal()), unit(p2.normal())) > 1.0 - 1e-9;
+    }
+    let mid = e.points[e.points.len() / 2];
+    match (normal_near(solid, a, mid), normal_near(solid, b, mid)) {
+        (Some(na), Some(nb)) => dot(na, nb) > 1.0 - 1e-3,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,3 +524,4 @@ mod tests {
         assert_eq!(f.problem(), Some("A value is out of range"));
     }
 }
+

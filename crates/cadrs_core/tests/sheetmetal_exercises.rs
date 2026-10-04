@@ -71,7 +71,12 @@ fn e1_dxf() -> String {
     std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(ex::E1_DXF)).expect("the E1 DXF")
 }
 
-/// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value.
+/// E1's mass in Carbon Steel (kg): the stand-in tray's quiz value, 45 442.737 mm³ × 7850 kg/m³,
+/// built with step 5's settings (1 mm, R1, K 0.45, minimal gap 0.025, Closed corners, Tear
+/// bend reliefs). It is the same as with the default reliefs: the DXF's flat already has the
+/// tray's corner notches and every bend line ends on a cut-out or the outline, so no Bend needs
+/// a relief cut (Tear and Rectangle cut nothing there), no corner is closed by the bends, and no
+/// rip uses the minimal gap (K 0.45 and rolled K 0.5 are the defaults).
 pub const E1_MASS: f64 = 0.356725;
 
 #[test]
@@ -237,16 +242,37 @@ fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     let mut h = History::default();
     ex::rework_e4(&mut DocHistory(&mut doc, &mut h), ex::E4_STUDIO).unwrap();
     let b = build(&doc, ex::E4_STUDIO);
+    // The feature list reads like the slides' (steps 2–9).
+    let names: Vec<String> = doc.element(ex::E4_STUDIO).unwrap().features().iter().skip(4).map(|f| f.name.clone()).collect();
+    assert_eq!(names, ["Finish sheet metal model 1", "Sketch 3", "Plane 1", "Sketch 4", "Sweep 1", "Mirror 1", "Fillet 1", "Fillet 2"]);
+    let el = doc.element(ex::E4_STUDIO).unwrap();
+    let sketch8 = el.feature(ex::E4_PATH_SKETCH).unwrap().sketch().unwrap();
+    assert!(matches!(sketch8.plane, Some(cadrs_sketch::PlaneRef::Face(_))), "Sketch 8 is on the wall's face");
+    assert_eq!(sketch8.geometry.curves.len(), 4, "Use took the slot's two lines and two arcs");
+    assert!(matches!(&el.feature(ex::E4_PLANE).unwrap().kind, cadrs_core::FeatureKind::Plane(p) if p.kind == cadrs_core::plane::PlaneType::PlanePoint));
+    assert!(matches!(&el.feature(ex::E4_MIRROR).unwrap().kind, cadrs_core::FeatureKind::Mirror(m) if m.reapply));
     assert_eq!(b.parts.len(), 1, "the rims are added to the Lower Enclosure");
     let ctx = &b.sheet_metal[0];
     assert!(!ctx.active, "finished");
     assert_eq!(ctx.flat, flat, "the flat doesn't show the rework");
     let v1 = b.parts[0].mass.unwrap().volume;
-    // Two rims of 8 × 2 round the slot's outline (less the fillets).
-    let perimeter = 2.0 * (ex::E4_SLOT_SIZE.0 - ex::E4_SLOT_SIZE.1) + std::f64::consts::PI * (ex::E4_SLOT_SIZE.1 + ex::E4_RIM.1);
-    let rims = 2.0 * perimeter * ex::E4_RIM.0 * ex::E4_RIM.1;
-    println!("E4 volume {v0:.3} → {v1:.3} (rims ≈ {rims:.3})");
-    assert!(v1 > v0 + 0.9 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, rims {rims}");
+    // Two collars round the slot's outline: 8 × 2 out of the wall plus the 0.5 lining through
+    // it (1.5), less the fillets (3 at the slot's inside entry, 1 on the collar's top outer edge).
+    let perimeter = 2.0 * (ex::E4_SLOT_SIZE.0 - ex::E4_SLOT_SIZE.1) + std::f64::consts::PI * ex::E4_SLOT_SIZE.1;
+    let section = ex::E4_RIM.0 * (ex::E4_RIM.1 + ex::E4_LINING) + ex::E4_WALL * ex::E4_LINING;
+    let rims = 2.0 * perimeter * section;
+    println!("E4 volume {v0:.3} → {v1:.3} (collars ≈ {rims:.3})");
+    assert!(v1 > v0 + 0.8 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, collars {rims}");
+    // Mirror 1 (Reapply) put a collar on the left wall too: the part reaches 8 out of both walls.
+    let part = &b.parts[0];
+    let xs = part.solid.positions.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
+    let reach = ex::E4_CHAIN[3].0 + ex::E4_RIM.0;
+    assert!((xs.0 + reach).abs() < 1e-3 && (xs.1 - reach).abs() < 1e-3, "{xs:?}: a collar on each wall");
+    // The fillets as the slides make them: 3 mm, then 1 mm.
+    for (f, r) in [(ex::E4_FILLET_1, ex::E4_FILLETS.0), (ex::E4_FILLET_2, ex::E4_FILLETS.1)] {
+        let cadrs_core::FeatureKind::Fillet(x) = &doc.element(ex::E4_STUDIO).unwrap().feature(f).unwrap().kind else { panic!("a fillet") };
+        assert_eq!((x.size, x.entities.len()), (r, 2));
+    }
 }
 
 

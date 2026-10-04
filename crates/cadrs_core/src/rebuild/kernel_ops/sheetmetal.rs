@@ -183,32 +183,6 @@ fn cyl_in(solid: &Solid, i: usize, planar: &[(usize, usize)], faces: &[FaceIn]) 
     Some(CylIn { key: key_of(&f.name), axis_origin: o, axis, radius, convex, start, sweep, z: (z0, z1), neighbours })
 }
 
-/// A face's outward normal near `p`: its mesh normal at its vertex nearest `p` (exact for planes,
-/// the surface normal at a mesh vertex for curved faces).
-fn normal_near(solid: &Solid, face: usize, p: Vec3) -> Option<V3> {
-    let f = &solid.faces[face];
-    let tri = solid.indices.get(3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count))?;
-    let d = |q: Vec3| (p3(q) - p3(p)).norm();
-    let vi = *tri.iter().min_by(|a, b| d(solid.positions[**a as usize]).total_cmp(&d(solid.positions[**b as usize])))? as usize;
-    Some(v3(*solid.normals.get(vi)?).normalize())
-}
-
-/// Whether faces `a` and `b` meet smoothly (tangent, the same side out) along edge `e`.
-fn tangent_across(solid: &Solid, a: usize, b: usize, e: &crate::solid::SolidEdge) -> bool {
-    if e.points.is_empty() {
-        return false;
-    }
-    // Planes: the same plane, facing the same way (exact).
-    if let (Some(p1), Some(p2)) = (solid.faces[a].plane, solid.faces[b].plane) {
-        return v3(p1.normal()).normalize().dot(&v3(p2.normal()).normalize()) > 1.0 - 1e-9;
-    }
-    let mid = e.points[e.points.len() / 2];
-    match (normal_near(solid, a, mid), normal_near(solid, b, mid)) {
-        (Some(na), Some(nb)) => na.dot(&nb) > 1.0 - 1e-3,
-        _ => false,
-    }
-}
-
 /// The faces, cylinders and shared straight edges of one solid's chosen faces.
 #[derive(Default)]
 struct Gathered {
@@ -920,19 +894,7 @@ impl Rebuilder {
                             // SM17: every face that meets a chosen one smoothly (a flat face
                             // carrying on in its plane, a bend's cylinder and the flats beyond
                             // it), so one pick takes a whole side of an imported folded sheet.
-                            let mut k = 0;
-                            while k < chosen.len() {
-                                let f = &solid.faces[chosen[k]];
-                                for e in &solid.edges {
-                                    let [a, b] = e.name.faces;
-                                    let other = if a == f.name { b } else if b == f.name { a } else { continue };
-                                    let Some(oi) = solid.faces.iter().position(|g| g.name == other) else { continue };
-                                    if !chosen.contains(&oi) && tangent_across(solid, chosen[k], oi, e) {
-                                        chosen.push(oi);
-                                    }
-                                }
-                                k += 1;
-                            }
+                            crate::sheetmetal::tangent_faces(solid, chosen);
                         }
                         g.add(solid, chosen);
                     }
@@ -1052,6 +1014,15 @@ impl Rebuilder {
             corner_broken: false,
             hole_marks: Vec::new(),
         };
+        // A dialog taking picks on the input: the model, table and flat only.
+        if x.picking {
+            let mut ctx = ctx;
+            let def = ctx.def.clone().ok_or("The sheet metal model has no definition")?;
+            let model = def.build().map_err(|e| e.message(name))?;
+            ctx.flat = flatten(&model);
+            ctx.model = model;
+            return Ok(refold::plain_output(refold::with_context(state, ctx), None));
+        }
         let consumed = if x.operation == SheetMetalOp::Convert && !x.keep_input { consumed } else { Vec::new() };
         let mut o = self.refold(id, name, state, &[], None, ctx, &consumed)?;
         o.warning = o.warning.or(warning);

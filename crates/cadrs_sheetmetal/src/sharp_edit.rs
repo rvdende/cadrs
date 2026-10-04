@@ -46,6 +46,10 @@ pub struct SharpDef {
     /// Walls and joints added after the build (rolled walls and their tangent joints).
     pub extra_walls: Vec<Wall>,
     pub extra_joints: Vec<Joint>,
+    /// Corner reliefs found on the input (an imported part's relief holes, P3I.8): its own
+    /// sizes, over the model's setting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corner_overrides: Vec<crate::model::CornerOverride>,
 }
 
 impl SharpDef {
@@ -56,6 +60,7 @@ impl SharpDef {
             builder,
             extra_walls: built.walls.get(walls..).map(<[Wall]>::to_vec).unwrap_or_default(),
             extra_joints: built.joints.get(joints..).map(<[Joint]>::to_vec).unwrap_or_default(),
+            corner_overrides: built.corner_overrides.clone(),
         }
     }
 
@@ -78,6 +83,7 @@ impl SharpDef {
         self.builder.seq += other.builder.seq;
         self.extra_walls.extend(other.extra_walls);
         self.extra_joints.extend(other.extra_joints);
+        self.corner_overrides.extend(other.corner_overrides);
     }
 
     /// The model.
@@ -85,6 +91,7 @@ impl SharpDef {
         let mut m = self.builder.build()?;
         m.walls.extend(self.extra_walls.iter().cloned());
         m.joints.extend(self.extra_joints.iter().cloned());
+        m.corner_overrides.extend(self.corner_overrides.iter().copied());
         Ok(m)
     }
 

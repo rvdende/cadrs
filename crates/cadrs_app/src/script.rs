@@ -70,11 +70,11 @@
 //!   ([`cadrs_core::samples::bracket_pair`]: 2 parts, 3 instances) to `path` (relative to the
 //!   working folder), for the import scenarios to pick.
 //! - `sm-e4-rework` (P3I.8): exercise E4's steps 3–9 on its stand-in after Finish sheet metal
-//!   model: the slot's outline sketched on the right wall, Plane 1, a 2 × 8 rectangle swept
-//!   round it (Add), mirrored about Right, its edges filleted
-//!   ([`cadrs_core::samples::sheetmetal_exercises::rework_after_finish`]).
+//!   model, as [`cadrs_core::samples::sheetmetal_exercises::rework_after_finish`] makes them
+//!   (`sm_e4` does them through the dialogs instead).
 //! - `sm-legacy-step <path>` (P3I.8, SM17): writes the legacy C-channel as a plain STEP solid
-//!   ([`cadrs_core::samples::sheetmetal_legacy`]). `sm-topdown-depth N`: the Heating Mantle
+//!   ([`cadrs_core::samples::sheetmetal_legacy`]); `sm-legacy-case-step <path>` the legacy Case
+//!   (an open box with round corner reliefs: `case_round`). `sm-topdown-depth N`: the Heating Mantle
 //!   master's depth (SM18, [`cadrs_core::samples::sheetmetal_topdown::set_depth`]).
 //! - `design-intent` (P3F.4): the course's hydraulic cylinder body driven by `#piston_d` and
 //!   `#clearance` ([`cadrs_core::samples::design_intent`]) in the active Part Studio.
@@ -157,6 +157,11 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
         // P3I.8 (SM17): the legacy C-channel's STEP file (`samples::sheetmetal_legacy`).
         if let Some(path) = m.0.strip_prefix("sm-legacy-step ") {
             write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::step);
+            continue;
+        }
+        // P3I.8 (SM17): the legacy Case (an open box, round corner reliefs as the lesson's).
+        if let Some(path) = m.0.strip_prefix("sm-legacy-case-step ") {
+            write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::case_round_step);
             continue;
         }
         // P3I.8 (SM18): the Heating Mantle master's depth, edited in its own studio.

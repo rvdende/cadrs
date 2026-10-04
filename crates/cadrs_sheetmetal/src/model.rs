@@ -394,7 +394,7 @@ impl BendGeom {
         // away from the outline's inside.
         let ccw = {
             let m = lp.len();
-            (0..m).map(|i| (lp[i].0 * lp[(i + 1) % m].1 - lp[(i + 1) % m].0 * lp[i].1)).sum::<f64>() > 0.0
+            (0..m).map(|i| lp[i].0 * lp[(i + 1) % m].1 - lp[(i + 1) % m].0 * lp[i].1).sum::<f64>() > 0.0
         };
         let wound = |t: [P3; 3], out: V3| {
             let n = (t[1] - t[0]).cross(&(t[2] - t[0]));

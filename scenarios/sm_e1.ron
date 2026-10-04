@@ -1,16 +1,24 @@
 // P3I.8 / X7, exercise E1 "Importing DXF & Bend" end to end (`ex1-importing-dxf-bend/step-*.png`)
 // on its stand-in: the flat DXF of our tray (`fixtures/sheetmetal/flat_pattern_e1.dxf`, P3I.6).
 // 01 Sketch on Top → Insert DXF or DWG; 02 the DXF inserted (outline, cut-outs, six bend lines);
-// 03 Sheet metal model → Thicken of the seven regions, 1 mm; 04 accepted, Sketch 1 shown again;
-// 05–10 six Bend features along the bend lines (each Bend hides Sketch 1 again, as in Onshape,
-// so it is shown before the next) (Inner, the opposite angle so they fold up), the
-// short end flanges first; 11 Assign material → Carbon Steel; 12 Mass properties: 0.357 kg
-// (`cadrs_core/tests/sheetmetal_exercises.rs` checks 0.356725 kg on the same steps).
+// 03 Sheet metal model → Thicken of the seven regions with step 5's settings (1 mm, R1, K 0.45,
+// rolled K 0.5, Minimal gap 0.025, Corner relief Closed, Bend relief Tear); 04 accepted, Sketch 1
+// shown again; 05–10 six Bend features along the bend lines (each Bend hides Sketch 1 again, as in
+// Onshape, so it is shown before the next) (Inner, the opposite angle so they fold up), the short
+// end flanges first; Sketch 1 hidden again; 11 Assign material → Carbon Steel; 12 Mass properties
+// (`cadrs_core/tests/sheetmetal_exercises.rs` checks E1_MASS on the same steps).
 Scenario(
     start: Some("document"),
     steps: [
         WaitFor("document-shell"),
         Wait(30),
+        // The exercise's document, by its name (step 1).
+        Click(ui("document-name")),
+        Wait(3),
+        Key("Ctrl+A"),
+        Type("Exercise: Import DXF"),
+        Key("Enter"),
+        Wait(5),
         Custom("sketch-dxf-dir fixtures/sheetmetal"),
         Click(ui("sketch")),
         WaitFor("sketch-dialog"),
@@ -51,6 +59,21 @@ Scenario(
         Wait(3),
         Click(xyz(-6, 60, 0)),
         Wait(40),
+        // Step 5's Relief settings: Minimal gap 0.025, Closed corners, Tear bend reliefs.
+        Click(ui("sm-minimal-gap-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("0.025"),
+        Key("Tab"),
+        Wait(10),
+        Click(ui("sm-corner-relief-type")),
+        Wait(5),
+        Click(ui("sm-corner-relief-type-option-4")),
+        Wait(10),
+        Click(ui("sm-bend-relief-type")),
+        Wait(5),
+        Click(ui("sm-bend-relief-type-option-2")),
+        Wait(30),
         Key("Shift+7"),
         Wait(30),
         Key("F"),
@@ -224,6 +247,11 @@ Scenario(
         Screenshot("10-north-wall"),
         Click(ui("sheet-metal-bend-dialog-accept")),
         Wait(40),
+        // Sketch 1 hidden again, so it doesn't cover the folded part.
+        Hover(ui("feature-sketch-1")),
+        Wait(5),
+        Click(ui("feature-sketch-1-visibility")),
+        Wait(20),
         Key("Shift+7"),
         Wait(20),
         Key("F"),

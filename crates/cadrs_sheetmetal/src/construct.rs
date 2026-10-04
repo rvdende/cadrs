@@ -128,6 +128,11 @@ pub struct Built {
 }
 
 impl Built {
+    /// The joint made from the input with key `k`.
+    pub fn joint_key_id(&self, k: u64) -> Option<JointId> {
+        self.joints.iter().find(|(x, _)| *x == k).map(|(_, j)| *j)
+    }
+
     pub fn wall_key(&self, w: WallId) -> Option<u64> {
         self.walls.iter().find(|(_, id)| *id == w).map(|(k, _)| *k)
     }
@@ -248,6 +253,32 @@ fn onto_line(p: P3, (o, d): (P3, V3)) -> P3 {
 }
 
 /// The intersection of the 2D lines through `p` along `d` and through `q` along `e`.
+/// The diameter of the circular arc a polyline follows: the circle through its ends and its
+/// middle point, if every point lies on it and the polyline turns smoothly (a few degrees at each
+/// point, not a square notch's right angles).
+fn round_diameter(pts: &[P2]) -> Option<f64> {
+    if pts.len() < 3 {
+        return None;
+    }
+    for w in pts.windows(3) {
+        let (u, v) = (w[1] - w[0], w[2] - w[1]);
+        if u.norm() < 1e-12 || v.norm() < 1e-12 || u.normalize().dot(&v.normalize()) < (30f64).to_radians().cos() {
+            return None;
+        }
+    }
+    let (a, b, c) = (pts[0], pts[pts.len() / 2], pts[pts.len() - 1]);
+    let d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let sq = |q: P2| q.x * q.x + q.y * q.y;
+    let ux = (sq(a) * (b.y - c.y) + sq(b) * (c.y - a.y) + sq(c) * (a.y - b.y)) / d;
+    let uy = (sq(a) * (c.x - b.x) + sq(b) * (a.x - c.x) + sq(c) * (b.x - a.x)) / d;
+    let centre = P2::new(ux, uy);
+    let r = (a - centre).norm();
+    pts.iter().all(|q| ((*q - centre).norm() - r).abs() <= 1e-6 * r.max(1.0)).then_some(2.0 * r)
+}
+
 fn meet(p: P2, d: V2, q: P2, e: V2) -> Option<P2> {
     let den = d.perp(&e);
     if den.abs() < 1e-12 * d.norm() * e.norm() {
@@ -283,6 +314,13 @@ struct Laid {
 }
 
 /// Builds the walls and joints of a Convert or Thicken (see the module docs).
+///
+/// An imported folded part (SM17) brings its reliefs with it. A picked bend cylinder cut into
+/// pieces is one bend; where a face's edge along a bend is followed by the short edges of a cut
+/// near the bend (a corner or bend relief hole) before its next edge, those edges are left out so
+/// the face gets its sharp corner back, and the bend runs as far as both its walls' edges do. A
+/// round hole between two bends becomes that corner's Round – Sized relief (the hole's diameter,
+/// from the arc it leaves on the walls), so the model folds and flattens as the original did.
 pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn], o: &FaceOpts) -> Result<Built, ConstructError> {
     if faces.is_empty() && cyls.is_empty() {
         return Err(ConstructError::NoWalls);
@@ -329,6 +367,32 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
         }
     }
 
+    // P3I.8: a picked bend cylinder cut into pieces (an imported part's relief holes leave the
+    // bend's ends as separate faces of the same cylinder) is one bend: the pieces on its axis
+    // and radius widen its extent and aren't rolled walls of their own.
+    let mut absorbed: Vec<usize> = Vec::new();
+    let mut bend_z: Vec<(usize, (f64, f64))> = Vec::new();
+    for &bi in &bend_cyls {
+        let c = &cyls[bi];
+        let mut z = c.z;
+        for (ci, d) in cyls.iter().enumerate() {
+            if ci == bi || bend_cyls.contains(&ci) || absorbed.contains(&ci) {
+                continue;
+            }
+            let off = d.axis_origin - c.axis_origin;
+            let coaxial = c.axis.dot(&d.axis).abs() > 1.0 - 1e-9 && (off - c.axis * off.dot(&c.axis)).norm() <= tol;
+            if !coaxial || (d.radius - c.radius).abs() > tol || d.convex != c.convex {
+                continue;
+            }
+            for dz in [d.z.0, d.z.1] {
+                let zc = (d.axis_origin + d.axis * dz - c.axis_origin).dot(&c.axis);
+                z = (z.0.min(zc), z.1.max(zc));
+            }
+            absorbed.push(ci);
+        }
+        bend_z.push((bi, z));
+    }
+
     // Offsets: the clearance on the material side; with Include bends, enough more that the
     // inside of each bend clears the input's edge by the clearance.
     let mut laid: Vec<Laid> = faces.iter().map(|_| Laid { offset: sign * o.clearance }).collect();
@@ -357,9 +421,12 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
     // The neighbour across each straight loop edge: by a shared edge, or across a cylinder
     // picked to bend (whose two flat neighbours then meet at their virtual sharp).
     let mut across: Vec<Vec<Option<usize>>> = Vec::with_capacity(faces.len());
+    // Which picked cylinder (index into `cyls`) each loop edge runs along, if any.
+    let mut via_cyl: Vec<Vec<Option<usize>>> = Vec::with_capacity(faces.len());
     for (fi, f) in faces.iter().enumerate() {
         let l = &f.outline.outer;
         let mut row = vec![None; l.len()];
+        let mut vrow = vec![None; l.len()];
         for (k, slot) in row.iter_mut().enumerate() {
             let (pk, qk) = (l[k], l[(k + 1) % l.len()]);
             for e in edges {
@@ -381,16 +448,98 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
                     let dist = |x: P3| ((x - c.axis_origin) - c.axis * (x - c.axis_origin).dot(&c.axis)).norm();
                     if par && (dist(pa) - c.radius).abs() < 1e-5 * size.max(c.radius) {
                         *slot = Some(other);
+                        vrow[k] = Some(ci);
                         break;
                     }
                 }
             }
         }
         across.push(row);
+        via_cyl.push(vrow);
+    }
+
+    // P3I.8: relief holes on the input (an imported folded part). Where a loop edge along a
+    // picked bend cylinder is followed (or preceded) by a few short edges near the bend before
+    // the next edge along a bend or the next long edge, those short edges are the outline of a
+    // corner or bend relief cut into the sheet: they're dropped, so the two lines meet at the
+    // sharp corner again, and a round hole between two bends becomes that corner's relief.
+    let r_max = bend_cyls.iter().map(|&ci| cyls[ci].radius).fold(p.bend_radius, f64::max);
+    let reach = 3.0 * (r_max + t);
+    let mut dropped: Vec<Vec<bool>> = Vec::with_capacity(faces.len());
+    // Runs between two bends (their cylinders, where, the hole's diameter if round) and runs
+    // between a bend and a free edge (a wall beside a corner hole: where, the diameter).
+    let mut corner_runs: Vec<(usize, usize, P3, Option<f64>)> = Vec::new();
+    let mut hole_runs: Vec<(P3, Option<f64>)> = Vec::new();
+    for (fi, f) in faces.iter().enumerate() {
+        let l = &f.outline.outer;
+        let n = l.len();
+        let mut drop = vec![false; n];
+        let short = |k: usize| across[fi][k].is_none() && (l[(k + 1) % n] - l[k]).norm() < reach;
+        // How far a point lies from the line of edge `k`.
+        let off_line = |k: usize, q: P2| {
+            let (a, b) = (l[k], l[(k + 1) % n]);
+            let d = (b - a).normalize();
+            (q - a).perp(&d).abs()
+        };
+        for k in 0..n {
+            let Some(ci) = via_cyl[fi][k] else { continue };
+            for dir in [1usize, n - 1] {
+                let mut run = Vec::new();
+                let mut j = (k + dir) % n;
+                while run.len() < n - 1 && short(j) && off_line(k, l[j]) < reach && off_line(k, l[(j + 1) % n]) < reach {
+                    run.push(j);
+                    j = (j + dir) % n;
+                }
+                if run.is_empty() || j == k {
+                    continue;
+                }
+                // The edges either side meet near the run (a corner to restore), not a sheet's end
+                // running parallel to the bend (a lip's short end is no relief).
+                let (dk, dj) = ((l[(k + 1) % n] - l[k]).normalize(), (l[(j + 1) % n] - l[j]).normalize());
+                let Some(corner) = meet(l[k], dk, l[j], dj) else { continue };
+                if run.iter().any(|&e| (l[e] - corner).norm() > reach) {
+                    continue;
+                }
+                // Between two bends: walk forwards only (the other bend's backward walk is the
+                // same run).
+                if dir != 1 && across[fi][j].is_some() {
+                    continue;
+                }
+                for &e in &run {
+                    drop[e] = true;
+                }
+                // The run's own vertices (not where it leaves the edges either side): on a
+                // round hole they lie on its circle.
+                let inner: Vec<P2> = run.iter().skip(1).map(|&e| l[e]).filter(|q| off_line(k, *q) > tol && off_line(j, *q) > tol).collect();
+                let mid = f.point(inner.get(inner.len() / 2).copied().unwrap_or(l[run[0]]));
+                let d = round_diameter(&inner);
+                match via_cyl[fi][j] {
+                    // Between two bends: that corner.
+                    Some(cj) if dir == 1 && cj != ci => corner_runs.push((ci, cj, mid, d)),
+                    _ => hole_runs.push((mid, d)),
+                }
+            }
+        }
+        dropped.push(drop);
+    }
+    // Each corner's round hole: the arc on the walls beside it (exact points of the hole's
+    // circle), else its own outline.
+    let mut round_reliefs: Vec<(u64, u64, f64)> = Vec::new();
+    for (ci, cj, at, d) in &corner_runs {
+        let near = hole_runs
+            .iter()
+            .filter_map(|(q, d)| d.map(|d| ((*q - *at).norm(), d)))
+            .filter(|(dist, _)| *dist < 2.0 * reach)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, d)| d);
+        if let Some(d) = near.or(*d) {
+            round_reliefs.push((cyls[*ci].key, cyls[*cj].key, d));
+        }
     }
 
     // The walls: each face's outline with its edges moved onto the lines where the planes meet.
     let mut b = SharpBuilder::new(p);
+    let mut reach_z: Vec<(usize, usize, (f64, f64))> = Vec::new();
     for (fi, f) in faces.iter().enumerate() {
         let l = &f.outline.outer;
         let n = l.len();
@@ -412,13 +561,28 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
                 (pk, d)
             })
             .collect();
-        let pts: Vec<P2> = (0..n)
+        // The relief cuts' edges left out: their neighbours meet at the sharp corner.
+        let kept_k: Vec<usize> = (0..n).filter(|k| !dropped[fi][*k]).collect();
+        let kept: Vec<(P2, V2)> = kept_k.iter().map(|&k| lines[k]).collect();
+        let m = kept.len();
+        let pts: Vec<P2> = (0..m)
             .map(|k| {
-                let prev = lines[(k + n - 1) % n];
-                let cur = lines[k];
+                let prev = kept[(k + m - 1) % m];
+                let cur = kept[k];
                 meet(prev.0, prev.1, cur.0, cur.1).unwrap_or(cur.0)
             })
             .collect();
+        // How far along each bend cylinder's axis this face's (restored) edges along it reach.
+        for (i, &k) in kept_k.iter().enumerate() {
+            let Some(ci) = via_cyl[fi][k] else { continue };
+            let c = &cyls[ci];
+            let at = |q: P2| (origin + f.u * q.x + f.v * q.y - c.axis_origin).dot(&c.axis);
+            let (za, zb) = (at(pts[i]), at(pts[(i + 1) % m]));
+            match reach_z.iter_mut().find(|x| x.0 == ci && x.1 == fi) {
+                Some((.., z)) => *z = (z.0.min(za.min(zb)), z.1.max(za.max(zb))),
+                None => reach_z.push((ci, fi, (za.min(zb), za.max(zb)))),
+            }
+        }
         let (v, outline) = if o.material_inside {
             let flip = |q: &P2| P2::new(q.x, -q.y);
             (-f.v, Polygon::with_holes(pts.iter().map(flip).collect(), f.outline.holes.iter().map(|h| h.iter().map(flip).collect()).collect()))
@@ -462,7 +626,20 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
         if r <= 0.0 {
             return Err(ConstructError::RadiusTooSmall { key: c.key });
         }
-        let (z0, z1) = c.z;
+        let (mut z0, mut z1) = bend_z.iter().find(|(i, _)| *i == ci).map_or(c.z, |(_, z)| *z);
+        // Where both walls' restored edges run along it (an imported part's relief holes cut
+        // the cylinder short; the walls, their corners back, say how long the bend is).
+        let za = reach_z.iter().find(|x| x.0 == ci && x.1 == fa).map(|x| x.2);
+        let zb = reach_z.iter().find(|x| x.0 == ci && x.1 == fb).map(|x| x.2);
+        if let (Some(a), Some(bz)) = (za, zb) {
+            let (lo, hi) = (a.0.max(bz.0), a.1.min(bz.1));
+            if lo < z0 {
+                z0 = lo;
+            }
+            if hi > z1 {
+                z1 = hi;
+            }
+        }
         let a = onto_line(c.axis_origin + c.axis * z0, line);
         let bb = onto_line(c.axis_origin + c.axis * z1, line);
         let j = b.joint(fa, fb, (a, bb), SharpJointKind::Bend { radius: Some(r), value: None });
@@ -494,11 +671,17 @@ pub fn from_faces(p: Params, faces: &[FaceIn], cyls: &[CylIn], edges: &[EdgeIn],
     for (k, j) in keys.iter().zip(&model.joints) {
         out.joints.push((*k, j.id));
     }
+    // The input's round corner holes as those corners' reliefs (Round – Sized, the hole's size).
+    for (ka, kb, d) in &round_reliefs {
+        let (Some(ja), Some(jb)) = (out.joint_key_id(*ka), out.joint_key_id(*kb)) else { continue };
+        let relief = crate::params::CornerRelief { kind: crate::params::CornerReliefKind::RoundSized, size: *d, ..p.corner_relief };
+        model.corner_overrides.push(crate::model::CornerOverride { bends: (ja, jb), relief });
+    }
     let built = (model.walls.len(), model.joints.len());
 
     // Cylinders left as they are: rolled walls joined to their flat neighbours by tangent joints.
     for (ci, c) in cyls.iter().enumerate() {
-        if bend_cyls.contains(&ci) {
+        if bend_cyls.contains(&ci) || absorbed.contains(&ci) {
             continue;
         }
         let off = c.neighbours.0.or(c.neighbours.1).map_or(sign * o.clearance, |f| laid[f].offset);

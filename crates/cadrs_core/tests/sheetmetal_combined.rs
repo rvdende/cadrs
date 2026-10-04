@@ -1,7 +1,7 @@
 //! Sheet metal features combined and reordered (SM1.6): every feature after a Sheet metal model
 //! changes one definition (`cadrs_sheetmetal::definition`) and refolds through one pipeline, so
 //! a Flange's bend can be modified, a Bend made on a flange and its corners broken, a Tab added
-//! after a Hem, the table reordered with later features' bends, a form kept through a later
+//! after a Hem (and the other way round), a Make joint and a Bend in either order, the table reordered with later features' bends, a form kept through a later
 //! refold, and the features moved, undone and redone, with the parts keeping their ids. Folded
 //! volumes are checked against the flat pattern as in `tests/sheetmetal.rs`.
 #![cfg(feature = "occt")]
@@ -11,7 +11,7 @@ use cadrs_core::commands::{AddFeature, AddSketch, EditSketch, MoveFeature, Repla
 use cadrs_core::document::{Document, EdgeRef, FaceRef, FeatureKind};
 use cadrs_core::rebuild::Build;
 use cadrs_core::sheetmetal::{CurveRef, SheetMetalExprs, SheetMetalModelFeature, SheetMetalOp};
-use cadrs_core::sheetmetal_features::{FlangeFeature, HemFeature, SheetMetalFeature};
+use cadrs_core::sheetmetal_features::{FlangeFeature, HemFeature, MakeJointFeature, MakeJointType, SheetMetalFeature};
 use cadrs_core::sheetmetal_form::{FormFeature, FormLocation, FormPick, FormSource, LIBRARY_NAME, LibraryForm};
 use cadrs_core::sheetmetal_joint::{PutModifyJoint, SetTableOrder, TableEdit, bend_feature_edit, bend_feature_of, modify_joint_of, table_edit};
 use cadrs_core::sheetmetal_tools::{BendFeature, CornerBreakFeature, LineRef, SheetMetalTool, SmPick, TabFeature};
@@ -382,6 +382,99 @@ fn a_flange_and_a_bend_in_either_order_make_the_same_part() {
     for i in 0..3 {
         assert!((b1.0[i] - b2.0[i]).abs() < 1e-6 && (b1.1[i] - b2.1[i]).abs() < 1e-6, "{b1:?} {b2:?}");
     }
+}
+
+/// Volume, flat area and bounds of the sole part, for comparing orders.
+type Made = (f64, f64, ([f64; 3], [f64; 3]));
+
+fn same_part(a: Made, b: Made) {
+    assert!(close(a.0, b.0, 1e-9) && close(a.1, b.1, 1e-9), "{} {} {} {}", a.0, b.0, a.1, b.1);
+    for i in 0..3 {
+        assert!((a.2.0[i] - b.2.0[i]).abs() < 1e-6 && (a.2.1[i] - b.2.1[i]).abs() < 1e-6, "{:?} {:?}", a.2, b.2);
+    }
+}
+
+#[test]
+fn a_hem_and_a_tab_in_either_order_make_the_same_part() {
+    let run = |tab_first: bool| -> Made {
+        let mut st = Studio::new();
+        let (_, plate) = st.plate(100.0, 60.0);
+        let e = edge_near(&plate, [100.0, 30.0, 2.0]);
+        let h = HemFeature { edges: vec![EdgeOrFace::Edge(e)], radius: 3.0, radius_expr: "3 mm".into(), ..Default::default() };
+        let hem = st.add("Hem", FeatureKind::SheetMetal(SheetMetalFeature::Hem(h)));
+        let s = st.sketch(PlaneRef::Top, vec![rect(40.0, 50.0, 60.0, 75.0)]);
+        let tab = st.add("Tab", FeatureKind::SheetMetalTool(SheetMetalTool::Tab(TabFeature { sketches: vec![s], ..Default::default() })));
+        if tab_first {
+            // The Tab (and its sketch) moved up above the Hem.
+            let to = st.position(hem);
+            st.h.execute(&mut st.d, &MoveFeature { element: st.el, feature: s, to, label: "Move".into() }).unwrap();
+            st.h.execute(&mut st.d, &MoveFeature { element: st.el, feature: tab, to: to + 1, label: "Move".into() }).unwrap();
+            assert!(st.position(tab) < st.position(hem));
+        }
+        let b = st.ok();
+        assert_eq!(b.parts.len(), 1);
+        assert_eq!(b.parts[0].id, plate.id);
+        assert!(b.sheet_metal[0].model.joints.iter().any(|j| j.bend().is_some_and(|x| x.hem)), "the hem is there");
+        all_match(&b);
+        (volume(&b.parts[0]), b.sheet_metal[0].flat.parts[0].area(), bounds(&b.parts[0]))
+    };
+    same_part(run(false), run(true));
+}
+
+#[test]
+fn a_make_joint_and_a_bend_in_either_order_make_the_same_part() {
+    // Two walls standing on Top, apart (an extruded line along x, 0..50, and one along y at
+    // x = 52, 5..30): Make joint (Bend) joins them at the corner; a Bend on the first wall's
+    // face along x = 20 folds its short end. Made in either order, each pick taken on the part
+    // as it is at that point (as a user would).
+    let run = |bend_first: bool| -> Made {
+        let mut st = Studio::new();
+        let line = |a: Vec2, b: Vec2| SketchOp::AddPolyline { points: vec![a, b], closed: false, construction: false, label: "Add line" };
+        let s = st.sketch(PlaneRef::Top, vec![line(Vec2::new(0.0, 0.0), Vec2::new(50.0, 0.0)), line(Vec2::new(52.0, 5.0), Vec2::new(52.0, 30.0))]);
+        let p = params();
+        let x = SheetMetalModelFeature { operation: SheetMetalOp::Extrude, sketches: vec![s], depth: 40.0, depth_expr: "40 mm".into(), params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
+        st.add("Sheet metal model", FeatureKind::SheetMetalModel(x));
+        assert_eq!(st.ok().parts.len(), 2);
+        let ls = st.sketch(PlaneRef::Front, vec![line(Vec2::new(20.0, -10.0), Vec2::new(20.0, 50.0))]);
+        let joint = |st: &mut Studio| {
+            let b = st.ok();
+            let find = |p: [f64; 3]| {
+                let part = b.parts.iter().find(|q| q.solid.edges.iter().any(|e| e.distance(p) < 1e-3)).expect("an edge there");
+                EdgeOrFace::Edge(edge_near(part, p))
+            };
+            let edges = vec![find([50.0, 0.0, 30.0]), find([52.0, 5.0, 30.0])];
+            st.add("Make joint", FeatureKind::SheetMetal(SheetMetalFeature::MakeJoint(MakeJointFeature { edges, kind: MakeJointType::Bend, ..Default::default() })));
+        };
+        let bend = |st: &mut Studio| {
+            let b = st.ok();
+            // The first wall's broad face on y = 0.
+            let (part, i) = b
+                .parts
+                .iter()
+                .flat_map(|q| (0..q.solid.faces.len()).map(move |i| (q, i)))
+                .filter(|(q, i)| q.solid.faces[*i].plane.is_some_and(|p| p.normal()[1].abs() > 0.999 && p.origin[1].abs() < 1e-6))
+                .max_by(|(q, a), (r, b)| q.solid.faces[*a].area.unwrap_or(0.0).total_cmp(&r.solid.faces[*b].area.unwrap_or(0.0)))
+                .expect("the first wall's face");
+            let face = FaceRef { part: part.id, face: part.solid.faces[i].name, seed: [35.0, 0.0, 20.0] };
+            let g = &st.d.element(st.el).unwrap().feature(ls).unwrap().sketch().unwrap().geometry;
+            let (curve, _) = g.curves.iter().next().unwrap();
+            let bl = LineRef::Sketch(CurveRef { sketch: ls, curve });
+            st.add("Bend", FeatureKind::SheetMetalTool(SheetMetalTool::Bend(BendFeature { line: Some(bl), face: Some(face), alignment: BendAlignment::Inner, ..Default::default() })));
+        };
+        if bend_first {
+            bend(&mut st);
+            joint(&mut st);
+        } else {
+            joint(&mut st);
+            bend(&mut st);
+        }
+        let b = st.ok();
+        assert_eq!(b.parts.len(), 1, "joined");
+        assert_eq!(b.sheet_metal[0].model.joints.iter().filter(|j| j.bend().is_some()).count(), 2, "the joint's bend and the Bend");
+        all_match(&b);
+        (volume(&b.parts[0]), b.sheet_metal[0].flat.parts[0].area(), bounds(&b.parts[0]))
+    };
+    same_part(run(false), run(true));
 }
 
 #[test]

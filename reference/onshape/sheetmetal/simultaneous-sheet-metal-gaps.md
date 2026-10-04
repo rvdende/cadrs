@@ -580,7 +580,54 @@ against the stand-ins' expected values.
   joints), then outermost first (a lip's line lies on its wall only while that wall is flat).
 - **Flat view menu**: New sketch, Export DXF/DWG of flat pattern, Create drawing of flat pattern,
   then Zoom to fit; the part is the one with the hovered bend, else the model's first.
-- **Gaps left**: E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
+- **P3I.8 fixes (judge 6.8)**: `sm_e4` does steps 3–9 through the dialogs (sketch on the wall
+  face with Use, Plane 1 of type Plane point, the rectangle, Sweep Add, Mirror with **Reapply
+  features**, two Fillets), one screenshot each, and `rework_after_finish` makes the same
+  features. The folded slot is a polygon (sheet metal cuts are folded from the flat), so Use
+  takes the slot sketch's curves rather than the part's edge. **Mirror → Reapply features** is
+  new: a feature mirror regenerates the features from their mirrored sketches (the frame
+  reflected with v reversed, the geometry flipped in v, regions' seeds too), Extrude, Revolve,
+  Sweep, Fillet, Chamfer and Hole. `sm_p3i8_topdown` builds the Enclosure and the Cover in the
+  dialogs from `sm_topdown_master` (Derived, Convert with Faces to exclude, bends and Keep input
+  parts, Thicken, renames) and edits the master through Extrude 1's dialog, showing both flats
+  before and after. E1 uses step 5's Relief settings (the mass doesn't move: see `E1_MASS`).
+  The legacy stand-in adds the **Case** (an open box: walls reached only through the bends,
+  round the corner gaps), and `sm_p3i8_legacy` shows the table and flat during Thicken with only
+  Tangent joints (SM17.2). Order tests: Hem/Tab and Make joint/Bend both ways.
+- **P3I.8 second round (judge 7.6)**: E4's fillets are the slides' (step 8: 3 mm where the
+  slot meets the wall's inside face; step 9: 1 mm on the collar's top outer edge). The folded
+  slot edge is a polygon, so the collar's profile reaches 0.5 into the slot and back through the
+  wall: the sweep's exact faces line the slot and the 3 mm fillet runs on them. The Space
+  Envelope is T-notched (Side Profile, Front Cutouts): Convert already rips every edge not picked,
+  the collision came from bending every wall off the base; the Enclosure bends the notch walls
+  and the tongue's sides off their neighbours at the outside corners, as the lesson's flat lays
+  them, and the notches' inside corners stay rips. Kept inputs of Convert show translucent
+  (during the dialog the folded part shows round them). The flat view draws tangent joints as
+  thin lines (SM17.2); the Sheet metal panel stays open through a Sheet metal model dialog;
+  Thicken's highlight shows the whole propagated skin; a folded part's loose slivers (under a
+  thickness cube) are dropped, so a Case with Round – Scaled reliefs thickens again into one
+  part (2.1 % lighter than the original: the material round the import's relief holes isn't
+  taken back yet). Finish sheet metal model's warning is also an info bar at the top.
+  Mirror Reapply is tested where it differs from a copy (Up to next).
+- **P3I.8 third round**: a Sheet metal model dialog taking picks no longer drops the feature
+  from the live build: a Thicken (or a Convert keeping its input) stays whole, its picks (edges
+  too, and their visibility) going through its own preview, so its preview, table and flat follow the picks; a Convert that uses its
+  input up builds its model, table and flat without parts (`SheetMetalModelFeature::picking`,
+  never saved). Derived sketches start hidden (their eyes show them, as Onshape's,
+  `18-…/t0062.6.png`). Flat-view bend labels move clear of each other and stay in view; the
+  table's Style reads "n/a" for tangent joints. Dropping fold slivers now warns.
+- **P3I.8 fourth round (relief holes on imports)**: Thicken/Convert from faces recognise an
+  imported part's relief holes (`construct::from_faces`): a picked bend cylinder cut into
+  pieces is one bend; the short edges a hole leaves on a face next to a bend are left out, so the
+  face gets its sharp corner back and the bend runs as far as both walls' edges; a round hole
+  between two bends becomes that corner's Round – Sized relief, its diameter from the arc on the
+  walls. The round-relieved Case thickened again matches the original's volume and flat area to
+  1e-7 with no slivers (the sliver drop stays as a warned safety net the test asserts never
+  fires); `sm_p3i8_legacy` uses it.
+- **Gaps left**: a bend-end relief hole (not at a corner) gets its face's corner back but the
+  model's own bend relief, not one sized from the hole. The garbled
+  letters near the toolbar in `sm_e4` are plane labels laid out at zero width (P3I.2 clips
+  them); E2's arc stand-in; the flat view's part pick is by hovered bend, not by the
   clicked piece; a shown flat sketch's region fill draws a shading artefact over the folded part
   (`sm_e1` 04+); flat sketches of loft or derived contexts aren't drawn (only Sheet metal model
   flats have planes); in-context sheet metal (SM18.4) isn't sheet-metal-specific.

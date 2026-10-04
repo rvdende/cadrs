@@ -312,6 +312,16 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
         SheetMetalOp::Convert => {
             v.extend(x.exclude.iter().filter_map(face));
         }
+        SheetMetalOp::Thicken if x.tangent_propagation => {
+            // SM17: the whole skin the pick takes, not only the picked face.
+            for f in &x.faces {
+                let Some(p) = cache.parts.iter().find(|p| p.solid.face(&f.face).is_some()) else { continue };
+                let Some(i) = p.solid.faces.iter().position(|g| g.name == f.face) else { continue };
+                let mut chosen = vec![i];
+                cadrs_core::sheetmetal::tangent_faces(&p.solid, &mut chosen);
+                v.extend(chosen.into_iter().map(|k| Pick::Face(p.id, p.solid.faces[k].name)));
+            }
+        }
         SheetMetalOp::Thicken => {
             v.extend(x.faces.iter().filter_map(face));
         }
