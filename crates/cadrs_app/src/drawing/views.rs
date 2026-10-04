@@ -755,6 +755,7 @@ fn rebuild_view_scene(
                 let sketches = sketch_polylines(&doc.doc, v);
                 let hl = ui.highlight_edge.filter(|(id, _)| *id == v.id).map(|(_, e)| e);
                 view_strokes(&mut strokes, v, g, color, &sketches, hl);
+                strokes.extend(super::flat_views::centermark_strokes(&d.style, v, g, color));
                 let decor = cadrs_drawing::view_kinds::view_decor(&d.style, &decor_views, v, Some(&**g), &avoid);
                 decor_strokes(&mut strokes, &decor, color);
             }
@@ -774,6 +775,7 @@ fn rebuild_view_scene(
         let mut gv = gv.clone();
         gv.hidden_lines = false;
         view_strokes(&mut strokes, &gv, g, ghost_color(), &[], None);
+        strokes.extend(super::flat_views::centermark_strokes(&d.style, &gv, g, ghost_color()));
         let decor = cadrs_drawing::view_kinds::view_decor(&d.style, &[], &gv, Some(&**g), &avoid);
         decor_strokes(&mut strokes, &decor, ghost_color());
     } else if let Some(gv) = &ui.ghost {

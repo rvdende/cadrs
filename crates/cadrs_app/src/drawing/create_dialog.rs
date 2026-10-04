@@ -159,20 +159,25 @@ struct CreateDrawingBody(Option<CreateDrawingState>);
 /// Opens the dialog. `reference` is the part or assembly the drawing is of (Create Drawing of
 /// X…), or `None` from the "+" menu.
 pub fn open_create_drawing(world: &mut World, reference: Option<ObjectRef>) {
-    open_with(world, reference, false);
+    open_with(world, reference, false, false);
+}
+
+/// Create Drawing of a part from the Parts list (D1.2): the drawing is named after the part,
+/// "<part> Drawing 1", as Onshape's (`ex3-drawings/step-06`, `step-08`).
+pub fn open_create_drawing_of_part(world: &mut World, r: ObjectRef) {
+    open_with(world, Some(r), false, true);
 }
 
 /// Create drawing of flat pattern of part `r` (P3I.7, SM16.1): the same dialog; OK opens the
 /// drawing with Insert view armed for the part's flat pattern.
 pub fn open_create_drawing_flat(world: &mut World, r: ObjectRef) {
-    open_with(world, Some(r), true);
+    open_with(world, Some(r), true, false);
 }
 
-fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool) {
+fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool, named: bool) {
     let Some(doc) = world.get_resource::<ActiveDocument>() else {
         return;
     };
-    let name = doc.doc.next_element_name("Drawing");
     // Opened on a part (an instance's or the Parts list's menu): the title names it.
     let of = reference.and_then(|r| r.part.map(|(f, index)| (r.element, f, index))).map(|(e, f, index)| {
         let owner = cadrs_core::properties::PropertyOwner::Part {
@@ -181,8 +186,16 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool) {
         };
         cadrs_core::properties::text(&doc.doc, owner, cadrs_core::properties::PropertyKey::Name, None)
     });
-    let title = match of.filter(|n| !n.trim().is_empty()) {
-        Some(part) if flat => format!("Create Drawing: {name} of {part} flat pattern"),
+    let of = of.filter(|n| !n.trim().is_empty());
+    // Create drawing of flat pattern names the drawing as Onshape does (`16-drawings/t0015.3`,
+    // `t0026.7`): "Flat pattern of <part> Drawing 1", the tab "Flat pattern of <part> …".
+    let name = match &of {
+        Some(part) if flat => doc.doc.next_element_name(&format!("Flat pattern of {part} Drawing")),
+        Some(part) if named => doc.doc.next_element_name(&format!("{part} Drawing")),
+        _ => doc.doc.next_element_name("Drawing"),
+    };
+    let title = match of {
+        Some(_) if flat || named => format!("Create Drawing: {name}"),
         Some(part) => format!("Create Drawing: {name} of {part}"),
         None => format!("Create Drawing: {name}"),
     };

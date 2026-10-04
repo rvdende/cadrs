@@ -11,9 +11,17 @@
 //! Naming: each outline edge is keyed by the first flat piece (a wall or a bend region) whose
 //! edge it lies on and that edge's index, so it keeps its name while the model's dimensions
 //! change; holes by the piece edge of their first side; tangent and bend lines by their joint;
-//! slits by their relief.
+//! slits by their relief; forms by their Form feature and copy; counterbores' and countersinks'
+//! outer diameters by their hole.
+//!
+//! Besides the outline, cut-outs, slits and bends, the view shows (SM16.3) the forms' outlines
+//! and centermarks (`FlatPart::forms`, as the Part Studio's flat view), the outer diameters of
+//! counterbored and countersunk holes ([`SheetMetalContext::hole_marks`], at the feature's own
+//! cut-outs) and a centermark on
+//! every round hole; runs of outline edges on one circle (corner break rounds, round reliefs)
+//! are true arcs.
 
-use cadrs_drawing::flat_view::{FlatBendInfo, FlatInput, FlatLoop, circle_of, flat_projection, key_of, simplify_loop};
+use cadrs_drawing::flat_view::{FlatBendInfo, FlatFormInfo, FlatInput, FlatLoop, circle_of, find_arcs, flat_projection, key_of, simplify_loop};
 use cadrs_sheetmetal::flat::{FlatPart, PieceSource};
 use cadrs_sheetmetal::poly::Seg2;
 
@@ -73,6 +81,13 @@ fn edge_key(part: &FlatPart, s: [P2; 2], fallback: u64) -> u64 {
     key_of(&[0xdead, fallback])
 }
 
+/// A point in wall `w`'s own 2D on the flat of `part` (as forms are placed).
+fn hole_on_flat(ctx: &SheetMetalContext, part: &FlatPart, w: cadrs_sheetmetal::WallId, q: cadrs_sheetmetal::poly::P2) -> Option<P2> {
+    let place = part.placement(w)?;
+    let wall = ctx.model.wall(w)?;
+    Some(p2(&place.apply(wall.flat_local(&ctx.model.params, q))))
+}
+
 /// The flat view input of `part` in sheet metal model `ctx`.
 pub fn flat_input(ctx: &SheetMetalContext, part: PartId) -> Option<FlatInput> {
     let walls = &ctx.parts.iter().find(|(p, _)| *p == part)?.1;
@@ -90,12 +105,22 @@ pub fn flat_input(ctx: &SheetMetalContext, part: PartId) -> Option<FlatInput> {
             if let Some((center, radius)) = circle_of(&raw) {
                 let key = edge_key(flat, [raw[0], raw[1]], li << 16);
                 input.loops.push(FlatLoop::Circle { center, radius, key });
+                // A counterbored or countersunk hole: its outer diameter too (the Hole feature's
+                // own cut-out: its centre where the feature's hole goes through the wall).
+                let mine = |m: &&crate::sheetmetal::HoleMark| {
+                    (m.radius - radius).abs() <= 1e-3 * m.radius.max(1.0)
+                        && m.at.iter().filter_map(|(w, q)| hole_on_flat(ctx, flat, *w, *q)).any(|c| (c[0] - center[0]).hypot(c[1] - center[1]) <= 1e-3 * radius.max(1.0))
+                };
+                if let Some(m) = ctx.hole_marks.iter().find(mine) {
+                    input.hole_marks.push((center, m.outer, key_of(&[key, 0xC0])));
+                }
                 continue;
             }
             let points = simplify_loop(&raw, 1e-6);
             let n = points.len();
             let keys = (0..n).map(|i| edge_key(flat, [points[i], points[(i + 1) % n]], (li << 16) | i as u64)).collect();
-            input.loops.push(FlatLoop::Polygon { points, keys });
+            let arcs = find_arcs(&points);
+            input.loops.push(FlatLoop::Polygon { points, keys, arcs });
         }
     }
     for (i, c) in flat.cuts.iter().enumerate() {
@@ -104,6 +129,13 @@ pub fn flat_input(ctx: &SheetMetalContext, part: PartId) -> Option<FlatInput> {
             let what: Vec<u64> = format!("{:?}", c.source).bytes().map(u64::from).collect();
             input.slits.push((seg(&s), key_of(&[key_of(&what), i as u64])));
         }
+    }
+    for (i, f) in flat.forms.iter().enumerate() {
+        input.forms.push(FlatFormInfo {
+            lines: f.lines.iter().map(|l| (l.points.iter().map(p2).collect(), l.closed)).collect(),
+            center: p2(&f.center),
+            key: key_of(&[f.source, i as u64]),
+        });
     }
     for b in &flat.bends {
         let row = table.bends.iter().find(|r| r.joint == b.joint);
@@ -157,7 +189,7 @@ mod tests {
         let part = PartId::new(feature, 0);
         let walls = model.walls.iter().map(|w| w.id).collect();
         (
-            SheetMetalContext { feature, name: String::new(), model, flat, parts: vec![(part, walls)], active: true, wall_keys: Vec::new(), joint_keys: Vec::new(), def: None, owners: Vec::new(), editors: Vec::new(), forms: Vec::new(), corner_broken: false },
+            SheetMetalContext { feature, name: String::new(), model, flat, parts: vec![(part, walls)], active: true, wall_keys: Vec::new(), joint_keys: Vec::new(), def: None, owners: Vec::new(), editors: Vec::new(), forms: Vec::new(), corner_broken: false, hole_marks: Vec::new() },
             part,
         )
     }

@@ -333,7 +333,7 @@ fn on_part_menu_action(ev: On<MenuAction>, q_anchor: Query<&PartMenuFor, With<Co
                 return;
             };
             let r = cadrs_drawing::ObjectRef { element: element.0, part: Some((part.feature.0, part.index)) };
-            crate::drawing::create_dialog::open_create_drawing(world, Some(r));
+            crate::drawing::create_dialog::open_create_drawing_of_part(world, r);
         }),
         "part-flat-drawing" => commands.queue(move |world: &mut World| {
             let Some(element) = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element().map(|e| e.id)) else {

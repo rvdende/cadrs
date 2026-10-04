@@ -357,6 +357,26 @@ pub struct SheetMetalContext {
     /// in the table any more.
     #[serde(default)]
     pub corner_broken: bool,
+    /// P3I.7 (SM16.3): counterbored and countersunk Hole features cut through it (the sheet
+    /// gets the hole's diameter); a flat pattern drawing view shows their outer diameter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hole_marks: Vec<HoleMark>,
+}
+
+/// A counterbored or countersunk Hole feature through sheet metal (P3I.7, SM16.3): its own
+/// round cut-outs (each on its wall, in the wall's own 2D, so it follows the wall when the flat
+/// changes) show the counterbore's or countersink's outer radius in flat pattern drawing views.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HoleMark {
+    pub feature: FeatureId,
+    /// The hole's radius (its cut-outs').
+    pub radius: f64,
+    /// The counterbore's or countersink's outer radius.
+    pub outer: f64,
+    /// Where each of its holes goes through a wall: the wall and the hole's centre in the
+    /// wall's own 2D.
+    #[serde(default)]
+    pub at: Vec<(cadrs_sheetmetal::WallId, cadrs_sheetmetal::poly::P2)>,
 }
 
 /// A Form feature's copies on one model (P3I.9; kept so a refold applies them again).

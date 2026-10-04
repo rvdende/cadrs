@@ -284,7 +284,7 @@ pub fn open_insert_view(world: &mut World) {
                 // P3I.7: every sheet metal part's flat pattern.
                 for p in cadrs_core::flat_drawing::flat_parts(&build.sheet_metal) {
                     if let Some(part) = build.part(p) {
-                        flats.push((el.id, p, format!("{} Flat pattern", cadrs_core::parts::display_name(part, props))));
+                        flats.push((el.id, p, format!("Flat pattern of {}", cadrs_core::parts::display_name(part, props))));
                     }
                 }
                 let parts = build
@@ -1113,14 +1113,8 @@ fn update_ghost(
             ViewTool::Insert => {
                 let r = insert.reference?;
                 // P3I.7: a flat pattern view only from the Flat patterns filter (SM16.2).
-                let mut v = if insert.flat {
-                    View::flat_pattern(r, insert.orientation, insert.scale, cursor)
-                } else {
-                    View::base(r, insert.orientation, insert.scale, cursor)
-                };
+                let mut v = inserted_view(insert.flat, r, insert.orientation, insert.scale, cursor, &d.style);
                 v.id = ghost_id;
-                v.hidden_lines = d.style.hidden_lines;
-                v.tangent_edges = d.style.tangent_edges;
                 // P3G.1: a linked source's copy, not in the document until the view is placed.
                 match super::view_linked::ghost_doc(&doc.doc, &insert) {
                     Some(with_links) => cache.ensure(&with_links, Some(d), &v),
@@ -1448,9 +1442,31 @@ fn sync_tool_hint(
     }
 }
 
+/// The view Insert view places: a part view takes the drawing's hidden line and tangent edge
+/// defaults; a flat pattern view (P3I.7) keeps its tangent edges hidden, so its bend lines'
+/// chain lines stay clean.
+pub fn inserted_view(flat: bool, r: ObjectRef, orientation: NamedView, scale: Scale, at: [f64; 2], style: &cadrs_drawing::DrawingStyle) -> View {
+    let mut v = if flat { View::flat_pattern(r, orientation, scale, at) } else { View::base(r, orientation, scale, at) };
+    v.hidden_lines = style.hidden_lines;
+    if !flat {
+        v.tangent_edges = style.tangent_edges;
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flat_views_keep_tangent_edges_hidden_whatever_the_style() {
+        let style = cadrs_drawing::DrawingStyle { tangent_edges: cadrs_drawing::style::TangentEdges::Solid, ..Default::default() };
+        let r = ObjectRef { element: uuid::Uuid::nil(), part: None };
+        let flat = inserted_view(true, r, NamedView::Top, Scale::new(1, 5), [0.0, 0.0], &style);
+        assert_eq!(flat.tangent_edges, cadrs_drawing::style::TangentEdges::Hidden);
+        let part = inserted_view(false, r, NamedView::Top, Scale::new(1, 5), [0.0, 0.0], &style);
+        assert_eq!(part.tangent_edges, cadrs_drawing::style::TangentEdges::Solid);
+    }
 
     #[test]
     fn align_turns_by_the_smallest_angle() {

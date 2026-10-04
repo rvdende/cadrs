@@ -489,6 +489,7 @@ impl Rebuilder {
                 Some(Err("Extrude can't intersect an active sheet metal part: use Tab or Flange, or Finish sheet metal model first".into()))
             }
             FeatureKind::Extrude(e) => self.sheet_metal_cut(before, f.id, &f.name, e, state),
+            FeatureKind::Hole(h) => self.sheet_metal_hole(before, f.id, &f.name, h, state),
             FeatureKind::Fillet(x) if x.kind == crate::applied::FilletType::Edge && !x.variable && !x.partial => {
                 let picks = corner_picks(state, &x.entities)?;
                 let c = CornerBreakFeature {
@@ -655,6 +656,122 @@ impl Rebuilder {
         }
         if !any {
             return None;
+        }
+        Some(Ok(output(current, owned)))
+    }
+}
+
+impl Rebuilder {
+    /// A Hole through active sheet metal (P3I.7, SM16.3): the walls it crosses get round
+    /// cut-outs of the hole's diameter, perpendicular to them (in the flat, like an Extrude →
+    /// Remove); a counterbore's or countersink's outer diameter is kept for flat pattern
+    /// drawing views ([`crate::sheetmetal::HoleMark`]). Holes at mate connectors, or on parts
+    /// that aren't all active sheet metal, fall through to the ordinary Hole.
+    fn sheet_metal_hole(&mut self, before: &[Feature], id: FeatureId, name: &str, h: &crate::applied::HoleFeature, state: &Arc<State>) -> Option<Result<Output, String>> {
+        use crate::hole::{HoleEnd, HoleStart, HoleStyle};
+        if h.problem().is_some() || !h.connectors.is_empty() || h.spec.start == HoleStart::SelectedPlane {
+            return None;
+        }
+        let solids: Vec<PartId> = state.parts.iter().filter(|p| p.part.kind == PartKind::Solid).map(|p| p.part.id).collect();
+        let targets: Vec<PartId> = if h.merge_scope.is_empty() { solids } else { h.merge_scope.clone() };
+        if targets.is_empty() || targets.iter().any(|p| context_of(state, *p).is_none()) {
+            return None;
+        }
+        let points = match super::super::applied::hole_points(before, h) {
+            Ok(p) if !p.is_empty() => p,
+            Ok(_) => return None,
+            Err(e) => return Some(Err(e)),
+        };
+        let spec = &h.spec;
+        let radius = spec.diameter.value / 2.0;
+        if radius <= 0.0 {
+            return None;
+        }
+        const FAR: f64 = 1e7;
+        // From the sketch plane on (Blind: as deep as set), or (Start from part) wherever the
+        // axis meets the sheet.
+        let z = match (spec.start, spec.end) {
+            (HoleStart::SketchPlane, HoleEnd::Blind) => (-1e-3, spec.depth.value),
+            (HoleStart::SketchPlane, _) => (-1e-3, FAR),
+            _ => (-FAR, FAR),
+        };
+        let ring: Vec<P2> = (0..64)
+            .map(|i| {
+                let t = std::f64::consts::TAU * i as f64 / 64.0;
+                P2::new(radius * t.cos(), radius * t.sin())
+            })
+            .collect();
+        let tools: Vec<CutTool> = points
+            .iter()
+            .map(|(_, origin, normal)| {
+                let n = V3::new(normal.x, normal.y, normal.z);
+                let dir = if h.flip { n } else { -n };
+                let x = if dir.x.abs() < 0.9 { V3::x().cross(&dir).normalize() } else { V3::y().cross(&dir).normalize() };
+                let y = dir.cross(&x);
+                let region = Region3 { origin: P3::new(origin.x, origin.y, origin.z), x, y, polygon: Polygon::new(ring.clone()) };
+                CutTool { region, dir, z: Some(z) }
+            })
+            .collect();
+        let outer = match spec.style {
+            HoleStyle::Counterbore => Some(spec.cbore_diameter.value / 2.0),
+            HoleStyle::Countersink => Some(spec.csink_diameter.value / 2.0),
+            HoleStyle::Simple => None,
+        }
+        .filter(|r| *r > radius);
+        let mut current = state.clone();
+        let mut owned = Vec::new();
+        let mut any = false;
+        let contexts: Vec<usize> = (0..state.sheet_metal.len()).filter(|i| state.sheet_metal[*i].active).collect();
+        for ci in contexts {
+            let ctx = &current.sheet_metal[ci];
+            let walls: Vec<cadrs_sheetmetal::WallId> = ctx.parts.iter().filter(|(p, _)| targets.contains(p)).flat_map(|(_, w)| w.clone()).collect();
+            if walls.is_empty() {
+                continue;
+            }
+            // Where each hole's axis goes through a wall in the cut (the wall's own 2D).
+            let at: Vec<(cadrs_sheetmetal::WallId, P2)> = tools
+                .iter()
+                .flat_map(|t| {
+                    let o = t.region.origin;
+                    ctx.model.walls.iter().filter(|w| walls.contains(&w.id)).filter_map(move |w| {
+                        let Surface::Planar { origin, .. } = w.surface else { return None };
+                        let n = w.surface.normal()?;
+                        let along = t.dir.dot(&n);
+                        if along.abs() < 1e-6 {
+                            return None;
+                        }
+                        let hit = o + t.dir * ((origin - o).dot(&n) / along);
+                        let q = w.surface.local(hit);
+                        w.outline.contains(q).then_some((w.id, q))
+                    })
+                })
+                .collect();
+            let mut model = ctx.model.clone();
+            match model_edit::cut_walls(&mut model, &tools, Some(&walls)) {
+                Ok(c) if c.is_empty() => continue,
+                Ok(_) => {}
+                Err(x) => return Some(Err(err(x))),
+            }
+            any = true;
+            let edit = StepEdit::Cut { tools: tools.clone(), walls: Some(walls) };
+            let r = self.edit_sheet_metal(id, name, &current, ci, |ctx| {
+                ctx.def.as_mut().expect("checked").push(name, edit);
+                if let Some(outer) = outer {
+                    ctx.hole_marks.push(crate::sheetmetal::HoleMark { feature: id, radius, outer, at });
+                }
+                Ok(None)
+            });
+            match r {
+                Ok(o) if o.error.is_some() => return Some(Ok(o)),
+                Ok(o) => {
+                    owned.extend(o.owned);
+                    current = o.state;
+                }
+                Err(x) => return Some(Err(format!("The hole can't be made in the sheet metal: {x}"))),
+            }
+        }
+        if !any {
+            return Some(Err("The holes miss the sheet metal".into()));
         }
         Some(Ok(output(current, owned)))
     }

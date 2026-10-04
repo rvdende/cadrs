@@ -1050,6 +1050,7 @@ impl Rebuilder {
             editors: vec![id],
             forms: Vec::new(),
             corner_broken: false,
+            hole_marks: Vec::new(),
         };
         let consumed = if x.operation == SheetMetalOp::Convert && !x.keep_input { consumed } else { Vec::new() };
         let mut o = self.refold(id, name, state, &[], None, ctx, &consumed)?;

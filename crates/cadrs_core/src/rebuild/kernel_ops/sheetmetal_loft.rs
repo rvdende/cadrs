@@ -332,6 +332,7 @@ impl Rebuilder {
                     editors: vec![id],
                     forms: Vec::new(),
                     corner_broken: false,
+                    hole_marks: Vec::new(),
                 };
                 self.refold(id, name, state, &[], None, ctx, &[])?
             }

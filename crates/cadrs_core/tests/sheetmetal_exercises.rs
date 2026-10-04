@@ -174,15 +174,50 @@ fn e3_the_sheet_metal_box_and_its_flat() {
     assert_eq!(b.parts.len(), 1);
     assert_eq!(name(&doc, ex::E3_STUDIO, &b.parts[0]), "Sheet Metal Box");
     let ctx = &b.sheet_metal[0];
-    assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1);
-    assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 4);
-    let (lo, hi) = ctx.flat.parts[0].bounds().unwrap();
-    let (w, h) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
-    // The bottom (200 × 125, less the bends' setbacks) with a 150 wall each side, unrolled: the
-    // flat is about 200 + 2 · 150 by 125 + 2 · 150 (the bends' allowances for their outer
-    // setbacks).
-    println!("E3 flat: {w:.4} × {h:.4}");
-    assert!((w - 500.0).abs() < 5.0 && (h - 425.0).abs() < 5.0, "{w} × {h}");
+    assert!(ctx.flat.is_ok() && ctx.flat.parts.len() == 1, "{:?}", ctx.flat.errors);
+    let fp = &ctx.flat.parts[0];
+    // Seven bends, as the exercise's part: front, back and both sides off the bottom, the shelf
+    // off the back, a flange on each sloping edge.
+    assert_eq!(ctx.model.joints.iter().filter(|j| j.bend().is_some()).count(), 7);
+    assert_eq!(fp.bends.len(), 7);
+    // All seven fold the same way: DOWN seen from the flat's top (`goal.png`).
+    assert!(fp.bends.iter().all(|b| b.up == fp.bends[0].up), "{:?}", fp.bends.iter().map(|b| b.up).collect::<Vec<_>>());
+    let p = &ctx.model.params;
+    let (t, r, k) = (p.thickness, p.bend_radius, p.k_factor);
+    let ba = |deg: f64| deg.to_radians() * (r + k * t);
+    let ex::E3Size { width: w, depth: d, back: hb, front: hf, shelf: sh, flange } = ex::E3;
+    let (lo, hi) = fp.bounds().unwrap();
+    let (along, across) = (hi.x - lo.x, hi.y - lo.y);
+    println!("E3 flat: {along:.4} × {across:.4}");
+    // The faces are the sheet's outside (the material is inside the block, as the exercise's
+    // part: 200 wide, 200 and 125 high, a 75 shelf), so a wall's flat runs from its bend's
+    // tangent line, R + T in from the outside corner. Along the strip: front, bottom, back and
+    // shelf less three bend deductions 2 (R + T) − π/2 (R + K·T): 650 − 3 · 2.5835 = 642.249,
+    // `goal.png`'s 642.25.
+    let bd = 2.0 * (r + t) - ba(90.0);
+    let strip = hf + d + hb + sh - 3.0 * bd;
+    assert!((strip - 642.2494).abs() < 1e-3);
+    assert!((along - strip).abs() < 1e-3, "{along} vs {strip}");
+    // Across: the bottom, a side's bend and its back corner each way, then the flange's far
+    // corner beyond it, square to the sloping edge, which leans at θ = atan(75 / 175) =
+    // 23.199° (`ex3-drawings/step-06`'s 23.2°). The flange bends from the edge (Hold line):
+    // its bend allowance and its flat, F − (R + T).
+    let theta = (hb - hf).atan2(d - sh);
+    let across_want = 2.0 * ((w / 2.0 - (r + t)) + ba(90.0) + (hb - (r + t)) + theta.cos() * (ba(90.0) + flange - (r + t)));
+    assert!((across - across_want).abs() < 1e-3, "{across} vs {across_want}");
+    // The two flanges' bend lines are oblique: at θ to the sides' bend lines (the angle in the
+    // flat between a side's front edge and its flange's edge is 90° + θ = 113.2°, as `goal.png`).
+    let dir = |b: &cadrs_sheetmetal::flat::FlatBend| (b.center.b.y - b.center.a.y).atan2(b.center.b.x - b.center.a.x).to_degrees().rem_euclid(180.0);
+    let oblique: Vec<f64> = fp.bends.iter().map(dir).filter(|a| a.abs() > 1e-6 && (a - 90.0).abs() > 1e-6 && (a - 180.0).abs() > 1e-6).collect();
+    assert_eq!(oblique.len(), 2, "{oblique:?}");
+    for a in &oblique {
+        assert!((a.min(180.0 - a) - theta.to_degrees()).abs() < 1e-3, "{a} vs {}", theta.to_degrees());
+    }
+    // Each oblique line is as long as the sloping edge, √(175² + 75²) = 190.394.
+    for b in fp.bends.iter().filter(|b| oblique.contains(&dir(b))) {
+        let l = (b.center.b - b.center.a).norm();
+        assert!((l - (d - sh).hypot(hb - hf)).abs() < 1e-3, "{l}");
+    }
     let v = b.parts[0].mass.unwrap().volume;
     assert!((v - predicted(&b, ex::E3_MODEL)).abs() < 1e-6 * v);
 }
@@ -213,3 +248,6 @@ fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     println!("E4 volume {v0:.3} → {v1:.3} (rims ≈ {rims:.3})");
     assert!(v1 > v0 + 0.9 * rims && v1 < v0 + 1.1 * rims, "{v0} → {v1}, rims {rims}");
 }
+
+
+

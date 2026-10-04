@@ -1,13 +1,21 @@
 // P3I.8 / X7, exercise E3 "Drawings" end to end (`ex3-drawings/goal.png`, step-02–12) on its
-// stand-in document (`fixtures/sheetmetal/sm_e3_standin.cadrs`: the Sheet Metal Box, a 200 × 125
-// × 150 block converted with its four bottom edges bent and its top open, 1.5 mm, R1.5).
+// stand-in document (`fixtures/sheetmetal/sm_e3_standin.cadrs`: the Sheet Metal Box, the
+// exercise's sloped enclosure, material inside: 200 wide, 250 deep, 200 high at the back and 125
+// at the front, a 75 deep shelf, the slope left open and a 35 mm flange folded in along each
+// sloping edge; 1.5 mm, R1.5, seven bends, all DOWN, two oblique in the flat).
 // 01 the box; 01b the Sheet metal table and flat view, right-click on the flat: New sketch,
 // Export DXF/DWG of flat pattern, Create drawing of flat pattern (SM14.1, SM15.1, SM16.1);
-// 01c Export DXF/DWG of flat pattern (step 2–3); then as `sm_p3i7_e3`: 02 Parts list → Create
-// drawing; 03 ANSI_A MM, Four views; 04–05 the folded views dimensioned; 06–08 Insert sheet,
-// Insert view → Flat patterns, placed with its bend notes; 09–10 bend notes dragged; 11 the flat
-// dimensioned; 12 Hide bend notes. The measured value: the flat is 500.833 × 425.833
-// (`cadrs_core/tests/sheetmetal_exercises.rs`).
+// 01c Export DXF/DWG of flat pattern (step 2–3); 02 Parts list → Create drawing (the tab
+// "Sheet Metal Box Drawing 1"); 03 ANSI_A MM, Four views; 04–05 `step-06`'s dimensions (the
+// top view's 200, 75 and 35, the front's 125, the side's 23.2° and 200); 06–08 Insert
+// sheet, Insert view → Flat patterns ("Flat pattern of Sheet Metal Box") at 1:5 (1:4 doesn't
+// fit beside this template's title block), View orientation → Rotate 90° so the strip stands
+// with the front at the top as `goal.png`; its bend notes along the lines (tangent edges hidden:
+// clean chain lines); 09–10 bend notes dragged off (leaders stay on their attach points) and
+// one dropped back; 11 `goal.png`'s five dimensions, clear of the notes (the strip's width, its
+// length 642.25, the side's bottom to the strip's end, the side's reach and the 113.2° at the
+// flange); 12 Hide bend notes; 13 undo. The flat is 642.249 × 659.939
+// (`cadrs_core/tests/sheetmetal_exercises.rs`, closed forms).
 Scenario(
     start: Some("document"),
     steps: [
@@ -55,26 +63,53 @@ Scenario(
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("04-four-views"),
-        // Dimension the folded views: the front's width and height, the side's depth.
+        // Dimension the folded views as `step-06`: the top view's width (200), shelf (75) and
+        // flange (35); the front's height (125); the side's height (200) and slope (23.2°).
         Key("D"),
         Wait(3),
-        ClickWorld(79.4, 92),
+        ClickWorld(81.9, 150),
         Wait(3),
-        ClickWorld(129.35, 92),
+        ClickWorld(122.0, 150),
         Wait(3),
-        ClickWorld(104.4, 121),
+        ClickWorld(102, 190),
         Wait(5),
-        ClickWorld(104.4, 73.2),
+        ClickWorld(100, 181.5),
         Wait(3),
-        ClickWorld(104.4, 110.9),
+        ClickWorld(100, 166.6),
         Wait(3),
-        ClickWorld(70, 92),
+        ClickWorld(70, 174),
         Wait(5),
-        ClickWorld(155.1, 92),
+        ClickWorld(81.9, 140),
         Wait(3),
-        ClickWorld(186.9, 92),
+        ClickWorld(88.85, 140),
         Wait(3),
-        ClickWorld(171, 121),
+        ClickWorld(68, 121),
+        Wait(5),
+        ClickWorld(102, 69.4),
+        Wait(3),
+        ClickWorld(102, 94.86),
+        Wait(3),
+        ClickWorld(70, 82),
+        Wait(5),
+        ClickWorld(183, 109.85),
+        Wait(3),
+        ClickWorld(165, 69.3),
+        Wait(3),
+        ClickWorld(202, 89.5),
+        Wait(5),
+        Key("Escape"),
+        Wait(3),
+        Click(ui_at("drawing-dimension", 0.85, 0.5)),
+        WaitFor("drawing-dim-angular"),
+        Click(ui("drawing-dim-angular")),
+        Wait(5),
+        ClickWorld(183, 109.45),
+        Wait(3),
+        ClickWorld(160.8, 103.5),
+        Wait(3),
+        MoveWorld(152, 106),
+        Wait(3),
+        ClickWorld(152, 106),
         Wait(5),
         Key("Escape"),
         Wait(5),
@@ -101,59 +136,91 @@ Scenario(
         Wait(5),
         Click(ui("insert-view-scale-option-3")),
         Wait(5),
-        MoveWorld(139, 135),
+        MoveWorld(94, 125),
         Wait(40),
-        MoveWorld(140, 135),
+        MoveWorld(95, 125),
         Wait(10),
         Screenshot("07-flat-following-the-cursor"),
-        ClickWorld(140, 135),
+        ClickWorld(95, 125),
         Wait(30),
         Key("Escape"),
         Wait(5),
+        // The strip upright, front at the top, as `goal.png`: View orientation → Rotate 90°.
+        RightClick(world(95, 125)),
+        Wait(6),
+        Hover(ui("flat-menu-orientation")),
+        Wait(6),
+        Screenshot("07b-view-orientation-rotate"),
+        Click(ui("flat-menu-rotate-ccw")),
+        Wait(20),
         ClickWorld(240, 190),
         Wait(5),
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("08-flat-placed-bend-notes"),
-        // SM16.4: drag bend notes off their lines (leaders), and one back onto its line.
-        DragWorld(140, 150.7, 205, 168),
+        // SM16.4: drag bend notes off their lines (leaders to where they were attached): both
+        // flanges' and the bottom-to-back bend's; then that one back onto its line.
+        DragWorld(39.5, 148.3, 40, 190),
         Wait(10),
-        DragWorld(156.9, 135, 215, 115),
+        DragWorld(150.5, 148.3, 140, 196),
         Wait(10),
-        DragWorld(116.8, 135, 60, 160),
+        DragWorld(95, 118.3, 135, 100),
         Wait(10),
         ClickWorld(240, 190),
         Wait(5),
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("09-bend-notes-dragged"),
-        DragWorld(215, 115, 161.5, 150),
+        DragWorld(135, 100, 95, 117.5),
         Wait(10),
         ClickWorld(240, 190),
         Wait(5),
         MoveTo(1500, 960),
         Wait(5),
         Screenshot("10-bend-note-reattached"),
-        // SM16.6: dimension the flat: its width, a bend line to the edge, its height.
+        // SM16.6: `goal.png`'s five dimensions, clear of the notes: the strip's width (195.8 in
+        // Onshape) above it, its length (642.25) beside it, from the side's bottom edge to the
+        // strip's end (271.93), the side's reach from the strip (197.42) and the angle between
+        // the side's edge and its flange's end (113.2°).
         Key("D"),
         Wait(3),
-        ClickWorld(90.2, 135),
+        ClickWorld(75.3, 180),
         Wait(3),
-        ClickWorld(189.8, 135),
+        ClickWorld(114.75, 180),
         Wait(3),
-        ClickWorld(105, 194),
+        ClickWorld(95, 197),
         Wait(5),
-        ClickWorld(160.04, 140),
+        ClickWorld(95, 189.5),
         Wait(3),
-        ClickWorld(189.8, 140),
+        ClickWorld(95, 60.65),
         Wait(3),
-        ClickWorld(175, 160),
+        ClickWorld(180, 125),
         Wait(5),
-        ClickWorld(140, 177.8),
+        ClickWorld(55, 115.2),
         Wait(3),
-        ClickWorld(140, 92.2),
+        ClickWorld(95, 60.65),
         Wait(3),
-        ClickWorld(75, 110),
+        ClickWorld(52, 88),
+        Wait(5),
+        ClickWorld(35.65, 120),
+        Wait(3),
+        ClickWorld(75.3, 90),
+        Wait(3),
+        ClickWorld(55, 54),
+        Wait(5),
+        Key("Escape"),
+        Wait(3),
+        Click(ui_at("drawing-dimension", 0.85, 0.5)),
+        WaitFor("drawing-dim-angular"),
+        Click(ui("drawing-dim-angular")),
+        Wait(5),
+        ClickWorld(35.65, 121),
+        Wait(3),
+        ClickWorld(32.5, 129.55),
+        Wait(3),
+        MoveWorld(23, 120),
+        Wait(3),
+        ClickWorld(23, 120),
         Wait(5),
         Key("Escape"),
         Wait(5),
@@ -161,7 +228,7 @@ Scenario(
         Wait(5),
         Screenshot("11-flat-dimensioned"),
         // SM16.4: right-click a bend note → Hide bend notes.
-        RightClick(world(140, 125.6)),
+        RightClick(world(95, 167.9)),
         Wait(6),
         Screenshot("12a-bend-note-menu"),
         Click(ui("flat-menu-bend-notes")),
