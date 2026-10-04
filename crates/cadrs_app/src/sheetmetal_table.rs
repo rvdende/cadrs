@@ -1019,7 +1019,7 @@ fn cell_states(doc: &ActiveDocument, features: &[cadrs_core::Feature], ctx: &She
                 FeatureKind::SheetMetalTool(cadrs_core::sheetmetal_tools::SheetMetalTool::Jog(x)) => &x.bend,
                 _ => continue,
             };
-            let r_bad = !b.use_model_radius && !(b.radius > 0.0);
+            let r_bad = !b.use_model_radius && (b.radius.is_nan() || b.radius <= 0.0);
             let k_bad = !b.use_model_k && !(0.0..=1.0).contains(&b.k_factor);
             out.push(CellState {
                 joint: j.id,

@@ -128,6 +128,9 @@ Scenario(
         Click(ui("smt-flat-sketch")),
         WaitFor("sketch-dialog"),
         Wait(20),
+        // The tab goes beside the sheet: zoom out so there is room to draw it.
+        Scroll(ui("smt-flat"), -3),
+        Wait(10),
         Key("G"),
         Wait(2),
         ClickWorld(205, -70),

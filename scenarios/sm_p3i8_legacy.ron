@@ -34,7 +34,11 @@ Scenario(
         Click(ui("import-picker-row-case.step")),
         Wait(5),
         Click(ui("import-picker-open")),
-        Wait(10),
+        // The Case's round reliefs fold through the bends as facets, so its STEP is large and
+        // slow to read.
+        Wait(1500),
+        WaitFor("import-dialog"),
+        Wait(5),
         Click(ui("import-ok")),
         Wait(120),
         Click(ui("tab-case")),
