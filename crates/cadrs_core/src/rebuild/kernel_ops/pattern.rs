@@ -29,10 +29,11 @@ use crate::pattern::{InstanceDot, MirrorFeature, MirrorPlane, PatternFeature, Pa
 
 /// One copy: its grid index, its instance number (1, 2, …; the names use it) and its motion.
 #[derive(Debug, Clone)]
-struct Instance {
-    index: [u32; 2],
+pub(super) struct Instance {
+    pub(super) index: [u32; 2],
     number: u32,
-    motion: Motion,
+    /// (P3I.5: read by the sheet-metal-aware face patterns.)
+    pub(super) motion: Motion,
 }
 
 fn v3(p: [f64; 3]) -> Vector3<f64> {
@@ -279,7 +280,7 @@ impl Rebuilder {
     }
 
     /// Every instance of a pattern but the seed (skipped ones too), with its motion.
-    fn pattern_instances(&self, before: &[Feature], x: &PatternFeature, state: &State, reference: Vector3<f64>) -> Result<Vec<Instance>, String> {
+    pub(super) fn pattern_instances(&self, before: &[Feature], x: &PatternFeature, state: &State, reference: Vector3<f64>) -> Result<Vec<Instance>, String> {
         let grid = x.grid();
         let n1 = x.first.count.max(1);
         let number = |i: [u32; 2]| i[1] * n1 + i[0] + 1;

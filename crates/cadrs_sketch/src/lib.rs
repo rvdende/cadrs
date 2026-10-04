@@ -306,6 +306,11 @@ pub enum Link {
     /// Where a plane (a default plane or a Plane feature) cuts the sketch plane (Final re-audit,
     /// S12.10: Normal to a plane): a line, used as construction.
     Plane(PlaneRef),
+    /// A line of a sheet metal flat pattern, for a sketch on that flat (P3I.6, SM14), in the
+    /// flat's (and so the sketch's) coordinates: part `part` of the Sheet metal model `model`;
+    /// the centre line of the bend of joint `bend`, else the edge of its outline or of a
+    /// cut-out nearest where the used curve lies.
+    FlatLine { model: uuid::Uuid, part: u8, bend: Option<u32> },
 }
 
 impl Link {
@@ -315,6 +320,7 @@ impl Link {
             Link::Edge { feature, .. }
             | Link::Silhouette { feature, .. }
             | Link::SketchCurve { feature, .. } => feature,
+            Link::FlatLine { model, .. } => model,
             Link::Plane(PlaneRef::Feature(fp)) => fp.feature,
             Link::Plane(PlaneRef::Face(fp)) => fp.feature,
             // A default plane: no feature.

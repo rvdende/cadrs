@@ -707,6 +707,10 @@ fn draw_direction_arrows(
     mut g: Gizmos<crate::parts::PickedEdgeGizmos>,
 ) {
     let Some(s) = session else { return };
+    // (A sheet metal loft's `arrows` are its connection guides, P3I.9.)
+    if s.kind != crate::applied::AppliedKind::Loft {
+        return;
+    }
     let Some(arrows) = cache.arrows.get(&s.feature) else { return };
     let len = 90.0 * view.view.scale;
     for (o, d) in arrows {

@@ -35,6 +35,9 @@ pub struct ViewRequest {
     /// Assembly views: also draw the curves where parts run into each other (Show part
     /// intersections, X6).
     pub intersections: bool,
+    /// A flat pattern view (P3I.7): the part's flat pattern, not its folded solid (see
+    /// [`crate::flat_drawing`]).
+    pub flat: bool,
 }
 
 /// A shaded triangle in the view's 2D frame (model mm) with a colour per corner (linear RGBA)
@@ -69,6 +72,8 @@ pub struct ViewGeometry {
     pub threads: Vec<ThreadInfo>,
     /// The studio's Chamfer features' specs, by feature id (chamfer dimensions, P3C.8).
     pub chamfers: HashMap<uuid::Uuid, ChamferInfo>,
+    /// A flat pattern view's bends (P3I.7).
+    pub flat: Option<cadrs_drawing::flat_view::FlatData>,
 }
 
 impl ViewModel for ViewGeometry {
@@ -89,6 +94,9 @@ impl ViewModel for ViewGeometry {
     }
     fn chamfer(&self, feature: &uuid::Uuid) -> Option<&ChamferInfo> {
         self.chamfers.get(feature)
+    }
+    fn flat(&self) -> Option<&cadrs_drawing::flat_view::FlatData> {
+        self.flat.as_ref()
     }
 }
 

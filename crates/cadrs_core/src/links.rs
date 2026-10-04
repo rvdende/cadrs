@@ -535,6 +535,9 @@ impl<'a> LinkContext<'a> {
                 Some(Curve3::Line(a, b))
             }
             Link::Plane(p) => plane_trace(&p.frame(), frame),
+            // A flat pattern's line lies in the flat, not in space ([`crate::parts::regenerate`]
+            // places it from the build's flat pattern).
+            Link::FlatLine { .. } => None,
             Link::SketchCurve { feature, curve } => {
                 let f = self.features.iter().find(|f| f.id.0 == feature)?;
                 let sk = f.sketch()?;
@@ -635,7 +638,7 @@ impl<'a> LinkContext<'a> {
                     index,
                 })
             }
-            Link::SketchCurve { .. } | Link::Plane(_) => Some(link),
+            Link::SketchCurve { .. } | Link::Plane(_) | Link::FlatLine { .. } => Some(link),
         }
     }
 

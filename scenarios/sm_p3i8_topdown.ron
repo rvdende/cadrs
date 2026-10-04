@@ -1,0 +1,53 @@
+// P3I.8 / SM18 (lesson `18-sheet-metal-and-top-down-design`, t0044–t0092) on the Heating Mantle
+// stand-in (`fixtures/sheetmetal/sm_topdown_standin.cadrs`): the Space Envelope master derived at
+// the workspace into Part Studio 1, the Enclosure converted around it (top and angled face
+// excluded, Keep input part) and the Cover thickened on those two faces, each model named after
+// its part. 01 Part Studio 1; 02 the Sheet metal context dropdown lists Enclosure and Cover; 03 the
+// Cover's flat; 04 the master 30 mm deeper in its own studio; 05 back in Part Studio 1: both
+// sheet metal parts follow through Derived.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("fixture sheetmetal/sm_topdown_standin"),
+        Wait(90),
+        Click(ui("tab-part-studio-1")),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-enclosure-and-cover"),
+        Click(ui("panel-sheet-metal")),
+        Wait(60),
+        Click(ui("smt-context")),
+        Wait(10),
+        MoveTo(1700, 300),
+        Wait(3),
+        Screenshot("02-contexts-named-after-features"),
+        Click(ui("smt-context-option-1")),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-cover-flat"),
+        Click(ui("panel-sheet-metal")),
+        Wait(20),
+        Click(ui("tab-space-envelope")),
+        Wait(30),
+        Custom("sm-topdown-depth 180"),
+        Wait(60),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-master-deeper"),
+        Click(ui("tab-part-studio-1")),
+        Wait(90),
+        Key("F"),
+        Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-both-follow"),
+    ],
+)

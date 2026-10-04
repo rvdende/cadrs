@@ -732,6 +732,8 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
             ("panel-appearance", "appearance", "Appearances", true),
             ("panel-custom-tables", "custom-table", "Custom tables", true),
             ("panel-configurations", "configurations", "Configurations (not available)", false),
+            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
+            ("panel-sheet-metal", "sheet-metal-table", "Sheet metal table and flat view", true),
             ("panel-variables", "variables", "Variables", true),
             // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
             // icon: Thicken's deformed sheet stands in).
@@ -1491,7 +1493,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }),
     ));
     tb.spawn(toolbar_separator(t));
-    let groups: [&[(&str, &str, bool, &str)]; 4] = [
+    let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
             ("extrude", "extrude", false, "Extrude (Shift+E)"),
             ("revolve", "revolve", false, "Revolve (Shift+W)"),
@@ -1518,8 +1520,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("plane", "plane", true, "Plane"),
             ("mate-connector", "mate-connector", true, "Mate connector"),
             ("variable", "variables", false, "Variable"),
-            ("custom-feature", "custom-feature", false, "Add custom features"),
         ],
+        // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
+        // general tools, before custom features).
+        &[("sheet-metal-model", "sheet-metal-model", true, "Sheet metal model")],
+        &[("custom-feature", "custom-feature", false, "Add custom features")],
         &[
             ("import", "file-import", false, "Import (a STEP or STL file)"),
             ("derived", "link", false, "Derived (parts of another Part Studio)"),
@@ -1578,6 +1583,44 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                         },
                     ),
                 ));
+                continue;
+            }
+            if *name == "sheet-metal-model" {
+                // P3I.2 (X1): the button starts a Sheet metal model; its ▾ lists the other
+                // sheet metal tools in Onshape's order.
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|world: &mut World| crate::applied::begin(world, crate::applied::AppliedKind::SheetMetal));
+                    }),
+                ));
+                tb.spawn((
+                    cadrs_ui::IconButton::new("sheet-metal-model-caret", "chevron-down").icon_size(14.0).build(t),
+                    observe(
+                        |a: On<Activate>, q: Query<(&ComputedNode, &UiGlobalTransform)>, theme: Res<Theme>, mut commands: Commands| {
+                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
+                                let s = n.inverse_scale_factor();
+                                let size = n.size() * s;
+                                // Under the Sheet metal model button, to its left.
+                                t.translation * s + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
+                            });
+                            let anchor = cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
+                            // P3I.4, P3I.5, P3I.9: the built tools start their features.
+                            commands.entity(anchor).observe(|ev: On<MenuAction>, mut commands: Commands| {
+                                let item = ev.item.to_string();
+                                commands.queue(move |world: &mut World| {
+                                    crate::sheetmetal_ui::start_tool(world, &item);
+                                });
+                            });
+                        },
+                    ),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| {
+                    n.width = Val::Px(16.0);
+                    n.height = Val::Px(32.0);
+                    n.margin = UiRect::left(Val::Px(-3.0));
+                });
                 continue;
             }
             if *name == "thicken" {
@@ -1680,6 +1723,16 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
         .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
         .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
+}
+
+/// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,
+/// greyed until they are built.
+fn sheet_metal_menu() -> Menu {
+    let mut m = Menu::new("sheet-metal-menu").min_width(220.0);
+    for (name, label, icon) in crate::sheetmetal_ui::OTHER_TOOLS {
+        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(!crate::sheetmetal_ui::tool_built(name)));
+    }
+    m
 }
 
 /// The pattern button's menu (PS22.1): Mirror has its own button, as in Onshape's toolbar.
@@ -2828,6 +2881,16 @@ enum RowKind {
     Fill,
     /// P3F.4: a Variable.
     Variable,
+    /// P3I.2: a Sheet metal model.
+    SheetMetalModel,
+    /// P3I.3.
+    ModifyJoint,
+    /// P3I.9: a Sheet metal loft, Form or Tag (its icon).
+    Sm9(&'static str),
+    /// P3I.4: Flange, Hem, Make joint (their icon).
+    SheetMetal(&'static str),
+    /// P3I.5: a sheet metal feature after it (its icon).
+    SheetMetalTool(&'static str),
 }
 
 impl RowKind {
@@ -2861,6 +2924,11 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
+            RowKind::SheetMetalModel => "sheet-metal-model",
+            RowKind::ModifyJoint => "sheet-metal-modify-joint",
+            RowKind::Sm9(icon) => icon,
+            RowKind::SheetMetal(icon) => icon,
+            RowKind::SheetMetalTool(icon) => icon,
             _ => "sketch",
         }
     }
@@ -2949,6 +3017,15 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Helix(_) => RowKind::Helix,
                 cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                 cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
+                cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+                cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
+                k @ (cadrs_core::FeatureKind::SheetMetalLoft(_) | cadrs_core::FeatureKind::Form(_) | cadrs_core::FeatureKind::TagForm(_)) => {
+                    RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
+                }
+                cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
+                cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
+                // P3I.6: a flat pattern extrude is an Extrude in the list.
+                cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,
@@ -3115,7 +3192,8 @@ fn rebuild_feature_rows(
                 }
             }
             let edited = editing == Some(*id);
-            let consumed = *kind == RowKind::ConsumedSketch;
+            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`).
+            let consumed = *kind == RowKind::ConsumedSketch || (*kind == RowKind::Sm9("sheet-metal-form") && !*shown);
             let fg = if inactive {
                 // Rolled back or suppressed (P3.9): grey, whatever else it is.
                 crate::feature_list::ROLLED_BACK_FG
@@ -3158,7 +3236,8 @@ fn rebuild_feature_rows(
                 // P3G.4 (DV3.5): the chevron opens what it brought in.
                 item = item.disclosure(Some(*open));
             }
-            if kind.is_sketch() {
+            // P3I.9 (SM20, `form-10.png`): a Form's eye shows or hides its sketch on the flat view.
+            if kind.is_sketch() || *kind == RowKind::Sm9("sheet-metal-form") {
                 // The eye shows or hides the sketch (PS1.5); it shows while the row is hovered.
                 let tip = if *shown { format!("Hide {name}") } else { format!("Show {name}") };
                 item = item
@@ -3409,6 +3488,9 @@ pub fn edit_feature(world: &mut World, id: FeatureId) {
         crate::boolean::edit_boolean(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Composite(_)) {
         crate::composite_ui::edit(world, id);
+    } else if matches!(kind, cadrs_core::FeatureKind::ModifyJoint(_)) {
+        // P3I.3.
+        crate::sheetmetal_joint_ui::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Import(_)) {
         crate::import_dialog::edit_import(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Extrude(_)) {
@@ -3515,6 +3597,12 @@ fn on_feature_context_menu(
         // P3F.2 (P3.2): the sketch flat, for cutting machines.
         menu = menu.item(MenuItem::new("feature-export-dxf", "Export as DXF/DWG…").icon("file-export"));
     }
+    // P3I.6 (SM14.1, SM15.1): a Sheet metal model's flat pattern, until the flat view's menu (P3I.3).
+    if el.and_then(|el| el.feature(row.0)).is_some_and(|f| matches!(f.kind, cadrs_core::FeatureKind::SheetMetalModel(_))) {
+        menu = menu
+            .item(MenuItem::new("feature-flat-sketch", "New sketch on flat pattern").icon("sketch").disabled(in_dialog))
+            .item(MenuItem::new("feature-flat-export", "Export DXF/DWG of flat pattern…").icon("flat-pattern"));
+    }
     menu = menu.separator().item(MenuItem::new("feature-add-to-folder", "Add selection to folder…")).separator();
     if is_sketch {
         menu = menu.item(if shown {
@@ -3579,6 +3667,17 @@ fn on_feature_menu_action(
         "feature-copy-sketch" => commands.queue(move |world: &mut World| crate::feature_menu::copy_sketch(world, id)),
         "feature-export-dxf" => commands.queue(move |world: &mut World| {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Sketch(id))
+        }),
+        // P3I.6.
+        "feature-flat-sketch" => commands.queue(move |world: &mut World| crate::flat_ui::begin_flat_sketch(world, id, 0)),
+        "feature-flat-export" => commands.queue(move |world: &mut World| match crate::flat_export_dialog::first_part(world, id) {
+            Some(p) => crate::flat_export_dialog::open(world, p),
+            None => {
+                let theme = world.resource::<cadrs_ui::Theme>().clone();
+                let mut commands = world.commands();
+                cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::warning("The sheet metal model has no flat pattern part").name("flat-export-toast"));
+                world.flush();
+            }
         }),
         "feature-show-dimensions" | "feature-hide-dimensions" => {
             commands.queue(move |world: &mut World| crate::feature_menu::toggle_dimensions(world, id))

@@ -36,6 +36,7 @@ pub mod panels;
 pub mod sheet_dialog;
 pub mod sheet_items;
 pub mod export_dialog;
+pub mod flat_views;
 pub mod toolbar;
 pub mod update;
 pub mod view_menu;
@@ -128,7 +129,7 @@ impl Plugin for DrawingPlugin {
                 note_bar::NoteBarPlugin,
                 update::UpdatePlugin,
             ))
-            .add_plugins((sheet_items::SheetItemsPlugin, export_dialog::DrawingExportPlugin, symbol_cards::SymbolCardsPlugin));
+            .add_plugins((sheet_items::SheetItemsPlugin, export_dialog::DrawingExportPlugin, symbol_cards::SymbolCardsPlugin, flat_views::FlatViewsPlugin));
     }
 }
 
@@ -211,6 +212,8 @@ pub struct DrawingUi {
     pub tool_points: Vec<[f64; 2]>,
     /// What a view-kind tool previews (sheet mm): a cutting line, a circle, a rectangle.
     pub tool_strokes: Vec<Vec<[f64; 2]>>,
+    /// A flat pattern view's settings while one of its bend notes is dragged (P3I.7).
+    pub flat_preview: Option<(cadrs_drawing::ViewId, cadrs_drawing::flat_view::FlatSettings)>,
 }
 
 /// A view pressed on: dragged once the pointer moves a few pixels.

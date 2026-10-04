@@ -47,10 +47,26 @@ pub enum Layer {
     Image,
     /// Section hatching, thread marks, break lines and cutting lines (P3C.8).
     Hatch,
+    /// P3I.6 (SM15): a sheet metal flat pattern's outer outline, its cut-outs, its tear
+    /// reliefs' slits, its up and down bend centrelines, its bend tangent lines and the
+    /// sketches on it.
+    FlatOutline,
+    FlatCutout,
+    FlatSlit,
+    BendUp,
+    BendDown,
+    BendTangent,
+    FlatSketch,
+    /// P3I.9 (SM20.3): a flat pattern's form outlines and centermarks ("Include form feature
+    /// outlines / centermarks").
+    FormOutline,
+    FormCentermark,
+    /// The outer diameters of counterbored and countersunk holes in a flat pattern.
+    FlatCbore,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 14] = [
+    pub const ALL: [Layer; 24] = [
         Layer::Border,
         Layer::Visible,
         Layer::Hidden,
@@ -65,6 +81,16 @@ impl Layer {
         Layer::Shaded,
         Layer::Image,
         Layer::Hatch,
+        Layer::FlatOutline,
+        Layer::FlatCutout,
+        Layer::FlatSlit,
+        Layer::BendUp,
+        Layer::BendDown,
+        Layer::BendTangent,
+        Layer::FlatSketch,
+        Layer::FormOutline,
+        Layer::FormCentermark,
+        Layer::FlatCbore,
     ];
 
     pub fn name(self) -> &'static str {
@@ -83,6 +109,16 @@ impl Layer {
             Layer::Shaded => "SHADED",
             Layer::Image => "IMAGES",
             Layer::Hatch => "HATCH",
+            Layer::FlatOutline => "OUTLINE",
+            Layer::FlatCutout => "CUTOUTS",
+            Layer::FlatSlit => "TEAR_SLITS",
+            Layer::BendUp => "BEND_UP",
+            Layer::BendDown => "BEND_DOWN",
+            Layer::BendTangent => "BEND_TANGENT",
+            Layer::FlatSketch => "FLAT_SKETCH",
+            Layer::FormOutline => "FORM_OUTLINES",
+            Layer::FormCentermark => "FORM_CENTERMARKS",
+            Layer::FlatCbore => "CBORE_CSINK",
         }
     }
 
@@ -91,7 +127,32 @@ impl Layer {
         match self {
             Layer::Hidden => "HIDDEN",
             Layer::Phantom => "PHANTOM",
+            // Bend centrelines (the flat export, P3I.6, and flat pattern views, P3I.7): CENTER,
+            // up and down told apart by their layers' colours.
+            Layer::BendUp | Layer::BendDown => "CENTER",
             _ => "CONTINUOUS",
+        }
+    }
+
+    /// P3I.6: a flat pattern layer (written to a DXF's layer table only when used, so other
+    /// drawings' files stay as they were; a flat pattern's file lists only the layers it uses).
+    pub fn is_flat(self) -> bool {
+        matches!(self, Layer::FlatOutline | Layer::FlatCutout | Layer::FlatSlit | Layer::BendUp | Layer::BendDown | Layer::BendTangent | Layer::FlatSketch | Layer::FormOutline | Layer::FormCentermark | Layer::FlatCbore)
+    }
+
+    /// The layer's AutoCAD colour index (7: black/white).
+    pub fn aci(self) -> i32 {
+        match self {
+            Layer::FlatCutout => 5,
+            Layer::FlatSlit => 6,
+            Layer::BendUp => 3,
+            Layer::BendDown => 1,
+            Layer::BendTangent => 8,
+            Layer::FlatSketch => 4,
+            Layer::FormOutline => 30,
+            Layer::FormCentermark => 2,
+            Layer::FlatCbore => 2,
+            _ => 7,
         }
     }
 }
@@ -358,6 +419,14 @@ pub fn sheet_page(d: &Drawing, index: usize, ctx: &PageContext) -> Page {
         for s in &input.sketches {
             page.polyline(s.clone(), Pen { width: Weight::Thin.mm(), color: INK, dash: None, layer: Layer::Sketch });
         }
+        // A flat pattern's bend lines, up and down each with its own pen (P3I.7).
+        if let Some(flat) = input.model.flat() {
+            for l in crate::flat_view::bend_lines(v, flat) {
+                let layer = if l.up { Layer::BendUp } else { Layer::BendDown };
+                let pen = Pen { width: l.style.weight, color: l.style.color, dash: Some(crate::flat_view::BEND_PATTERN.to_vec()), layer };
+                page.polyline(l.points, pen);
+            }
+        }
         // Hatching, threads, breaks, cutting lines and labels (P3C.8).
         let dec = crate::view_kinds::view_decor(&d.style, &sheet.views, v, Some(input.model), &crate::view_kinds::label_avoid(sheet));
         for l in &dec.thin {
@@ -411,6 +480,19 @@ pub fn sheet_page(d: &Drawing, index: usize, ctx: &PageContext) -> Page {
                     layer: Layer::Annotation,
                 }));
             }
+        }
+    }
+    // A flat pattern's bend notes (P3I.7).
+    for v in &views {
+        let Some(flat) = ctx.views.get(&v.id).and_then(|i| i.model.flat()) else { continue };
+        for n in crate::flat_view::bend_notes(&d.style, v, flat) {
+            for s in &n.strokes {
+                page.polyline(s.clone(), ann_pen(INK));
+            }
+            for t in &n.fills {
+                page.fill(t.to_vec(), INK, Layer::Annotation);
+            }
+            page.items.push(Item::Text(rotated_text(n.text.pos, n.text.height, &n.text.text, false, false, n.rotation, Layer::Annotation)));
         }
     }
     // Notes and tables.

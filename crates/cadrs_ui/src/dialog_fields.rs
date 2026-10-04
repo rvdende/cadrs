@@ -153,6 +153,12 @@ impl Select {
         }
     }
 
+    /// The open list marks the current option (highlighted, with a check), as Onshape's export
+    /// dialogs' lists do. Every select's list does that now (P3I.2), so this only states it.
+    pub fn mark_selected(self) -> Self {
+        self
+    }
+
     /// A boxed select (a 1 px grey border all round, as the Material dialog's dropdowns,
     /// P3.6) instead of the underlined one.
     pub fn bordered(mut self) -> Self {
@@ -281,12 +287,15 @@ fn on_select_activate(
     let mut menu = Menu::new(format!("{name}-menu"))
         .min_width(width.max(120.0))
         .item_height(24.0)
+        .medium_text()
         .text_only();
     if let Some(side) = side {
         menu = menu.side(side.0);
     }
     for (i, (label, enabled)) in state.options.iter().enumerate() {
-        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled));
+        // The current choice is marked (P3I.2 judge: nothing showed which was chosen; P3I.6's
+        // export dialogs' lists, `Select::mark_selected`, mark it too).
+        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled).checked(i == state.selected));
     }
     open_menu(&mut commands, a.entity, menu.build(&theme));
 }

@@ -79,6 +79,10 @@ pub enum Target {
     /// its top-left corner: `ui_at("appearance-opacity", 0.4, 0.5)` (a slider at 40%).
     #[serde(rename = "ui_at")]
     UiAt(String, f32, f32),
+    /// A point of the sheet metal flat view's flat, in the flat's millimetres (the view's
+    /// scene: the parts side by side), wherever that view shows it: `flat(40, -20)`.
+    #[serde(rename = "flat")]
+    Flat(f32, f32),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
