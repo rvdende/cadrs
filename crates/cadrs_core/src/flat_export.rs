@@ -492,11 +492,23 @@ pub fn cbore_marks(build: &Build, features: &[Feature], r: &FlatPartRef) -> Vec<
         .filter(|r| *r > 0.0)
         .collect();
     let mut out: Vec<(P2, f64)> = Vec::new();
-    if radii.is_empty() {
-        return out;
-    }
     let Some(ctx) = build.sheet_metal.iter().rev().find(|c| c.feature == r.model) else { return out };
     let Some(flat) = ctx.flat.parts.get(r.index) else { return out };
+    // A Hole on active sheet metal cuts the flat at its own diameter and keeps its outer circle as
+    // a mark: where each hole goes through a wall, in the wall's own 2D.
+    for m in ctx.hole_marks.iter().filter(|m| m.outer > 0.0) {
+        for (w, q) in m.at.iter().filter(|(w, _)| flat.walls.contains(w)) {
+            let Some(place) = flat.placement(*w) else { continue };
+            let at = place.apply(*q);
+            if !out.iter().any(|(o, rr)| (*o - at).norm() < 1e-6 && (rr - m.outer).abs() < 1e-9) {
+                out.push((at, m.outer));
+            }
+        }
+    }
+    if !out.is_empty() || radii.is_empty() {
+        return out;
+    }
+    // Otherwise (a hole made before the model, or on a finished one) the part's circular edges.
     let Some(part) = build.parts.iter().find(|p| p.id == r.part) else { return out };
     let t = ctx.model.params.thickness;
     for e in &part.solid.edges {

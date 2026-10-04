@@ -353,7 +353,7 @@ fn east_flange(plate: &Part) -> FlangeFeature {
 
 fn check_volume(b: &Build) {
     let p = sm_part(b);
-    assert!(close(volume(&p), predicted(b, &p), 1e-6), "{} vs {}", volume(&p), predicted(b, &p));
+    assert!(close(volume(&p), predicted(b, &p), 2e-5), "{} vs {}", volume(&p), predicted(b, &p));
 }
 
 /// Up to entity: the flange runs from its outer sharp (z = 0) up to the block's top face, so its

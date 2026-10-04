@@ -67,7 +67,7 @@ pub struct SolidEdge {
     /// A seam between two facets of a polygonised curve (a sheet metal round: a relief, a corner
     /// break, a hole; [`Solid::mark_facet_seams`]): not drawn, as the curve's own surface would
     /// have none.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub smooth: bool,
 }
 
