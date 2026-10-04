@@ -159,6 +159,9 @@ pub fn initial(world: &World, picked: &[Pick]) -> Option<(&'static str, FeatureK
     } else {
         SheetMetalOp::Convert
     };
+    // Convert thickens the part's faces inward, as Onshape's arrow shows (`02-…/t0101.0.png`):
+    // the converted part keeps its outer size and its bends read Up.
+    x.flip_thickness = x.operation == SheetMetalOp::Convert;
     let field = first_field(x.operation);
     Some(("Sheet metal model", FeatureKind::SheetMetalModel(x), field))
 }

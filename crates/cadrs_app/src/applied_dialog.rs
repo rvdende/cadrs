@@ -1117,6 +1117,12 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Role>, mut commands: Commands) {
             let op = cadrs_core::sheetmetal::SheetMetalOp::ALL[i.min(2)];
             change(&mut commands, "Operation", move |k| {
                 if let FeatureKind::SheetMetalModel(x) = k {
+                    // Convert's thickness goes inward by default, the others' outward: a flip
+                    // made on one tab stays a flip on the next.
+                    let convert = cadrs_core::sheetmetal::SheetMetalOp::Convert;
+                    if (x.operation == convert) != (op == convert) {
+                        x.flip_thickness = !x.flip_thickness;
+                    }
                     x.operation = op;
                 }
             });

@@ -260,9 +260,11 @@ against the stand-ins' expected values.
   feet Up and its 180° roll Down (opposite turns, opposite directions), the converted box all Up
   (`t0101.0.png`). That box shows Up because Onshape's Convert arrow points into the part
   (`t0040.8.png`, `t0101.0.png`: material inside, the input faces outside), while our Convert
-  default puts the material outside (see Convert default side above), which gives Down. The
-  open question is the Convert default side, not the Up/Down rule; flipping the default would
-  change every Convert closed form and exercise, so it is left for a decision. **Corner hole**:
+  default put the material outside, which gave Down. **Decided at the merge**: a new Convert
+  starts with the material inside (`flip_thickness` set by the dialog, `sheetmetal_ui::initial`),
+  as Onshape's, so a converted part keeps its outer size and its bends read Up
+  (`sheetmetal_collision/02b`). Switching tabs keeps a flip relative to each tab's default.
+  Saved features and the core tests set the side themselves, so their closed forms stand. **Corner hole**:
   where two bends meet at a box corner the Simple corner relief leaves the corner square open
   (the L notch in the flat); the colours seen through it are the box's other parts (its back
   and bottom walls, ripped off as separate parts), not inner faces of the folded part.
