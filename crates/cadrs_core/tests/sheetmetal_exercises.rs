@@ -105,7 +105,7 @@ fn e1_six_bends_on_the_imported_flat_and_its_mass() {
 }
 
 /// E2's mass in Carbon Steel (kg): the stand-in's own value (its profile's arc is a trapezoid).
-pub const E2_MASS: f64 = 0.111473;
+pub const E2_MASS: f64 = 0.111319;
 
 #[test]
 fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
@@ -124,6 +124,39 @@ fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
     // The Round – Sized corner relief is cut from the bends as a wedge (an approximation of its
     // round, P3I.2), so the folded volume is within 1e-4 of the flat's.
     assert!((v - predicted(&b, ex::E2_MODEL)).abs() < 1e-4 * v, "{v} vs {}", predicted(&b, ex::E2_MODEL));
+    // Steps 9–11 in closed form (T = 1, R = 1, K 0.45, minimal gap 0.025; the right wall's
+    // inside at x = 124, outside x = 125, top z = 15, front end y = −80):
+    // - Flange 2, Inner, 10: its inside on the wall's top edge (z = 15, so the wall grows to the
+    //   outer sharp z = 16), its tip 10 in from the outer sharp (x = 115); its flat wall runs from
+    //   the bend's tangent (x = 125 − (R + T) = 123) to the tip: 8 wide.
+    // - Flange 3, Inner, 10: on the wall's end edge between its bends' tangent lines (z from
+    //   R + T = 2 up to 16 − 2 = 14), its inside on y = −80, its tip at x = 115, 8 wide (x 115..123).
+    // - Make joint, butt 1: the lip (first) carried on to where the walls' planes meet and stopped
+    //   the gap short of Flange 3's inside (y = −80 + 0.025); Flange 3 runs on up to the lip's top
+    //   (z = 16).
+    let ctx_m = &ctx.model;
+    let extent = |pick: &dyn Fn(&cadrs_sheetmetal::Wall) -> bool| {
+        let w = ctx_m.walls.iter().find(|w| pick(w)).expect("the wall");
+        let pts: Vec<_> = w.outline.outer.iter().map(|q| w.surface.point(*q)).collect();
+        let r = |i: usize| pts.iter().map(|p| p[i]).fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(v), b.max(v)));
+        (r(0), r(1), r(2))
+    };
+    let centre = |w: &cadrs_sheetmetal::Wall| {
+        let (lo, hi) = w.outline.bounds().unwrap();
+        w.surface.point(cadrs_sheetmetal::poly::P2::from((lo.coords + hi.coords) / 2.0))
+    };
+    let normal = |w: &cadrs_sheetmetal::Wall, i: usize| w.surface.normal().is_some_and(|n| n[i].abs() > 0.999);
+    let lip = extent(&|w| normal(w, 2) && centre(w).z > 10.0 && centre(w).x > 100.0);
+    let f3 = extent(&|w| normal(w, 1) && centre(w).x > 100.0 && centre(w).y < -70.0);
+    println!("E2 Flange 2 (lip): x {:?}, y {:?}, z {:?}", lip.0, lip.1, lip.2);
+    println!("E2 Flange 3: x {:?}, y {:?}, z {:?}", f3.0, f3.1, f3.2);
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    assert!(near(lip.0.0, 115.0) && near(lip.0.1, 123.0), "the lip 8 wide: {lip:?}");
+    assert!(near(lip.1.0, -80.0 + 0.025) && near(lip.1.1, 0.0), "the lip stops the gap short of Flange 3: {lip:?}");
+    // (Make joint carries Flange 3's bend on with its top edge, so no square corner is left
+    // past the bend's tangent under the lip's bend.)
+    assert!(near(f3.0.0, 115.0) && near(f3.0.1, 123.0), "Flange 3 8 wide: {f3:?}");
+    assert!(near(f3.2.0, 2.0) && near(f3.2.1, 16.0), "Flange 3 from the base bend's tangent to the lip's top: {f3:?}");
     let m = mass_kg(&doc, ex::E2_STUDIO, part);
     assert!((m - v * 7850e-9).abs() < 1e-12);
     println!("E2 mass: {m:.6} kg (volume {v:.3} mm³)");

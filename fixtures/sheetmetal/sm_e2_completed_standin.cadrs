@@ -670,73 +670,6 @@
                                             faces: ((
                                                 op: "53e20000-0000-0000-0000-000000000012",
                                                 origin: Cap(
-                                                    region: 6287390444883651090,
-                                                    end: true,
-                                                ),
-                                                split: 0,
-                                            ), (
-                                                op: "53e20000-0000-0000-0000-000000000012",
-                                                origin: Side(
-                                                    region: 6287390444883651090,
-                                                    curve: 5,
-                                                ),
-                                                split: 0,
-                                            )),
-                                            index: 0,
-                                        ),
-                                        seed: (120.0, -80.0, 1.0),
-                                    )),
-                                ],
-                                alignment: Inner,
-                                end: Blind,
-                                distance: 15.0,
-                                distance_expr: "15 mm",
-                                up_to: None,
-                                offset: 0.0,
-                                offset_expr: "0 mm",
-                                angle_control: BendAngle,
-                                angle: 90.0,
-                                angle_expr: "90 deg",
-                                flip: false,
-                                parallel_to: None,
-                                direction: None,
-                                direction_angle: 90.0,
-                                direction_angle_expr: "90 deg",
-                                auto_miter: true,
-                                miter_angle: 45.0,
-                                miter_angle_expr: "45 deg",
-                                use_model_radius: true,
-                                radius: 1.0,
-                                radius_expr: "1 mm",
-                                partial: false,
-                                chain: PerEdge,
-                                flip_sides: false,
-                                hold_adjacent: true,
-                                bound: (
-                                    kind: Blind,
-                                    distance: 25.0,
-                                    distance_expr: "25 mm",
-                                    up_to: None,
-                                    offset: 0.0,
-                                    offset_expr: "0 mm",
-                                ),
-                                second: None,
-                            ))),
-                        ),
-                        (
-                            id: ("53e20000-0000-0000-0000-000000000018"),
-                            name: "Flange 3",
-                            kind: SheetMetal(Flange((
-                                edges: [
-                                    Edge((
-                                        part: (
-                                            feature: ("53e20000-0000-0000-0000-000000000012"),
-                                            index: 0,
-                                        ),
-                                        edge: (
-                                            faces: ((
-                                                op: "53e20000-0000-0000-0000-000000000012",
-                                                origin: Cap(
                                                     region: 6287390448078572568,
                                                     end: true,
                                                 ),
@@ -791,6 +724,73 @@
                             ))),
                         ),
                         (
+                            id: ("53e20000-0000-0000-0000-000000000018"),
+                            name: "Flange 3",
+                            kind: SheetMetal(Flange((
+                                edges: [
+                                    Edge((
+                                        part: (
+                                            feature: ("53e20000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e20000-0000-0000-0000-000000000012",
+                                                origin: Cap(
+                                                    region: 6287390448078572568,
+                                                    end: true,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e20000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 6287390444883651090,
+                                                    curve: 5,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (124.0, -80.0, 8.0),
+                                    )),
+                                ],
+                                alignment: Inner,
+                                end: Blind,
+                                distance: 10.0,
+                                distance_expr: "10 mm",
+                                up_to: None,
+                                offset: 0.0,
+                                offset_expr: "0 mm",
+                                angle_control: BendAngle,
+                                angle: 90.0,
+                                angle_expr: "90 deg",
+                                flip: false,
+                                parallel_to: None,
+                                direction: None,
+                                direction_angle: 90.0,
+                                direction_angle_expr: "90 deg",
+                                auto_miter: true,
+                                miter_angle: 45.0,
+                                miter_angle_expr: "45 deg",
+                                use_model_radius: true,
+                                radius: 1.0,
+                                radius_expr: "1 mm",
+                                partial: false,
+                                chain: PerEdge,
+                                flip_sides: false,
+                                hold_adjacent: true,
+                                bound: (
+                                    kind: Blind,
+                                    distance: 25.0,
+                                    distance_expr: "25 mm",
+                                    up_to: None,
+                                    offset: 0.0,
+                                    offset_expr: "0 mm",
+                                ),
+                                second: None,
+                            ))),
+                        ),
+                        (
                             id: ("53e20000-0000-0000-0000-000000000019"),
                             name: "Make joint 1",
                             kind: SheetMetal(MakeJoint((
@@ -804,21 +804,21 @@
                                             faces: ((
                                                 op: "53e20000-0000-0000-0000-000000000017",
                                                 origin: Cap(
-                                                    region: 6287390444426809293,
-                                                    end: true,
+                                                    region: 6287390448339352046,
+                                                    end: false,
                                                 ),
                                                 split: 0,
                                             ), (
                                                 op: "53e20000-0000-0000-0000-000000000017",
                                                 origin: Side(
-                                                    region: 6287390444426809293,
-                                                    curve: 2,
+                                                    region: 6287390448339352046,
+                                                    curve: 0,
                                                 ),
                                                 split: 0,
                                             )),
                                             index: 0,
                                         ),
-                                        seed: (123.0, -80.0, 10.0),
+                                        seed: (119.0, -80.0, 16.0),
                                     )),
                                     Edge((
                                         part: (
@@ -827,23 +827,23 @@
                                         ),
                                         edge: (
                                             faces: ((
-                                                op: "53e20000-0000-0000-0000-000000000012",
+                                                op: "53e20000-0000-0000-0000-000000000018",
                                                 origin: Cap(
-                                                    region: 6287390448078572568,
-                                                    end: false,
+                                                    region: 6287390445657040327,
+                                                    end: true,
                                                 ),
                                                 split: 0,
                                             ), (
-                                                op: "53e20000-0000-0000-0000-000000000012",
+                                                op: "53e20000-0000-0000-0000-000000000018",
                                                 origin: Side(
-                                                    region: 6287390448078572568,
-                                                    curve: 1,
+                                                    region: 6287390445657040327,
+                                                    curve: 2,
                                                 ),
                                                 split: 0,
                                             )),
                                             index: 0,
                                         ),
-                                        seed: (125.0, -80.0, 8.0),
+                                        seed: (119.0, -80.0, 14.0),
                                     )),
                                 ],
                                 kind: Rip,

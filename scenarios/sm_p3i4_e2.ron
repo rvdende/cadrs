@@ -5,10 +5,10 @@
 // Step 3: Sheet metal model, Extrude 80 mm, 1 mm thick, bend radius 1 mm. Step 4: Flange on the
 // two back edges (the left base and the left wall), Inner, 8 mm: one plane, mitred at the
 // corner. Step 5: Partial flange, Per chain, Hold adjacent edges, Blind 10 mm. Step 6: Hem on
-// the two flanges' top edges: Straight, Flattened, 5 mm, In place, Simple. Steps 9–10: Flange 2
-// on the right base's front edge (15 mm, as high as the right wall) and Flange 3 on the right
-// wall's top edge (10 mm). Step 11: Make joint between Flange 2's side and the right wall's
-// front edge: Rip, Butt joint – Direction 1.
+// the two flanges' top edges: Straight, Flattened, 5 mm, In place, Simple. Step 9: Flange 2, a
+// 10 mm lip on the right wall's top edge; step 10: Flange 3, 10 mm on the right wall's vertical
+// front end edge; step 11: Make joint between "Edge of Flange 2" (the lip's end) and "Edge of
+// Flange 3" (its top edge): Rip, Butt joint – Direction 1.
 Scenario(
     start: Some("document"),
     steps: [
@@ -120,28 +120,9 @@ Scenario(
         Screenshot("06-hem-two-back-edges"),
         Click(ui("sheet-metal-hem-dialog-accept")),
         Wait(30),
-        // Step 9.
-        Custom("view 30 30 110 -70 8 0.08"),
+        // Step 9 (`step-09.png`): Flange 2 on the right wall's top edge, a 10 mm lip turned in.
+        Custom("view 30 30 62 -40 8 0.16"),
         Wait(10),
-        Click(ui("sheet-metal-model-caret")),
-        Wait(10),
-        Click(ui("sheet-metal-menu-flange")),
-        WaitFor("sheet-metal-flange-dialog"),
-        Wait(5),
-        Click(xyz(105, -80, 1)),
-        Wait(5),
-        Click(ui("smf-distance-field")),
-        Wait(2),
-        Key("Ctrl+A"),
-        Type("15"),
-        Key("Tab"),
-        Wait(40),
-        MoveTo(1420, 900),
-        Wait(3),
-        Screenshot("09-flange-2"),
-        Click(ui("sheet-metal-flange-dialog-accept")),
-        Wait(30),
-        // Step 10.
         Click(ui("sheet-metal-model-caret")),
         Wait(10),
         Click(ui("sheet-metal-menu-flange")),
@@ -157,18 +138,41 @@ Scenario(
         Wait(40),
         MoveTo(1420, 900),
         Wait(3),
+        Screenshot("09-flange-2"),
+        Click(ui("sheet-metal-flange-dialog-accept")),
+        Wait(30),
+        // Step 10 (`step-10.png`): Flange 3 on the right wall's vertical front end edge, 10 mm,
+        // turned in (as tall as the wall between its bends).
+        Custom("view 30 20 118 -80 8 0.035"),
+        Wait(10),
+        Click(ui("sheet-metal-model-caret")),
+        Wait(10),
+        Click(ui("sheet-metal-menu-flange")),
+        WaitFor("sheet-metal-flange-dialog"),
+        Wait(5),
+        Click(xyz(124, -80, 8)),
+        Wait(5),
+        Click(ui("smf-distance-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Tab"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
         Screenshot("10-flange-3"),
         Click(ui("sheet-metal-flange-dialog-accept")),
         Wait(30),
-        // Step 11.
+        // Step 11 (`step-11.png`): Make joint, "Edge of Flange 2" (the lip's front end) and "Edge
+        // of Flange 3" (its top edge): Rip, Butt joint – Direction 1.
         Click(ui("sheet-metal-model-caret")),
         Wait(10),
         Click(ui("sheet-metal-menu-make-joint")),
         WaitFor("sheet-metal-make-joint-dialog"),
         Wait(5),
-        Click(xyz(123, -80, 10)),
+        Click(xyz(119, -80, 16)),
         Wait(5),
-        Click(xyz(125, -80, 8)),
+        Click(xyz(119, -80, 14)),
         Wait(10),
         Click(ui("smf-rip-style")),
         Wait(5),
@@ -179,6 +183,9 @@ Scenario(
         Screenshot("11-make-joint-butt-1"),
         Click(ui("sheet-metal-make-joint-dialog-accept")),
         Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("11b-joined"),
         Custom("view 30 30 62 -40 8 0.16"),
         Wait(10),
         MoveTo(1420, 900),

@@ -51,7 +51,7 @@ below).
 | SM1.6 | Active-model behaviour | ✅ | P3I.2: contexts record their parts and `active`. Integration: **one definition and one pipeline** for every feature after the model (see Decisions (integration)): Flange, Hem, Make joint and Modify joint edit the walls at their virtual sharps; Bend, Jog, Tab, cuts, corner breaks, face copies, Corner, Bend relief and Loft (Add) are ordered steps replayed on the built model; forms are kept with the model and applied again at every refold; parts keep their ids. Extrude → Remove whose targets are all active sheet metal cuts the walls perpendicular and shows in the flat; Extrude Add with a merge scope of active sheet metal is refused (use Tab or Flange). Ordinary features (fillets of non-corner edges, booleans, …) still act on the folded part only and are lost at the next refold. |
 | SM2.1–SM2.7 | Sheet metal model (Convert / Extrude / Thicken; General / Material / Relief) | ✅ | P3I.2: dialog, rebuild and folded solid; see Decisions (P3I.2). |
 | SM2.8 | One model per part; rename names the context | ✅ | Contexts are keyed by the feature; P3I.3's context dropdown lists the features by name. |
-| SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain applies the bounds per edge (an approximation). |
+| SM3.1–SM3.7 | Flange (alignment, end types, angle control, miter, model radius, partial flange) | ✅ | P3I.4: see Decisions (P3I.4). Per chain finds the chains of edges meeting end to end and bounds only their free ends (fix round). Open: a Per chain bound that goes Up to an entity is measured on the first edge. |
 | SM3.8 | Move face on a flange | ❌ | Move face (direct edit) doesn't exist in cadrs; not required by the exercises. |
 | SM4.1–SM4.5 | Hem (Straight / Rolled / Tear drop, alignment, corner type) | ✅ | P3I.4: closed-form flat lengths tested; the last values are remembered for the app session (not across sessions). Hems are in the Bends table (P3I.3's table shows them). |
 | SM5.1–SM5.4 | Tab (profiles, flanges to merge, subtraction scope/offset) | ✅ | P3I.5: profiles added to parallel walls they touch (auto when *Flange to merge* is empty; bridged coplanar walls merge), clearance pockets (profile grown by the offset) cut from sheet metal walls or ordinary parts in the scope; in the flat. |
@@ -73,7 +73,7 @@ below).
 | SM19.1 | Jog | ✅ | P3I.5: two opposite bends sized for the offset (Blind, Up to entity with offset, Thickness factor; anchors Inside/Nominal/Outside), Preserve material off stretches the sheet so the far end stays (tests). |
 | SM19.2 | Sheet metal Loft | ✅ | P3I.9: New/Add (one active model), Profile 1/2 (region, face, edges, point), Connections with draggable handles and Rip, Chordal tolerance, General/Material/Relief; planar facet walls along the tessellation (facet joints, steep non-fanning edges bent), a closed loft ripped at its matched start, mitred folded walls; flat × T matches the folded volume (tests). Fixes: Loft Add joins a profile that runs along a free edge of a model wall to that wall with a bend of the model's radius (both trimmed back from the virtual sharp, a tangent joint in one plane): one part, one flat (`a_loft_added_on_the_models_edge_bends_onto_it_as_one_part`, `sm_p3i9_loft` 08–09); a loft touching no edge is united as before. Add connection adds an empty connection whose field takes a point on each profile (the loft's own edges and vertices included); a profile on a wall's far face joins too; the square-to-round's facet-only fallback no longer warns. |
 | SM20.1–SM20.3 | Form, Tag (Form), forms library | ✅ | P3I.9: Tag (Form) (add/remove parts, flat sketch, origin connector); Form with Select Part Studio (Current document / Other documents / Libraries), the form's variables (Variable features; `thickness` driven by the model), locations (sketch points, a sketch's points, vertices, mate connectors), target faces, opposite direction; touching joints, rips, corners or edges is an error; outlines and centermarks in `FlatPart.forms`. cadrs's own library: louver, bridge lance, dimple, emboss, extruded hole (`samples::sheetmetal_forms`). Integration: forms are kept with the model and applied again at every refold, placed relative to their wall (they follow it); their outlines and centermarks show in the flat view (`sm_p3i9_form` 09). Fixes: every refold checks each copy again (its wall still there, its footprint clear of joints, rips and edges; a copy a later Bend split off moves onto that wall) and fails the feature naming the Form; Current-document forms follow their Part Studio (refreshed by tab id after every command, undo and redo, like Derived); a form Part Studio without a Length variable `thickness` is refused (rebuild error, and the picker says so); the picker's search filters the forms and shows a shaded preview of the form; a Form's eye hides it on the flat view and greys its row; the dialog marks each location with a dot and triad; Libraries ▸ My sheet metal forms lists the document's own forms; the louver's ends are closed by end walls sloping at its Angle, the lance's ramps take an Angle, the dimple is drafted and rounded into its top (a revolve), the emboss drafted; their added volumes are closed forms (tests). |
-| E1–E4 | Exercises | ✅ | P3I.8: stand-ins built by `samples::sheetmetal_exercises` (fixtures under `fixtures/sheetmetal/`, kept current by `tests/sheetmetal_exercises.rs`) and scenarios doing each end to end: `sm_e1` (Insert DXF, Thicken of 7 regions, 6 Inner Bends, Carbon Steel: **0.356733 kg**), `sm_e2` (Extrude, flanges, partial flange, hem, tab, flanges, Make joint butt 1, Corner Round – Sized 3.3, Carbon Steel: **0.111473 kg**, the panel shows 14200.438 mm³ as the test), `sm_e3` (flat DXF export from the flat view menu, Create drawing, four views, flat view with bend notes, dimensions: flat **500.833 × 425.833**), `sm_e4` (Finish, the rework with sketch/plane/sweep/mirror/fillets; the flat under Context "Lower Enclosure" unchanged, tested). E2's R35 arc is a trapezoid of lines (Extrude bends only between lines); its tab sketch is on Top, not on the face. |
+| E1–E4 | Exercises | ✅ | P3I.8: stand-ins built by `samples::sheetmetal_exercises` (fixtures under `fixtures/sheetmetal/`, kept current by `tests/sheetmetal_exercises.rs`) and scenarios doing each end to end: `sm_e1` (Insert DXF, Thicken of 7 regions, 6 Inner Bends, Carbon Steel: **0.356733 kg**), `sm_e2` (Extrude, flanges, partial flange, hem, tab, Flange 2 a 10 lip on the right wall's top edge, Flange 3 10 on its vertical front end edge, Make joint butt 1 between the lip's end and Flange 3's top edge as the slides' steps 9–11, Corner Round – Sized 3.3, Carbon Steel: **0.111319 kg**, the panel shows 14180.808 mm³ as the test), `sm_e3` (flat DXF export from the flat view menu, Create drawing, four views, flat view with bend notes, dimensions: flat **500.833 × 425.833**), `sm_e4` (Finish, the rework with sketch/plane/sweep/mirror/fillets; the flat under Context "Lower Enclosure" unchanged, tested). E2's R35 arc is a trapezoid of lines (Extrude bends only between lines); its tab sketch is on Top, not on the face; Flange 3 stands on the wall's end edge between its bends' tangent lines (the edge the folded part shows), so its foot is open to the base as in the slide. |
 | X1 | Toolbar group, Search tools | 🟡 | P3I.2: Sheet metal model button + ▾ with the 12 other tools in Onshape's order (greyed until built), all in Search tools; the table/flat view toggle is P3I.3. P3I.9: Loft, Form; P3I.4: Flange, Hem, Make joint; P3I.5: Finish, Tab, Bend, Jog, Corner, Bend relief and Corner break enabled in both. All twelve tools are built and enabled. |
 | X2 | Feature-list icons | 🟡 | P3I.2: Sheet metal model; P3I.4: Flange, Hem, Make joint; P3I.5: its seven features; P3I.9: Loft, Form, Tag; the others come with their features. All sheet metal features have their icons. |
 | X4, X5, X6 | Undo, units, errors | ✅ (for P3I.2) | Every edit a command; lengths in the document unit, scales unitless; out-of-range fields red with the range tooltip; errors red with tooltip. |
@@ -385,11 +385,41 @@ against the stand-ins' expected values.
 - **Hem**: Straight (180°; Flattened = inner radius half the minimal gap), Rolled (the bend
   only; a 0.001 mm leg because every bend needs a wall after it), Tear drop (`β`, `ℓ` solved so
   the leg ends the gap off the wall and Total length from the outermost point). Corners: Simple
-  cuts a hem's leg short of the other hem's bend, Closed meets along the corner's bisector.
+  cuts both legs on the corner's bisector, Closed carries them on to it first.
 - **Make joint**: both edges carried to where the walls' planes meet, then a rip or bend there.
-- **Gaps left**: Per chain is per edge; Move face (SM3.8); hems and flanges only on flat walls'
-  edges (not on rolled walls or hem legs); the E2 stand-in replaces the R35 arc by lines (the
-  sheet metal Extrude bends only between lines).
+- **Fix round (P3I.4 judge, 8.4)**: E2's steps 9–11 as the slides (a lip on the right wall's
+  top edge, a flange on its vertical end edge, Make joint between their edges, butt 1). A flange
+  on a wall's side edge spans the stretch the folded part shows (between the bends' tangent
+  lines). Per chain: chains found by shared ends; the first free end met (in pick order) takes the
+  first bound, the chain's other free end the second. A partial flange's bounds follow the pick's
+  own direction (an Up to vertex bound went to the wrong end when the wall's outline ran the
+  other way). Align to geometry takes the parallel on the picked face's side (the arrow the
+  other); Angle from direction turns away from the wall, whichever way the edge runs. Automatic
+  miter off: the miter plane runs through the corner's outside at the miter angle to the first
+  flange; each (square-ended) flange stops where its inside meets it (the cut used to lean away
+  from the flange and changed nothing). Hems on
+  flanges mitred at a box corner: the later hem stops `2R + T` plus half the gap clear of the
+  earlier one (Simple and Closed alike: bend regions end square); a hem's corner cut is where
+  its plane crosses the leg's and keeps the leg's whole thickness on its side. Simple hems on one wall's corner: both
+  legs are cut on the corner's bisector, half the gap off it (they used to be cut only at the
+  other's bend, so they crossed: "walls intersect"); Closed carries them on first.
+  The last hem is remembered only when a new
+  hem is accepted (not its flip); the hem has a flip arrow in the view. Onshape shows the red "!"
+  and a red name while a new feature has nothing picked (`03-flange/t0012.6.png`), as cadrs does.
+- **Fix round 2 (judge 8.54)**: a wall's relief cuts are snapped back onto its exact edges (the
+  polygon booleans round to 1e-6 mm, which left an oblique edge off its bend's face, so a Flange
+  on the sloping edges of a sloped enclosure came out as separate parts); Make joint carries a
+  bend that ends at the moved edge on with it (no square corner under the lip in E2); Simple hem
+  corners cut both legs on the bisector; an Outer or Middle flange end that runs into a corner
+  where another wall is joined stops half the minimal gap short (on the sloped enclosure its
+  bend's outside landed exactly on the front wall's top edge and the kernel's union collapsed:
+  every alignment now works there; open: a Hold line flange stopping short of such a corner
+  leaves its wall untrimmed in the builder); a miter-angle end that runs on moves its own corners
+  (one straight end); Partial flange is greyed until an edge is picked.
+- **Gaps left**: Move face (SM3.8); hems and flanges only on flat walls' edges (not on rolled
+  walls or hem legs); the E2 stand-in replaces the R35 arc by lines (the sheet metal Extrude bends
+  only between lines); Per chain Up to bounds measure on the first edge; the 12 px labels are in
+  the sheet metal feature dialogs only (other dialogs' label columns are sized for 11 px).
 
 ### Decisions (P3I.5)
 

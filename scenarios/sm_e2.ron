@@ -4,11 +4,11 @@
 // sheet metal Extrude bends only between lines). 03 Sheet metal model → Extrude 80, 1 mm, R1, minimal gap 0.025, bend relief scales 1.5 × 1;
 // 04–05 Flange 1 on the two back edges, Inner 8, Partial flange (Per chain, Hold adjacent edges,
 // 10); 06 Hem on the flange's top edges (Straight, Flattened, 5, In place); 07–08 a 20 × 10
-// rectangle off the right base's front edge (on Top) and Tab 1; 09 Flange 2 on the front edge
-// beside the tab (15, as high as the right wall); 10 Flange 3 on the right wall's top edge (10);
-// 11 Make joint, Rip, Butt joint – Direction 1; 12 Corner at the rear-left corner, Round – Sized
+// rectangle off the right base's front edge (on Top) and Tab 1; 09 Flange 2, a 10 lip on the
+// right wall's top edge; 10 Flange 3, 10 on the right wall's vertical front end edge; 11 Make
+// joint between the lip's end and Flange 3's top edge, Rip, Butt joint – Direction 1; 12 Corner at the rear-left corner, Round – Sized
 // 3.3; 13 Carbon Steel; 14 Mass properties: 0.111 kg (`cadrs_core/tests/sheetmetal_exercises.rs`
-// checks 0.111473 kg on the same steps).
+// checks 0.111319 kg on the same steps).
 Scenario(
     start: Some("document"),
     steps: [
@@ -158,28 +158,9 @@ Scenario(
         Screenshot("08-tab"),
         Click(ui("sheet-metal-tab-dialog-accept")),
         Wait(30),
-        // Step 9.
-        Custom("view 30 30 110 -70 8 0.08"),
+        // Step 9 (`step-09.png`): Flange 2 on the right wall's top edge, a 10 mm lip turned in.
+        Custom("view 30 30 62 -40 8 0.16"),
         Wait(10),
-        Click(ui("sheet-metal-model-caret")),
-        Wait(10),
-        Click(ui("sheet-metal-menu-flange")),
-        WaitFor("sheet-metal-flange-dialog"),
-        Wait(5),
-        Click(xyz(120, -80, 1)),
-        Wait(5),
-        Click(ui("smf-distance-field")),
-        Wait(2),
-        Key("Ctrl+A"),
-        Type("15"),
-        Key("Tab"),
-        Wait(40),
-        MoveTo(1420, 900),
-        Wait(3),
-        Screenshot("09-flange-2"),
-        Click(ui("sheet-metal-flange-dialog-accept")),
-        Wait(30),
-        // Step 10.
         Click(ui("sheet-metal-model-caret")),
         Wait(10),
         Click(ui("sheet-metal-menu-flange")),
@@ -195,18 +176,41 @@ Scenario(
         Wait(40),
         MoveTo(1420, 900),
         Wait(3),
+        Screenshot("09-flange-2"),
+        Click(ui("sheet-metal-flange-dialog-accept")),
+        Wait(30),
+        // Step 10 (`step-10.png`): Flange 3 on the right wall's vertical front end edge, 10 mm,
+        // turned in (as tall as the wall between its bends).
+        Custom("view 30 20 118 -80 8 0.035"),
+        Wait(10),
+        Click(ui("sheet-metal-model-caret")),
+        Wait(10),
+        Click(ui("sheet-metal-menu-flange")),
+        WaitFor("sheet-metal-flange-dialog"),
+        Wait(5),
+        Click(xyz(124, -80, 8)),
+        Wait(5),
+        Click(ui("smf-distance-field")),
+        Wait(2),
+        Key("Ctrl+A"),
+        Type("10"),
+        Key("Tab"),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
         Screenshot("10-flange-3"),
         Click(ui("sheet-metal-flange-dialog-accept")),
         Wait(30),
-        // Step 11.
+        // Step 11 (`step-11.png`): Make joint, "Edge of Flange 2" (the lip's front end) and "Edge
+        // of Flange 3" (its top edge): Rip, Butt joint – Direction 1.
         Click(ui("sheet-metal-model-caret")),
         Wait(10),
         Click(ui("sheet-metal-menu-make-joint")),
         WaitFor("sheet-metal-make-joint-dialog"),
         Wait(5),
-        Click(xyz(123, -80, 10)),
+        Click(xyz(119, -80, 16)),
         Wait(5),
-        Click(xyz(125, -80, 8)),
+        Click(xyz(119, -80, 14)),
         Wait(10),
         Click(ui("smf-rip-style")),
         Wait(5),
@@ -217,6 +221,9 @@ Scenario(
         Screenshot("11-make-joint-butt-1"),
         Click(ui("sheet-metal-make-joint-dialog-accept")),
         Wait(30),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("11b-joined"),
         // Step 12.
         Custom("view 30 30 15 0 8 0.06"),
         Wait(10),

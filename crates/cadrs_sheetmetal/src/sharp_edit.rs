@@ -229,6 +229,8 @@ struct SharpEdge {
     n: V3,
     /// The picked stretch: lengths along the edge from its start.
     pick: (f64, f64),
+    /// The pick runs against the edge (its `a` nearer the edge's end).
+    reversed: bool,
 }
 
 impl SharpEdge {
@@ -270,7 +272,7 @@ fn sharp_edge(def: &SharpDef, pick: &EdgePick) -> Result<SharpEdge, String> {
         let n = w.u.cross(&w.v).normalize();
         let e = (w.u * dir.x + w.v * dir.y).normalize();
         let into3 = (w.u * into.x + w.v * into.y).normalize();
-        return Ok(SharpEdge { wall: wi, seg, into, origin: surf.point(p), e, into3, n, pick: (lo.max(0.0), hi.min(seg.len())) });
+        return Ok(SharpEdge { wall: wi, seg, into, origin: surf.point(p), e, into3, n, pick: (lo.max(0.0), hi.min(seg.len())), reversed: s0 > s1 });
     }
     Err("The edge isn't on the wall's boundary".into())
 }
@@ -444,41 +446,68 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
     if !(r >= 0.0) {
         return Err("The bend radius must be at least 0".into());
     }
+    // A partial flange's bounds arrive measured from the picked stretch's start and end as the
+    // pick runs; the sharp outline's edge may run the other way: put them in its order.
+    let ses: Vec<SharpEdge> = edges.iter().map(|fe| sharp_edge(def, &fe.pick)).collect::<Result<_, _>>()?;
+    let mut chained: Vec<FlangeEdge> = edges.iter().zip(&ses).map(|(fe, se)| FlangeEdge { partial: fe.partial.map(|(d0, d1)| if se.reversed { (d1, d0) } else { (d0, d1) }), ..*fe }).collect();
     // Per chain (SM3.7): edges meeting end to end are one chain; the bounds apply at the chain's
-    // free ends only (the first bound at the first edge's, the second at the last edge's).
-    let mut chained: Vec<FlangeEdge> = edges.to_vec();
+    // free ends only: the first free end met (in the order the edges were picked) takes the first
+    // bound, the chain's other free end the second. A lone edge takes both, as Per edge.
     if o.per_chain && edges.len() > 1 {
-        let ses: Vec<SharpEdge> = edges.iter().map(|fe| sharp_edge(def, &fe.pick)).collect::<Result<_, _>>()?;
+        let n = ses.len();
         let tol = 1e-6 * ses.iter().map(|x| x.len()).fold(1.0, f64::max);
         let end = |x: &SharpEdge, i: usize| if i == 0 { x.at(0.0, 0.0) } else { x.at(x.len(), 0.0) };
-        let shared = |k: usize, i: usize| (0..ses.len()).any(|l| l != k && (0..2).any(|j| (end(&ses[k], i) - end(&ses[l], j)).norm() < tol));
+        let meet = |k: usize, i: usize, l: usize| (0..2).any(|j| (end(&ses[k], i) - end(&ses[l], j)).norm() < tol);
+        let shared = |k: usize, i: usize| (0..n).any(|l| l != k && meet(k, i, l));
+        // The chains (union-find over shared ends).
+        let mut chain: Vec<usize> = (0..n).collect();
+        fn root(c: &mut [usize], mut i: usize) -> usize {
+            while c[i] != i {
+                c[i] = c[c[i]];
+                i = c[i];
+            }
+            i
+        }
+        for k in 0..n {
+            for l in k + 1..n {
+                if (0..2).any(|i| meet(k, i, l)) {
+                    let (a, b) = (root(&mut chain, k), root(&mut chain, l));
+                    chain[b] = a;
+                }
+            }
+        }
         let (first, second) = edges[0].partial.unwrap_or((0.0, 0.0));
-        let last = edges.len() - 1;
+        let mut met: Vec<(usize, usize)> = Vec::new();
         for (k, fe) in chained.iter_mut().enumerate() {
             if fe.partial.is_none() {
                 continue;
             }
+            let r = root(&mut chain, k);
             let mut d = [0.0, 0.0];
             for (i, di) in d.iter_mut().enumerate() {
                 if shared(k, i) {
                     continue;
                 }
-                if k == 0 && !(k == last && i == 1) {
-                    *di = first;
-                } else if k == last {
-                    *di = second;
-                }
-            }
-            // The first edge's free end takes the first bound; a lone end of the last edge the second.
-            if k == 0 && !shared(0, 0) && !shared(0, 1) {
-                d = [first, second];
+                let c = match met.iter_mut().find(|(q, _)| *q == r) {
+                    Some((_, c)) => {
+                        *c += 1;
+                        *c - 1
+                    }
+                    None => {
+                        met.push((r, 1));
+                        0
+                    }
+                };
+                *di = if c == 0 { first } else { second };
             }
             fe.partial = Some((d[0], d[1]));
         }
     }
     let edges = &chained[..];
+    // Where each picked edge's sharp ends are (to tell a corner this feature mitres).
+    let sharp_ends: Vec<[P3; 2]> = ses.iter().map(|x| [x.at(0.0, 0.0), x.at(x.len(), 0.0)]).collect();
     let mut pend: Vec<Pending> = Vec::new();
-    for fe in edges {
+    for (fi, fe) in edges.iter().enumerate() {
         if fe.pick.joined {
             return Err("An edge to flange is already joined to another wall".into());
         }
@@ -494,12 +523,46 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
         let x_s = o.alignment.outer_offset(t, r, theta);
         let x_d = if fe.toward { x_s } else { x_s - t * h };
         let (p0, p1) = se.pick;
-        let span = match fe.partial {
+        let mut span = match fe.partial {
             Some((d0, d1)) => (p0 + d0.max(0.0), p1 - d1.max(0.0)),
             None => (p0, p1),
         };
-        if span.1 - span.0 < 1e-6 {
-            return Err("The partial flange has no length".into());
+        // An end that runs (all but a rip's trim) into a corner of its wall where another wall is
+        // already joined: it stops half the minimal gap short, so the flange's bend can't touch
+        // that wall's edge exactly (on a sloped enclosure, Outer put the bend's outside corner on
+        // the front wall's top edge and the kernel's union failed).
+        // (Outer and Middle only: Inner and Hold line keep the bend above that edge, and a
+        // flange stopping just short of a ripped corner with Hold line leaves its wall
+        // untrimmed in the builder, which is still open.)
+        let pull = matches!(o.alignment, FlangeAlignment::Outer | FlangeAlignment::Middle);
+        for end in 0..2usize {
+            if !pull {
+                break;
+            }
+            let reach = if end == 0 { span.0 } else { se.len() - span.1 };
+            if reach > t + p.minimal_gap + 1e-9 {
+                continue;
+            }
+            let corner = se.at(if end == 0 { 0.0 } else { se.len() }, 0.0);
+            let tol = 1e-6 * se.len().max(1.0);
+            let mitred = sharp_ends.iter().enumerate().any(|(k, e)| k != fi && e.iter().any(|q| (q - corner).norm() < tol));
+            let joined = def.builder.joints.iter().any(|j| {
+                if j.a != se.wall && j.b != se.wall {
+                    return false;
+                }
+                let (a, b) = j.edge;
+                let Some(d) = (b - a).try_normalize(1e-12) else { return false };
+                let s = (corner - a).dot(&d);
+                d.cross(&se.e).norm() > 1e-6 && s > -tol && s < (b - a).norm() + tol && ((corner - a) - d * s).norm() < tol
+            });
+            if mitred || !joined {
+                continue;
+            }
+            if end == 0 {
+                span.0 += p.minimal_gap / 2.0;
+            } else {
+                span.1 -= p.minimal_gap / 2.0;
+            }
         }
         let whole = match fe.partial {
             Some((d0, d1)) => (d0 <= 1e-9, d1 <= 1e-9),
@@ -619,17 +682,29 @@ pub fn flange(def: &mut SharpDef, edges: &[FlangeEdge], o: &FlangeOpts) -> Resul
                     }
                 }
                 Some(alpha) => {
-                    // Ends cut at the miter angle through the corner's end of the flange.
-                    for (i, e) in [(k, ek), (l, el)] {
-                        let x = &pend[i];
-                        let s = if e == 0 { x.span.0 } else { x.span.1 };
-                        let inward = if e == 0 { 1.0 } else { -1.0 };
-                        let dir = V2::new(-inward * alpha.cos(), x.sign * alpha.sin());
-                        let mut nn = perp(dir);
-                        if nn.x * inward < 0.0 {
-                            nn = -nn;
+                    // The miter plane runs through the corner's outside at `alpha` to the first
+                    // flange (90° − alpha to the second). A wall's end is square, so each stops
+                    // where its inside meets the plane: past the edge's end by `T·(1 − cot α)`
+                    // (negative: short of it) for the first, `T·(1 − tan α)` for the second;
+                    // 45° stops both at the edge's end.
+                    let alpha = alpha.clamp(1e-3, FRAC_PI_2 - 1e-3);
+                    let lim = 4.0 * t;
+                    let ext = [(t * (1.0 - 1.0 / alpha.tan())).clamp(-size, lim), (t * (1.0 - alpha.tan())).clamp(-size, lim)];
+                    for ((i, e), x) in [(k, ek), (l, el)].into_iter().zip(ext) {
+                        let s0 = if e == 0 { pend[i].span.0 } else { pend[i].span.1 };
+                        let out = if e == 0 { -1.0 } else { 1.0 };
+                        let u = s0 + out * x;
+                        if x > 0.0 {
+                            // Carried on: the end's own corners move out (one straight end, no
+                            // seam where a piece was added).
+                            for q in pend[i].outline.outer.iter_mut() {
+                                if (q.x - s0).abs() < 1e-9 {
+                                    q.x = u;
+                                }
+                            }
+                        } else {
+                            pend[i].outline = pend[i].outline.clip_half_plane(P2::new(u, 0.0), V2::new(-out, 0.0));
                         }
-                        pend[i].outline = pend[i].outline.clip_half_plane(P2::new(s, 0.0), nn);
                     }
                 }
             }
@@ -858,15 +933,11 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
                     if (pk - pl).norm() > tol {
                         continue;
                     }
-                    let clip = if o.closed {
-                        // Along the corner's bisector.
-                        let nrm = (dk - dl).try_normalize(1e-9);
-                        nrm.map(|nn| HemClip { point: pk + nn * (p.minimal_gap / 2.0), normal: nn, extend: length + o.radius + 2.0 * t + trim })
-                    } else {
-                        // Short of where the other hem's bend starts.
-                        let nn = ses[l].into3;
-                        Some(HemClip { point: pl + nn * (trim + p.minimal_gap / 2.0), normal: nn, extend: 0.0 })
-                    };
+                    // Both legs cut on the corner's bisector, half the gap off it (Simple,
+                    // `hem-straight-simple.png`: a clean V in the flat); Closed first carries
+                    // each leg on past its bend's end so the cut closes the corner.
+                    let extend = if o.closed { length + o.radius + 2.0 * t + trim } else { 0.0 };
+                    let clip = (dk - dl).try_normalize(1e-9).map(|nn| HemClip { point: pk + nn * (p.minimal_gap / 2.0), normal: nn, extend });
                     clips[k].extend(clip);
                 }
             }
@@ -891,6 +962,49 @@ pub fn hem(def: &mut SharpDef, edges: &[HemEdge], o: &HemOpts) -> Result<Vec<Add
                         spans[k].1 = a.len() - clear;
                     }
                 }
+            }
+        }
+    }
+    // Hems on two walls meeting at a box corner (flanges mitred into each other, folded the
+    // same way): the later hem stops half the minimal gap clear of the earlier one (which reaches
+    // `2R + T` in from its wall's face). Simple and Closed alike: a bend region ends square, so
+    // the legs (`2R` in, where the earlier hem's leg already is) can't close any further.
+    let depth = 2.0 * o.radius + t;
+    let gap = p.minimal_gap;
+    for k in 0..ses.len() {
+        for l in 0..k {
+            let (a, b) = (&ses[k], &ses[l]);
+            if a.wall == b.wall || a.n.dot(&b.n).abs() > 1.0 - 1e-9 {
+                continue;
+            }
+            // Ends of the two edges at one corner (the rip between the walls keeps them up to a
+            // thickness and the gap apart).
+            let near = 2.0 * (t + gap) + tol;
+            let ends = |s: &SharpEdge| [(0usize, s.at(0.0, 0.0)), (1usize, s.at(s.len(), 0.0))];
+            let Some(ek) = ends(a).into_iter().flat_map(|(i, p)| ends(b).into_iter().map(move |(j, q)| (i, j, (p - q).norm()))).find(|x| x.2 < near).map(|x| x.0) else {
+                continue;
+            };
+            let wb = &def.builder.walls[b.wall];
+            let hb = |x: P3| (x - wb.origin).dot(&b.n);
+            // Where the earlier hem lies off its wall, and whether the later wall is on that side.
+            let sigma = if edges[l].toward { 1.0 } else { -1.0 };
+            let mid = a.at(a.len() / 2.0, 0.0);
+            let same_side = if sigma > 0.0 { hb(mid) > t } else { hb(mid) < 0.0 };
+            if !same_side {
+                continue;
+            }
+            let level = if sigma > 0.0 { t + depth + gap / 2.0 } else { -(depth + gap / 2.0) };
+            let slope = a.e.dot(&b.n);
+            if slope.abs() < 1e-9 {
+                continue;
+            }
+            // The later hem's edge stops where it is `level` off the earlier hem's wall.
+            let s_end = if ek == 0 { 0.0 } else { a.len() };
+            let s = s_end + (level - hb(a.at(s_end, 0.0))) / slope;
+            if ek == 0 {
+                spans[k].0 = spans[k].0.max(s);
+            } else {
+                spans[k].1 = spans[k].1.min(s);
             }
         }
     }
@@ -960,6 +1074,23 @@ pub fn make_joint(def: &mut SharpDef, first: &EdgePick, second: &EdgePick, key: 
         let wall = &mut def.builder.walls[s.wall];
         if x.abs() > 1e-12 {
             wall.outline = shift_edge(&wall.outline, s.seg, s.into, -x).ok_or("The joint cuts a wall away")?;
+            // A bend that ends at the moved edge's corner runs on with it (else the wall's
+            // corner past the bend's tangent line is left square).
+            let tol = 1e-6 * s.len().max(1.0);
+            let line = |p: P3| ((p - s.origin) - s.e * (p - s.origin).dot(&s.e)).norm() < tol;
+            for j in def.builder.joints.iter_mut().filter(|j| (j.a == s.wall || j.b == s.wall) && matches!(j.kind, SharpJointKind::Bend { .. })) {
+                let (a, b) = j.edge;
+                let d = b - a;
+                if d.norm() < tol || d.normalize().cross(&s.e).norm() < 1e-6 || d.normalize().dot(&s.into3).abs() < 1e-6 {
+                    continue;
+                }
+                let moved = |p: P3| p - s.into3 * x;
+                if line(b) {
+                    j.edge.1 = moved(b);
+                } else if line(a) {
+                    j.edge.0 = moved(a);
+                }
+            }
         }
     }
     let edge = (lo3 + ld * lo, lo3 + ld * hi);

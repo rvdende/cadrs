@@ -2,8 +2,9 @@
 // plate (Thicken, bend radius 1): the empty dialog as Onshape's (Straight, Flattened, Total
 // length 12.5 mm, Outer, Simple); the east edge picked: a flattened straight hem lying the
 // minimal gap over the plate; Rolled (inner radius 1, 270 deg); Tear drop (minimal gap); In
-// place; Straight with an inner radius; the flip arrow; accepted. A second hem starts from the
-// first one's values (SM4.5).
+// place; Straight with an inner radius; the dialog's flip arrow, then the arrow in the view
+// flipping it back; accepted. A second hem changed and cancelled isn't remembered: the next one
+// starts from the accepted hem's values (SM4.5), not flipped.
 Scenario(
     start: Some("document"),
     steps: [
@@ -78,10 +79,29 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("07-flipped"),
-        Click(ui("smf-hem-type-flip")),
-        Wait(20),
+        // The arrow in the view flips it back (one command, like the dialog's arrow).
+        Click(ui("smf-hem-flip-arrow")),
+        Wait(40),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07b-flipped-back-by-the-view-arrow"),
         Click(ui("sheet-metal-hem-dialog-accept")),
         Wait(30),
+        // A second hem started and changed (Tear drop, flipped) but cancelled: not remembered.
+        Click(ui("sheet-metal-model-caret")),
+        Wait(10),
+        Click(ui("sheet-metal-menu-hem")),
+        WaitFor("sheet-metal-hem-dialog"),
+        Wait(10),
+        Click(ui("smf-hem-type")),
+        Wait(5),
+        Click(ui("smf-hem-type-option-2")),
+        Wait(10),
+        Click(ui("smf-hem-type-flip")),
+        Wait(10),
+        Key("Escape"),
+        Wait(20),
+        // The next hem starts from the accepted one's values (Straight, inner radius), not flipped.
         Click(ui("sheet-metal-model-caret")),
         Wait(10),
         Click(ui("sheet-metal-menu-hem")),
