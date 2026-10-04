@@ -9,7 +9,7 @@ use crate::geom::ArcGeom;
 use crate::{ConstraintId, Curve, CurveId, CurveKind, Link, PointId, Sketch, Vec2};
 
 /// A shape in sketch coordinates that a link projects to.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Projected {
     Line(Vec2, Vec2),
     Circle(Vec2, f64),
@@ -24,6 +24,9 @@ pub enum Projected {
     /// Part of such an ellipse (an arc seen at an angle), from `start` counter-clockwise to
     /// `end`; `minor` is positive.
     EllipseArc { center: Vec2, major: Vec2, minor: f64, start: Vec2, end: Vec2 },
+    /// Any other curve (a spline edge, a cylinder's edge cut at a slant): the spline through
+    /// these points on it, in order (a closed curve lists each once).
+    Spline { points: Vec<Vec2>, closed: bool },
     /// A point (a pierce).
     Point(Vec2),
 }
@@ -54,6 +57,10 @@ impl Projected {
             Projected::EllipseArc { center, major, minor, start, end } => {
                 center.distance(major) < 1e-6 || minor.abs() < 1e-6 || start.distance(end) < 1e-6
             }
+            Projected::Spline { ref points, closed } => {
+                points.len() < if closed { 3 } else { 2 }
+                    || points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() < 1e-6
+            }
             Projected::Point(_) => false,
         }
     }
@@ -71,7 +78,20 @@ impl Sketch {
         if shape.degenerate() {
             return None;
         }
+        if let Projected::Spline { points, closed } = &shape {
+            let ids: Vec<PointId> = points.iter().map(|p| self.add_point(*p)).collect();
+            let (start, end) = (ids[0], if *closed { ids[0] } else { ids[ids.len() - 1] });
+            let id = self.curves.insert(Curve { kind: CurveKind::Spline { start, end }, construction: false });
+            let (t0, t1) = if *closed { (None, None) } else { crate::spline::end_derivatives(points) };
+            self.splines.insert(
+                id,
+                crate::spline::SplineData { points: ids, periodic: *closed, start_tangent: t0, end_tangent: t1 },
+            );
+            self.constraints.insert(ConstraintOf::Use(CurveRef::Curve(id), link));
+            return Some(id);
+        }
         let kind = match shape {
+            Projected::Spline { .. } => unreachable!("handled above"),
             Projected::Line(a, b) => CurveKind::Line {
                 a: self.add_point(a),
                 b: self.add_point(b),
@@ -119,6 +139,9 @@ impl Sketch {
         let Some(c) = self.curves.get(curve).copied() else {
             return false;
         };
+        if let (CurveKind::Spline { .. }, Projected::Spline { points, closed }) = (c.kind, &shape) {
+            return self.set_projected_spline(curve, points, *closed);
+        }
         let moves: Vec<(PointId, Vec2)>;
         let mut scalar = None;
         match (c.kind, shape) {
@@ -169,6 +192,55 @@ impl Sketch {
             && let Some(k) = self.curves.get_mut(curve)
         {
             k.kind.set_scalar(v);
+        }
+        true
+    }
+
+    /// Moves a projected spline through its source's points as they are now: its points move
+    /// (the ends stay the ends), and points are added or dropped if there are more or fewer.
+    fn set_projected_spline(&mut self, curve: CurveId, points: &[Vec2], closed: bool) -> bool {
+        let Some(old) = self.splines.get(curve).cloned() else { return false };
+        if old.periodic != closed || points.len() < 2 {
+            return false;
+        }
+        let n = points.len();
+        let mut ids: Vec<PointId> = Vec::with_capacity(n);
+        let m = old.points.len();
+        for (i, p) in points.iter().enumerate() {
+            // The ends keep their points; the points between reuse the old ones in order.
+            let reuse = if closed {
+                old.points.get(i).copied()
+            } else if i == n - 1 {
+                old.points.last().copied()
+            } else if i < m - 1 {
+                old.points.get(i).copied()
+            } else {
+                None
+            };
+            let id = match reuse {
+                Some(k) => {
+                    if let Some(q) = self.points.get_mut(k) {
+                        q.pos = *p;
+                    }
+                    k
+                }
+                None => self.add_point(*p),
+            };
+            ids.push(id);
+        }
+        let (start, end) = (ids[0], if closed { ids[0] } else { ids[n - 1] });
+        let (t0, t1) = if closed { (None, None) } else { crate::spline::end_derivatives(points) };
+        if let Some(k) = self.curves.get_mut(curve) {
+            k.kind = CurveKind::Spline { start, end };
+        }
+        self.splines.insert(
+            curve,
+            crate::spline::SplineData { points: ids.clone(), periodic: closed, start_tangent: t0, end_tangent: t1 },
+        );
+        for p in old.points {
+            if !ids.contains(&p) && !self.point_in_use(p) {
+                self.remove_point(p);
+            }
         }
         true
     }

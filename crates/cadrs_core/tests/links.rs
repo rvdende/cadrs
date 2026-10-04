@@ -647,7 +647,7 @@ fn an_arc_edge_seen_at_an_angle_projects_to_an_elliptical_arc() {
         let (center, major, minor, start, end) = arc;
         assert!((center.distance(major) - 10.0).abs() < 1e-9 && (minor - 10.0 * h).abs() < 1e-9, "{arc:?}");
         // Its ends are the line's.
-        let Some(Projected::Line(a, b)) = items.iter().map(|(p, _)| *p).find(|p| matches!(p, Projected::Line(..))) else {
+        let Some(Projected::Line(a, b)) = items.iter().map(|(p, _)| p.clone()).find(|p| matches!(p, Projected::Line(..))) else {
             panic!("{items:?}")
         };
         assert!(
@@ -656,7 +656,7 @@ fn an_arc_edge_seen_at_an_angle_projects_to_an_elliptical_arc() {
         );
         let mut g = Sketch::new();
         for (shape, link) in &items {
-            g.add_projected(*shape, *link).unwrap();
+            g.add_projected(shape.clone(), *link).unwrap();
         }
         assert!(g.curves.values().any(|c| matches!(c.kind, CurveKind::EllipseArc { .. })));
         // Fully defined (projected), and one region: the half ellipse.
@@ -666,8 +666,82 @@ fn an_arc_edge_seen_at_an_angle_projects_to_an_elliptical_arc() {
         let want = std::f64::consts::PI * 100.0 / 2.0 * h;
         assert!((rs[0].area() - want).abs() < 1e-6, "{} != {want}", rs[0].area());
         // The source moves (taller): the projection follows.
-        let shape = items[0].0;
+        let shape = items[0].0.clone();
         let c = g.curves.keys().next().unwrap();
         assert!(g.set_projected(c, shape));
+    }
+}
+
+/// Use of a face with a spline edge: the edge projects to a spline through points on it (or a
+/// line when seen edge-on), closing the face's outline into a region of the right size.
+#[test]
+fn a_spline_edge_projects_to_a_spline() {
+    let mut d = Doc::new();
+    // A profile on Top: a spline from (0, 0) to (40, 0) over the x axis, closed by a line.
+    let s1 = d.sketch(PlaneRef::Top);
+    d.edit(
+        s1,
+        SketchOp::Batch(vec![
+            SketchOp::AddSpline {
+                points: vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 8.0), Vec2::new(25.0, 12.0), Vec2::new(40.0, 0.0)],
+                periodic: false,
+                start_tangent: None,
+                end_tangent: None,
+                construction: false,
+            },
+            SketchOp::AddPolyline {
+                points: vec![Vec2::new(40.0, 0.0), Vec2::new(0.0, 0.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+        ]),
+    );
+    let area = regions(d.g(s1))[0].area();
+    let ex = d.extrude(s1, 10.0, |_| true);
+    let features = d.features();
+    let solid = parts(&features).remove(0).solid;
+    let top = cap_name(&features, ex, 0, true).unwrap();
+    let ctx = cadrs_core::links::LinkContext { solids: vec![(ex, &*solid)], features: &features };
+    let project = |frame: &cadrs_sketch::PlaneFrame| -> Vec<(Projected, Link)> {
+        cadrs_core::links::face_edges(&solid, &top)
+            .into_iter()
+            .map(|edge| {
+                let link = Link::Edge { feature: ex.0, edge };
+                (ctx.shape(link, frame).expect("every edge projects"), link)
+            })
+            .collect()
+    };
+    let h = (0.5f64).sqrt();
+    let flat = cadrs_sketch::PlaneFrame { origin: [0.0, 0.0, 30.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
+    let tilted = cadrs_sketch::PlaneFrame { origin: [0.0, 0.0, 5.0], u: [1.0, 0.0, 0.0], v: [0.0, h, h] };
+    for (frame, scale) in [(flat, 1.0), (tilted, h)] {
+        let items = project(&frame);
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert!(items.iter().any(|(p, _)| matches!(p, Projected::Spline { closed: false, .. })), "{items:?}");
+        let mut g = Sketch::new();
+        for (shape, link) in &items {
+            g.add_projected(shape.clone(), *link).unwrap();
+        }
+        assert!(g.curves.values().any(|c| matches!(c.kind, CurveKind::Spline { .. })));
+        assert!(solve::analyze(&g).fully_constrained());
+        let rs = regions(&g);
+        assert_eq!(rs.len(), 1, "{rs:?}");
+        let want = area * scale;
+        assert!((rs[0].area() - want).abs() < 1e-3 * want, "{} != {want}", rs[0].area());
+        // Following a source with fewer points keeps the curve, its ends and the region.
+        let k = g.curves.iter().find(|(_, c)| matches!(c.kind, CurveKind::Spline { .. })).unwrap().0;
+        let Some((Projected::Spline { points, .. }, _)) = items.iter().find(|(p, _)| matches!(p, Projected::Spline { .. })) else {
+            unreachable!()
+        };
+        let fewer: Vec<Vec2> = points.iter().copied().step_by(2).chain(points.last().copied()).collect();
+        let fewer: Vec<Vec2> = fewer.iter().enumerate().filter(|(i, p)| *i == 0 || fewer[i - 1].distance(**p) > 0.0).map(|(_, p)| *p).collect();
+        assert!(g.set_projected(k, Projected::Spline { points: fewer.clone(), closed: false }));
+        assert_eq!(g.splines[k].points.len(), fewer.len());
+        assert_eq!(regions(&g).len(), 1);
+    }
+    // Seen edge-on (from Front, the top face's edges lie along z = 10): lines.
+    for (p, _) in project(&PlaneRef::Front.frame()) {
+        assert!(matches!(p, Projected::Line(..)), "{p:?}");
     }
 }

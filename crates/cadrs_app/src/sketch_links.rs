@@ -258,8 +258,8 @@ fn use_hover(
 /// True if two projected shapes are the same curve (a line either way round).
 fn same_shape(a: &Projected, b: &Projected) -> bool {
     const EPS: f64 = 1e-6;
-    match (*a, *b) {
-        (Projected::Line(p, q), Projected::Line(r, s)) => {
+    match (a, b) {
+        (&Projected::Line(p, q), &Projected::Line(r, s)) => {
             (p.distance(r) < EPS && q.distance(s) < EPS) || (p.distance(s) < EPS && q.distance(r) < EPS)
         }
         _ => a == b,
@@ -470,6 +470,10 @@ fn draw_link_hover(pick: Res<LinkPick>, view: Res<ViewportView>, mut g: Gizmos<F
             Projected::EllipseArc { center, major, minor, start, end } => {
                 let e = cadrs_sketch::EllipseArcGeom::ccw(center, major, minor, start, end);
                 g.linestrip(e.tessellate(0.05, 8).into_iter().map(w), color);
+            }
+            Projected::Spline { ref points, closed } => {
+                let spans = cadrs_sketch::spline::spans(points, closed, None, None);
+                g.linestrip(cadrs_sketch::spline::tessellate(&spans, 8).into_iter().map(w), color);
             }
             Projected::Point(p) => {
                 // Where the edge pierces the plane: an orange disc about 9 px across, facing the
