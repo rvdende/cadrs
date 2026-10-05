@@ -1052,6 +1052,7 @@ fn draw_regions(
     q_fill: Query<(), With<RegionFill>>,
     failed: Res<crate::parts::FailedReferences>,
     applied: Option<Res<crate::applied::AppliedSession>>,
+    selection: Res<crate::viewport::Selection>,
     mut commands: Commands,
 ) {
     // The fill entity goes away with the document.
@@ -1137,7 +1138,9 @@ fn draw_regions(
                     .iter()
                     .any(|(s, c, seed)| *s == sr.sketch && *c == curves && r.contains(*seed))
             } else {
-                plain.contains(sr.sketch, i)
+                // A sketch selected whole (its feature row, or a right-click on it) fills every
+                // region orange, as Onshape's.
+                plain.contains(sr.sketch, i) || selection.contains(Pick::Feature(sr.sketch))
             };
             if is_selected && !extruding {
                 plain_key.push((sr.sketch, i));

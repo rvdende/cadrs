@@ -56,7 +56,7 @@ fn thickened_with(l: &Legacy, bends: bool, p: cadrs_sheetmetal::Params) -> (Buil
     let original = Rebuilder::new().rebuild(&(l.features)());
     assert!(original.errors.is_empty(), "{:?}", original.errors);
     let bytes = (l.step)(&mut Rebuilder::new()).expect("the STEP file");
-    let import = Feature { id: FeatureId::new(), name: "Import 1".into(), kind: FeatureKind::Import(ImportFeature::from_file("legacy.step", bytes).unwrap()) };
+    let import = Feature { id: FeatureId::new(), name: "Import 1".into(), kind: FeatureKind::Import(ImportFeature::from_file("legacy.step", bytes).unwrap()), suppress_by: None };
     let b = Rebuilder::new().rebuild(std::slice::from_ref(&import));
     assert!(b.errors.is_empty(), "{:?}", b.errors);
     assert_eq!(b.parts.len(), 1);
@@ -85,8 +85,8 @@ fn thickened_with(l: &Legacy, bends: bool, p: cadrs_sheetmetal::Params) -> (Buil
         exprs: SheetMetalExprs::of(&p),
         ..Default::default()
     };
-    let sm = Feature { id: FeatureId::new(), name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x) };
-    let del = Feature { id: FeatureId::new(), name: "Delete part 1".into(), kind: FeatureKind::DeletePart(DeletePartFeature { parts: vec![part.id] }) };
+    let sm = Feature { id: FeatureId::new(), name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x), suppress_by: None };
+    let del = Feature { id: FeatureId::new(), name: "Delete part 1".into(), kind: FeatureKind::DeletePart(DeletePartFeature { parts: vec![part.id] }), suppress_by: None };
     let b = Rebuilder::new().rebuild(&[import, sm, del]);
     (original, b)
 }

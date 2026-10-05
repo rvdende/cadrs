@@ -6,6 +6,7 @@
 //! [`LibraryHistory`] in the same way.
 
 pub mod advanced;
+pub mod analysis;
 pub mod assembly;
 pub mod applied;
 pub mod appearance;
@@ -37,12 +38,14 @@ pub mod links;
 pub mod material;
 pub mod move_doc;
 pub mod mate;
+pub mod named_views;
 pub mod measure;
 pub mod brep;
 pub mod parts;
 pub mod pcb;
 pub mod pattern;
 pub mod plane;
+pub mod preferences;
 pub mod properties;
 pub mod rebuild;
 pub mod render;
@@ -67,6 +70,7 @@ pub mod time;
 pub mod variables;
 pub mod transform;
 pub mod views;
+pub mod workspace_merge;
 
 pub use command::{Command, CommandError, History, Scope};
 pub use document::{

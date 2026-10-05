@@ -11,8 +11,9 @@
 // 05 "+" → Create Part Studio: the new tab ("Part Studio 1", right of it) selected and in view.
 // 06 the Tab manager: 61 tabs, its list scrolled to the end.
 // 07 the Drawings filter: the 5 drawings ("5 of 61 tabs").
-// 08 Clear; rows 1–12 selected (click, Shift+click) and put in a new folder, "First twelve"
-//    typed into its row.
+// 08 Clear; rows 1–12 selected (click row 1, Shift+click row 12, which is scrolled into view
+//    first: P3E.3a) and put in a new folder, "First twelve" typed into its row; the folder row
+//    reads "Folder · 12 tabs" (checked).
 // 09 the strip after it: the folder tab first, then Studio 14 …; the manager shows the folder
 //    row.
 // 10 the folder opened in the tab bar: Home, "First twelve", its 12 tabs.
@@ -87,6 +88,7 @@ Scenario(
         Screenshot("08-new-folder-of-twelve"),
         Key("Enter"),
         Wait(20),
+        ExpectText("tab-manager-folder-first-twelve", "12 tabs"),
         MoveTo(1420, 780),
         Wait(3),
         Screenshot("09-strip-with-folder"),

@@ -135,6 +135,10 @@ pub struct Element {
     /// [`crate::simulation`]).
     #[serde(default, skip_serializing_if = "crate::simulation::Simulation::is_empty")]
     pub simulation: crate::simulation::Simulation,
+    /// Cameras saved under a name (P3E.3a, TD6.5: the view cube menu's Named views…), see
+    /// [`crate::named_views`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_views: Vec<crate::named_views::NamedView>,
 }
 
 impl Element {
@@ -156,6 +160,7 @@ impl Element {
             contexts: Vec::new(),
             open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -169,6 +174,7 @@ impl Element {
             contexts: Vec::new(),
             open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -181,6 +187,7 @@ impl Element {
             contexts: Vec::new(),
             open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -194,6 +201,7 @@ impl Element {
             contexts: Vec::new(),
             open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -252,8 +260,25 @@ impl Element {
         }
     }
 
+    /// True if the feature is suppressed: by Suppress, or by its suppression variable (IR5.5).
+    /// Only a feature with a suppression variable evaluates the variables (once, the list's);
+    /// for many features, take [`Self::all_suppressed`] once instead.
     pub fn is_suppressed(&self, feature: FeatureId) -> bool {
         self.suppressed().contains(&feature)
+            || (self.feature(feature).is_some_and(|f| f.suppress_by.is_some()) && self.suppressed_by_variable().contains(&feature))
+    }
+
+    /// The features their suppression variable suppresses (IR5.5), with the variables' values
+    /// as last evaluated ([`crate::variables::suppressed_by_variables`]).
+    pub fn suppressed_by_variable(&self) -> Vec<FeatureId> {
+        crate::variables::suppressed_by_variables(self.features(), self.suppressed())
+    }
+
+    /// Every suppressed feature, in list order: by Suppress or by a variable (IR5.5).
+    pub fn all_suppressed(&self) -> Vec<FeatureId> {
+        let by_var = self.suppressed_by_variable();
+        let manual = self.suppressed();
+        self.features().iter().map(|f| f.id).filter(|f| manual.contains(f) || by_var.contains(f)).collect()
     }
 
     /// The number of features above the rollback bar (P3.9): all of them when it is at the end.
@@ -271,13 +296,14 @@ impl Element {
     }
 
     /// The features that are built (P3.9): the ones above the rollback bar, without the
-    /// suppressed ones.
+    /// suppressed ones (by Suppress or by a variable, IR5.5).
     pub fn active_features(&self) -> Vec<Feature> {
         let bar = self.rollback_index();
         let suppressed = self.suppressed();
+        let by_var = self.suppressed_by_variable();
         self.features()[..bar]
             .iter()
-            .filter(|f| !suppressed.contains(&f.id))
+            .filter(|f| !suppressed.contains(&f.id) && !by_var.contains(&f.id))
             .cloned()
             .collect()
     }
@@ -415,9 +441,18 @@ pub struct Feature {
     pub id: FeatureId,
     pub name: String,
     pub kind: FeatureKind,
+    /// IR5.5 "Suppress by variable…": a variable that suppresses the feature (see
+    /// [`crate::variables::SuppressByVariable`]). Files from before it load without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppress_by: Option<crate::variables::SuppressByVariable>,
 }
 
 impl Feature {
+    /// A feature with no suppression variable.
+    pub fn new(id: FeatureId, name: impl Into<String>, kind: FeatureKind) -> Self {
+        Self { id, name: name.into(), kind, suppress_by: None }
+    }
+
     /// The sketch parameters, if this is a sketch feature.
     pub fn sketch(&self) -> Option<&SketchFeature> {
         match &self.kind {

@@ -4,6 +4,7 @@
 // Bevy's `AsBindGroup` derive (`part_shading`) nests deeper than the default 128.
 #![recursion_limit = "256"]
 
+pub mod analysis;
 pub mod appearance;
 pub mod advanced;
 pub mod assembly;
@@ -39,6 +40,7 @@ pub mod tab_folders;
 pub mod tab_manager;
 pub mod rebuild_indicator;
 pub mod reference_manager;
+pub mod manipulator;
 pub mod mass_props;
 pub mod measure;
 pub mod material_dialog;
@@ -48,6 +50,7 @@ pub mod parts;
 pub mod pattern;
 pub mod pattern_dialog;
 pub mod pcb;
+pub mod preferences_ui;
 pub mod sheetmetal_features_ui;
 pub mod sheetmetal_ui;
 pub mod sheetmetal_joint_ui;
@@ -94,6 +97,11 @@ pub mod variables_ui;
 pub mod view_cube;
 pub mod viewport_menu;
 pub mod viewport;
+pub mod view_options;
+pub mod section_view;
+pub mod suppress_variable;
+pub mod hidden_edges;
+pub mod workspaces;
 
 use bevy::prelude::*;
 use cadrs_core::{Document, DocumentMeta, Element, ElementId, History, Store, Timestamp};
@@ -266,6 +274,14 @@ pub struct ActiveDocument {
     pub read_only: Option<String>,
     /// How many edits were refused while read-only (the session says so each time).
     pub refused: u32,
+}
+
+/// P3E.4: a workspace's undo and redo stacks, kept while another workspace is open.
+#[derive(Default)]
+pub struct WorkspaceUndo {
+    history: History,
+    undo_active: Vec<Option<ElementId>>,
+    redo_active: Vec<Option<ElementId>>,
 }
 
 /// Why an edit of a read-only document is refused.
@@ -475,6 +491,32 @@ impl ActiveDocument {
         }
     }
 
+    /// P3E.4: opens another workspace's state `doc` with its own undo and redo `undo` (empty
+    /// the first time), and returns this workspace's. The active tab stays if it's there. The
+    /// document file follows on the next save.
+    pub fn switch_workspace(&mut self, doc: Document, undo: WorkspaceUndo) -> WorkspaceUndo {
+        self.remember_active_index();
+        let old = WorkspaceUndo {
+            history: std::mem::replace(&mut self.history, undo.history),
+            undo_active: std::mem::replace(&mut self.undo_active, undo.undo_active),
+            redo_active: std::mem::replace(&mut self.redo_active, undo.redo_active),
+        };
+        self.doc = doc;
+        self.fix_active();
+        old
+    }
+
+    /// Saves the document and its metadata now (a workspace switch: the file holds the open
+    /// workspace and the metadata its name), without touching the modified time.
+    pub fn save_now(&mut self, store: &Store) -> Result<(), cadrs_core::StoreError> {
+        let Some(meta) = &self.meta else {
+            return Ok(());
+        };
+        store.save(&self.doc, meta)?;
+        self.saved = self.doc.clone();
+        Ok(())
+    }
+
     /// True if the document changed since it was opened.
     pub fn changed_since_open(&self) -> bool {
         self.doc != self.opened
@@ -563,14 +605,14 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((sketch_diagnostics::SketchDiagnosticsPlugin, feature_menu::FeatureMenuPlugin))
             // P3I.6: the flat pattern export and the sketch's Insert DXF or DWG.
             .add_plugins((flat_export_dialog::FlatExportDialogPlugin, sketch_dxf::SketchDxfPlugin, flat_ui::FlatUiPlugin))
-            .add_plugins((history_panel::HistoryPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
+            .add_plugins((history_panel::HistoryPlugin, workspaces::WorkspacesPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, sheetmetal_features_ui::SheetMetalFeaturesPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
-            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, sheetmetal_p3i9_ui::Sm9Plugin))
+            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin, sheetmetal_p3i9_ui::Sm9Plugin))
             // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
             .add_plugins((sheetmetal_table::SheetMetalTablePlugin, sheetmetal_joint_ui::ModifyJointUiPlugin))
             .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
-            .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin))
+            .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin, analysis::AnalysisPlugin, preferences_ui::PreferencesPlugin, manipulator::ManipulatorPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin))
             .init_resource::<ExportDirOverride>()

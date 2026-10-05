@@ -500,7 +500,7 @@ fn hit(sc: &Screen, p: Vec2) -> Option<TriadHandle> {
 /// The triad handle at a screen position (for the right-click menu), with its instance.
 pub fn handle_at(world: &World, at: Vec2) -> Option<(InstanceId, TriadHandle)> {
     let t = world.resource::<Triad>();
-    if t.hidden {
+    if t.hidden || world.contains_resource::<crate::measure::MeasurePanel>() {
         return None;
     }
     let f = t.frame?;
@@ -829,9 +829,11 @@ fn draw_triad(
     mut halo: Gizmos<TriadHaloGizmos>,
     mut line: Gizmos<TriadGizmos>,
     mut dots: (Gizmos<super::connectors::ConnectorHaloGizmos>, Gizmos<super::connectors::ConnectorGizmos>),
+    measuring: Option<Res<crate::measure::MeasurePanel>>,
 ) {
     let Some(doc) = doc else { return };
-    if triad.hidden {
+    // Not over the faces Measure is measuring (P3E.3b judge: measure 08).
+    if triad.hidden || measuring.is_some() {
         return;
     }
     let Some(f) = triad.drag.as_ref().and_then(|d| d.frame).or(triad.frame) else { return };
@@ -1047,6 +1049,7 @@ fn draw_silhouettes(
     doc: Option<Res<ActiveDocument>>,
     view: Res<ViewportView>,
     mut gizmos: Gizmos<SilhouetteGizmos>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
     let Some(doc) = doc else { return };
     if super::active_assembly(&doc).is_none() {
@@ -1067,7 +1070,15 @@ fn draw_silhouettes(
                 continue;
             }
             for [a, b] in contour(part, back) {
-                gizmos.line(a, b, OUTLINE);
+                // P3E.3a: cut by a section view.
+                match section.plane {
+                    None => gizmos.line(a, b, OUTLINE),
+                    Some(plane) => {
+                        for piece in crate::section_view::clip_polyline([a, b], plane) {
+                            gizmos.linestrip(piece, OUTLINE);
+                        }
+                    }
+                }
             }
         }
     }

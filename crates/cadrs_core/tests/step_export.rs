@@ -32,6 +32,7 @@ fn sketch(name: &str, plane: PlaneRef, geometry: Sketch) -> Feature {
             disable_imprinting: false,
             geometry,
         }),
+        suppress_by: None,
     }
 }
 
@@ -55,6 +56,7 @@ fn extrude(name: &str, sketch: &Feature, seeds: &[Vec2], depth: f64) -> Feature 
             depth_expr: format!("{depth} mm"),
             ..ExtrudeFeature::default()
         }),
+        suppress_by: None,
     }
 }
 

@@ -644,6 +644,7 @@ mod migrate {
                 contexts: Vec::new(),
                 open_context: None,
                 simulation: Default::default(),
+                named_views: Vec::new(),
                 kind: match e.kind {
                     ElementKindV1::PartStudio { features } => cur::ElementKind::PartStudio {
                         features: features
@@ -664,6 +665,7 @@ mod migrate {
                                         })
                                     }
                                 },
+                                suppress_by: None,
                             })
                             .collect(),
                         parts: Vec::new(),

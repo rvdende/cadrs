@@ -7,6 +7,13 @@
 //    ΔZ 10 (the Z component drawn blue), Angle 0.
 // 05 Maximum: from the top's far corner to the edge's far end, √(100² + 10² + 10²) = 100.995.
 // 06 a vertex alone: its X Y Z; 07 `[` closes the panel.
+// P3E.3b (A1.9): the same tool in an assembly, on the interference stand-in
+// (`fixtures/interference_standin.cadrs`: two 50 × 30 × 20 Blocks, the second placed at
+// (40, 10, 5)), measured in assembly coordinates:
+// 08 Block <1>'s top (z = 20) and Block <2>'s top (z = 5 + 20 = 25), the Measure panel
+//    (the Measure tool; back to Minimum from 05's Maximum): "Distance: 5.000 mm", ΔZ 5, Angle 0.
+// 09 Block <2>'s far top corner alone: X 90, Y 40, Z 25 (its own corner
+//    (50, 30, 20) moved by the instance's placement).
 Scenario(
     start: Some("document"),
     steps: [
@@ -64,5 +71,36 @@ Scenario(
         Key("["),
         Wait(5),
         Screenshot("07-panel-closed"),
+        Custom("fixture interference_standin"),
+        Wait(20),
+        Click(ui("tab-interference-assembly")),
+        Wait(20),
+        Custom("view 30 30 80 20 5 0.2"),
+        Wait(20),
+        Click(xyz(10, 5, 20)),
+        Wait(3),
+        Click(xyz(70, 30, 25)),
+        Wait(5),
+        Click(ui("view-measure")),
+        WaitFor("measure-dialog"),
+        Wait(5),
+        Click(ui("measure-mode-0")),
+        Wait(5),
+        ExpectText("measure-summary", "Distance: 5.000 mm"),
+        ExpectText("measure-distance", "5.000 mm"),
+        ExpectText("measure-angle", "0.000°"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("08-assembly-top-faces-5mm"),
+        Key("Space"),
+        Wait(3),
+        Click(xyz(90, 40, 25)),
+        Wait(5),
+        ExpectText("measure-x", "90.000 mm"),
+        ExpectText("measure-y", "40.000 mm"),
+        ExpectText("measure-z", "25.000 mm"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("09-assembly-vertex-in-assembly-coordinates"),
     ],
 )

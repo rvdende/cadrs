@@ -510,6 +510,7 @@ fn draw_sketches(
         Res<crate::feature_menu::ShownDimensions>,
         Res<crate::sketch_tools::ExternalSnap>,
     ),
+    section: Res<crate::section_view::SectionClip>,
     (mut lines, mut thin, mut rubber_g, mut hover_g, mut dots, mut accepted, mut rings, mut wide_g, mut accepted_dots): (
         Gizmos<SketchLineGizmos>,
         Gizmos<SketchThinGizmos>,
@@ -554,6 +555,10 @@ fn draw_sketches(
         // Sketches an extrude used are hidden (`screens/24`); sketches on a flat pattern are
         // drawn in the flat view (P3I.6).
         if Some(f.id) == editing || parts.hidden_sketches.contains(&f.id) || parts.rolled_back_sketches.contains(&f.id) || parts.flat_sketches.contains(&f.id) {
+            continue;
+        }
+        // P3E.3a: a sketch on the side a section view removes is not drawn.
+        if section.plane.is_some_and(|clip| crate::section_view::plane_removed(&plane.frame(), clip)) {
             continue;
         }
         let map = ScreenMap::new(plane, &view.view, &rect);

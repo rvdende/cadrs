@@ -32,7 +32,7 @@ impl Plugin for ScalePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RebuildLog>()
             .add_systems(Update, sync_scale_notice.run_if(in_state(AppState::Document)))
-            .add_systems(PostUpdate, (keep_active_tab_in_view, sync_tab_overflow).chain().after(bevy::ui::UiSystems::Layout))
+            .add_systems(PostUpdate, (pad_strip_end, keep_active_tab_in_view, sync_tab_overflow).chain().after(bevy::ui::UiSystems::Layout))
             .add_observer(on_strip_wheel)
             .add_observer(on_chevron);
     }
@@ -263,6 +263,30 @@ fn sync_tab_overflow(
             };
             *g = BackgroundGradient(vec![LinearGradient::to_right(stops).into()]);
         }
+    }
+}
+
+/// P3E.3a (P3E.2 carried delta: a ~150 px blank band after the left chevron): the strip gets
+/// just enough room after its last tab that its scroll range ends on a tab's edge, so scrolled
+/// to the end it shows whole tabs from the left (the room is left over after the last tab, as
+/// on a bar that isn't full) instead of a cut tab veiled by the fade.
+#[allow(clippy::type_complexity)]
+fn pad_strip_end(mut q_strip: Query<(&ComputedNode, &UiGlobalTransform, &ScrollPosition, &mut Node), With<crate::document::TabStrip>>, q_tabs: StripTabs) {
+    let Some((node, at, pos, mut n)) = q_strip.iter_mut().next() else { return };
+    let s = node.inverse_scale_factor();
+    let pad = match n.padding.right {
+        Val::Px(p) => p,
+        _ => 0.0,
+    };
+    let (edges, _) = tab_edges((node, at, pos), &q_tabs);
+    let bare_max = (node.content_size().x * s - pad - node.size().x * s).max(0.0);
+    let want = if bare_max <= 0.5 {
+        0.0
+    } else {
+        edges.iter().copied().find(|e| *e >= bare_max - 0.5).map_or(0.0, |e| (e - bare_max).max(0.0))
+    };
+    if (want - pad).abs() > 0.5 {
+        n.padding.right = Val::Px(want);
     }
 }
 

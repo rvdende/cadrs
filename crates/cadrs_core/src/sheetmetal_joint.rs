@@ -368,7 +368,7 @@ impl Command for PutModifyJoint {
             f.kind = kind;
         } else {
             let at = insert_index(features, self.joint.model, &self.after).ok_or_else(|| CommandError::Invalid("the sheet metal model is gone".into()))?;
-            features.insert(at, Feature { id: self.feature, name, kind });
+            features.insert(at, Feature { id: self.feature, name, kind, suppress_by: None });
             if let Some(r) = rollback
                 && *r >= at
             {

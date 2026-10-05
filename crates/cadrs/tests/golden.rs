@@ -1011,6 +1011,12 @@ fn golden_course_insp_feature_menu() {
     run_scenario("course_insp_feature_menu");
 }
 
+// IR5.5: Dynamic suppression ▸ Suppress by variable.
+#[test]
+fn golden_course_insp_suppress_by_variable() {
+    run_scenario("course_insp_suppress_by_variable");
+}
+
 #[test]
 fn golden_course_insp_profile_inspector() {
     run_scenario("course_insp_profile_inspector");
@@ -1308,6 +1314,50 @@ fn golden_course_td_tab_manager() {
 #[test]
 fn golden_course_td_many_tabs() {
     run_scenario("course_td_many_tabs");
+}
+
+// P3E.3a: render modes, perspective, zoom to window, named views; section views; selection.
+#[test]
+fn golden_course_td_render_modes() {
+    run_scenario("course_td_render_modes");
+}
+
+#[test]
+fn golden_course_td_section() {
+    run_scenario("course_td_section");
+}
+
+#[test]
+fn golden_course_td_selection() {
+    run_scenario("course_td_selection");
+}
+
+// P3E.3b: Measure (with its assembly frames), the analysis tools, the mouse preference.
+#[test]
+fn golden_course_td_measure() {
+    run_scenario("course_td_measure");
+}
+
+#[test]
+fn golden_course_td_analysis() {
+    run_scenario("course_td_analysis");
+}
+
+#[test]
+fn golden_course_td_mouse_prefs() {
+    run_scenario("course_td_mouse_prefs");
+}
+
+// P3E.4: workspaces, branches and merge.
+#[test]
+fn golden_course_td_branch_merge() {
+    run_scenario("course_td_branch_merge");
+}
+
+// P3E.5: the test drive walkthrough on the drill stand-in.
+#[test]
+fn golden_course_td_ex1_drill() {
+    run_scenario("course_td_ex1_drill");
 }
 
 // Final part 2: the assembly course scenarios (stage 3B) and the importer/list scenarios merged

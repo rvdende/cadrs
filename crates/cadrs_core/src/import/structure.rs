@@ -207,6 +207,7 @@ pub fn import_elements(doc: &Document, plan: &ImportPlan, file_name: &str, data:
             units: None,
             structure: Some(mode),
         }),
+        suppress_by: None,
     };
     if let Some(features) = studio.features_mut() {
         features.push(feature);

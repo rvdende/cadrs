@@ -72,6 +72,10 @@ pub struct TabFolderView {
     /// The undo and redo stacks' lengths last seen: after an undo or redo the bar opens the
     /// active tab's folder too (P3E.2 judge r1).
     seen_history: (usize, usize),
+    /// The folder that held the active tab when last seen: an undo or redo follows the tab only
+    /// when it moved it to another folder (P3E.3a: undoing a reorder of the top level stays
+    /// there).
+    seen_parent: Option<ElementId>,
 }
 
 /// The tab bar's Home button and breadcrumb container.
@@ -113,15 +117,15 @@ fn follow_active(doc: Option<Res<ActiveDocument>>, mut view: ResMut<TabFolderVie
     let history = (doc.history.undo_len(), doc.history.redo_len());
     let undo_redo = history.1 != view.seen_history.1;
     view.seen_history = history;
-    if active == view.seen_active && !undo_redo {
+    let parent = active.and_then(|a| tab_tree::parent_of(&layout, TabItem::Tab(a)));
+    let moved = parent != view.seen_parent;
+    view.seen_parent = parent;
+    if active == view.seen_active && !(undo_redo && moved) {
         return;
     }
     view.seen_active = active;
-    if let Some(a) = active {
-        let parent = tab_tree::parent_of(&layout, TabItem::Tab(a));
-        if view.folder != parent {
-            view.folder = parent;
-        }
+    if active.is_some() && view.folder != parent {
+        view.folder = parent;
     }
 }
 
@@ -607,11 +611,17 @@ pub struct DragDim;
 
 /// Dims `e` (once) while it is dragged.
 pub fn dim(commands: &mut Commands, e: Entity) {
+    dim_with(commands, e, Color::srgba(1.0, 1.0, 1.0, 0.6));
+}
+
+/// [`dim`] with a veil of this colour (P3E.3a: a dragged tab in the strip is veiled grey, so
+/// the white active tab dims too; P3E.2 carried delta).
+pub fn dim_with(commands: &mut Commands, e: Entity, veil: Color) {
     commands.spawn((
         Name::new("drag-dim"),
         DragDim,
         Node { position_type: PositionType::Absolute, left: Val::Px(0.0), right: Val::Px(0.0), top: Val::Px(0.0), bottom: Val::Px(0.0), ..default() },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.6)),
+        BackgroundColor(veil),
         Pickable::IGNORE,
         ChildOf(e),
     ));
@@ -726,7 +736,7 @@ fn place_tab_drop(
         && let Some(src) = drag.source
         && commands.get_entity(src).is_ok()
     {
-        dim(&mut commands, src);
+        dim_with(&mut commands, src, Color::srgba(0.80, 0.80, 0.80, 0.72));
     }
     let Some((_, bn, bt)) = q_bar.iter().find(|(n, ..)| n.as_str() == "tab-bar") else { return };
     let s = bn.inverse_scale_factor();

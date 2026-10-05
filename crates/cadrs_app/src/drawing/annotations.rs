@@ -1629,7 +1629,7 @@ fn hint_text(ui: &AnnotationUi) -> Option<String> {
         AnnTool::SheetLine => "Line: click the start, then the end · Esc to finish".into(),
         AnnTool::SheetSpline => "Spline: click its points · double-click or Enter to finish".into(),
         AnnTool::PlaceImport => "Click the sheet to place it · Esc to cancel".into(),
-        AnnTool::PlaceBom => "Insert BOM: click the sheet to place the table (it snaps to the border's corner) · Esc to cancel".into(),
+        AnnTool::PlaceBom => "Insert BOM: click the sheet to place the table (it snaps to the border's corner or the title block) · Esc to cancel".into(),
         AnnTool::Callout if ui.preview.is_none() => "Callout: pick an edge of a part in an assembly view · ✓ to finish".into(),
         AnnTool::Callout => "Callout: click to place it (it lines up with the others) · Esc to cancel".into(),
         AnnTool::Dimension(t) => {

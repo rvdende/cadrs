@@ -50,7 +50,7 @@ pub fn channel() -> Vec<Feature> {
     SketchOp::AddPolyline { points: CHAIN.iter().map(|(x, y)| Vec2::new(*x, *y)).collect(), closed: false, construction: false, label: "Add line" }
         .apply(&mut g)
         .expect("a chain");
-    let sketch = Feature { id: SKETCH, name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Front), disable_imprinting: false, geometry: g }) };
+    let sketch = Feature { id: SKETCH, name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Front), disable_imprinting: false, geometry: g }), suppress_by: None };
     let p = params();
     let x = SheetMetalModelFeature {
         operation: SheetMetalOp::Extrude,
@@ -61,7 +61,7 @@ pub fn channel() -> Vec<Feature> {
         exprs: SheetMetalExprs::of(&p),
         ..Default::default()
     };
-    let model = Feature { id: MODEL, name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x) };
+    let model = Feature { id: MODEL, name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x), suppress_by: None };
     vec![sketch, model]
 }
 
@@ -114,11 +114,12 @@ fn case_of(p: cadrs_sheetmetal::Params) -> Vec<Feature> {
         .apply(&mut g)
         .expect("a rectangle");
     let region = cadrs_sketch::region::regions(&g).into_iter().next().expect("the rectangle's region");
-    let sketch = Feature { id: CASE_SKETCH, name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }) };
+    let sketch = Feature { id: CASE_SKETCH, name: "Sketch 1".into(), kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }), suppress_by: None };
     let block = Feature {
         id: CASE_BLOCK,
         name: "Extrude 1".into(),
         kind: FeatureKind::Extrude(ExtrudeFeature { regions: vec![RegionRef::new(CASE_SKETCH, &region)], depth: h, depth_expr: format!("{h} mm"), ..Default::default() }),
+        suppress_by: None,
     };
     // A session of its own: `case_step` runs this on the rebuild worker, which
     // `rebuild::build` would wait on.
@@ -135,7 +136,7 @@ fn case_of(p: cadrs_sheetmetal::Params) -> Vec<Feature> {
         .map(|e| EdgeOrFace::Edge(EdgeRef { part: part.id, edge: e.name, seed: e.points[e.points.len() / 2] }))
         .collect();
     let x = SheetMetalModelFeature { operation: SheetMetalOp::Convert, parts: vec![part.id], exclude: vec![top], bends, params: p, exprs: SheetMetalExprs::of(&p), ..Default::default() };
-    let model = Feature { id: CASE_MODEL, name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x) };
+    let model = Feature { id: CASE_MODEL, name: "Sheet metal model 1".into(), kind: FeatureKind::SheetMetalModel(x), suppress_by: None };
     vec![sketch, block, model]
 }
 

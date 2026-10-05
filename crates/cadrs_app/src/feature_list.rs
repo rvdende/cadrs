@@ -137,7 +137,11 @@ pub const CHILD_SWATCH: Color = Color::srgb(0.337, 0.694, 0.408);
 pub struct ListState {
     /// The number of features above the rollback bar.
     pub bar: usize,
+    /// Suppressed by Suppress or by their variable (IR5.5).
     pub suppressed: Vec<FeatureId>,
+    /// IR5.5: the features with a suppression variable, and how the row's tag reads it
+    /// ("#withHole").
+    pub suppress_vars: Vec<(FeatureId, String)>,
     /// The filter's matches (`None`: no filter).
     pub shown: Option<Vec<FeatureId>>,
     /// Show dependencies: the feature, its parents and its children.
@@ -261,7 +265,8 @@ pub fn list_state(
     });
     ListState {
         bar,
-        suppressed: el.suppressed().to_vec(),
+        suppressed: el.all_suppressed(),
+        suppress_vars: el.features().iter().filter_map(|f| Some((f.id, f.suppress_by.as_ref()?.label()))).collect(),
         shown,
         dependency_of,
         parents,

@@ -184,6 +184,7 @@ impl Element {
             contexts: Vec::new(),
             open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 

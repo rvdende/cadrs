@@ -58,7 +58,7 @@ impl Corner {
         }
     }
 
-    fn right(self) -> bool {
+    pub fn right(self) -> bool {
         matches!(self, Corner::TopRight | Corner::BottomRight)
     }
 

@@ -185,6 +185,7 @@ mod tests {
             id: m,
             name: "Sheet metal model 1".into(),
             kind: FeatureKind::SheetMetalModel(Default::default()),
+            suppress_by: None,
         };
         assert_eq!(flat_target(std::slice::from_ref(&f), flat_plane_id(m, 3)), Some((m, 3)));
         assert_eq!(flat_target(&[f], uuid::Uuid::new_v4()), None);

@@ -134,18 +134,23 @@ pub fn cut_bodies(k: &mut dyn Kernel, bodies: &[(BodyId, &BodyNames)], frame: &V
     Ok(out)
 }
 
-/// The loops of the faces of `body` on the cutting plane (see the module docs).
-fn cap_loops(k: &dyn Kernel, body: BodyId, frame: &ViewFrame, depth: f64) -> Result<Vec<Vec<[f64; 2]>>, String> {
+/// The faces of `body` on the cutting plane: planar, facing along the direction of sight, at the
+/// cut's depth.
+fn cap_faces(k: &dyn Kernel, body: BodyId, frame: &ViewFrame, depth: f64) -> Result<Vec<cadrs_kernel::FaceInfo>, String> {
     let faces = k.faces(body).map_err(|e| e.to_string())?;
-    let caps: Vec<cadrs_kernel::FaceId> = faces
-        .iter()
+    Ok(faces
+        .into_iter()
         .filter(|f| {
             f.plane.as_ref().is_some_and(|p| {
                 p.normal.into_inner().dot(&frame.dir).abs() > 1.0 - 1e-6 && (frame.depth(&p.origin) - depth).abs() < 1e-4
             })
         })
-        .map(|f| f.id)
-        .collect();
+        .collect())
+}
+
+/// The loops of the faces of `body` on the cutting plane (see the module docs).
+fn cap_loops(k: &dyn Kernel, body: BodyId, frame: &ViewFrame, depth: f64) -> Result<Vec<Vec<[f64; 2]>>, String> {
+    let caps: Vec<cadrs_kernel::FaceId> = cap_faces(k, body, frame, depth)?.iter().map(|f| f.id).collect();
     if caps.is_empty() {
         return Ok(Vec::new());
     }
@@ -164,6 +169,133 @@ fn cap_loops(k: &dyn Kernel, body: BodyId, frame: &ViewFrame, depth: f64) -> Res
                 })
             }),
     ))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Section view (P3E.3a, PS2.9, X14, A3.3, IR5.5): the 3D view cut by a plane, with caps.
+
+/// A section view's cutting plane: the material on the side `normal` points to is removed (the
+/// eye looks at the cut from that side).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionPlane {
+    pub origin: [f64; 3],
+    /// Unit length.
+    pub normal: [f64; 3],
+}
+
+/// The faces a section leaves on its plane for one part: its triangles and boundary loops (3D,
+/// in the part's placed coordinates) and its exact area (mm², the kernel's).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Cap {
+    pub triangles: Vec<[[f32; 3]; 3]>,
+    pub loops: Vec<Vec<[f32; 3]>>,
+    pub area: f64,
+}
+
+impl SectionPlane {
+    /// The drawing frame that looks at the cut from the removed side: the material nearer the
+    /// eye than depth 0 is what goes.
+    fn frame(&self) -> ViewFrame {
+        let n = nalgebra::Vector3::from(self.normal).normalize();
+        let x = if n.x.abs() < 0.9 { nalgebra::Vector3::x() } else { nalgebra::Vector3::y() };
+        let mut f = ViewFrame::new(-n, x);
+        f.origin = Point3::from(self.origin);
+        f
+    }
+}
+
+/// The cap a section by `plane` leaves on `body`: a half-space boolean ([`cut_bodies`], the
+/// drawings' section cut, with the whole of the body's extent as the cut region) and the cut
+/// result's faces on the plane. A body the plane misses has no cap.
+pub fn section_cap(k: &mut dyn Kernel, body: BodyId, plane: &SectionPlane) -> Result<Cap, String> {
+    let frame = plane.frame();
+    let names = BodyNames::default();
+    let cut = ViewCut { depth: 0.0, polygon: Vec::new() };
+    let r = match cut_bodies(k, &[(body, &names)], &frame, &cut) {
+        Ok(r) => r,
+        // All of it on the removed side: nothing left, so no cap.
+        Err(_) => return Ok(Cap::default()),
+    };
+    let mut cap = Cap::default();
+    let result = (|| -> Result<(), String> {
+        for b in r.bodies.iter().copied().filter(|b| r.temps.contains(b)) {
+            let faces = cap_faces(k, b, &frame, 0.0)?;
+            if faces.is_empty() {
+                continue;
+            }
+            cap.area += faces.iter().map(|f| f.area).sum::<f64>();
+            let ids: Vec<cadrs_kernel::FaceId> = faces.iter().map(|f| f.id).collect();
+            let mesh = k.tessellate(b, Tessellation { deflection: 0.01, angle: 5f64.to_radians() }).map_err(|e| e.to_string())?;
+            let tris: Vec<[[f64; 3]; 3]> = mesh
+                .indices
+                .iter()
+                .zip(&mesh.triangle_faces)
+                .filter(|(_, f)| ids.contains(f))
+                .map(|(t, _)| t.map(|i| {
+                    let p = mesh.positions[i as usize];
+                    [p.x, p.y, p.z]
+                }))
+                .collect();
+            let up = frame.up();
+            let to3 = |q: [f64; 2]| {
+                let p = frame.origin + frame.x * q[0] + up * q[1];
+                [p.x as f32, p.y as f32, p.z as f32]
+            };
+            cap.loops.extend(
+                boundary_loops(tris.iter().map(|t| {
+                    t.map(|p| {
+                        let q = frame.to_2d(&Point3::from(p));
+                        [q.x, q.y]
+                    })
+                }))
+                .into_iter()
+                .map(|l| l.into_iter().map(to3).collect::<Vec<_>>()),
+            );
+            cap.triangles.extend(tris.iter().map(|t| t.map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])));
+        }
+        Ok(())
+    })();
+    for t in &r.temps {
+        k.release(*t);
+    }
+    result.map(|_| cap)
+}
+
+/// One part to section: its Part Studio's features, the part, and where it is placed (an
+/// assembly's occurrence; the identity in a Part Studio). `view_part` is its id on screen.
+#[derive(Debug, Clone)]
+pub struct SectionItem {
+    pub view_part: crate::ids::PartId,
+    pub features: Vec<crate::document::Feature>,
+    pub part: crate::ids::PartId,
+    pub pose: crate::assembly::Pose,
+}
+
+/// The caps of `items` cut by `plane`, worked out on the kernel thread (each part's exact body,
+/// placed, cut by the half-space). Parts that fail or that the plane misses are left out.
+pub fn caps(items: Vec<SectionItem>, plane: SectionPlane) -> crate::rebuild::PendingJob<Vec<(crate::ids::PartId, Cap)>> {
+    crate::rebuild::run_on_worker(move |r| caps_on(r, &items, &plane))
+}
+
+#[cfg(feature = "occt")]
+fn caps_on(r: &mut crate::rebuild::Rebuilder, items: &[SectionItem], plane: &SectionPlane) -> Vec<(crate::ids::PartId, Cap)> {
+    let mut out = Vec::new();
+    for it in items {
+        let Ok(body) = r.placed_body(&it.features, it.part, it.pose.rotation, it.pose.translation) else { continue };
+        let cap = section_cap(r.kernel_mut(), body, plane);
+        r.release_body(body);
+        if let Ok(cap) = cap
+            && !cap.triangles.is_empty()
+        {
+            out.push((it.view_part, cap));
+        }
+    }
+    out
+}
+
+#[cfg(not(feature = "occt"))]
+fn caps_on(_r: &mut crate::rebuild::Rebuilder, _items: &[SectionItem], _plane: &SectionPlane) -> Vec<(crate::ids::PartId, Cap)> {
+    Vec::new()
 }
 
 /// The boundary loops of a set of 2D triangles (see the module docs).
@@ -252,5 +384,39 @@ mod tests {
         assert_eq!(loops.len(), 2);
         let area = cadrs_drawing::view_kinds::region_area(&loops);
         assert!((area - 12.0).abs() < 1e-9, "{area}");
+    }
+
+    /// P3E.3a (PS2.9): a section through a Ø40 cylinder, 30 tall, at mid height caps with its
+    /// circle: area 400π = 1256.6371 mm², the cap's boundary a circle of radius 20 on the
+    /// plane; flipped, the same cap; a plane above it leaves none.
+    #[cfg(feature = "occt")]
+    #[test]
+    fn a_section_through_a_40_mm_cylinder_caps_with_its_circle() {
+        use cadrs_kernel::backend::occt::OcctKernel;
+        let mut k = OcctKernel::new();
+        let circle = Curve2::Circle { center: Point2::new(5.0, -3.0), radius: 20.0, source: Some(1) };
+        let profile = Profile::new(Plane::top(), vec![Region { outer: Loop { curves: vec![circle] }, holes: Vec::new(), source: Some(1) }]);
+        let body = k.extrude(&profile, Extent::Blind(30.0)).unwrap().bodies[0];
+        for normal in [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
+            let cap = section_cap(&mut k, body, &SectionPlane { origin: [0.0, 0.0, 12.0], normal }).unwrap();
+            assert!((cap.area - 400.0 * std::f64::consts::PI).abs() < 1e-4, "{}", cap.area);
+            assert!((cap.area - 1256.6371).abs() < 1e-4);
+            let tri_area: f64 = cap
+                .triangles
+                .iter()
+                .map(|t| {
+                    let v = |p: [f32; 3]| nalgebra::Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64);
+                    (v(t[1]) - v(t[0])).cross(&(v(t[2]) - v(t[0]))).norm() / 2.0
+                })
+                .sum();
+            assert!((tri_area - cap.area).abs() < 2.0, "{tri_area}");
+            assert!(cap.triangles.iter().flatten().all(|p| (p[2] - 12.0).abs() < 1e-3));
+            assert_eq!(cap.loops.len(), 1);
+            assert!(cap.loops[0].iter().all(|p| ((p[0] - 5.0).hypot(p[1] + 3.0) - 20.0).abs() < 0.05));
+        }
+        // The body is still there, whole.
+        assert!((k.mass_properties(body).unwrap().volume - 400.0 * std::f64::consts::PI * 30.0).abs() < 1e-3);
+        let above = section_cap(&mut k, body, &SectionPlane { origin: [0.0, 0.0, 40.0], normal: [0.0, 0.0, 1.0] }).unwrap();
+        assert!(above.triangles.is_empty() && above.area == 0.0);
     }
 }
