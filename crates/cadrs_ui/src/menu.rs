@@ -290,6 +290,8 @@ struct ItemLook {
     strong_icons: bool,
     /// Shortcuts as keycap chips ("shift" "o") instead of text ("Shift+O").
     keycaps: bool,
+    /// Labels in the medium weight (a select's list, which reads like its value).
+    medium: bool,
 }
 
 impl Default for ItemLook {
@@ -297,6 +299,7 @@ impl Default for ItemLook {
         Self {
             icon_size: 16.0,
             strong_icons: false,
+            medium: false,
             keycaps: false,
         }
     }
@@ -347,6 +350,12 @@ impl Menu {
     /// box hint.
     pub fn keycap_shortcuts(mut self) -> Self {
         self.look.keycaps = true;
+        self
+    }
+
+    /// Labels in the medium weight, as a select's value (P3I.2 judge: the list read greyed).
+    pub fn medium_text(mut self) -> Self {
+        self.look.medium = true;
         self
     }
 
@@ -514,7 +523,7 @@ fn item_bundle(
         muted
     };
     let t = theme.clone();
-    let font = theme.font(theme.font_base, FontWeight::NORMAL);
+    let font = theme.font(theme.font_base, if look.medium { FontWeight::MEDIUM } else { FontWeight::NORMAL });
     let small = theme.font(theme.font_sm, FontWeight::NORMAL);
     let has_submenu = item.submenu.is_some();
     let MenuItem {

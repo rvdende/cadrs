@@ -309,7 +309,99 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Radius", &mut x.radius_expr, &mut x.radius, L);
             s("Start angle", &mut x.start_angle_expr, &mut x.start_angle, A);
         }
-        FeatureKind::Variable(_)
+        FeatureKind::SheetMetalModel(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Bend allowance", &mut e.bend_allowance, &mut p.bend_allowance, L);
+            s("Bend deduction", &mut e.bend_deduction, &mut p.bend_deduction, L);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+            s("Corner relief scale", &mut e.corner_relief_scale, &mut p.corner_relief.scale, C);
+            s("Corner relief size", &mut e.corner_relief_size, &mut p.corner_relief.size, L);
+            s("Bend relief depth scale", &mut e.bend_relief_depth_scale, &mut p.bend_relief.depth_scale, C);
+            s("Bend relief width scale", &mut e.bend_relief_width_scale, &mut p.bend_relief.width_scale, C);
+            s("Clearance from input", &mut x.clearance_expr, &mut x.clearance, L);
+            s("Depth", &mut x.depth_expr, &mut x.depth, L);
+            if let Some(c) = &mut x.second {
+                s("Second depth", &mut c.depth_expr, &mut c.depth, L);
+            }
+        }
+        FeatureKind::ModifyJoint(x) => {
+            s("Bend radius", &mut x.radius_expr, &mut x.radius, L);
+            let q = if x.calc == cadrs_sheetmetal::BendCalc::KFactor { C } else { L };
+            s(x.calc.label(), &mut x.value_expr, &mut x.value, q);
+        }
+        // P3I.9.
+        FeatureKind::SheetMetalLoft(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Chordal tolerance", &mut x.chordal_tolerance_expr, &mut x.chordal_tolerance, L);
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+        }
+        FeatureKind::Form(x) => {
+            for v in &mut x.variables {
+                let q = if v.angle { Quantity::Angle } else { L };
+                let label: &'static str = match v.name.as_str() {
+                    "Length" => "Length",
+                    "Width" => "Width",
+                    "Height" => "Height",
+                    "Diameter" => "Diameter",
+                    "Angle" => "Angle",
+                    _ => "Form variable",
+                };
+                s(label, &mut v.expr, &mut v.value, q);
+            }
+        }
+        // P3I.4.
+        FeatureKind::SheetMetal(x) => {
+            for (label, expr, value, angle) in x.exprs_mut() {
+                s(label, expr, value, if angle { A } else { L });
+            }
+        }
+        // P3I.5: the sheet metal features after the model.
+        FeatureKind::SheetMetalTool(t) => {
+            use crate::sheetmetal_tools::SheetMetalTool as T;
+            let bend = |b: &mut crate::sheetmetal_tools::BendFeature, s: &mut dyn FnMut(&'static str, &mut String, &mut f64, Quantity)| {
+                s("Bend angle", &mut b.angle_expr, &mut b.angle, A);
+                s("Bend radius", &mut b.radius_expr, &mut b.radius, L);
+                s("K Factor", &mut b.k_expr, &mut b.k_factor, C);
+            };
+            match t {
+                T::Bend(b) => bend(b, &mut s),
+                T::Jog(j) => {
+                    bend(&mut j.bend, &mut s);
+                    s("Jog offset", &mut j.offset_expr, &mut j.offset, L);
+                    s("Offset distance", &mut j.up_to_offset_expr, &mut j.up_to_offset, L);
+                    s("Thickness factor", &mut j.factor_expr, &mut j.factor, C);
+                }
+                T::Tab(x) => s("Subtraction offset", &mut x.offset_expr, &mut x.offset, L),
+                T::Corner(x) => {
+                    s("Corner relief scale", &mut x.scale_expr, &mut x.relief.scale, C);
+                    s("Corner relief size", &mut x.size_expr, &mut x.relief.size, L);
+                }
+                T::BendRelief(x) => {
+                    s("Bend relief depth scale", &mut x.depth_scale_expr, &mut x.relief.depth_scale, C);
+                    s("Bend relief width scale", &mut x.width_scale_expr, &mut x.relief.width_scale, C);
+                    s("Bend relief depth", &mut x.depth_expr, &mut x.relief.depth, L);
+                }
+                T::CornerBreak(x) => {
+                    s("Radius", &mut x.size_expr, &mut x.size, L);
+                    s("Distance", &mut x.distance_expr, &mut x.distance, L);
+                    s("Distance 2", &mut x.distance2_expr, &mut x.distance2, L);
+                    s("Angle", &mut x.angle_expr, &mut x.angle, A);
+                }
+                T::Finish(_) => {}
+            }
+        }
+        FeatureKind::TagForm(_)
+        | FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)
         | FeatureKind::DeletePart(_)
@@ -318,7 +410,8 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         | FeatureKind::Mirror(_)
         | FeatureKind::Import(_)
         | FeatureKind::Derived(_)
-        | FeatureKind::Composite(_) => {}
+        | FeatureKind::Composite(_)
+        | FeatureKind::FlatExtrude(_) => {}
     }
 }
 

@@ -170,6 +170,10 @@ pub trait ViewModel {
     fn boms(&self) -> Vec<&crate::assembly::BomData> {
         Vec::new()
     }
+    /// A flat pattern view's bends (P3I.7).
+    fn flat(&self) -> Option<&crate::flat_view::FlatData> {
+        None
+    }
 }
 
 /// A plain [`ViewModel`] (tests, and what `cadrs_core` stores).
@@ -1801,6 +1805,8 @@ fn angle_graphics(g: &mut AnnGraphics, sz: &Sizes, x: P2, ua: P2, ub: P2, t: P2,
     } else {
         d.max(sz.arrow * 2.0)
     };
+    // Never smaller than the text is wide: a text dropped near the corner keeps a readable arc.
+    let rho = rho.max(2.0 * half[0]);
     let n = 48;
     let pts: Vec<P2> = (0..=n)
         .map(|i| {

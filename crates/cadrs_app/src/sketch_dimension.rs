@@ -521,7 +521,8 @@ pub fn open_editor(world: &mut World, id: DimensionId) {
     let theme = world.resource::<Theme>().clone();
     let u = world.resource::<crate::WorkspaceUnits>().0;
     let mut q = world.query_filtered::<Entity, With<ViewportArea>>();
-    let Some(area) = q.iter(world).next() else {
+    let viewport = q.iter(world).next();
+    let Some(area) = world.resource::<crate::sketch_tools::SketchArea>().host(viewport, world.resource::<ViewportRect>()).0 else {
         return;
     };
     let q = d.kind.quantity();
@@ -695,12 +696,14 @@ fn on_cancel(ev: On<DimEditCancel>, mut commands: Commands) {
 
 /// Keeps the editor on its dimension's value (it is hidden until the label has been drawn);
 /// closes it if the dimension went away.
+#[allow(clippy::too_many_arguments)]
 fn sync_dim_edit(
     mut editor: ResMut<DimensionEditor>,
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
     overlay: Res<SketchOverlay>,
-    rect: Res<ViewportRect>,
+    viewport_rect: Res<ViewportRect>,
+    sketch_area: Res<crate::sketch_tools::SketchArea>,
     mut q: Query<(&mut Node, &mut Visibility), With<DimEditBox>>,
     mut commands: Commands,
 ) {
@@ -724,6 +727,7 @@ fn sync_dim_edit(
     // over it (`screens/16b`); the label itself is not drawn while it is edited, so no half
     // value shows beside the box (T3 judge).
     let row_center = cadrs_ui::dim_edit::HEIGHT - 17.0;
+    let rect = sketch_area.rect(&viewport_rect);
     let local = label.center - rect.0.min + Vec2::new(-label.half.x, -row_center);
     let (left, top) = (Val::Px(local.x.round()), Val::Px(local.y.round()));
     if node.left != left || node.top != top {

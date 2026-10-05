@@ -37,10 +37,11 @@ impl Plugin for AppliedPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BeforeParts>()
             .init_resource::<RadiusArrow>()
+            .init_resource::<crate::sheetmetal_ui::SmFlipArrow>()
             .init_resource::<crate::transform_ui::XyzArrows>()
             .add_systems(
                 Update,
-                (applied_picks, applied_keys, radius_arrow_pointer, crate::transform_ui::xyz_arrow_pointer, crate::applied_dialog::sync_applied_dialog, crate::draft_ui::sync_fillet_entries)
+                (crate::sheetmetal_ui::sm_flip_arrow_pointer, applied_picks, applied_keys, radius_arrow_pointer, crate::transform_ui::xyz_arrow_pointer, crate::applied_dialog::sync_applied_dialog, crate::draft_ui::sync_fillet_entries, crate::sheetmetal_ui::sync_numbers)
                     .chain()
                     .after(crate::viewport::apply_view_to_camera)
                     .before(crate::parts::PartsSet)
@@ -55,7 +56,7 @@ impl Plugin for AppliedPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (place_radius_arrow, crate::transform_ui::place_xyz_arrows, crate::draft_ui::place_radius_labels)
+                (place_radius_arrow, crate::sheetmetal_ui::place_sm_flip_arrow, crate::transform_ui::place_xyz_arrows, crate::draft_ui::place_radius_labels)
                     .before(bevy::ui::UiSystems::Layout)
                     .run_if(in_state(AppState::Document)),
             )
@@ -92,6 +93,16 @@ pub enum AppliedKind {
     Thicken,
     Helix,
     Fill,
+    /// P3I.2: the Sheet metal model (`crate::sheetmetal_ui`).
+    SheetMetal,
+    /// P3I.9: Sheet metal loft, Form, Tag (`crate::sheetmetal_p3i9_ui`).
+    Sm9(crate::sheetmetal_p3i9_ui::Sm9Kind),
+    /// P3I.4: Flange, Hem, Make joint (`crate::sheetmetal_features_ui`).
+    SmFeature(crate::sheetmetal_features_ui::SmTool),
+    /// P3I.5: the sheet metal features after it (`crate::sheetmetal_tools_ui`).
+    SheetMetalTool(crate::sheetmetal_tools_ui::SmTool),
+    /// P3I.6: the flat pattern extrude (`crate::flat_ui`).
+    FlatExtrude,
 }
 
 impl AppliedKind {
@@ -113,6 +124,11 @@ impl AppliedKind {
             FeatureKind::Thicken(_) => Some(Self::Thicken),
             FeatureKind::Helix(_) => Some(Self::Helix),
             FeatureKind::Fill(_) => Some(Self::Fill),
+            FeatureKind::SheetMetalModel(_) => Some(Self::SheetMetal),
+            k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)) => crate::sheetmetal_p3i9_ui::Sm9Kind::of(k).map(Self::Sm9),
+            FeatureKind::SheetMetal(x) => Some(Self::SmFeature(crate::sheetmetal_features_ui::SmTool::of(x))),
+            FeatureKind::SheetMetalTool(x) => Some(Self::SheetMetalTool(crate::sheetmetal_tools_ui::SmTool::of(x))),
+            FeatureKind::FlatExtrude(_) => Some(Self::FlatExtrude),
             _ => None,
         }
     }
@@ -193,6 +209,26 @@ pub enum AppliedField {
     ThickenEntities,
     HelixEntity,
     FillEdges,
+    /// P3I.2: the Sheet metal model's fields: Convert's parts, faces to exclude and edges or
+    /// cylinders to bend (Thicken's too); Extrude's curves, arcs to extrude as bends and the Up
+    /// to entities of its two ends; Thicken's faces and regions.
+    SmParts,
+    SmExclude,
+    SmBends,
+    SmCurves,
+    SmArcs,
+    SmFaces,
+    SmUpTo,
+    SmSecondUpTo,
+    /// P3I.9's fields (`crate::sheetmetal_p3i9_ui`).
+    Sm9(crate::sheetmetal_p3i9_ui::Sm9Field),
+    /// P3I.4: the Flange, Hem and Make joint fields.
+    Smf(crate::sheetmetal_features_ui::SmfField),
+    /// P3I.5: a field of the sheet metal features after the model (`crate::sheetmetal_tools_ui`
+    /// numbers them).
+    SmTool(u8),
+    /// P3I.6: the flat pattern extrude's regions.
+    FlatRegions,
 }
 
 /// The applied feature whose dialog is open.
@@ -210,6 +246,9 @@ pub struct AppliedSession {
     /// P3.10 (P3.8 judge): a new hole's Merge scope is still to be filled with the part its
     /// first point drills.
     pub scope_auto: bool,
+    /// P3I.2: which of the Sheet metal model dialog's sections are open (Selections, General,
+    /// Material, Relief).
+    pub sections: [bool; 4],
 }
 
 impl AppliedSession {
@@ -328,6 +367,12 @@ impl AppliedSession {
             AppliedField::ThickenEntities => PickFilter { faces: true, regions: true, ..none },
             AppliedField::HelixEntity => PickFilter { faces: true, edges: true, sketch_curves: true, connectors: true, ..none },
             AppliedField::FillEdges => PickFilter { edges: true, sketch_curves: true, ..none },
+            AppliedField::Sm9(f) => crate::sheetmetal_p3i9_ui::pick_filter(f, none),
+            AppliedField::FlatRegions => PickFilter { regions: true, ..none },
+            f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),
+            f => crate::sheetmetal_ui::pick_filter(f, cadrs_core::document::EndType::Blind, none)
+                .or_else(|| crate::sheetmetal_features_ui::pick_filter(f, none))
+                .unwrap_or(none),
         }
     }
 }
@@ -381,7 +426,15 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
     // mate connector).
     let advanced = crate::advanced::initial(world, kind, &picked)
         .or_else(|| crate::pattern::initial(world, kind, &picked))
-        .or_else(|| crate::surfacing_ui::initial(world, kind, &picked));
+        .or_else(|| crate::surfacing_ui::initial(world, kind, &picked))
+        .or_else(|| (kind == AppliedKind::SheetMetal).then(|| crate::sheetmetal_ui::initial(world, &picked)).flatten())
+        .or_else(|| match kind {
+            AppliedKind::Sm9(k) => crate::sheetmetal_p3i9_ui::initial(world, k, &picked),
+            AppliedKind::SmFeature(t) => crate::sheetmetal_features_ui::initial(world, t, &picked),
+            _ => None,
+        })
+        .or_else(|| crate::sheetmetal_tools_ui::initial(world, kind, &picked))
+        .or_else(|| (kind == AppliedKind::FlatExtrude).then(|| crate::flat_ui::initial(world, &picked)).flatten());
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -437,7 +490,12 @@ pub fn begin(world: &mut World, kind: AppliedKind) {
         | AppliedKind::MateConnector
         | AppliedKind::Thicken
         | AppliedKind::Helix
-        | AppliedKind::Fill => {
+        | AppliedKind::Fill
+        | AppliedKind::SheetMetal
+        | AppliedKind::Sm9(_)
+        | AppliedKind::SmFeature(_)
+        | AppliedKind::SheetMetalTool(_)
+        | AppliedKind::FlatExtrude => {
             let Some((base, kind, field)) = advanced else { return };
             (AddFeature { element, feature, base_name: base.into(), kind }, field)
         }
@@ -497,6 +555,14 @@ pub fn edit(world: &mut World, feature: FeatureId) {
         AppliedKind::Thicken => AppliedField::ThickenEntities,
         AppliedKind::Helix => AppliedField::HelixEntity,
         AppliedKind::Fill => AppliedField::FillEdges,
+        AppliedKind::SheetMetal => match &before.kind {
+            FeatureKind::SheetMetalModel(x) => crate::sheetmetal_ui::first_field(x.operation),
+            _ => AppliedField::SmParts,
+        },
+        AppliedKind::Sm9(_) => crate::sheetmetal_p3i9_ui::first_field(&before.kind),
+        AppliedKind::SmFeature(_) => AppliedField::Smf(crate::sheetmetal_features_ui::SmfField::Edges),
+        AppliedKind::SheetMetalTool(t) => crate::sheetmetal_tools_ui::first_field(t),
+        AppliedKind::FlatExtrude => AppliedField::FlatRegions,
     };
     start(world, element, feature, kind, false, mark, Some(before), field);
 }
@@ -523,6 +589,8 @@ fn start(
         field,
         show_final: false,
         scope_auto: is_new && kind == AppliedKind::Hole,
+        // P3I.9: the loft's General open, Material and Relief closed (its help dialog).
+        sections: if matches!(kind, AppliedKind::Sm9(_)) { [true, true, false, false] } else { [true; 4] },
     });
     // The hole's sketch stays shown while its points are picked (it isn't consumed yet).
     world.resource_mut::<crate::parts::PartOverride>().editing = Some(feature);
@@ -577,7 +645,24 @@ pub fn accept(world: &mut World) {
     // the funnel's failing Shell, `ex4-step10.png`); an edit before it can fix it (PS21.11).
     let label = if s.is_new { format!("Insert {}", f.name) } else { format!("Edit {}", f.name) };
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
+        // A new sheet metal feature that uses a sketch shown by its eye (E1: Sketch 1 shown to
+        // pick a bend line) hides it again, as Onshape does: the sketch goes back to the
+        // automatic behaviour, hidden once a feature consumes it (exercise E1 step 10).
+        if s.is_new && matches!(f.kind, FeatureKind::SheetMetalTool(_)) {
+            let shown: Vec<FeatureId> = f
+                .input_sketches()
+                .into_iter()
+                .filter(|k| doc.doc.element(s.element).is_some_and(|el| el.sketch_visibility(*k) == Some(true)))
+                .collect();
+            for sketch in shown {
+                let _ = doc.execute(&cadrs_core::commands::SetSketchVisibility { element: s.element, sketch, visible: None });
+            }
+        }
         doc.squash_element_since(s.mark, s.element, label);
+    }
+    // SM4.5: a new hem accepted is what the next hem starts from.
+    if s.is_new {
+        crate::sheetmetal_features_ui::remember_accepted(world, &f.kind);
     }
     end(world);
 }
@@ -775,6 +860,31 @@ fn applied_picks(
                         return;
                     }
                 }
+                (k @ FeatureKind::SheetMetalModel(_), _) => {
+                    if !crate::sheetmetal_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_)), AppliedField::Sm9(f)) => {
+                    if !crate::sheetmetal_p3i9_ui::pick(world, k, f, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::SheetMetal(_), _) => {
+                    if !crate::sheetmetal_features_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::SheetMetalTool(_), _) => {
+                    if !crate::sheetmetal_tools_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
+                (k @ FeatureKind::FlatExtrude(_), _) => {
+                    if !crate::flat_ui::pick(world, k, field, pick) {
+                        return;
+                    }
+                }
                 // P3.8 (and a hole's mate connectors, PS15.2).
                 (k @ (FeatureKind::Pattern(_) | FeatureKind::Mirror(_) | FeatureKind::MateConnector(_)), _)
                 | (k @ FeatureKind::Hole(_), AppliedField::HoleConnectors) => {
@@ -828,11 +938,19 @@ fn roll_back_for_overrides(session: Option<Res<AppliedSession>>, composite: Opti
         return;
     }
     // P3.10: a variable fillet's vertices and points are picked on the edges it rounds too.
+    // P3I.2: a Convert's faces to exclude and edges to bend are picked on the part it consumes.
     let want = session
+        .as_ref()
         .filter(|s| matches!(s.field, AppliedField::Overrides | AppliedField::FilletVertices | AppliedField::FilletEdgePoints))
         .map(|s| s.feature);
     if over.rolled_back != want {
         over.rolled_back = want;
+    }
+    // P3I.2 judge: they are picked on the part as it was, with the folded model translucent
+    // over it and updating with each pick (`02-sheet-metal-model/t0101.0.png`).
+    let staged = session.filter(|s| !s.show_final && matches!(s.field, AppliedField::SmExclude | AppliedField::SmBends)).map(|s| s.feature);
+    if over.staged != staged {
+        over.staged = staged;
     }
 }
 
@@ -1008,6 +1126,10 @@ fn show_references(
         k @ FeatureKind::Draft(_) => want.extend(crate::draft_ui::references(k, &cache)),
         k @ FeatureKind::Transform(_) => want.extend(crate::transform_ui::references(k, &cache)),
         k @ (FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_)) => want.extend(crate::surfacing_ui::references(k, &cache)),
+        k @ FeatureKind::SheetMetalModel(_) => want.extend(crate::sheetmetal_ui::references(k, &cache)),
+        k @ (FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_)) => want.extend(crate::sheetmetal_p3i9_ui::references(k, &cache)),
+        k @ FeatureKind::SheetMetal(_) => want.extend(crate::sheetmetal_features_ui::references(k, &cache)),
+        k @ FeatureKind::SheetMetalTool(_) => want.extend(crate::sheetmetal_tools_ui::references(k, &cache)),
         _ => {}
     }
     // P3.10: a hole's start plane and Up to entity, a variable fillet's vertices.
@@ -1104,6 +1226,8 @@ fn draw_references(
         ),
         FeatureKind::Shell(x) if !x.hollow => (x.faces.iter().map(|f| EdgeOrFace::Face(*f)).collect(), false),
         FeatureKind::Draft(x) => (x.faces.iter().map(|f| EdgeOrFace::Face(*f)).collect(), false),
+        k @ FeatureKind::SheetMetalModel(_) => (crate::sheetmetal_ui::drawn_references(k), false),
+        k @ FeatureKind::SheetMetal(_) => (crate::sheetmetal_features_ui::drawn_references(k), false),
         _ => return,
     };
     for e in &entities {
@@ -1241,6 +1365,8 @@ fn arrow_size(k: &FeatureKind) -> Option<f64> {
     match k {
         FeatureKind::Fillet(f) => Some(f.size),
         FeatureKind::Plane(p) if p.kind == cadrs_core::plane::PlaneType::Offset => Some(p.offset),
+        // P3I.2: a sheet metal Extrude's depth.
+        FeatureKind::SheetMetalModel(x) if x.operation == cadrs_core::sheetmetal::SheetMetalOp::Extrude => Some(x.depth),
         _ => None,
     }
 }
@@ -1254,6 +1380,10 @@ fn set_arrow_size(k: &mut FeatureKind, v: f64, expr: String) {
         FeatureKind::Plane(p) => {
             p.offset = v;
             p.offset_expr = expr;
+        }
+        FeatureKind::SheetMetalModel(x) => {
+            x.depth = v;
+            x.depth_expr = expr;
         }
         _ => {}
     }
@@ -1276,7 +1406,7 @@ fn radius_arrow_pointer(
     mut commands: Commands,
 ) {
     use bevy::picking::pointer::{PointerAction, PointerButton, PointerId};
-    let Some(s) = session.filter(|s| matches!(s.kind, AppliedKind::Fillet | AppliedKind::Plane)) else {
+    let Some(s) = session.filter(|s| matches!(s.kind, AppliedKind::Fillet | AppliedKind::Plane | AppliedKind::SheetMetal)) else {
         inputs.clear();
         return;
     };
@@ -1327,6 +1457,7 @@ fn radius_arrow_pointer(
                         let label = match &d.kind {
                             FeatureKind::Fillet(f) if f.measurement == cadrs_core::applied::FilletMeasurement::Width => "Drag width",
                             FeatureKind::Fillet(_) => "Drag radius",
+                            FeatureKind::SheetMetalModel(_) => "Drag depth",
                             _ => "Drag offset",
                         };
                         set(world, d.kind, label);
@@ -1411,7 +1542,20 @@ fn place_radius_arrow(
         let size = dragged.unwrap_or(f.size) as f32;
         Some((Vec3::new(mid[0] as f32, mid[1] as f32, mid[2] as f32) + dir * size, dir))
     }));
-    let arrow_name = if plane_target.is_some() { "plane-offset-arrow" } else { "fillet-arrow" };
+    // P3I.2: a sheet metal Extrude's depth, at the end of its first curve's sweep.
+    let sm_target = session.as_ref().filter(|s| s.kind == AppliedKind::SheetMetal).and_then(|s| {
+        let el = doc.as_ref()?.doc.element(s.element)?;
+        let FeatureKind::SheetMetalModel(x) = &el.feature(s.feature)?.kind else { return None };
+        crate::sheetmetal_ui::depth_arrow(el.features(), x, dragged.unwrap_or(x.depth))
+    });
+    let target = target.or(sm_target);
+    let arrow_name = if plane_target.is_some() {
+        "plane-offset-arrow"
+    } else if sm_target.is_some() {
+        "sm-depth-arrow"
+    } else {
+        "fillet-arrow"
+    };
     arrow.axis = target;
     let placed = target.and_then(|(p, dir)| {
         let d = view.view.project_vector(dir);

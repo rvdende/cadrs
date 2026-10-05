@@ -29,10 +29,11 @@ use crate::pattern::{InstanceDot, MirrorFeature, MirrorPlane, PatternFeature, Pa
 
 /// One copy: its grid index, its instance number (1, 2, …; the names use it) and its motion.
 #[derive(Debug, Clone)]
-struct Instance {
-    index: [u32; 2],
+pub(super) struct Instance {
+    pub(super) index: [u32; 2],
     number: u32,
-    motion: Motion,
+    /// (P3I.5: read by the sheet-metal-aware face patterns.)
+    pub(super) motion: Motion,
 }
 
 fn v3(p: [f64; 3]) -> Vector3<f64> {
@@ -279,7 +280,7 @@ impl Rebuilder {
     }
 
     /// Every instance of a pattern but the seed (skipped ones too), with its motion.
-    fn pattern_instances(&self, before: &[Feature], x: &PatternFeature, state: &State, reference: Vector3<f64>) -> Result<Vec<Instance>, String> {
+    pub(super) fn pattern_instances(&self, before: &[Feature], x: &PatternFeature, state: &State, reference: Vector3<f64>) -> Result<Vec<Instance>, String> {
         let grid = x.grid();
         let n1 = x.first.count.max(1);
         let number = |i: [u32; 2]| i[1] * n1 + i[0] + 1;
@@ -460,6 +461,7 @@ impl Rebuilder {
         let merge = Merge { op: x.op, merge_all: x.merge_all, scope: &x.merge_scope, surface: false };
         match x.mirror_type {
             PatternType::Part => self.copy_parts(id, &x.parts, &make, &merge, state),
+            PatternType::Feature if x.reapply => self.reapply(before, id, &x.features, &make, state),
             PatternType::Feature => self.copy_feature_effect(before, id, &x.features, &make, state),
             PatternType::Face => self.copy_faces(id, &x.faces, &make, state),
         }
@@ -809,9 +811,6 @@ impl Rebuilder {
         if feats.len() != seeds.len() {
             return Err("A feature to pattern no longer exists".into());
         }
-        if make.iter().any(|i| i.motion.is_reflection()) {
-            return Err("Reapply features can't mirror".into());
-        }
         // The sketches the features use (moved with each instance).
         let mut sketches: HashSet<FeatureId> = HashSet::new();
         for f in &feats {
@@ -915,7 +914,10 @@ impl Rebuilder {
     }
 }
 
-/// A sketch moved by `m` (its plane's frame; its geometry stays in sketch coordinates).
+/// A sketch moved by `m` (its plane's frame; its geometry stays in sketch coordinates). A
+/// reflection (a mirror's Reapply) would leave the frame left-handed, its normal backwards (an
+/// extrude would go the wrong way), so the frame's v is reversed and the geometry flipped in it
+/// ([`flip_v`]): every point lands where the reflection puts it, the normal is the reflected one.
 fn moved_sketch(f: &Feature, m: &Motion) -> Feature {
     let mut g = f.clone();
     if let FeatureKind::Sketch(s) = &mut g.kind
@@ -923,10 +925,42 @@ fn moved_sketch(f: &Feature, m: &Motion) -> Feature {
     {
         let fr = plane.frame();
         let o = m.point(&Point3::from(fr.origin));
-        let (u, v) = (m.vector(&v3(fr.u)), m.vector(&v3(fr.v)));
+        let (u, mut v) = (m.vector(&v3(fr.u)), m.vector(&v3(fr.v)));
+        if m.is_reflection() {
+            v = -v;
+            flip_v(&mut s.geometry);
+        }
         s.plane = Some(PlaneRef::Feature(FeaturePlane { feature: f.id.0, origin: arr(o.coords), u: arr(u), v: arr(v) }));
     }
     g
+}
+
+/// The sketch's geometry mirrored in its own u axis (v → −v): points, arcs (their ends swapped,
+/// so they still run counter-clockwise), spline tangents and the imprinted part edges.
+fn flip_v(g: &mut cadrs_sketch::Sketch) {
+    use cadrs_sketch::{CurveKind, ImprintShape, Vec2};
+    let flip = |p: Vec2| Vec2::new(p.x, -p.y);
+    for p in g.points.values_mut() {
+        p.pos = flip(p.pos);
+    }
+    for c in g.curves.values_mut() {
+        if let CurveKind::Arc { start, end, .. } = &mut c.kind {
+            std::mem::swap(start, end);
+        }
+    }
+    for s in g.splines.values_mut() {
+        s.start_tangent = s.start_tangent.map(flip);
+        s.end_tangent = s.end_tangent.map(flip);
+    }
+    for i in &mut g.imprint {
+        i.shape = match i.shape {
+            ImprintShape::Line(a, b) => ImprintShape::Line(flip(a), flip(b)),
+            ImprintShape::Circle(c, r) => ImprintShape::Circle(flip(c), r),
+            ImprintShape::Arc { center, radius, start_angle, sweep } => {
+                ImprintShape::Arc { center: flip(center), radius, start_angle: -(start_angle + sweep), sweep }
+            }
+        };
+    }
 }
 
 /// A feature of a Reapply pattern's instance: its own id, and its references to faces, edges
@@ -977,10 +1011,16 @@ fn remap_feature(f: &Feature, ops: &HashMap<uuid::Uuid, uuid::Uuid>, m: &Motion)
         EdgeOrFace::Edge(r) => EdgeOrFace::Edge(edge(r)),
         EdgeOrFace::Face(r) => EdgeOrFace::Face(face(r)),
     };
+    // A mirror flips its sketches' geometry (`moved_sketch`): the regions' inside points too.
+    let flipped = m.is_reflection();
+    let region = |r: crate::document::RegionRef| {
+        if flipped { crate::document::RegionRef { seed: cadrs_sketch::Vec2::new(r.seed.x, -r.seed.y), ..r } } else { r }
+    };
     let id = FeatureId(*ops.get(&f.id.0).ok_or("not a patterned feature")?);
     let kind = match &f.kind {
         FeatureKind::Extrude(e) => {
             let mut e = e.clone();
+            e.regions = e.regions.into_iter().map(region).collect();
             e.faces = e.faces.into_iter().map(face).collect();
             e.up_to = e.up_to.map(up_to);
             e.direction = e.direction.map(direction);
@@ -991,6 +1031,7 @@ fn remap_feature(f: &Feature, ops: &HashMap<uuid::Uuid, uuid::Uuid>, m: &Motion)
         }
         FeatureKind::Revolve(r) => {
             let mut r = r.clone();
+            r.regions = r.regions.into_iter().map(region).collect();
             r.faces = r.faces.into_iter().map(face).collect();
             r.up_to = r.up_to.map(up_to);
             r.axis = r.axis.map(|a| match a {
@@ -1033,6 +1074,22 @@ fn remap_feature(f: &Feature, ops: &HashMap<uuid::Uuid, uuid::Uuid>, m: &Motion)
                 })
                 .collect();
             FeatureKind::Hole(x)
+        }
+        FeatureKind::Sweep(x) => {
+            use crate::advanced::PathRef;
+            let mut x = x.clone();
+            x.regions = x.regions.into_iter().map(region).collect();
+            x.faces = x.faces.into_iter().map(face).collect();
+            x.path = x
+                .path
+                .into_iter()
+                .map(|p| match p {
+                    PathRef::Edge(r) => PathRef::Edge(edge(r)),
+                    p => p,
+                })
+                .collect();
+            x.lock_direction = x.lock_direction.map(direction);
+            FeatureKind::Sweep(x)
         }
         FeatureKind::Sketch(_) => f.kind.clone(),
         _ => return Err(format!("{} can't be reapplied; turn Reapply features off", f.name)),

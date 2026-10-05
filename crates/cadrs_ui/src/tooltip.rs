@@ -51,12 +51,15 @@ pub enum TooltipStyle {
     /// An error message: left-aligned below the element, wrapped to its width, white with a red
     /// accent.
     Error,
-    /// An information card (a list row's details, several lines): white with a border and a
+    /// An information card (a list row's details, several lines): dark like the labels, with a
     /// shadow, beside the element (to its right, top-aligned), so it doesn't cover the rows below.
     Card,
     /// A small label beside the element (to its right, centred on it), so it doesn't cover the
     /// rows below: a feature-list row's status ("Sketch 4 (Hidden) is not fully defined").
     Beside,
+    /// An error message beside its element (to its right, top-aligned), so it covers neither
+    /// the rows nor the section headers below: a dialog field's out-of-range value.
+    ErrorBeside,
     /// A help card (P3.9: the feature filter's prefixes): white, left-aligned below the element.
     /// The first line of the text is its title; each later line is a row (not wrapped), and a
     /// tab splits a row into a bold term and its description.
@@ -88,6 +91,15 @@ impl Tooltip {
             text: text.into(),
             shortcut: None,
             style: TooltipStyle::Error,
+        }
+    }
+
+    /// An error message beside its element (see [`TooltipStyle::ErrorBeside`]).
+    pub fn error_beside(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            shortcut: None,
+            style: TooltipStyle::ErrorBeside,
         }
     }
 
@@ -251,6 +263,7 @@ fn update_tooltips(
             .spawn((
                 Name::new("tooltip"),
                 TooltipBubble,
+                CardOwnerLeft(center.x - size.x / 2.0),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(center.x + size.x / 2.0 + 8.0),
@@ -260,8 +273,9 @@ fn update_tooltips(
                     border_radius: BorderRadius::all(Val::Px(t.radius_sm)),
                     ..default()
                 },
-                BackgroundColor(Color::WHITE),
-                BorderColor::all(Color::srgb_u8(0xc3, 0xca, 0xd4)),
+                // One look with the label tooltips (dark), only beside its element and on several lines.
+                BackgroundColor(t.tooltip_background),
+                BorderColor::all(t.tooltip_background),
                 BoxShadow::new(
                     Color::srgba(0.0, 0.0, 0.0, 0.22),
                     Val::Px(0.0),
@@ -276,7 +290,7 @@ fn update_tooltips(
                 b.spawn((
                     Text::new(text),
                     t.font(t.font_sm, FontWeight::NORMAL),
-                    TextColor(Color::srgb_u8(0x1f, 0x23, 0x28)),
+                    TextColor(t.tooltip_foreground),
                     TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap),
                     Pickable::IGNORE,
                 ));
@@ -356,18 +370,21 @@ fn update_tooltips(
         state.bubble = Some(bubble);
         return;
     }
-    if tooltip.style == TooltipStyle::Error {
+    if matches!(tooltip.style, TooltipStyle::Error | TooltipStyle::ErrorBeside) {
         // Left-aligned under the element, a little in from its left edge, and no wider. A small
         // element, such as an icon, gets a 220 px bubble below and to the right of it, clear of
         // the icon itself (gpui-component's tooltips sit offset from what they explain).
         let small = size.x < 40.0;
         let inset = 20.0f32.min(size.x / 4.0);
-        let (left, top) = if small {
+        let beside = tooltip.style == TooltipStyle::ErrorBeside;
+        let (left, top) = if beside {
+            (center.x + size.x / 2.0 + 8.0, center.y - size.y / 2.0)
+        } else if small {
             (center.x + size.x / 2.0 + 6.0, center.y + size.y / 2.0 + 8.0)
         } else {
             (center.x - size.x / 2.0 + inset, center.y + size.y / 2.0 + 4.0)
         };
-        let width = if small { 220.0 } else { (size.x - inset).max(120.0) };
+        let width = if small || beside { 220.0 } else { (size.x - inset).max(120.0) };
         let bubble = commands
             .spawn((
                 Name::new("tooltip"),
@@ -455,18 +472,36 @@ fn update_tooltips(
     state.bubble = Some(bubble);
 }
 
+/// A card tooltip's element's left edge (where it goes when there is no room on the right).
+#[derive(Component, Clone, Copy)]
+struct CardOwnerLeft(f32);
+
 /// A bubble that runs off the window's right edge moves left onto it (P3.6: the right-hand
 /// panel strip's tooltips).
+#[allow(clippy::type_complexity)]
 fn keep_on_screen(
     windows: Query<&Window>,
-    mut q: Query<(&mut Node, &ComputedNode, &UiGlobalTransform, Option<&TooltipOwnerLeft>), With<TooltipBubble>>,
+    mut q: Query<(&mut Node, &ComputedNode, &UiGlobalTransform, Option<&TooltipOwnerLeft>, Option<&CardOwnerLeft>), With<TooltipBubble>>,
 ) {
     let Some(w) = windows.iter().next() else { return };
     let width = w.width();
-    for (mut node, computed, t, owner_left) in &mut q {
+    for (mut node, computed, t, owner_left, card) in &mut q {
         let scale = computed.inverse_scale_factor();
         let right = (t.translation.x + computed.size().x / 2.0) * scale;
         let over = right - (width - 4.0);
+        // A card beside its element that runs off the right goes to the element's left, so it
+        // never covers the element (a disabled menu item's reason).
+        if let Some(c) = card
+            && over > 0.5
+            && computed.size().x > 0.0
+        {
+            let w = computed.size().x * scale;
+            let left = (c.0 - 8.0 - w).max(4.0);
+            if node.left != Val::Px(left) {
+                node.left = Val::Px(left);
+            }
+            continue;
+        }
         if over > 0.5
             && let Val::Px(left) = node.left
         {

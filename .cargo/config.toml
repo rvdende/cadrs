@@ -6,9 +6,13 @@ CXXSTDLIB_x86_64_pc_windows_gnu = "static:-bundle=stdc++"
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 
 # Faster Linux builds (https://bevy.org/learn/quick-start/getting-started/setup/): link with mold,
-# share monomorphized generics between crates, and run rustc's front end on 8 threads (both
-# nightly). The release container builds on stable without mold: tools/release/build.sh turns
+# share monomorphized generics between crates, and run rustc's front end on 4 threads (both
+# nightly). 8 threads on top of a job per core overloaded the i9-13900KF, so the front end and the
+# job count are both capped. The release container builds on stable without mold: tools/release/build.sh turns
 # them off there.
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y", "-Zthreads=8"]
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zshare-generics=y", "-Zthreads=4"]
+
+[build]
+jobs = 16

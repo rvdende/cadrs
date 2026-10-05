@@ -28,7 +28,13 @@ struct Out {
     version: DxfVersion,
 }
 
-/// The DXF version written.
+/// The DXF version written. Every entity the writer uses (LINE, ARC, CIRCLE, LWPOLYLINE, SPLINE,
+/// TEXT and SOLID) and every table record has the same group codes from AutoCAD
+/// 2000 (AC1015) to 2018 (AC1032): later releases only added entities and optional codes the
+/// writer doesn't use, so the versions differ in `$ACADVER` and text encoding only. 2007 and
+/// later write UTF-8 text and the block records' units and explodability (codes 280/281), older
+/// ones non-ASCII text as `\U+XXXX`. (R12 has no subclass markers or lightweight polylines: not
+/// written.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DxfVersion {
     /// AutoCAD 2013 (AC1027), UTF-8 text.
@@ -36,15 +42,42 @@ pub enum DxfVersion {
     R2013,
     /// AutoCAD 2000 (AC1015), for older readers: non-ASCII text as `\U+XXXX`.
     R2000,
+    /// AutoCAD 2004 (AC1018).
+    R2004,
+    /// AutoCAD 2007 (AC1021).
+    R2007,
+    /// AutoCAD 2010 (AC1024).
+    R2010,
+    /// AutoCAD 2018 (AC1032).
+    R2018,
 }
 
 impl DxfVersion {
     pub const ALL: [DxfVersion; 2] = [DxfVersion::R2013, DxfVersion::R2000];
 
+    /// Every version the writer writes, oldest first (the flat pattern export's Version list).
+    pub const WRITTEN: [DxfVersion; 6] = [DxfVersion::R2000, DxfVersion::R2004, DxfVersion::R2007, DxfVersion::R2010, DxfVersion::R2013, DxfVersion::R2018];
+
     pub fn label(self) -> &'static str {
         match self {
             DxfVersion::R2013 => "AutoCAD 2013 (R2013)",
             DxfVersion::R2000 => "AutoCAD 2000 (R2000)",
+            DxfVersion::R2004 => "AutoCAD 2004 (R2004)",
+            DxfVersion::R2007 => "AutoCAD 2007 (R2007)",
+            DxfVersion::R2010 => "AutoCAD 2010 (R2010)",
+            DxfVersion::R2018 => "AutoCAD 2018 (R2018)",
+        }
+    }
+
+    /// The release year, as Onshape's export dialogs list versions.
+    pub fn year(self) -> &'static str {
+        match self {
+            DxfVersion::R2000 => "2000",
+            DxfVersion::R2004 => "2004",
+            DxfVersion::R2007 => "2007",
+            DxfVersion::R2010 => "2010",
+            DxfVersion::R2013 => "2013",
+            DxfVersion::R2018 => "2018",
         }
     }
 
@@ -52,7 +85,16 @@ impl DxfVersion {
         match self {
             DxfVersion::R2013 => "AC1027",
             DxfVersion::R2000 => "AC1015",
+            DxfVersion::R2004 => "AC1018",
+            DxfVersion::R2007 => "AC1021",
+            DxfVersion::R2010 => "AC1024",
+            DxfVersion::R2018 => "AC1032",
         }
+    }
+
+    /// 2007 and later: UTF-8 text.
+    pub fn utf8(self) -> bool {
+        !matches!(self, DxfVersion::R2000 | DxfVersion::R2004)
     }
 }
 
@@ -87,10 +129,11 @@ fn lineweight(mm: f64) -> i32 {
 }
 
 /// (name, description, pattern: dash, gap, …) of the linetypes we write.
-fn linetypes() -> [(&'static str, &'static str, Vec<f64>); 2] {
+fn linetypes() -> [(&'static str, &'static str, Vec<f64>); 3] {
     let hidden = crate::view::LineKind::Hidden.pattern().unwrap_or(&[2.0, 0.8]).to_vec();
     let phantom = crate::view::LineKind::Phantom.pattern().unwrap_or(&[4.0, 0.8, 0.8, 0.8, 0.8, 0.8]).to_vec();
-    [("HIDDEN", "Hidden __ __ __", hidden), ("PHANTOM", "Phantom ____ _ _ ____", phantom)]
+    let center = crate::flat_view::BEND_PATTERN.to_vec();
+    [("HIDDEN", "Hidden __ __ __", hidden), ("PHANTOM", "Phantom ____ _ _ ____", phantom), ("CENTER", "Center ____ _ ____ _", center)]
 }
 
 /// The drawing's extents. A page of strokes only (a sketch or a face laid flat, P3F.2 judge: one
@@ -270,7 +313,12 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
     }
     o.pair(0, "ENDTAB");
     // LAYER
-    table(&mut o, "LAYER", &h_layer_t, 1 + Layer::ALL.len());
+    // The flat pattern layers (P3I.6) only when the page uses them; a flat pattern's page (one
+    // using any of them) lists only the layers it uses, not the drawings' ones.
+    let used = |l: Layer| page.items.iter().any(|it| matches!(it, Item::Stroke(_, pen) if pen.layer == l));
+    let flat_page = Layer::ALL.into_iter().any(|l| l.is_flat() && used(l));
+    let layers: Vec<Layer> = Layer::ALL.into_iter().filter(|l| if flat_page { used(*l) } else { !l.is_flat() || used(*l) }).collect();
+    table(&mut o, "LAYER", &h_layer_t, 1 + layers.len());
     let layer_rec = |o: &mut Out, name: &str, lt: &str, color: i32| {
         record(o, "LAYER", &h_layer_t, "AcDbLayerTableRecord");
         o.pair(2, name);
@@ -280,8 +328,8 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
         o.pair(370, -3);
     };
     layer_rec(&mut o, "0", "CONTINUOUS", 7);
-    for l in Layer::ALL {
-        layer_rec(&mut o, l.name(), l.linetype(), 7);
+    for l in layers {
+        layer_rec(&mut o, l.name(), l.linetype(), l.aci());
     }
     o.pair(0, "ENDTAB");
     // STYLE: Standard, and INTER for our texts.
@@ -335,7 +383,7 @@ pub fn write_dxf_version(page: &Page, version: DxfVersion) -> String {
         o.pair(100, "AcDbBlockTableRecord");
         o.pair(2, name);
         o.pair(70, 0);
-        if version == DxfVersion::R2013 {
+        if version.utf8() {
             o.pair(280, 1);
             o.pair(281, 0);
         }
@@ -422,6 +470,9 @@ fn entity_head(o: &mut Out, owner: &str, kind: &str, layer: Layer, pen: Option<&
     }
     if color == crate::export::DANGLING {
         o.pair(62, 1);
+    } else if color != crate::export::INK && matches!(layer, Layer::BendUp | Layer::BendDown) {
+        // A bend line's own colour (P3I.7), as a true colour.
+        o.pair(420, ((color[0] as i32) << 16) | ((color[1] as i32) << 8) | color[2] as i32);
     }
     if let Some(p) = pen {
         o.pair(370, lineweight(p.width));
@@ -510,7 +561,7 @@ fn write_item(o: &mut Out, owner: &str, it: &Item) {
             o.point(10, t.pos);
             o.num(40, t.height);
             let text = dxf_text(&t.text);
-            let text = if o.version == DxfVersion::R2000 { ascii_escaped(&text) } else { text };
+            let text = if o.version.utf8() { text } else { ascii_escaped(&text) };
             o.pair(1, text);
             if t.rotation != 0.0 {
                 o.num(50, t.rotation);

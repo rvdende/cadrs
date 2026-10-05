@@ -472,6 +472,13 @@ impl Feature {
             FeatureKind::Hole(h) => h.sketch_ids(),
             FeatureKind::Sweep(s) => s.sketches(),
             FeatureKind::Loft(l) => l.sketches(),
+            // P3I.2: an Extrude's or Thicken's sketches (hidden once used, like an extrude's).
+            FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
+            // P3I.9.
+            FeatureKind::SheetMetalLoft(x) => x.sketch_ids(),
+            FeatureKind::SheetMetalTool(x) => x.sketch_ids(),
+            // P3I.6: a flat pattern extrude's sketches.
+            FeatureKind::FlatExtrude(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }
@@ -481,6 +488,7 @@ impl Feature {
         match &self.kind {
             FeatureKind::Extrude(e) => (&e.regions, &e.sketches),
             FeatureKind::Revolve(r) => (&r.regions, &r.sketches),
+            FeatureKind::FlatExtrude(x) => (&x.regions, &x.sketches),
             _ => (&[], &[]),
         }
     }
@@ -566,6 +574,14 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem().is_none(),
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
+            FeatureKind::ModifyJoint(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalLoft(x) => x.problem().is_none(),
+            FeatureKind::Form(x) => x.problem().is_none(),
+            FeatureKind::TagForm(x) => x.problem().is_none(),
+            FeatureKind::SheetMetal(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalTool(x) => x.problem().is_none(),
+            FeatureKind::FlatExtrude(x) => x.problem().is_none(),
         }
     }
 
@@ -597,6 +613,14 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem(),
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
+            FeatureKind::SheetMetalModel(x) => x.problem(),
+            FeatureKind::ModifyJoint(x) => x.problem(),
+            FeatureKind::SheetMetalLoft(x) => x.problem(),
+            FeatureKind::Form(x) => x.problem(),
+            FeatureKind::TagForm(x) => x.problem(),
+            FeatureKind::SheetMetal(x) => x.problem(),
+            FeatureKind::SheetMetalTool(x) => x.problem(),
+            FeatureKind::FlatExtrude(x) => x.problem(),
         }
     }
 
@@ -721,6 +745,14 @@ impl Feature {
             FeatureKind::Thicken(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::ModifyJoint(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Form(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::TagForm(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetal(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalTool(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::FlatExtrude(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -856,6 +888,26 @@ pub enum FeatureKind {
     Fill(crate::surfacing::FillFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
+    /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).
+    SheetMetalModel(crate::sheetmetal::SheetMetalModelFeature),
+    /// A sheet metal joint made a bend, a rip or a tangent joint (P3I.3, SM6.4;
+    /// [`crate::sheetmetal_joint`]).
+    ModifyJoint(crate::sheetmetal_joint::ModifyJointFeature),
+    /// P3I.9: a Sheet metal loft (SM19.2; [`crate::sheetmetal_loft`]).
+    SheetMetalLoft(crate::sheetmetal_loft::SheetMetalLoftFeature),
+    /// P3I.9: a sheet metal Form (SM20.1; [`crate::sheetmetal_form`]).
+    Form(crate::sheetmetal_form::FormFeature),
+    /// P3I.9: a Tag (Form), in a form's Part Studio (SM20.2).
+    TagForm(crate::sheetmetal_form::TagFormFeature),
+    /// P3I.4: Flange, Hem or Make joint on an active sheet metal model (SM1.6, SM3, SM4, SM6;
+    /// [`crate::sheetmetal_features`]).
+    SheetMetal(crate::sheetmetal_features::SheetMetalFeature),
+    /// P3I.5: a sheet metal feature after the model: Finish, Tab, Bend, Jog, Corner, Bend relief
+    /// or Corner break ([`crate::sheetmetal_tools`]).
+    SheetMetalTool(crate::sheetmetal_tools::SheetMetalTool),
+    /// An extrude of a flat-pattern sketch, Add or Remove in the flat (P3I.6, SM14;
+    /// [`crate::sheetmetal_flat`]). Shown as "Extrude".
+    FlatExtrude(crate::sheetmetal_flat::FlatExtrudeFeature),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer

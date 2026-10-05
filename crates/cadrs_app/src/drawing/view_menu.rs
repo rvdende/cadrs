@@ -60,6 +60,10 @@ pub fn open_space_menu(world: &mut World, pos: Vec2) {
     if super::notes::open_item_menu(world, pos) {
         return;
     }
+    // A flat pattern view's bend note (P3I.7).
+    if super::flat_views::open_bend_note_menu(world, pos) {
+        return;
+    }
     let rect = *world.resource::<crate::viewport::ViewportRect>();
     let hit = (|| {
         let doc = world.get_resource::<ActiveDocument>()?;
@@ -86,6 +90,11 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     let Some((_, v)) = find_view(world, id) else {
         return;
     };
+    // A flat pattern view has its own menu (P3I.7).
+    if v.flat.is_some() {
+        super::flat_views::open_flat_view_menu(world, pos, id);
+        return;
+    }
     let Some(doc) = world.get_resource::<ActiveDocument>() else {
         return;
     };
@@ -195,7 +204,7 @@ fn on_view_menu_action(ev: On<MenuAction>, q: Query<&ViewMenuFor>, mut commands:
     commands.queue(move |w: &mut World| view_menu_action(w, id, &item));
 }
 
-fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
+pub(super) fn view_menu_action(w: &mut World, id: ViewId, item: &str) {
     let Some((_, v)) = find_view(w, id) else {
         return;
     };
@@ -353,6 +362,7 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
     };
     let inherited = v.scale_inherited && v.parent.is_some();
     let name = v.name.clone();
+    let flat = v.flat.clone();
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("view-properties-dialog")
@@ -414,6 +424,10 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
                 }
                 b.spawn(form_row(t, "view-props-sheet-row", "Sheet", lw))
                     .with_child(sh.selected(sheet_index).build(t));
+                // A flat pattern view's bend line pens (P3I.7).
+                if let Some(f) = &flat {
+                    super::flat_views::properties_rows(b, t, f, lw);
+                }
             })
             .footer(move |f| {
                 let t = &tf;
@@ -472,6 +486,7 @@ fn apply_view_properties(world: &mut World) {
             v.scale_inherited = false;
         });
     }
+    super::flat_views::apply_properties(world, dialog.view);
     if let (Some(sheet), Some((from, _))) = (sheet, find_view(world, dialog.view)) {
         let current = world
             .get_resource::<ActiveDocument>()

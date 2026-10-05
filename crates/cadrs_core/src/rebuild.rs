@@ -108,6 +108,10 @@ pub struct Build {
     /// P3G.4: the derived sketches, placed (each a sketch on a frame of its own, named after the
     /// Derived feature): later features take their regions like any sketch's.
     pub derived_sketches: Vec<Feature>,
+    /// P3I.2: each Sheet metal model's definition, flat pattern and parts (the "sheet metal
+    /// contexts", SM1.3), in list order; a failed model keeps its context (the flat view shows
+    /// why, SM1.5).
+    pub sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
 }
 
 /// P3D.1: how a feature came out of the last rebuild.
@@ -125,6 +129,10 @@ pub enum FeatureStatus {
 pub struct Stage {
     pub before: Vec<Part>,
     pub tool: Arc<crate::solid::Solid>,
+    /// More bodies drawn with `tool`: a Sheet metal model's other folded parts (P3I.2), shown
+    /// translucent over the part it converts while its edges to bend are picked.
+    #[serde(default)]
+    pub more: Vec<Arc<crate::solid::Solid>>,
 }
 
 /// The parts an extrude's new body meets (before its boolean).
@@ -214,6 +222,9 @@ struct State {
     /// P3G.4: what each Derived feature so far brought in, and its sketches (placed).
     derived: Arc<HashMap<FeatureId, crate::derived::DerivedOutput>>,
     derived_sketches: Arc<Vec<Feature>>,
+    /// P3I.2: the sheet metal models so far (their definitions, flats and parts).
+    #[serde(default)]
+    sheet_metal: Arc<Vec<crate::sheetmetal::SheetMetalContext>>,
 }
 
 impl State {
@@ -634,6 +645,7 @@ impl Rebuilder {
         }
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
+        out.sheet_metal = (*state.sheet_metal).clone();
         debug_assert!(self.depth != 0 || key == final_key(features), "final_key must follow the rebuild's keys");
         self.trail.clear();
         self.last = state;
@@ -780,6 +792,10 @@ impl Rebuilder {
         req: &crate::views::ViewRequest,
     ) -> Result<crate::views::ViewGeometry, String> {
         let build = self.rebuild(features);
+        // A flat pattern view (P3I.7): the part's flat, from its sheet metal model.
+        if req.flat {
+            return crate::flat_drawing::flat_geometry(&build.sheet_metal, req);
+        }
         let state = self.last.clone();
         let parts = crate::views::view_parts(&build.parts, req.part);
         if parts.is_empty() {
@@ -990,6 +1006,12 @@ impl Rebuilder {
             dots: None,
             uses: Vec::new(),
         };
+        // P3I.5 (SM1.6, SM12): Extrude → Remove, Fillet, Chamfer and Face patterns on an active
+        // sheet metal model edit its definition.
+        #[cfg(feature = "occt")]
+        if let Some(r) = self.sheet_metal_aware(before, f, state) {
+            return r.unwrap_or_else(fail);
+        }
         match &f.kind {
             FeatureKind::Sketch(_) | FeatureKind::Variable(_) => fail(String::new()),
             FeatureKind::DeletePart(d) => {
@@ -1016,6 +1038,8 @@ impl Rebuilder {
                     uses: Vec::new(),
                 }
             }
+            // P3I.6 (SM14.3): an ordinary Extrude can't take a flat-pattern sketch.
+            FeatureKind::Extrude(e) if crate::sheetmetal_flat::on_flat(before, &e.sketches()) => fail(crate::sheetmetal_flat::MODEL_SPACE.into()),
             #[cfg(feature = "occt")]
             FeatureKind::Extrude(e) => match self.extrude(before, f.id, e, state) {
                 Ok(o) => o,
@@ -1069,6 +1093,38 @@ impl Rebuilder {
             FeatureKind::Helix(x) => self.helix(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Fill(x) => self.fill(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            #[cfg(feature = "occt")]
+            FeatureKind::ModifyJoint(x) => self.modify_joint(f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::ModifyJoint(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.9.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalLoft(x) => self.sheet_metal_loft(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::Form(x) => self.sheet_metal_form(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::TagForm(x) => self.tag_form(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.4.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetal(x) => self.sheet_metal_feature(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetal(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.5.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalTool(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.6.
+            #[cfg(feature = "occt")]
+            FeatureKind::FlatExtrude(x) => self.flat_extrude(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::FlatExtrude(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
@@ -1325,6 +1381,12 @@ mod kernel_ops {
     mod import;
     mod linked;
     mod pattern;
+    mod sheetmetal;
+    mod sheetmetal_joint;
+    mod sheetmetal_form;
+    mod sheetmetal_loft;
+    mod sheetmetal_features;
+    mod sheetmetal_flat;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;
@@ -1525,6 +1587,7 @@ mod kernel_ops {
                 .map(|s| Stage {
                     before: state.parts.iter().map(|p| p.part.clone()).collect(),
                     tool: Arc::new(s),
+                    more: Vec::new(),
                 });
             let result = self.apply_extrude_op(id, e, tool, state, &contacts, geoms);
             result.map(|mut o| {
