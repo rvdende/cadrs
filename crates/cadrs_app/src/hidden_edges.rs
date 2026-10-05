@@ -51,7 +51,7 @@ pub struct HiddenLineParams {
     /// Linear RGBA.
     pub color: Vec4,
     /// The section view's clip plane (see [`crate::part_shading::PartShadingParams`]).
-    pub clip: Vec4,
+    pub clip: [Vec4; crate::section_view::MAX_PLANES],
     /// x: the dash period (mm); y: the depth bias toward the eye (see `hidden_edges.wgsl`).
     pub dash: Vec4,
 }
@@ -141,7 +141,7 @@ fn sync_hidden_edges(
     }
     let material = mat
         .get_or_insert_with(|| {
-            materials.add(HiddenLineMaterial { params: HiddenLineParams { color: HIDDEN_EDGE.to_linear().to_vec4(), clip: Vec4::ZERO, dash: Vec4::ZERO } })
+            materials.add(HiddenLineMaterial { params: HiddenLineParams { color: HIDDEN_EDGE.to_linear().to_vec4(), clip: [Vec4::ZERO; crate::section_view::MAX_PLANES], dash: Vec4::ZERO } })
         })
         .clone();
     for part in cache.shown() {
@@ -161,7 +161,7 @@ fn sync_params(view: Res<ViewportView>, clip: Res<crate::section_view::SectionCl
     if !view.view.render.hidden_edges() {
         return;
     }
-    let clip = clip.plane.map_or(Vec4::ZERO, |(o, n)| n.extend(n.dot(o)));
+    let clip = clip.plane.map_or([Vec4::ZERO; crate::section_view::MAX_PLANES], |c| c.uniforms());
     // As the part edges' gizmo bias, grown in perspective (`crate::view_options`).
     let k = crate::view_options::bias_factor(&view.view);
     let dash = Vec4::new(DASH_PX * view.view.scale, (6e-5 * k).min(0.05), 0.0, 0.0);

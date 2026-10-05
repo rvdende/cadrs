@@ -51,6 +51,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<ExtraHighlight>()
             .init_resource::<PickFilterOverride>()
             .init_resource::<Selection>()
+            .init_resource::<FeatureRowClick>()
             .init_resource::<ViewportDrag>()
             .init_resource::<ActiveKind>()
             .init_gizmo_group::<HighlightGizmos>()
@@ -449,6 +450,26 @@ pub struct PickFilterOverride(pub Option<crate::parts::PickFilter>);
 /// The selection (additive, like Onshape: clicking toggles, clicking empty space clears).
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct Selection(pub Vec<Pick>);
+
+/// How a click on a feature-list row selects, set with its [`PickRequest`] (the view's own
+/// clicks keep toggling).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowSelect {
+    /// A plain click: the row alone (clicking the only selected row clears it).
+    Only,
+    /// Ctrl: the row added or taken away.
+    Toggle,
+    /// Shift: every row from the anchor to this one, in the list's order.
+    Range(Vec<Pick>),
+}
+
+/// The feature list's pending row click, and the row a Shift+click ranges from (the last one
+/// clicked without Shift).
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct FeatureRowClick {
+    pub pending: Option<(Pick, RowSelect)>,
+    pub anchor: Option<Pick>,
+}
 
 impl Selection {
     pub fn contains(&self, p: Pick) -> bool {
@@ -1231,6 +1252,7 @@ fn apply_pick_requests(
     (connector, composite): (Option<Res<crate::assembly::connector_tool::ConnectorSession>>, Option<Res<crate::composite_ui::CompositeSession>>),
     pick_override: Res<PickFilterOverride>,
     derived: Option<Res<crate::derived_ui::DerivedSession>>,
+    mut row_click: ResMut<FeatureRowClick>,
 ) {
     // (The mate dialog takes the picks as connectors, P3B.2; the assembly's Mate connector
     // dialog its entities, P3B.7.)
@@ -1238,12 +1260,23 @@ fn apply_pick_requests(
     let insert_takes = insert.is_some_and(|s| !s.standard);
     if extrude.is_some() || boolean.is_some() || mass.is_some() || applied.is_some() || create.is_some() || insert_takes || mate.is_some() || connector.is_some() || pick_override.0.is_some() || derived.is_some() || composite.is_some() {
         picks.clear();
+        row_click.pending = None;
         return;
     }
     for p in picks.read() {
-        match p.0 {
-            Some(p) => selection.toggle(p),
-            None => selection.0.clear(),
+        let row = row_click.pending.take_if(|(r, _)| Some(*r) == p.0).map(|(_, how)| how);
+        match (p.0, row) {
+            (Some(p), Some(RowSelect::Only)) => {
+                selection.0 = if selection.0 == [p] { Vec::new() } else { vec![p] };
+                row_click.anchor = Some(p);
+            }
+            (Some(p), Some(RowSelect::Range(rows))) => selection.0 = if rows.is_empty() { vec![p] } else { rows },
+            (Some(p), Some(RowSelect::Toggle)) => {
+                selection.toggle(p);
+                row_click.anchor = Some(p);
+            }
+            (Some(p), None) => selection.toggle(p),
+            (None, _) => selection.0.clear(),
         }
     }
 }
@@ -1999,7 +2032,7 @@ fn place_plane_labels(
             && planes.shows(k)
             && alpha > 0.0
             && !(sketch_plane == Some(k.plane_ref()) && normal_view)
-            && !cut.is_some_and(|(o, n)| n.dot(anchor - o) > 1e-3);
+            && !cut.is_some_and(|c| c.removes(anchor));
         vis.set_if_neq(if show {
             Visibility::Inherited
         } else {

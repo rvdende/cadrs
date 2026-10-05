@@ -2805,12 +2805,17 @@ fn clear_toasts(mut commands: Commands) {
     commands.queue(cadrs_ui::close_toasts);
 }
 
-/// A click on a feature-list row picks it (it toggles the selection, or fills the sketch
-/// dialog's plane field).
+/// A click on a feature-list row picks it (or fills the open dialog's field). A feature row
+/// selects as Onshape's list does: a plain click makes it the selection, Ctrl+click adds or
+/// removes it, Shift+click selects every feature from the last row clicked to this one.
+#[allow(clippy::too_many_arguments)]
 fn on_pick_row_activate(
     a: On<Activate>,
     q: Query<&PickRow>,
     button: Res<cadrs_ui::menu::LastPointerButton>,
+    keys: Res<ButtonInput<KeyCode>>,
+    doc: Option<Res<ActiveDocument>>,
+    mut row_click: ResMut<crate::viewport::FeatureRowClick>,
     mut selection: ResMut<crate::viewport::Selection>,
     mut picks: MessageWriter<PickRequest>,
 ) {
@@ -2828,6 +2833,22 @@ fn on_pick_row_activate(
         // Right-clicking another feature makes it the selection (its menu acts on it alone).
         if secondary && matches!(row.0, Pick::Feature(_)) {
             selection.0.retain(|p| !matches!(p, Pick::Feature(_)));
+        }
+        if let (Pick::Feature(id), false) = (row.0, secondary) {
+            let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+            let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight, KeyCode::SuperLeft, KeyCode::SuperRight]);
+            let how = match (shift, row_click.anchor) {
+                (true, Some(Pick::Feature(from))) => {
+                    let order: Vec<FeatureId> = doc.as_ref().and_then(|d| d.active_element()).map(|el| el.features().iter().map(|f| f.id).collect()).unwrap_or_default();
+                    match (order.iter().position(|f| *f == from), order.iter().position(|f| *f == id)) {
+                        (Some(a), Some(b)) => crate::viewport::RowSelect::Range(order[a.min(b)..=a.max(b)].iter().map(|f| Pick::Feature(*f)).collect()),
+                        _ => crate::viewport::RowSelect::Only,
+                    }
+                }
+                _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
+                _ => crate::viewport::RowSelect::Only,
+            };
+            row_click.pending = Some((row.0, how));
         }
         picks.write(PickRequest(Some(row.0)));
     }

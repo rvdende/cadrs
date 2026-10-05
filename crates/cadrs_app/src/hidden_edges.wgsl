@@ -6,7 +6,7 @@
 
 struct HiddenLineParams {
     color: vec4<f32>,
-    clip: vec4<f32>,
+    clip: array<vec4<f32>, 4>,
     dash: vec4<f32>,
 }
 
@@ -19,8 +19,19 @@ struct FragmentOutput {
 
 @fragment
 fn fragment(in: VertexOutput) -> FragmentOutput {
-    // The section view's removed side.
-    if (dot(params.clip.xyz, params.clip.xyz) > 0.5 && dot(params.clip.xyz, in.world_position.xyz) > params.clip.w) {
+    // The section view's removed part: on the removed side of every plane.
+    var planes = 0;
+    var removed = true;
+    for (var i = 0; i < 4; i++) {
+        let c = params.clip[i];
+        if (dot(c.xyz, c.xyz) > 0.5) {
+            planes += 1;
+            if (dot(c.xyz, in.world_position.xyz) <= c.w) {
+                removed = false;
+            }
+        }
+    }
+    if (planes > 0 && removed) {
         discard;
     }
 #ifdef VERTEX_UVS_A

@@ -34,22 +34,24 @@ pub struct PartShading {
     pub cap: bool,
     /// The Translucent render mode's material (its parts drawn see-through).
     pub translucent: bool,
+    /// The material of the parts a section leaves whole (its Exclude / Include items).
+    pub unclipped: bool,
     #[uniform(0)]
     pub params: PartShadingParams,
 }
 
 impl PartShading {
     pub fn new(blend: bool, cull_back: bool) -> Self {
-        Self { blend, cull_back, cap: false, translucent: false, params: PartShadingParams::default() }
+        Self { blend, cull_back, cap: false, translucent: false, unclipped: false, params: PartShadingParams::default() }
     }
 }
 
 /// The per-view uniforms of [`PartShading`].
 #[derive(Debug, Clone, Copy, PartialEq, ShaderType)]
 pub struct PartShadingParams {
-    /// The section view's clip plane: fragments with `dot(n, p) > w` (the removed side) are
-    /// discarded; no clipping when `n` is zero.
-    pub clip: Vec4,
+    /// The section view's planes (`n.extend(n·o)` each, zero for none): a fragment with
+    /// `dot(n, p) > w` for every plane (on the removed side of all) is discarded.
+    pub clip: [Vec4; crate::section_view::MAX_PLANES],
     /// x: 1 draws the faces flat white (the hidden-line render modes); y: an opacity factor
     /// (the Translucent render mode's).
     pub style: Vec4,
@@ -65,7 +67,7 @@ pub struct PartShadingParams {
 
 impl Default for PartShadingParams {
     fn default() -> Self {
-        Self { clip: Vec4::ZERO, style: Vec4::new(0.0, 1.0, 0.0, 0.0), analysis: Vec4::ZERO, pull: Vec4::ZERO, bands: [Vec4::ZERO; 6] }
+        Self { clip: [Vec4::ZERO; crate::section_view::MAX_PLANES], style: Vec4::new(0.0, 1.0, 0.0, 0.0), analysis: Vec4::ZERO, pull: Vec4::ZERO, bands: [Vec4::ZERO; 6] }
     }
 }
 

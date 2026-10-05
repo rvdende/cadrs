@@ -456,28 +456,28 @@ pub struct PartCache {
     pub section: Option<SectionPick>,
 }
 
-/// A section view as picking sees it: a point on the plane, the removed side's normal and the
-/// caps' triangles.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// A section view as picking sees it: its cut, the parts it leaves whole and the caps'
+/// triangles.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SectionPick {
-    pub origin: Vec3,
-    pub normal: Vec3,
+    pub cut: crate::section_view::Cut,
+    pub excluded: Vec<PartId>,
     pub caps: Vec<[Vec3; 3]>,
 }
 
 impl SectionPick {
     /// True if `p` was cut away.
     pub fn removes(&self, p: Vec3) -> bool {
-        (p - self.origin).dot(self.normal) > 1e-4 * p.length().max(1.0)
+        self.cut.removes(p)
     }
 
-    /// True if a cap covers the point `p` on the plane.
+    /// True if a cap covers the point `p` on a plane.
     fn capped(&self, p: Vec3) -> bool {
         self.caps.iter().any(|t| {
             let (a, b, c) = (t[0], t[1], t[2]);
             let n = (b - a).cross(c - a);
             let nn = n.length_squared();
-            if nn < 1e-12 {
+            if nn < 1e-12 || ((p - a).dot(n)).abs() / nn.sqrt() > 1e-2 {
                 return false;
             }
             let w = |u: Vec3, v: Vec3| (v - u).cross(p - u).dot(n) / nn;
@@ -485,35 +485,28 @@ impl SectionPick {
             w(a, b) >= tol && w(b, c) >= tol && w(c, a) >= tol
         })
     }
-
-    /// The stretch of the pick ray `o + t·d` that sees the kept parts: from `t0` to `t1`;
-    /// `None` when it sees none (it never enters the kept side, or a cap stops it).
-    fn window(&self, o: Vec3, d: Vec3) -> Option<(f32, f32)> {
-        let side = (o - self.origin).dot(self.normal);
-        let dn = d.dot(self.normal);
-        let t = if dn.abs() > 1e-9 { -side / dn } else { f32::INFINITY };
-        if side > 0.0 {
-            if dn >= 0.0 {
-                return None;
-            }
-            if self.capped(o + d * t) {
-                return None;
-            }
-            Some((t, f32::MAX))
-        } else {
-            Some((0.0, if dn > 0.0 { t } else { f32::MAX }))
-        }
-    }
 }
 
-/// The nearest hit of `pick` (a ray-cast from `o` along `d` returning the distance), only
-/// counting what a section view keeps.
-fn sectioned_hit<T>(section: Option<&SectionPick>, o: Vec3, d: Vec3, pick: impl FnOnce(Vec3) -> Option<(T, f64)>) -> Option<(T, f64)> {
-    let Some(s) = section else { return pick(o) };
-    let (t0, t1) = s.window(o, d)?;
-    let (x, t) = pick(o + d * t0)?;
-    let t = t + t0 as f64;
-    (t <= t1 as f64).then_some((x, t))
+/// The nearest hit of `pick` (a ray-cast from a point along `d` returning the distance) on
+/// `part`, only counting what a section view keeps: a hit before the ray enters the removed
+/// part, or past where it leaves it (unless a cap stops it there).
+fn sectioned_hit<T>(section: Option<&SectionPick>, part: PartId, o: Vec3, d: Vec3, pick: impl Fn(Vec3) -> Option<(T, f64)>) -> Option<(T, f64)> {
+    let Some(s) = section.filter(|s| !s.excluded.contains(&part)) else { return pick(o) };
+    let Some((t0, t1)) = s.cut.removed_span(o, o + d, 0.0, f32::MAX) else { return pick(o) };
+    if let Some((x, t)) = pick(o)
+        && (t as f32) < t0
+    {
+        return Some((x, t));
+    }
+    if t1 >= f32::MAX / 2.0 {
+        return None;
+    }
+    let exit = o + d * t1;
+    if s.capped(exit) {
+        return None;
+    }
+    let (x, t) = pick(exit)?;
+    Some((x, t + t1 as f64))
 }
 
 impl PartCache {
@@ -1498,11 +1491,13 @@ struct PartMaterials {
     surface: Option<Handle<PartShading>>,
     /// P3E.3a: every part in the Translucent render mode: blended, front faces only.
     translucent: Option<Handle<PartShading>>,
+    /// The same four, for the parts a section leaves whole (not clipped).
+    unclipped: [Option<Handle<PartShading>>; 4],
 }
 
-/// What the part meshes were last built for: the parts' generation, the edited extrude and the
-/// ghosted parts.
-type MeshKey = (u64, Option<FeatureId>, Vec<PartId>, bool);
+/// What the part meshes were last built for: the parts' generation, the edited extrude, the
+/// ghosted parts, the Translucent mode and the parts a section leaves whole.
+type MeshKey = (u64, Option<FeatureId>, Vec<PartId>, bool, Vec<PartId>);
 
 /// Keeps one mesh entity per part, rebuilt when the parts change.
 #[allow(clippy::too_many_arguments)]
@@ -1516,11 +1511,13 @@ fn sync_part_meshes(
     mut q: Query<(Entity, &mut PartMesh, &Mesh3d, &mut MeshMaterial3d<PartShading>)>,
     mut last: Local<Option<MeshKey>>,
     view: Res<ViewportView>,
+    section: Res<crate::section_view::SectionClip>,
     mut commands: Commands,
 ) {
     // P3E.3a: the Translucent render mode draws every part see-through.
     let see_through = view.view.render.translucent();
-    let key = (cache.generation, over.editing, ghosts.parts.clone(), see_through);
+    let excluded = if section.plane.is_some() { section.excluded.clone() } else { Vec::new() };
+    let key = (cache.generation, over.editing, ghosts.parts.clone(), see_through, excluded.clone());
     if last.as_ref() == Some(&key) && q.iter().count() == cache.shown().count() + cache.tool.iter().count() {
         return;
     }
@@ -1541,15 +1538,24 @@ fn sync_part_meshes(
         .translucent
         .get_or_insert_with(|| materials.add(PartShading { translucent: true, ..PartShading::new(true, true) }))
         .clone();
+    let twin = |i: usize, m: PartShading, materials: &mut Assets<PartShading>, mats: &mut PartMaterials| mats.unclipped[i].get_or_insert_with(|| materials.add(PartShading { unclipped: true, ..m })).clone();
+    let unclipped = [
+        twin(0, PartShading::new(false, false), &mut materials, &mut mats),
+        twin(1, PartShading::new(true, true), &mut materials, &mut mats),
+        twin(2, PartShading::new(false, true), &mut materials, &mut mats),
+        twin(3, PartShading { translucent: true, ..PartShading::new(true, true) }, &mut materials, &mut mats),
+    ];
     let material_for = |part: &Part, preview: bool, bases: &[FaceBase]| {
+        let whole = excluded.contains(&part.id);
+        let pick = |i: usize, m: &Handle<PartShading>| if whole { unclipped[i].clone() } else { m.clone() };
         if see_through && !preview {
-            translucent_mat.clone()
+            pick(3, &translucent_mat)
         } else if translucent(preview, bases) {
-            preview_mat.clone()
+            pick(1, &preview_mat)
         } else if two_sided(part, false) {
-            surface_mat.clone()
+            pick(2, &surface_mat)
         } else {
-            solid.clone()
+            pick(0, &solid)
         }
     };
     let mut have: HashMap<PartId, Entity> = HashMap::new();
@@ -1676,7 +1682,6 @@ fn draw_part_edges(
 ) {
     // P3E.3a: the tab's render mode, and the section view's plane (the edges are cut by it).
     let mode = view.view.render;
-    let clip = section.plane;
     // Each part's lines for this view direction, kept while neither changes (working them out for
     // every part every frame cost a large assembly most of its frame).
     let back = view.view.back();
@@ -1704,6 +1709,8 @@ fn draw_part_edges(
         _ => None,
     };
     for part in cache.shown().chain(cache.tool.iter()) {
+        // The section's cut, none for the parts it leaves whole.
+        let clip = section.clip_for(part.id);
         let preview = over.previews(part);
         let part_selected = selection.contains(Pick::Part(part.id))
             || (cache.assembly.is_some() && part.id.index > 0 && selection.contains(Pick::Part(PartId::new(part.id.feature, 0))));
@@ -1843,7 +1850,7 @@ fn draw_part_edges(
         // Vertices: a dot about 9 px across, facing the viewer.
         let rot = Quat::from_rotation_arc(Vec3::Z, v.back());
         for vx in &part.solid.vertices {
-            if clip.is_some_and(|(o, n)| (v3(vx.point) - o).dot(n) > 0.0) {
+            if clip.is_some_and(|c| c.removes(v3(vx.point))) {
                 continue;
             }
             let pick = Pick::Vertex(part.id, vx.name);
@@ -1864,7 +1871,7 @@ fn draw_part_edges(
 }
 
 /// Draws a polyline, cut by the section view's plane if there is one (P3E.3a).
-fn strip<T: GizmoConfigGroup>(g: &mut Gizmos<T>, clip: Option<(Vec3, Vec3)>, pts: impl IntoIterator<Item = Vec3>, color: Color) {
+fn strip<T: GizmoConfigGroup>(g: &mut Gizmos<T>, clip: Option<crate::section_view::Cut>, pts: impl IntoIterator<Item = Vec3>, color: Color) {
     match clip {
         None => g.linestrip(pts, color),
         Some(plane) => {
@@ -2151,12 +2158,19 @@ fn visible(cache: &PartCache, view: &ViewState, p: Vec3) -> bool {
 /// [`visible`], the faces the operation `skip` made (an open dialog's own preview) not in the way.
 fn visible_skipping(cache: &PartCache, view: &ViewState, p: Vec3, skip: Option<cadrs_sketch::OpId>) -> bool {
     let (o, d) = view.ray(view.project(p));
-    if let Some(s) = &cache.section
-        && (s.removes(p) || s.window(o, d).is_none())
-    {
-        return false;
-    }
     let depth = (p - o).dot(d);
+    // Cut away, or behind a cap (where the ray leaves the removed part on its way to `p`).
+    if let Some(s) = &cache.section {
+        if s.removes(p) {
+            return false;
+        }
+        if let Some((_, t1)) = s.cut.removed_span(o, o + d, 0.0, f32::MAX)
+            && t1 < depth
+            && s.capped(o + d * t1)
+        {
+            return false;
+        }
+    }
     // Two pixels' worth of slack, plus rounding of big coordinates.
     let slack = 2.0 * view.scale + 1e-4 * p.length().max(1.0);
     pick_opaque_face(cache, view, view.project(p), skip).is_none_or(|(_, _, t)| depth <= t + slack)
@@ -2173,7 +2187,7 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2, skip: Opt
         if clear {
             continue;
         }
-        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), o, d, |o| part.solid.pick_where(to64(o), to64(d), |face| skip.is_none_or(|op| face.name.op != op))) {
+        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), part.id, o, d, |o| part.solid.pick_where(to64(o), to64(d), |face| skip.is_none_or(|op| face.name.op != op))) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {
                 best = Some((part.id, part.solid.faces[f].name, t));
@@ -2312,7 +2326,7 @@ pub fn pick_face_skipping(
     let (o, d) = view.ray(offset);
     let mut best: Option<(PartId, FaceName, f32)> = None;
     for part in cache.pickable() {
-        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), o, d, |o| part.solid.pick_where(to64(o), to64(d), |f| Some(f.name.op) != skip)) {
+        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), part.id, o, d, |o| part.solid.pick_where(to64(o), to64(d), |f| Some(f.name.op) != skip)) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {
                 best = Some((part.id, part.solid.faces[f].name, t));

@@ -5,9 +5,9 @@
 #import bevy_pbr::forward_io::VertexOutput
 #import bevy_pbr::mesh_view_bindings::view
 
-// P3E.3a: the section view's clip plane and the render mode (`PartShadingParams`).
+// P3E.3a: the section view's planes and the render mode (`PartShadingParams`).
 struct PartShadingParams {
-    clip: vec4<f32>,
+    clip: array<vec4<f32>, 4>,
     style: vec4<f32>,
     // P3E.3b: the analysis tools (`crate::analysis`).
     analysis: vec4<f32>,
@@ -23,10 +23,26 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3(0.04045));
 }
 
+// The section view's planes (zero for none): `p` is cut away when it is past every plane.
+fn section_removed(clip: array<vec4<f32>, 4>, p: vec3<f32>) -> bool {
+    var planes = 0;
+    var removed = true;
+    for (var i = 0; i < 4; i++) {
+        let c = clip[i];
+        if (dot(c.xyz, c.xyz) > 0.5) {
+            planes += 1;
+            if (dot(c.xyz, p) <= c.w) {
+                removed = false;
+            }
+        }
+    }
+    return planes > 0 && removed;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    // The section view's removed side.
-    if (dot(params.clip.xyz, params.clip.xyz) > 0.5 && dot(params.clip.xyz, in.world_position.xyz) > params.clip.w) {
+    // The section view's removed part: on the removed side of every plane.
+    if (section_removed(params.clip, in.world_position.xyz)) {
         discard;
     }
     let len = length(in.world_normal);

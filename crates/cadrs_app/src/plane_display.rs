@@ -356,7 +356,7 @@ fn place_plane_feature_labels(
         let clear = corners.iter().find_map(|d| {
             let start = o + (w - u) * half + u * d.x - w * d.y;
             // P3E.3a judge: not on the side a section view removed.
-            if cut.is_some_and(|(co, cn)| cn.dot(start - co) > 0.0) {
+            if cut.is_some_and(|c| c.removes(start)) {
                 return None;
             }
             let corner = rect.to_screen(v.project(start)) - rect.0.min;
