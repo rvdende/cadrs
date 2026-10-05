@@ -120,8 +120,14 @@ pub enum SectionRef {
 /// The most section planes a section has (the shaders' clip planes).
 pub const MAX_PLANES: usize = 4;
 
+/// How far (mm) a section plane sits past where it was put, into its removed side, so the
+/// faces lying in it don't fight the caps (the same cut as an offset of 0.001 mm).
+pub const PLANE_NUDGE: f32 = 1e-3;
+
 /// One section plane: where it was picked (a point on it, centred on the parts, and its
-/// normal), the in-plane axis it turns about, and its flip, offset (mm) and angle (degrees).
+/// normal), an in-plane axis (how its rectangle is drawn), its flip and offset (mm), and how it
+/// was turned: by the gizmo's arc about the line of sight (so turning it in the Top view keeps
+/// it upright), or by the Angle field about `turn_axis`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionCutPlane {
     pub reference: SectionRef,
@@ -131,7 +137,10 @@ pub struct SectionCutPlane {
     pub axis: Vec3,
     pub flip: bool,
     pub offset: f32,
-    pub angle: f32,
+    pub turn: Quat,
+    /// The axis the Angle field reads and sets the turn about: the plane's in-plane axis until
+    /// the arc turns it, then the line of sight it was turned about.
+    pub turn_axis: Vec3,
 }
 
 impl SectionCutPlane {
@@ -142,26 +151,47 @@ impl SectionCutPlane {
             _ if n.cross(Vec3::Z).length() > 1e-3 => Vec3::Z.cross(n).normalize(),
             _ => Vec3::X,
         };
-        Self { reference, label, origin, normal: n, axis, flip: false, offset: 0.0, angle: 0.0 }
+        Self { reference, label, origin, normal: n, axis, flip: false, offset: 0.0, turn: Quat::IDENTITY, turn_axis: axis }
     }
 
-    /// The plane's normal turned by its angle (before the flip).
+    /// How far it is turned (degrees), signed about `turn_axis`.
+    pub fn angle(&self) -> f32 {
+        let (ax, a) = self.turn.to_axis_angle();
+        let a = if a > std::f32::consts::PI { a - std::f32::consts::TAU } else { a };
+        let deg = a.to_degrees();
+        if deg.abs() < 1e-3 {
+            0.0
+        } else if ax.dot(self.turn_axis) < 0.0 {
+            -deg
+        } else {
+            deg
+        }
+    }
+
+    /// Turns it `deg` from its picked orientation about `turn_axis`.
+    pub fn set_angle(&mut self, deg: f32) {
+        self.turn = Quat::from_axis_angle(self.turn_axis.normalize_or_zero(), deg.to_radians());
+    }
+
+    /// The plane's normal turned (before the flip).
     fn turned(&self) -> Vec3 {
-        let r = Quat::from_axis_angle(self.axis.normalize_or_zero(), self.angle.to_radians());
-        (r * self.normal).normalize_or_zero()
+        (self.turn * self.normal).normalize_or_zero()
     }
 
     /// The cutting plane: a point on it and the normal of the side removed. It is moved by the
-    /// offset along the picked normal and turned about the axis through that point.
+    /// offset along the picked normal and turned about that point, then a hair
+    /// ([`PLANE_NUDGE`]) into the removed side: a face lying in the plane (the face picked as
+    /// it) is kept and drawn whole, the caps only where the plane cuts material.
     pub fn plane(&self) -> (Vec3, Vec3) {
         let n = self.turned();
-        (self.origin + self.normal * self.offset, if self.flip { -n } else { n })
+        let removed = if self.flip { -n } else { n };
+        (self.origin + self.normal * self.offset + removed * PLANE_NUDGE, removed)
     }
 
-    /// The plane's in-plane axes as drawn: the turning axis and the one across it.
+    /// The plane's in-plane axes as drawn.
     fn axes(&self) -> (Vec3, Vec3) {
         let n = self.turned();
-        let u = self.axis.normalize_or_zero();
+        let u = (self.turn * self.axis).normalize_or_zero();
         (u, n.cross(u).normalize_or_zero())
     }
 }
@@ -333,9 +363,12 @@ pub struct SectionClip {
     pub excluded: Vec<PartId>,
     pub caps: Arc<Caps>,
     key: Option<Vec<CapKey>>,
-    pending: Vec<(CapKey, cadrs_core::rebuild::PendingJob<Vec<(PartId, Cap)>>)>,
-    cache: Vec<(CapKey, Arc<Vec<(PartId, Cap)>>)>,
+    pending: Vec<(CapKey, cadrs_core::rebuild::PendingJob<PlaneCaps>)>,
+    cache: Vec<(CapKey, Arc<PlaneCaps>)>,
 }
+
+/// One plane's caps as the kernel works them out, per part.
+type PlaneCaps = Vec<(PartId, Cap)>;
 
 /// A cap as drawn: its part, its plane's removed-side normal, its triangles and its outlines
 /// (only where the other planes remove too).
@@ -650,7 +683,7 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&Name>, mut commands: Commands)
             let Some(deg) = parse_degrees(&text) else { return };
             edit(world, |s| {
                 if let Some(p) = s.active_plane_mut() {
-                    p.angle = deg;
+                    p.set_angle(deg);
                 }
             });
         }
@@ -736,7 +769,7 @@ struct SectionDialog(String);
 
 /// A plane's row: "Section plane 2 (Right plane)", its angle when turned.
 fn plane_row(i: usize, p: &SectionCutPlane) -> String {
-    let angle = if p.angle != 0.0 { format!(", {} deg", fmt_deg(p.angle)) } else { String::new() };
+    let angle = if p.angle() != 0.0 { format!(", {} deg", fmt_deg(p.angle())) } else { String::new() };
     format!("Section plane {} ({}{angle})", i + 1, p.label)
 }
 
@@ -750,7 +783,7 @@ fn section_dialog(t: &Theme, s: &SectionState, part_names: Vec<String>, offset: 
     let rows: Vec<String> = s.planes.iter().enumerate().map(|(i, p)| plane_row(i, p)).collect();
     let active = s.active_plane();
     let flipped = active.is_some_and(|p| p.flip);
-    let angle = active.map(|p| format!("{} deg", fmt_deg(p.angle))).unwrap_or_else(|| "0 deg".into());
+    let angle = active.map(|p| format!("{} deg", fmt_deg(p.angle()))).unwrap_or_else(|| "0 deg".into());
     let has_plane = active.is_some();
     let (mode, field) = (s.mode, s.field);
     FeatureDialog::new("section-dialog")
@@ -938,14 +971,14 @@ fn compute_caps(views: Res<SectionViews>, doc: Option<Res<ActiveDocument>>, mut 
 
 impl SectionClip {
     /// Each plane's caps from the cache, in the planes' order.
-    fn caps_raw(&self, keys: &[CapKey]) -> Vec<Arc<Vec<(PartId, Cap)>>> {
+    fn caps_raw(&self, keys: &[CapKey]) -> Vec<Arc<PlaneCaps>> {
         keys.iter().map(|k| self.cache.iter().find(|(c, _)| c == k).map(|(_, v)| v.clone()).unwrap_or_default()).collect()
     }
 }
 
 /// The caps as drawn: each plane's, kept only where the other planes remove too (two planes
 /// meet in a wedge, each cap stopping at the other plane).
-fn combine(raw: &[Arc<Vec<(PartId, Cap)>>], cut: &Cut) -> Caps {
+fn combine(raw: &[Arc<PlaneCaps>], cut: &Cut) -> Caps {
     let v = |p: [f32; 3]| Vec3::from_array(p);
     let mut out = Vec::new();
     for (i, caps) in raw.iter().enumerate() {
@@ -1238,7 +1271,7 @@ fn sync_section_plane(
     // the dialog is open: no second rectangle on it.
     let own_square = |p: &SectionCutPlane| {
         p.offset == 0.0
-            && p.angle == 0.0
+            && p.turn == Quat::IDENTITY
             && match p.reference {
                 SectionRef::Plane(_) => true,
                 SectionRef::Feature(f) => cache.planes.contains_key(&f),
@@ -1310,11 +1343,11 @@ pub struct SectionArrowDrag {
     px_per_mm: f32,
 }
 
-/// A drag on the rotation arc: the plane turns about its axis through `centre`, following the
-/// pointer's angle about it.
+/// A drag on the rotation arc: the plane turns about the line of sight through `centre` (as
+/// the view looked at the press), following the pointer's angle about it.
 #[derive(Debug, Clone, Copy)]
 pub struct SectionTurnDrag {
-    start_angle: f32,
+    start_turn: Quat,
     centre: Vec3,
     axis: Vec3,
     /// The pointer's angle (radians) about the axis at the press, measured from `zero`.
@@ -1353,18 +1386,31 @@ const ARROW_LEN: f32 = 64.0;
 const ARC_PX: f32 = 60.0;
 const ARC_HALF_DEG: f32 = 40.0;
 
-/// The rotation arc's points (world): round the turning axis through the gizmo's centre, from
-/// −40° to 40° about the removed side's normal.
-fn arc_points(p: &SectionCutPlane, view: &crate::camera::ViewState) -> Vec<Vec3> {
+/// The direction the arc starts from: the removed side's normal as the view sees it (square to
+/// the line of sight), or the plane's axis when the plane faces the view.
+fn arc_zero(p: &SectionCutPlane, sight: Vec3) -> Option<Vec3> {
     let (_, n) = p.plane();
+    let e = n - sight * n.dot(sight);
+    if e.length() > 1e-3 {
+        return Some(e.normalize());
+    }
     let (u, _) = p.axes();
+    let e = u - sight * u.dot(sight);
+    (e.length() > 1e-3).then(|| e.normalize())
+}
+
+/// The rotation arc's points (world): round the line of sight through the gizmo's centre (a
+/// circle on screen), from −40° to 40° about the removed side's normal as seen.
+fn arc_points(p: &SectionCutPlane, view: &crate::camera::ViewState) -> Vec<Vec3> {
+    let w = view.back().normalize_or_zero();
+    let Some(e) = arc_zero(p, w) else { return Vec::new() };
     let c = gizmo_centre(p);
-    let px_per_mm = view.project_vector(n).length().max(view.project_vector(n.cross(u)).length()).max(1e-6);
+    let px_per_mm = view.project_vector(e).length().max(1e-6);
     let r = ARC_PX / px_per_mm;
     (0..=24)
         .map(|k| {
             let a = (-ARC_HALF_DEG + 2.0 * ARC_HALF_DEG * k as f32 / 24.0).to_radians();
-            c + (Quat::from_axis_angle(u, a) * n) * r
+            c + (Quat::from_axis_angle(w, a) * e) * r
         })
         .collect()
 }
@@ -1433,11 +1479,13 @@ fn section_arrow_pointer(
                         grab.0 = true;
                     }
                 } else if near_arc(pos, &arrow.arc) {
+                    // Turned about the line of sight: in the Top view the plane stays upright.
                     let c = gizmo_centre(&p);
-                    let axis = p.axis.normalize_or_zero();
-                    let zero = p.normal;
-                    if let Some(a) = pointer_angle(o, d, c, axis, zero) {
-                        arrow.turn = Some(SectionTurnDrag { start_angle: p.angle, centre: c, axis, start_pointer: a, zero });
+                    let axis = view.view.back().normalize_or_zero();
+                    if let Some(zero) = arc_zero(&p, axis)
+                        && let Some(a) = pointer_angle(o, d, c, axis, zero)
+                    {
+                        arrow.turn = Some(SectionTurnDrag { start_turn: p.turn, centre: c, axis, start_pointer: a, zero });
                         grab.0 = true;
                     }
                 }
@@ -1468,11 +1516,13 @@ fn section_arrow_pointer(
                     if delta < -180.0 {
                         delta += 360.0;
                     }
-                    let angle = (d.start_angle + delta).round().clamp(-89.0, 89.0);
+                    // 1° steps.
+                    let turn = (Quat::from_axis_angle(d.axis, delta.round().to_radians()) * d.start_turn).normalize();
                     if let Some(p) = views.per.get_mut(&el).and_then(|s| s.active_plane_mut())
-                        && p.angle != angle
+                        && !p.turn.abs_diff_eq(turn, 1e-6)
                     {
-                        p.angle = angle;
+                        p.turn = turn;
+                        p.turn_axis = d.axis;
                     }
                 }
             }
@@ -1539,19 +1589,19 @@ fn place_section_arrow(
         gizmos.linestrip(arc.iter().copied(), color);
         // Its handle: a small ring at its middle.
         if let (Some(p), Some(mid)) = (plane.as_ref(), arc.get(arc.len() / 2)) {
-            let (u, _) = p.axes();
-            let px = view.view.project_vector(u).length().max(1e-6);
-            gizmos.circle(Isometry3d::new(*mid, Quat::from_rotation_arc(Vec3::Z, u)), 5.0 / px, color);
+            let w = view.view.back().normalize_or_zero();
+            let px = arc_zero(p, w).map_or(1.0, |e| view.view.project_vector(e).length()).max(1e-6);
+            gizmos.circle(Isometry3d::new(*mid, Quat::from_rotation_arc(Vec3::Z, w)), 5.0 / px, color);
         }
     }
     // The angle readout, by the arc's end while turned or turning.
-    let label = plane.as_ref().filter(|p| p.angle != 0.0 || arrow.turn.is_some()).zip(arc_screen.last().copied());
+    let label = plane.as_ref().filter(|p| p.angle() != 0.0 || arrow.turn.is_some()).zip(arc_screen.last().copied());
     match (label, q_label.iter_mut().next()) {
         (Some((p, at)), Some((_, mut node, children))) => {
             let local = at - rect.0.min;
             node.left = Val::Px(local.x + 8.0);
             node.top = Val::Px(local.y - 10.0);
-            let text = format!("{} deg", fmt_deg(p.angle));
+            let text = format!("{} deg", fmt_deg(p.angle()));
             for c in children.iter() {
                 if let Ok(mut t) = q_text.get_mut(c)
                     && t.0 != text
@@ -1580,7 +1630,7 @@ fn place_section_arrow(
                         BorderColor::all(theme.primary),
                         Pickable::IGNORE,
                         DespawnOnExit(AppState::Document),
-                        children![(Text::new(format!("{} deg", fmt_deg(p.angle))), TextFont { font_size: bevy::text::FontSize::Px(12.0), ..default() }, TextColor(theme.foreground), Pickable::IGNORE)],
+                        children![(Text::new(format!("{} deg", fmt_deg(p.angle()))), TextFont { font_size: bevy::text::FontSize::Px(12.0), ..default() }, TextColor(theme.foreground), Pickable::IGNORE)],
                     ))
                     .id();
                 commands.entity(area).add_child(label);
@@ -1823,10 +1873,19 @@ mod tests {
         // The Top plane turned 30° about its u axis (x): the removed side's normal leans to −y.
         let mut p = SectionCutPlane::new(SectionRef::Plane(PlaneKind::Top), "Top plane".into(), Vec3::ZERO, Vec3::Z);
         p.offset = 5.0;
-        p.angle = 30.0;
+        p.set_angle(30.0);
         let (o, n) = p.plane();
-        assert!((o - Vec3::new(0.0, 0.0, 5.0)).length() < 1e-5);
+        assert!((o - Vec3::new(0.0, 0.0, 5.0)).length() < 2e-3);
         assert!((n - Vec3::new(0.0, -0.5, 3f32.sqrt() / 2.0)).length() < 1e-5, "{n}");
+        assert!((p.angle() - 30.0).abs() < 1e-3);
+        // The Front plane turned about the line of sight from Top (z): it stays upright, its
+        // normal swung in the XY plane.
+        let mut f = SectionCutPlane::new(SectionRef::Plane(PlaneKind::Front), "Front plane".into(), Vec3::ZERO, PlaneKind::Front.normal());
+        f.turn = Quat::from_axis_angle(Vec3::Z, 25f32.to_radians());
+        f.turn_axis = Vec3::Z;
+        let (_, n) = f.plane();
+        assert!(n.z.abs() < 1e-6, "{n}");
+        assert!((f.angle() - 25.0).abs() < 1e-3);
         assert_eq!(parse_degrees("25 deg"), Some(25.0));
         assert_eq!(parse_degrees("-10°"), Some(-10.0));
     }
@@ -1840,7 +1899,10 @@ mod tests {
         let mut p = SectionCutPlane::new(SectionRef::Plane(PlaneKind::Top), "Top plane".into(), Vec3::ZERO, Vec3::Z);
         p.offset = 5.0;
         p.flip = true;
-        assert_eq!(p.plane(), (Vec3::new(0.0, 0.0, 5.0), -Vec3::Z));
+        let (o, n) = p.plane();
+        assert_eq!(n, -Vec3::Z);
+        // Nudged a hair into the removed side (−z).
+        assert!((o - Vec3::new(0.0, 0.0, 5.0 - PLANE_NUDGE)).length() < 1e-6, "{o}");
         assert_eq!(SectionState::default().cut(), None);
     }
 }

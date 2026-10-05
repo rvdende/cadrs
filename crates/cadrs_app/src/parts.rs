@@ -1518,7 +1518,7 @@ fn sync_part_meshes(
     let see_through = view.view.render.translucent();
     let excluded = if section.plane.is_some() { section.excluded.clone() } else { Vec::new() };
     let key = (cache.generation, over.editing, ghosts.parts.clone(), see_through, excluded.clone());
-    if last.as_ref() == Some(&key) && q.iter().count() == cache.shown().count() + cache.tool.iter().count() {
+    if last.as_ref() == Some(&key) && q.iter().count() == cache.shown().count() + cache.tool.len() {
         return;
     }
     *last = Some(key);

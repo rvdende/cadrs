@@ -151,6 +151,9 @@ Scenario(
         Screenshot("15-feature-menu-section-item"),
         Key("Escape"),
         Wait(5),
+        // Nothing selected (the right-click selected Sketch 2): the face is the only plane.
+        Key("Space"),
+        Wait(5),
         Click(ui("view-section")),
         WaitFor("section-dialog"),
         Wait(5),
