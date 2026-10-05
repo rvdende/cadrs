@@ -48,6 +48,7 @@ impl Plugin for ViewportPlugin {
             .init_resource::<DialogInset>()
             .init_resource::<PlaneHighlight>()
             .init_resource::<HoverOverride>()
+            .init_resource::<ExtraHighlight>()
             .init_resource::<PickFilterOverride>()
             .init_resource::<Selection>()
             .init_resource::<ViewportDrag>()
@@ -348,8 +349,15 @@ pub fn plane_pick(p: PlaneRef) -> Option<Pick> {
     }
 }
 
-/// How a field names a plane: "Top plane", or a Plane feature's name ("Lower Plane").
+/// How a field names a plane: "Top plane", a Plane feature's name ("Lower Plane"), or a sheet
+/// metal flat pattern's "Face of Sheet metal model 1" (P3I.6, lesson t0052).
 pub fn plane_label(features: &[cadrs_core::Feature], p: PlaneRef) -> String {
+    if let PlaneRef::Feature(f) = p
+        && let Some((model, _)) = cadrs_core::sheetmetal_flat::flat_target(features, f.feature)
+    {
+        let name = features.iter().find(|x| x.id == model).map_or("Sheet metal model", |x| x.name.as_str());
+        return format!("Face of {name}");
+    }
     match p {
         PlaneRef::Feature(f) => features
             .iter()
@@ -421,6 +429,16 @@ impl PlaneHighlight {
 /// dialog's Shift lock, A6.5).
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct HoverOverride(pub Option<Pick>);
+
+/// Entities a panel or dialog lights up besides the pointer's and the selection's: `hovered`
+/// draws in the hover orange (a Sheet metal table row's joint, all its faces), `selected` in the
+/// selection amber without being selected (the Modify joint dialog's joint). Each owner sets
+/// its own list and clears it when done.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct ExtraHighlight {
+    pub hovered: Vec<Pick>,
+    pub selected: Vec<Pick>,
+}
 
 /// A panel's own picking (P3F.5: the simulation's load dialog picks faces): while set, clicks
 /// and hover in the view (Part Studio or Assembly) use this filter and the picks go to that
@@ -1939,14 +1957,17 @@ fn place_plane_labels(
     // P3E.3a judge: a label whose corner a section view cut away hides with it.
     let cut = section.and_then(|s| s.plane);
     // The parts' screen bounds (viewport-relative): a label over a part would draw over its
-    // edges, so it hides.
+    // edges, so it hides. From the corners of each part's 3D box (a little larger than its
+    // outline; projecting every vertex of every part each frame cost a large assembly most of
+    // its frame).
     let part_boxes: Vec<Rect> = parts
         .iter()
         .flat_map(|c| c.parts.iter())
         .filter_map(|part| {
-            let mut pts = part.solid.positions.iter().map(|p| {
-                rect.to_screen(v.project(Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)))
-                    - rect.0.min
+            let (lo, hi) = part.solid.pick_index().bounds?;
+            let mut pts = (0..8).map(|k| {
+                let c = [if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }];
+                rect.to_screen(v.project(Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32))) - rect.0.min
             });
             let first = pts.next()?;
             Some(pts.fold(Rect::from_corners(first, first), |r, p| r.union_point(p)))
@@ -1998,6 +2019,14 @@ fn place_plane_labels(
             size,
         ]
         .map(|q| corner + a * (pad.x + q.x) + b * (pad.y + q.y));
+        // Clipped to the viewport: a rotated label's glyphs escape the area's clip and drew
+        // over the toolbar (P3I.2 judge, `sheetmetal_extrude`), so a label not wholly inside
+        // hides, as the Plane features' and the sketch plane's do.
+        let inside = Rect::from_corners(Vec2::ZERO, rect.0.size());
+        if label_box.iter().any(|p| !inside.contains(*p)) {
+            vis.set_if_neq(Visibility::Hidden);
+            continue;
+        }
         let label_box = label_box[1..]
             .iter()
             .fold(Rect::from_corners(label_box[0], label_box[0]), |r, p| {

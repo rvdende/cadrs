@@ -31,7 +31,7 @@ pub fn use_loop(s: &mut Sketch, items: &[(Projected, Link)]) -> Result<Vec<(Curv
     }
     let mut used: Vec<CurveId> = Vec::new();
     for (shape, link) in items {
-        let id = s.add_projected(*shape, *link).ok_or("the face's edges are already used")?;
+        let id = s.add_projected(shape.clone(), *link).ok_or("the face's edges are already used")?;
         if let Some(c) = s.curves.get_mut(id) {
             c.construction = true;
         }
@@ -103,15 +103,15 @@ pub fn outer_loop(items: &[(Projected, Link)]) -> Vec<(Projected, Link)> {
     let mut left: Vec<(Projected, Link)> = Vec::new();
     for it in items {
         if matches!(it.0, Projected::Circle(..)) {
-            loops.push(vec![*it]);
+            loops.push(vec![it.clone()]);
         } else if ends(&it.0).is_some() {
-            left.push(*it);
+            left.push(it.clone());
         }
     }
     let size = loop_size(items).max(1.0);
     let near = |a: crate::Vec2, b: crate::Vec2| a.distance(b) <= 1e-6 * size;
     while let Some(first) = left.pop() {
-        let mut lp = vec![first];
+        let mut lp = vec![first.clone()];
         let (start, mut at) = ends(&first.0).expect("filtered");
         while !near(at, start) {
             let Some(i) = left.iter().position(|(p, _)| ends(p).is_some_and(|(a, b)| near(a, at) || near(b, at))) else {

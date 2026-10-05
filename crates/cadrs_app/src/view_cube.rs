@@ -220,16 +220,23 @@ pub fn face_label_alpha(facing: f32) -> f32 {
 fn fade_face_labels(
     view: Res<ViewportView>,
     repair: Option<Res<crate::repair::Repair>>,
+    (sm, panel): (Option<Res<crate::sheetmetal_table::SmTable>>, Option<Res<crate::appearance::SidePanel>>),
     q: Query<(&FaceLabel, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let back = view.view.back();
     // P3D.4: the Repair panel's cube shares the faces; a label it faces shows too (a face
-    // turned away from the main view is hidden there by the cube itself).
-    let other = repair.filter(|r| r.open).map(|r| r.view.back());
+    // turned away from the main view is hidden there by the cube itself). So does the Sheet
+    // metal table's flat view cube (its Top stays labelled when the main view looks from below).
+    let mut others: Vec<Vec3> = repair.filter(|r| r.open).map(|r| r.view.back()).into_iter().collect();
+    if panel.is_some_and(|p| *p == crate::appearance::SidePanel::SheetMetal)
+        && let Some(t) = sm
+    {
+        others.push(t.view.back());
+    }
     for (label, mat) in &q {
         let n = label.0.normal();
-        let a = face_label_alpha(other.map_or(n.dot(back), |o| n.dot(back).max(n.dot(o))));
+        let a = face_label_alpha(others.iter().fold(n.dot(back), |m, o| m.max(n.dot(*o))));
         // Premultiplied: scale every channel.
         let c = Color::LinearRgba(LinearRgba::new(a, a, a, a));
         if let Some(m) = materials.get(&mat.0)
@@ -963,43 +970,50 @@ fn place_cube_labels(
     view: Res<ViewportView>,
     mut q_axis: Query<(&AxisLabel, &ComputedNode, &mut Node, &mut TextColor)>,
 ) {
-    let v = cube_view(&view.view);
     for (axis, node_c, mut node, mut color) in &mut q_axis {
-        let tip = TRIAD_ORIGIN + axis.0 * (TRIAD_LEN + 0.35);
-        // An axis pointing (nearly) at the viewer has no label, as in Onshape's normal views
-        // (`screens/09` shows only X and Y); a tip behind the cube shows faintly, as if seen
-        // through it.
-        let along = axis.0.dot(v.back());
-        let a = if along.abs() > 0.9 {
-            0.0
-        } else if along < -0.3 {
-            0.45
-        } else {
-            1.0
-        };
+        let size = node_c.size() * node_c.inverse_scale_factor();
+        let (p, a) = axis_label_spot(&view.view, axis.0, size);
         if (color.0.alpha() - a).abs() > 1e-3 {
             color.0.set_alpha(a);
         }
-        let size = node_c.size() * node_c.inverse_scale_factor();
-        // A tip in front of the cube's face labels moves out along its axis until the label
-        // clears the cube's outline, so "Z" never sits on "Top".
-        let mut offset = v.project(tip);
-        let dir = v.project_vector(axis.0).normalize_or_zero();
-        let clear = CUBE_PX * 1.62 + size.max_element() / 2.0;
-        if along > -0.3 && dir.dot(offset) > 0.0 {
-            let mut n = 0;
-            while offset.length() < clear && n < 40 {
-                offset += dir * 2.0;
-                n += 1;
-            }
-        }
-        let p = CUBE_CENTER + offset;
-        let (l, t) = (Val::Px(p.x - size.x / 2.0), Val::Px(p.y - size.y / 2.0));
+        let (l, t) = (Val::Px(p.x), Val::Px(p.y));
         if node.left != l || node.top != t {
             node.left = l;
             node.top = t;
         }
     }
+}
+
+/// Where an axis letter of the cube's triad goes for `view` (its label's top-left in the cube
+/// widget, for a label of `size`) and its opacity: the main cube's and the flat view's.
+pub(crate) fn axis_label_spot(view: &ViewState, axis: Vec3, size: Vec2) -> (Vec2, f32) {
+    let v = cube_view(view);
+    let tip = TRIAD_ORIGIN + axis * (TRIAD_LEN + 0.35);
+    // An axis pointing (nearly) at the viewer has no label, as in Onshape's normal views
+    // (`screens/09` shows only X and Y); a tip behind the cube shows faintly, as if seen
+    // through it.
+    let along = axis.dot(v.back());
+    let a = if along.abs() > 0.9 {
+        0.0
+    } else if along < -0.3 {
+        0.45
+    } else {
+        1.0
+    };
+    // A tip in front of the cube's face labels moves out along its axis until the label
+    // clears the cube's outline, so "Z" never sits on "Top".
+    let mut offset = v.project(tip);
+    let dir = v.project_vector(axis).normalize_or_zero();
+    let clear = CUBE_PX * 1.62 + size.max_element() / 2.0;
+    if along > -0.3 && dir.dot(offset) > 0.0 {
+        let mut n = 0;
+        while offset.length() < clear && n < 40 {
+            offset += dir * 2.0;
+            n += 1;
+        }
+    }
+    let p = CUBE_CENTER + offset;
+    (Vec2::new(p.x - size.x / 2.0, p.y - size.y / 2.0), a)
 }
 
 fn on_cube_click(

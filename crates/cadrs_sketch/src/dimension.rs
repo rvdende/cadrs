@@ -10,7 +10,7 @@
 //!   other entity's side of it measures to the near side, clicking it on the other side to the
 //!   far side ([`propose_at`], `intro-to-sketching.md` S13.4: "clicking near the outside
 //!   dimensions to the outside; clicking near the inside dimensions to the inside"). Two
-//!   concentric circles give the ring's width.
+//!   concentric circles give the ring's width, wherever they were clicked.
 //! - [`measure`]: a dimension's current value on the geometry.
 //! - [`label_params`]: where a dragged label puts the dimension (its `offset` and `along`).
 //! - [`layout`]: what to draw: extension lines, the dimension line (with a gap for the value),
@@ -131,12 +131,16 @@ pub fn measure(s: &Sketch, kind: DimensionKind) -> Option<f64> {
             let h = c.distance(foot(c, a, b));
             if far { h + r } else { (h - r).abs() }
         }
-        DimensionKind::CircleCircle { a, b, far_a, far_b } => {
+        DimensionKind::CircleCircle { a, b, far_a, far_b, axis } => {
             let (c1, r1) = round(s, a)?;
             let (c2, r2) = round(s, b)?;
             let rho1 = if far_a { -r1 } else { r1 };
             let rho2 = if far_b { -r2 } else { r2 };
-            (c1.distance(c2) - rho1 - rho2).abs()
+            let d = match axis {
+                None => c1.distance(c2),
+                Some(axis) => (c2 - c1).dot(axis.dir()).abs(),
+            };
+            (d - rho1 - rho2).abs()
         }
         DimensionKind::Offset { source, target } => offset_value(s, source, target)?,
         // The whole axis (`entity_tools/ellipse-04.png` draws it across the ellipse; the help
@@ -168,14 +172,25 @@ pub fn offset_value(s: &Sketch, source: crate::CurveId, target: crate::CurveId) 
     Some((r1 - r2).abs())
 }
 
-/// Whether a dimension to a circle measures to its far side: the circle was clicked at
-/// `click` (sketch mm), and the other entity is at `other`. Clicking on the other entity's
-/// side of the curve (both inside it, or both outside) measures to the near side; without a
-/// click, the near side.
-pub fn far_side(center: Vec2, radius: f64, click: Option<Vec2>, other: Vec2) -> bool {
-    let other_outside = other.distance(center) > radius;
-    let click_outside = click.map_or(other_outside, |k| k.distance(center) > radius);
-    click_outside != other_outside
+/// Whether a dimension to a circle measures to its far side: the circle (centered at
+/// `center`) was clicked at `click` (sketch mm), and the dimension runs from it along
+/// `toward` (to the other entity). Clicking the half of the circle that faces the other
+/// entity measures to the near side, the half away from it to the far side, wherever on that
+/// half and whether just inside or just outside the curve; without a click (or with nothing
+/// to face), the near side.
+pub fn far_side(center: Vec2, click: Option<Vec2>, toward: Vec2) -> bool {
+    click.is_some_and(|k| (k - center).dot(toward) < -1e-9 * toward.length())
+}
+
+/// The unit direction a circle-to-circle dimension runs in from the first center to the
+/// second: along the line through them, or along `axis` (pointing toward the second).
+fn circles_dir(c1: Vec2, c2: Vec2, axis: Option<crate::Axis>) -> Vec2 {
+    let d = c2 - c1;
+    let u = match axis {
+        None => d.normalize(),
+        Some(axis) => axis.dir() * if d.dot(axis.dir()) < 0.0 { -1.0 } else { 1.0 },
+    };
+    if u == Vec2::ZERO { Vec2::new(1.0, 0.0) } else { u }
 }
 
 /// The two measured points of a dimension to circles (on the first entity, then on the
@@ -204,13 +219,13 @@ fn circle_attachments(s: &Sketch, kind: DimensionKind, angle: f64) -> Option<(Ve
             let t = c + u * rho(r, far);
             (foot(t, a, b), t)
         }
-        DimensionKind::CircleCircle { a, b, far_a, far_b } => {
+        DimensionKind::CircleCircle { a, b, far_a, far_b, axis } => {
             let (c1, r1) = round(s, a)?;
             let (c2, r2) = round(s, b)?;
             let u = if kind.radial(s) {
                 Vec2::from_angle(angle)
             } else {
-                dir(c1, c2)
+                circles_dir(c1, c2, axis)
             };
             (c1 + u * rho(r1, far_a), c2 - u * rho(r2, far_b))
         }
@@ -296,7 +311,8 @@ fn classify(s: &Sketch, e: SketchEntity) -> Option<Pick> {
             CurveKind::Arc { .. } => Pick::Arc(c),
             CurveKind::Ellipse { .. } => Pick::Ellipse(c),
             // An offset ellipse is dimensioned by its Offset dimension only.
-            CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } => return None,
+            // An elliptical arc (a projected part edge) is sized by its source.
+            CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } => return None,
             // A Bézier curve is sized by its points (dimension those).
             CurveKind::Bezier { .. } => return None,
         },
@@ -363,13 +379,6 @@ pub fn propose_at(
 ) -> Option<Dimension> {
     let p: Option<Vec<Pick>> = picks.iter().map(|(e, _)| classify(s, *e)).collect();
     let click = |i: usize| picks.get(i).and_then(|(_, k)| *k);
-    let other_pos = |p: Pick| -> Option<Vec2> {
-        match p {
-            Pick::Point(r) => point_pos(s, r),
-            Pick::Circle(c) | Pick::Arc(c) => round(s, c).map(|(c, _)| c),
-            Pick::Line(_) | Pick::Ellipse(_) => None,
-        }
-    };
     let kind = match p?.as_slice() {
         [Pick::Line(l)] => {
             let CurveRef::Curve(c) = *l else { return None };
@@ -431,32 +440,46 @@ pub fn propose_at(
             (Pick::Point(p), Pick::Circle(c) | Pick::Arc(c))
             | (Pick::Circle(c) | Pick::Arc(c), Pick::Point(p)) => {
                 let ci = if matches!(*a, Pick::Point(_)) { 1 } else { 0 };
-                let (center, r) = round(s, c)?;
+                let (center, _) = round(s, c)?;
                 DimensionKind::PointCircle {
                     p,
                     circle: c,
-                    far: far_side(center, r, click(ci), point_pos(s, p)?),
+                    far: far_side(center, click(ci), point_pos(s, p)? - center),
                 }
             }
             (Pick::Line(line), Pick::Circle(c) | Pick::Arc(c))
             | (Pick::Circle(c) | Pick::Arc(c), Pick::Line(line)) => {
                 let ci = if matches!(*a, Pick::Line(_)) { 1 } else { 0 };
-                let (center, r) = round(s, c)?;
+                let (center, _) = round(s, c)?;
                 let (la, lb) = line_ends(s, line)?;
                 DimensionKind::LineCircle {
                     line,
                     circle: c,
-                    far: far_side(center, r, click(ci), foot(center, la, lb)),
+                    far: far_side(center, click(ci), foot(center, la, lb) - center),
                 }
             }
             (Pick::Circle(ca) | Pick::Arc(ca), Pick::Circle(cb) | Pick::Arc(cb)) => {
-                let (pa, ra) = round(s, ca)?;
-                let (pb, rb) = round(s, cb)?;
-                DimensionKind::CircleCircle {
-                    a: ca,
-                    b: cb,
-                    far_a: far_side(pa, ra, click(0), other_pos(*b)?),
-                    far_b: far_side(pb, rb, click(1), other_pos(*a)?),
+                let (pa, _) = round(s, ca)?;
+                let (pb, _) = round(s, cb)?;
+                if pa.distance(pb) < 1e-6 {
+                    // Concentric: always the ring's width, as Onshape does (where the edges
+                    // were clicked can't pick a side, since the centers coincide).
+                    DimensionKind::CircleCircle { a: ca, b: cb, far_a: false, far_b: true, axis: None }
+                } else {
+                    // The label picks the direction as for two points (the centers).
+                    let axis = match linear_orientation(pa, pb, cursor) {
+                        Orientation::Horizontal => Some(crate::Axis::Horizontal),
+                        Orientation::Vertical => Some(crate::Axis::Vertical),
+                        Orientation::Aligned => None,
+                    };
+                    let u = circles_dir(pa, pb, axis);
+                    DimensionKind::CircleCircle {
+                        a: ca,
+                        b: cb,
+                        far_a: far_side(pa, click(0), u),
+                        far_b: far_side(pb, click(1), -u),
+                        axis,
+                    }
                 }
             }
             (Pick::Line(a), Pick::Line(b)) => {
@@ -529,6 +552,12 @@ fn point_to_line(s: &Sketch, p: PointRef, line: CurveRef, cursor: Vec2) -> Optio
 fn linear_frame(s: &Sketch, kind: DimensionKind, angle: f64) -> Option<(Vec2, Vec2, Vec2, Vec2)> {
     let pos = |p| s.points.get(p).map(|p| p.pos);
     Some(match kind {
+        // Horizontal or vertical between two circles' extremes.
+        DimensionKind::CircleCircle { axis: Some(axis), .. } if !kind.radial(s) => {
+            let (p1, p2) = circle_attachments(s, kind, angle)?;
+            let u = axis.dir();
+            (p1, p2, u, Vec2::new(u.y, u.x))
+        }
         DimensionKind::PointCircle { .. }
         | DimensionKind::LineCircle { .. }
         | DimensionKind::CircleCircle { .. }
@@ -670,7 +699,12 @@ fn round(s: &Sketch, curve: crate::CurveId) -> Option<(Vec2, f64)> {
     match s.curves.get(curve)?.kind {
         CurveKind::Circle { center, radius } => Some((s.points.get(center)?.pos, radius)),
         CurveKind::Arc { .. } => s.arc_geom(curve).map(|g| (g.center, g.radius)),
-        CurveKind::Line { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => None,
+        CurveKind::Line { .. }
+        | CurveKind::Ellipse { .. }
+        | CurveKind::EllipseOffset { .. }
+        | CurveKind::EllipseArc { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::Bezier { .. } => None,
     }
 }
 
@@ -1363,21 +1397,30 @@ mod tests {
             assert!((r - 75.0).abs() < 1e-6 || (r - 40.0).abs() < 1e-6, "{r}");
             assert!((tip.angle() - cursor.angle()).abs() < 1e-6);
         }
-        // Both clicked outside: across the center (75 + 40).
-        let across = propose_at(
-            &s,
-            &[(e(big), Some(v(0.0, 76.0))), (e(small), Some(v(0.0, 41.0)))],
-            cursor,
-        )
-        .unwrap();
-        assert!((across.value - 115.0).abs() < 1e-9);
+        // Wherever the edges were clicked (here both just outside), the ring's width.
+        for clicks in [(76.0, 41.0), (74.0, 39.0), (76.0, 39.0), (75.0, 40.0)] {
+            let d = propose_at(
+                &s,
+                &[(e(big), Some(v(0.0, clicks.0))), (e(small), Some(v(0.0, clicks.1)))],
+                cursor,
+            )
+            .unwrap();
+            assert!((d.value - 35.0).abs() < 1e-9, "{clicks:?} {d:?}");
+            let d = propose_at(
+                &s,
+                &[(e(small), Some(v(0.0, clicks.1))), (e(big), Some(v(0.0, clicks.0)))],
+                cursor,
+            )
+            .unwrap();
+            assert!((d.value - 35.0).abs() < 1e-9, "{clicks:?} {d:?}");
+        }
         // A line and a circle: clicked on the line's side (outside), the near side: 120 - 75.
         let near = propose_at(&s, &[(e(l), None), (e(big), Some(v(76.0, 0.0)))], v(100.0, 60.0))
             .unwrap();
         assert!(matches!(near.kind, DimensionKind::LineCircle { far: false, .. }));
         assert!((near.value - 45.0).abs() < 1e-9);
-        // Clicked inside the circle: to the far side, 120 + 75.
-        let far = propose_at(&s, &[(e(l), None), (e(big), Some(v(74.0, 0.0)))], v(100.0, 60.0))
+        // Clicked on the half away from the line: to the far side, 120 + 75.
+        let far = propose_at(&s, &[(e(l), None), (e(big), Some(v(-74.0, 0.0)))], v(100.0, 60.0))
             .unwrap();
         assert!((far.value - 195.0).abs() < 1e-9);
         // A point and a circle.
@@ -1385,7 +1428,7 @@ mod tests {
         let d = propose_at(&s, &[(p, None), (e(small), Some(v(41.0, 0.0)))], v(80.0, 10.0)).unwrap();
         let want = v(120.0, -50.0).length() - 40.0;
         assert!((d.value - want).abs() < 1e-9);
-        let d = propose_at(&s, &[(p, None), (e(small), Some(v(39.0, 0.0)))], v(80.0, 10.0)).unwrap();
+        let d = propose_at(&s, &[(p, None), (e(small), Some(v(-39.0, 0.0)))], v(80.0, 10.0)).unwrap();
         assert!((d.value - (want + 80.0)).abs() < 1e-9);
         // The center of a circle with the circle is not a distance.
         let center = s.curve_points(small)[0];
@@ -1461,5 +1504,111 @@ mod tests {
         };
         let lay = layout(&s, &d2, LayoutStyle::new(4.0, (12.0, 6.0))).unwrap();
         assert!(lay.lines.iter().any(|(a, b)| a.x.max(b.x) > 70.0));
+    }
+
+    /// Whether an extension line starts (after its small gap) from `p`, across `u`.
+    fn starts_at(lay: &Layout, p: Vec2, u: Vec2) -> bool {
+        lay.lines.iter().any(|(a, _)| (*a - p).dot(u).abs() < 1e-6 && a.distance(p) < 20.0)
+    }
+
+    /// Two circles of different radii, off the axes (`reference/onshape/dimension/two-circles.png`
+    /// recreated): each circle is measured to the side of it that was clicked, the half facing
+    /// the other circle (near) or the half away from it (far), wherever on that half and
+    /// whether the click lands just inside or just outside the curve. The label picks the
+    /// direction as for two points: straight above or below the centers a horizontal
+    /// distance, beside them a vertical one, elsewhere along the line through the centers.
+    #[test]
+    fn two_circles_near_and_far_sides() {
+        let mut s = Sketch::new();
+        let (ca, ra) = (v(-45.3, 24.1), 12.7);
+        let (cb, rb) = (v(-1.2, 37.9), 7.8);
+        let a = circle(&mut s, ca, ra);
+        let b = circle(&mut s, cb, rb);
+        let e = SketchEntity::Curve;
+        let d = cb - ca;
+        let u = d.normalize();
+        // A click on a circle on the side `dir` points to, nudged off the curve by `out`.
+        let on = |c: Vec2, r: f64, dir: Vec2, tilt: f64, out: f64| c + Vec2::from_angle(dir.angle() + tilt) * (r + out);
+        let combos = [(false, false), (false, true), (true, false), (true, true)];
+        // Along the centers, the label up and to the left of both (out of both bands).
+        for &(far_a, far_b) in &combos {
+            let want = d.length() + if far_a { ra } else { -ra } + if far_b { rb } else { -rb };
+            for (tilt, out) in [(0.0, 0.0), (0.4, 0.3), (-0.5, -0.3), (0.2, -0.2)] {
+                let ka = on(ca, ra, if far_a { -u } else { u }, tilt, out);
+                let kb = on(cb, rb, if far_b { u } else { -u }, -tilt, -out);
+                for cursor in [v(-70.0, 80.0), v(20.0, -10.0)] {
+                    let dim = propose_at(&s, &[(e(a), Some(ka)), (e(b), Some(kb))], cursor).unwrap();
+                    assert!(
+                        (dim.value - want).abs() < 1e-9,
+                        "aligned far_a {far_a} far_b {far_b} tilt {tilt} out {out}: {} != {want}",
+                        dim.value
+                    );
+                    // The arrows run along the centers' line; the extension lines start on the
+                    // circles where that line meets the chosen sides.
+                    let lay = layout(&s, &dim, LayoutStyle::new(3.0, (8.0, 6.0))).unwrap();
+                    assert_eq!(lay.arrows.len(), 2);
+                    for (_, dir) in &lay.arrows {
+                        assert!(dir.cross(u).abs() < 1e-6, "{dir:?} not along {u:?}");
+                    }
+                    let pa = ca + u * if far_a { -ra } else { ra };
+                    let pb = cb - u * if far_b { -rb } else { rb };
+                    for want in [pa, pb] {
+                        assert!(starts_at(&lay, want, u), "no extension line from {want:?}");
+                    }
+                }
+            }
+        }
+        // Horizontal (the label above the centers) and vertical (beside them): between the
+        // circles' left/right or top/bottom extremes.
+        let x = Vec2::new(1.0, 0.0);
+        let y = Vec2::new(0.0, 1.0);
+        for &(far_a, far_b) in &combos {
+            let sign = |far: bool, r: f64| if far { r } else { -r };
+            let h = (d.x.abs() + sign(far_a, ra) + sign(far_b, rb)).abs();
+            // (Nearest sides overlap vertically: the value is the size of the gap.)
+            let vv = (d.y.abs() + sign(far_a, ra) + sign(far_b, rb)).abs();
+            for (axis, cursor, want) in [(x, v(-23.0, 70.0), h), (y, v(30.0, 31.0), vv)] {
+                let towards = axis * d.dot(axis).signum();
+                let ka = on(ca, ra, if far_a { -towards } else { towards }, 0.3, 0.2);
+                let kb = on(cb, rb, if far_b { towards } else { -towards }, -0.3, -0.2);
+                let dim = propose_at(&s, &[(e(a), Some(ka)), (e(b), Some(kb))], cursor).unwrap();
+                assert!(
+                    (dim.value - want).abs() < 1e-9,
+                    "axis {axis:?} far_a {far_a} far_b {far_b}: {} != {want}",
+                    dim.value
+                );
+                // The arrows run along the axis; the extension lines start at the circles'
+                // extremes.
+                let lay = layout(&s, &dim, LayoutStyle::new(3.0, (8.0, 6.0))).unwrap();
+                assert_eq!(lay.arrows.len(), 2);
+                for (_, dir) in &lay.arrows {
+                    assert!(dir.cross(axis).abs() < 1e-6, "{dir:?} not along {axis:?}");
+                }
+                let pa = ca + towards * if far_a { -ra } else { ra };
+                let pb = cb - towards * if far_b { -rb } else { rb };
+                for want in [pa, pb] {
+                    assert!(starts_at(&lay, want, axis), "no extension line from {want:?}");
+                }
+                // Driving it moves the circles to the new distance.
+                let mut t = s.clone();
+                SketchOp::SetDimension {
+                    dimension: Dimension { value: want + 5.0, ..dim },
+                    moves: vec![],
+                    radii: vec![],
+                }
+                .apply(&mut t)
+                .unwrap();
+                let got = measure(&t, dim.kind).unwrap();
+                assert!((got - (want + 5.0)).abs() < 1e-6, "{got}");
+            }
+        }
+        // The centers: 44.1 across, 13.8 up and 46.2 along.
+        let pa = s.curve_points(a)[0];
+        let pb = s.curve_points(b)[0];
+        let p = SketchEntity::Point;
+        for (cursor, want) in [(v(-23.0, 70.0), d.x.abs()), (v(30.0, 31.0), d.y.abs()), (v(-70.0, 80.0), d.length())] {
+            let dim = propose(&s, &[p(pa), p(pb)], cursor).unwrap();
+            assert!((dim.value - want).abs() < 1e-9, "{} != {want}", dim.value);
+        }
     }
 }

@@ -182,6 +182,11 @@ impl OcctKernel {
                     if m.dot(&dir).abs() > 1.0 - 1e-9 {
                         return check_depth("the face", (pl.origin - o).dot(&dir) - offset);
                     }
+                    // A plane along the extrude direction is never reached (and the sweep below
+                    // would be endless: OCCT's fuse of such prisms never returns).
+                    if m.dot(&dir).abs() < 1e-6 {
+                        return Err(KernelError::InvalidParameter("the face is parallel to the extrude direction".into()));
+                    }
                     // An oblique plane: how far the sweep must go to cross it everywhere.
                     let point = pl.origin - dir * offset;
                     let samples = profile_samples(self, profile, spec, o)?;
@@ -191,6 +196,9 @@ impl OcctKernel {
                         .fold(f64::NEG_INFINITY, f64::max);
                     if far.is_nan() || far <= MIN_DEPTH {
                         return Err(too_thin("the face", far));
+                    }
+                    if far > 1e6 {
+                        return Err(KernelError::InvalidParameter("the face is too nearly parallel to the extrude direction".into()));
                     }
                     Ok(Reach::Trim {
                         kind: TrimKind::Plane { point, normal: m },
@@ -309,13 +317,29 @@ impl OcctKernel {
         };
         let trimmed = match kind {
             TrimKind::Plane { point, normal } => {
-                let side_of_o = (o - point).dot(&normal);
-                if side_of_o.abs() < LINEAR_EPS {
-                    return Err(KernelError::InvalidParameter(
-                        "the face's plane passes through the start of the extrude".into(),
-                    ));
-                }
-                let away = -normal * side_of_o.signum();
+                // Keep the side the profile is on (the sketch plane's origin may lie anywhere,
+                // even on the face's plane: an arc's radial end face through it).
+                let sides: Vec<f64> = profile_samples(self, profile, spec, o)?
+                    .iter()
+                    .map(|p| (p - point).dot(&normal))
+                    .collect();
+                let above = sides.iter().any(|s| *s > LINEAR_EPS);
+                let below = sides.iter().any(|s| *s < -LINEAR_EPS);
+                let side_of_profile = match (above, below) {
+                    (true, false) => 1.0,
+                    (false, true) => -1.0,
+                    (true, true) => {
+                        return Err(KernelError::InvalidParameter(
+                            "the face's plane crosses the profile".into(),
+                        ));
+                    }
+                    (false, false) => {
+                        return Err(KernelError::InvalidParameter(
+                            "the face's plane passes through the start of the extrude".into(),
+                        ));
+                    }
+                };
+                let away = -normal * side_of_profile;
                 let size = 4.0 * (far + profile_size(profile)) + 10.0;
                 let cutter = half_space(point, normal, away, size)?;
                 let (cut, h) = shape.try_subtract_h(&cutter).map_err(occt)?;
@@ -373,7 +397,7 @@ impl OcctKernel {
         let infos: Vec<crate::FaceInfo> = faces_of(&shape)
             .iter()
             .enumerate()
-            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f, &shape))
+            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f))
             .collect();
         for (t, info) in tags.iter_mut().zip(&infos) {
             if t.is_none() {
@@ -604,7 +628,7 @@ fn near_pieces((shape, tags): Tagged, o: Point3<f64>, dir: Vector3<f64>) -> Resu
             })
             .collect();
         let touches = faces.iter().enumerate().any(|(i, f)| {
-            let info = super::face_info(crate::FaceId(i as u64), f, &solid);
+            let info = super::face_info(crate::FaceId(i as u64), f);
             info.plane.is_some_and(|pl| {
                 pl.normal.dot(&dir).abs() > 1.0 - 1e-9 && ((info.center - o).dot(&dir)).abs() < 1e-7 * (1.0 + info.center.coords.norm())
             })

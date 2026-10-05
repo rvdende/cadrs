@@ -231,7 +231,7 @@ impl Command for ReplaceInstances {
                 *slot = m.clone();
             }
         }
-        asm.mates.retain(|f| !self.dropped.contains(&f.id));
+        asm.retain_mates(|f| !self.dropped.contains(&f.id));
         asm.drop_orphan_relations();
         super::folders::tidy(asm);
         Ok(())

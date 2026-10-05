@@ -345,9 +345,50 @@ fn face_and_feature_mirror_of_a_pocket() {
     close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
     m.mirror_type = PatternType::Feature;
     m.features = vec![pocket];
+    d.set(mirror, FeatureKind::Mirror(m.clone()));
+    close(d.volume(), 200_000.0 - 2000.0, 1e-6);
+    close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
+    // Reapply features (P3I.8, E4 step 7): the extrude regenerated from its mirrored sketch,
+    // still cutting down from z = 15 (the mirrored frame keeps Top's normal): the same pocket.
+    m.reapply = true;
     d.set(mirror, FeatureKind::Mirror(m));
     close(d.volume(), 200_000.0 - 2000.0, 1e-6);
     close(d.parts()[0].mass.unwrap().center_of_mass.x, 0.0, 1e-9);
+}
+
+#[test]
+fn a_reapplied_mirror_stops_at_its_own_up_to_next() {
+    // A plate (z 0..10) under two ceilings: z 30..35 over the right (x 10..40), z 40..45 over
+    // the left (x −40..−10). A 10 × 10 post from the plate's top (start offset 10) Up to next
+    // on the right reaches z = 30 (20 tall). Mirrored about Right: copying its material gives a
+    // 20-tall post on the left too; Reapply features regenerates it there, Up to next: up to the
+    // left ceiling, 30 tall (P3I.8, PS27.5).
+    let mut d = Doc::new();
+    d.block(-50.0, -20.0, 50.0, 20.0, 10.0);
+    let ceiling = |d: &mut Doc, x0: f64, x1: f64, z: f64| {
+        let s = d.sketch(PlaneRef::Top, vec![rect(x0, -20.0, x1, 20.0)]);
+        d.extrude(s, &[Vec2::new((x0 + x1) / 2.0, 0.0)], |e| {
+            e.depth = 5.0;
+            e.depth_expr = "5 mm".into();
+            e.start_offset = Some(Offset { value: z, expr: format!("{z} mm"), flip: false });
+        });
+    };
+    ceiling(&mut d, 10.0, 40.0, 30.0);
+    ceiling(&mut d, -40.0, -10.0, 40.0);
+    let s = d.sketch(PlaneRef::Top, vec![rect(20.0, -5.0, 30.0, 5.0)]);
+    let post = d.extrude(s, &[Vec2::new(25.0, 0.0)], |e| {
+        e.end = cadrs_core::document::EndType::UpToNext;
+        e.start_offset = Some(Offset { value: 10.0, expr: "10 mm".into(), flip: false });
+    });
+    let before = d.volume();
+    let mut m = MirrorFeature { mirror_type: PatternType::Feature, features: vec![post], plane: Some(MirrorPlane::Plane(PlaneRef::Right)), ..MirrorFeature::default() };
+    let mirror = d.add("Mirror", FeatureKind::Mirror(m.clone()));
+    let copied = d.volume() - before;
+    close(copied, 100.0 * 20.0, 1e-3);
+    m.reapply = true;
+    d.set(mirror, FeatureKind::Mirror(m));
+    let reapplied = d.volume() - before;
+    close(reapplied, 100.0 * 30.0, 1e-3);
 }
 
 #[test]

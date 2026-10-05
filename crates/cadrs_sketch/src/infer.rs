@@ -237,6 +237,8 @@ pub fn shapes(s: &Sketch) -> Vec<(CurveRef, Shape)> {
                 CurveKind::Arc { .. } => Shape::Arc(s.arc_geom(k)?),
                 CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => Shape::Ellipse(s.ellipse_geom(k)?),
                 CurveKind::Spline { .. } => return None,
+                // Nothing snaps onto an elliptical arc's body (its ends and center are points).
+                CurveKind::EllipseArc { .. } => return None,
                 // Nothing snaps onto a Bézier curve (its ends and handles are points).
                 CurveKind::Bezier { .. } => return None,
             };

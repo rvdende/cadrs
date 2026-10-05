@@ -154,6 +154,7 @@ fn distance_to_curve(s: &Sketch, c: CurveId, p: Vec2) -> Option<f64> {
         CurveKind::Circle { center, radius } => (s.pos(center).distance(p) - radius).abs(),
         CurveKind::Arc { .. } => s.arc_geom(c)?.distance(p),
         CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => s.ellipse_geom(c)?.distance(p),
+        CurveKind::EllipseArc { .. } => s.ellipse_arc_geom(c)?.distance(p),
         CurveKind::Spline { .. } => crate::spline::nearest(&s.spline_spans(c)?, p)?.2,
         CurveKind::Bezier { .. } => s.bezier_geom(c)?.distance(p),
     })
@@ -233,6 +234,7 @@ impl EntityNames {
                 CurveKind::Circle { .. } => "Circle",
                 CurveKind::Arc { .. } => "Arc",
                 CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => "Ellipse",
+                CurveKind::EllipseArc { .. } => "Elliptical arc",
                 CurveKind::Spline { .. } => "Spline",
                 CurveKind::Bezier { .. } => "Bézier curve",
             };

@@ -507,8 +507,8 @@ impl DragInfo {
                     (center, s.pos(center) + delta),
                     (major, s.pos(major) + delta),
                 ]),
-                // A spline moves as a whole (its points).
-                CurveKind::Spline { .. } => Drag::Points(s.curve_points(c).into_iter().map(|p| (p, s.pos(p) + delta)).collect()),
+                // A spline or an elliptical arc moves as a whole (its points).
+                CurveKind::Spline { .. } | CurveKind::EllipseArc { .. } => Drag::Points(s.curve_points(c).into_iter().map(|p| (p, s.pos(p) + delta)).collect()),
                 // A Bézier curve moves as a whole (drag a handle to reshape it).
                 CurveKind::Bezier { a, c1, c2, b } => Drag::Points([a, c1, c2, b].map(|p| (p, s.pos(p) + delta)).to_vec()),
             },

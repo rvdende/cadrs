@@ -153,6 +153,12 @@ impl Select {
         }
     }
 
+    /// The open list marks the current option (highlighted, with a check), as Onshape's export
+    /// dialogs' lists do. Every select's list does that now (P3I.2), so this only states it.
+    pub fn mark_selected(self) -> Self {
+        self
+    }
+
     /// A boxed select (a 1 px grey border all round, as the Material dialog's dropdowns,
     /// P3.6) instead of the underlined one.
     pub fn bordered(mut self) -> Self {
@@ -281,12 +287,15 @@ fn on_select_activate(
     let mut menu = Menu::new(format!("{name}-menu"))
         .min_width(width.max(120.0))
         .item_height(24.0)
+        .medium_text()
         .text_only();
     if let Some(side) = side {
         menu = menu.side(side.0);
     }
     for (i, (label, enabled)) in state.options.iter().enumerate() {
-        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled));
+        // The current choice is marked (P3I.2 judge: nothing showed which was chosen; P3I.6's
+        // export dialogs' lists, `Select::mark_selected`, mark it too).
+        menu = menu.item(MenuItem::new(format!("{name}-option-{i}"), label.clone()).disabled(!enabled).checked(i == state.selected));
     }
     open_menu(&mut commands, a.entity, menu.build(&theme));
 }
@@ -369,6 +378,7 @@ pub struct NumberField {
     chevron: bool,
     trailing: Option<(Cow<'static, str>, String)>,
     label_width: f32,
+    label_size: f32,
     disabled: bool,
     label_icon: Option<(Cow<'static, str>, Color)>,
 }
@@ -382,6 +392,7 @@ impl NumberField {
             chevron: false,
             trailing: None,
             label_width: 48.0,
+            label_size: 11.0,
             disabled: false,
             label_icon: None,
         }
@@ -418,6 +429,13 @@ impl NumberField {
         self
     }
 
+    /// The label's font size (11 px by default; a dialog whose label column is wide enough can
+    /// match Onshape's feature dialogs, where labels are nearly the values' size, with 12).
+    pub fn label_size(mut self, px: f32) -> Self {
+        self.label_size = px;
+        self
+    }
+
     /// An icon after the value (named `<name>-icon`), with a tooltip.
     pub fn trailing_icon(mut self, icon: impl Into<Cow<'static, str>>, tip: impl Into<String>) -> Self {
         self.trailing = Some((icon.into(), tip.into()));
@@ -434,6 +452,7 @@ impl NumberField {
         let chevron = self.chevron;
         let trailing = self.trailing;
         let label_width = self.label_width;
+        let label_size = self.label_size;
         let disabled = self.disabled;
         let label_icon = self.label_icon;
         (
@@ -482,7 +501,7 @@ impl NumberField {
                         label_icon.as_ref().map(|(_, c)| *c).unwrap_or(label_color)
                     };
                     let weight = if label_icon.is_some() { FontWeight::MEDIUM } else { FontWeight::NORMAL };
-                    l.spawn((t.text(label, 11.0, weight, fg), Pickable::IGNORE));
+                    l.spawn((t.text(label, label_size, weight, fg), Pickable::IGNORE));
                     if let Some((i, color)) = label_icon {
                         l.spawn((icon(i, 11.0, color), Pickable::IGNORE));
                     }

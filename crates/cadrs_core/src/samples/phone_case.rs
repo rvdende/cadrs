@@ -257,10 +257,10 @@ pub fn file(document: Document) -> crate::store::DocumentFile {
 pub fn board_in_context(s: &mut dyn Studio) -> Result<(), CommandError> {
     let el = BOARD_STUDIO;
     // Step 2: Create Part Studio in context, at the assembly Origin.
-    s.run(&CreateStudioInContext { assembly: CELL_PHONE, studio: el, name: None })?;
+    s.run(&CreateStudioInContext { assembly: CELL_PHONE, studio: el, name: None, origin: crate::assembly::Pose::IDENTITY })?;
     let solids = context::solids(s.document(), el);
     let of = |inst: InstanceId| {
-        let id = context::context_id(inst);
+        let id = context::context_id(0, inst);
         solids.iter().find(|(f, _)| *f == id).cloned().ok_or_else(|| CommandError::Invalid(format!("no context part for {inst}")))
     };
     let (case_id, case) = of(ENCLOSURE_1)?;
@@ -345,7 +345,7 @@ pub fn resize(s: &mut dyn Studio, width: f64, length: f64) -> Result<(), Command
 
 /// Step 13: Update context of the board studio (one undo step; nothing when it's current).
 pub fn update_context(s: &mut dyn Studio) -> Result<bool, CommandError> {
-    let ctx = s.document().element(BOARD_STUDIO).and_then(|e| e.context.clone()).ok_or_else(|| CommandError::Invalid("no context".into()))?;
+    let ctx = s.document().element(BOARD_STUDIO).and_then(|e| e.contexts.first().cloned()).ok_or_else(|| CommandError::Invalid("no context".into()))?;
     let now = resnapshot(s.document(), BOARD_STUDIO, &ctx)?;
     if now == ctx {
         return Ok(false);

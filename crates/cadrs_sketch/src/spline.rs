@@ -62,6 +62,27 @@ pub fn knots(pts: &[Vec2], periodic: bool) -> Vec<f64> {
     h
 }
 
+/// The derivatives (in the normalized parameter, see [`knots`]) at the two ends of an open
+/// curve sampled at `pts`, from the parabola through the first (last) three points: end
+/// tangents for a spline through samples of a known curve (a projected part edge), so it
+/// leaves its ends as the curve does. `None` with fewer than three points.
+pub fn end_derivatives(pts: &[Vec2]) -> (Option<Vec2>, Option<Vec2>) {
+    let n = pts.len();
+    if n < 3 {
+        return (None, None);
+    }
+    let h = knots(pts, false);
+    // f'(t0) of the parabola through (t0, p0), (t0 + a, p1), (t0 + a + b, p2).
+    let at_start = |p0: Vec2, p1: Vec2, p2: Vec2, a: f64, b: f64| {
+        p0 * (-(2.0 * a + b) / (a * (a + b))) + p1 * ((a + b) / (a * b)) - p2 * (a / (b * (a + b)))
+    };
+    let start = at_start(pts[0], pts[1], pts[2], h[0], h[1]);
+    // The same at the far end, running backwards (so the sign flips).
+    let end = -at_start(pts[n - 1], pts[n - 2], pts[n - 3], h[n - 2], h[n - 3]);
+    let ok = |v: Vec2| (v.x.is_finite() && v.y.is_finite()).then_some(v);
+    (ok(start), ok(end))
+}
+
 /// The derivative at each point (in the normalized parameter) of the C2 cubic through `pts`.
 pub fn derivatives(pts: &[Vec2], periodic: bool, start: Option<Vec2>, end: Option<Vec2>) -> Vec<Vec2> {
     let n = pts.len();

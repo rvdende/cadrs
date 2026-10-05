@@ -781,6 +781,20 @@ impl PartStudio<'_> {
         };
         let id = self.feature_id(fid);
         self.s.run(&AddImport { element: self.el, feature: id, file_name: name, bytes: std::sync::Arc::new(bytes), y_axis_up: Self::flag(f, "yAxisIsUp"), units })?;
+        // Without Flatten, Onshape's Part Studio holds each distinct part of a STEP assembly
+        // once, in its own coordinates (its assembly places them), and its assemblies' instances
+        // are placed for that: read it the same way.
+        let current = self.s.doc.element(self.el).and_then(|e| e.feature(id)).and_then(|x| match &x.kind {
+            FeatureKind::Import(x) => Some(x.clone()),
+            _ => None,
+        });
+        if let Some(mut x) = current
+            && !Self::flag(f, "flatten")
+            && x.format == cadrs_core::import::ImportFormat::Step
+        {
+            x.structure = Some(cadrs_core::import::ImportMode::AtOrigin);
+            self.s.run(&cadrs_core::commands::SetFeature { element: self.el, feature: id, kind: FeatureKind::Import(x), label: "Import".into() })?;
+        }
         self.finish_added(f, fid, id, fr)
     }
 

@@ -1,0 +1,567 @@
+(
+    version: 5,
+    meta: (
+        created: 1791000000,
+        modified: 1791000000,
+        created_by: "cadrs",
+        modified_by: "cadrs",
+        owned_by: "cadrs",
+        last_opened: None,
+        trashed: None,
+    ),
+    document: (
+        id: ("53e30000-0000-0000-0000-000000000100"),
+        name: "Exercise: Drawings (stand-in)",
+        elements: [
+            (
+                id: ("53e30000-0000-0000-0000-000000000101"),
+                name: "Part Studio 1",
+                kind: PartStudio(
+                    features: [
+                        (
+                            id: ("53e30000-0000-0000-0000-000000000011"),
+                            name: "Sketch 1",
+                            kind: Sketch((
+                                plane: Some(Right),
+                                disable_imprinting: false,
+                                geometry: (
+                                    points: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 250.0,
+                                                    y: 0.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 250.0,
+                                                    y: 200.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 175.0,
+                                                    y: 200.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                pos: (
+                                                    x: 0.0,
+                                                    y: 125.0,
+                                                ),
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    curves: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 2,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 2,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 3,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 3,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 4,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 4,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 5,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                        (
+                                            value: Some((
+                                                kind: Line(
+                                                    a: (
+                                                        idx: 5,
+                                                        version: 1,
+                                                    ),
+                                                    b: (
+                                                        idx: 1,
+                                                        version: 1,
+                                                    ),
+                                                ),
+                                                construction: false,
+                                            )),
+                                            version: 1,
+                                        ),
+                                    ],
+                                    dimensions: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                    constraints: [
+                                        (
+                                            value: None,
+                                            version: 0,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                        ),
+                        (
+                            id: ("53e30000-0000-0000-0000-000000000012"),
+                            name: "Extrude 1",
+                            kind: Extrude((
+                                regions: [
+                                    (
+                                        sketch: ("53e30000-0000-0000-0000-000000000011"),
+                                        curves: [
+                                            (
+                                                idx: 1,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 2,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 3,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 4,
+                                                version: 1,
+                                            ),
+                                            (
+                                                idx: 5,
+                                                version: 1,
+                                            ),
+                                        ],
+                                        seed: (
+                                            x: 166.66666666666666,
+                                            y: 66.66666666666667,
+                                        ),
+                                    ),
+                                ],
+                                sketches: [],
+                                faces: [],
+                                body: Solid,
+                                thin: (
+                                    thickness1: 5.0,
+                                    thickness1_expr: "5 mm",
+                                    thickness2: 0.0,
+                                    thickness2_expr: "0 mm",
+                                    flip_wall: false,
+                                    mid_plane: false,
+                                ),
+                                op: New,
+                                merge_all: false,
+                                merge_scope: [],
+                                end: Blind,
+                                depth: 200.0,
+                                depth_expr: "200 mm",
+                                up_to: None,
+                                offset: None,
+                                flip: false,
+                                symmetric: false,
+                                start_offset: None,
+                                direction: None,
+                                second: None,
+                            )),
+                        ),
+                        (
+                            id: ("53e30000-0000-0000-0000-000000000013"),
+                            name: "Sheet metal model 1",
+                            kind: SheetMetalModel((
+                                operation: Convert,
+                                parts: [
+                                    (
+                                        feature: ("53e30000-0000-0000-0000-000000000012"),
+                                        index: 0,
+                                    ),
+                                ],
+                                exclude: [
+                                    (
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        face: (
+                                            op: "53e30000-0000-0000-0000-000000000012",
+                                            origin: Side(
+                                                region: 5712915675464566280,
+                                                curve: 4294967300,
+                                            ),
+                                            split: 0,
+                                        ),
+                                        seed: (100.0, 87.5, 162.5),
+                                    ),
+                                ],
+                                bends: [
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967297,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967301,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (100.0, 0.0, 0.0),
+                                    )),
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967297,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967298,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (100.0, 250.0, 0.0),
+                                    )),
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Cap(
+                                                    region: 5712915675464566280,
+                                                    end: false,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967297,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (0.0, 125.0, 0.0),
+                                    )),
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Cap(
+                                                    region: 5712915675464566280,
+                                                    end: true,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967297,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (200.0, 125.0, 0.0),
+                                    )),
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000012"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967298,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000012",
+                                                origin: Side(
+                                                    region: 5712915675464566280,
+                                                    curve: 4294967299,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (100.0, 250.0, 200.0),
+                                    )),
+                                ],
+                                clearance: 0.0,
+                                clearance_expr: "0 mm",
+                                include_bends: false,
+                                keep_input: false,
+                                curves: [],
+                                sketches: [],
+                                arcs_as_bends: [],
+                                end: Blind,
+                                depth: 25.0,
+                                depth_expr: "25 mm",
+                                up_to: None,
+                                flip_extrude: false,
+                                symmetric: false,
+                                second: None,
+                                faces: [],
+                                regions: [],
+                                region_sketches: [],
+                                tangent_propagation: false,
+                                params: (
+                                    thickness: 1.5,
+                                    bend_radius: 1.5,
+                                    flip_direction_up: true,
+                                    bend_calc: KFactor,
+                                    k_factor: 0.45,
+                                    rolled_k_factor: 0.5,
+                                    bend_allowance: 2.0,
+                                    bend_deduction: 2.0,
+                                    minimal_gap: 0.2,
+                                    corner_relief: (
+                                        kind: Simple,
+                                        scale: 1.5,
+                                        size: 3.0,
+                                    ),
+                                    bend_relief: (
+                                        kind: ObroundScaled,
+                                        depth_scale: 2.0,
+                                        width_scale: 2.0,
+                                        depth: 6.0,
+                                        extend: false,
+                                    ),
+                                ),
+                                flip_thickness: true,
+                                exprs: (
+                                    thickness: "1.5 mm",
+                                    bend_radius: "1.5 mm",
+                                    k_factor: "0.45",
+                                    rolled_k_factor: "0.5",
+                                    bend_allowance: "2 mm",
+                                    bend_deduction: "2 mm",
+                                    minimal_gap: "0.2 mm",
+                                    corner_relief_scale: "1.5",
+                                    corner_relief_size: "3 mm",
+                                    bend_relief_depth_scale: "2",
+                                    bend_relief_width_scale: "2",
+                                ),
+                                table_order: [],
+                            )),
+                        ),
+                        (
+                            id: ("53e30000-0000-0000-0000-000000000014"),
+                            name: "Flange 1",
+                            kind: SheetMetal(Flange((
+                                edges: [
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000013"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000013",
+                                                origin: Cap(
+                                                    region: 6287390447825711467,
+                                                    end: false,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000013",
+                                                origin: Side(
+                                                    region: 6287390447825711467,
+                                                    curve: 0,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (0.0, 87.5, 162.5),
+                                    )),
+                                    Edge((
+                                        part: (
+                                            feature: ("53e30000-0000-0000-0000-000000000013"),
+                                            index: 0,
+                                        ),
+                                        edge: (
+                                            faces: ((
+                                                op: "53e30000-0000-0000-0000-000000000013",
+                                                origin: Cap(
+                                                    region: 6287390448291908331,
+                                                    end: false,
+                                                ),
+                                                split: 0,
+                                            ), (
+                                                op: "53e30000-0000-0000-0000-000000000013",
+                                                origin: Side(
+                                                    region: 6287390448291908331,
+                                                    curve: 1,
+                                                ),
+                                                split: 0,
+                                            )),
+                                            index: 0,
+                                        ),
+                                        seed: (200.0, 87.5, 162.5),
+                                    )),
+                                ],
+                                alignment: HoldLine,
+                                end: Blind,
+                                distance: 35.0,
+                                distance_expr: "35 mm",
+                                up_to: None,
+                                offset: 0.0,
+                                offset_expr: "0 mm",
+                                angle_control: BendAngle,
+                                angle: 90.0,
+                                angle_expr: "90 deg",
+                                flip: true,
+                                parallel_to: None,
+                                direction: None,
+                                direction_angle: 90.0,
+                                direction_angle_expr: "90 deg",
+                                auto_miter: true,
+                                miter_angle: 45.0,
+                                miter_angle_expr: "45 deg",
+                                use_model_radius: true,
+                                radius: 1.0,
+                                radius_expr: "1 mm",
+                                partial: false,
+                                chain: PerEdge,
+                                flip_sides: false,
+                                hold_adjacent: true,
+                                bound: (
+                                    kind: Blind,
+                                    distance: 25.0,
+                                    distance_expr: "25 mm",
+                                    up_to: None,
+                                    offset: 0.0,
+                                    offset_expr: "0 mm",
+                                ),
+                                second: None,
+                            ))),
+                        ),
+                    ],
+                    parts: [
+                        (
+                            part: (
+                                feature: ("53e30000-0000-0000-0000-000000000013"),
+                                index: 0,
+                            ),
+                            name: Some("Sheet Metal Box"),
+                            hidden: false,
+                        ),
+                    ],
+                ),
+            ),
+        ],
+        units: (
+            length: Millimeter,
+            mass: Kilogram,
+            decimals: 3,
+            angle_decimals: 3,
+        ),
+    ),
+)

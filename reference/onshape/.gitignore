@@ -1,0 +1,10 @@
+# Screenshots, video frames and raw course text gathered from Onshape's Learning Center and Help
+# Center are for internal reference only: kept locally, never committed or shipped.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.mp4
+*.webm
+**/raw/

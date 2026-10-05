@@ -46,7 +46,7 @@ pub fn shape_of(s: &Sketch, id: CurveId) -> Option<Shape> {
         },
         CurveKind::Arc { .. } => Shape::Arc(s.arc_geom(id)?),
         CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => Shape::Ellipse(s.ellipse_geom(id)?),
-        CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
+        CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
     })
 }
 
@@ -186,7 +186,7 @@ fn param(s: &Sketch, id: CurveId, p: Vec2) -> Option<(f64, f64)> {
         CurveKind::Circle { center, radius } => {
             (norm_angle((p - s.pos(center)).angle()) * radius, TAU * radius)
         }
-        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
+        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
     })
 }
 
@@ -316,7 +316,7 @@ pub fn trim_removed_path(s: &Sketch, id: CurveId, at: Vec2) -> Option<Vec<Vec2>>
             }
             .tessellate(STEP, 2)
         }
-        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
+        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => return None,
     })
 }
 
@@ -529,7 +529,7 @@ pub fn trim(s: &mut Sketch, id: CurveId, at: Vec2) -> Result<(), String> {
             };
             drop_extent_constraints(s, id);
         }
-        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => {
+        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } | CurveKind::Spline { .. } | CurveKind::Bezier { .. } => {
             unreachable!("handled by the plan")
         }
     }

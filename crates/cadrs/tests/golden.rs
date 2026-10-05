@@ -1394,6 +1394,21 @@ fn golden_course_asm_edit_in_context() {
 }
 
 #[test]
+fn golden_course_mic_contexts() {
+    run_scenario("course_mic_contexts");
+}
+
+#[test]
+fn golden_course_mic_ex2_slide() {
+    run_scenario("course_mic_ex2_slide");
+}
+
+#[test]
+fn golden_course_mic_ex3_gripper() {
+    run_scenario("course_mic_ex3_gripper");
+}
+
+#[test]
 fn golden_course_asm_ex1_start() {
     run_scenario("course_asm_ex1_start");
 }

@@ -207,6 +207,10 @@ pub struct PartOverride {
     /// Leaves this feature out while set: the chamfer's Direction overrides are picked on the
     /// edges as they were before it (P3.6).
     pub rolled_back: Option<FeatureId>,
+    /// Shows this feature's stage while set: the parts as they were before it, pickable, with
+    /// what it makes drawn translucent over them. A Sheet metal model's edges to bend and faces
+    /// to exclude are picked so (P3I.2 judge, `02-sheet-metal-model/t0101.0.png`).
+    pub staged: Option<FeatureId>,
     /// Leaves out the features after this one while set: a feature before the end is being
     /// edited and its dialog's Final is off (PS21.11).
     pub rollback_to: Option<FeatureId>,
@@ -235,8 +239,19 @@ const GHOST_ALPHA: f32 = 0.22;
 pub const ACCENT_TINT: Color = Color::srgba(38.0 / 255.0, 110.0 / 255.0, 230.0 / 255.0, 0.6);
 
 /// The part's face colours, faint when the part is ghosted.
-fn ghosted_bases(cache: &PartCache, ghosts: &PartGhosts, part: &Part) -> Vec<FaceBase> {
-    let mut bases = cache.bases(part);
+fn ghosted_bases(cache: &PartCache, over: &PartOverride, ghosts: &PartGhosts, part: &Part) -> Vec<FaceBase> {
+    // P3I.2 judge: the edited feature's preview reads as one model (a Sheet metal model's
+    // several parts, as Onshape's one translucent sheet): all in its first part's colour.
+    let mut bases = match cache.parts.iter().find(|p| over.previews(p) && p.feature == part.feature) {
+        Some(first) if over.previews(part) && first.id != part.id => {
+            let b = cache.bases(first).first().copied();
+            match b {
+                Some(b) => vec![b; part.solid.faces.len()],
+                None => cache.bases(part),
+            }
+        }
+        _ => cache.bases(part),
+    };
     if ghosts.parts.contains(&part.id) {
         for b in &mut bases {
             b.alpha = b.alpha.min(GHOST_ALPHA);
@@ -296,7 +311,7 @@ fn sketch_curve_polylines(g: &cadrs_sketch::Sketch, frame: &PlaneFrame) -> Vec<(
                 }
                 None => continue,
             },
-            CurveKind::Spline { .. } => cadrs_sketch::hit::curve_polyline(g, id),
+            CurveKind::Spline { .. } | CurveKind::EllipseArc { .. } => cadrs_sketch::hit::curve_polyline(g, id),
             CurveKind::Bezier { .. } => match g.bezier_geom(id) {
                 Some(b) => (0..=64).map(|k| b.point_at(k as f64 / 64.0)).collect(),
                 None => continue,
@@ -365,10 +380,15 @@ pub struct PartCache {
     pub preview_curves: HashSet<(FeatureId, cadrs_sketch::CurveId)>,
     /// The regions of every visible sketch.
     pub regions: Vec<SketchRegions>,
+    /// P3I.6: the sketches on a sheet metal flat pattern. They are drawn and picked in the flat
+    /// view (`crate::flat_ui`), not in 3D.
+    pub flat_sketches: HashSet<FeatureId>,
     /// P3G.4: what each Derived feature brought in, and its sketches (placed), from the last
     /// rebuild.
     pub derived: HashMap<FeatureId, cadrs_core::derived::DerivedOutput>,
     pub derived_sketches: Vec<Feature>,
+    /// P3I.3: the sheet metal models' contexts from the last rebuild (the table and flat view).
+    pub sheet_metal: Vec<cadrs_core::sheetmetal::SheetMetalContext>,
     /// The curves of every visible sketch (P3.4: a revolve axis is picked among them).
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
@@ -421,10 +441,16 @@ pub struct PartCache {
     /// While the Extrude dialog edits an Add: the body it adds, drawn as the translucent
     /// preview over the parts as they were before it (`ex1-step4.png`). Not a part: it is not
     /// listed, measured or picked.
-    pub tool: Option<Part>,
+    pub tool: Vec<Part>,
+    /// While a Sheet metal model's edges are picked on the parts before it (`PartOverride::staged`):
+    /// the parts it makes, which the Parts list shows (`t0101.0.png`) though the view shows
+    /// the parts before it. Empty otherwise.
+    pub staged_parts: Vec<Part>,
     /// P3B.9: parts drawn in another colour: an assembly's interfering parts (red), a Part
     /// Studio's assembly context (translucent grey). Change with [`PartCache::set_tints`].
     pub tints: HashMap<PartId, FaceBase>,
+    /// Shown parts that picks go through (an assembly context's, MC2.3).
+    pub unpickable: HashSet<PartId>,
     /// P3E.3a: the active tab's section view (`crate::section_view`): picking ignores what it
     /// cut away, and its caps hide what is behind them.
     pub section: Option<SectionPick>,
@@ -553,11 +579,17 @@ impl PartCache {
         self.parts.iter().filter(|p| !self.is_hidden(p.id))
     }
 
+    /// The shown parts that can be picked (MC2.3: not an assembly context's while Select
+    /// transparent geometry is off).
+    pub fn pickable(&self) -> impl Iterator<Item = &Part> {
+        self.shown().filter(|p| !self.unpickable.contains(&p.id))
+    }
+
     /// A shown part, or the Add preview's body, by id (what the part meshes draw).
     fn drawn(&self, id: PartId) -> Option<&Part> {
         self.part(id)
             .filter(|p| !self.is_hidden(p.id))
-            .or_else(|| self.tool.as_ref().filter(|t| t.id == id))
+            .or_else(|| self.tool.iter().find(|t| t.id == id))
     }
 
     /// Sets the parts drawn in another colour (P3B.9).
@@ -659,7 +691,7 @@ impl PartCache {
     /// Every face's base colour (PS9). The Add preview's body takes the colour of the part it
     /// joins (else the next palette colour), as the part it becomes.
     pub fn bases(&self, part: &Part) -> Vec<FaceBase> {
-        if self.tool.as_ref().is_some_and(|t| t.id == part.id) {
+        if self.tool.iter().any(|t| t.id == part.id) {
             let joined = self
                 .contacts
                 .get(&part.feature)
@@ -751,41 +783,48 @@ impl PartCache {
         self.connectors.clear();
         self.visibility.clear();
         self.names.clear();
-        self.tool = None;
+        self.tool.clear();
+        self.staged_parts.clear();
         self.generation += 1;
     }
 
     /// Takes a finished rebuild's parts and errors. While `editing` is an Add extrude (the
     /// last part feature), the parts are the ones before it and [`Self::tool`] its new body.
-    fn apply(&mut self, build: &cadrs_core::rebuild::Build, editing: Option<FeatureId>) {
+    fn apply(&mut self, build: &cadrs_core::rebuild::Build, editing: Option<FeatureId>, staged: bool) {
         let stage = build.stage.as_ref().filter(|(f, _)| Some(*f) == editing);
+        let staged_parts = if staged && stage.is_some() { build.parts.clone() } else { Vec::new() };
+        if self.staged_parts.len() != staged_parts.len() || self.staged_parts.iter().zip(&staged_parts).any(|(a, b)| a.id != b.id || a.name != b.name) {
+            self.generation += 1;
+        }
+        self.staged_parts = staged_parts;
         let (parts, tool) = match stage {
             Some((f, st)) => (
                 st.before.clone(),
-                Some(Part {
-                    id: PartId::new(*f, u32::MAX),
-                    feature: *f,
-                    name: String::new(),
-                    kind: cadrs_core::parts::PartKind::Solid,
-                    palette: 0,
-                    solid: st.tool.clone(),
-                    mass: None,
-                    features: vec![*f],
-                    source: None,
-                    derived: None,
-                }),
+                std::iter::once(&st.tool)
+                    .chain(&st.more)
+                    .enumerate()
+                    .map(|(k, solid)| Part {
+                        id: PartId::new(*f, u32::MAX - k as u32),
+                        feature: *f,
+                        name: String::new(),
+                        kind: cadrs_core::parts::PartKind::Solid,
+                        palette: 0,
+                        solid: solid.clone(),
+                        mass: None,
+                        features: vec![*f],
+                        source: None,
+                        derived: None,
+                    })
+                    .collect(),
             ),
-            None => (build.parts.clone(), None),
+            None => (build.parts.clone(), Vec::new()),
         };
         let same = self.parts.len() == parts.len()
             && self.parts.iter().zip(&parts).all(|(a, b)| {
                 a.id == b.id && a.name == b.name && std::sync::Arc::ptr_eq(&a.solid, &b.solid)
             })
-            && match (&self.tool, &tool) {
-                (None, None) => true,
-                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(&a.solid, &b.solid),
-                _ => false,
-            };
+            && self.tool.len() == tool.len()
+            && self.tool.iter().zip(&tool).all(|(a, b)| std::sync::Arc::ptr_eq(&a.solid, &b.solid));
         if !same {
             self.generation += 1;
             self.bounds = parts.iter().filter_map(|p| p.solid.bounds()).collect();
@@ -805,6 +844,9 @@ impl PartCache {
             self.derived = build.derived.clone();
             self.generation += 1;
         }
+        if self.sheet_metal != build.sheet_metal {
+            self.sheet_metal = build.sheet_metal.clone();
+        }
         self.contacts = build.contacts.clone();
         self.axes = build.axes.clone();
         self.arrows = build.arrows.clone();
@@ -820,6 +862,16 @@ impl PartCache {
         self.names = build.names.clone();
         self.rebuilding = false;
     }
+}
+
+/// The feature whose stage (the parts before it and its new bodies) is shown: the one the
+/// override stages, else the edited one unless it is a Sheet metal model (its folded parts
+/// preview as parts while no edges are picked).
+fn stage_feature(features: &[Feature], o: &PartOverride) -> Option<FeatureId> {
+    o.staged.or_else(|| {
+        let e = o.editing?;
+        (!features.iter().any(|f| f.id == e && matches!(f.kind, cadrs_core::FeatureKind::SheetMetalModel(_)))).then_some(e)
+    })
 }
 
 /// The features the parts are made from: the document's, with the override applied.
@@ -843,7 +895,15 @@ fn effective_features(features: &[Feature], o: &PartOverride) -> Vec<Feature> {
         f.kind = k.clone();
     }
     if let Some(id) = o.rolled_back {
-        out.retain(|f| f.id != id);
+        // A Sheet metal model taking picks on its input still builds its model, table and flat
+        // (no parts): the panel follows the picks (P3I.8).
+        // A Thicken (or a Convert that keeps its input) leaves its input in place: it stays
+        // whole, picks go through its own faces (the dialog's `skip_op`) and its preview shows.
+        match out.iter_mut().find(|f| f.id == id).map(|f| &mut f.kind) {
+            Some(cadrs_core::FeatureKind::SheetMetalModel(x)) if x.operation != cadrs_core::sheetmetal::SheetMetalOp::Convert || x.keep_input => {}
+            Some(cadrs_core::FeatureKind::SheetMetalModel(x)) => x.picking = true,
+            _ => out.retain(|f| f.id != id),
+        }
     }
     if let Some(id) = o.rollback_to
         && let Some(i) = out.iter().position(|f| f.id == id)
@@ -876,15 +936,17 @@ pub fn consumed_sketches(features: &[Feature], editing: Option<FeatureId>) -> Ha
 }
 
 /// The sketches hidden in the view: the ones a feature (other than `editing`) uses, unless their
-/// eye shows them, and the ones their eye hides (PS1.4, PS1.5).
+/// eye shows them, and the ones their eye hides (PS1.4, PS1.5). A Derived feature's sketches
+/// (not in the list) start hidden, as Onshape's do (`18-…/t0062.6.png`): their eyes show them.
 pub fn hidden_sketches(el: &cadrs_core::Element, features: &[Feature], editing: Option<FeatureId>) -> HashSet<FeatureId> {
     let consumed = consumed_sketches(features, editing);
     features
         .iter()
-        .filter(|f| f.sketch().is_some())
+        // (A Form's eye too, P3I.9: its sketch on the flat view.)
+        .filter(|f| f.sketch().is_some() || matches!(f.kind, cadrs_core::FeatureKind::Form(_)))
         .filter(|f| match el.sketch_visibility(f.id) {
             Some(shown) => !shown,
-            None => consumed.contains(&f.id),
+            None => consumed.contains(&f.id) || el.feature(f.id).is_none(),
         })
         .map(|f| f.id)
         .collect()
@@ -960,7 +1022,7 @@ fn update_part_cache(
             cache.pending = None;
             if same_element {
                 log.0.push((features.len(), build.computed, build.elapsed));
-                cache.apply(&build, over.editing);
+                cache.apply(&build, stage_feature(features, &over), over.staged.is_some());
             }
         }
         return;
@@ -977,7 +1039,7 @@ fn update_part_cache(
             if cache.key.as_ref().is_some_and(|(id, ..)| *id != el.id) {
                 cache.parts.clear();
             }
-            cache.apply(&build, over.editing);
+            cache.apply(&build, stage_feature(features, &over), over.staged.is_some());
             cache.pending = None;
         }
         None => {
@@ -1033,7 +1095,9 @@ fn update_part_cache(
             })
         })
         .collect();
+    let flat_sketches: HashSet<FeatureId> = effective.iter().filter(|f| cadrs_core::sheetmetal_flat::sketch_target(&effective, f.id).is_some()).map(|f| f.id).collect();
     let c = &mut *cache;
+    c.flat_sketches = flat_sketches;
     c.rolled_back_sketches = features
         .iter()
         .filter(|f| f.sketch().is_some() && Some(f.id) != over.editing && !effective.iter().any(|e| e.id == f.id))
@@ -1354,6 +1418,14 @@ pub fn part_material(preview: bool) -> StandardMaterial {
     }
 }
 /// The edge lines of a part in this view: its edges plus the silhouettes of curved faces.
+/// The lines [`draw_part_edges`] drew for each part (by solid and culling) at the view direction
+/// `back`.
+#[derive(Default)]
+pub struct LinesCache {
+    back: Vec3,
+    lines: HashMap<(usize, bool), std::sync::Arc<Vec<Vec<Vec3>>>>,
+}
+
 pub fn part_lines(part: &Part, view: &ViewState) -> Vec<Vec<Vec3>> {
     part_lines_culled(part, view, false)
 }
@@ -1377,7 +1449,8 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
     let mut out: Vec<Vec<Vec3>> = s
         .edges
         .iter()
-        .filter(|e| !(cull && e.name.faces[0] != e.name.faces[1] && e.name.faces.iter().all(faces_away)))
+        // A round's facet seams (sheet metal) aren't drawn.
+        .filter(|e| !e.smooth && !(cull && e.name.faces[0] != e.name.faces[1] && e.name.faces.iter().all(faces_away)))
         .map(|e| e.points.iter().map(|p| v3(*p)).collect())
         .collect();
     for w in s.rulings.windows(2) {
@@ -1485,8 +1558,8 @@ fn sync_part_meshes(
             commands.entity(e).try_despawn();
             continue;
         };
-        let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &ghosts, part);
+        let preview = over.previews(part) || cache.tool.iter().any(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
+        let bases = ghosted_bases(&cache, &over, &ghosts, part);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             *m = part_base_mesh(part, preview, &bases);
         }
@@ -1501,8 +1574,8 @@ fn sync_part_meshes(
         if have.contains_key(&part.id) {
             continue;
         }
-        let preview = over.previews(part) || cache.tool.as_ref().is_some_and(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &ghosts, part);
+        let preview = over.previews(part) || cache.tool.iter().any(|t| t.id == part.id) || crate::assembly::standard::is_ghost(part.id);
+        let bases = ghosted_bases(&cache, &over, &ghosts, part);
         let mesh = meshes.add(part_base_mesh(part, preview, &bases));
         let mut e = commands.spawn((
             Name::new(format!("part-{}", part.name.to_lowercase().replace(' ', "-"))),
@@ -1565,7 +1638,7 @@ fn shade_parts(
         };
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             let sel = selected.contains(&part.id);
-            let bases = ghosted_bases(&cache, &ghosts, part);
+            let bases = ghosted_bases(&cache, &over, &ghosts, part);
             let picked: Vec<usize> = part
                 .solid
                 .faces
@@ -1598,12 +1671,24 @@ fn draw_part_edges(
     mut vertices: Gizmos<VertexGizmos>,
     mut free_edges: Gizmos<FreeEdgeGizmos>,
     (failed, ghosts, analysis): (Res<FailedReferences>, Res<PartGhosts>, Res<crate::analysis::ShadingAnalysis>),
-    hover_parts: Res<HoverParts>,
+    (hover_parts, extra, mut lines_cache): (Res<HoverParts>, Res<crate::viewport::ExtraHighlight>, Local<LinesCache>),
     section: Res<crate::section_view::SectionClip>,
 ) {
     // P3E.3a: the tab's render mode, and the section view's plane (the edges are cut by it).
     let mode = view.view.render;
     let clip = section.plane;
+    // Each part's lines for this view direction, kept while neither changes (working them out for
+    // every part every frame cost a large assembly most of its frame).
+    let back = view.view.back();
+    if lines_cache.back != back {
+        lines_cache.back = back;
+        lines_cache.lines.clear();
+    }
+    let alive: std::collections::HashSet<usize> = cache.parts.iter().chain(cache.tool.iter()).map(|p| std::sync::Arc::as_ptr(&p.solid) as usize).collect();
+    lines_cache.lines.retain(|(k, _), _| alive.contains(k));
+    let mut lines_of = |part: &Part, v: &ViewState, cull: bool| -> std::sync::Arc<Vec<Vec<Vec3>>> {
+        lines_cache.lines.entry((std::sync::Arc::as_ptr(&part.solid) as usize, cull)).or_insert_with(|| std::sync::Arc::new(part_lines_culled(part, v, cull))).clone()
+    };
     // The references stay in the selection colour while a feature fails (`ex4-step10.png`).
     let selected_color = SELECTED;
     // P3E.3b: under the zebra stripes the edges are mid-grey, apart from both bands.
@@ -1636,7 +1721,7 @@ fn draw_part_edges(
                     .and_then(|f| f.plane)
                     .is_none_or(|p| v3(p.normal()).dot(back) > 1e-4)
             };
-            for e in &part.solid.edges {
+            for e in part.solid.edges.iter().filter(|e| !e.smooth) {
                 // The edges on the sketch plane lie under the selected region's outline.
                 let on_start = e
                     .name
@@ -1669,24 +1754,26 @@ fn draw_part_edges(
             // colour below, at the same depth: not black under them too.
             let outlined = part_hovered || part_selected || (failed_parts.contains(&part.id) && failed.2.is_empty());
             if !outlined && mode.edges() {
-                for line in part_lines_culled(part, &v, opaque && !mode.translucent()) {
-                    strip(&mut edges, clip, line, edge_color);
+                for line in lines_of(part, &v, opaque && !mode.translucent()).iter() {
+                    strip(&mut edges, clip, line.iter().copied(), edge_color);
                 }
             }
-            for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1] && mode.edges()) {
+            for e in part.solid.edges.iter().filter(|e| e.name.faces[0] == e.name.faces[1] && !e.smooth && mode.edges()) {
                 strip(&mut free_edges, clip, e.points.iter().map(|p| v3(*p)), edge_color);
             }
         }
         // Base colours only when a face of the part is selected (the per-frame cost).
-        let bases = if part.solid.faces.iter().any(|f| selection.contains(Pick::Face(part.id, f.name))) {
+        let selected = |p: Pick| selection.contains(p) || extra.selected.contains(&p);
+        let hovered_pick = |p: Pick| highlight.is_hovered(p) || extra.hovered.contains(&p);
+        let bases = if part.solid.faces.iter().any(|f| selected(Pick::Face(part.id, f.name))) {
             cache.bases(part)
         } else {
             Vec::new()
         };
         for (fi, face) in part.solid.faces.iter().enumerate() {
             let pick = Pick::Face(part.id, face.name);
-            let hovered = highlight.is_hovered(pick) || list_feature.is_some_and(|f| face.name.op == f.0);
-            if !hovered && !selection.contains(pick) {
+            let hovered = hovered_pick(pick) || list_feature.is_some_and(|f| face.name.op == f.0);
+            if !hovered && !selected(pick) {
                 continue;
             }
             for l in &face.loops {
@@ -1734,16 +1821,16 @@ fn draw_part_edges(
             // A see-through tint (a Part Studio's assembly context) shows its back edges, as a
             // transparent part does.
             let opaque = !ghosts.parts.contains(&part.id) && !cache.transparent.contains(&part.id) && cache.tints.get(&part.id).is_none_or(|t| t.alpha >= 1.0);
-            for line in part_lines_culled(part, &v, opaque) {
-                strip(&mut outline_edges, clip, line, color);
+            for line in lines_of(part, &v, opaque).iter() {
+                strip(&mut outline_edges, clip, line.iter().copied(), color);
             }
         }
         // Edges: hovered or selected.
         for e in &part.solid.edges {
             let pick = Pick::Edge(part.id, e.name);
-            let color = if highlight.is_hovered(pick) {
+            let color = if hovered_pick(pick) {
                 EDGE_HOVER
-            } else if selection.contains(pick) {
+            } else if selected(pick) {
                 SELECTED
             } else {
                 continue;
@@ -1760,9 +1847,9 @@ fn draw_part_edges(
                 continue;
             }
             let pick = Pick::Vertex(part.id, vx.name);
-            let color = if highlight.is_hovered(pick) {
+            let color = if hovered_pick(pick) {
                 HOVER
-            } else if selection.contains(pick) {
+            } else if selected(pick) {
                 SELECTED
             } else {
                 continue;
@@ -1862,7 +1949,7 @@ fn tint_selection(
     over: Res<PartOverride>,
     doc: Option<Res<crate::ActiveDocument>>,
     mut face_selection: ResMut<FaceSelection>,
-    (highlight, hover_parts): (Res<PlaneHighlight>, Res<HoverParts>),
+    (highlight, hover_parts, extra): (Res<PlaneHighlight>, Res<HoverParts>, Res<crate::viewport::ExtraHighlight>),
     mut commands: Commands,
 ) {
     // The Final preview and a dialog's accent faces are Part Studio things.
@@ -1898,6 +1985,7 @@ fn tint_selection(
         .0
         .iter()
         .chain(failing)
+        .chain(extra.selected.iter())
         .filter(|p| matches!(p, Pick::Face(..)) && !accent.contains(p))
         .copied()
         .collect();
@@ -2057,6 +2145,11 @@ pub const VERTEX_PICK_PX: f32 = 8.0;
 /// True if nothing of a part lies in front of the point `p` (on a part's surface) as the view
 /// sees it.
 fn visible(cache: &PartCache, view: &ViewState, p: Vec3) -> bool {
+    visible_skipping(cache, view, p, None)
+}
+
+/// [`visible`], the faces the operation `skip` made (an open dialog's own preview) not in the way.
+fn visible_skipping(cache: &PartCache, view: &ViewState, p: Vec3, skip: Option<cadrs_sketch::OpId>) -> bool {
     let (o, d) = view.ray(view.project(p));
     if let Some(s) = &cache.section
         && (s.removes(p) || s.window(o, d).is_none())
@@ -2066,13 +2159,13 @@ fn visible(cache: &PartCache, view: &ViewState, p: Vec3) -> bool {
     let depth = (p - o).dot(d);
     // Two pixels' worth of slack, plus rounding of big coordinates.
     let slack = 2.0 * view.scale + 1e-4 * p.length().max(1.0);
-    pick_opaque_face(cache, view, view.project(p)).is_none_or(|(_, _, t)| depth <= t + slack)
+    pick_opaque_face(cache, view, view.project(p), skip).is_none_or(|(_, _, t)| depth <= t + slack)
 }
 
 /// How far along the pick ray the nearest face of an opaque part is: an edge seen through a
 /// clear part (the Pneumatic Cylinder's barrel, a part made transparent) stays pickable, as the
 /// eye sees it (`ex3-step14.png` picks the Rear Cap's rod holes through the barrel).
-fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, FaceName, f32)> {
+fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2, skip: Option<cadrs_sketch::OpId>) -> Option<(PartId, FaceName, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(PartId, FaceName, f32)> = None;
     for part in cache.shown() {
@@ -2080,7 +2173,7 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
         if clear {
             continue;
         }
-        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), o, d, |o| part.solid.pick_where(to64(o), to64(d), |_| true)) {
+        if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), o, d, |o| part.solid.pick_where(to64(o), to64(d), |face| skip.is_none_or(|op| face.name.op != op))) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {
                 best = Some((part.id, part.solid.faces[f].name, t));
@@ -2093,8 +2186,14 @@ fn pick_opaque_face(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option
 /// The nearest visible part edge within [`EDGE_PICK_PX`] of a screen offset, with its distance
 /// (px).
 pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, EdgeName, f32)> {
+    pick_edge_skipping(cache, view, offset, None)
+}
+
+/// [`pick_edge`] through the operation `skip`'s own edges and faces (an open dialog's preview:
+/// a Thicken's bends are picked on the faces under it, P3I.8).
+pub fn pick_edge_skipping(cache: &PartCache, view: &ViewState, offset: Vec2, skip: Option<cadrs_sketch::OpId>) -> Option<(PartId, EdgeName, f32)> {
     let mut near: Vec<(f32, PartId, EdgeName, Vec3, Option<cadrs_core::solid::EdgeCircle>)> = Vec::new();
-    for part in cache.shown() {
+    for part in cache.pickable() {
         let index = part.solid.pick_index();
         if !index.bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
             continue;
@@ -2105,6 +2204,9 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
         let penalty = if clear { EDGE_PICK_PX } else { 0.0 };
         for (ei, e) in part.solid.edges.iter().enumerate() {
             if !index.edges[ei].as_ref().is_some_and(|b| near_on_screen(view, b, offset, EDGE_PICK_PX)) {
+                continue;
+            }
+            if skip.is_some_and(|op| e.name.faces.iter().any(|x| x.op == op)) {
                 continue;
             }
             let mut best: Option<(f32, Vec3)> = None;
@@ -2126,7 +2228,7 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
     }
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near.into_iter()
-        .find(|(_, f, _, p, c)| visible(cache, view, *p) || c.is_some_and(|c| hidden_by_its_shaft(cache, view, *f, *p, &c)))
+        .find(|(_, f, _, p, c)| visible_skipping(cache, view, *p, skip) || c.is_some_and(|c| hidden_by_its_shaft(cache, view, *f, *p, &c)))
         .map(|(d, f, n, _, _)| (f, n, d))
 }
 
@@ -2135,7 +2237,7 @@ pub fn pick_edge(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(P
 /// radius. Such an edge stays pickable all round, as Onshape lets you pick a hole edge with its
 /// rod shown (`ex3-step14.png`).
 fn hidden_by_its_shaft(cache: &PartCache, view: &ViewState, part: PartId, p: Vec3, c: &cadrs_core::solid::EdgeCircle) -> bool {
-    let Some((occluder, face, _)) = pick_opaque_face(cache, view, view.project(p)) else { return false };
+    let Some((occluder, face, _)) = pick_opaque_face(cache, view, view.project(p), None) else { return false };
     if occluder == part {
         return false;
     }
@@ -2158,7 +2260,7 @@ fn hidden_by_its_shaft(cache: &PartCache, view: &ViewState, part: PartId, p: Vec
 /// The nearest visible part vertex within [`VERTEX_PICK_PX`] of a screen offset.
 pub fn pick_vertex(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(PartId, VertexName, f32)> {
     let mut near: Vec<(f32, PartId, VertexName, Vec3)> = cache
-        .shown()
+        .pickable()
         .filter(|part| part.solid.pick_index().bounds.as_ref().is_some_and(|b| near_on_screen(view, b, offset, VERTEX_PICK_PX)))
         .flat_map(|part| {
             part.solid.vertices.iter().map(move |v| {
@@ -2209,7 +2311,7 @@ pub fn pick_face_skipping(
 ) -> Option<(PartId, FaceName, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(PartId, FaceName, f32)> = None;
-    for part in cache.shown() {
+    for part in cache.pickable() {
         if let Some((f, t)) = sectioned_hit(cache.section.as_ref(), o, d, |o| part.solid.pick_where(to64(o), to64(d), |f| Some(f.name.op) != skip)) {
             let t = t as f32;
             if best.is_none_or(|b| t < b.2) {
@@ -2225,7 +2327,7 @@ pub fn pick_face_skipping(
 pub fn pick_region(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, usize, f32)> {
     let (o, d) = view.ray(offset);
     let mut best: Option<(FeatureId, usize, f32, f64)> = None;
-    for sr in &cache.regions {
+    for sr in cache.regions.iter().filter(|sr| !cache.flat_sketches.contains(&sr.sketch)) {
         let Some(p) = sr.frame.intersect_ray(to64(o), to64(d)) else {
             continue;
         };
@@ -2251,7 +2353,7 @@ pub fn pick_region(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<
 /// The nearest sketch point within [`VERTEX_PICK_PX`] of a screen offset, not behind a part.
 pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::PointId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::PointId, Vec3)> = Vec::new();
-    for sc in &cache.sketch_curves {
+    for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
         for (id, p) in &sc.points {
             let q = v3(*p);
             let d = view.project(q).distance(offset);
@@ -2269,7 +2371,7 @@ pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> O
 /// The nearest sketch curve within [`EDGE_PICK_PX`] of a screen offset, not behind a part.
 pub fn pick_sketch_curve(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::CurveId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::CurveId, Vec3)> = Vec::new();
-    for sc in &cache.sketch_curves {
+    for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
         for (id, pts) in &sc.curves {
             let mut best: Option<(f32, Vec3)> = None;
             for w in pts.windows(2) {
@@ -2334,9 +2436,7 @@ pub fn pick_scene(cache: &PartCache, view: &ViewState, offset: Vec2, filter: Pic
             {
                 return Some(Pick::Vertex(f, v));
             }
-            if let Some((f, e, _)) = pick_edge(cache, view, offset)
-                .filter(|(_, e, _)| filter.skip_op.is_none_or(|op| e.faces.iter().all(|x| x.op != op)))
-            {
+            if let Some((f, e, _)) = pick_edge_skipping(cache, view, offset, filter.skip_op) {
                 return Some(Pick::Edge(f, e));
             }
         }

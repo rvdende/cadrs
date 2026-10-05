@@ -1,5 +1,5 @@
 //! The geometry fingerprint: a hash of the source that decides what a rebuild makes (this
-//! crate, the kernel and the sketcher), of the locked OpenCASCADE and of the compiler, as
+//! crate, the kernel, the sketcher and the sheet metal definitions), of the locked OpenCASCADE and of the compiler, as
 //! `CADRS_GEOMETRY_FINGERPRINT`. On-disk caches of built geometry are keyed by it, so a fix to a
 //! feature's implementation, committed or not, never reuses a result the old code built.
 
@@ -10,7 +10,7 @@ fn main() {
     let crates = manifest.parent().unwrap();
     let workspace = crates.parent().unwrap();
     let mut h = Fnv(0xcbf2_9ce4_8422_2325);
-    for dir in ["cadrs_core/src", "cadrs_kernel/src", "cadrs_sketch/src"] {
+    for dir in ["cadrs_core/src", "cadrs_kernel/src", "cadrs_sketch/src", "cadrs_sheetmetal/src"] {
         let dir = crates.join(dir);
         println!("cargo:rerun-if-changed={}", dir.display());
         let mut files = Vec::new();

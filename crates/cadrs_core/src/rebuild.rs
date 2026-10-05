@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,10 @@ pub struct Build {
     /// P3G.4: the derived sketches, placed (each a sketch on a frame of its own, named after the
     /// Derived feature): later features take their regions like any sketch's.
     pub derived_sketches: Vec<Feature>,
+    /// P3I.2: each Sheet metal model's definition, flat pattern and parts (the "sheet metal
+    /// contexts", SM1.3), in list order; a failed model keeps its context (the flat view shows
+    /// why, SM1.5).
+    pub sheet_metal: Vec<crate::sheetmetal::SheetMetalContext>,
 }
 
 /// P3D.1: how a feature came out of the last rebuild.
@@ -125,6 +129,10 @@ pub enum FeatureStatus {
 pub struct Stage {
     pub before: Vec<Part>,
     pub tool: Arc<crate::solid::Solid>,
+    /// More bodies drawn with `tool`: a Sheet metal model's other folded parts (P3I.2), shown
+    /// translucent over the part it converts while its edges to bend are picked.
+    #[serde(default)]
+    pub more: Vec<Arc<crate::solid::Solid>>,
 }
 
 /// The parts an extrude's new body meets (before its boolean).
@@ -214,6 +222,9 @@ struct State {
     /// P3G.4: what each Derived feature so far brought in, and its sketches (placed).
     derived: Arc<HashMap<FeatureId, crate::derived::DerivedOutput>>,
     derived_sketches: Arc<Vec<Feature>>,
+    /// P3I.2: the sheet metal models so far (their definitions, flats and parts).
+    #[serde(default)]
+    sheet_metal: Arc<Vec<crate::sheetmetal::SheetMetalContext>>,
 }
 
 impl State {
@@ -253,10 +264,26 @@ struct Entry {
     time: Duration,
     /// The rebuild that last used it.
     last_used: u64,
+    /// For a Derived feature: the cache keys of its source's outputs (nested sources' too).
+    /// They are used whenever it is ([`Rebuilder::rebuild`]), so they live as long as it does:
+    /// a later sketch on a derived face, or a change below it, finds the source still built
+    /// instead of importing a STEP file again.
+    sources: Vec<u64>,
 }
 
-/// Cached outputs are dropped when this many rebuilds went by without using them.
+/// Cached outputs are dropped when this many rebuilds went by without using them (by default;
+/// see [`keep_unused_for`]).
 const KEEP_REBUILDS: u64 = 48;
+
+static KEEP_UNUSED: AtomicU64 = AtomicU64::new(KEEP_REBUILDS);
+
+/// Keeps cached outputs until `rebuilds` rebuilds went by without using them (still at most
+/// [`MAX_ENTRIES`]). The Onshape importer rebuilds twice a feature and builds a Derived
+/// feature's source tab long before the Derived feature: with the app's 48 the source (a STEP
+/// import of seconds) was gone again by then.
+pub fn keep_unused_for(rebuilds: u64) {
+    KEEP_UNUSED.store(rebuilds, Ordering::Relaxed);
+}
 /// And the oldest are dropped beyond this many.
 const MAX_ENTRIES: usize = 1024;
 
@@ -337,6 +364,24 @@ pub fn chain_keys(features: &[Feature]) -> Vec<u64> {
     keys
 }
 
+/// The cache keys of the outputs the Derived features among `features` build their sources
+/// from, nested sources' too.
+fn derived_source_keys(features: &[Feature]) -> Vec<u64> {
+    fn go(features: &[Feature], out: &mut Vec<u64>, depth: usize) {
+        for f in features {
+            if let FeatureKind::Derived(d) = &f.kind
+                && depth < 8
+            {
+                out.extend(chain_keys(&d.studio));
+                go(&d.studio, out, depth + 1);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    go(features, &mut out, 0);
+    out
+}
+
 /// The chain key before the first feature.
 const CHAIN_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
@@ -394,6 +439,10 @@ impl Rebuilder {
         let stage_for = self.stage_for;
         let last = self.last.clone();
         let times = self.sketch_times.clone();
+        // A source built in another session (another document imported earlier, a document
+        // opened before) comes back from its snapshot instead of being rebuilt.
+        #[cfg(feature = "occt")]
+        self.restore_snapshot(features);
         self.depth += 1;
         let build = self.rebuild(features);
         self.depth -= 1;
@@ -469,12 +518,17 @@ impl Rebuilder {
                     },
                     None => self.compute(&features[..i], f, &state),
                 };
+                let sources = match &f.kind {
+                    FeatureKind::Derived(_) => derived_source_keys(std::slice::from_ref(f)),
+                    _ => Vec::new(),
+                };
                 self.entries.insert(
                     key,
                     Entry {
                         output,
                         time: t0.elapsed(),
                         last_used: generation,
+                        sources,
                     },
                 );
             }
@@ -483,6 +537,15 @@ impl Rebuilder {
             }
             let entry = self.entries.get_mut(&key).expect("just inserted");
             entry.last_used = generation;
+            if !entry.sources.is_empty() {
+                let sources = entry.sources.clone();
+                for k in sources {
+                    if let Some(e) = self.entries.get_mut(&k) {
+                        e.last_used = generation;
+                    }
+                }
+            }
+            let entry = self.entries.get(&key).expect("just inserted");
             state = entry.output.state.clone();
             out.times.push((f.id, entry.time));
             self.trail.push((f.id, state.clone()));
@@ -582,6 +645,7 @@ impl Rebuilder {
         }
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
+        out.sheet_metal = (*state.sheet_metal).clone();
         debug_assert!(self.depth != 0 || key == final_key(features), "final_key must follow the rebuild's keys");
         self.trail.clear();
         self.last = state;
@@ -599,18 +663,8 @@ impl Rebuilder {
     /// its Derived features' sources' outputs, which it doesn't touch while the Derived output
     /// itself is cached (an edit of the Derived feature then needs them).
     pub fn snapshot_keys(&self, features: &[Feature]) -> Vec<u64> {
-        fn sources(features: &[Feature], out: &mut Vec<u64>, depth: usize) {
-            for f in features {
-                if let FeatureKind::Derived(d) = &f.kind
-                    && depth < 8
-                {
-                    out.extend(chain_keys(&d.studio));
-                    sources(&d.studio, out, depth + 1);
-                }
-            }
-        }
         let mut keys = self.used_keys();
-        sources(features, &mut keys, 0);
+        keys.extend(derived_source_keys(features));
         keys
     }
 
@@ -621,7 +675,7 @@ impl Rebuilder {
         let mut stale: Vec<u64> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.last_used + KEEP_REBUILDS < generation)
+            .filter(|(_, e)| e.last_used.saturating_add(KEEP_UNUSED.load(Ordering::Relaxed)) < generation)
             .map(|(k, _)| *k)
             .collect();
         if self.entries.len() - stale.len() > MAX_ENTRIES {
@@ -738,6 +792,10 @@ impl Rebuilder {
         req: &crate::views::ViewRequest,
     ) -> Result<crate::views::ViewGeometry, String> {
         let build = self.rebuild(features);
+        // A flat pattern view (P3I.7): the part's flat, from its sheet metal model.
+        if req.flat {
+            return crate::flat_drawing::flat_geometry(&build.sheet_metal, req);
+        }
         let state = self.last.clone();
         let parts = crate::views::view_parts(&build.parts, req.part);
         if parts.is_empty() {
@@ -948,6 +1006,12 @@ impl Rebuilder {
             dots: None,
             uses: Vec::new(),
         };
+        // P3I.5 (SM1.6, SM12): Extrude → Remove, Fillet, Chamfer and Face patterns on an active
+        // sheet metal model edit its definition.
+        #[cfg(feature = "occt")]
+        if let Some(r) = self.sheet_metal_aware(before, f, state) {
+            return r.unwrap_or_else(fail);
+        }
         match &f.kind {
             FeatureKind::Sketch(_) | FeatureKind::Variable(_) => fail(String::new()),
             FeatureKind::DeletePart(d) => {
@@ -974,6 +1038,8 @@ impl Rebuilder {
                     uses: Vec::new(),
                 }
             }
+            // P3I.6 (SM14.3): an ordinary Extrude can't take a flat-pattern sketch.
+            FeatureKind::Extrude(e) if crate::sheetmetal_flat::on_flat(before, &e.sketches()) => fail(crate::sheetmetal_flat::MODEL_SPACE.into()),
             #[cfg(feature = "occt")]
             FeatureKind::Extrude(e) => match self.extrude(before, f.id, e, state) {
                 Ok(o) => o,
@@ -1027,6 +1093,38 @@ impl Rebuilder {
             FeatureKind::Helix(x) => self.helix(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Fill(x) => self.fill(before, f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalModel(x) => self.sheet_metal_model(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalModel(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            #[cfg(feature = "occt")]
+            FeatureKind::ModifyJoint(x) => self.modify_joint(f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::ModifyJoint(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.9.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalLoft(x) => self.sheet_metal_loft(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::Form(x) => self.sheet_metal_form(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
+            FeatureKind::TagForm(x) => self.tag_form(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalLoft(_) | FeatureKind::Form(_) | FeatureKind::TagForm(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.4.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetal(x) => self.sheet_metal_feature(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetal(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.5.
+            #[cfg(feature = "occt")]
+            FeatureKind::SheetMetalTool(x) => self.sheet_metal_tool(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::SheetMetalTool(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
+            // P3I.6.
+            #[cfg(feature = "occt")]
+            FeatureKind::FlatExtrude(x) => self.flat_extrude(before, f.id, &f.name, x, state).unwrap_or_else(fail),
+            #[cfg(not(feature = "occt"))]
+            FeatureKind::FlatExtrude(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
             FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
@@ -1277,11 +1375,18 @@ mod kernel_ops {
 
     mod advanced;
     mod applied;
+    mod context;
     mod derived;
     mod draft;
     mod import;
     mod linked;
     mod pattern;
+    mod sheetmetal;
+    mod sheetmetal_joint;
+    mod sheetmetal_form;
+    mod sheetmetal_loft;
+    mod sheetmetal_features;
+    mod sheetmetal_flat;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;
@@ -1311,6 +1416,24 @@ mod kernel_ops {
             id: FeatureId,
             e: &ExtrudeFeature,
             state: &Arc<State>,
+        ) -> Result<Output, String> {
+            // MC1.3: its ends may go up to assembly-context parts (released once it's built).
+            let (ends, context) = self.with_context_targets(state, &e.context)?;
+            let out = self.extrude_with(before, id, e, state, &ends);
+            for b in context {
+                self.kernel.release(b);
+            }
+            out
+        }
+
+        /// [`Self::extrude`], its ends resolved in `ends`.
+        fn extrude_with(
+            &mut self,
+            before: &[Feature],
+            id: FeatureId,
+            e: &ExtrudeFeature,
+            state: &Arc<State>,
+            ends: &Arc<State>,
         ) -> Result<Output, String> {
             if let Some(p) = e.problem() {
                 return Err(p.into());
@@ -1350,9 +1473,9 @@ mod kernel_ops {
                 .direction
                 .map(|d| self.direction(before, state, &d))
                 .transpose()?;
-            let first = self.end_of(state, e.end, e.depth, &e.up_to, &e.offset)?;
+            let first = self.end_of(ends, e.end, e.depth, &e.up_to, &e.offset)?;
             let second = match (&e.second, e.symmetric) {
-                (Some(s), false) => Some(self.end_of(state, s.end, s.depth, &s.up_to, &s.offset)?),
+                (Some(s), false) => Some(self.end_of(ends, s.end, s.depth, &s.up_to, &s.offset)?),
                 _ => None,
             };
             let start_offset = e.start_offset.as_ref().map_or(0.0, Offset::signed);
@@ -1464,6 +1587,7 @@ mod kernel_ops {
                 .map(|s| Stage {
                     before: state.parts.iter().map(|p| p.part.clone()).collect(),
                     tool: Arc::new(s),
+                    more: Vec::new(),
                 });
             let result = self.apply_extrude_op(id, e, tool, state, &contacts, geoms);
             result.map(|mut o| {
@@ -1999,6 +2123,24 @@ mod kernel_ops {
             r: &RevolveFeature,
             state: &Arc<State>,
         ) -> Result<Output, String> {
+            // MC1.3: its ends may go up to assembly-context parts (released once it's built).
+            let (ends, context) = self.with_context_targets(state, &r.context)?;
+            let out = self.revolve_with(before, id, r, state, &ends);
+            for b in context {
+                self.kernel.release(b);
+            }
+            out
+        }
+
+        /// [`Self::revolve`], its ends resolved in `ends`.
+        fn revolve_with(
+            &mut self,
+            before: &[Feature],
+            id: FeatureId,
+            r: &RevolveFeature,
+            state: &Arc<State>,
+            ends: &Arc<State>,
+        ) -> Result<Output, String> {
             if let Some(p) = r.problem() {
                 return Err(p.into());
             }
@@ -2041,7 +2183,7 @@ mod kernel_ops {
             };
             let to_end = |this: &Self, end: EndType, angle: f64, up_to: &Option<UpTo>, offset: &Option<Offset>| {
                 let offset = offset.as_ref().map_or(0.0, |o| rad(o.signed()));
-                Ok::<_, String>(match this.end_of(state, end, 1.0, up_to, &None)? {
+                Ok::<_, String>(match this.end_of(ends, end, 1.0, up_to, &None)? {
                     ExtrudeEnd::UpToNext { .. } => RevolveEnd::UpToNext { offset },
                     ExtrudeEnd::UpToFace { body, face, .. } => RevolveEnd::UpToFace { body, face, offset },
                     ExtrudeEnd::UpToPart { body, .. } => RevolveEnd::UpToPart { body, offset },
@@ -2166,7 +2308,9 @@ mod kernel_ops {
                         CurveKind::Circle { center, .. } | CurveKind::Arc { center, .. } => {
                             make(frame.to_world(g.pos(center)), frame.normal())
                         }
-                        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => Err("An ellipse can't be a revolve axis".into()),
+                        CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } | CurveKind::EllipseArc { .. } => {
+                            Err("An ellipse can't be a revolve axis".into())
+                        }
                         CurveKind::Spline { .. } => Err("A spline can't be a revolve axis".into()),
                         CurveKind::Bezier { .. } => Err("A Bézier curve can't be a revolve axis".into()),
                     }
@@ -2201,6 +2345,7 @@ mod kernel_ops {
                         crate::links::Curve3::Circle { center, normal, .. }
                         | crate::links::Curve3::Arc { center, normal, .. } => make(center, normal),
                         crate::links::Curve3::Ellipse { .. } => Err(lost()),
+                        crate::links::Curve3::Sampled { .. } => Err("Only a straight or circular edge can be a revolve axis".into()),
                     }
                 }
                 AxisRef::Connector(c) => {
@@ -2563,7 +2708,7 @@ pub fn sketch_chains(sketch: FeatureId, g: &Sketch) -> Vec<ChainGeom> {
                 }
             }
             CurveKind::Line { a, b } | CurveKind::Bezier { a, b, .. } => open.push((id, a, b)),
-            CurveKind::Arc { start, end, .. } => open.push((id, start, end)),
+            CurveKind::Arc { start, end, .. } | CurveKind::EllipseArc { start, end, .. } => open.push((id, start, end)),
             CurveKind::Spline { start, end } if start == end => {
                 let pieces: Vec<(Piece, CurveId)> =
                     g.spline_spans(id).unwrap_or_default().into_iter().map(|b| (Piece::Bezier(BezierGeom::new(b)), id)).collect();
@@ -2578,6 +2723,10 @@ pub fn sketch_chains(sketch: FeatureId, g: &Sketch) -> Vec<ChainGeom> {
         let p = match g.curves.get(id)?.kind {
             CurveKind::Line { a, b } => vec![Piece::Line(g.pos(a), g.pos(b))],
             CurveKind::Arc { .. } => vec![Piece::Arc(g.arc_geom(id)?)],
+            CurveKind::EllipseArc { .. } => {
+                let e = g.ellipse_arc_geom(id)?;
+                vec![Piece::Ellipse { g: e.e, t0: e.t0, sweep: e.sweep }]
+            }
             CurveKind::Spline { .. } => g.spline_spans(id)?.into_iter().map(|b| Piece::Bezier(BezierGeom::new(b))).collect(),
             CurveKind::Bezier { .. } => vec![Piece::Bezier(g.bezier_geom(id)?)],
             _ => return None,
@@ -2793,6 +2942,21 @@ pub fn run_on_worker<T: Send + 'static>(f: impl FnOnce(&mut Rebuilder) -> T + Se
     }));
     let _ = worker().lock().map(|tx| tx.send(job));
     PendingJob { rx: Mutex::new(rx) }
+}
+
+/// Rebuilds `features` (from the cache, mostly) and writes their session snapshot now, instead
+/// of once the rebuild thread goes idle: the Onshape importer runs each document in its own
+/// process, and a later document's Derived feature restores this one's Part Studio from it.
+/// Nothing is written without a snapshot store ([`session::set_store`]).
+#[cfg(feature = "occt")]
+pub fn save_snapshot_now(features: Vec<Feature>) {
+    run_on_worker(move |r| {
+        r.rebuild(&features);
+        if let Some(save) = r.plan_save(&features) {
+            r.save_snapshot(save);
+        }
+    })
+    .wait();
 }
 
 /// P3B.9: kernel bodies of placed parts, for work across Part Studios (an assembly's

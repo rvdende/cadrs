@@ -45,6 +45,7 @@ pub mod title_block;
 pub mod update;
 pub mod view;
 pub mod view_kinds;
+pub mod flat_view;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

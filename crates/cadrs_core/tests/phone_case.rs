@@ -61,9 +61,11 @@ fn board_in_context_follows_the_resized_case() {
     // The studio: its context is the assembly at the Origin; three parts, named.
     let st = doc.element(pc::BOARD_STUDIO).unwrap();
     assert_eq!(st.name, "Board & Keep out");
-    let ctx = st.context.clone().unwrap();
+    let ctx = st.contexts[0].clone();
     assert_eq!(ctx.assembly, pc::CELL_PHONE);
-    assert_eq!(ctx.instance, InstanceId::ORIGIN);
+    // MC3.3: made at the Origin, then the first inserted part became the primary instance.
+    assert_ne!(ctx.instance, InstanceId::ORIGIN);
+    assert_eq!(cadrs_core::assembly::context::studio_of(&doc, pc::CELL_PHONE, ctx.instance), Some(pc::BOARD_STUDIO));
     assert_eq!(ctx.parts.len(), 3, "Enclosure, Battery, Antenna");
     // Inserted where the studio has them, and grouped.
     let asm = doc.element(pc::CELL_PHONE).unwrap().assembly_model().unwrap();

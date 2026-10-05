@@ -56,6 +56,9 @@ pub enum CursorKind {
     NotAllowed,
     /// A divider between stacked panes, hovered or dragged ([`crate::splitter`]).
     RowResize,
+    /// A divider between side-by-side panes (a dock panel's edge, [`crate::dock`]), hovered or
+    /// dragged.
+    ColResize,
 }
 
 impl CursorKind {
@@ -70,6 +73,7 @@ impl CursorKind {
             CursorKind::Grabbing => SystemCursorIcon::Grabbing,
             CursorKind::NotAllowed => SystemCursorIcon::NotAllowed,
             CursorKind::RowResize => SystemCursorIcon::RowResize,
+            CursorKind::ColResize => SystemCursorIcon::ColResize,
         }
     }
 }
@@ -114,7 +118,12 @@ fn ui_cursor(
 #[allow(clippy::too_many_arguments)]
 fn resolve_cursor(
     request: Res<CursorRequest>,
-    q_hover_cursor: Query<(&Hovered, &crate::splitter::HoverCursor, Option<&crate::splitter::Splitter>)>,
+    q_hover_cursor: Query<(
+        &Hovered,
+        &crate::splitter::HoverCursor,
+        Option<&crate::splitter::Splitter>,
+        Option<&crate::dock::DockGrip>,
+    )>,
     q_buttons: Query<(&Hovered, Has<InteractionDisabled>), With<WidgetButton>>,
     q_inputs: Query<(&Hovered, &Children), With<TextInputFrame>>,
     q_disabled: Query<(), With<InteractionDisabled>>,
@@ -123,8 +132,11 @@ fn resolve_cursor(
 ) {
     // An element with its own cursor (a divider): while dragged (over anything), else while
     // hovered and nothing captures the pointer.
-    let dragged = q_hover_cursor.iter().find(|(_, _, s)| s.is_some_and(|s| s.dragging())).map(|(_, c, _)| c.0);
-    let hovered = q_hover_cursor.iter().find(|(h, ..)| h.get()).map(|(_, c, _)| c.0);
+    let dragged = q_hover_cursor
+        .iter()
+        .find(|(_, _, s, g)| s.is_some_and(|s| s.dragging()) || g.is_some_and(|g| g.dragging()))
+        .map(|(_, c, ..)| c.0);
+    let hovered = q_hover_cursor.iter().find(|(h, ..)| h.get()).map(|(_, c, ..)| c.0);
     let kind = dragged
         .or(request.capture)
         .or(hovered)

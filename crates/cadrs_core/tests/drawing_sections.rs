@@ -40,6 +40,7 @@ fn request(view: &View) -> ViewRequest {
         appearances: Vec::new(),
         cut: view.effective_cut(),
         intersections: false,
+        flat: false,
     }
 }
 

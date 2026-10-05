@@ -908,7 +908,7 @@ impl SketchOp {
             SketchOp::Use { items } => {
                 let mut added = 0;
                 for (shape, link) in items {
-                    if s.add_projected(*shape, *link).is_some() {
+                    if s.add_projected(shape.clone(), *link).is_some() {
                         added += 1;
                     }
                 }
@@ -919,7 +919,7 @@ impl SketchOp {
             }
             SketchOp::UseConstruction { items } => {
                 for (shape, link) in items {
-                    if let Some(c) = s.add_projected(*shape, *link)
+                    if let Some(c) = s.add_projected(shape.clone(), *link)
                         && let Some(c) = s.curves.get_mut(c)
                     {
                         c.construction = true;

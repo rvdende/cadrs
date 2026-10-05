@@ -232,9 +232,10 @@ fn course_parts_mesh_or_explain() {
     eprintln!("course parts: {meshed} of {total} meshed (worst volume error {:.2} %); not meshed: {failed:#?}", worst * 100.0);
     // Pinned (P3F.5 judge): a fixture added or removed must update this count on purpose. The
     // judge asked for 89, the count it saw; the fixtures on this branch, with 3G's derived and
-    // linked documents, hold 103 parts, all meshed; 3H's phone case stand-in adds 3 (106); 3E's
-    // drill stand-in (P3E.5) adds 3 (MANIFOLD, CARBURETOR_BODY, DRILL_BODY: 109).
-    assert_eq!(total, 109, "course parts in fixtures/");
+    // linked documents, hold 103 parts, all meshed; 3H's phone case stand-in adds 3 (106); the
+    // managed in-context stand-ins add the Rail, Carriage, Finger and Palm (110); 3E's drill
+    // stand-in (P3E.5) adds 3 (MANIFOLD, CARBURETOR_BODY, DRILL_BODY: 113).
+    assert_eq!(total, 113, "course parts in fixtures/");
     // P3F.5 judge: every part meshes, within 1 % of the kernel's volume (89 of 89, worst
     // 0.73 %, when this was written; 103 of 103, worst 0.72 %, with 3G's fixtures).
     assert!(failed.is_empty() && meshed == total, "{meshed} of {total} meshed: {failed:#?}");

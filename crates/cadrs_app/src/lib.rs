@@ -51,6 +51,15 @@ pub mod pattern;
 pub mod pattern_dialog;
 pub mod pcb;
 pub mod preferences_ui;
+pub mod sheetmetal_features_ui;
+pub mod sheetmetal_ui;
+pub mod sheetmetal_joint_ui;
+pub mod sheetmetal_table;
+pub mod sheetmetal_p3i9_ui;
+pub mod sheetmetal_tools_ui;
+pub mod flat_ui;
+pub mod flat_export_dialog;
+pub mod sketch_dxf;
 pub mod surfacing_ui;
 pub mod transform_ui;
 pub mod properties_dialog;
@@ -331,6 +340,20 @@ impl ActiveDocument {
                 let extra = self.undo_active.len() - keep;
                 self.undo_active.drain(..extra);
             }
+            // MC2.5: a pending assembly context is created by the first command that references
+            // it, in that command's undo step.
+            if let Some((studio, context)) = cadrs_core::assembly::context::pending_to_commit(&self.doc)
+                && self.history.execute(&mut self.doc, &cadrs_core::assembly::context::AddContext { studio, context }).is_ok()
+            {
+                // The document has it now (deleting it later must not bring it back).
+                cadrs_core::assembly::context::set_pending(self.doc.id, studio, None);
+                self.history.squash_element_since(undo0.min(self.history.undo_len()), studio, cmd.label());
+                let keep = self.history.undo_len();
+                while self.undo_active.len() < keep {
+                    self.undo_active.push(before);
+                }
+                self.undo_active.truncate(keep);
+            }
         }
         self.fix_active();
         r
@@ -580,10 +603,15 @@ impl Plugin for CadrsAppPlugin {
                 viewport_menu::ViewportMenuPlugin,
             ))
             .add_plugins((sketch_diagnostics::SketchDiagnosticsPlugin, feature_menu::FeatureMenuPlugin))
+            // P3I.6: the flat pattern export and the sketch's Insert DXF or DWG.
+            .add_plugins((flat_export_dialog::FlatExportDialogPlugin, sketch_dxf::SketchDxfPlugin, flat_ui::FlatUiPlugin))
             .add_plugins((history_panel::HistoryPlugin, workspaces::WorkspacesPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
-            .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
+            .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, sheetmetal_features_ui::SheetMetalFeaturesPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
-            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin))
+            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin, sheetmetal_p3i9_ui::Sm9Plugin))
+            // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
+            .add_plugins((sheetmetal_table::SheetMetalTablePlugin, sheetmetal_joint_ui::ModifyJointUiPlugin))
+            .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
             .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin, analysis::AnalysisPlugin, preferences_ui::PreferencesPlugin, manipulator::ManipulatorPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin))

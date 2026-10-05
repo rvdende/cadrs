@@ -641,7 +641,8 @@ mod migrate {
                 id: e.id,
                 name: e.name,
                 assembly: Default::default(),
-                context: None,
+                contexts: Vec::new(),
+                open_context: None,
                 simulation: Default::default(),
                 named_views: Vec::new(),
                 kind: match e.kind {

@@ -736,6 +736,9 @@ impl ViewModel for SheetModel<'_> {
     fn boms(&self) -> Vec<&BomData> {
         self.tables.iter().filter_map(|t| t.bom.as_ref()).collect()
     }
+    fn flat(&self) -> Option<&crate::flat_view::FlatData> {
+        self.inner.flat()
+    }
 }
 
 #[cfg(test)]

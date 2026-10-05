@@ -770,9 +770,9 @@ impl Rebuilder {
 /// The world position and sketch-plane normal of every point a hole is placed at, with a stable
 /// key per point (for the names of its faces).
 /// A hole's place: its key, where it is, and the sketch plane's normal there.
-type HolePlace = (u64, Point3<f64>, Unit<Vector3<f64>>);
+pub(super) type HolePlace = (u64, Point3<f64>, Unit<Vector3<f64>>);
 
-fn hole_points(before: &[Feature], h: &HoleFeature) -> Result<Vec<HolePlace>, String> {
+pub(super) fn hole_points(before: &[Feature], h: &HoleFeature) -> Result<Vec<HolePlace>, String> {
     use slotmap::Key;
     let mut out = Vec::new();
     let mut lost = 0;

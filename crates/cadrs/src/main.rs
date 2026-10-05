@@ -92,7 +92,7 @@ fn main() -> AppExit {
             .insert_resource(cadrs_app::parts::RebuildBudget(None));
     }
     app.add_plugins((CadrsUiPlugin, CadrsAppPlugin))
-        .add_systems(Last, (share_sketch_mapping, share_view_mapping))
+        .add_systems(Last, (share_sketch_mapping, share_view_mapping, share_flat_mapping))
         .run()
 }
 
@@ -119,6 +119,25 @@ fn share_sketch_mapping(
             y_axis: m.y,
         }),
     };
+    if out.0 != want {
+        out.0 = want;
+    }
+}
+
+/// Lets scenarios address points of the sheet metal flat view (`flat(x, y)`).
+fn share_flat_mapping(table: Res<cadrs_app::sheetmetal_table::SmTable>, out: Option<ResMut<cadrs_harness::FlatToScreen>>) {
+    let Some(mut out) = out else {
+        return;
+    };
+    let want = table.body.filter(|_| table.scene.is_some()).map(|(_, rect)| {
+        let v = table.view;
+        let z = table.scene.as_ref().map_or(0.0, |s| s.thickness as f32);
+        cadrs_harness::Affine {
+            origin: rect.center() + v.project(Vec3::new(0.0, 0.0, z)),
+            x_axis: v.project_vector(Vec3::X),
+            y_axis: v.project_vector(Vec3::Y),
+        }
+    });
     if out.0 != want {
         out.0 = want;
     }

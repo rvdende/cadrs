@@ -181,7 +181,8 @@ impl Element {
             name: name.into(),
             kind: ElementKind::PcbStudio(Box::default()),
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
             named_views: Vec::new(),
         }

@@ -6,9 +6,11 @@
 //   small circle to R15;
 // - the line and the big circle clicked on its outside (the line's side): to its near side,
 //   30; placed, then 20 typed: the line moves 10 closer (the circle's center is on the origin);
-// - the line and the big circle clicked on its inside: to its far side, 100 (shown, then
-//   dropped with Esc);
-// - a point and the small circle clicked on its outside: to its near side.
+// - the line and the big circle clicked on its half away from the line (just inside): to its
+//   far side, 100 (shown, then dropped with Esc);
+// - a point and the small circle clicked on the half facing the point: to its near side.
+// The side is the half of the circle that was clicked (facing the other entity: near; away
+// from it: far), not whether the click was just inside or outside the curve.
 Scenario(
     start: Some("document"),
     steps: [
@@ -82,10 +84,10 @@ Scenario(
         Screenshot("04c-typed-20-the-line-moved"),
         Click(world(60, 12)),
         Wait(2),
-        Click(world(39.3, 0)),
+        Click(world(-39.3, 0)),
         MoveWorld(20, -50),
         Wait(2),
-        Screenshot("05-line-to-circle-clicked-inside-far-100"),
+        Screenshot("05-line-to-circle-clicked-far-half-far-100"),
         Key("Escape"),
         Wait(2),
         Click(world(60, 30)),

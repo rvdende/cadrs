@@ -76,6 +76,7 @@ fn request(view: &View, hidden: bool) -> ViewRequest {
         appearances: Vec::new(),
         cut: None,
         intersections: false,
+        flat: false,
     }
 }
 

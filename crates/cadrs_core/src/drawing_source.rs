@@ -201,6 +201,7 @@ pub fn view_request(state: &StudioState, v: &cadrs_drawing::View) -> crate::view
         appearances: state.appearances.clone(),
         cut: v.effective_cut(),
         intersections: false,
+        flat: v.flat.is_some(),
     }
 }
 

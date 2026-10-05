@@ -171,6 +171,22 @@ const ROW_RESIZE: Sprite = Sprite {
     halo: true,
 };
 
+const COL_RESIZE: Sprite = Sprite {
+    rows: &[
+        "     B B     ",
+        "   B B B B   ",
+        "  BB B B BB  ",
+        " BBB B B BBB ",
+        "BBBBBB BBBBBB",
+        " BBB B B BBB ",
+        "  BB B B BB  ",
+        "   B B B B   ",
+        "     B B     ",
+    ],
+    hot: (6, 4),
+    halo: true,
+};
+
 const NOT_ALLOWED: Sprite = Sprite {
     rows: &[
         "     BBBBBB     ",
@@ -204,6 +220,7 @@ fn sprite(kind: CursorKind) -> &'static Sprite {
         CursorKind::Grabbing => &GRABBING,
         CursorKind::NotAllowed => &NOT_ALLOWED,
         CursorKind::RowResize => &ROW_RESIZE,
+        CursorKind::ColResize => &COL_RESIZE,
     }
 }
 

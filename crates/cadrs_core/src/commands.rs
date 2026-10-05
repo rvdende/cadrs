@@ -531,7 +531,9 @@ fn refresh(doc: &mut Document, element: ElementId) {
 pub fn refresh_studio(doc: &mut Document, element: ElementId) {
     // Derived features first: the sketches may sit on their parts.
     crate::derived::resolve_document(doc);
-    let context = crate::assembly::context::solids(doc, element);
+    let context = crate::assembly::context::solids_by_context(doc, element);
+    // MC1.3: ends up to a context part carry it as the context has it.
+    crate::assembly::context::refresh_targets(doc, element);
     let units = doc.units;
     // P3F.4: variables first, so the sketches regenerate with the dimensions they drive.
     let suppressed = doc.element(element).map(|e| e.suppressed().to_vec()).unwrap_or_default();

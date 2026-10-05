@@ -1590,7 +1590,7 @@ dependencies = [
  "crossbeam-queue",
  "derive_more",
  "futures-lite",
- "heapless",
+ "heapless 0.9.3",
  "web-task",
 ]
 
@@ -1982,7 +1982,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadrs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bevy",
  "cadrs_app",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bevy",
  "cadrs_core",
@@ -2004,6 +2004,7 @@ dependencies = [
  "cadrs_kernel",
  "cadrs_pcb",
  "cadrs_render",
+ "cadrs_sheetmetal",
  "cadrs_sketch",
  "cadrs_ui",
  "chrono",
@@ -2016,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bincode",
  "blake3",
@@ -2025,10 +2026,12 @@ dependencies = [
  "cadrs_idf",
  "cadrs_kernel",
  "cadrs_render",
+ "cadrs_sheetmetal",
  "cadrs_sketch",
  "directories",
  "image",
  "nalgebra",
+ "resvg",
  "ron",
  "serde",
  "slotmap",
@@ -2038,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_drawing"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cadrs_kernel",
  "cadrs_sketch",
@@ -2054,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_fea"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "faer",
  "rayon",
@@ -2063,7 +2066,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_harness"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bevy",
  "cadrs_ui",
@@ -2074,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_idf"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "proptest",
@@ -2084,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_kernel"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "glam 0.24.2",
  "nalgebra",
@@ -2095,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_onshape"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "cadrs_core",
@@ -2111,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_pcb"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cadrs_core",
  "cadrs_idf",
@@ -2123,15 +2126,28 @@ dependencies = [
 
 [[package]]
 name = "cadrs_render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "image",
  "rayon",
 ]
 
 [[package]]
+name = "cadrs_sheetmetal"
+version = "0.1.2"
+dependencies = [
+ "earcutr",
+ "geo",
+ "nalgebra",
+ "proptest",
+ "resvg",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "cadrs_sketch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cadrs_kernel",
  "earcutr",
@@ -2146,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "cadrs_ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bevy",
  "icon-rs",
@@ -3041,6 +3057,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
+name = "float_next_after"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3345,6 +3367,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "geo"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f3901269ec6d4f6068d3f09e5f02f995bd076398dcd1dfec407cd230b02d11b"
+dependencies = [
+ "earcutr",
+ "float_next_after",
+ "geo-types",
+ "geographiclib-rs",
+ "i_overlay",
+ "log",
+ "num-traits",
+ "rand 0.8.8",
+ "robust",
+ "rstar",
+ "sif-itree",
+ "spade",
+]
+
+[[package]]
+name = "geo-types"
+version = "0.7.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "777d18aa0f12f8b285331cd867133ee14422b3f023f6d388034c47d43e28786a"
+dependencies = [
+ "approx",
+ "num-traits",
+ "rayon",
+ "rstar",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "geographiclib-rs"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5a7f08910fd98737a6eda7568e7c5e645093e073328eeef49758cfe8b0489c7"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3352,6 +3417,17 @@ checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
  "rustix 1.1.5",
  "windows-link",
+]
+
+[[package]]
+name = "getrandom"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "wasi",
 ]
 
 [[package]]
@@ -3647,6 +3723,16 @@ dependencies = [
 
 [[package]]
 name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
@@ -3686,6 +3772,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "i_float"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "010025c2c532c8d82e42d0b8bb5184afa449fa6f06c709ea9adcb16c49ae405b"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "i_key_sort"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9190f86706ca38ac8add223b2aed8b1330002b5cdbbce28fb58b10914d38fc27"
+
+[[package]]
+name = "i_overlay"
+version = "4.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413183068e6e0289e18d7d0a1f661b81546e6918d5453a44570b9ab30cbed1b3"
+dependencies = [
+ "i_float",
+ "i_key_sort",
+ "i_shape",
+ "i_tree",
+ "rayon",
+]
+
+[[package]]
+name = "i_shape"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ea154b742f7d43dae2897fcd5ead86bc7b5eefcedd305a7ebf9f69d44d61082"
+dependencies = [
+ "i_float",
+]
+
+[[package]]
+name = "i_tree"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35e6d558e6d4c7b82bc51d9c771e7a927862a161a7d87bf2b0541450e0e20915"
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3711,9 +3840,9 @@ dependencies = [
 
 [[package]]
 name = "icon-rs"
-version = "0.3.9"
+version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5189225839e14c847b5ec2fa917cded49da9c502557a1c8611dc45cac2835461"
+checksum = "7e1331577b826b75281e07a1654b94c4137443ff6df0f7d9388ecba0811ea1c2"
 
 [[package]]
 name = "icu_collections"
@@ -4953,7 +5082,7 @@ dependencies = [
 [[package]]
 name = "occt-sys"
 version = "7.8.1"
-source = "git+https://github.com/rvdende/opencascade-rs?branch=main#6ca0f68453af465df92c32a99b05308402776b5b"
+source = "git+https://github.com/rvdende/opencascade-rs?branch=main#70e8afa018d56567af3ccc31461e97469b8fcf9a"
 dependencies = [
  "cmake",
 ]
@@ -4986,7 +5115,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "opencascade"
 version = "0.3.0"
-source = "git+https://github.com/rvdende/opencascade-rs?branch=main#6ca0f68453af465df92c32a99b05308402776b5b"
+source = "git+https://github.com/rvdende/opencascade-rs?branch=main#70e8afa018d56567af3ccc31461e97469b8fcf9a"
 dependencies = [
  "cxx",
  "glam 0.24.2",
@@ -4998,7 +5127,7 @@ dependencies = [
 [[package]]
 name = "opencascade-kicad-parser"
 version = "0.3.0"
-source = "git+https://github.com/rvdende/opencascade-rs?branch=main#6ca0f68453af465df92c32a99b05308402776b5b"
+source = "git+https://github.com/rvdende/opencascade-rs?branch=main#70e8afa018d56567af3ccc31461e97469b8fcf9a"
 dependencies = [
  "sexp",
  "thiserror 1.0.69",
@@ -5007,7 +5136,7 @@ dependencies = [
 [[package]]
 name = "opencascade-sys"
 version = "0.3.0"
-source = "git+https://github.com/rvdende/opencascade-rs?branch=main#6ca0f68453af465df92c32a99b05308402776b5b"
+source = "git+https://github.com/rvdende/opencascade-rs?branch=main#70e8afa018d56567af3ccc31461e97469b8fcf9a"
 dependencies = [
  "cmake",
  "cxx",
@@ -5342,7 +5471,7 @@ dependencies = [
  "bitflags 2.13.2",
  "num-traits",
  "rand 0.9.5",
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -5441,11 +5570,22 @@ checksum = "019b4b213425016d7d84a153c4c73afb0946fbb4840e4eece7ba8848b9d6da22"
 
 [[package]]
 name = "rand"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
+dependencies = [
+ "libc",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.5",
 ]
 
@@ -5461,12 +5601,31 @@ dependencies = [
 
 [[package]]
 name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -5734,6 +5893,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "rstar"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "421400d13ccfd26dfa5858199c30a5d76f9c54e0dba7575273025b43c5175dbb"
+dependencies = [
+ "heapless 0.8.0",
+ "num-traits",
+ "smallvec",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5951,6 +6121,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sif-itree"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7f45b8998ced5134fb1d75732c77842a3e888f19c1ff98481822e8fbfbf930b"
+
+[[package]]
 name = "simba"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6073,6 +6249,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "spade"
+version = "2.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa"
+dependencies = [
+ "hashbrown 0.16.1",
+ "num-traits",
+ "robust",
+ "smallvec",
 ]
 
 [[package]]
@@ -6692,6 +6880,12 @@ dependencies = [
  "same-file",
  "winapi-util",
 ]
+
+[[package]]
+name = "wasi"
+version = "0.11.1+wasi-snapshot-preview1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
 name = "wasip2"

@@ -24,6 +24,9 @@ use cadrs_core::Store;
 use cadrs_onshape::{query, raw};
 
 fn main() -> ExitCode {
+    // An import builds a Derived feature's source tab long before the feature: keep every
+    // output the cache has room for, not only those of the last few rebuilds.
+    cadrs_core::rebuild::keep_unused_for(u64::MAX);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut raw_dir = default_raw();
     let mut data_dir = std::env::var_os("CADRS_DATA_DIR").map(PathBuf::from).or_else(Store::default_root);
@@ -165,8 +168,22 @@ fn import_one(raw_dir: &Path, store: &Store, id: &str, skip: &[String], dry_run:
     };
     // Derived features read other documents from the store.
     cadrs_core::derived::set_document_loader(Some(cadrs_core::derived::store_loader(store.clone())));
+    // Rebuild snapshots next to the documents, where the app keeps them: a Derived feature
+    // restores its source document's Part Studio from one instead of rebuilding it.
+    if let Some(dir) = store.root().parent() {
+        let disk = cadrs_core::blob_store::DiskStore::new(dir.join("cache").join("session"));
+        cadrs_core::rebuild::session::set_store(Some(std::sync::Arc::new(disk)));
+    }
     let started = Instant::now();
     let imported = cadrs_onshape::import_document(&d, user, &options);
+    // This document's Part Studios as built, for later documents that derive from them (and
+    // the app opening it).
+    for el in &imported.doc.elements {
+        let features = el.features().to_vec();
+        if el.assembly_model().is_none() && features.iter().any(cadrs_core::Feature::is_part_feature) {
+            cadrs_core::rebuild::save_snapshot_now(features);
+        }
+    }
     let mut line = format!("{}", imported.report);
     let mut ok = true;
     if !dry_run {
