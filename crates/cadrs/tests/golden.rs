@@ -2228,3 +2228,39 @@ fn golden_course_pcb_component_documents() {
 fn golden_pcb_create_board_component() {
     run_scenario("pcb_create_board_component");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_course_views() {
+    run_scenario("eda_course_views");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_schematic_gs04_12() {
+    run_scenario("eda_schematic_gs04_12");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_gs13_21() {
+    run_scenario("eda_layout_gs13_21");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_parts_gs22_26() {
+    run_scenario("eda_parts_gs22_26");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_library_browser() {
+    run_scenario("eda_library_browser");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_power_monitor() {
+    run_scenario("eda_power_monitor");
+}

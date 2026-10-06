@@ -19,9 +19,14 @@ impl YAxis {
     /// Y down about 0 (boards, footprints).
     pub const DOWN: YAxis = YAxis { sign: -1.0, origin: 0.0 };
 
-    /// Y down from the top of a page `height` mm tall.
+    /// Y down from the top of a page `height` mm tall. The origin is the page height rounded up
+    /// to the 50 mil schematic grid, so KiCad's grid (from the page's top-left corner) lands on
+    /// cadrs's (from the bottom-left): an imported sheet can be edited without its symbols and
+    /// wires snapping off each other. (A4's 210 mm becomes 210.82 mm: the drawing sits 0.82 mm
+    /// higher on the page.)
     pub fn page(height: f64) -> YAxis {
-        YAxis { sign: -1.0, origin: height }
+        let grid = cadrs_eda::units::to_mm(cadrs_eda::units::SCHEMATIC_GRID);
+        YAxis { sign: -1.0, origin: (height / grid - 1e-9).ceil() * grid }
     }
 
     pub fn pt(&self, x: f64, y: f64) -> Pt {

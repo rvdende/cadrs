@@ -254,6 +254,8 @@ fn chips(lib: &str, prefix: &str) -> Vec<Footprint> {
     CHIPS
         .iter()
         .map(|&(imp, met, l, w, pitch, pw, ph)| {
+            // Chip inductors are thinner, with longer pads, than capacitors of the same size.
+            let (l, w, pitch, pw, ph) = if prefix == "L" && imp == "0805" { (2.0, 0.9, 2.125, 0.875, 1.2) } else { (l, w, pitch, pw, ph) };
             let mut f = chip_smd(lib, &format!("{prefix}_{imp}_{met}Metric"), pitch, Size::mm(pw, ph), Size::mm(l, w));
             f.description = format!("{prefix} chip {imp} ({met} metric), {l} × {w} mm");
             f.keywords = format!("{} {imp}", prefix.to_lowercase());

@@ -520,6 +520,14 @@ pub fn add_label(sch: &mut Schematic, sheet: usize, text: &str, at: Pt, angle: f
     id
 }
 
+/// Adds a text note (the Text tool): left-aligned at `at`, not on the grid, no electrical meaning.
+pub fn add_note(sch: &mut Schematic, sheet: usize, text: &str, at: Pt) -> Uuid {
+    let id = Uuid::new_v4();
+    let style = TextStyle { h_align: crate::graphics::HAlign::Left, v_align: crate::graphics::VAlign::Bottom, ..Default::default() };
+    sch.sheets[sheet].notes.push(Note { id, text: Text { text: text.into(), at, angle: 0.0, style, visible: true } });
+    id
+}
+
 pub fn add_no_connect(sch: &mut Schematic, sheet: usize, at: Pt) -> Uuid {
     let id = Uuid::new_v4();
     sch.sheets[sheet].no_connects.push(NoConnect { id, at: snap(at, SCHEMATIC_GRID) });

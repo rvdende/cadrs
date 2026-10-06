@@ -102,7 +102,8 @@ pub fn net_at(board: &Board, p: Pt, layer: Layer) -> String {
     if let Some(v) = board.vias.iter().find(|v| v.at.dist(p) <= v.diameter as f64 / 2.0) {
         return v.net.clone();
     }
-    board.tracks.iter().find(|t| t.layer == layer && (t.a == p || t.b == p)).map(|t| t.net.clone()).unwrap_or_default()
+    // A track ending here that has a net (another one there may be new, without one yet).
+    board.tracks.iter().filter(|t| t.layer == layer && (t.a == p || t.b == p)).map(|t| t.net.clone()).find(|n| !n.is_empty()).unwrap_or_default()
 }
 
 /// The 45° path from `a` to `b`: a straight run then a diagonal (or the reverse with

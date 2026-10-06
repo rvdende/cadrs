@@ -46,10 +46,17 @@ pub type Loop = Vec<Edge>;
 /// The outline's closed loops, largest first. Open chains are left out (see
 /// [`open_ends`]).
 pub fn loops(board: &Board) -> Vec<Loop> {
+    loops_of(board.outline_shapes().iter().map(|s| &s.geom))
+}
+
+/// The closed loops a set of drawn shapes makes (rectangles, circles and closed polylines alone;
+/// lines, arcs and open polylines chained end to end), largest first. A footprint's courtyard
+/// drawn as four lines is one loop.
+pub fn loops_of<'a>(shapes: impl Iterator<Item = &'a Geom>) -> Vec<Loop> {
     let mut out: Vec<Loop> = vec![];
     let mut edges: Vec<Edge> = vec![];
-    for s in board.outline_shapes() {
-        match s.geom {
+    for g in shapes {
+        match g.clone() {
             Geom::Line { a, b } => edges.push(Edge { a, b, mid: None }),
             Geom::Arc { start, mid, end } => edges.push(Edge { a: start, b: end, mid: Some(mid) }),
             Geom::Rect { a, b } => {

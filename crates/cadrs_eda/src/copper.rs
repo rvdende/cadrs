@@ -17,6 +17,11 @@ pub enum Item {
     Via(Uuid),
     /// Zone id, layer, filled polygon index.
     Zone(Uuid, Layer, usize),
+    /// A footprint's drawing on a copper layer (footprint id, shape index): a PCB antenna's
+    /// strips, a net tie. It carries the footprint's net when its pads have only one.
+    FpShape(Uuid, usize),
+    /// A board drawing on a copper layer (shape id), on its own net.
+    Shape(Uuid),
 }
 
 /// A copper item: its net, its shape on each copper layer it is on, its hole (pads, vias), and
@@ -84,6 +89,7 @@ pub fn items(board: &Board) -> Vec<Copper> {
     let copper: Vec<Layer> = board.copper().collect();
     let mut out = vec![];
     for (fi, f) in board.footprints.iter().enumerate() {
+        let loose_net = footprint_net(&f.footprint);
         for (pi, pad) in f.footprint.pads.iter().enumerate() {
             let layers: Vec<Layer> = copper.iter().copied().filter(|l| f.placement.layers(pad.layers).contains(*l)).collect();
             if layers.is_empty() && pad.kind != PadKind::NonPlated {
@@ -94,7 +100,12 @@ pub fn items(board: &Board) -> Vec<Copper> {
             let plated = pad.kind != PadKind::NonPlated;
             out.push(Copper {
                 item: Item::Pad(f.id, pi),
-                net: pad.net.clone().unwrap_or_default(),
+                // An unnumbered pad (a PCB antenna's plated hole) carries its footprint's net.
+                net: match (&pad.net, pad.number.is_empty()) {
+                    (Some(n), _) if !n.is_empty() => n.clone(),
+                    (_, true) => loose_net.clone(),
+                    _ => String::new(),
+                },
                 bounds: bounds_of(&[&r]),
                 layers: if plated { layers.iter().map(|l| (*l, r.clone())).collect() } else { vec![] },
                 hole,
@@ -121,6 +132,23 @@ pub fn items(board: &Board) -> Vec<Copper> {
             hole: Some(poly::circle(v.at, v.drill / 2)),
             anchors: vec![v.at],
         });
+    }
+    for f in &board.footprints {
+        let net = footprint_net(&f.footprint);
+        for (si, s) in f.footprint.shapes.iter().enumerate() {
+            let layer = f.placement.layer(s.layer);
+            if !copper.contains(&layer) {
+                continue;
+            }
+            let r = poly::map(&poly::shape_region(&s.shape), |p| f.placement.apply(p));
+            let anchors = poly::geom_points(&s.shape.geom).0.into_iter().take(1).map(|p| f.placement.apply(p)).collect();
+            out.push(Copper { item: Item::FpShape(f.id, si), net: net.clone(), bounds: bounds_of(&[&r]), layers: vec![(layer, r)], hole: None, anchors });
+        }
+    }
+    for s in board.shapes.iter().filter(|s| copper.contains(&s.layer)) {
+        let r = poly::shape_region(&s.shape);
+        let anchors = poly::geom_points(&s.shape.geom).0.into_iter().take(1).collect();
+        out.push(Copper { item: Item::Shape(s.id), net: s.net.clone(), bounds: bounds_of(&[&r]), layers: vec![(s.layer, r)], hole: None, anchors });
     }
     for z in board.zones.iter().filter(|z| z.keepout.is_none()) {
         for (l, polys) in &z.filled {
@@ -193,7 +221,8 @@ pub fn ratsnest(board: &Board) -> Vec<Airwire> {
     nets.dedup();
     for net in nets {
         let mine: Vec<Copper> = all.iter().filter(|c| c.net == net).cloned().collect();
-        let groups = islands(&mine);
+        // Islands of loose copper alone need no connection.
+        let groups: Vec<Vec<usize>> = islands(&mine).into_iter().filter(|g| g.iter().any(|&i| needs_connection(board, &mine[i]))).collect();
         if groups.len() < 2 {
             continue;
         }
@@ -222,4 +251,22 @@ pub fn ratsnest(board: &Board) -> Vec<Airwire> {
         }
     }
     out
+}
+
+/// The net a footprint's loose copper (drawings on copper, unnumbered pads) belongs to: its
+/// numbered pads' net when they all have the same one, else none.
+pub fn footprint_net(f: &crate::footprint::Footprint) -> String {
+    let mut nets = f.pads.iter().filter_map(|p| p.net.as_deref()).filter(|n| !n.is_empty());
+    let first = nets.next();
+    first.filter(|n| nets.all(|m| m == *n)).unwrap_or("").to_string()
+}
+
+/// Whether an item has to be connected to the rest of its net: not a footprint's loose copper
+/// (drawings, unnumbered pads) or a board drawing, which only join what touches them.
+pub fn needs_connection(board: &Board, c: &Copper) -> bool {
+    match c.item {
+        Item::FpShape(..) | Item::Shape(..) => false,
+        Item::Pad(f, i) => board.footprints.iter().find(|x| x.id == f).is_some_and(|x| !x.footprint.pads[i].number.is_empty()),
+        _ => true,
+    }
 }

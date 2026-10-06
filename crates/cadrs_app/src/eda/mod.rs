@@ -737,28 +737,44 @@ fn draw_lines(
 // Scenario commands
 
 /// The `eda-…` scenario commands:
-/// - `eda-example <stage>`: adds the "Getting Started" course's design at a step (`gs04`,
-///   `gs07`, `gs11`, `gs14`, `gs16`, `gs17`, `gs18`, `gs25`) as a board of the active PCB
-///   Studio, and shows it;
+/// - `eda-example <stage>`: adds an example as a board of the active PCB Studio and shows it:
+///   the "Getting Started" course's design at a step (`gs04`, `gs07`, `gs11`, `gs14`, `gs16`,
+///   `gs17`, `gs18`, `gs25`), or `power-monitor` (the LoRa board redrawn, with its project
+///   parts as components);
 /// - `eda-mode schematic|layout|3d`; `eda-fit`; `eda-zoom x0 y0 x1 y1` (shows that box, mm).
 pub fn is_script_command(s: &str) -> bool {
     s.starts_with("eda-")
 }
 
-fn course_stage(stage: &str) -> Option<Design> {
+/// An example board for scenarios (`eda-example <stage>`): the board's name, its design, and
+/// the components of its project library (made in the studio's Components).
+fn course_stage(stage: &str) -> Option<(&'static str, Design, Vec<cadrs_eda::Component>)> {
     use cadrs_eda::getting_started as gs;
     let lib = cadrs_eda::library::LibraryTable::builtin();
-    Some(match stage {
-        "gs04" => gs::gs04(&lib),
-        "gs07" => gs::gs07(&lib),
-        "gs11" => gs::gs11(&lib),
-        "gs14" => gs::gs14(&lib).0,
-        "gs16" => gs::gs16(&lib),
-        "gs17" => gs::gs17(&lib),
-        "gs18" => gs::gs18(&lib),
-        "gs25" => gs::gs25().0,
-        _ => return None,
-    })
+    let course = |d: Design| Some(("getting-started", d, vec![]));
+    match stage {
+        "gs04" => course(gs::gs04(&lib)),
+        "gs07" => course(gs::gs07(&lib)),
+        "gs11" => course(gs::gs11(&lib)),
+        "gs14" => course(gs::gs14(&lib).0),
+        "gs16" => course(gs::gs16(&lib)),
+        "gs17" => course(gs::gs17(&lib)),
+        "gs18" => course(gs::gs18(&lib)),
+        "gs25" => course(gs::gs25().0),
+        "power-monitor" => {
+            use cadrs_eda::power_monitor as pm;
+            let (d, lib) = pm::design();
+            let header = lib.footprint("Connector_PinHeader_2.54mm:PinHeader_2x10_P2.54mm_Vertical").cloned();
+            let parts = vec![
+                cadrs_eda::Component { name: "RA-01SH".into(), symbol: Some(pm::ra01sh_symbol()), footprint: Some(pm::ra01sh_footprint()) },
+                cadrs_eda::Component { name: "ESP32 header left".into(), symbol: Some(pm::esp32_header_symbol(false)), footprint: header.clone() },
+                cadrs_eda::Component { name: "ESP32 header right".into(), symbol: Some(pm::esp32_header_symbol(true)), footprint: header },
+                cadrs_eda::Component { name: "PCB antenna".into(), symbol: lib.symbol("Device:Antenna").cloned(), footprint: Some(pm::swra416_footprint()) },
+            ];
+            Some(("power-monitor", d, parts))
+        }
+        _ => None,
+    }
 }
 
 fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut commands: Commands) {
@@ -766,15 +782,26 @@ fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut com
         let s = m.0.trim().to_string();
         commands.queue(move |w: &mut World| {
             if let Some(stage) = s.strip_prefix("eda-example ") {
-                let Some(design) = course_stage(stage.trim()) else {
+                let Some((name, design, parts)) = course_stage(stage.trim()) else {
                     warn!("eda-example: no stage {stage}");
                     return;
                 };
                 let Some(mut doc) = w.get_resource_mut::<ActiveDocument>() else { return };
                 let Some(element) = doc.active_element().filter(|e| e.pcb().is_some()).map(|e| e.id) else { return };
-                let cmd = cadrs_core::pcb::AddBoard { element, name: Some("getting-started".into()), design: Box::new(design), imported_from: None };
+                let cmd = cadrs_core::pcb::AddBoard { element, name: Some(name.into()), design: Box::new(design), imported_from: None };
                 if let Err(e) = doc.execute(&cmd) {
                     warn!("eda-example: {e}");
+                }
+                // The project library's parts as components.
+                for part in parts {
+                    let added = doc.execute(&cadrs_core::pcb::AddComponent { element, name: Some(part.name.clone()) });
+                    let id = doc.doc.element(element).and_then(|e| e.pcb()).and_then(|s| s.components.last()).map(|c| c.id);
+                    if let (Ok(()), Some(component)) = (added, id) {
+                        let set = cadrs_core::pcb::SetComponent { element, component, value: Box::new(part), label: "Example part".into() };
+                        if let Err(e) = doc.execute(&set) {
+                            warn!("eda-example: {e}");
+                        }
+                    }
                 }
             } else if let Some(m) = s.strip_prefix("eda-mode ") {
                 let mode = match m.trim() {

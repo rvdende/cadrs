@@ -75,6 +75,10 @@ pub fn fill_zone(board: &Board, zone: &Zone) -> Vec<(Layer, Vec<Polygon>)> {
     let mut out = vec![];
     for layer in zone.layers.copper().iter() {
         let mut area = poly::intersection(&outline, &board_area);
+        let keepouts = pour_keepouts(board, layer);
+        if !keepouts.is_empty() {
+            area = poly::difference(&area, &poly::union_all(&keepouts));
+        }
         let mut cut: Vec<Region> = vec![];
         let mut spokes: Vec<Region> = vec![];
         for c in &items {
@@ -178,4 +182,30 @@ pub fn filled_area(z: &Zone, layer: Layer) -> f64 {
         .map(|pg| poly::ring_area(&pg.outer) + pg.holes.iter().map(|h| poly::ring_area(h)).sum::<f64>())
         .sum::<f64>()
         / 1e12
+}
+
+/// The keep-out areas on `layer` that forbid copper pours: the board's and its footprints'
+/// (a PCB antenna's), in board coordinates.
+pub fn pour_keepouts(board: &Board, layer: Layer) -> Vec<Region> {
+    let ring_region = |rings: &[Vec<crate::units::Pt>]| -> Region {
+        rings
+            .iter()
+            .map(|r| {
+                let mut r = r.clone();
+                if poly::ring_area(&r) < 0.0 {
+                    r.reverse();
+                }
+                r
+            })
+            .collect()
+    };
+    let forbids = |z: &Zone| z.keepout.is_some_and(|k| k.copper_pour);
+    let mut out: Vec<Region> = board.zones.iter().filter(|z| forbids(z) && z.layers.contains(layer)).map(|z| ring_region(&z.outline)).collect();
+    for f in &board.footprints {
+        for z in f.footprint.zones.iter().filter(|z| forbids(z) && f.placement.layers(z.layers).contains(layer)) {
+            let placed: Vec<Vec<crate::units::Pt>> = z.outline.iter().map(|r| r.iter().map(|p| f.placement.apply(*p)).collect()).collect();
+            out.push(ring_region(&placed));
+        }
+    }
+    out
 }

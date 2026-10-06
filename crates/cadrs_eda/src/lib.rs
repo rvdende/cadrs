@@ -24,6 +24,7 @@ pub mod font;
 pub mod getting_started;
 pub mod forward;
 pub mod outline;
+pub mod power_monitor;
 pub mod zone;
 pub mod sch_edit;
 pub mod footprint;

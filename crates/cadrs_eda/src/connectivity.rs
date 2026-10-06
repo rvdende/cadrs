@@ -230,11 +230,18 @@ pub fn netlist(sch: &Schematic) -> Netlist {
             .or_else(|| local_name.get(&root))
             .cloned()
             .unwrap_or_else(|| {
-                // A lone pin's net is "unconnected-(…)".
-                let kind = if net.pins.len() == 1 { "unconnected" } else { "Net" };
-                match net.part_pins().next().or(net.pins.first()) {
-                    Some(p) if !p.name.is_empty() && p.name != "~" => format!("{kind}-({}-{})", p.reference, p.name),
-                    Some(p) => format!("{kind}-({}-Pad{})", p.reference, p.number),
+                // A lone pin's net is "unconnected-(U1-NC-Pad3)" (its pad number too, as KiCad:
+                // two pins of one part may share a name); a joined one "Net-(U1-ANT)".
+                let lone = net.pins.len() == 1;
+                // A pin with a name of its own drives the name (as in KiCad: "Net-(U1-ANT)"
+                // over a capacitor's unnamed pin); a name that is just the number doesn't count.
+                let named = |p: &&NetPin| !p.name.is_empty() && p.name != "~" && p.name != p.number;
+                let driver = net.part_pins().find(|p| named(p)).or_else(|| net.part_pins().next()).or(net.pins.first());
+                match driver {
+                    Some(p) if lone && named(&p) => format!("unconnected-({}-{}-Pad{})", p.reference, p.name, p.number),
+                    Some(p) if lone => format!("unconnected-({}-Pad{})", p.reference, p.number),
+                    Some(p) if named(&p) => format!("Net-({}-{})", p.reference, p.name),
+                    Some(p) => format!("Net-({}-Pad{})", p.reference, p.number),
                     None => "unconnected".into(),
                 }
             });

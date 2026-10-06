@@ -73,6 +73,11 @@ pub fn describe(board: &Board, c: &Copper) -> String {
             format!("Track [{}] on {}, length {}", net(&c.net), layer_short(t.layer), mm4(t.a.dist(t.b)))
         }
         Item::Via(_) => format!("Via [{}]", net(&c.net)),
+        Item::FpShape(fid, _) => {
+            let f = board.footprints.iter().find(|f| f.id == *fid).unwrap();
+            format!("Copper drawing [{}] of {}", net(&c.net), f.reference())
+        }
+        Item::Shape(_) => format!("Copper drawing [{}]", net(&c.net)),
         Item::Zone(zid, l, _) => {
             let z = board.zones.iter().find(|z| z.id == *zid).unwrap();
             format!("Zone [{}] on {}, priority {}", net(&c.net), layer_short(*l), z.priority)
@@ -97,12 +102,22 @@ fn bounds_near(a: &Copper, b: &Copper, gap: Nm) -> bool {
     x.min.x <= y.max.x && x.max.x >= y.min.x && x.min.y <= y.max.y && x.max.y >= y.min.y
 }
 
-/// One of the same zone's polygons, or the same footprint's pads: never checked against each
-/// other here.
-fn related(a: &Copper, b: &Copper) -> bool {
+/// One of the same zone's polygons, or parts of one footprint where one is a copper drawing or
+/// an unnumbered pad (a PCB antenna's strips and plated holes are one conductor): never checked
+/// against each other here.
+fn related(board: &Board, a: &Copper, b: &Copper) -> bool {
+    let owner = |c: &Copper| match c.item {
+        Item::Pad(f, _) | Item::FpShape(f, _) => Some(f),
+        _ => None,
+    };
+    let loose = |c: &Copper| match c.item {
+        Item::FpShape(..) => true,
+        Item::Pad(f, i) => board.footprints.iter().find(|x| x.id == f).is_some_and(|x| x.footprint.pads[i].number.is_empty()),
+        _ => false,
+    };
     match (&a.item, &b.item) {
         (Item::Zone(x, ..), Item::Zone(y, ..)) => x == y,
-        _ => false,
+        _ => owner(a).is_some() && owner(a) == owner(b) && (loose(a) || loose(b)),
     }
 }
 
@@ -116,7 +131,7 @@ pub fn check(board: &Board) -> Report {
     for i in 0..items.len() {
         for j in i + 1..items.len() {
             let (a, b) = (&items[i], &items[j]);
-            if same_net(a, b) || related(a, b) {
+            if same_net(a, b) || related(board, a, b) {
                 continue;
             }
             let netclass = rules.clearance(&a.net, &b.net);
@@ -174,15 +189,18 @@ pub fn check(board: &Board) -> Report {
                 }
                 let margin = pad.rules.mask_margin.unwrap_or(rules.mask_margin);
                 let opening = copper::pad_region(board, fi, pi, margin);
-                let net = pad.net.clone().unwrap_or_default();
+                // The pad as copper: its net is the one connectivity gives it (an unnumbered
+                // pad's is its footprint's).
+                let me = items.iter().find(|x| matches!(x.item, Item::Pad(id, k) if id == f.id && k == pi));
+                let net = me.map_or(String::new(), |m| m.net.clone());
                 let exposed: Vec<&Copper> = items
                     .iter()
                     .filter(|c| !(c.net == net && !net.is_empty()) && !matches!(c.item, Item::Pad(id, k) if id == f.id && k == pi))
+                    .filter(|c| me.is_none_or(|m| !related(board, m, c)))
                     .filter(|c| c.on(cu).is_some_and(|r| poly::overlaps(r, &opening)))
                     .collect();
                 if let Some(c) = exposed.first() {
                     let name = if side == Side::Top { "Front" } else { "Back" };
-                    let me = items.iter().find(|x| matches!(x.item, Item::Pad(id, k) if id == f.id && k == pi));
                     v.push(Violation {
                         rule: Rule::MaskBridge,
                         message: format!("{name} solder mask aperture bridges items with different nets"),
@@ -256,18 +274,16 @@ pub fn check(board: &Board) -> Report {
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let r: Vec<Region> = f
-                .footprint
-                .shapes
+            // Rectangles, or lines chained into loops (KiCad's courtyards are four lines).
+            let geoms = f.footprint.shapes.iter().filter(|s| s.layer == Layer::TopCourtyard).map(|s| &s.shape.geom);
+            let r: Vec<Region> = crate::outline::loops_of(geoms)
                 .iter()
-                .filter(|s| s.layer == Layer::TopCourtyard)
-                .map(|s| {
-                    let (pts, closed) = poly::geom_points(&s.shape.geom);
-                    let mut ring: Vec<Pt> = pts.into_iter().map(|p| f.placement.apply(p)).collect();
+                .map(|l| {
+                    let mut ring: Vec<Pt> = crate::outline::ring(l).into_iter().map(|p| f.placement.apply(p)).collect();
                     if poly::ring_area(&ring) < 0.0 {
                         ring.reverse();
                     }
-                    if closed { vec![ring] } else { vec![] }
+                    vec![ring]
                 })
                 .collect();
             (i, f.placement.side, poly::union_all(&r))
