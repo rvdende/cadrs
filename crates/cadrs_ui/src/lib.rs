@@ -150,9 +150,10 @@ pub use cursor::{CursorKind, CursorRequest, CursorState};
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCommand(pub String);
 
-/// Background work the screen is still waiting for (drawing views being projected, P3C.7):
-/// scripted screenshots wait until it is done, so they never catch a "Generating view…"
-/// placeholder. The app sets it every frame.
+/// Background work the screen is still waiting for (drawing views being projected, P3C.7, a
+/// rebuild, a view animation, a section's caps): scripted steps wait until it is done, so they
+/// never act on, or catch, a half-finished screen. Cleared in `PreUpdate` every frame; the app's
+/// systems set it later in the frame while they have work in flight.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PendingWork(pub bool);
 
@@ -187,6 +188,9 @@ impl Plugin for CadrsUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .init_resource::<PendingWork>()
+            .add_systems(PreUpdate, |mut p: ResMut<PendingWork>| {
+                p.set_if_neq(PendingWork(false));
+            })
             .init_resource::<RenderSurface>()
             .insert_resource(ClearColor(Theme::default().viewport_background))
             .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)

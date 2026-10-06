@@ -26,8 +26,8 @@
 //!   its normal, the cut following the pointer 1:1. The reference picked for it (a plane, a
 //!   sketch, a face) stays selected, highlighted in the list and the view, until the dialog
 //!   closes.
-//! - The default planes, plane features and sketches are cut too: a plane's square is clipped
-//!   by the section plane, and a sketch on the removed side is not drawn.
+//! - The default planes and plane features stay whole; a sketch on the removed side is not
+//!   drawn.
 //! - A section is a view, per tab: nothing in the document changes and nothing is undone.
 
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ impl Plugin for SectionViewPlugin {
             .init_resource::<ShownBounds>()
             .add_systems(
                 Update,
-                (take_picks, section_arrow_pointer, sync_dialog, compute_caps, sync_cap_meshes, draw_caps, track_bounds, sync_section_plane, place_section_arrow, clip_plane_meshes)
+                (take_picks, section_arrow_pointer, sync_dialog, compute_caps, sync_cap_meshes, draw_caps, track_bounds, sync_section_plane, place_section_arrow)
                     .chain()
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
@@ -494,6 +494,18 @@ fn show_references(world: &mut World) {
     if sel.0 != want {
         sel.0 = want;
     }
+}
+
+/// The view's right-click menu (a plane, a face, empty space): Section view… cut by the plane
+/// or planar face right-clicked, or the dialog with no plane yet (a curved face, empty space);
+/// with a section on, Exit section view.
+pub fn open_for_pick(world: &mut World, pick: Option<Pick>) {
+    if active(world) && world.resource::<SectionViews>().dialog.is_none() {
+        exit(world);
+        return;
+    }
+    let picked = pick.and_then(|p| resolve(world, p));
+    open_with(world, picked);
 }
 
 /// A feature's menu (IR5.5): cut by the feature's plane (a plane feature, a sketch's plane).
@@ -1655,77 +1667,6 @@ fn place_section_arrow(
             commands.spawn((crate::manipulator::arrow("section-offset-arrow", a), SectionArrowNode, DespawnOnExit(AppState::Document)));
         }
     }
-}
-
-/// A plane square's mesh before a section cut it.
-#[derive(Component)]
-struct Unclipped(Handle<Mesh>);
-
-/// The default planes' and plane features' squares, cut by the section: each square's part
-/// that is kept (its mesh swapped for the kept pieces, and back without a section).
-#[allow(clippy::type_complexity)]
-fn clip_plane_meshes(
-    clip: Res<SectionClip>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut q: Query<(Entity, &Transform, &mut Mesh3d, Option<&Unclipped>), Or<(With<PlaneKind>, With<crate::plane_display::PlaneQuad>)>>,
-    mut done: Local<HashMap<Entity, (Option<Cut>, Transform)>>,
-    mut commands: Commands,
-) {
-    let plane = clip.plane;
-    let mut seen = Vec::new();
-    for (e, t, mut mesh, original) in &mut q {
-        seen.push(e);
-        if done.get(&e) == Some(&(plane, *t)) {
-            continue;
-        }
-        done.insert(e, (plane, *t));
-        let Some(cut) = plane else {
-            if let Some(o) = original {
-                mesh.0 = o.0.clone();
-                commands.entity(e).remove::<Unclipped>();
-            }
-            continue;
-        };
-        let source = original.map(|o| o.0.clone()).unwrap_or_else(|| mesh.0.clone());
-        if original.is_none() {
-            commands.entity(e).insert(Unclipped(source.clone()));
-        }
-        // The square in its own frame (a centred rectangle in XY), cut in world space.
-        let half = meshes
-            .get(&source)
-            .and_then(|m| match m.attribute(Mesh::ATTRIBUTE_POSITION) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) => p.iter().map(|q| Vec2::new(q[0].abs(), q[1].abs())).reduce(Vec2::max),
-                _ => None,
-            })
-            .unwrap_or(Vec2::splat(crate::viewport::PLANE_HALF));
-        let affine = t.compute_affine();
-        let corners = [Vec3::new(-half.x, -half.y, 0.0), Vec3::new(half.x, -half.y, 0.0), Vec3::new(half.x, half.y, 0.0), Vec3::new(-half.x, half.y, 0.0)].map(|c| affine.transform_point3(c));
-        let inverse = affine.inverse();
-        let mut local: Vec<[f32; 3]> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        for piece in clip_polygon(&corners, cut) {
-            let base = local.len() as u32;
-            local.extend(piece.iter().map(|p| inverse.transform_point3(*p).to_array()));
-            indices.extend((1..piece.len() as u32 - 1).flat_map(|i| [base, base + i, base + i + 1]));
-        }
-        if indices.is_empty() {
-            // All of it removed: an empty triangle.
-            local = vec![[0.0; 3]; 3];
-            indices = vec![0, 1, 2];
-        }
-        let count = local.len();
-        let clipped = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, local)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 0.0, 1.0]; count])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32, 0.0]; count])
-            .with_inserted_indices(Indices::U32(indices));
-        let old = std::mem::replace(&mut mesh.0, meshes.add(clipped));
-        // The previous cut's mesh (not the shared square) is no longer used.
-        if old != source {
-            meshes.remove(&old);
-        }
-    }
-    done.retain(|e, _| seen.contains(e));
 }
 
 /// How far past a cutting plane (mm) a polygon or line still counts as on it, and is kept.

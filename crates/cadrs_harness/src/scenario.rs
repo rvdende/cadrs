@@ -22,6 +22,14 @@
 //!     ],
 //! )
 //! ```
+//!
+//! Every step waits for the app to settle before it runs: no rebuild, view animation, section
+//! caps or other background work in flight ([`cadrs_ui::PendingWork`]), then two quiet frames
+//! for what that produced to be laid out and drawn. A step's UI target is waited for too. So a
+//! scenario needs no `Wait`s between steps; `Wait(n)` is only for what runs on its own time
+//! (a tooltip's delay, an animation caught half-way). A step that waits longer than the
+//! scenario's `timeout` (seconds, default 30; `SetTimeout(s)` changes it from there on) fails
+//! the scenario.
 
 use std::path::{Path, PathBuf};
 
@@ -47,7 +55,15 @@ pub struct Scenario {
     /// that scenario first (the copy waits until it has finished).
     #[serde(default)]
     pub data_from: Option<String>,
+    /// Seconds one step may wait (for the app to settle, or for its UI target) before the
+    /// scenario fails.
+    #[serde(default = "default_timeout")]
+    pub timeout: f32,
     pub steps: Vec<Step>,
+}
+
+fn default_timeout() -> f32 {
+    30.0
 }
 
 fn default_cursor() -> bool {
@@ -133,8 +149,11 @@ pub enum Step {
     /// Press and release a key, optionally with modifiers: `"Enter"`, `"L"`, `"Ctrl+A"`,
     /// `"Shift+7"`, `"Escape"`, `"ArrowLeft"`.
     Key(String),
-    /// Run this many frames.
+    /// Run this many frames (only for what runs on its own time: every step already waits for
+    /// the app to settle).
     Wait(u32),
+    /// From here on, a step may wait this many seconds before the scenario fails.
+    SetTimeout(f32),
     /// Wait until a UI node with this name exists (fails after a timeout).
     WaitFor(String),
     /// Check that the text in the UI node with this name (its own and its descendants' text,
@@ -195,14 +214,16 @@ mod tests {
                     KeyUp("Ctrl"), ClickWorld(1, 2), MoveWorld(3, 4), DragWorld(0, 0, 5, 5),
                     Click(world(2, 3)), Custom("populate-sketch 10"), MeasureStart("x"),
                     MeasureEnd, PressWith("right", at(4, 4)), ReleaseWith("right"),
-                    Hover(xyz(1, 2, 3)), ExpectText("a", "b"),
+                    Hover(xyz(1, 2, 3)), ExpectText("a", "b"), SetTimeout(5),
                 ],
             )"#,
         )
         .unwrap();
+        assert_eq!(s.timeout, 30.0);
+        assert_eq!(s.steps[30], Step::SetTimeout(5.0));
         assert_eq!(s.start.as_deref(), Some("gallery"));
         assert_eq!(s.warmup, 20);
-        assert_eq!(s.steps.len(), 30);
+        assert_eq!(s.steps.len(), 31);
         assert_eq!(s.steps[28], Step::Hover(Target::Xyz(1.0, 2.0, 3.0)));
         assert_eq!(s.steps[29], Step::ExpectText("a".into(), "b".into()));
         assert!(s.cursor);

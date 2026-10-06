@@ -57,6 +57,7 @@ impl Plugin for ViewportPlugin {
             .init_gizmo_group::<HighlightGizmos>()
             .init_gizmo_group::<HoverGizmos>()
             .init_gizmo_group::<EdgeOnGizmos>()
+            .add_systems(PostUpdate, flag_pending_work.run_if(in_state(AppState::Document)))
             .add_message::<PickRequest>()
             .add_systems(Startup, (spawn_main_camera, configure_gizmos))
             .add_systems(OnEnter(AppState::Document), spawn_scene)
@@ -1771,8 +1772,10 @@ fn draw_plane_edges(
     section: Res<crate::section_view::SectionClip>,
     mut section_gizmos: Gizmos<crate::section_view::SectionPlaneGizmos>,
 ) {
-    // P3E.3a: in a section view the planes are cut by its plane too.
-    let clip = section.plane;
+    // A section view doesn't cut the planes (they stay whole, as Onshape's); a selected one is
+    // depth-tested while a section is on, so the kept part hides it.
+    let clip: Option<crate::section_view::Cut> = None;
+    let sectioned = section.plane.is_some();
     use crate::section_view::clipped_line as cut;
     for (kind, t, vis) in &q {
         if !vis.get() {
@@ -1810,7 +1813,7 @@ fn draw_plane_edges(
             if hovered {
                 // Hover: a thin orange outline (1.5 px, like the plane edges).
                 cut(&mut hover_gizmos, clip, a, b, theme.highlight);
-            } else if selected && clip.is_some() {
+            } else if selected && sectioned {
                 // In a section view (the picked plane, P3E.3b) depth-tested, so the kept part
                 // hides it where it is in front.
                 cut(&mut section_gizmos, clip, a, b, theme.selection_3d);
@@ -1983,12 +1986,9 @@ fn place_plane_labels(
     parts: Option<Res<crate::parts::PartCache>>,
     meshes: Res<Assets<Mesh>>,
     fills: Query<(&Mesh3d, &InheritedVisibility), With<crate::plane_display::LabelOccluder>>,
-    section: Option<Res<crate::section_view::SectionClip>>,
 ) {
     let v = view.view;
     let sketch_plane = sketch.active.map(|m| m.plane);
-    // P3E.3a judge: a label whose corner a section view cut away hides with it.
-    let cut = section.and_then(|s| s.plane);
     // The parts' screen bounds (viewport-relative): a label over a part would draw over its
     // edges, so it hides. From the corners of each part's 3D box (a little larger than its
     // outline; projecting every vertex of every part each frame cost a large assembly most of
@@ -2027,12 +2027,10 @@ fn place_plane_labels(
         // The plane being sketched on keeps its label (`screens/08`) except when viewed
         // straight on, where the sketch covers it (`screens/09`).
         let normal_view = facing > 0.999;
-        let anchor = (w - u) * PLANE_HALF;
         let show = *kind == ActiveKind::PartStudio
             && planes.shows(k)
             && alpha > 0.0
-            && !(sketch_plane == Some(k.plane_ref()) && normal_view)
-            && !cut.is_some_and(|c| c.removes(anchor));
+            && !(sketch_plane == Some(k.plane_ref()) && normal_view);
         vis.set_if_neq(if show {
             Visibility::Inherited
         } else {
@@ -2211,6 +2209,19 @@ fn place_origin_marker(
     }
 }
 
+/// Scripted steps wait while a rebuild runs, the view is animating or a section's caps are
+/// being worked out ([`cadrs_ui::PendingWork`]).
+fn flag_pending_work(
+    cache: Res<crate::parts::PartCache>,
+    view: Res<ViewportView>,
+    section: Res<crate::section_view::SectionClip>,
+    mut pending: ResMut<cadrs_ui::PendingWork>,
+) {
+    if (cache.rebuilding || view.animation.is_some() || section.busy()) && !pending.0 {
+        pending.0 = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2357,3 +2368,4 @@ mod tests {
         assert_eq!(PlaneKind::Top.label_corner(), Vec3::new(-75.0, 75.0, 0.0));
     }
 }
+
