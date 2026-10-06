@@ -171,12 +171,13 @@ pub fn board_mesh(pcb: &PcbBoard) -> Result<BoardMesh, String> {
     board_mesh_in(&mut k, pcb)
 }
 
-/// The motion a footprint's 3D model sits by in its footprint's (package) frame: scale, turn
-/// about X, then Y, then Z (degrees), then move by the offset (mm).
-pub fn model_motion(m: &cadrs_eda::footprint::Model3d) -> Motion {
+/// The motion a footprint's 3D model sits by in its footprint's (package) frame, as KiCad
+/// places models: scale (times `unit`, the file's unit in mm), turn by the negated angles about
+/// X, then Y, then Z (degrees), then move by the offset (mm).
+pub fn model_motion(m: &cadrs_eda::footprint::Model3d, unit: f64) -> Motion {
     use nalgebra::{Matrix3, Rotation3};
-    let [sx, sy, sz] = m.scale;
-    let [rx, ry, rz] = m.rotation.map(f64::to_radians);
+    let [sx, sy, sz] = m.scale.map(|s| s * unit);
+    let [rx, ry, rz] = m.rotation.map(|a| -a.to_radians());
     let r = Rotation3::from_axis_angle(&Vector3::z_axis(), rz) * Rotation3::from_axis_angle(&Vector3::y_axis(), ry) * Rotation3::from_axis_angle(&Vector3::x_axis(), rx);
     Motion { linear: r.matrix() * Matrix3::from_diagonal(&Vector3::new(sx, sy, sz)), translation: Vector3::new(m.offset[0], m.offset[1], m.offset[2]) }
 }
@@ -186,7 +187,7 @@ pub fn model_motion(m: &cadrs_eda::footprint::Model3d) -> Motion {
 /// when the model has no generated body.
 pub fn generated_bodies(m: &cadrs_eda::footprint::Model3d, name: &str, class: BodyClass, item: Option<ItemId>) -> Vec<BodyMesh> {
     let Some(body) = &m.body else { return vec![] };
-    let motion = model_motion(m);
+    let motion = model_motion(m, 1.0);
     let alpha = (m.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     cadrs_eda::model3d::mesh(body)
         .into_iter()
@@ -200,6 +201,60 @@ pub fn generated_bodies(m: &cadrs_eda::footprint::Model3d, name: &str, class: Bo
                 normals: g.normals,
                 indices: g.indices,
                 edges: g.edges,
+            }
+            .moved(&motion)
+        })
+        .collect()
+}
+
+/// A model file's meshes (`ext`: `wrl`/`vrml`, `step`/`stp`) and its unit in mm: KiCad's VRML is
+/// in 0.1 inch and coloured per shape; STEP is in mm, shown in one neutral grey.
+#[cfg(feature = "occt")]
+pub fn file_meshes(bytes: &[u8], ext: &str) -> Result<(Vec<cadrs_eda::model3d::Mesh>, f64), String> {
+    match ext.to_ascii_lowercase().as_str() {
+        "wrl" | "vrml" => {
+            let text = String::from_utf8_lossy(bytes);
+            Ok((cadrs_eda::wrl::read(&text)?, cadrs_eda::wrl::KICAD_UNIT_MM))
+        }
+        "step" | "stp" => {
+            let mut k = cadrs_kernel::backend::occt::OcctKernel::new();
+            let bodies = k.import_step(bytes).map_err(|e| e.to_string())?;
+            let mut m = cadrs_eda::model3d::Mesh { color: [150, 150, 156], ..Default::default() };
+            for b in bodies {
+                let t = k.tessellate(b, tessellation()).map_err(|e| e.to_string());
+                k.release(b);
+                let t = t?;
+                let base = m.positions.len() as u32;
+                m.positions.extend(t.positions.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]));
+                m.normals.extend(t.normals.iter().map(|n| [n.x as f32, n.y as f32, n.z as f32]));
+                m.indices.extend(t.indices.iter().flatten().map(|i| base + i));
+                m.edges.extend(t.edges.iter().map(|(_, pts)| pts.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect()));
+            }
+            if m.indices.is_empty() {
+                return Err("No solids in the STEP file".into());
+            }
+            Ok((vec![m], 1.0))
+        }
+        other => Err(format!("3D models of type .{other} aren't supported (use STEP or VRML)")),
+    }
+}
+
+/// A model file's meshes (from [`file_meshes`]) as display meshes in the package frame.
+pub fn file_bodies(meshes: &[cadrs_eda::model3d::Mesh], unit: f64, m: &cadrs_eda::footprint::Model3d, name: &str, class: BodyClass, item: Option<ItemId>) -> Vec<BodyMesh> {
+    let motion = model_motion(m, unit);
+    let alpha = (m.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    meshes
+        .iter()
+        .map(|g| {
+            BodyMesh {
+                name: name.to_string(),
+                class,
+                color: [g.color[0], g.color[1], g.color[2], alpha],
+                item,
+                positions: g.positions.clone(),
+                normals: g.normals.clone(),
+                indices: g.indices.clone(),
+                edges: g.edges.clone(),
             }
             .moved(&motion)
         })

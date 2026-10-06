@@ -57,11 +57,30 @@ pub struct PcbMeshCache {
     entries: HashMap<(ElementId, BoardId), (PcbBoard, Arc<BoardMesh>)>,
     /// Package boxes for the component view, by (package name, its outline and height).
     packages: HashMap<String, Option<Arc<BodyMesh>>>,
+    /// 3D model files' meshes and units by blob hash (`None`: unreadable, reported once).
+    models: HashMap<String, Option<Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>>>,
     /// How many boards were tessellated (a switch back to a cached board adds none).
     pub builds: usize,
 }
 
 impl PcbMeshCache {
+    /// The meshes of a model file (by its blob hash; `ext` its type), read once.
+    pub fn model(&mut self, hash: &str, ext: &str) -> Option<Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>> {
+        if let Some(m) = self.models.get(hash) {
+            return m.clone();
+        }
+        let bytes = cadrs_core::blobs::get(hash)?;
+        let m = match cadrs_pcb::mesh::file_meshes(&bytes, ext) {
+            Ok(m) => Some(Arc::new(m)),
+            Err(e) => {
+                warn!("3D model {hash}.{ext}: {e}");
+                None
+            }
+        };
+        self.models.insert(hash.to_string(), m.clone());
+        m
+    }
+
     /// The meshes of `board`, built now unless the cache has them for this very board.
     pub fn get_or_build(&mut self, key: (ElementId, BoardId), board: &PcbBoard) -> Arc<BoardMesh> {
         if let Some((b, m)) = self.entries.get(&key)
@@ -255,6 +274,24 @@ pub struct PcbBodyMesh {
     base: FaceBase,
 }
 
+
+/// The board id a component's 3D preview is shown under (its footprint on a board patch,
+/// [`cadrs_core::pcb::design::footprint_patch`]): from the top of the id range down.
+pub fn part_board_id(c: cadrs_core::pcb::ComponentId) -> BoardId {
+    BoardId(u64::MAX - c.0)
+}
+
+/// The preview design of the component a [`part_board_id`] stands for.
+fn part_design(world: &World, el: ElementId, b: BoardId) -> Option<cadrs_eda::Design> {
+    let c = cadrs_core::pcb::ComponentId(u64::MAX.checked_sub(b.0).filter(|c| *c < u64::MAX / 2)?);
+    let fp = world.get_resource::<ActiveDocument>()?.doc.element(el)?.pcb()?.component(c)?.component.footprint.clone()?;
+    Some(cadrs_core::pcb::design::footprint_patch(&fp))
+}
+
+/// The design a shown board was made from: a native board's, or a component preview's.
+fn shown_design(world: &World, el: ElementId, b: BoardId) -> Option<cadrs_eda::Design> {
+    part_design(world, el, b).or_else(|| crate::eda::design(world.get_resource::<ActiveDocument>()?, el, b).cloned())
+}
 /// The tab, board and view mode the viewport should show.
 fn wanted(world: &World) -> Option<(SceneKey, PcbBoard)> {
     if *world.resource::<ActiveKind>() != ActiveKind::PcbStudio {
@@ -262,6 +299,14 @@ fn wanted(world: &World) -> Option<(SceneKey, PcbBoard)> {
     }
     let doc = world.get_resource::<ActiveDocument>()?;
     let el = doc.active_element()?;
+    // The component editor's 3D mode: the component's footprint on a board patch.
+    if let Some((pel, c, crate::eda::Mode::ThreeD)) = world.resource::<crate::eda::Eda2d>().component()
+        && pel == el.id
+    {
+        let b = part_board_id(c);
+        let d = part_design(world, pel, b)?;
+        return Some((SceneKey::Board(pel, b), cadrs_core::pcb::design::pcb_board("part", &d)));
+    }
     let s = el.pcb()?;
     let b = s.board(world.resource::<PcbUi>().shown_board(el.id, s)?)?;
     let key = match &world.resource::<PcbUi>().view {
@@ -296,12 +341,18 @@ fn board_bodies(world: &mut World, el: ElementId, board_id: BoardId, board: &Pcb
     let t = board.thickness();
     type Shown = (Representation, Option<(Arc<Solid>, [u8; 4], PartTransform)>);
     let mut reps: HashMap<String, Shown> = HashMap::new();
-    // A native board's footprint models by reference (their generated bodies replace the box).
-    let models: HashMap<String, cadrs_eda::footprint::Model3d> = world
-        .get_resource::<ActiveDocument>()
-        .and_then(|doc| crate::eda::design(doc, el, board_id))
-        .map(|d| d.board.footprints.iter().filter_map(|f| Some((f.reference().to_string(), f.footprint.models.iter().find(|m| m.visible && m.body.is_some())?.clone()))).collect())
-        .unwrap_or_default();
+    // A native board's footprint models by reference (shown in place of the box); footprints
+    // with no model show nothing, as in KiCad.
+    let mut models: HashMap<String, cadrs_eda::footprint::Model3d> = HashMap::new();
+    let mut bare: std::collections::HashSet<String> = Default::default();
+    for f in shown_design(world, el, board_id).iter().flat_map(|d| d.board.footprints.iter()) {
+        let r = f.reference().to_string();
+        if f.footprint.models.iter().all(|m| !m.visible) {
+            bare.insert(r);
+        } else if let Some(m) = f.footprint.models.iter().find(|m| m.visible && (m.body.is_some() || m.blob.is_some())) {
+            models.insert(r, m.clone());
+        }
+    }
     let mut out = Vec::with_capacity(mesh.bodies.len());
     for b in &mesh.bodies {
         let placement = b.item.filter(|_| b.class.is_component()).and_then(|i| board.component(i));
@@ -322,11 +373,23 @@ fn board_bodies(world: &mut World, el: ElementId, board_id: BoardId, board: &Pcb
                 let m = cadrs_pcb::placement::custom_motion(p, t, tr);
                 out.push(cadrs_pcb::mesh::solid_body(solid, &b.name, b.class, *col, b.item).moved(&m));
             }
+            _ if bare.contains(&p.refdes) => {}
             _ => match models.get(&p.refdes) {
                 Some(model) => {
-                    format!("{model:?}").hash(sig);
+                    format!("{:?}{:?}{:?}{:?}{}", model.blob, model.offset, model.rotation, model.scale, model.opacity).hash(sig);
+                    model.body.as_ref().map(|b| format!("{b:?}")).hash(sig);
                     let m = cadrs_pcb::placement::placement_motion(p, t);
-                    out.extend(cadrs_pcb::mesh::generated_bodies(model, &b.name, b.class, b.item).into_iter().map(|g| g.moved(&m)));
+                    // The model's file when it is loaded and readable, else its generated body.
+                    let ext = std::path::Path::new(&model.source).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+                    let file = model.blob.as_ref().and_then(|h| world.resource_mut::<PcbMeshCache>().model(h, &ext));
+                    let shown = match &file {
+                        Some(f) => cadrs_pcb::mesh::file_bodies(&f.0, f.1, model, &b.name, b.class, b.item),
+                        None => cadrs_pcb::mesh::generated_bodies(model, &b.name, b.class, b.item),
+                    };
+                    if shown.is_empty() {
+                        out.push(b.clone());
+                    }
+                    out.extend(shown.into_iter().map(|g| g.moved(&m)));
                 }
                 None => out.push(b.clone()),
             },

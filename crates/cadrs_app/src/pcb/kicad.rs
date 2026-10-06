@@ -44,6 +44,9 @@ pub fn import(world: &mut World, paths: &[PathBuf]) -> (Vec<String>, Vec<String>
             }
         };
         let n = project.design.board.footprints.len();
+        let mut project = project;
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        warnings.extend(load_models(&mut project.design, &dir));
         let cmd = AddBoard {
             element,
             name: Some(project.name.clone()),
@@ -60,4 +63,43 @@ pub fn import(world: &mut World, paths: &[PathBuf]) -> (Vec<String>, Vec<String>
         }
     }
     (names, warnings, errors)
+}
+
+/// Reads the 3D model files the footprints name into the document (blobs), so the board shows
+/// them: the VRML next to a STEP when there is one (it has colours), else what KiCad's paths
+/// resolve to. A model file that isn't found gives way to the generated body of the built-in
+/// footprint of the same name, when there is one. Returns a warning per model file not found.
+fn load_models(design: &mut cadrs_eda::Design, project_dir: &Path) -> Vec<String> {
+    let mut read: std::collections::HashMap<String, Option<(String, String)>> = Default::default();
+    let mut missing = vec![];
+    let builtin = cadrs_eda::library::LibraryTable::builtin();
+    for f in &mut design.board.footprints {
+        for m in &mut f.footprint.models {
+            let got = read
+                .entry(m.source.clone())
+                .or_insert_with(|| {
+                    let p = cadrs_kicad::resolve_model(&m.source, project_dir)?;
+                    let wrl = p.with_extension("wrl");
+                    let p = if wrl.is_file() { wrl } else { p };
+                    let bytes = std::fs::read(&p).ok()?;
+                    Some((cadrs_core::blobs::insert(bytes), p.to_string_lossy().into_owned()))
+                })
+                .clone();
+            match got {
+                Some((hash, path)) => {
+                    m.blob = Some(hash);
+                    m.source = path;
+                }
+                None => {
+                    if m.body.is_none() {
+                        m.body = builtin.footprint(&f.footprint.id).and_then(|b| b.models.first()).and_then(|b| b.body.clone());
+                    }
+                    if !missing.contains(&m.source) {
+                        missing.push(m.source.clone());
+                    }
+                }
+            }
+        }
+    }
+    missing.into_iter().map(|s| format!("3D model not found: {s}")).collect()
 }

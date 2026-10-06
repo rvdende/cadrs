@@ -3,7 +3,9 @@
 // "battery": matching parts only, Battery_Cell chosen with its preview; 04 placed on the sheet;
 // 05 a component "Regulator" started from Regulator_Linear:AMS1117-3.3 (the symbol); 06 its
 // footprint, copied with it (SOT-223); 07 the footprint browser narrowed by the symbol's
-// filters... none, so all footprints; filter "SOT-23-5", chosen and previewed.
+// filters (none: every footprint), filtered to "SOT-23-5"; 09 the component in 3D (its
+// generated SOT-223 body on a board patch); 10 Browse… links fixtures/eda/test_part.wrl; 11 that
+// model in 3D.
 Scenario(
     start: Some("document"),
     steps: [
@@ -70,5 +72,29 @@ Scenario(
         Wait(3),
         Screenshot("08-footprint-browser"),
         Click(ui("eda-chooser-cancel")),
+        // The component in 3D: its footprint's generated model on a board patch.
+        Click(ui("eda-mode-3d")),
+        Wait(3),
+        Key("F"),
+        MoveTo(1100, 860),
+        Screenshot("09-regulator-3d"),
+        // A model file instead (Browse… in the 3D model dialog).
+        Click(ui("eda-mode-footprint")),
+        WaitFor("fp-model"),
+        Click(ui("fp-model")),
+        WaitFor("eda-model-dialog"),
+        Click(ui("eda-model-browse")),
+        WaitFor("eda-model-picker"),
+        Click(ui("eda-model-picker-name-field")),
+        Type("fixtures/eda/test_part.wrl"),
+        Click(ui("eda-model-picker-open")),
+        WaitFor("eda-model-dialog"),
+        Screenshot("10-model-file"),
+        Click(ui("eda-model-ok")),
+        Click(ui("eda-mode-3d")),
+        Wait(3),
+        Key("F"),
+        MoveTo(1100, 860),
+        Screenshot("11-model-file-3d"),
     ],
 )

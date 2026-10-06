@@ -99,6 +99,7 @@ pub fn register(app: &mut App) {
         Update,
         (strips, on_strip, on_click, on_keys, follow_pointer, publish).chain().after(super::navigate).run_if(in_state(AppState::Document)),
     );
+    super::part_dialogs::register(app);
 }
 
 fn strips(world: &mut World) {

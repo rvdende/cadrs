@@ -289,7 +289,7 @@ fn sync_mode_bar(
         bar = None;
     }
     let modes: &[(Mode, &str, &str)] = if want == Some(true) {
-        &[(Mode::Symbol, "eda-mode-symbol", "Symbol"), (Mode::Footprint, "eda-mode-footprint", "Footprint")]
+        &[(Mode::Symbol, "eda-mode-symbol", "Symbol"), (Mode::Footprint, "eda-mode-footprint", "Footprint"), (Mode::ThreeD, "eda-mode-3d", "3D")]
     } else {
         &[(Mode::Schematic, "eda-mode-schematic", "Schematic"), (Mode::Layout, "eda-mode-layout", "Layout"), (Mode::ThreeD, "eda-mode-3d", "3D")]
     };

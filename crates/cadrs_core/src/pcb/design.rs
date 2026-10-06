@@ -81,6 +81,28 @@ fn footprint_box(f: &Footprint) -> Option<Bounds> {
     })
 }
 
+/// A component's 3D preview as a design: its footprint at the origin (reference `REF`) on a
+/// board patch 2 mm larger than the footprint all round.
+pub fn footprint_patch(fp: &Footprint) -> Design {
+    use cadrs_eda::board::{BoardShape, PlacedFootprint};
+    use cadrs_eda::graphics::{Fill, Geom, Shape, Stroke};
+    let b = footprint_box(fp).unwrap_or_else(|| Bounds::of(Pt::ZERO).grow(cadrs_eda::units::mm(2.0))).grow(cadrs_eda::units::mm(2.0));
+    let mut d = Design::new();
+    d.board.shapes.push(BoardShape {
+        id: uuid::Uuid::new_v4(),
+        shape: Shape { geom: Geom::Rect { a: b.min, b: b.max }, stroke: Stroke::width(cadrs_eda::units::mm(0.05)), fill: Fill::None },
+        layer: Layer::Outline,
+        locked: false,
+        net: String::new(),
+    });
+    let mut f = fp.clone();
+    if let Some(r) = f.fields.iter_mut().find(|x| x.name == cadrs_eda::symbol::fields::REFERENCE) {
+        r.text.text.text = "REF".into();
+    }
+    d.board.footprints.push(PlacedFootprint { id: uuid::Uuid::new_v4(), footprint: f, placement: Default::default(), locked: false, symbol: None });
+    d
+}
+
 /// The studio board for a design named `name`.
 pub fn pcb_board(name: &str, design: &Design) -> PcbBoard {
     let mut board = Board::new(name, Units::Mm, IdfVersion::V3);
@@ -127,6 +149,21 @@ mod tests {
     use cadrs_eda::board::{Board as Layout, BoardShape};
     use cadrs_eda::graphics::{Geom, Shape, Stroke};
     use cadrs_eda::units::mm;
+
+    #[test]
+    fn footprint_patch_is_a_board_under_the_part() {
+        let lib = cadrs_eda::library::LibraryTable::builtin();
+        let fp = lib.footprint("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm").unwrap();
+        let d = footprint_patch(fp);
+        let b = pcb_board("part", &d);
+        assert_eq!(b.board.placements.len(), 1);
+        assert_eq!(b.board.placements[0].refdes, "REF");
+        let o = &b.board.outline.as_ref().unwrap().loops[0];
+        let xs: Vec<f64> = o.points.iter().map(|p| p.x).collect();
+        let (lo, hi) = (xs.iter().cloned().fold(f64::MAX, f64::min), xs.iter().cloned().fold(f64::MIN, f64::max));
+        // The courtyard (±3.70 mm across the pads) and 2 mm more.
+        assert!((hi - 5.7).abs() < 0.02 && (lo + 5.7).abs() < 0.02, "{lo} {hi}");
+    }
 
     fn shape(geom: Geom) -> BoardShape {
         BoardShape { id: uuid::Uuid::new_v4(), shape: Shape { geom, stroke: Stroke::default(), fill: Default::default() }, layer: Layer::Outline, locked: false, net: String::new() }

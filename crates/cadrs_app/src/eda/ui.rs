@@ -56,6 +56,15 @@ pub fn text_value(world: &mut World, name: &str) -> String {
     q.iter(world).find(|(n, _)| n.as_str() == field).map(|(_, t)| t.value().to_string()).unwrap_or_default()
 }
 
+/// Sets the text of the text input named `name`.
+pub fn set_text_value(world: &mut World, name: &str, value: &str) {
+    let field = format!("{name}-field");
+    let mut q = world.query_filtered::<(&Name, &mut EditableText), With<TextInputField>>();
+    if let Some((_, mut t)) = q.iter_mut(world).find(|(n, _)| n.as_str() == field) {
+        t.editor_mut().set_text(value);
+    }
+}
+
 /// The libraries a board in this studio sees: the built-in ones, and the studio's components
 /// as the project library named after the studio.
 pub fn libraries(world: &World) -> LibraryTable {

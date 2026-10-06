@@ -242,8 +242,11 @@ pub fn check_footprint(f: &Footprint) -> Vec<String> {
 
 /// Sets a footprint's 3D model (the 3D Models tab), adding it if there is none.
 pub fn set_model(f: &mut Footprint, source: &str, offset: [f64; 3], rotation: [f64; 3], scale: [f64; 3], opacity: f64) {
-    let body = f.models.first().and_then(|m| m.body.clone());
-    let m = Model3d { source: source.into(), blob: None, offset, rotation, scale, visible: true, opacity, body };
+    // The generated body stays; so does the stored file while the source names it.
+    let old = f.models.first();
+    let body = old.and_then(|m| m.body.clone());
+    let blob = old.filter(|m| m.source == source).and_then(|m| m.blob.clone());
+    let m = Model3d { source: source.into(), blob, offset, rotation, scale, visible: true, opacity, body };
     match f.models.first_mut() {
         Some(x) => *x = m,
         None => f.models.push(m),

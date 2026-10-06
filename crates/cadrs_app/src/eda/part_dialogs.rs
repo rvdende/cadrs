@@ -416,6 +416,15 @@ pub fn open_model(w: &mut World) {
             .width(560.0)
             .body(move |p| {
                 text_row(p, &t, "Model file", "eda-model-path", m.source.clone(), 340.0);
+                let tb = t.clone();
+                row(p, &t, "", move |r| {
+                    r.spawn((
+                        cadrs_ui::Button::new("eda-model-browse").label("Browse…").build(&tb),
+                        observe(|_: On<Activate>, mut commands: Commands| {
+                            commands.queue(browse_model);
+                        }),
+                    ));
+                });
                 for (k, axis) in ["x", "y", "z"].iter().enumerate() {
                     let name: &'static str = ["eda-model-offset-x", "eda-model-offset-y", "eda-model-offset-z"][k];
                     text_row(p, &t, &format!("Offset {axis} (mm)"), name, format!("{}", m.offset[k]), 100.0);
@@ -445,4 +454,52 @@ fn accept_model(w: &mut World) {
         cadrs_eda::lib_edit::set_model(c.footprint.as_mut().unwrap(), path.trim(), [ox?, oy?, oz?], [rx?, ry?, rz?], [s, s, s], opacity?.clamp(0.0, 1.0));
         Ok(())
     });
+}
+
+/// Browse… in the 3D model dialog: a STEP or VRML file.
+fn browse_model(w: &mut World) {
+    let theme = w.resource::<Theme>().clone();
+    let dir = std::env::current_dir().unwrap_or_default();
+    let mut c = w.commands();
+    cadrs_ui::file_picker::open_file_picker(&mut c, &theme, "eda-model-picker", "Choose a 3D model", "eda-model-file", dir, &["step", "stp", "wrl"]);
+    w.flush();
+}
+
+/// A picked model file is stored with the document (a blob) and linked to the footprint's
+/// model at once; the dialog's offset and rotation still apply on OK.
+fn on_model_picked(mut msgs: MessageReader<cadrs_ui::file_picker::FilePicked>, mut commands: Commands) {
+    for m in msgs.read() {
+        if m.tag != "eda-model-file" {
+            continue;
+        }
+        let path = m.path.clone();
+        commands.queue(move |w: &mut World| {
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    ui::toast(w, &format!("Couldn't read {}: {e}", path.display()));
+                    return;
+                }
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let hash = cadrs_core::blobs::insert(bytes);
+            let linked = commit(w, "3D model file", |c| {
+                let f = c.footprint.as_mut().unwrap();
+                if f.models.is_empty() {
+                    f.models.push(cadrs_eda::footprint::Model3d::file(&name));
+                }
+                let m = &mut f.models[0];
+                m.source = name.clone();
+                m.blob = Some(hash);
+                Ok(())
+            });
+            if linked {
+                ui::set_text_value(w, "eda-model-path", &name);
+            }
+        });
+    }
+}
+
+pub fn register(app: &mut App) {
+    app.add_systems(Update, on_model_picked.run_if(in_state(AppState::Document)));
 }
