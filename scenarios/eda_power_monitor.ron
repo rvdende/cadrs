@@ -1,7 +1,8 @@
 // The desk power monitor's LoRa board, redrawn in cadrs (cadrs_eda::power_monitor; no KiCad
 // import): 01 the schematic; 02 ERC (only the headers' unused pins, as in KiCad); 03 the
-// layout; 04 the antenna and its matching network, close; 05 DRC; 06 the board in 3D; 07 the
-// RA-01SH component's symbol; 08 its footprint; 09 its generated 3D model; 10 the PCB antenna's
+// layout (the layers panel bottom-left); 04 the antenna and its matching network, close; 05 the
+// back copper active, the other layers dimmed; 06 DRC; 07 the board in 3D; 08 the RA-01SH
+// component's symbol; 09 its footprint; 10 its generated 3D model; 11 the PCB antenna's
 // footprint (front and back copper strips, plated holes, keep-out).
 Scenario(
     start: Some("document"),
@@ -29,36 +30,47 @@ Scenario(
         Custom("eda-zoom 90 -105 114 -84"),
         MoveTo(1100, 900),
         Screenshot("04-antenna"),
+        // The layers panel: the back copper active, the other layers dimmed.
+        Click(ui("eda-layers-toggle")),
+        WaitFor("eda-layer-bottom-copper"),
+        Custom("eda-zoom 85 -106 121 -62"),
+        Click(ui("eda-layer-bottom-copper")),
+        Click(ui("eda-layers-dim")),
+        MoveTo(1100, 900),
+        Screenshot("05-back-copper"),
+        Click(ui("eda-layers-dim")),
+        Click(ui("eda-layer-top-copper")),
+        Click(ui("eda-layers-toggle")),
         Click(ui("pcb-drc")),
         WaitFor("eda-drc-dialog"),
         Click(ui("eda-drc-run")),
-        Screenshot("05-drc"),
+        Screenshot("06-drc"),
         Click(ui("eda-drc-close")),
         Click(ui("eda-mode-3d")),
         Wait(3),
         Key("F"),
         MoveTo(1100, 900),
-        Screenshot("06-3d"),
+        Screenshot("07-3d"),
         Click(ui("pcb-part-ra-01sh")),
         WaitFor("eda-mode-symbol"),
         Click(ui("eda-mode-symbol")),
         Custom("eda-fit"),
         MoveTo(1100, 900),
-        Screenshot("07-ra01sh-symbol"),
+        Screenshot("08-ra01sh-symbol"),
         Click(ui("eda-mode-footprint")),
         Custom("eda-fit"),
         MoveTo(1100, 900),
-        Screenshot("08-ra01sh-footprint"),
+        Screenshot("09-ra01sh-footprint"),
         Click(ui("eda-mode-3d")),
         Wait(3),
         Key("F"),
         MoveTo(1100, 900),
-        Screenshot("09-ra01sh-3d"),
+        Screenshot("10-ra01sh-3d"),
         Click(ui("pcb-part-pcb-antenna")),
         WaitFor("eda-mode-footprint"),
         Click(ui("eda-mode-footprint")),
         Custom("eda-fit"),
         MoveTo(1100, 900),
-        Screenshot("10-antenna-footprint"),
+        Screenshot("11-antenna-footprint"),
     ],
 )

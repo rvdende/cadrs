@@ -361,13 +361,15 @@ pub struct BoardView {
     /// Footprints, tracks and vias shown selected.
     pub selected: Vec<uuid::Uuid>,
     pub ratsnest: bool,
+    /// Other layers than the active one drawn faint (KiCad's high-contrast mode).
+    pub dim_inactive: bool,
 }
 
 impl BoardView {
     pub fn all(board: &Board) -> BoardView {
         let mut visible: Vec<Layer> = board.copper().collect();
         visible.extend([Layer::TopSilk, Layer::BottomSilk, Layer::TopCourtyard, Layer::BottomCourtyard, Layer::TopFab, Layer::BottomFab, Layer::Outline, Layer::Drawings, Layer::Comments]);
-        BoardView { visible, active: Layer::TopCopper, selected: vec![], ratsnest: true }
+        BoardView { visible, active: Layer::TopCopper, selected: vec![], ratsnest: true, dim_inactive: false }
     }
 }
 
@@ -395,15 +397,28 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
     let items = crate::copper::items(b);
     let shown = |l: Layer| view.visible.contains(&l);
     for (z, layer) in draw_order(b, view.active).into_iter().enumerate() {
-        let z = z as i32;
+        // Two depths a layer: its zone fills, then the rest of it.
+        let z = z as i32 * 2;
         if !shown(layer) {
             continue;
         }
-        let color = th.layer(layer);
+        let mut color = th.layer(layer);
+        if view.dim_inactive && layer != view.active && layer != Layer::Outline {
+            color[3] = (color[3] as u32 * 30 / 100) as u8;
+        }
         if layer.is_copper() {
-            let parts: Vec<Region> = items.iter().filter_map(|c| c.on(layer).cloned()).collect();
+            // Zone fills a little see-through, so copper of the other side shows under them;
+            // pads, tracks and vias on top.
+            let zone = |c: &&crate::copper::Copper| matches!(c.item, crate::copper::Item::Zone(..));
+            let fills: Vec<Region> = items.iter().filter(zone).filter_map(|c| c.on(layer).cloned()).collect();
+            if !fills.is_empty() {
+                let mut faint = color;
+                faint[3] = (faint[3] as u32 * 55 / 100) as u8;
+                d.region(faint, z, &poly::union_all(&fills));
+            }
+            let parts: Vec<Region> = items.iter().filter(|c| !zone(c)).filter_map(|c| c.on(layer).cloned()).collect();
             let all = poly::union_all(&parts);
-            d.region(color, z, &all);
+            d.region(color, z + 1, &all);
             // Selected copper on top, in the highlight colour.
             let sel: Vec<Region> = items
                 .iter()
@@ -415,7 +430,7 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
                 .filter_map(|c| c.on(layer).cloned())
                 .collect();
             if !sel.is_empty() {
-                d.region(th.highlight, z, &poly::union_all(&sel));
+                d.region(th.highlight, z + 1, &poly::union_all(&sel));
             }
         }
         for f in &b.footprints {

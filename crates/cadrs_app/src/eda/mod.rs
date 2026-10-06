@@ -14,6 +14,7 @@
 //! Names: `eda-mode-schematic`, `eda-mode-layout`, `eda-mode-3d` (the switch).
 
 pub mod browser;
+pub mod layers_panel;
 pub mod layout_tools;
 mod lay_dialogs;
 mod part_dialogs;
@@ -194,6 +195,7 @@ impl Plugin for EdaPlugin {
         layout_tools::register(app);
         part_tools::register(app);
         browser::register(app);
+        layers_panel::register(app);
     }
 }
 
@@ -552,6 +554,8 @@ pub struct SceneInputs {
     pub sym_selected: Vec<cadrs_eda::lib_edit::SymbolPart>,
     pub hidden_layers: Vec<cadrs_eda::layer::Layer>,
     pub active_layer: Option<cadrs_eda::layer::Layer>,
+    /// Layers other than the active one drawn faint.
+    pub dim_inactive: bool,
     /// A design being edited (a drag in progress) drawn instead of the document's.
     pub preview: Option<u64>,
 }
@@ -645,6 +649,7 @@ fn rebuild_scene(
                 Mode::Layout => {
                     let mut v = render::BoardView::all(&d.board);
                     v.visible.retain(|l| !inputs.hidden_layers.contains(l));
+                    v.dim_inactive = inputs.dim_inactive;
                     if let Some(a) = inputs.active_layer {
                         v.active = a;
                     }

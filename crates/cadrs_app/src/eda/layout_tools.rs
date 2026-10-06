@@ -76,11 +76,17 @@ pub struct LayoutState {
     pub active: Layer,
     /// U pressed once already on this selection: the next U goes through vias.
     pub expanded: bool,
+    /// Layers hidden in the layers panel.
+    pub hidden: Vec<Layer>,
+    /// Other layers than the active one drawn faint.
+    pub dim: bool,
+    /// The layers panel is open (else just its button).
+    pub layers_open: bool,
 }
 
 impl Default for LayoutState {
     fn default() -> Self {
-        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false }
+        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false }
     }
 }
 
@@ -504,6 +510,12 @@ fn publish(s: Res<LayoutState>, eda: Res<super::Eda2d>, mut inputs: ResMut<Scene
     }
     if inputs.active_layer != Some(s.active) {
         inputs.active_layer = Some(s.active);
+    }
+    if inputs.hidden_layers != s.hidden {
+        inputs.hidden_layers = s.hidden.clone();
+    }
+    if inputs.dim_inactive != s.dim {
+        inputs.dim_inactive = s.dim;
     }
 }
 
