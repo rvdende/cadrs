@@ -33,13 +33,24 @@ use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
 pub fn register(app: &mut App) {
-    app.init_resource::<CreateHold>().add_systems(Update, finish_create.run_if(in_state(AppState::Document)));
+    app.init_resource::<CreateHold>()
+        .add_systems(Update, finish_create.run_if(in_state(AppState::Document)))
+        .add_systems(PostUpdate, flag_creating);
 }
 
 /// Scenarios only (`pcb-create-hold <frames>`): the progress card stays at least this many
 /// frames, so a headless run can photograph it (the build is often done in a frame or two).
 #[derive(Resource, Default)]
 pub struct CreateHold(pub u32);
+
+/// Scripted steps wait while a generation runs, but not while a scenario's hold keeps its
+/// progress card up (the scenario photographs it).
+fn flag_creating(q: Query<&RunningCreate>, hold: Res<CreateHold>, mut pending: ResMut<cadrs_ui::PendingWork>, mut why: ResMut<cadrs_ui::PendingWhy>) {
+    if q.iter().any(|r| r.frames >= hold.0) {
+        pending.0 = true;
+        why.add("PCB create assembly");
+    }
+}
 
 #[derive(Component)]
 struct CreateDialog {

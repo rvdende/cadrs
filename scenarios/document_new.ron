@@ -11,7 +11,7 @@ Scenario(
         Type("Bracket"),
         Click(ui("new-document-create")),
         WaitFor("document-loading"),
-        Screenshot("01-loading-studio-data"),
+        ScreenshotNow("01-loading-studio-data"),
         MoveTo(1420, 780),
         Wait(2),
         Screenshot("02-part-studio-default"),

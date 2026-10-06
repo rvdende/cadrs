@@ -12,7 +12,7 @@ Scenario(
         Screenshot("02-name-typed"),
         Click(ui("new-document-create")),
         WaitFor("document-loading"),
-        Screenshot("03-loading"),
+        ScreenshotNow("03-loading"),
         Screenshot("04-document-open"),
         Click(ui("back-to-documents")),
         WaitFor("doc-row-0"),

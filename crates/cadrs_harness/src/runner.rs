@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use bevy::camera::NormalizedRenderTarget;
 use bevy::input::ButtonState;
@@ -131,6 +131,60 @@ pub struct Runner {
     waiting: Option<std::time::Instant>,
     /// Frames in a row with no pending work, before the current step.
     quiet: u8,
+    /// Shared with the [`watchdog`]: when the last frame ran and the step timeout (both ms).
+    heartbeat: Arc<Heartbeat>,
+}
+
+/// What the [`watchdog`] thread watches: the last frame's time since the start (ms, 0 before the
+/// first) and the current step timeout (ms).
+#[derive(Default)]
+struct Heartbeat {
+    last_frame: AtomicU64,
+    timeout: AtomicU64,
+    start: std::sync::OnceLock<std::time::Instant>,
+}
+
+impl Heartbeat {
+    fn beat(&self) {
+        let start = *self.start.get_or_init(std::time::Instant::now);
+        self.last_frame.store(start.elapsed().as_millis() as u64 + 1, Ordering::Relaxed);
+    }
+}
+
+/// Fails a scenario whose app stopped running frames (a deadlock, or a frame stuck in a
+/// computation) for longer than its step timeout: it writes every thread's stack (`eu-stack`,
+/// else `gdb`) to `hang-stacks.txt` in the output directory and to stderr, and exits with an
+/// error. Without it, a hung app would hang the test run.
+fn watchdog(heartbeat: Arc<Heartbeat>, out_dir: PathBuf) {
+    std::thread::Builder::new()
+        .name("scenario-watchdog".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let Some(start) = heartbeat.start.get() else { continue };
+            let last = heartbeat.last_frame.load(Ordering::Relaxed);
+            let timeout = heartbeat.timeout.load(Ordering::Relaxed).max(1000);
+            let now = start.elapsed().as_millis() as u64;
+            if last == 0 || now.saturating_sub(last) < timeout {
+                continue;
+            }
+            let pid = std::process::id().to_string();
+            let stacks = std::process::Command::new("eu-stack")
+                .args(["-p", &pid])
+                .output()
+                .ok()
+                .filter(|o| o.status.success() || !o.stdout.is_empty())
+                .or_else(|| std::process::Command::new("gdb").args(["-p", &pid, "-batch", "-ex", "thread apply all bt"]).output().ok())
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_else(|| "(no eu-stack or gdb to dump the stacks)".into());
+            let path = out_dir.join("hang-stacks.txt");
+            let _ = std::fs::write(&path, &stacks);
+            eprintln!("{stacks}");
+            let msg = format!("the app ran no frame for {} s (hung); thread stacks in {}", timeout / 1000, path.display());
+            error!("scenario failed: {msg}");
+            eprintln!("scenario failed: {msg}");
+            std::process::exit(1);
+        })
+        .ok();
 }
 
 pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: PathBuf) {
@@ -138,6 +192,12 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
         panic!("cannot create {}: {e}", out_dir.display());
     }
+    let heartbeat = Arc::new(Heartbeat::default());
+    heartbeat.timeout.store((scenario.timeout.max(0.1) * 1000.0) as u64, Ordering::Relaxed);
+    watchdog(heartbeat.clone(), out_dir.clone());
+    // (The app may be traced: a hang's stacks can be dumped, by the watchdog or by hand.)
+    #[cfg(target_os = "linux")]
+    allow_ptrace();
     app.init_resource::<WorldToScreen>();
     app.init_resource::<SpaceToScreen>();
     app.init_resource::<FlatToScreen>();
@@ -161,6 +221,7 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
         timeout: std::time::Duration::from_secs_f32(scenario.timeout.max(0.1)),
         waiting: None,
         quiet: 0,
+        heartbeat: heartbeat.clone(),
     })
     .add_systems(First, drive);
 }
@@ -174,6 +235,7 @@ fn fail(world: &mut World, msg: String) {
 
 fn drive(world: &mut World) {
     let mut runner = world.resource_mut::<Runner>();
+    runner.heartbeat.beat();
     if runner.done {
         return;
     }
@@ -221,11 +283,14 @@ fn drive(world: &mut World) {
     };
     if let Step::SetTimeout(secs) = step {
         runner.timeout = std::time::Duration::from_secs_f32(secs.max(0.1));
+        runner.heartbeat.timeout.store((secs.max(0.1) * 1000.0) as u64, Ordering::Relaxed);
         return;
     }
     // Every step (but a Wait or a measurement) waits for the app to settle: no pending work
     // (rebuilds, view animations, section caps, drawing views), then `QUIET_FRAMES` quiet frames.
-    if !matches!(step, Step::Wait(_) | Step::MeasureStart(_) | Step::MeasureEnd) {
+    // (A WaitFor polls at once: it waits for something on screen itself, which may only be
+    // there while the app is busy, like the loading cover. ScreenshotNow takes the frame as is.)
+    if !matches!(step, Step::Wait(_) | Step::WaitFor(_) | Step::ScreenshotNow(_) | Step::MeasureStart(_) | Step::MeasureEnd) {
         let busy = world.get_resource::<cadrs_ui::PendingWork>().is_some_and(|w| w.0);
         let mut runner = world.resource_mut::<Runner>();
         let since = *runner.waiting.get_or_insert_with(std::time::Instant::now);
@@ -504,6 +569,7 @@ fn expand(world: &mut World, step: &Step) -> Result<Vec<Vec<Op>>, String> {
             vec![],
             vec![Op::Shot(label.clone())],
         ],
+        Step::ScreenshotNow(label) => vec![vec![Op::Shot(label.clone())]],
     })
 }
 
@@ -755,6 +821,11 @@ fn execute(world: &mut World, op: Op) {
             world.write_message(FinishAnimations);
         }
         Op::Custom(cmd) => {
+            // The harness's own: `harness-sleep <seconds>` blocks a frame (tests the watchdog).
+            if let Some(secs) = cmd.strip_prefix("harness-sleep ").and_then(|v| v.trim().parse::<f64>().ok()) {
+                std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                return;
+            }
             world.write_message(ScriptCommand(cmd));
         }
         Op::MeasureStart(label) => {
@@ -844,6 +915,22 @@ pub fn perf_report(frames: &[f64]) -> String {
         v[n - 1],
         1000.0 / mean
     )
+}
+
+/// Lets any process of the user attach to this one (`PR_SET_PTRACER_ANY`), whatever
+/// `kernel.yama.ptrace_scope` says, so the watchdog's `eu-stack` (a child, not the parent) can
+/// read a hung app's stacks.
+#[cfg(target_os = "linux")]
+fn allow_ptrace() {
+    const PR_SET_PTRACER: i32 = 0x5961_6d61;
+    const PR_SET_PTRACER_ANY: u64 = u64::MAX;
+    unsafe extern "C" {
+        fn prctl(option: i32, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> i32;
+    }
+    // SAFETY: prctl with PR_SET_PTRACER only changes who may trace this process.
+    unsafe {
+        prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    }
 }
 
 #[cfg(test)]
