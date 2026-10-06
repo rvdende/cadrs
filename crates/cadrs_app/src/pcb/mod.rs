@@ -877,6 +877,7 @@ fn spawn_chrome(q_area: Query<Entity, With<ViewportArea>>, q_have: Query<(), Wit
 /// Shows the strip in PCB Studio tabs and the hint in an empty one; the strip's buttons show
 /// which pane is open.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn sync_chrome(
     kind: Res<ActiveKind>,
     doc: Option<Res<ActiveDocument>>,

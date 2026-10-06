@@ -68,10 +68,13 @@ pub fn ra01sh_symbol() -> Symbol {
     s
 }
 
+/// A header column's pins: (name, electrical type) from the top.
+type PinColumn = [(&'static str, PinType); 10];
+
 /// One of the ESP32 mini module's two 2×10 headers: odd pins left, even pins right.
 pub fn esp32_header_symbol(right: bool) -> Symbol {
     use PinType::{Bidirectional as Bi, Input, NoConnect as Nc, Output, Passive as Pa, PowerIn as Pi, PowerOut as Po};
-    let (name, odd, even): (&str, [(&str, PinType); 10], [(&str, PinType); 10]) = if right {
+    let (name, odd, even): (&str, PinColumn, PinColumn) = if right {
         (
             "esp32-pins-header-right",
             [("TXD", Output), ("RXD", Input), ("IO22", Bi), ("IO21", Bi), ("IO17", Bi), ("IO16", Bi), ("GND", Pi), ("VCC", Pi), ("TD0", Bi), ("SD0", Bi)],
@@ -228,9 +231,13 @@ pub fn libraries() -> LibraryTable {
 // ---------------------------------------------------------------------------------------------
 // The schematic
 
+/// A symbol to place: library id, x, y (mm), quarter turns, footprint, reference and value
+/// positions.
+type Placed = (&'static str, f64, f64, u32, &'static str, (f64, f64), (f64, f64));
+
 /// Where each symbol goes: library id, position (mm), turns of 90° counter-clockwise,
 /// footprint, and where its reference and value sit.
-const PLACED: [(&str, f64, f64, u32, &str, (f64, f64), (f64, f64)); 9] = [
+const PLACED: [Placed; 9] = [
     ("power:GNDREF", 50.8, 93.98, 0, "", (50.8, 87.63), (50.8, 88.9)),
     ("Device:C", 90.17, 157.48, 3, "Capacitor_SMD:C_0805_2012Metric", (90.17, 165.1), (90.17, 162.56)),
     ("power_monitor:esp32-pins-header-left", 63.5, 120.65, 0, "Connector_PinHeader_2.54mm:PinHeader_2x10_P2.54mm_Vertical", (70.485, 137.16), (70.485, 134.62)),

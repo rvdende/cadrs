@@ -430,7 +430,7 @@ pub fn connector(cols: usize, n: usize) -> Symbol {
     filters(&mut s, &[if cols == 1 { "Connector*:*_1x??_*" } else { "Connector*:*_2x??_*" }]);
     s.show_pin_names = false;
     let top = (n as f64 - 1.0) * 1.27;
-    let (x0, x1) = (-1.27, if cols == 1 { 1.27 } else { 1.27 });
+    let (x0, x1) = (-1.27, 1.27);
     s.graphics.push(rect((x0, top + 1.27), (x1, -top - 1.27), 0.254, Fill::Background));
     for (i, y) in rows(n).enumerate() {
         if cols == 1 {

@@ -52,7 +52,7 @@ fn file_solids(k: &mut dyn Kernel, bytes: &[u8], ext: &str) -> Result<(Vec<BodyI
                     let q = m.positions[i as usize];
                     Point3::new(q[0] as f64, q[1] as f64, q[2] as f64)
                 };
-                let tris: Vec<[Point3<f64>; 3]> = m.indices.chunks_exact(3).map(|t| [p(t[0]), p(t[1]), p(t[2])]).collect();
+                let tris: Vec<[Point3<f64>; 3]> = m.indices.as_chunks::<3>().0.iter().map(|t| [p(t[0]), p(t[1]), p(t[2])]).collect();
                 if let Ok(b) = k.mesh_solid(&tris, 1e-4) {
                     bodies.push(b);
                 }
@@ -69,9 +69,12 @@ fn moved(k: &mut dyn Kernel, b: BodyId, m: &Motion) -> Result<BodyId, String> {
     first(r)
 }
 
+/// Bodies with their names (the board, then each part by reference).
+pub type NamedBodies = Vec<(String, BodyId)>;
+
 /// The board and its parts' models as bodies (named), with warnings for models that couldn't
 /// be made. The caller releases the bodies.
-pub fn native_board_bodies(k: &mut dyn Kernel, pcb: &PcbBoard, design: &cadrs_eda::Design) -> Result<(Vec<(String, BodyId)>, Vec<String>), String> {
+pub fn native_board_bodies(k: &mut dyn Kernel, pcb: &PcbBoard, design: &cadrs_eda::Design) -> Result<(NamedBodies, Vec<String>), String> {
     let g = crate::board_geometry(k, pcb).map_err(|e| e.to_string())?;
     let mut out = vec![];
     let mut warnings = g.warnings.clone();

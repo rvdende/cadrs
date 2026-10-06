@@ -682,22 +682,23 @@ fn lib(name: &str, desc: &str, fps: Vec<Footprint>) -> Library {
 }
 
 pub(super) fn footprint_libraries() -> Vec<Library> {
-    let mut out = vec![];
-    out.push(lib(
-        "Resistor_THT",
-        "Through-hole resistors",
-        vec![
-            axial_tht("Resistor_THT", "R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal", 7.62, 3.6, 1.6, 0.8, 1.6),
-            axial_tht("Resistor_THT", "R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal", 10.16, 6.3, 2.5, 0.8, 1.6),
-            axial_tht("Resistor_THT", "R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal", 12.7, 9.0, 3.2, 0.8, 1.6),
-        ],
-    ));
-    out.push(lib("Diode_THT", "Through-hole diodes", vec![axial_tht("Diode_THT", "D_DO-41_SOD81_P10.16mm_Horizontal", 10.16, 5.2, 2.7, 1.1, 2.2), axial_tht("Diode_THT", "D_DO-35_SOD27_P7.62mm_Horizontal", 7.62, 4.0, 2.0, 0.8, 1.6)]));
-    out.push(lib("LED_THT", "Through-hole LEDs", vec![radial_led_tht(3.0), radial_led_tht(5.0)]));
-    out.push(lib("Battery", "Battery holders", vec![coin_holder()]));
-    out.push(lib("Resistor_SMD", "Surface-mount resistors", chips("Resistor_SMD", "R")));
-    out.push(lib("Capacitor_SMD", "Surface-mount capacitors", chips("Capacitor_SMD", "C")));
-    out.push(lib("Inductor_SMD", "Surface-mount inductors", chips("Inductor_SMD", "L")));
+    let mut out = vec![
+        lib(
+            "Resistor_THT",
+            "Through-hole resistors",
+            vec![
+                axial_tht("Resistor_THT", "R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal", 7.62, 3.6, 1.6, 0.8, 1.6),
+                axial_tht("Resistor_THT", "R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal", 10.16, 6.3, 2.5, 0.8, 1.6),
+                axial_tht("Resistor_THT", "R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal", 12.7, 9.0, 3.2, 0.8, 1.6),
+            ],
+        ),
+        lib("Diode_THT", "Through-hole diodes", vec![axial_tht("Diode_THT", "D_DO-41_SOD81_P10.16mm_Horizontal", 10.16, 5.2, 2.7, 1.1, 2.2), axial_tht("Diode_THT", "D_DO-35_SOD27_P7.62mm_Horizontal", 7.62, 4.0, 2.0, 0.8, 1.6)]),
+        lib("LED_THT", "Through-hole LEDs", vec![radial_led_tht(3.0), radial_led_tht(5.0)]),
+        lib("Battery", "Battery holders", vec![coin_holder()]),
+        lib("Resistor_SMD", "Surface-mount resistors", chips("Resistor_SMD", "R")),
+        lib("Capacitor_SMD", "Surface-mount capacitors", chips("Capacitor_SMD", "C")),
+        lib("Inductor_SMD", "Surface-mount inductors", chips("Inductor_SMD", "L")),
+    ];
     let mut leds = chips("LED_SMD", "LED");
     leds.push(ws2812b());
     out.push(lib("LED_SMD", "Surface-mount LEDs", leds));

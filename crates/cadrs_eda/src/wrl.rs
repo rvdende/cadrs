@@ -256,7 +256,7 @@ fn shape(p: &Parser, n: &Node, at: Affine, out: &mut Vec<Mesh>) {
     let Some(coord) = node(p, geom.get("coord")) else { return };
     let Some(Value::Numbers(pts)) = coord.get("point").map(|v| p.resolve(v)) else { return };
     let Some(Value::Numbers(idx)) = geom.get("coordIndex").map(|v| p.resolve(v)) else { return };
-    let points: Vec<[f64; 3]> = pts.chunks_exact(3).map(|c| at.apply([c[0], c[1], c[2]])).collect();
+    let points: Vec<[f64; 3]> = pts.as_chunks::<3>().0.iter().map(|c| at.apply(*c)).collect();
     let i = match out.iter().position(|m| m.color == color) {
         Some(i) => i,
         None => {

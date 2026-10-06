@@ -51,6 +51,9 @@ pub struct PcbGridGizmos;
 pub const COMPONENT_TOP: [u8; 4] = [120, 10, 10, 255];
 pub const COMPONENT_SIDE: [u8; 4] = [245, 32, 32, 255];
 
+/// A model file's meshes and its unit (mm).
+type ModelMeshes = Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>;
+
 /// Built board meshes, per (tab, board), with the board each was built from.
 #[derive(Resource, Default)]
 pub struct PcbMeshCache {
@@ -58,14 +61,14 @@ pub struct PcbMeshCache {
     /// Package boxes for the component view, by (package name, its outline and height).
     packages: HashMap<String, Option<Arc<BodyMesh>>>,
     /// 3D model files' meshes and units by blob hash (`None`: unreadable, reported once).
-    models: HashMap<String, Option<Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>>>,
+    models: HashMap<String, Option<ModelMeshes>>,
     /// How many boards were tessellated (a switch back to a cached board adds none).
     pub builds: usize,
 }
 
 impl PcbMeshCache {
     /// The meshes of a model file (by its blob hash; `ext` its type), read once.
-    pub fn model(&mut self, hash: &str, ext: &str) -> Option<Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>> {
+    pub fn model(&mut self, hash: &str, ext: &str) -> Option<ModelMeshes> {
         if let Some(m) = self.models.get(hash) {
             return m.clone();
         }

@@ -34,7 +34,10 @@ fn board_parts(d: &Design) -> BTreeMap<String, ((i64, i64), i64, String, BTreeMa
 }
 
 /// Every track as (layer, ends in µm in a fixed order, width µm), sorted.
-fn tracks(d: &Design) -> Vec<(String, (i64, i64), (i64, i64), i64)> {
+/// (layer, one end µm, the other, width µm).
+type TrackKey = (String, (i64, i64), (i64, i64), i64);
+
+fn tracks(d: &Design) -> Vec<TrackKey> {
     let um = |p: Pt| (p.x / 1000, p.y / 1000);
     let mut v: Vec<_> = d.board.tracks.iter().map(|t| {
         let (a, b) = if (t.a.x, t.a.y) <= (t.b.x, t.b.y) { (t.a, t.b) } else { (t.b, t.a) };

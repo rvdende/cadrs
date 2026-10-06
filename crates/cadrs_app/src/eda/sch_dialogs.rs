@@ -588,7 +588,7 @@ pub fn schematic_pdf(d: &cadrs_eda::Design, title: &str) -> Vec<u8> {
         if a.z == -10 {
             continue;
         }
-        for t in a.tris.chunks_exact(3) {
+        for t in a.tris.as_chunks::<3>().0 {
             let points = t.iter().map(|q| [q[0] / 1e6, q[1] / 1e6]).collect();
             page.items.push(Item::Fill { points, color: [a.color[0], a.color[1], a.color[2]], layer: Layer::Visible });
         }

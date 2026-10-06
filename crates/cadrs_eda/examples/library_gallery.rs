@@ -29,7 +29,7 @@ fn main() {
     let mut d = cadrs_eda::Design::new();
     d.schematic.sheets[0].paper = Paper { name: "User".into(), size: Size::mm(330.0, 230.0) };
     let shown = |id: &str| !id.starts_with("Connector:Conn_") || id.ends_with("01x04") || id.ends_with("02x05_Odd_Even");
-    let ids: Vec<_> = t.libraries.iter().flat_map(|l| l.symbols.iter()).filter(|s| shown(&s.id) && !s.id.starts_with("Connector:Screw_Terminal_01x0") || s.id.ends_with("Terminal_01x03")).map(|s| s.clone()).collect();
+    let ids: Vec<_> = t.libraries.iter().flat_map(|l| l.symbols.iter()).filter(|s| shown(&s.id) && !s.id.starts_with("Connector:Screw_Terminal_01x0") || s.id.ends_with("Terminal_01x03")).cloned().collect();
     for (i, s) in ids.iter().enumerate() {
         let (c, r) = ((i % 12) as f64, (i / 12) as f64);
         cadrs_eda::sch_edit::place_symbol(&mut d.schematic, 0, s, Pt::mm(20.32 + c * 25.4, 210.82 - r * 27.94), uuid::Uuid::new_v4());
