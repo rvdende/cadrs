@@ -198,6 +198,7 @@ fn fillet(edges: Vec<EdgeOrFace>, r: f64) -> FeatureKind {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn reflector_every_step() {
     let mut s = Studio::new();
     // The stand-in: the rounded square (area 182² − (4 − π)·36²) 45 high, less the sphere's cap

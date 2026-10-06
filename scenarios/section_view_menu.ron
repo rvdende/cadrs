@@ -1,0 +1,40 @@
+// Section view… in the view's right-click menu, a shortcut for the bottom-right tool: on a
+// 60 × 40 × 20 block, the front face's menu (01) opens the Section view dialog cut by that face
+// (02); ✓; then empty space's menu reads Exit section view (03), which ends it (04). No Waits:
+// every step waits for the app to settle.
+Scenario(
+    start: Some("document"),
+    timeout: 20,
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch top rect 0 0 60 40"),
+        Key("Shift+7"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(30, 20, 0)),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("20"),
+        // Enter in the depth field accepts the dialog.
+        Key("Enter"),
+        Key("F"),
+        RightClick(xyz(30, 0, 10)),
+        WaitFor("viewport-section-view"),
+        Hover(ui("viewport-section-view")),
+        Screenshot("01-face-menu-section-view"),
+        Click(ui("viewport-section-view")),
+        WaitFor("section-dialog"),
+        MoveTo(1420, 900),
+        ExpectText("section-planes", "Face"),
+        Screenshot("02-cut-by-the-face"),
+        Click(ui("section-dialog-accept")),
+        RightClick(at(1400, 850)),
+        WaitFor("viewport-section-view"),
+        ExpectText("viewport-section-view", "Exit section view"),
+        Hover(ui("viewport-section-view")),
+        Screenshot("03-exit-section-view"),
+        Click(ui("viewport-section-view")),
+        MoveTo(1420, 900),
+        Screenshot("04-exited"),
+    ],
+)

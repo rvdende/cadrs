@@ -314,6 +314,7 @@ fn funnel(side: f64) -> Report {
 
 /// PS21: both readings of PS21.7, the kept one checked against the course's self-check.
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn funnel_course_self_check() {
     let away = funnel(-1.0);
     let toward = funnel(1.0);

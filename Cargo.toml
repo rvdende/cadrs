@@ -1,7 +1,23 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/cadrs"]
+# `cargo build -r` / `cargo run -r` build and run the app (crates/cadrs); `cargo test -r` runs
+# the fast tests of the crates without Bevy. The app's own tests need the `app-tests` feature
+# (`cargo test -r -p cadrs -F app-tests`); the golden screenshot tests are also `#[ignore]`d.
+# cadrs_onshape (the Onshape importer, a second binary) is left out so `cargo run` stays
+# unambiguous: `cargo test -r -p cadrs_onshape`.
+default-members = [
+    "crates/cadrs",
+    "crates/cadrs_core",
+    "crates/cadrs_drawing",
+    "crates/cadrs_fea",
+    "crates/cadrs_idf",
+    "crates/cadrs_kernel",
+    "crates/cadrs_pcb",
+    "crates/cadrs_render",
+    "crates/cadrs_sheetmetal",
+    "crates/cadrs_sketch",
+]
 
 [workspace.package]
 version = "0.1.3"

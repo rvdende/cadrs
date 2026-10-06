@@ -55,6 +55,7 @@ fn mass_kg(doc: &Document, el: ElementId, part: &Part) -> f64 {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn the_fixtures_are_current() {
     for (name, file) in ex::files(&e1_dxf()).unwrap() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../fixtures/sheetmetal/{name}.cadrs"));
@@ -114,6 +115,7 @@ fn e1_six_bends_on_the_imported_flat_and_its_mass() {
 pub const E2_MASS: f64 = 0.111320;
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn e2_is_one_part_and_weighs_its_flat_in_carbon_steel() {
     let doc = ex::document_e2().unwrap();
     let b = build(&doc, ex::E2_STUDIO);
@@ -228,6 +230,7 @@ fn e3_the_sheet_metal_box_and_its_flat() {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn e4_the_rework_after_finish_leaves_the_flat_alone() {
     let mut doc = ex::document_e4().unwrap();
     let b = build(&doc, ex::E4_STUDIO);

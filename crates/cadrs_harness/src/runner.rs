@@ -69,8 +69,12 @@ impl Affine {
 /// windowed replay, keep the real mouse outside the window.
 pub const HARNESS_POINTER: PointerId = PointerId::Mouse;
 
-/// Frames a step may wait for its UI target before the scenario fails.
-const TARGET_TIMEOUT: u32 = 300;
+/// Frames a step waits at least for its UI target (however fast frames are) before its
+/// timeout can fail it.
+const TARGET_MIN_FRAMES: u32 = 30;
+/// Quiet frames (no pending work) before a step runs: what the work produced is laid out and
+/// drawn.
+const QUIET_FRAMES: u8 = 2;
 /// Frames to wait for a screenshot readback before failing.
 const SHOT_TIMEOUT: u32 = 600;
 /// Frames a screenshot waits for the app's pending work.
@@ -121,6 +125,12 @@ pub struct Runner {
     settle: Option<u8>,
     /// Frames a screenshot has waited for the app's pending work ([`cadrs_ui::PendingWork`]).
     work_frames: u32,
+    /// How long one step may wait (to settle, or for its target) before the scenario fails.
+    timeout: std::time::Duration,
+    /// When the current step started waiting.
+    waiting: Option<std::time::Instant>,
+    /// Frames in a row with no pending work, before the current step.
+    quiet: u8,
 }
 
 pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: PathBuf) {
@@ -148,6 +158,9 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
         measure: None,
         settle: None,
         work_frames: 0,
+        timeout: std::time::Duration::from_secs_f32(scenario.timeout.max(0.1)),
+        waiting: None,
+        quiet: 0,
     })
     .add_systems(First, drive);
 }
@@ -206,6 +219,28 @@ fn drive(world: &mut World) {
         world.write_message(AppExit::Success);
         return;
     };
+    if let Step::SetTimeout(secs) = step {
+        runner.timeout = std::time::Duration::from_secs_f32(secs.max(0.1));
+        return;
+    }
+    // Every step (but a Wait or a measurement) waits for the app to settle: no pending work
+    // (rebuilds, view animations, section caps, drawing views), then `QUIET_FRAMES` quiet frames.
+    if !matches!(step, Step::Wait(_) | Step::MeasureStart(_) | Step::MeasureEnd) {
+        let busy = world.get_resource::<cadrs_ui::PendingWork>().is_some_and(|w| w.0);
+        let mut runner = world.resource_mut::<Runner>();
+        let since = *runner.waiting.get_or_insert_with(std::time::Instant::now);
+        runner.quiet = if busy { 0 } else { runner.quiet.saturating_add(1) };
+        if runner.quiet < QUIET_FRAMES {
+            if since.elapsed() > runner.timeout {
+                let secs = runner.timeout.as_secs_f32();
+                let why = world.get_resource::<cadrs_ui::PendingWhy>().map(|w| w.0.join(", ")).unwrap_or_default();
+                let why = if why.is_empty() { "unnamed pending work".to_string() } else { why };
+                return fail(world, format!("{step:?}: the app was still busy after {secs} s ({why})"));
+            }
+            runner.steps.push_front(step);
+            return;
+        }
+    }
     // A screenshot waits for the app's background work (drawing views being projected), a few
     // frames more for what it produced to be drawn, and at most `WORK_TIMEOUT` frames.
     if matches!(step, Step::Screenshot(_)) {
@@ -256,12 +291,15 @@ fn drive(world: &mut World) {
             let mut runner = world.resource_mut::<Runner>();
             runner.retries = 0;
             runner.settle = None;
+            runner.waiting = None;
+            runner.quiet = 0;
             runner.frames.extend(frames);
         }
         Err(missing) => {
             let mut runner = world.resource_mut::<Runner>();
             runner.retries += 1;
-            if runner.retries > TARGET_TIMEOUT {
+            let timed_out = runner.waiting.is_some_and(|t| t.elapsed() > runner.timeout);
+            if runner.retries > TARGET_MIN_FRAMES && timed_out {
                 if let Step::ExpectText(name, _) = &step {
                     let got = node_text(world, name);
                     if !got.is_empty() {
@@ -437,6 +475,7 @@ fn expand(world: &mut World, step: &Step) -> Result<Vec<Vec<Op>>, String> {
             f
         }
         Step::Wait(n) => vec![vec![]; *n as usize],
+        Step::SetTimeout(_) => vec![],
         Step::WaitFor(name) => {
             resolve(world, &Target::Ui(name.clone()))?;
             vec![vec![]]

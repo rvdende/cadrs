@@ -128,6 +128,7 @@ fn sorted(mut v: Vec<ViewId>) -> Vec<ViewId> {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn the_dependency_tracker_marks_exactly_the_affected_views() {
     let mut doc = hb::document().unwrap();
     let mut h = History::default();
@@ -167,6 +168,7 @@ fn the_dependency_tracker_marks_exactly_the_affected_views() {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn before_update_the_views_show_the_old_model() {
     let mut doc = hb::document().unwrap();
     let before: Vec<Arc<ViewGeometry>> = [HANDLE_VIEWS, GRIP_VIEWS].concat().iter().map(|id| shown(&doc, *id).1).collect();
@@ -184,6 +186,7 @@ fn before_update_the_views_show_the_old_model() {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn ex3_values_after_update() {
     let mut doc = hb::document().unwrap();
     let mut h = History::default();
@@ -327,6 +330,7 @@ fn ex3_values_after_update() {
 /// row 8 is the M6 configuration (its Description says M6), the balloons still point at their
 /// parts and the M6 heads are bigger in the view.
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn d14_7_m6_cap_screws_update_the_assembly_sheet() {
     use cadrs_core::drawing_assembly as da;
     use cadrs_core::samples::hand_brake::assembly as ha;
@@ -407,6 +411,7 @@ fn d14_7_m6_cap_screws_update_the_assembly_sheet() {
 /// triangles cover: no edge is left in more than 3 visible pieces. Show part intersections (X6)
 /// adds the curves where the plate enters the enclosure.
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn assembly_view_hides_edges_inside_overlapping_parts() {
     use cadrs_core::drawing_assembly as da;
     use cadrs_core::samples::hand_brake::assembly as ha;

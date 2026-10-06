@@ -426,9 +426,8 @@ fn drive_view_cache(
 ) {
     cache.frame += 1;
     // Scripted screenshots wait while the shown sheet's views are being projected (P3C.7).
-    let busy = *kind == ActiveKind::Drawing && cache.busy();
-    if pending.0 != busy {
-        pending.0 = busy;
+    if *kind == ActiveKind::Drawing && cache.busy() && !pending.0 {
+        pending.0 = true;
     }
     let Some(doc) = doc else {
         return;

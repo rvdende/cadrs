@@ -76,6 +76,7 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_insert_menu_action)
             .add_observer(on_inline_commit)
             .add_observer(on_pick_row_activate)
+            .add_systems(PostUpdate, flag_loading)
             .add_observer(on_tree_toggle)
             .add_observer(on_derived_toggle)
             .add_observer(on_feature_double_click)
@@ -144,6 +145,15 @@ struct LoadingOverlay {
 
 /// How long the loading cover stays up, in seconds.
 const LOADING_TIME: f32 = 0.35;
+
+/// Scripted steps wait while the loading cover is up (it takes the pointer and hides the
+/// document).
+fn flag_loading(q: Query<(), With<LoadingOverlay>>, mut pending: ResMut<cadrs_ui::PendingWork>, mut why: ResMut<cadrs_ui::PendingWhy>) {
+    if !q.is_empty() {
+        pending.0 = true;
+        why.add("loading cover");
+    }
+}
 /// Save this long after the last change (seconds).
 const AUTO_SAVE_DELAY: f32 = 1.0;
 

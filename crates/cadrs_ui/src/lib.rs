@@ -150,11 +150,25 @@ pub use cursor::{CursorKind, CursorRequest, CursorState};
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCommand(pub String);
 
-/// Background work the screen is still waiting for (drawing views being projected, P3C.7):
-/// scripted screenshots wait until it is done, so they never catch a "Generating view…"
-/// placeholder. The app sets it every frame.
+/// Background work the screen is still waiting for (drawing views being projected, P3C.7, a
+/// rebuild, a view animation, a section's caps): scripted steps wait until it is done, so they
+/// never act on, or catch, a half-finished screen. Cleared in `PreUpdate` every frame; the app's
+/// systems set it later in the frame while they have work in flight.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PendingWork(pub bool);
+
+/// What set [`PendingWork`] this frame ("rebuild", "view animation", …), for a scripted step
+/// that times out waiting. Cleared with it.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct PendingWhy(pub Vec<&'static str>);
+
+impl PendingWhy {
+    pub fn add(&mut self, why: &'static str) {
+        if !self.0.contains(&why) {
+            self.0.push(why);
+        }
+    }
+}
 
 /// Commonly used items, including Bevy's `Activate` event and the `observe` bundle helper.
 pub mod prelude {
@@ -187,6 +201,13 @@ impl Plugin for CadrsUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .init_resource::<PendingWork>()
+            .init_resource::<PendingWhy>()
+            .add_systems(PreUpdate, |mut p: ResMut<PendingWork>, mut why: ResMut<PendingWhy>| {
+                p.set_if_neq(PendingWork(false));
+                if !why.0.is_empty() {
+                    why.0.clear();
+                }
+            })
             .init_resource::<RenderSurface>()
             .insert_resource(ClearColor(Theme::default().viewport_background))
             .add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin)

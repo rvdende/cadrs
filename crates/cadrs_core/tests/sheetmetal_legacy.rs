@@ -114,6 +114,7 @@ fn same_as_original(l: &Legacy, walls: usize) {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn an_imported_channel_thickened_with_its_bends_is_the_channel_again() {
     // 5 flats (lips, sides, base) and 4 bends, R3.
     same_as_original(&CHANNEL, 5);
@@ -127,6 +128,7 @@ fn an_imported_case_is_taken_round_its_corner_gaps() {
 }
 
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn an_imported_case_with_round_corner_reliefs_is_the_case_again() {
     // The lesson's Case has round holes at its corners. Thickened again, the holes are
     // recognised as corner reliefs: the bends run their full length (the bend ends the holes cut
