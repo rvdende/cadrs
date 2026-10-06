@@ -1,10 +1,13 @@
 //! Golden-image tests: run each scenario headless and compare its screenshots with
 //! `tests/golden/<scenario>/*.png`.
 //!
+//! - They are `#[ignore]`d, so a plain `cargo test` stays fast: run them with
+//!   `cargo test -r -p cadrs --test golden -- --ignored` (add a name to run some:
+//!   `… -- --ignored section`).
 //! - Goldens are git-ignored. When a scenario has none yet, the test records the current
 //!   screenshots as the local baseline and passes.
-//! - `CADRS_BLESS=1 cargo test -p cadrs --test golden` writes the current screenshots as the new
-//!   goldens.
+//! - `CADRS_BLESS=1 cargo test -r -p cadrs --test golden -- --ignored` writes the current
+//!   screenshots as the new goldens.
 //! - If the app cannot start a GPU renderer (for example CI without a GPU), the test prints why
 //!   and passes, rather than failing.
 //! - `CADRS_SKIP_GOLDEN=1` skips the tests.
@@ -223,31 +226,37 @@ fn diff_fraction(a: &Path, b: &Path) -> f64 {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_smoke() {
     run_scenario("smoke");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_ui_gallery() {
     run_scenario("ui_gallery");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_landing_empty() {
     run_scenario("landing_empty");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_landing_create_document() {
     run_scenario("landing_create_document");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_landing_many_documents() {
     run_scenario("landing_many_documents");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_document_new() {
     let Some(out) = run_scenario("document_new") else {
         return;
@@ -262,369 +271,441 @@ fn golden_document_new() {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_tabs_create_assembly() {
     run_scenario("tabs_create_assembly");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_viewport_orbit() {
     run_scenario("viewport_orbit");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_plane_hover_select() {
     run_scenario("plane_hover_select");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_create_on_top() {
     run_scenario("sketch_create_on_top");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_create_on_front() {
     run_scenario("sketch_create_on_front");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_edit_existing() {
     run_scenario("sketch_edit_existing");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_line_chain() {
     run_scenario("sketch_line_chain");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_rectangle() {
     run_scenario("sketch_rectangle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_circle_arc() {
     run_scenario("sketch_circle_arc");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_select_delete() {
     run_scenario("sketch_select_delete");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_snap_endpoint_midpoint() {
     run_scenario("snap_endpoint_midpoint");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_snap_intersection() {
     run_scenario("snap_intersection");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_snap_hv_inference() {
     run_scenario("snap_hv_inference");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_constrain_rectangle() {
     run_scenario("constrain_rectangle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_drag_underconstrained() {
     run_scenario("drag_underconstrained");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_overconstrained_red() {
     run_scenario("overconstrained_red");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_dimension_rectangle_full() {
     run_scenario("dimension_rectangle_full");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_dimension_circle() {
     run_scenario("dimension_circle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_dimension_edit_value() {
     run_scenario("dimension_edit_value");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_dimension_conflict() {
     run_scenario("dimension_conflict");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_constraint_glyphs_more() {
     run_scenario("constraint_glyphs_more");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_keyboard_shortcuts() {
     run_scenario("keyboard_shortcuts");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_cursors_tooltips() {
     run_scenario("cursors_tooltips");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_extrude_rectangle() {
     run_scenario("extrude_rectangle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_extrude_preview_drag() {
     run_scenario("extrude_preview_drag");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_on_face() {
     run_scenario("sketch_on_face");
 }
 
 // P3.1: kernel-backed extrudes and a failed feature.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps_kernel_extrude() {
     run_scenario("course_ps_kernel_extrude");
 }
 
 // P3.2: edge, face and vertex picking, and faces named after their feature.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps_edge_hover() {
     run_scenario("course_ps_edge_hover");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps_face_names() {
     run_scenario("course_ps_face_names");
 }
 
 // P3.3: Extrude complete, Boolean, Parts, Mass properties.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps6_control_arm() {
     run_scenario("course_ps6_control_arm");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps4_end_types() {
     run_scenario("course_ps4_end_types");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps4_surface_thin() {
     run_scenario("course_ps4_surface_thin");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps5_boolean() {
     run_scenario("course_ps5_boolean");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps7_revolve_types() {
     run_scenario("course_ps7_revolve_types");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps8_reducer_coupling() {
     run_scenario("course_ps8_reducer_coupling");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps1_whole_sketch() {
     run_scenario("course_ps1_whole_sketch");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps2_parts_list() {
     run_scenario("course_ps2_parts_list");
 }
 
 // T3: entity tools (one scenario per lesson).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s3_midpoint_line() {
     run_scenario("course_s3_midpoint_line");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s3_aligned_rectangle() {
     run_scenario("course_s3_aligned_rectangle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s4_three_point_circle() {
     run_scenario("course_s4_three_point_circle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s6_slot() {
     run_scenario("course_s6_slot");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s7_polygon() {
     run_scenario("course_s7_polygon");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s8_ellipse() {
     run_scenario("course_s8_ellipse");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s9_fillet() {
     run_scenario("course_s9_fillet");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s9_chamfer() {
     run_scenario("course_s9_chamfer");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s10_point() {
     run_scenario("course_s10_point");
 }
 
 // Final re-audit of the sketching course: the phase 2 partial rows.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s8_ellipse_tangent() {
     run_scenario("course_s8_ellipse_tangent");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s9_fillet_line_arc() {
     run_scenario("course_s9_fillet_line_arc");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s12_normal_plane() {
     run_scenario("course_s12_normal_plane");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s12_curvature() {
     run_scenario("course_s12_curvature");
 }
 
 // T2: lifecycle and constraint UX (one scenario per lesson).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s1_new_sketch_context_menu() {
     run_scenario("course_s1_new_sketch_context_menu");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s1_plane_visibility() {
     run_scenario("course_s1_plane_visibility");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s1_view_normal_menu() {
     run_scenario("course_s1_view_normal_menu");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s2_restore_toast() {
     run_scenario("course_s2_restore_toast");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s2_rename_sketch() {
     run_scenario("course_s2_rename_sketch");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s3_line_double_click_end() {
     run_scenario("course_s3_line_double_click_end");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s4_line_to_tangent_arc() {
     run_scenario("course_s4_line_to_tangent_arc");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s11_drag_inference() {
     run_scenario("course_s11_drag_inference");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s11_shift_keeps_glyphs() {
     run_scenario("course_s11_shift_keeps_glyphs");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s13_quick_dim_line_arc() {
     run_scenario("course_s13_quick_dim_line_arc");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s13_driving_driven_toggle() {
     run_scenario("course_s13_driving_driven_toggle");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_x1_workspace_units() {
     run_scenario("course_x1_workspace_units");
 }
 
 // T1: the Introduction to Sketching course's exercise enablers.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ex1_basic() {
     run_scenario("course_ex1_basic");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ex2_intermediate() {
     run_scenario("course_ex2_intermediate");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_x2_region_area() {
     run_scenario("course_x2_region_area");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s13_first_dim_scales() {
     run_scenario("course_s13_first_dim_scales");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s13_circle_dims() {
     run_scenario("course_s13_circle_dims");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s12_symmetric() {
     run_scenario("course_s12_symmetric");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s19_mirror() {
     run_scenario("course_s19_mirror");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s19_offset() {
     run_scenario("course_s19_offset");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_disabled_placeholders() {
     run_scenario("course_disabled_placeholders");
 }
 
 /// Saving and reopening a document gives back exactly what was on screen.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_reload_roundtrip() {
     let Some(out) = run_scenario("reload_roundtrip") else {
         return;
@@ -664,71 +745,85 @@ fn golden_reload_roundtrip() {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s17_trim() {
     run_scenario("course_s17_trim");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s17_trim_drag() {
     run_scenario("course_s17_trim_drag");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s17_regions_without_trim() {
     run_scenario("course_s17_regions_without_trim");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s17_extend() {
     run_scenario("course_s17_extend");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s18_split() {
     run_scenario("course_s18_split");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s12_normal() {
     run_scenario("course_s12_normal");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s20_use_edges() {
     run_scenario("course_s20_use_edges");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s20_use_updates() {
     run_scenario("course_s20_use_updates");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s21_imprinting() {
     run_scenario("course_s21_imprinting");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s21_disable_imprinting() {
     run_scenario("course_s21_disable_imprinting");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s12_pierce() {
     run_scenario("course_s12_pierce");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s16_text() {
     run_scenario("course_s16_text");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_s20_use_silhouette() {
     run_scenario("course_s20_use_silhouette");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_perf_500() {
     // The corner is dragged out and back and dropped where it started: the sketch must look as
     // it did before (only the cursor and its hover differ).
@@ -742,157 +837,188 @@ fn golden_perf_500() {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_create() {
     run_scenario("course_drw_create");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_sheets() {
     run_scenario("course_drw_sheets");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_views() {
     run_scenario("course_drw_views");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_four_views() {
     run_scenario("course_drw_four_views");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_ex1_ujoint() {
     run_scenario("course_drw_ex1_ujoint");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_dimension_palette() {
     run_scenario("course_drw_dimension_palette");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_notes() {
     run_scenario("course_drw_notes");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_tables() {
     run_scenario("course_drw_tables");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_ex3_update() {
     run_scenario("course_drw_ex3_update");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_export() {
     run_scenario("course_drw_export");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_insert_dxf_image() {
     run_scenario("course_drw_insert_dxf_image");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_section_detail() {
     run_scenario("course_drw_section_detail");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_more_views() {
     run_scenario("course_drw_more_views");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_more_annotations() {
     run_scenario("course_drw_more_annotations");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_ex2_assembly() {
     run_scenario("course_drw_ex2_assembly");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps3_folders() {
     run_scenario("course_ps3_folders");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps3_filter() {
     run_scenario("course_ps3_filter");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps11_dependencies() {
     run_scenario("course_ps11_dependencies");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps13_rollback_final() {
     run_scenario("course_ps13_rollback_final");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps2_search_tools() {
     run_scenario("course_ps2_search_tools");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_p6_cube_corner() {
     run_scenario("course_p6_cube_corner");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps2_regeneration_times() {
     run_scenario("course_ps2_regeneration_times");
 }
 
 // P3.10: the Part Studios remainder, features.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps4_draft() {
     run_scenario("course_ps4_draft");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps15_hole_options() {
     run_scenario("course_ps15_hole_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps14_fillet_options() {
     run_scenario("course_ps14_fillet_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps5_boolean_options() {
     run_scenario("course_ps5_boolean_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps20_loft_match() {
     run_scenario("course_ps20_loft_match");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps7_revolve_connector() {
     run_scenario("course_ps7_revolve_connector");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_x7_mass_options() {
     run_scenario("course_x7_mass_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps20_loft_direction() {
     run_scenario("course_ps20_loft_direction");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps25_curve_pattern() {
     run_scenario("course_ps25_curve_pattern");
 }
@@ -901,191 +1027,228 @@ fn golden_course_ps25_curve_pattern() {
 // had no goldens.
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps17_gear_cover() {
     run_scenario("course_ps17_gear_cover");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps21_funnel() {
     run_scenario("course_ps21_funnel");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps27_reflector() {
     run_scenario("course_ps27_reflector");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps10_material() {
     run_scenario("course_ps10_material");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps12_planes() {
     run_scenario("course_ps12_planes");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps14_chamfer() {
     run_scenario("course_ps14_chamfer");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps14_fillet() {
     run_scenario("course_ps14_fillet");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps15_hole() {
     run_scenario("course_ps15_hole");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps16_shell_fail() {
     run_scenario("course_ps16_shell_fail");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps18_split_options() {
     run_scenario("course_ps18_split_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps18_split() {
     run_scenario("course_ps18_split");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps19_sweep_planes() {
     run_scenario("course_ps19_sweep_planes");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps19_sweep() {
     run_scenario("course_ps19_sweep");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps20_loft() {
     run_scenario("course_ps20_loft");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps22_skip_instances() {
     run_scenario("course_ps22_skip_instances");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps26_mirror() {
     run_scenario("course_ps26_mirror");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps8_single_revolve() {
     run_scenario("course_ps8_single_revolve");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_ps9_appearance() {
     run_scenario("course_ps9_appearance");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_p310_profiles() {
     run_scenario("course_p310_profiles");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_x11_mate_connectors() {
     run_scenario("course_x11_mate_connectors");
 }
 
 // Stage 3D: Inspection and Repair Tools (P3D.1, P3D.2).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_error_states() {
     run_scenario("course_insp_error_states");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_feature_menu() {
     run_scenario("course_insp_feature_menu");
 }
 
 // IR5.5: Dynamic suppression ▸ Suppress by variable.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_suppress_by_variable() {
     run_scenario("course_insp_suppress_by_variable");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_profile_inspector() {
     run_scenario("course_insp_profile_inspector");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_constraint_manager() {
     run_scenario("course_insp_constraint_manager");
 }
 
 // Stage 3D: P3D.3 (history) and P3D.4 (Repair, Replace reference, the Conrod exercise).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_history_panel() {
     run_scenario("course_insp_history_panel");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_edit_healthy_moment() {
     run_scenario("course_insp_edit_healthy_moment");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_insp_ex1_conrod() {
     run_scenario("course_insp_ex1_conrod");
 }
 
 // Stage 3F: P3F.2 (import and export).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_tips_import_step() {
     run_scenario("course_tips_import_step");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_export() {
     run_scenario("course_pcad_export");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_design_intent() {
     run_scenario("course_pcad_design_intent");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_variables() {
     run_scenario("course_pcad_variables");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_variables() {
     run_scenario("course_asm_variables");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_tips_suppress_threads() {
     run_scenario("course_tips_suppress_threads");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_tips_export_assembly() {
     run_scenario("course_tips_export_assembly");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_simulation() {
     // P3F.5 (P3.5): the cantilever's loads, solve, von Mises map, legend and probe.
     run_scenario("course_pcad_simulation");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_simulation() {
     // P3F.5 (A1.7, A1.8, A6.3, X16): an assembly's loads and a Simulation connection.
     run_scenario("course_asm_simulation");
@@ -1105,6 +1268,7 @@ fn luminance_stats(img: &image::RgbaImage) -> (f64, f64) {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_render() {
     // P3F.6 (P3.6): Render Studio renders the Control Arm to a 1920 × 1080 PNG that isn't blank
     // (its luminance varies: the model, its shading and its shadow on the backdrop).
@@ -1120,6 +1284,7 @@ fn golden_course_pcad_render() {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcad_export_image() {
     // P3F.6 (P3.7): Export image… writes the sizes and formats asked for, from a Part Studio and
     // from an exploded view.
@@ -1154,6 +1319,7 @@ fn perf_max(out: &Path, label: &str) -> f64 {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_tips_scale() {
     // P3F.3 (T4.2, X7): the scale fixture's timings, from the app's own measurements. A debug
     // build (and the golden suite's parallel apps) is given 8×; the release numbers are the
@@ -1179,183 +1345,218 @@ fn golden_course_tips_scale() {
 
 // Stage 3G: P3G.1 (external references, version-pinned links, Other documents in Insert).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_insert_linked() {
     run_scenario("course_er_insert_linked");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_versions_in_document() {
     run_scenario("course_er_versions_in_document");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_drw_version_reference() {
     run_scenario("course_drw_version_reference");
 }
 
 // Stage 3G: P3G.2 (update badges, Reference manager, pinning, Update all).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_update_linked() {
     run_scenario("course_er_update_linked");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_reference_manager() {
     run_scenario("course_er_reference_manager");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_update_all() {
     run_scenario("course_er_update_all");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_pinning() {
     run_scenario("course_er_pinning");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_change_to_version() {
     run_scenario("course_er_change_to_version");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_open_linked() {
     run_scenario("course_er_open_linked");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_move_to_document() {
     run_scenario("course_er_move_to_document");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_tips_move_tab() {
     run_scenario("course_tips_move_tab");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_derived_dialog() {
     run_scenario("course_dv_derived_dialog");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_derived_options() {
     run_scenario("course_dv_derived_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_ex1_two_copies() {
     run_scenario("course_dv_ex1_two_copies");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_ex2_update() {
     run_scenario("course_dv_ex2_update");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_ex3_workspace() {
     run_scenario("course_dv_ex3_workspace");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_ex4_assembly_update() {
     run_scenario("course_dv_ex4_assembly_update");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_dv_ex5_circular() {
     run_scenario("course_dv_ex5_circular");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_ex1_hexapod() {
     run_scenario("course_er_ex1_hexapod");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_er_ex2_move() {
     run_scenario("course_er_ex2_move");
 }
 
 // P3E.1: the documents page (labels, details, samples, import).
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_documents_labels() {
     run_scenario("course_td_documents_labels");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_documents_details() {
     run_scenario("course_td_documents_details");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_documents_samples() {
     run_scenario("course_td_documents_samples");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_documents_import() {
     run_scenario("course_td_documents_import");
 }
 
 // P3E.2: tab folders, the full Tab manager, and 60 tabs.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_tab_folders() {
     run_scenario("course_td_tab_folders");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_tab_manager() {
     run_scenario("course_td_tab_manager");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_many_tabs() {
     run_scenario("course_td_many_tabs");
 }
 
 // P3E.3a: render modes, perspective, zoom to window, named views; section views; selection.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_render_modes() {
     run_scenario("course_td_render_modes");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_section() {
     run_scenario("course_td_section");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_selection() {
     run_scenario("course_td_selection");
 }
 
 // P3E.3b: Measure (with its assembly frames), the analysis tools, the mouse preference.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_measure() {
     run_scenario("course_td_measure");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_analysis() {
     run_scenario("course_td_analysis");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_mouse_prefs() {
     run_scenario("course_td_mouse_prefs");
 }
 
 // P3E.4: workspaces, branches and merge.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_branch_merge() {
     run_scenario("course_td_branch_merge");
 }
 
 // P3E.5: the test drive walkthrough on the drill stand-in.
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_td_ex1_drill() {
     run_scenario("course_td_ex1_drill");
 }
@@ -1364,106 +1565,127 @@ fn golden_course_td_ex1_drill() {
 // from main, which were not registered before.
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_animate() {
     run_scenario("course_asm_animate");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_bom() {
     run_scenario("course_asm_bom");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_bom_template() {
     run_scenario("course_asm_bom_template");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_connector_tool_origin() {
     run_scenario("course_asm_connector_tool_origin");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_edit_implicit_connector() {
     run_scenario("course_asm_edit_implicit_connector");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_edit_in_context() {
     run_scenario("course_asm_edit_in_context");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_mic_contexts() {
     run_scenario("course_mic_contexts");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_mic_ex2_slide() {
     run_scenario("course_mic_ex2_slide");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_mic_ex3_gripper() {
     run_scenario("course_mic_ex3_gripper");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_ex1_start() {
     run_scenario("course_asm_ex1_start");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_ex2_pneumatic() {
     run_scenario("course_asm_ex2_pneumatic");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_ex3_structure() {
     run_scenario("course_asm_ex3_structure");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_ex4_connectors() {
     run_scenario("course_asm_ex4_connectors");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_exploded_view() {
     run_scenario("course_asm_exploded_view");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_folders() {
     run_scenario("course_asm_folders");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_hide_show() {
     run_scenario("course_asm_hide_show");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_insert_placement() {
     run_scenario("course_asm_insert_placement");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_interference() {
     run_scenario("course_asm_interference");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_items() {
     run_scenario("course_asm_items");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_mate_connectors() {
     run_scenario("course_asm_mate_connectors");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_mate_dialog_options() {
     let Some(out) = run_scenario("course_asm_mate_dialog_options") else {
         return;
@@ -1474,436 +1696,523 @@ fn golden_course_asm_mate_dialog_options() {
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_mates_pinslot() {
     run_scenario("course_asm_mates_pinslot");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_mates_planar_ball_parallel() {
     run_scenario("course_asm_mates_planar_ball_parallel");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_mates_tangent_width() {
     run_scenario("course_asm_mates_tangent_width");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_named_positions() {
     run_scenario("course_asm_named_positions");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_relations() {
     run_scenario("course_asm_relations");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_replace() {
     run_scenario("course_asm_replace");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_replicate() {
     run_scenario("course_asm_replicate");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_rigid_insert() {
     run_scenario("course_asm_rigid_insert");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_show_mates() {
     run_scenario("course_asm_show_mates");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_std_batch() {
     run_scenario("course_asm_std_batch");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_std_bulk_edit() {
     run_scenario("course_asm_std_bulk_edit");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_subassemblies() {
     run_scenario("course_asm_subassemblies");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_triad() {
     run_scenario("course_asm_triad");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_asm_where_used() {
     run_scenario("course_asm_where_used");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_feature_list_hover() {
     run_scenario("feature_list_hover");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_feature_list_scroll() {
     run_scenario("feature_list_scroll");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_onshape_derived() {
     run_scenario("onshape_derived");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_onshape_import() {
     run_scenario("onshape_import");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_part_export_step() {
     run_scenario("part_export_step");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_transform_feature() {
     run_scenario("transform_feature");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_hole_construction_points() {
     run_scenario("hole_construction_points");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_snap_part_edges() {
     run_scenario("sketch_snap_part_edges");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_transform_xyz_arrows() {
     run_scenario("transform_xyz_arrows");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_bom() {
     run_scenario("course_pcb_bom");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_component_properties() {
     run_scenario("course_pcb_component_properties");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_component_view() {
     run_scenario("course_pcb_component_view");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_custom_part() {
     run_scenario("course_pcb_custom_part");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_delete_board() {
     run_scenario("course_pcb_delete_board");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_ex1_board() {
     run_scenario("course_pcb_ex1_board");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_ex2_vision() {
     run_scenario("course_pcb_ex2_vision");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_ex3_idf_assembly() {
     run_scenario("course_pcb_ex3_idf_assembly");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_export_idf() {
     run_scenario("course_pcb_export_idf");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_geometry_cellphone() {
     run_scenario("course_pcb_geometry_cellphone");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_geometry_vision() {
     run_scenario("course_pcb_geometry_vision");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_import_idf() {
     run_scenario("course_pcb_import_idf");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_one_part() {
     run_scenario("course_pcb_one_part");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_search() {
     run_scenario("course_pcb_search");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_settings() {
     run_scenario("course_pcb_settings");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_studio_create() {
     run_scenario("course_pcb_studio_create");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_course_pcb_sync_partstudio() {
     run_scenario("course_pcb_sync_partstudio");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_feature_list_select() {
     run_scenario("feature_list_select");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_readme_screenshots() {
     run_scenario("readme_screenshots");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_section_view_menu() {
     run_scenario("section_view_menu");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_section_view_planes() {
     run_scenario("section_view_planes");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sheetmetal_collision() {
     run_scenario("sheetmetal_collision");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sheetmetal_convert() {
     run_scenario("sheetmetal_convert");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sheetmetal_dialog() {
     run_scenario("sheetmetal_dialog");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sheetmetal_extrude() {
     run_scenario("sheetmetal_extrude");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sheetmetal_thicken() {
     run_scenario("sheetmetal_thicken");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sketch_spline() {
     run_scenario("sketch_spline");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_e1() {
     run_scenario("sm_e1");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_e2() {
     run_scenario("sm_e2");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_e3() {
     run_scenario("sm_e3");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_e4() {
     run_scenario("sm_e4");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i3_bend_feature() {
     run_scenario("sm_p3i3_bend_feature");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i3_edits() {
     run_scenario("sm_p3i3_edits");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i3_table() {
     run_scenario("sm_p3i3_table");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_e2() {
     run_scenario("sm_p3i4_e2");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_flange() {
     run_scenario("sm_p3i4_flange");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_flange_miter() {
     run_scenario("sm_p3i4_flange_miter");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_hem() {
     run_scenario("sm_p3i4_hem");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_hem_corner() {
     run_scenario("sm_p3i4_hem_corner");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i4_make_joint() {
     run_scenario("sm_p3i4_make_joint");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_bend() {
     run_scenario("sm_p3i5_bend");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_bend_relief() {
     run_scenario("sm_p3i5_bend_relief");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_corner() {
     run_scenario("sm_p3i5_corner");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_corner_break() {
     run_scenario("sm_p3i5_corner_break");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_cut() {
     run_scenario("sm_p3i5_cut");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_dialogs() {
     run_scenario("sm_p3i5_dialogs");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_finish() {
     run_scenario("sm_p3i5_finish");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_jog() {
     run_scenario("sm_p3i5_jog");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_mirror() {
     run_scenario("sm_p3i5_mirror");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i5_tab() {
     run_scenario("sm_p3i5_tab");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i6_e1_import() {
     run_scenario("sm_p3i6_e1_import");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i6_export_dialog() {
     run_scenario("sm_p3i6_export_dialog");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i6_flat_cut_and_tab() {
     run_scenario("sm_p3i6_flat_cut_and_tab");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i7_e3() {
     run_scenario("sm_p3i7_e3");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i7_forms() {
     run_scenario("sm_p3i7_forms");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i7_options() {
     run_scenario("sm_p3i7_options");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i8_flat_view() {
     run_scenario("sm_p3i8_flat_view");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i8_legacy() {
     run_scenario("sm_p3i8_legacy");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i8_topdown() {
     run_scenario("sm_p3i8_topdown");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i9_form() {
     run_scenario("sm_p3i9_form");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_sm_p3i9_loft() {
     run_scenario("sm_p3i9_loft");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_surfacing_fill() {
     run_scenario("surfacing_fill");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_surfacing_helix() {
     run_scenario("surfacing_helix");
 }
 
 #[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs --test golden -- --ignored"]
 fn golden_surfacing_thicken() {
     run_scenario("surfacing_thicken");
 }

@@ -7,6 +7,7 @@ Onshape-style CAD in Rust + Bevy 0.19.1. Local notes in `docs/` (git-ignored: `P
 - Build in release everywhere so nothing builds twice: `cargo build -r`, `cargo test -r --workspace`,
   `cargo clippy --workspace --all-targets`.
 - Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`.
+- Golden screenshot tests are `#[ignore]`d (slow, GPU): `cargo test -r -p cadrs --test golden -- --ignored`.
 - Windowed run from a shell with no display: prefix `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`.
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
