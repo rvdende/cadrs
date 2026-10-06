@@ -2264,3 +2264,9 @@ fn golden_eda_library_browser() {
 fn golden_eda_power_monitor() {
     run_scenario("eda_power_monitor");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_schematic_editing() {
+    run_scenario("eda_schematic_editing");
+}

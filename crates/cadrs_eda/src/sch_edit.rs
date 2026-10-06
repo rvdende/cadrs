@@ -539,6 +539,223 @@ pub fn pin_at(sch: &Schematic, sheet: usize, p: Pt, tol: Nm) -> Option<(Uuid, St
     sch.sheets[sheet].symbols.iter().find_map(|s| sch.placed_pins(s).find(|(_, at)| at.dist(p) <= tol as f64).map(|(pin, at)| (s.id, pin.number.clone(), at)))
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Mirror, copy and paste, net highlighting
+
+/// Mirrors items about the vertical line through `center` (X: left for right) or, with `up_down`,
+/// the horizontal one (Y: top for bottom). A symbol keeps its anchor's mirrored place and turns
+/// over (its rotation negated, its mirror flag toggled; mirrored twice it is half turned).
+pub fn mirror_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt, up_down: bool) {
+    let m = |p: Pt| if up_down { Pt::new(p.x, 2 * center.y - p.y) } else { Pt::new(2 * center.x - p.x, p.y) };
+    let flip_text = |t: &mut Text| {
+        t.at = m(t.at);
+        let horizontal = t.angle.rem_euclid(180.0) < 1.0;
+        if horizontal != up_down {
+            t.style.h_align = match t.style.h_align {
+                crate::graphics::HAlign::Left => crate::graphics::HAlign::Right,
+                crate::graphics::HAlign::Right => crate::graphics::HAlign::Left,
+                c => c,
+            };
+        }
+    };
+    let sh = &mut sch.sheets[sheet];
+    for it in items {
+        match it {
+            SchItem::Symbol(id) => {
+                if let Some(s) = sh.symbols.iter_mut().find(|s| s.id == *id) {
+                    s.placement.at = m(s.placement.at);
+                    let (mirror, half) = match (s.placement.mirror, up_down) {
+                        (Mirror::None, false) => (Mirror::Y, false),
+                        (Mirror::None, true) => (Mirror::X, false),
+                        (Mirror::Y, false) | (Mirror::X, true) => (Mirror::None, false),
+                        (Mirror::X, false) | (Mirror::Y, true) => (Mirror::None, true),
+                    };
+                    s.placement.mirror = mirror;
+                    s.placement.angle = normalize_deg(-s.placement.angle + if half { 180.0 } else { 0.0 });
+                    s.fields.iter_mut().for_each(|f| flip_text(&mut f.text));
+                }
+            }
+            SchItem::Field(id, name) => {
+                if let Some(f) = sh.symbols.iter_mut().find(|s| s.id == *id).and_then(|s| s.field_mut(name)) {
+                    let at = f.text.at;
+                    flip_text(&mut f.text);
+                    f.text.at = at;
+                }
+            }
+            SchItem::Wire(id) => sh.wires.iter_mut().filter(|w| w.id == *id).for_each(|w| (w.a, w.b) = (m(w.a), m(w.b))),
+            SchItem::Bus(id) => sh.buses.iter_mut().filter(|w| w.id == *id).for_each(|w| (w.a, w.b) = (m(w.a), m(w.b))),
+            SchItem::Junction(id) => sh.junctions.iter_mut().filter(|j| j.id == *id).for_each(|j| j.at = m(j.at)),
+            SchItem::NoConnect(id) => sh.no_connects.iter_mut().filter(|j| j.id == *id).for_each(|j| j.at = m(j.at)),
+            SchItem::Label(id) => sh.labels.iter_mut().filter(|l| l.id == *id).for_each(|l| {
+                l.text.at = m(l.text.at);
+                // A label points the other way across its mirror.
+                let horizontal = l.text.angle.rem_euclid(180.0) < 1.0;
+                if horizontal != up_down {
+                    l.text.angle = normalize_deg(l.text.angle + 180.0);
+                }
+            }),
+            SchItem::Note(id) => sh.notes.iter_mut().filter(|n| n.id == *id).for_each(|n| flip_text(&mut n.text)),
+            SchItem::Drawing(id) => sh.drawings.iter_mut().filter(|n| n.id == *id).for_each(|n| n.shape.geom = n.shape.geom.map(m)),
+        }
+    }
+}
+
+/// Copied schematic items (Ctrl+C), relative to where they were copied from, with the
+/// definitions of their symbols (so they paste into another schematic too).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SchClip {
+    pub symbols: Vec<PlacedSymbol>,
+    pub definitions: Vec<Symbol>,
+    pub wires: Vec<Wire>,
+    pub junctions: Vec<Junction>,
+    pub no_connects: Vec<NoConnect>,
+    pub labels: Vec<Label>,
+    pub notes: Vec<Note>,
+    pub drawings: Vec<Drawing>,
+}
+
+impl SchClip {
+    pub fn is_empty(&self) -> bool {
+        self.symbols.is_empty() && self.wires.is_empty() && self.junctions.is_empty() && self.no_connects.is_empty() && self.labels.is_empty() && self.notes.is_empty() && self.drawings.is_empty()
+    }
+}
+
+/// Copies `items`; their positions are kept relative to `origin` (on the grid).
+pub fn copy_items(sch: &Schematic, sheet: usize, items: &[SchItem], origin: Pt) -> SchClip {
+    let mut c = SchClip::default();
+    let d = Pt::ZERO - snap(origin, SCHEMATIC_GRID);
+    let sh = &sch.sheets[sheet];
+    let mut tmp = Schematic { symbols: vec![], sheets: vec![Sheet::default()] };
+    for it in items {
+        match it {
+            SchItem::Symbol(id) => {
+                if let Some(s) = sh.symbols.iter().find(|s| s.id == *id) {
+                    tmp.sheets[0].symbols.push(s.clone());
+                    if let Some(def) = sch.symbol(&s.symbol)
+                        && !c.definitions.iter().any(|x| x.id == def.id)
+                    {
+                        c.definitions.push(def.clone());
+                    }
+                }
+            }
+            SchItem::Wire(id) => tmp.sheets[0].wires.extend(sh.wires.iter().filter(|w| w.id == *id).cloned()),
+            SchItem::Junction(id) => tmp.sheets[0].junctions.extend(sh.junctions.iter().filter(|w| w.id == *id).cloned()),
+            SchItem::NoConnect(id) => tmp.sheets[0].no_connects.extend(sh.no_connects.iter().filter(|w| w.id == *id).cloned()),
+            SchItem::Label(id) => tmp.sheets[0].labels.extend(sh.labels.iter().filter(|w| w.id == *id).cloned()),
+            SchItem::Note(id) => tmp.sheets[0].notes.extend(sh.notes.iter().filter(|w| w.id == *id).cloned()),
+            SchItem::Drawing(id) => tmp.sheets[0].drawings.extend(sh.drawings.iter().filter(|w| w.id == *id).cloned()),
+            _ => {}
+        }
+    }
+    let all: Vec<SchItem> = everything(&tmp, 0);
+    move_items(&mut tmp, 0, &all, d, false);
+    let s = tmp.sheets.remove(0);
+    (c.symbols, c.wires, c.junctions, c.no_connects, c.labels, c.notes, c.drawings) = (s.symbols, s.wires, s.junctions, s.no_connects, s.labels, s.notes, s.drawings);
+    c
+}
+
+/// Every item of a sheet.
+pub fn everything(sch: &Schematic, sheet: usize) -> Vec<SchItem> {
+    let sh = &sch.sheets[sheet];
+    let mut v: Vec<SchItem> = sh.symbols.iter().map(|x| SchItem::Symbol(x.id)).collect();
+    v.extend(sh.wires.iter().map(|x| SchItem::Wire(x.id)));
+    v.extend(sh.buses.iter().map(|x| SchItem::Bus(x.id)));
+    v.extend(sh.junctions.iter().map(|x| SchItem::Junction(x.id)));
+    v.extend(sh.no_connects.iter().map(|x| SchItem::NoConnect(x.id)));
+    v.extend(sh.labels.iter().map(|x| SchItem::Label(x.id)));
+    v.extend(sh.notes.iter().map(|x| SchItem::Note(x.id)));
+    v.extend(sh.drawings.iter().map(|x| SchItem::Drawing(x.id)));
+    v
+}
+
+/// Pastes `clip` with its origin at `at` (snapped): new ids, symbols annotated on from the
+/// schematic's references, definitions added when missing. Returns the new items (the
+/// selection after a paste).
+pub fn paste(sch: &mut Schematic, sheet: usize, clip: &SchClip, at: Pt) -> Vec<SchItem> {
+    for def in &clip.definitions {
+        if sch.symbol(&def.id).is_none() {
+            sch.symbols.push(def.clone());
+        }
+    }
+    let d = snap(at, SCHEMATIC_GRID) - Pt::ZERO;
+    let mut out = vec![];
+    let mut tmp = Schematic { symbols: vec![], sheets: vec![Sheet::default()] };
+    {
+        let t = &mut tmp.sheets[0];
+        t.symbols = clip.symbols.clone();
+        t.wires = clip.wires.clone();
+        t.junctions = clip.junctions.clone();
+        t.no_connects = clip.no_connects.clone();
+        t.labels = clip.labels.clone();
+        t.notes = clip.notes.clone();
+        t.drawings = clip.drawings.clone();
+    }
+    let all = everything(&tmp, 0);
+    move_items(&mut tmp, 0, &all, d, false);
+    let t = tmp.sheets.remove(0);
+    for mut s in t.symbols {
+        s.id = Uuid::new_v4();
+        s.pin_ids.iter_mut().for_each(|(_, id)| *id = Uuid::new_v4());
+        let pre = prefix(s.reference()).to_string();
+        // Annotated on from what the schematic has (C2 pasted beside C1 becomes C3).
+        let r = next_reference(sch, &pre);
+        if let Some(f) = s.field_mut(fields::REFERENCE) {
+            f.text.text = r;
+        }
+        out.push(SchItem::Symbol(s.id));
+        sch.sheets[sheet].symbols.push(s);
+    }
+    let sh = &mut sch.sheets[sheet];
+    for mut w in t.wires {
+        w.id = Uuid::new_v4();
+        out.push(SchItem::Wire(w.id));
+        sh.wires.push(w);
+    }
+    for mut j in t.junctions {
+        j.id = Uuid::new_v4();
+        out.push(SchItem::Junction(j.id));
+        sh.junctions.push(j);
+    }
+    for mut n in t.no_connects {
+        n.id = Uuid::new_v4();
+        out.push(SchItem::NoConnect(n.id));
+        sh.no_connects.push(n);
+    }
+    for mut l in t.labels {
+        l.id = Uuid::new_v4();
+        out.push(SchItem::Label(l.id));
+        sh.labels.push(l);
+    }
+    for mut n in t.notes {
+        n.id = Uuid::new_v4();
+        out.push(SchItem::Note(n.id));
+        sh.notes.push(n);
+    }
+    for mut n in t.drawings {
+        n.id = Uuid::new_v4();
+        out.push(SchItem::Drawing(n.id));
+        sh.drawings.push(n);
+    }
+    out
+}
+
+/// The net under `p` (a wire, a pin or a label there) as the items to highlight: its wires,
+/// labels and the junctions on them. With the net's name.
+pub fn net_items_at(sch: &Schematic, sheet: usize, p: Pt, tol: Nm) -> Option<(String, Vec<SchItem>)> {
+    let nl = crate::connectivity::netlist(sch);
+    let sh = &sch.sheets[sheet];
+    let wire = sh.wires.iter().find(|w| seg_dist(p, w.a, w.b) <= tol as f64).map(|w| w.id);
+    let net = nl.nets.iter().find(|n| {
+        wire.is_some_and(|w| n.wires.contains(&(sheet, w))) || n.pins.iter().any(|q| q.sheet == sheet && q.at.dist(p) <= tol as f64)
+    })?;
+    let wires: Vec<Uuid> = net.wires.iter().filter(|(s, _)| *s == sheet).map(|(_, w)| *w).collect();
+    let mut items: Vec<SchItem> = wires.iter().map(|w| SchItem::Wire(*w)).collect();
+    let on = |q: Pt| sh.wires.iter().filter(|w| wires.contains(&w.id)).any(|w| crate::connectivity::on_segment(q, w.a, w.b));
+    items.extend(sh.labels.iter().filter(|l| on(l.text.at) || net.labels.contains(&l.text.text)).map(|l| SchItem::Label(l.id)));
+    items.extend(sh.junctions.iter().filter(|j| on(j.at)).map(|j| SchItem::Junction(j.id)));
+    Some((net.name.clone(), items))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,5 +821,47 @@ mod tests {
         assert_eq!(enclosed.iter().filter(|i| matches!(i, SchItem::Wire(_))).count(), 1);
         let crossing = box_select(&s, 0, Bounds { min: Pt::mm(-1.0, -1.0), max: Pt::mm(14.0, 14.0) }, true);
         assert_eq!(crossing.iter().filter(|i| matches!(i, SchItem::Wire(_))).count(), 2);
+    }
+
+    #[test]
+    fn mirror_copy_paste_and_net_highlight() {
+        let lib = crate::library::LibraryTable::builtin();
+        let mut s = Schematic { symbols: vec![], sheets: vec![Sheet::default()] };
+        let led = place_symbol(&mut s, 0, lib.symbol("Device:LED").unwrap(), Pt::mm(50.8, 50.8), Uuid::new_v4());
+        let pins = |s: &Schematic| {
+            let mut v: Vec<(String, Pt)> = s.placed_pins(&s.sheets[0].symbols[0]).map(|(p, at)| (p.number.clone(), at)).collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+        let before = pins(&s);
+        // Left for right: the cathode (pin 1, left) goes right.
+        mirror_items(&mut s, 0, &[SchItem::Symbol(led)], Pt::mm(50.8, 50.8), false);
+        let after = pins(&s);
+        assert_eq!(after[0].1, Pt::mm(50.8 + 3.81, 50.8));
+        assert_eq!(after[1].1, Pt::mm(50.8 - 3.81, 50.8));
+        // Twice is back where it was; X then Y is a half turn.
+        mirror_items(&mut s, 0, &[SchItem::Symbol(led)], Pt::mm(50.8, 50.8), false);
+        assert_eq!(pins(&s), before);
+        mirror_items(&mut s, 0, &[SchItem::Symbol(led)], Pt::mm(50.8, 50.8), false);
+        mirror_items(&mut s, 0, &[SchItem::Symbol(led)], Pt::mm(50.8, 50.8), true);
+        assert_eq!(s.sheets[0].symbols[0].placement.mirror, Mirror::None);
+        assert_eq!(s.sheets[0].symbols[0].placement.angle, 180.0);
+
+        // A wire from the anode; copy both and paste them 25.4 mm up.
+        let anode = pins(&s)[1].1;
+        let w = add_wire(&mut s, 0, &[anode, Pt::mm(30.48, 50.8)]);
+        let items = vec![SchItem::Symbol(led), SchItem::Wire(w[0])];
+        let clip = copy_items(&s, 0, &items, Pt::mm(50.8, 50.8));
+        assert_eq!((clip.symbols.len(), clip.wires.len(), clip.definitions.len()), (1, 1, 1));
+        let pasted = paste(&mut s, 0, &clip, Pt::mm(50.8, 76.2));
+        assert_eq!(pasted.len(), 2);
+        let refs: Vec<&str> = s.sheets[0].symbols.iter().map(|x| x.reference()).collect();
+        assert_eq!(refs, ["D1", "D2"]);
+        assert!(s.sheets[0].wires.iter().any(|x| x.a.y == Pt::mm(0.0, 76.2).y));
+
+        // The net under the first wire: that wire alone.
+        let (name, hl) = net_items_at(&s, 0, Pt::mm(40.0, 50.8), crate::units::mm(0.5)).unwrap();
+        assert_eq!(name, "unconnected-(D1-A-Pad2)");
+        assert_eq!(hl, vec![SchItem::Wire(w[0])]);
     }
 }

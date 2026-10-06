@@ -34,6 +34,8 @@ pub struct Net {
     pub labels: Vec<String>,
     /// Has a no-connect flag.
     pub no_connect: bool,
+    /// Its wires (sheet, wire id).
+    pub wires: Vec<(usize, Uuid)>,
 }
 
 impl Net {
@@ -99,7 +101,7 @@ enum Node {
     Label { text: String, global: bool, sheet: usize },
     PowerName(String),
     NoConnect,
-    Wire,
+    Wire(usize, Uuid),
 }
 
 /// The schematic's nets.
@@ -113,7 +115,7 @@ pub fn netlist(sch: &Schematic) -> Netlist {
     };
     for (si, sheet) in sch.sheets.iter().enumerate() {
         // Wire segments.
-        let wires: Vec<(usize, Pt, Pt)> = sheet.wires.iter().map(|w| (add(Node::Wire, &mut dsu), w.a, w.b)).collect();
+        let wires: Vec<(usize, Pt, Pt)> = sheet.wires.iter().map(|w| (add(Node::Wire(si, w.id), &mut dsu), w.a, w.b)).collect();
         // Points that join: each connection point with the node it belongs to.
         let mut points: Vec<(Pt, usize, bool)> = vec![]; // (where, node, may join a wire's middle)
         for &(n, a, b) in &wires {
@@ -203,7 +205,7 @@ pub fn netlist(sch: &Schematic) -> Netlist {
     let mut local_name: HashMap<usize, String> = HashMap::new();
     for (i, node) in nodes.iter().enumerate() {
         let root = dsu.find(i);
-        let net = groups.entry(root).or_insert_with(|| Net { name: String::new(), pins: vec![], labels: vec![], no_connect: false });
+        let net = groups.entry(root).or_insert_with(|| Net { name: String::new(), pins: vec![], labels: vec![], no_connect: false, wires: vec![] });
         match node {
             Node::Pin(p) => net.pins.push(p.clone()),
             Node::Label { text, global, .. } => {
@@ -215,7 +217,7 @@ pub fn netlist(sch: &Schematic) -> Netlist {
                 power_name.entry(root).or_insert_with(|| n.clone());
             }
             Node::NoConnect => net.no_connect = true,
-            Node::Wire => {}
+            Node::Wire(s, id) => net.wires.push((*s, *id)),
         }
     }
     let mut nets: Vec<Net> = vec![];

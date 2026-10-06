@@ -96,6 +96,90 @@ fn accept_label(w: &mut World) {
     }
 }
 
+
+/// Ctrl+L: a global label's name (it joins every sheet's net of that name).
+pub fn open_global_label(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-glabel-dialog")
+            .title("Global label")
+            .width(440.0)
+            .body(move |b| text_row(b, &t, "Label", "eda-glabel-text", ""))
+            .footer(move |f| ok_cancel(f, &tf, "eda-glabel-ok", accept_global_label)),
+    );
+}
+
+fn accept_global_label(w: &mut World) {
+    let text = ui::text_value(w, "eda-glabel-text").trim().to_string();
+    close_all(w);
+    if !text.is_empty() {
+        set_tool(w, Tool::GlobalLabel(text));
+    }
+}
+
+/// T: a text note's words.
+pub fn open_text(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-text-dialog")
+            .title("Text")
+            .width(440.0)
+            .body(move |b| text_row(b, &t, "Text", "eda-text-text", ""))
+            .footer(move |f| ok_cancel(f, &tf, "eda-text-ok", accept_text)),
+    );
+}
+
+fn accept_text(w: &mut World) {
+    let text = ui::text_value(w, "eda-text-text").trim().to_string();
+    close_all(w);
+    if !text.is_empty() {
+        set_tool(w, Tool::Text(text));
+    }
+}
+
+/// Ctrl+F: a symbol by its reference or value; found, it is selected and centred.
+pub fn open_find(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-find-dialog")
+            .title("Find")
+            .width(440.0)
+            .body(move |b| text_row(b, &t, "Reference or value", "eda-find-text", ""))
+            .footer(move |f| ok_cancel(f, &tf, "eda-find-ok", accept_find)),
+    );
+}
+
+fn accept_find(w: &mut World) {
+    let text = ui::text_value(w, "eda-find-text").trim().to_lowercase();
+    close_all(w);
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let sh = &d.schematic.sheets[0];
+    let hit = sh
+        .symbols
+        .iter()
+        .find(|s| s.reference().to_lowercase() == text)
+        .or_else(|| sh.symbols.iter().find(|s| s.value().to_lowercase().contains(&text)))
+        .map(|s| (s.id, s.placement.at));
+    match hit {
+        Some((id, at)) => {
+            w.resource_mut::<super::schematic_tools::SchState>().selection = vec![se::SchItem::Symbol(id)];
+            let key = w.resource::<super::Eda2d>().0;
+            if let Some(k) = key
+                && let Some(v) = w.resource_mut::<super::EdaUi>().views.get_mut(&k)
+            {
+                v.0.center = [at.x as f64, at.y as f64];
+                v.1 = false;
+            }
+        }
+        None => ui::toast(w, &format!("Nothing matches \u{201c}{text}\u{201d}")),
+    }
+}
 // ---------------------------------------------------------------------------------------------
 // Symbol properties (E)
 

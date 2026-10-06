@@ -8,6 +8,10 @@
 //! - **A** the library browser ([`super::browser`]), **P** the same for power symbols; the
 //!   chosen symbol follows the pointer and a click places it (annotated).
 //! - **W** wire: click, click, … ; double-click (or a click on a pin or wire) ends; Esc cancels.
+//! - **X** / **Y** mirror the selection left for right / top for bottom; **Ctrl+C** copies,
+//!   **Ctrl+V** pastes and **Ctrl+D** duplicates (both follow the pointer to a click);
+//!   **Ctrl+L** a global label, **T** a text note; **`** highlights the net under the pointer
+//!   (again, or Esc: off); **Ctrl+F** finds a symbol by reference or value.
 //! - **L** net label (its name asked first), **Q** no-connect flag.
 //! - The strip: those tools, Annotate, Assign footprints, ERC, BOM export, Page settings.
 //!
@@ -54,6 +58,12 @@ pub enum Tool {
     /// A label of this name, placed on the next click.
     Label(String),
     NoConnect,
+    /// Copied or duplicated items following the pointer, pasted on the next click.
+    Paste(Box<se::SchClip>),
+    /// A global label of this name, placed on the next click.
+    GlobalLabel(String),
+    /// A text note, placed on the next click.
+    Text(String),
 }
 
 impl Tool {
@@ -65,6 +75,9 @@ impl Tool {
             Tool::Wire(_) => "wire",
             Tool::Label(_) => "label",
             Tool::NoConnect => "noconnect",
+            Tool::Paste(_) => "paste",
+            Tool::GlobalLabel(_) => "label",
+            Tool::Text(_) => "text",
         }
     }
 }
@@ -87,6 +100,10 @@ pub struct SchState {
     pub moving: Option<Moving>,
     /// A box selection started here.
     pub boxing: Option<Pt>,
+    /// What Ctrl+C copied.
+    pub clipboard: Option<se::SchClip>,
+    /// The net highlighted (` on a wire or pin): its name and items.
+    pub net: Option<(String, Vec<SchItem>)>,
 }
 
 pub fn register(app: &mut App) {
@@ -260,6 +277,32 @@ fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
                 Ok(())
             });
         }
+        Tool::Paste(clip) => {
+            let mut pasted = vec![];
+            ui::commit(w, "Paste", |d| {
+                pasted = se::paste(&mut d.schematic, 0, &clip, at);
+                se::fix_junctions(&mut d.schematic, 0);
+                Ok(())
+            });
+            set_tool(w, Tool::Select);
+            w.resource_mut::<SchState>().selection = pasted;
+        }
+        Tool::GlobalLabel(text) => {
+            let at = snap(at);
+            ui::commit(w, "Add global label", |d| {
+                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Global(Default::default()));
+                Ok(())
+            });
+            set_tool(w, Tool::Select);
+        }
+        Tool::Text(text) => {
+            let at = snap(at);
+            ui::commit(w, "Add text", |d| {
+                se::add_note(&mut d.schematic, 0, &text, at);
+                Ok(())
+            });
+            set_tool(w, Tool::Select);
+        }
     }
 }
 
@@ -347,23 +390,72 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
     let held = world.resource::<ButtonInput<KeyCode>>().clone();
     let (ctrl, shift) = (held.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]), held.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
     for k in keys {
-        if k.state != ButtonState::Pressed || ctrl {
+        if k.state != ButtonState::Pressed {
             continue;
         }
         let pointer = world.resource::<EdaPointer>().at;
         let sel = world.resource::<SchState>().selection.clone();
+        if ctrl {
+            match k.key_code {
+                // Copy (from under the pointer); paste or duplicate follow the pointer.
+                KeyCode::KeyC | KeyCode::KeyD => {
+                    let items = if sel.is_empty() { hit_items(world, pointer) } else { sel };
+                    let Some((_, _, d)) = ui::current(world) else { continue };
+                    let clip = se::copy_items(&d.schematic, 0, &items, pointer);
+                    if clip.is_empty() {
+                        continue;
+                    }
+                    if k.key_code == KeyCode::KeyD {
+                        set_tool(world, Tool::Paste(Box::new(clip)));
+                    } else {
+                        world.resource_mut::<SchState>().clipboard = Some(clip);
+                    }
+                }
+                KeyCode::KeyV => {
+                    if let Some(clip) = world.resource::<SchState>().clipboard.clone() {
+                        set_tool(world, Tool::Paste(Box::new(clip)));
+                    }
+                }
+                KeyCode::KeyL => dialogs::open_global_label(world),
+                KeyCode::KeyF => dialogs::open_find(world),
+                _ => {}
+            }
+            continue;
+        }
         match k.key_code {
             KeyCode::Escape => {
                 let had = !matches!(world.resource::<SchState>().tool, Tool::Select) || world.resource::<SchState>().moving.is_some();
                 set_tool(world, Tool::Select);
                 if !had {
                     world.resource_mut::<SchState>().selection.clear();
+                    world.resource_mut::<SchState>().net = None;
                 }
             }
             KeyCode::KeyA if !shift => run_action(world, "symbol"),
             KeyCode::KeyP => run_action(world, "power"),
             KeyCode::KeyW => run_action(world, "wire"),
             KeyCode::KeyL => run_action(world, "label"),
+            KeyCode::KeyT => dialogs::open_text(world),
+            // Mirror the selection (or what is under the pointer) left for right, or top for bottom.
+            KeyCode::KeyX | KeyCode::KeyY => {
+                let items = if sel.is_empty() { hit_items(world, pointer) } else { sel };
+                if !items.is_empty() {
+                    let up_down = k.key_code == KeyCode::KeyY;
+                    ui::commit(world, "Mirror", |d| {
+                        let c = snap(se::selection_center(&d.schematic, 0, &items));
+                        se::mirror_items(&mut d.schematic, 0, &items, c, up_down);
+                        se::fix_junctions(&mut d.schematic, 0);
+                        Ok(())
+                    });
+                }
+            }
+            // Highlight the net under the pointer (again: off).
+            KeyCode::Backquote => {
+                let tol = tolerance(world);
+                let found = ui::current(world).and_then(|(_, _, d)| se::net_items_at(&d.schematic, 0, pointer, tol));
+                let mut s = world.resource_mut::<SchState>();
+                s.net = if found.as_ref().map(|f| &f.0) == s.net.as_ref().map(|n| &n.0) { None } else { found };
+            }
             KeyCode::KeyQ => run_action(world, "noconnect"),
             KeyCode::KeyM | KeyCode::KeyG => {
                 let items = if sel.is_empty() { hit_items(world, pointer) } else { sel };
@@ -449,6 +541,18 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
                 se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Local);
                 Some(d)
             }
+            Tool::GlobalLabel(text) => {
+                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Global(Default::default()));
+                Some(d)
+            }
+            Tool::Text(text) => {
+                se::add_note(&mut d.schematic, 0, &text, at);
+                Some(d)
+            }
+            Tool::Paste(clip) => {
+                se::paste(&mut d.schematic, 0, &clip, at);
+                Some(d)
+            }
             _ => None,
         }
     };
@@ -460,8 +564,13 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
 
 /// The selection shown highlighted.
 fn publish(s: Res<SchState>, mut inputs: ResMut<SceneInputs>) {
-    if inputs.sch_highlight != s.selection {
-        inputs.sch_highlight = s.selection.clone();
+    // The selection, and the highlighted net.
+    let mut hl = s.selection.clone();
+    if let Some((_, items)) = &s.net {
+        hl.extend(items.iter().filter(|i| !s.selection.contains(i)).cloned());
+    }
+    if inputs.sch_highlight != hl {
+        inputs.sch_highlight = hl;
     }
 }
 
