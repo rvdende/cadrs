@@ -138,6 +138,10 @@ impl Symbol {
         self.fields.iter().find(|f| f.name == name)
     }
 
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut Field> {
+        self.fields.iter_mut().find(|f| f.name == name)
+    }
+
     /// The pins drawn for `unit` in body `style`.
     pub fn unit_pins(&self, unit: u32, style: u32) -> impl Iterator<Item = &Pin> {
         self.pins.iter().filter(move |p| (p.unit == 0 || p.unit == unit) && (p.style == 0 || p.style == style))

@@ -18,6 +18,7 @@ pub mod drc;
 pub mod expr;
 pub mod fab;
 pub mod lib_edit;
+pub mod model3d;
 pub mod erc;
 pub mod font;
 pub mod getting_started;

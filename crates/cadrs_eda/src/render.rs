@@ -508,6 +508,26 @@ pub fn to_svg(d: &DrawList) -> String {
 }
 
 /// Faint cross-hairs through the origin, for the part editors.
+/// An editor view ([`symbol_view`], [`footprint_view`]) as a thumbnail: without the origin
+/// axes, its box just around what is drawn (`margin` out).
+pub fn tight(mut d: DrawList, margin: Nm) -> DrawList {
+    let axis = |l: &Line| l.pts.len() == 2 && l.width == 0 && (l.pts[0].x == -l.pts[1].x && l.pts[0].y == 0 && l.pts[1].y == 0 || l.pts[0].y == -l.pts[1].y && l.pts[0].x == 0 && l.pts[1].x == 0) && l.pts[0] != l.pts[1];
+    d.lines.retain(|l| !axis(l));
+    let mut b: Option<Bounds> = None;
+    for l in &d.lines {
+        for p in &l.pts {
+            b = Some(Bounds::union(b, Bounds::of(*p).grow(l.width / 2)));
+        }
+    }
+    for a in &d.areas {
+        for t in &a.tris {
+            b = Some(Bounds::union(b, Bounds::of(Pt::new(t[0] as Nm, t[1] as Nm))));
+        }
+    }
+    d.bounds = b.map(|b| b.grow(margin));
+    d
+}
+
 fn origin_axes(d: &mut DrawList, color: Rgba, reach: Nm) {
     d.line(color, 0, vec![Pt::new(-reach, 0), Pt::new(reach, 0)]);
     d.line(color, 0, vec![Pt::new(0, -reach), Pt::new(0, reach)]);

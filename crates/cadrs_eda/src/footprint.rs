@@ -141,6 +141,17 @@ pub struct Model3d {
     pub scale: [f64; 3],
     pub visible: bool,
     pub opacity: f64,
+    /// A generated body ([`crate::model3d`]): shown when there is no model file to load (the
+    /// built-in footprints have one each).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<crate::model3d::Body>,
+}
+
+impl Model3d {
+    /// A model from a file `source`, as it sits by default.
+    pub fn file(source: &str) -> Model3d {
+        Model3d { source: source.into(), blob: None, offset: [0.0; 3], rotation: [0.0; 3], scale: [1.0; 3], visible: true, opacity: 1.0, body: None }
+    }
 }
 
 /// What a footprint is for.

@@ -13,6 +13,7 @@
 //!
 //! Names: `eda-mode-schematic`, `eda-mode-layout`, `eda-mode-3d` (the switch).
 
+pub mod browser;
 pub mod layout_tools;
 mod lay_dialogs;
 mod part_dialogs;
@@ -192,6 +193,7 @@ impl Plugin for EdaPlugin {
         schematic_tools::register(app);
         layout_tools::register(app);
         part_tools::register(app);
+        browser::register(app);
     }
 }
 

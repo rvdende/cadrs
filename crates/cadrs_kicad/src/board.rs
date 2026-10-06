@@ -376,6 +376,7 @@ fn read_footprint(f: &Sexp, net: &impl Fn(&Sexp) -> String, warnings: &mut Vec<S
                 scale: xyz(c, "scale").unwrap_or([1.0; 3]),
                 visible: c.flag("hide") != Some(true),
                 opacity: c.get_f64("opacity").unwrap_or(1.0),
+                body: None,
             }),
             "zone" => {
                 // Footprint zones are stored in board coordinates.

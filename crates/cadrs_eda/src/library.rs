@@ -124,6 +124,29 @@ impl LibraryTable {
     pub fn footprints(&self) -> impl Iterator<Item = &Footprint> {
         self.ordered().flat_map(|l| &l.footprints)
     }
+
+    /// Footprints matching `filter` (every word in the id, keywords or description, any case)
+    /// and, when `globs` has any, one of those footprint filters (a symbol's: `R_*`,
+    /// `Connector*:*_1x??_*`) on the name or the full id. Exact name matches first.
+    pub fn search_footprints(&self, filter: &str, globs: &[String]) -> Vec<&Footprint> {
+        let words: Vec<String> = filter.split_whitespace().map(str::to_lowercase).collect();
+        let mut hits: Vec<&Footprint> = self
+            .footprints()
+            .filter(|f| globs.is_empty() || globs.iter().any(|g| glob(g, f.name()) || glob(g, &f.id)))
+            .filter(|f| {
+                let hay = format!("{} {} {}", f.id, f.keywords, f.description).to_lowercase();
+                words.iter().all(|w| hay.contains(w))
+            })
+            .collect();
+        let f = filter.trim().to_lowercase();
+        hits.sort_by_key(|x| (x.name().to_lowercase() != f, !x.name().to_lowercase().starts_with(&f), x.id.clone()));
+        hits
+    }
+
+    /// The enabled libraries in lookup order (project ones first).
+    pub fn enabled(&self) -> impl Iterator<Item = &Library> {
+        self.ordered()
+    }
 }
 
 /// Glob match with `*` and `?`, ignoring case (footprint filters).
@@ -170,5 +193,17 @@ mod tests {
         let hits = t.search_symbols("r", false);
         assert_eq!(hits[0].name(), "R");
         assert!(t.search_symbols("", true).iter().all(|s| s.power));
+    }
+
+    #[test]
+    fn footprint_search_takes_symbol_filters() {
+        let t = LibraryTable::builtin();
+        let r = t.symbol("Device:R").unwrap();
+        let hits = t.search_footprints("0805", &r.footprint_filters);
+        assert!(!hits.is_empty() && hits.iter().all(|f| f.name().starts_with("R_")), "{:?}", hits.iter().map(|f| &f.id).collect::<Vec<_>>());
+        let conn = t.symbol("Connector:Conn_01x04").unwrap();
+        let hits = t.search_footprints("", &conn.footprint_filters);
+        assert!(hits.iter().any(|f| f.name() == "PinHeader_1x04_P2.54mm_Vertical"));
+        assert!(hits.iter().all(|f| f.name().contains("_1x")));
     }
 }

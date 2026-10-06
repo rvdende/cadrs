@@ -5,8 +5,8 @@
 //!   inside, right to left what the box touches; dragging a selected item moves it with its
 //!   wires attached. **M** moves the selection (wires stay), **G** drags it (wires follow),
 //!   **R** rotates it, **Del** deletes it, **E** edits the symbol's fields.
-//! - **A** the symbol chooser, **P** the power chooser; the chosen symbol follows the pointer
-//!   and a click places it (annotated).
+//! - **A** the library browser ([`super::browser`]), **P** the same for power symbols; the
+//!   chosen symbol follows the pointer and a click places it (annotated).
 //! - **W** wire: click, click, … ; double-click (or a click on a pin or wire) ends; Esc cancels.
 //! - **L** net label (its name asked first), **Q** no-connect flag.
 //! - The strip: those tools, Annotate, Assign footprints, ERC, BOM export, Page settings.
@@ -17,14 +17,11 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 
-use bevy::ui_widgets::{Activate, observe};
 use cadrs_eda::Design;
 use cadrs_eda::sch_edit::{self as se, SchItem};
 use cadrs_eda::schematic::LabelKind;
 use cadrs_eda::symbol::Symbol;
 use cadrs_eda::units::{Bounds, Pt, SCHEMATIC_GRID, mm};
-use cadrs_ui::prelude::*;
-use cadrs_ui::{Dialog, TextSubmit};
 
 use super::ui::{self, StripAction};
 use super::{EdaClick, EdaPointer, Mode, Preview, SceneInputs};
@@ -33,15 +30,15 @@ use crate::AppState;
 const STRIP: ui::StripSpec = &[
     Some(("sch-select", "drag-handle", "Select (Esc)", "select")),
     None,
-    Some(("sch-add-symbol", "chip", "Add a symbol (A)", "symbol")),
-    Some(("sch-add-power", "plus", "Add a power symbol (P)", "power")),
-    Some(("sch-wire", "line", "Add a wire (W)", "wire")),
-    Some(("sch-label", "text", "Add a net label (L)", "label")),
-    Some(("sch-no-connect", "close", "Add a no-connect flag (Q)", "noconnect")),
+    Some(("sch-add-symbol", "add-symbol", "Add a symbol (A)", "symbol")),
+    Some(("sch-add-power", "add-power", "Add a power symbol (P)", "power")),
+    Some(("sch-wire", "wire", "Add a wire (W)", "wire")),
+    Some(("sch-label", "net-label", "Add a net label (L)", "label")),
+    Some(("sch-no-connect", "no-connect", "Add a no-connect flag (Q)", "noconnect")),
     None,
-    Some(("sch-annotate", "tag", "Fill in reference designators", "annotate")),
-    Some(("sch-assign", "link", "Assign footprints", "assign")),
-    Some(("sch-erc", "diagnostics", "Electrical rules check", "erc")),
+    Some(("sch-annotate", "annotate", "Fill in reference designators", "annotate")),
+    Some(("sch-assign", "assign-footprints", "Assign footprints", "assign")),
+    Some(("sch-erc", "erc", "Electrical rules check", "erc")),
     Some(("sch-bom", "bill-of-materials", "Bill of materials", "bom")),
     Some(("sch-page", "properties", "Page settings", "page")),
 ];
@@ -90,8 +87,6 @@ pub struct SchState {
     pub moving: Option<Moving>,
     /// A box selection started here.
     pub boxing: Option<Pt>,
-    /// The chooser lists power symbols only.
-    pub chooser_power: bool,
 }
 
 pub fn register(app: &mut App) {
@@ -99,8 +94,6 @@ pub fn register(app: &mut App) {
         Update,
         (strip, on_strip, on_click, on_keys, follow_pointer, publish).chain().after(super::navigate).run_if(in_state(AppState::Document)),
     );
-    app.add_systems(Update, chooser::refresh.run_if(in_state(AppState::Document)));
-    app.add_observer(chooser::on_row).add_observer(chooser::on_submit);
     super::sch_dialogs::register(app);
 }
 
@@ -136,8 +129,8 @@ fn on_strip(mut actions: MessageReader<StripAction>, mut commands: Commands) {
 pub fn run_action(w: &mut World, action: &str) {
     match action {
         "select" => set_tool(w, Tool::Select),
-        "symbol" => chooser::open(w, false),
-        "power" => chooser::open(w, true),
+        "symbol" => super::browser::open(w, super::browser::Kind::Symbols { power: false }, super::browser::Purpose::Place),
+        "power" => super::browser::open(w, super::browser::Kind::Symbols { power: true }, super::browser::Purpose::Place),
         "wire" => set_tool(w, Tool::Wire(vec![])),
         "label" => dialogs::open_label(w),
         "noconnect" => set_tool(w, Tool::NoConnect),
@@ -473,133 +466,6 @@ fn publish(s: Res<SchState>, mut inputs: ResMut<SceneInputs>) {
 }
 
 // ---------------------------------------------------------------------------------------------
-
-/// The symbol chooser (A, P): a filter field, the matching symbols, OK.
-pub mod chooser {
-    use super::*;
-
-    #[derive(Component)]
-    pub struct Chooser;
-
-    #[derive(Component)]
-    pub struct ChooserList;
-
-    #[derive(Component, Clone)]
-    pub struct ChooserRow(pub String);
-
-    #[derive(Resource, Default)]
-    pub struct ChooserState {
-        pub filter: Option<String>,
-        pub chosen: Option<String>,
-    }
-
-    pub fn open(w: &mut World, power: bool) {
-        w.resource_mut::<SchState>().chooser_power = power;
-        w.init_resource::<ChooserState>();
-        *w.resource_mut::<ChooserState>() = ChooserState::default();
-        let theme = w.resource::<Theme>().clone();
-        let (tb, tf) = (theme.clone(), theme.clone());
-        w.spawn((
-            Dialog::new("eda-chooser")
-                .title(if power { "Choose a power symbol" } else { "Choose a symbol" })
-                .width(460.0)
-                .body(move |b| {
-                    b.spawn(TextInput::new("eda-chooser-filter").placeholder("Filter").width(Val::Percent(100.0)).height(28.0).build(&tb));
-                    b.spawn((
-                        Name::new("eda-chooser-list"),
-                        ChooserList,
-                        Node { flex_direction: FlexDirection::Column, height: Val::Px(300.0), overflow: Overflow::scroll_y(), margin: UiRect::top(Val::Px(6.0)), ..default() },
-                    ));
-                })
-                .footer(move |f| {
-                    f.spawn((
-                        cadrs_ui::Button::new("eda-chooser-ok").label("OK").primary().build(&tf),
-                        observe(|_: On<Activate>, mut commands: Commands| {
-                            commands.queue(accept);
-                        }),
-                    ));
-                    f.spawn((
-                        cadrs_ui::Button::new("eda-chooser-cancel").label("Cancel").build(&tf),
-                        observe(|_: On<Activate>, mut commands: Commands| {
-                            commands.queue(close);
-                        }),
-                    ));
-                })
-                .build(&theme),
-            Chooser,
-            DespawnOnExit(AppState::Document),
-        ));
-    }
-
-    pub fn close(w: &mut World) {
-        let mut q = w.query_filtered::<Entity, With<Chooser>>();
-        let es: Vec<Entity> = q.iter(w).collect();
-        for e in es {
-            w.entity_mut(e).despawn();
-        }
-    }
-
-    fn accept(w: &mut World) {
-        let chosen = w.get_resource::<ChooserState>().and_then(|s| s.chosen.clone());
-        let lib = ui::libraries(w);
-        let filter = ui::text_value(w, "eda-chooser-filter");
-        let power = w.resource::<SchState>().chooser_power;
-        let sym = chosen.and_then(|id| lib.symbol(&id).cloned()).or_else(|| lib.search_symbols(&filter, power).first().map(|s| (*s).clone()));
-        close(w);
-        if let Some(sym) = sym {
-            set_tool(w, Tool::Place(Box::new(sym)));
-        }
-    }
-
-    /// Rebuilds the list when the filter changes.
-    pub fn refresh(world: &mut World) {
-        let mut q = world.query_filtered::<Entity, With<ChooserList>>();
-        let Some(list) = q.iter(world).next() else { return };
-        let filter = ui::text_value(world, "eda-chooser-filter");
-        let state = world.resource::<ChooserState>();
-        if state.filter.as_deref() == Some(filter.as_str()) {
-            return;
-        }
-        let chosen = state.chosen.clone();
-        let power = world.resource::<SchState>().chooser_power;
-        let lib = ui::libraries(world);
-        let hits: Vec<(String, String)> = lib
-            .search_symbols(&filter, power)
-            .into_iter()
-            .take(60)
-            .map(|s| (s.id.clone(), s.field(cadrs_eda::symbol::fields::DESCRIPTION).map_or(String::new(), |f| f.value().to_string())))
-            .collect();
-        world.resource_mut::<ChooserState>().filter = Some(filter);
-        let theme = world.resource::<Theme>().clone();
-        let mut commands = world.commands();
-        commands.entity(list).despawn_children();
-        commands.entity(list).with_children(|l| {
-            for (id, desc) in hits {
-                let name = format!("eda-chooser-{}", crate::pcb::slug(&id));
-                l.spawn((ListItem::new(name).label(id.clone()).detail(desc).height(24.0).selected(chosen.as_deref() == Some(id.as_str())).build(&theme), ChooserRow(id), cadrs_ui::DoubleClickable));
-            }
-        });
-        world.flush();
-    }
-
-    pub fn on_row(a: On<Activate>, q: Query<&ChooserRow>, mut commands: Commands) {
-        if let Ok(r) = q.get(a.entity) {
-            let id = r.0.clone();
-            commands.queue(move |w: &mut World| {
-                w.resource_mut::<ChooserState>().chosen = Some(id);
-                // Redraw the selection.
-                w.resource_mut::<ChooserState>().filter = None;
-            });
-        }
-    }
-
-    /// Enter in the filter accepts the first match.
-    pub fn on_submit(ev: On<TextSubmit>, q: Query<&Name>, mut commands: Commands) {
-        if q.get(ev.entity).is_ok_and(|n| n.as_str() == "eda-chooser-filter-field") {
-            commands.queue(accept);
-        }
-    }
-}
 
 pub mod dialogs {
     //! The Schematic's dialogs: label name, symbol fields (E), page settings, footprint

@@ -218,8 +218,17 @@ pub fn check_footprint(f: &Footprint) -> Vec<String> {
         return out;
     };
     for p in &f.pads {
-        let r = p.size.w.max(p.size.h) / 2;
-        if !cy.contains(p.at - Pt::new(r, r)) || !cy.contains(p.at + Pt::new(r, r)) {
+        // The pad's box: its size, turned a quarter if it is; any other angle, its longest side.
+        let a = p.angle.rem_euclid(180.0);
+        let half = if a.abs() < 0.01 {
+            Pt::new(p.size.w / 2, p.size.h / 2)
+        } else if (a - 90.0).abs() < 0.01 {
+            Pt::new(p.size.h / 2, p.size.w / 2)
+        } else {
+            let r = p.size.w.max(p.size.h) / 2;
+            Pt::new(r, r)
+        };
+        if !cy.contains(p.at - half) || !cy.contains(p.at + half) {
             out.push(format!("Pad {} outside the courtyard", p.number));
         }
     }
@@ -233,7 +242,8 @@ pub fn check_footprint(f: &Footprint) -> Vec<String> {
 
 /// Sets a footprint's 3D model (the 3D Models tab), adding it if there is none.
 pub fn set_model(f: &mut Footprint, source: &str, offset: [f64; 3], rotation: [f64; 3], scale: [f64; 3], opacity: f64) {
-    let m = Model3d { source: source.into(), blob: None, offset, rotation, scale, visible: true, opacity };
+    let body = f.models.first().and_then(|m| m.body.clone());
+    let m = Model3d { source: source.into(), blob: None, offset, rotation, scale, visible: true, opacity, body };
     match f.models.first_mut() {
         Some(x) => *x = m,
         None => f.models.push(m),

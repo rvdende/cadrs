@@ -15,6 +15,7 @@ occt = ["cadrs_kernel/occt", "cadrs_core/occt"]
 cadrs_idf.workspace = true
 cadrs_kernel.workspace = true
 cadrs_core.workspace = true
+cadrs_eda.workspace = true
 cadrs_sketch.workspace = true
 nalgebra.workspace = true
 serde.workspace = true

@@ -170,3 +170,38 @@ pub fn board_mesh(pcb: &PcbBoard) -> Result<BoardMesh, String> {
     let mut k = cadrs_kernel::backend::occt::OcctKernel::new();
     board_mesh_in(&mut k, pcb)
 }
+
+/// The motion a footprint's 3D model sits by in its footprint's (package) frame: scale, turn
+/// about X, then Y, then Z (degrees), then move by the offset (mm).
+pub fn model_motion(m: &cadrs_eda::footprint::Model3d) -> Motion {
+    use nalgebra::{Matrix3, Rotation3};
+    let [sx, sy, sz] = m.scale;
+    let [rx, ry, rz] = m.rotation.map(f64::to_radians);
+    let r = Rotation3::from_axis_angle(&Vector3::z_axis(), rz) * Rotation3::from_axis_angle(&Vector3::y_axis(), ry) * Rotation3::from_axis_angle(&Vector3::x_axis(), rx);
+    Motion { linear: r.matrix() * Matrix3::from_diagonal(&Vector3::new(sx, sy, sz)), translation: Vector3::new(m.offset[0], m.offset[1], m.offset[2]) }
+}
+
+/// A footprint model's generated body ([`cadrs_eda::model3d`]) as display meshes in the package
+/// frame, one per colour, named `name` and tagged with the component's class and item. Empty
+/// when the model has no generated body.
+pub fn generated_bodies(m: &cadrs_eda::footprint::Model3d, name: &str, class: BodyClass, item: Option<ItemId>) -> Vec<BodyMesh> {
+    let Some(body) = &m.body else { return vec![] };
+    let motion = model_motion(m);
+    let alpha = (m.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    cadrs_eda::model3d::mesh(body)
+        .into_iter()
+        .map(|g| {
+            BodyMesh {
+                name: name.to_string(),
+                class,
+                color: [g.color[0], g.color[1], g.color[2], alpha],
+                item,
+                positions: g.positions,
+                normals: g.normals,
+                indices: g.indices,
+                edges: g.edges,
+            }
+            .moved(&motion)
+        })
+        .collect()
+}

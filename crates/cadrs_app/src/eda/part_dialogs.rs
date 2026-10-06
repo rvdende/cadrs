@@ -406,15 +406,7 @@ fn accept_rect(w: &mut World) {
 pub fn open_model(w: &mut World) {
     let Some((_, _, c)) = current(w) else { return };
     let f = c.footprint.unwrap();
-    let m = f.models.first().cloned().unwrap_or(cadrs_eda::footprint::Model3d {
-        source: format!("{}.step", f.name()),
-        blob: None,
-        offset: [0.0; 3],
-        rotation: [0.0; 3],
-        scale: [1.0; 3],
-        visible: true,
-        opacity: 1.0,
-    });
+    let m = f.models.first().cloned().unwrap_or_else(|| cadrs_eda::footprint::Model3d::file(&format!("{}.step", f.name())));
     let t = w.resource::<Theme>().clone();
     let tf = t.clone();
     spawn_dialog(

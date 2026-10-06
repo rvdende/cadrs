@@ -2018,6 +2018,7 @@ dependencies = [
  "chrono",
  "image",
  "nalgebra",
+ "resvg",
  "ron",
  "serde",
  "uuid",
@@ -2147,6 +2148,7 @@ name = "cadrs_pcb"
 version = "0.1.3"
 dependencies = [
  "cadrs_core",
+ "cadrs_eda",
  "cadrs_idf",
  "cadrs_kernel",
  "cadrs_sketch",
@@ -3910,9 +3912,9 @@ dependencies = [
 
 [[package]]
 name = "icon-rs"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e1331577b826b75281e07a1654b94c4137443ff6df0f7d9388ecba0811ea1c2"
+checksum = "36e738de1552ef6af184dafe186c42d467da9431e934921fc25512f2137b840c"
 
 [[package]]
 name = "icu_collections"

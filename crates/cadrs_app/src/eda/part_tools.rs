@@ -31,26 +31,28 @@ use crate::{ActiveDocument, AppState};
 const SYMBOL_STRIP: ui::StripSpec = &[
     Some(("sym-select", "drag-handle", "Select (Esc)", "select")),
     None,
-    Some(("sym-pin", "plus", "Add a pin", "pin")),
+    Some(("sym-pin", "pin", "Add a pin", "pin")),
     Some(("sym-repeat", "copy", "Repeat the last pin (Insert)", "repeat")),
     Some(("sym-line", "line", "Draw a line", "line")),
     Some(("sym-circle", "center-circle", "Draw a circle", "circle")),
     Some(("sym-rect", "corner-rectangle", "Draw a rectangle", "rect")),
     None,
     Some(("sym-props", "properties", "Symbol properties", "props")),
+    Some(("sym-from-library", "books", "Start from a library symbol", "fromlib")),
 ];
 
 const FOOTPRINT_STRIP: ui::StripSpec = &[
     Some(("fp-select", "drag-handle", "Select (Esc)", "select")),
     None,
-    Some(("fp-pad", "plus", "Add a pad", "pad")),
+    Some(("fp-pad", "pad", "Add a pad", "pad")),
     Some(("fp-push", "copy", "Push the selected pad's properties to the other pads", "push")),
     Some(("fp-line", "line", "Draw a line", "line")),
     Some(("fp-rect", "corner-rectangle", "Draw a rectangle", "rect")),
     Some(("fp-layer", "layers", "Drawing layer: Fab, Silkscreen, Courtyard", "layer")),
     None,
     Some(("fp-props", "properties", "Footprint properties", "props")),
-    Some(("fp-model", "part", "3D model", "model")),
+    Some(("fp-from-library", "books", "Start from a library footprint", "fromlib")),
+    Some(("fp-model", "board-3d", "3D model", "model")),
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -210,6 +212,12 @@ pub fn run_action(w: &mut World, m: Mode, action: &str) {
             ui::toast(w, &format!("Drawing on {name}"));
         }
         (_, "model") => super::part_dialogs::open_model(w),
+        (Mode::Symbol, "fromlib") => super::browser::open(w, super::browser::Kind::Symbols { power: false }, super::browser::Purpose::ComponentSymbol),
+        (_, "fromlib") => {
+            // Footprints the component's symbol allows, when it says.
+            let globs = current(w).and_then(|(_, _, c)| c.symbol.map(|s| s.footprint_filters)).unwrap_or_default();
+            super::browser::open(w, super::browser::Kind::Footprints { globs }, super::browser::Purpose::ComponentFootprint);
+        }
         _ => {}
     }
 }

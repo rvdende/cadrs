@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+resvg.workspace = true
 bevy.workspace = true
 cadrs_core.workspace = true
 cadrs_sheetmetal.workspace = true

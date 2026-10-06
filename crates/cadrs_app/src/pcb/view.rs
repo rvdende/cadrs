@@ -292,10 +292,16 @@ fn custom_part(world: &mut World, rep: &Representation) -> Option<(Arc<Solid>, [
 }
 
 /// The bodies of the board view (see the module docs).
-fn board_bodies(world: &mut World, el: ElementId, board: &PcbBoard, mesh: &BoardMesh, sig: &mut impl Hasher) -> Vec<BodyMesh> {
+fn board_bodies(world: &mut World, el: ElementId, board_id: BoardId, board: &PcbBoard, mesh: &BoardMesh, sig: &mut impl Hasher) -> Vec<BodyMesh> {
     let t = board.thickness();
     type Shown = (Representation, Option<(Arc<Solid>, [u8; 4], PartTransform)>);
     let mut reps: HashMap<String, Shown> = HashMap::new();
+    // A native board's footprint models by reference (their generated bodies replace the box).
+    let models: HashMap<String, cadrs_eda::footprint::Model3d> = world
+        .get_resource::<ActiveDocument>()
+        .and_then(|doc| crate::eda::design(doc, el, board_id))
+        .map(|d| d.board.footprints.iter().filter_map(|f| Some((f.reference().to_string(), f.footprint.models.iter().find(|m| m.visible && m.body.is_some())?.clone()))).collect())
+        .unwrap_or_default();
     let mut out = Vec::with_capacity(mesh.bodies.len());
     for b in &mesh.bodies {
         let placement = b.item.filter(|_| b.class.is_component()).and_then(|i| board.component(i));
@@ -316,7 +322,14 @@ fn board_bodies(world: &mut World, el: ElementId, board: &PcbBoard, mesh: &Board
                 let m = cadrs_pcb::placement::custom_motion(p, t, tr);
                 out.push(cadrs_pcb::mesh::solid_body(solid, &b.name, b.class, *col, b.item).moved(&m));
             }
-            _ => out.push(b.clone()),
+            _ => match models.get(&p.refdes) {
+                Some(model) => {
+                    format!("{model:?}").hash(sig);
+                    let m = cadrs_pcb::placement::placement_motion(p, t);
+                    out.extend(cadrs_pcb::mesh::generated_bodies(model, &b.name, b.class, b.item).into_iter().map(|g| g.moved(&m)));
+                }
+                None => out.push(b.clone()),
+            },
         }
     }
     out
@@ -407,7 +420,7 @@ pub fn sync_pcb_view(world: &mut World) {
         Some((SceneKey::Board(e, b), board)) => {
             let mesh = world.resource_mut::<PcbMeshCache>().get_or_build((*e, *b), board);
             (Arc::as_ptr(&mesh) as usize).hash(&mut sig);
-            let mut v = board_bodies(world, *e, board, &mesh, &mut sig);
+            let mut v = board_bodies(world, *e, *b, board, &mesh, &mut sig);
             v.extend(bottom_keep_overlays(&v, board.thickness()));
             v
         }

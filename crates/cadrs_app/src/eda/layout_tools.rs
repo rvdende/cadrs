@@ -26,16 +26,16 @@ use crate::AppState;
 const STRIP: ui::StripSpec = &[
     Some(("pcb-select", "drag-handle", "Select (Esc)", "select")),
     None,
-    Some(("pcb-update", "sync-document", "Update PCB from schematic (F8)", "update")),
+    Some(("pcb-update", "update-pcb", "Update PCB from schematic (F8)", "update")),
     Some(("pcb-board-setup", "settings", "Board setup", "setup")),
-    Some(("pcb-outline", "corner-rectangle", "Draw the board outline", "outline")),
-    Some(("pcb-route", "spline", "Route tracks (X)", "route")),
-    Some(("pcb-zone", "custom-table", "Add a filled zone", "zone")),
+    Some(("pcb-outline", "board-outline", "Draw the board outline", "outline")),
+    Some(("pcb-route", "route-track", "Route tracks (X)", "route")),
+    Some(("pcb-zone", "copper-zone", "Add a filled zone", "zone")),
     Some(("pcb-fill", "fill-zones", "Fill all zones (B)", "fill")),
-    Some(("pcb-layer", "flip-horizontal", "Switch the active layer (front / back)", "layer")),
+    Some(("pcb-layer", "layers", "Switch the active layer (front / back)", "layer")),
     None,
-    Some(("pcb-drc", "diagnostics", "Design rules checker", "drc")),
-    Some(("pcb-plot", "file-export", "Plot fabrication outputs", "plot")),
+    Some(("pcb-drc", "drc", "Design rules checker", "drc")),
+    Some(("pcb-plot", "plot-gerbers", "Plot fabrication outputs", "plot")),
 ];
 
 #[derive(Clone, Debug, Default)]
