@@ -881,13 +881,15 @@ fn sync_chrome(
     kind: Res<ActiveKind>,
     doc: Option<Res<ActiveDocument>>,
     ui: Res<PcbUi>,
+    eda: Res<crate::eda::Eda2d>,
     mut q_hint: Query<&mut Visibility, (With<PcbHint>, Without<PcbStrip>)>,
     mut q_strip: Query<&mut Visibility, (With<PcbStrip>, Without<PcbHint>)>,
     q_btn: Query<(Entity, &Name, Has<Selected>)>,
     mut commands: Commands,
 ) {
     let pcb = *kind == ActiveKind::PcbStudio;
-    let empty = pcb && doc.as_deref().and_then(active_studio).is_some_and(|(_, s)| s.boards.is_empty());
+    // Not over a component being edited.
+    let empty = pcb && eda.component().is_none() && doc.as_deref().and_then(active_studio).is_some_and(|(_, s)| s.boards.is_empty());
     let vis = |on: bool| if on { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut q_hint {
         v.set_if_neq(vis(empty));

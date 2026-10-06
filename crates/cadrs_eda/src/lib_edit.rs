@@ -253,6 +253,127 @@ pub fn set_model(f: &mut Footprint, source: &str, offset: [f64; 3], rotation: [f
     }
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Bulk editing: arrange a box symbol, pad arrays, renumbering
+
+/// Lays a symbol's pins out round a body rectangle, KiCad style: pins pointing right (into the
+/// body from the left) go down the left side in their order, pins pointing left down the right
+/// side, pins pointing down along the top and pins pointing up along the bottom, 100 mil apart,
+/// 100 mil long. The body is the symbol's first rectangle (made if there is none), sized to fit
+/// the longer side (at least `min_width` wide), centred on the origin; the reference and value
+/// go above it.
+pub fn arrange_box(s: &mut Symbol, min_width: Nm) {
+    let step = 100 * MIL;
+    let side = |a: f64| match a.rem_euclid(360.0).round() as i32 {
+        0 => 0,   // into the body from the left
+        180 => 1, // from the right
+        270 => 2, // from the top
+        _ => 3,   // from the bottom
+    };
+    let counts: Vec<i64> = (0..4).map(|k| s.pins.iter().filter(|p| side(p.angle) == k).count() as i64).collect();
+    let count = |k: i32| counts[k as usize];
+    let rows = count(0).max(count(1)).max(1);
+    let cols = count(2).max(count(3));
+    // Half sizes on the 50 mil grid: a row of pins fits the side with 100 mil to spare at each end.
+    let half_h = ((rows + 1) * step / 2 / SCHEMATIC_GRID + 1) * SCHEMATIC_GRID;
+    let half_w = (((cols + 1) * step / 2).max(min_width / 2) / SCHEMATIC_GRID + 1) * SCHEMATIC_GRID;
+    let mut seen = [0i64; 4];
+    for p in &mut s.pins {
+        let k = side(p.angle);
+        let i = seen[k as usize];
+        seen[k as usize] += 1;
+        let n = [count(0), count(1), count(2), count(3)][k as usize];
+        // Centred along the side, on the grid.
+        let first = ((n - 1) * step / 2 / SCHEMATIC_GRID) * SCHEMATIC_GRID;
+        p.length = step;
+        p.at = match k {
+            0 => Pt::new(-half_w - step, first - i * step),
+            1 => Pt::new(half_w + step, first - i * step),
+            2 => Pt::new(-first + i * step, half_h + step),
+            _ => Pt::new(-first + i * step, -half_h - step),
+        };
+    }
+    let rect = Geom::Rect { a: Pt::new(-half_w, half_h), b: Pt::new(half_w, -half_h) };
+    match s.graphics.iter_mut().find(|g| matches!(&g.item, SymbolItem::Shape(sh) if matches!(sh.geom, Geom::Rect { .. }))) {
+        Some(g) => {
+            if let SymbolItem::Shape(sh) = &mut g.item {
+                sh.geom = rect;
+            }
+        }
+        None => s.graphics.insert(0, SymbolGraphic { item: SymbolItem::Shape(Shape { geom: rect, stroke: Stroke::width(mm(0.254)), fill: Fill::Background }), unit: 0, style: 0 }),
+    }
+    if let Some(f) = s.fields.get_mut(0) {
+        f.text.at = Pt::new(0, half_h + step + 2 * SCHEMATIC_GRID);
+    }
+    if let Some(f) = s.fields.get_mut(1) {
+        f.text.at = Pt::new(0, -half_h - step - 2 * SCHEMATIC_GRID);
+    }
+}
+
+/// How a pad array numbers on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ArrayShape {
+    /// `count` pads, each `step` from the last.
+    Line { step: Pt },
+    /// `count` pads round `center`, `angle` degrees apart (counter-clockwise), turned with it.
+    Circle { center: Pt, angle: f64 },
+}
+
+/// Copies pad `from` `count - 1` times along the shape, numbered on from it. Returns the new
+/// pads' indices.
+pub fn pad_array(f: &mut Footprint, from: usize, count: usize, shape: ArrayShape) -> Vec<usize> {
+    let mut out = vec![];
+    let Some(src) = f.pads.get(from).cloned() else { return out };
+    let mut number = src.number.clone();
+    for i in 1..count {
+        number = increment(&number);
+        let mut p = src.clone();
+        p.id = uuid::Uuid::new_v4();
+        p.number = number.clone();
+        match shape {
+            ArrayShape::Line { step } => p.at = src.at + Pt::new(step.x * i as Nm, step.y * i as Nm),
+            ArrayShape::Circle { center, angle } => {
+                let a = angle * i as f64;
+                p.at = center + (src.at - center).rotated(a);
+                p.angle = crate::units::normalize_deg(src.angle + a);
+            }
+        }
+        f.pads.push(p);
+        out.push(f.pads.len() - 1);
+    }
+    out
+}
+
+/// Numbers the numbered pads from `first` on: row by row from the top left, or (`ccw`)
+/// counter-clockwise round the centre from the top of the left side, as ICs are.
+pub fn renumber_pads(f: &mut Footprint, first: u32, ccw: bool) {
+    let idx: Vec<usize> = (0..f.pads.len()).filter(|&i| !f.pads[i].number.is_empty()).collect();
+    if idx.is_empty() {
+        return;
+    }
+    let (mut sx, mut sy) = (0i128, 0i128);
+    for &i in &idx {
+        sx += f.pads[i].at.x as i128;
+        sy += f.pads[i].at.y as i128;
+    }
+    let c = Pt::new((sx / idx.len() as i128) as Nm, (sy / idx.len() as i128) as Nm);
+    let key = |p: Pt| -> (i64, i64) {
+        if ccw {
+            // From straight left-and-up (just past 90° from +x), going counter-clockwise.
+            let a = ((p.y - c.y) as f64).atan2((p.x - c.x) as f64).to_degrees();
+            let from_top_left = (a - 135.0).rem_euclid(360.0);
+            ((from_top_left * 1000.0) as i64, 0)
+        } else {
+            (-(p.y / 1000), p.x / 1000)
+        }
+    };
+    let mut order = idx.clone();
+    order.sort_by_key(|&i| key(f.pads[i].at));
+    for (k, i) in order.into_iter().enumerate() {
+        f.pads[i].number = (first + k as u32).to_string();
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +442,50 @@ pub fn delete_symbol_parts(s: &mut Symbol, parts: &[SymbolPart]) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::*;
+
+    #[test]
+    fn arrange_pad_array_and_renumber() {
+        // A box symbol: 3 pins in from the left, 2 from the right, then arranged.
+        let mut s = new_symbol("MODULE", "U", true);
+        for (n, o) in [("1", Orientation::Right), ("2", Orientation::Right), ("3", Orientation::Right), ("4", Orientation::Left), ("5", Orientation::Left)] {
+            add_pin(&mut s, &PinProps::new("P", n, Pt::ZERO, o));
+        }
+        arrange_box(&mut s, mm(10.16));
+        let at = |n: &str| s.pins.iter().find(|p| p.number == n).unwrap().at;
+        assert_eq!(at("1").x, at("2").x);
+        assert!(at("1").y > at("2").y && at("2").y > at("3").y, "down the left side");
+        assert_eq!(at("2").y, 0, "centred");
+        assert!(at("4").x > 0 && at("4").y > at("5").y);
+        assert!(off_grid_pins(&s).is_empty(), "{:?}", s.pins.iter().map(|p| p.at.to_mm()).collect::<Vec<_>>());
+        assert!(s.graphics.iter().any(|g| matches!(&g.item, SymbolItem::Shape(sh) if matches!(sh.geom, Geom::Rect { .. }))));
+
+        // A row of four pads from one, 2.54 mm apart.
+        let mut f = new_footprint("Row", "Row", MountKind::ThroughHole);
+        add_pad(&mut f, Pt::ZERO);
+        let made = pad_array(&mut f, 0, 4, ArrayShape::Line { step: Pt::mm(2.54, 0.0) });
+        assert_eq!(made.len(), 3);
+        assert_eq!((f.pads[3].number.as_str(), f.pads[3].at), ("4", Pt::mm(7.62, 0.0)));
+        // Eight round a circle.
+        let mut c = new_footprint("Ring", "Ring", MountKind::ThroughHole);
+        add_pad(&mut c, Pt::mm(5.0, 0.0));
+        pad_array(&mut c, 0, 8, ArrayShape::Circle { center: Pt::ZERO, angle: 45.0 });
+        assert_eq!(c.pads[2].at, Pt::mm(0.0, 5.0));
+
+        // SOIC-8 numbers shuffled, renumbered counter-clockwise: back to KiCad's order.
+        let lib = crate::library::LibraryTable::builtin();
+        let mut so = lib.footprint("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm").unwrap().clone();
+        let want: Vec<(String, Pt)> = so.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
+        so.pads.reverse();
+        so.pads.iter_mut().for_each(|p| p.number = "?".into());
+        renumber_pads(&mut so, 1, true);
+        let mut got: Vec<(String, Pt)> = so.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
+        got.sort_by_key(|x| x.0.parse::<u32>().unwrap());
+        assert_eq!(got, want);
     }
 }

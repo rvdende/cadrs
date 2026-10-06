@@ -501,5 +501,254 @@ fn on_model_picked(mut msgs: MessageReader<cadrs_ui::file_picker::FilePicked>, m
 }
 
 pub fn register(app: &mut App) {
-    app.add_systems(Update, on_model_picked.run_if(in_state(AppState::Document)));
+    app.add_systems(Update, (on_model_picked, refresh_pin_table).run_if(in_state(AppState::Document)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pin table (symbol editor): every pin as a row; a quick "add pins" list
+
+/// Which side of the body a pin sits on, and the direction it points (into the body).
+const SIDES: [(&str, f64); 4] = [("Left", 0.0), ("Right", 180.0), ("Top", 270.0), ("Bottom", 90.0)];
+
+#[derive(Clone, Debug)]
+struct PinRow {
+    /// The pin it was read from (its other properties are kept).
+    orig: Option<usize>,
+    number: String,
+    name: String,
+    kind: usize,
+    side: usize,
+}
+
+#[derive(Resource, Default)]
+struct PinTable {
+    rows: Vec<PinRow>,
+    generation: u64,
+    shown: Option<u64>,
+}
+
+fn side_of(angle: f64) -> usize {
+    SIDES.iter().position(|(_, a)| (angle.rem_euclid(360.0) - a).abs() < 1.0).unwrap_or(0)
+}
+
+pub fn open_pin_table(w: &mut World) {
+    let Some((_, _, c)) = current(w) else { return };
+    let s = c.symbol.unwrap();
+    let rows = s
+        .pins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| PinRow { orig: Some(i), number: p.number.clone(), name: p.name.clone(), kind: PIN_TYPES.iter().position(|(_, k)| *k == p.kind).unwrap_or(4), side: side_of(p.angle) })
+        .collect();
+    w.insert_resource(PinTable { rows, generation: 0, shown: None });
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-pin-table")
+            .title("Pin table")
+            .width(640.0)
+            .body(move |p| {
+                p.spawn(t.text("Number, name, electrical type and side of each pin. Add several at once: \u{201c}1 ANT, 2 GND, 3 3.3V\u{201d}.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                p.spawn(Node { column_gap: Val::Px(8.0), align_items: AlignItems::Center, margin: UiRect::vertical(Val::Px(6.0)), ..default() }).with_children(|r| {
+                    r.spawn(TextInput::new("eda-pins-add").placeholder("1 ANT, 2 GND, …").width(Val::Px(330.0)).height(26.0).build(&t));
+                    let mut s = Select::new("eda-pins-add-side").bordered().width(Val::Px(110.0));
+                    for (n, _) in SIDES {
+                        s = s.option(n, true);
+                    }
+                    r.spawn(s.selected(0).build(&t));
+                    r.spawn((
+                        cadrs_ui::Button::new("eda-pins-add-ok").label("Add").build(&t),
+                        observe(|_: On<Activate>, mut commands: Commands| {
+                            commands.queue(add_pin_rows);
+                        }),
+                    ));
+                });
+                p.spawn((Name::new("eda-pins-list"), Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), max_height: Val::Px(360.0), overflow: Overflow::scroll_y(), ..default() }));
+                p.spawn(Checkbox::new("eda-pins-arrange").label("Arrange the pins round a box").checked(true).build(&t));
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-pins-ok", accept_pin_table)),
+    );
+}
+
+/// The rows as edited in the dialog.
+fn read_pin_rows(w: &mut World) -> Vec<PinRow> {
+    let rows = w.get_resource::<PinTable>().map(|t| t.rows.clone()).unwrap_or_default();
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, r)| PinRow {
+            number: ui::text_value(w, &format!("eda-pins-{i}-number")),
+            name: ui::text_value(w, &format!("eda-pins-{i}-name")),
+            kind: select_index(w, &format!("eda-pins-{i}-type")),
+            side: select_index(w, &format!("eda-pins-{i}-side")),
+            ..r
+        })
+        .collect()
+}
+
+fn add_pin_rows(w: &mut World) {
+    let mut rows = read_pin_rows(w);
+    let text = ui::text_value(w, "eda-pins-add");
+    let side = select_index(w, "eda-pins-add-side");
+    for item in text.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()) {
+        let (number, name) = item.split_once(char::is_whitespace).map_or((item, item), |(a, b)| (a, b.trim()));
+        rows.push(PinRow { orig: None, number: number.into(), name: name.into(), kind: 4, side });
+    }
+    ui::set_text_value(w, "eda-pins-add", "");
+    let mut t = w.resource_mut::<PinTable>();
+    t.rows = rows;
+    t.generation += 1;
+}
+
+fn delete_pin_row(w: &mut World, i: usize) {
+    let mut rows = read_pin_rows(w);
+    if i < rows.len() {
+        rows.remove(i);
+    }
+    let mut t = w.resource_mut::<PinTable>();
+    t.rows = rows;
+    t.generation += 1;
+}
+
+/// Rebuilds the rows when they change.
+fn refresh_pin_table(world: &mut World) {
+    let Some(t) = world.get_resource::<PinTable>() else { return };
+    if t.shown == Some(t.generation) {
+        return;
+    }
+    let (rows, generation) = (t.rows.clone(), t.generation);
+    let mut q = world.query::<(Entity, &Name)>();
+    let Some(list) = q.iter(world).find(|(_, n)| n.as_str() == "eda-pins-list").map(|(e, _)| e) else { return };
+    world.resource_mut::<PinTable>().shown = Some(generation);
+    let th = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    commands.entity(list).despawn_children();
+    commands.entity(list).with_children(|l| {
+        for (i, r) in rows.into_iter().enumerate() {
+            l.spawn(Node { column_gap: Val::Px(6.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                row.spawn(TextInput::new(format!("eda-pins-{i}-number")).value(r.number).width(Val::Px(70.0)).height(24.0).build(&th));
+                row.spawn(TextInput::new(format!("eda-pins-{i}-name")).value(r.name).width(Val::Px(170.0)).height(24.0).build(&th));
+                let mut k = Select::new(format!("eda-pins-{i}-type")).bordered().width(Val::Px(150.0));
+                for (n, _) in PIN_TYPES {
+                    k = k.option(n, true);
+                }
+                row.spawn(k.selected(r.kind).build(&th));
+                let mut s = Select::new(format!("eda-pins-{i}-side")).bordered().width(Val::Px(100.0));
+                for (n, _) in SIDES {
+                    s = s.option(n, true);
+                }
+                row.spawn(s.selected(r.side).build(&th));
+                row.spawn((
+                    ToolButton::new(format!("eda-pins-{i}-delete"), "delete").icon_size(14.0).tooltip("Delete this pin").build(&th),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.queue(move |w: &mut World| delete_pin_row(w, i));
+                    }),
+                ));
+            });
+        }
+    });
+    world.flush();
+}
+
+fn accept_pin_table(w: &mut World) {
+    let rows = read_pin_rows(w);
+    let arrange = checkbox(w, "eda-pins-arrange");
+    close_all(w);
+    w.remove_resource::<PinTable>();
+    commit(w, "Pin table", |c| {
+        let s = c.symbol.as_mut().unwrap();
+        let mut pins = vec![];
+        for r in &rows {
+            if r.number.trim().is_empty() {
+                continue;
+            }
+            let mut p = r.orig.and_then(|i| s.pins.get(i).cloned()).unwrap_or_else(|| cadrs_eda::stdlib::pin("", "", PinType::Passive, (0.0, 0.0), 0.0, 2.54));
+            p.number = r.number.trim().into();
+            p.name = r.name.trim().into();
+            p.kind = PIN_TYPES[r.kind.min(PIN_TYPES.len() - 1)].1;
+            p.angle = SIDES[r.side.min(3)].1;
+            pins.push(p);
+        }
+        s.pins = pins;
+        if arrange {
+            cadrs_eda::lib_edit::arrange_box(s, cadrs_eda::units::mm(10.16));
+        }
+        Ok(())
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pad array and renumbering (footprint editor)
+
+/// The pad an array starts from: the selected one, else the last.
+fn array_source(w: &mut World) -> Option<usize> {
+    let (_, _, c) = current(w)?;
+    let f = c.footprint?;
+    let sel = w.resource::<super::part_tools::PartState>().fp_selection.clone();
+    f.pads.iter().position(|p| sel.contains(&p.id)).or(f.pads.len().checked_sub(1))
+}
+
+pub fn open_pad_array(w: &mut World) {
+    let Some(from) = array_source(w) else {
+        ui::toast(w, "Add a pad to make an array from");
+        return;
+    };
+    w.insert_resource(Editing(Some(from)));
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-pad-array")
+            .title("Pad array")
+            .width(460.0)
+            .body(move |p| {
+                select_row(p, &t, "Arrangement", "eda-array-shape", &["In a line", "Round the origin"], 0);
+                text_row(p, &t, "Pads in all", "eda-array-count", "8".into(), 100.0);
+                text_row(p, &t, "Step X (mm)", "eda-array-dx", "2.54".into(), 100.0);
+                text_row(p, &t, "Step Y (mm)", "eda-array-dy", "0".into(), 100.0);
+                text_row(p, &t, "Angle step (°)", "eda-array-angle", "45".into(), 100.0);
+                p.spawn(t.text("A line steps by X and Y; a circle turns about the footprint's origin by the angle. Pads are numbered on.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-array-ok", accept_pad_array)),
+    );
+}
+
+fn accept_pad_array(w: &mut World) {
+    let Some(from) = w.resource::<Editing>().0 else { return };
+    let circle = select_index(w, "eda-array-shape") == 1;
+    let count = ui::text_value(w, "eda-array-count").trim().parse::<usize>().map_err(|_| "Pads in all: a whole number".to_string());
+    let (dx, dy) = (length(w, "eda-array-dx", Unit::Mm), length(w, "eda-array-dy", Unit::Mm));
+    let angle = ui::text_value(w, "eda-array-angle").trim().parse::<f64>().map_err(|_| "Angle step: a number".to_string());
+    close_all(w);
+    commit(w, "Pad array", |c| {
+        let shape = if circle { cadrs_eda::lib_edit::ArrayShape::Circle { center: Pt::ZERO, angle: angle? } } else { cadrs_eda::lib_edit::ArrayShape::Line { step: Pt::new(dx?, dy?) } };
+        cadrs_eda::lib_edit::pad_array(c.footprint.as_mut().unwrap(), from, count?.clamp(1, 1000), shape);
+        Ok(())
+    });
+}
+
+pub fn open_renumber(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-renumber")
+            .title("Renumber pads")
+            .width(460.0)
+            .body(move |p| {
+                text_row(p, &t, "First number", "eda-renumber-first", "1".into(), 100.0);
+                select_row(p, &t, "Order", "eda-renumber-order", &["Counter-clockwise (ICs)", "Row by row from the top left"], 0);
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-renumber-ok", accept_renumber)),
+    );
+}
+
+fn accept_renumber(w: &mut World) {
+    let first = ui::text_value(w, "eda-renumber-first").trim().parse::<u32>().map_err(|_| "First number: a whole number".to_string());
+    let ccw = select_index(w, "eda-renumber-order") == 0;
+    close_all(w);
+    commit(w, "Renumber pads", |c| {
+        cadrs_eda::lib_edit::renumber_pads(c.footprint.as_mut().unwrap(), first?, ccw);
+        Ok(())
+    });
 }

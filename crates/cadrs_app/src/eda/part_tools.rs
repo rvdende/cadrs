@@ -36,6 +36,8 @@ const SYMBOL_STRIP: ui::StripSpec = &[
     Some(("sym-line", "line", "Draw a line", "line")),
     Some(("sym-circle", "center-circle", "Draw a circle", "circle")),
     Some(("sym-rect", "corner-rectangle", "Draw a rectangle", "rect")),
+    Some(("sym-pin-table", "custom-table", "Pin table", "pintable")),
+    Some(("sym-arrange", "aligned-rectangle", "Arrange the pins round a box", "arrange")),
     None,
     Some(("sym-props", "properties", "Symbol properties", "props")),
     Some(("sym-from-library", "books", "Start from a library symbol", "fromlib")),
@@ -46,6 +48,8 @@ const FOOTPRINT_STRIP: ui::StripSpec = &[
     None,
     Some(("fp-pad", "pad", "Add a pad", "pad")),
     Some(("fp-push", "copy", "Push the selected pad's properties to the other pads", "push")),
+    Some(("fp-pad-array", "linear-pattern", "Pad array", "padarray")),
+    Some(("fp-renumber", "sort-descending", "Renumber pads", "renumber")),
     Some(("fp-line", "line", "Draw a line", "line")),
     Some(("fp-rect", "corner-rectangle", "Draw a rectangle", "rect")),
     Some(("fp-layer", "layers", "Drawing layer: Fab, Silkscreen, Courtyard", "layer")),
@@ -213,6 +217,15 @@ pub fn run_action(w: &mut World, m: Mode, action: &str) {
             ui::toast(w, &format!("Drawing on {name}"));
         }
         (_, "model") => super::part_dialogs::open_model(w),
+        (_, "pintable") => super::part_dialogs::open_pin_table(w),
+        (_, "arrange") => {
+            commit(w, "Arrange pins", |c| {
+                le::arrange_box(c.symbol.as_mut().unwrap(), mm(10.16));
+                Ok(())
+            });
+        }
+        (_, "padarray") => super::part_dialogs::open_pad_array(w),
+        (_, "renumber") => super::part_dialogs::open_renumber(w),
         (Mode::Symbol, "fromlib") => super::browser::open(w, super::browser::Kind::Symbols { power: false }, super::browser::Purpose::ComponentSymbol),
         (_, "fromlib") => {
             // Footprints the component's symbol allows, when it says.
