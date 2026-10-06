@@ -122,6 +122,7 @@ impl Plugin for Sm9Plugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FormPicker>()
             .init_resource::<ConnDrag>()
+            .add_systems(PostUpdate, flag_picker_search)
             .add_systems(
                 Update,
                 (sync_dialog, read_picker_search, sync_picker, place_handles, draw_connections, draw_form_marks)
@@ -1606,6 +1607,14 @@ fn form_preview(pick: &FormPick, values: &[FormVariable]) -> Option<Image> {
         }
     }
     Some(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, px, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default()))
+}
+
+/// Scripted steps wait while the picker's search is still to follow the typed text.
+fn flag_picker_search(p: Res<FormPicker>, mut pending: ResMut<cadrs_ui::PendingWork>, mut why: ResMut<cadrs_ui::PendingWhy>) {
+    if p.open && p.query != p.typed {
+        pending.0 = true;
+        why.add("form picker search");
+    }
 }
 
 /// The search field's text into the picker (the lists follow it).

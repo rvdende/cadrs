@@ -2216,9 +2216,13 @@ fn flag_pending_work(
     view: Res<ViewportView>,
     section: Res<crate::section_view::SectionClip>,
     mut pending: ResMut<cadrs_ui::PendingWork>,
+    mut why: ResMut<cadrs_ui::PendingWhy>,
 ) {
-    if (cache.rebuilding || view.animation.is_some() || section.busy()) && !pending.0 {
-        pending.0 = true;
+    for (busy, what) in [(cache.rebuilding, "rebuild"), (view.animation.is_some(), "view animation"), (section.busy(), "section caps")] {
+        if busy {
+            pending.0 = true;
+            why.add(what);
+        }
     }
 }
 

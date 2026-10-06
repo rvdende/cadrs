@@ -233,7 +233,9 @@ fn drive(world: &mut World) {
         if runner.quiet < QUIET_FRAMES {
             if since.elapsed() > runner.timeout {
                 let secs = runner.timeout.as_secs_f32();
-                return fail(world, format!("{step:?}: the app was still busy after {secs} s"));
+                let why = world.get_resource::<cadrs_ui::PendingWhy>().map(|w| w.0.join(", ")).unwrap_or_default();
+                let why = if why.is_empty() { "unnamed pending work".to_string() } else { why };
+                return fail(world, format!("{step:?}: the app was still busy after {secs} s ({why})"));
             }
             runner.steps.push_front(step);
             return;

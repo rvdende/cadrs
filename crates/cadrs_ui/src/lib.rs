@@ -157,6 +157,19 @@ pub struct ScriptCommand(pub String);
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PendingWork(pub bool);
 
+/// What set [`PendingWork`] this frame ("rebuild", "view animation", …), for a scripted step
+/// that times out waiting. Cleared with it.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct PendingWhy(pub Vec<&'static str>);
+
+impl PendingWhy {
+    pub fn add(&mut self, why: &'static str) {
+        if !self.0.contains(&why) {
+            self.0.push(why);
+        }
+    }
+}
+
 /// Commonly used items, including Bevy's `Activate` event and the `observe` bundle helper.
 pub mod prelude {
     pub use crate::{
@@ -188,8 +201,12 @@ impl Plugin for CadrsUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .init_resource::<PendingWork>()
-            .add_systems(PreUpdate, |mut p: ResMut<PendingWork>| {
+            .init_resource::<PendingWhy>()
+            .add_systems(PreUpdate, |mut p: ResMut<PendingWork>, mut why: ResMut<PendingWhy>| {
                 p.set_if_neq(PendingWork(false));
+                if !why.0.is_empty() {
+                    why.0.clear();
+                }
             })
             .init_resource::<RenderSurface>()
             .insert_resource(ClearColor(Theme::default().viewport_background))

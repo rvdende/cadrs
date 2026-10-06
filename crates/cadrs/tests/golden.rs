@@ -1587,3 +1587,323 @@ fn golden_sketch_snap_part_edges() {
 fn golden_transform_xyz_arrows() {
     run_scenario("transform_xyz_arrows");
 }
+
+#[test]
+fn golden_course_pcb_bom() {
+    run_scenario("course_pcb_bom");
+}
+
+#[test]
+fn golden_course_pcb_component_properties() {
+    run_scenario("course_pcb_component_properties");
+}
+
+#[test]
+fn golden_course_pcb_component_view() {
+    run_scenario("course_pcb_component_view");
+}
+
+#[test]
+fn golden_course_pcb_custom_part() {
+    run_scenario("course_pcb_custom_part");
+}
+
+#[test]
+fn golden_course_pcb_delete_board() {
+    run_scenario("course_pcb_delete_board");
+}
+
+#[test]
+fn golden_course_pcb_ex1_board() {
+    run_scenario("course_pcb_ex1_board");
+}
+
+#[test]
+fn golden_course_pcb_ex2_vision() {
+    run_scenario("course_pcb_ex2_vision");
+}
+
+#[test]
+fn golden_course_pcb_ex3_idf_assembly() {
+    run_scenario("course_pcb_ex3_idf_assembly");
+}
+
+#[test]
+fn golden_course_pcb_export_idf() {
+    run_scenario("course_pcb_export_idf");
+}
+
+#[test]
+fn golden_course_pcb_geometry_cellphone() {
+    run_scenario("course_pcb_geometry_cellphone");
+}
+
+#[test]
+fn golden_course_pcb_geometry_vision() {
+    run_scenario("course_pcb_geometry_vision");
+}
+
+#[test]
+fn golden_course_pcb_import_idf() {
+    run_scenario("course_pcb_import_idf");
+}
+
+#[test]
+fn golden_course_pcb_one_part() {
+    run_scenario("course_pcb_one_part");
+}
+
+#[test]
+fn golden_course_pcb_search() {
+    run_scenario("course_pcb_search");
+}
+
+#[test]
+fn golden_course_pcb_settings() {
+    run_scenario("course_pcb_settings");
+}
+
+#[test]
+fn golden_course_pcb_studio_create() {
+    run_scenario("course_pcb_studio_create");
+}
+
+#[test]
+fn golden_course_pcb_sync_partstudio() {
+    run_scenario("course_pcb_sync_partstudio");
+}
+
+#[test]
+fn golden_feature_list_select() {
+    run_scenario("feature_list_select");
+}
+
+#[test]
+fn golden_readme_screenshots() {
+    run_scenario("readme_screenshots");
+}
+
+#[test]
+fn golden_section_view_menu() {
+    run_scenario("section_view_menu");
+}
+
+#[test]
+fn golden_section_view_planes() {
+    run_scenario("section_view_planes");
+}
+
+#[test]
+fn golden_sheetmetal_collision() {
+    run_scenario("sheetmetal_collision");
+}
+
+#[test]
+fn golden_sheetmetal_convert() {
+    run_scenario("sheetmetal_convert");
+}
+
+#[test]
+fn golden_sheetmetal_dialog() {
+    run_scenario("sheetmetal_dialog");
+}
+
+#[test]
+fn golden_sheetmetal_extrude() {
+    run_scenario("sheetmetal_extrude");
+}
+
+#[test]
+fn golden_sheetmetal_thicken() {
+    run_scenario("sheetmetal_thicken");
+}
+
+#[test]
+fn golden_sketch_spline() {
+    run_scenario("sketch_spline");
+}
+
+#[test]
+fn golden_sm_e1() {
+    run_scenario("sm_e1");
+}
+
+#[test]
+fn golden_sm_e2() {
+    run_scenario("sm_e2");
+}
+
+#[test]
+fn golden_sm_e3() {
+    run_scenario("sm_e3");
+}
+
+#[test]
+fn golden_sm_e4() {
+    run_scenario("sm_e4");
+}
+
+#[test]
+fn golden_sm_p3i3_bend_feature() {
+    run_scenario("sm_p3i3_bend_feature");
+}
+
+#[test]
+fn golden_sm_p3i3_edits() {
+    run_scenario("sm_p3i3_edits");
+}
+
+#[test]
+fn golden_sm_p3i3_table() {
+    run_scenario("sm_p3i3_table");
+}
+
+#[test]
+fn golden_sm_p3i4_e2() {
+    run_scenario("sm_p3i4_e2");
+}
+
+#[test]
+fn golden_sm_p3i4_flange() {
+    run_scenario("sm_p3i4_flange");
+}
+
+#[test]
+fn golden_sm_p3i4_flange_miter() {
+    run_scenario("sm_p3i4_flange_miter");
+}
+
+#[test]
+fn golden_sm_p3i4_hem() {
+    run_scenario("sm_p3i4_hem");
+}
+
+#[test]
+fn golden_sm_p3i4_hem_corner() {
+    run_scenario("sm_p3i4_hem_corner");
+}
+
+#[test]
+fn golden_sm_p3i4_make_joint() {
+    run_scenario("sm_p3i4_make_joint");
+}
+
+#[test]
+fn golden_sm_p3i5_bend() {
+    run_scenario("sm_p3i5_bend");
+}
+
+#[test]
+fn golden_sm_p3i5_bend_relief() {
+    run_scenario("sm_p3i5_bend_relief");
+}
+
+#[test]
+fn golden_sm_p3i5_corner() {
+    run_scenario("sm_p3i5_corner");
+}
+
+#[test]
+fn golden_sm_p3i5_corner_break() {
+    run_scenario("sm_p3i5_corner_break");
+}
+
+#[test]
+fn golden_sm_p3i5_cut() {
+    run_scenario("sm_p3i5_cut");
+}
+
+#[test]
+fn golden_sm_p3i5_dialogs() {
+    run_scenario("sm_p3i5_dialogs");
+}
+
+#[test]
+fn golden_sm_p3i5_finish() {
+    run_scenario("sm_p3i5_finish");
+}
+
+#[test]
+fn golden_sm_p3i5_jog() {
+    run_scenario("sm_p3i5_jog");
+}
+
+#[test]
+fn golden_sm_p3i5_mirror() {
+    run_scenario("sm_p3i5_mirror");
+}
+
+#[test]
+fn golden_sm_p3i5_tab() {
+    run_scenario("sm_p3i5_tab");
+}
+
+#[test]
+fn golden_sm_p3i6_e1_import() {
+    run_scenario("sm_p3i6_e1_import");
+}
+
+#[test]
+fn golden_sm_p3i6_export_dialog() {
+    run_scenario("sm_p3i6_export_dialog");
+}
+
+#[test]
+fn golden_sm_p3i6_flat_cut_and_tab() {
+    run_scenario("sm_p3i6_flat_cut_and_tab");
+}
+
+#[test]
+fn golden_sm_p3i7_e3() {
+    run_scenario("sm_p3i7_e3");
+}
+
+#[test]
+fn golden_sm_p3i7_forms() {
+    run_scenario("sm_p3i7_forms");
+}
+
+#[test]
+fn golden_sm_p3i7_options() {
+    run_scenario("sm_p3i7_options");
+}
+
+#[test]
+fn golden_sm_p3i8_flat_view() {
+    run_scenario("sm_p3i8_flat_view");
+}
+
+#[test]
+fn golden_sm_p3i8_legacy() {
+    run_scenario("sm_p3i8_legacy");
+}
+
+#[test]
+fn golden_sm_p3i8_topdown() {
+    run_scenario("sm_p3i8_topdown");
+}
+
+#[test]
+fn golden_sm_p3i9_form() {
+    run_scenario("sm_p3i9_form");
+}
+
+#[test]
+fn golden_sm_p3i9_loft() {
+    run_scenario("sm_p3i9_loft");
+}
+
+#[test]
+fn golden_surfacing_fill() {
+    run_scenario("surfacing_fill");
+}
+
+#[test]
+fn golden_surfacing_helix() {
+    run_scenario("surfacing_helix");
+}
+
+#[test]
+fn golden_surfacing_thicken() {
+    run_scenario("surfacing_thicken");
+}
