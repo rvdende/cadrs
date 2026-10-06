@@ -260,3 +260,17 @@ pub fn natural(s: &str) -> (String, u64, String) {
     let rest = s[head.len() + digits.len()..].to_string();
     (head, digits.parse().unwrap_or(0), rest)
 }
+
+/// The netlist as CSV: one line per pin, `"Net","Reference","Pin","Pin name"`, nets by name,
+/// power ports and flags left out.
+pub fn netlist_csv(sch: &Schematic) -> String {
+    let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let mut out = String::from("\"Net\",\"Reference\",\"Pin\",\"Pin name\"\n");
+    for n in netlist(sch).nets {
+        for p in n.part_pins() {
+            out.push_str(&[q(&n.name), q(&p.reference), q(&p.number), q(&p.name)].join(","));
+            out.push('\n');
+        }
+    }
+    out
+}

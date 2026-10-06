@@ -571,3 +571,88 @@ pub fn register(app: &mut App) {
         .add_observer(on_assign_footprint);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Plot: the sheet as SVG or PDF, the netlist as CSV
+
+/// The sheet as a vector PDF page at its paper size (lines and fills; text as strokes).
+pub fn schematic_pdf(d: &cadrs_eda::Design, title: &str) -> Vec<u8> {
+    use cadrs_drawing::export::{Item, Layer, Page, Pen, Shape};
+    use cadrs_eda::units::to_mm;
+    let list = cadrs_eda::render::schematic(&d.schematic, 0, &cadrs_eda::render::SchematicTheme::default(), &cadrs_eda::render::Highlight::default());
+    let paper = &d.schematic.sheets[0].paper;
+    let mut page = Page { name: title.into(), width: to_mm(paper.size.w), height: to_mm(paper.size.h), items: vec![] };
+    let mm2 = |p: &cadrs_eda::units::Pt| [to_mm(p.x), to_mm(p.y)];
+    for a in &list.areas {
+        // The paper's own colour stays the paper's.
+        if a.z == -10 {
+            continue;
+        }
+        for t in a.tris.chunks_exact(3) {
+            let points = t.iter().map(|q| [q[0] / 1e6, q[1] / 1e6]).collect();
+            page.items.push(Item::Fill { points, color: [a.color[0], a.color[1], a.color[2]], layer: Layer::Visible });
+        }
+    }
+    for l in &list.lines {
+        let mut pen = Pen::new(to_mm(l.width).max(0.15), Layer::Visible);
+        pen.color = [l.color[0], l.color[1], l.color[2]];
+        page.items.push(Item::Stroke(Shape::Polyline { points: l.pts.iter().map(mm2).collect(), closed: false }, pen));
+    }
+    cadrs_drawing::pdf::write_pdf(&[page], &cadrs_drawing::pdf::PdfOptions::default())
+}
+
+pub fn open_plot(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-splot-dialog")
+            .title("Plot schematic")
+            .width(560.0)
+            .body(move |p| {
+                text_row(p, &t, "Output directory", "eda-splot-dir", "plots/");
+                p.spawn((Name::new("eda-splot-log"), t.text("", t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::top(Val::Px(6.0)), ..default() }));
+            })
+            .footer(move |f| {
+                for (name, label, kind) in [("eda-splot-svg", "SVG", "svg"), ("eda-splot-pdf", "PDF", "pdf"), ("eda-splot-netlist", "Netlist (CSV)", "net")] {
+                    f.spawn((
+                        cadrs_ui::Button::new(name).label(label).build(&tf),
+                        observe(move |_: On<Activate>, mut commands: Commands| {
+                            commands.queue(move |w: &mut World| run_plot(w, kind));
+                        }),
+                    ));
+                }
+                f.spawn((
+                    cadrs_ui::Button::new("eda-splot-close").label("Close").build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_all);
+                    }),
+                ));
+            }),
+    );
+}
+
+/// Writes the sheet as SVG or PDF, or the netlist, into `dir`; returns the file written.
+pub fn plot_schematic_to(w: &mut World, dir: &std::path::Path, kind: &str) -> Result<std::path::PathBuf, String> {
+    let (el, b, d) = ui::current(w).ok_or("No board")?;
+    let name = w.resource::<crate::ActiveDocument>().doc.element(el).and_then(|e| e.pcb()).and_then(|s| s.board(b)).map(|x| cadrs_idf::safe_file_name(x.name())).unwrap_or_else(|| "schematic".into());
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let (file, bytes): (String, Vec<u8>) = match kind {
+        "svg" => (format!("{name}.svg"), cadrs_eda::render::to_svg(&cadrs_eda::render::schematic(&d.schematic, 0, &cadrs_eda::render::SchematicTheme::default(), &cadrs_eda::render::Highlight::default())).into_bytes()),
+        "pdf" => (format!("{name}.pdf"), schematic_pdf(&d, &name)),
+        _ => (format!("{name}-netlist.csv"), cadrs_eda::connectivity::netlist_csv(&d.schematic).into_bytes()),
+    };
+    let path = dir.join(&file);
+    std::fs::write(&path, bytes).map_err(|e| format!("{file}: {e}"))?;
+    Ok(path)
+}
+
+fn run_plot(w: &mut World, kind: &str) {
+    let dir = ui::text_value(w, "eda-splot-dir");
+    let dir = std::path::PathBuf::from(if dir.trim().is_empty() { "plots/".into() } else { dir });
+    let msg = match plot_schematic_to(w, &dir, kind) {
+        Ok(p) => format!("Wrote {}", p.display()),
+        Err(e) => format!("Error: {e}"),
+    };
+    ui::set_label(w, "eda-splot-log", &msg);
+}

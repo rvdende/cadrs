@@ -45,6 +45,7 @@ const STRIP: ui::StripSpec = &[
     Some(("sch-erc", "erc", "Electrical rules check", "erc")),
     Some(("sch-bom", "bill-of-materials", "Bill of materials", "bom")),
     Some(("sch-page", "properties", "Page settings", "page")),
+    Some(("sch-plot", "file-export", "Plot the schematic (SVG, PDF) or export its netlist", "plot")),
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -161,6 +162,7 @@ pub fn run_action(w: &mut World, action: &str) {
         "erc" => dialogs::open_erc(w),
         "bom" => dialogs::open_bom(w),
         "page" => dialogs::open_page(w),
+        "plot" => dialogs::open_plot(w),
         _ => {}
     }
 }
