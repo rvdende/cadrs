@@ -2276,3 +2276,9 @@ fn golden_eda_schematic_editing() {
 fn golden_eda_part_tools() {
     run_scenario("eda_part_tools");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_drawing() {
+    run_scenario("eda_layout_drawing");
+}

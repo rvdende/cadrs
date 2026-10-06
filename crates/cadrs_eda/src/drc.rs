@@ -21,6 +21,8 @@ pub enum Rule {
     CourtyardOverlap,
     OutlineNotClosed,
     DanglingTrack,
+    /// A track, via, pad or footprint inside a keep-out that forbids it.
+    KeepoutViolation,
 }
 
 impl Rule {
@@ -303,6 +305,30 @@ pub fn check(board: &Board) -> Report {
             }
         }
     }
+    // Keep-outs: what they forbid, inside them on their layers (a footprint's own keep-out
+    // doesn't forbid its own parts).
+    for (owner, layers, region, rules) in keepouts(board) {
+        for c in &items {
+            let forbidden = match c.item {
+                Item::Track(_) => rules.tracks,
+                Item::Via(_) => rules.vias,
+                Item::Pad(f, _) => rules.pads && Some(f) != owner,
+                _ => false,
+            };
+            if forbidden && c.layers.iter().any(|(l, r)| layers.contains(*l) && poly::overlaps(r, &region)) {
+                v.push(Violation { rule: Rule::KeepoutViolation, message: "Items not allowed (keep-out)".into(), items: vec![describe(board, c)], at: c.anchors.first().copied().unwrap_or_default() });
+            }
+        }
+        if rules.footprints {
+            for (i, side, r) in &courtyards {
+                let f = &board.footprints[*i];
+                let on = if *side == Side::Top { Layer::TopCopper } else { Layer::BottomCopper };
+                if Some(f.id) != owner && layers.contains(on) && poly::overlaps(r, &region) {
+                    v.push(Violation { rule: Rule::KeepoutViolation, message: "Footprint not allowed (keep-out)".into(), items: vec![f.reference().into()], at: f.placement.at });
+                }
+            }
+        }
+    }
     // Track ends on nothing.
     for (ti, c) in items.iter().enumerate().filter(|(_, c)| matches!(c.item, Item::Track(_))) {
         let Item::Track(id) = &c.item else { continue };
@@ -321,4 +347,30 @@ pub fn check(board: &Board) -> Report {
 /// For messages: millimetres with four decimals.
 pub fn fmt_mm(v: Nm) -> String {
     format!("{:.4}", to_mm(v))
+}
+
+/// Every keep-out: (the footprint it belongs to, its layers, its area, what it forbids).
+fn keepouts(board: &Board) -> Vec<(Option<uuid::Uuid>, crate::layer::LayerSet, Region, crate::board::Keepout)> {
+    let ring = |pts: Vec<Pt>| {
+        let mut r = pts;
+        if poly::ring_area(&r) < 0.0 {
+            r.reverse();
+        }
+        r
+    };
+    let mut out = vec![];
+    for z in &board.zones {
+        if let Some(k) = z.keepout {
+            out.push((None, z.layers, z.outline.iter().map(|r| ring(r.clone())).collect(), k));
+        }
+    }
+    for f in &board.footprints {
+        for z in &f.footprint.zones {
+            if let Some(k) = z.keepout {
+                let region: Region = z.outline.iter().map(|r| ring(r.iter().map(|p| f.placement.apply(*p)).collect())).collect();
+                out.push((Some(f.id), f.placement.layers(z.layers), region, k));
+            }
+        }
+    }
+    out
 }

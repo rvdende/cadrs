@@ -188,6 +188,42 @@ pub fn delete_tracks(board: &mut Board, ids: &[Uuid]) {
     board.vias.retain(|v| !ids.contains(&v.id));
 }
 
+
+/// The line width drawings take on `layer` unless told: KiCad's defaults (silkscreen 0.12 mm,
+/// fabrication 0.1, courtyard and outline 0.05, copper 0.2, the rest 0.15).
+pub fn default_width(layer: Layer) -> Nm {
+    let mm = crate::units::mm;
+    match layer {
+        Layer::TopSilk | Layer::BottomSilk => mm(0.12),
+        Layer::TopFab | Layer::BottomFab => mm(0.1),
+        Layer::TopCourtyard | Layer::BottomCourtyard | Layer::Outline => mm(0.05),
+        l if l.is_copper() => mm(0.2),
+        _ => mm(0.15),
+    }
+}
+
+/// Draws a line, rectangle or circle on `layer` (the Draw tools); returns its id.
+pub fn add_shape(board: &mut Board, geom: crate::graphics::Geom, layer: Layer) -> Uuid {
+    let id = Uuid::new_v4();
+    let shape = crate::graphics::Shape { geom, stroke: crate::graphics::Stroke::width(default_width(layer)), fill: crate::graphics::Fill::None };
+    board.shapes.push(crate::board::BoardShape { id, shape, layer, locked: false, net: String::new() });
+    id
+}
+
+/// Writes `text` on `layer` at `at` (1 mm high, 0.15 mm strokes; mirrored on the bottom so it
+/// reads from below); returns its id.
+pub fn add_text(board: &mut Board, text: &str, at: Pt, layer: Layer) -> Uuid {
+    let id = Uuid::new_v4();
+    let style = crate::graphics::TextStyle {
+        size: crate::units::Size::mm(1.0, 1.0),
+        thickness: Some(crate::units::mm(0.15)),
+        mirrored: layer.side() == Some(Side::Bottom),
+        ..Default::default()
+    };
+    let t = crate::graphics::Text { text: text.into(), at, angle: 0.0, style, visible: true };
+    board.texts.push(crate::board::BoardText { id, text: t, layer, locked: false, knockout: false });
+    id
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,12 +248,14 @@ pub enum BoardItem {
     Zone(Uuid),
     /// A drawn shape (the board outline, silkscreen art).
     Shape(Uuid),
+    /// Text drawn on a layer.
+    Text(Uuid),
 }
 
 impl BoardItem {
     pub fn id(self) -> Uuid {
         match self {
-            BoardItem::Footprint(i) | BoardItem::Track(i) | BoardItem::Via(i) | BoardItem::Zone(i) | BoardItem::Shape(i) => i,
+            BoardItem::Footprint(i) | BoardItem::Track(i) | BoardItem::Via(i) | BoardItem::Zone(i) | BoardItem::Shape(i) | BoardItem::Text(i) => i,
         }
     }
 }
@@ -253,7 +291,10 @@ pub fn hit(board: &Board, p: Pt, tol: Nm) -> Option<BoardItem> {
             return Some(BoardItem::Footprint(f.id));
         }
     }
-    // Drawn shapes by their line (the outline's edge, silkscreen art).
+    // Text by its box, drawn shapes by their line (the outline's edge, silkscreen art).
+    if let Some(t) = board.texts.iter().rev().find(|t| crate::font::bounds(&t.text).is_some_and(|b| b.grow(tol).contains(p))) {
+        return Some(BoardItem::Text(t.id));
+    }
     for s in board.shapes.iter().rev() {
         let (pts, closed) = poly::geom_points(&s.shape.geom);
         let w = s.shape.stroke.width.max(1) + 2 * tol;
@@ -273,6 +314,7 @@ pub fn delete_items(board: &mut Board, items: &[BoardItem]) {
     board.footprints.retain(|f| !ids.contains(&f.id));
     board.zones.retain(|z| !ids.contains(&z.id));
     board.shapes.retain(|s| !ids.contains(&s.id));
+    board.texts.retain(|t| !ids.contains(&t.id));
 }
 
 /// The footprint with this id.

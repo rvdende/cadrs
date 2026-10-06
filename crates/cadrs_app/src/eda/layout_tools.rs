@@ -9,7 +9,9 @@
 //!   double-click ends. **PgUp** / **PgDn** pick the top / bottom copper.
 //! - The strip: Update PCB from schematic (**F8**), Board setup, Board outline (two corners on
 //!   a 1 mm grid), Route, Add zone (its net and layer asked first, then corners, double-click
-//!   ends), Fill zones (**B**), DRC, Plot.
+//!   ends), Add keep-out (its layers and what it forbids asked first, then corners), Draw lines /
+//!   a rectangle / a circle and Text on the drawing layer (picked in the layers panel), Fill
+//!   zones (**B**), DRC, Plot.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -31,6 +33,11 @@ const STRIP: ui::StripSpec = &[
     Some(("pcb-outline", "board-outline", "Draw the board outline", "outline")),
     Some(("pcb-route", "route-track", "Route tracks (X)", "route")),
     Some(("pcb-zone", "copper-zone", "Add a filled zone", "zone")),
+    Some(("pcb-keepout", "keepout-zone", "Add a keep-out", "keepout")),
+    Some(("pcb-draw-line", "line", "Draw lines on the drawing layer", "line")),
+    Some(("pcb-draw-rect", "corner-rectangle", "Draw a rectangle on the drawing layer", "rect")),
+    Some(("pcb-draw-circle", "center-circle", "Draw a circle on the drawing layer", "circle")),
+    Some(("pcb-text", "text", "Add text on the drawing layer", "text")),
     Some(("pcb-fill", "fill-zones", "Fill all zones (B)", "fill")),
     Some(("pcb-layer", "layers", "Switch the active layer (front / back)", "layer")),
     None,
@@ -48,6 +55,20 @@ pub enum Tool {
     Route { runs: Vec<(Layer, Vec<Pt>)>, vias: Vec<Pt>, net: String },
     /// A zone of `net` on `layer`: its corners so far.
     Zone { net: String, layer: Layer, pts: Vec<Pt> },
+    /// A line, rectangle or circle on the drawing layer: its first point once clicked.
+    Draw { kind: DrawKind, start: Option<Pt> },
+    /// Text, placed on the drawing layer with the next click.
+    Text(String),
+    /// A keep-out on `layers` forbidding what `rules` says: its corners so far.
+    Keepout { layers: cadrs_eda::layer::LayerSet, rules: cadrs_eda::board::Keepout, pts: Vec<Pt> },
+}
+
+/// What the Draw tools make.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DrawKind {
+    Line,
+    Rect,
+    Circle,
 }
 
 impl Tool {
@@ -57,6 +78,11 @@ impl Tool {
             Tool::Outline(_) => "outline",
             Tool::Route { .. } => "route",
             Tool::Zone { .. } => "zone",
+            Tool::Draw { kind: DrawKind::Line, .. } => "line",
+            Tool::Draw { kind: DrawKind::Rect, .. } => "rect",
+            Tool::Draw { kind: DrawKind::Circle, .. } => "circle",
+            Tool::Text(_) => "text",
+            Tool::Keepout { .. } => "keepout",
         }
     }
 }
@@ -82,11 +108,13 @@ pub struct LayoutState {
     pub dim: bool,
     /// The layers panel is open (else just its button).
     pub layers_open: bool,
+    /// What the Draw and Text tools draw on (a click in the layers panel picks it).
+    pub draw_layer: Layer,
 }
 
 impl Default for LayoutState {
     fn default() -> Self {
-        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false }
+        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false, draw_layer: Layer::TopSilk }
     }
 }
 
@@ -144,6 +172,11 @@ pub fn run_action(w: &mut World, action: &str) {
             start_route(w, at);
         }
         "zone" => super::lay_dialogs::open_zone(w),
+        "line" => set_tool(w, Tool::Draw { kind: DrawKind::Line, start: None }),
+        "rect" => set_tool(w, Tool::Draw { kind: DrawKind::Rect, start: None }),
+        "circle" => set_tool(w, Tool::Draw { kind: DrawKind::Circle, start: None }),
+        "text" => super::lay_dialogs::open_text(w),
+        "keepout" => super::lay_dialogs::open_keepout(w),
         "fill" => {
             ui::commit(w, "Fill zones", |d| {
                 cadrs_eda::zone::fill_all(&mut d.board);
@@ -281,6 +314,43 @@ fn press(w: &mut World, at: Pt, shift: bool) {
             pts.push(snap(at, grid()));
             w.resource_mut::<LayoutState>().tool = Tool::Zone { net, layer, pts };
         }
+        Tool::Draw { kind, start: None } => w.resource_mut::<LayoutState>().tool = Tool::Draw { kind, start: Some(snap(at, grid())) },
+        Tool::Draw { kind, start: Some(a) } => {
+            let b = snap(at, grid());
+            if a == b {
+                return;
+            }
+            let layer = w.resource::<LayoutState>().draw_layer;
+            ui::commit(w, "Draw", |d| {
+                be::add_shape(&mut d.board, draw_geom(kind, a, b), layer);
+                Ok(())
+            });
+            // Lines chain on from where the last one ended.
+            w.resource_mut::<LayoutState>().tool = Tool::Draw { kind, start: (kind == DrawKind::Line).then_some(b) };
+        }
+        Tool::Text(text) => {
+            let layer = w.resource::<LayoutState>().draw_layer;
+            let at = snap(at, grid());
+            ui::commit(w, "Add text", |d| {
+                be::add_text(&mut d.board, &text, at, layer);
+                Ok(())
+            });
+            set_tool(w, Tool::Select);
+        }
+        Tool::Keepout { layers, rules, mut pts } => {
+            pts.push(snap(at, grid()));
+            w.resource_mut::<LayoutState>().tool = Tool::Keepout { layers, rules, pts };
+        }
+    }
+}
+
+/// The shape a Draw tool makes from `a` to `b`.
+fn draw_geom(kind: DrawKind, a: Pt, b: Pt) -> cadrs_eda::graphics::Geom {
+    use cadrs_eda::graphics::Geom;
+    match kind {
+        DrawKind::Line => Geom::Line { a, b },
+        DrawKind::Rect => Geom::Rect { a, b },
+        DrawKind::Circle => Geom::Circle { center: a, radius: a.dist(b).round() as Nm },
     }
 }
 
@@ -299,6 +369,18 @@ fn double(w: &mut World, _at: Pt) {
             }
             set_tool(w, Tool::Select);
         }
+        Tool::Keepout { layers, rules, mut pts } => {
+            pts.dedup();
+            if pts.len() >= 3 {
+                ui::commit(w, "Add keep-out", |d| {
+                    cadrs_eda::zone::add_keepout(&mut d.board, layers, pts.clone(), rules);
+                    Ok(())
+                });
+            }
+            set_tool(w, Tool::Select);
+        }
+        // A double-click ends a chain of lines.
+        Tool::Draw { kind: DrawKind::Line, .. } => set_tool(w, Tool::Draw { kind: DrawKind::Line, start: None }),
         _ => {}
     }
 }
@@ -480,7 +562,15 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<Pt>>) {
             Tool::Outline(Some(a)) => {
                 cadrs_eda::outline::add_rect(&mut d.board, a, snap(at, mm(1.0)));
             }
-            Tool::Zone { pts, .. } => {
+            Tool::Draw { kind, start: Some(a) } => {
+                let layer = world.resource::<LayoutState>().draw_layer;
+                be::add_shape(&mut d.board, draw_geom(kind, a, snap(at, grid())), layer);
+            }
+            Tool::Text(text) => {
+                let layer = world.resource::<LayoutState>().draw_layer;
+                be::add_text(&mut d.board, &text, snap(at, grid()), layer);
+            }
+            Tool::Keepout { pts, .. } | Tool::Zone { pts, .. } => {
                 let mut ring = pts.clone();
                 ring.push(snap(at, grid()));
                 if ring.len() >= 2 {

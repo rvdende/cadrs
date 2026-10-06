@@ -462,6 +462,53 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
             d.text(&t.text, color);
         }
     }
+    // Zone outlines, and keep-outs hatched (the board's and footprints' ones).
+    let mut zones: Vec<(Vec<Vec<Pt>>, crate::layer::LayerSet, bool)> = b.zones.iter().map(|z| (z.outline.clone(), z.layers, z.keepout.is_some())).collect();
+    for f in &b.footprints {
+        for z in &f.footprint.zones {
+            let rings = z.outline.iter().map(|r| r.iter().map(|p| f.placement.apply(*p)).collect()).collect();
+            zones.push((rings, f.placement.layers(z.layers), z.keepout.is_some()));
+        }
+    }
+    for (rings, layers, keepout) in zones {
+        let Some(layer) = layers.iter().find(|l| shown(*l)) else { continue };
+        let mut color = th.layer(layer);
+        if view.dim_inactive && layer != view.active {
+            color[3] = (color[3] as u32 * 30 / 100) as u8;
+        }
+        for r in &rings {
+            let mut pts = r.clone();
+            if let Some(p) = pts.first().copied() {
+                pts.push(p);
+            }
+            d.line(color, mm(0.1), pts);
+        }
+        if keepout {
+            let region: Region = rings.iter().map(|r| {
+                let mut r = r.clone();
+                if poly::ring_area(&r) < 0.0 {
+                    r.reverse();
+                }
+                r
+            }).collect();
+            let bb = region.iter().flatten().fold(None, |acc: Option<Bounds>, p| Some(Bounds::union(acc, Bounds::of(*p))));
+            if let Some(bb) = bb {
+                // 45° hatching, 1 mm apart.
+                let h = bb.max.y - bb.min.y;
+                let step = mm(1.0);
+                let mut strokes = vec![];
+                let mut x = bb.min.x - h;
+                while x < bb.max.x {
+                    strokes.push(poly::stroke(&[Pt::new(x, bb.min.y), Pt::new(x + h, bb.max.y)], mm(0.08)));
+                    x += step;
+                }
+                let hatch = poly::intersection(&poly::union_all(&strokes), &region);
+                let mut faint = color;
+                faint[3] = (faint[3] as u32 * 60 / 100) as u8;
+                d.region(faint, 90, &hatch);
+            }
+        }
+    }
     // Vias and holes over the copper.
     let top = 100;
     for v in &b.vias {

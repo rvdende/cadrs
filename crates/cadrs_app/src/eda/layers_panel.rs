@@ -61,8 +61,8 @@ fn sync(world: &mut World) {
     }
     let list = layers(world);
     let s = world.resource::<LayoutState>();
-    let state = format!("{list:?}{:?}{:?}{}{}", s.active, s.hidden, s.dim, s.layers_open);
-    let open = s.layers_open;
+    let state = format!("{list:?}{:?}{:?}{}{}{:?}", s.active, s.hidden, s.dim, s.layers_open, s.draw_layer);
+    let (open, draw) = (s.layers_open, s.draw_layer);
     let (active, hidden, dim) = (s.active, s.hidden.clone(), s.dim);
     if existing.as_ref().is_some_and(|(_, shown)| *shown == state) {
         return;
@@ -103,7 +103,8 @@ fn sync(world: &mut World) {
             });
             for l in &list {
                 let slug = crate::pcb::slug(&l.name());
-                let is_active = *l == active;
+                // The routing layer and (when it isn't copper) the drawing layer.
+                let is_active = *l == active || (*l == draw && !draw.is_copper());
                 let visible = !hidden.contains(l);
                 let row = format!("eda-layer-{slug}");
                 p.spawn((
@@ -131,9 +132,10 @@ fn sync(world: &mut World) {
 }
 
 fn on_row(a: On<Activate>, q: Query<&LayerRow>, mut s: ResMut<LayoutState>) {
-    if let Ok(r) = q.get(a.entity)
-        && r.0.is_copper()
-    {
+    let Ok(r) = q.get(a.entity) else { return };
+    // Any layer is what the Draw and Text tools draw on; a copper one is also routed on.
+    s.draw_layer = r.0;
+    if r.0.is_copper() {
         s.active = r.0;
     }
 }

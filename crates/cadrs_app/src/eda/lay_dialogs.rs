@@ -278,6 +278,83 @@ fn accept_zone(w: &mut World) {
     set_tool(w, Tool::Zone { net, layer, pts: vec![] });
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Text and keep-outs
+
+/// Text on the drawing layer: its words, then a click places it.
+pub fn open_text(w: &mut World) {
+    let layer = w.resource::<LayoutState>().draw_layer;
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-btext-dialog")
+            .title("Text")
+            .width(440.0)
+            .body(move |p| {
+                row(p, &t, "Text", |r| {
+                    r.spawn(TextInput::new("eda-btext-text").width(Val::Px(220.0)).height(26.0).build(&t));
+                });
+                p.spawn(t.text(format!("On {} (pick another layer in the layers panel).", layer.name()), t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+            })
+            .footer(move |f| {
+                button(f, &tf, "eda-btext-ok", "OK", true, accept_text);
+                button(f, &tf, "eda-btext-cancel", "Cancel", false, close_all);
+            }),
+    );
+}
+
+fn accept_text(w: &mut World) {
+    let text = ui::text_value(w, "eda-btext-text").trim().to_string();
+    close_all(w);
+    if !text.is_empty() {
+        set_tool(w, Tool::Text(text));
+    }
+}
+
+/// A keep-out (rule area): its layers and what it forbids, then its corners (double-click ends).
+pub fn open_keepout(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-keepout-dialog")
+            .title("Keep-out properties")
+            .width(440.0)
+            .body(move |p| {
+                row(p, &t, "Layers", |r| {
+                    let s = Select::new("eda-keepout-layers").bordered().width(Val::Px(200.0)).option("Top copper", true).option("Bottom copper", true).option("Both copper layers", true);
+                    r.spawn(s.selected(2).build(&t));
+                });
+                for (name, label, on) in [("eda-keepout-tracks", "No tracks", true), ("eda-keepout-vias", "No vias", true), ("eda-keepout-pads", "No pads", false), ("eda-keepout-pour", "No copper pours", true), ("eda-keepout-footprints", "No footprints", false)] {
+                    p.spawn(Checkbox::new(name).label(label).checked(on).build(&t));
+                }
+            })
+            .footer(move |f| {
+                button(f, &tf, "eda-keepout-ok", "OK", true, accept_keepout);
+                button(f, &tf, "eda-keepout-cancel", "Cancel", false, close_all);
+            }),
+    );
+}
+
+fn accept_keepout(w: &mut World) {
+    use cadrs_eda::layer::LayerSet;
+    let layers = match select_index(w, "eda-keepout-layers") {
+        Some(0) => LayerSet::of(&[Layer::TopCopper]),
+        Some(1) => LayerSet::of(&[Layer::BottomCopper]),
+        _ => LayerSet::of(&[Layer::TopCopper, Layer::BottomCopper]),
+    };
+    let rules = cadrs_eda::board::Keepout {
+        tracks: checkbox(w, "eda-keepout-tracks"),
+        vias: checkbox(w, "eda-keepout-vias"),
+        pads: checkbox(w, "eda-keepout-pads"),
+        copper_pour: checkbox(w, "eda-keepout-pour"),
+        footprints: checkbox(w, "eda-keepout-footprints"),
+    };
+    close_all(w);
+    set_tool(w, Tool::Keepout { layers, rules, pts: vec![] });
+}
 // ---------------------------------------------------------------------------------------------
 // DRC (GS19)
 

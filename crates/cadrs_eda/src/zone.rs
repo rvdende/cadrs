@@ -32,6 +32,13 @@ pub fn add_zone(board: &mut Board, net: &str, layer: Layer, outline: Vec<Pt>) ->
     id
 }
 
+/// Adds a keep-out (a rule area) on `layers` forbidding what `rules` says; returns its id.
+pub fn add_keepout(board: &mut Board, layers: LayerSet, outline: Vec<Pt>, rules: crate::board::Keepout) -> Uuid {
+    let id = Uuid::new_v4();
+    board.zones.push(Zone { id, name: String::new(), net: String::new(), layers, priority: 0, outline: vec![outline], fill: ZoneFill::default(), keepout: Some(rules), locked: false, filled: vec![] });
+    id
+}
+
 /// A region's rings as polygons with holes (holes go to the outer ring holding them).
 pub fn to_polygons(r: &Region) -> Vec<Polygon> {
     let mut outers: Vec<Polygon> = r.iter().filter(|x| poly::ring_area(x) > 0.0).map(|x| Polygon { outer: x.clone(), holes: vec![] }).collect();
