@@ -38,6 +38,7 @@ const STRIP: ui::StripSpec = &[
     Some(("pcb-draw-rect", "corner-rectangle", "Draw a rectangle on the drawing layer", "rect")),
     Some(("pcb-draw-circle", "center-circle", "Draw a circle on the drawing layer", "circle")),
     Some(("pcb-text", "text", "Add text on the drawing layer", "text")),
+    Some(("pcb-measure", "ruler", "Measure (Ctrl+Shift+M)", "measure")),
     Some(("pcb-fill", "fill-zones", "Fill all zones (B)", "fill")),
     Some(("pcb-layer", "layers", "Switch the active layer (front / back)", "layer")),
     None,
@@ -61,6 +62,8 @@ pub enum Tool {
     Text(String),
     /// A keep-out on `layers` forbidding what `rules` says: its corners so far.
     Keepout { layers: cadrs_eda::layer::LayerSet, rules: cadrs_eda::board::Keepout, pts: Vec<Pt> },
+    /// The ruler: its start, and its end once a second click froze it.
+    Measure { a: Option<Pt>, b: Option<Pt> },
 }
 
 /// What the Draw tools make.
@@ -83,6 +86,7 @@ impl Tool {
             Tool::Draw { kind: DrawKind::Circle, .. } => "circle",
             Tool::Text(_) => "text",
             Tool::Keepout { .. } => "keepout",
+            Tool::Measure { .. } => "measure",
         }
     }
 }
@@ -110,11 +114,15 @@ pub struct LayoutState {
     pub layers_open: bool,
     /// What the Draw and Text tools draw on (a click in the layers panel picks it).
     pub draw_layer: Layer,
+    /// The net highlighted (` on its copper).
+    pub net: Option<String>,
+    /// The width new tracks get (W / Shift+W step it); `None`: the net class'.
+    pub track_width: Option<Nm>,
 }
 
 impl Default for LayoutState {
     fn default() -> Self {
-        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false, draw_layer: Layer::TopSilk }
+        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false, draw_layer: Layer::TopSilk, net: None, track_width: None }
     }
 }
 
@@ -177,6 +185,7 @@ pub fn run_action(w: &mut World, action: &str) {
         "circle" => set_tool(w, Tool::Draw { kind: DrawKind::Circle, start: None }),
         "text" => super::lay_dialogs::open_text(w),
         "keepout" => super::lay_dialogs::open_keepout(w),
+        "measure" => set_tool(w, Tool::Measure { a: None, b: None }),
         "fill" => {
             ui::commit(w, "Fill zones", |d| {
                 cadrs_eda::zone::fill_all(&mut d.board);
@@ -225,6 +234,7 @@ fn start_route(w: &mut World, at: Pt) {
 /// Lays the route as tracks and vias (one undo step).
 fn finish_route(w: &mut World, runs: Vec<(Layer, Vec<Pt>)>, vias: Vec<Pt>, net: String) {
     let any = runs.iter().any(|(_, p)| p.len() >= 2);
+    let width = w.resource::<LayoutState>().track_width;
     if any {
         ui::commit(w, "Route", |d| {
             for v in &vias {
@@ -232,7 +242,7 @@ fn finish_route(w: &mut World, runs: Vec<(Layer, Vec<Pt>)>, vias: Vec<Pt>, net: 
             }
             for (l, pts) in &runs {
                 if pts.len() >= 2 {
-                    let ids = be::route(&mut d.board, pts, *l, None);
+                    let ids = be::route(&mut d.board, pts, *l, width);
                     // The route's net is the start's (a run starting at a via gets it too).
                     for t in d.board.tracks.iter_mut().filter(|t| ids.contains(&t.id)) {
                         t.net = net.clone();
@@ -341,7 +351,23 @@ fn press(w: &mut World, at: Pt, shift: bool) {
             pts.push(snap(at, grid()));
             w.resource_mut::<LayoutState>().tool = Tool::Keepout { layers, rules, pts };
         }
+        // The ruler: a start, an end (it stays), then a click starts another.
+        Tool::Measure { a, b } => {
+            let p = snap(at, grid());
+            w.resource_mut::<LayoutState>().tool = match (a, b) {
+                (Some(a), None) => Tool::Measure { a: Some(a), b: Some(p) },
+                _ => Tool::Measure { a: Some(p), b: None },
+            };
+        }
     }
+}
+
+/// The ruler's line and its reading, on the comments layer.
+fn ruler(d: &mut Design, a: Pt, b: Pt) {
+    let (dx, dy) = (cadrs_eda::units::to_mm(b.x - a.x), cadrs_eda::units::to_mm(b.y - a.y));
+    be::add_shape(&mut d.board, cadrs_eda::graphics::Geom::Line { a, b }, Layer::Comments);
+    let mid = Pt::new((a.x + b.x) / 2, (a.y + b.y) / 2 + mm(1.0));
+    be::add_text(&mut d.board, &format!("{:.3} mm  (dx {dx:.3}, dy {dy:.3})", dx.hypot(dy)), mid, Layer::Comments);
 }
 
 /// The shape a Draw tool makes from `a` to `b`.
@@ -423,8 +449,15 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
     }
     let held = world.resource::<ButtonInput<KeyCode>>().clone();
     let ctrl = held.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let shift = held.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     for k in keys {
-        if k.state != ButtonState::Pressed || ctrl {
+        if k.state != ButtonState::Pressed {
+            continue;
+        }
+        if ctrl {
+            if shift && k.key_code == KeyCode::KeyM {
+                set_tool(world, Tool::Measure { a: None, b: None });
+            }
             continue;
         }
         let pointer = world.resource::<EdaPointer>().at;
@@ -434,9 +467,32 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                 set_tool(world, Tool::Select);
                 if !busy {
                     world.resource_mut::<LayoutState>().selection.clear();
+                    world.resource_mut::<LayoutState>().net = None;
                 }
             }
             KeyCode::F8 => run_action(world, "update"),
+            // Highlight the net of the copper under the pointer (again: off).
+            KeyCode::Backquote => {
+                let net = board_of(world).and_then(|d| {
+                    let items = cadrs_eda::copper::items(&d.board);
+                    items.iter().find(|c| !c.net.is_empty() && c.layers.iter().any(|(_, r)| cadrs_eda::poly::contains(r, pointer))).map(|c| c.net.clone())
+                });
+                let mut s = world.resource_mut::<LayoutState>();
+                s.net = if net == s.net { None } else { net };
+            }
+            // Step the width new tracks get through the net class' and the predefined ones.
+            KeyCode::KeyW => {
+                let Some(d) = board_of(world) else { continue };
+                let class = d.board.rules.class_of("").track_width;
+                let mut sizes: Vec<Nm> = std::iter::once(class).chain(d.board.rules.track_widths.iter().copied()).chain([mm(0.25), mm(0.4), mm(0.6), mm(1.0)]).collect();
+                sizes.sort();
+                sizes.dedup();
+                let now = world.resource::<LayoutState>().track_width.unwrap_or(class);
+                let i = sizes.iter().position(|s| *s == now).unwrap_or(0);
+                let next = if shift { sizes[i.saturating_sub(1)] } else { sizes[(i + 1).min(sizes.len() - 1)] };
+                world.resource_mut::<LayoutState>().track_width = Some(next);
+                ui::toast(world, &format!("Track width {} mm", cadrs_eda::units::to_mm(next)));
+            }
             KeyCode::KeyB => run_action(world, "fill"),
             KeyCode::KeyX => run_action(world, "route"),
             KeyCode::PageUp => world.resource_mut::<LayoutState>().active = Layer::TopCopper,
@@ -544,13 +600,14 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<Pt>>) {
     } else {
         match tool {
             Tool::Route { runs, vias, net } => {
+                let width = world.resource::<LayoutState>().track_width;
                 let to = snap_to_copper(&d, at);
                 for (k, (l, pts)) in runs.iter().enumerate() {
                     let mut p = pts.clone();
                     if k + 1 == runs.len() {
                         p.extend(be::posture(*pts.last().unwrap(), to, false).into_iter().skip(1));
                     }
-                    let ids = be::route(&mut d.board, &p, *l, None);
+                    let ids = be::route(&mut d.board, &p, *l, width);
                     for t in d.board.tracks.iter_mut().filter(|t| ids.contains(&t.id)) {
                         t.net = net.clone();
                     }
@@ -570,6 +627,7 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<Pt>>) {
                 let layer = world.resource::<LayoutState>().draw_layer;
                 be::add_text(&mut d.board, &text, snap(at, grid()), layer);
             }
+            Tool::Measure { a: Some(a), b } => ruler(&mut d, a, b.unwrap_or_else(|| snap(at, grid()))),
             Tool::Keepout { pts, .. } | Tool::Zone { pts, .. } => {
                 let mut ring = pts.clone();
                 ring.push(snap(at, grid()));
@@ -606,6 +664,9 @@ fn publish(s: Res<LayoutState>, eda: Res<super::Eda2d>, mut inputs: ResMut<Scene
     }
     if inputs.dim_inactive != s.dim {
         inputs.dim_inactive = s.dim;
+    }
+    if inputs.board_net != s.net {
+        inputs.board_net = s.net.clone();
     }
 }
 

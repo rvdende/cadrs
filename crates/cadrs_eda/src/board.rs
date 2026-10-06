@@ -212,6 +212,9 @@ pub struct Rules {
     pub net_classes: Vec<NetClass>,
     /// Explicit net → class assignments (on top of the patterns).
     pub net_class_of: Vec<(String, String)>,
+    /// Predefined track widths (W steps through them after the net class'), smallest first.
+    #[serde(default)]
+    pub track_widths: Vec<Nm>,
 }
 
 impl Default for Rules {
@@ -234,6 +237,7 @@ impl Default for Rules {
             mask_margin: 0,
             net_classes: vec![NetClass::default()],
             net_class_of: vec![],
+            track_widths: vec![],
         }
     }
 }

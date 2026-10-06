@@ -556,6 +556,8 @@ pub struct SceneInputs {
     pub active_layer: Option<cadrs_eda::layer::Layer>,
     /// Layers other than the active one drawn faint.
     pub dim_inactive: bool,
+    /// The net highlighted in the Layout.
+    pub board_net: Option<String>,
     /// A design being edited (a drag in progress) drawn instead of the document's.
     pub preview: Option<u64>,
 }
@@ -650,6 +652,7 @@ fn rebuild_scene(
                     let mut v = render::BoardView::all(&d.board);
                     v.visible.retain(|l| !inputs.hidden_layers.contains(l));
                     v.dim_inactive = inputs.dim_inactive;
+                    v.highlight_net = inputs.board_net.clone();
                     if let Some(a) = inputs.active_layer {
                         v.active = a;
                     }

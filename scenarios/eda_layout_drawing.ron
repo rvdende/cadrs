@@ -1,7 +1,8 @@
 // Drawing on the board, on the course's finished board (GS18): 01 the top silkscreen picked as
 // the drawing layer in the layers panel; 02 text, a rectangle, a circle and a run of lines on
 // it; 03 a keep-out in the top-right corner (no copper pour, tracks or vias, both sides); 04 the
-// ground zone refilled round it; 05 DRC still clean.
+// ground zone refilled round it; 05 DRC still clean; 06 the VCC net highlighted (`) and the
+// track width stepped (W); 07 the ruler (Ctrl+Shift+M) corner to corner.
 Scenario(
     start: Some("document"),
     steps: [
@@ -59,5 +60,18 @@ Scenario(
         ExpectText("eda-drc-summary", "Violations (0): 0 errors, 0 warnings. Unconnected items: 0"),
         Screenshot("05-drc"),
         Click(ui("eda-drc-close")),
+        // The VCC net highlighted (`), the track width stepped up (W), the ruler across the board.
+        Hover(flat(37.12, 26.0)),
+        Key("`"),
+        Key("W"),
+        MoveTo(1100, 900),
+        Screenshot("06-net-and-width"),
+        Key("Ctrl+Shift+M"),
+        Click(flat(0.0, 0.0)),
+        Click(flat(45.0, 50.0)),
+        MoveTo(1100, 900),
+        Screenshot("07-measure"),
+        Key("Escape"),
+        Key("Escape"),
     ],
 )

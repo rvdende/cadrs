@@ -363,13 +363,15 @@ pub struct BoardView {
     pub ratsnest: bool,
     /// Other layers than the active one drawn faint (KiCad's high-contrast mode).
     pub dim_inactive: bool,
+    /// A net drawn in the highlight colour (` in the Layout).
+    pub highlight_net: Option<String>,
 }
 
 impl BoardView {
     pub fn all(board: &Board) -> BoardView {
         let mut visible: Vec<Layer> = board.copper().collect();
         visible.extend([Layer::TopSilk, Layer::BottomSilk, Layer::TopCourtyard, Layer::BottomCourtyard, Layer::TopFab, Layer::BottomFab, Layer::Outline, Layer::Drawings, Layer::Comments]);
-        BoardView { visible, active: Layer::TopCopper, selected: vec![], ratsnest: true, dim_inactive: false }
+        BoardView { visible, active: Layer::TopCopper, selected: vec![], ratsnest: true, dim_inactive: false, highlight_net: None }
     }
 }
 
@@ -461,6 +463,13 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
         for t in b.texts.iter().filter(|t| t.layer == layer) {
             d.text(&t.text, color);
         }
+    }
+    // The highlighted net's copper, on every shown layer, over the rest.
+    if let Some(net) = view.highlight_net.as_ref().filter(|n| !n.is_empty()) {
+        let mine: Vec<Region> = items.iter().filter(|c| &c.net == net).flat_map(|c| c.layers.iter().filter(|(l, _)| shown(*l)).map(|(_, r)| r.clone())).collect();
+        let mut lit = th.highlight;
+        lit[3] = 0xd0;
+        d.region(lit, 80, &poly::union_all(&mine));
     }
     // Zone outlines, and keep-outs hatched (the board's and footprints' ones).
     let mut zones: Vec<(Vec<Vec<Pt>>, crate::layer::LayerSet, bool)> = b.zones.iter().map(|z| (z.outline.clone(), z.layers, z.keepout.is_some())).collect();
