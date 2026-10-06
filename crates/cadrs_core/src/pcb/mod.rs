@@ -19,6 +19,7 @@
 pub mod board;
 pub mod bom;
 pub mod component_docs;
+pub mod design;
 pub mod generated;
 pub mod import;
 pub mod library;
@@ -49,14 +50,34 @@ pub enum BoardSource {
     Idf { emn: String, emp: Option<String> },
     /// Synced from a Part Studio or Assembly tab (P3H.5, PCB5): see [`sync`].
     Mcad(sync::McadSource),
+    /// Designed in cadrs: the board's [`StudioBoard::design`] (schematic and layout), made
+    /// with + under Boards or imported (`imported_from`: the file it came from, e.g. a KiCad
+    /// project; its folder is where its 3D models are looked for).
+    Native { imported_from: Option<String> },
 }
 
 /// One board of a PCB Studio.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StudioBoard {
     pub id: BoardId,
+    /// The mechanical board (outline, placements, packages). For a native board it is made
+    /// from the design ([`design::pcb_board`]).
     pub board: PcbBoard,
     pub source: BoardSource,
+    /// A native board's schematic and layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<Box<cadrs_eda::Design>>,
+}
+
+/// A component's id within its PCB Studio, stable while it exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ComponentId(pub u64);
+
+/// A component made in this studio (+ under Components): its symbol, footprint and 3D model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StudioComponent {
+    pub id: ComponentId,
+    pub component: cadrs_eda::Component,
 }
 
 impl StudioBoard {
@@ -130,6 +151,11 @@ pub struct PcbStudio {
     /// What Create assembly made from its boards (P3H.6, [`generated`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub generated: Vec<GeneratedAssembly>,
+    /// Components made in this studio, in the order they were added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<StudioComponent>,
+    #[serde(default)]
+    next_component: u64,
 }
 
 impl PcbStudio {
@@ -151,8 +177,26 @@ impl PcbStudio {
         let n = self.next_board.max(self.boards.iter().map(|b| b.id.0 + 1).max().unwrap_or(0));
         let id = BoardId(n);
         self.next_board = n + 1;
-        self.boards.push(StudioBoard { id, board, source });
+        self.boards.push(StudioBoard { id, board, source, design: None });
         id
+    }
+
+    pub fn component(&self, id: ComponentId) -> Option<&StudioComponent> {
+        self.components.iter().find(|c| c.id == id)
+    }
+
+    /// A component name not yet used in this studio (as [`Self::free_name`] for boards).
+    pub fn free_component_name(&self, name: &str) -> String {
+        let used = |n: &str| self.components.iter().any(|c| c.component.name == n);
+        if !used(name) {
+            return name.to_string();
+        }
+        (1..).map(|n| format!("{name} ({n})")).find(|c| !used(c)).unwrap()
+    }
+
+    /// The first "Board 1", "Board 2", … (or "Component n") not yet used.
+    fn next_free(&self, base: &str, used: impl Fn(&str) -> bool) -> String {
+        (1..).map(|n| format!("{base} {n}")).find(|c| !used(c)).unwrap()
     }
 
     /// Removes a board. If it was active, its neighbour (the next board, else the previous one)
@@ -257,6 +301,199 @@ impl Command for DeleteBoard {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         let s = studio_mut(doc, self.element)?;
         s.remove_board(self.board).map(|_| ()).ok_or_else(|| CommandError::Invalid("no such board".into()))
+    }
+}
+
+/// The + under Boards (or an imported design): adds a native board and shows it. Without a name
+/// it is "Board n"; a name already in the studio gets " (1)", " (2)", …
+#[derive(Debug, Clone)]
+pub struct AddBoard {
+    pub element: ElementId,
+    pub name: Option<String>,
+    pub design: Box<cadrs_eda::Design>,
+    pub imported_from: Option<String>,
+}
+
+impl AddBoard {
+    /// A new empty board: one empty schematic sheet, a 100 × 80 mm outline, no parts.
+    pub fn new_board(element: ElementId) -> AddBoard {
+        use cadrs_eda::units::mm;
+        let design = cadrs_eda::Design { board: cadrs_eda::board::Board::with_rect_outline(mm(100.0), mm(80.0)), ..cadrs_eda::Design::new() };
+        AddBoard { element, name: None, design: Box::new(design), imported_from: None }
+    }
+}
+
+impl Command for AddBoard {
+    fn label(&self) -> String {
+        match (&self.imported_from, &self.name) {
+            (Some(_), Some(name)) => format!("Import {name}"),
+            (Some(_), None) => "Import board".into(),
+            (None, _) => "Create board".into(),
+        }
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let s = studio_mut(doc, self.element)?;
+        let name = match &self.name {
+            Some(n) => s.free_name(n.trim()),
+            None => s.next_free("Board", |c| s.boards.iter().any(|b| b.name() == c)),
+        };
+        let board = design::pcb_board(&name, &self.design);
+        let id = s.add_board(board, BoardSource::Native { imported_from: self.imported_from.clone() });
+        if let Some(b) = s.board_mut(id) {
+            b.design = Some(self.design.clone());
+        }
+        s.active = Some(id);
+        Ok(())
+    }
+}
+
+/// Renames a board (double-click its row, or right after + under Boards). The name must not be
+/// empty or another board's.
+#[derive(Debug, Clone)]
+pub struct RenameBoard {
+    pub element: ElementId,
+    pub board: BoardId,
+    pub name: String,
+}
+
+impl Command for RenameBoard {
+    fn label(&self) -> String {
+        format!("Rename board to {}", self.name.trim())
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(CommandError::Invalid("A board name can't be empty".into()));
+        }
+        let s = studio_mut(doc, self.element)?;
+        if s.boards.iter().any(|b| b.id != self.board && b.name() == name) {
+            return Err(CommandError::Invalid(format!("There is already a board named {name}")));
+        }
+        let b = s.board_mut(self.board).ok_or_else(|| CommandError::Invalid("no such board".into()))?;
+        b.board.board.name = name.to_string();
+        Ok(())
+    }
+}
+
+/// The + under Components: adds an empty component ("Component n" without a name).
+#[derive(Debug, Clone)]
+pub struct AddComponent {
+    pub element: ElementId,
+    pub name: Option<String>,
+}
+
+impl Command for AddComponent {
+    fn label(&self) -> String {
+        "Create component".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let s = studio_mut(doc, self.element)?;
+        let name = match &self.name {
+            Some(n) => s.free_component_name(n.trim()),
+            None => s.next_free("Component", |c| s.components.iter().any(|x| x.component.name == c)),
+        };
+        let n = s.next_component.max(s.components.iter().map(|c| c.id.0 + 1).max().unwrap_or(0));
+        s.next_component = n + 1;
+        s.components.push(StudioComponent { id: ComponentId(n), component: cadrs_eda::Component::new(name) });
+        Ok(())
+    }
+}
+
+/// Renames a component (as [`RenameBoard`]).
+#[derive(Debug, Clone)]
+pub struct RenameComponent {
+    pub element: ElementId,
+    pub component: ComponentId,
+    pub name: String,
+}
+
+impl Command for RenameComponent {
+    fn label(&self) -> String {
+        format!("Rename component to {}", self.name.trim())
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(CommandError::Invalid("A component name can't be empty".into()));
+        }
+        let s = studio_mut(doc, self.element)?;
+        if s.components.iter().any(|c| c.id != self.component && c.component.name == name) {
+            return Err(CommandError::Invalid(format!("There is already a component named {name}")));
+        }
+        let c = s.components.iter_mut().find(|c| c.id == self.component).ok_or_else(|| CommandError::Invalid("no such component".into()))?;
+        c.component.name = name.to_string();
+        Ok(())
+    }
+}
+
+/// An edit of a native board's schematic or layout: the editors compute the new design with
+/// `cadrs_eda` and commit it as one undo step (`label`: "Add wire", "Fill zones", …). The
+/// mechanical board (3D view, Create assembly) is rebuilt from it.
+#[derive(Debug, Clone)]
+pub struct SetDesign {
+    pub element: ElementId,
+    pub board: BoardId,
+    pub design: Box<cadrs_eda::Design>,
+    pub label: String,
+}
+
+impl Command for SetDesign {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let s = studio_mut(doc, self.element)?;
+        let b = s.board_mut(self.board).ok_or_else(|| CommandError::Invalid("no such board".into()))?;
+        if b.design.is_none() {
+            return Err(CommandError::Invalid(format!("{} is not designed in cadrs", b.name())));
+        }
+        let name = b.name().to_string();
+        b.board = design::pcb_board(&name, &self.design);
+        b.design = Some(self.design.clone());
+        Ok(())
+    }
+}
+
+/// An edit of a component's symbol or footprint (the symbol and footprint editors), one undo
+/// step.
+#[derive(Debug, Clone)]
+pub struct SetComponent {
+    pub element: ElementId,
+    pub component: ComponentId,
+    pub value: Box<cadrs_eda::Component>,
+    pub label: String,
+}
+
+impl Command for SetComponent {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let s = studio_mut(doc, self.element)?;
+        let c = s.components.iter_mut().find(|c| c.id == self.component).ok_or_else(|| CommandError::Invalid("no such component".into()))?;
+        let name = c.component.name.clone();
+        c.component = (*self.value).clone();
+        // The name is the list's; renaming goes through RenameComponent.
+        c.component.name = name;
+        Ok(())
     }
 }
 

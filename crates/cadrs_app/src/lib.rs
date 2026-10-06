@@ -16,6 +16,7 @@ pub mod create_selection;
 pub mod cursor;
 pub mod document;
 pub mod drawing;
+pub mod eda;
 pub mod draft_ui;
 pub mod boolean;
 pub mod derived_ui;
@@ -608,7 +609,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins((history_panel::HistoryPlugin, workspaces::WorkspacesPlugin, repair::RepairPlugin, replace_reference::ReplaceReferencePlugin, panel_tab::PanelTabPlugin))
             .add_plugins((appearance::AppearancePlugin, material_dialog::MaterialDialogPlugin, applied::AppliedPlugin, sheetmetal_features_ui::SheetMetalFeaturesPlugin, feature_folders::FeatureFoldersPlugin, feature_list::FeatureListPlugin, search_tools::SearchToolsPlugin, plane_display::PlaneDisplayPlugin, create_selection::CreateSelectionPlugin, pattern::PatternPlugin, export_dialog::ExportDialogPlugin, assembly::AssemblyPlugin, properties_dialog::PropertiesDialogPlugin))
             .add_plugins((drawing::DrawingPlugin, linked::LinkedPlugin, reference_manager::ReferenceManagerPlugin, linked_session::LinkedSessionPlugin, move_document::MoveDocumentPlugin, derived_ui::DerivedPlugin))
-            .add_plugins((pcb::PcbPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin, sheetmetal_p3i9_ui::Sm9Plugin))
+            .add_plugins((pcb::PcbPlugin, eda::EdaPlugin, measure::MeasurePlugin, view_options::ViewOptionsPlugin, section_view::SectionViewPlugin, hidden_edges::HiddenEdgesPlugin, sheetmetal_p3i9_ui::Sm9Plugin))
             // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
             .add_plugins((sheetmetal_table::SheetMetalTablePlugin, sheetmetal_joint_ui::ModifyJointUiPlugin))
             .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)

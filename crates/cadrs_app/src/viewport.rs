@@ -947,13 +947,14 @@ fn viewport_pointer(
     kind: Res<ActiveKind>,
     mut picks: MessageWriter<PickRequest>,
     planes: Res<PlanesVisible>,
-    (parts, sketch, extrude, applied, create, pick_override): (
+    (parts, sketch, extrude, applied, create, pick_override, eda2d): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::sketch::SketchSession>>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
+        Res<crate::eda::Eda2d>,
     ),
     (mut focus, q_number, mut grab, zoom_window): (
         ResMut<bevy::input_focus::InputFocus>,
@@ -964,7 +965,7 @@ fn viewport_pointer(
     prefs: Res<crate::preferences_ui::LocalPreferences>,
     mut commands: Commands,
 ) {
-    if kind.is_flat() {
+    if kind.is_flat() || eda2d.flat() {
         // The sheet has its own navigation (`crate::drawing`); a render has none.
         inputs.clear();
         return;
@@ -1332,9 +1333,9 @@ fn view_shortcuts(
     doc: Option<Res<ActiveDocument>>,
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
-    (cache, asm_parts, pcb_scene): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>),
+    (cache, asm_parts, pcb_scene, eda2d): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>, Res<crate::eda::Eda2d>),
 ) {
-    if kind.is_flat() {
+    if kind.is_flat() || eda2d.flat() {
         // No 3D views on a sheet or a render; F and Ctrl+S are handled by `crate::drawing`.
         keys_in.clear();
         return;

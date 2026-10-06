@@ -27,7 +27,10 @@
 
 pub mod create_assembly;
 pub mod dialogs;
+#[cfg(feature = "kicad")]
+pub mod kicad;
 pub mod manipulator;
+pub mod naming;
 pub mod panes;
 pub mod sync;
 pub mod transfer;
@@ -44,7 +47,7 @@ use cadrs_core::pcb::{BoardId, DeleteBoard, ItemId, PartTransform, PcbStudio};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::{ContextMenuAnchor, LastPointerButton};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{ScriptCommand, TextSubmit, TreeToggle};
+use cadrs_ui::{DoubleClickable, ScriptCommand, TextSubmit, TreeToggle};
 
 use crate::viewport::{ActiveKind, PickRequest, ViewportArea, ViewportDrag, ViewportRect, ViewportView};
 use crate::{ActiveDocument, AppState};
@@ -105,6 +108,7 @@ impl Plugin for PcbPlugin {
             .add_observer(on_search_submit)
             .add_observer(dialogs::on_path_browse);
         panes::register(app);
+        naming::register(app);
         manipulator::register(app);
         dialogs::register(app);
         transfer::register(app);
@@ -518,6 +522,10 @@ struct ComponentsRow(ElementId, BoardId);
 #[derive(Component, Clone)]
 struct PackageRow(ElementId, BoardId, String);
 
+/// A component made in the studio (+ under Components), listed first under Components.
+#[derive(Component, Clone, Copy)]
+struct NativeComponentRow(ElementId, cadrs_core::pcb::ComponentId);
+
 /// The Components nodes that are expanded (view state, not saved).
 #[derive(Resource, Default)]
 struct ComponentsOpen(HashSet<(ElementId, BoardId)>);
@@ -545,6 +553,7 @@ type PackageInfo = (String, String, usize);
 struct TreeSnap {
     element: Option<ElementId>,
     boards: Vec<(BoardId, String, bool, Vec<PackageInfo>)>,
+    components: Vec<(cadrs_core::pcb::ComponentId, String)>,
     open: Vec<BoardId>,
     viewing: Option<(BoardId, String)>,
     tree: Option<Entity>,
@@ -582,6 +591,7 @@ fn rebuild_tree(
     let snap = TreeSnap {
         element: Some(el),
         boards: s.boards.iter().map(|b| (b.id, b.name().to_string(), shown == Some(b.id), packages(&b.board))).collect(),
+        components: s.components.iter().map(|c| (c.id, c.component.name.clone())).collect(),
         open: s.boards.iter().filter(|b| open.0.contains(&(el, b.id))).map(|b| b.id).collect(),
         viewing: match &ui.view {
             PcbView::Component { element, board, package } if *element == el => Some((*board, package.clone())),
@@ -596,13 +606,15 @@ fn rebuild_tree(
     let t = theme.clone();
     commands.entity(tree).despawn_children();
     commands.entity(tree).with_children(|p| {
-        p.spawn(TreeItem::new("pcb-boards", "Boards").icon("board", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t)).insert(Pickable::IGNORE);
+        p.spawn(TreeItem::new("pcb-boards", "Boards").icon("board", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t))
+            .insert(Pickable::IGNORE)
+            .with_children(|h| header_add(h, &t, "pcb-add-board", "Create board"));
         for (id, name, active, _) in &snap.boards {
-            let mut item = TreeItem::new(format!("pcb-board-{}", slug(name)), name.clone()).icon("board", 16.0).left(26.0).height(24.0);
+            let mut item = TreeItem::new(format!("pcb-board-{}", slug(name)), name.clone()).icon("board", 16.0).left(26.0).height(24.0).editable();
             if *active {
                 item = item.weight(FontWeight::BOLD).foreground(t.primary).icon_color(t.primary);
             }
-            let mut row = p.spawn((item.build(&t), BoardRow(el, *id), ContextMenuTarget, Tooltip::new(name.clone())));
+            let mut row = p.spawn((item.build(&t), BoardRow(el, *id), ContextMenuTarget, DoubleClickable, Tooltip::new(name.clone())));
             if *active {
                 row.with_child((
                     Name::new("pcb-board-active-bar"),
@@ -626,7 +638,17 @@ fn rebuild_tree(
             BackgroundColor(t.separator),
             Pickable::IGNORE,
         ));
-        p.spawn(TreeItem::new("pcb-components", "Components").icon("chip", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t)).insert(Pickable::IGNORE);
+        p.spawn(TreeItem::new("pcb-components", "Components").icon("chip", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t))
+            .insert(Pickable::IGNORE)
+            .with_children(|h| header_add(h, &t, "pcb-add-component", "Create component"));
+        for (id, name) in &snap.components {
+            p.spawn((
+                TreeItem::new(format!("pcb-part-{}", slug(name)), name.clone()).icon("chip", 16.0).left(26.0).height(24.0).editable().build(&t),
+                NativeComponentRow(el, *id),
+                DoubleClickable,
+                Tooltip::new(format!("{name}: double-click to rename")),
+            ));
+        }
         for (id, name, _, pkgs) in &snap.boards {
             let is_open = snap.open.contains(id);
             p.spawn((
@@ -654,6 +676,16 @@ fn rebuild_tree(
     });
 }
 
+/// The + at the right end of a section header (Boards, Components).
+fn header_add(h: &mut ChildSpawnerCommands, t: &Theme, name: &'static str, tip: &str) {
+    h.spawn(Node { flex_grow: 1.0, ..default() });
+    h.spawn(IconButton::new(name, "plus").tooltip(tip).build(t)).entry::<Node>().and_modify(|mut n| {
+        n.width = Val::Px(18.0);
+        n.height = Val::Px(18.0);
+        n.margin.right = Val::Px(6.0);
+    });
+}
+
 /// A click on a board (under Boards or Components) shows it in the board view; a click on a
 /// package opens its component view (PCB4.5).
 #[allow(clippy::too_many_arguments)]
@@ -662,12 +694,18 @@ fn on_tree_activate(
     q_board: Query<&BoardRow>,
     q_comp: Query<&ComponentsRow>,
     q_pkg: Query<&PackageRow>,
+    q_native: Query<&NativeComponentRow>,
     last: Option<Res<LastPointerButton>>,
     mut open: ResMut<ComponentsOpen>,
     mut commands: Commands,
 ) {
     // A right-click on a row also activates it; only a left click switches.
     if last.is_some_and(|l| l.0 != bevy::picking::pointer::PointerButton::Primary) {
+        return;
+    }
+    // A component made here opens in its editor (`crate::eda::part_tools`).
+    if let Ok(&NativeComponentRow(el, c)) = q_native.get(a.entity) {
+        commands.queue(move |w: &mut World| crate::eda::edit_component(w, el, c));
         return;
     }
     if let Ok(PackageRow(el, b, pkg)) = q_pkg.get(a.entity).cloned() {
@@ -683,7 +721,10 @@ fn on_tree_activate(
         }
         _ => return,
     };
-    commands.queue(move |w: &mut World| show_board(w, el, id));
+    commands.queue(move |w: &mut World| {
+        crate::eda::stop_editing(w, el);
+        show_board(w, el, id);
+    });
 }
 
 /// Opens the component view of a package (PCB4.5): the package alone on a grid, with the

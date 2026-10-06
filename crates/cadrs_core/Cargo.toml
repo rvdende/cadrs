@@ -18,6 +18,7 @@ cadrs_fea.workspace = true
 cadrs_render.workspace = true
 cadrs_drawing.workspace = true
 cadrs_idf.workspace = true
+cadrs_eda.workspace = true
 cadrs_sheetmetal.workspace = true
 nalgebra.workspace = true
 serde.workspace = true

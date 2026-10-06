@@ -323,3 +323,88 @@ fn keep_ids_are_stable_per_area() {
 }
 
 mod p3h4;
+
+#[test]
+fn plus_creates_named_boards_and_components() {
+    let (mut d, mut h, id) = doc_with_studio();
+    h.execute(&mut d, &AddBoard::new_board(id)).unwrap();
+    h.execute(&mut d, &AddBoard::new_board(id)).unwrap();
+    assert_eq!(names(studio(&d, id)), ["Board 1", "Board 2"]);
+    assert_eq!(h.undo_label(), Some("Create board"));
+    let s = studio(&d, id);
+    let b = &s.boards[1];
+    assert_eq!(s.active, Some(b.id));
+    assert!(matches!(b.source, BoardSource::Native { imported_from: None }));
+    // Its mechanical board: the 100 × 80 mm outline, 1.6 mm thick, no parts.
+    let o = b.board.board.outline.as_ref().unwrap();
+    assert!((o.loops[0].area() - 8000.0).abs() < 1e-9);
+    assert_eq!(b.board.thickness(), 1.6);
+    assert!(b.design.is_some());
+
+    // Renamed (as the inline edit after + does); names stay unique.
+    let b1 = s.boards[0].id;
+    h.execute(&mut d, &RenameBoard { element: id, board: b1, name: " Power monitor ".into() }).unwrap();
+    assert_eq!(names(studio(&d, id)), ["Power monitor", "Board 2"]);
+    let b2 = studio(&d, id).boards[1].id;
+    assert!(h.execute(&mut d, &RenameBoard { element: id, board: b2, name: "Power monitor".into() }).is_err());
+    assert!(h.execute(&mut d, &RenameBoard { element: id, board: b2, name: "  ".into() }).is_err());
+    // The next unnamed board takes the first free number.
+    h.execute(&mut d, &AddBoard::new_board(id)).unwrap();
+    assert_eq!(names(studio(&d, id)), ["Power monitor", "Board 2", "Board 1"]);
+
+    h.execute(&mut d, &AddComponent { element: id, name: None }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()) }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()) }).unwrap();
+    let comps = |d: &Document| studio(d, id).components.iter().map(|c| c.component.name.clone()).collect::<Vec<_>>();
+    assert_eq!(comps(&d), ["Component 1", "RA-01SH", "RA-01SH (1)"]);
+    let c0 = studio(&d, id).components[0].id;
+    h.execute(&mut d, &RenameComponent { element: id, component: c0, name: "LoRa module".into() }).unwrap();
+    assert_eq!(comps(&d)[0], "LoRa module");
+
+    // Saved and loaded.
+    let back: Document = ron::from_str(&ron::to_string(&d).unwrap()).unwrap();
+    assert_eq!(studio(&back, id), studio(&d, id));
+
+    // Undo takes them away again (four component steps, then the third board).
+    for _ in 0..5 {
+        h.undo(&mut d);
+    }
+    assert!(studio(&d, id).components.is_empty());
+    assert_eq!(names(studio(&d, id)), ["Power monitor", "Board 2"]);
+}
+
+#[test]
+fn designs_and_components_edit_through_undo() {
+    use cadrs_eda::library::LibraryTable;
+    let (mut d, mut h, id) = doc_with_studio();
+    h.execute(&mut d, &AddBoard::new_board(id)).unwrap();
+    let board = studio(&d, id).boards[0].id;
+    // The course's board replaces the empty one in one step; the 3D board follows.
+    let lib = LibraryTable::builtin();
+    let course = cadrs_eda::getting_started::gs18(&lib);
+    h.execute(&mut d, &SetDesign { element: id, board, design: Box::new(course.clone()), label: "Fill zones".into() }).unwrap();
+    assert_eq!(h.undo_label(), Some("Fill zones"));
+    let b = studio(&d, id).board(board).unwrap();
+    assert_eq!(b.design.as_deref(), Some(&course));
+    assert_eq!(b.board.board.placements.len(), 3);
+    assert_eq!(b.name(), "Board 1");
+    h.undo(&mut d);
+    assert_eq!(studio(&d, id).board(board).unwrap().board.board.placements.len(), 0);
+    // An imported IDF board has no design to edit.
+    import(&mut d, &mut h, id, vision());
+    let idf = studio(&d, id).boards[1].id;
+    assert!(h.execute(&mut d, &SetDesign { element: id, board: idf, design: Box::new(course), label: "x".into() }).is_err());
+    // Components: the symbol editor's result, name kept.
+    h.execute(&mut d, &AddComponent { element: id, name: Some("Switch".into()) }).unwrap();
+    let c = studio(&d, id).components[0].id;
+    let mut value = cadrs_eda::Component::new("ignored");
+    value.symbol = Some(cadrs_eda::getting_started::switch_symbol());
+    value.footprint = Some(cadrs_eda::getting_started::switch_footprint());
+    h.execute(&mut d, &SetComponent { element: id, component: c, value: Box::new(value), label: "Edit symbol".into() }).unwrap();
+    let got = &studio(&d, id).component(c).unwrap().component;
+    assert_eq!(got.name, "Switch");
+    assert_eq!(got.symbol.as_ref().unwrap().pins.len(), 2);
+    // Saved and loaded.
+    let back: Document = ron::from_str(&ron::to_string(&d).unwrap()).unwrap();
+    assert_eq!(studio(&back, id), studio(&d, id));
+}

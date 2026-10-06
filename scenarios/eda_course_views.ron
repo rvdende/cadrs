@@ -1,0 +1,28 @@
+// A native board's Schematic, Layout and 3D views (docs/PLAN.md GS2): the "Getting Started"
+// course's finished design (GS25) opened as a board of a PCB Studio. 01 the Schematic view,
+// fitted to the sheet, with the Schematic | Layout | 3D switch; 02 zoomed in on the circuit
+// with the wheel; 03 the Layout view; 04 zoomed in; 05 the 3D view.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Custom("eda-example gs25"),
+        WaitFor("eda-mode-bar"),
+        MoveTo(1100, 900),
+        Screenshot("01-schematic"),
+        Scroll(at(700, 560), 4),
+        Wait(2),
+        Screenshot("02-schematic-zoomed"),
+        Click(ui("eda-mode-layout")),
+        MoveTo(1100, 900),
+        Screenshot("03-layout"),
+        Scroll(at(900, 400), 2),
+        Wait(2),
+        Screenshot("04-layout-zoomed"),
+        Click(ui("eda-mode-3d")),
+        MoveTo(1100, 900),
+        Screenshot("05-3d"),
+    ],
+)

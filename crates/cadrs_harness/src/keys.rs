@@ -71,6 +71,7 @@ fn parse_key(name: &str, shifted: bool) -> Option<KeySpec> {
         "escape" | "esc" => return named(C::Escape, Key::Escape),
         "backspace" => return named(C::Backspace, Key::Backspace),
         "delete" | "del" => return named(C::Delete, Key::Delete),
+        "insert" | "ins" => return named(C::Insert, Key::Insert),
         "tab" => return named(C::Tab, Key::Tab),
         "space" => {
             return Some(KeySpec {
@@ -89,6 +90,16 @@ fn parse_key(name: &str, shifted: bool) -> Option<KeySpec> {
         "pagedown" => return named(C::PageDown, Key::PageDown),
         "f1" => return named(C::F1, Key::F1),
         "f2" => return named(C::F2, Key::F2),
+        "f3" => return named(C::F3, Key::F3),
+        "f4" => return named(C::F4, Key::F4),
+        "f5" => return named(C::F5, Key::F5),
+        "f6" => return named(C::F6, Key::F6),
+        "f7" => return named(C::F7, Key::F7),
+        "f8" => return named(C::F8, Key::F8),
+        "f9" => return named(C::F9, Key::F9),
+        "f10" => return named(C::F10, Key::F10),
+        "f11" => return named(C::F11, Key::F11),
+        "f12" => return named(C::F12, Key::F12),
         _ => {}
     }
     let mut chars = name.chars();

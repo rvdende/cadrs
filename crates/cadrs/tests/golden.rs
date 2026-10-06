@@ -2222,3 +2222,9 @@ fn golden_surfacing_thicken() {
 fn golden_course_pcb_component_documents() {
     run_scenario("course_pcb_component_documents");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_pcb_create_board_component() {
+    run_scenario("pcb_create_board_component");
+}

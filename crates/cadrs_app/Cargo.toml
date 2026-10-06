@@ -23,3 +23,10 @@ nalgebra.workspace = true
 uuid.workspace = true
 serde.workspace = true
 ron.workspace = true
+cadrs_eda.workspace = true
+# KiCad project import: a crutch that can be dropped (remove the feature and `pcb::kicad`).
+cadrs_kicad = { workspace = true, optional = true }
+
+[features]
+default = ["kicad"]
+kicad = ["dep:cadrs_kicad"]

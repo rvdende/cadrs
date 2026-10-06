@@ -124,11 +124,33 @@ fn share_sketch_mapping(
     }
 }
 
-/// Lets scenarios address points of the sheet metal flat view (`flat(x, y)`).
-fn share_flat_mapping(table: Res<cadrs_app::sheetmetal_table::SmTable>, out: Option<ResMut<cadrs_harness::FlatToScreen>>) {
+/// Lets scenarios address points of the sheet metal flat view, or of a native board's
+/// Schematic or Layout view (design millimetres), as `flat(x, y)`.
+fn share_flat_mapping(
+    table: Res<cadrs_app::sheetmetal_table::SmTable>,
+    eda: Res<cadrs_app::eda::Eda2d>,
+    eda_ui: Res<cadrs_app::eda::EdaUi>,
+    rect: Res<cadrs_app::viewport::ViewportRect>,
+    out: Option<ResMut<cadrs_harness::FlatToScreen>>,
+) {
     let Some(mut out) = out else {
         return;
     };
+    if let Some(key) = eda.0.filter(|_| eda.flat())
+        && let Some((v, _)) = eda_ui.views.get(&key)
+    {
+        let s = v.to_screen([0.0, 0.0]);
+        let k = v.scale as f32;
+        let want = Some(cadrs_harness::Affine {
+            origin: rect.0.min + Vec2::new(s[0] as f32, s[1] as f32),
+            x_axis: Vec2::new(k, 0.0),
+            y_axis: Vec2::new(0.0, -k),
+        });
+        if out.0 != want {
+            out.0 = want;
+        }
+        return;
+    }
     let want = table.body.filter(|_| table.scene.is_some()).map(|(_, rect)| {
         let v = table.view;
         let z = table.scene.as_ref().map_or(0.0, |s| s.thickness as f32);

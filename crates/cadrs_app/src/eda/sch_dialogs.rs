@@ -1,0 +1,489 @@
+//! The Schematic view's dialogs (GS3, GS7, GS9–GS12): the label's name, a symbol's fields (E),
+//! page settings, footprint assignment, ERC, BOM.
+//!
+//! Names: `eda-label-dialog` (`eda-label-text`, `eda-label-ok`), `eda-props-dialog`
+//! (`eda-props-<field>`, `eda-props-ok`), `eda-page-dialog` (`eda-page-paper`, `eda-page-title`,
+//! `eda-page-date`, `eda-page-rev`, `eda-page-company`, `eda-page-ok`), `eda-assign-dialog`
+//! (`eda-assign-sym-<ref>` rows, `eda-assign-fp-<slug>` candidates, the `eda-assign-by-symbol`,
+//! `eda-assign-by-pins` checkboxes, `eda-assign-filter`, `eda-assign-ok`), `eda-erc-dialog`
+//! (`eda-erc-run`, `eda-erc-list`, `eda-erc-summary`), `eda-bom-dialog` (`eda-bom-preview`,
+//! `eda-bom-export`).
+
+use bevy::prelude::*;
+use bevy::text::FontWeight;
+use bevy::ui_widgets::{Activate, observe};
+use cadrs_eda::assign::{Filters, candidates};
+use cadrs_eda::sch_edit as se;
+use cadrs_eda::symbol::fields;
+use cadrs_ui::checkbox::CheckboxState;
+use cadrs_ui::dialog_fields::{Select, SelectState};
+use cadrs_ui::prelude::*;
+use cadrs_ui::{Checkbox, Dialog};
+use uuid::Uuid;
+
+use super::schematic_tools::{Tool, set_tool};
+use super::ui;
+use crate::AppState;
+
+#[derive(Component)]
+pub struct EdaDialog;
+
+fn close_all(w: &mut World) {
+    let mut q = w.query_filtered::<Entity, With<EdaDialog>>();
+    let es: Vec<Entity> = q.iter(w).collect();
+    for e in es {
+        w.entity_mut(e).despawn();
+    }
+}
+
+/// A labelled row: the label, then `f` spawns the field.
+fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSpawner)) {
+    p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(10.0), height: Val::Px(34.0), ..default() }).with_children(|r| {
+        r.spawn((t.text(label, t.font_base, FontWeight::MEDIUM, t.muted_foreground), Node { width: Val::Px(110.0), ..default() }));
+        f(r);
+    });
+}
+
+fn text_row(p: &mut ChildSpawner, t: &Theme, label: &str, name: &'static str, value: &str) {
+    let value = value.to_string();
+    row(p, t, label, |r| {
+        r.spawn(TextInput::new(name).value(value).width(Val::Px(300.0)).height(28.0).build(t));
+    });
+}
+
+/// OK / Cancel; OK runs `ok`.
+fn ok_cancel(f: &mut ChildSpawner, t: &Theme, ok_name: &'static str, ok: fn(&mut World)) {
+    f.spawn((
+        cadrs_ui::Button::new(ok_name).label("OK").primary().build(t),
+        observe(move |_: On<Activate>, mut commands: Commands| {
+            commands.queue(ok);
+        }),
+    ));
+    f.spawn((
+        cadrs_ui::Button::new(format!("{ok_name}-cancel")).label("Cancel").build(t),
+        observe(|_: On<Activate>, mut commands: Commands| {
+            commands.queue(close_all);
+        }),
+    ));
+}
+
+fn spawn_dialog(w: &mut World, d: Dialog) {
+    let theme = w.resource::<Theme>().clone();
+    w.spawn((d.build(&theme), EdaDialog, DespawnOnExit(AppState::Document)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Label
+
+pub fn open_label(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-label-dialog")
+            .title("Net label")
+            .width(440.0)
+            .body(move |b| text_row(b, &t, "Label", "eda-label-text", ""))
+            .footer(move |f| ok_cancel(f, &tf, "eda-label-ok", accept_label)),
+    );
+}
+
+fn accept_label(w: &mut World) {
+    let text = ui::text_value(w, "eda-label-text").trim().to_string();
+    close_all(w);
+    if !text.is_empty() {
+        set_tool(w, Tool::Label(text));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Symbol properties (E)
+
+#[derive(Resource, Default)]
+struct PropsTarget(Option<Uuid>);
+
+const PROP_FIELDS: [(&str, &str); 4] = [(fields::REFERENCE, "eda-props-reference"), (fields::VALUE, "eda-props-value"), (fields::FOOTPRINT, "eda-props-footprint"), (fields::DATASHEET, "eda-props-datasheet")];
+
+pub fn open_properties(w: &mut World, symbol: Uuid) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let Some(s) = d.schematic.sheets.iter().flat_map(|x| &x.symbols).find(|x| x.id == symbol).cloned() else { return };
+    w.insert_resource(PropsTarget(Some(symbol)));
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    let title = format!("Symbol properties: {}", s.reference());
+    spawn_dialog(
+        w,
+        Dialog::new("eda-props-dialog")
+            .title(title)
+            .width(480.0)
+            .body(move |b| {
+                for (name, field) in PROP_FIELDS {
+                    text_row(b, &t, name, field, s.field(name).map_or("", |f| f.value()));
+                }
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-props-ok", accept_properties)),
+    );
+}
+
+fn accept_properties(w: &mut World) {
+    let Some(id) = w.get_resource::<PropsTarget>().and_then(|t| t.0) else { return };
+    let values: Vec<(&str, String)> = PROP_FIELDS.iter().map(|(n, f)| (*n, ui::text_value(w, f))).collect();
+    close_all(w);
+    ui::commit(w, "Edit symbol properties", |d| {
+        for (name, v) in &values {
+            let cur = d.schematic.sheets.iter().flat_map(|s| &s.symbols).find(|s| s.id == id).and_then(|s| s.field(name)).map(|f| f.value().to_string());
+            if cur.as_deref() != Some(v.as_str()) && !(cur.is_none() && v.is_empty()) {
+                se::set_field(&mut d.schematic, id, name, v);
+            }
+        }
+        Ok(())
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Page settings (GS3)
+
+const PAPERS: [&str; 12] = ["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLegal"];
+
+pub fn open_page(w: &mut World) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let sh = d.schematic.sheets[0].clone();
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-page-dialog")
+            .title("Page settings")
+            .width(480.0)
+            .body(move |b| {
+                let selected = PAPERS.iter().position(|p| *p == sh.paper.name).unwrap_or(1);
+                row(b, &t, "Paper size", |r| {
+                    let mut s = Select::new("eda-page-paper").bordered().width(Val::Px(160.0));
+                    for p in PAPERS {
+                        s = s.option(p, true);
+                    }
+                    r.spawn(s.selected(selected).build(&t));
+                });
+                let tb = &sh.title_block;
+                text_row(b, &t, "Title", "eda-page-title", &tb.title);
+                text_row(b, &t, "Issue date", "eda-page-date", &tb.date);
+                text_row(b, &t, "Revision", "eda-page-rev", &tb.revision);
+                text_row(b, &t, "Company", "eda-page-company", &tb.company);
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-page-ok", accept_page)),
+    );
+}
+
+fn select_index(w: &mut World, name: &str) -> Option<usize> {
+    let mut q = w.query::<(&Name, &SelectState)>();
+    q.iter(w).find(|(n, _)| n.as_str() == name).map(|(_, s)| s.selected)
+}
+
+fn accept_page(w: &mut World) {
+    let paper = select_index(w, "eda-page-paper").and_then(|i| PAPERS.get(i)).and_then(|p| se::paper(p));
+    let tb = cadrs_eda::schematic::TitleBlock {
+        title: ui::text_value(w, "eda-page-title"),
+        date: ui::text_value(w, "eda-page-date"),
+        revision: ui::text_value(w, "eda-page-rev"),
+        company: ui::text_value(w, "eda-page-company"),
+        comments: vec![],
+    };
+    close_all(w);
+    ui::commit(w, "Page settings", |d| {
+        let p = paper.unwrap_or_else(|| d.schematic.sheets[0].paper.clone());
+        let comments = d.schematic.sheets[0].title_block.comments.clone();
+        se::set_page(&mut d.schematic, 0, p, cadrs_eda::schematic::TitleBlock { comments, ..tb });
+        Ok(())
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Assign footprints (GS10)
+
+#[derive(Resource, Default, Clone, PartialEq)]
+pub struct AssignState {
+    pub symbol: Option<Uuid>,
+    shown: Option<(Option<Uuid>, bool, bool, String, u64)>,
+}
+
+#[derive(Component)]
+struct AssignSymbols;
+
+#[derive(Component)]
+struct AssignCandidates;
+
+#[derive(Component, Clone, Copy)]
+struct AssignSymbolRow(Uuid);
+
+#[derive(Component, Clone)]
+struct AssignFootprintRow(String);
+
+pub fn open_assign(w: &mut World) {
+    w.insert_resource(AssignState::default());
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-assign-dialog")
+            .title("Assign footprints")
+            .width(860.0)
+            .body(move |b| {
+                b.spawn(Node { column_gap: Val::Px(14.0), align_items: AlignItems::Center, ..default() }).with_children(|r| {
+                    r.spawn(Checkbox::new("eda-assign-by-symbol").label("Symbol's filters").checked(true).build(&t));
+                    r.spawn(Checkbox::new("eda-assign-by-pins").label("Pin count").checked(true).build(&t));
+                    r.spawn(TextInput::new("eda-assign-filter").placeholder("Filter footprints").width(Val::Px(260.0)).height(28.0).build(&t));
+                });
+                b.spawn(Node { column_gap: Val::Px(10.0), height: Val::Px(360.0), margin: UiRect::top(Val::Px(8.0)), ..default() }).with_children(|r| {
+                    r.spawn((Name::new("eda-assign-symbols"), AssignSymbols, Node { width: Val::Px(330.0), flex_shrink: 0.0, flex_direction: FlexDirection::Column, overflow: Overflow { x: OverflowAxis::Clip, y: OverflowAxis::Scroll }, ..default() }));
+                    r.spawn((Name::new("eda-assign-candidates"), AssignCandidates, Node { flex_grow: 1.0, flex_direction: FlexDirection::Column, overflow: Overflow { x: OverflowAxis::Clip, y: OverflowAxis::Scroll }, ..default() }));
+                });
+            })
+            .footer(move |f| {
+                f.spawn((
+                    cadrs_ui::Button::new("eda-assign-ok").label("Close").primary().build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_all);
+                    }),
+                ));
+            }),
+    );
+}
+
+fn checkbox(w: &mut World, name: &str) -> bool {
+    let mut q = w.query::<(&Name, &CheckboxState)>();
+    q.iter(w).find(|(n, _)| n.as_str() == name).is_some_and(|(_, s)| s.checked)
+}
+
+/// Rebuilds both lists when the selection, the filters or the design change.
+pub fn refresh_assign(w: &mut World) {
+    let mut q = w.query_filtered::<Entity, With<AssignSymbols>>();
+    let Some(syms) = q.iter(w).next() else { return };
+    let mut q2 = w.query_filtered::<Entity, With<AssignCandidates>>();
+    let Some(cands) = q2.iter(w).next() else { return };
+    let by_symbol = checkbox(w, "eda-assign-by-symbol");
+    let by_pins = checkbox(w, "eda-assign-by-pins");
+    let text = ui::text_value(w, "eda-assign-filter");
+    let undo = w.resource::<crate::ActiveDocument>().history.undo_len() as u64;
+    let state = w.resource::<AssignState>().clone();
+    let key = (state.symbol, by_symbol, by_pins, text.clone(), undo);
+    if state.shown.as_ref() == Some(&key) {
+        return;
+    }
+    w.resource_mut::<AssignState>().shown = Some(key);
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let lib = ui::libraries(w);
+    let theme = w.resource::<Theme>().clone();
+    let mut parts: Vec<_> = d.schematic.sheets.iter().flat_map(|s| &s.symbols).filter(|s| !s.reference().starts_with('#')).cloned().collect();
+    parts.sort_by_key(|s| cadrs_eda::connectivity::natural(s.reference()));
+    let chosen = state.symbol.or(parts.first().map(|s| s.id));
+    let found: Vec<(String, String)> = chosen
+        .and_then(|id| parts.iter().find(|s| s.id == id))
+        .map(|s| {
+            candidates(&lib, &d.schematic, s, &Filters { symbol_filters: by_symbol, pin_count: by_pins, library: None, text: text.clone() })
+                .into_iter()
+                .take(200)
+                .map(|f| (f.id.clone(), f.description.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut commands = w.commands();
+    commands.entity(syms).despawn_children();
+    commands.entity(syms).with_children(|l| {
+        for s in &parts {
+            let label = format!("{} – {} : {}", s.reference(), s.value(), if s.footprint().is_empty() { "—" } else { s.footprint() });
+            l.spawn((ListItem::new(format!("eda-assign-sym-{}", s.reference())).label(label).height(24.0).selected(Some(s.id) == chosen).build(&theme), AssignSymbolRow(s.id)));
+        }
+    });
+    commands.entity(cands).despawn_children();
+    commands.entity(cands).with_children(|l| {
+        for (id, desc) in found {
+            l.spawn((
+                ListItem::new(format!("eda-assign-fp-{}", crate::pcb::slug(&id))).label(id.clone()).detail(desc).height(24.0).build(&theme),
+                AssignFootprintRow(id),
+                cadrs_ui::DoubleClickable,
+            ));
+        }
+    });
+    w.flush();
+}
+
+fn on_assign_row(a: On<Activate>, q_sym: Query<&AssignSymbolRow>, mut state: Option<ResMut<AssignState>>) {
+    if let (Ok(r), Some(state)) = (q_sym.get(a.entity), state.as_mut()) {
+        state.symbol = Some(r.0);
+    }
+}
+
+/// Double-click (or click) a footprint: it is assigned to the chosen symbol.
+fn on_assign_footprint(a: On<cadrs_ui::DoubleClick>, q: Query<&AssignFootprintRow>, mut commands: Commands) {
+    let Ok(r) = q.get(a.entity) else { return };
+    let fp = r.0.clone();
+    commands.queue(move |w: &mut World| {
+        let Some((_, _, d)) = ui::current(w) else { return };
+        let mut parts: Vec<_> = d.schematic.sheets.iter().flat_map(|s| &s.symbols).filter(|s| !s.reference().starts_with('#')).cloned().collect();
+        parts.sort_by_key(|s| cadrs_eda::connectivity::natural(s.reference()));
+        let chosen = w.resource::<AssignState>().symbol.or(parts.first().map(|s| s.id));
+        let Some(id) = chosen else { return };
+        let Some(r) = parts.iter().find(|s| s.id == id).map(|s| s.reference().to_string()) else { return };
+        ui::commit(w, "Assign footprint", |d| {
+            cadrs_eda::assign::assign(&mut d.schematic, &r, &fp);
+            Ok(())
+        });
+        // On to the next symbol without a footprint.
+        let next = ui::current(w).and_then(|(_, _, d)| {
+            let mut v: Vec<_> = d.schematic.sheets.iter().flat_map(|s| &s.symbols).filter(|s| !s.reference().starts_with('#') && s.footprint().is_empty()).cloned().collect();
+            v.sort_by_key(|s| cadrs_eda::connectivity::natural(s.reference()));
+            v.first().map(|s| s.id)
+        });
+        if next.is_some() {
+            w.resource_mut::<AssignState>().symbol = next;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// ERC (GS11)
+
+#[derive(Component)]
+struct ErcList;
+
+pub fn open_erc(w: &mut World) {
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-erc-dialog")
+            .title("Electrical rules checker")
+            .width(620.0)
+            .body(move |b| {
+                b.spawn((Name::new("eda-erc-summary"), t.text("", t.font_base, FontWeight::MEDIUM, t.foreground)));
+                b.spawn((Name::new("eda-erc-list"), ErcList, Node { flex_direction: FlexDirection::Column, height: Val::Px(300.0), overflow: Overflow::scroll_y(), margin: UiRect::top(Val::Px(8.0)), ..default() }));
+            })
+            .footer(move |f| {
+                f.spawn((
+                    cadrs_ui::Button::new("eda-erc-run").label("Run ERC").primary().build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(run_erc);
+                    }),
+                ));
+                f.spawn((
+                    cadrs_ui::Button::new("eda-erc-close").label("Close").build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_all);
+                    }),
+                ));
+            }),
+    );
+    run_erc(w);
+}
+
+fn run_erc(w: &mut World) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let vs = cadrs_eda::erc::check(&d.schematic);
+    let errors = vs.iter().filter(|v| v.severity() == cadrs_eda::erc::Severity::Error).count();
+    let warnings = vs.len() - errors;
+    let summary = if vs.is_empty() { "No violations".to_string() } else { format!("Violations ({}): {errors} errors, {warnings} warnings", vs.len()) };
+    ui::set_label(w, "eda-erc-summary", &summary);
+    let mut q = w.query_filtered::<Entity, With<ErcList>>();
+    let Some(list) = q.iter(w).next() else { return };
+    let t = w.resource::<Theme>().clone();
+    let mut commands = w.commands();
+    commands.entity(list).despawn_children();
+    commands.entity(list).with_children(|l| {
+        for (i, v) in vs.iter().enumerate() {
+            let sev = if v.severity() == cadrs_eda::erc::Severity::Error { "Error" } else { "Warning" };
+            l.spawn((Name::new(format!("eda-erc-{i}")), t.text(format!("{sev}: {}", v.rule.message()), t.font_base, FontWeight::SEMIBOLD, t.foreground)));
+            for item in &v.items {
+                l.spawn((t.text(format!("    {item}"), t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::left(Val::Px(14.0)), ..default() }));
+            }
+        }
+    });
+    w.flush();
+}
+
+// ---------------------------------------------------------------------------------------------
+// BOM (GS12)
+
+pub fn open_bom(w: &mut World) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let rows = cadrs_eda::bom::rows(&d.schematic);
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-bom-dialog")
+            .title("Bill of materials")
+            .width(760.0)
+            .body(move |b| {
+                b.spawn((Name::new("eda-bom-preview"), Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..default() })).with_children(|l| {
+                    let head = ["Reference", "Value", "Footprint", "Qty", "DNP"];
+                    let widths = [120.0, 90.0, 430.0, 40.0, 40.0];
+                    let line = |l: &mut ChildSpawner, cells: [String; 5], bold: bool| {
+                        l.spawn(Node { column_gap: Val::Px(6.0), ..default() }).with_children(|r| {
+                            for (c, w) in cells.into_iter().zip(widths) {
+                                r.spawn((t.text(c, t.font_sm, if bold { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }, t.foreground), Node { width: Val::Px(w), ..default() }));
+                            }
+                        });
+                    };
+                    line(l, head.map(String::from), true);
+                    for r in &rows {
+                        line(l, [r.references.join(", "), r.value.clone(), r.footprint.clone(), r.qty().to_string(), if r.dnp { "DNP".into() } else { String::new() }], false);
+                    }
+                });
+            })
+            .footer(move |f| {
+                f.spawn((
+                    cadrs_ui::Button::new("eda-bom-export").label("Export…").primary().build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|w: &mut World| {
+                            let theme = w.resource::<Theme>().clone();
+                            let dir = std::env::current_dir().unwrap_or_default();
+                            let mut c = w.commands();
+                            cadrs_ui::file_picker::open_folder_picker(&mut c, &theme, "eda-bom-folder", "Export the BOM to", "eda-bom", dir);
+                            w.flush();
+                        });
+                    }),
+                ));
+                f.spawn((
+                    cadrs_ui::Button::new("eda-bom-close").label("Close").build(&tf),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(close_all);
+                    }),
+                ));
+            }),
+    );
+}
+
+/// Writes the BOM CSV into `dir` as `<board>.csv`; returns the path.
+pub fn export_bom(w: &mut World, dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let (el, b, d) = ui::current(w)?;
+    let name = w.resource::<crate::ActiveDocument>().doc.element(el)?.pcb()?.board(b)?.name().to_string();
+    let path = dir.join(format!("{}.csv", cadrs_idf::safe_file_name(&name)));
+    match std::fs::write(&path, cadrs_eda::bom::csv(&d.schematic)) {
+        Ok(()) => {
+            ui::toast(w, &format!("Wrote {}", path.display()));
+            Some(path)
+        }
+        Err(e) => {
+            ui::toast(w, &format!("Couldn't write {}: {e}", path.display()));
+            None
+        }
+    }
+}
+
+pub fn on_folder_picked(mut msgs: MessageReader<cadrs_ui::file_picker::FilePicked>, mut commands: Commands) {
+    for m in msgs.read() {
+        if m.tag == "eda-bom" {
+            let p = m.path.clone();
+            commands.queue(move |w: &mut World| {
+                export_bom(w, &p);
+            });
+        }
+    }
+}
+
+pub fn register(app: &mut App) {
+    app.add_systems(Update, (refresh_assign, on_folder_picked).run_if(in_state(AppState::Document)))
+        .add_observer(on_assign_row)
+        .add_observer(on_assign_footprint);
+}
+

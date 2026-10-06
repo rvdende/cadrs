@@ -363,7 +363,9 @@ fn drive(world: &mut World) {
         Err(missing) => {
             let mut runner = world.resource_mut::<Runner>();
             runner.retries += 1;
-            let timed_out = runner.waiting.is_some_and(|t| t.elapsed() > runner.timeout);
+            // (A WaitFor skips the settle wait, so its clock may only start here.)
+            let since = *runner.waiting.get_or_insert_with(std::time::Instant::now);
+            let timed_out = since.elapsed() > runner.timeout;
             if runner.retries > TARGET_MIN_FRAMES && timed_out {
                 if let Step::ExpectText(name, _) = &step {
                     let got = node_text(world, name);
