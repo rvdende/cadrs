@@ -104,8 +104,11 @@ fn rebuild_part_list(
     };
     // P3H.6 judge: a composite part's row has the composite part icon.
     let composite = |p: PartId| doc.as_deref().and_then(|d| Some(cadrs_core::transform::is_composite_part(&d.doc, d.active_element()?.id, p))).unwrap_or(false);
-    let rows: Vec<(PartId, String, PartKind, bool, bool, bool)> = cache
-        .parts
+    // While a Sheet metal model's edges are picked, the parts it makes (`t0101.0.png`), bold
+    // as its preview.
+    let staged = !cache.staged_parts.is_empty();
+    let listed = if staged { &cache.staged_parts } else { &cache.parts };
+    let rows: Vec<(PartId, String, PartKind, bool, bool, bool)> = listed
         .iter()
         // P3B.9: an assembly context's parts are not the studio's.
         .filter(|p| !cadrs_core::assembly::context::is_context(p.feature))
@@ -114,7 +117,7 @@ fn rebuild_part_list(
                 p.id,
                 cache.part_name(p.id).unwrap_or(&p.name).to_string(),
                 p.kind,
-                over.previews(p),
+                over.previews(p) || (staged && over.staged.is_some_and(|f| p.features.contains(&f))),
                 cache.is_hidden_part(p.id),
                 composite(p.id),
             )
@@ -238,6 +241,7 @@ fn on_part_context_menu(
     q: Query<&PartRow>,
     cache: Res<PartCache>,
     theme: Res<Theme>,
+    doc: Option<Res<ActiveDocument>>,
     mut commands: Commands,
 ) {
     let Ok(row) = q.get(ev.entity) else {
@@ -255,7 +259,18 @@ fn on_part_context_menu(
         .separator()
         .item(MenuItem::new("part-copy-here", "Copy here…").disabled(true))
         .item(MenuItem::new("part-copy", format!("Copy {name}")).icon("copy").disabled(true))
-        .item(MenuItem::new("part-drawing", format!("Create Drawing of {name}…")).icon("file-new"))
+        .item(MenuItem::new("part-drawing", format!("Create Drawing of {name}…")).icon("file-new"));
+    // P3I.7 (SM16.1): a sheet metal part's flat pattern.
+    let sheet_metal = doc
+        .as_deref()
+        .and_then(|d| d.active_element().map(|e| e.id).map(|e| crate::drawing::flat_views::is_sheet_metal_part(&d.doc, e, row.0)))
+        .unwrap_or(false);
+    let menu = if sheet_metal {
+        menu.item(MenuItem::new("part-flat-drawing", "Create drawing of flat pattern…").icon("flat-pattern"))
+    } else {
+        menu
+    };
+    let menu = menu
         .item(MenuItem::new("part-export", "Export…").icon("file-export"))
         .item(MenuItem::new("part-where-used", "Where used…").icon("tab-manager").disabled(true))
         .item(MenuItem::new("part-task", "Create task…").disabled(true))
@@ -273,7 +288,7 @@ fn on_part_context_menu(
         })
         .separator()
         .item(MenuItem::new("part-comment", "Add comment").icon("comments").disabled(true))
-        .item(MenuItem::new("part-zoom", "Zoom to selection").disabled(true))
+        .item(MenuItem::new("part-zoom", "Zoom to selection"))
         .separator()
         .item(MenuItem::new("part-delete", "Delete…").icon("remove-circle"));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
@@ -289,6 +304,12 @@ fn on_part_menu_action(ev: On<MenuAction>, q_anchor: Query<&PartMenuFor, With<Co
     let part = target.0;
     match ev.item.as_str() {
         "part-rename" => commands.queue(move |world: &mut World| rename_part(world, part)),
+        // P3E.3a: the part (or the selected parts it is among).
+        "part-zoom" => commands.queue(move |world: &mut World| {
+            let parts = targets(world, part);
+            world.resource_mut::<crate::viewport::Selection>().0 = parts.into_iter().map(crate::viewport::Pick::Part).collect();
+            crate::view_options::zoom_to_selection(world);
+        }),
         "part-hide" | "part-show" => {
             let hidden = ev.item == "part-hide";
             commands.queue(move |world: &mut World| {
@@ -323,7 +344,14 @@ fn on_part_menu_action(ev: On<MenuAction>, q_anchor: Query<&PartMenuFor, With<Co
                 return;
             };
             let r = cadrs_drawing::ObjectRef { element: element.0, part: Some((part.feature.0, part.index)) };
-            crate::drawing::create_dialog::open_create_drawing(world, Some(r));
+            crate::drawing::create_dialog::open_create_drawing_of_part(world, r);
+        }),
+        "part-flat-drawing" => commands.queue(move |world: &mut World| {
+            let Some(element) = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element().map(|e| e.id)) else {
+                return;
+            };
+            let r = cadrs_drawing::ObjectRef { element: element.0, part: Some((part.feature.0, part.index)) };
+            crate::drawing::flat_views::open_create_drawing_of_flat(world, r);
         }),
         "part-export" => commands.queue(move |world: &mut World| {
             let parts = targets(world, part);

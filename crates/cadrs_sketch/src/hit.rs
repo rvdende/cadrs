@@ -60,6 +60,10 @@ pub fn curve_polyline(s: &Sketch, id: CurveId) -> Vec<Vec2> {
             .ellipse_geom(id)
             .map(|g| g.tessellate(PICK_STEP, 16))
             .unwrap_or_default(),
+        CurveKind::EllipseArc { .. } => s
+            .ellipse_arc_geom(id)
+            .map(|g| g.tessellate(PICK_STEP, 4))
+            .unwrap_or_default(),
         CurveKind::Spline { .. } => s.spline_spans(id).map(|sp| crate::spline::tessellate(&sp, 8)).unwrap_or_default(),
         CurveKind::Bezier { .. } => s
             .bezier_geom(id)

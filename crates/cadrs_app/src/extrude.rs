@@ -183,6 +183,10 @@ pub fn begin_extrude(world: &mut World) {
     {
         return;
     }
+    // P3I.6 (SM14.2): regions of a flat-pattern sketch get the abbreviated flat extrude.
+    if crate::flat_ui::extrude_redirect(world) {
+        return;
+    }
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -1047,6 +1051,8 @@ fn draw_regions(
     mut fill: Local<FillState>,
     q_fill: Query<(), With<RegionFill>>,
     failed: Res<crate::parts::FailedReferences>,
+    applied: Option<Res<crate::applied::AppliedSession>>,
+    selection: Res<crate::viewport::Selection>,
     mut commands: Commands,
 ) {
     // The fill entity goes away with the document.
@@ -1057,8 +1063,14 @@ fn draw_regions(
     // (P3.8, `crate::sketch_draw`) and after it (its larger depth bias sorts it nearer), so the
     // selected region stays orange (`course_s17_regions_without_trim` 02); otherwise behind parts.
     let layer = if sketching.is_some() { crate::viewport::OVERLAY_LAYER } else { crate::viewport::OCCLUDED_LAYER };
-    if let Some((e, ..)) = fill.as_ref() {
+    if let Some((e, _, mat, _)) = fill.as_ref() {
         commands.entity(*e).insert(bevy::camera::visibility::RenderLayers::layer(layer));
+        let bias = wash_bias(layer);
+        if materials.get(mat).is_some_and(|m| m.depth_bias != bias)
+            && let Some(mut m) = materials.get_mut(mat)
+        {
+            m.depth_bias = bias;
+        }
     }
     let selected: SelectedRegions = match (&session, &doc) {
         (Some(s), Some(d)) => {
@@ -1080,7 +1092,30 @@ fn draw_regions(
         }
         _ => Vec::new(),
     };
-    let extruding = session.is_some();
+    // P3I.6 (exercise E1, `ex1-importing-dxf-bend/step-04.png`): the Sheet metal model's Thicken
+    // regions are picked regions too, orange like the Extrude dialog's.
+    let thicken: SelectedRegions = match (&session, &applied, &doc) {
+        (None, Some(a), Some(d)) => {
+            let el = d.doc.element(a.element);
+            match el.and_then(|e| e.feature(a.feature)).map(|f| &f.kind) {
+                Some(cadrs_core::FeatureKind::SheetMetalModel(x)) if x.operation == cadrs_core::sheetmetal::SheetMetalOp::Thicken => {
+                    let mut v: SelectedRegions = x.regions.iter().map(|r| (r.sketch, r.curves.clone(), r.seed)).collect();
+                    for sk in x.region_sketches.iter().copied() {
+                        let Some(g) = el.and_then(|el| el.feature(sk)).and_then(|f| f.sketch()) else { continue };
+                        for r in cadrs_core::rebuild::whole_sketch_regions(&g.geometry) {
+                            let rr = RegionRef::new(sk, &r);
+                            v.push((sk, rr.curves, rr.seed));
+                        }
+                    }
+                    v
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+    let extruding = session.is_some() || !thicken.is_empty();
+    let selected = if thicken.is_empty() { selected } else { thicken };
     // The selected region's outline in `screens/23`; a plain selection's in `ex1-step8`.
     // A failing feature's regions are red (P3.7, PS20.5).
     let orange = if failed.0 {
@@ -1092,7 +1127,8 @@ fn draw_regions(
     };
     let mut tris: Vec<[f32; 3]> = Vec::new();
     let mut plain_key: Vec<(FeatureId, usize)> = Vec::new();
-    for sr in &cache.regions {
+    // Sketches on a flat pattern show their regions in the flat view (`crate::flat_ui`).
+    for sr in cache.regions.iter().filter(|sr| !cache.flat_sketches.contains(&sr.sketch)) {
         for (i, r) in sr.regions.iter().enumerate() {
             let mut curves = r.curves.clone();
             curves.sort();
@@ -1102,7 +1138,9 @@ fn draw_regions(
                     .iter()
                     .any(|(s, c, seed)| *s == sr.sketch && *c == curves && r.contains(*seed))
             } else {
-                plain.contains(sr.sketch, i)
+                // A sketch selected whole (its feature row, or a right-click on it) fills every
+                // region orange, as Onshape's.
+                plain.contains(sr.sketch, i) || selection.contains(Pick::Feature(sr.sketch))
             };
             if is_selected && !extruding {
                 plain_key.push((sr.sketch, i));
@@ -1162,10 +1200,12 @@ fn draw_regions(
             if let Some(mut m) = meshes.get_mut(&*handle) {
                 *m = mesh;
             }
+            let bias = wash_bias(layer);
             if let Some(mut m) = materials.get_mut(&*mat)
-                && m.base_color != wash
+                && (m.base_color != wash || m.depth_bias != bias)
             {
                 m.base_color = wash;
+                m.depth_bias = bias;
             }
             *k = key;
         }
@@ -1178,7 +1218,7 @@ fn draw_regions(
                 double_sided: true,
                 alpha_mode: AlphaMode::Blend,
                 // In front of a face it lies on, and of the edited sketch's fill.
-                depth_bias: 1001.0,
+                depth_bias: wash_bias(layer),
                 ..default()
             });
             let e = commands
@@ -1196,6 +1236,13 @@ fn draw_regions(
             *fill = Some((e, handle, material, key));
         }
     }
+}
+
+/// The wash's depth bias: over the edited sketch's translucent fill while sketching (on the
+/// overlay, which has no parts' depth); otherwise a hair in front of a face the region lies on
+/// and of a shown sketch's fill, but not through a part (P3I.6: 1001 showed through sheets).
+fn wash_bias(layer: usize) -> f32 {
+    if layer == crate::viewport::OVERLAY_LAYER { 1001.0 } else { crate::sketch_draw::FILL_BIAS + 8.0 }
 }
 
 /// The region fill entity, its mesh and material, and what it was built from.

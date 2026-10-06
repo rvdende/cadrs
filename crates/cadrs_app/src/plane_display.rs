@@ -180,6 +180,7 @@ fn sync_plane_quads(
 }
 
 /// The squares' outlines: thin blue-grey, orange when hovered, blue when selected.
+#[allow(clippy::too_many_arguments)]
 fn draw_plane_feature_edges(
     mut gizmos: Gizmos,
     mut hl_gizmos: Gizmos<HighlightGizmos>,
@@ -188,7 +189,12 @@ fn draw_plane_feature_edges(
     theme: Res<Theme>,
     highlight: Res<PlaneHighlight>,
     selection: Res<Selection>,
+    section: Res<crate::section_view::SectionClip>,
+    mut section_gizmos: Gizmos<crate::section_view::SectionPlaneGizmos>,
 ) {
+    // P3E.3a: cut by a section view's plane.
+    let clip = section.plane;
+    use crate::section_view::clipped_line as cut;
     for pq in &q {
         let [o, u, v] = pq.frame;
         let h = pq.half;
@@ -198,11 +204,15 @@ fn draw_plane_feature_edges(
         for i in 0..4 {
             let (a, b) = (corners[i], corners[(i + 1) % 4]);
             if hovered {
-                hover_gizmos.line(a, b, theme.highlight);
+                cut(&mut hover_gizmos, clip, a, b, theme.highlight);
+            } else if selected && clip.is_some() {
+                // In a section view (the picked plane, P3E.3b) depth-tested, so the kept part
+                // hides it where it is in front.
+                cut(&mut section_gizmos, clip, a, b, theme.selection_3d);
             } else if selected {
-                hl_gizmos.line(a, b, theme.selection_3d);
+                cut(&mut hl_gizmos, clip, a, b, theme.selection_3d);
             } else {
-                gizmos.line(a, b, theme.plane_edge);
+                cut(&mut gizmos, clip, a, b, theme.plane_edge);
             }
         }
     }
@@ -300,8 +310,10 @@ fn place_plane_feature_labels(
     doc: Option<Res<ActiveDocument>>,
     mut q: Query<(&PlaneFeatureLabel, &Children, &mut Node, &mut UiTransform, &mut Visibility), Without<AffineInner>>,
     mut q_inner: Query<(&ComputedNode, &mut UiTransform, &mut TextColor), With<AffineInner>>,
+    section: Res<crate::section_view::SectionClip>,
 ) {
     let v = view.view;
+    let cut = section.plane;
     // The screen boxes of the labels placed so far: a label doesn't go over another
     // (`course_ps12_planes` 14: Plane 3's moved label met Plane 1's).
     let mut placed: Vec<Rect> = Vec::new();
@@ -343,6 +355,10 @@ fn place_plane_feature_labels(
         ];
         let clear = corners.iter().find_map(|d| {
             let start = o + (w - u) * half + u * d.x - w * d.y;
+            // P3E.3a judge: not on the side a section view removed.
+            if cut.is_some_and(|c| c.removes(start)) {
+                return None;
+            }
             let corner = rect.to_screen(v.project(start)) - rect.0.min;
             let pts = [Vec2::ZERO, Vec2::new(size.x, 0.0), Vec2::new(0.0, size.y), size].map(|q| corner + a * (pad.x + q.x) + b * (pad.y + q.y));
             if pts.iter().any(|p| !inside.contains(*p)) {

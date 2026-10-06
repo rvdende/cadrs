@@ -220,16 +220,23 @@ pub fn face_label_alpha(facing: f32) -> f32 {
 fn fade_face_labels(
     view: Res<ViewportView>,
     repair: Option<Res<crate::repair::Repair>>,
+    (sm, panel): (Option<Res<crate::sheetmetal_table::SmTable>>, Option<Res<crate::appearance::SidePanel>>),
     q: Query<(&FaceLabel, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let back = view.view.back();
     // P3D.4: the Repair panel's cube shares the faces; a label it faces shows too (a face
-    // turned away from the main view is hidden there by the cube itself).
-    let other = repair.filter(|r| r.open).map(|r| r.view.back());
+    // turned away from the main view is hidden there by the cube itself). So does the Sheet
+    // metal table's flat view cube (its Top stays labelled when the main view looks from below).
+    let mut others: Vec<Vec3> = repair.filter(|r| r.open).map(|r| r.view.back()).into_iter().collect();
+    if panel.is_some_and(|p| *p == crate::appearance::SidePanel::SheetMetal)
+        && let Some(t) = sm
+    {
+        others.push(t.view.back());
+    }
     for (label, mat) in &q {
         let n = label.0.normal();
-        let a = face_label_alpha(other.map_or(n.dot(back), |o| n.dot(back).max(n.dot(o))));
+        let a = face_label_alpha(others.iter().fold(n.dot(back), |m, o| m.max(n.dot(*o))));
         // Premultiplied: scale every channel.
         let c = Color::LinearRgba(LinearRgba::new(a, a, a, a));
         if let Some(m) = materials.get(&mat.0)
@@ -618,11 +625,16 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
                 .icon_size(16.0)
                 .tooltip("View options")
                 .build(theme),
-            cadrs_ui::prelude::observe(
-                |a: On<Activate>, theme: Res<Theme>, mut commands: Commands| {
-                    cadrs_ui::open_menu(&mut commands, a.entity, view_menu().build(&theme));
-                },
-            ),
+            cadrs_ui::prelude::observe(|a: On<Activate>, mut commands: Commands| {
+                let anchor = a.entity;
+                commands.queue(move |world: &mut World| {
+                    let state = ViewMenuState::of(world);
+                    let theme = world.resource::<Theme>().clone();
+                    let mut commands = world.commands();
+                    cadrs_ui::open_menu(&mut commands, anchor, view_menu(state).build(&theme));
+                    world.flush();
+                });
+            }),
             cadrs_ui::prelude::observe(on_view_menu),
         ))
         .insert(Node {
@@ -638,10 +650,46 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
     });
 }
 
-/// The view cube's ▾ menu, grouped like Onshape's; what cadrs does not have yet is disabled,
-/// and the render options it always uses are shown checked.
-fn view_menu() -> cadrs_ui::Menu {
+/// What the view menu shows checked or enabled.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewMenuState {
+    pub render: crate::camera::RenderMode,
+    /// Each render group's last mode (its row's label).
+    pub groups: (crate::camera::RenderMode, crate::camera::RenderMode),
+    pub perspective: bool,
+    pub previous: bool,
+    pub section: bool,
+    /// A Part Studio or an Assembly (not a PCB Studio): named views and section views.
+    pub modeling: bool,
+}
+
+impl ViewMenuState {
+    pub fn of(world: &World) -> Self {
+        let view = world.resource::<ViewportView>().view;
+        let kind = *world.resource::<crate::viewport::ActiveKind>();
+        let element = world.resource::<ViewportView>().element;
+        Self {
+            render: view.render,
+            groups: world.resource::<crate::view_options::RenderGroups>().labels(element, view.render),
+            perspective: view.perspective,
+            previous: crate::view_options::has_previous(world),
+            section: crate::section_view::active(world),
+            modeling: matches!(kind, crate::viewport::ActiveKind::PartStudio | crate::viewport::ActiveKind::Assembly),
+        }
+    }
+}
+
+/// The view cube's ▾ menu, grouped like Onshape's (`reference/onshape/view/view-cube-menu4-01.png`).
+/// P3E.3a: the render modes in their two groups (the shaded modes, then the hidden-line ones;
+/// the group in use is checked, and each is named after the mode last picked in it),
+/// Perspective view, Named views…, Previous view, Zoom to window and Section view… work. What
+/// cadrs does not have yet is disabled.
+fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
     use cadrs_ui::MenuItem as I;
+    let line = st.render.line_drawing();
+    // Each group's row reads the mode last picked in it.
+    let (shaded_label, line_label) = (st.groups.0.label(), st.groups.1.label());
+    let check = |on: bool, item: I| if on { item.icon("check") } else { item };
     cadrs_ui::Menu::new("view-menu")
         .align_end()
         .min_width(222.0)
@@ -652,35 +700,23 @@ fn view_menu() -> cadrs_ui::Menu {
         .separator()
         .item(I::new("view-graphics", "Graphics preferences…").icon("settings").disabled(true))
         .separator()
-        .item(I::new("view-named", "Named views…").disabled(true))
-        .item(I::new("view-previous", "Previous view").disabled(true))
+        .item(I::new("view-named", "Named views…").disabled(!st.modeling))
+        .item(I::new("view-previous", "Previous view").disabled(!st.previous))
         .separator()
         .item(I::new("view-zoom-to-fit", "Zoom to fit").shortcut("F"))
-        .item(I::new("view-zoom-window", "Zoom to window").disabled(true))
+        .item(I::new("view-zoom-window", "Zoom to window"))
         .separator()
-        .item(I::new("view-perspective", "Perspective view").disabled(true))
+        .item(check(st.perspective, I::new("view-perspective", "Perspective view")))
         .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
         .separator()
-        .item(
-            I::new("view-shaded", "Shaded with edges")
-                .icon("check")
-                .submenu(vec![]),
-        )
-        .item(
-            I::new("view-hidden-edges", "Hidden edges removed")
-                .icon("check")
-                .submenu(vec![]),
-        )
-        .item(
-            I::new("view-tangent-edges", "Tangent edges visible")
-                .icon("check")
-                .submenu(vec![]),
-        )
+        .item(check(!line, I::new("view-shaded", shaded_label)).submenu(crate::view_options::render_items(st.render, false)))
+        .item(check(line, I::new("view-hidden-edges", line_label)).submenu(crate::view_options::render_items(st.render, true)))
+        .item(I::new("view-tangent-edges", "Tangent edges visible").icon("check").submenu(vec![]))
         .separator()
         .item(I::new("view-high-quality", "View in high quality").disabled(true))
         .item(I::new("view-boundary", "Highlight boundary edges").disabled(true))
         .separator()
-        .item(I::new("view-section", "Section view…").icon("section-view").disabled(true))
+        .item(I::new("view-section-item", if st.section { "Exit section view" } else { "Section view…" }).icon("section-view").disabled(!st.modeling))
 }
 
 fn on_view_menu(
@@ -690,8 +726,14 @@ fn on_view_menu(
     mut commands: Commands,
 ) {
     let target = view.target();
+    if let Some(slug) = ev.item.strip_prefix("view-render-") {
+        if let Some(mode) = crate::camera::RenderMode::ALL.into_iter().find(|m| m.slug() == slug) {
+            commands.queue(move |world: &mut World| crate::view_options::set_render_mode(world, mode));
+        }
+        return;
+    }
     let to = match ev.item.as_str() {
-        "view-isometric" => crate::viewport::fitted_isometric(rect.0.size()),
+        "view-isometric" => crate::viewport::fitted_isometric_for(view.view.perspective, rect.0.size()),
         // Dimetric: two axes foreshortened equally; trimetric: Onshape's default view.
         "view-dimetric" => ViewState {
             azimuth: DIMETRIC.0,
@@ -701,6 +743,27 @@ fn on_view_menu(
         "view-trimetric" => target.oriented(crate::camera::StandardView::Default),
         "view-zoom-to-fit" => {
             commands.queue(crate::viewport::zoom_to_fit);
+            return;
+        }
+        "view-zoom-window" => {
+            commands.queue(crate::view_options::start_zoom_window);
+            return;
+        }
+        "view-previous" => {
+            commands.queue(crate::view_options::previous_view);
+            return;
+        }
+        "view-named" => {
+            commands.queue(crate::view_options::open_named_views);
+            return;
+        }
+        "view-perspective" => {
+            let on = !view.view.perspective;
+            commands.queue(move |world: &mut World| crate::view_options::set_perspective(world, on));
+            return;
+        }
+        "view-section-item" => {
+            commands.queue(crate::section_view::toggle);
             return;
         }
         _ => return,
@@ -907,43 +970,50 @@ fn place_cube_labels(
     view: Res<ViewportView>,
     mut q_axis: Query<(&AxisLabel, &ComputedNode, &mut Node, &mut TextColor)>,
 ) {
-    let v = cube_view(&view.view);
     for (axis, node_c, mut node, mut color) in &mut q_axis {
-        let tip = TRIAD_ORIGIN + axis.0 * (TRIAD_LEN + 0.35);
-        // An axis pointing (nearly) at the viewer has no label, as in Onshape's normal views
-        // (`screens/09` shows only X and Y); a tip behind the cube shows faintly, as if seen
-        // through it.
-        let along = axis.0.dot(v.back());
-        let a = if along.abs() > 0.9 {
-            0.0
-        } else if along < -0.3 {
-            0.45
-        } else {
-            1.0
-        };
+        let size = node_c.size() * node_c.inverse_scale_factor();
+        let (p, a) = axis_label_spot(&view.view, axis.0, size);
         if (color.0.alpha() - a).abs() > 1e-3 {
             color.0.set_alpha(a);
         }
-        let size = node_c.size() * node_c.inverse_scale_factor();
-        // A tip in front of the cube's face labels moves out along its axis until the label
-        // clears the cube's outline, so "Z" never sits on "Top".
-        let mut offset = v.project(tip);
-        let dir = v.project_vector(axis.0).normalize_or_zero();
-        let clear = CUBE_PX * 1.62 + size.max_element() / 2.0;
-        if along > -0.3 && dir.dot(offset) > 0.0 {
-            let mut n = 0;
-            while offset.length() < clear && n < 40 {
-                offset += dir * 2.0;
-                n += 1;
-            }
-        }
-        let p = CUBE_CENTER + offset;
-        let (l, t) = (Val::Px(p.x - size.x / 2.0), Val::Px(p.y - size.y / 2.0));
+        let (l, t) = (Val::Px(p.x), Val::Px(p.y));
         if node.left != l || node.top != t {
             node.left = l;
             node.top = t;
         }
     }
+}
+
+/// Where an axis letter of the cube's triad goes for `view` (its label's top-left in the cube
+/// widget, for a label of `size`) and its opacity: the main cube's and the flat view's.
+pub(crate) fn axis_label_spot(view: &ViewState, axis: Vec3, size: Vec2) -> (Vec2, f32) {
+    let v = cube_view(view);
+    let tip = TRIAD_ORIGIN + axis * (TRIAD_LEN + 0.35);
+    // An axis pointing (nearly) at the viewer has no label, as in Onshape's normal views
+    // (`screens/09` shows only X and Y); a tip behind the cube shows faintly, as if seen
+    // through it.
+    let along = axis.dot(v.back());
+    let a = if along.abs() > 0.9 {
+        0.0
+    } else if along < -0.3 {
+        0.45
+    } else {
+        1.0
+    };
+    // A tip in front of the cube's face labels moves out along its axis until the label
+    // clears the cube's outline, so "Z" never sits on "Top".
+    let mut offset = v.project(tip);
+    let dir = v.project_vector(axis).normalize_or_zero();
+    let clear = CUBE_PX * 1.62 + size.max_element() / 2.0;
+    if along > -0.3 && dir.dot(offset) > 0.0 {
+        let mut n = 0;
+        while offset.length() < clear && n < 40 {
+            offset += dir * 2.0;
+            n += 1;
+        }
+    }
+    let p = CUBE_CENTER + offset;
+    (Vec2::new(p.x - size.x / 2.0, p.y - size.y / 2.0), a)
 }
 
 fn on_cube_click(

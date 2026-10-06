@@ -317,6 +317,7 @@ mod tests {
             id: FeatureId::from_u128(id),
             name: format!("Extrude {id}"),
             kind: FeatureKind::Extrude(crate::document::ExtrudeFeature { regions, ..Default::default() }),
+            suppress_by: None,
         }
     }
 

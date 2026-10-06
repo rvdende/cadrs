@@ -306,6 +306,8 @@ fn drawn_edges(v: &View, g: &ViewGeometry) -> Vec<usize> {
         .edges
         .iter()
         .enumerate()
+        // A flat pattern's bend lines while they are shown (P3I.7).
+        .filter(|(_, e)| !cadrs_drawing::flat_view::is_bend_edge(e) || v.flat.as_ref().is_some_and(|f| !f.bend_lines_hidden))
         .filter(|(_, e)| match (e.visibility, e.class) {
             (ProjVisibility::Visible, ProjClass::Smooth) => v.tangent_edges != TangentEdges::Hidden,
             (ProjVisibility::Visible, _) => true,
@@ -1376,6 +1378,22 @@ fn rebuild_scene(
     {
         emit(&gr, orange(), false, false, &mut strokes, &mut fills);
     }
+    // Flat pattern views' bend notes (P3I.7).
+    for (v, g) in &views {
+        let Some(g) = g else { continue };
+        let Some(flat) = g.flat.as_ref() else { continue };
+        let selected = dui.selected.contains(&v.id) || dui.flat_preview.as_ref().is_some_and(|(id, _)| *id == v.id);
+        let color = if selected { orange() } else { ink() };
+        for n in cadrs_drawing::flat_view::bend_notes(&d.style, v, flat) {
+            for st in &n.strokes {
+                strokes.push((st.iter().map(v2).collect(), color));
+            }
+            for t in &n.fills {
+                fills.push((t.map(|p| v2(&p)), color));
+            }
+            texts.push(SceneText { rotation: n.rotation as f32, ..SceneText::plain(n.text.clone(), color) });
+        }
+    }
     // Inference lines (D11.6): dashed, from the other callouts.
     for (a, b) in &ui.guides {
         for dash in cadrs_drawing::view::dashes(&[*a, *b], &[1.6, 1.0]) {
@@ -1611,7 +1629,7 @@ fn hint_text(ui: &AnnotationUi) -> Option<String> {
         AnnTool::SheetLine => "Line: click the start, then the end · Esc to finish".into(),
         AnnTool::SheetSpline => "Spline: click its points · double-click or Enter to finish".into(),
         AnnTool::PlaceImport => "Click the sheet to place it · Esc to cancel".into(),
-        AnnTool::PlaceBom => "Insert BOM: click the sheet to place the table (it snaps to the border's corner) · Esc to cancel".into(),
+        AnnTool::PlaceBom => "Insert BOM: click the sheet to place the table (it snaps to the border's corner or the title block) · Esc to cancel".into(),
         AnnTool::Callout if ui.preview.is_none() => "Callout: pick an edge of a part in an assembly view · ✓ to finish".into(),
         AnnTool::Callout => "Callout: click to place it (it lines up with the others) · Esc to cancel".into(),
         AnnTool::Dimension(t) => {

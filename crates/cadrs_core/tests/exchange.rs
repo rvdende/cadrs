@@ -35,6 +35,7 @@ fn sketch(g: Sketch) -> Feature {
         id: FeatureId::new(),
         name: "Sketch 1".into(),
         kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g }),
+        suppress_by: None,
     }
 }
 
@@ -44,6 +45,7 @@ fn extrude(s: &Feature, seeds: &[Vec2], depth: f64) -> Feature {
         id: FeatureId::new(),
         name: "Extrude".into(),
         kind: FeatureKind::Extrude(samples::extrude_of(samples::region_refs(s.id, g, seeds), depth)),
+        suppress_by: None,
     }
 }
 

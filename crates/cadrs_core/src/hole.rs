@@ -1001,6 +1001,7 @@ pub fn hole_vertices(g: &cadrs_sketch::Sketch) -> Vec<cadrs_sketch::PointId> {
             CurveKind::Circle { center, .. } => vec![center],
             CurveKind::Arc { center, start, end } => vec![center, start, end],
             CurveKind::Ellipse { center, major, .. } | CurveKind::EllipseOffset { center, major, .. } => vec![center, major],
+            CurveKind::EllipseArc { center, start, end, .. } => vec![center, start, end],
             // Its ends (its control points are handles, not places for holes).
             CurveKind::Bezier { a, b, c1, c2 } => {
                 used.extend([c1, c2]);

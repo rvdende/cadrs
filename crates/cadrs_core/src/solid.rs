@@ -64,6 +64,11 @@ pub struct SolidEdge {
     /// → Tangent connected): edges with the same group meet end to end with parallel tangents
     /// (the kernel's exact tangents). `None` for prism meshes.
     pub tangent_group: Option<u32>,
+    /// A seam between two facets of a polygonised curve (a sheet metal round: a relief, a corner
+    /// break, a hole; [`Solid::mark_facet_seams`]): not drawn, as the curve's own surface would
+    /// have none.
+    #[serde(default)]
+    pub smooth: bool,
 }
 
 /// A circle in space: its center, the unit normal of its plane and its radius.
@@ -375,6 +380,86 @@ pub(crate) fn normalize(a: Vec3) -> Vec3 {
 }
 
 impl Solid {
+    /// Marks the seams between facets of polygonised curves as smooth (not drawn): edges between
+    /// two flat faces that turn by less than `max_angle` (radians) across them, and edges between
+    /// two faces of one name. Sheet metal walls
+    /// carry their rounds (reliefs, corner breaks, round holes) as fine polygons, whose every
+    /// facet would otherwise draw an edge line (`sm_p3i5_corner` 03).
+    pub fn mark_facet_seams(&mut self, max_angle: f64) {
+        use std::collections::HashMap;
+        // The triangles at each corner point (faces have their own copies of shared points, a
+        // hair apart): a grid of 0.1 µm cells, searched with their neighbours.
+        let key = |p: Vec3| p.map(|c| (c * 1e4).floor() as i64);
+        let mut cells: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+        for t in 0..self.indices.len() / 3 {
+            for k in 0..3 {
+                let i = self.indices[3 * t + k] as usize;
+                cells.entry(key(self.positions[i])).or_default().push(t);
+            }
+        }
+        let has = |t: usize, p: Vec3| (0..3).any(|k| len(sub(self.positions[self.indices[3 * t + k] as usize], p)) <= 1e-6);
+        let near = |p: Vec3| -> Vec<usize> {
+            let c = key(p);
+            let mut out: Vec<usize> = Vec::new();
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(ts) = cells.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) {
+                            out.extend(ts.iter().copied().filter(|t| has(*t, p)));
+                        }
+                    }
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        // Which face a triangle is of, and whether that face is flat.
+        let mut flat_tri = vec![false; self.indices.len() / 3];
+        for f in &self.faces {
+            for t in f.first_triangle..(f.first_triangle + f.triangle_count).min(flat_tri.len()) {
+                flat_tri[t] = f.plane.is_some();
+            }
+        }
+        let tri_normal = |t: usize| -> Option<Vec3> {
+            let p = |k: usize| self.positions[self.indices[3 * t + k] as usize];
+            let (a, b, c) = (p(0), p(1), p(2));
+            let n = cross(sub(b, a), sub(c, a));
+            let l = len(n);
+            (l > 1e-15).then(|| scale(n, 1.0 / l))
+        };
+        let cos_max = max_angle.cos();
+        let marks: Vec<bool> = self
+            .edges
+            .iter()
+            .map(|e| {
+                // Between two faces of one name: a meshed tool's facets (a round cut through a
+                // bend, which names all its faces alike) or a closed face's seam; neither is an
+                // edge of the part.
+                if e.name.faces[0] == e.name.faces[1] {
+                    return true;
+                }
+                if e.circle.is_some() || e.points.len() < 2 {
+                    return false;
+                }
+                // The triangles on either side of its first stretch: both of flat faces, turning
+                // by at most `max_angle` across it.
+                let (ta, tb) = (near(e.points[0]), near(e.points[1]));
+                let both: Vec<usize> = ta.iter().copied().filter(|t| tb.contains(t)).collect();
+                if both.len() != 2 || !both.iter().all(|t| flat_tri[*t]) {
+                    return false;
+                }
+                match (tri_normal(both[0]), tri_normal(both[1])) {
+                    (Some(a), Some(b)) => dot(a, b).abs() >= cos_max && dot(a, b) > 0.0,
+                    _ => false,
+                }
+            })
+            .collect();
+        for (e, m) in self.edges.iter_mut().zip(marks) {
+            e.smooth = m;
+        }
+    }
+
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
@@ -887,6 +972,7 @@ fn side_faces(
                     points: vec![p, add(p, offset)],
                     circle: None,
                     tangent_group: None,
+                    smooth: false,
                 });
             }
         }
@@ -990,6 +1076,7 @@ fn side_faces(
                 points: pts.iter().map(|p| add(*p, shift)).collect(),
                 circle: None,
                 tangent_group: None,
+                smooth: false,
             });
         }
     }

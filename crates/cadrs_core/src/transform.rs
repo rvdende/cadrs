@@ -446,7 +446,7 @@ pub struct Composite {
 /// latter with their snapshot (see [`TransformFeature::context`]): the source studios' current
 /// features and where the context has the parts.
 pub fn context_copies(doc: &Document, studio: ElementId, picked: &[PartId]) -> (Vec<PartId>, Vec<ContextCopy>, Vec<ContextSource>) {
-    let ctx = doc.element(studio).and_then(|e| e.context.as_ref());
+    let el = doc.element(studio);
     let (mut own, mut copies, mut sources): (Vec<PartId>, Vec<ContextCopy>, Vec<ContextSource>) = (Vec::new(), Vec::new(), Vec::new());
     for p in picked {
         if !crate::assembly::context::is_context(p.feature) {
@@ -455,19 +455,22 @@ pub fn context_copies(doc: &Document, studio: ElementId, picked: &[PartId]) -> (
             }
             continue;
         }
-        let Some(cp) = ctx.and_then(|c| c.parts.iter().find(|c| c.id == p.feature)) else { continue };
+        let Some((ctx, cp)) = el.and_then(|e| crate::assembly::context::find_part(doc, e.id, p.feature)) else { continue };
+        let (ctx, cp) = (&ctx, &cp);
         if copies.iter().any(|c: &ContextCopy| c.id == cp.id) {
             continue;
         }
-        let source = match sources.iter().position(|s| s.element == cp.element) {
+        // The context's snapshot of the source studio (MC1.2), or its features now (an old
+        // context).
+        let Some(features) = crate::assembly::context::source_features(doc, ctx, cp.element) else { continue };
+        let source = match sources.iter().position(|s| s.element == cp.element && s.features == features) {
             Some(i) => i,
             None => {
-                let Some(e) = doc.element(cp.element) else { continue };
-                sources.push(ContextSource { element: cp.element, features: e.active_features() });
+                sources.push(ContextSource { element: cp.element, features });
                 sources.len() - 1
             }
         };
-        let appearance = doc.element(cp.element).and_then(|e| e.part_props().iter().find(|q| q.part == cp.part)).and_then(|q| q.appearance);
+        let appearance = if ctx.studios.is_empty() { doc.element(cp.element).and_then(|e| e.part_props().iter().find(|q| q.part == cp.part)).and_then(|q| q.appearance) } else { cp.appearance };
         copies.push(ContextCopy { id: cp.id, source, part: cp.part, pose: cp.pose, name: cp.name.clone(), appearance });
     }
     (own, copies, sources)

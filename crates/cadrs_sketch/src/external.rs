@@ -161,7 +161,7 @@ impl External {
         if needed.is_empty() {
             return op;
         }
-        let items: Vec<(Projected, Link)> = needed.iter().filter_map(|c| self.curves.get(c).copied()).collect();
+        let items: Vec<(Projected, Link)> = needed.iter().filter_map(|c| self.curves.get(c).cloned()).collect();
         let op = self.rewrite(op);
         match op {
             SketchOp::Batch(ops) if ops.is_empty() => SketchOp::UseConstruction { items },

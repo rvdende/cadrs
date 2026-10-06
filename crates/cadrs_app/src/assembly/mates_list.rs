@@ -355,11 +355,28 @@ fn rebuild_mate_rows(
         })
         .collect();
     let n_mates = key.len();
+    // P3B.7 judge: the assembly's own mate connectors (A22.2), each a feature row, where they
+    // were made among the mates (as Onshape lists features in creation order).
+    let mut connectors: Vec<(usize, ListRow)> = Vec::new();
+    for c in &model.connectors {
+        if let Some(f) = &ui.filter
+            && !f.matches(&cadrs_core::feature_list::FeatureFacts { name: &c.name, type_label: "Mate connector", ..Default::default() })
+        {
+            continue;
+        }
+        let owner = cache.part_name(super::occurrence_part(c.connector.instance)).unwrap_or("instance").to_string();
+        connectors.push((c.listed_after.unwrap_or(n_mates).min(n_mates), ListRow::Connector { id: c.id, name: c.name.clone(), owner }));
+    }
+    connectors.sort_by_key(|(k, _)| *k);
+    let mut connectors = connectors.into_iter().peekable();
     // Folders at their first mate; closed, their mates hidden (A18.5). The filter (A1.5) keeps
     // the mates that match, and their folders.
     let mut rows: Vec<ListRow> = Vec::new();
     let mut done: Vec<cadrs_core::FeatureId> = Vec::new();
-    for r in key {
+    for (i, r) in key.into_iter().enumerate() {
+        while let Some((_, row)) = connectors.next_if(|(k, _)| *k <= i) {
+            rows.push(row);
+        }
         if let Some(f) = &ui.filter {
             let folder = r.folder.and_then(|id| model.mate_folders.iter().find(|x| x.id == id)).map(|x| x.name.clone());
             let ty = model.mate(r.id).map(|m| m.type_label()).unwrap_or("");
@@ -383,16 +400,7 @@ fn rebuild_mate_rows(
         }
         rows.push(ListRow::Mate(r));
     }
-    // P3B.7 judge: the assembly's own mate connectors (A22.2), each a feature row.
-    for c in &model.connectors {
-        if let Some(f) = &ui.filter
-            && !f.matches(&cadrs_core::feature_list::FeatureFacts { name: &c.name, type_label: "Mate connector", ..Default::default() })
-        {
-            continue;
-        }
-        let owner = cache.part_name(super::occurrence_part(c.connector.instance)).unwrap_or("instance").to_string();
-        rows.push(ListRow::Connector { id: c.id, name: c.name.clone(), owner });
-    }
+    rows.extend(connectors.map(|(_, row)| row));
     if ui.filter.is_none() {
         for f in model.mate_folders.iter().filter(|f| f.features.is_empty()) {
             rows.push(ListRow::Folder { id: f.id, name: f.name.clone(), count: 0, open: f.open });

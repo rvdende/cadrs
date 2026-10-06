@@ -212,7 +212,8 @@ pub(crate) fn name(kind: &FeatureKind) -> Option<&'static str> {
         FeatureKind::Thicken(_) => "thicken",
         FeatureKind::Helix(_) => "helix",
         FeatureKind::Fill(_) => "fill",
-        _ => return None,
+        // P3I.6: the flat pattern extrude ends the chain.
+        k => return crate::flat_ui::name(k),
     })
 }
 
@@ -221,7 +222,7 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
         FeatureKind::Thicken(x) => format!("thicken {:?} {} {} {} {}", x.op, x.mid_plane, x.flip, x.keep_tools, x.merge_all),
         FeatureKind::Helix(x) => format!("helix {:?} {:?} {} {}", x.helix_type, x.path, x.clockwise, x.flip),
         FeatureKind::Fill(x) => format!("fill {} {:?}", x.add, x.continuity.first()),
-        _ => return None,
+        k => return crate::flat_ui::layout(k),
     })
 }
 
@@ -257,7 +258,7 @@ pub(crate) fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind,
             })
             .collect(),
         (FeatureKind::Fill(x), Role::MergeScope) => crate::applied::part_names(cache, &x.merge_scope),
-        _ => return None,
+        (k, r) => return crate::flat_ui::items(features, k, r),
     })
 }
 
@@ -266,7 +267,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::ThickenEntities => AppliedField::ThickenEntities,
         Role::HelixEntity => AppliedField::HelixEntity,
         Role::FillEdges => AppliedField::FillEdges,
-        _ => return None,
+        r => return crate::flat_ui::list_field(r),
     })
 }
 
@@ -354,7 +355,7 @@ pub(crate) fn body(b: &mut ChildSpawner, t: &Theme, kind: &FeatureKind, field: A
                 }
             });
         }
-        _ => {}
+        k => crate::flat_ui::body(b, t, k, field, items_of),
     }
 }
 
@@ -412,7 +413,7 @@ pub(crate) fn tab(k: &mut FeatureKind, role: Role, i: usize) {
     match k {
         FeatureKind::Thicken(x) => x.op = BooleanOp::ALL[i.min(3)],
         FeatureKind::Fill(x) => x.add = i == 1,
-        _ => {}
+        k => crate::flat_ui::tab(k, role, i),
     }
 }
 
@@ -525,6 +526,6 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         (FeatureKind::Fill(x), Role::MergeScope) if i < x.merge_scope.len() => {
             x.merge_scope.remove(i);
         }
-        _ => {}
+        (k, r) => crate::flat_ui::remove(k, r, i),
     }
 }

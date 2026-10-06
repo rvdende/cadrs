@@ -882,7 +882,7 @@ pub fn solid_of(
     }
     for (((name, parts), circle), group) in edge_order.into_iter().zip(edge_parts).zip(edge_circles).zip(edge_groups) {
         for points in chain(parts, tol_piece) {
-            out.edges.push(SolidEdge { name, points, circle, tangent_group: Some(group) });
+            out.edges.push(SolidEdge { name, points, circle, tangent_group: Some(group), smooth: false });
         }
     }
 

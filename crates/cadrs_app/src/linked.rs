@@ -936,13 +936,14 @@ pub fn open_create_version_dialog(world: &mut World, target: VersionTarget) {
         VersionTarget::Current => world.resource::<DocLog>().log.as_ref().map(|l| l.next_version_name()).unwrap_or_else(|| "V1".into()),
         VersionTarget::Other(d, _) => format!("V{}", resolver(world).0.versions(d).len() + 1),
     };
+    let ws_name = crate::workspaces::current_name(world);
     let theme = world.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("create-version-dialog")
             .width(560.0)
-            .title("Create version from Main")
+            .title(format!("Create version from {ws_name}"))
             .title_font(theme.font_lg, FontWeight::NORMAL)
             .body(move |b| {
                 let t = &tb;
@@ -1076,19 +1077,23 @@ fn on_top_bar(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
     }
 }
 
-/// The top bar's versions counter follows the document's versions (ER2.2).
+/// The top bar's versions counter follows the document's versions (ER2.2), and its branches
+/// counter the branches (P3E.4).
 fn sync_versions_counter(log: Res<DocLog>, q: Query<(&Name, &Children)>, mut q_text: Query<&mut Text>) {
     if !log.is_changed() {
         return;
     }
-    let n = log.log.as_ref().map(|l| l.versions().len()).unwrap_or(0).to_string();
+    let versions = log.log.as_ref().map(|l| l.versions().len()).unwrap_or(0).to_string();
+    let branches = log.log.as_ref().map(|l| l.branches().len()).unwrap_or(0).to_string();
     for (name, children) in &q {
-        if name.as_str() != "document-versions" {
-            continue;
-        }
+        let n = match name.as_str() {
+            "document-versions" => &versions,
+            "document-branches" => &branches,
+            _ => continue,
+        };
         for c in children.iter() {
             if let Ok(mut t) = q_text.get_mut(c)
-                && t.0 != n
+                && t.0 != *n
             {
                 t.0 = n.clone();
             }

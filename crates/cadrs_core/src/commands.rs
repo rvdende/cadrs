@@ -5,7 +5,7 @@ mod drawing;
 pub use drawing::{EditDrawing, InsertElement};
 pub use applied::{CreateFolder, MoveFeatures, SetFeature, SetFolder, UnpackFolder, normalize_folders};
 mod list;
-pub use list::{DeleteFolder, SetRollback, SetSuppressed};
+pub use list::{DeleteFolder, SetRollback, SetSuppressByVariable, SetSuppressed};
 
 use cadrs_sketch::{CurveId, FaceName, PlaneRef, SketchOp, Vec2};
 
@@ -292,6 +292,7 @@ impl Command for AddSketch {
             id: self.feature,
             name,
             kind: FeatureKind::Sketch(SketchFeature::new(self.plane)),
+            suppress_by: None,
         })?;
         refresh(doc, self.element);
         Ok(())
@@ -530,7 +531,9 @@ fn refresh(doc: &mut Document, element: ElementId) {
 pub fn refresh_studio(doc: &mut Document, element: ElementId) {
     // Derived features first: the sketches may sit on their parts.
     crate::derived::resolve_document(doc);
-    let context = crate::assembly::context::solids(doc, element);
+    let context = crate::assembly::context::solids_by_context(doc, element);
+    // MC1.3: ends up to a context part carry it as the context has it.
+    crate::assembly::context::refresh_targets(doc, element);
     let units = doc.units;
     // P3F.4: variables first, so the sketches regenerate with the dimensions they drive.
     let suppressed = doc.element(element).map(|e| e.suppressed().to_vec()).unwrap_or_default();
@@ -567,6 +570,7 @@ impl Command for AddExtrude {
             id: self.feature,
             name,
             kind: FeatureKind::Extrude(self.extrude.clone()),
+            suppress_by: None,
         })?;
         Ok(())
     }
@@ -636,6 +640,7 @@ impl Command for AddRevolve {
             id: self.feature,
             name,
             kind: FeatureKind::Revolve(self.revolve.clone()),
+            suppress_by: None,
         })?;
         Ok(())
     }
@@ -1077,6 +1082,7 @@ impl Command for AddFeature {
             id: self.feature,
             name,
             kind: self.kind.clone(),
+            suppress_by: None,
         })?;
         refresh(doc, self.element);
         Ok(())

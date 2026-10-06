@@ -149,6 +149,8 @@ pub struct ViewKey {
     cut: u64,
     /// Show part intersections (assembly views).
     intersections: bool,
+    /// A flat pattern view (P3I.7).
+    flat: bool,
 }
 
 /// The hash of a view's cut (0 without one).
@@ -305,7 +307,7 @@ impl ViewCache {
     fn key_of(&mut self, doc: &cadrs_core::Document, d: Option<&Drawing>, v: &View) -> Option<ViewKey> {
         if cadrs_core::drawing_assembly::is_assembly(doc, ElementId(v.reference.element)) {
             let (element, state, _) = self.assembly_of(doc, d, v)?;
-            return Some(ViewKey { element, state, part: None, frame: v.frame.key(), shaded: v.shaded, cut: 0, intersections: v.part_intersections });
+            return Some(ViewKey { element, state, part: None, frame: v.frame.key(), shaded: v.shaded, cut: 0, intersections: v.part_intersections, flat: false });
         }
         let (element, state, _) = self.state_of(doc, d, v, false)?;
         Some(ViewKey {
@@ -316,6 +318,7 @@ impl ViewCache {
             shaded: v.shaded,
             cut: cut_hash(v),
             intersections: false,
+            flat: v.flat.is_some(),
         })
     }
 
@@ -329,12 +332,13 @@ impl ViewCache {
             shaded: v.shaded,
             cut: cut_hash(v),
             intersections: false,
+            flat: v.flat.is_some(),
         }
     }
 
     /// The key an assembly view would have with the assembly state `snapshot` (P3C.5).
     pub fn assembly_key_with(snapshot: &str, v: &View) -> ViewKey {
-        ViewKey { element: ElementId(v.reference.element), state: snapshot_hash(snapshot), part: None, frame: v.frame.key(), shaded: v.shaded, cut: 0, intersections: v.part_intersections }
+        ViewKey { element: ElementId(v.reference.element), state: snapshot_hash(snapshot), part: None, frame: v.frame.key(), shaded: v.shaded, cut: 0, intersections: v.part_intersections, flat: false }
     }
 
     /// Stores a projection made elsewhere (an update's) under `key`.
@@ -574,6 +578,10 @@ pub fn shown_views(d: &Drawing, index: usize, ui: &DrawingUi) -> Vec<View> {
             if let Some((_, a)) = ui.drag_preview.iter().find(|(id, _)| *id == v.id) {
                 v.anchor = *a;
             }
+            // A bend note being dragged (P3I.7).
+            if let Some((_, f)) = ui.flat_preview.as_ref().filter(|(id, _)| *id == v.id) {
+                v.flat = Some(f.clone());
+            }
             v
         })
         .collect()
@@ -662,6 +670,8 @@ fn view_strokes(strokes: &mut Vec<Stroke>, v: &View, g: &ViewGeometry, color: Co
         let c = if Some(l.edge) == highlight { Color::srgb_u8(0x1f, 0x7a, 0xe0) } else { color };
         push_line(strokes, &l.points, l.kind, c);
     }
+    // A flat pattern's bend lines, in their own pens unless highlighted (P3I.7).
+    strokes.extend(super::flat_views::bend_strokes(v, g, (color != ink()).then_some(color)));
     if !sketches.is_empty() {
         let frame = v.frame.view_frame();
         let sketch_color = sketch_color();
@@ -745,6 +755,7 @@ fn rebuild_view_scene(
                 let sketches = sketch_polylines(&doc.doc, v);
                 let hl = ui.highlight_edge.filter(|(id, _)| *id == v.id).map(|(_, e)| e);
                 view_strokes(&mut strokes, v, g, color, &sketches, hl);
+                strokes.extend(super::flat_views::centermark_strokes(&d.style, v, g, color));
                 let decor = cadrs_drawing::view_kinds::view_decor(&d.style, &decor_views, v, Some(&**g), &avoid);
                 decor_strokes(&mut strokes, &decor, color);
             }
@@ -764,6 +775,7 @@ fn rebuild_view_scene(
         let mut gv = gv.clone();
         gv.hidden_lines = false;
         view_strokes(&mut strokes, &gv, g, ghost_color(), &[], None);
+        strokes.extend(super::flat_views::centermark_strokes(&d.style, &gv, g, ghost_color()));
         let decor = cadrs_drawing::view_kinds::view_decor(&d.style, &[], &gv, Some(&**g), &avoid);
         decor_strokes(&mut strokes, &decor, ghost_color());
     } else if let Some(gv) = &ui.ghost {

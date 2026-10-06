@@ -311,6 +311,10 @@ pub struct View {
     /// Show threads (D4.8): tapped holes' thread marks.
     #[serde(default)]
     pub threads: bool,
+    /// A flat pattern view (P3I.7, SM16): the referenced sheet metal part laid flat, with its
+    /// bend lines and notes (see [`crate::flat_view`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat: Option<crate::flat_view::FlatSettings>,
 }
 
 impl View {
@@ -343,7 +347,25 @@ impl View {
             breaks: Vec::new(),
             broken_out: None,
             threads: false,
+            flat: None,
         }
+    }
+
+    /// A flat pattern view of a sheet metal part (P3I.7, SM16.2): only the Insert view dialog's
+    /// Flat patterns filter makes one.
+    pub fn flat_pattern(reference: ObjectRef, orientation: NamedView, scale: Scale, anchor: [f64; 2]) -> Self {
+        let mut v = Self::base(reference, orientation, scale, anchor);
+        v.name = "Flat pattern".to_string();
+        v.flat = Some(crate::flat_view::FlatSettings::default());
+        // Onshape's flat views show the bends' chain lines clean, without their tangent lines
+        // (`ex3-drawings/goal.png`); Tangent edges → Solid or Phantom shows them.
+        v.tangent_edges = TangentEdges::Hidden;
+        v
+    }
+
+    /// Whether it shows a flat pattern (or is projected from one).
+    pub fn is_flat(&self) -> bool {
+        self.flat.is_some()
     }
 
     /// A model point on the sheet (through the view's breaks, P3C.8).
@@ -634,6 +656,10 @@ pub fn view_lines(view: &View, hlr: &Hlr) -> Vec<ViewLine> {
     let clip = crate::view_kinds::view_clip(view);
     let mut out = Vec::new();
     for (i, e) in hlr.edges.iter().enumerate() {
+        // A flat pattern's bend lines have their own pen (`crate::flat_view::bend_lines`).
+        if crate::flat_view::is_bend_edge(e) {
+            continue;
+        }
         if e.visibility == ProjVisibility::Hidden && view.hidden_lines && covered(e, &tangents) {
             continue;
         }

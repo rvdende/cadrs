@@ -40,7 +40,9 @@ D2.10 and X1 to ✅ (Move to document); P3G.1 (2026-09-29) moved D13.1 and X14 t
 moved D1.2, D11.*, D12.*, D14.7, D14.8, X3 and X10 to ✅; the wrap-up moved D14.1 (Document
 Copy… exists, as D8.1) and X6 (Show part intersections) to ✅. The 2 🟡 rows (D2.10, X1) are blocked on
 another stage's feature (below); every ✅ row cites a scenario frame or a test that exists
-(checked by script against the scenarios' Screenshot names, 2026-09-29).
+(checked by script against the scenarios' Screenshot names, 2026-09-29). **After stage 3E
+(2026-10-02):** unchanged, ✅ 111 · 🟡 0 · ❌ 0 · out of scope 4; D2.2's mouse-mapping half, left
+to P3E.3, is checked against the preference it built (`course_td_mouse_prefs` 08b–12).
 
 **Out of scope** (only these count): cloud and multi-user collaboration, sharing and
 permissions, release management and paid tiers, Onshape account and learning-site features, and,
@@ -76,7 +78,7 @@ The course passes on this branch except for these, which need a feature another 
 | ID | Requirement | Status | Notes |
 |---|---|---|---|
 | D2.1 | Sheet on a grey background | ✅ | P3C.1. `course_drw_create` 05. |
-| D2.2 | Left click selects, wheel zooms, right/middle drag pans, no rotate; mouse mapping from preferences | ✅ | P3C.1. The mouse-mapping preference is a local setting (P3E.3 adds the preference; drawings read it). `course_drw_create` 06–07. |
+| D2.2 | Left click selects, wheel zooms, right/middle drag pans, no rotate; mouse mapping from preferences | ✅ | P3C.1 (`course_drw_create` 06–07). **P3E.3**: the mouse mapping is a local account preference (Preferences… in the account menu; Onshape, SolidWorks and other presets), and the sheet follows it: with SolidWorks a middle drag pans and a right drag does nothing; back on Onshape a right drag pans again; never a rotate (`course_td_mouse_prefs` 08b–12; `preferences.rs`: `sheets_pan_with_the_rotate_and_pan_gestures`, `preferences_round_trip_through_the_store_root`). |
 | D2.3 | F fits the sheet | ✅ | P3C.1. `course_drw_create` 08. |
 | D2.4 | Drawing toolbar (update, views, dimensions, annotations, note, callout, table, BOM, centerline, centermark, virtual sharp, line, spline, DXF/DWG, image) | ✅ | P3C.1 (toolbar with every group; items enabled as their milestones land: P3C.2–P3C.8). P3C.7: sheet sketch Line and Spline, Insert DXF or DWG and Insert image work (`course_drw_insert_dxf_image`). |
 | D2.5 | Drawing properties panel (Units and precision, dual units, zeros, …; update from template; lock) | ✅ | P3C.1. `course_drw_sheets` 14–16, 22–24. |

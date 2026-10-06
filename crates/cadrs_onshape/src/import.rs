@@ -41,8 +41,41 @@ pub struct Options {
     pub only: Option<String>,
 }
 
+/// The skip list and progress file of the import a supervisor runs, for the imports it makes
+/// of other documents along the way ([`Options::nested`]).
+static SUPERVISED: std::sync::Mutex<Option<(std::collections::HashSet<String>, Option<std::path::PathBuf>)>> = std::sync::Mutex::new(None);
+
+impl Options {
+    /// The options of an import of another document made during this one (a Derived feature's
+    /// source, a linked instance's document): under the same supervision, so each of its
+    /// features has the time limit to itself (it isn't counted against the feature that needed
+    /// it) and a feature of it that hung is skipped next time.
+    pub fn nested(only: Option<String>) -> Self {
+        let (skip, progress) = SUPERVISED.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
+        Options { skip, progress, only }
+    }
+}
+
+/// Runs a nested import ([`Options::nested`]); afterwards the progress file names the feature
+/// that asked for it again (a hang after it must skip that one, not the nested import's last).
+pub(crate) fn nested_import<T>(f: impl FnOnce() -> T) -> T {
+    let path = SUPERVISED.lock().ok().and_then(|s| s.as_ref().and_then(|(_, p)| p.clone()));
+    let before = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+    let out = f();
+    if let (Some(p), Some(b)) = (path, before) {
+        std::fs::write(p, b).ok();
+    }
+    out
+}
+
 /// Imports `raw` as a new cadrs document (with a stable id, so a later import replaces it).
 pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Imported {
+    if options.progress.is_some()
+        && let Ok(mut s) = SUPERVISED.lock()
+        && s.is_none()
+    {
+        *s = Some((options.skip.clone(), options.progress.clone()));
+    }
     let json = raw.json().unwrap_or(Value::Null);
     let mut doc = Document::empty(raw.name.clone());
     doc.id = DocumentId::from_u128(stable_u128(&[&raw.id]));
@@ -95,6 +128,66 @@ pub fn import_document(raw: &RawDocument, user: &str, options: &Options) -> Impo
     // Assemblies once their Part Studios are there (not for a lone studio another document needs).
     if options.only.is_none() {
         crate::assembly::import_assemblies(&mut s, raw, &elements, &mut reports);
+        // Part Studios Onshape designed in the context of an assembly here: each gets a context
+        // of that assembly (around its instance, where Onshape places it) and is imported again
+        // with it; then the assemblies again, for the parts that only build now.
+        let mut again = false;
+        // The frozen context entities each in-context studio names: a copy of a studio (a
+        // duplicated tab) names the same ones, and has its context, though it isn't in the
+        // assembly itself.
+        let foreign: Vec<(usize, ElementId, std::collections::HashSet<String>)> = studios
+            .iter()
+            .filter_map(|&(i, id)| {
+                let ids = in_context_entities(&elements[i]);
+                (!ids.is_empty()).then_some((i, id, ids))
+            })
+            .collect();
+        for (i, id, ids) in &foreign {
+            let (i, id) = (*i, *id);
+            let el = &elements[i];
+            // Its own instance, else that of a studio naming the same context entities (whose
+            // parts are then left out, as Onshape's context of it had them).
+            let anchor = crate::assembly::context_anchor(raw, &elements, &el.id).map(|a| (a, id)).or_else(|| {
+                foreign.iter().filter(|(j, _, other)| *j != i && !other.is_disjoint(ids)).find_map(|(j, other_id, _)| crate::assembly::context_anchor(raw, &elements, &elements[*j].id).map(|a| (a, *other_id)))
+            });
+            let Some(((asm, inst, pose), left_out)) = anchor else {
+                if let Some(er) = reports[i].as_mut() {
+                    er.notes.push("made in context of an assembly that isn't in this document: its in-context features have no context".into());
+                }
+                continue;
+            };
+            let ctx = match cadrs_core::assembly::context::snapshot_with(&s.doc, asm, left_out, inst, pose.inverse(), 0) {
+                Ok(c) => c,
+                Err(e) => {
+                    if let Some(er) = reports[i].as_mut() {
+                        er.notes.push(format!("its assembly context: {e}"));
+                    }
+                    continue;
+                }
+            };
+            let Some(k) = s.doc.element_index(id) else { continue };
+            let mut fresh = cadrs_core::Element::part_studio(el.name.clone());
+            fresh.id = id;
+            // Onshape opens it in that context (the workspace's active one).
+            fresh.open_context = Some(ctx.id);
+            fresh.contexts = vec![ctx];
+            s.doc.elements[k] = fresh;
+            let mut er = ElementReport { name: el.name.clone(), kind: el.kind.clone(), imported: true, ..Default::default() };
+            PartStudio::new(&mut s, id, &raw.id, el, vars.clone(), &mut er, options).run();
+            reports[i] = Some(er);
+            again = true;
+        }
+        if again {
+            for e in s.doc.elements.iter_mut().filter(|e| e.assembly_model().is_some()) {
+                e.assembly = Default::default();
+            }
+            for (i, el) in elements.iter().enumerate() {
+                if el.kind == "ASSEMBLY" {
+                    reports[i] = Some(ElementReport { name: el.name.clone(), kind: el.kind.clone(), imported: true, ..Default::default() });
+                }
+            }
+            crate::assembly::import_assemblies(&mut s, raw, &elements, &mut reports);
+        }
     }
     report.elements.extend(reports.into_iter().flatten());
     if s.doc.elements.is_empty() {
@@ -181,7 +274,7 @@ pub(crate) fn load_source(root: &std::path::Path, doc: &str, element: &str) -> O
     }
     let raw = crate::raw::documents(root).into_iter().find(|d| d.id == doc)?;
     BUSY.lock().ok()?.push(doc.to_string());
-    let _ = import_document(&raw, "import", &Options { only: Some(element.to_string()), ..Options::default() });
+    let _ = nested_import(|| import_document(&raw, "import", &Options::nested(Some(element.to_string()))));
     BUSY.lock().ok()?.retain(|d| d != doc);
     crate::eval::source(doc, element)
 }
@@ -345,6 +438,9 @@ pub(crate) struct PartStudio<'a> {
     options: &'a Options,
     /// Its Derived features' sources (to resolve queries on derived parts).
     pub(crate) derived: crate::eval::DerivedSources,
+    /// The parts of its assembly contexts (`managed-in-context-design.md`), for the features
+    /// Onshape made in context.
+    context: Vec<Part>,
 }
 
 impl<'a> PartStudio<'a> {
@@ -357,7 +453,8 @@ impl<'a> PartStudio<'a> {
         report: &'a mut ElementReport,
         options: &'a Options,
     ) -> Self {
-        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new() }
+        let context = cadrs_core::assembly::context::parts(&s.doc, el, |_, f| Some(cadrs_core::rebuild::build(f))).0;
+        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new(), context }
     }
 
     /// A query model of `parts` with this studio's features, sketches and derived sources.
@@ -828,14 +925,29 @@ impl<'a> PartStudio<'a> {
                         }
                     }
                 }
+                // Made in context: the face of the assembly context it lies on.
+                let in_context = is_in_context(f);
                 by_query
-                    .or_else(|| self.face_plane(&solved))
+                    .or_else(|| self.face_plane(&solved, in_context))
                     .or(near)
-                    .ok_or_else(|| CommandError::Invalid("sketch plane is not a default plane or a planar face of the model".into()))?
+                    .ok_or_else(|| {
+                        CommandError::Invalid(if in_context {
+                            "sketch plane is a face of an assembly context that isn't there (or has moved since)".into()
+                        } else {
+                            "sketch plane is not a default plane or a planar face of the model".into()
+                        })
+                    })?
             }
         };
         let id = self.feature_id(fid);
-        let parts = self.parts();
+        let mut parts = self.parts();
+        if is_in_context(f) {
+            parts.extend(self.context.iter().cloned());
+            fr.notes.push("in context of an assembly".into());
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                eprintln!("IN-CONTEXT {}: {} parts, {} of them the context's", f["name"].as_str().unwrap_or_default(), parts.len(), self.context.len());
+            }
+        }
         let map = sketch::import(self.s, self.el, id, f, &solved, plane, &parts, fr)?;
         let g = sketch::sketch_of(self.s, self.el, id)?;
         self.features.insert(fid.to_string(), id);
@@ -843,10 +955,14 @@ impl<'a> PartStudio<'a> {
         Ok(())
     }
 
-    /// A planar face of the model the sketch lies on (same plane, facing the same way).
-    fn face_plane(&mut self, solved: &sketch::Solved) -> Option<PlaneRef> {
+    /// A planar face of the model the sketch lies on (same plane, facing the same way); with
+    /// `in_context`, of the assembly context's parts too.
+    fn face_plane(&mut self, solved: &sketch::Solved, in_context: bool) -> Option<PlaneRef> {
         let (n, o) = sketch::world_plane(solved)?;
-        let parts = self.parts();
+        let mut parts = self.parts();
+        if in_context {
+            parts.extend(self.context.iter().cloned());
+        }
         let feats = self.s.doc.element(self.el)?.features().to_vec();
         // Of the faces on that plane, the one the sketch's geometry is on.
         let pts = sketch::world_points(solved);
@@ -1148,6 +1264,28 @@ impl<'a> PartStudio<'a> {
                 fr.notes.push("up to face imported as a blind depth (the profile goes past the face's edges)".into());
             }
         }
+        // Still failing: the other faces the query could mean, as they are (a curved face the
+        // profile lands on), the first that builds.
+        if self.rebuild_error(id).is_some() && x.end == EndType::UpToFace {
+            let tried = x.up_to;
+            for face in self.up_to_candidates(f) {
+                if tried.as_ref().is_some_and(|t| matches!(t, UpTo::Face(r) if r.part == face.part && r.face == face.face)) {
+                    continue;
+                }
+                let mut y = x.clone();
+                y.up_to = Some(UpTo::Face(face));
+                self.s.run(&SetExtrude { element: self.el, feature: id, extrude: y, label: "Extrude".into() })?;
+                self.parts();
+                if self.rebuild_error(id).is_none() {
+                    fr.notes.push("up to another face the query names (the first one didn't build)".into());
+                    break;
+                }
+            }
+            if self.rebuild_error(id).is_some() {
+                self.s.run(&SetExtrude { element: self.el, feature: id, extrude: x.clone(), label: "Extrude".into() })?;
+                self.parts();
+            }
+        }
         if let Some(e) = self.rebuild_error(id) {
             fr.notes.push(format!("rebuild error: {e}"));
         }
@@ -1164,17 +1302,8 @@ impl<'a> PartStudio<'a> {
         if x.end != EndType::UpToFace {
             return None;
         }
+        let faces = self.up_to_candidates(f);
         let parts = self.parts();
-        let mut faces = Vec::new();
-        for p in refs::picks(param(f, "endBoundEntityFace")) {
-            let Pick::Query(q) = p else { continue };
-            for e in self.model(&parts).eval(&q) {
-                if let crate::eval::Ent::Face(pi, fi) = e {
-                    let part = &parts[pi];
-                    faces.push(cadrs_core::document::FaceRef { part: part.id, face: part.solid.faces[fi].name, seed: part.solid.face_point(fi).unwrap_or([0.0; 3]) });
-                }
-            }
-        }
         if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
             for fc in &faces {
                 let pl = parts.iter().find(|p| p.id == fc.part).and_then(|p| p.solid.face(&fc.face)).and_then(|x| x.plane);
@@ -1186,6 +1315,22 @@ impl<'a> PartStudio<'a> {
             y.up_to = Some(UpTo::Face(face));
             self.up_to_as_blind(&y)
         })
+    }
+
+    /// The faces an extrude's "up to face" query could mean.
+    fn up_to_candidates(&mut self, f: &Value) -> Vec<cadrs_core::document::FaceRef> {
+        let parts = self.parts();
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "endBoundEntityFace")) {
+            let Pick::Query(q) = p else { continue };
+            for e in self.model(&parts).eval(&q) {
+                if let crate::eval::Ent::Face(pi, fi) = e {
+                    let part = &parts[pi];
+                    faces.push(cadrs_core::document::FaceRef { part: part.id, face: part.solid.faces[fi].name, seed: part.solid.face_point(fi).unwrap_or([0.0; 3]) });
+                }
+            }
+        }
+        faces
     }
 
     /// An "Up to face" extrude to a planar face parallel to its sketch as the blind extrude
@@ -1314,6 +1459,8 @@ impl<'a> PartStudio<'a> {
             band: (f64, f64),
             bbox: Option<[f64; 6]>,
             info: Option<Value>,
+            /// A sheet (surface) body: matched by its box alone.
+            sheet: bool,
         }
         let mut onshape = Vec::new();
         // Composite parts (an Import with "Create composite"): Onshape's one composite against
@@ -1380,7 +1527,23 @@ impl<'a> PartStudio<'a> {
                 let p = &v["point"];
                 Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
             })));
-            onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info });
+            onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info, sheet: false });
+        }
+        // Sheet bodies (silkscreen, a PCB's soldermask, …) have no mass properties: their boxes.
+        let box_of = |pid: &str| {
+            let body = details["bodies"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_str() == Some(pid)))?;
+            bbox_of(body["vertices"].as_array()?.iter().filter_map(|v| {
+                let p = &v["point"];
+                Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
+            }))
+        };
+        for info in parts_json.as_array().into_iter().flatten().filter(|p| p["bodyType"].as_str() == Some("sheet")) {
+            let Some(pid) = info["partId"].as_str() else { continue };
+            if onshape.iter().any(|o| o.pid == pid) {
+                continue;
+            }
+            let name = info["name"].as_str().unwrap_or(pid).to_string();
+            onshape.push(Os { pid: pid.to_string(), name, volume: 0.0, band: (0.0, 0.0), bbox: box_of(pid), info: Some(info.clone()), sheet: true });
         }
         let cadrs: Vec<(usize, f64, Option<[f64; 6]>)> = parts
             .iter()
@@ -1396,16 +1559,24 @@ impl<'a> PartStudio<'a> {
                 eprintln!("PARTS cadrs: {v:.1} mm³ {bb:?}");
             }
         }
-        // Pair them best first: close boxes, close volumes.
+        // Pair them best first: close boxes, close volumes. A sheet pairs with a part without
+        // volume, by its box.
         let mut pairs = Vec::new();
         for (oi, o) in onshape.iter().enumerate() {
-            for (ci, (_, v, bb)) in cadrs.iter().enumerate() {
-                let dv = (v - o.volume).abs() / o.volume.abs().max(1e-9);
+            for (ci, (i, v, bb)) in cadrs.iter().enumerate() {
+                let surface = parts[*i].kind == cadrs_core::parts::PartKind::Surface;
                 let db = match (o.bbox, bb) {
                     (Some(a), Some(b)) => (0..6).map(|k| (a[k] - b[k]).abs()).sum::<f64>(),
                     _ => 0.0,
                 };
                 let size = o.bbox.map(|a| (a[3] - a[0]) + (a[4] - a[1]) + (a[5] - a[2])).unwrap_or(1.0).max(1e-6);
+                if o.sheet || surface {
+                    if o.sheet && surface && o.bbox.is_some() && db / size < 0.2 {
+                        pairs.push((db / size, oi, ci));
+                    }
+                    continue;
+                }
+                let dv = (v - o.volume).abs() / o.volume.abs().max(1e-9);
                 if dv < 0.5 || db / size < 0.2 {
                     pairs.push((db / size + dv, oi, ci));
                 }
@@ -1417,6 +1588,34 @@ impl<'a> PartStudio<'a> {
         for (_, oi, ci) in pairs {
             if !matched.contains_key(&oi) && used.insert(ci) {
                 matched.insert(oi, ci);
+            }
+        }
+        // Sheets Onshape gives no geometry for (its body details list solids only): by name, in
+        // order (Onshape numbers parts in the order it reads the file, as the reader here does),
+        // when as many are left on each side.
+        let mut sheets: Vec<(&str, Vec<usize>)> = Vec::new();
+        for (oi, o) in onshape.iter().enumerate().filter(|(oi, o)| o.sheet && !matched.contains_key(oi)) {
+            match sheets.iter_mut().find(|(n, _)| *n == o.name) {
+                Some((_, v)) => v.push(oi),
+                None => sheets.push((&o.name, vec![oi])),
+            }
+        }
+        for (name, ois) in sheets {
+            let cis: Vec<usize> = cadrs
+                .iter()
+                .enumerate()
+                .filter(|(ci, (i, ..))| !used.contains(ci) && parts[*i].kind == cadrs_core::parts::PartKind::Surface && same_product(&parts[*i].name, name))
+                .map(|(ci, _)| ci)
+                .collect();
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() && cis.len() != ois.len() {
+                let surfaces: Vec<&str> = cadrs.iter().filter(|(i, ..)| parts[*i].kind == cadrs_core::parts::PartKind::Surface).map(|(i, ..)| parts[*i].name.as_str()).take(8).collect();
+                eprintln!("SHEETS {name}: {} in Onshape, {} here; surfaces here e.g. {surfaces:?}", ois.len(), cis.len());
+            }
+            if cis.len() == ois.len() {
+                for (oi, ci) in ois.into_iter().zip(cis) {
+                    used.insert(ci);
+                    matched.insert(oi, ci);
+                }
             }
         }
         // For assemblies: which part each Onshape part became, and how far it sits from
@@ -1477,6 +1676,16 @@ impl<'a> PartStudio<'a> {
             self.s.run(&SetPartAppearance { element: self.el, parts, appearance: Some(a) }).ok();
         }
     }
+}
+
+/// Whether a cadrs import piece named `ours` ("<product>", "<product> (3)") is of the product
+/// Onshape named `theirs` (the product's name, which Onshape may give a suffix: "…__NONE").
+fn same_product(ours: &str, theirs: &str) -> bool {
+    let base = match ours.rsplit_once(" (") {
+        Some((b, k)) if k.strip_suffix(')').is_some_and(|k| k.parse::<u32>().is_ok()) => b,
+        _ => ours,
+    };
+    theirs == base || theirs.strip_prefix(base).is_some_and(|rest| rest.starts_with("__"))
 }
 
 /// How far box `b` sits from box `a` when it is `a` moved (zero otherwise, or without both).
@@ -1583,6 +1792,29 @@ fn imprint_distance(shape: &cadrs_sketch::ImprintShape, p: cadrs_sketch::Vec2) -
 /// feature that made the face if it is a part feature, else the part's; the face's frame and a
 /// point on it). Unlike `parts::face_plane` it doesn't rebuild up to that feature, so a face a
 /// later feature split (and renamed) still works.
+/// The frozen context entities (`foreignId`s of "In context entity" subfeatures) the features of
+/// Part Studio `el` name.
+fn in_context_entities(el: &RawElement) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Some(json) = el.features() else { return out };
+    for f in json["features"].as_array().into_iter().flatten() {
+        for sf in f["subFeatures"].as_array().into_iter().flatten() {
+            if param(sf, "isInContext").and_then(|p| p["value"].as_bool()) == Some(true)
+                && let Some(id) = param(sf, "foreignId").and_then(|p| p["foreignId"].as_str())
+            {
+                out.insert(id.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Whether Onshape made feature `f` in the context of an assembly: it has "In context entity"
+/// subfeatures (`importForeign` with `isInContext`), whose frozen geometry isn't exported.
+pub(crate) fn is_in_context(f: &Value) -> bool {
+    f["subFeatures"].as_array().into_iter().flatten().any(|sf| param(sf, "isInContext").and_then(|p| p["value"].as_bool()) == Some(true))
+}
+
 fn plane_on(features: &[cadrs_core::document::Feature], part: &Part, fi: usize) -> Option<PlaneRef> {
     let face = &part.solid.faces[fi];
     let frame = face.plane?;

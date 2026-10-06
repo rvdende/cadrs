@@ -1,0 +1,73 @@
+// The feature list's selection, as Onshape's: a plain click selects that feature alone,
+// Shift+click every feature from the last one clicked to this one, Ctrl+click adds or takes one
+// away. Then a sketch selected in the list stays selected (its regions filled orange) when it
+// is right-clicked in the view, and its menu is Onshape's sketch menu (Edit, Show dimensions,
+// Show dependencies, New sketch, Offset plane, Extrude, Revolve, Hide, Section view, Export,
+// Clear selection, Select, the views, Delete, appearance).
+// 01 three sketches on Top (Sketch 1–3) and an extrude of the first; Sketch 1 clicked.
+// 02 Shift+click Sketch 3: Sketch 1, Extrude 1, Sketch 2 and Sketch 3 selected.
+// 03 a plain click on Sketch 2: only Sketch 2.
+// 04 Ctrl+click Sketch 3: Sketch 2 and Sketch 3.
+// 05 Sketch 3 clicked alone, then right-clicked in the view: still selected (its region
+//    orange), its menu open.
+// 06 the menu's Extrude…: the Extrude dialog with Sketch 3's region.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Wait(30),
+        Custom("sketch top rect 0 0 40 30"),
+        Wait(5),
+        Key("Shift+7"),
+        Wait(30),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Wait(3),
+        Click(xyz(20, 15, 0)),
+        Wait(3),
+        Click(ui("extrude-dialog-accept")),
+        Wait(30),
+        Custom("sketch top rect 60 0 100 30"),
+        Wait(5),
+        Custom("sketch top rect 0 50 40 80"),
+        Wait(5),
+        Key("F"),
+        Wait(30),
+        Click(ui("feature-sketch-1")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-sketch-1-clicked"),
+        KeyDown("Shift"),
+        Click(ui("feature-sketch-3")),
+        KeyUp("Shift"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-shift-click-range"),
+        Click(ui("feature-sketch-2")),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-plain-click-one"),
+        KeyDown("Ctrl"),
+        Click(ui("feature-sketch-3")),
+        KeyUp("Ctrl"),
+        Wait(10),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-ctrl-click-adds"),
+        Click(ui("feature-sketch-3")),
+        Wait(10),
+        RightClick(xyz(20, 65, 0)),
+        WaitFor("viewport-context-menu"),
+        Wait(10),
+        Screenshot("05-sketch-menu-still-selected"),
+        Click(ui("viewport-extrude")),
+        WaitFor("extrude-dialog"),
+        Wait(20),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-extrude-from-menu"),
+    ],
+)

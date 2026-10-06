@@ -24,11 +24,13 @@ pub fn shaft() -> Vec<Feature> {
         id: FeatureId::from_u128(0x5a_f700_0000_0000_0000_0000_0000_0001),
         name: "Sketch 1".into(),
         kind: FeatureKind::Sketch(SketchFeature { plane: Some(PlaneRef::Top), disable_imprinting: false, geometry: g.clone() }),
+        suppress_by: None,
     };
     let extrude = Feature {
         id: FeatureId::from_u128(0x5a_f700_0000_0000_0000_0000_0000_0002),
         name: "Extrude 1".into(),
         kind: FeatureKind::Extrude(super::extrude_of(super::region_refs(sketch.id, &g, &[Vec2::new(0.0, 0.0)]), 240.0)),
+        suppress_by: None,
     };
     vec![sketch, extrude]
 }

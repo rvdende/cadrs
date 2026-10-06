@@ -44,6 +44,43 @@ impl Command for SetSuppressed {
     }
 }
 
+/// Sets or removes a feature's suppression variable (IR5.5, Dynamic suppression ▸ Suppress by
+/// variable…): with `#withHole`, the feature is suppressed while `#withHole` is 0. One undo step
+/// each way; the variables are evaluated again (a Variable it suppresses defines nothing below).
+#[derive(Debug, Clone)]
+pub struct SetSuppressByVariable {
+    pub element: ElementId,
+    pub feature: FeatureId,
+    /// `None` removes it.
+    pub rule: Option<crate::variables::SuppressByVariable>,
+}
+
+impl Command for SetSuppressByVariable {
+    fn label(&self) -> String {
+        match &self.rule {
+            Some(r) => format!("Suppress by {}", r.label()),
+            None => "Remove suppression variable".into(),
+        }
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        if let Some(r) = &self.rule
+            && cadrs_sketch::units::variable_names(&r.expr).is_empty()
+        {
+            return Err(CommandError::Invalid("pick a variable".into()));
+        }
+        let f = part_studio_features(doc, self.element)?
+            .iter_mut()
+            .find(|f| f.id == self.feature)
+            .ok_or_else(|| CommandError::Invalid("feature not found".into()))?;
+        f.suppress_by = self.rule.clone();
+        refresh(doc, self.element);
+        Ok(())
+    }
+}
+
 /// Moves the rollback bar (PS13.1): `index` features stay above it (`None`, or the length of
 /// the list: at the end).
 #[derive(Debug, Clone)]

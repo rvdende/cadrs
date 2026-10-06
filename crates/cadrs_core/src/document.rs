@@ -121,15 +121,24 @@ pub struct Element {
     /// An Assembly tab's instances (P3B.1, [`crate::assembly`]); empty for a Part Studio.
     #[serde(default, skip_serializing_if = "crate::assembly::Assembly::is_empty")]
     pub assembly: crate::assembly::Assembly,
-    /// A Part Studio edited **in the context** of an assembly (P3B.9, X15,
-    /// [`crate::assembly::context`]): the other instances around its part, as reference
-    /// geometry.
+    /// A Part Studio's **assembly contexts** (P3B.9, X15, `managed-in-context-design.md`;
+    /// [`crate::assembly::context`]): snapshots of assemblies around its parts, as reference
+    /// geometry. Documents from before several contexts have a single `context`.
+    #[serde(default, alias = "context", deserialize_with = "crate::assembly::context::deserialize_contexts", skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<crate::assembly::context::StudioContext>,
+    /// The context the Part Studio opens in (one of `contexts`): Onshape keeps the active
+    /// context with the workspace, and an import of it sets this. The app's active context is
+    /// view state; this only starts it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<crate::assembly::context::StudioContext>,
+    pub open_context: Option<crate::assembly::context::ContextNo>,
     /// A Part Studio's or Assembly's simulation setup: its Loads list and mesh (P3F.5,
     /// [`crate::simulation`]).
     #[serde(default, skip_serializing_if = "crate::simulation::Simulation::is_empty")]
     pub simulation: crate::simulation::Simulation,
+    /// Cameras saved under a name (P3E.3a, TD6.5: the view cube menu's Named views…), see
+    /// [`crate::named_views`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_views: Vec<crate::named_views::NamedView>,
 }
 
 impl Element {
@@ -148,8 +157,10 @@ impl Element {
                 rollback: None,
             },
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -160,8 +171,10 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Render(Box::new(crate::render::RenderStudio::new(source))),
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -171,8 +184,10 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Assembly,
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -183,8 +198,10 @@ impl Element {
             name: name.into(),
             kind: ElementKind::Drawing(Box::new(drawing)),
             assembly: Default::default(),
-            context: None,
+            contexts: Vec::new(),
+            open_context: None,
             simulation: Default::default(),
+            named_views: Vec::new(),
         }
     }
 
@@ -243,8 +260,25 @@ impl Element {
         }
     }
 
+    /// True if the feature is suppressed: by Suppress, or by its suppression variable (IR5.5).
+    /// Only a feature with a suppression variable evaluates the variables (once, the list's);
+    /// for many features, take [`Self::all_suppressed`] once instead.
     pub fn is_suppressed(&self, feature: FeatureId) -> bool {
         self.suppressed().contains(&feature)
+            || (self.feature(feature).is_some_and(|f| f.suppress_by.is_some()) && self.suppressed_by_variable().contains(&feature))
+    }
+
+    /// The features their suppression variable suppresses (IR5.5), with the variables' values
+    /// as last evaluated ([`crate::variables::suppressed_by_variables`]).
+    pub fn suppressed_by_variable(&self) -> Vec<FeatureId> {
+        crate::variables::suppressed_by_variables(self.features(), self.suppressed())
+    }
+
+    /// Every suppressed feature, in list order: by Suppress or by a variable (IR5.5).
+    pub fn all_suppressed(&self) -> Vec<FeatureId> {
+        let by_var = self.suppressed_by_variable();
+        let manual = self.suppressed();
+        self.features().iter().map(|f| f.id).filter(|f| manual.contains(f) || by_var.contains(f)).collect()
     }
 
     /// The number of features above the rollback bar (P3.9): all of them when it is at the end.
@@ -262,13 +296,14 @@ impl Element {
     }
 
     /// The features that are built (P3.9): the ones above the rollback bar, without the
-    /// suppressed ones.
+    /// suppressed ones (by Suppress or by a variable, IR5.5).
     pub fn active_features(&self) -> Vec<Feature> {
         let bar = self.rollback_index();
         let suppressed = self.suppressed();
+        let by_var = self.suppressed_by_variable();
         self.features()[..bar]
             .iter()
-            .filter(|f| !suppressed.contains(&f.id))
+            .filter(|f| !suppressed.contains(&f.id) && !by_var.contains(&f.id))
             .cloned()
             .collect()
     }
@@ -406,9 +441,18 @@ pub struct Feature {
     pub id: FeatureId,
     pub name: String,
     pub kind: FeatureKind,
+    /// IR5.5 "Suppress by variable…": a variable that suppresses the feature (see
+    /// [`crate::variables::SuppressByVariable`]). Files from before it load without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppress_by: Option<crate::variables::SuppressByVariable>,
 }
 
 impl Feature {
+    /// A feature with no suppression variable.
+    pub fn new(id: FeatureId, name: impl Into<String>, kind: FeatureKind) -> Self {
+        Self { id, name: name.into(), kind, suppress_by: None }
+    }
+
     /// The sketch parameters, if this is a sketch feature.
     pub fn sketch(&self) -> Option<&SketchFeature> {
         match &self.kind {
@@ -463,6 +507,13 @@ impl Feature {
             FeatureKind::Hole(h) => h.sketch_ids(),
             FeatureKind::Sweep(s) => s.sketches(),
             FeatureKind::Loft(l) => l.sketches(),
+            // P3I.2: an Extrude's or Thicken's sketches (hidden once used, like an extrude's).
+            FeatureKind::SheetMetalModel(x) => x.sketch_ids(),
+            // P3I.9.
+            FeatureKind::SheetMetalLoft(x) => x.sketch_ids(),
+            FeatureKind::SheetMetalTool(x) => x.sketch_ids(),
+            // P3I.6: a flat pattern extrude's sketches.
+            FeatureKind::FlatExtrude(x) => x.sketch_ids(),
             _ => Vec::new(),
         }
     }
@@ -472,6 +523,7 @@ impl Feature {
         match &self.kind {
             FeatureKind::Extrude(e) => (&e.regions, &e.sketches),
             FeatureKind::Revolve(r) => (&r.regions, &r.sketches),
+            FeatureKind::FlatExtrude(x) => (&x.regions, &x.sketches),
             _ => (&[], &[]),
         }
     }
@@ -557,6 +609,14 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem().is_none(),
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalModel(x) => x.problem().is_none(),
+            FeatureKind::ModifyJoint(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalLoft(x) => x.problem().is_none(),
+            FeatureKind::Form(x) => x.problem().is_none(),
+            FeatureKind::TagForm(x) => x.problem().is_none(),
+            FeatureKind::SheetMetal(x) => x.problem().is_none(),
+            FeatureKind::SheetMetalTool(x) => x.problem().is_none(),
+            FeatureKind::FlatExtrude(x) => x.problem().is_none(),
         }
     }
 
@@ -588,6 +648,14 @@ impl Feature {
             FeatureKind::Helix(x) => x.problem(),
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
+            FeatureKind::SheetMetalModel(x) => x.problem(),
+            FeatureKind::ModifyJoint(x) => x.problem(),
+            FeatureKind::SheetMetalLoft(x) => x.problem(),
+            FeatureKind::Form(x) => x.problem(),
+            FeatureKind::TagForm(x) => x.problem(),
+            FeatureKind::SheetMetal(x) => x.problem(),
+            FeatureKind::SheetMetalTool(x) => x.problem(),
+            FeatureKind::FlatExtrude(x) => x.problem(),
         }
     }
 
@@ -712,6 +780,14 @@ impl Feature {
             FeatureKind::Thicken(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::ModifyJoint(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalLoft(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::Form(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::TagForm(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetal(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::SheetMetalTool(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::FlatExtrude(x) => x.parents().into_iter().for_each(&mut add),
         }
         match &self.kind {
             FeatureKind::MateConnector(x) => {
@@ -847,6 +923,26 @@ pub enum FeatureKind {
     Fill(crate::surfacing::FillFeature),
     /// A variable, `#name = expression` (P3F.4, P5.2; [`crate::variables`]).
     Variable(crate::variables::VariableFeature),
+    /// A sheet metal model: Convert, Extrude or Thicken (P3I.2, SM2; [`crate::sheetmetal`]).
+    SheetMetalModel(crate::sheetmetal::SheetMetalModelFeature),
+    /// A sheet metal joint made a bend, a rip or a tangent joint (P3I.3, SM6.4;
+    /// [`crate::sheetmetal_joint`]).
+    ModifyJoint(crate::sheetmetal_joint::ModifyJointFeature),
+    /// P3I.9: a Sheet metal loft (SM19.2; [`crate::sheetmetal_loft`]).
+    SheetMetalLoft(crate::sheetmetal_loft::SheetMetalLoftFeature),
+    /// P3I.9: a sheet metal Form (SM20.1; [`crate::sheetmetal_form`]).
+    Form(crate::sheetmetal_form::FormFeature),
+    /// P3I.9: a Tag (Form), in a form's Part Studio (SM20.2).
+    TagForm(crate::sheetmetal_form::TagFormFeature),
+    /// P3I.4: Flange, Hem or Make joint on an active sheet metal model (SM1.6, SM3, SM4, SM6;
+    /// [`crate::sheetmetal_features`]).
+    SheetMetal(crate::sheetmetal_features::SheetMetalFeature),
+    /// P3I.5: a sheet metal feature after the model: Finish, Tab, Bend, Jog, Corner, Bend relief
+    /// or Corner break ([`crate::sheetmetal_tools`]).
+    SheetMetalTool(crate::sheetmetal_tools::SheetMetalTool),
+    /// An extrude of a flat-pattern sketch, Add or Remove in the flat (P3I.6, SM14;
+    /// [`crate::sheetmetal_flat`]). Shown as "Extrude".
+    FlatExtrude(crate::sheetmetal_flat::FlatExtrudeFeature),
 }
 
 /// A closed region of a sketch, as an extrude refers to it: the sketch, the curves on its outer
@@ -1238,6 +1334,10 @@ pub struct ExtrudeFeature {
     /// plane. Solids only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<crate::draft::ExtrudeDraft>,
+    /// MC1.3: the assembly-context parts its ends go up to, frozen as the context has them
+    /// (kept up to date by [`crate::commands::refresh_studio`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::assembly::context::ContextTarget>,
 }
 
 /// Onshape's default extrude depth.
@@ -1265,6 +1365,7 @@ impl Default for ExtrudeFeature {
             direction: None,
             second: None,
             draft: None,
+            context: Vec::new(),
         }
     }
 }
@@ -1470,6 +1571,9 @@ pub struct RevolveFeature {
     /// Second end position: an end turning the other way (`depth` is its angle in degrees).
     #[serde(default)]
     pub second: Option<EndCondition>,
+    /// MC1.3: the assembly-context parts its ends go up to (see [`ExtrudeFeature::context`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::assembly::context::ContextTarget>,
 }
 
 impl Default for RevolveFeature {
@@ -1491,6 +1595,7 @@ impl Default for RevolveFeature {
             offset: None,
             flip: false,
             second: None,
+            context: Vec::new(),
         }
     }
 }

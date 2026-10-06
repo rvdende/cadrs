@@ -376,7 +376,7 @@ fn move_to_document(world: &mut World, sel: Vec<ElementId>) {
         [one] => doc.doc.tab_tree.folder(*one).map(|f| f.name.clone()),
         _ => None,
     };
-    world.resource_mut::<TabManager>().open = false;
+    // P3E.3a (P3E.2 carried delta): the docked manager stays open under the dialog.
     crate::move_document::open_move_dialog_named(world, tabs, name);
 }
 
@@ -405,7 +405,8 @@ pub struct TabThumbs {
     pub generation: u64,
 }
 
-/// Studios bigger than this show their icon (a thumbnail would mean a second full rebuild).
+/// Studios bigger than this aren't rebuilt for their thumbnail: it is drawn from the parts on
+/// screen once the studio has been open (P3E.3a), and shows the icon until then.
 const THUMB_FEATURE_LIMIT: usize = 60;
 const THUMB_SIZE: u32 = 160;
 
@@ -423,9 +424,26 @@ fn fill_thumbs(world: &mut World) {
         if fresh {
             continue;
         }
+        // P3E.3a (P3E.2 carried delta: a big studio's preview was its icon): a studio too big
+        // to rebuild again for its thumbnail is drawn from the parts on screen, once they are
+        // built from its current features.
+        let big = matches!(el.kind, ElementKind::PartStudio { .. }) && el.features().len() > THUMB_FEATURE_LIMIT;
+        if big {
+            let cache = world.resource::<crate::parts::PartCache>();
+            let on_screen = cache.settled().is_some_and(|(id, features, over)| id == el.id && features == el.features() && *over == crate::parts::PartOverride::default());
+            if !on_screen {
+                continue;
+            }
+        }
         budget -= 1;
-        let img = world.resource_scope(|_, mut parts: Mut<crate::assembly::AssemblyParts>| -> Option<image::RgbaImage> {
+        let img = world.resource_scope(|world, mut parts: Mut<crate::assembly::AssemblyParts>| -> Option<image::RgbaImage> {
             match &el.kind {
+                ElementKind::PartStudio { .. } if big => {
+                    let cache = world.resource::<crate::parts::PartCache>();
+                    let list: Vec<(&cadrs_core::Solid, [u8; 3])> =
+                        cache.parts.iter().map(|p| (&*p.solid, cadrs_core::appearance::part_appearance(p, el.part_props()).rgb)).collect();
+                    (!list.is_empty()).then(|| cadrs_core::assembly::thumb::render(&list, THUMB_SIZE))
+                }
                 ElementKind::PartStudio { .. } if el.features().len() <= THUMB_FEATURE_LIMIT => {
                     let build = parts.build(&doc, el.id)?;
                     let list: Vec<(&cadrs_core::Solid, [u8; 3])> =
@@ -825,10 +843,8 @@ fn on_row_click(mut click: On<Pointer<Click>>, q: Query<&ManagerRow>, keys: Res<
     // The rows in list order (a range runs over what is shown).
     let order: Vec<ElementId> = rows_of(&doc.doc, &tm).iter().map(|r| r.item.id()).collect();
     if shift && let Some(a) = tm.anchor {
-        let (i, j) = (order.iter().position(|e| *e == a), order.iter().position(|e| *e == id));
-        if let (Some(i), Some(j)) = (i, j) {
-            let (lo, hi) = (i.min(j), i.max(j));
-            tm.selected = order[lo..=hi].to_vec();
+        if let Some(range) = range_selection(&order, a, id) {
+            tm.selected = range;
         }
     } else if ctrl {
         if let Some(i) = tm.selected.iter().position(|e| *e == id) {
@@ -851,6 +867,15 @@ fn on_row_click(mut click: On<Pointer<Click>>, q: Query<&ManagerRow>, keys: Res<
             }
         }
     }
+}
+
+/// The rows a Shift+click selects: every row of `order` (the list as shown, scrolled out of view
+/// or not) from the anchor to the clicked row, in list order. `None` if either isn't listed.
+pub fn range_selection(order: &[ElementId], anchor: ElementId, clicked: ElementId) -> Option<Vec<ElementId>> {
+    let i = order.iter().position(|e| *e == anchor)?;
+    let j = order.iter().position(|e| *e == clicked)?;
+    let (lo, hi) = (i.min(j), i.max(j));
+    Some(order[lo..=hi].to_vec())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1169,6 +1194,25 @@ mod tests {
         d.elements.push(Element::part_studio("Top plate"));
         d.elements.push(Element::part_studio("Piston"));
         d
+    }
+
+    /// P3E.3a (P3E.2 carried delta): a Shift+click range covers every row between the anchor
+    /// and the clicked row, whether the rows are in view or not: rows 1 and 12 of 60 tabs give
+    /// the 12 tabs in list order, either way round.
+    #[test]
+    fn a_shift_click_range_covers_rows_out_of_view() {
+        let mut d = Document::empty("T");
+        for i in 0..60 {
+            d.elements.push(Element::part_studio(format!("Studio {}", i + 2)));
+        }
+        let tm = TabManager::default();
+        let order: Vec<ElementId> = rows_of(&d, &tm).iter().map(|r| r.item.id()).collect();
+        assert_eq!(order.len(), 60);
+        let range = range_selection(&order, order[0], order[11]).unwrap();
+        assert_eq!(range, order[..12].to_vec());
+        assert_eq!(range_selection(&order, order[11], order[0]).unwrap(), order[..12].to_vec());
+        assert_eq!(range_selection(&order, order[5], order[5]).unwrap(), vec![order[5]]);
+        assert!(range_selection(&order, ElementId::new(), order[3]).is_none());
     }
 
     #[test]

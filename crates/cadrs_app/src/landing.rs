@@ -1149,6 +1149,8 @@ fn rebuild_main(
                 let tag_font = t.font(t.font_xs, FontWeight::NORMAL);
                 let placeholder = t.subtle_foreground;
                 let name = e.name.clone();
+                // TD3.7: the workspace last opened (P3E.4).
+                let workspace = e.meta.workspace_name().to_string();
                 let name_label = format!("doc-name-{i}");
                 let mut row = TableRow::new(format!("doc-row-{i}"), &cols)
                     .cell(move |c| {
@@ -1178,7 +1180,7 @@ fn rebuild_main(
                         .with_children(|tag| {
                             tag.spawn((icon("location", 12.0, tag_color), Pickable::IGNORE));
                             tag.spawn((
-                                Text::new("Main"),
+                                Text::new(workspace),
                                 tag_font,
                                 TextColor(tag_color),
                                 TextLayout::no_wrap(),

@@ -150,7 +150,7 @@ Scenario(
         Wait(10),
         Key("Ctrl+Z"),
         Wait(20),
-        Click(ui("tab-manager")),
+        // P3E.3a: the manager stayed open, docked, under the dialog.
         WaitFor("tab-manager-panel"),
         Wait(10),
         MoveTo(1420, 780),

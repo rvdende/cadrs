@@ -491,6 +491,11 @@ pub struct LocalConnector {
     /// "Mate connector 1".
     pub name: String,
     pub connector: MateConnector,
+    /// Where it is in the Mate Features list, which lists features in the order they were made:
+    /// after this many of the assembly's mate features (set when it is added). `None` (older
+    /// documents): after them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed_after: Option<usize>,
 }
 
 /// An implicit connector point found on an entity: which point, on what, its frame (part

@@ -178,7 +178,7 @@ pub fn control_arm_constraints(g: &Sketch) -> SketchOp {
     // The overall length, 250: from the far side of one eye to the far side of the other.
     if let (Some(a), Some(b)) = (circle_id(v(-EYE_X, 0.0), EYE_R), circle_id(v(EYE_X, 0.0), EYE_R)) {
         ops.push(dim(
-            DimensionKind::CircleCircle { a, b, far_a: true, far_b: true },
+            DimensionKind::CircleCircle { a, b, far_a: true, far_b: true, axis: None },
             2.0 * (EYE_X + EYE_R),
             -40.0,
         ));
@@ -221,8 +221,11 @@ pub mod conrod;
 pub mod design_intent;
 pub mod flange;
 pub mod drawing_bracket;
+pub mod drill;
+pub mod gasket;
 pub mod gear_cover;
 pub mod hand_brake;
+pub mod in_context;
 pub mod inspection;
 pub mod linked_block;
 pub mod motor_mount;
@@ -235,9 +238,14 @@ pub mod pneumatic_ex2;
 pub mod pneumatic_ex3;
 pub mod reflector;
 pub mod scale;
+pub mod sheetmetal_forms;
+pub mod sheetmetal_legacy;
+pub mod sheetmetal_topdown;
+pub mod sheetmetal_exercises;
 pub mod simulation;
 pub mod step_stool;
 pub mod ujoint;
 pub mod ujoint_assembly;
 pub mod ujoint_drawing;
+pub mod with_hole;
 pub mod drawing_bar;

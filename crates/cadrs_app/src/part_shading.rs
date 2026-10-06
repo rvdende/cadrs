@@ -7,7 +7,7 @@ use bevy::asset::embedded_asset;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{AsBindGroup, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 
 pub struct PartShadingPlugin;
@@ -22,11 +22,53 @@ impl Plugin for PartShadingPlugin {
 /// Unlit, head-lit part faces: opaque (both sides drawn), or blended for the preview and
 /// transparent appearances (front faces only); `cull_back` for a surface, whose mesh carries
 /// both sides.
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// P3E.3a: `params` carries the tab's render mode and section view
+/// ([`crate::section_view`]): see [`PartShadingParams`]. `cap` marks a section view's cap
+/// material, which the clip plane leaves alone.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy, PartialEq)]
 #[bind_group_data(PartShadingKey)]
 pub struct PartShading {
     pub blend: bool,
     pub cull_back: bool,
+    pub cap: bool,
+    /// The Translucent render mode's material (its parts drawn see-through).
+    pub translucent: bool,
+    /// The material of the parts a section leaves whole (its Exclude / Include items).
+    pub unclipped: bool,
+    #[uniform(0)]
+    pub params: PartShadingParams,
+}
+
+impl PartShading {
+    pub fn new(blend: bool, cull_back: bool) -> Self {
+        Self { blend, cull_back, cap: false, translucent: false, unclipped: false, params: PartShadingParams::default() }
+    }
+}
+
+/// The per-view uniforms of [`PartShading`].
+#[derive(Debug, Clone, Copy, PartialEq, ShaderType)]
+pub struct PartShadingParams {
+    /// The section view's planes (`n.extend(n·o)` each, zero for none): a fragment with
+    /// `dot(n, p) > w` for every plane (on the removed side of all) is discarded.
+    pub clip: [Vec4; crate::section_view::MAX_PLANES],
+    /// x: 1 draws the faces flat white (the hidden-line render modes); y: an opacity factor
+    /// (the Translucent render mode's).
+    pub style: Vec4,
+    /// P3E.3b, the analysis tools ([`crate::analysis`]): x the face colouring (0 none, 1 zebra
+    /// stripes, 2 draft analysis), y the draft angle needed (degrees), z the zebra stripes per
+    /// half turn.
+    pub analysis: Vec4,
+    /// The draft analysis's pull direction (xyz).
+    pub pull: Vec4,
+    /// The draft bands' colours (linear), top band first ([`cadrs_core::analysis::DraftBand`]).
+    pub bands: [Vec4; 6],
+}
+
+impl Default for PartShadingParams {
+    fn default() -> Self {
+        Self { clip: [Vec4::ZERO; crate::section_view::MAX_PLANES], style: Vec4::new(0.0, 1.0, 0.0, 0.0), analysis: Vec4::ZERO, pull: Vec4::ZERO, bands: [Vec4::ZERO; 6] }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

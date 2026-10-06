@@ -764,6 +764,16 @@ fn on_context_menu(
                 Some(!row.cells[i].is_empty())
             });
             let has_pn = has_pn.unwrap_or_else(|| !cadrs_core::properties::text(&world.resource::<ActiveDocument>().doc, row.key.owner, PropertyKey::PartNumber, None).is_empty());
+            // TD9.4 (P3E.5): Switch to the row's Part Studio (its part selected) or subassembly
+            // tab; not for standard content (no tab of this document) or an Item.
+            let tab = match row.key.owner {
+                PropertyOwner::Item { .. } => None,
+                o => world.resource::<ActiveDocument>().doc.element(o.element()).map(|e| e.name.clone()),
+            };
+            let switch = match &tab {
+                Some(name) => MenuItem::new("bom-row-switch-to", format!("Switch to {name}")),
+                None => MenuItem::new("bom-row-switch-to", "Switch to").disabled(true),
+            };
             let menu = Menu::new("bom-row-menu")
                 .min_width(210.0)
                 .item_height(22.0)
@@ -775,7 +785,8 @@ fn on_context_menu(
                 })
                 .item(MenuItem::new("bom-row-properties", "Properties…"))
                 .item(MenuItem::new("bom-row-material", "Assign material…").disabled(row.key.owner.is_assembly()))
-                .item(MenuItem::new("bom-row-part-number", "Generate next part number").disabled(has_pn));
+                .item(MenuItem::new("bom-row-part-number", "Generate next part number").disabled(has_pn))
+                .item(switch);
             let theme = world.resource::<Theme>().clone();
             let mut cm = world.commands();
             let anchor = open_context_menu(&mut cm, at, menu.build(&theme));
@@ -1000,6 +1011,7 @@ fn context_action(world: &mut World, for_: BomMenuFor, item: &str) {
                 "bom-row-part-number" => {
                     run(world, &GenerateMissingPartNumbers { owners: vec![row.key.owner] });
                 }
+                "bom-row-switch-to" => super::menu::switch_to_owner(world, row.key.owner),
                 _ => {}
             }
         }

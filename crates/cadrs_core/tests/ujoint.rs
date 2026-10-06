@@ -88,6 +88,7 @@ fn geometry(features: &[cadrs_core::Feature], v: &View) -> Arc<ViewGeometry> {
             appearances: Vec::new(),
             cut: None,
             intersections: false,
+            flat: false,
         },
     )
     .expect("the view projects")

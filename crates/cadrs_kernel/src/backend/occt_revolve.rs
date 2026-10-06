@@ -414,7 +414,7 @@ impl OcctKernel {
         let infos: Vec<crate::FaceInfo> = faces_of(&shape)
             .iter()
             .enumerate()
-            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f, &shape))
+            .map(|(i, f)| super::face_info(crate::FaceId(i as u64), f))
             .collect();
         for (t, info) in tags.iter_mut().zip(&infos) {
             if t.is_none() {

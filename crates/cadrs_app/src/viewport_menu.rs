@@ -90,7 +90,16 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
     // region right-clicked does not stay selected as a region (no Area readout).
     // One curve right-clicked: only that curve is highlighted (P3.6; the menu's Edit curve
     // appearance… is for it).
-    if let Some(p) = pick.filter(|p| *p != Pick::Origin) {
+    // Right-clicking what is already selected keeps the selection (a selected sketch stays
+    // whole and orange; the menu acts on it), as Onshape's.
+    let already = match pick {
+        Some(Pick::Region(s, _) | Pick::Feature(s) | Pick::SketchCurve(s, _) | Pick::SketchPoint(s, _)) => {
+            world.resource::<Selection>().contains(Pick::Feature(s))
+        }
+        Some(p) => world.resource::<Selection>().contains(p),
+        None => false,
+    };
+    if let Some(p) = pick.filter(|p| *p != Pick::Origin && !already) {
         let p = match (p, curve) {
             (Pick::Region(s, _) | Pick::Feature(s) | Pick::SketchCurve(s, _), Some(MenuCurve(cs, c))) if cs == s => {
                 Pick::SketchCurve(s, c)
@@ -100,6 +109,12 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
         };
         world.resource_mut::<Selection>().0 = vec![p];
     }
+    // P3I.6: a sheet metal part's faces also offer its flat pattern's New sketch and DXF export
+    // (until the flat view's own menu, P3I.3).
+    let flat = match target {
+        MenuTarget::Face(part, _) => crate::flat_export_dialog::flat_ref(world, part).is_some(),
+        _ => false,
+    };
     let planes_shown = world.resource::<PlanesVisible>().any();
     let theme = world.resource::<Theme>().clone();
     let menu = Menu::new("viewport-context-menu").min_width(200.0).item_height(23.0);
@@ -114,7 +129,8 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             .separator()
             .item(MenuItem::new("viewport-normal-to", "View normal to plane"))
             .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit")),
-        MenuTarget::Face(..) => menu
+        MenuTarget::Face(..) => {
+            let m = menu
             .item(MenuItem::new("viewport-new-sketch", "New sketch").icon("sketch").disabled(!planar_face))
             .separator()
             .item(MenuItem::new("viewport-face-appearance", "Add appearance to face…").icon("appearance"))
@@ -122,26 +138,53 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             .item(MenuItem::new("viewport-part-material", "Assign material…").icon("material-library"))
             .separator()
             // P3F.2 (P3.2): a flat face as DXF or DWG, for cutting machines.
-            .item(MenuItem::new("viewport-export-face", "Export as DXF/DWG…").icon("file-export").disabled(!planar_face))
-            .separator()
-            .item(MenuItem::new("viewport-normal-to", "View normal to face").disabled(!planar_face))
-            .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit")),
+            .item(MenuItem::new("viewport-export-face", "Export as DXF/DWG…").icon("file-export").disabled(!planar_face));
+            let m = if flat {
+                m.item(MenuItem::new("viewport-flat-sketch", "New sketch on flat pattern").icon("sketch"))
+                    .item(MenuItem::new("viewport-flat-export", "Export DXF/DWG of flat pattern…").icon("flat-pattern"))
+            } else {
+                m
+            };
+            m.separator()
+                .item(MenuItem::new("viewport-normal-to", "View normal to face").disabled(!planar_face))
+                .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
+                .item(MenuItem::new("viewport-zoom-to-selection", "Zoom to selection"))
+        }
         MenuTarget::Sketch(s) => {
+            // Onshape's sketch menu (a selected sketch's regions are its profiles): edit and
+            // inspect it, start features from it, show, export, select and view.
             let name = feature_name(world, s);
+            let dims = world.resource::<crate::feature_menu::ShownDimensions>().0.contains(&s);
             menu.item(MenuItem::new("viewport-edit-sketch", format!("Edit {name}…")).icon("edit"))
-                .item(MenuItem::new("viewport-rename-sketch", "Rename"))
-                .item(MenuItem::new("viewport-delete-sketch", "Delete"))
+                .item(MenuItem::new("viewport-sketch-dimensions", if dims { "Hide dimensions" } else { "Show dimensions" }))
+                .item(MenuItem::new("viewport-sketch-dependencies", format!("Show dependencies of {name}…")))
                 .separator()
+                .item(MenuItem::new("viewport-new-sketch", "New sketch…").icon("sketch"))
+                .item(MenuItem::new("viewport-offset-plane", "Offset plane…").icon("plane"))
+                .item(MenuItem::new("viewport-extrude", "Extrude…").icon("extrude"))
+                .item(MenuItem::new("viewport-revolve", "Revolve…").icon("revolve"))
+                .separator()
+                .item(MenuItem::new("viewport-hide-sketch", "Hide").icon("hidden"))
+                .item(MenuItem::new("viewport-section-view", "Section view…").icon("section-view"))
+                .item(MenuItem::new("viewport-export-sketch", "Export as DXF/DWG…").icon("file-export"))
+                .separator()
+                .item(MenuItem::new("viewport-clear-selection", "Clear selection"))
+                .item(
+                    MenuItem::new("viewport-select", "Select")
+                        .submenu(vec![MenuItem::new("viewport-create-selection", "Create selection…").into()]),
+                )
+                .separator()
+                .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
+                .item(MenuItem::new("viewport-zoom-to-selection", "Zoom to selection"))
+                .item(MenuItem::new("viewport-normal-to", "View normal to"))
+                .separator()
+                .item(MenuItem::new("viewport-rename-sketch", "Rename"))
+                .item(MenuItem::new("viewport-delete-sketch", format!("Delete {name}")).icon("delete"))
                 .item(MenuItem::new("viewport-sketch-appearance", "Edit sketch appearance…").icon("appearance"))
                 .item(
                     MenuItem::new("viewport-curve-appearance", "Edit curve appearance…")
                         .disabled(curve.is_none_or(|c| c.0 != s)),
                 )
-                .separator()
-                .item(MenuItem::new("viewport-export-sketch", "Export as DXF/DWG…").icon("file-export"))
-                .separator()
-                .item(MenuItem::new("viewport-normal-to", "View normal to sketch plane"))
-                .item(MenuItem::new("viewport-zoom-to-fit", "Zoom to fit"))
         }
         MenuTarget::Empty | MenuTarget::Sketching => menu
             .text_only()
@@ -237,6 +280,8 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         ("viewport-toggle-planes", _) => world.resource_mut::<PlanesVisible>().toggle_all(),
         ("viewport-create-selection", _) => crate::create_selection::open(world),
         ("viewport-zoom-to-fit", _) => crate::viewport::zoom_to_fit(world),
+        // P3E.3a: whatever is selected (what was right-clicked is).
+        ("viewport-zoom-to-selection", _) => crate::view_options::zoom_to_selection(world),
         ("viewport-normal-to", MenuTarget::Sketching) => crate::viewport::normal_to_sketch(world),
         ("viewport-normal-to", _) => {
             let normal = match target {
@@ -258,6 +303,33 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
             }
         }
         ("viewport-edit-sketch", MenuTarget::Sketch(s)) => crate::document::edit_feature(world, s),
+        ("viewport-sketch-dimensions", MenuTarget::Sketch(s)) => crate::feature_menu::toggle_dimensions(world, s),
+        ("viewport-sketch-dependencies", MenuTarget::Sketch(s)) => crate::feature_list::show_dependencies(world, s),
+        // A new sketch on the sketch's own plane.
+        ("viewport-new-sketch", MenuTarget::Sketch(s)) => {
+            let plane = world.get_resource::<ActiveDocument>().and_then(|d| d.active_element()?.feature(s)?.sketch()?.plane);
+            crate::sketch::begin_sketch_on(world, plane);
+        }
+        // Features from the selected sketch: its regions are the profiles (the Plane takes the
+        // sketch's plane).
+        ("viewport-offset-plane", MenuTarget::Sketch(s)) => {
+            world.resource_mut::<Selection>().0 = vec![Pick::Feature(s)];
+            crate::applied::begin(world, crate::applied::AppliedKind::Plane);
+        }
+        ("viewport-extrude", MenuTarget::Sketch(s)) => {
+            world.resource_mut::<Selection>().0 = vec![Pick::Feature(s)];
+            crate::extrude::begin_extrude(world);
+        }
+        ("viewport-revolve", MenuTarget::Sketch(s)) => {
+            world.resource_mut::<Selection>().0 = vec![Pick::Feature(s)];
+            crate::revolve::begin_revolve(world);
+        }
+        ("viewport-hide-sketch", MenuTarget::Sketch(s)) => {
+            world.resource_mut::<Selection>().0.retain(|p| !matches!(p, Pick::Feature(f) | Pick::SketchCurve(f, _) if *f == s));
+            crate::feature_menu::set_sketch_visible(world, s, false);
+        }
+        ("viewport-section-view", MenuTarget::Sketch(s)) => crate::section_view::open_for_feature(world, s),
+        ("viewport-clear-selection", _) => world.resource_mut::<Selection>().0.clear(),
         ("viewport-rename-sketch", MenuTarget::Sketch(s)) => {
             crate::document::rename_feature(world, s)
         }
@@ -280,6 +352,13 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         ("viewport-export-face", MenuTarget::Face(part, face)) => {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Face(part, face));
         }
+        // P3I.6.
+        ("viewport-flat-sketch", MenuTarget::Face(part, _)) => {
+            if let Some(r) = crate::flat_export_dialog::flat_ref(world, part) {
+                crate::flat_ui::begin_flat_sketch(world, r.model, r.index);
+            }
+        }
+        ("viewport-flat-export", MenuTarget::Face(part, _)) => crate::flat_export_dialog::open(world, part),
         ("viewport-export-sketch", MenuTarget::Sketch(s)) => {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Sketch(s));
         }

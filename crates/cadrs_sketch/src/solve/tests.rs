@@ -171,8 +171,8 @@ fn jacobians_match_finite_differences() {
         DimensionKind::PointCircle { p: pref(a1), circle: ar, far: true },
         DimensionKind::LineCircle { line: cref(l1), circle: c2, far: false },
         DimensionKind::LineCircle { line: cref(l2), circle: ar2, far: true },
-        DimensionKind::CircleCircle { a: c1, b: ar2, far_a: false, far_b: true },
-        DimensionKind::CircleCircle { a: ar, b: ar2, far_a: true, far_b: false },
+        DimensionKind::CircleCircle { a: c1, b: ar2, far_a: false, far_b: true, axis: None },
+        DimensionKind::CircleCircle { a: ar, b: ar2, far_a: true, far_b: false, axis: None },
         DimensionKind::Offset { source: l1, target: l2 },
         DimensionKind::Offset { source: ar, target: c2 },
     ] {

@@ -42,6 +42,7 @@ pub struct ActionRow {
     selected: bool,
     indent: f32,
     height: f32,
+    font_size: f32,
     actions: Vec<ActionSpec>,
 }
 
@@ -56,6 +57,7 @@ impl ActionRow {
             selected: false,
             indent: 0.0,
             height: 20.0,
+            font_size: 11.0,
             actions: Vec::new(),
         }
     }
@@ -94,6 +96,12 @@ impl ActionRow {
         self
     }
 
+    /// The label's size (11 px by default, a dense panel list's).
+    pub fn font_size(mut self, px: f32) -> Self {
+        self.font_size = px;
+        self
+    }
+
     /// A trailing icon button (`key` names it `<row>-<key>` and comes back in
     /// [`ActionRowAction`]).
     pub fn action(mut self, key: impl Into<String>, icon: impl Into<Cow<'static, str>>, tooltip: impl Into<String>, enabled: bool) -> Self {
@@ -112,6 +120,7 @@ impl ActionRow {
             selected,
             indent,
             height,
+            font_size,
             actions,
         } = self;
         let prefix = name.to_string();
@@ -147,7 +156,7 @@ impl ActionRow {
                     // An error header and a selected row read bold (`ex1-step5.png`,
                     // `ex1-step8.png`).
                     t.font(
-                        11.0,
+                        font_size,
                         if (header && error) || selected {
                             FontWeight::BOLD
                         } else if header {

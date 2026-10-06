@@ -110,6 +110,7 @@ fn project(features: &[crate::Feature], v: &View, part: PartId) -> Result<Arc<Vi
             appearances: Vec::new(),
             cut: None,
             intersections: false,
+            flat: false,
         },
     )
     .map_err(|e| bad(&e))

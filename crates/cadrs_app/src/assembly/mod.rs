@@ -49,6 +49,7 @@ pub mod explode;
 pub mod folders;
 pub mod group_dialog;
 pub mod in_context;
+pub mod linked_context;
 pub mod insert;
 pub mod insert_linked;
 pub mod interference;

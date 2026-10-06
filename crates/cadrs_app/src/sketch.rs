@@ -353,6 +353,8 @@ pub enum SketchToolButton {
     Construction,
     /// Shown for parity; not available yet (always disabled).
     Other(&'static str),
+    /// P3I.6: Insert DXF or DWG (`crate::sketch_dxf`).
+    InsertDxf,
 }
 
 impl SketchToolButton {
@@ -362,6 +364,7 @@ impl SketchToolButton {
             SketchToolButton::Tool(t) => t.implemented(),
             SketchToolButton::Construction => true,
             SketchToolButton::Other(_) => false,
+            SketchToolButton::InsertDxf => true,
         }
     }
 }
@@ -397,6 +400,16 @@ pub fn begin_sketch(world: &mut World) {
         cadrs_core::parts::plane_feature_ref(el.features(), f)
     });
     let plane = selection.plane().map(PlaneKind::plane_ref).or(face_plane).or(feature_plane);
+    begin_sketch_on(world, plane);
+}
+
+/// Starts a new sketch on `plane` (P3I.6: also the flat pattern's New sketch).
+pub fn begin_sketch_on(world: &mut World, plane: Option<PlaneRef>) {
+    if world.contains_resource::<SketchSession>()
+        || world.contains_resource::<crate::extrude::ExtrudeSession>()
+    {
+        return;
+    }
     let extent = plane_extent(world);
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
@@ -1266,6 +1279,7 @@ fn on_tool_button(
         SketchToolButton::Construction => tool.construction = !tool.construction,
         // Disabled: not available yet.
         SketchToolButton::Other(_) => {}
+        SketchToolButton::InsertDxf => commands.queue(crate::sketch_dxf::open),
     }
 }
 
@@ -1706,7 +1720,7 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 "dxf-import",
                 true,
                 "Insert DXF or DWG",
-                B::Other("Importing DXF and DWG files"),
+                B::InsertDxf,
             ),
         ],
         &[(
@@ -1848,7 +1862,7 @@ pub(crate) fn sync_sketch_toolbar(
         let want = match b {
             SketchToolButton::Tool(t) => tool.tool.family() == t.family(),
             SketchToolButton::Construction => tool.construction,
-            SketchToolButton::Other(_) => false,
+            SketchToolButton::Other(_) | SketchToolButton::InsertDxf => false,
         };
         if want && !selected {
             commands.entity(e).try_insert(Selected);
@@ -1967,8 +1981,14 @@ fn place_sketch_plane_label(
     >,
     mut commands: Commands,
 ) {
+    // Not for a sketch on a flat pattern: it is edited in the flat view (P3I.6).
     let current = session_plane(session.as_deref(), doc.as_deref())
-        .filter(|(_, p)| p.face().is_none());
+        .filter(|(_, p)| p.face().is_none())
+        .filter(|(s, _)| {
+            doc.as_ref()
+                .and_then(|d| d.active_element())
+                .is_none_or(|el| cadrs_core::sheetmetal_flat::sketch_target(el.features(), s.feature).is_none())
+        });
     let Some((s, plane)) = current else {
         for (e, ..) in &q {
             commands.entity(e).try_despawn();

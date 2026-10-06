@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 bevy.workspace = true
 cadrs_core.workspace = true
+cadrs_sheetmetal.workspace = true
 cadrs_sketch.workspace = true
 cadrs_ui.workspace = true
 chrono.workspace = true

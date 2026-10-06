@@ -60,6 +60,7 @@ pub mod tab_strip;
 pub mod text_dialog;
 pub mod table;
 pub mod tabs;
+pub mod tag;
 pub mod theme;
 pub mod timeline;
 pub mod toast;
@@ -90,12 +91,13 @@ pub use dialog_fields::{
 pub use entry_list::{
     Entry, EntryGroup, EntryGroupAction, EntryGroupActivate, EntryGroupState, EntryRemove, EntryState, EntryToggled,
 };
-pub use dock::{DockPanel, DockPanelState, DockPanelToggled, ToggleDockPanel};
+pub use dock::{DockGrip, DockPanel, DockPanelResized, DockPanelState, DockPanelToggled, ToggleDockPanel};
 pub use inline_edit::{
     DoubleClick, DoubleClickable, InlineEdit, InlineEditCancel, InlineEditCommit,
     InlineEditLabel, InlineEditOptions, begin_inline_edit,
 };
 pub use tabs::Tab;
+pub use tag::Tag;
 pub use tab_strip::{TabStrip, TabStripSelect, TabStripState};
 pub use toolbar::{Kbd, ToolButton, toolbar_separator};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};

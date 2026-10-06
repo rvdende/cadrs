@@ -55,6 +55,14 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Helix(_) => "Helix",
         FeatureKind::Fill(_) => "Fill",
         FeatureKind::Variable(_) => "Variable",
+        FeatureKind::SheetMetalModel(_) => "Sheet metal model",
+        FeatureKind::ModifyJoint(_) => "Modify joint",
+        FeatureKind::SheetMetalLoft(_) => "Sheet metal loft",
+        FeatureKind::Form(_) => "Form",
+        FeatureKind::TagForm(_) => "Tag",
+        FeatureKind::SheetMetal(x) => x.label(),
+        FeatureKind::SheetMetalTool(x) => x.label(),
+        FeatureKind::FlatExtrude(_) => "Extrude",
     }
 }
 
@@ -317,11 +325,11 @@ mod tests {
         let e1 = FeatureId::new();
         let s2 = FeatureId::new();
         let e2 = FeatureId::new();
-        let sketch = |id, plane| Feature { id, name: "S".into(), kind: FeatureKind::Sketch(SketchFeature::new(plane)) };
+        let sketch = |id, plane| Feature { id, name: "S".into(), kind: FeatureKind::Sketch(SketchFeature::new(plane)), suppress_by: None };
         let extrude = |id, s: FeatureId| {
             let mut x = ExtrudeFeature::default();
             x.sketches.push(s);
-            Feature { id, name: "E".into(), kind: FeatureKind::Extrude(x) }
+            Feature { id, name: "E".into(), kind: FeatureKind::Extrude(x), suppress_by: None }
         };
         let face = cadrs_sketch::FacePlane {
             feature: e1.0,

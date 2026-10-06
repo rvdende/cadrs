@@ -38,8 +38,9 @@ impl StudioState {
         if !matches!(el.kind, ElementKind::PartStudio { .. }) {
             return None;
         }
+        let off = el.all_suppressed();
         Some(Self {
-            features: el.features().iter().filter(|f| !el.is_suppressed(f.id)).cloned().collect(),
+            features: el.features().iter().filter(|f| !off.contains(&f.id)).cloned().collect(),
             props: el.part_props().to_vec(),
             appearances: el.feature_appearances().to_vec(),
         })
@@ -200,6 +201,7 @@ pub fn view_request(state: &StudioState, v: &cadrs_drawing::View) -> crate::view
         appearances: state.appearances.clone(),
         cut: v.effective_cut(),
         intersections: false,
+        flat: v.flat.is_some(),
     }
 }
 

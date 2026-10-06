@@ -15,6 +15,7 @@
 //! - `sketch <plane> <shape>…`: adds a sketch on `top`, `front` or `right` with the shapes
 //!   `rect x0 y0 x1 y1` (a rectangle with its constraints), `tri x0 y0 x1 y1 x2 y2`,
 //!   `chain x0 y0 x1 y1 …` (an open polyline), `poly x0 y0 x1 y1 …` (a closed one, P3.5),
+//!   `arc cx cy sx sy ex ey` (counter-clockwise from s to e, P3I.2),
 //!   `circle cx cy r`, `centreline x0 y0 x1 y1` (a construction line, P3.4) and `point x y`
 //!   (P3.8), in the plane's
 //!   coordinates
@@ -50,6 +51,8 @@
 //!   (degrees, as the view cube's camera: azimuth from the Front view toward the Right view),
 //!   optionally centred on the point `X Y Z` at `SCALE` mm per pixel, as orbiting would; for
 //!   picking edges only visible from one side (a pocket's corners).
+//! - `gasket` (P3E.4): stores and opens the branch-and-merge stand-in "Carburetor (stand-in)"
+//!   ([`cadrs_core::samples::gasket`]).
 //! - `fixture <name>`: opens the stand-in document `fixtures/<name>.cadrs` as a fresh copy in
 //!   the scenario's document store (the course's "Make a copy", P3B.1), with an empty undo
 //!   history: e.g. `fixture motor_mount_standin` (Ex1 of the assemblies course).
@@ -68,8 +71,18 @@
 //! - `step-fixture <path>` (P3F.2): writes the two-bracket STEP assembly
 //!   ([`cadrs_core::samples::bracket_pair`]: 2 parts, 3 instances) to `path` (relative to the
 //!   working folder), for the import scenarios to pick.
+//! - `sm-e4-rework` (P3I.8): exercise E4's steps 3–9 on its stand-in after Finish sheet metal
+//!   model, as [`cadrs_core::samples::sheetmetal_exercises::rework_after_finish`] makes them
+//!   (`sm_e4` does them through the dialogs instead).
+//! - `sm-legacy-step <path>` (P3I.8, SM17): writes the legacy C-channel as a plain STEP solid
+//!   ([`cadrs_core::samples::sheetmetal_legacy`]); `sm-legacy-case-step <path>` the legacy Case
+//!   (an open box with round corner reliefs: `case_round`). `sm-topdown-depth N`: the Heating Mantle
+//!   master's depth (SM18, [`cadrs_core::samples::sheetmetal_topdown::set_depth`]).
 //! - `design-intent` (P3F.4): the course's hydraulic cylinder body driven by `#piston_d` and
 //!   `#clearance` ([`cadrs_core::samples::design_intent`]) in the active Part Studio.
+//! - `with-hole` (IR5.5): a 60 × 40 × 10 plate with a Ø16 hole (Extrude 2, Remove) and a
+//!   Number Variable `#withHole` = 1 ([`cadrs_core::samples::with_hole`]), for Suppress by
+//!   variable.
 //! - `simulation-beam` (P3F.5): the simulation's cantilever, 100 × 10 × 10 mm in Steel - A36
 //!   ([`cadrs_core::samples::simulation`]), in the active Part Studio.
 //! - `clear-dir <path>` (P3F.2 judge): empties a folder under `target/` (an export scenario's
@@ -146,10 +159,42 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             step_fixture(path.trim());
             continue;
         }
+        // P3I.8 (SM17): the legacy C-channel's STEP file (`samples::sheetmetal_legacy`).
+        if let Some(path) = m.0.strip_prefix("sm-legacy-step ") {
+            write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::step);
+            continue;
+        }
+        // P3I.8 (SM17): the legacy Case (an open box, round corner reliefs as the lesson's).
+        if let Some(path) = m.0.strip_prefix("sm-legacy-case-step ") {
+            write_step(path.trim(), cadrs_core::samples::sheetmetal_legacy::case_round_step);
+            continue;
+        }
+        // P3I.8 (SM18): the Heating Mantle master's depth, edited in its own studio.
+        if let Some(n) = m.0.strip_prefix("sm-topdown-depth ").and_then(|n| n.trim().parse::<f64>().ok()) {
+            commands.queue(move |world: &mut World| {
+                let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+                if let Err(e) = cadrs_core::samples::sheetmetal_topdown::set_depth(&mut *doc, n) {
+                    warn!("sm-topdown-depth: {e}");
+                }
+            });
+            continue;
+        }
         // P3G.1: the linked-documents block (see [`linked_block`]).
         if let Some(rest) = m.0.strip_prefix("linked-block") {
             let arg = rest.trim().to_string();
             commands.queue(move |world: &mut World| linked_block(world, &arg));
+            continue;
+        }
+        // P3I.7: flat pattern drawings (see [`crate::drawing::flat_views::script`]).
+        if let Some(rest) = m.0.strip_prefix("flat-drawing ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::drawing::flat_views::script(world, &arg));
+            continue;
+        }
+        // P3I.9: the sheet metal loft and form set-ups (see [`crate::sheetmetal_p3i9_ui::script`]).
+        if let Some(rest) = m.0.strip_prefix("sm9 ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::sheetmetal_p3i9_ui::script(world, &arg));
             continue;
         }
         // P3G.4: the Derived feature's set-ups (see [`crate::derived_ui::script`]).
@@ -173,6 +218,11 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
         if let Some(rest) = m.0.strip_prefix("linked-ex ") {
             let arg = rest.trim().to_string();
             commands.queue(move |world: &mut World| crate::linked_exercises::script(world, &arg));
+            continue;
+        }
+        // P3E.4: the branch-and-merge stand-in.
+        if m.0.trim() == "gasket" {
+            commands.queue(open_gasket);
             continue;
         }
         if let Some(name) = m.0.strip_prefix("fixture ") {
@@ -321,6 +371,14 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             (Some("design-intent"), None) => {
                 commands.queue(design_intent);
             }
+            // IR5.5: the plate whose hole `#withHole` switches (`cadrs_core::samples::with_hole`).
+            (Some("with-hole"), None) => {
+                commands.queue(with_hole);
+            }
+            // P3I.8: exercise E4's rework after Finish (steps 3–9) on its stand-in.
+            (Some("sm-e4-rework"), None) => {
+                commands.queue(sm_e4_rework);
+            }
             // P3F.5: the simulation's beam (`cadrs_core::samples::simulation`).
             (Some("simulation-beam"), None) => {
                 commands.queue(simulation_beam);
@@ -330,6 +388,8 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             // P3H.3: `pcb-studio`, `pcb-import …` and `pcb-choose …` are `crate::pcb`'s.
             _ if crate::pcb::is_script_command(&m.0) => {}
+            // P3I.6: `crate::sketch_dxf` reads its own folder command.
+            _ if m.0.starts_with("sketch-dxf-dir ") => {}
             _ => warn!("unknown script command {:?}", m.0),
         }
     }
@@ -496,6 +556,22 @@ fn add_sketch(world: &mut World, spec: &str) {
                     closed: true,
                     construction: false,
                     label: "Add triangle",
+                });
+                i += 7;
+            }
+            "arc" => {
+                // P3I.2: an arc about cx cy, counter-clockwise from sx sy to ex ey (its ends join
+                // the curves already there).
+                let v: Vec<f64> = (1..=6).filter_map(|k| num(rest.get(i + k))).collect();
+                if v.len() != 6 {
+                    warn!("sketch: bad arc in {spec:?}");
+                    return;
+                }
+                ops.push(SketchOp::AddArc {
+                    center: SVec2::new(v[0], v[1]),
+                    start: SVec2::new(v[2], v[3]),
+                    end: SVec2::new(v[4], v[5]),
+                    construction: false,
                 });
                 i += 7;
             }
@@ -836,6 +912,18 @@ fn inspection(world: &mut World) {
 
 /// P3F.4: the course's design-intent model ([`cadrs_core::samples::design_intent`]) in the
 /// active Part Studio.
+fn sm_e4_rework(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::sheetmetal_exercises::rework_after_finish(&mut *doc, element) {
+        warn!("sm-e4-rework: {e}");
+    }
+}
+
 fn design_intent(world: &mut World) {
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
@@ -845,6 +933,20 @@ fn design_intent(world: &mut World) {
     };
     if let Err(e) = cadrs_core::samples::design_intent::build_in(&mut *doc, element) {
         warn!("design-intent: {e}");
+    }
+}
+
+/// IR5.5: the plate with a hole and `#withHole` ([`cadrs_core::samples::with_hole`]) in the
+/// active Part Studio.
+fn with_hole(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::with_hole::build_in(&mut *doc, element) {
+        warn!("with-hole: {e}");
     }
 }
 
@@ -1047,6 +1149,30 @@ pub(crate) fn fixtures_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures"))
 }
 
+/// `gasket` (P3E.4): stores and opens the branch-and-merge stand-in "Carburetor (stand-in)"
+/// ([`cadrs_core::samples::gasket`]: the Part Studios Gasket and Manifold and Assembly 1), with
+/// an empty history.
+fn open_gasket(world: &mut World) {
+    let doc = match cadrs_core::samples::gasket::document() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("gasket: {e}");
+            return;
+        }
+    };
+    let mut file = cadrs_core::samples::gear_cover::file(doc);
+    // Made by the user two hours ago (so its Start sorts before what the scenario does).
+    let now = world.get_resource::<crate::AppClock>().map_or(0, |c| c.now());
+    let user = world.get_resource::<crate::UserProfile>().map(|u| u.id.clone()).unwrap_or_default();
+    file.meta = cadrs_core::DocumentMeta::new(&user, now - 7_200);
+    if let Some(store) = world.get_resource::<crate::DocumentStore>()
+        && let Err(e) = store.0.save(&file.document, &file.meta)
+    {
+        warn!("gasket: {e}");
+    }
+    world.insert_resource(crate::ActiveDocument::stored(file.document, file.meta));
+}
+
 /// Opens `fixtures/<name>.cadrs` as the active document, saved in the document store.
 fn open_fixture(world: &mut World, name: &str) {
     let path = fixtures_dir().join(format!("{name}.cadrs"));
@@ -1082,8 +1208,13 @@ fn open_fixture(world: &mut World, name: &str) {
 
 /// `step-fixture <path>`: the bracket pair STEP file, written now (the kernel thread builds it).
 fn step_fixture(path: &str) {
+    write_step(path, cadrs_core::samples::bracket_pair::step);
+}
+
+/// Writes the STEP file `make` builds (on the kernel thread) to `path`.
+fn write_step(path: &str, make: fn(&mut cadrs_core::rebuild::Rebuilder) -> Result<Vec<u8>, String>) {
     let path = std::path::PathBuf::from(path);
-    let bytes = cadrs_core::rebuild::run_on_worker(cadrs_core::samples::bracket_pair::step).wait();
+    let bytes = cadrs_core::rebuild::run_on_worker(make).wait();
     match bytes {
         Some(Ok(b)) => {
             if let Some(dir) = path.parent() {

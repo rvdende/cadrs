@@ -28,6 +28,11 @@ use crate::scenario::{Scenario, Step, Target};
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct WorldToScreen(pub Option<Affine>);
 
+/// Maps the sheet metal flat view's flat millimetres to screen pixels for `flat(x, y)`
+/// targets. The app keeps it up to date; `None` while the flat view isn't shown.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct FlatToScreen(pub Option<Affine>);
+
 /// Maps 3D world millimetres to screen pixels for `xyz(x, y, z)` targets (the view is
 /// orthographic, so this is affine). The app keeps it up to date.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -125,6 +130,7 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
     }
     app.init_resource::<WorldToScreen>();
     app.init_resource::<SpaceToScreen>();
+    app.init_resource::<FlatToScreen>();
     app.insert_resource(Runner {
         name,
         out_dir,
@@ -276,7 +282,7 @@ fn drive(world: &mut World) {
 
 /// Whether the step has a target placed by the current view (`world()` or `xyz()`).
 fn uses_view(step: &Step) -> bool {
-    let view = |t: &Target| matches!(t, Target::World(..) | Target::Xyz(..));
+    let view = |t: &Target| matches!(t, Target::World(..) | Target::Xyz(..) | Target::Flat(..));
     match step {
         Step::Click(t)
         | Step::RightClick(t)
@@ -482,6 +488,10 @@ fn resolve(world: &mut World, target: &Target) -> Result<Vec2, String> {
                 .map(|m| m.apply(Vec2::new(*x, *y)).round())
                 .ok_or_else(|| "world(..): no sketch plane mapping".to_string())
         }
+        Target::Flat(x, y) => {
+            let map = world.get_resource::<FlatToScreen>().copied().unwrap_or_default();
+            map.0.map(|m| m.apply(Vec2::new(*x, *y)).round()).ok_or_else(|| "flat(..): the flat view isn't shown".to_string())
+        }
         Target::Xyz(x, y, z) => {
             let map = world.get_resource::<SpaceToScreen>().copied().unwrap_or_default();
             map.0
@@ -501,17 +511,18 @@ fn resolve(world: &mut World, target: &Target) -> Result<Vec2, String> {
         }
         Target::Ui(name) => {
             let mut q = world.query::<(
+                Entity,
                 &Name,
                 &ComputedNode,
                 &UiGlobalTransform,
                 &InheritedVisibility,
             )>();
-            let found: Vec<Vec2> = q
+            let found: Vec<(Entity, Vec2)> = q
                 .iter(world)
-                .filter(|(n, node, _, vis)| {
+                .filter(|(_, n, node, _, vis)| {
                     n.as_str() == name && vis.get() && node.size().x > 0.0 && node.size().y > 0.0
                 })
-                .map(|(_, node, t, _)| t.translation * node.inverse_scale_factor())
+                .map(|(e, _, node, t, _)| (e, t.translation * node.inverse_scale_factor()))
                 .collect();
             if found.len() > 1 {
                 warn!(
@@ -519,8 +530,64 @@ fn resolve(world: &mut World, target: &Target) -> Result<Vec2, String> {
                     found.len()
                 );
             }
-            found.first().copied().ok_or_else(|| name.clone())
+            let (e, pos) = found.first().copied().ok_or_else(|| name.clone())?;
+            // P3E.3a: a node scrolled out of its list is scrolled into view first (as a user
+            // would), and looked up again once the layout has moved it.
+            if scroll_into_view(world, e, pos) {
+                return Err(name.clone());
+            }
+            Ok(pos)
         }
+    }
+}
+
+/// If the point `pos` (logical px) of the node `e` lies outside a scrolling ancestor's visible
+/// box, scrolls that ancestor so the point is inside it and returns true.
+fn scroll_into_view(world: &mut World, e: Entity, pos: Vec2) -> bool {
+    let mut cur = e;
+    loop {
+        // A node placed absolutely (a popup, a dialog over a list) isn't scrolled by the lists
+        // it sits in.
+        if world.get::<Node>(cur).is_some_and(|n| n.position_type == PositionType::Absolute) {
+            return false;
+        }
+        let Some(parent) = world.get::<ChildOf>(cur).map(|c| c.parent()) else { return false };
+        cur = parent;
+        let Some(node) = world.get::<Node>(cur) else { continue };
+        let (sx, sy) = (node.overflow.x == OverflowAxis::Scroll, node.overflow.y == OverflowAxis::Scroll);
+        if !sx && !sy {
+            continue;
+        }
+        let (Some(c), Some(t)) = (world.get::<ComputedNode>(cur), world.get::<UiGlobalTransform>(cur)) else { continue };
+        let k = c.inverse_scale_factor();
+        let (center, half) = (t.translation * k, c.size() * k / 2.0);
+        let margin = 6.0;
+        let mut delta = Vec2::ZERO;
+        for (i, on) in [(0usize, sx), (1, sy)] {
+            if !on {
+                continue;
+            }
+            let (lo, hi) = (center[i] - half[i] + margin, center[i] + half[i] - margin);
+            if pos[i] < lo {
+                delta[i] = pos[i] - lo - margin;
+            } else if pos[i] > hi {
+                delta[i] = pos[i] - hi + margin;
+            }
+        }
+        if delta == Vec2::ZERO {
+            continue;
+        }
+        // How far it can scroll (logical px): a list already at its end is left alone.
+        let max = ((c.content_size - c.size) * k).max(Vec2::ZERO);
+        if let Some(mut s) = world.get_mut::<ScrollPosition>(cur) {
+            let to = (s.0 + delta).clamp(Vec2::ZERO, max);
+            if (to - s.0).length() < 0.5 {
+                return false;
+            }
+            s.0 = to;
+            return true;
+        }
+        return false;
     }
 }
 

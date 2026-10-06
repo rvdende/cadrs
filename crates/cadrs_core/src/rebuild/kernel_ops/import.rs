@@ -20,8 +20,10 @@ impl Rebuilder {
         let model = self.kernel.import_model(format, bytes).map_err(|e| format!("Import failed: {e}"))?;
         let plan = self.plan_of(x.format, &model);
         let originals: Vec<BodyId> = model.parts.iter().map(|p| p.body).collect();
-        // Where each body goes: a part at its first occurrence, or every occurrence.
+        // Where each body goes: a part at its first occurrence or its own origin, or every
+        // occurrence.
         let wanted: Vec<(usize, Motion, String)> = match mode {
+            ImportMode::AtOrigin => (0..originals.len()).map(|i| (i, Motion::identity(), format!("part {}", i + 1))).collect(),
             ImportMode::Parts => (0..originals.len())
                 .map(|i| {
                     let first = model.occurrences.iter().find(|o| o.part == i).map_or(Motion::identity(), |o| o.placement);
@@ -53,31 +55,32 @@ impl Rebuilder {
             placed.iter().for_each(|b| self.kernel.release(*b));
             return Err(e);
         }
-        // One body per solid.
-        let mut bodies: Vec<BodyId> = Vec::new();
+        // One body per solid (and per loose shell), named after the part it came from.
+        let entries = plan.entry_names(mode);
+        let stem = x.stem();
+        let mut bodies: Vec<(BodyId, String)> = Vec::new();
         let mut failed = None;
-        for b in &placed {
+        for (w, b) in placed.iter().enumerate() {
             if failed.is_none() {
-                match self.kernel.split_solids(*b) {
-                    Ok(rs) => bodies.extend(rs.into_iter().flat_map(|r| r.bodies)),
+                match self.kernel.split_imported(*b) {
+                    Ok(rs) => {
+                        let pieces: Vec<BodyId> = rs.into_iter().flat_map(|r| r.bodies).collect();
+                        let name = entries.get(w).map_or_else(|| stem.clone(), |(_, n)| n.clone());
+                        let names = crate::import::structure::piece_names(&name, pieces.len()).collect::<Vec<_>>();
+                        bodies.extend(pieces.into_iter().zip(names));
+                    }
                     Err(e) => failed = Some(format!("Import failed: {e}")),
                 }
             }
             self.kernel.release(*b);
         }
         if let Some(e) = failed {
-            bodies.iter().for_each(|b| self.kernel.release(*b));
+            bodies.iter().for_each(|(b, _)| self.kernel.release(*b));
             return Err(e);
         }
         if bodies.is_empty() {
             return Err("The file holds no parts".into());
         }
-        let names = plan.part_names(mode);
-        let stem = x.stem();
-        Ok(bodies
-            .into_iter()
-            .enumerate()
-            .map(|(k, b)| (b, names.get(k).cloned().unwrap_or_else(|| if k == 0 { stem.clone() } else { format!("{stem} ({})", k + 1) })))
-            .collect())
+        Ok(bodies)
     }
 }

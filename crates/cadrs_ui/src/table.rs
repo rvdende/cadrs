@@ -21,6 +21,9 @@
 //!   cell of that column under the same [`TableRoot`], or under the header's parent) and
 //!   triggers [`TableColumnResize`] when released; double-clicking it asks for the column to
 //!   fit its content (`width: None`). The owner keeps the width for its next rebuild.
+//! - [`Column::grow`] shares the free width between flexible columns by weight;
+//!   [`Column::shaded`] fills a column's cells (a row-number column); [`TableHeader::grid`] and
+//!   [`TableRow::grid`] draw grid lines between the cells (gpui-component's bordered table).
 //! - A [`TableBody`] (the rows' scroll container, a sibling of the header) scrolls both ways
 //!   with the wheel (Shift+wheel: sideways); the header follows its horizontal scroll, so a
 //!   wide table scrolls sideways inside a fixed-width panel.
@@ -82,6 +85,10 @@ pub struct Column {
     pub first_sort: ColumnSort,
     /// The narrowest a resize can make it (px).
     pub min_width: f32,
+    /// A flexible column's share of the free width (default 1).
+    pub grow: f32,
+    /// The cells' fill (header and body), if any.
+    pub background: Option<Color>,
 }
 
 impl Column {
@@ -94,7 +101,22 @@ impl Column {
             sort: ColumnSort::Default,
             first_sort: ColumnSort::Ascending,
             min_width: 32.0,
+            grow: 1.0,
+            background: None,
         }
+    }
+
+    /// A flexible column (no fixed width) taking `weight` shares of the free width.
+    pub fn grow(mut self, weight: f32) -> Self {
+        self.width = None;
+        self.grow = weight;
+        self
+    }
+
+    /// Fills the column's cells (Onshape's shaded "#" column).
+    pub fn shaded(mut self, c: Color) -> Self {
+        self.background = Some(c);
+        self
     }
 
     /// The narrowest a resize can make it (default 32 px).
@@ -140,12 +162,21 @@ impl Column {
                 n.flex_shrink = 0.0;
             }
             None => {
-                n.flex_grow = 1.0;
+                n.flex_grow = self.grow;
                 n.flex_basis = Val::Px(0.0);
                 n.min_width = Val::Px(0.0);
             }
         }
         n
+    }
+
+    /// A cell's node with a grid line on its right (`grid`), and its fill.
+    fn cell_bundle(&self, theme: &Theme, grid: bool) -> (Node, BackgroundColor, BorderColor) {
+        let mut n = self.cell_node(theme);
+        if grid {
+            n.border = UiRect::right(Val::Px(1.0));
+        }
+        (n, BackgroundColor(self.background.unwrap_or(Color::NONE)), BorderColor::all(theme.row_separator))
     }
 }
 
@@ -188,6 +219,7 @@ pub struct TableHeader {
     double_click_sort: bool,
     menus: bool,
     resizable: bool,
+    grid: bool,
 }
 
 impl TableHeader {
@@ -199,7 +231,14 @@ impl TableHeader {
             double_click_sort: false,
             menus: false,
             resizable: false,
+            grid: false,
         }
+    }
+
+    /// Grid lines between the cells (and a top border), for a bordered table.
+    pub fn grid(mut self) -> Self {
+        self.grid = true;
+        self
     }
 
     /// The dividers between header cells can be dragged to resize the columns (see the module
@@ -236,6 +275,7 @@ impl TableHeader {
             double_click_sort,
             menus,
             resizable,
+            grid,
         } = self;
         let prefix = name.to_string();
         (
@@ -245,7 +285,7 @@ impl TableHeader {
                 height: Val::Px(height),
                 flex_shrink: 0.0,
                 align_items: AlignItems::Center,
-                border: UiRect::bottom(Val::Px(2.0)),
+                border: if grid { UiRect::new(Val::ZERO, Val::ZERO, Val::Px(1.0), Val::Px(1.0)) } else { UiRect::bottom(Val::Px(2.0)) },
                 // Scrolled sideways with its [`TableBody`] (not by the wheel itself).
                 overflow: Overflow {
                     x: OverflowAxis::Scroll,
@@ -254,7 +294,7 @@ impl TableHeader {
                 ..default()
             },
             ScrollPosition::default(),
-            BorderColor::all(Color::srgb_u8(0xd0, 0xd0, 0xd0)),
+            BorderColor::all(if grid { theme.row_separator } else { Color::srgb_u8(0xd0, 0xd0, 0xd0) }),
             Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
                 let n = columns.len();
                 for (i, col) in columns.into_iter().enumerate() {
@@ -267,8 +307,12 @@ impl TableHeader {
                         TableColumnCell {
                             column: col.key.to_string(),
                         },
-                        col.cell_node(&theme),
+                        col.cell_bundle(&theme, grid),
                     ));
+                    if grid {
+                        // A bordered table centres its headers over its centred cells.
+                        cell.entry::<Node>().and_modify(|mut n| n.justify_content = JustifyContent::Center);
+                    }
                     if col.sortable || menus {
                         cell.insert(TableHeaderCell {
                             column: col.key.to_string(),
@@ -332,8 +376,8 @@ impl TableHeader {
                             .with_child((icon(a, 14.0, muted), Pickable::IGNORE));
                         }
                         // The column divider (Onshape draws a short grey line between headers);
-                        // in a resizable header it is the resize handle.
-                        let idle = if i + 1 < n { sep } else { Color::NONE };
+                        // in a resizable header it is the resize handle. A grid has its own lines.
+                        let idle = if i + 1 < n && !grid { sep } else { Color::NONE };
                         let line = (
                             ResizeLine,
                             Node {
@@ -370,7 +414,7 @@ impl TableHeader {
                                 },
                             ))
                             .with_child(line);
-                        } else if i + 1 < n {
+                        } else if i + 1 < n && !grid {
                             c.spawn(line);
                         }
                     });
@@ -394,6 +438,7 @@ pub struct TableRow {
     height: Option<f32>,
     selected: bool,
     force: Option<VisualState>,
+    grid: bool,
 }
 
 impl TableRow {
@@ -406,7 +451,14 @@ impl TableRow {
             height: None,
             selected: false,
             force: None,
+            grid: false,
         }
+    }
+
+    /// Grid lines between the cells, for a bordered table.
+    pub fn grid(mut self) -> Self {
+        self.grid = true;
+        self
     }
 
     /// Adds the next cell's content.
@@ -456,6 +508,7 @@ impl TableRow {
             height,
             selected,
             force,
+            grid,
         } = self;
         let fg = theme.foreground;
         let total = total_width(&columns);
@@ -497,7 +550,7 @@ impl TableRow {
                         TableColumnCell {
                             column: col.key.to_string(),
                         },
-                        col.cell_node(&theme),
+                        col.cell_bundle(&theme, grid),
                         Pickable::IGNORE,
                     ));
                     if let Some(f) = cells.next() {

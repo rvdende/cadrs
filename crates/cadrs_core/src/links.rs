@@ -48,7 +48,7 @@ fn unit(a: Vec3) -> Vec3 {
 }
 
 /// A curve in space.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Curve3 {
     Line(Vec3, Vec3),
     /// A full circle: its center, unit normal, radius and a unit direction in its plane.
@@ -76,6 +76,55 @@ pub enum Curve3 {
         normal: Vec3,
         offset: f64,
     },
+    /// Any other curve (a spline edge, a cylinder's edge cut at a slant), as points on it in
+    /// order (a closed curve lists each once).
+    Sampled { points: Vec<Vec3>, closed: bool },
+}
+
+/// At most this many points of a curve are kept for [`Curve3::Sampled`] (and so for the
+/// spline a Use makes of it).
+const MAX_SAMPLES: usize = 48;
+
+/// A curve through the points of a polyline on it (its exact points): every point while there
+/// are at most [`MAX_SAMPLES`], else that many spread evenly along it (the ends kept).
+pub fn sampled(pts: &[Vec3]) -> Option<Curve3> {
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    let closed = n > 3 && len(sub(pts[0], pts[n - 1])) < 1e-9;
+    let pts = if closed { &pts[..n - 1] } else { pts };
+    let m = pts.len();
+    if m <= MAX_SAMPLES {
+        return Some(Curve3::Sampled { points: pts.to_vec(), closed });
+    }
+    // Arc length at each point (closing back to the first for a closed curve).
+    let mut at = vec![0.0];
+    for w in pts.windows(2) {
+        at.push(at.last().unwrap() + len(sub(w[1], w[0])));
+    }
+    let total = at[m - 1] + if closed { len(sub(pts[0], pts[m - 1])) } else { 0.0 };
+    let k = if closed { MAX_SAMPLES } else { MAX_SAMPLES - 1 };
+    let mut out: Vec<Vec3> = Vec::new();
+    let mut j = 0;
+    for i in 0..=k {
+        if closed && i == k {
+            break;
+        }
+        let want = total * i as f64 / k as f64;
+        while j + 1 < m && at[j + 1] <= want {
+            j += 1;
+        }
+        // The nearer of the two points around it.
+        let pick = if j + 1 < m && at[j + 1] - want < want - at[j] { j + 1 } else { j };
+        if out.last().is_none_or(|q| len(sub(*q, pts[pick])) > 0.0) {
+            out.push(pts[pick]);
+        }
+    }
+    if !closed && out.last().is_some_and(|q| len(sub(*q, pts[m - 1])) > 0.0) {
+        out.push(pts[m - 1]);
+    }
+    Some(Curve3::Sampled { points: out, closed })
 }
 
 /// The circle through three points in space: center and unit normal.
@@ -152,7 +201,7 @@ pub fn curve_of_polyline(pts: &[Vec3]) -> Option<Curve3> {
 pub fn edge_curve(e: &crate::solid::SolidEdge) -> Option<Curve3> {
     let pts = &e.points;
     let (Some(c), Some(first), Some(last)) = (e.circle, pts.first(), pts.last()) else {
-        return curve_of_polyline(pts);
+        return curve_of_polyline(pts).or_else(|| sampled(pts));
     };
     let normal = unit(c.normal);
     // A point of the polyline put exactly on the circle.
@@ -215,11 +264,12 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
             }
         }
         Curve3::Arc {
+            center,
             normal,
+            radius,
             start,
             mid,
             end,
-            ..
         } => {
             let cos = dot(normal, big_n).abs();
             if cos > 1.0 - PARALLEL {
@@ -234,8 +284,32 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
                 let hi = pts.iter().copied().max_by(|a, b| key(a).total_cmp(&key(b)))?;
                 Projected::Line(lo, hi)
             } else {
-                // An elliptical arc: not a curve cadrs has.
-                return None;
+                // An elliptical arc: on the circle's projection (as for a whole circle), from
+                // whichever end makes it run counter-clockwise through the middle.
+                let d = unit(cross(normal, big_n));
+                let (c, major, minor) = (s(center), s(add(center, scale(d, radius))), radius * cos);
+                let e = cadrs_sketch::geom::EllipseGeom::new(c, major, minor);
+                let (ts, tm, te) = (e.param_of(s(start)), e.param_of(s(mid)), e.param_of(s(end)));
+                let ccw = cadrs_sketch::geom::norm_angle(tm - ts) < cadrs_sketch::geom::norm_angle(te - ts);
+                let (start, end) = if ccw { (s(start), s(end)) } else { (s(end), s(start)) };
+                Projected::EllipseArc { center: c, major, minor, start, end }
+            }
+        }
+        Curve3::Sampled { points, closed } => {
+            let pts: Vec<Vec2> = points.iter().map(|p| s(*p)).collect();
+            // Seen edge-on (all on one line): the segment between its extremes.
+            let lo = *pts.first()?;
+            let hi = pts.iter().copied().max_by(|a, b| a.distance(lo).total_cmp(&b.distance(lo)))?;
+            let size = hi.distance(lo);
+            let dir = (hi - lo).normalize();
+            let straight = size > 0.0 && pts.iter().all(|p| dir.cross(*p - lo).abs() < 1e-9 * (1.0 + size));
+            if straight {
+                let key = |p: &Vec2| p.dot(dir);
+                let a = pts.iter().copied().min_by(|x, y| key(x).total_cmp(&key(y)))?;
+                let b = pts.iter().copied().max_by(|x, y| key(x).total_cmp(&key(y)))?;
+                Projected::Line(a, b)
+            } else {
+                Projected::Spline { points: pts, closed }
             }
         }
         Curve3::Ellipse {
@@ -326,6 +400,19 @@ pub fn crossings(c: Curve3, frame: &PlaneFrame) -> Vec<Vec2> {
                 .collect()
         }
         Curve3::Ellipse { .. } => Vec::new(),
+        // Where its segments cross (sampled: about on the curve).
+        Curve3::Sampled { points, closed } => {
+            let n = points.len();
+            let segs = if closed { n } else { n.saturating_sub(1) };
+            (0..segs)
+                .filter_map(|i| {
+                    let (a, b) = (points[i], points[(i + 1) % n]);
+                    let (da, db) = (dist(a), dist(b));
+                    (da.signum() != db.signum() || da == 0.0)
+                        .then(|| if (da - db).abs() < 1e-300 { a } else { add(a, scale(sub(b, a), da / (da - db))) })
+                })
+                .collect()
+        }
     };
     pts.into_iter().map(|p| frame.to_sketch(p)).collect()
 }
@@ -448,6 +535,9 @@ impl<'a> LinkContext<'a> {
                 Some(Curve3::Line(a, b))
             }
             Link::Plane(p) => plane_trace(&p.frame(), frame),
+            // A flat pattern's line lies in the flat, not in space ([`crate::parts::regenerate`]
+            // places it from the build's flat pattern).
+            Link::FlatLine { .. } => None,
             Link::SketchCurve { feature, curve } => {
                 let f = self.features.iter().find(|f| f.id.0 == feature)?;
                 let sk = f.sketch()?;
@@ -488,9 +578,11 @@ impl<'a> LinkContext<'a> {
                         normal,
                         offset: distance,
                     },
-                    CurveKind::Spline { .. } => return None,
-                    // Not projected (Use takes lines, arcs, circles and ellipses).
-                    CurveKind::Bezier { .. } => return None,
+                    // Other curves as points along them.
+                    CurveKind::Spline { .. } | CurveKind::Bezier { .. } | CurveKind::EllipseArc { .. } => {
+                        let pts: Vec<Vec3> = cadrs_sketch::hit::curve_polyline(g, curve).into_iter().map(w).collect();
+                        return sampled(&pts);
+                    }
                 })
             }
         }
@@ -546,7 +638,7 @@ impl<'a> LinkContext<'a> {
                     index,
                 })
             }
-            Link::SketchCurve { .. } | Link::Plane(_) => Some(link),
+            Link::SketchCurve { .. } | Link::Plane(_) | Link::FlatLine { .. } => Some(link),
         }
     }
 
@@ -575,6 +667,13 @@ pub fn projected_distance(shape: &Projected, p: Vec2) -> Option<f64> {
         }
         Projected::Point(q) => p.distance(q),
         Projected::Ellipse { .. } => return None,
+        Projected::Spline { ref points, closed } => {
+            let spans = cadrs_sketch::spline::spans(points, closed, None, None);
+            cadrs_sketch::spline::nearest(&spans, p)?.2
+        }
+        Projected::EllipseArc { center, major, minor, start, end } => {
+            cadrs_sketch::EllipseArcGeom::ccw(center, major, minor, start, end).distance(p)
+        }
         Projected::EllipseOffset { center, major, minor, distance } => {
             cadrs_sketch::geom::EllipseGeom::new(center, major, minor).with_offset(distance).distance(p)
         }
@@ -604,6 +703,10 @@ pub fn curve_samples(g: &Sketch, c: CurveId) -> Vec<Vec2> {
             .map(|a| vec![a.start(), a.mid(), a.end()])
             .unwrap_or_default(),
         CurveKind::Ellipse { .. } => Vec::new(),
+        CurveKind::EllipseArc { .. } => g
+            .ellipse_arc_geom(c)
+            .map(|e| vec![e.start(), e.mid(), e.end()])
+            .unwrap_or_default(),
         CurveKind::EllipseOffset { .. } => g
             .ellipse_geom(c)
             .map(|e| (0..4).map(|k| e.point_at(k as f64 * std::f64::consts::FRAC_PI_2)).collect())

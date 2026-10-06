@@ -43,7 +43,7 @@ pub use constraint::{
     Constraint, ConstraintKind, ConstraintOf, ConstraintSpec, CurveRef, CurveSpec, Fit, Orient,
     PointRef, PointSpec,
 };
-pub use geom::ArcGeom;
+pub use geom::{ArcGeom, EllipseArcGeom};
 pub use hit::{Entity as SketchEntity, Hit};
 pub use ops::SketchOp;
 pub use region::Region;
@@ -306,6 +306,11 @@ pub enum Link {
     /// Where a plane (a default plane or a Plane feature) cuts the sketch plane (Final re-audit,
     /// S12.10: Normal to a plane): a line, used as construction.
     Plane(PlaneRef),
+    /// A line of a sheet metal flat pattern, for a sketch on that flat (P3I.6, SM14), in the
+    /// flat's (and so the sketch's) coordinates: part `part` of the Sheet metal model `model`;
+    /// the centre line of the bend of joint `bend`, else the edge of its outline or of a
+    /// cut-out nearest where the used curve lies.
+    FlatLine { model: uuid::Uuid, part: u8, bend: Option<u32> },
 }
 
 impl Link {
@@ -315,6 +320,7 @@ impl Link {
             Link::Edge { feature, .. }
             | Link::Silhouette { feature, .. }
             | Link::SketchCurve { feature, .. } => feature,
+            Link::FlatLine { model, .. } => model,
             Link::Plane(PlaneRef::Feature(fp)) => fp.feature,
             Link::Plane(PlaneRef::Face(fp)) => fp.feature,
             // A default plane: no feature.
@@ -574,6 +580,17 @@ pub enum CurveKind {
         minor: f64,
         distance: f64,
     },
+    /// Part of an ellipse (Onshape's elliptical arc): the ellipse with this center, major point
+    /// and (positive) minor radius, from `start` counter-clockwise to `end`, both on it. Use
+    /// makes one from an arc edge of a part seen at an angle to the sketch plane. Older
+    /// documents simply have none.
+    EllipseArc {
+        center: PointId,
+        major: PointId,
+        minor: f64,
+        start: PointId,
+        end: PointId,
+    },
     /// An interpolated spline (Onshape's `skInterpolatedSpline`): the C2 cubic through its
     /// points, kept in [`Sketch::splines`] under the curve's id ([`spline`]). `start` and `end`
     /// are its first and last points (the same point for a closed spline).
@@ -598,7 +615,7 @@ impl CurveKind {
     pub fn scalar(&self) -> Option<f64> {
         match *self {
             CurveKind::Circle { radius, .. } => Some(radius),
-            CurveKind::Ellipse { minor, .. } => Some(minor),
+            CurveKind::Ellipse { minor, .. } | CurveKind::EllipseArc { minor, .. } => Some(minor),
             _ => None,
         }
     }
@@ -607,7 +624,7 @@ impl CurveKind {
     pub fn set_scalar(&mut self, v: f64) {
         match self {
             CurveKind::Circle { radius, .. } => *radius = v,
-            CurveKind::Ellipse { minor, .. } => *minor = v,
+            CurveKind::Ellipse { minor, .. } | CurveKind::EllipseArc { minor, .. } => *minor = v,
             _ => {}
         }
     }
@@ -617,6 +634,23 @@ impl CurveKind {
 pub struct Curve {
     pub kind: CurveKind,
     pub construction: bool,
+}
+
+/// The sketch axis a distance is measured along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    /// Its unit direction.
+    pub fn dir(self) -> Vec2 {
+        match self {
+            Axis::Horizontal => Vec2::new(1.0, 0.0),
+            Axis::Vertical => Vec2::new(0.0, 1.0),
+        }
+    }
 }
 
 /// What a dimension measures.
@@ -665,15 +699,18 @@ pub enum DimensionKind {
         circle: CurveId,
         far: bool,
     },
-    /// The distance between two circles or arcs along the line through their centers, each
-    /// taken on its near side (facing the other) or its far side. Concentric ones (a ring's
-    /// width) are measured radially, along the label's direction ([`Dimension::offset`] is its
-    /// angle).
+    /// The distance between two circles or arcs along the line through their centers (or,
+    /// with an `axis`, horizontally or vertically: between their left/right or top/bottom
+    /// extremes), each taken on its near side (facing the other) or its far side. Concentric
+    /// ones (a ring's width) are measured radially, along the label's direction
+    /// ([`Dimension::offset`] is its angle).
     CircleCircle {
         a: CurveId,
         b: CurveId,
         far_a: bool,
         far_b: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<Axis>,
     },
     /// How far `target` is offset from `source` (the Offset tool): the distance between two
     /// parallel lines, or the difference of two concentric radii (measured radially along the
@@ -1071,7 +1108,11 @@ impl Sketch {
         let mut ellipse = false;
         for (id, c) in &self.curves {
             match c.kind {
-                CurveKind::Ellipse { major, .. } | CurveKind::EllipseOffset { major, .. } if major == p => ellipse = true,
+                CurveKind::Ellipse { major, .. } | CurveKind::EllipseOffset { major, .. } | CurveKind::EllipseArc { major, .. }
+                    if major == p =>
+                {
+                    ellipse = true
+                }
                 k if self.kind_points(id, &k).contains(&p) => return false,
                 _ => {}
             }
@@ -1227,7 +1268,22 @@ impl Sketch {
             CurveKind::Arc { start, end, .. } => Some((start, end)),
             CurveKind::Spline { start, end } => (start != end).then_some((start, end)),
             CurveKind::Bezier { a, b, .. } => Some((a, b)),
+            CurveKind::EllipseArc { start, end, .. } => Some((start, end)),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => None,
+        }
+    }
+
+    /// An elliptical arc's geometry.
+    pub fn ellipse_arc_geom(&self, id: CurveId) -> Option<geom::EllipseArcGeom> {
+        match self.curves.get(id)?.kind {
+            CurveKind::EllipseArc { center, major, minor, start, end } => Some(geom::EllipseArcGeom::ccw(
+                self.pos(center),
+                self.pos(major),
+                minor,
+                self.pos(start),
+                self.pos(end),
+            )),
+            _ => None,
         }
     }
 
@@ -1283,6 +1339,10 @@ impl Sketch {
                     -spline::bez_tangent(sp.last()?, 1.0)
                 })
             }
+            CurveKind::EllipseArc { start, .. } => {
+                let g = self.ellipse_arc_geom(id)?;
+                Some(if start == p { g.start_tangent() } else { -g.end_tangent() })
+            }
             CurveKind::Spline { .. } | CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipseOffset { .. } => None,
             CurveKind::Bezier { a, .. } => {
                 let g = self.bezier_geom(id)?;
@@ -1321,6 +1381,13 @@ impl Sketch {
                     major: swap(major),
                     minor,
                     distance,
+                },
+                CurveKind::EllipseArc { center, major, minor, start, end } => CurveKind::EllipseArc {
+                    center: swap(center),
+                    major: swap(major),
+                    minor,
+                    start: swap(start),
+                    end: swap(end),
                 },
                 CurveKind::Spline { start, end } => CurveKind::Spline { start: swap(start), end: swap(end) },
                 CurveKind::Bezier { a, c1, c2, b } => CurveKind::Bezier {
@@ -1408,6 +1475,7 @@ pub(crate) fn curve_points(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Circle { center, .. } => vec![center],
         CurveKind::Arc { center, start, end } => vec![center, start, end],
         CurveKind::Ellipse { center, major, .. } | CurveKind::EllipseOffset { center, major, .. } => vec![center, major],
+        CurveKind::EllipseArc { center, major, start, end, .. } => vec![center, major, start, end],
         CurveKind::Spline { start, end } => if start == end { vec![start] } else { vec![start, end] },
         CurveKind::Bezier { a, c1, c2, b } => vec![a, c1, c2, b],
     }

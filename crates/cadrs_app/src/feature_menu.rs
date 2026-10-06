@@ -135,11 +135,12 @@ pub fn show_all_sketches(world: &mut World) {
     let element = el.id;
     // Only sketches hidden by the user or by a feature using them (not rolled back ones).
     let bar = el.rollback_index();
+    let off = el.all_suppressed();
     let ids: Vec<FeatureId> = el
         .features()
         .iter()
         .enumerate()
-        .filter(|(i, f)| f.sketch().is_some() && *i < bar && hidden.contains(&f.id) && !el.is_suppressed(f.id))
+        .filter(|(i, f)| f.sketch().is_some() && *i < bar && hidden.contains(&f.id) && !off.contains(&f.id))
         .map(|(_, f)| f.id)
         .collect();
     if ids.is_empty() {

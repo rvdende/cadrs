@@ -106,7 +106,7 @@ pub struct TabButton(pub ElementId);
 
 /// The row the tabs are spawned into.
 #[derive(Component)]
-struct TabStrip;
+pub(crate) struct TabStrip;
 
 /// The "+" (insert new tab) button; its menu's actions bubble to it.
 #[derive(Component)]
@@ -487,6 +487,8 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
             t.text(doc_name, t.font_xl, FontWeight::BOLD, t.foreground),
             Pickable::IGNORE,
         ));
+        // P3E.4: the open workspace's name; a click lists the workspaces to switch to
+        // (see [`crate::workspaces`]).
         bar.spawn((
             Name::new("branch-label"),
             t.text("Main", t.font_md, FontWeight::NORMAL, t.subtle_foreground),
@@ -494,6 +496,9 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
                 margin: UiRect::new(Val::Px(4.0), Val::Px(10.0), Val::Px(3.0), Val::ZERO),
                 ..default()
             },
+            bevy::ui_widgets::Button,
+            bevy::picking::hover::Hovered::default(),
+            Tooltip::new("Workspaces"),
         ));
         // Placeholder counters (link, public, versions, branches, likes).
         for (name, icon_name, count, tip) in [
@@ -732,6 +737,8 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
             ("panel-appearance", "appearance", "Appearances", true),
             ("panel-custom-tables", "custom-table", "Custom tables", true),
             ("panel-configurations", "configurations", "Configurations (not available)", false),
+            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
+            ("panel-sheet-metal", "sheet-metal-table", "Sheet metal table and flat view", true),
             ("panel-variables", "variables", "Variables", true),
             // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
             // icon: Thicken's deformed sheet stands in).
@@ -764,6 +771,9 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
+            // P3E.3b: the Analysis tools (icon-rs has no analysis icon: the curvature glyph
+            // stands in).
+            ("view-analysis", "constraint-curvature", "Analysis tools"),
             ("view-mass", "mass-properties", "Mass properties"),
         ] {
             s.spawn(ToolButton::new(name, icon_name).icon_size(18.0).tooltip(tip).build(t));
@@ -1191,6 +1201,9 @@ fn rebuild_tabs(
             })
             .collect::<Vec<_>>(),
     );
+    // P3E.3a (P3E.2 carried delta): the folder tab that holds the active tab is marked.
+    let layout = cadrs_core::tab_tree::layout(&doc.doc);
+    let holds_active = |f: cadrs_core::ElementId| new.active.is_some_and(|a| cadrs_core::tab_tree::tabs_in(&layout, f).contains(&a));
     commands.entity(strip).with_children(|s| {
         for (entry, node) in new.tabs.iter().zip(names) {
             match entry {
@@ -1209,6 +1222,7 @@ fn rebuild_tabs(
                         Tab::new(node.replacen("tab-", "tab-folder-", 1), name.clone())
                             .icon("folder")
                             .width(150.0)
+                            .marked(holds_active(*id))
                             .build(&theme),
                         crate::tab_folders::FolderTab(*id),
                         Tooltip::new(format!("{name} ({count} tabs)")),
@@ -1491,7 +1505,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }),
     ));
     tb.spawn(toolbar_separator(t));
-    let groups: [&[(&str, &str, bool, &str)]; 4] = [
+    let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
             ("extrude", "extrude", false, "Extrude (Shift+E)"),
             ("revolve", "revolve", false, "Revolve (Shift+W)"),
@@ -1518,8 +1532,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("plane", "plane", true, "Plane"),
             ("mate-connector", "mate-connector", true, "Mate connector"),
             ("variable", "variables", false, "Variable"),
-            ("custom-feature", "custom-feature", false, "Add custom features"),
         ],
+        // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
+        // general tools, before custom features).
+        &[("sheet-metal-model", "sheet-metal-model", true, "Sheet metal model")],
+        &[("custom-feature", "custom-feature", false, "Add custom features")],
         &[
             ("import", "file-import", false, "Import (a STEP or STL file)"),
             ("derived", "link", false, "Derived (parts of another Part Studio)"),
@@ -1578,6 +1595,44 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                         },
                     ),
                 ));
+                continue;
+            }
+            if *name == "sheet-metal-model" {
+                // P3I.2 (X1): the button starts a Sheet metal model; its ▾ lists the other
+                // sheet metal tools in Onshape's order.
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|world: &mut World| crate::applied::begin(world, crate::applied::AppliedKind::SheetMetal));
+                    }),
+                ));
+                tb.spawn((
+                    cadrs_ui::IconButton::new("sheet-metal-model-caret", "chevron-down").icon_size(14.0).build(t),
+                    observe(
+                        |a: On<Activate>, q: Query<(&ComputedNode, &UiGlobalTransform)>, theme: Res<Theme>, mut commands: Commands| {
+                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
+                                let s = n.inverse_scale_factor();
+                                let size = n.size() * s;
+                                // Under the Sheet metal model button, to its left.
+                                t.translation * s + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
+                            });
+                            let anchor = cadrs_ui::menu::open_context_menu(&mut commands, at, sheet_metal_menu().build(&theme));
+                            // P3I.4, P3I.5, P3I.9: the built tools start their features.
+                            commands.entity(anchor).observe(|ev: On<MenuAction>, mut commands: Commands| {
+                                let item = ev.item.to_string();
+                                commands.queue(move |world: &mut World| {
+                                    crate::sheetmetal_ui::start_tool(world, &item);
+                                });
+                            });
+                        },
+                    ),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| {
+                    n.width = Val::Px(16.0);
+                    n.height = Val::Px(32.0);
+                    n.margin = UiRect::left(Val::Px(-3.0));
+                });
                 continue;
             }
             if *name == "thicken" {
@@ -1680,6 +1735,16 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
         .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
         .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
+}
+
+/// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,
+/// greyed until they are built.
+fn sheet_metal_menu() -> Menu {
+    let mut m = Menu::new("sheet-metal-menu").min_width(220.0);
+    for (name, label, icon) in crate::sheetmetal_ui::OTHER_TOOLS {
+        m = m.item(MenuItem::new(format!("sheet-metal-menu-{}", name.trim_start_matches("sheet-metal-")), label).icon(icon).disabled(!crate::sheetmetal_ui::tool_built(name)));
+    }
+    m
 }
 
 /// The pattern button's menu (PS22.1): Mirror has its own button, as in Onshape's toolbar.
@@ -2740,12 +2805,17 @@ fn clear_toasts(mut commands: Commands) {
     commands.queue(cadrs_ui::close_toasts);
 }
 
-/// A click on a feature-list row picks it (it toggles the selection, or fills the sketch
-/// dialog's plane field).
+/// A click on a feature-list row picks it (or fills the open dialog's field). A feature row
+/// selects as Onshape's list does: a plain click makes it the selection, Ctrl+click adds or
+/// removes it, Shift+click selects every feature from the last row clicked to this one.
+#[allow(clippy::too_many_arguments)]
 fn on_pick_row_activate(
     a: On<Activate>,
     q: Query<&PickRow>,
     button: Res<cadrs_ui::menu::LastPointerButton>,
+    keys: Res<ButtonInput<KeyCode>>,
+    doc: Option<Res<ActiveDocument>>,
+    mut row_click: ResMut<crate::viewport::FeatureRowClick>,
     mut selection: ResMut<crate::viewport::Selection>,
     mut picks: MessageWriter<PickRequest>,
 ) {
@@ -2763,6 +2833,22 @@ fn on_pick_row_activate(
         // Right-clicking another feature makes it the selection (its menu acts on it alone).
         if secondary && matches!(row.0, Pick::Feature(_)) {
             selection.0.retain(|p| !matches!(p, Pick::Feature(_)));
+        }
+        if let (Pick::Feature(id), false) = (row.0, secondary) {
+            let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+            let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight, KeyCode::SuperLeft, KeyCode::SuperRight]);
+            let how = match (shift, row_click.anchor) {
+                (true, Some(Pick::Feature(from))) => {
+                    let order: Vec<FeatureId> = doc.as_ref().and_then(|d| d.active_element()).map(|el| el.features().iter().map(|f| f.id).collect()).unwrap_or_default();
+                    match (order.iter().position(|f| *f == from), order.iter().position(|f| *f == id)) {
+                        (Some(a), Some(b)) => crate::viewport::RowSelect::Range(order[a.min(b)..=a.max(b)].iter().map(|f| Pick::Feature(*f)).collect()),
+                        _ => crate::viewport::RowSelect::Only,
+                    }
+                }
+                _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
+                _ => crate::viewport::RowSelect::Only,
+            };
+            row_click.pending = Some((row.0, how));
         }
         picks.write(PickRequest(Some(row.0)));
     }
@@ -2828,6 +2914,16 @@ enum RowKind {
     Fill,
     /// P3F.4: a Variable.
     Variable,
+    /// P3I.2: a Sheet metal model.
+    SheetMetalModel,
+    /// P3I.3.
+    ModifyJoint,
+    /// P3I.9: a Sheet metal loft, Form or Tag (its icon).
+    Sm9(&'static str),
+    /// P3I.4: Flange, Hem, Make joint (their icon).
+    SheetMetal(&'static str),
+    /// P3I.5: a sheet metal feature after it (its icon).
+    SheetMetalTool(&'static str),
 }
 
 impl RowKind {
@@ -2861,6 +2957,11 @@ impl RowKind {
             RowKind::Helix => "thread",
             RowKind::Fill => "surface",
             RowKind::Variable => "variables",
+            RowKind::SheetMetalModel => "sheet-metal-model",
+            RowKind::ModifyJoint => "sheet-metal-modify-joint",
+            RowKind::Sm9(icon) => icon,
+            RowKind::SheetMetal(icon) => icon,
+            RowKind::SheetMetalTool(icon) => icon,
             _ => "sketch",
         }
     }
@@ -2949,6 +3050,15 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Helix(_) => RowKind::Helix,
                 cadrs_core::FeatureKind::Fill(_) => RowKind::Fill,
                 cadrs_core::FeatureKind::Variable(_) => RowKind::Variable,
+                cadrs_core::FeatureKind::SheetMetalModel(_) => RowKind::SheetMetalModel,
+                cadrs_core::FeatureKind::ModifyJoint(_) => RowKind::ModifyJoint,
+                k @ (cadrs_core::FeatureKind::SheetMetalLoft(_) | cadrs_core::FeatureKind::Form(_) | cadrs_core::FeatureKind::TagForm(_)) => {
+                    RowKind::Sm9(crate::sheetmetal_p3i9_ui::row_icon(k).unwrap_or("sketch"))
+                }
+                cadrs_core::FeatureKind::SheetMetal(x) => RowKind::SheetMetal(x.icon()),
+                cadrs_core::FeatureKind::SheetMetalTool(x) => RowKind::SheetMetalTool(x.icon()),
+                // P3I.6: a flat pattern extrude is an Extrude in the list.
+                cadrs_core::FeatureKind::FlatExtrude(_) => RowKind::Extrude,
                 _ if cache.hidden_sketches.contains(&f.id) => RowKind::ConsumedSketch,
                 _ if cache.preview_sketches.contains(&f.id) => RowKind::ReferencedSketch,
                 _ => RowKind::Sketch,
@@ -3115,7 +3225,8 @@ fn rebuild_feature_rows(
                 }
             }
             let edited = editing == Some(*id);
-            let consumed = *kind == RowKind::ConsumedSketch;
+            // P3I.9: a Form hidden with its eye is greyed out too (`form-12.png`).
+            let consumed = *kind == RowKind::ConsumedSketch || (*kind == RowKind::Sm9("sheet-metal-form") && !*shown);
             let fg = if inactive {
                 // Rolled back or suppressed (P3.9): grey, whatever else it is.
                 crate::feature_list::ROLLED_BACK_FG
@@ -3158,7 +3269,8 @@ fn rebuild_feature_rows(
                 // P3G.4 (DV3.5): the chevron opens what it brought in.
                 item = item.disclosure(Some(*open));
             }
-            if kind.is_sketch() {
+            // P3I.9 (SM20, `form-10.png`): a Form's eye shows or hides its sketch on the flat view.
+            if kind.is_sketch() || *kind == RowKind::Sm9("sheet-metal-form") {
                 // The eye shows or hides the sketch (PS1.5); it shows while the row is hovered.
                 let tip = if *shown { format!("Hide {name}") } else { format!("Show {name}") };
                 item = item
@@ -3286,6 +3398,26 @@ fn rebuild_feature_rows(
                     .id();
                 row.insert_children(2, &[glyph]);
             }
+            // IR5.5: a feature with a suppression variable shows it in a tag after its name
+            // ("#withHole"), grey with the row while it suppresses.
+            if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
+                let (when, colour) = if suppressed {
+                    ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
+                } else {
+                    ("currently active", t.muted_foreground)
+                };
+                let rule = label.strip_prefix("not ").map_or_else(|| format!("{label} is 0 (false)"), |l| format!("{l} is not 0 (true)"));
+                let tag = row
+                    .commands()
+                    .spawn((
+                        cadrs_ui::Tag::new(format!("{row_name}-suppression-variable"), label.clone()).color(colour).outline().build(&t),
+                        cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
+                    ))
+                    // Hoverable for its tooltip; clicks go to the row.
+                    .insert(Pickable { should_block_lower: false, is_hoverable: true })
+                    .id();
+                row.insert_children(2, &[tag]);
+            }
             let in_folder = folder.is_some();
             // P3G.4 (DV1.3, ER X2): a Derived feature's linked icon, as an instance's.
             if let Some((_, _, _, Some((icon, tip)))) = derived {
@@ -3409,6 +3541,9 @@ pub fn edit_feature(world: &mut World, id: FeatureId) {
         crate::boolean::edit_boolean(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Composite(_)) {
         crate::composite_ui::edit(world, id);
+    } else if matches!(kind, cadrs_core::FeatureKind::ModifyJoint(_)) {
+        // P3I.3.
+        crate::sheetmetal_joint_ui::edit(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Import(_)) {
         crate::import_dialog::edit_import(world, id);
     } else if matches!(kind, cadrs_core::FeatureKind::Extrude(_)) {
@@ -3457,7 +3592,9 @@ fn on_feature_context_menu(
     // P3.9: suppression, the rollback bar, folders and dependencies.
     let el = doc.as_ref().and_then(|d| d.active_element());
     let name = el.and_then(|el| el.feature(row.0)).map(|f| f.name.clone()).unwrap_or_default();
-    let suppressed = el.is_some_and(|el| el.is_suppressed(row.0));
+    // Suppressed by Suppress (Unsuppress undoes that, not a variable's suppression, IR5.5).
+    let suppressed = el.is_some_and(|el| el.suppressed().contains(&row.0));
+    let by_variable = el.and_then(|el| el.feature(row.0)).is_some_and(|f| f.suppress_by.is_some());
     let can_edit = el.is_some_and(|el| crate::feature_list::editable(el, row.0));
     let bar_at_end = el.is_none_or(|el| el.rollback_index() == el.features().len());
     let below_this = el.is_some_and(|el| el.features().iter().position(|f| f.id == row.0).is_some_and(|i| el.rollback_index() == i + 1));
@@ -3515,6 +3652,12 @@ fn on_feature_context_menu(
         // P3F.2 (P3.2): the sketch flat, for cutting machines.
         menu = menu.item(MenuItem::new("feature-export-dxf", "Export as DXF/DWG…").icon("file-export"));
     }
+    // P3I.6 (SM14.1, SM15.1): a Sheet metal model's flat pattern, until the flat view's menu (P3I.3).
+    if el.and_then(|el| el.feature(row.0)).is_some_and(|f| matches!(f.kind, cadrs_core::FeatureKind::SheetMetalModel(_))) {
+        menu = menu
+            .item(MenuItem::new("feature-flat-sketch", "New sketch on flat pattern").icon("sketch").disabled(in_dialog))
+            .item(MenuItem::new("feature-flat-export", "Export DXF/DWG of flat pattern…").icon("flat-pattern"));
+    }
     menu = menu.separator().item(MenuItem::new("feature-add-to-folder", "Add selection to folder…")).separator();
     if is_sketch {
         menu = menu.item(if shown {
@@ -3526,18 +3669,22 @@ fn on_feature_context_menu(
     menu = menu
         .item(MenuItem::new("feature-show-all-sketches", "Show all sketches"))
         .separator()
-        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(true))
+        .item(MenuItem::new("feature-section-view", "Section view…").icon("section-view").disabled(in_dialog))
         .separator()
         .item(if suppressed {
             MenuItem::new("feature-unsuppress", "Unsuppress").disabled(in_dialog)
         } else {
             MenuItem::new("feature-suppress", "Suppress").disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable or a configuration: cadrs has neither yet.
-        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu(vec![
-            MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(true).into(),
-            MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into(),
-        ]))
+        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        .item(MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu({
+            let mut items: Vec<cadrs_ui::menu::MenuEntry> = vec![MenuItem::new("feature-suppress-by-variable", "Suppress by variable…").disabled(editing || in_dialog).into()];
+            if by_variable {
+                items.push(MenuItem::new("feature-remove-suppression-variable", "Remove suppression variable").disabled(in_dialog).into());
+            }
+            items.push(MenuItem::new("feature-suppress-by-configuration", "Suppress by configuration…").disabled(true).into());
+            items
+        }))
         .separator()
         .item(MenuItem::new("feature-add-comment", "Add comment").icon("comments").disabled(true))
         .separator()
@@ -3580,6 +3727,17 @@ fn on_feature_menu_action(
         "feature-export-dxf" => commands.queue(move |world: &mut World| {
             crate::export_dialog::open(world, crate::export_dialog::ExportSource::Sketch(id))
         }),
+        // P3I.6.
+        "feature-flat-sketch" => commands.queue(move |world: &mut World| crate::flat_ui::begin_flat_sketch(world, id, 0)),
+        "feature-flat-export" => commands.queue(move |world: &mut World| match crate::flat_export_dialog::first_part(world, id) {
+            Some(p) => crate::flat_export_dialog::open(world, p),
+            None => {
+                let theme = world.resource::<cadrs_ui::Theme>().clone();
+                let mut commands = world.commands();
+                cadrs_ui::show_notification(&mut commands, &theme, cadrs_ui::Notification::warning("The sheet metal model has no flat pattern part").name("flat-export-toast"));
+                world.flush();
+            }
+        }),
         "feature-show-dimensions" | "feature-hide-dimensions" => {
             commands.queue(move |world: &mut World| crate::feature_menu::toggle_dimensions(world, id))
         }
@@ -3587,6 +3745,8 @@ fn on_feature_menu_action(
         "feature-hide" => commands.queue(move |world: &mut World| crate::feature_menu::set_sketch_visible(world, id, false)),
         "feature-show-all-sketches" => commands.queue(crate::feature_menu::show_all_sketches),
         "feature-zoom-to" => commands.queue(move |world: &mut World| crate::feature_menu::zoom_to_feature(world, id)),
+        // P3E.3a (IR5.5): a section by the feature's plane (a plane feature, a sketch).
+        "feature-section-view" => commands.queue(move |world: &mut World| crate::section_view::open_for_feature(world, id)),
         "feature-rename" => {
             commands.queue(move |world: &mut World| rename_feature(world, id));
         }
@@ -3619,6 +3779,9 @@ fn on_feature_menu_action(
             }
         }),
         "feature-suppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, true)),
+        // IR5.5: Dynamic suppression ▸ Suppress by variable.
+        "feature-suppress-by-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::open(world, id)),
+        "feature-remove-suppression-variable" => commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id)),
         "feature-unsuppress" => commands.queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),
         "feature-add-to-folder" => commands.queue(move |world: &mut World| crate::feature_folders::add_selection_to_folder(world, id)),
         "feature-roll-here" => commands.queue(move |world: &mut World| crate::feature_list::roll_to(world, Some(id))),

@@ -17,6 +17,13 @@
 //!   so changing `#piston_d` in the Variable table is one undo step that updates every use.
 //! - **Uses.** [`uses`] lists the variables a feature's expressions name (the feature list's
 //!   `:variable` filter, Show dependencies).
+//! - **Suppress by variable** (IR5.5). A feature can carry a [`SuppressByVariable`]: an
+//!   expression (`#withHole`) evaluated with the variables above the feature. It is suppressed
+//!   while the value is 0 (false), or while it isn't when inverted. [`refresh`] skips it like a
+//!   suppressed feature (so a suppressed Variable defines nothing below it),
+//!   [`suppressed_by_variables`] gives the features left out of the rebuild
+//!   ([`crate::document::Element::active_features`]), and [`check`] fails a feature whose
+//!   expression names a variable that isn't defined above it (it then builds, with the error).
 
 use cadrs_sketch::units::{self, ParseError, Quantity, Units, VarValue};
 use cadrs_sketch::SketchOp;
@@ -24,6 +31,91 @@ use serde::{Deserialize, Serialize};
 
 use crate::document::{Feature, FeatureKind};
 use crate::ids::FeatureId;
+
+/// A feature's suppression variable (IR5.5, the feature menu's Dynamic suppression ▸ Suppress
+/// by variable…).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SuppressByVariable {
+    /// The expression, as picked: `#withHole`.
+    pub expr: String,
+    /// Suppressed while the value is non-zero (true) instead of while it is 0 (false).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
+}
+
+impl SuppressByVariable {
+    /// Suppression by `#name` (suppressed while it is 0).
+    pub fn variable(name: &str) -> Self {
+        Self { expr: format!("#{name}"), invert: false }
+    }
+
+    /// Whether it suppresses its feature with the variables above it (`env`); why not, when the
+    /// expression can't be evaluated there (`later`: the variables defined below the feature).
+    pub fn suppresses(&self, env: &[(String, VarValue)], later: &[String]) -> Result<bool, String> {
+        for n in units::variable_names(&self.expr) {
+            if !env.iter().any(|(k, _)| *k == n) {
+                return Err(if later.contains(&n) {
+                    format!("Suppression: #{n} is used before it is defined; move its Variable above this feature")
+                } else {
+                    format!("Suppression: #{n} is not defined")
+                });
+            }
+        }
+        // Whether a bare number is in mm or inches doesn't change whether it is 0.
+        let v = units::eval_any(&self.expr, 1.0, &env).map_err(|e| format!("Suppression: {e}"))?;
+        Ok((v.value.abs() < 1e-9) != self.invert)
+    }
+
+    /// How the feature list shows it: "#withHole", "not #withHole" when inverted.
+    pub fn label(&self) -> String {
+        if self.invert { format!("not {}", self.expr.trim()) } else { self.expr.trim().to_string() }
+    }
+}
+
+/// The features (of a whole list, in order) their suppression variable suppresses (IR5.5),
+/// with the Variables' values as last evaluated; `suppressed` are the ones suppressed by
+/// Suppress. One whose expression can't be evaluated isn't suppressed ([`check`] fails it).
+pub fn suppressed_by_variables(features: &[Feature], suppressed: &[FeatureId]) -> Vec<FeatureId> {
+    let mut out = Vec::new();
+    if features.iter().all(|f| f.suppress_by.is_none()) {
+        return out;
+    }
+    let mut env: Vec<(String, VarValue)> = Vec::new();
+    for f in features {
+        if suppressed.contains(&f.id) {
+            continue;
+        }
+        if let Some(rule) = &f.suppress_by
+            && rule.suppresses(&env, &[]) == Ok(true)
+        {
+            out.push(f.id);
+            continue;
+        }
+        if let FeatureKind::Variable(v) = &f.kind
+            && v.problem().is_none()
+        {
+            env.push((v.name.clone(), v.var_value()));
+        }
+    }
+    out
+}
+
+/// The variables a feature's suppression variable can name (IR5.5's picker): those defined
+/// above it among `features` (the ones that build), with their values.
+pub fn in_scope(features: &[Feature], feature: FeatureId, units: &Units) -> Vec<(String, VarValue)> {
+    let end = features.iter().position(|f| f.id == feature).unwrap_or(features.len());
+    let mut env = defined(&features[..end], units);
+    // The last definition of a name wins: list each name once.
+    let mut seen: Vec<String> = Vec::new();
+    env.reverse();
+    env.retain(|(n, _)| {
+        let first = !seen.contains(n);
+        seen.push(n.clone());
+        first
+    });
+    env.reverse();
+    env
+}
 
 /// A Variable's type (Onshape's Length, Angle, Number and Any).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -309,7 +401,99 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
             s("Radius", &mut x.radius_expr, &mut x.radius, L);
             s("Start angle", &mut x.start_angle_expr, &mut x.start_angle, A);
         }
-        FeatureKind::Variable(_)
+        FeatureKind::SheetMetalModel(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Bend allowance", &mut e.bend_allowance, &mut p.bend_allowance, L);
+            s("Bend deduction", &mut e.bend_deduction, &mut p.bend_deduction, L);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+            s("Corner relief scale", &mut e.corner_relief_scale, &mut p.corner_relief.scale, C);
+            s("Corner relief size", &mut e.corner_relief_size, &mut p.corner_relief.size, L);
+            s("Bend relief depth scale", &mut e.bend_relief_depth_scale, &mut p.bend_relief.depth_scale, C);
+            s("Bend relief width scale", &mut e.bend_relief_width_scale, &mut p.bend_relief.width_scale, C);
+            s("Clearance from input", &mut x.clearance_expr, &mut x.clearance, L);
+            s("Depth", &mut x.depth_expr, &mut x.depth, L);
+            if let Some(c) = &mut x.second {
+                s("Second depth", &mut c.depth_expr, &mut c.depth, L);
+            }
+        }
+        FeatureKind::ModifyJoint(x) => {
+            s("Bend radius", &mut x.radius_expr, &mut x.radius, L);
+            let q = if x.calc == cadrs_sheetmetal::BendCalc::KFactor { C } else { L };
+            s(x.calc.label(), &mut x.value_expr, &mut x.value, q);
+        }
+        // P3I.9.
+        FeatureKind::SheetMetalLoft(x) => {
+            let e = &mut x.exprs;
+            let p = &mut x.params;
+            s("Chordal tolerance", &mut x.chordal_tolerance_expr, &mut x.chordal_tolerance, L);
+            s("Thickness", &mut e.thickness, &mut p.thickness, L);
+            s("Bend radius", &mut e.bend_radius, &mut p.bend_radius, L);
+            s("Default bend K Factor", &mut e.k_factor, &mut p.k_factor, C);
+            s("Rolled K Factor", &mut e.rolled_k_factor, &mut p.rolled_k_factor, C);
+            s("Minimal gap", &mut e.minimal_gap, &mut p.minimal_gap, L);
+        }
+        FeatureKind::Form(x) => {
+            for v in &mut x.variables {
+                let q = if v.angle { Quantity::Angle } else { L };
+                let label: &'static str = match v.name.as_str() {
+                    "Length" => "Length",
+                    "Width" => "Width",
+                    "Height" => "Height",
+                    "Diameter" => "Diameter",
+                    "Angle" => "Angle",
+                    _ => "Form variable",
+                };
+                s(label, &mut v.expr, &mut v.value, q);
+            }
+        }
+        // P3I.4.
+        FeatureKind::SheetMetal(x) => {
+            for (label, expr, value, angle) in x.exprs_mut() {
+                s(label, expr, value, if angle { A } else { L });
+            }
+        }
+        // P3I.5: the sheet metal features after the model.
+        FeatureKind::SheetMetalTool(t) => {
+            use crate::sheetmetal_tools::SheetMetalTool as T;
+            let bend = |b: &mut crate::sheetmetal_tools::BendFeature, s: &mut dyn FnMut(&'static str, &mut String, &mut f64, Quantity)| {
+                s("Bend angle", &mut b.angle_expr, &mut b.angle, A);
+                s("Bend radius", &mut b.radius_expr, &mut b.radius, L);
+                s("K Factor", &mut b.k_expr, &mut b.k_factor, C);
+            };
+            match t {
+                T::Bend(b) => bend(b, &mut s),
+                T::Jog(j) => {
+                    bend(&mut j.bend, &mut s);
+                    s("Jog offset", &mut j.offset_expr, &mut j.offset, L);
+                    s("Offset distance", &mut j.up_to_offset_expr, &mut j.up_to_offset, L);
+                    s("Thickness factor", &mut j.factor_expr, &mut j.factor, C);
+                }
+                T::Tab(x) => s("Subtraction offset", &mut x.offset_expr, &mut x.offset, L),
+                T::Corner(x) => {
+                    s("Corner relief scale", &mut x.scale_expr, &mut x.relief.scale, C);
+                    s("Corner relief size", &mut x.size_expr, &mut x.relief.size, L);
+                }
+                T::BendRelief(x) => {
+                    s("Bend relief depth scale", &mut x.depth_scale_expr, &mut x.relief.depth_scale, C);
+                    s("Bend relief width scale", &mut x.width_scale_expr, &mut x.relief.width_scale, C);
+                    s("Bend relief depth", &mut x.depth_expr, &mut x.relief.depth, L);
+                }
+                T::CornerBreak(x) => {
+                    s("Radius", &mut x.size_expr, &mut x.size, L);
+                    s("Distance", &mut x.distance_expr, &mut x.distance, L);
+                    s("Distance 2", &mut x.distance2_expr, &mut x.distance2, L);
+                    s("Angle", &mut x.angle_expr, &mut x.angle, A);
+                }
+                T::Finish(_) => {}
+            }
+        }
+        FeatureKind::TagForm(_)
+        | FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
         | FeatureKind::Sketch(_)
         | FeatureKind::DeletePart(_)
@@ -318,7 +502,8 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         | FeatureKind::Mirror(_)
         | FeatureKind::Import(_)
         | FeatureKind::Derived(_)
-        | FeatureKind::Composite(_) => {}
+        | FeatureKind::Composite(_)
+        | FeatureKind::FlatExtrude(_) => {}
     }
 }
 
@@ -423,6 +608,13 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
                 _ => None,
             })
             .collect();
+        // IR5.5: a suppression variable that isn't defined above (it would have left the
+        // feature out of `features` if it suppressed it).
+        if let Some(rule) = &f.suppress_by
+            && let Err(w) = rule.suppresses(&env, &later)
+        {
+            out.push((f.id, w));
+        }
         match &f.kind {
             FeatureKind::Variable(v) => {
                 if let Some(p) = v.problem() {
@@ -499,6 +691,12 @@ pub fn refresh(features: &mut [Feature], suppressed: &[FeatureId], units: &Units
     let mut env: Vec<(String, VarValue)> = Vec::new();
     for f in features.iter_mut() {
         if suppressed.contains(&f.id) {
+            continue;
+        }
+        // IR5.5: suppressed by its variable (with the values just evaluated above it).
+        if let Some(rule) = &f.suppress_by
+            && rule.suppresses(&env, &[]) == Ok(true)
+        {
             continue;
         }
         match &mut f.kind {

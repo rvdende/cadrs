@@ -35,7 +35,7 @@ pub struct ManagedContextPlugin;
 
 impl Plugin for ManagedContextPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (sync_origin_dialog, follow_parts, sync_insert_dialog).chain().after(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
+        app.add_systems(Update, (origin_picks, sync_origin_dialog, follow_parts, sync_insert_dialog).chain().after(crate::parts::PartsSet).run_if(in_state(AppState::Document)))
             .add_systems(OnExit(AppState::Document), |mut commands: Commands| {
                 commands.remove_resource::<OriginSession>();
                 commands.remove_resource::<InsertSession>();
@@ -64,33 +64,81 @@ pub fn on_display_states_item(world: &mut World, item: &str) {
 // ---------------------------------------------------------------------------------------------
 // Origin of new Part Studio
 
-/// The open Origin of new Part Studio dialog: the assembly it creates the studio in.
+/// The open Origin of new Part Studio dialog: the assembly it creates the studio in, and the
+/// origin picked (MC2.9): the assembly Origin, or a mate connector (explicit, or the implicit
+/// point of a face, edge or vertex clicked), as a frame in the assembly and its label.
 #[derive(Resource, Debug, Clone)]
 pub struct OriginSession {
     pub assembly: ElementId,
+    pub origin: cadrs_core::assembly::Pose,
+    pub label: String,
 }
 
 #[derive(Component)]
-struct OriginDialog;
+struct OriginDialog(String);
 
 /// Opens the Origin of new Part Studio dialog in the active assembly.
 pub fn open_origin_dialog(world: &mut World) {
     let Some(assembly) = world.get_resource::<ActiveDocument>().and_then(super::active_assembly) else { return };
-    world.insert_resource(OriginSession { assembly });
+    world.insert_resource(OriginSession { assembly, origin: cadrs_core::assembly::Pose::IDENTITY, label: "Origin".into() });
     world.resource_mut::<Selection>().0 = vec![Pick::Origin];
 }
 
-fn origin_dialog(t: &Theme) -> impl Bundle {
+/// A click while the dialog is open picks the origin: an explicit mate connector near the
+/// pointer, the Origin, or the implicit mate connector of the clicked entity nearest the pointer.
+#[allow(clippy::too_many_arguments)]
+fn origin_picks(
+    mut picks: MessageReader<crate::viewport::PickRequest>,
+    session: Option<ResMut<OriginSession>>,
+    doc: Option<Res<ActiveDocument>>,
+    mut parts: ResMut<super::AssemblyParts>,
+    view: Res<crate::viewport::ViewportView>,
+    rect: Res<crate::viewport::ViewportRect>,
+    vdrag: Res<crate::viewport::ViewportDrag>,
+    cache: Res<PartCache>,
+    shown: Res<crate::pattern::MateConnectorsShown>,
+) {
+    let (Some(mut s), Some(doc)) = (session, doc) else {
+        picks.clear();
+        return;
+    };
+    for p in picks.read() {
+        let at = rect.offset(vdrag.pointer());
+        let explicit = shown
+            .0
+            .then(|| super::connector_tool::nearest_explicit(&super::connector_tool::explicit_connectors(&doc, &mut parts, &cache), &view.view, at))
+            .flatten();
+        let picked = if let Some((c, frame)) = explicit {
+            Some((super::connector_tool::connector_label(&doc, &cache, &c), frame.pose()))
+        } else if p.0 == Some(Pick::Origin) {
+            Some(("Origin".to_string(), cadrs_core::assembly::Pose::IDENTITY))
+        } else if let Some((instance, entity)) = p.0.as_ref().and_then(super::connectors::entity_of)
+            && let Some(pts) = super::connectors::entity_points(&doc, &mut parts, instance, entity)
+            && let Some(best) = pts.nearest(&view.view, at)
+        {
+            let c = cadrs_core::assembly::connector::MateConnector::implicit(instance, &best);
+            Some((super::connector_tool::connector_label(&doc, &cache, &c), pts.world(&best).pose()))
+        } else {
+            None
+        };
+        if let Some((label, pose)) = picked {
+            s.label = label;
+            s.origin = pose;
+        }
+    }
+}
+
+fn origin_dialog(t: &Theme, label: String) -> impl Bundle {
     let tb = t.clone();
     (
-        OriginDialog,
+        OriginDialog(label.clone()),
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("origin-dialog")
             .title("Origin of new Part Studio")
             .valid(true)
             .width(230.0)
             .body(move |b| {
-                b.spawn(SelectionList::new("origin-dialog-field").placeholder("Select origin/mate connector").items(vec!["Origin".to_string()]).active(true).build(&tb))
+                b.spawn(SelectionList::new("origin-dialog-field").placeholder("Select origin/mate connector").items(vec![label]).active(true).build(&tb))
                     .entry::<Node>()
                     .and_modify(|mut n| {
                         n.flex_grow = 0.0;
@@ -101,12 +149,18 @@ fn origin_dialog(t: &Theme) -> impl Bundle {
     )
 }
 
-fn sync_origin_dialog(session: Option<Res<OriginSession>>, theme: Res<Theme>, q: Query<Entity, With<OriginDialog>>, q_area: Query<Entity, With<ViewportArea>>, mut commands: Commands) {
+fn sync_origin_dialog(session: Option<Res<OriginSession>>, theme: Res<Theme>, q: Query<(Entity, &OriginDialog)>, q_area: Query<Entity, With<ViewportArea>>, mut commands: Commands) {
     match (session, q.iter().next()) {
-        (None, Some(e)) => commands.entity(e).try_despawn(),
-        (Some(_), None) => {
+        (None, Some((e, _))) => commands.entity(e).try_despawn(),
+        (Some(s), have) => {
+            if have.is_some_and(|(_, d)| d.0 == s.label) {
+                return;
+            }
+            if let Some((e, _)) = have {
+                commands.entity(e).try_despawn();
+            }
             let Some(area) = q_area.iter().next() else { return };
-            let d = commands.spawn(origin_dialog(&theme)).id();
+            let d = commands.spawn(origin_dialog(&theme, s.label.clone())).id();
             commands.entity(area).add_child(d);
         }
         _ => {}
@@ -117,7 +171,8 @@ fn sync_origin_dialog(session: Option<Res<OriginSession>>, theme: Res<Theme>, q:
 pub fn accept_origin(world: &mut World) {
     let Some(s) = world.remove_resource::<OriginSession>() else { return };
     let studio = ElementId::new();
-    if super::run(world, &CreateStudioInContext { assembly: s.assembly, studio, name: None }) {
+    if super::run(world, &CreateStudioInContext { assembly: s.assembly, studio, name: None, origin: s.origin }) {
+        world.resource_mut::<super::in_context::ActiveContexts>().0.insert(studio, 0);
         world.resource_mut::<ActiveDocument>().set_active(studio);
         world.resource_mut::<Selection>().0.clear();
     }
@@ -274,10 +329,28 @@ fn on_cancel(ev: On<FeatureDialogCancel>, q_origin: Query<(), With<OriginDialog>
 // ---------------------------------------------------------------------------------------------
 // Update context from the assembly
 
-/// The Part Studio of `instance` whose context was made in `assembly` (for the instance menu's
-/// Update context ▸), and its name.
-pub fn context_studio_of(doc: &ActiveDocument, assembly: ElementId, instance: InstanceId) -> Option<(ElementId, String)> {
-    let studio = cadrs_core::assembly::context::studio_of(&doc.doc, assembly, instance)?;
-    let el = doc.doc.element(studio)?;
-    (el.context.as_ref()?.assembly == assembly).then(|| (studio, el.name.clone()))
+/// A context of an instance's Part Studio made in an assembly, for the instance menu.
+#[derive(Debug, Clone)]
+pub struct InstanceContext {
+    pub id: cadrs_core::assembly::context::ContextNo,
+    pub label: String,
+    /// The instance is its primary instance.
+    pub primary: bool,
+    pub stale: bool,
+    pub no_primary: bool,
+}
+
+/// The contexts of `instance`'s Part Studio made in `assembly` (MC2.14, MC4.6, MC3.3).
+pub fn contexts_of(doc: &ActiveDocument, assembly: ElementId, instance: InstanceId) -> Vec<InstanceContext> {
+    use cadrs_core::assembly::context::{self, ContextStatus};
+    let Some(studio) = context::studio_of(&doc.doc, assembly, instance) else { return Vec::new() };
+    let Some(el) = doc.doc.element(studio) else { return Vec::new() };
+    el.contexts
+        .iter()
+        .filter(|c| c.assembly == assembly && c.document.is_none())
+        .map(|c| {
+            let status = context::status(&doc.doc, studio, c);
+            InstanceContext { id: c.id, label: c.label(), primary: c.instance == instance, stale: status == ContextStatus::OutOfDate, no_primary: status == ContextStatus::NoPrimary }
+        })
+        .collect()
 }

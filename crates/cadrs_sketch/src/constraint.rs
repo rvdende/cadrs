@@ -487,7 +487,8 @@ fn classify(s: &Sketch, e: crate::SketchEntity) -> Option<Pick> {
         E::Origin => Pick::Point(PointRef::Origin),
         E::Curve(c) => match s.curves.get(c)?.kind {
             CurveKind::Line { .. } => Pick::Line(CurveRef::Curve(c)),
-            CurveKind::Ellipse { .. } => Pick::Ellipse(CurveRef::Curve(c)),
+            // An elliptical arc constrains as its ellipse.
+            CurveKind::Ellipse { .. } | CurveKind::EllipseArc { .. } => Pick::Ellipse(CurveRef::Curve(c)),
             CurveKind::Bezier { .. } => Pick::Bezier(CurveRef::Curve(c)),
             _ => Pick::Round(CurveRef::Curve(c)),
         },
