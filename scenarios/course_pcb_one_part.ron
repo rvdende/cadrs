@@ -8,7 +8,9 @@
 // 07 the Composite part dialog with the 30 copies (box again) and Closed checked;
 // 08 accepted: one part "Composite part 1" in the Parts list; 08b its row double-clicked: the
 //    dialog again (the studio before it, its members selected), Esc;
-// 09 Insert and go to Assembly with it; 10 the assembly: one more instance, "Composite part 1 <1>".
+// 09 a separate parent assembly (Assembly 1, the enclosure's stand-in): Insert with the composite
+//    part armed; 10 accepted: Instances (1) "Composite part 1 <1>" (composite part icon), its
+//    row clicked so it is selected in the view, and the Bill of materials with one row for it.
 Scenario(
     start: Some("document"),
     steps: [
@@ -98,19 +100,30 @@ Scenario(
         Screenshot("08b-edit-composite-part"),
         Key("Escape"),
         ExpectText("part-row-composite-part-1", "Composite part 1"),
-        // Insert and go to Assembly: one instance.
-        Click(ui("part-row-composite-part-1")),
-        Click(ui("context-go")),
-        WaitFor("context-go-menu-insert"),
-        Click(ui("context-go-menu-insert")),
-        WaitFor("insert-go-dialog"),
-        MoveTo(1300, 250),
+        // The one part goes into a separate parent assembly (the enclosure's stand-in, Assembly
+        // 1): Insert, the composite part, ✓ (its Part Studio position).
+        Click(ui("tab-assembly-1")),
+        Click(ui("insert")),
+        WaitFor("insert-dialog"),
+        Click(ui("insert-search-field")),
+        Type("Composite"),
+        Click(ui("insert-part-composite-part-1")),
+        // The picked part follows the pointer: shown in the free middle of the view (clear of
+        // the view cube).
+        MoveTo(930, 600),
         Wait(3),
-        Screenshot("09-insert-and-go-to-assembly"),
-        Click(ui("insert-go-dialog-accept")),
+        Screenshot("09-insert-composite-into-assembly-1"),
+        Click(ui("insert-dialog-accept")),
+        // Its row clicked: the one instance selected (highlighted in the view); the BOM has one
+        // row for it.
+        Click(ui("instance-row-1")),
+        Click(ui("assembly-bom")),
+        WaitFor("bom-panel"),
+        Key("Shift+7"),
         Key("F"),
+        ExpectText("instance-row-1", "Composite part 1"),
         MoveTo(1300, 250),
         Wait(3),
-        Screenshot("10-assembly-with-one-part"),
+        Screenshot("10-one-instance-and-bom-row"),
     ],
 )

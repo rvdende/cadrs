@@ -5,16 +5,20 @@
 // `ex3-step14-exported-emn-placement.png`, `v7-modify-placement-poster.png`.
 // 01 (steps 3–4) the board imported into a PCB Studio; 02 (step 5) Create assembly, defaults:
 //    the new tabs;
-// 03 (step 6) the "secondary board" Part Studio, Top view: Sketch 2 on the board's top face, the
-//    0.5 × 0.375 in corner profile with R0.25 at the bottom-left corner (dimensions in mm,
-//    the document's units: 12.7, 9.525, R6.35);
+// 03a (step 6) the "secondary board" Part Studio, Top view: Sketch 2 on the board's top face, the
+//    Rectangle tool's first corner snapped to the board's bottom-left corner, the second being
+//    placed; 03b the Dimension tool: the bottom side typed 0.5 in, the left side "0.375 in" being
+//    typed; 03c the sketch Fillet at the inner corner, "0.25 in" typed; 03d the finished 0.5 ×
+//    0.375 in corner profile with R0.25 (dimensions in mm, the document's units: 12.7, 9.525,
+//    R6.35);
 // 04 (step 7) Extrude: Blind, "0.125 in", New; 05 the part renamed "Keep-out";
 // 06 (step 8) the "secondary board" assembly, Insert: Keep-out picked; 07 ✓ inside the dialog:
 //    it keeps its Part Studio position, over the uBGA;
 // 08 (step 9) Top view, the uBGA clicked (its top face: "Area: 52.540 mm²", 7.4 × 7.1), the
 //    triad's Y arrow dragged and "1 in" typed; 09 applied: the uBGA 25.4 mm further along Y;
-// 10 (step 10) Group, a box dragged over the board (window: the 20 components); 11 grouped, the
-//    board fixed;
+// 10 (step 10) Group, a box dragged over the board (window): the 20 components it will select
+//    pre-highlighted; 10b released: they fill the Group's Instances; 11 grouped, the board fixed
+//    ("Group 1" under Mate Features in normal text);
 // 12 (step 11) in PCB Studio, Sync: the dialog on the "secondary board (Assembly)", Top Plane;
 // 13 (step 12) the board updated in place: the uBGA moved, the keep-out (dark) at the corner;
 // 14 (steps 13–14) Export IDF 3.0 → secondary board.zip → secondary board.emn, Find
@@ -41,17 +45,60 @@ Scenario(
         Click(ui("pcb-create-ok")),
         WaitFor("pcb-create-toast"),
         Screenshot("02-created"),
-        // Step 6: the keep-out sketch on the board's top face.
+        // Step 6: the keep-out sketch on the board's top face, drawn with the sketch tools.
         Click(ui("tab-secondary-board")),
         Key("Shift+5"),
         Key("F"),
-        Custom("pcb-ex3-keepout-sketch"),
-        Wait(30),
-        DoubleClick(ui("feature-sketch-2")),
+        Click(ui("sketch")),
         WaitFor("sketch-dialog"),
+        // The board's top face as the sketch plane.
+        Click(xyz(20, 0, 0.84)),
+        Scroll(xyz(12, -8, 0.84), 6),
+        Wait(20),
+        // A rectangle from the board's bottom-left corner (the first click snaps to it).
+        Key("G"),
+        Click(xyz(-5.20972, -22.74338, 0.84)),
+        Hover(xyz(4, -18, 0.84)),
+        Wait(2),
+        Hover(xyz(8.4, -12.6, 0.84)),
+        Wait(3),
+        Screenshot("03a-rectangle-from-board-corner"),
+        Click(xyz(8.4, -12.6, 0.84)),
+        // Its quick-dimension boxes closed (the Dimension tool sets the sizes), then the tool.
+        Key("Escape"),
+        Key("Escape"),
+        // Dimension tool, corner to corner (the sides lie on the board's edges, which the first
+        // corner's snap brought into the sketch): the bottom side 0.5 in, the left side 0.375 in.
+        Key("D"),
+        Click(xyz(-5.20972, -22.74338, 0.84)),
+        Click(xyz(8.3612, -22.74338, 0.84)),
+        Hover(xyz(1.5, -26.5, 0.84)),
+        Wait(2),
+        Click(xyz(1.5, -26.5, 0.84)),
+        Key("Ctrl+A"),
+        Type("0.5 in"),
+        Key("Enter"),
+        Click(xyz(-5.20972, -22.74338, 0.84)),
+        Click(xyz(-5.20972, -12.64632, 0.84)),
+        Hover(xyz(-9, -17.5, 0.84)),
+        Wait(2),
+        Click(xyz(-9, -17.5, 0.84)),
+        Key("Ctrl+A"),
+        Type("0.375 in"),
+        Screenshot("03b-dimension-0-375-in"),
+        Key("Enter"),
+        Key("Escape"),
+        // Sketch fillet R0.25 in at the profile's inner corner.
+        Key("Shift+F"),
+        Click(xyz(7.49028, -13.21838, 0.84)),
+        Key("Ctrl+A"),
+        Type("0.25 in"),
+        Screenshot("03c-fillet-0-25-in"),
+        Key("Enter"),
+        Key("Escape"),
         MoveTo(1450, 880),
         Wait(3),
-        Screenshot("03-keepout-sketch"),
+        Screenshot("03d-keepout-sketch"),
         Click(ui("sketch-dialog-accept")),
         // Step 7: Extrude Blind 0.125 in, New.
         Key("Shift+E"),
@@ -66,6 +113,7 @@ Scenario(
         Screenshot("04-extrude-0-125-in-new"),
         Key("Enter"),
         Key("Shift+7"),
+        Key("F"),
         RightClick(ui("part-row-part-2")),
         WaitFor("part-rename"),
         Click(ui("part-rename")),
@@ -112,11 +160,12 @@ Scenario(
         Wait(2),
         Hover(xyz(45.2, -22.4, 2)),
         Wait(5),
+        Screenshot("10-group-box-select"),
         Release,
         Wait(10),
         MoveTo(1450, 880),
         Wait(3),
-        Screenshot("10-group-box-select"),
+        Screenshot("10b-components-in-group"),
         Click(ui("group-dialog-accept")),
         RightClick(ui("instance-row-1")),
         WaitFor("asm-fix"),
@@ -131,6 +180,7 @@ Scenario(
         Click(ui("pcb-sync-ok")),
         WaitFor("pcb-sync-toast"),
         Key("Shift+5"),
+        Key("F"),
         MoveTo(1100, 900),
         Wait(3),
         Screenshot("13-synced-moved-and-keep-out"),
@@ -144,7 +194,11 @@ Scenario(
         Click(ui("pcb-emn-find-field")),
         Type("ubga48_7"),
         Key("Enter"),
-        ExpectText("pcb-emn-scroll", "uBGA48_7.4X7.1 7401048 X2 4.064182376174947 8.9"),
+        ExpectText("pcb-emn-scroll", "4.064182376174947 8.9 0 90 TOP PLACED"),
+        // The keep-out (IDF 3.0): its record, height 0.125 in, and the R0.25 in corner's 90° arc.
+        ExpectText("pcb-emn-scroll", ".PLACE_KEEPOUT MCAD"),
+        ExpectText("pcb-emn-scroll", "TOP 3.175"),
+        ExpectText("pcb-emn-scroll", "0 1.14028 -13.21838 90"),
         Screenshot("14-exported-emn-ubga48"),
     ],
 )

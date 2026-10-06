@@ -107,7 +107,12 @@ pub(super) fn box_select(
     ),
     mut state: ResMut<AssemblyBox>,
     mut selection: ResMut<Selection>,
-    (composite, applied, mut commands): (Option<Res<crate::composite_ui::CompositeSession>>, Option<Res<crate::applied::AppliedSession>>, Commands),
+    (composite, applied, mut pre, mut commands): (
+        Option<Res<crate::composite_ui::CompositeSession>>,
+        Option<Res<crate::applied::AppliedSession>>,
+        ResMut<crate::parts::HoverParts>,
+        Commands,
+    ),
 ) {
     let in_assembly = doc.as_deref().is_some_and(|d| super::active_assembly(d).is_some());
     // P3H.6: in a Part Studio, the Composite part dialog and the Transform's Parts to transform
@@ -117,6 +122,9 @@ pub(super) fn box_select(
     if !in_assembly && !studio_box {
         inputs.clear();
         *state = AssemblyBox::default();
+        if !pre.2.is_empty() {
+            pre.2.clear();
+        }
         return;
     }
     let blocked = busy.0.is_some() || busy.1.is_some() || busy.2.is_some() || busy.3.is_some() || busy.4.editing();
@@ -143,6 +151,13 @@ pub(super) fn box_select(
                     state.current = Some(pos);
                     if !state.active && s.distance(pos) >= 4.0 && !busy.5.dragging() {
                         state.active = true;
+                    }
+                    // P3H.6 judge: what the box will select is pre-highlighted while it is dragged.
+                    if state.active {
+                        let want = preview_parts(&cache, &view.view, rect.offset(s), rect.offset(pos), studio_box);
+                        if pre.2 != want {
+                            pre.2 = want;
+                        }
                     }
                 }
             }
@@ -181,6 +196,19 @@ pub(super) fn box_select(
             _ => {}
         }
     }
+    if !state.active && !pre.2.is_empty() {
+        pre.2.clear();
+    }
+}
+
+/// The parts a box will select, for its pre-highlight: in an assembly every part of the
+/// instances it selects, in a Part Studio the parts themselves.
+fn preview_parts(cache: &PartCache, view: &crate::camera::ViewState, a: Vec2, b: Vec2, studio: bool) -> Vec<cadrs_core::PartId> {
+    if studio {
+        return parts_in_box(cache, view, a, b);
+    }
+    let found = instances_in_box(cache, view, a, b);
+    cache.shown().filter(|p| found.contains(&InstanceId::of_part(p.id))).map(|p| p.id).collect()
 }
 
 /// Draws the box: window a blue outline over a blue fill, crossing a dashed yellow outline over

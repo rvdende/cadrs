@@ -29,7 +29,8 @@
 //! scenario needs no `Wait`s between steps; `Wait(n)` is only for what runs on its own time
 //! (a tooltip's delay, an animation caught half-way). A step that waits longer than the
 //! scenario's `timeout` (seconds, default 30; `SetTimeout(s)` changes it from there on) fails
-//! the scenario.
+//! the scenario. `WaitFor` and `ScreenshotNow` don't wait to settle (for a state that only
+//! lasts while the app is busy).
 
 use std::path::{Path, PathBuf};
 
@@ -166,6 +167,10 @@ pub enum Step {
     AssertEnabled(String),
     /// Save the frame as `NN-label.png` (the label should carry its own number).
     Screenshot(String),
+    /// Save the frame as it is now, without waiting for the app to settle or for animations to
+    /// finish: a state that only lasts while the app is busy (the loading cover, after
+    /// `WaitFor("document-loading")`).
+    ScreenshotNow(String),
     /// Send a named set-up command to the app (see `cadrs_ui::ScriptCommand`), e.g.
     /// `Custom("populate-sketch 500")`.
     Custom(String),

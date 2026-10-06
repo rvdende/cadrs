@@ -2216,3 +2216,9 @@ fn golden_surfacing_helix() {
 fn golden_surfacing_thicken() {
     run_scenario("surfacing_thicken");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_course_pcb_component_documents() {
+    run_scenario("course_pcb_component_documents");
+}

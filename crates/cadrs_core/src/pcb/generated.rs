@@ -8,6 +8,10 @@
 //! later Sync (PCB5.5, PCB9.6) reads the instance back as that placement without relying on part
 //! names. The assembly generated from a board is also that board's sync target: syncing it
 //! updates the board in place rather than adding another one.
+//!
+//! P3H.7: the components are instances of **component documents** referenced by version
+//! ([`super::component_docs`]); the command carries their frozen copies ([`CreatePcbAssembly::links`])
+//! and the generation records which documents they are ([`GeneratedAssembly::documents`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -48,8 +52,8 @@ pub struct GeneratedAssembly {
     pub board: BoardId,
     /// The Part Studio with the board (and keep parts), named after the board.
     pub studio: ElementId,
-    /// The Part Studio with the component parts (while components are in-document parts; P3H.7
-    /// moves them to component documents).
+    /// The Part Studio with the component parts when they are in-document parts (the P3H.6
+    /// fallback with no document store; `None` with component documents, P3H.7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components_studio: Option<ElementId>,
     /// The Assembly, named after the board.
@@ -60,6 +64,10 @@ pub struct GeneratedAssembly {
     /// included).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub packages: Vec<GeneratedPackage>,
+    /// P3H.7: the component documents its component instances reference (by version), one per
+    /// package (empty while components are in-document parts).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<super::component_docs::ComponentDocument>,
 }
 
 impl GeneratedAssembly {
@@ -91,6 +99,9 @@ pub struct CreatePcbAssembly {
     /// Create, reused, with the parts of the packages it didn't have yet.
     pub replaced: Vec<Element>,
     pub generated: GeneratedAssembly,
+    /// P3H.7: the frozen copies of the component documents' versions the component instances
+    /// reference ([`crate::external`]); added with the tabs, removed by the same undo step.
+    pub links: Vec<crate::external::LinkedElement>,
 }
 
 impl Command for CreatePcbAssembly {
@@ -118,6 +129,11 @@ impl Command for CreatePcbAssembly {
         let at = doc.element_index(self.element).map_or(doc.elements.len(), |i| i + 1);
         for (k, e) in self.elements.iter().enumerate() {
             doc.elements.insert(at + k, e.clone());
+        }
+        for l in &self.links {
+            if doc.linked_element(l.id()).is_none() {
+                doc.linked.push(l.clone());
+            }
         }
         Ok(())
     }

@@ -86,8 +86,16 @@ pub fn notice_row(p: &mut ChildSpawnerCommands, t: &Theme) {
 /// geometry (the origin and three planes), so the notice says so (P3F.3–P3F.4 judge).
 pub fn notice(features: usize, parts: usize) -> Option<String> {
     (features > FEATURE_BUDGET || parts > PART_BUDGET).then(|| {
-        format!("Large studio: {features} features\n(excluding default geometry),\n{parts} parts. Consider splitting it.")
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        format!("Large studio: {}\n(excluding default geometry),\n{}. Consider splitting it.", plural(features, "feature", "features"), plural(parts, "part", "parts"))
     })
+}
+
+/// The studio's own parts, as its Parts list shows them (P3H.6 judge): an assembly context's
+/// parts are not the studio's, and a closed composite's members are not in the build's parts
+/// (the composite is one part).
+pub fn listed_parts(parts: &[cadrs_core::Part]) -> usize {
+    parts.iter().filter(|p| !cadrs_core::assembly::context::is_context(p.feature)).count()
 }
 
 fn sync_scale_notice(
@@ -97,8 +105,7 @@ fn sync_scale_notice(
     mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
 ) {
     let want = doc.as_ref().and_then(|d| d.active_element()).and_then(|e| match e.kind {
-        // An assembly context's ghost parts aren't the studio's (MC2.4).
-        ElementKind::PartStudio { .. } => notice(e.features().len(), cache.parts.iter().filter(|p| !cadrs_core::assembly::context::is_context(p.feature)).count()),
+        ElementKind::PartStudio { .. } => notice(e.features().len(), listed_parts(&cache.parts)),
         _ => None,
     });
     for mut n in &mut q_row {

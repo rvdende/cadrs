@@ -35,7 +35,7 @@ Scenario(
         Screenshot("04-open-a-copy-dialog"),
         Click(ui("sample-copy-dialog-ok")),
         WaitFor("document-loading"),
-        Screenshot("05-copy-opening"),
+        ScreenshotNow("05-copy-opening"),
         MoveTo(1420, 780),
         Wait(3),
         Screenshot("06-copy-opened"),

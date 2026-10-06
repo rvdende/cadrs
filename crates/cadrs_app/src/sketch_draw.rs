@@ -2597,16 +2597,48 @@ pub(crate) fn fill_mesh(s: &Sketch, plane: PlaneRef) -> Mesh {
     fill_mesh_with(s, plane, true)
 }
 
+/// True if part of `r`'s outer boundary runs along an imprinted face edge that no sketch curve
+/// covers (the region is a piece of the face itself, not something the sketch drew there: a
+/// shape drawn over the face's edges, or Use'd onto them, still covers them).
+fn bare_face_edge(s: &Sketch, r: &cadrs_sketch::Region) -> bool {
+    let n = r.outer.len();
+    let covered = |p: cadrs_sketch::Vec2| {
+        s.curves.iter().filter(|(_, c)| !c.construction).any(|(id, c)| {
+            let d = match c.kind {
+                cadrs_sketch::CurveKind::Line { a, b } => cadrs_sketch::geom::dist_point_segment(p, s.pos(a), s.pos(b)),
+                cadrs_sketch::CurveKind::Circle { center, radius } => (p.distance(s.pos(center)) - radius).abs(),
+                cadrs_sketch::CurveKind::Arc { .. } => s.arc_geom(id).map_or(f64::INFINITY, |g| g.distance(p)),
+                _ => f64::INFINITY,
+            };
+            d < 1e-6
+        })
+    };
+    (0..n).any(|i| {
+        let c = r.outer_curves.get(i).copied();
+        c.is_some_and(|c| s.imprint.iter().any(|x| x.id == c)) && !covered(cadrs_sketch::Vec2::new((r.outer[i].x + r.outer[(i + 1) % n].x) * 0.5, (r.outer[i].y + r.outer[(i + 1) % n].y) * 0.5))
+    })
+}
+
 /// [`fill_mesh`]; without `outlined`, leaving out the regions whose outer boundary is all
-/// imprinted face edges (the face around what the sketch draws).
+/// imprinted face edges (the face around what the sketch draws). With `outlined` (the edited
+/// sketch) on a part face, the regions whose outer boundary runs along the face's imprinted
+/// edges where no sketch curve covers them are left out too ([`bare_face_edge`]; P3H.7, P3H.6
+/// judge: they are pieces of the face itself; filled, they greyed the whole board while its
+/// keep-out was sketched, where `ex3-step6-keepout-sketch.png` keeps the board green). They stay
+/// selectable regions (S21.1).
 pub(crate) fn fill_mesh_with(s: &Sketch, plane: PlaneRef, outlined: bool) -> Mesh {
     let frame = plane.frame();
     let n = frame.normal();
     let normal = [n[0] as f32, n[1] as f32, n[2] as f32];
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let imprinted = |c: &cadrs_sketch::CurveId| s.imprint.iter().any(|i| i.id == *c);
+    let on_face = matches!(plane, PlaneRef::Face(_));
     for r in cadrs_sketch::region::regions_shared(s).iter() {
-        if !outlined && !s.imprint.is_empty() && r.outer_curves.iter().all(|c| s.imprint.iter().any(|i| i.id == *c)) {
+        if !outlined && !s.imprint.is_empty() && r.outer_curves.iter().all(imprinted) {
+            continue;
+        }
+        if outlined && on_face && !s.imprint.is_empty() && bare_face_edge(s, r) {
             continue;
         }
         let (verts, idx) = r.triangulate();

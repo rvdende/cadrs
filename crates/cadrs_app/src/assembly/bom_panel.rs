@@ -328,6 +328,17 @@ fn rebuild(world: &mut World) {
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_panel(world: &mut World, t: &Theme, bom: &Bom, s: &BomSettings, selected: &[bool], ui: &BomUi, width: f32, scroll: ScrollPosition, units: cadrs_sketch::units::Units) -> Entity {
+    // P3H.6 judge: a composite part's row has the composite part icon.
+    let composite_rows: Vec<bool> = {
+        let doc = world.get_resource::<ActiveDocument>().map(|d| &d.doc);
+        bom.rows
+            .iter()
+            .map(|r| match (doc, r.key.owner) {
+                (Some(d), PropertyOwner::Part { element, part }) => cadrs_core::transform::is_composite_part(d, element, part),
+                _ => false,
+            })
+            .collect()
+    };
     let sort = ui.sort;
     let mut widths: Vec<f32> = (0..bom.columns.len()).map(|i| col_width(bom, i, &ui.widths)).collect();
     fit_widths(bom, &ui.widths, &mut widths, width - 14.0);
@@ -420,6 +431,7 @@ fn spawn_panel(world: &mut World, t: &Theme, bom: &Bom, s: &BomSettings, selecte
                         let caret = (*c == BomColumn::Item && row.has_children).then_some(if row.expanded { "chevron-down" } else { "chevron-right" });
                         let icon_name = (*c == BomColumn::Property(PropertyKey::Name)).then(|| match row.key.owner {
                             PropertyOwner::Assembly { .. } => "assembly",
+                            PropertyOwner::Part { .. } if composite_rows.get(ri).copied().unwrap_or(false) => "composite-part",
                             PropertyOwner::Part { .. } if text.starts_with("Hex") || text.contains(" x ") => "standard-content",
                             PropertyOwner::Part { .. } => "part",
                             PropertyOwner::Item { .. } => "tag",

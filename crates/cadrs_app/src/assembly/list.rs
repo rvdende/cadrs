@@ -130,6 +130,8 @@ enum RowSpec {
         /// P3G.1 (ER1.9, DV1.7): a linked instance's icon tooltip, and its state (P3G.2: out of
         /// date, pinned, unreachable).
         linked: Option<(String, crate::linked::LinkIcon)>,
+        /// An instance of a composite part (P3H.6 judge: its icon).
+        composite: bool,
     },
     /// A part of an open rigid Part Studio instance.
     StudioPart {
@@ -261,6 +263,7 @@ fn rows(doc: &ActiveDocument, cache: &PartCache, dofs: &super::mates_list::Insta
             .filter(|_| !i.flexible)
             .and_then(|f| doc.doc.element(i.source.element())?.assembly_model()?.named_position(f).map(|p| p.name.clone())),
         linked: i.link.map(|r| crate::linked::instance_badge(&doc.doc, status, &r, doc.active_element().map(|e| e.id).unwrap_or_default(), i)),
+        composite: i.source.part().is_some_and(|p| cadrs_core::transform::is_composite_part(&doc.doc, i.source.element(), p)),
     };
     let push_children = |out: &mut Vec<RowSpec>, i: &cadrs_core::assembly::Instance| {
         if !ui.expanded.contains(&i.id) || filter.is_some() {
@@ -415,7 +418,7 @@ fn rebuild_instance_rows(
                 RowSpec::Folder { id, name, count, open, hidden, instances } => {
                     spawn_folder_row(c, &t, *id, name, *count, *open, *hidden, instances);
                 }
-                RowSpec::Instance { id, name, hidden, fixed, dof, suppressed, sub, folder, standard, studio, connectors, replicated, following, linked } => {
+                RowSpec::Instance { id, name, hidden, fixed, dof, suppressed, sub, folder, standard, studio, connectors, replicated, following, linked, composite } => {
                     k += 1;
                     let row = InstanceRowSpec {
                         k,
@@ -433,6 +436,7 @@ fn rebuild_instance_rows(
                         replicated: *replicated,
                         following: following.as_deref(),
                         linked: linked.as_ref().map(|(tip, icon)| (tip.as_str(), *icon)),
+                        composite: *composite,
                     };
                     spawn_instance_row(c, &t, &row);
                 }
@@ -541,10 +545,11 @@ struct InstanceRowSpec<'a> {
     replicated: bool,
     following: Option<&'a str>,
     linked: Option<(&'a str, crate::linked::LinkIcon)>,
+    composite: bool,
 }
 
 fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRowSpec) {
-    let InstanceRowSpec { k, id, name, hidden, fixed, dof, suppressed, sub, folder, standard, studio, connectors, replicated, following, linked } = *spec;
+    let InstanceRowSpec { k, id, name, hidden, fixed, dof, suppressed, sub, folder, standard, studio, connectors, replicated, following, linked, composite } = *spec;
     let fg = if hidden || suppressed { HIDDEN_FG } else { t.foreground };
     let row_name = format!("instance-row-{k}");
     // The part name shrinks ("Structural R…"), the number stays (P3B.1 judge).
@@ -563,6 +568,7 @@ fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRo
                 Some((_, true)) => "assembly",
                 None if studio.is_some() => "part-studio",
                 None if standard => "standard-content",
+                None if composite => "composite-part",
                 None => "part",
             },
             16.0,

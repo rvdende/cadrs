@@ -666,8 +666,35 @@ impl Command for SetStudioContext {
             },
             None => el.contexts.clear(),
         }
+        resnapshot_context_copies(doc, self.studio);
         crate::commands::refresh_studio(doc, self.studio);
         Ok(())
+    }
+}
+
+/// P3H.6: after the Part Studio `studio`'s context changed (Update context), every Transform in
+/// it that copies context parts takes a new snapshot of them (the source studios' features and
+/// where the context has the parts now), matched by context id; a part the context no longer
+/// has is dropped from the Transform. Part of the same undo step.
+fn resnapshot_context_copies(doc: &mut Document, studio: ElementId) {
+    let Some(features) = doc.element(studio).map(|e| e.features()) else { return };
+    let updated: Vec<(usize, crate::transform::TransformFeature)> = features
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| match &f.kind {
+            crate::document::FeatureKind::Transform(x) if !x.context.is_empty() => {
+                let mut y = x.clone();
+                y.set_picked(doc, studio, &x.picked());
+                (y != *x).then_some((i, y))
+            }
+            _ => None,
+        })
+        .collect();
+    let Some(features) = doc.element_mut(studio).and_then(|e| e.features_mut()) else { return };
+    for (i, y) in updated {
+        if let Some(f) = features.get_mut(i) {
+            f.kind = crate::document::FeatureKind::Transform(y);
+        }
     }
 }
 

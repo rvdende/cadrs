@@ -1,0 +1,121 @@
+// P3H.7 (PCB7.3, PCB7.10, PCB9.5, PCB11.1–PCB11.3, X7): component documents. The secondary
+// board (`fixtures/idf/secondary board`, 20 components of 7 packages) in a stored document
+// "Secondary board product". Compare `v6-create-assembly-bom-poster.png`,
+// `v8-component-properties-poster.png`.
+// 01 Create assembly (defaults): the toast "… and 7 component documents in PCB Components";
+// 02 the assembly: each component instance a version-pinned reference (the link icon in
+//    Instances), named "<package> <n>";
+// 03 the documents page, the "PCB Components" folder opened: one document per package (named
+//    after it, its thumbnail the package box), each with a version;
+// 04 back in the assembly, right-click the uBGA48_7.4X7.1 instance → "Open linked document";
+// 05 the component document at V1, read-only (banner with Edit Main and Back), its one part
+//    selected: 7.4 × 7.1 × 1.2 mm;
+// 06 Edit Main: its workspace, editable, the banner "Editing Main of uBGA48_7.4X7.1";
+// 07 its extrude edited: depth 2 mm typed (PCB11.2: edit the component's Part Studio);
+// 08 Create version (V2);
+// 09 Back to Secondary board product: the uBGA's instance shows the blue update badge (and the
+//    tab its badge);
+// 10 the badge clicked: the Reference manager "uBGA48_7.4X7.1 V1 ⇒ V2";
+// 11 Update: the instance is 2 mm high, no badges; 12 mass properties of it: 7.4 · 7.1 · 2 =
+//    105.08 mm³ (was 7.4 · 7.1 · 1.2 = 63.048 mm³).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("pcb-save-as Secondary board product"),
+        Click(ui("insert-tab")),
+        WaitFor("create-pcb-studio"),
+        Click(ui("create-pcb-studio")),
+        WaitFor("pcb-tree"),
+        Click(ui("pcb-import")),
+        WaitFor("pcb-import-dialog"),
+        Custom("pcb-choose secondary board/secondary board.emn;secondary board/secondary board.emp"),
+        Click(ui("pcb-import-ok")),
+        WaitFor("pcb-board-secondary-board"),
+        Click(ui("pcb-create-assembly")),
+        WaitFor("pcb-create-dialog"),
+        Click(ui("pcb-create-ok")),
+        WaitFor("pcb-create-toast"),
+        ExpectText("pcb-create-toast", "7 component documents in PCB Components"),
+        MoveTo(1100, 900),
+        Wait(3),
+        Screenshot("01-created-component-documents"),
+        Click(ui("pcb-create-open")),
+        Key("F"),
+        Hover(ui("instance-row-4-linked")),
+        Wait(40),
+        Screenshot("02-assembly-linked-instances"),
+        // The documents page: the component folder.
+        Click(ui("back-to-documents")),
+        WaitFor("landing"),
+        Wait(30),
+        DoubleClick(ui("folder-row-0")),
+        MoveTo(1500, 900),
+        Wait(3),
+        Screenshot("03-component-folder"),
+        Custom("move-doc open Secondary board product"),
+        WaitFor("document-shell"),
+        Click(ui("tab-secondary-board-assembly")),
+        Key("F"),
+        // PCB7.10: right-click the uBGA → Open linked document.
+        Click(ui("instance-row-4")),
+        RightClick(ui("instance-row-4")),
+        WaitFor("assembly-context-menu"),
+        Hover(ui("asm-open-linked")),
+        Wait(20),
+        Screenshot("04-open-linked-document-menu"),
+        Click(ui("asm-open-linked")),
+        WaitFor("linked-session-banner"),
+        Key("F"),
+        // Closer: the 7.4 mm part (the default planes set the fit).
+        Scroll(xyz(0, 0, 0.6), 14),
+        Wait(30),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("05-component-v1-read-only"),
+        // Edit Main: the component's workspace.
+        Click(ui("linked-session-main")),
+        WaitFor("linked-edit-banner"),
+        Key("F"),
+        Scroll(xyz(0, 0, 0.6), 14),
+        Wait(30),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("06-editing-main"),
+        // PCB11.2: its height 1.2 → 2 mm.
+        DoubleClick(ui("feature-ubga48-7-4x7-1")),
+        WaitFor("extrude-dialog"),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("2 mm"),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("07-height-2-mm"),
+        Key("Enter"),
+        Click(ui("document-create-version")),
+        WaitFor("create-version-name"),
+        Screenshot("08-create-version-v2"),
+        Click(ui("create-version-create")),
+        // Back to the board's assembly: the update badge.
+        Click(ui("linked-edit-back")),
+        WaitFor("document-shell"),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("09-update-badge"),
+        Click(ui("instance-row-4-linked")),
+        WaitFor("reference-manager"),
+        Hover(ui("refman-update")),
+        Wait(10),
+        Screenshot("10-reference-manager"),
+        Click(ui("refman-update")),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("11-updated"),
+        Click(ui("instance-row-4")),
+        Click(ui("view-mass")),
+        WaitFor("mass-dialog"),
+        MoveTo(1500, 880),
+        Wait(3),
+        Screenshot("12-mass-105-08"),
+    ],
+)

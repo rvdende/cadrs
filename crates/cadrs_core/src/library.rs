@@ -48,6 +48,10 @@ pub struct DocumentMeta {
     /// The document description shown and edited in the details panel (P3E.1, TD3.8).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// P3H.7 (PCB7.3, PCB11.1): set on a PCB component document, the package it models (found
+    /// again by it whatever the document's name or folder; `crate::pcb::component_docs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcb_component: Option<crate::pcb::component_docs::ComponentKey>,
     /// The workspace last opened (P3E.4, TD3.7: shown beside the name on the documents page);
     /// `None` for Main.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,6 +77,7 @@ impl DocumentMeta {
             folder: None,
             labels: Vec::new(),
             description: String::new(),
+            pcb_component: None,
             workspace: None,
         }
     }

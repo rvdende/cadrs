@@ -17,6 +17,10 @@
 //!   coordinates is that placement's (the first sync that sees it records it on the board,
 //!   [`cadrs_core::pcb::McadSource::frames`], so later syncs read a moved instance from the same
 //!   frame). The placement is where the instance puts the package frame;
+//!   P3H.7: an instance of a **component document** (a version of a document Create assembly
+//!   made for a package, [`cadrs_core::pcb::GeneratedAssembly::documents`]) that isn't tied
+//!   (inserted by hand) stands for the nearest placement of its package no other instance
+//!   stands for, whatever its part or document is called;
 //! - the **board**, **keep-ins** and **keep-outs** by [`crate::names`];
 //! - everything else is **not translated** and listed ("Not translated: Enclosure, …").
 
@@ -205,6 +209,10 @@ pub fn plan(doc: &Document, pcb: ElementId, source: ElementId, plane: SyncPlaneC
         library: Library::new(IdfVersion::V3),
         unrecognised: Vec::new(),
     };
+    // P3H.7: the component documents this PCB Studio's Create assemblies used, by document.
+    let component_docs: HashMap<cadrs_core::DocumentId, (String, String)> =
+        studio.generated.iter().flat_map(|g| g.documents.iter()).map(|d| (d.document, (d.package.clone(), d.part_number.clone()))).collect();
+    let mut by_document: Vec<(String, String, AsmPose)> = Vec::new();
     for (element, part, pose, occurrence) in items {
         let name = source_part_name(doc, &InstanceSource::Part { element, part }, None);
         // P3H.6: an instance Create assembly made stands for its placement, by designator.
@@ -222,11 +230,65 @@ pub fn plan(doc: &Document, pcb: ElementId, source: ElementId, plane: SyncPlaneC
             }
             continue;
         }
+        // P3H.7 (PCB5.5): an instance of a component document (its source is in the component
+        // folder) that Create assembly didn't tie to a placement (inserted by hand, or its tie
+        // lost): matched below by its package, whatever the part or document is called now.
+        if link.is_none()
+            && let Some(k) = doc.linked_element(element).and_then(|l| l.source.document).and_then(|d| component_docs.get(&d))
+        {
+            by_document.push((k.0.clone(), k.1.clone(), pose));
+            continue;
+        }
         if role_of(&name).is_some() {
             let features = doc.element(element).map(|e| e.active_features()).unwrap_or_default();
             plan.parts.push(SyncPart { name, features, part, pose });
         } else if !plan.unrecognised.contains(&name) {
             plan.unrecognised.push(name);
+        }
+    }
+    // Each untied component instance stands for the nearest placement of its package that no
+    // other instance stands for (the board synced before first). Its package frame is the
+    // component document's own (the part is built in the package frame), so the instance's
+    // origin is the placement's (x, y): measured in the board frame the sync will use (the
+    // chosen plane's x and y axes, as `board_from_mcad`), not the model's X and Y. Pairs are
+    // assigned nearest first over all instances (not instance by instance), so the order the
+    // instances were inserted in doesn't decide which placement each gets.
+    let frame = sync_plane(plane).plane();
+    let (origin, xd, yd) = (frame.origin, frame.x_dir.into_inner(), frame.y_dir().into_inner());
+    let uv = |t: [f64; 3]| {
+        let d = nalgebra::Point3::from(t) - origin;
+        [d.dot(&xd), d.dot(&yd)]
+    };
+    let order: Vec<BoardId> = target.into_iter().chain(studio.boards.iter().map(|b| b.id).filter(|b| Some(*b) != target)).collect();
+    // (distance, instance, board rank, placement) for every free placement of the first board
+    // (in `order`) that has a free placement of the instance's package.
+    let mut pairs: Vec<(f64, usize, usize, Placement)> = Vec::new();
+    for (i, (package, part_number, pose)) in by_document.iter().enumerate() {
+        let at = uv(pose.translation);
+        let of_package = |p: &&Placement| &p.package == package && (part_number.is_empty() || &p.part_number == part_number);
+        let found = order.iter().enumerate().filter_map(|(rank, id)| studio.board(*id).map(|b| (rank, b))).find(|(_, b)| b.board.components().map(|(_, p)| p).any(|p| of_package(&p) && !plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes))));
+        let Some((rank, b)) = found else { continue };
+        for p in b.board.components().map(|(_, p)| p).filter(of_package).filter(|p| !plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes))) {
+            pairs.push(((p.x - at[0]).hypot(p.y - at[1]), i, rank, p.clone()));
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut taken = vec![false; by_document.len()];
+    for (_, i, rank, p) in pairs {
+        if taken[i] || plan.components.iter().any(|c| c.refdes.eq_ignore_ascii_case(&p.refdes)) {
+            continue;
+        }
+        taken[i] = true;
+        plan.components.push(SyncComponent { refdes: p.refdes.clone(), package: p.package.clone(), part_number: p.part_number.clone(), frame: AsmPose::IDENTITY, pose: by_document[i].2 });
+        if let Some(pk) = studio.board(order[rank]).and_then(|b| b.board.library.package(&p.package, &p.part_number))
+            && plan.library.package(&pk.name, &pk.part_number).is_none()
+        {
+            plan.library.packages.push(Package::clone(pk));
+        }
+    }
+    for (i, (package, _, _)) in by_document.iter().enumerate() {
+        if !taken[i] && !plan.unrecognised.contains(package) {
+            plan.unrecognised.push(package.clone());
         }
     }
     Ok(plan)

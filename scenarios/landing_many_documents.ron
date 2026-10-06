@@ -12,7 +12,7 @@ Scenario(
         Screenshot("02-row-hover"),
         DoubleClick(ui("doc-name-2")),
         WaitFor("document-loading"),
-        Screenshot("03-row-opens-loading"),
+        ScreenshotNow("03-row-opens-loading"),
         Screenshot("04-row-opened-document"),
         Click(ui("back-to-documents")),
         WaitFor("doc-row-0"),

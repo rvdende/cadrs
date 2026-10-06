@@ -169,7 +169,12 @@ fn create_assembly_bom_has_one_row_per_part_number_with_description() {
     let x = lib.packages.iter().find(|p| p.name == "CRYSTAL_HC49").unwrap();
     assert_eq!(description(x).as_deref(), Some("Crystal 16MHz"));
     let q = lib.packages.iter().find(|p| p.name == "QFP100_600MIL").unwrap();
-    assert_eq!(description(q), None, "a thermal record isn't a description");
+    // Its THETA_JC record comes first: a thermal record isn't a description, its DESCRIPTION is.
+    assert_eq!(description(q).as_deref(), Some("Vision processor QFP-100"));
+    // P3H.6 judge: every package has one, so every BOM row has a Description (`v6` poster).
+    for p in &lib.packages {
+        assert!(description(p).is_some(), "{} has no description", p.name);
+    }
     // Every row is a part number (the board has none) or the board.
     assert_eq!(rows.len(), packages.len() + 1);
 }
@@ -279,6 +284,8 @@ fn ex3_moved_component_is_25_4_mm_further() {
     let i = emn.lines().position(|l| l.starts_with("uBGA48_7.4X7.1 ")).unwrap();
     let line = emn.lines().nth(i + 1).unwrap();
     assert_eq!(line.split_whitespace().next(), Some("4.064182376174947"), "{line}");
+    // No float noise: Y prints as the course's 8.9, not 8.900000000000002.
+    assert_eq!(line.split_whitespace().nth(1), Some("8.9"), "{line}");
     assert!(line.ends_with("90 TOP PLACED"), "{line}");
 }
 

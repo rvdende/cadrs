@@ -1332,7 +1332,7 @@ fn view_shortcuts(
     doc: Option<Res<ActiveDocument>>,
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
-    (cache, asm_parts): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>),
+    (cache, asm_parts, pcb_scene): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>),
 ) {
     if kind.is_flat() {
         // No 3D views on a sheet or a render; F and Ctrl+S are handled by `crate::drawing`.
@@ -1436,6 +1436,11 @@ fn view_shortcuts(
                     if !drawn.is_empty() {
                         pts = drawn;
                     }
+                }
+                // PCB Studio: the board shown (as the zoom-to-fit button does; P3H.6 fix round 1,
+                // F framed the origin).
+                if *kind == ActiveKind::PcbStudio && let Some(scene) = pcb_scene.as_deref() {
+                    pts = scene.fit_points();
                 }
                 let to = view.target().fitted_beside(&pts, rect.0.size(), fit_fill(*kind), inset.0);
                 view.animate_to(to);
@@ -1626,12 +1631,13 @@ fn update_hover(
     session: Option<Res<crate::sketch::SketchSession>>,
     planes: Res<PlanesVisible>,
     hover_override: Res<HoverOverride>,
-    (parts, extrude, applied, create, pick_override): (
+    (parts, extrude, applied, create, pick_override, triad): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
+        Option<Res<crate::assembly::triad::Triad>>,
     ),
     (zoom_window, section_arrow): (Option<Res<crate::view_options::ZoomWindow>>, Res<crate::section_view::SectionArrow>),
     mut last: Local<Option<(Vec2, crate::parts::PickFilter, Option<Pick>)>>,
@@ -1645,7 +1651,8 @@ fn update_hover(
     let over = pointer_over_viewport(&hover, &q_area) && zoom_window.is_none() && section_arrow.drag.is_none();
     let query = match filter {
         Some(f) if over && !drag.navigating && *kind == ActiveKind::PartStudio => Some(f),
-        Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly => {
+        // No pre-highlight while a triad drag or its value box is active (P3H.6 judge).
+        Some(f) if over && !drag.navigating && *kind == ActiveKind::Assembly && !triad.as_deref().is_some_and(|t| t.busy()) => {
             Some(if pick_override.0.is_some() { f } else { crate::assembly::pick_filter() })
         }
         _ => None,

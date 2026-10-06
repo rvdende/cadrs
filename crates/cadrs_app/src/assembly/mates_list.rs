@@ -476,7 +476,9 @@ fn rebuild_mate_rows(
             } else if r.error.is_some() {
                 // P3G.5: a lost entity is an error (red, as a failed feature).
                 t.danger
-            } else if r.shown {
+            } else if r.shown || r.group {
+                // A Group (or another row without an eye) has nothing to hide: normal text
+                // (P3H.6 judge: "Group 1" read as suppressed).
                 t.foreground
             } else {
                 Color::srgb_u8(0x8a, 0x8f, 0x94)

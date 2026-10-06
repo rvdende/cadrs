@@ -214,7 +214,8 @@ pub const EX3_KEEPOUT: [f64; 3] = [12.7, 9.525, 6.35];
 /// the **top face of the board part** ("Board [<board>]") with a 0.5 × 0.375 in rectangle at
 /// the board's bottom-left corner (the lowest-x, lowest-y corner of its outline), its inner
 /// corner filleted R0.25 in, dimensioned 0.5 (bottom), 0.375 (left) and R0.25 like
-/// `ex3-step6-keepout-sketch.png`. Several commands; the caller makes them one undo step.
+/// `ex3-step6-keepout-sketch.png`. Several commands; the caller makes them one undo step. For
+/// the Ex3 tests only: `course_pcb_ex3_idf_assembly` draws it with the sketch tools.
 pub fn ex3_keepout_sketch(s: &mut dyn Studio, el: ElementId, sketch: FeatureId) -> Result<(), CommandError> {
     use cadrs_sketch::{Dimension, DimensionKind};
     let e = s.document().element(el).ok_or(CommandError::ElementNotFound(el))?;

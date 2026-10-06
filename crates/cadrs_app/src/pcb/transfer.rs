@@ -37,7 +37,9 @@ use cadrs_ui::{Button, Dialog, DialogClose, Notification, RadioGroup, RadioGroup
 use crate::{ActiveDocument, AppClock, AppState};
 
 pub fn register(app: &mut App) {
-    app.add_systems(Update, finish_syncs.run_if(in_state(AppState::Document))).add_observer(on_emn_find);
+    app.add_systems(Update, finish_syncs.run_if(in_state(AppState::Document)))
+        .add_systems(PostUpdate, flag_syncing)
+        .add_observer(on_emn_find);
 }
 
 fn close<T: Component>(world: &mut World) {
@@ -135,6 +137,14 @@ pub fn open_sync_dialog(world: &mut World) {
 fn select_index(world: &mut World, name: &str) -> usize {
     let mut q = world.query::<(&Name, &SelectState)>();
     q.iter(world).find(|(n, _)| n.as_str() == name).map_or(0, |(_, s)| s.selected)
+}
+
+/// Scripted steps wait while a sync runs.
+fn flag_syncing(q: Query<(), With<RunningSync>>, mut pending: ResMut<cadrs_ui::PendingWork>, mut why: ResMut<cadrs_ui::PendingWhy>) {
+    if !q.is_empty() {
+        pending.0 = true;
+        why.add("PCB sync");
+    }
 }
 
 /// A sync on the kernel thread.
