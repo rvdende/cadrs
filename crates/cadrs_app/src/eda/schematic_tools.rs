@@ -43,6 +43,7 @@ const STRIP: ui::StripSpec = &[
     Some(("sch-annotate", "annotate", "Fill in reference designators", "annotate")),
     Some(("sch-assign", "assign-footprints", "Assign footprints", "assign")),
     Some(("sch-erc", "erc", "Electrical rules check", "erc")),
+    Some(("sch-fields", "custom-table", "Symbol fields table", "fields")),
     Some(("sch-bom", "bill-of-materials", "Bill of materials", "bom")),
     Some(("sch-page", "properties", "Page settings", "page")),
     Some(("sch-plot", "file-export", "Plot the schematic (SVG, PDF) or export its netlist", "plot")),
@@ -163,6 +164,7 @@ pub fn run_action(w: &mut World, action: &str) {
         "bom" => dialogs::open_bom(w),
         "page" => dialogs::open_page(w),
         "plot" => dialogs::open_plot(w),
+        "fields" => dialogs::open_fields_table(w),
         _ => {}
     }
 }

@@ -77,7 +77,8 @@ fn redrawn_power_monitor_matches_kicad() {
     // The same DRC findings (KiCad's own DRC reports the same two loose ground tracks).
     let findings = |d: &Design| {
         let r = cadrs_eda::drc::check(&d.board);
-        let mut v: Vec<String> = r.violations.iter().map(|v| format!("{:?}", v.rule)).collect();
+        // The redraw gave the RA-01SH footprint the courtyard the imported one lacks.
+        let mut v: Vec<String> = r.violations.iter().filter(|v| v.rule != cadrs_eda::drc::Rule::MissingCourtyard).map(|v| format!("{:?}", v.rule)).collect();
         v.sort();
         (v, r.unconnected.len())
     };

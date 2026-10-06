@@ -23,11 +23,15 @@ pub enum Rule {
     DanglingTrack,
     /// A track, via, pad or footprint inside a keep-out that forbids it.
     KeepoutViolation,
+    /// A footprint without a courtyard (unless it allows that).
+    MissingCourtyard,
+    /// Silkscreen over a pad's solder mask opening (the fab clips it).
+    SilkOverMask,
 }
 
 impl Rule {
     pub fn is_warning(self) -> bool {
-        matches!(self, Rule::DanglingTrack)
+        matches!(self, Rule::DanglingTrack | Rule::MissingCourtyard | Rule::SilkOverMask)
     }
 }
 
@@ -305,6 +309,40 @@ pub fn check(board: &Board) -> Report {
             }
         }
     }
+    // Footprints without a courtyard.
+    for (i, _, r) in &courtyards {
+        let f = &board.footprints[*i];
+        if r.is_empty() && !f.footprint.attrs.allow_missing_courtyard && !f.footprint.pads.is_empty() {
+            v.push(Violation { rule: Rule::MissingCourtyard, message: "Footprint has no courtyard defined".into(), items: vec![f.reference().into()], at: f.placement.at });
+        }
+    }
+    // Silkscreen over solder mask openings (pads), per side.
+    for side in [Side::Top, Side::Bottom] {
+        let (silk, mask) = if side == Side::Top { (Layer::TopSilk, Layer::TopMask) } else { (Layer::BottomSilk, Layer::BottomMask) };
+        let mut openings: Vec<(Region, String)> = vec![];
+        for (fi, f) in board.footprints.iter().enumerate() {
+            for (pi, pad) in f.footprint.pads.iter().enumerate() {
+                if f.placement.layers(pad.layers).contains(mask) {
+                    openings.push((copper::pad_region(board, fi, pi, pad.rules.mask_margin.unwrap_or(rules.mask_margin)), format!("Pad {} of {}", pad.number, f.reference())));
+                }
+            }
+        }
+        let mut silk_items: Vec<(Region, String)> = vec![];
+        for f in &board.footprints {
+            for s in f.footprint.shapes.iter().filter(|s| f.placement.layer(s.layer) == silk) {
+                silk_items.push((poly::map(&poly::shape_region(&s.shape), |p| f.placement.apply(p)), format!("Silkscreen of {}", f.reference())));
+            }
+        }
+        for s in board.shapes.iter().filter(|s| s.layer == silk) {
+            silk_items.push((poly::shape_region(&s.shape), "Silkscreen drawing".into()));
+        }
+        for (sr, sname) in &silk_items {
+            if let Some((_, pname)) = openings.iter().find(|(o, _)| poly::overlaps(o, sr)) {
+                let at = sr.first().and_then(|r| r.first()).copied().unwrap_or_default();
+                v.push(Violation { rule: Rule::SilkOverMask, message: "Silkscreen clipped by solder mask".into(), items: vec![sname.clone(), pname.clone()], at });
+            }
+        }
+    }
     // Keep-outs: what they forbid, inside them on their layers (a footprint's own keep-out
     // doesn't forbid its own parts).
     for (owner, layers, region, rules) in keepouts(board) {
@@ -373,4 +411,27 @@ fn keepouts(board: &Board) -> Vec<(Option<uuid::Uuid>, crate::layer::LayerSet, R
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::PlacedFootprint;
+
+    #[test]
+    fn silkscreen_over_pads_and_missing_courtyards() {
+        let lib = crate::library::LibraryTable::builtin();
+        let mut b = Board::with_rect_outline(crate::units::mm(20.0), crate::units::mm(20.0));
+        let mut f = lib.footprint("Resistor_SMD:R_0805_2012Metric").unwrap().clone();
+        let place = |f: crate::footprint::Footprint, x: f64| PlacedFootprint { id: uuid::Uuid::new_v4(), footprint: f, placement: crate::footprint::FootprintPlacement { at: Pt::mm(x, 10.0), ..Default::default() }, locked: false, symbol: None };
+        b.footprints.push(place(f.clone(), 5.0));
+        assert!(check(&b).violations.iter().all(|v| !matches!(v.rule, Rule::SilkOverMask | Rule::MissingCourtyard)));
+        // Silkscreen across pad 1, and a copy without its courtyard.
+        crate::lib_edit::add_fp_shape(&mut f, crate::graphics::Geom::Line { a: Pt::mm(-1.5, 0.0), b: Pt::mm(1.5, 0.0) }, Layer::TopSilk, crate::units::mm(0.12));
+        f.shapes.retain(|s| s.layer != Layer::TopCourtyard);
+        b.footprints.push(place(f, 15.0));
+        let rules: Vec<Rule> = check(&b).violations.iter().map(|v| v.rule).collect();
+        assert!(rules.contains(&Rule::SilkOverMask), "{rules:?}");
+        assert!(rules.contains(&Rule::MissingCourtyard), "{rules:?}");
+    }
 }

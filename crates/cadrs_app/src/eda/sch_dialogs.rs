@@ -656,3 +656,88 @@ fn run_plot(w: &mut World, kind: &str) {
     };
     ui::set_label(w, "eda-splot-log", &msg);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Symbol fields table: every placed symbol's reference, value, footprint, LCSC part and DNP
+
+#[derive(Resource, Default)]
+struct FieldsTable(Vec<Uuid>);
+
+pub fn open_fields_table(w: &mut World) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let mut rows: Vec<(Uuid, String, String, String, String, bool)> = d
+        .schematic
+        .sheets
+        .iter()
+        .flat_map(|s| &s.symbols)
+        .filter(|s| !s.reference().starts_with('#'))
+        .map(|s| {
+            let lcsc = ["LCSC", "LCSC Part", "LCSC Part #"].iter().find_map(|n| s.field(n).map(|f| f.value().to_string())).unwrap_or_default();
+            (s.id, s.reference().to_string(), s.value().to_string(), s.footprint().to_string(), lcsc, s.dnp)
+        })
+        .collect();
+    rows.sort_by_key(|r| cadrs_eda::connectivity::natural(&r.1));
+    w.insert_resource(FieldsTable(rows.iter().map(|r| r.0).collect()));
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-fields-table")
+            .title("Symbol fields")
+            .width(900.0)
+            .body(move |p| {
+                p.spawn(Node { column_gap: Val::Px(6.0), ..default() }).with_children(|h| {
+                    for (label, wd) in [("Reference", 80.0), ("Value", 170.0), ("Footprint", 380.0), ("LCSC part", 110.0), ("DNP", 40.0)] {
+                        h.spawn((t.text(label, t.font_sm, FontWeight::MEDIUM, t.muted_foreground), Node { width: Val::Px(wd), ..default() }));
+                    }
+                });
+                p.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), max_height: Val::Px(420.0), overflow: Overflow::scroll_y(), ..default() }).with_children(|l| {
+                    for (i, (_, r, v, fp, lcsc, dnp)) in rows.into_iter().enumerate() {
+                        l.spawn(Node { column_gap: Val::Px(6.0), align_items: AlignItems::Center, ..default() }).with_children(|row| {
+                            row.spawn(TextInput::new(format!("eda-fields-{i}-reference")).value(r).width(Val::Px(80.0)).height(24.0).build(&t));
+                            row.spawn(TextInput::new(format!("eda-fields-{i}-value")).value(v).width(Val::Px(170.0)).height(24.0).build(&t));
+                            row.spawn(TextInput::new(format!("eda-fields-{i}-footprint")).value(fp).width(Val::Px(380.0)).height(24.0).build(&t));
+                            row.spawn(TextInput::new(format!("eda-fields-{i}-lcsc")).value(lcsc).width(Val::Px(110.0)).height(24.0).build(&t));
+                            row.spawn(Checkbox::new(format!("eda-fields-{i}-dnp")).checked(dnp).build(&t));
+                        });
+                    }
+                });
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-fields-ok", accept_fields_table)),
+    );
+}
+
+fn accept_fields_table(w: &mut World) {
+    let ids = w.get_resource::<FieldsTable>().map(|t| t.0.clone()).unwrap_or_default();
+    let rows: Vec<(Uuid, String, String, String, String, bool)> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let field = |w: &mut World, n: &str| ui::text_value(w, &format!("eda-fields-{i}-{n}")).trim().to_string();
+            let dnp = {
+                let name = format!("eda-fields-{i}-dnp");
+                let mut q = w.query::<(&Name, &CheckboxState)>();
+                q.iter(w).find(|(n, _)| n.as_str() == name).is_some_and(|(_, s)| s.checked)
+            };
+            (*id, field(w, "reference"), field(w, "value"), field(w, "footprint"), field(w, "lcsc"), dnp)
+        })
+        .collect();
+    close_all(w);
+    w.remove_resource::<FieldsTable>();
+    ui::commit(w, "Edit symbol fields", |d| {
+        for (id, r, v, fp, lcsc, dnp) in &rows {
+            let s = &mut d.schematic;
+            se::set_field(s, *id, fields::REFERENCE, r);
+            se::set_field(s, *id, fields::VALUE, v);
+            se::set_field(s, *id, fields::FOOTPRINT, fp);
+            let has = s.sheets.iter().flat_map(|x| &x.symbols).find(|x| x.id == *id).and_then(|x| ["LCSC", "LCSC Part", "LCSC Part #"].into_iter().find(|n| x.field(n).is_some()));
+            if !lcsc.is_empty() || has.is_some() {
+                se::set_field(s, *id, has.unwrap_or("LCSC Part"), lcsc);
+            }
+            if let Some(x) = s.sheets.iter_mut().flat_map(|x| &mut x.symbols).find(|x| x.id == *id) {
+                x.dnp = *dnp;
+            }
+        }
+        Ok(())
+    });
+}

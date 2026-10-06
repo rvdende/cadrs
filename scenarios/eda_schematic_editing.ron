@@ -1,7 +1,8 @@
 // Schematic editing beyond the course, on its GS7 stage (BT1, R1, D1 wired, VCC/GND, label):
 // 01 R1 copied (Ctrl+C) and pasted (Ctrl+V) as R2; 02 BT1 duplicated (Ctrl+D) as BT2; 03 D1
 // mirrored left for right (X); 04 a global label SDA (Ctrl+L) and a text note (T); 05 the GND
-// net highlighted (`); 06 Find (Ctrl+F) "BT2": selected and centred.
+// net highlighted (`); 06 Find (Ctrl+F) "BT2": selected and centred; 07 the symbol fields table:
+// R1 to 330 with an LCSC part number; 08 R1 reads 330.
 Scenario(
     start: Some("document"),
     steps: [
@@ -65,5 +66,18 @@ Scenario(
         Click(ui("eda-find-ok")),
         MoveTo(1100, 900),
         Screenshot("06-find"),
+        // The fields table: R1 becomes 330 Ω with an LCSC part number.
+        Click(ui("sch-fields")),
+        WaitFor("eda-fields-table"),
+        Click(ui("eda-fields-3-value-field")),
+        Key("Ctrl+A"),
+        Type("330"),
+        Click(ui("eda-fields-3-lcsc-field")),
+        Type("C17630"),
+        Screenshot("07-fields-table"),
+        Click(ui("eda-fields-ok")),
+        Custom("eda-zoom 70 60 260 145"),
+        MoveTo(1100, 900),
+        Screenshot("08-r1-330"),
     ],
 )
