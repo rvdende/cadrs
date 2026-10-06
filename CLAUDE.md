@@ -4,10 +4,15 @@ Onshape-style CAD in Rust + Bevy 0.19.1. Local notes in `docs/` (git-ignored: `P
 `PROGRESS.md`, `ORCHESTRATOR.md` for background workers). Kernel design: `crates/cadrs_kernel/README.md`.
 
 ## Commands
-- Build in release everywhere so nothing builds twice: `cargo build -r`, `cargo test -r --workspace`,
+- Build in release everywhere so nothing builds twice: `cargo build -r`,
   `cargo clippy --workspace --all-targets`.
+- Tests:
+  - `cargo test -r`: the fast tests of the crates without Bevy (about a minute).
+  - `cargo test -r -- --ignored`: the slow core tests (each over 5 s).
+  - `cargo test -r --workspace -F cadrs/app-tests`: also the UI crates and the app's own tests.
+  - `cargo test -r -p cadrs -F app-tests --test golden -- --ignored`: the golden screenshot tests
+    (slow, GPU; `CADRS_BLESS=1` records new baselines).
 - Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`.
-- Golden screenshot tests are `#[ignore]`d (slow, GPU): `cargo test -r -p cadrs --test golden -- --ignored`.
 - Windowed run from a shell with no display: prefix `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`.
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
 - Cold builds take 4+ minutes. Never run two cargo builds at once.

@@ -15,6 +15,21 @@ cadrs_ui.workspace = true
 [features]
 # Faster dev builds: Bevy as a shared library (`cargo run -F dev`). Not for shipped builds.
 dev = ["bevy/dynamic_linking"]
+# The app's tests (they build the whole app): a plain `cargo test` leaves them out.
+app-tests = []
+
+[[bin]]
+name = "cadrs"
+path = "src/main.rs"
+test = false
+
+[[test]]
+name = "startup"
+required-features = ["app-tests"]
+
+[[test]]
+name = "golden"
+required-features = ["app-tests"]
 
 [dev-dependencies]
 image.workspace = true

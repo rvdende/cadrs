@@ -190,6 +190,7 @@ fn the_simulation_fixture_is_current() {
 /// to within 1 % of the kernel's exact volume (its mass properties; the carved Delaunay mesh of
 /// the refined surface, worst 0.73 %).
 #[test]
+#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
 fn course_parts_mesh_or_explain() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "cadrs")).collect();
