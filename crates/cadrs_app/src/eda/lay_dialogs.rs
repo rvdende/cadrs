@@ -340,10 +340,12 @@ pub fn open_plot(w: &mut World) {
                 row(p, &t, "Output directory", |r| {
                     r.spawn(TextInput::new("eda-plot-dir").value("fab/").width(Val::Px(320.0)).height(26.0).build(&t));
                 });
-                p.spawn(t.text("Gerber X2: copper, board outline, solder mask, silkscreen and paste layers, with a job file.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                p.spawn(t.text("Gerber X2: copper, board outline, solder mask, silkscreen and paste layers, with a job file. Drill files: Excellon, plated and not. Assembly: JLCPCB's BOM and placement (CPL) files. STEP: the board with its parts' 3D models.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
                 p.spawn(list_node("eda-plot-log", 180.0));
             })
             .footer(move |f| {
+                button(f, &tf, "eda-plot-step", "STEP", false, run_step);
+                button(f, &tf, "eda-plot-assembly", "JLCPCB BOM and placement", false, run_assembly);
                 button(f, &tf, "eda-plot-drill", "Generate drill files", false, run_drill);
                 button(f, &tf, "eda-plot-run", "Plot", true, run_plot);
                 button(f, &tf, "eda-plot-close", "Close", false, close_all);
@@ -409,4 +411,50 @@ fn run_drill(w: &mut World) {
     list_lines(w, "eda-plot-log", lines);
 }
 
+
+/// Writes JLCPCB's assembly files into `dir`: `<board>-bom.csv` (from the schematic) and
+/// `<board>-cpl.csv` (the placement of the surface-mount parts).
+pub fn assembly_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
+    let Some((_, _, d)) = ui::current(w) else { return Err("No board".into()) };
+    let name = board_name(w);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut out = vec![];
+    for (file, text) in [(format!("{name}-bom.csv"), cadrs_eda::bom::jlcpcb_csv(&d.schematic)), (format!("{name}-cpl.csv"), cadrs_eda::fab::jlcpcb_cpl(&d.board))] {
+        std::fs::write(dir.join(&file), text).map_err(|e| format!("{file}: {e}"))?;
+        out.push(format!("Created {file}"));
+    }
+    Ok(out)
+}
+
+fn run_assembly(w: &mut World) {
+    let dir = plot_dir(w);
+    let lines = match assembly_to(w, &dir) {
+        Ok(v) => v.into_iter().map(|l| (l, false)).collect(),
+        Err(e) => vec![(format!("Error: {e}"), true)],
+    };
+    list_lines(w, "eda-plot-log", lines);
+}
+
+/// Writes `<board>.step` into `dir`: the board and its parts' 3D models.
+pub fn step_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
+    let Some((el, b, d)) = ui::current(w) else { return Err("No board".into()) };
+    let pcb = w.resource::<crate::ActiveDocument>().doc.element(el).and_then(|e| e.pcb()).and_then(|s| s.board(b)).map(|x| x.board.clone()).ok_or("No board")?;
+    let name = board_name(w);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let (bytes, warnings) = cadrs_pcb::step::native_board_step(&pcb, &d)?;
+    let file = format!("{name}.step");
+    std::fs::write(dir.join(&file), bytes).map_err(|e| format!("{file}: {e}"))?;
+    let mut out = vec![format!("Created {file}")];
+    out.extend(warnings.into_iter().map(|w| format!("Warning: {w}")));
+    Ok(out)
+}
+
+fn run_step(w: &mut World) {
+    let dir = plot_dir(w);
+    let lines = match step_to(w, &dir) {
+        Ok(v) => v.into_iter().map(|l| { let warn = l.starts_with("Warning"); (l, warn) }).collect(),
+        Err(e) => vec![(format!("Error: {e}"), true)],
+    };
+    list_lines(w, "eda-plot-log", lines);
+}
 pub fn register(_app: &mut App) {}

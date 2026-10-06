@@ -1,9 +1,10 @@
 // The desk power monitor's LoRa board, redrawn in cadrs (cadrs_eda::power_monitor; no KiCad
 // import): 01 the schematic; 02 ERC (only the headers' unused pins, as in KiCad); 03 the
 // layout (the layers panel bottom-left); 04 the antenna and its matching network, close; 05 the
-// back copper active, the other layers dimmed; 06 DRC; 07 the board in 3D; 08 the RA-01SH
-// component's symbol; 09 its footprint; 10 its generated 3D model; 11 the PCB antenna's
-// footprint (front and back copper strips, plated holes, keep-out).
+// back copper active, the other layers dimmed; 06 DRC; 06b the board as STEP and JLCPCB's BOM and
+// placement files; 07 the board in 3D; 08 the RA-01SH component's symbol; 09 its footprint;
+// 10 its generated 3D model; 11 the PCB antenna's footprint (front and back copper strips,
+// plated holes, keep-out).
 Scenario(
     start: Some("document"),
     steps: [
@@ -46,6 +47,16 @@ Scenario(
         Click(ui("eda-drc-run")),
         Screenshot("06-drc"),
         Click(ui("eda-drc-close")),
+        // Outputs: the board as STEP, JLCPCB's BOM and placement files.
+        Click(ui("pcb-plot")),
+        WaitFor("eda-plot-dialog"),
+        Click(ui("eda-plot-dir-field")),
+        Key("Ctrl+A"),
+        Type("target/scenarios/eda_power_monitor/fab/"),
+        Click(ui("eda-plot-step")),
+        Click(ui("eda-plot-assembly")),
+        Screenshot("06b-outputs"),
+        Click(ui("eda-plot-close")),
         Click(ui("eda-mode-3d")),
         Wait(3),
         Key("F"),

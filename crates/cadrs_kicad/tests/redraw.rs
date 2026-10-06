@@ -85,3 +85,27 @@ fn redrawn_power_monitor_matches_kicad() {
     eprintln!("ours {mine:?}\nkicad {theirs:?}");
     assert_eq!(mine, theirs);
 }
+
+/// The redraw's JLCPCB placement file agrees with the one the project shipped, for the parts that
+/// one lists (their values were changed to 0R before ordering).
+#[test]
+fn redrawn_power_monitor_places_like_the_jlcpcb_files() {
+    let Some(dir) = reference_project() else {
+        eprintln!("skipped: no reference project");
+        return;
+    };
+    let Ok(theirs) = std::fs::read_to_string(dir.join("jlcpcb/CPL.csv")) else { return };
+    let (ours, _) = cadrs_eda::power_monitor::design();
+    let mine = cadrs_eda::fab::jlcpcb_cpl(&ours.board);
+    assert_eq!(mine.lines().next(), theirs.lines().next(), "header");
+    let without_value = |l: &str| {
+        let mut f: Vec<&str> = l.split(',').collect();
+        f.remove(1);
+        f.join(",")
+    };
+    for line in theirs.lines().skip(1) {
+        let r = line.split(',').next().unwrap();
+        let m = mine.lines().find(|l| l.split(',').next() == Some(r)).unwrap_or_else(|| panic!("{r} missing from\n{mine}"));
+        assert_eq!(without_value(m), without_value(line));
+    }
+}

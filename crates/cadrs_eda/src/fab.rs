@@ -317,3 +317,53 @@ pub fn excellon(board: &Board, plated: bool) -> String {
     let _ = writeln!(s, "M30");
     s
 }
+
+/// One footprint in a placement (pick-and-place) file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Position {
+    pub reference: String,
+    pub value: String,
+    /// The footprint's name without its library.
+    pub package: String,
+    /// Mm, Y up (as the layout).
+    pub x: f64,
+    pub y: f64,
+    pub rotation: f64,
+    pub bottom: bool,
+}
+
+/// The footprints a placement file lists: those not excluded from it and not DNP, only
+/// surface-mount ones when `smd_only` (KiCad's default), in reference order.
+pub fn positions(board: &Board, smd_only: bool) -> Vec<Position> {
+    use crate::footprint::MountKind;
+    let mut v: Vec<Position> = board
+        .footprints
+        .iter()
+        .filter(|f| !f.footprint.attrs.exclude_from_pos && !f.footprint.attrs.dnp && !f.footprint.attrs.board_only)
+        .filter(|f| !smd_only || f.footprint.attrs.mount == MountKind::Smd)
+        .map(|f| {
+            let at = f.placement.at.to_mm();
+            Position {
+                reference: f.reference().into(),
+                value: f.footprint.field(crate::symbol::fields::VALUE).map_or(String::new(), |x| x.text.text.text.clone()),
+                package: f.footprint.name().into(),
+                x: at[0],
+                y: at[1],
+                rotation: f.placement.angle,
+                bottom: f.placement.side == crate::layer::Side::Bottom,
+            }
+        })
+        .collect();
+    v.sort_by_key(|p| crate::connectivity::natural(&p.reference));
+    v
+}
+
+/// JLCPCB's placement file (CPL): Designator, Val, Package, Mid X, Mid Y, Rotation, Layer.
+pub fn jlcpcb_cpl(board: &Board) -> String {
+    let mut out = String::from("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n");
+    for p in positions(board, true) {
+        let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        out.push_str(&format!("{},{},{},{:.6},{:.6},{:.6},{}\n", q(&p.reference), q(&p.value), q(&p.package), p.x, p.y, p.rotation, if p.bottom { "bottom" } else { "top" }));
+    }
+    out
+}

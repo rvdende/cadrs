@@ -31,6 +31,7 @@ pub mod mesh;
 pub mod names;
 pub mod placement;
 pub mod sample;
+pub mod step;
 pub mod sync;
 
 pub use board::{ItemId, KeepArea, KeepIds, KeepKind, PcbBoard};

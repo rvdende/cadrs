@@ -157,6 +157,8 @@ pub fn ra01sh_footprint() -> Footprint {
 pub fn swra416_footprint() -> Footprint {
     let mut f = le::new_footprint("Texas_SWRA416_868MHz_915MHz", "Texas_SWRA416_868MHz_915MHz", MountKind::Smd);
     f.description = "TI SWRA416 868 MHz / 915 MHz helical PCB antenna".into();
+    // Copper only: nothing to pick and place.
+    f.attrs.exclude_from_pos = true;
     f.models.clear();
     // The feed pad.
     let feed = le::add_pad(&mut f, p(-9.0, -5.9));
@@ -566,5 +568,21 @@ mod tests {
         // Everything that should be is connected.
         let r = crate::drc::check(b);
         assert!(r.unconnected.is_empty(), "{:?}", r.unconnected);
+    }
+}
+
+#[cfg(test)]
+mod outputs {
+    #[test]
+    fn jlcpcb_bom_and_placement() {
+        let (d, _) = super::design();
+        let bom = crate::bom::jlcpcb_csv(&d.schematic);
+        assert!(bom.starts_with("Comment,Designator,Footprint,LCSC Part #\n"));
+        // The three 0805 capacitors share a row; the module keeps its LCSC part number.
+        assert!(bom.contains("\"C\",\"C1,C2,C3\",\"C_0805_2012Metric\",\"\""), "{bom}");
+        let cpl = crate::fab::jlcpcb_cpl(&d.board);
+        assert!(cpl.contains("\"U1\",\"RA-01SH\",\"WIRELM-SMD_RA-01SH\",102.870000,-78.613000,180.000000,top"), "{cpl}");
+        // Through-hole headers are left to the hand.
+        assert!(!cpl.contains("\"J1\""));
     }
 }
