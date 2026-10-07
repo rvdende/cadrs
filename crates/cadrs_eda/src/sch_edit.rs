@@ -292,25 +292,211 @@ fn symbol_pin_points(sch: &Schematic, s: &PlacedSymbol) -> Vec<Pt> {
     sch.placed_pins(s).map(|(_, p)| p).collect()
 }
 
-/// Moves items by `d`. With `drag` (G), the ends of unselected wires on the moved symbols'
-/// pins (and on moved wire ends) follow, so connections stay; without it (M) they stay put.
+
+/// A point that moved: from, to, and (a pin there) the way the pin points out of its symbol,
+/// one of (±1, 0), (0, ±1), so a wire can come into it straight.
+type Shift = (Pt, Pt, Option<Pt>);
+
+/// The way a pin at `angle` (towards its body, degrees, as placed) points out: a unit step.
+fn outward(angle: f64) -> Pt {
+    match ((angle.rem_euclid(360.0) + 45.0) / 90.0) as i32 % 4 {
+        0 => Pt::new(-1, 0),
+        1 => Pt::new(0, -1),
+        2 => Pt::new(1, 0),
+        _ => Pt::new(0, 1),
+    }
+}
+
+/// The pins of the selected symbols (keyed by symbol and pin), where they are and which way
+/// they point out.
+fn pin_spots(sch: &Schematic, sheet: usize, items: &[SchItem]) -> Vec<((Uuid, usize), Pt, Pt)> {
+    let sh = &sch.sheets[sheet];
+    let mut out = vec![];
+    for it in items {
+        let SchItem::Symbol(id) = it else { continue };
+        let Some(s) = sh.symbols.iter().find(|s| s.id == *id) else { continue };
+        for (k, (p, at)) in sch.placed_pins(s).enumerate() {
+            out.push(((s.id, k), at, outward(s.placement.apply_angle(p.angle))));
+        }
+    }
+    out
+}
+
+/// How the pins of a selection moved between two states.
+fn pin_shifts(before: &[((Uuid, usize), Pt, Pt)], after: &[((Uuid, usize), Pt, Pt)]) -> Vec<Shift> {
+    before.iter().filter_map(|(k, from, _)| after.iter().find(|a| a.0 == *k).map(|(_, to, out)| (*from, *to, Some(*out)))).filter(|s| s.0 != s.1).collect()
+}
+
+/// A symbol's body as placed: its drawing and the inner ends of its pins (not the pin tips).
+fn body_box(sch: &Schematic, s: &PlacedSymbol) -> Option<Bounds> {
+    let def = sch.symbol(&s.symbol)?;
+    let mut b: Option<Bounds> = None;
+    for g in def.unit_graphics(s.unit, s.style) {
+        if let SymbolItem::Shape(sh) = &g.item {
+            for p in sh.geom.extent() {
+                b = Some(Bounds::union(b, Bounds::of(s.placement.apply(p))));
+            }
+        }
+    }
+    for p in def.unit_pins(s.unit, s.style) {
+        b = Some(Bounds::union(b, Bounds::of(s.placement.apply(p.inner_end()))));
+    }
+    b
+}
+
+/// Whether a level or upright segment runs through a box's inside.
+fn crosses(a: Pt, b: Pt, r: &Bounds) -> bool {
+    let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+    let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+    x0 < r.max.x && x1 > r.min.x && y0 < r.max.y && y1 > r.min.y
+}
+
+/// A path without repeated points or straight-through corners.
+fn tidy(pts: Vec<Pt>) -> Vec<Pt> {
+    let mut out: Vec<Pt> = vec![];
+    for p in pts {
+        if out.last() == Some(&p) {
+            continue;
+        }
+        if out.len() >= 2 {
+            let (a, b) = (out[out.len() - 2], out[out.len() - 1]);
+            if (a.x == b.x && b.x == p.x) || (a.y == b.y && b.y == p.y) {
+                out.pop();
+            }
+        }
+        out.push(p);
+    }
+    out
+}
+
+/// A square path from `o` to `e`, coming into `e` the way `out` points (a pin), clear of
+/// `bodies` where it can be: the shortest of the L and Z shapes (fewest bends first),
+/// starting along `level` (the wire's old direction) when that ties.
+fn square_path(o: Pt, e: Pt, out: Option<Pt>, level: bool, bodies: &[Bounds]) -> Vec<Pt> {
+    let g = SCHEMATIC_GRID;
+    // A pin is left straight, at least a grid step, before any bend.
+    let q = out.map_or(e, |d| e + Pt::new(d.x * g, d.y * g));
+    let mid = |a: Nm, b: Nm| snap(Pt::new((a + b) / 2, 0), g).x;
+    let mut cands = vec![
+        vec![o, Pt::new(q.x, o.y), q, e],
+        vec![o, Pt::new(o.x, q.y), q, e],
+        vec![o, Pt::new(mid(o.x, q.x), o.y), Pt::new(mid(o.x, q.x), q.y), q, e],
+        vec![o, Pt::new(o.x, mid(o.y, q.y)), Pt::new(q.x, mid(o.y, q.y)), q, e],
+    ];
+    if let Some(d) = out {
+        // Out of the pin, along it, then across: for a pin facing away from `o`.
+        let far = |k: Nm| e + Pt::new(d.x * k, d.y * k);
+        let r = far(2 * g);
+        cands.push(vec![o, Pt::new(o.x, r.y), r, e]);
+        cands.push(vec![o, Pt::new(r.x, o.y), r, e]);
+    }
+    cands
+        .into_iter()
+        .map(tidy)
+        .filter(|p| p.len() >= 2 && p.windows(2).all(|s| s[0].x == s[1].x || s[0].y == s[1].y))
+        // Coming into a pin from its own side only.
+        .filter(|p| out.is_none_or(|d| {
+            let before = p[p.len() - 2];
+            let (dx, dy) = ((before.x - e.x).signum(), (before.y - e.y).signum());
+            (dx, dy) == (d.x, d.y)
+        }))
+        .min_by_key(|p| {
+            let through = p.windows(2).filter(|s| bodies.iter().any(|b| crosses(s[0], s[1], b))).count();
+            let first_level = p[0].y == p[1].y;
+            let len: i64 = p.windows(2).map(|s| (s[1].x - s[0].x).abs() + (s[1].y - s[0].y).abs()).sum();
+            (through, p.len(), first_level != level, len)
+        })
+        .unwrap_or_else(|| vec![o, e])
+}
+
+/// Keeps wires (other than `skip`) on points that moved, and square: the end on a moved point
+/// follows it. A wire that would go slanted slides the free corner beyond it (the other wire
+/// of an L, so both stay square) when it then still comes into its pin from outside, or is
+/// re-run as a square path ([`square_path`]) clear of the moved symbols.
+fn follow_wires(sch: &mut Schematic, sheet: usize, items: &[SchItem], shifts: &[Shift], skip: &[Uuid]) {
+    if shifts.is_empty() {
+        return;
+    }
+    // Where a corner can't slide from: pins (where they are now) and labels.
+    let fixed: Vec<Pt> = sch.sheets[sheet].symbols.iter().flat_map(|s| sch.placed_pins(s).map(|(_, p)| p)).chain(sch.sheets[sheet].labels.iter().map(|l| l.text.at)).collect();
+    let bodies: Vec<Bounds> = sch.sheets[sheet].symbols.iter().filter(|s| items.contains(&SchItem::Symbol(s.id))).filter_map(|s| body_box(sch, s)).collect();
+    let sh = &mut sch.sheets[sheet];
+    let shift_of = |p: Pt| shifts.iter().find(|s| s.0 == p).copied();
+    let ids: Vec<Uuid> = sh.wires.iter().filter(|w| !skip.contains(&w.id)).map(|w| w.id).collect();
+    let mut slid: Vec<Uuid> = vec![];
+    for id in ids {
+        if slid.contains(&id) {
+            continue;
+        }
+        let Some(i) = sh.wires.iter().position(|w| w.id == id) else { continue };
+        let w = sh.wires[i].clone();
+        let (s, o) = match (shift_of(w.a), shift_of(w.b)) {
+            (None, None) => continue,
+            (Some(a), Some(b)) => {
+                sh.wires[i].a = a.1;
+                sh.wires[i].b = b.1;
+                continue;
+            }
+            (Some(s), None) => (s, w.b),
+            (None, Some(s)) => (s, w.a),
+        };
+        let e = s.1;
+        let level = w.a.y == w.b.y && w.a.x != w.b.x;
+        let upright = w.a.x == w.b.x && w.a.y != w.b.y;
+        // From outside the pin (or no pin): the way in is fine.
+        let enters_ok = |from: Pt| s.2.is_none_or(|d| ((from.x - e.x).signum(), (from.y - e.y).signum()) == (d.x, d.y));
+        if (o.x == e.x || o.y == e.y || !(level || upright)) && enters_ok(o) {
+            (sh.wires[i].a, sh.wires[i].b) = (o, e);
+            continue;
+        }
+        // The free corner beyond slides along the other wire.
+        let others: Vec<usize> = (0..sh.wires.len()).filter(|&j| j != i && (sh.wires[j].a == o || sh.wires[j].b == o)).collect();
+        if (level || upright)
+            && let [j] = others[..]
+            && !fixed.contains(&o)
+            && shift_of(o).is_none()
+            && !skip.contains(&sh.wires[j].id)
+        {
+            let v = &sh.wires[j];
+            let across = if level { v.a.x == v.b.x } else { v.a.y == v.b.y };
+            let o2 = if level { Pt::new(o.x, e.y) } else { Pt::new(e.x, o.y) };
+            if across && o2 != e && enters_ok(o2) {
+                let v = &mut sh.wires[j];
+                if v.a == o {
+                    v.a = o2;
+                } else {
+                    v.b = o2;
+                }
+                slid.push(v.id);
+                (sh.wires[i].a, sh.wires[i].b) = (o2, e);
+                continue;
+            }
+        }
+        let pts = square_path(o, e, s.2, level, &bodies);
+        (sh.wires[i].a, sh.wires[i].b) = (pts[0], pts[1]);
+        for k in 1..pts.len() - 1 {
+            sh.wires.push(Wire { id: Uuid::new_v4(), a: pts[k], b: pts[k + 1], stroke: w.stroke });
+        }
+    }
+    sh.wires.retain(|w| w.a != w.b);
+}
+
+/// Moves items by `d`. With `drag` (G, or dragging with the mouse), unselected wires on the
+/// moved symbols' pins (and on moved wire ends and labels) stay on them and square
+/// ([`follow_wires`]); without it (M) they stay put.
 pub fn move_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], d: Pt, drag: bool) {
-    let mut anchors: Vec<Pt> = vec![];
+    let mut shifts: Vec<Shift> = vec![];
     if drag {
+        shifts.extend(pin_spots(sch, sheet, items).into_iter().map(|(_, p, out)| (p, p + d, Some(out))));
         let sh = &sch.sheets[sheet];
         for it in items {
             match it {
-                SchItem::Symbol(id) => {
-                    if let Some(s) = sh.symbols.iter().find(|s| s.id == *id) {
-                        anchors.extend(symbol_pin_points(sch, s));
-                    }
-                }
                 SchItem::Wire(id) => {
                     if let Some(w) = sh.wires.iter().find(|w| w.id == *id) {
-                        anchors.extend([w.a, w.b]);
+                        shifts.extend([(w.a, w.a + d, None), (w.b, w.b + d, None)]);
                     }
                 }
-                SchItem::Label(id) => anchors.extend(sh.labels.iter().filter(|l| l.id == *id).map(|l| l.text.at)),
+                SchItem::Label(id) => shifts.extend(sh.labels.iter().filter(|l| l.id == *id).map(|l| (l.text.at, l.text.at + d, None))),
                 _ => {}
             }
         }
@@ -345,21 +531,13 @@ pub fn move_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], d: Pt, d
         }
     }
     if drag {
-        let moved_wires: Vec<Uuid> = items.iter().filter_map(|i| if let SchItem::Wire(id) = i { Some(*id) } else { None }).collect();
-        for w in sh.wires.iter_mut().filter(|w| !moved_wires.contains(&w.id)) {
-            if anchors.contains(&w.a) {
-                w.a = w.a + d;
-            }
-            if anchors.contains(&w.b) {
-                w.b = w.b + d;
-            }
-        }
         for j in sh.junctions.iter_mut() {
-            if anchors.contains(&j.at) && !items.contains(&SchItem::Junction(j.id)) {
+            if shifts.iter().any(|s| s.0 == j.at) && !items.contains(&SchItem::Junction(j.id)) {
                 j.at = j.at + d;
             }
         }
-        sh.wires.retain(|w| w.a != w.b);
+        let moved_wires: Vec<Uuid> = items.iter().filter_map(|i| if let SchItem::Wire(id) = i { Some(*id) } else { None }).collect();
+        follow_wires(sch, sheet, items, &shifts, &moved_wires);
     }
 }
 
@@ -387,8 +565,37 @@ fn rot_text(t: &mut Text, c: Pt) {
     t.angle = normalize_deg(t.angle + 90.0);
 }
 
-/// Rotates items a quarter turn counter-clockwise about `center` (R).
+/// Rotates items a quarter turn counter-clockwise about `center` (R). Wires on the turned pins
+/// (and on turned wire ends) stay on them, square ([`follow_wires`]).
 pub fn rotate_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt) {
+    keeping_wires(sch, sheet, items, |sch| turn_items(sch, sheet, items, center));
+}
+
+/// Mirrors items (X, Y; see [`flip_items`]), wires on them staying on them, square.
+pub fn mirror_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt, up_down: bool) {
+    keeping_wires(sch, sheet, items, |sch| flip_items(sch, sheet, items, center, up_down));
+}
+
+/// Runs an edit of `items` and brings the other wires along with their pins and wire ends.
+fn keeping_wires(sch: &mut Schematic, sheet: usize, items: &[SchItem], edit: impl FnOnce(&mut Schematic)) {
+    let wires: Vec<Uuid> = items.iter().filter_map(|i| if let SchItem::Wire(id) = i { Some(*id) } else { None }).collect();
+    let ends = |sch: &Schematic| sch.sheets[sheet].wires.iter().filter(|w| wires.contains(&w.id)).flat_map(|w| [(w.id, 0, w.a), (w.id, 1, w.b)]).collect::<Vec<_>>();
+    let (pins, wire_ends) = (pin_spots(sch, sheet, items), ends(sch));
+    edit(sch);
+    let mut shifts = pin_shifts(&pins, &pin_spots(sch, sheet, items));
+    for (id, k, to) in ends(sch) {
+        if let Some((_, _, from)) = wire_ends.iter().find(|e| e.0 == id && e.1 == k)
+            && *from != to
+        {
+            shifts.push((*from, to, None));
+        }
+    }
+    follow_wires(sch, sheet, items, &shifts, &wires);
+}
+
+/// Rotates items a quarter turn counter-clockwise about `center`, leaving wires that aren't
+/// among them where they are (a symbol being placed).
+pub fn turn_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt) {
     let sh = &mut sch.sheets[sheet];
     let r = |p: Pt| center + (p - center).rotated(90.0);
     for it in items {
@@ -546,7 +753,7 @@ pub fn pin_at(sch: &Schematic, sheet: usize, p: Pt, tol: Nm) -> Option<(Uuid, St
 /// Mirrors items about the vertical line through `center` (X: left for right) or, with `up_down`,
 /// the horizontal one (Y: top for bottom). A symbol keeps its anchor's mirrored place and turns
 /// over (its rotation negated, its mirror flag toggled; mirrored twice it is half turned).
-pub fn mirror_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt, up_down: bool) {
+pub fn flip_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], center: Pt, up_down: bool) {
     let m = |p: Pt| if up_down { Pt::new(p.x, 2 * center.y - p.y) } else { Pt::new(2 * center.x - p.x, p.y) };
     let flip_text = |t: &mut Text| {
         t.at = m(t.at);
@@ -795,7 +1002,9 @@ mod tests {
         let d = Pt::mm(5.08, 0.0);
         let mut dragged = s.clone();
         move_items(&mut dragged, 0, &[SchItem::Symbol(r)], d, true);
-        assert_eq!(dragged.sheets[0].wires[0].a, top + d);
+        // Still on the pin (through a bend: the wire went straight up, the pin moved across).
+        assert!(dragged.sheets[0].wires.iter().any(|w| w.a == top + d || w.b == top + d));
+        assert!(square_and_joined(&dragged, &[top + Pt::mm(0.0, 10.16)]));
         move_items(&mut s, 0, &[SchItem::Symbol(r)], d, false);
         assert_eq!(s.sheets[0].wires[0].a, top);
         // Rotating about its own anchor turns the pins: the vertical R lies flat.
@@ -803,6 +1012,71 @@ mod tests {
         rotate_items(&mut dragged, 0, &[SchItem::Symbol(r)], c);
         let pins: Vec<Pt> = dragged.placed_pins(&dragged.sheets[0].symbols[0]).map(|(_, p)| p).collect();
         assert_eq!(pins[0].y, pins[1].y);
+    }
+
+    /// Every wire is level or upright, and every wire end but the `free` ones is on a pin, a
+    /// label, another wire's end or along another wire.
+    fn square_and_joined(s: &Schematic, free: &[Pt]) -> bool {
+        let sh = &s.sheets[0];
+        let pins: Vec<Pt> = sh.symbols.iter().flat_map(|x| s.placed_pins(x).map(|(_, p)| p)).collect();
+        sh.wires.iter().all(|w| w.a.x == w.b.x || w.a.y == w.b.y)
+            && sh.wires.iter().all(|w| {
+                [w.a, w.b].iter().all(|&e| {
+                    free.contains(&e) || pins.contains(&e) || sh.labels.iter().any(|l| l.text.at == e) || sh.wires.iter().any(|v| v.id != w.id && crate::connectivity::on_segment(e, v.a, v.b))
+                })
+            })
+    }
+
+    /// A pin with an L of wire going off to the left and up: (pin, corner, far end).
+    fn l_wire(s: &mut Schematic, lib: &LibraryTable) -> (Uuid, Pt, Pt, Pt) {
+        // A level R: its pin 2 on the left.
+        let r = place_symbol(s, 0, lib.symbol("Device:R").unwrap(), Pt::mm(50.8, 50.8), Uuid::new_v4());
+        turn_items(s, 0, &[SchItem::Symbol(r)], Pt::mm(50.8, 50.8));
+        let left = s.placed_pins(&s.sheets[0].symbols[0]).map(|(_, p)| p).min_by_key(|p| p.x).unwrap();
+        let corner = left - Pt::mm(10.16, 0.0);
+        let far = corner + Pt::mm(0.0, 12.7);
+        add_wire(s, 0, &[left, corner, far]);
+        (r, left, corner, far)
+    }
+
+    #[test]
+    fn dragging_slides_the_corner_so_wires_stay_square() {
+        let (mut s, lib) = sch();
+        let (r, left, corner, far) = l_wire(&mut s, &lib);
+        // Down 5.08: the corner comes down with it; the far end stays.
+        move_items(&mut s, 0, &[SchItem::Symbol(r)], Pt::mm(0.0, -5.08), true);
+        let w = &s.sheets[0].wires;
+        assert_eq!(w.len(), 2, "{w:?}");
+        let new_corner = corner - Pt::mm(0.0, 5.08);
+        assert!(w.iter().any(|x| (x.a, x.b) == (left - Pt::mm(0.0, 5.08), new_corner) || (x.b, x.a) == (left - Pt::mm(0.0, 5.08), new_corner)));
+        assert!(w.iter().any(|x| [x.a, x.b].contains(&far) && [x.a, x.b].contains(&new_corner)));
+        assert!(square_and_joined(&s, &[far]));
+    }
+
+    #[test]
+    fn rotating_keeps_wires_on_the_pins_and_square() {
+        let (mut s, lib) = sch();
+        let (r, _, _, far) = l_wire(&mut s, &lib);
+        let right = s.placed_pins(&s.sheets[0].symbols[0]).map(|(_, p)| p).max_by_key(|p| p.x).unwrap();
+        let free = right + Pt::mm(7.62, 0.0);
+        add_wire(&mut s, 0, &[right, free]);
+        for _ in 0..4 {
+            let c = selection_center(&s, 0, &[SchItem::Symbol(r)]);
+            rotate_items(&mut s, 0, &[SchItem::Symbol(r)], c);
+            assert!(square_and_joined(&s, &[far, free]), "{:?}", s.sheets[0].wires);
+            let pins: Vec<Pt> = s.placed_pins(&s.sheets[0].symbols[0]).map(|(_, p)| p).collect();
+            for p in pins {
+                assert!(s.sheets[0].wires.iter().any(|w| w.a == p || w.b == p), "pin at {p:?} left unwired");
+            }
+            let body = body_box(&s, &s.sheets[0].symbols[0]).unwrap();
+            for w in &s.sheets[0].wires {
+                assert!(!crosses(w.a, w.b, &body), "{w:?} runs through the body {body:?}");
+            }
+        }
+        // Mirrored too.
+        let c = selection_center(&s, 0, &[SchItem::Symbol(r)]);
+        mirror_items(&mut s, 0, &[SchItem::Symbol(r)], c, true);
+        assert!(square_and_joined(&s, &[far, free]));
     }
 
     #[test]

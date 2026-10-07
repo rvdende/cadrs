@@ -2,17 +2,23 @@
 //!
 //! - **Select** (Esc): click picks (a field alone when its text is clicked), Shift+click adds,
 //!   Ctrl+click toggles; dragging on empty paper boxes — left to right takes what is wholly
-//!   inside, right to left what the box touches; dragging a selected item moves it with its
-//!   wires attached. **M** moves the selection (wires stay), **G** drags it (wires follow),
-//!   **R** rotates it, **Del** deletes it, **E** edits the symbol's fields.
+//!   inside, right to left what the box touches; dragging an item moves it with its
+//!   wires attached (they stay on the pins and square: corners slide, bends are added).
+//!   **M** moves the selection (wires stay), **G** drags it (wires follow),
+//!   **R** rotates it and **X** / **Y** mirror it (wires on it follow, square), **Del**
+//!   deletes it, **E** edits the symbol's fields.
 //! - **A** the library browser ([`super::browser`]), **P** the same for power symbols; the
-//!   chosen symbol follows the pointer and a click places it (annotated).
+//!   chosen symbol follows the pointer (**R** turns it, **X** / **Y** mirror it) and a click
+//!   places it (annotated). Tools that put something at a point show a crosshair on the grid
+//!   point they will use, its square filled green when that point connects (a wire or pin).
+//!   The sheet shows the grid as dots.
 //! - **W** wire: click, click, … ; double-click (or a click on a pin or wire) ends; Esc cancels.
 //! - **X** / **Y** mirror the selection left for right / top for bottom; **Ctrl+C** copies,
 //!   **Ctrl+V** pastes and **Ctrl+D** duplicates (both follow the pointer to a click);
 //!   **Ctrl+L** a global label, **T** a text note; **`** highlights the net under the pointer
 //!   (again, or Esc: off); **Ctrl+F** finds a symbol by reference or value.
-//! - **L** net label (its name asked first), **Q** no-connect flag.
+//! - **L** net label (its name asked first; **R** turns it while it follows the pointer),
+//!   **Q** no-connect flag.
 //! - The strip: those tools, Annotate, Assign footprints, ERC, BOM export, Page settings.
 //!
 //! Every change is one undo step (`ui::commit`).
@@ -105,8 +111,45 @@ pub struct SchState {
     pub boxing: Option<Pt>,
     /// What Ctrl+C copied.
     pub clipboard: Option<se::SchClip>,
+    /// How the symbol or label being placed is turned (R: quarter turns) and mirrored (X, Y).
+    pub orient: Orient,
     /// The net highlighted (` on a wire or pin): its name and items.
     pub net: Option<(String, Vec<SchItem>)>,
+}
+
+
+/// How a symbol or label being placed sits: quarter turns counter-clockwise, then mirrored left
+/// for right (X) and top for bottom (Y).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Orient {
+    pub turns: u8,
+    pub mirror_x: bool,
+    pub mirror_y: bool,
+}
+
+/// Places a symbol at `at`, turned and mirrored as `o` says (no wires are touched).
+fn place_oriented(d: &mut Design, sym: &Symbol, at: Pt, id: uuid::Uuid, o: Orient) {
+    let id = se::place_symbol(&mut d.schematic, 0, sym, at, id);
+    let item = [SchItem::Symbol(id)];
+    for _ in 0..o.turns {
+        se::turn_items(&mut d.schematic, 0, &item, at);
+    }
+    if o.mirror_x {
+        se::flip_items(&mut d.schematic, 0, &item, at, false);
+    }
+    if o.mirror_y {
+        se::flip_items(&mut d.schematic, 0, &item, at, true);
+    }
+}
+
+/// A label's angle for an orientation: turned, and pointed the other way by a mirror across it.
+fn label_angle(o: Orient) -> f64 {
+    let mut a = o.turns as f64 * 90.0;
+    let level = o.turns.is_multiple_of(2);
+    if (o.mirror_x && level) || (o.mirror_y && !level) {
+        a += 180.0;
+    }
+    cadrs_eda::units::normalize_deg(a)
 }
 
 pub fn register(app: &mut App) {
@@ -173,6 +216,7 @@ pub fn run_action(w: &mut World, action: &str) {
 pub fn set_tool(w: &mut World, tool: Tool) {
     let mut s = w.resource_mut::<SchState>();
     s.tool = tool;
+    s.orient = Orient::default();
     s.moving = None;
     s.boxing = None;
     w.resource_mut::<Preview>().set(None);
@@ -203,6 +247,7 @@ fn on_click(mut reader: MessageReader<EdaClick>, mut commands: Commands) {
 
 fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
     let tool = w.resource::<SchState>().tool.clone();
+    let orient = w.resource::<SchState>().orient;
     // A move started with M or G ends with a click.
     if let Some(m) = w.resource::<SchState>().moving.clone().filter(|m| !m.on_release) {
         finish_move(w, &m, at);
@@ -246,7 +291,7 @@ fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
             let at = snap(at);
             let mark = w.resource::<ActiveDocument>().history.undo_len();
             let placed = ui::commit(w, "Place symbol", |d| {
-                se::place_symbol(&mut d.schematic, 0, &sym, at, uuid::Uuid::new_v4());
+                place_oriented(d, &sym, at, uuid::Uuid::new_v4(), orient);
                 Ok(())
             });
             // A library part placed for the first time joins the studio's Components (one
@@ -276,7 +321,7 @@ fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
         Tool::Label(text) => {
             let at = snap(at);
             ui::commit(w, "Add label", |d| {
-                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Local);
+                se::add_label(&mut d.schematic, 0, &text, at, label_angle(orient), LabelKind::Local);
                 Ok(())
             });
             set_tool(w, Tool::Select);
@@ -301,7 +346,7 @@ fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
         Tool::GlobalLabel(text) => {
             let at = snap(at);
             ui::commit(w, "Add global label", |d| {
-                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Global(Default::default()));
+                se::add_label(&mut d.schematic, 0, &text, at, label_angle(orient), LabelKind::Global(Default::default()));
                 Ok(())
             });
             set_tool(w, Tool::Select);
@@ -433,6 +478,18 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
             }
             continue;
         }
+        // While placing a symbol or a label: R turns it, X and Y mirror it.
+        let placing = matches!(world.resource::<SchState>().tool, Tool::Place(_) | Tool::Label(_) | Tool::GlobalLabel(_));
+        if placing && matches!(k.key_code, KeyCode::KeyR | KeyCode::KeyX | KeyCode::KeyY) {
+            let mut s = world.resource_mut::<SchState>();
+            let o = &mut s.orient;
+            match k.key_code {
+                KeyCode::KeyR => o.turns = (o.turns + 1) % 4,
+                KeyCode::KeyX => o.mirror_x = !o.mirror_x,
+                _ => o.mirror_y = !o.mirror_y,
+            }
+            continue;
+        }
         match k.key_code {
             KeyCode::Escape => {
                 let had = !matches!(world.resource::<SchState>().tool, Tool::Select) || world.resource::<SchState>().moving.is_some();
@@ -515,6 +572,17 @@ fn hit_items(w: &World, at: Pt) -> Vec<SchItem> {
 
 /// Shows what the tool would do at the pointer: a symbol to place, the wire so far, a move.
 fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
+    // The crosshair of a tool that puts something down at a point: on the grid point it will
+    // use, marked when that point connects (a wire or a pin is there).
+    let placing = shown(world) && matches!(world.resource::<SchState>().tool, Tool::Place(_) | Tool::Wire(_) | Tool::Label(_) | Tool::GlobalLabel(_) | Tool::NoConnect);
+    let cross = placing.then(|| {
+        let at = snap(world.resource::<EdaPointer>().at);
+        let connects = ui::current(world).is_some_and(|(_, _, d)| se::pin_at(&d.schematic, 0, at, 1000).is_some() || d.schematic.sheets[0].wires.iter().any(|w| cadrs_eda::connectivity::on_segment(at, w.a, w.b)));
+        (at, connects)
+    });
+    if world.resource::<super::Crosshair>().0 != cross {
+        world.resource_mut::<super::Crosshair>().0 = cross;
+    }
     if !shown(world) {
         return;
     }
@@ -522,6 +590,7 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
     let s = world.resource::<SchState>();
     let key = (at, s.selection.len() as u64 ^ (s.tool.action().len() as u64) << 8);
     let tool = s.tool.clone();
+    let orient = s.orient;
     let moving = s.moving.clone();
     if *last == Some(key) && moving.is_none() && matches!(tool, Tool::Select) {
         return;
@@ -535,7 +604,7 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
     } else {
         match tool {
             Tool::Place(sym) => {
-                se::place_symbol(&mut d.schematic, 0, &sym, at, uuid::Uuid::nil());
+                place_oriented(&mut d, &sym, at, uuid::Uuid::nil(), orient);
                 Some(d)
             }
             Tool::Wire(pts) if !pts.is_empty() => {
@@ -549,11 +618,11 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
                 Some(d)
             }
             Tool::Label(text) => {
-                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Local);
+                se::add_label(&mut d.schematic, 0, &text, at, label_angle(orient), LabelKind::Local);
                 Some(d)
             }
             Tool::GlobalLabel(text) => {
-                se::add_label(&mut d.schematic, 0, &text, at, 0.0, LabelKind::Global(Default::default()));
+                se::add_label(&mut d.schematic, 0, &text, at, label_angle(orient), LabelKind::Global(Default::default()));
                 Some(d)
             }
             Tool::Text(text) => {

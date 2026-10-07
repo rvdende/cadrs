@@ -148,6 +148,19 @@ pub struct EdaMedium;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct EdaThick;
 
+/// The schematic grid's dots (2 px squares).
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct EdaDots;
+/// The placing crosshair (1 px).
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct EdaCross;
+
+/// Where a placing tool will put its point (snapped to the grid), and whether that point
+/// connects (it is on a wire or a pin); drawn as a crosshair with a small square, filled when
+/// it connects. Set by the tools each frame, `None` when nothing is being placed.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct Crosshair(pub Option<(cadrs_eda::units::Pt, bool)>);
+
 /// The representative width (mm) of each class, and the class of a line width (nm).
 const CLASSES: [f32; 5] = [0.0, 0.1, 0.15, 0.25, 0.4];
 
@@ -184,10 +197,13 @@ impl Plugin for EdaPlugin {
             .init_gizmo_group::<EdaThin>()
             .init_gizmo_group::<EdaMedium>()
             .init_gizmo_group::<EdaThick>()
+            .init_gizmo_group::<EdaDots>()
+            .init_gizmo_group::<EdaCross>()
+            .init_resource::<Crosshair>()
             .add_systems(Startup, (spawn_camera, configure_gizmos))
             .add_systems(
                 Update,
-                (track_context, sync_mode_bar, navigate, fit_views, place_camera, rebuild_scene, set_line_widths, draw_lines)
+                (track_context, sync_mode_bar, navigate, fit_views, place_camera, rebuild_scene, set_line_widths, draw_lines, draw_overlay)
                     .chain()
                     .run_if(in_state(AppState::Document)),
             )
@@ -229,6 +245,10 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     set(store.config_mut::<EdaThin>().0);
     set(store.config_mut::<EdaMedium>().0);
     set(store.config_mut::<EdaThick>().0);
+    set(store.config_mut::<EdaDots>().0);
+    set(store.config_mut::<EdaCross>().0);
+    store.config_mut::<EdaDots>().0.line.width = 2.0;
+    store.config_mut::<EdaCross>().0.line.width = 1.5;
 }
 
 fn reset(mut ui: ResMut<EdaUi>, mut scene: ResMut<EdaScene>, mut eda: ResMut<Eda2d>, q: Query<Entity, With<EdaEntity>>, mut commands: Commands) {
@@ -749,6 +769,49 @@ fn draw_lines(
             2 => g2.linestrip_2d(pts, c),
             3 => g3.linestrip_2d(pts, c),
             _ => g4.linestrip_2d(pts, c),
+        }
+    }
+}
+
+/// The schematic grid as dots (every grid point, or every 2nd, 4th, … when they'd be closer
+/// than 10 px), and the placing crosshair ([`Crosshair`]).
+fn draw_overlay(eda: Res<Eda2d>, ui: Res<EdaUi>, cross: Res<Crosshair>, mut dots: Gizmos<EdaDots>, mut cg: Gizmos<EdaCross>) {
+    let Some((_, _, mode)) = eda.0 else { return };
+    if !matches!(mode, Mode::Schematic | Mode::Symbol) {
+        return;
+    }
+    let Some(v) = current_view(&ui, &eda) else { return };
+    let mm = |nm: i64| nm as f32 / 1e6;
+    let mut step = cadrs_eda::units::SCHEMATIC_GRID;
+    while (step as f64 / 1e6) * v.scale < 10.0 {
+        step *= 2;
+    }
+    let vis = v.visible();
+    let (x0, x1) = (vis.min.x.div_euclid(step), vis.max.x.div_euclid(step) + 1);
+    let (y0, y1) = (vis.min.y.div_euclid(step), vis.max.y.div_euclid(step) + 1);
+    // A dot is a 2 px stroke a pixel and a half long.
+    let len = (1.5 / v.scale) as f32;
+    let dot = Color::srgba(0.45, 0.45, 0.45, 0.7);
+    if (x1 - x0) * (y1 - y0) < 40_000 {
+        for i in x0..=x1 {
+            for j in y0..=y1 {
+                let (x, y) = (mm(i * step), mm(j * step));
+                dots.line_2d(Vec2::new(x - len / 2.0, y), Vec2::new(x + len / 2.0, y), dot);
+            }
+        }
+    }
+    if let Some((at, connects)) = cross.0 {
+        let c = Vec2::new(mm(at.x), mm(at.y));
+        let px = 1.0 / v.scale as f32;
+        let ink = Color::srgb(0.1, 0.1, 0.1);
+        cg.line_2d(c - Vec2::X * 36.0 * px, c + Vec2::X * 36.0 * px, ink);
+        cg.line_2d(c - Vec2::Y * 36.0 * px, c + Vec2::Y * 36.0 * px, ink);
+        let sq = if connects { Color::srgb(0.1, 0.6, 0.2) } else { Color::srgb(0.75, 0.55, 0.1) };
+        cg.rect_2d(Isometry2d::from_translation(c), Vec2::splat(11.0 * px), sq);
+        if connects {
+            cg.rect_2d(Isometry2d::from_translation(c), Vec2::splat(8.0 * px), sq);
+            cg.rect_2d(Isometry2d::from_translation(c), Vec2::splat(5.0 * px), sq);
+            cg.rect_2d(Isometry2d::from_translation(c), Vec2::splat(2.0 * px), sq);
         }
     }
 }
