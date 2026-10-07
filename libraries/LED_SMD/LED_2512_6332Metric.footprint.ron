@@ -52,11 +52,11 @@
       layer: TopCourtyard,
     ),
     (
-      shape: (geom: Line(a: (x: -1815000, y: 1800000), b: (x: 1815000, y: 1800000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Line(a: (x: -1925000, y: 1710000), b: (x: 1925000, y: 1710000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
     (
-      shape: (geom: Line(a: (x: -1815000, y: -1800000), b: (x: 1815000, y: -1800000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Line(a: (x: -1925000, y: -1710000), b: (x: 1925000, y: -1710000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
   ],

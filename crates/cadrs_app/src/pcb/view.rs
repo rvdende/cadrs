@@ -488,6 +488,13 @@ pub fn sync_pcb_view(world: &mut World) {
             (Arc::as_ptr(&mesh) as usize).hash(&mut sig);
             let mut v = board_bodies(world, *e, *b, board, &mesh, &mut sig);
             v.extend(bottom_keep_overlays(&v, board.thickness()));
+            // A native board is made: its edges the solder mask's green, as its faces.
+            if crate::eda::design(world.resource::<ActiveDocument>(), *e, *b).is_some() {
+                let m = cadrs_eda::render::made::MASK;
+                for body in v.iter_mut().filter(|x| x.class == BodyClass::Board) {
+                    body.color = [m[0], m[1], m[2], body.color[3]];
+                }
+            }
             v
         }
         Some((SceneKey::Component(e, _, pkg), board)) => {
@@ -505,6 +512,16 @@ pub fn sync_pcb_view(world: &mut World) {
     let old: Vec<Entity> = world.query_filtered::<Entity, With<PcbBodyMesh>>().iter(world).collect();
     for e in old {
         world.despawn(e);
+    }
+    let old: Vec<Entity> = world.query_filtered::<Entity, With<PcbSkin>>().iter(world).collect();
+    for e in old {
+        world.despawn(e);
+    }
+    // A native board shows as made: mask, copper, pads and silkscreen on its faces.
+    if let Some((SceneKey::Board(e, b), board)) = &want
+        && let Some(design) = shown_design(world, *e, *b).filter(|_| part_design(world, *e, *b).is_none())
+    {
+        spawn_skins(world, &design, board.thickness());
     }
     let bounds = {
         let mut b = BoardMesh { bodies: bodies.clone(), warnings: vec![] }.bounds();
@@ -552,6 +569,66 @@ pub fn sync_pcb_view(world: &mut World) {
     }
 }
 
+
+/// A native board's made look over its top and bottom faces: the mask, copper, pads and
+/// silkscreen of [`cadrs_eda::render::board_surface`] as a texture on the outline, a hair off
+/// each face.
+#[derive(Component)]
+pub struct PcbSkin;
+
+/// Pixels per mm of the board's texture.
+const SKIN_PX_PER_MM: f32 = 24.0;
+
+fn spawn_skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) {
+    use cadrs_eda::layer::Side;
+    use resvg::{tiny_skia, usvg};
+    let region = cadrs_eda::outline::board_region(&design.board);
+    let tris = cadrs_eda::poly::triangulate(&region);
+    let Some(bounds) = region.iter().flatten().fold(None, |acc, p| Some(cadrs_eda::units::Bounds::union(acc, cadrs_eda::units::Bounds::of(*p)))) else { return };
+    if tris.is_empty() {
+        return;
+    }
+    let (x0, y1) = (bounds.min.x as f64 / 1e6, bounds.max.y as f64 / 1e6);
+    let (w, h) = (bounds.size().w as f64 / 1e6, bounds.size().h as f64 / 1e6);
+    for (side, z, up) in [(Side::Top, thickness + 0.02, true), (Side::Bottom, -0.02, false)] {
+        let mut d = cadrs_eda::render::board_surface(&design.board, side);
+        d.bounds = Some(bounds);
+        let Ok(tree) = usvg::Tree::from_str(&cadrs_eda::render::to_svg(&d), &usvg::Options::default()) else { continue };
+        let (pw, ph) = ((w as f32 * SKIN_PX_PER_MM).ceil() as u32, (h as f32 * SKIN_PX_PER_MM).ceil() as u32);
+        let Some(mut pix) = tiny_skia::Pixmap::new(pw.max(1), ph.max(1)) else { continue };
+        let k = pw as f32 / tree.size().width();
+        resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pix.as_mut());
+        let image = Image::new(
+            bevy::render::render_resource::Extent3d { width: pw.max(1), height: ph.max(1), depth_or_array_layers: 1 },
+            bevy::render::render_resource::TextureDimension::D2,
+            pix.take(),
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let mut positions = vec![];
+        let mut uvs = vec![];
+        for t in tris.chunks(3) {
+            // Wound to face out of its side.
+            let order: [usize; 3] = if up { [0, 1, 2] } else { [0, 2, 1] };
+            for i in order {
+                let (x, y) = (t[i][0] / 1e6, t[i][1] / 1e6);
+                positions.push([x as f32, y as f32, z as f32]);
+                uvs.push([((x - x0) / w) as f32, ((y1 - y) / h) as f32]);
+            }
+        }
+        let n = positions.len();
+        let normal = if up { [0.0, 0.0, 1.0] } else { [0.0, 0.0, -1.0] };
+        let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![normal; n])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+            .with_inserted_indices(Indices::U32((0..n as u32).collect()));
+        let image = world.resource_mut::<Assets<Image>>().add(image);
+        let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color_texture: Some(image), unlit: true, double_sided: true, cull_mode: None, ..default() });
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+        world.spawn((Name::new(format!("pcb-skin-{}", if up { "top" } else { "bottom" })), PcbSkin, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, DespawnOnExit(AppState::Document)));
+    }
+}
 /// The grid of a component view for a part `size` mm across: (half extent, spacing).
 fn grid_of(size: f32) -> (f32, f32) {
     let raw = size / 8.0;

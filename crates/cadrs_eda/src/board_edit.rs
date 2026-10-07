@@ -224,6 +224,21 @@ pub fn add_text(board: &mut Board, text: &str, at: Pt, layer: Layer) -> Uuid {
     board.texts.push(crate::board::BoardText { id, text: t, layer, locked: false, knockout: false });
     id
 }
+
+/// Puts artwork on `layer`: each polygon a filled shape (a logo from [`crate::graphic_import`]).
+/// Returns their ids.
+pub fn add_artwork(board: &mut Board, polys: &[Vec<Pt>], layer: Layer) -> Vec<Uuid> {
+    polys
+        .iter()
+        .filter(|p| p.len() >= 3)
+        .map(|pts| {
+            let id = Uuid::new_v4();
+            let shape = crate::graphics::Shape { geom: crate::graphics::Geom::Polyline { pts: pts.clone(), closed: true }, stroke: crate::graphics::Stroke::width(0), fill: crate::graphics::Fill::Outline };
+            board.shapes.push(crate::board::BoardShape { id, shape, layer, locked: false, net: String::new() });
+            id
+        })
+        .collect()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

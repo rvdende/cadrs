@@ -46,7 +46,17 @@
       style: 0,
     ),
     (
-      item: Shape((geom: Polyline(pts: [(x: -1270000, y: -1270000), (x: 1270000, y: -1270000), (x: 0, y: -2540000), (x: -1270000, y: -1270000)], closed: true), stroke: (width: 254000, style: Default, color: None), fill: Outline)),
+      item: Shape((geom: Polyline(pts: [(x: -1270000, y: -1270000), (x: 1270000, y: -1270000)], closed: false), stroke: (width: 254000, style: Default, color: None), fill: r#None)),
+      unit: 0,
+      style: 0,
+    ),
+    (
+      item: Shape((geom: Polyline(pts: [(x: -762000, y: -1905000), (x: 762000, y: -1905000)], closed: false), stroke: (width: 254000, style: Default, color: None), fill: r#None)),
+      unit: 0,
+      style: 0,
+    ),
+    (
+      item: Shape((geom: Polyline(pts: [(x: -254000, y: -2540000), (x: 254000, y: -2540000)], closed: false), stroke: (width: 254000, style: Default, color: None), fill: r#None)),
       unit: 0,
       style: 0,
     ),

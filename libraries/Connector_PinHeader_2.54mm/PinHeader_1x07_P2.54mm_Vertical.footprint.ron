@@ -98,23 +98,11 @@
       layer: TopFab,
     ),
     (
-      shape: (geom: Line(a: (x: -1380000, y: -16620000), b: (x: 1380000, y: -16620000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Polyline(pts: [(x: -1330000, y: -1270000), (x: -1330000, y: -16570000), (x: 1330000, y: -16570000), (x: 1330000, y: -1270000), (x: -1330000, y: -1270000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
     (
-      shape: (geom: Line(a: (x: 1380000, y: -16620000), b: (x: 1380000, y: 1380000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
-      layer: TopSilk,
-    ),
-    (
-      shape: (geom: Line(a: (x: -1380000, y: 1380000), b: (x: 1380000, y: 1380000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
-      layer: TopSilk,
-    ),
-    (
-      shape: (geom: Line(a: (x: -1380000, y: -16620000), b: (x: -1380000, y: 1380000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
-      layer: TopSilk,
-    ),
-    (
-      shape: (geom: Polyline(pts: [(x: -1580000, y: 0), (x: -1580000, y: 1580000), (x: 0, y: 1580000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Polyline(pts: [(x: -1330000, y: 0), (x: -1330000, y: 1330000), (x: 0, y: 1330000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
     (

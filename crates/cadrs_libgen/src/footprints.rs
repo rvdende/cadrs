@@ -208,9 +208,10 @@ fn chip_smd(lib: &str, name: &str, pitch: f64, pad: Size, body: Size) -> Footpri
     f.shapes.push(fp_shape(rect_geom(-bw / 2.0, -bh / 2.0, bw / 2.0, bh / 2.0), Layer::TopFab, 0.1));
     let (cx, cy) = (pitch / 2.0 + cadrs_eda::units::to_mm(pad.w) / 2.0 + 0.25, (bh / 2.0).max(cadrs_eda::units::to_mm(pad.h) / 2.0) + 0.25);
     f.shapes.push(fp_shape(rect_geom(-cx, -cy, cx, cy), Layer::TopCourtyard, 0.05));
-    // Silkscreen along the long sides, between the pads.
-    let sx = (pitch / 2.0 - cadrs_eda::units::to_mm(pad.w) / 2.0 - SILK_GAP - SILK / 2.0).max(0.0);
-    let sy = (bh / 2.0).max(cadrs_eda::units::to_mm(pad.h) / 2.0 - 0.1) + SILK_GAP;
+    // Silkscreen along the long sides, between the pads, as KiCad's: just outside the body,
+    // stopping 0.15 mm short of the pads.
+    let sx = (pitch / 2.0 - cadrs_eda::units::to_mm(pad.w) / 2.0 - 0.15).max(0.0);
+    let sy = bh / 2.0 + 0.11;
     if sx > 0.1 && bh > 0.7 {
         for y in [sy, -sy] {
             f.shapes.push(fp_shape(Geom::Line { a: p(-sx, y), b: p(sx, y) }, Layer::TopSilk, SILK));
@@ -474,9 +475,23 @@ fn pin_header(socket: bool, cols: usize, rows: usize, pitch: f64) -> Footprint {
     let (x0, x1, y0, y1) = (-h, (cols as f64 - 1.0) * pitch + h, -(rows as f64 - 1.0) * pitch - h, h);
     fab_outline(&mut f, x0, y0, x1, y1, if socket { 0.0 } else { h / 2.0 });
     let g = 0.11;
-    silk_rect(&mut f, x0 - g, y0 - g, x1 + g, y1 + g);
-    // Pin 1: a corner mark outside the outline.
-    f.shapes.push(fp_shape(Geom::Polyline { pts: vec![p(x0 - g - 0.2, 0.0), p(x0 - g - 0.2, y1 + g + 0.2), p(0.0, y1 + g + 0.2)], closed: false }, Layer::TopSilk, SILK));
+    if socket {
+        silk_rect(&mut f, x0 - g, y0 - g, x1 + g, y1 + g);
+        // Pin 1: a corner mark outside the outline.
+        f.shapes.push(fp_shape(Geom::Polyline { pts: vec![p(x0 - g - 0.2, 0.0), p(x0 - g - 0.2, y1 + g + 0.2), p(0.0, y1 + g + 0.2)], closed: false }, Layer::TopSilk, SILK));
+    } else {
+        // As KiCad's headers: the outline steps in round pin 1's cell (open above it), and an
+        // L marks pin 1's corner.
+        let e = h + 0.06;
+        let (l, r, b, t) = (-e, (cols as f64 - 1.0) * pitch + e, -(rows as f64 - 1.0) * pitch - e, e);
+        let outline = if cols >= 2 {
+            vec![p(l, -h), p(l, b), p(r, b), p(r, t), p(h, t), p(h, -h), p(l, -h)]
+        } else {
+            vec![p(l, -h), p(l, b), p(r, b), p(r, -h), p(l, -h)]
+        };
+        f.shapes.push(fp_shape(Geom::Polyline { pts: outline, closed: false }, Layer::TopSilk, SILK));
+        f.shapes.push(fp_shape(Geom::Polyline { pts: vec![p(l, 0.0), p(l, t), p(0.0, t)], closed: false }, Layer::TopSilk, SILK));
+    }
     courtyard(&mut f, 0.5);
     place_texts(&mut f, y1 + 0.4, y0 - 0.4, (x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let body = if socket {

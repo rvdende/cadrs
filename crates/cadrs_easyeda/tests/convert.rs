@@ -111,13 +111,17 @@ fn import_ra01sh_online() {
     let dir = std::env::temp_dir().join(format!("cadrs-easyeda-{}", uuid::Uuid::new_v4())).join("LCSC");
     let r = cadrs_easyeda::import("C2764087", &dir, &PartInfo::default()).unwrap();
     assert_eq!((r.symbol.as_str(), r.footprint.as_str()), ("LCSC:RA-01SH", "LCSC:WIRELM-SMD_RA-01SH"));
-    let step = r.model.clone().unwrap();
-    assert!(std::fs::read(&step).unwrap().starts_with(b"ISO-10303-21"));
+    let shown = r.model.clone().unwrap();
+    assert_eq!(shown.extension().unwrap(), "obj");
     let (lib, errors) = cadrs_eda::library::load_library(&dir, cadrs_eda::library::Scope::Global);
     assert!(errors.is_empty(), "{errors:?}");
     let f = &lib.footprints[0];
-    assert_eq!(f.models[0].source, step.to_string_lossy());
-    assert!(f.models[0].body.is_some());
+    // The OBJ shown (it has colours), the STEP kept hidden beside it.
+    assert_eq!(f.models[0].source, shown.to_string_lossy());
+    assert!(f.models[0].visible && f.models[0].body.is_some());
+    assert!(f.models[1].source.ends_with(".step") && !f.models[1].visible);
+    assert!(std::fs::read(&f.models[1].source).unwrap().starts_with(b"ISO-10303-21"));
+    assert!(cadrs_eda::obj::read(&std::fs::read_to_string(&shown).unwrap()).unwrap().len() >= 3);
     let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     eprintln!("{:?}", r.warnings);
 }

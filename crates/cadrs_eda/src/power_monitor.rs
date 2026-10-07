@@ -190,6 +190,8 @@ pub fn swra416_footprint() -> Footprint {
     for (x, y) in holes {
         let mut h = crate::footprint::new_pad("", PadShape::Circle, p(x, y), Size::mm(1.0, 1.0), Some(mm(0.4)));
         h.kind = PadKind::ThroughHole;
+        // Copper only: tented, under the solder mask.
+        h.layers = LayerSet::ALL_COPPER;
         f.pads.push(h);
     }
     for layer in [Layer::TopCourtyard, Layer::BottomCourtyard] {
@@ -216,13 +218,28 @@ pub fn swra416_footprint() -> Footprint {
 
 /// The built-in libraries and the project's own (the two module symbols, two footprints).
 pub fn libraries() -> LibraryTable {
+    libraries_with(None)
+}
+
+/// [`libraries`] with another Ra-01SH (a symbol and footprint from elsewhere, such as the
+/// JLCPCB catalogue: the same pins and pads) in place of the drawn one.
+pub fn libraries_with(module: Option<(Symbol, Footprint)>) -> LibraryTable {
     let mut t = LibraryTable::builtin();
     let mut l = Library::new(LIB, Scope::Project);
     l.description = "Desk power monitor LoRa board".into();
-    l.put_symbol(ra01sh_symbol());
+    let substituted = module.is_some();
+    let (mut sym, mut fp) = module.unwrap_or_else(|| (ra01sh_symbol(), ra01sh_footprint()));
+    if substituted {
+        // The project's module footprint (EasyEDA's, as easyeda2kicad wrote it) has no
+        // courtyard; this board keeps it so.
+        fp.shapes.retain(|s| !matches!(s.layer, Layer::TopCourtyard | Layer::BottomCourtyard));
+    }
+    // A module is a U here, whatever its source called it (LCSC's says L).
+    le::set_symbol_field(&mut sym, fields::REFERENCE, "U?");
+    l.put_symbol(sym);
     l.put_symbol(esp32_header_symbol(false));
     l.put_symbol(esp32_header_symbol(true));
-    l.put_footprint(ra01sh_footprint());
+    l.put_footprint(fp);
     l.put_footprint(swra416_footprint());
     t.add(l);
     t
@@ -249,73 +266,73 @@ const PLACED: [Placed; 9] = [
     ("power_monitor:RA-01SH", 119.38, 120.65, 0, "power_monitor:WIRELM-SMD_RA-01SH", (119.38, 137.16), (119.38, 134.62)),
 ];
 
-/// Every wire, end to end (mm).
-const WIRES: [(f64, f64, f64, f64); 65] = [
-    (87.63, 140.97, 144.78, 140.97),
-    (186.69, 130.81, 175.26, 130.81),
-    (88.9, 139.7, 88.9, 118.11),
-    (186.69, 104.14, 186.69, 130.81),
-    (72.39, 157.48, 69.85, 157.48),
-    (95.25, 124.46, 107.95, 124.46),
-    (50.8, 130.81, 58.42, 130.81),
-    (96.52, 104.14, 96.52, 127.0),
-    (50.8, 104.14, 96.52, 104.14),
-    (69.85, 146.05, 82.55, 146.05),
-    (143.51, 124.46, 143.51, 139.7),
-    (82.55, 157.48, 82.55, 154.94),
-    (144.78, 140.97, 144.78, 121.92),
-    (175.26, 128.27, 177.8, 128.27),
-    (100.33, 121.92, 100.33, 147.32),
-    (146.05, 104.14, 146.05, 115.57),
-    (91.44, 125.73, 91.44, 116.84),
-    (139.7, 111.76, 130.81, 111.76),
-    (90.17, 138.43, 90.17, 115.57),
-    (96.52, 104.14, 139.7, 104.14),
-    (100.33, 147.32, 177.8, 147.32),
-    (86.36, 142.24, 86.36, 123.19),
-    (146.05, 119.38, 130.81, 119.38),
-    (50.8, 93.98, 50.8, 104.14),
-    (96.52, 127.0, 107.95, 127.0),
-    (82.55, 113.03, 95.25, 113.03),
-    (177.8, 147.32, 177.8, 128.27),
-    (146.05, 142.24, 146.05, 119.38),
-    (50.8, 146.05, 69.85, 146.05),
-    (130.81, 127.0, 142.24, 127.0),
-    (96.52, 129.54, 107.95, 129.54),
-    (142.24, 127.0, 142.24, 138.43),
-    (140.97, 104.14, 146.05, 104.14),
-    (142.24, 138.43, 90.17, 138.43),
-    (96.52, 157.48, 96.52, 129.54),
-    (82.55, 125.73, 91.44, 125.73),
-    (69.85, 157.48, 69.85, 154.94),
-    (82.55, 115.57, 90.17, 115.57),
-    (139.7, 111.76, 139.7, 104.14),
-    (140.97, 129.54, 140.97, 104.14),
-    (144.78, 121.92, 130.81, 121.92),
-    (50.8, 104.14, 50.8, 130.81),
-    (140.97, 104.14, 139.7, 104.14),
-    (95.25, 113.03, 95.25, 124.46),
-    (86.36, 142.24, 146.05, 142.24),
-    (143.51, 139.7, 88.9, 139.7),
-    (91.44, 116.84, 107.95, 116.84),
-    (80.01, 157.48, 82.55, 157.48),
-    (130.81, 124.46, 143.51, 124.46),
-    (82.55, 157.48, 86.36, 157.48),
-    (50.8, 130.81, 50.8, 146.05),
-    (87.63, 120.65, 87.63, 140.97),
-    (139.7, 104.14, 140.97, 104.14),
-    (82.55, 146.05, 82.55, 147.32),
-    (140.97, 129.54, 130.81, 129.54),
-    (69.85, 157.48, 67.31, 157.48),
-    (146.05, 115.57, 151.13, 115.57),
-    (82.55, 120.65, 87.63, 120.65),
-    (82.55, 123.19, 86.36, 123.19),
-    (69.85, 146.05, 69.85, 147.32),
-    (93.98, 157.48, 96.52, 157.48),
-    (146.05, 104.14, 186.69, 104.14),
-    (82.55, 118.11, 88.9, 118.11),
-    (67.31, 157.48, 67.31, 162.56),
-    (107.95, 121.92, 100.33, 121.92),
+/// Every wire, end to end (mm), and its colour (0xRRGGBB).
+const WIRES: [(f64, f64, f64, f64, u32); 65] = [
+    (87.63, 140.97, 144.78, 140.97, 0xFF9900),
+    (186.69, 130.81, 175.26, 130.81, 0x2E2E2E),
+    (88.9, 139.7, 88.9, 118.11, 0x0FBF5F),
+    (186.69, 104.14, 186.69, 130.81, 0x2E2E2E),
+    (72.39, 157.48, 69.85, 157.48, 0x00C2C2),
+    (95.25, 124.46, 107.95, 124.46, 0xFF130F),
+    (50.8, 130.81, 58.42, 130.81, 0x2E2E2E),
+    (96.52, 104.14, 96.52, 127.0, 0x2E2E2E),
+    (50.8, 104.14, 96.52, 104.14, 0x2E2E2E),
+    (69.85, 146.05, 82.55, 146.05, 0x2E2E2E),
+    (143.51, 124.46, 143.51, 139.7, 0x0FBF5F),
+    (82.55, 157.48, 82.55, 154.94, 0x00C2C2),
+    (144.78, 140.97, 144.78, 121.92, 0xFF9900),
+    (175.26, 128.27, 177.8, 128.27, 0x848484),
+    (100.33, 121.92, 100.33, 147.32, 0x848484),
+    (146.05, 104.14, 146.05, 115.57, 0x2E2E2E),
+    (91.44, 125.73, 91.44, 116.84, 0x9100FF),
+    (139.7, 111.76, 130.81, 111.76, 0x2E2E2E),
+    (90.17, 138.43, 90.17, 115.57, 0x000EFF),
+    (96.52, 104.14, 139.7, 104.14, 0x000000),
+    (100.33, 147.32, 177.8, 147.32, 0x848484),
+    (86.36, 142.24, 86.36, 123.19, 0xDAD200),
+    (146.05, 119.38, 130.81, 119.38, 0xDAD200),
+    (50.8, 93.98, 50.8, 104.14, 0x2E2E2E),
+    (96.52, 127.0, 107.95, 127.0, 0x2E2E2E),
+    (82.55, 113.03, 95.25, 113.03, 0xFF130F),
+    (177.8, 147.32, 177.8, 128.27, 0x848484),
+    (146.05, 142.24, 146.05, 119.38, 0xDAD200),
+    (50.8, 146.05, 69.85, 146.05, 0x2E2E2E),
+    (130.81, 127.0, 142.24, 127.0, 0x000EFF),
+    (96.52, 129.54, 107.95, 129.54, 0x00C2C2),
+    (142.24, 127.0, 142.24, 138.43, 0x000EFF),
+    (140.97, 104.14, 146.05, 104.14, 0x2E2E2E),
+    (142.24, 138.43, 90.17, 138.43, 0x000EFF),
+    (96.52, 157.48, 96.52, 129.54, 0x00C2C2),
+    (82.55, 125.73, 91.44, 125.73, 0x9100FF),
+    (69.85, 157.48, 69.85, 154.94, 0x00C2C2),
+    (82.55, 115.57, 90.17, 115.57, 0x000EFF),
+    (139.7, 111.76, 139.7, 104.14, 0x2E2E2E),
+    (140.97, 129.54, 140.97, 104.14, 0x000000),
+    (144.78, 121.92, 130.81, 121.92, 0xFF9900),
+    (50.8, 104.14, 50.8, 130.81, 0x2E2E2E),
+    (140.97, 104.14, 139.7, 104.14, 0x2E2E2E),
+    (95.25, 113.03, 95.25, 124.46, 0xFF130F),
+    (86.36, 142.24, 146.05, 142.24, 0xDAD200),
+    (143.51, 139.7, 88.9, 139.7, 0x0FBF5F),
+    (91.44, 116.84, 107.95, 116.84, 0x9100FF),
+    (80.01, 157.48, 82.55, 157.48, 0x00C2C2),
+    (130.81, 124.46, 143.51, 124.46, 0x0FBF5F),
+    (82.55, 157.48, 86.36, 157.48, 0x00C2C2),
+    (50.8, 130.81, 50.8, 146.05, 0x2E2E2E),
+    (87.63, 120.65, 87.63, 140.97, 0xFF9900),
+    (139.7, 104.14, 140.97, 104.14, 0x2E2E2E),
+    (82.55, 146.05, 82.55, 147.32, 0x2E2E2E),
+    (140.97, 129.54, 130.81, 129.54, 0x2E2E2E),
+    (69.85, 157.48, 67.31, 157.48, 0x00C2C2),
+    (146.05, 115.57, 151.13, 115.57, 0x2E2E2E),
+    (82.55, 120.65, 87.63, 120.65, 0xFF9900),
+    (82.55, 123.19, 86.36, 123.19, 0xDAD200),
+    (69.85, 146.05, 69.85, 147.32, 0x2E2E2E),
+    (93.98, 157.48, 96.52, 157.48, 0x00C2C2),
+    (146.05, 104.14, 186.69, 104.14, 0x2E2E2E),
+    (82.55, 118.11, 88.9, 118.11, 0x0FBF5F),
+    (67.31, 157.48, 67.31, 162.56, 0x00C2C2),
+    (107.95, 121.92, 100.33, 121.92, 0x848484),
 ];
 
 /// The net labels.
@@ -344,10 +361,18 @@ pub fn schematic(lib: &LibraryTable) -> Design {
             }
         }
     }
-    for (x0, y0, x1, y1) in WIRES {
-        se::add_wire(s, 0, &[p(x0, y0), p(x1, y1)]);
+    for (x0, y0, x1, y1, rgb) in WIRES {
+        let ids = se::add_wire(s, 0, &[p(x0, y0), p(x1, y1)]);
+        let color = crate::graphics::Color { r: (rgb >> 16) as u8, g: (rgb >> 8) as u8, b: rgb as u8, a: 255 };
+        se::set_wire_color(s, 0, &ids, Some(color));
     }
     se::fix_junctions(s, 0);
+    // Junctions coloured by hand (the rest the theme's).
+    for (x, y, rgb) in [(82.55, 157.48, 0x00C2C2), (69.85, 157.48, 0x00C2C2), (69.85, 146.05, 0x000000), (146.05, 104.14, 0x000000)] {
+        if let Some(j) = s.sheets[0].junctions.iter_mut().find(|j| j.at == p(x, y)) {
+            j.color = Some(crate::graphics::Color { r: (rgb >> 16) as u8, g: (rgb >> 8) as u8, b: rgb as u8, a: 255 });
+        }
+    }
     for (text, x, y) in LABELS {
         se::add_label(s, 0, text, p(x, y), 0.0, LabelKind::Local);
     }
@@ -368,6 +393,19 @@ const BOARD_PLACEMENT: [(&str, f64, f64, f64); 8] = [
     ("J1", 88.906, -72.05, 0.0),
     ("J2", 114.306, -72.05, 0.0),
     ("U1", 102.87, -78.613, 180.0),
+];
+
+/// Where each footprint's reference sits on the silkscreen (as moved on the board): reference,
+/// position in the footprint (mm), angle (°), height (mm).
+const REF_TEXT: [(&str, f64, f64, f64, f64); 8] = [
+    ("L1", -2.159, 0.0, 90.0, 0.6),
+    ("C1", -1.27, 1.397, 180.0, 0.6),
+    ("C2", 2.413, 0.0, 0.0, 0.6),
+    ("C3", 2.413, 0.127, 0.0, 0.6),
+    ("AE1", -7.222, -0.804, 180.0, 0.6),
+    ("J1", 1.27, 2.38, 0.0, 1.0),
+    ("J2", 1.27, 2.38, 0.0, 1.0),
+    ("U1", 0.254, 3.937, 0.0, 1.0),
 ];
 
 /// The outline: eight edges and the arc around the antenna's corner.
@@ -491,7 +529,11 @@ const VIAS: [(f64, f64); 3] = [(101.727, -89.535), (94.234, -68.58), (95.631, -8
 /// The schematic and the board: Update PCB, the outline, every footprint placed, the tracks
 /// routed and the vias set, and the back-copper ground rectangle under the module.
 pub fn design() -> (Design, LibraryTable) {
-    let lib = libraries();
+    design_from(libraries())
+}
+
+/// The board from these libraries ([`libraries_with`]).
+pub fn design_from(lib: LibraryTable) -> (Design, LibraryTable) {
     let mut d = schematic(&lib);
     d.board.thickness = mm(1.6);
     d.board.shapes.clear();
@@ -511,6 +553,16 @@ pub fn design() -> (Design, LibraryTable) {
         let i = be::footprint_index(b, r).unwrap_or_else(|| panic!("{r}"));
         be::move_footprint(b, i, p(x, y));
         be::rotate_footprint(b, i, angle);
+    }
+    for (r, x, y, angle, size) in REF_TEXT {
+        let i = be::footprint_index(b, r).unwrap_or_else(|| panic!("{r}"));
+        if let Some(f) = b.footprints[i].footprint.field_mut(fields::REFERENCE) {
+            f.text.text.at = p(x, y);
+            f.text.text.angle = angle;
+            f.text.text.style.size = Size::mm(size, size);
+            f.text.text.style.thickness = Some(mm(size * 0.15));
+            f.text.layer = Layer::TopSilk;
+        }
     }
     let gnd = b.footprints.iter().flat_map(|f| f.footprint.pads.iter()).filter_map(|pd| pd.net.clone()).find(|n| n == "GNDREF").unwrap_or_default();
     for (x, y) in VIAS {
@@ -548,6 +600,23 @@ pub fn design() -> (Design, LibraryTable) {
         locked: false,
         net: gnd,
     });
+    // The silkscreen: the logo (artwork from an SVG), the board's name and version, the
+    // module's name; left- and bottom-aligned, as KiCad's.
+    let logo = crate::graphic_import::svg_polygons(include_str!("../../../fixtures/eda/d4_logo.svg")).expect("the logo");
+    be::add_artwork(b, &crate::graphic_import::placed_at(&logo, p(93.995875, -91.667542)), Layer::TopSilk);
+    for (text, x, y, size, thickness) in [("LoRa 868MHz", 93.98, -96.139, 0.75, 0.15), ("RA-01SH", 99.314, -74.93, 1.0, 0.15), ("v1.0.0", 100.584, -94.615, 0.75, 0.09375)] {
+        let id = be::add_text(b, text, p(x, y), Layer::TopSilk);
+        let t = b.texts.iter_mut().find(|t| t.id == id).unwrap();
+        t.text.style.size = Size::mm(size, size);
+        t.text.style.thickness = Some(mm(thickness));
+        t.text.style.h_align = crate::graphics::HAlign::Left;
+        t.text.style.v_align = crate::graphics::VAlign::Bottom;
+    }
+    // The headers and two of the capacitors are drawn without their 3D models (KiCad's
+    // "hide" on them): only the module, L1 and C1 show.
+    for f in b.footprints.iter_mut().filter(|f| ["J1", "J2", "C2", "C3"].contains(&f.reference())) {
+        f.footprint.models.iter_mut().for_each(|m| m.visible = false);
+    }
     (d, lib)
 }
 

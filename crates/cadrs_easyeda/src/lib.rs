@@ -25,7 +25,7 @@ pub struct Imported {
     /// `library:name` of the new symbol and footprint.
     pub symbol: String,
     pub footprint: String,
-    /// The 3D model file, when there was one.
+    /// The 3D model file shown (the OBJ, else the STEP), when there was one.
     pub model: Option<PathBuf>,
     /// What didn't come across (shapes cadrs doesn't read, a model that wouldn't download).
     pub warnings: Vec<String>,
@@ -68,16 +68,22 @@ pub fn write_part(result: &serde_json::Value, dir: &Path, info: &PartInfo, model
     cadrs_eda::library::ensure_library(dir, "Parts from the JLCPCB/LCSC catalogue (JLCEDA/EasyEDA official library)")?;
     let mut model_file = None;
     if let (Some(m), Some((obj, step))) = (&c.model, models) {
-        match step {
-            Some(bytes) => {
-                let path = dir.join(format!("{}.step", cadrs_eda::library::file_stem(c.footprint.name())));
-                std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-                c.footprint.models.push(convert::place_model(m, &path.to_string_lossy(), obj.as_deref()));
-                model_file = Some(path);
-            }
-            // The box of its extent stands in.
-            None if obj.is_some() => c.footprint.models.push(convert::place_model(m, "", obj.as_deref())),
-            None => {}
+        let stem = cadrs_eda::library::file_stem(c.footprint.name());
+        // The OBJ (with its colours) is what the 3D view shows; the STEP rides along, hidden,
+        // for mechanical CAD.
+        if let Some(text) = &obj {
+            let path = dir.join(format!("{stem}.obj"));
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+            c.footprint.models.push(convert::place_model(m, &path.to_string_lossy(), obj.as_deref()));
+            model_file = Some(path);
+        }
+        if let Some(bytes) = step {
+            let path = dir.join(format!("{stem}.step"));
+            std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            let mut model = convert::place_model(m, &path.to_string_lossy(), obj.as_deref());
+            model.visible = obj.is_none();
+            c.footprint.models.push(model);
+            model_file.get_or_insert(path);
         }
     }
     cadrs_eda::library::write_symbol(dir, &c.symbol)?;

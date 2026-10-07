@@ -328,7 +328,11 @@
       layer: TopFab,
     ),
     (
-      shape: (geom: Polyline(pts: [(x: -945000, y: 0), (x: -945000, y: 945000), (x: 0, y: 945000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Polyline(pts: [(x: -695000, y: -635000), (x: -695000, y: -18475000), (x: 1965000, y: -18475000), (x: 1965000, y: 695000), (x: 635000, y: 695000), (x: 635000, y: -635000), (x: -695000, y: -635000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Polyline(pts: [(x: -695000, y: 0), (x: -695000, y: 695000), (x: 0, y: 695000)], closed: false), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
     (

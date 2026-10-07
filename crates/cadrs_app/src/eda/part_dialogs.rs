@@ -461,7 +461,7 @@ fn browse_model(w: &mut World) {
     let theme = w.resource::<Theme>().clone();
     let dir = std::env::current_dir().unwrap_or_default();
     let mut c = w.commands();
-    cadrs_ui::file_picker::open_file_picker(&mut c, &theme, "eda-model-picker", "Choose a 3D model", "eda-model-file", dir, &["step", "stp", "wrl"]);
+    cadrs_ui::file_picker::open_file_picker(&mut c, &theme, "eda-model-picker", "Choose a 3D model", "eda-model-file", dir, &["step", "stp", "wrl", "obj"]);
     w.flush();
 }
 

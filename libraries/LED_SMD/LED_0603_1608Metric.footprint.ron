@@ -51,6 +51,14 @@
       shape: (geom: Rect(a: (x: -1475000, y: -725000), b: (x: 1475000, y: 725000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
       layer: TopCourtyard,
     ),
+    (
+      shape: (geom: Line(a: (x: -175000, y: 510000), b: (x: 175000, y: 510000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -175000, y: -510000), b: (x: 175000, y: -510000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
   ],
   texts: [
     (

@@ -11,9 +11,10 @@ repository.workspace = true
 serde.workspace = true
 uuid.workspace = true
 ron.workspace = true
+# Artwork imported as board graphics (SVG paths flattened to polygons).
+resvg.workspace = true
 clipper2-rust.workspace = true
 earcutr.workspace = true
 
 [dev-dependencies]
 gerber_parser.workspace = true
-resvg.workspace = true

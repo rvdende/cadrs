@@ -21,6 +21,9 @@ fn main() {
     let b = &d.board;
     for f in &b.footprints {
         println!("fp {} {} at {:?} angle {} side {:?} models {:?}", f.reference(), f.footprint.id, f.placement.at, f.placement.angle, f.placement.side, f.footprint.models.iter().map(|m| (&m.source, m.offset, m.rotation)).collect::<Vec<_>>());
+        for fl in &f.footprint.fields {
+            println!("  field {} {:?} at {:?} angle {} layer {:?} visible {} size {:?}", fl.name, fl.text.text.text, fl.text.text.at, fl.text.text.angle, fl.text.layer, fl.text.text.visible, fl.text.text.style.size);
+        }
     }
     println!("tracks {} vias {} zones {} shapes {} texts {}", b.tracks.len(), b.vias.len(), b.zones.len(), b.shapes.len(), b.texts.len());
     for s in &b.shapes {

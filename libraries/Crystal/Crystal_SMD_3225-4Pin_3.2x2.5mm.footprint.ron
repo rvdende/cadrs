@@ -92,7 +92,7 @@
       scale: (1.0, 1.0, 1.0),
       visible: true,
       opacity: 1.0,
-      body: Some((parts: [(solid: Box(min: (-1.6, -1.25, 0.0), max: (1.6, 1.25, 0.2)), color: (196, 160, 110)), (solid: Box(min: (-1.4, -1.05, 0.2), max: (1.4, 1.05, 0.8)), color: (180, 182, 186))])),
+      body: Some((parts: [(solid: Box(min: (-1.6, -1.25, 0.0), max: (1.6, 1.25, 0.2)), color: (127, 94, 78)), (solid: Box(min: (-1.4, -1.05, 0.2), max: (1.4, 1.05, 0.8)), color: (180, 182, 186))])),
     ),
   ],
   zones: [],

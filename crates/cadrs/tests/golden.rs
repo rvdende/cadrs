@@ -2306,3 +2306,9 @@ fn golden_eda_schematic_wiring() {
 fn golden_eda_wire_colour_footprint() {
     run_scenario("eda_wire_colour_footprint");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_properties() {
+    run_scenario("eda_layout_properties");
+}

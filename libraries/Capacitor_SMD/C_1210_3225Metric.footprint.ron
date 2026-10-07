@@ -52,11 +52,11 @@
       layer: TopCourtyard,
     ),
     (
-      shape: (geom: Line(a: (x: -640000, y: 1450000), b: (x: 640000, y: 1450000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Line(a: (x: -750000, y: 1360000), b: (x: 750000, y: 1360000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
     (
-      shape: (geom: Line(a: (x: -640000, y: -1450000), b: (x: 640000, y: -1450000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      shape: (geom: Line(a: (x: -750000, y: -1360000), b: (x: 750000, y: -1360000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
       layer: TopSilk,
     ),
   ],
@@ -76,7 +76,7 @@
       scale: (1.0, 1.0, 1.0),
       visible: true,
       opacity: 1.0,
-      body: Some((parts: [(solid: Box(min: (-1.0, -1.25, 0.0), max: (1.0, 1.25, 1.6)), color: (196, 160, 110)), (solid: Box(min: (-1.6, -1.25, 0.0), max: (-1.0, 1.25, 1.6)), color: (196, 198, 202)), (solid: Box(min: (1.0, -1.25, 0.0), max: (1.6, 1.25, 1.6)), color: (196, 198, 202))])),
+      body: Some((parts: [(solid: Box(min: (-1.0, -1.25, 0.0), max: (1.0, 1.25, 1.6)), color: (127, 94, 78)), (solid: Box(min: (-1.6, -1.25, 0.0), max: (-1.0, 1.25, 1.6)), color: (196, 198, 202)), (solid: Box(min: (1.0, -1.25, 0.0), max: (1.6, 1.25, 1.6)), color: (196, 198, 202))])),
     ),
   ],
   zones: [],

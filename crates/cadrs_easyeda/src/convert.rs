@@ -215,7 +215,9 @@ fn symbol_shapes(f: &Frame, shapes: &[Value], s: &mut Symbol, warnings: &mut Vec
         match t[0] {
             "R" => {
                 let (x, y, w, h) = (n(1), n(2), n(5), n(6));
-                s.graphics.push(shape_item(Geom::Rect { a: f.pt(x, y), b: f.pt(x + w, y + h) }, n(8), fill_of(field(&t, 10))));
+                // A body box is filled as KiCad's symbols are (EasyEDA leaves them empty).
+                let fill = if fill_of(field(&t, 10)) == Fill::None { Fill::Background } else { fill_of(field(&t, 10)) };
+                s.graphics.push(shape_item(Geom::Rect { a: f.pt(x, y), b: f.pt(x + w, y + h) }, n(8), fill));
             }
             "E" | "C" => {
                 let (cx, cy, rx, ry, (w, fill)) = if t[0] == "E" { (n(1), n(2), n(3), n(4), (n(6), field(&t, 8))) } else { (n(1), n(2), n(3), n(3), (n(5), field(&t, 7))) };
@@ -336,7 +338,8 @@ fn fp_layer(id: &str) -> Option<Layer> {
         "7" => Layer::TopMask,
         "8" => Layer::BottomMask,
         "10" => Layer::Outline,
-        "12" => Layer::Drawings,
+        // The document layer: notes, as KiCad's Cmts.User.
+        "12" => Layer::Comments,
         "13" => Layer::TopFab,
         "14" => Layer::BottomFab,
         // The part's body shape and its polarity marks.

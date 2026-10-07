@@ -775,7 +775,7 @@ fn draw_lines(
 
 /// The schematic grid as dots (every grid point, or every 2nd, 4th, … when they'd be closer
 /// than 10 px), and the placing crosshair ([`Crosshair`]).
-fn draw_overlay(eda: Res<Eda2d>, ui: Res<EdaUi>, cross: Res<Crosshair>, mut dots: Gizmos<EdaDots>, mut cg: Gizmos<EdaCross>) {
+fn draw_overlay(eda: Res<Eda2d>, ui: Res<EdaUi>, scene: Res<EdaScene>, cross: Res<Crosshair>, mut dots: Gizmos<EdaDots>, mut cg: Gizmos<EdaCross>) {
     let Some((_, _, mode)) = eda.0 else { return };
     if !matches!(mode, Mode::Schematic | Mode::Symbol) {
         return;
@@ -792,9 +792,22 @@ fn draw_overlay(eda: Res<Eda2d>, ui: Res<EdaUi>, cross: Res<Crosshair>, mut dots
     // A dot is a 2 px stroke a pixel and a half long.
     let len = (1.5 / v.scale) as f32;
     let dot = Color::srgba(0.45, 0.45, 0.45, 0.7);
+    // Filled symbol bodies hide the grid under them (KiCad's do): their boxes, in nm.
+    let body = render::SchematicTheme::default().body_fill;
+    let filled: Vec<[f64; 4]> = scene
+        .list
+        .areas
+        .iter()
+        .filter(|a| a.color == body && !a.tris.is_empty())
+        .map(|a| a.tris.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, t| [b[0].min(t[0]), b[1].min(t[1]), b[2].max(t[0]), b[3].max(t[1])]))
+        .collect();
+    let hidden = |x: i64, y: i64| filled.iter().any(|b| (x as f64) > b[0] && (x as f64) < b[2] && (y as f64) > b[1] && (y as f64) < b[3]);
     if (x1 - x0) * (y1 - y0) < 40_000 {
         for i in x0..=x1 {
             for j in y0..=y1 {
+                if hidden(i * step, j * step) {
+                    continue;
+                }
                 let (x, y) = (mm(i * step), mm(j * step));
                 dots.line_2d(Vec2::new(x - len / 2.0, y), Vec2::new(x + len / 2.0, y), dot);
             }
@@ -824,6 +837,8 @@ fn draw_overlay(eda: Res<Eda2d>, ui: Res<EdaUi>, cross: Res<Crosshair>, mut dots
 ///   the "Getting Started" course's design at a step (`gs04`, `gs07`, `gs11`, `gs14`, `gs16`,
 ///   `gs17`, `gs18`, `gs25`), or `power-monitor` (the LoRa board redrawn, with its project
 ///   parts as components);
+/// - `eda-redraw power-monitor`: the shown board becomes the LoRa board (see
+///   [`redraw_power_monitor`]);
 /// - `eda-mode schematic|layout|3d`; `eda-fit`; `eda-zoom x0 y0 x1 y1` (shows that box, mm);
 /// - `eda-lcsc-fixtures <dir>`: the online part search answers from the saved EasyEDA parts in
 ///   `<dir>` instead of the network ([`online`]).
@@ -862,6 +877,50 @@ fn course_stage(stage: &str) -> Option<(&'static str, Design, Vec<cadrs_eda::Com
     }
 }
 
+/// `eda-redraw power-monitor`: the shown board becomes the desk power monitor's LoRa board
+/// (the redraw, [`cadrs_eda::power_monitor`]), its Ra-01SH the JLCPCB catalogue's (symbol,
+/// footprint and STEP model, from the user's library) when it's there; the studio's Components
+/// become the parts it uses. One undo step.
+fn redraw_power_monitor(w: &mut World) {
+    use cadrs_eda::power_monitor as pm;
+    let lib = ui::libraries(w);
+    let module = lib.symbol("LCSC:RA-01SH").cloned().zip(lib.footprint("LCSC:WIRELM-SMD_RA-01SH").cloned());
+    if module.is_none() {
+        warn!("eda-redraw: no LCSC:RA-01SH in the libraries; the drawn module is used");
+    }
+    let (design, plib) = pm::design_from(pm::libraries_with(module));
+    let Some((element, studio)) = w.get_resource::<ActiveDocument>().and_then(|d| active_studio(d).map(|(el, s)| (el, s.clone()))) else { return };
+    let board = w.resource::<PcbUi>().shown_board(element, &studio);
+    let mark = w.resource::<ActiveDocument>().history.undo_len();
+    let mut doc = w.resource_mut::<ActiveDocument>();
+    let r = match board {
+        Some(board) => doc.execute(&cadrs_core::pcb::SetDesign { element, board, design: Box::new(design.clone()), label: "Redraw".into() }),
+        None => doc.execute(&cadrs_core::pcb::AddBoard { element, name: Some("power-monitor".into()), design: Box::new(design.clone()), imported_from: None }),
+    };
+    if let Err(e) = r {
+        warn!("eda-redraw: {e}");
+        return;
+    }
+    // Components: one per part the schematic uses (power ports aside), with its footprint.
+    for c in &studio.components {
+        let _ = doc.execute(&cadrs_core::pcb::DeleteComponent { element, component: c.id });
+    }
+    let sch = &design.schematic;
+    let mut seen = vec![];
+    for s in sch.sheets.iter().flat_map(|sh| &sh.symbols) {
+        let Some(def) = sch.symbol(&s.symbol) else { continue };
+        if def.power || seen.contains(&def.id) {
+            continue;
+        }
+        seen.push(def.id.clone());
+        let fp_id = s.field(cadrs_eda::symbol::fields::FOOTPRINT).map(|f| f.value().to_string()).unwrap_or_default();
+        let footprint = plib.footprint(&fp_id).cloned();
+        let value = cadrs_eda::Component { name: def.name().to_string(), symbol: Some(def.clone()), footprint };
+        let _ = doc.execute(&cadrs_core::pcb::AddComponent { element, name: None, value: Some(Box::new(value)) });
+    }
+    doc.squash_element_since(mark, element, "Redraw the power monitor board");
+}
+
 fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut commands: Commands) {
     for m in msgs.read() {
         let s = m.0.trim().to_string();
@@ -888,6 +947,8 @@ fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut com
                         }
                     }
                 }
+            } else if s.strip_prefix("eda-redraw ").is_some_and(|x| x.trim() == "power-monitor") {
+                redraw_power_monitor(w);
             } else if let Some(m) = s.strip_prefix("eda-mode ") {
                 let mode = match m.trim() {
                     "schematic" => Mode::Schematic,

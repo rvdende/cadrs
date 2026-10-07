@@ -155,6 +155,7 @@ pub fn update_pcb(d: &mut Design, lib: &LibraryTable, opts: &Options) -> Report 
             }
             if let Some(pin) = symdef.and_then(|d| d.pins.iter().find(|p| p.number == pad.number)) {
                 pad.pin_function = pin.name.clone();
+                pad.pin_type = pin_type_name(pin.kind).into();
             }
         }
     }
@@ -173,4 +174,23 @@ pub fn update_pcb(d: &mut Design, lib: &LibraryTable, opts: &Options) -> Report 
     rep.messages.push(String::new());
     rep.messages.push(format!("Total warnings: {}, errors: {}.", rep.warnings.len(), rep.errors.len()));
     rep
+}
+
+/// A pin type as pads record it (KiCad's names).
+pub fn pin_type_name(t: crate::symbol::PinType) -> &'static str {
+    use crate::symbol::PinType::*;
+    match t {
+        Input => "input",
+        Output => "output",
+        Bidirectional => "bidirectional",
+        TriState => "tri_state",
+        Passive => "passive",
+        Free => "free",
+        Unspecified => "unspecified",
+        PowerIn => "power_in",
+        PowerOut => "power_out",
+        OpenCollector => "open_collector",
+        OpenEmitter => "open_emitter",
+        NoConnect => "no_connect",
+    }
 }

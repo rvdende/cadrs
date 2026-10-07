@@ -1,6 +1,8 @@
 //! The Layout view's tools (docs/PLAN.md GS13–GS21, GS25), keys as in the guide:
 //!
-//! - **Select** (Esc): click picks a footprint, track, via or zone (Shift adds); pressing on a
+//! - **Select** (Esc): click picks a footprint, track, via or zone (Shift adds); **E** or a
+//!   double-click opens a footprint's properties (exact position, angle, side, 3D model shown)
+//!   or a drawn shape's (width, filled, net); pressing on a
 //!   footprint and dragging moves it (it lands where the button is let go); **M** moves
 //!   the selected footprint (a click puts it down), **D** drags it with its tracks attached,
 //!   **R** rotates it, **F** flips it to the other side (F with nothing selected fits the
@@ -39,6 +41,7 @@ const STRIP: ui::StripSpec = &[
     Some(("pcb-draw-rect", "corner-rectangle", "Draw a rectangle on the drawing layer", "rect")),
     Some(("pcb-draw-circle", "center-circle", "Draw a circle on the drawing layer", "circle")),
     Some(("pcb-text", "text", "Add text on the drawing layer", "text")),
+    Some(("pcb-graphic", "image", "Import a graphic (SVG) onto the drawing layer", "graphic")),
     Some(("pcb-measure", "ruler", "Measure (Ctrl+Shift+M)", "measure")),
     Some(("pcb-fill", "fill-zones", "Fill all zones (B)", "fill")),
     Some(("pcb-layer", "layers", "Switch the active layer (front / back)", "layer")),
@@ -61,6 +64,9 @@ pub enum Tool {
     Draw { kind: DrawKind, start: Option<Pt> },
     /// Text, placed on the drawing layer with the next click.
     Text(String),
+    /// Imported artwork (filled polygons, mm, its top-left corner at the origin), placed on the
+    /// drawing layer with the next click.
+    Graphic(Vec<Vec<Pt>>),
     /// A keep-out on `layers` forbidding what `rules` says: its corners so far.
     Keepout { layers: cadrs_eda::layer::LayerSet, rules: cadrs_eda::board::Keepout, pts: Vec<Pt> },
     /// The ruler: its start, and its end once a second click froze it.
@@ -86,6 +92,7 @@ impl Tool {
             Tool::Draw { kind: DrawKind::Rect, .. } => "rect",
             Tool::Draw { kind: DrawKind::Circle, .. } => "circle",
             Tool::Text(_) => "text",
+            Tool::Graphic(_) => "graphic",
             Tool::Keepout { .. } => "keepout",
             Tool::Measure { .. } => "measure",
         }
@@ -122,18 +129,69 @@ pub struct LayoutState {
     pub net: Option<String>,
     /// The width new tracks get (W / Shift+W step it); `None`: the net class'.
     pub track_width: Option<Nm>,
+    /// How the Text tool writes: height and stroke width (mm), alignment.
+    pub text_style: TextLook,
 }
 
 impl Default for LayoutState {
     fn default() -> Self {
-        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false, draw_layer: Layer::TopSilk, net: None, track_width: None }
+        LayoutState { tool: Tool::Select, selection: vec![], moving: None, active: Layer::TopCopper, expanded: false, hidden: vec![], dim: false, layers_open: false, draw_layer: Layer::TopSilk, net: None, track_width: None, text_style: TextLook::default() }
     }
 }
 
+
+/// How the Text tool writes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextLook {
+    pub height: f64,
+    pub thickness: f64,
+    pub align: cadrs_eda::graphics::HAlign,
+}
+
+impl Default for TextLook {
+    fn default() -> Self {
+        TextLook { height: 1.0, thickness: 0.15, align: cadrs_eda::graphics::HAlign::Center }
+    }
+}
+
+/// Writes text as the Text tool's style says.
+fn add_text(d: &mut Design, text: &str, at: Pt, layer: Layer, look: TextLook) {
+    let id = be::add_text(&mut d.board, text, at, layer);
+    if let Some(t) = d.board.texts.iter_mut().find(|t| t.id == id) {
+        t.text.style.size = cadrs_eda::units::Size::mm(look.height, look.height);
+        t.text.style.thickness = Some(mm(look.thickness));
+        t.text.style.h_align = look.align;
+    }
+}
+
+/// Import graphic: an SVG file, then its artwork follows the pointer to a click.
+fn pick_graphic(w: &mut World) {
+    let theme = w.resource::<cadrs_ui::prelude::Theme>().clone();
+    let dir = std::env::current_dir().unwrap_or_default();
+    let mut c = w.commands();
+    cadrs_ui::file_picker::open_file_picker(&mut c, &theme, "eda-graphic-picker", "Import a graphic", "eda-graphic-file", dir, &["svg"]);
+    w.flush();
+}
+
+fn on_graphic_picked(mut msgs: MessageReader<cadrs_ui::file_picker::FilePicked>, mut commands: Commands) {
+    for m in msgs.read() {
+        if m.tag != "eda-graphic-file" {
+            continue;
+        }
+        let path = m.path.clone();
+        commands.queue(move |w: &mut World| {
+            let polys = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| cadrs_eda::graphic_import::svg_polygons(&t));
+            match polys {
+                Ok(p) => set_tool(w, Tool::Graphic(cadrs_eda::graphic_import::placed_at(&p, Pt::ZERO))),
+                Err(e) => ui::toast(w, &format!("{}: {e}", path.display())),
+            }
+        });
+    }
+}
 pub fn register(app: &mut App) {
     app.init_resource::<LayoutState>().add_systems(
         Update,
-        (strip, on_strip, on_click, on_keys, follow_pointer, publish).chain().after(super::navigate).run_if(in_state(AppState::Document)),
+        (strip, on_strip, on_click, on_keys, on_graphic_picked, follow_pointer, publish).chain().after(super::navigate).run_if(in_state(AppState::Document)),
     );
     super::lay_dialogs::register(app);
 }
@@ -188,6 +246,7 @@ pub fn run_action(w: &mut World, action: &str) {
         "rect" => set_tool(w, Tool::Draw { kind: DrawKind::Rect, start: None }),
         "circle" => set_tool(w, Tool::Draw { kind: DrawKind::Circle, start: None }),
         "text" => super::lay_dialogs::open_text(w),
+        "graphic" => pick_graphic(w),
         "keepout" => super::lay_dialogs::open_keepout(w),
         "measure" => set_tool(w, Tool::Measure { a: None, b: None }),
         "fill" => {
@@ -352,9 +411,19 @@ fn press(w: &mut World, at: Pt, shift: bool) {
         }
         Tool::Text(text) => {
             let layer = w.resource::<LayoutState>().draw_layer;
+            let look = w.resource::<LayoutState>().text_style;
             let at = snap(at, grid());
             ui::commit(w, "Add text", |d| {
-                be::add_text(&mut d.board, &text, at, layer);
+                add_text(d, &text, at, layer, look);
+                Ok(())
+            });
+            set_tool(w, Tool::Select);
+        }
+        Tool::Graphic(polys) => {
+            let layer = w.resource::<LayoutState>().draw_layer;
+            let at = snap(at, grid());
+            ui::commit(w, "Import graphic", |d| {
+                be::add_artwork(&mut d.board, &cadrs_eda::graphic_import::placed_at(&polys, at), layer);
                 Ok(())
             });
             set_tool(w, Tool::Select);
@@ -395,6 +464,7 @@ fn draw_geom(kind: DrawKind, a: Pt, b: Pt) -> cadrs_eda::graphics::Geom {
 fn double(w: &mut World, _at: Pt) {
     let tool = w.resource::<LayoutState>().tool.clone();
     match tool {
+        Tool::Select => open_properties(w, _at),
         Tool::Route { runs, vias, net } => finish_route(w, runs, vias, net),
         Tool::Zone { net, layer, mut pts } => {
             // The double-click's second press added its point twice.
@@ -540,6 +610,8 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                     s.moving = Some(Moving { fp, from, drag: k.key_code == KeyCode::KeyD, on_release: false });
                 }
             }
+            // The properties of the footprint or shape under the pointer (else the selected one).
+            KeyCode::KeyE => open_properties(world, pointer),
             KeyCode::KeyR => {
                 if let Some(fp) = target_footprint(world, pointer) {
                     ui::commit(world, "Rotate footprint", |d| {
@@ -644,7 +716,12 @@ fn follow_pointer(world: &mut World, mut last: Local<Option<Pt>>) {
             }
             Tool::Text(text) => {
                 let layer = world.resource::<LayoutState>().draw_layer;
-                be::add_text(&mut d.board, &text, snap(at, grid()), layer);
+                let look = world.resource::<LayoutState>().text_style;
+                add_text(&mut d, &text, snap(at, grid()), layer, look);
+            }
+            Tool::Graphic(polys) => {
+                let layer = world.resource::<LayoutState>().draw_layer;
+                be::add_artwork(&mut d.board, &cadrs_eda::graphic_import::placed_at(&polys, snap(at, grid())), layer);
             }
             Tool::Measure { a: Some(a), b } => ruler(&mut d, a, b.unwrap_or_else(|| snap(at, grid()))),
             Tool::Keepout { pts, .. } | Tool::Zone { pts, .. } => {
@@ -696,4 +773,19 @@ fn target_footprint(w: &World, pointer: Pt) -> Option<uuid::Uuid> {
         _ => None,
     });
     under.or_else(|| selected_footprint(w))
+}
+
+/// E or a double-click: the properties of the footprint or shape at `at` (else the selected
+/// one).
+fn open_properties(w: &mut World, at: Pt) {
+    let under = board_of(w).and_then(|d| be::hit(&d.board, at, tolerance(w)));
+    let target = under.or_else(|| w.resource::<LayoutState>().selection.first().copied());
+    match target {
+        Some(BoardItem::Footprint(id)) => {
+            w.resource_mut::<LayoutState>().moving = None;
+            super::lay_dialogs::open_footprint(w, id);
+        }
+        Some(BoardItem::Shape(id)) => super::lay_dialogs::open_shape(w, id),
+        _ => {}
+    }
 }

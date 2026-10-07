@@ -60,7 +60,8 @@ fn main() -> AppExit {
     // Scenarios and headless runs export into their output folder (a BOM's CSV, P3B.6), never
     // into the user's Downloads (Final part 3: golden runs had written there).
     // Nor do they see or add to the user's own libraries.
-    let user_libraries = (scripted || opts.headless).then(|| opts.resolved_out_dir().join("libraries"));
+    // ($CADRS_USER_LIBRARIES still picks a folder: a run that uses the user's parts, read only.)
+    let user_libraries = (scripted || opts.headless).then(|| std::env::var_os("CADRS_USER_LIBRARIES").map(std::path::PathBuf::from).unwrap_or_else(|| opts.resolved_out_dir().join("libraries")));
     if scripted || opts.headless {
         app.insert_resource(cadrs_app::ExportDirOverride(Some(opts.resolved_out_dir().join("exports"))));
     }

@@ -87,6 +87,57 @@ impl DrawList {
     }
 }
 
+
+/// The colours of a made board, for [`board_surface`].
+pub mod made {
+    use super::Rgba;
+    /// Green solder mask over bare laminate.
+    pub const MASK: Rgba = [0x12, 0x2e, 0x19, 0xff];
+    /// The mask over copper: a little lighter.
+    pub const MASK_OVER_COPPER: Rgba = [0x21, 0x48, 0x28, 0xff];
+    /// Bare copper finished in gold (ENIG) where the mask is open.
+    pub const GOLD: Rgba = [0xb8, 0x9c, 0x14, 0xff];
+    pub const SILK: Rgba = [0xf4, 0xf4, 0xf0, 0xff];
+    /// Soldered pads (where paste goes).
+    pub const SOLDER: Rgba = [0xb8, 0xb8, 0xb4, 0xff];
+    pub const HOLE: Rgba = [0x14, 0x14, 0x14, 0xff];
+}
+
+/// One face of the board as it looks made (the 3D view lays it over the board): solder mask,
+/// lighter where copper runs under it; pads and other openings in the mask bare gold; the
+/// silkscreen on top; the holes. In board coordinates, whichever side.
+pub fn board_surface(b: &Board, side: Side) -> DrawList {
+    let (cu, mask, paste, silk) = match side {
+        Side::Top => (Layer::TopCopper, Layer::TopMask, Layer::TopPaste, Layer::TopSilk),
+        Side::Bottom => (Layer::BottomCopper, Layer::BottomMask, Layer::BottomPaste, Layer::BottomSilk),
+    };
+    // The silkscreen and the holes, as the layout draws them, in the made colours.
+    let th = BoardTheme { background: made::MASK, board: made::MASK, top_silk: made::SILK, bottom_silk: made::SILK, via: made::MASK_OVER_COPPER, hole: made::HOLE, highlight: made::SILK, ..BoardTheme::default() };
+    let view = BoardView { visible: vec![silk], active: cu, selected: vec![], ratsnest: false, dim_inactive: false, highlight_net: None };
+    let mut d = board(b, &th, &view);
+    let items = crate::copper::items(b);
+    let pad_of = |c: &crate::copper::Copper| match c.item {
+        crate::copper::Item::Pad(fid, i) => b.footprints.iter().find(|f| f.id == fid).and_then(|f| f.footprint.pads.get(i).map(|p| f.placement.layers(p.layers))),
+        _ => None,
+    };
+    let pads_open = |c: &crate::copper::Copper| pad_of(c).is_some_and(|l| l.contains(mask));
+    // Pads that get solder paste (SMD) look silver, as soldered; the rest bare gold.
+    let pasted = |c: &crate::copper::Copper| pad_of(c).is_some_and(|l| l.contains(paste));
+    let under: Vec<Region> = items.iter().filter(|c| !pads_open(c)).filter_map(|c| c.on(cu).cloned()).collect();
+    d.region(made::MASK_OVER_COPPER, -9, &poly::union_all(&under));
+    let open: Vec<Region> = items.iter().filter(|c| pads_open(c) && !pasted(c)).filter_map(|c| c.on(cu).cloned()).collect();
+    d.region(made::GOLD, -8, &poly::union_all(&open));
+    let soldered: Vec<Region> = items.iter().filter(|c| pads_open(c) && pasted(c)).filter_map(|c| c.on(cu).cloned()).collect();
+    d.region(made::SOLDER, -8, &poly::union_all(&soldered));
+    // Copper drawings on the mask layer itself (openings drawn by hand) are bare too.
+    for s in b.shapes.iter().filter(|s| s.layer == mask) {
+        let (pts, closed) = poly::geom_points(&s.shape.geom);
+        if closed && pts.len() >= 3 {
+            d.region(made::GOLD, -8, &vec![pts]);
+        }
+    }
+    d
+}
 // ---------------------------------------------------------------------------------------------
 // Schematic
 
@@ -133,7 +184,7 @@ impl Default for SchematicTheme {
     }
 }
 
-const WIRE_W: Nm = 152_400;
+const WIRE_W: Nm = 250_000;
 const BODY_W: Nm = 254_000;
 
 fn text_at(s: &str, at: Pt, angle: f64, size: Nm, h: HAlign, v: VAlign) -> Text {
@@ -217,16 +268,26 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
                 d.shape(&Shape { geom: Geom::Circle { center: c, radius: r }, stroke: Default::default(), fill: Fill::None }, pin, None, WIRE_W, 1);
             }
             if lone.contains(&a) {
-                d.shape(&Shape { geom: Geom::Circle { center: a, radius: mm(0.25) }, stroke: Default::default(), fill: Fill::None }, pin, None, 0, 1);
+                if p.kind == crate::symbol::PinType::NoConnect {
+                    // A pin that connects to nothing by design: KiCad's small X at its end, in the
+                    // pin's colour.
+                    let k = mm(0.4);
+                    d.line(pin, WIRE_W, vec![a - Pt::new(k, k), a + Pt::new(k, k)]);
+                    d.line(pin, WIRE_W, vec![a - Pt::new(k, -k), a + Pt::new(k, -k)]);
+                } else {
+                    d.shape(&Shape { geom: Geom::Circle { center: a, radius: mm(0.25) }, stroke: Default::default(), fill: Fill::None }, pin, None, 0, 1);
+                }
             }
             if p.length == 0 || !p.visible {
                 continue;
             }
-            // Number above the pin's middle; name inside the body past its inner end.
+            // Number above a level pin's middle (left of an upright one), reading as the
+            // sheet does whichever way the pin points; name inside the body past its inner end.
             if def.show_pin_numbers {
                 let mid = Pt::new((a.x + b.x) / 2, (a.y + b.y) / 2);
-                let up = Pt::new(0, mm(0.3)).rotated(dir);
-                d.text(&text_at(&p.number, mid + up, dir, p.number_size, HAlign::Center, VAlign::Bottom), th.pin_number);
+                let level = (dir.rem_euclid(180.0) - 90.0).abs() > 45.0;
+                let (angle, up) = if level { (0.0, Pt::new(0, mm(0.3))) } else { (90.0, Pt::new(-mm(0.3), 0)) };
+                d.text(&text_at(&p.number, mid + up, angle, p.number_size, HAlign::Center, VAlign::Bottom), th.pin_number);
             }
             if def.show_pin_names && !p.name.is_empty() && p.name != "~" {
                 let at = b + Pt::new(def.pin_name_offset.max(mm(0.5)), 0).rotated(dir);
@@ -242,7 +303,7 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
             d.text(&t, c);
         }
     }
-    // A wire's own colour when it has one; a junction takes the colour of a wire through it.
+    // A wire's and a junction's own colour when they have one, else the theme's.
     let rgba = |c: Option<crate::graphics::Color>| c.filter(|c| c.a > 0).map(|c| [c.r, c.g, c.b, 255]);
     for wire in &sh.wires {
         let c = if lit(&SchItem::Wire(wire.id)) { th.highlight } else { rgba(wire.stroke.color).unwrap_or(th.wire) };
@@ -253,8 +314,7 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     }
     for j in &sh.junctions {
         let r = if j.diameter > 0 { j.diameter / 2 } else { mm(0.457) };
-        let wired = sh.wires.iter().filter(|w| crate::connectivity::on_segment(j.at, w.a, w.b)).find_map(|w| rgba(w.stroke.color));
-        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { wired.unwrap_or(th.junction) };
+        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { rgba(j.color).unwrap_or(th.junction) };
         d.region(c, 2, &poly::circle(j.at, r));
     }
     for n in &sh.no_connects {
@@ -265,7 +325,11 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     for l in &sh.labels {
         let c = if lit(&SchItem::Label(l.id)) { th.highlight } else { th.label };
         let mut t = l.text.clone();
-        if !matches!(l.kind, LabelKind::Local) {
+        if matches!(l.kind, LabelKind::Local) {
+            // A local label's text stands just above its wire.
+            t.at = t.at + Pt::new(0, mm(0.3)).rotated(t.angle);
+            t.style.v_align = VAlign::Bottom;
+        } else {
             // A flag around the text: pointed at the connection end.
             let size = t.style.size.h;
             let len = font::line_width(&t.text, &t.style).round() as Nm + size;
@@ -316,10 +380,11 @@ impl Default for BoardTheme {
     fn default() -> Self {
         BoardTheme {
             background: [0x00, 0x10, 0x23, 0xff],
-            board: [0x1c, 0x2a, 0x3b, 0xff],
-            top_copper: [0xc8, 0x34, 0x34, 0xe0],
-            bottom_copper: [0x4d, 0x7f, 0xc4, 0xe0],
-            inner_copper: [0x7f, 0xc8, 0x7f, 0xe0],
+            // The board inside its outline as the canvas (KiCad leaves it unfilled).
+            board: [0x00, 0x10, 0x23, 0xff],
+            top_copper: [0xc8, 0x34, 0x34, 0xff],
+            bottom_copper: [0x4d, 0x7f, 0xc4, 0xff],
+            inner_copper: [0x7f, 0xc8, 0x7f, 0xff],
             top_silk: [0xf2, 0xed, 0xa1, 0xff],
             bottom_silk: [0xe8, 0xb2, 0xa7, 0xff],
             top_courtyard: [0xff, 0x26, 0xe2, 0xff],
@@ -327,10 +392,10 @@ impl Default for BoardTheme {
             top_fab: [0xaf, 0xaf, 0xaf, 0xff],
             bottom_fab: [0x58, 0x5d, 0x84, 0xff],
             outline: [0xd0, 0xd2, 0xcd, 0xff],
-            via: [0xb5, 0xb5, 0xb5, 0xff],
+            via: [0xe3, 0xb7, 0x2e, 0xff],
             hole: [0x10, 0x16, 0x20, 0xff],
             ratsnest: [0x00, 0xf8, 0xff, 0xff],
-            pad_text: [0xff, 0xff, 0xff, 0xd0],
+            pad_text: [0xd8, 0xd8, 0xd8, 0xe0],
             highlight: [0xf9, 0x7a, 0x16, 0xff],
         }
     }
@@ -424,6 +489,16 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
             let parts: Vec<Region> = items.iter().filter(|c| !zone(c)).filter_map(|c| c.on(layer).cloned()).collect();
             let all = poly::union_all(&parts);
             d.region(color, z + 1, &all);
+            // Each pad outlined at its clearance, a little way out (KiCad's clearance outline).
+            for c in items.iter().filter(|c| matches!(c.item, crate::copper::Item::Pad(..))) {
+                if let Some(r) = c.on(layer) {
+                    for ring in poly::inflate(r, mm(0.2)) {
+                        let mut pts = ring.clone();
+                        pts.push(ring[0]);
+                        d.line(color, 0, pts);
+                    }
+                }
+            }
             // Selected copper on top, in the highlight colour.
             let sel: Vec<Region> = items
                 .iter()
@@ -440,10 +515,12 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
         }
         for f in &b.footprints {
             let lit = view.selected.contains(&f.id);
-            for s in f.footprint.shapes.iter().filter(|s| f.placement.layer(s.layer) == layer) {
+            // Copper drawings are drawn as copper (above, from the copper items), not again as lines.
+            for s in f.footprint.shapes.iter().filter(|s| f.placement.layer(s.layer) == layer && !layer.is_copper()) {
                 let geom = if f.placement.angle % 90.0 == 0.0 { s.shape.geom.clone() } else { s.shape.geom.rect_as_polyline() };
                 let shape = Shape { geom: geom.map(|p| f.placement.apply(p)), ..s.shape.clone() };
-                d.shape(&shape, if lit { th.highlight } else { color }, None, mm(0.1), z);
+                let fill = (s.shape.fill != crate::graphics::Fill::None).then_some(if lit { th.highlight } else { color });
+                d.shape(&shape, if lit { th.highlight } else { color }, fill, mm(0.1), z);
             }
             let texts = f.footprint.fields.iter().map(|x| &x.text).chain(f.footprint.texts.iter());
             for t in texts.filter(|t| f.placement.layer(t.layer) == layer) {
@@ -457,8 +534,10 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
                 d.text(&tt, if lit { th.highlight } else { color });
             }
         }
-        for s in b.shapes.iter().filter(|s| s.layer == layer) {
-            d.shape(&s.shape, color, None, mm(0.1), z);
+        for s in b.shapes.iter().filter(|s| s.layer == layer && !layer.is_copper()) {
+            // A filled shape (a logo, a copper area) is filled, the rest outlined.
+            let fill = (s.shape.fill != crate::graphics::Fill::None).then_some(color);
+            d.shape(&s.shape, color, fill, mm(0.1), z);
             for p in poly::geom_points(&s.shape.geom).0 {
                 bounds = Some(Bounds::union(bounds, Bounds::of(p)));
             }
@@ -511,12 +590,12 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
                 let mut strokes = vec![];
                 let mut x = bb.min.x - h;
                 while x < bb.max.x {
-                    strokes.push(poly::stroke(&[Pt::new(x, bb.min.y), Pt::new(x + h, bb.max.y)], mm(0.08)));
+                    strokes.push(poly::stroke(&[Pt::new(x, bb.min.y), Pt::new(x + h, bb.max.y)], mm(0.05)));
                     x += step;
                 }
                 let hatch = poly::intersection(&poly::union_all(&strokes), &region);
                 let mut faint = color;
-                faint[3] = (faint[3] as u32 * 60 / 100) as u8;
+                faint[3] = (faint[3] as u32 * 40 / 100) as u8;
                 d.region(faint, 90, &hatch);
             }
         }
@@ -532,18 +611,93 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
         for p in &f.footprint.pads {
             if let Some(dr) = p.drill {
                 let c = f.placement.apply(p.at + dr.offset.rotated(p.angle));
-                d.region(th.hole, top + 1, &poly::hole(c, dr.size, f.placement.apply_angle(p.angle)));
+                let hole = poly::hole(c, dr.size, f.placement.apply_angle(p.angle));
+                d.region(th.hole, top + 1, &hole);
+                // A plated hole's wall, outlined as KiCad does.
+                if p.kind == PadKind::ThroughHole {
+                    for ring in &hole {
+                        let mut pts = ring.clone();
+                        pts.push(ring[0]);
+                        d.line(th.via, 0, pts);
+                    }
+                }
             }
             // Pad numbers, small, in the pad.
             let on_shown = f.placement.layers(p.layers).iter().any(|l| l.is_copper() && shown(l));
             if on_shown && !p.number.is_empty() && !matches!(p.shape, PadShape::Custom { .. }) && p.kind != PadKind::NonPlated {
-                let s = (p.size.w.min(p.size.h) * 2 / 5).min(mm(1.0));
-                let mut t = text_at(&p.number, f.placement.apply(p.at), 0.0, s, HAlign::Center, VAlign::Center);
-                t.style.thickness = Some(s / 8);
+                let at = f.placement.apply(p.at);
+                // The pad's size as it lies on the board (a quarter turn swaps its sides); the
+                // text runs along its long side, as KiCad's (a tall pad's reads upwards).
+                let turned = (f.placement.apply_angle(p.angle).rem_euclid(180.0) - 90.0).abs() < 1.0;
+                let (pw, ph) = if turned { (p.size.h, p.size.w) } else { (p.size.w, p.size.h) };
+                let tall = ph > pw;
+                let (long, short, angle) = if tall { (ph, pw, 90.0) } else { (pw, ph, 0.0) };
+                // "Up" in the text's frame.
+                let up = |k: Nm| if tall { Pt::new(-k, 0) } else { Pt::new(0, k) };
+                let s = (short * 9 / 20).min(mm(1.0));
+                // A no-connect pin's pad reads "x", as KiCad's.
+                // A pad on no net is "unconnected-(REF-pin-PadN)", KiCad's name for it.
+                let lone = format!("unconnected-({}-{}-Pad{})", f.reference(), if p.pin_function.is_empty() { "~" } else { p.pin_function.as_str() }, p.number);
+                let net = if p.pin_type.starts_with("no_connect") { Some("x") } else { p.net.as_deref().filter(|n| !n.is_empty()).or(Some(lone.as_str())) };
+                // With a net: the number above, the net's name under it, shrunk to fit.
+                let (num_at, net_size) = match net {
+                    Some(n) if short >= mm(0.5) => {
+                        let probe = text_at(n, Pt::ZERO, 0.0, mm(1.0), HAlign::Center, VAlign::Center);
+                        let w = crate::font::bounds(&probe).map_or(mm(1.0), |b| b.max.x - b.min.x).max(1);
+                        let size = ((long as f64 * 0.85 / w as f64) * mm(1.0) as f64) as Nm;
+                        // Smaller than the number, as KiCad's.
+                        let cap = if long >= short * 9 / 5 { short * 2 / 7 } else { short / 4 };
+                        (at + up(short / 5), Some(size.min(cap)))
+                    }
+                    _ => (at, None),
+                };
+                let s = if net_size.is_some() { s.min(short * 7 / 20) } else { s };
+                let mut t = text_at(&p.number, num_at, angle, s, HAlign::Center, VAlign::Center);
+                // Small text in hairline strokes, so it stays legible.
+                t.style.thickness = Some(if s < mm(0.3) { 1 } else { s / 14 });
                 d.text(&t, th.pad_text);
+                if let (Some(n), Some(ns)) = (net, net_size)
+                    && ns >= mm(0.05)
+                {
+                    let mut t = text_at(n, at - up(short / 5), angle, ns, HAlign::Center, VAlign::Center);
+                    t.style.thickness = Some(if ns < mm(0.3) { 1 } else { ns / 14 });
+                    d.text(&t, th.pad_text);
+                }
             }
             bounds = Some(Bounds::union(bounds, Bounds::of(f.placement.apply(p.at))));
         }
+    }
+    // Net names along the tracks long enough to carry them, as KiCad writes them.
+    for t in b.tracks.iter().filter(|t| !t.net.is_empty() && shown(t.layer)) {
+        let len = t.a.dist(t.b);
+        let size = (t.width as f64 * 0.6).min(mm(0.8) as f64) as Nm;
+        let probe = text_at(&t.net, Pt::ZERO, 0.0, size, HAlign::Center, VAlign::Center);
+        let need = crate::font::bounds(&probe).map_or(0, |b| b.max.x - b.min.x) as f64;
+        // Only tracks wide enough to read (KiCad's show on the wide ones at board scale).
+        // (With room to spare, so the name stays clear of the pads at the ends.)
+        if size < mm(0.25) || len < need * 1.3 + mm(1.0) as f64 {
+            continue;
+        }
+        let mut angle = ((t.b.y - t.a.y) as f64).atan2((t.b.x - t.a.x) as f64).to_degrees();
+        // Reading left to right, or upwards.
+        if !(-90.0..90.0).contains(&angle) || (angle - 90.0).abs() < 1e-6 {
+            angle = crate::units::normalize_deg(angle + 180.0);
+        }
+        let mid = Pt::new((t.a.x + t.b.x) / 2, (t.a.y + t.b.y) / 2);
+        let mut tt = text_at(&t.net, mid, angle, size, HAlign::Center, VAlign::Center);
+        tt.style.thickness = Some(size / 8);
+        d.text(&tt, th.pad_text);
+    }
+    // Each footprint's anchor, a small + in its courtyard's colour (as KiCad marks them).
+    for f in &b.footprints {
+        let court = f.placement.layer(Layer::TopCourtyard);
+        if !shown(court) {
+            continue;
+        }
+        let (c, k) = (f.placement.at, mm(0.4));
+        let col = th.layer(court);
+        d.line(col, 0, vec![c - Pt::new(k, 0), c + Pt::new(k, 0)]);
+        d.line(col, 0, vec![c - Pt::new(0, k), c + Pt::new(0, k)]);
     }
     if view.ratsnest {
         for a in crate::copper::ratsnest(b) {

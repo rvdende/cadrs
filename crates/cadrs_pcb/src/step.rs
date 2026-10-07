@@ -44,8 +44,9 @@ fn primitive(k: &mut dyn Kernel, s: &Solid) -> Result<BodyId, String> {
 fn file_solids(k: &mut dyn Kernel, bytes: &[u8], ext: &str) -> Result<(Vec<BodyId>, f64), String> {
     match ext.to_ascii_lowercase().as_str() {
         "step" | "stp" => Ok((k.import_step(bytes).map_err(|e| e.to_string())?, 1.0)),
-        "wrl" | "vrml" => {
-            let meshes = cadrs_eda::wrl::read(&String::from_utf8_lossy(bytes))?;
+        "wrl" | "vrml" | "obj" => {
+            let text = String::from_utf8_lossy(bytes);
+            let (meshes, unit) = if ext.eq_ignore_ascii_case("obj") { (cadrs_eda::obj::read(&text)?, 1.0) } else { (cadrs_eda::wrl::read(&text)?, cadrs_eda::wrl::KICAD_UNIT_MM) };
             let mut bodies = vec![];
             for m in meshes {
                 let p = |i: u32| {
@@ -57,7 +58,7 @@ fn file_solids(k: &mut dyn Kernel, bytes: &[u8], ext: &str) -> Result<(Vec<BodyI
                     bodies.push(b);
                 }
             }
-            Ok((bodies, cadrs_eda::wrl::KICAD_UNIT_MM))
+            Ok((bodies, unit))
         }
         other => Err(format!("3D models of type .{other} aren't supported")),
     }

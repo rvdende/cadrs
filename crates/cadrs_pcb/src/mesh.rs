@@ -216,6 +216,7 @@ pub fn file_meshes(bytes: &[u8], ext: &str) -> Result<(Vec<cadrs_eda::model3d::M
             let text = String::from_utf8_lossy(bytes);
             Ok((cadrs_eda::wrl::read(&text)?, cadrs_eda::wrl::KICAD_UNIT_MM))
         }
+        "obj" => Ok((cadrs_eda::obj::read(&String::from_utf8_lossy(bytes))?, 1.0)),
         "step" | "stp" => {
             let mut k = cadrs_kernel::backend::occt::OcctKernel::new();
             let bodies = k.import_step(bytes).map_err(|e| e.to_string())?;
@@ -235,7 +236,7 @@ pub fn file_meshes(bytes: &[u8], ext: &str) -> Result<(Vec<cadrs_eda::model3d::M
             }
             Ok((vec![m], 1.0))
         }
-        other => Err(format!("3D models of type .{other} aren't supported (use STEP or VRML)")),
+        other => Err(format!("3D models of type .{other} aren't supported (use STEP, VRML or OBJ)")),
     }
 }
 

@@ -1,19 +1,22 @@
 //! The Layout view's dialogs (GS13, GS14, GS18, GS19, GS21): Update PCB from schematic, Board
-//! setup, zone properties, DRC, Plot.
+//! setup, zone properties, DRC, Plot, text, a footprint's and a shape's properties (E).
 //!
 //! Names: `eda-update-dialog` (`eda-update-replace`, `eda-update-delete`, `eda-update-run`,
 //! `eda-update-log`), `eda-setup-dialog` (`eda-setup-copper`, `eda-setup-<rule>`,
 //! `eda-setup-track`, `eda-setup-clearance`, `eda-setup-via`, `eda-setup-via-drill`,
 //! `eda-setup-ok`), `eda-zone-dialog` (`eda-zone-net`, `eda-zone-layer`, `eda-zone-ok`),
 //! `eda-drc-dialog` (`eda-drc-refill`, `eda-drc-run`, `eda-drc-summary`, `eda-drc-list`),
-//! `eda-plot-dialog` (`eda-plot-dir`, `eda-plot-run`, `eda-plot-drill`, `eda-plot-log`).
+//! `eda-plot-dialog` (`eda-plot-dir`, `eda-plot-run`, `eda-plot-drill`, `eda-plot-log`),
+//! `eda-btext-dialog` (`eda-btext-text`, `-height`, `-thickness`, `-align`, `-ok`),
+//! `eda-fprops-dialog` (`eda-fprops-x`, `-y`, `-angle`, `-side`, `-model`, `-ok`),
+//! `eda-sprops-dialog` (`eda-sprops-width`, `-filled`, `-net`, `-ok`).
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_eda::expr::{Unit, eval};
 use cadrs_eda::layer::Layer;
-use cadrs_eda::units::{Nm, to_mm};
+use cadrs_eda::units::{Nm, Pt, mm, to_mm};
 use cadrs_ui::checkbox::CheckboxState;
 use cadrs_ui::dialog_fields::{Select, SelectState};
 use cadrs_ui::prelude::*;
@@ -282,9 +285,10 @@ fn accept_zone(w: &mut World) {
 // ---------------------------------------------------------------------------------------------
 // Text and keep-outs
 
-/// Text on the drawing layer: its words, then a click places it.
+/// Text on the drawing layer: its words, height, stroke and alignment, then a click places it.
 pub fn open_text(w: &mut World) {
     let layer = w.resource::<LayoutState>().draw_layer;
+    let look = w.resource::<LayoutState>().text_style;
     let t = w.resource::<Theme>().clone();
     let tf = t.clone();
     spawn_dialog(
@@ -295,6 +299,16 @@ pub fn open_text(w: &mut World) {
             .body(move |p| {
                 row(p, &t, "Text", |r| {
                     r.spawn(TextInput::new("eda-btext-text").width(Val::Px(220.0)).height(26.0).build(&t));
+                });
+                mm_row(p, &t, "Height", "eda-btext-height", mm(look.height));
+                mm_row(p, &t, "Stroke width", "eda-btext-thickness", mm(look.thickness));
+                row(p, &t, "Alignment", |r| {
+                    let i = match look.align {
+                        cadrs_eda::graphics::HAlign::Left => 0,
+                        cadrs_eda::graphics::HAlign::Center => 1,
+                        cadrs_eda::graphics::HAlign::Right => 2,
+                    };
+                    r.spawn(Select::new("eda-btext-align").bordered().width(Val::Px(120.0)).option("Left", true).option("Centre", true).option("Right", true).selected(i).build(&t));
                 });
                 p.spawn(t.text(format!("On {} (pick another layer in the layers panel).", layer.name()), t.font_sm, FontWeight::NORMAL, t.muted_foreground));
             })
@@ -307,7 +321,18 @@ pub fn open_text(w: &mut World) {
 
 fn accept_text(w: &mut World) {
     let text = ui::text_value(w, "eda-btext-text").trim().to_string();
+    let (h, th) = (read_mm(w, "eda-btext-height"), read_mm(w, "eda-btext-thickness"));
+    let align = match select_index(w, "eda-btext-align") {
+        Some(0) => cadrs_eda::graphics::HAlign::Left,
+        Some(2) => cadrs_eda::graphics::HAlign::Right,
+        _ => cadrs_eda::graphics::HAlign::Center,
+    };
     close_all(w);
+    let (Ok(h), Ok(th)) = (h, th) else {
+        ui::toast(w, "Height and stroke width are lengths in mm");
+        return;
+    };
+    w.resource_mut::<LayoutState>().text_style = super::layout_tools::TextLook { height: to_mm(h).max(0.1), thickness: to_mm(th).max(0.01), align };
     if !text.is_empty() {
         set_tool(w, Tool::Text(text));
     }
@@ -535,3 +560,141 @@ fn run_step(w: &mut World) {
     list_lines(w, "eda-plot-log", lines);
 }
 pub fn register(_app: &mut App) {}
+
+// ---------------------------------------------------------------------------------------------
+// Footprint and shape properties (E)
+
+/// The footprint or shape the properties dialog edits.
+#[derive(Resource, Clone, Copy)]
+struct PropsOf(cadrs_eda::board_edit::BoardItem);
+
+/// A footprint's properties: where it is (exact position and angle), which side, and whether
+/// its 3D model shows.
+pub fn open_footprint(w: &mut World, id: uuid::Uuid) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let Some(f) = d.board.footprints.iter().find(|f| f.id == id).cloned() else { return };
+    w.insert_resource(PropsOf(cadrs_eda::board_edit::BoardItem::Footprint(id)));
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    let shows = f.footprint.models.iter().any(|m| m.visible);
+    let has_model = !f.footprint.models.is_empty();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-fprops-dialog")
+            .title(format!("Footprint properties: {}", f.reference()))
+            .width(460.0)
+            .body(move |p| {
+                p.spawn(t.text(f.footprint.id.clone(), t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                mm_row(p, &t, "Position X", "eda-fprops-x", f.placement.at.x);
+                mm_row(p, &t, "Position Y", "eda-fprops-y", f.placement.at.y);
+                row(p, &t, "Rotation", |r| {
+                    r.spawn(TextInput::new("eda-fprops-angle").value(format!("{}", f.placement.angle)).width(Val::Px(120.0)).height(26.0).build(&t));
+                    r.spawn(t.text("°", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                });
+                row(p, &t, "Side", |r| {
+                    let i = usize::from(f.placement.side == cadrs_eda::layer::Side::Bottom);
+                    r.spawn(Select::new("eda-fprops-side").bordered().width(Val::Px(120.0)).option("Top", true).option("Bottom", true).selected(i).build(&t));
+                });
+                if has_model {
+                    p.spawn(Checkbox::new("eda-fprops-model").label("Show its 3D model").checked(shows).build(&t));
+                }
+            })
+            .footer(move |f| {
+                button(f, &tf, "eda-fprops-ok", "OK", true, accept_footprint);
+                button(f, &tf, "eda-fprops-cancel", "Cancel", false, close_all);
+            }),
+    );
+}
+
+fn read_deg(w: &mut World, name: &str) -> Result<f64, String> {
+    ui::text_value(w, name).trim().trim_end_matches('°').trim().parse::<f64>().map_err(|_| "not an angle".to_string())
+}
+
+fn accept_footprint(w: &mut World) {
+    let Some(PropsOf(cadrs_eda::board_edit::BoardItem::Footprint(id))) = w.get_resource::<PropsOf>().copied() else { return };
+    let (x, y, angle) = (read_mm(w, "eda-fprops-x"), read_mm(w, "eda-fprops-y"), read_deg(w, "eda-fprops-angle"));
+    let bottom = select_index(w, "eda-fprops-side") == Some(1);
+    let has_model = { let mut q = w.query::<&Name>(); q.iter(w).any(|n| n.as_str() == "eda-fprops-model") };
+    let show = checkbox(w, "eda-fprops-model");
+    close_all(w);
+    let (Ok(x), Ok(y), Ok(angle)) = (x, y, angle) else {
+        ui::toast(w, "Position is a length (mm), rotation an angle (°)");
+        return;
+    };
+    ui::commit(w, "Footprint properties", |d| {
+        use cadrs_eda::board_edit as be;
+        let i = be::footprint_by_id(&d.board, id).ok_or("The footprint is gone")?;
+        if (d.board.footprints[i].placement.side == cadrs_eda::layer::Side::Bottom) != bottom {
+            be::flip_footprint(&mut d.board, i);
+        }
+        let turn = angle - d.board.footprints[i].placement.angle;
+        if turn.abs() > 1e-9 {
+            be::rotate_footprint(&mut d.board, i, turn);
+        }
+        be::move_footprint(&mut d.board, i, Pt::new(x, y));
+        if has_model {
+            // The first model shows or not (others, such as a STEP kept for mechanical CAD,
+            // stay as they are).
+            if let Some(m) = d.board.footprints[i].footprint.models.first_mut() {
+                m.visible = show;
+            }
+        }
+        Ok(())
+    });
+}
+
+/// A drawn shape's properties: its stroke, whether it's filled, and (on copper) its net.
+pub fn open_shape(w: &mut World, id: uuid::Uuid) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let Some(s) = d.board.shapes.iter().find(|s| s.id == id).cloned() else { return };
+    w.insert_resource(PropsOf(cadrs_eda::board_edit::BoardItem::Shape(id)));
+    let nets: Vec<String> = std::iter::once(String::new()).chain(d.board.nets.iter().filter(|n| !n.is_empty()).cloned()).collect();
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-sprops-dialog")
+            .title(format!("Shape on {}", s.layer.name()))
+            .width(460.0)
+            .body(move |p| {
+                mm_row(p, &t, "Line width", "eda-sprops-width", s.shape.stroke.width);
+                p.spawn(Checkbox::new("eda-sprops-filled").label("Filled").checked(s.shape.fill != cadrs_eda::graphics::Fill::None).build(&t));
+                if s.layer.is_copper() {
+                    row(p, &t, "Net", |r| {
+                        let mut sel = Select::new("eda-sprops-net").bordered().width(Val::Px(200.0));
+                        for n in &nets {
+                            sel = sel.option(if n.is_empty() { "(none)" } else { n.as_str() }, true);
+                        }
+                        let i = nets.iter().position(|n| *n == s.net).unwrap_or(0);
+                        r.spawn(sel.selected(i).build(&t));
+                    });
+                }
+            })
+            .footer(move |f| {
+                button(f, &tf, "eda-sprops-ok", "OK", true, accept_shape);
+                button(f, &tf, "eda-sprops-cancel", "Cancel", false, close_all);
+            }),
+    );
+}
+
+fn accept_shape(w: &mut World) {
+    let Some(PropsOf(cadrs_eda::board_edit::BoardItem::Shape(id))) = w.get_resource::<PropsOf>().copied() else { return };
+    let width = read_mm(w, "eda-sprops-width");
+    let filled = checkbox(w, "eda-sprops-filled");
+    let net_i = select_index(w, "eda-sprops-net");
+    let nets: Vec<String> = ui::current(w).map(|(_, _, d)| std::iter::once(String::new()).chain(d.board.nets.iter().filter(|n| !n.is_empty()).cloned()).collect()).unwrap_or_default();
+    close_all(w);
+    let Ok(width) = width else {
+        ui::toast(w, "The line width is a length in mm");
+        return;
+    };
+    ui::commit(w, "Shape properties", |d| {
+        let s = d.board.shapes.iter_mut().find(|s| s.id == id).ok_or("The shape is gone")?;
+        s.shape.stroke.width = width;
+        s.shape.fill = if filled { cadrs_eda::graphics::Fill::Outline } else { cadrs_eda::graphics::Fill::None };
+        if let Some(n) = net_i.and_then(|i| nets.get(i)) {
+            s.net = n.clone();
+        }
+        Ok(())
+    });
+}

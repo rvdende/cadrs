@@ -315,7 +315,8 @@ fn more_device(lib: &mut Library) {
     ant.show_pin_numbers = false;
     ant.pins = vec![pin("1", "A", PinType::Input, (0.0, -5.08), 90.0, 3.81)];
     ant.graphics.push(line(&[(0.0, -1.27), (0.0, 3.81)], 0.254, Fill::None));
-    ant.graphics.push(line(&[(-1.905, 3.81), (0.0, 1.27), (1.905, 3.81), (-1.905, 3.81)], 0.254, Fill::None));
+    // An open fork round the stem.
+    ant.graphics.push(line(&[(-1.27, 3.81), (0.0, 1.27), (1.27, 3.81)], 0.254, Fill::None));
     fields_right(&mut ant, 2.54);
     ant.fields[0].text.at = p(2.54, 2.54);
     ant.fields[1].text.at = p(2.54, 0.0);
@@ -513,8 +514,11 @@ fn port(name: &str, style: Port) -> Symbol {
             s.fields[1].text.at = p(0.0, -3.81);
         }
         Port::GroundRef => {
+            // Three bars, shorter going down.
             s.graphics.push(line(&[(0.0, 0.0), (0.0, -1.27)], 0.254, Fill::None));
-            s.graphics.push(line(&[(-1.27, -1.27), (1.27, -1.27), (0.0, -2.54), (-1.27, -1.27)], 0.254, Fill::Outline));
+            s.graphics.push(line(&[(-1.27, -1.27), (1.27, -1.27)], 0.254, Fill::None));
+            s.graphics.push(line(&[(-0.762, -1.905), (0.762, -1.905)], 0.254, Fill::None));
+            s.graphics.push(line(&[(-0.254, -2.54), (0.254, -2.54)], 0.254, Fill::None));
             s.fields[1].text.at = p(0.0, -3.81);
         }
         Port::Earth => {

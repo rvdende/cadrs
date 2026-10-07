@@ -18,7 +18,7 @@ pub mod colors {
     /// Gold-plated pins.
     pub const GOLD: Rgb = [214, 175, 72];
     /// Ceramic capacitor body.
-    pub const CERAMIC: Rgb = [196, 160, 110];
+    pub const CERAMIC: Rgb = [127, 94, 78];
     /// Thick-film resistor body (its top).
     pub const RESISTOR: Rgb = [30, 30, 30];
     /// Inductor / ferrite body.
