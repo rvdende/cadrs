@@ -2,7 +2,7 @@
 // saved EasyEDA answer for the Ra-01SH LoRa module, LCSC C2764087, stands in for the network).
 // 01 the symbol browser's JLCPCB parts tab; 02 "ra-01sh" searched, the module chosen: its
 // symbol and footprint previewed; 03 Add to library: the part on the Libraries tab, in LCSC;
-// 04 OK: placed on the sheet; 05 its footprint on the board after Update PCB.
+// 04 OK: placed on the sheet; 05 close up (thick strokes join without gaps).
 Scenario(
     start: Some("document"),
     steps: [
@@ -40,5 +40,7 @@ Scenario(
         Custom("eda-zoom 70 75 135 125"),
         MoveTo(1100, 860),
         Screenshot("04-placed"),
+        Custom("eda-zoom 88 104 104 114"),
+        Screenshot("05-close-up"),
     ],
 )

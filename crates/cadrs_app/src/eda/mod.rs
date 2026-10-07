@@ -218,11 +218,17 @@ fn spawn_camera(mut commands: Commands, surface: Res<RenderSurface>) {
 }
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
-    store.config_mut::<EdaHair>().0.render_layers = RenderLayers::layer(EDA_LAYER);
-    store.config_mut::<EdaFine>().0.render_layers = RenderLayers::layer(EDA_LAYER);
-    store.config_mut::<EdaThin>().0.render_layers = RenderLayers::layer(EDA_LAYER);
-    store.config_mut::<EdaMedium>().0.render_layers = RenderLayers::layer(EDA_LAYER);
-    store.config_mut::<EdaThick>().0.render_layers = RenderLayers::layer(EDA_LAYER);
+    // Round joints: without them a thick curve (an arc, a stroke-font glyph) is a row of
+    // separate quads with gaps on the outside of every bend.
+    fn set(c: &mut GizmoConfig) {
+        c.render_layers = RenderLayers::layer(EDA_LAYER);
+        c.line.joints = GizmoLineJoint::Round(6);
+    }
+    set(store.config_mut::<EdaHair>().0);
+    set(store.config_mut::<EdaFine>().0);
+    set(store.config_mut::<EdaThin>().0);
+    set(store.config_mut::<EdaMedium>().0);
+    set(store.config_mut::<EdaThick>().0);
 }
 
 fn reset(mut ui: ResMut<EdaUi>, mut scene: ResMut<EdaScene>, mut eda: ResMut<Eda2d>, q: Query<Entity, With<EdaEntity>>, mut commands: Commands) {
@@ -733,7 +739,9 @@ fn draw_lines(
         return;
     }
     for l in &scene.list.lines {
-        let pts = l.pts.iter().map(|p| Vec2::new((p.x as f64 / 1e6) as f32, (p.y as f64 / 1e6) as f32));
+        // A closed outline runs on past its start, so its first corner gets a joint too.
+        let closed = l.pts.len() > 2 && l.pts.first() == l.pts.last();
+        let pts = l.pts.iter().chain(l.pts.get(1).filter(|_| closed)).map(|p| Vec2::new((p.x as f64 / 1e6) as f32, (p.y as f64 / 1e6) as f32));
         let c = rgba(l.color);
         match class_of(l.width) {
             0 => g0.linestrip_2d(pts, c),
