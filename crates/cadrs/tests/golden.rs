@@ -2288,3 +2288,9 @@ fn golden_eda_layout_drawing() {
 fn golden_eda_online_parts() {
     run_scenario("eda_online_parts");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_component_list() {
+    run_scenario("eda_component_list");
+}

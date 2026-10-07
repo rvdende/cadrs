@@ -1,0 +1,44 @@
+// Moving parts with the mouse, and the Components list (on the course's finished board, GS18):
+// 01 the board; 02 R1 dragged up by its body (press, drag, let go: one undo step); 03 a
+// capacitor placed from the library on the schematic: it joins Components as "C"; 04 its
+// right-click menu (Edit, Rename, Delete); 05 deleted (the placed C stays on the sheet).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Custom("eda-example gs18"),
+        WaitFor("eda-mode-bar"),
+        Click(ui("eda-mode-layout")),
+        WaitFor("eda-layout-tools"),
+        Custom("eda-zoom -5 -5 60 55"),
+        MoveTo(1100, 900),
+        Screenshot("01-board"),
+        Drag(flat(30.65, 11.46), flat(30.65, 21.46)),
+        MoveTo(1100, 900),
+        Wait(2),
+        Screenshot("02-r1-dragged"),
+        // A library part on the schematic becomes a component.
+        Click(ui("eda-mode-schematic")),
+        WaitFor("sch-erc"),
+        MoveTo(900, 500),
+        Key("A"),
+        WaitFor("eda-chooser"),
+        Click(ui("eda-chooser-filter-field")),
+        Type("capacitor"),
+        WaitFor("eda-chooser-device-c"),
+        Click(ui("eda-chooser-device-c")),
+        Click(ui("eda-chooser-ok")),
+        Click(flat(220.98, 60.96)),
+        WaitFor("pcb-part-c"),
+        MoveTo(1100, 900),
+        Screenshot("03-component-added"),
+        RightClick(ui("pcb-part-c")),
+        WaitFor("pcb-component-menu"),
+        Screenshot("04-component-menu"),
+        Click(ui("pcb-delete-component")),
+        Wait(2),
+        Screenshot("05-component-deleted"),
+    ],
+)

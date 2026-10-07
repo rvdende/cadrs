@@ -352,14 +352,29 @@ fn plus_creates_named_boards_and_components() {
     h.execute(&mut d, &AddBoard::new_board(id)).unwrap();
     assert_eq!(names(studio(&d, id)), ["Power monitor", "Board 2", "Board 1"]);
 
-    h.execute(&mut d, &AddComponent { element: id, name: None }).unwrap();
-    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()) }).unwrap();
-    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()) }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: None, value: None }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()), value: None }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: Some("RA-01SH".into()), value: None }).unwrap();
     let comps = |d: &Document| studio(d, id).components.iter().map(|c| c.component.name.clone()).collect::<Vec<_>>();
     assert_eq!(comps(&d), ["Component 1", "RA-01SH", "RA-01SH (1)"]);
     let c0 = studio(&d, id).components[0].id;
     h.execute(&mut d, &RenameComponent { element: id, component: c0, name: "LoRa module".into() }).unwrap();
     assert_eq!(comps(&d)[0], "LoRa module");
+
+    // A library part placed on a schematic comes in with its symbol, under its own name; a
+    // deleted component comes back on undo.
+    let mut cap = cadrs_eda::Component::new("C");
+    cap.symbol = Some(cadrs_eda::symbol::new_symbol("C", "C", "Unpolarized capacitor"));
+    h.execute(&mut d, &AddComponent { element: id, name: None, value: Some(Box::new(cap)) }).unwrap();
+    assert_eq!(comps(&d)[3], "C");
+    assert!(studio(&d, id).components[3].component.symbol.is_some());
+    let c3 = studio(&d, id).components[3].id;
+    h.execute(&mut d, &DeleteComponent { element: id, component: c3 }).unwrap();
+    assert_eq!(comps(&d).len(), 3);
+    assert!(h.execute(&mut d, &DeleteComponent { element: id, component: c3 }).is_err());
+    h.undo(&mut d);
+    h.undo(&mut d);
+    assert_eq!(comps(&d).len(), 3);
 
     // Saved and loaded.
     let back: Document = ron::from_str(&ron::to_string(&d).unwrap()).unwrap();
@@ -395,7 +410,7 @@ fn designs_and_components_edit_through_undo() {
     let idf = studio(&d, id).boards[1].id;
     assert!(h.execute(&mut d, &SetDesign { element: id, board: idf, design: Box::new(course), label: "x".into() }).is_err());
     // Components: the symbol editor's result, name kept.
-    h.execute(&mut d, &AddComponent { element: id, name: Some("Switch".into()) }).unwrap();
+    h.execute(&mut d, &AddComponent { element: id, name: Some("Switch".into()), value: None }).unwrap();
     let c = studio(&d, id).components[0].id;
     let mut value = cadrs_eda::Component::new("ignored");
     value.symbol = Some(cadrs_eda::getting_started::switch_symbol());

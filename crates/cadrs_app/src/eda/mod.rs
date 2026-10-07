@@ -816,7 +816,7 @@ fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut com
                 }
                 // The project library's parts as components.
                 for part in parts {
-                    let added = doc.execute(&cadrs_core::pcb::AddComponent { element, name: Some(part.name.clone()) });
+                    let added = doc.execute(&cadrs_core::pcb::AddComponent { element, name: Some(part.name.clone()), value: None });
                     let id = doc.doc.element(element).and_then(|e| e.pcb()).and_then(|s| s.components.last()).map(|c| c.id);
                     if let (Ok(()), Some(component)) = (added, id) {
                         let set = cadrs_core::pcb::SetComponent { element, component, value: Box::new(part), label: "Example part".into() };

@@ -105,6 +105,8 @@ impl Plugin for PcbPlugin {
             .add_observer(on_tree_toggle)
             .add_observer(on_board_menu)
             .add_observer(on_board_menu_action)
+            .add_observer(on_component_menu)
+            .add_observer(on_component_menu_action)
             .add_observer(on_search_submit)
             .add_observer(dialogs::on_path_browse);
         panes::register(app);
@@ -645,8 +647,9 @@ fn rebuild_tree(
             p.spawn((
                 TreeItem::new(format!("pcb-part-{}", slug(name)), name.clone()).icon("chip", 16.0).left(26.0).height(24.0).editable().build(&t),
                 NativeComponentRow(el, *id),
+                ContextMenuTarget,
                 DoubleClickable,
-                Tooltip::new(format!("{name}: double-click to rename")),
+                Tooltip::new(format!("{name}: click to edit, double-click to rename, right-click for more")),
             ));
         }
         for (id, name, _, pkgs) in &snap.boards {
@@ -793,6 +796,62 @@ pub fn delete_board(world: &mut World, el: ElementId, id: BoardId) {
     world.flush();
 }
 
+
+/// The context menu anchor of a component row's menu.
+#[derive(Component, Clone, Copy)]
+struct ComponentMenuFor(ElementId, cadrs_core::pcb::ComponentId);
+
+/// Right-click a component → Edit, Rename, Delete.
+fn on_component_menu(ev: On<ContextMenuRequested>, q: Query<(&NativeComponentRow, &UiGlobalTransform, &ComputedNode)>, theme: Res<Theme>, mut commands: Commands) {
+    let Ok((r, tf, node)) = q.get(ev.entity) else { return };
+    let s = node.inverse_scale_factor();
+    let bottom = (tf.translation.y + node.size().y / 2.0) * s;
+    let at = Vec2::new(ev.position.x + 2.0, bottom.max(ev.position.y) + 4.0);
+    let menu = Menu::new("pcb-component-menu")
+        .min_width(170.0)
+        .item(MenuItem::new("pcb-edit-component", "Edit").icon("edit"))
+        .item(MenuItem::new("pcb-rename-component", "Rename"))
+        .item(MenuItem::new("pcb-delete-component", "Delete").icon("delete"));
+    let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
+    commands.entity(anchor).insert((ComponentMenuFor(r.0, r.1), DespawnOnExit(AppState::Document)));
+}
+
+fn on_component_menu_action(ev: On<MenuAction>, q: Query<&ComponentMenuFor, With<ContextMenuAnchor>>, mut commands: Commands) {
+    let Ok(&ComponentMenuFor(el, id)) = q.get(ev.entity) else { return };
+    match ev.item.as_str() {
+        "pcb-edit-component" => commands.queue(move |w: &mut World| crate::eda::edit_component(w, el, id)),
+        "pcb-rename-component" => commands.queue(move |w: &mut World| naming::rename_component(w, el, id)),
+        "pcb-delete-component" => commands.queue(move |w: &mut World| delete_component(w, el, id)),
+        _ => {}
+    }
+}
+
+/// Deletes a component (undoable, Undo in a toast). Placed parts keep their copies.
+pub fn delete_component(world: &mut World, el: ElementId, id: cadrs_core::pcb::ComponentId) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+    let name = doc.doc.element(el).and_then(|e| e.pcb()).and_then(|s| s.component(id)).map(|c| c.component.name.clone()).unwrap_or_default();
+    if let Err(e) = doc.execute(&cadrs_core::pcb::DeleteComponent { element: el, component: id }) {
+        warn!("delete component: {e}");
+        return;
+    }
+    // Its editor closes (an undo brings the component back, not the editor).
+    if world.resource::<crate::eda::EdaUi>().editing.get(&el) == Some(&id) {
+        crate::eda::stop_editing(world, el);
+    }
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    let toast = cadrs_ui::show_toast_for(&mut commands, &theme, format!("Deleted component {name}."), 3.0);
+    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    commands.entity(undo).insert(observe(|_: On<Activate>, mut commands: Commands| {
+        commands.queue(|world: &mut World| {
+            if let Some(mut d) = world.get_resource_mut::<ActiveDocument>() {
+                d.undo();
+            }
+            cadrs_ui::close_toasts(world);
+        });
+    }));
+    world.flush();
+}
 // ---------------------------------------------------------------------------------------------
 // Viewport chrome: the empty-state hint and the right-edge toggles
 

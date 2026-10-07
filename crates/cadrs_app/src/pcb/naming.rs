@@ -71,7 +71,7 @@ pub fn add_component(world: &mut World) {
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
     let Some((el, _)) = active_studio(&doc) else { return };
     let mark = doc.history.undo_len();
-    if let Err(e) = doc.execute(&AddComponent { element: el, name: None }) {
+    if let Err(e) = doc.execute(&AddComponent { element: el, name: None, value: None }) {
         warn!("create component: {e}");
         return;
     }
@@ -168,4 +168,10 @@ fn rename(world: &mut World, target: Target, value: &str) {
             world.flush();
         }
     }
+}
+
+/// Starts renaming a component's row (its context menu's Rename).
+pub fn rename_component(world: &mut World, el: ElementId, id: cadrs_core::pcb::ComponentId) {
+    world.resource_mut::<JustCreated>().0 = None;
+    world.resource_mut::<PendingRename>().0 = Some(Target::Component(el, id));
 }

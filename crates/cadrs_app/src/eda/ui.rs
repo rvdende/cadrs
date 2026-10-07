@@ -97,6 +97,33 @@ pub fn libraries(world: &World) -> LibraryTable {
     t
 }
 
+/// Adds a library part placed on a schematic to the studio's Components (its symbol, and its
+/// default footprint when the symbol names one), unless it is one already: a power port, one
+/// of the studio's own components, or a part of the same name. Returns whether it added one.
+pub fn add_library_component(world: &mut World, element: ElementId, sym: &cadrs_eda::symbol::Symbol) -> bool {
+    if sym.power {
+        return false;
+    }
+    let lib = libraries(world);
+    let doc = world.resource::<ActiveDocument>();
+    let Some(e) = doc.doc.element(element) else { return false };
+    let Some(s) = e.pcb() else { return false };
+    let own = format!("{}:", project_library_name(&e.name));
+    if sym.id.starts_with(&own) || s.components.iter().any(|c| c.component.name == sym.name() || c.component.symbol.as_ref().is_some_and(|x| x.name() == sym.name())) {
+        return false;
+    }
+    let footprint = sym.field(cadrs_eda::symbol::fields::FOOTPRINT).and_then(|f| lib.footprint(f.value())).cloned();
+    let value = cadrs_eda::Component { name: sym.name().to_string(), symbol: Some(sym.clone()), footprint };
+    let cmd = cadrs_core::pcb::AddComponent { element, name: None, value: Some(Box::new(value)) };
+    match world.resource_mut::<ActiveDocument>().execute(&cmd) {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("add component: {e}");
+            false
+        }
+    }
+}
+
 /// A studio's name as a library name: "PCB Studio 1" → "PCB_Studio_1".
 pub fn project_library_name(studio: &str) -> String {
     studio.chars().map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' }).collect()

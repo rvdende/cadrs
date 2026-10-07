@@ -381,11 +381,13 @@ impl Command for RenameBoard {
     }
 }
 
-/// The + under Components: adds an empty component ("Component n" without a name).
+/// The + under Components: adds an empty component ("Component n" without a name), or a copy
+/// of `value` (a library part placed on a schematic) under its name or `name`.
 #[derive(Debug, Clone)]
 pub struct AddComponent {
     pub element: ElementId,
     pub name: Option<String>,
+    pub value: Option<Box<cadrs_eda::Component>>,
 }
 
 impl Command for AddComponent {
@@ -397,13 +399,38 @@ impl Command for AddComponent {
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         let s = studio_mut(doc, self.element)?;
-        let name = match &self.name {
+        let wanted = self.name.as_deref().or(self.value.as_ref().map(|v| v.name.as_str()));
+        let name = match wanted {
             Some(n) => s.free_component_name(n.trim()),
             None => s.next_free("Component", |c| s.components.iter().any(|x| x.component.name == c)),
         };
         let n = s.next_component.max(s.components.iter().map(|c| c.id.0 + 1).max().unwrap_or(0));
         s.next_component = n + 1;
-        s.components.push(StudioComponent { id: ComponentId(n), component: cadrs_eda::Component::new(name) });
+        let mut component = self.value.as_deref().cloned().unwrap_or_else(|| cadrs_eda::Component::new(""));
+        component.name = name;
+        s.components.push(StudioComponent { id: ComponentId(n), component });
+        Ok(())
+    }
+}
+
+/// Right-click a component → Delete. Parts already placed from it keep their copies.
+#[derive(Debug, Clone)]
+pub struct DeleteComponent {
+    pub element: ElementId,
+    pub component: ComponentId,
+}
+
+impl Command for DeleteComponent {
+    fn label(&self) -> String {
+        "Delete component".into()
+    }
+    fn scope(&self) -> Scope {
+        Scope::Element(self.element)
+    }
+    fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
+        let s = studio_mut(doc, self.element)?;
+        let i = s.components.iter().position(|c| c.id == self.component).ok_or_else(|| CommandError::Invalid("no such component".into()))?;
+        s.components.remove(i);
         Ok(())
     }
 }

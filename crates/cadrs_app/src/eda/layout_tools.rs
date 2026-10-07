@@ -1,6 +1,7 @@
 //! The Layout view's tools (docs/PLAN.md GS13–GS21, GS25), keys as in the guide:
 //!
-//! - **Select** (Esc): click picks a footprint, track, via or zone (Shift adds); **M** moves
+//! - **Select** (Esc): click picks a footprint, track, via or zone (Shift adds); pressing on a
+//!   footprint and dragging moves it (it lands where the button is let go); **M** moves
 //!   the selected footprint (a click puts it down), **D** drags it with its tracks attached,
 //!   **R** rotates it, **F** flips it to the other side (F with nothing selected fits the
 //!   view), **U** selects the connection's tracks (again: through vias), **Del** deletes.
@@ -96,6 +97,9 @@ pub struct Moving {
     pub fp: uuid::Uuid,
     pub from: Pt,
     pub drag: bool,
+    /// Started by pressing on the footprint: it lands when the button is let go (M and D: on
+    /// the next click).
+    pub on_release: bool,
 }
 
 #[derive(Resource, Debug)]
@@ -268,14 +272,15 @@ fn on_click(mut reader: MessageReader<EdaClick>, mut commands: Commands) {
             match c {
                 EdaClick::Press { at, shift, .. } => press(world, at, shift),
                 EdaClick::Double { at } => double(world, at),
-                EdaClick::Release { .. } => {}
+                EdaClick::Release { at } => release(world, at),
             }
         }
     });
 }
 
 fn press(w: &mut World, at: Pt, shift: bool) {
-    if let Some(m) = w.resource::<LayoutState>().moving.clone() {
+    // A move started with M or D ends with a click.
+    if let Some(m) = w.resource::<LayoutState>().moving.clone().filter(|m| !m.on_release) {
         finish_move(w, &m, at);
         return;
     }
@@ -292,7 +297,14 @@ fn press(w: &mut World, at: Pt, shift: bool) {
                         s.selection.push(h);
                     }
                 }
-                Some(h) => s.selection = vec![h],
+                Some(h) => {
+                    // Pressing on a footprint starts dragging it (from the grid point pressed,
+                    // so it keeps its place under the pointer).
+                    if let BoardItem::Footprint(fp) = h {
+                        s.moving = Some(Moving { fp, from: snap(at, grid()), drag: false, on_release: true });
+                    }
+                    s.selection = vec![h];
+                }
                 None if !shift => s.selection.clear(),
                 None => {}
             }
@@ -411,6 +423,13 @@ fn double(w: &mut World, _at: Pt) {
     }
 }
 
+/// Letting go of a footprint being dragged puts it down (where it was: just a selection).
+fn release(w: &mut World, at: Pt) {
+    if let Some(m) = w.resource::<LayoutState>().moving.clone().filter(|m| m.on_release) {
+        finish_move(w, &m, at);
+    }
+}
+
 fn finish_move(w: &mut World, m: &Moving, at: Pt) {
     let d = snap(at, grid()) - m.from;
     let (fp, drag) = (m.fp, m.drag);
@@ -518,7 +537,7 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                 if let (Some(fp), Some(from)) = (fp, anchor) {
                     let mut s = world.resource_mut::<LayoutState>();
                     s.selection = vec![BoardItem::Footprint(fp)];
-                    s.moving = Some(Moving { fp, from, drag: k.key_code == KeyCode::KeyD });
+                    s.moving = Some(Moving { fp, from, drag: k.key_code == KeyCode::KeyD, on_release: false });
                 }
             }
             KeyCode::KeyR => {

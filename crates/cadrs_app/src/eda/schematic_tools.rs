@@ -29,6 +29,7 @@ use cadrs_eda::units::{Bounds, Pt, SCHEMATIC_GRID, mm};
 
 use super::ui::{self, StripAction};
 use super::{EdaClick, EdaPointer, Mode, Preview, SceneInputs};
+use crate::ActiveDocument;
 use crate::AppState;
 
 const STRIP: ui::StripSpec = &[
@@ -243,10 +244,16 @@ fn press(w: &mut World, at: Pt, shift: bool, ctrl: bool) {
         }
         Tool::Place(sym) => {
             let at = snap(at);
-            ui::commit(w, "Place symbol", |d| {
+            let mark = w.resource::<ActiveDocument>().history.undo_len();
+            let placed = ui::commit(w, "Place symbol", |d| {
                 se::place_symbol(&mut d.schematic, 0, &sym, at, uuid::Uuid::new_v4());
                 Ok(())
             });
+            // A library part placed for the first time joins the studio's Components (one
+            // undo step with the placing).
+            if placed && let Some((element, _, _)) = ui::current(w) && ui::add_library_component(w, element, &sym) {
+                w.resource_mut::<ActiveDocument>().squash_element_since(mark, element, "Place symbol");
+            }
             set_tool(w, Tool::Select);
         }
         Tool::Wire(mut pts) => {
