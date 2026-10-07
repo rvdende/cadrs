@@ -59,6 +59,8 @@ fn main() -> AppExit {
     let scripted = scenario.is_some();
     // Scenarios and headless runs export into their output folder (a BOM's CSV, P3B.6), never
     // into the user's Downloads (Final part 3: golden runs had written there).
+    // Nor do they see or add to the user's own libraries.
+    let user_libraries = (scripted || opts.headless).then(|| opts.resolved_out_dir().join("libraries"));
     if scripted || opts.headless {
         app.insert_resource(cadrs_app::ExportDirOverride(Some(opts.resolved_out_dir().join("exports"))));
     }
@@ -73,6 +75,9 @@ fn main() -> AppExit {
     }
     if let Some(dir) = data_dir {
         app.insert_resource(DocumentStore(Store::new(dir)));
+    }
+    if let Some(dir) = user_libraries {
+        app.insert_resource(cadrs_app::eda::libraries::UserLibraries::load(Some(dir)));
     }
     if scripted {
         let user = UserProfile {

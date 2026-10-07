@@ -662,7 +662,7 @@ fn accept_pin_table(w: &mut World) {
             if r.number.trim().is_empty() {
                 continue;
             }
-            let mut p = r.orig.and_then(|i| s.pins.get(i).cloned()).unwrap_or_else(|| cadrs_eda::stdlib::pin("", "", PinType::Passive, (0.0, 0.0), 0.0, 2.54));
+            let mut p = r.orig.and_then(|i| s.pins.get(i).cloned()).unwrap_or_else(|| cadrs_eda::symbol::pin("", "", PinType::Passive, (0.0, 0.0), 0.0, 2.54));
             p.number = r.number.trim().into();
             p.name = r.name.trim().into();
             p.kind = PIN_TYPES[r.kind.min(PIN_TYPES.len() - 1)].1;

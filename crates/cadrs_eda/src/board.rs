@@ -114,6 +114,7 @@ pub struct Polygon {
 /// A copper pour or keep-out area.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Zone {
+    #[serde(default, skip_serializing_if = "Uuid::is_nil")]
     pub id: Uuid,
     pub name: String,
     pub net: String,

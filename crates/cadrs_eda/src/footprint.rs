@@ -82,6 +82,7 @@ pub struct PadRules {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pad {
+    #[serde(default, skip_serializing_if = "Uuid::is_nil")]
     pub id: Uuid,
     /// Pad "number" (often a number, sometimes "A1" or empty for mechanical pads).
     pub number: String,
@@ -93,18 +94,24 @@ pub struct Pad {
     pub drill: Option<Drill>,
     pub layers: LayerSet,
     /// The net on a placed footprint (a name in the board's net list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub net: Option<String>,
     /// The symbol pin's name and type it came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_function: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    #[serde(default, skip_serializing_if = "crate::units::is_default")]
     pub rules: PadRules,
     /// Copper height above the board, for press-fit pins and the 3D view.
+    #[serde(default, skip_serializing_if = "crate::units::is_default")]
     pub die_length: Nm,
 }
 
 /// A drawn item of a footprint on one layer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FpShape {
+    #[serde(default, skip_serializing_if = "Uuid::is_nil")]
     pub id: Uuid,
     pub shape: Shape,
     pub layer: Layer,
@@ -113,6 +120,7 @@ pub struct FpShape {
 /// A text item of a footprint (fields are [`FpField`]s).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FpText {
+    #[serde(default, skip_serializing_if = "Uuid::is_nil")]
     pub id: Uuid,
     pub text: Text,
     pub layer: Layer,
@@ -202,6 +210,56 @@ impl Footprint {
 
     pub fn name(&self) -> &str {
         self.id.rsplit_once(':').map_or(&self.id, |(_, n)| n)
+    }
+}
+
+/// A text item on `layer` at `at`, `size` mm high with strokes `thickness` mm wide.
+pub fn fp_text(text: &str, at: Pt, layer: Layer, size: f64, thickness: f64) -> FpText {
+    let style = crate::graphics::TextStyle { size: Size::mm(size, size), thickness: Some(crate::units::mm(thickness)), ..Default::default() };
+    FpText { id: Uuid::new_v4(), text: Text { text: text.into(), at, angle: 0.0, style, visible: true }, layer, keep_upright: true }
+}
+
+/// An empty footprint `lib:name` with Reference on silkscreen at `ref_at`, Value on fab at
+/// `value_at`, and `${REFERENCE}` on fab at the body's centre.
+pub fn new_footprint(id: &str, description: &str, mount: MountKind, ref_at: Pt, value_at: Pt, center: Pt) -> Footprint {
+    Footprint {
+        id: id.into(),
+        description: description.into(),
+        keywords: String::new(),
+        fields: vec![
+            FpField { name: crate::symbol::fields::REFERENCE.into(), text: fp_text("REF**", ref_at, Layer::TopSilk, 1.0, 0.15) },
+            FpField { name: crate::symbol::fields::VALUE.into(), text: fp_text(id.rsplit(':').next().unwrap_or(id), value_at, Layer::TopFab, 1.0, 0.15) },
+        ],
+        attrs: FootprintAttrs { mount, ..Default::default() },
+        pads: vec![],
+        shapes: vec![],
+        texts: vec![fp_text("${REFERENCE}", center, Layer::TopFab, 1.0, 0.15)],
+        models: vec![],
+        zones: vec![],
+    }
+}
+
+/// A pad: plated through-hole when `drill` is set, else SMD on the top layers.
+pub fn new_pad(number: &str, shape: PadShape, at: Pt, size: Size, drill: Option<Nm>) -> Pad {
+    let (kind, layers) = match drill {
+        Some(_) => (PadKind::ThroughHole, LayerSet::ALL_COPPER.union(LayerSet::of(&[Layer::TopMask, Layer::BottomMask]))),
+        None => (PadKind::Smd, LayerSet::of(&[Layer::TopCopper, Layer::TopMask, Layer::TopPaste])),
+    };
+    Pad {
+        id: Uuid::new_v4(),
+        number: number.into(),
+        kind,
+        shape,
+        at,
+        angle: 0.0,
+        size,
+        drill: drill.map(|d| Drill { size: Size::new(d, d), offset: Pt::ZERO }),
+        layers,
+        net: None,
+        pin_function: String::new(),
+        pin_type: String::new(),
+        rules: PadRules::default(),
+        die_length: 0,
     }
 }
 

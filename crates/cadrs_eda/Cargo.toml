@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 serde.workspace = true
 uuid.workspace = true
+ron.workspace = true
 clipper2-rust.workspace = true
 earcutr.workspace = true
 

@@ -35,7 +35,6 @@ pub mod library;
 pub mod poly;
 pub mod render;
 pub mod schematic;
-pub mod stdlib;
 pub mod symbol;
 pub mod units;
 pub mod view;

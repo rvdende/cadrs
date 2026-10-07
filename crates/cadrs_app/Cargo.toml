@@ -27,7 +27,11 @@ ron.workspace = true
 cadrs_eda.workspace = true
 # KiCad project import: a crutch that can be dropped (remove the feature and `pcb::kicad`).
 cadrs_kicad = { workspace = true, optional = true }
+cadrs_easyeda = { workspace = true, optional = true }
+directories.workspace = true
 
 [features]
-default = ["kicad"]
+default = ["kicad", "easyeda"]
 kicad = ["dep:cadrs_kicad"]
+# The online part search (JLCPCB/LCSC, EasyEDA parts) in the library browser.
+easyeda = ["dep:cadrs_easyeda"]

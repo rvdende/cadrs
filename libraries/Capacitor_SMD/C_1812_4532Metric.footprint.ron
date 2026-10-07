@@ -1,0 +1,83 @@
+(
+  id: "C_1812_4532Metric",
+  description: "C chip 1812 (4532 metric), 4.5 × 3.2 mm",
+  keywords: "c 1812",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 0, y: 2600000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "C_1812_4532Metric", at: (x: 0, y: -2600000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: Smd,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: Smd,
+      shape: RoundRect(ratio: 0.25),
+      at: (x: -2100000, y: 0),
+      angle: 0.0,
+      size: (w: 1300000, h: 3400000),
+      drill: None,
+      layers: [TopCopper, TopMask, TopPaste],
+    ),
+    (
+      number: "2",
+      kind: Smd,
+      shape: RoundRect(ratio: 0.25),
+      at: (x: 2100000, y: 0),
+      angle: 0.0,
+      size: (w: 1300000, h: 3400000),
+      drill: None,
+      layers: [TopCopper, TopMask, TopPaste],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Rect(a: (x: -2250000, y: -1600000), b: (x: 2250000, y: 1600000)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -3000000, y: -1950000), b: (x: 3000000, y: 1950000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+    (
+      shape: (geom: Line(a: (x: -1190000, y: 1800000), b: (x: 1190000, y: 1800000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -1190000, y: -1800000), b: (x: 1190000, y: -1800000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 0, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Capacitor_SMD.3dshapes/C_1812_4532Metric.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Box(min: (-1.65, -1.6, 0.0), max: (1.65, 1.6, 1.6)), color: (196, 160, 110)), (solid: Box(min: (-2.25, -1.6, 0.0), max: (-1.65, 1.6, 1.6)), color: (196, 198, 202)), (solid: Box(min: (1.65, -1.6, 0.0), max: (2.25, 1.6, 1.6)), color: (196, 198, 202))])),
+    ),
+  ],
+  zones: [],
+)

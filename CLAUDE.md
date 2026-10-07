@@ -20,6 +20,10 @@ Onshape-style CAD in Rust + Bevy 0.19.1. Local notes in `docs/` (git-ignored: `P
 ## Layout
 - Crates in `crates/*`; shared versions in root `[workspace.dependencies]`.
 - `cadrs_core` and `cadrs_sketch` don't depend on bevy.
+- Library parts are data, never code: `libraries/<Library>/<name>.symbol.ron|.footprint.ron`,
+  read at runtime. `cargo run -r -p cadrs_libgen -- libraries` rewrites the built-in ones from
+  their generators. The library browser's JLCPCB parts tab (`cadrs_easyeda`) downloads parts
+  into the user's library folder (`~/.local/share/cadrs/libraries`).
 - Reusable UI goes in `cadrs_ui`, not `cadrs_app`. Reference for components, API style and
   interaction: gpui-component (`~/.cargo/registry/src/*/gpui-component-0.6.6/src/`) and GPUI
   (`gpui-pre-0.3.6`). Don't add GPUI as a dependency.

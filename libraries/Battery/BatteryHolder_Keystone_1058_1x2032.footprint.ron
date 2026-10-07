@@ -1,0 +1,79 @@
+(
+  id: "BatteryHolder_Keystone_1058_1x2032",
+  description: "Coin cell holder, CR2032, surface mount",
+  keywords: "",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 0, y: 12000000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "BatteryHolder_Keystone_1058_1x2032", at: (x: 0, y: -12000000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: Smd,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: Smd,
+      shape: Rect,
+      at: (x: -14730000, y: 0),
+      angle: 0.0,
+      size: (w: 2540000, h: 5080000),
+      drill: None,
+      layers: [TopCopper, TopMask, TopPaste],
+    ),
+    (
+      number: "2",
+      kind: Smd,
+      shape: Rect,
+      at: (x: 14730000, y: 0),
+      angle: 0.0,
+      size: (w: 2540000, h: 5080000),
+      drill: None,
+      layers: [TopCopper, TopMask, TopPaste],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Circle(center: (x: 0, y: 0), radius: 10000000), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Polyline(pts: [(x: -13000000, y: 3500000), (x: -8000000, y: 3500000), (x: -6000000, y: 9000000), (x: 6000000, y: 9000000), (x: 8000000, y: 3500000), (x: 13000000, y: 3500000), (x: 13000000, y: -3500000), (x: 8000000, y: -3500000), (x: 5000000, y: -8000000), (x: 3000000, y: -6500000), (x: -3000000, y: -6500000), (x: -5000000, y: -8000000), (x: -8000000, y: -3500000), (x: -13000000, y: -3500000)], closed: true), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -16500000, y: -11000000), b: (x: 16500000, y: 11000000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 0, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Battery.3dshapes/BatteryHolder_Keystone_1058_1x2032.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Box(min: (-13.0, -3.5, 0.0), max: (13.0, 3.5, 4.2)), color: (38, 38, 42)), (solid: Cylinder(base: (0.0, 0.0, 0.0), axis: Z, radius: 10.0, length: 3.2), color: (38, 38, 42)), (solid: Box(min: (-16.0, -2.5, 0.0), max: (-13.0, 2.5, 0.3)), color: (196, 198, 202)), (solid: Box(min: (13.0, -2.5, 0.0), max: (16.0, 2.5, 0.3)), color: (196, 198, 202))])),
+    ),
+  ],
+  zones: [],
+)

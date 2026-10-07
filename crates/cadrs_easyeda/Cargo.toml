@@ -1,0 +1,18 @@
+[package]
+name = "cadrs_easyeda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Parts from the JLCPCB/LCSC catalogue: search it, fetch a part's EasyEDA symbol, footprint and
+# 3D model, and write them into a cadrs library folder. Only the app's online part search
+# depends on it, so it can be deleted without touching the rest.
+[dependencies]
+cadrs_eda.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,6 +1,6 @@
 //! Generated 3D models: a part's body as coloured boxes and cylinders in footprint coordinates
 //! (mm, X/Y as the footprint, Z up from the board surface). The footprint generators in
-//! [`crate::stdlib`] make one with every footprint, so a board shows real-looking parts with
+//! the built-in libraries make one with every footprint, so a board shows real-looking parts with
 //! no model files. [`mesh`] turns a body into triangles, one group per colour.
 
 use serde::{Deserialize, Serialize};

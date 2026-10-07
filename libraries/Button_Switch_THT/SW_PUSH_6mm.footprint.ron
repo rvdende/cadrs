@@ -1,0 +1,111 @@
+(
+  id: "SW_PUSH_6mm",
+  description: "Tactile push button, 6 × 6 mm, through hole",
+  keywords: "tact sw push 6mm",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 3250000, y: 2500000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "SW_PUSH_6mm", at: (x: 3250000, y: -7000000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: ThroughHole,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 2000000, h: 2000000),
+      drill: Some((size: (w: 1100000, h: 1100000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 6500000, y: 0),
+      angle: 0.0,
+      size: (w: 2000000, h: 2000000),
+      drill: Some((size: (w: 1100000, h: 1100000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 0, y: -4500000),
+      angle: 0.0,
+      size: (w: 2000000, h: 2000000),
+      drill: Some((size: (w: 1100000, h: 1100000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 6500000, y: -4500000),
+      angle: 0.0,
+      size: (w: 2000000, h: 2000000),
+      drill: Some((size: (w: 1100000, h: 1100000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Rect(a: (x: 250000, y: -5250000), b: (x: 6250000, y: 750000)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Line(a: (x: 1260000, y: -5500000), b: (x: 5240000, y: -5500000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: 6500000, y: -3240000), b: (x: 6500000, y: -1260000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: 1260000, y: 1000000), b: (x: 5240000, y: 1000000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: 0, y: -3240000), b: (x: 0, y: -1260000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -1250000, y: -5750000), b: (x: 7750000, y: 1250000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 3250000, y: -2250000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Button_Switch_THT.3dshapes/SW_PUSH_6mm.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Box(min: (0.25, -5.25, 0.0), max: (6.25, 0.75, 3.5)), color: (38, 38, 42)), (solid: Cylinder(base: (3.25, -2.25, 3.5), axis: Z, radius: 1.75, length: 1.5), color: (38, 38, 42))])),
+    ),
+  ],
+  zones: [],
+)

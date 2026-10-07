@@ -157,3 +157,58 @@ impl Symbol {
         self.id.rsplit_once(':').map_or(&self.id, |(_, n)| n)
     }
 }
+
+fn new_field(name: &str, value: &str, at: Pt, h: crate::graphics::HAlign, visible: bool) -> Field {
+    let style = crate::graphics::TextStyle { h_align: h, ..Default::default() };
+    Field { name: name.into(), text: Text { text: value.into(), at, angle: 0.0, style, visible }, show_name: false }
+}
+
+/// A pin: number, name, type, where wires connect (mm), the direction towards the body, length
+/// (mm).
+pub fn pin(number: &str, name: &str, kind: PinType, at: (f64, f64), angle: f64, length: f64) -> Pin {
+    Pin {
+        number: number.into(),
+        name: name.into(),
+        kind,
+        shape: PinShape::Line,
+        at: Pt::mm(at.0, at.1),
+        angle,
+        length: crate::units::mm(length),
+        visible: true,
+        name_size: crate::units::mm(1.27),
+        number_size: crate::units::mm(1.27),
+        unit: 0,
+        style: 0,
+    }
+}
+
+/// A new symbol with the standard fields: Reference `prefix?`, Value `name`, an empty
+/// Footprint, Datasheet and a Description.
+pub fn new_symbol(name: &str, prefix: &str, description: &str) -> Symbol {
+    use crate::graphics::HAlign;
+    let mm = crate::units::mm;
+    Symbol {
+        id: name.into(),
+        fields: vec![
+            new_field(fields::REFERENCE, &format!("{prefix}?"), Pt::mm(2.54, 1.27), HAlign::Left, true),
+            new_field(fields::VALUE, name, Pt::mm(2.54, -1.27), HAlign::Left, true),
+            new_field(fields::FOOTPRINT, "", Pt::ZERO, HAlign::Center, false),
+            new_field(fields::DATASHEET, "~", Pt::ZERO, HAlign::Center, false),
+            new_field(fields::DESCRIPTION, description, Pt::ZERO, HAlign::Center, false),
+        ],
+        keywords: String::new(),
+        footprint_filters: vec![],
+        unit_count: 1,
+        units_swappable: false,
+        unit_names: vec![],
+        has_alternate: false,
+        power: false,
+        show_pin_numbers: true,
+        show_pin_names: true,
+        pin_name_offset: mm(0.508),
+        in_bom: true,
+        on_board: true,
+        graphics: vec![],
+        pins: vec![],
+    }
+}

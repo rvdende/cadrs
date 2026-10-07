@@ -98,7 +98,7 @@ pub use inline_edit::{
 };
 pub use tabs::Tab;
 pub use tag::Tag;
-pub use tab_strip::{TabStrip, TabStripSelect, TabStripState};
+pub use tab_strip::{TabStrip, TabStripSelect, TabStripState, select_tab};
 pub use toolbar::{Kbd, ToolButton, toolbar_separator};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};
 pub use icon::{Icon, IconAtlas, icon};

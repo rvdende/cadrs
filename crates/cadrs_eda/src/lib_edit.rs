@@ -6,7 +6,7 @@
 use crate::footprint::*;
 use crate::graphics::{Fill, Geom, Shape, Stroke};
 use crate::layer::Layer;
-use crate::stdlib;
+
 use crate::symbol::*;
 use crate::units::{MIL, Nm, Pt, SCHEMATIC_GRID, Size, mm};
 
@@ -32,7 +32,7 @@ impl Orientation {
 
 /// File → New symbol: a name, a reference prefix, pin names shown or not.
 pub fn new_symbol(name: &str, prefix: &str, show_pin_names: bool) -> Symbol {
-    let mut s = stdlib::new_symbol(name, prefix, "");
+    let mut s = crate::symbol::new_symbol(name, prefix, "");
     s.show_pin_names = show_pin_names;
     // The reference starts above the body and the value below it, clear of a two-grid drawing;
     // the user moves them.
@@ -154,7 +154,7 @@ pub fn set_symbol_field(s: &mut Symbol, name: &str, value: &str) {
 
 /// File → New footprint, then its properties: name, value, mount type.
 pub fn new_footprint(name: &str, value: &str, mount: MountKind) -> Footprint {
-    let mut f = stdlib::new_footprint(name, "", mount, Pt::new(0, mm(2.0)), Pt::new(0, -mm(2.0)), Pt::ZERO);
+    let mut f = crate::footprint::new_footprint(name, "", mount, Pt::new(0, mm(2.0)), Pt::new(0, -mm(2.0)), Pt::ZERO);
     if let Some(v) = f.field_mut(fields::VALUE) {
         v.text.text.text = value.into();
     }
@@ -168,7 +168,7 @@ pub fn add_pad(f: &mut Footprint, at: Pt) -> usize {
         Some(last) => Pad { id: uuid::Uuid::new_v4(), number: increment(&last.number), at, ..last.clone() },
         None => {
             let drill = if f.attrs.mount == MountKind::Smd { None } else { Some(mm(0.8)) };
-            stdlib::new_pad("1", PadShape::Circle, at, Size::mm(1.6, 1.6), drill)
+            crate::footprint::new_pad("1", PadShape::Circle, at, Size::mm(1.6, 1.6), drill)
         }
     };
     f.pads.push(pad);

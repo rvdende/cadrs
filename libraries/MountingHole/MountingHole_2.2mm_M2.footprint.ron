@@ -1,0 +1,54 @@
+(
+  id: "MountingHole_2.2mm_M2",
+  description: "Mounting hole, M2",
+  keywords: "mounting hole",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 0, y: 3500000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "MountingHole_2.2mm_M2", at: (x: 0, y: -3500000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: Unspecified,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: true,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "",
+      kind: NonPlated,
+      shape: Circle,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 2200000, h: 2200000),
+      drill: Some((size: (w: 2200000, h: 2200000), offset: (x: 0, y: 0))),
+      layers: [TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Circle(center: (x: 0, y: 0), radius: 2200000), stroke: (width: 150000, style: Default, color: None), fill: r#None),
+      layer: Comments,
+    ),
+    (
+      shape: (geom: Circle(center: (x: 0, y: 0), radius: 2450000), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 0, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [],
+  zones: [],
+)

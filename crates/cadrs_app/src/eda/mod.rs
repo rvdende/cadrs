@@ -14,6 +14,9 @@
 //! Names: `eda-mode-schematic`, `eda-mode-layout`, `eda-mode-3d` (the switch).
 
 pub mod browser;
+pub mod libraries;
+#[cfg(feature = "easyeda")]
+pub mod online;
 pub mod layers_panel;
 pub mod layout_tools;
 mod lay_dialogs;
@@ -194,6 +197,7 @@ impl Plugin for EdaPlugin {
         schematic_tools::register(app);
         layout_tools::register(app);
         part_tools::register(app);
+        libraries::register(app);
         browser::register(app);
         layers_panel::register(app);
     }
@@ -749,7 +753,9 @@ fn draw_lines(
 ///   the "Getting Started" course's design at a step (`gs04`, `gs07`, `gs11`, `gs14`, `gs16`,
 ///   `gs17`, `gs18`, `gs25`), or `power-monitor` (the LoRa board redrawn, with its project
 ///   parts as components);
-/// - `eda-mode schematic|layout|3d`; `eda-fit`; `eda-zoom x0 y0 x1 y1` (shows that box, mm).
+/// - `eda-mode schematic|layout|3d`; `eda-fit`; `eda-zoom x0 y0 x1 y1` (shows that box, mm);
+/// - `eda-lcsc-fixtures <dir>`: the online part search answers from the saved EasyEDA parts in
+///   `<dir>` instead of the network ([`online`]).
 pub fn is_script_command(s: &str) -> bool {
     s.starts_with("eda-")
 }
@@ -823,6 +829,11 @@ fn run_script_commands(mut msgs: MessageReader<cadrs_ui::ScriptCommand>, mut com
                 let target = active_studio(doc).and_then(|(el, st)| Some((el, Subject::Board(pcb.shown_board(el, st)?))));
                 if let Some(key) = target {
                     w.resource_mut::<EdaUi>().modes.insert(key, mode);
+                }
+            } else if let Some(_dir) = s.strip_prefix("eda-lcsc-fixtures ") {
+                #[cfg(feature = "easyeda")]
+                if let Some(mut o) = w.get_resource_mut::<online::Online>() {
+                    o.fixtures = Some(std::path::PathBuf::from(_dir.trim()));
                 }
             } else if s == "eda-fit" {
                 fit(w);

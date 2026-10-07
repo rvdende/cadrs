@@ -1,0 +1,13 @@
+[package]
+name = "cadrs_libgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Writes the built-in libraries (`libraries/`) from parametric generators. A tool: the app
+# loads the files and doesn't depend on this.
+[dependencies]
+cadrs_eda.workspace = true
+uuid.workspace = true

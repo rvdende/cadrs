@@ -180,6 +180,11 @@ impl Bounds {
     }
 }
 
+/// For `#[serde(skip_serializing_if)]`: leaves default values out of saved files.
+pub fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

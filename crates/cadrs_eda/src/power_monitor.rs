@@ -188,7 +188,7 @@ pub fn swra416_footprint() -> Footprint {
         le::add_fp_shape(&mut f, Geom::Line { a: p(x - 2.0, 5.8), b: p(x - 1.0, 4.8) }, Layer::BottomCopper, w);
     }
     for (x, y) in holes {
-        let mut h = crate::stdlib::new_pad("", PadShape::Circle, p(x, y), Size::mm(1.0, 1.0), Some(mm(0.4)));
+        let mut h = crate::footprint::new_pad("", PadShape::Circle, p(x, y), Size::mm(1.0, 1.0), Some(mm(0.4)));
         h.kind = PadKind::ThroughHole;
         f.pads.push(h);
     }

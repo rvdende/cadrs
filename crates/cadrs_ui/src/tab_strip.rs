@@ -243,3 +243,29 @@ fn on_tab_activate(
         });
     }
 }
+
+/// Selects a strip's tab from code, as a click would but without [`TabStripSelect`] (the
+/// caller already knows): the tab drawn selected, the strip's state set.
+pub fn select_tab(world: &mut World, strip: Entity, index: usize) {
+    let mut q = world.query::<(Entity, &StripTab, &Children)>();
+    let tabs: Vec<(Entity, usize, Vec<Entity>)> = q.iter(world).filter(|(_, t, _)| t.strip == strip).map(|(e, t, c)| (e, t.index, c.to_vec())).collect();
+    for (e, i, children) in tabs {
+        let weight = if i == index { FontWeight::SEMIBOLD } else { FontWeight::NORMAL };
+        for c in children {
+            if world.get::<StripTabLabel>(c).is_some()
+                && let Some(mut f) = world.get_mut::<TextFont>(c)
+                && f.weight != weight
+            {
+                f.weight = weight;
+            }
+        }
+        if i == index {
+            world.entity_mut(e).insert(Selected);
+        } else {
+            world.entity_mut(e).remove::<Selected>();
+        }
+    }
+    if let Some(mut s) = world.get_mut::<TabStripState>(strip) {
+        s.selected = index;
+    }
+}

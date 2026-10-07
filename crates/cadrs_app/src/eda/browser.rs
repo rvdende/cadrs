@@ -7,11 +7,18 @@
 //! the schematic, or copy the symbol or footprint into the component being edited (its default
 //! footprint along with a symbol, when the component has none yet).
 //!
-//! Names: `eda-chooser` (the dialog), `eda-chooser-filter` (`-field`), `eda-chooser-list`,
+//! With the `easyeda` feature a second tab, **JLCPCB parts**, searches JLCPCB's catalogue
+//! ([`super::online`]): Enter or Search looks the filter up, choosing a part previews its
+//! symbol and footprint, **Add to library** downloads it into the user library `LCSC` (and
+//! shows it on the Libraries tab), OK adds it and takes it.
+//!
+//! Names: `eda-chooser` (the dialog), `eda-chooser-source` (the tabs: `-0` Libraries, `-1`
+//! JLCPCB parts), `eda-chooser-filter` (`-field`), `eda-chooser-search`, `eda-chooser-list`,
 //! `eda-chooser-lib-<library>` (a library row), `eda-chooser-<library>-<item>` (an item row),
+//! `eda-chooser-lcsc-<number>` (a JLCPCB part row), `eda-chooser-status`,
 //! `eda-chooser-preview` (symbol or footprint), `eda-chooser-preview-footprint`,
-//! `eda-chooser-description`, `eda-chooser-ok`, `eda-chooser-cancel`. Enter in the filter takes
-//! the chosen item, else the first match.
+//! `eda-chooser-description`, `eda-chooser-add`, `eda-chooser-ok`, `eda-chooser-cancel`. Enter
+//! in the filter takes the chosen item, else the first match.
 
 use std::collections::HashSet;
 
@@ -22,7 +29,9 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_eda::library::LibraryTable;
 use cadrs_eda::render::{self, DrawList};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{Dialog, TextSubmit};
+use cadrs_ui::{Dialog, TabStrip, TextSubmit};
+#[cfg(feature = "easyeda")]
+use cadrs_ui::{TabStripSelect, TabStripState};
 
 use super::ui;
 use crate::AppState;
@@ -53,11 +62,13 @@ pub struct Chooser;
 #[derive(Component)]
 struct ChooserList;
 
-/// A row: a library (toggles) or an item (chooses).
+/// A row: a library (toggles), an item (chooses) or a JLCPCB part (chooses).
 #[derive(Component, Clone)]
 enum Row {
     Library(String),
     Item(String),
+    #[cfg_attr(not(feature = "easyeda"), allow(dead_code))]
+    Part(String),
 }
 
 #[derive(Resource)]
@@ -71,6 +82,8 @@ pub struct Browser {
     open: HashSet<String>,
     /// The chosen item the previews were last drawn for.
     previewed: Option<String>,
+    /// The JLCPCB parts tab is showing.
+    pub online: bool,
 }
 
 /// Rows at most (a broad filter over every library would otherwise build thousands).
@@ -79,12 +92,18 @@ const MAX_ROWS: usize = 400;
 const PREVIEW: (u32, u32) = (340, 200);
 
 pub fn register(app: &mut App) {
-    app.add_systems(Update, (refresh, preview).chain().run_if(in_state(AppState::Document))).add_observer(on_row).add_observer(on_double).add_observer(on_submit);
+    app.add_systems(Update, (poll, refresh, preview).chain().run_if(in_state(AppState::Document))).add_observer(on_row).add_observer(on_double).add_observer(on_submit);
+    #[cfg(feature = "easyeda")]
+    {
+        super::online::register(app);
+        app.add_observer(on_source);
+    }
 }
 
 pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
     close(w);
-    w.insert_resource(Browser { kind: kind.clone(), purpose, shown: None, chosen: None, open: HashSet::new(), previewed: None });
+    w.insert_resource(Browser { kind: kind.clone(), purpose, shown: None, chosen: None, open: HashSet::new(), previewed: None, online: false });
+    let online = cfg!(feature = "easyeda");
     let theme = w.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
     let title = match &kind {
@@ -100,12 +119,32 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
             .body(move |b| {
                 b.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(12.0), ..default() }).with_children(|row| {
                     row.spawn(Node { flex_direction: FlexDirection::Column, width: Val::Px(430.0), ..default() }).with_children(|left| {
-                        left.spawn(TextInput::new("eda-chooser-filter").placeholder("Filter").width(Val::Percent(100.0)).height(28.0).build(&tb));
+                        if online {
+                            left.spawn(Node { flex_direction: FlexDirection::Column, margin: UiRect::bottom(Val::Px(6.0)), ..default() }).with_children(|t| {
+                                t.spawn(TabStrip::new("eda-chooser-source").compact().tab("Libraries").tab("JLCPCB parts").build(&tb));
+                            });
+                        }
+                        left.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(6.0), ..default() }).with_children(|r| {
+                            r.spawn(TextInput::new("eda-chooser-filter").placeholder("Filter").width(Val::Percent(100.0)).height(28.0).build(&tb));
+                            if online {
+                                r.spawn((Name::new("eda-chooser-search-box"), Node { display: Display::None, ..default() })).with_children(|b| {
+                                    b.spawn((
+                                        cadrs_ui::Button::new("eda-chooser-search").label("Search").build(&tb),
+                                        observe(|_: On<Activate>, mut commands: Commands| {
+                                            commands.queue(submit);
+                                        }),
+                                    ));
+                                });
+                            }
+                        });
                         left.spawn((
                             Name::new("eda-chooser-list"),
                             ChooserList,
-                            Node { flex_direction: FlexDirection::Column, height: Val::Px(420.0), overflow: Overflow::scroll_y(), margin: UiRect::top(Val::Px(6.0)), ..default() },
+                            Node { flex_direction: FlexDirection::Column, height: Val::Px(if online { 370.0 } else { 420.0 }), overflow: Overflow::scroll_y(), margin: UiRect::top(Val::Px(6.0)), ..default() },
                         ));
+                        if online {
+                            left.spawn((Name::new("eda-chooser-status"), tb.text("", tb.font_sm, FontWeight::NORMAL, tb.muted_foreground), Node { margin: UiRect::top(Val::Px(4.0)), ..default() }));
+                        }
                     });
                     row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), width: Val::Px(PREVIEW.0 as f32), ..default() }).with_children(|right| {
                         let frame = |n: &'static str| (Name::new(n), ImageNode::default(), Node { width: Val::Px(PREVIEW.0 as f32), height: Val::Px(PREVIEW.1 as f32), border: UiRect::all(Val::Px(1.0)), ..default() }, BorderColor::all(tb.border));
@@ -118,6 +157,18 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                 });
             })
             .footer(move |f| {
+                if online {
+                    f.spawn((Name::new("eda-chooser-add-box"), Node { display: Display::None, ..default() })).with_children(|b| {
+                        b.spawn((
+                            cadrs_ui::Button::new("eda-chooser-add").label("Add to library").build(&tf),
+                            observe(|_: On<Activate>, mut commands: Commands| {
+                                #[cfg(feature = "easyeda")]
+                                commands.queue(|w: &mut World| super::online::add(w, false));
+                                let _ = &mut commands;
+                            }),
+                        ));
+                    });
+                }
                 f.spawn((
                     cadrs_ui::Button::new("eda-chooser-ok").label("OK").primary().build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -160,6 +211,12 @@ fn hits(lib: &LibraryTable, kind: &Kind, filter: &str) -> Vec<(String, String, S
 
 fn accept(w: &mut World) {
     let Some(b) = w.get_resource::<Browser>() else { return };
+    #[cfg(feature = "easyeda")]
+    if b.online {
+        // Added first; taken when it's in the library (see `poll`).
+        super::online::add(w, true);
+        return;
+    }
     let (kind, purpose, chosen) = (b.kind.clone(), b.purpose, b.chosen.clone());
     let lib = ui::libraries(w);
     let filter = ui::text_value(w, "eda-chooser-filter");
@@ -202,6 +259,11 @@ fn refresh(world: &mut World) {
     let Some(list) = q.iter(world).next() else { return };
     let filter = ui::text_value(world, "eda-chooser-filter");
     let Some(b) = world.get_resource::<Browser>() else { return };
+    #[cfg(feature = "easyeda")]
+    if b.online {
+        refresh_online(world, list);
+        return;
+    }
     if b.shown.as_deref() == Some(filter.as_str()) {
         return;
     }
@@ -264,16 +326,119 @@ fn on_row(a: On<Activate>, q: Query<&Row>, mut commands: Commands) {
                 }
             }
             Row::Item(id) => b.chosen = Some(id),
+            Row::Part(_lcsc) => {
+                b.shown = None;
+                #[cfg(feature = "easyeda")]
+                super::online::choose(w, &_lcsc);
+                return;
+            }
         }
         // Redraw the list (the selection or the open libraries changed).
         b.shown = None;
     });
 }
 
-/// Enter in the filter takes the chosen item, else the first match.
+/// Enter in the filter takes the chosen item, else the first match; on the JLCPCB tab it
+/// searches.
 fn on_submit(ev: On<TextSubmit>, q: Query<&Name>, mut commands: Commands) {
     if q.get(ev.entity).is_ok_and(|n| n.as_str() == "eda-chooser-filter-field") {
-        commands.queue(accept);
+        commands.queue(submit);
+    }
+}
+
+fn submit(w: &mut World) {
+    #[cfg(feature = "easyeda")]
+    if w.get_resource::<Browser>().is_some_and(|b| b.online) {
+        let q = ui::text_value(w, "eda-chooser-filter");
+        super::online::search(w, &q);
+        return;
+    }
+    accept(w);
+}
+
+/// The JLCPCB tab's list: the last search's parts.
+#[cfg(feature = "easyeda")]
+fn refresh_online(world: &mut World, list: Entity) {
+    let o = world.resource::<super::online::Online>();
+    let key = format!("\u{1}online {} {:?}", o.generation, o.chosen);
+    if world.resource::<Browser>().shown.as_deref() == Some(key.as_str()) {
+        return;
+    }
+    let rows: Vec<(String, String, String)> = o.hits.iter().map(|h| (h.lcsc.clone(), format!("{}  {}", h.lcsc, h.mpn), super::online::describe(h).0)).collect();
+    let chosen = o.chosen.clone();
+    world.resource_mut::<Browser>().shown = Some(key);
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    commands.entity(list).despawn_children();
+    commands.entity(list).with_children(|l| {
+        for (lcsc, label, detail) in rows {
+            let name = format!("eda-chooser-lcsc-{}", lcsc.to_lowercase());
+            let detail = if detail.chars().count() > 34 { format!("{}…", detail.chars().take(33).collect::<String>()) } else { detail };
+            l.spawn((ListItem::new(name).label(label).detail(detail).height(24.0).selected(chosen.as_deref() == Some(lcsc.as_str())).build(&theme), Row::Part(lcsc), cadrs_ui::DoubleClickable));
+        }
+    });
+    world.flush();
+}
+
+/// Switching between the Libraries and JLCPCB parts tabs.
+#[cfg(feature = "easyeda")]
+fn on_source(ev: On<TabStripSelect>, q: Query<&Name>, mut commands: Commands) {
+    if q.get(ev.entity).is_ok_and(|n| n.as_str() == "eda-chooser-source") {
+        let online = ev.index == 1;
+        commands.queue(move |w: &mut World| set_source(w, online));
+    }
+}
+
+/// Shows a tab: its list, previews, and the Search and Add buttons on the JLCPCB one.
+#[cfg(feature = "easyeda")]
+fn set_source(w: &mut World, online: bool) {
+    let Some(mut b) = w.get_resource_mut::<Browser>() else { return };
+    b.online = online;
+    b.shown = None;
+    b.previewed = Some("\u{1}".into());
+    let mut q = w.query_filtered::<(Entity, &Name), With<TabStripState>>();
+    if let Some((strip, _)) = q.iter(w).find(|(_, n)| n.as_str() == "eda-chooser-source") {
+        cadrs_ui::select_tab(w, strip, usize::from(online));
+    }
+    let mut q = w.query::<(&Name, &mut Node)>();
+    for (n, mut node) in q.iter_mut(w) {
+        if matches!(n.as_str(), "eda-chooser-search-box" | "eda-chooser-add-box") {
+            node.display = if online { Display::Flex } else { Display::None };
+        }
+    }
+}
+
+/// Picks up finished online work: redraws, or (a part was added) shows it on the Libraries tab
+/// and, after OK, takes it.
+fn poll(w: &mut World) {
+    if w.get_resource::<Browser>().is_none() {
+        return;
+    }
+    #[cfg(feature = "easyeda")]
+    {
+        use super::online::{self, Done};
+        let status = w.resource::<online::Online>().status.clone();
+        ui::set_label(w, "eda-chooser-status", &status);
+        match online::poll(w) {
+            Done::Nothing => {}
+            Done::Redraw => {
+                let mut b = w.resource_mut::<Browser>();
+                b.shown = None;
+                b.previewed = Some("\u{1}".into());
+            }
+            Done::Added(symbol, footprint, take) => {
+                set_source(w, false);
+                let mut b = w.resource_mut::<Browser>();
+                let id = if matches!(b.kind, Kind::Footprints { .. }) { footprint } else { symbol };
+                b.chosen = Some(id.clone());
+                b.open.insert(super::libraries::ONLINE_LIBRARY.into());
+                let name = id.split_once(':').map_or(id.as_str(), |(_, n)| n).to_string();
+                ui::set_text_value(w, "eda-chooser-filter", &name);
+                if take {
+                    accept(w);
+                }
+            }
+        }
     }
 }
 
@@ -303,6 +468,11 @@ fn set_image(w: &mut World, name: &str, list: Option<DrawList>) {
 /// Draws the previews when the chosen item changes.
 fn preview(world: &mut World) {
     let Some(b) = world.get_resource::<Browser>() else { return };
+    #[cfg(feature = "easyeda")]
+    if b.online {
+        preview_online(world);
+        return;
+    }
     if b.previewed == b.chosen {
         return;
     }
@@ -337,6 +507,38 @@ fn preview(world: &mut World) {
             }
         }
     }
+    set_image(world, "eda-chooser-preview", main);
+    set_image(world, "eda-chooser-preview-footprint", second);
+    ui::set_label(world, "eda-chooser-description", &text);
+}
+
+/// The JLCPCB tab's previews: the chosen part's symbol and footprint, once fetched.
+#[cfg(feature = "easyeda")]
+fn preview_online(world: &mut World) {
+    let o = world.resource::<super::online::Online>();
+    let key = format!("\u{2}{:?} {}", o.chosen, o.preview.as_ref().map_or("", |p| p.0.as_str()));
+    if world.resource::<Browser>().previewed.as_deref() == Some(key.as_str()) {
+        return;
+    }
+    let footprints = matches!(world.resource::<Browser>().kind, Kind::Footprints { .. });
+    let (mut main, mut second, mut text) = (None, None, String::new());
+    if let Some(lcsc) = &o.chosen {
+        let hit = o.hits.iter().find(|h| &h.lcsc == lcsc);
+        text = hit.map(|h| super::online::describe(h).1).unwrap_or_else(|| lcsc.clone());
+        match o.preview.as_ref().filter(|p| &p.0 == lcsc) {
+            Some((_, c)) => {
+                let sym = render::tight(render::symbol_view(Some(&c.symbol), &render::SchematicTheme::default(), &[]), cadrs_eda::units::mm(1.5));
+                let fp = render::tight(render::footprint_view(Some(&c.footprint), &render::BoardTheme::default(), &[]), cadrs_eda::units::mm(1.0));
+                (main, second) = if footprints { (Some(fp), None) } else { (Some(sym), Some(fp)) };
+                text += &format!("\n\n{} · {} pins\n{} · {} pads", c.symbol.id, c.symbol.pins.len(), c.footprint.id, c.footprint.pads.len());
+                for w in &c.warnings {
+                    text += &format!("\n{w}");
+                }
+            }
+            None => text += "\n\nLoading its symbol and footprint…",
+        }
+    }
+    world.resource_mut::<Browser>().previewed = Some(key);
     set_image(world, "eda-chooser-preview", main);
     set_image(world, "eda-chooser-preview-footprint", second);
     ui::set_label(world, "eda-chooser-description", &text);

@@ -65,10 +65,14 @@ pub fn set_text_value(world: &mut World, name: &str, value: &str) {
     }
 }
 
-/// The libraries a board in this studio sees: the built-in ones, and the studio's components
-/// as the project library named after the studio.
+/// The libraries a board in this studio sees: the built-in ones, the user's
+/// ([`super::libraries`]), and the studio's components as the project library named after the
+/// studio.
 pub fn libraries(world: &World) -> LibraryTable {
     let mut t = LibraryTable::builtin();
+    if let Some(u) = world.get_resource::<super::libraries::UserLibraries>() {
+        u.add_to(&mut t);
+    }
     let Some((el, _, _)) = world.resource::<Eda2d>().0 else { return t };
     let doc = world.resource::<ActiveDocument>();
     let Some(e) = doc.doc.element(el) else { return t };
@@ -205,7 +209,9 @@ pub fn keys_for(world: &mut World, mode: Mode) -> bool {
 /// Sets the text of the text node named `name`.
 pub fn set_label(world: &mut World, name: &str, value: &str) {
     let mut q = world.query::<(&Name, &mut Text)>();
-    if let Some((_, mut t)) = q.iter_mut(world).find(|(n, _)| n.as_str() == name) {
+    if let Some((_, mut t)) = q.iter_mut(world).find(|(n, _)| n.as_str() == name)
+        && t.0 != value
+    {
         t.0 = value.to_string();
     }
 }

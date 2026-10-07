@@ -1,0 +1,91 @@
+(
+  id: "Crystal_HC49-U_Vertical",
+  description: "HC-49/U crystal, vertical",
+  keywords: "crystal THT HC-49",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 2440000, y: 3400000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "Crystal_HC49-U_Vertical", at: (x: 2440000, y: -3400000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: ThroughHole,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 1500000, h: 1500000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 4880000, y: 0),
+      angle: 0.0,
+      size: (w: 1500000, h: 1500000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Rect(a: (x: -3235000, y: -2325000), b: (x: 8115000, y: 2325000)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Line(a: (x: -3350000, y: -2440000), b: (x: 8230000, y: -2440000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: 8230000, y: -2440000), b: (x: 8230000, y: 2440000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -3350000, y: 2440000), b: (x: 8230000, y: 2440000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -3350000, y: -2440000), b: (x: -3350000, y: 2440000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -3740000, y: -2830000), b: (x: 8620000, y: 2830000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 2440000, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Crystal.3dshapes/Crystal_HC49-U_Vertical.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Box(min: (-3.235, -2.325, 0.0), max: (8.115, 2.325, 13.5)), color: (200, 202, 206))])),
+    ),
+  ],
+  zones: [],
+)

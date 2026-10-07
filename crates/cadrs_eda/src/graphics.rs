@@ -139,16 +139,23 @@ pub enum VAlign {
 pub struct TextStyle {
     pub size: Size,
     /// Stroke thickness; `None` is the default for the size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thickness: Option<Nm>,
+    #[serde(default, skip_serializing_if = "crate::units::is_default")]
     pub bold: bool,
+    #[serde(default, skip_serializing_if = "crate::units::is_default")]
     pub italic: bool,
     pub h_align: HAlign,
     pub v_align: VAlign,
     /// Mirrored (text on the bottom side reads mirrored from the top).
+    #[serde(default, skip_serializing_if = "crate::units::is_default")]
     pub mirrored: bool,
     /// A font name; `None` is the default stroke font.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_spacing: Option<f64>,
 }
 
