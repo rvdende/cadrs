@@ -541,6 +541,36 @@ pub fn move_items(sch: &mut Schematic, sheet: usize, items: &[SchItem], d: Pt, d
     }
 }
 
+
+/// The wires joined to `wire` through each other (an end on another wire's end or along it),
+/// `wire` among them: a run drawn as one.
+pub fn connected_wires(sch: &Schematic, sheet: usize, wire: Uuid) -> Vec<Uuid> {
+    let ws = &sch.sheets[sheet].wires;
+    let Some(start) = ws.iter().position(|w| w.id == wire) else { return vec![] };
+    let touch = |a: &Wire, b: &Wire| {
+        use crate::connectivity::on_segment;
+        on_segment(a.a, b.a, b.b) || on_segment(a.b, b.a, b.b) || on_segment(b.a, a.a, a.b) || on_segment(b.b, a.a, a.b)
+    };
+    let mut seen = vec![false; ws.len()];
+    let mut stack = vec![start];
+    seen[start] = true;
+    while let Some(i) = stack.pop() {
+        for j in 0..ws.len() {
+            if !seen[j] && touch(&ws[i], &ws[j]) {
+                seen[j] = true;
+                stack.push(j);
+            }
+        }
+    }
+    ws.iter().zip(seen).filter(|(_, s)| *s).map(|(w, _)| w.id).collect()
+}
+
+/// Colours wires (`None`: the theme's wire colour).
+pub fn set_wire_color(sch: &mut Schematic, sheet: usize, wires: &[Uuid], color: Option<crate::graphics::Color>) {
+    for w in sch.sheets[sheet].wires.iter_mut().filter(|w| wires.contains(&w.id)) {
+        w.stroke.color = color;
+    }
+}
 /// The centre a selection rotates about: its box's centre, on the grid.
 pub fn selection_center(sch: &Schematic, sheet: usize, items: &[SchItem]) -> Pt {
     let sh = &sch.sheets[sheet];
@@ -1077,6 +1107,24 @@ mod tests {
         let c = selection_center(&s, 0, &[SchItem::Symbol(r)]);
         mirror_items(&mut s, 0, &[SchItem::Symbol(r)], c, true);
         assert!(square_and_joined(&s, &[far, free]));
+    }
+
+    #[test]
+    fn a_wire_run_takes_one_colour() {
+        let (mut s, _) = sch();
+        // An L, a tee off it, and a wire that only crosses (no junction): not joined.
+        let l = add_wire(&mut s, 0, &[Pt::mm(0.0, 0.0), Pt::mm(10.16, 0.0), Pt::mm(10.16, 10.16)]);
+        add_wire(&mut s, 0, &[Pt::mm(5.08, 0.0), Pt::mm(5.08, -5.08)]);
+        let apart = add_wire(&mut s, 0, &[Pt::mm(7.62, 5.08), Pt::mm(12.7, 5.08)]);
+        let run = connected_wires(&s, 0, l[0]);
+        assert!(!run.contains(&apart[0]));
+        // The L's two legs and the tee (split where the tee meets it).
+        assert!(run.len() >= 3, "{run:?}");
+        let orange = crate::graphics::Color { r: 255, g: 153, b: 0, a: 255 };
+        set_wire_color(&mut s, 0, &run, Some(orange));
+        let colored = s.sheets[0].wires.iter().filter(|w| w.stroke.color == Some(orange)).count();
+        assert_eq!(colored, run.len());
+        assert_eq!(s.sheets[0].wires.iter().find(|w| w.id == apart[0]).unwrap().stroke.color, None);
     }
 
     #[test]

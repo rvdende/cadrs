@@ -6,7 +6,8 @@
 //!   wires attached (they stay on the pins and square: corners slide, bends are added).
 //!   **M** moves the selection (wires stay), **G** drags it (wires follow),
 //!   **R** rotates it and **X** / **Y** mirror it (wires on it follow, square), **Del**
-//!   deletes it, **E** edits the symbol's fields.
+//!   deletes it, **E** (or a double-click) edits a symbol's fields (Footprint: Choose… browses
+//!   the footprints its filters allow) or a wire's colour (its whole connected run).
 //! - **A** the library browser ([`super::browser`]), **P** the same for power symbols; the
 //!   chosen symbol follows the pointer (**R** turns it, **X** / **Y** mirror it) and a click
 //!   places it (annotated). Tools that put something at a point show a crosshair on the grid
@@ -406,11 +407,18 @@ fn double(w: &mut World, at: Pt) {
     match tool {
         Tool::Wire(pts) => finish_wire(w, &pts),
         Tool::Select => {
-            // Double-clicking a symbol edits its fields.
+            // Double-clicking a symbol edits its fields; a wire, its colour.
             let Some((_, _, d)) = ui::current(w) else { return };
-            if let Some(SchItem::Symbol(id) | SchItem::Field(id, _)) = se::hit(&d.schematic, 0, at, tolerance(w)) {
-                w.resource_mut::<SchState>().moving = None;
-                dialogs::open_properties(w, id);
+            match se::hit(&d.schematic, 0, at, tolerance(w)) {
+                Some(SchItem::Symbol(id) | SchItem::Field(id, _)) => {
+                    w.resource_mut::<SchState>().moving = None;
+                    dialogs::open_properties(w, id);
+                }
+                Some(SchItem::Wire(id)) => {
+                    w.resource_mut::<SchState>().moving = None;
+                    dialogs::open_wire(w, id);
+                }
+                _ => {}
             }
         }
         _ => {}
@@ -552,12 +560,12 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                 world.resource_mut::<SchState>().selection.clear();
             }
             KeyCode::KeyE => {
-                let target = sel.iter().chain(hit_items(world, pointer).iter()).find_map(|i| match i {
-                    SchItem::Symbol(id) | SchItem::Field(id, _) => Some(*id),
-                    _ => None,
-                });
-                if let Some(id) = target {
-                    dialogs::open_properties(world, id);
+                // A symbol's fields, or a wire's colour.
+                let target = sel.iter().chain(hit_items(world, pointer).iter()).find(|i| matches!(i, SchItem::Symbol(_) | SchItem::Field(..) | SchItem::Wire(_))).cloned();
+                match target {
+                    Some(SchItem::Symbol(id) | SchItem::Field(id, _)) => dialogs::open_properties(world, id),
+                    Some(SchItem::Wire(id)) => dialogs::open_wire(world, id),
+                    _ => {}
                 }
             }
             _ => {}

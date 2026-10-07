@@ -54,6 +54,8 @@ pub enum Purpose {
     ComponentSymbol,
     /// The component editor: the footprint becomes the component's.
     ComponentFootprint,
+    /// The symbol properties dialog's Choose…: the footprint goes into its Footprint field.
+    PropsFootprint,
 }
 
 #[derive(Component)]
@@ -241,6 +243,11 @@ fn accept(w: &mut World) {
                 c.symbol = Some(sym);
                 Ok(())
             });
+        }
+        Purpose::PropsFootprint => {
+            if lib.footprint(&id).is_some() {
+                ui::set_text_value(w, "eda-props-footprint", &id);
+            }
         }
         Purpose::ComponentFootprint => {
             if let Some(fp) = lib.footprint(&id).cloned() {

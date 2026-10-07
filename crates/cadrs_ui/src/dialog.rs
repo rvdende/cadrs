@@ -27,7 +27,7 @@ impl Plugin for DialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_close_button)
             .add_observer(on_dialog_close)
-            .add_systems(Update, (close_on_escape, dismiss_toasts_on_open));
+            .add_systems(Update, (stack_new_dialogs, close_on_escape, dismiss_toasts_on_open));
     }
 }
 
@@ -281,6 +281,19 @@ fn dismiss_toasts_on_open(
     for (e, t) in &q_toasts {
         if t.autohide {
             commands.entity(e).try_despawn();
+        }
+    }
+}
+
+/// A dialog opened over another (a browser from a properties dialog) goes on top of it, its
+/// backdrop covering the one below.
+fn stack_new_dialogs(q_new: Query<Entity, Added<DialogRoot>>, mut q_all: Query<(Entity, &mut GlobalZIndex), With<DialogRoot>>) {
+    for e in &q_new {
+        let top = q_all.iter().filter(|(o, _)| *o != e).map(|(_, z)| z.0).max();
+        if let (Some(top), Ok((_, mut z))) = (top, q_all.get_mut(e))
+            && z.0 <= top
+        {
+            z.0 = top + 1;
         }
     }
 }

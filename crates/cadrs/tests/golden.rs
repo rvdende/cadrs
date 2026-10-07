@@ -2300,3 +2300,9 @@ fn golden_eda_component_list() {
 fn golden_eda_schematic_wiring() {
     run_scenario("eda_schematic_wiring");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_wire_colour_footprint() {
+    run_scenario("eda_wire_colour_footprint");
+}

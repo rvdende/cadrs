@@ -2,7 +2,10 @@
 //! page settings, footprint assignment, ERC, BOM.
 //!
 //! Names: `eda-label-dialog` (`eda-label-text`, `eda-label-ok`), `eda-props-dialog`
-//! (`eda-props-<field>`, `eda-props-ok`), `eda-page-dialog` (`eda-page-paper`, `eda-page-title`,
+//! (`eda-props-<field>`, `eda-props-footprint-choose`: the footprint browser, `eda-props-ok`),
+//! `eda-wire-dialog` (`eda-wire-default`, `eda-wire-swatch-<n>`, `eda-wire-hex`, `eda-wire-only`,
+//! `eda-wire-ok`),
+//! `eda-page-dialog` (`eda-page-paper`, `eda-page-title`,
 //! `eda-page-date`, `eda-page-rev`, `eda-page-company`, `eda-page-ok`), `eda-assign-dialog`
 //! (`eda-assign-sym-<ref>` rows, `eda-assign-fp-<slug>` candidates, the `eda-assign-by-symbol`,
 //! `eda-assign-by-pins` checkboxes, `eda-assign-filter`, `eda-assign-ok`), `eda-erc-dialog`
@@ -18,7 +21,7 @@ use cadrs_eda::symbol::fields;
 use cadrs_ui::checkbox::CheckboxState;
 use cadrs_ui::dialog_fields::{Select, SelectState};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{Checkbox, Dialog};
+use cadrs_ui::{Checkbox, ColorSwatch, Dialog};
 use uuid::Uuid;
 
 use super::schematic_tools::{Tool, set_tool};
@@ -191,6 +194,8 @@ const PROP_FIELDS: [(&str, &str); 4] = [(fields::REFERENCE, "eda-props-reference
 pub fn open_properties(w: &mut World, symbol: Uuid) {
     let Some((_, _, d)) = ui::current(w) else { return };
     let Some(s) = d.schematic.sheets.iter().flat_map(|x| &x.symbols).find(|x| x.id == symbol).cloned() else { return };
+    // The footprint browser narrows to the symbol's footprint filters (C_* for a capacitor).
+    let globs = d.schematic.symbol(&s.symbol).map(|def| def.footprint_filters.clone()).unwrap_or_default();
     w.insert_resource(PropsTarget(Some(symbol)));
     let t = w.resource::<Theme>().clone();
     let tf = t.clone();
@@ -199,10 +204,25 @@ pub fn open_properties(w: &mut World, symbol: Uuid) {
         w,
         Dialog::new("eda-props-dialog")
             .title(title)
-            .width(480.0)
+            .width(520.0)
             .body(move |b| {
                 for (name, field) in PROP_FIELDS {
-                    text_row(b, &t, name, field, s.field(name).map_or("", |f| f.value()));
+                    let value = s.field(name).map_or("", |f| f.value()).to_string();
+                    if name != fields::FOOTPRINT {
+                        text_row(b, &t, name, field, &value);
+                        continue;
+                    }
+                    let globs = globs.clone();
+                    row(b, &t, name, |r| {
+                        r.spawn(TextInput::new(field).value(value).placeholder("None: choose one").width(Val::Px(250.0)).height(28.0).build(&t));
+                        r.spawn((
+                            cadrs_ui::Button::new("eda-props-footprint-choose").label("Choose…").build(&t),
+                            observe(move |_: On<Activate>, mut commands: Commands| {
+                                let globs = globs.clone();
+                                commands.queue(move |w: &mut World| super::browser::open(w, super::browser::Kind::Footprints { globs }, super::browser::Purpose::PropsFootprint));
+                            }),
+                        ));
+                    });
                 }
             })
             .footer(move |f| ok_cancel(f, &tf, "eda-props-ok", accept_properties)),
@@ -224,6 +244,100 @@ fn accept_properties(w: &mut World) {
     });
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Wire colour (E or double-click on a wire)
+
+/// The wire being coloured and the colour picked so far (`None`: the default).
+#[derive(Resource, Clone)]
+struct WireTarget {
+    wire: Uuid,
+    color: Option<cadrs_eda::graphics::Color>,
+}
+
+/// The swatches offered: the default, then a palette (the colours schematics commonly use).
+const WIRE_COLORS: [(u8, u8, u8); 12] = [(0, 132, 0), (46, 46, 46), (0, 0, 0), (132, 132, 132), (255, 19, 15), (255, 153, 0), (218, 210, 0), (15, 191, 95), (0, 194, 194), (0, 14, 255), (145, 0, 255), (194, 0, 194)];
+
+#[derive(Component, Clone, Copy)]
+struct WireSwatch(Option<(u8, u8, u8)>);
+
+fn hex(c: Option<cadrs_eda::graphics::Color>) -> String {
+    c.map(|c| format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)).unwrap_or_default()
+}
+
+fn parse_hex(s: &str) -> Option<cadrs_eda::graphics::Color> {
+    let s = s.trim().trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    Some(cadrs_eda::graphics::Color { r: (v >> 16) as u8, g: (v >> 8) as u8, b: v as u8, a: 255 })
+}
+
+/// The wire dialog: its colour (a swatch or a hex code), for its whole run of connected wires
+/// unless "Only this wire".
+pub fn open_wire(w: &mut World, wire: Uuid) {
+    let Some((_, _, d)) = ui::current(w) else { return };
+    let Some(cur) = d.schematic.sheets[0].wires.iter().find(|x| x.id == wire).map(|x| x.stroke.color) else { return };
+    let run = se::connected_wires(&d.schematic, 0, wire).len();
+    w.insert_resource(WireTarget { wire, color: cur });
+    let t = w.resource::<Theme>().clone();
+    let tf = t.clone();
+    spawn_dialog(
+        w,
+        Dialog::new("eda-wire-dialog")
+            .title("Wire colour")
+            .width(460.0)
+            .body(move |b| {
+                b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(10.0), padding: UiRect::vertical(Val::Px(6.0)), ..default() }).with_children(|r| {
+                    r.spawn((t.text("Colour", t.font_base, FontWeight::MEDIUM, t.muted_foreground), Node { width: Val::Px(110.0), ..default() }));
+                    r.spawn(Node { column_gap: Val::Px(6.0), flex_wrap: FlexWrap::Wrap, width: Val::Px(300.0), row_gap: Val::Px(6.0), ..default() }).with_children(|s| {
+                        let sel = |c: Option<(u8, u8, u8)>| cur.map(|x| (x.r, x.g, x.b)) == c;
+                        s.spawn((cadrs_ui::Button::new("eda-wire-default").label("Default").small().build(&t), WireSwatch(None)));
+                        for (i, (r, g, bl)) in WIRE_COLORS.iter().enumerate() {
+                            let c = Some((*r, *g, *bl));
+                            s.spawn((ColorSwatch::new(format!("eda-wire-swatch-{i}"), Color::srgb_u8(*r, *g, *bl)).size(22.0).selected(sel(c)).build(&t), WireSwatch(c)));
+                        }
+                    });
+                });
+                text_row(b, &t, "Hex", "eda-wire-hex", &hex(cur));
+                b.spawn((Node { margin: UiRect::top(Val::Px(6.0)), ..default() },)).with_children(|r| {
+                    r.spawn(Checkbox::new("eda-wire-only").label(format!("Only this wire (else all {run} connected)")).checked(false).build(&t));
+                });
+            })
+            .footer(move |f| ok_cancel(f, &tf, "eda-wire-ok", accept_wire)),
+    );
+}
+
+/// A swatch or Default picks the colour (shown in the hex field).
+fn on_wire_swatch(a: On<Activate>, q: Query<&WireSwatch>, mut commands: Commands) {
+    let Ok(&WireSwatch(c)) = q.get(a.entity) else { return };
+    commands.queue(move |w: &mut World| {
+        let color = c.map(|(r, g, b)| cadrs_eda::graphics::Color { r, g, b, a: 255 });
+        if let Some(mut t) = w.get_resource_mut::<WireTarget>() {
+            t.color = color;
+        }
+        ui::set_text_value(w, "eda-wire-hex", &hex(color));
+        let mut q = w.query::<(&WireSwatch, &mut cadrs_ui::SwatchSelected)>();
+        for (s, mut sel) in q.iter_mut(w) {
+            sel.0 = s.0 == c && c.is_some();
+        }
+    });
+}
+
+fn accept_wire(w: &mut World) {
+    let Some(t) = w.get_resource::<WireTarget>().cloned() else { return };
+    let typed = ui::text_value(w, "eda-wire-hex");
+    // A typed code wins; an empty field is the default colour.
+    let color = if typed.trim().is_empty() { None } else { parse_hex(&typed).or(t.color) };
+    let only = checkbox(w, "eda-wire-only");
+    close_all(w);
+    ui::commit(w, "Wire colour", |d| {
+        let wires = if only { vec![t.wire] } else { se::connected_wires(&d.schematic, 0, t.wire) };
+        se::set_wire_color(&mut d.schematic, 0, &wires, color);
+        Ok(())
+    });
+}
 // ---------------------------------------------------------------------------------------------
 // Page settings (GS3)
 
@@ -568,7 +682,8 @@ pub fn on_folder_picked(mut msgs: MessageReader<cadrs_ui::file_picker::FilePicke
 pub fn register(app: &mut App) {
     app.add_systems(Update, (refresh_assign, on_folder_picked).run_if(in_state(AppState::Document)))
         .add_observer(on_assign_row)
-        .add_observer(on_assign_footprint);
+        .add_observer(on_assign_footprint)
+        .add_observer(on_wire_swatch);
 }
 
 

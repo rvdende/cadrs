@@ -242,8 +242,10 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
             d.text(&t, c);
         }
     }
+    // A wire's own colour when it has one; a junction takes the colour of a wire through it.
+    let rgba = |c: Option<crate::graphics::Color>| c.filter(|c| c.a > 0).map(|c| [c.r, c.g, c.b, 255]);
     for wire in &sh.wires {
-        let c = if lit(&SchItem::Wire(wire.id)) { th.highlight } else { th.wire };
+        let c = if lit(&SchItem::Wire(wire.id)) { th.highlight } else { rgba(wire.stroke.color).unwrap_or(th.wire) };
         d.line(c, if wire.stroke.width > 0 { wire.stroke.width } else { WIRE_W }, vec![wire.a, wire.b]);
     }
     for b in &sh.buses {
@@ -251,7 +253,8 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     }
     for j in &sh.junctions {
         let r = if j.diameter > 0 { j.diameter / 2 } else { mm(0.457) };
-        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { th.junction };
+        let wired = sh.wires.iter().filter(|w| crate::connectivity::on_segment(j.at, w.a, w.b)).find_map(|w| rgba(w.stroke.color));
+        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { wired.unwrap_or(th.junction) };
         d.region(c, 2, &poly::circle(j.at, r));
     }
     for n in &sh.no_connects {
