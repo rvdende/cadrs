@@ -314,7 +314,9 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     }
     for j in &sh.junctions {
         let r = if j.diameter > 0 { j.diameter / 2 } else { mm(0.457) };
-        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { rgba(j.color).unwrap_or(th.junction) };
+        // A dot with no colour of its own takes its wires' colour.
+        let wire_color = sh.wires.iter().filter(|w| crate::connectivity::on_segment(j.at, w.a, w.b)).find_map(|w| rgba(w.stroke.color));
+        let c = if lit(&SchItem::Junction(j.id)) { th.highlight } else { rgba(j.color).or(wire_color).unwrap_or(th.junction) };
         d.region(c, 2, &poly::circle(j.at, r));
     }
     for n in &sh.no_connects {
@@ -653,14 +655,14 @@ pub fn board(b: &Board, th: &BoardTheme, view: &BoardView) -> DrawList {
                 };
                 let s = if net_size.is_some() { s.min(short * 7 / 20) } else { s };
                 let mut t = text_at(&p.number, num_at, angle, s, HAlign::Center, VAlign::Center);
-                // Small text in hairline strokes, so it stays legible.
-                t.style.thickness = Some(if s < mm(0.3) { 1 } else { s / 14 });
+                // Thin strokes, in proportion to the size (KiCad's pad text).
+                t.style.thickness = Some(s / 9);
                 d.text(&t, th.pad_text);
                 if let (Some(n), Some(ns)) = (net, net_size)
                     && ns >= mm(0.05)
                 {
                     let mut t = text_at(n, at - up(short / 5), angle, ns, HAlign::Center, VAlign::Center);
-                    t.style.thickness = Some(if ns < mm(0.3) { 1 } else { ns / 14 });
+                    t.style.thickness = Some(ns / 9);
                     d.text(&t, th.pad_text);
                 }
             }

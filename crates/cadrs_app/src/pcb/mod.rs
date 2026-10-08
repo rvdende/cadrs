@@ -84,6 +84,7 @@ impl Plugin for PcbPlugin {
                     on_viewport_pick,
                     view::sync_pcb_view,
                     view::fit_on_switch,
+                    view::orbit_about_selection,
                     view::shade_pcb,
                     view::draw_pcb_edges,
                     spawn_chrome,

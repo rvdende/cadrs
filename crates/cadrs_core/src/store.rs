@@ -2,7 +2,8 @@
 //!
 //! Layout: `<root>/<uuid>/document.ron` (a versioned [`DocumentFile`]),
 //! `<root>/<uuid>/entry.ron` (its name and metadata, so listing the documents doesn't parse
-//! every document) and `<root>/<uuid>/thumbnail.png`. The default root is `<data dir>/cadrs/documents`, where the
+//! every document), `<root>/<uuid>/thumbnail.png` (the lists' small picture) and
+//! `<root>/<uuid>/thumbnail-large.png` (the details panel's). The default root is `<data dir>/cadrs/documents`, where the
 //! data dir comes from the `directories` crate (`~/.local/share` on Linux, `%APPDATA%` on
 //! Windows). Tests and scenarios pass their own root so they never touch real documents.
 //!
@@ -47,6 +48,8 @@ pub const SCHEMA_VERSION: u32 = 5;
 
 pub const DOCUMENT_FILE: &str = "document.ron";
 pub const THUMBNAIL_FILE: &str = "thumbnail.png";
+/// The details panel's larger picture ([`thumbnail::THUMB_LARGE_W`]), when the document has one.
+pub const THUMBNAIL_LARGE_FILE: &str = "thumbnail-large.png";
 /// A document's listing entry, a cache of `document.ron`'s head ([`EntryFile`]).
 pub const ENTRY_FILE: &str = "entry.ron";
 /// Folders (and, since P3E.1, the labels) live in `<root>/folders.ron`.
@@ -169,13 +172,14 @@ impl Store {
     }
 
     /// True if the document has no thumbnail, or one saved before `modified` (its last edit):
-    /// the app quit with the document open, so the thumbnail was never rendered.
+    /// the app quit with the document open, so the thumbnail was never rendered. Also with no
+    /// large thumbnail (one saved before they were), so the next close renders one.
     pub fn thumbnail_outdated(&self, id: DocumentId, modified: Timestamp) -> bool {
         let saved = std::fs::metadata(self.thumbnail_path(id))
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-        saved.is_none_or(|t| (t.as_secs() as Timestamp) < modified)
+        saved.is_none_or(|t| (t.as_secs() as Timestamp) < modified) || !self.doc_dir(id).join(THUMBNAIL_LARGE_FILE).exists()
     }
 
     /// Writes `document.ron` for `doc`.
@@ -418,7 +422,7 @@ impl Store {
         let mut meta = DocumentMeta::new(user, now);
         meta.last_opened = None;
         self.save(&doc, &meta)?;
-        match self.read_thumbnail(source) {
+        match self.read_thumbnail_large(source) {
             Some(img) => self.write_thumbnail(id, &img)?,
             None => self.write_thumbnail(
                 id,
@@ -452,20 +456,43 @@ impl Store {
         self.create(&doc, &meta)
     }
 
+    /// Saves the document's thumbnail. An image larger than the lists' size is kept as the
+    /// large picture too, and the lists' one is scaled down from it; a small one replaces both.
     pub fn write_thumbnail(&self, id: DocumentId, img: &RgbaImage) -> Result<(), StoreError> {
         std::fs::create_dir_all(self.doc_dir(id))?;
-        let mut bytes = Vec::new();
-        img.write_to(&mut io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-            .map_err(|e| StoreError::Io(io::Error::other(e)))?;
-        write_atomic(&self.thumbnail_path(id), &bytes)?;
+        let png = |img: &RgbaImage| -> Result<Vec<u8>, StoreError> {
+            let mut bytes = Vec::new();
+            img.write_to(&mut io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+                .map_err(|e| StoreError::Io(io::Error::other(e)))?;
+            Ok(bytes)
+        };
+        let large = self.doc_dir(id).join(THUMBNAIL_LARGE_FILE);
+        if img.width() > thumbnail::THUMB_W {
+            write_atomic(&large, &png(img)?)?;
+            let small = image::imageops::resize(img, thumbnail::THUMB_W, thumbnail::THUMB_H, image::imageops::FilterType::Triangle);
+            write_atomic(&self.thumbnail_path(id), &png(&small)?)?;
+        } else {
+            if large.exists() {
+                std::fs::remove_file(&large)?;
+            }
+            write_atomic(&self.thumbnail_path(id), &png(img)?)?;
+        }
         Ok(())
     }
 
-    /// The document's thumbnail as RGBA8, if it has one.
+    /// The document's thumbnail as RGBA8 at the lists' size, if it has one.
     pub fn read_thumbnail(&self, id: DocumentId) -> Option<RgbaImage> {
         image::open(self.thumbnail_path(id))
             .ok()
             .map(|i| i.to_rgba8())
+    }
+
+    /// The document's large thumbnail (the details panel's), else its small one.
+    pub fn read_thumbnail_large(&self, id: DocumentId) -> Option<RgbaImage> {
+        image::open(self.doc_dir(id).join(THUMBNAIL_LARGE_FILE))
+            .ok()
+            .map(|i| i.to_rgba8())
+            .or_else(|| self.read_thumbnail(id))
     }
 
     /// Fills the store with `n` sample documents with fixed ids, names and timestamps (for

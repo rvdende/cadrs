@@ -712,9 +712,47 @@ pub fn junctions_needed(sch: &Schematic, sheet: usize) -> Vec<Pt> {
     out
 }
 
+/// Removes zero-length wires and joins wires that lie on top of each other (a duplicate, or
+/// collinear segments that overlap) into one, keeping the first one's id and stroke. Without
+/// this an overlap counts as extra wire ends, so it gets junction dots that can't be deleted.
+pub fn tidy_wires(sch: &mut Schematic, sheet: usize) {
+    let wires = &mut sch.sheets[sheet].wires;
+    wires.retain(|w| w.a != w.b);
+    // Where `p` lies along the line through `a` and `b` (in units of |b - a|²), if on it.
+    let along = |a: Pt, b: Pt, p: Pt| -> Option<i128> {
+        let (dx, dy) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
+        let (px, py) = ((p.x - a.x) as i128, (p.y - a.y) as i128);
+        (dx * py - dy * px == 0).then_some(dx * px + dy * py)
+    };
+    let mut i = 0;
+    while i < wires.len() {
+        let (a, b) = (wires[i].a, wires[i].b);
+        let other = (i + 1..wires.len()).find(|&j| {
+            let (Some(s), Some(t)) = (along(a, b, wires[j].a), along(a, b, wires[j].b)) else { return false };
+            // Overlapping by more than a point.
+            let len = along(a, b, b).unwrap_or(0);
+            s.max(t).min(len) > s.min(t).max(0)
+        });
+        match other {
+            Some(j) => {
+                let w = wires.remove(j);
+                let pts = [a, b, w.a, w.b];
+                let key = |p: &Pt| along(a, b, *p).unwrap_or(0);
+                let lo = *pts.iter().min_by_key(|p| key(p)).unwrap();
+                let hi = *pts.iter().max_by_key(|p| key(p)).unwrap();
+                (wires[i].a, wires[i].b) = (lo, hi);
+                // Look again from the start: the longer wire may overlap one checked before.
+                i = 0;
+            }
+            None => i += 1,
+        }
+    }
+}
+
 /// Adds the junctions [`junctions_needed`] lists that aren't there, and removes ones that no
-/// longer join anything.
+/// longer join anything. Wires on top of each other are joined first ([`tidy_wires`]).
 pub fn fix_junctions(sch: &mut Schematic, sheet: usize) {
+    tidy_wires(sch, sheet);
     let need = junctions_needed(sch, sheet);
     let sh = &mut sch.sheets[sheet];
     sh.junctions.retain(|j| need.contains(&j.at));
@@ -1125,6 +1163,35 @@ mod tests {
         let colored = s.sheets[0].wires.iter().filter(|w| w.stroke.color == Some(orange)).count();
         assert_eq!(colored, run.len());
         assert_eq!(s.sheets[0].wires.iter().find(|w| w.id == apart[0]).unwrap().stroke.color, None);
+    }
+
+    #[test]
+    fn wires_on_top_of_each_other_are_joined() {
+        let (mut s, _) = sch();
+        // An L, then its first leg drawn again in part and in full: no stray dots.
+        let l = add_wire(&mut s, 0, &[Pt::mm(0.0, 0.0), Pt::mm(25.4, 0.0), Pt::mm(25.4, -25.4)]);
+        add_wire(&mut s, 0, &[Pt::mm(12.7, 0.0), Pt::mm(25.4, 0.0)]);
+        add_wire(&mut s, 0, &[Pt::mm(25.4, 0.0), Pt::mm(0.0, 0.0)]);
+        // Overlapping the corner leg and running on past it.
+        add_wire(&mut s, 0, &[Pt::mm(25.4, -12.7), Pt::mm(25.4, -38.1)]);
+        let sh = &s.sheets[0];
+        assert_eq!(sh.wires.len(), 2, "{:?}", sh.wires);
+        assert!(sh.junctions.is_empty(), "{:?}", sh.junctions);
+        assert!(sh.wires.iter().any(|w| w.id == l[0] && [w.a, w.b].contains(&Pt::mm(0.0, 0.0)) && [w.a, w.b].contains(&Pt::mm(25.4, 0.0))));
+        assert!(sh.wires.iter().any(|w| [w.a, w.b].contains(&Pt::mm(25.4, -38.1)) && [w.a, w.b].contains(&Pt::mm(25.4, 0.0))));
+        // Wires that only meet end to end, or cross, stay apart.
+        add_wire(&mut s, 0, &[Pt::mm(0.0, 0.0), Pt::mm(-12.7, 0.0)]);
+        add_wire(&mut s, 0, &[Pt::mm(12.7, 5.08), Pt::mm(12.7, -5.08)]);
+        assert_eq!(s.sheets[0].wires.len(), 4);
+        // A tee's dot takes the wire's colour when it has none of its own.
+        add_wire(&mut s, 0, &[Pt::mm(25.4, -12.7), Pt::mm(38.1, -12.7)]);
+        let grey = crate::graphics::Color { r: 128, g: 128, b: 128, a: 255 };
+        let run = connected_wires(&s, 0, l[0]);
+        set_wire_color(&mut s, 0, &run, Some(grey));
+        assert_eq!(s.sheets[0].junctions.len(), 1);
+        let d = crate::render::schematic(&s, 0, &crate::render::SchematicTheme::default(), &Default::default());
+        assert!(d.areas.iter().any(|a| a.color == [128, 128, 128, 255]));
+        assert!(!d.areas.iter().any(|a| a.color == crate::render::SchematicTheme::default().junction));
     }
 
     #[test]

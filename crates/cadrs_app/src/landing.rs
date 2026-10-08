@@ -198,9 +198,9 @@ fn sync(store: &cadrs_core::Store, before: &Library, after: &Library) {
     }
 }
 
-/// Thumbnail images by document.
+/// Thumbnail images by document: the lists' small ones, and the details panel's large ones.
 #[derive(Resource, Default)]
-struct Thumbnails(HashMap<DocumentId, Option<Handle<Image>>>);
+struct Thumbnails(HashMap<DocumentId, Option<Handle<Image>>>, HashMap<DocumentId, Option<Handle<Image>>>);
 
 /// The main panel, rebuilt whenever the list changes.
 #[derive(Component)]
@@ -306,6 +306,7 @@ fn load_library(
     lib.history.clear();
     // Thumbnails may have changed while a document was open.
     thumbs.0.clear();
+    thumbs.1.clear();
 }
 
 /// Reads the library from the store again (the scenario command `landing-reload`, after a
@@ -317,6 +318,7 @@ pub fn reload_library(world: &mut World) {
     lib.lib = l;
     lib.history.clear();
     world.resource_mut::<Thumbnails>().0.clear();
+    world.resource_mut::<Thumbnails>().1.clear();
 }
 
 fn thumbnail(
@@ -325,25 +327,29 @@ fn thumbnail(
     store: &cadrs_core::Store,
     id: DocumentId,
 ) -> Option<Handle<Image>> {
-    thumbs
-        .0
-        .entry(id)
-        .or_insert_with(|| {
-            let img = store.read_thumbnail(id)?;
-            let (w, h) = img.dimensions();
-            Some(images.add(Image::new(
-                Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                img.into_raw(),
-                TextureFormat::Rgba8UnormSrgb,
-                RenderAssetUsages::RENDER_WORLD,
-            )))
-        })
-        .clone()
+    thumbs.0.entry(id).or_insert_with(|| thumbnail_image(images, store.read_thumbnail(id)?)).clone()
+}
+
+/// The document's large thumbnail (the details panel's; its small one if it has none).
+fn large_thumbnail(
+    thumbs: &mut Thumbnails,
+    images: &mut Assets<Image>,
+    store: &cadrs_core::Store,
+    id: DocumentId,
+) -> Option<Handle<Image>> {
+    thumbs.1.entry(id).or_insert_with(|| thumbnail_image(images, store.read_thumbnail_large(id)?)).clone()
+}
+
+/// A decoded thumbnail as an image.
+fn thumbnail_image(images: &mut Assets<Image>, img: image::RgbaImage) -> Option<Handle<Image>> {
+    let (w, h) = img.dimensions();
+    Some(images.add(Image::new(
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        img.into_raw(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )))
 }
 
 // ---------------------------------------------------------------------------------------------

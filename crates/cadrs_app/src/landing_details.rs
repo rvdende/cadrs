@@ -38,7 +38,7 @@ use cadrs_ui::{Button, CheckboxChange, FilePicked, LabelChip, details_caption, d
 
 use super::{
     DocLibrary, DocRow, FilterItem, LandingDialog, LandingState, PickRow, Thumbnails, close_dialogs, dialog_buttons,
-    field_label, field_value, open_document, thumbnail, thumbnail_node, undo_toast,
+    field_label, field_value, open_document, large_thumbnail, thumbnail_node, undo_toast,
 };
 use crate::{AppClock, AppState, DocumentStore, UserProfile};
 
@@ -550,7 +550,7 @@ pub fn rebuild_details(
             None => Content::None("Select a document to see its details.".into()),
             Some(e) => match d.tab {
                 DetailsTab::Info => {
-                    let th = thumbnail(&mut thumbs, &mut images, &store.0, id);
+                    let th = large_thumbnail(&mut thumbs, &mut images, &store.0, id);
                     Content::Doc(Box::new(e), th)
                 }
                 DetailsTab::Versions => Content::Versions(e.name.clone(), cadrs_core::documents_page::versions(&store.0, id).unwrap_or_default()),
@@ -1228,6 +1228,7 @@ pub fn import_file(world: &mut World, path: &Path) {
         let _ = store.write_thumbnail(doc.id, &img);
     }
     world.resource_mut::<Thumbnails>().0.remove(&doc.id);
+    world.resource_mut::<Thumbnails>().1.remove(&doc.id);
     let id = doc.id;
     world.resource_mut::<DocLibrary>().execute(&store, &AddEntry { entry });
     {

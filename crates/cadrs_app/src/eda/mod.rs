@@ -136,17 +136,10 @@ pub struct EdaScene {
     pub list: DrawList,
 }
 
-/// Width classes of the gizmo lines (a gizmo group has one pixel width).
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct EdaHair;
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct EdaFine;
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct EdaThin;
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct EdaMedium;
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct EdaThick;
+/// The scene's lines of one width (nm; 0 is the thinnest the canvas draws), as a retained
+/// gizmo whose pixel width follows the zoom.
+#[derive(Component)]
+struct EdaLines(i64);
 
 /// The schematic grid's dots (2 px squares).
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -161,23 +154,6 @@ pub struct EdaCross;
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct Crosshair(pub Option<(cadrs_eda::units::Pt, bool)>);
 
-/// The representative width (mm) of each class, and the class of a line width (nm).
-const CLASSES: [f32; 5] = [0.0, 0.1, 0.15, 0.25, 0.4];
-
-fn class_of(width_nm: i64) -> usize {
-    let w = width_nm as f32 / 1e6;
-    if w <= 0.0 {
-        0
-    } else if w <= 0.12 {
-        1
-    } else if w <= 0.2 {
-        2
-    } else if w <= 0.3 {
-        3
-    } else {
-        4
-    }
-}
 
 pub struct EdaPlugin;
 
@@ -192,18 +168,13 @@ impl Plugin for EdaPlugin {
             .add_message::<EdaClick>()
             .add_message::<ui::StripAction>()
             .add_observer(ui::on_strip_button)
-            .init_gizmo_group::<EdaHair>()
-            .init_gizmo_group::<EdaFine>()
-            .init_gizmo_group::<EdaThin>()
-            .init_gizmo_group::<EdaMedium>()
-            .init_gizmo_group::<EdaThick>()
             .init_gizmo_group::<EdaDots>()
             .init_gizmo_group::<EdaCross>()
             .init_resource::<Crosshair>()
             .add_systems(Startup, (spawn_camera, configure_gizmos))
             .add_systems(
                 Update,
-                (track_context, sync_mode_bar, navigate, fit_views, place_camera, rebuild_scene, set_line_widths, draw_lines, draw_overlay)
+                (track_context, sync_mode_bar, navigate, fit_views, place_camera, rebuild_scene, set_line_widths, draw_overlay)
                     .chain()
                     .run_if(in_state(AppState::Document)),
             )
@@ -234,17 +205,10 @@ fn spawn_camera(mut commands: Commands, surface: Res<RenderSurface>) {
 }
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
-    // Round joints: without them a thick curve (an arc, a stroke-font glyph) is a row of
-    // separate quads with gaps on the outside of every bend.
     fn set(c: &mut GizmoConfig) {
         c.render_layers = RenderLayers::layer(EDA_LAYER);
         c.line.joints = GizmoLineJoint::Round(6);
     }
-    set(store.config_mut::<EdaHair>().0);
-    set(store.config_mut::<EdaFine>().0);
-    set(store.config_mut::<EdaThin>().0);
-    set(store.config_mut::<EdaMedium>().0);
-    set(store.config_mut::<EdaThick>().0);
     set(store.config_mut::<EdaDots>().0);
     set(store.config_mut::<EdaCross>().0);
     store.config_mut::<EdaDots>().0.line.width = 2.0;
@@ -639,6 +603,7 @@ fn rebuild_scene(
     q: Query<Entity, With<EdaEntity>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
     mut commands: Commands,
 ) {
     let flat = eda.flat();
@@ -731,44 +696,48 @@ fn rebuild_scene(
             layer.clone(),
         ));
     }
+    // One retained gizmo per line width ([`set_line_widths`] sizes them to the zoom).
+    let mut by_width: Vec<(i64, GizmoAsset)> = vec![];
+    for l in &list.lines {
+        let i = match by_width.iter().position(|(w, _)| *w == l.width) {
+            Some(i) => i,
+            None => {
+                by_width.push((l.width, GizmoAsset::default()));
+                by_width.len() - 1
+            }
+        };
+        // A closed outline runs on past its start, so its first corner gets a joint too.
+        let closed = l.pts.len() > 2 && l.pts.first() == l.pts.last();
+        let pts = l.pts.iter().chain(l.pts.get(1).filter(|_| closed)).map(|p| Vec2::new((p.x as f64 / 1e6) as f32, (p.y as f64 / 1e6) as f32));
+        by_width[i].1.linestrip_2d(pts, rgba(l.color));
+    }
+    for (width, asset) in by_width {
+        commands.spawn((
+            Name::new("eda-lines"),
+            EdaEntity,
+            EdaLines(width),
+            Gizmo {
+                handle: gizmo_assets.add(asset),
+                // Round joints: without them a thick curve (an arc, a stroke-font glyph) is a
+                // row of separate quads with gaps on the outside of every bend.
+                line_config: GizmoLineConfig { width: 1.0, joints: GizmoLineJoint::Round(6), ..default() },
+                ..default()
+            },
+            layer.clone(),
+        ));
+    }
     scene.list = list;
     scene.key = Some(key);
 }
 
-/// Each width class's pixel width at the current zoom (at least a pixel).
-fn set_line_widths(eda: Res<Eda2d>, ui: Res<EdaUi>, mut store: ResMut<GizmoConfigStore>) {
+/// Each line width's pixel width at the current zoom (at least a pixel): a line is as wide as
+/// it is in the design, so small stroke text stays in proportion.
+fn set_line_widths(eda: Res<Eda2d>, ui: Res<EdaUi>, mut q: Query<(&EdaLines, &mut Gizmo)>) {
     let Some(v) = current_view(&ui, &eda).filter(|_| eda.flat()) else { return };
-    let px = |k: usize| (CLASSES[k] * v.scale as f32).max(1.0);
-    store.config_mut::<EdaHair>().0.line.width = 1.0;
-    store.config_mut::<EdaFine>().0.line.width = px(1);
-    store.config_mut::<EdaThin>().0.line.width = px(2);
-    store.config_mut::<EdaMedium>().0.line.width = px(3);
-    store.config_mut::<EdaThick>().0.line.width = px(4);
-}
-
-fn draw_lines(
-    eda: Res<Eda2d>,
-    scene: Res<EdaScene>,
-    mut g0: Gizmos<EdaHair>,
-    mut g1: Gizmos<EdaFine>,
-    mut g2: Gizmos<EdaThin>,
-    mut g3: Gizmos<EdaMedium>,
-    mut g4: Gizmos<EdaThick>,
-) {
-    if !eda.flat() || scene.key.is_none() {
-        return;
-    }
-    for l in &scene.list.lines {
-        // A closed outline runs on past its start, so its first corner gets a joint too.
-        let closed = l.pts.len() > 2 && l.pts.first() == l.pts.last();
-        let pts = l.pts.iter().chain(l.pts.get(1).filter(|_| closed)).map(|p| Vec2::new((p.x as f64 / 1e6) as f32, (p.y as f64 / 1e6) as f32));
-        let c = rgba(l.color);
-        match class_of(l.width) {
-            0 => g0.linestrip_2d(pts, c),
-            1 => g1.linestrip_2d(pts, c),
-            2 => g2.linestrip_2d(pts, c),
-            3 => g3.linestrip_2d(pts, c),
-            _ => g4.linestrip_2d(pts, c),
+    for (lines, mut g) in &mut q {
+        let px = ((lines.0 as f64 / 1e6 * v.scale) as f32).max(1.0);
+        if g.line_config.width != px {
+            g.line_config.width = px;
         }
     }
 }

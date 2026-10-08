@@ -459,6 +459,23 @@ fn bottom_keep_overlays(bodies: &[BodyMesh], thickness: f64) -> Vec<BodyMesh> {
         .collect()
 }
 
+/// The bodies of a board view: the board, its components as shown and the keep-outs (see the
+/// module docs). Also what the document's thumbnail shows of a board ([`crate::thumbnail`]).
+pub fn board_view_bodies(world: &mut World, e: ElementId, b: BoardId, board: &PcbBoard, sig: &mut impl Hasher) -> Vec<BodyMesh> {
+    let mesh = world.resource_mut::<PcbMeshCache>().get_or_build((e, b), board);
+    (Arc::as_ptr(&mesh) as usize).hash(sig);
+    let mut v = board_bodies(world, e, b, board, &mesh, sig);
+    v.extend(bottom_keep_overlays(&v, board.thickness()));
+    // A native board is made: its edges the solder mask's green, as its faces.
+    if crate::eda::design(world.resource::<ActiveDocument>(), e, b).is_some() {
+        let m = cadrs_eda::render::made::MASK;
+        for body in v.iter_mut().filter(|x| x.class == BodyClass::Board) {
+            body.color = [m[0], m[1], m[2], body.color[3]];
+        }
+    }
+    v
+}
+
 /// Keeps the body entities in step with the active board, the view mode and the library (see
 /// the module docs).
 pub fn sync_pcb_view(world: &mut World) {
@@ -483,20 +500,7 @@ pub fn sync_pcb_view(world: &mut World) {
     let mut grid = None;
     let bodies = match &want {
         None => vec![],
-        Some((SceneKey::Board(e, b), board)) => {
-            let mesh = world.resource_mut::<PcbMeshCache>().get_or_build((*e, *b), board);
-            (Arc::as_ptr(&mesh) as usize).hash(&mut sig);
-            let mut v = board_bodies(world, *e, *b, board, &mesh, &mut sig);
-            v.extend(bottom_keep_overlays(&v, board.thickness()));
-            // A native board is made: its edges the solder mask's green, as its faces.
-            if crate::eda::design(world.resource::<ActiveDocument>(), *e, *b).is_some() {
-                let m = cadrs_eda::render::made::MASK;
-                for body in v.iter_mut().filter(|x| x.class == BodyClass::Board) {
-                    body.color = [m[0], m[1], m[2], body.color[3]];
-                }
-            }
-            v
-        }
+        Some((SceneKey::Board(e, b), board)) => board_view_bodies(world, *e, *b, board, &mut sig),
         Some((SceneKey::Component(e, _, pkg), board)) => {
             let (fp, size) = footprint(board, pkg);
             footprint_loops = fp;
@@ -580,13 +584,22 @@ pub struct PcbSkin;
 const SKIN_PX_PER_MM: f32 = 24.0;
 
 fn spawn_skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) {
+    for (name, mesh, material) in skins(world, design, thickness) {
+        world.spawn((Name::new(name), PcbSkin, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, DespawnOnExit(AppState::Document)));
+    }
+}
+
+/// A native board's top and bottom skins (see [`PcbSkin`]): name, mesh and material. Also
+/// what the document's thumbnail shows of a native board ([`crate::thumbnail`]).
+pub fn skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) -> Vec<(&'static str, Handle<Mesh>, Handle<StandardMaterial>)> {
     use cadrs_eda::layer::Side;
     use resvg::{tiny_skia, usvg};
+    let mut out = vec![];
     let region = cadrs_eda::outline::board_region(&design.board);
     let tris = cadrs_eda::poly::triangulate(&region);
-    let Some(bounds) = region.iter().flatten().fold(None, |acc, p| Some(cadrs_eda::units::Bounds::union(acc, cadrs_eda::units::Bounds::of(*p)))) else { return };
+    let Some(bounds) = region.iter().flatten().fold(None, |acc, p| Some(cadrs_eda::units::Bounds::union(acc, cadrs_eda::units::Bounds::of(*p)))) else { return out };
     if tris.is_empty() {
-        return;
+        return out;
     }
     let (x0, y1) = (bounds.min.x as f64 / 1e6, bounds.max.y as f64 / 1e6);
     let (w, h) = (bounds.size().w as f64 / 1e6, bounds.size().h as f64 / 1e6);
@@ -626,8 +639,9 @@ fn spawn_skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) {
         let image = world.resource_mut::<Assets<Image>>().add(image);
         let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color_texture: Some(image), unlit: true, double_sided: true, cull_mode: None, ..default() });
         let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        world.spawn((Name::new(format!("pcb-skin-{}", if up { "top" } else { "bottom" })), PcbSkin, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, DespawnOnExit(AppState::Document)));
+        out.push((if up { "pcb-skin-top" } else { "pcb-skin-bottom" }, mesh, material));
     }
+    out
 }
 /// The grid of a component view for a part `size` mm across: (half extent, spacing).
 fn grid_of(size: f32) -> (f32, f32) {
@@ -673,7 +687,7 @@ fn colors(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Vec<[f32
         .collect()
 }
 
-fn body_mesh(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Mesh {
+pub(crate) fn body_mesh(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Mesh {
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions.clone())
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, b.normals.clone())
@@ -846,6 +860,25 @@ pub fn frame_item(world: &mut World, item: ItemId) {
     let box_pts: Vec<Vec3> = [Vec3::new(lo.x - m, lo.y - m, lo.z), Vec3::new(hi.x + m, lo.y - m, lo.z), Vec3::new(lo.x - m, hi.y + m, lo.z), Vec3::new(hi.x + m, hi.y + m, hi.z)].to_vec();
     let to = view.target().fitted(&box_pts, size, crate::viewport::FIT_FILL);
     view.animate_to(to);
+}
+
+/// While components are selected in a board view, the view orbits about the centre of their
+/// bodies' box; with none, about the focus (the board's middle after zoom to fit).
+pub fn orbit_about_selection(kind: Res<ActiveKind>, scene: Res<PcbScene>, ui: Res<PcbUi>, mut view: ResMut<ViewportView>) {
+    let mut pivot = None;
+    if *kind == ActiveKind::PcbStudio && !scene.is_component_view() && !ui.selected.is_empty() {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for b in scene.bodies.iter().filter(|b| b.item.is_some_and(|i| ui.selected.contains(&i))) {
+            for p in &b.positions {
+                lo = lo.min(Vec3::from_array(*p));
+                hi = hi.max(Vec3::from_array(*p));
+            }
+        }
+        pivot = (lo.x <= hi.x).then(|| (lo + hi) / 2.0);
+    }
+    if view.pivot != pivot {
+        view.pivot = pivot;
+    }
 }
 
 /// The component under a screen offset: the nearest hit of the pick ray on a shown component

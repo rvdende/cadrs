@@ -6,8 +6,9 @@
 //! active or on hover highlights. It shows the default planes (drawn a little stronger than in
 //! the viewport so they read at 60×34 px), the first Part Studio's parts (shaded as in the
 //! viewport, with black edges) and its sketches that no extrude used: closed regions filled grey
-//! with dark edges. With geometry, the view zooms to fit it, so every document's thumbnail shows
-//! its own.
+//! with dark edges. A document with none of those but a PCB Studio board shows the board as its
+//! 3D view does (components, and a native board's mask, copper and silkscreen). With geometry,
+//! the view zooms to fit it, so every document's thumbnail shows its own.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -16,7 +17,7 @@ use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use cadrs_core::thumbnail::{THUMB_H, THUMB_W};
+use cadrs_core::thumbnail::{THUMB_LARGE_H, THUMB_LARGE_W};
 use image::RgbaImage;
 
 use crate::camera::{StandardView, ViewState};
@@ -62,7 +63,25 @@ struct ThumbnailSketches(
     Vec3,
     /// The parts' edge lines.
     Vec<Vec<Vec3>>,
+    /// A board is shown (so no planes).
+    bool,
 );
+
+/// The board a document with no Part Studio geometry shows: its first PCB Studio's board (the
+/// one shown there last), as element, board and mechanical board.
+fn document_board(doc: &cadrs_core::Document) -> Option<(cadrs_core::ElementId, cadrs_core::pcb::BoardId, cadrs_core::pcb::PcbBoard)> {
+    doc.elements.iter().find_map(|e| {
+        let s = e.pcb()?;
+        let b = s.active.and_then(|id| s.board(id)).or(s.boards.first())?;
+        Some((e.id, b.id, b.board.clone()))
+    })
+}
+
+/// Whether the thumbnail shows a board: the document has one and its first Part Studio has
+/// neither parts nor sketches.
+fn shows_board(doc: &cadrs_core::Document) -> bool {
+    document_board(doc).is_some() && document_sketches(doc).is_empty() && document_parts(doc).is_empty()
+}
 
 /// The parts of a document's first Part Studio.
 fn document_parts(doc: &cadrs_core::Document) -> Vec<cadrs_core::Part> {
@@ -127,7 +146,7 @@ pub fn thumbnail_view_with(
     }
     ViewState::standard(StandardView::Isometric).fitted(
         &pts,
-        Vec2::new(THUMB_W as f32, THUMB_H as f32),
+        Vec2::new(THUMB_LARGE_W as f32, THUMB_LARGE_H as f32),
         0.9,
     )
 }
@@ -153,8 +172,8 @@ pub fn thumbnail_view() -> ViewState {
             hi = hi.max(s);
         }
     }
-    let margin = 3.0;
-    let size = Vec2::new(THUMB_W as f32, THUMB_H as f32) - 2.0 * margin;
+    let margin = 12.0;
+    let size = Vec2::new(THUMB_LARGE_W as f32, THUMB_LARGE_H as f32) - 2.0 * margin;
     let extent = (hi - lo) / size;
     // `project` above used the default scale; scale so the extent fits.
     v.scale *= extent.x.max(extent.y);
@@ -169,8 +188,8 @@ fn setup_thumbnail(
     mut store: ResMut<GizmoConfigStore>,
 ) {
     let mut image = Image::new_target_texture(
-        THUMB_W * SS,
-        THUMB_H * SS,
+        THUMB_LARGE_W * SS,
+        THUMB_LARGE_H * SS,
         TextureFormat::Rgba8UnormSrgb,
         None,
     );
@@ -180,7 +199,8 @@ fn setup_thumbnail(
 
     let (config, _) = store.config_mut::<ThumbGizmos>();
     config.render_layers = RenderLayers::layer(THUMB_LAYER);
-    config.line.width = 2.6;
+    // About a pixel in the lists' small copy, two in the details panel.
+    config.line.width = 8.0;
 
     let v = thumbnail_view();
     commands.spawn((
@@ -241,7 +261,7 @@ fn draw_thumbnail_scene(
     for line in &sketches.2 {
         gizmos.linestrip(line.iter().map(|p| *p + sketches.1 * 0.5), Color::srgb_u8(0x14, 0x14, 0x14));
     }
-    if sketches.0.is_empty() && sketches.2.is_empty() {
+    if sketches.0.is_empty() && sketches.2.is_empty() && !sketches.3 {
         let edge = Color::srgb_u8(0x3f, 0x5f, 0x8c);
         for k in PlaneKind::ALL {
             let c = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
@@ -289,11 +309,35 @@ fn prepare_thumbnail_scene(world: &mut World) {
             Some((e.part_props().to_vec(), e.feature_appearances().to_vec()))
         })
         .unwrap_or_default();
-    let part_pts: Vec<Vec3> = parts
+    let mut part_pts: Vec<Vec3> = parts
         .iter()
         .flat_map(|p| p.solid.positions.iter().map(|q| Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)))
         .collect();
+    // With no Part Studio geometry, the document's board as its 3D view shows it.
+    let board = if sketches.is_empty() && parts.is_empty() { world.get_resource::<ActiveDocument>().and_then(|d| document_board(&d.doc)) } else { None };
+    let board_bodies = match &board {
+        Some((e, b, board)) => crate::pcb::view::board_view_bodies(world, *e, *b, board, &mut std::collections::hash_map::DefaultHasher::new()),
+        None => vec![],
+    };
+    part_pts.extend(board_bodies.iter().flat_map(|b| b.positions.iter().map(|p| Vec3::from_array(*p))));
     let v = thumbnail_view_with(&sketches, &part_pts);
+    if let Some((e, b, board)) = &board {
+        let (opaque, blended) = {
+            let mut mats = world.resource_mut::<Assets<StandardMaterial>>();
+            (mats.add(crate::parts::part_material(false)), mats.add(crate::parts::part_material(true)))
+        };
+        for body in &board_bodies {
+            let base = crate::parts::FaceBase { rgb: [body.color[0] as f32, body.color[1] as f32, body.color[2] as f32], alpha: body.color[3] as f32 / 255.0 };
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(crate::pcb::view::body_mesh(body, &v, base, 0));
+            let material = if base.alpha < 1.0 { blended.clone() } else { opaque.clone() };
+            world.spawn((Name::new("thumbnail-board"), ThumbSketch, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, RenderLayers::layer(THUMB_LAYER)));
+        }
+        // A native board's mask, copper, pads and silkscreen.
+        let design = crate::eda::design(world.resource::<ActiveDocument>(), *e, *b).cloned();
+        for (_, mesh, material) in design.map(|d| crate::pcb::view::skins(world, &d, board.thickness())).unwrap_or_default() {
+            world.spawn((Name::new("thumbnail-board-skin"), ThumbSketch, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, RenderLayers::layer(THUMB_LAYER)));
+        }
+    }
     let part_material = world
         .resource_mut::<Assets<StandardMaterial>>()
         .add(crate::parts::part_material(false));
@@ -346,7 +390,7 @@ fn prepare_thumbnail_scene(world: &mut World) {
             o.scale = v.scale / SS as f32;
         }
     }
-    let show_planes = sketches.is_empty() && parts.is_empty();
+    let show_planes = sketches.is_empty() && parts.is_empty() && board.is_none();
     let mut q = world.query_filtered::<&mut Visibility, With<ThumbPlane>>();
     for mut v in q.iter_mut(world) {
         *v = if show_planes {
@@ -356,7 +400,7 @@ fn prepare_thumbnail_scene(world: &mut World) {
         };
     }
     *world.resource_mut::<ThumbnailSketches>() =
-        ThumbnailSketches(sketches, v.back() * 1.0, part_lines);
+        ThumbnailSketches(sketches, v.back() * 1.0, part_lines, board.is_some());
 }
 
 fn clear_thumbnail_scene(world: &mut World) {
@@ -367,6 +411,7 @@ fn clear_thumbnail_scene(world: &mut World) {
     }
     world.resource_mut::<ThumbnailSketches>().0.clear();
     world.resource_mut::<ThumbnailSketches>().2.clear();
+    world.resource_mut::<ThumbnailSketches>().3 = false;
     let mut q = world.query_filtered::<&mut Camera, With<ThumbCamera>>();
     for mut c in q.iter_mut(world) {
         c.is_active = false;
@@ -382,11 +427,12 @@ pub fn close_document(world: &mut World) {
     // A stored document gets a new thumbnail only if it is new, changed while open, or has
     // none or one older than its last edit (a document.ron copied from another machine without
     // its thumbnail.png, or the app quit while it was open), so opening and closing a document
-    // keeps the picture it had.
+    // keeps the picture it had. A document whose picture is its board always gets a new one,
+    // so thumbnails saved before boards were drawn (the bare planes) are replaced.
     let store = world.resource::<DocumentStore>().0.clone();
     let rerender = world.get_resource::<ActiveDocument>().is_some_and(|d| {
         d.meta.as_ref().is_some_and(|m| {
-            d.fresh || d.changed_since_open() || store.thumbnail_outdated(d.doc.id, m.modified)
+            d.fresh || d.changed_since_open() || store.thumbnail_outdated(d.doc.id, m.modified) || shows_board(&d.doc)
         })
     });
     if !rerender {
@@ -479,7 +525,7 @@ pub fn finish_thumbnail(mut img: RgbaImage) -> RgbaImage {
             }
         }
     }
-    image::imageops::resize(&img, THUMB_W, THUMB_H, image::imageops::FilterType::Triangle)
+    image::imageops::resize(&img, THUMB_LARGE_W, THUMB_LARGE_H, image::imageops::FilterType::Triangle)
 }
 
 #[cfg(test)]
@@ -496,9 +542,9 @@ mod tests {
                 hi = hi.max(s.abs());
             }
         }
-        assert!(hi.x <= THUMB_W as f32 / 2.0 + 0.01 && hi.y <= THUMB_H as f32 / 2.0 + 0.01);
+        assert!(hi.x <= THUMB_LARGE_W as f32 / 2.0 + 0.01 && hi.y <= THUMB_LARGE_H as f32 / 2.0 + 0.01);
         // It fills one dimension.
-        assert!(hi.x > THUMB_W as f32 / 2.0 - 4.0 || hi.y > THUMB_H as f32 / 2.0 - 4.0);
+        assert!(hi.x > THUMB_LARGE_W as f32 / 2.0 - 16.0 || hi.y > THUMB_LARGE_H as f32 / 2.0 - 16.0);
     }
 
     #[test]
@@ -522,13 +568,13 @@ mod tests {
 
     #[test]
     fn finishing_unpremultiplies_and_downscales() {
-        let mut img = RgbaImage::new(THUMB_W * SS, THUMB_H * SS);
+        let mut img = RgbaImage::new(THUMB_LARGE_W * SS, THUMB_LARGE_H * SS);
         for p in img.pixels_mut() {
             // 50% coverage of pure white, premultiplied: linear 0.5 is sRGB 188.
             *p = image::Rgba([188, 188, 188, 128]);
         }
         let out = finish_thumbnail(img);
-        assert_eq!(out.dimensions(), (THUMB_W, THUMB_H));
+        assert_eq!(out.dimensions(), (THUMB_LARGE_W, THUMB_LARGE_H));
         let p = out.get_pixel(10, 10);
         assert!(p[0] >= 253 && p[3] == 128, "{p:?}");
     }
@@ -540,12 +586,18 @@ mod tests {
         let doc = cadrs_core::Document::new("Thumb");
         let meta = cadrs_core::DocumentMeta::new("me", 0);
         store.create(&doc, &meta).unwrap();
-        let mut img = RgbaImage::new(THUMB_W * SS, THUMB_H * SS);
-        img.put_pixel(100, 60, image::Rgba([255, 0, 0, 255]));
+        let mut img = RgbaImage::new(THUMB_LARGE_W * SS, THUMB_LARGE_H * SS);
+        for (x, y) in (80..120).flat_map(|x| (40..80).map(move |y| (x, y))) {
+            img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+        }
         store.write_thumbnail(doc.id, &finish_thumbnail(img)).unwrap();
+        // The lists' small copy, and the details panel's large one.
         let back = store.read_thumbnail(doc.id).unwrap();
-        assert_eq!(back.dimensions(), (THUMB_W, THUMB_H));
-        assert!(back.get_pixel(50, 30)[0] > 0);
+        assert_eq!(back.dimensions(), (cadrs_core::thumbnail::THUMB_W, cadrs_core::thumbnail::THUMB_H));
+        assert!(back.get_pixel(11, 7)[0] > 0);
+        let large = store.read_thumbnail_large(doc.id).unwrap();
+        assert_eq!(large.dimensions(), (THUMB_LARGE_W, THUMB_LARGE_H));
+        assert!(large.get_pixel(50, 30)[0] > 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
