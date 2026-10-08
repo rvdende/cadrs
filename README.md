@@ -1,6 +1,6 @@
 # cadrs
 
-[![CI](https://github.com/rvdende/cadrs/actions/workflows/ci.yml/badge.svg)](https://github.com/rvdende/cadrs/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/check-runs/rvdende/cadrs/main?label=CI&logo=github)](https://github.com/rvdende/cadrs/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Rust](https://img.shields.io/badge/rust-stable%20%C2%B7%20edition%202024-orange.svg)](https://www.rust-lang.org)
 [![Bevy](https://img.shields.io/badge/bevy-0.19-232326.svg)](https://bevyengine.org)
