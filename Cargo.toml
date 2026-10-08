@@ -10,8 +10,11 @@ default-members = [
     "crates/cadrs",
     "crates/cadrs_core",
     "crates/cadrs_drawing",
+    "crates/cadrs_eda",
+    "crates/cadrs_easyeda",
     "crates/cadrs_fea",
     "crates/cadrs_idf",
+    "crates/cadrs_kicad",
     "crates/cadrs_kernel",
     "crates/cadrs_pcb",
     "crates/cadrs_render",
@@ -33,7 +36,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 resvg = "0.45"
-icon-rs = "0.3.10"
+icon-rs = "0.3.12"
 directories = "6"
 earcutr = "0.4"
 proptest = "1"
@@ -44,6 +47,10 @@ glam = "0.24"
 # Sheet metal flat patterns (P3I.1): 2D polygon booleans for the flat outline, reliefs and the
 # collision check (MIT/Apache-2.0).
 geo = "0.32"
+# Electronics (cadrs_eda): Clipper2 polygon booleans and offsets on i64 (Boost licence) for zone
+# fill, clearances and DRC; gerber_parser checks our Gerber output in tests (MIT/Apache-2.0).
+clipper2-rust = "1.2"
+gerber_parser = "0.5"
 tiny-skia = "0.11"
 flate2 = "1"
 # P3F.5 (simulation): sparse Cholesky (MIT), exact geometric predicates (MIT/Apache-2.0),
@@ -52,6 +59,8 @@ faer = { version = "0.24", default-features = false, features = ["std", "sparse-
 robust = "1.2"
 rayon = "1"
 serde_json = "1"
+# HTTP for the online part search (cadrs_easyeda; rustls, MIT/Apache-2.0).
+ureq = "3"
 blake3 = "1"
 bincode = "1"
 base64 = "0.22"
@@ -64,6 +73,9 @@ cadrs_app = { path = "crates/cadrs_app" }
 cadrs_harness = { path = "crates/cadrs_harness" }
 cadrs_kernel = { path = "crates/cadrs_kernel" }
 cadrs_drawing = { path = "crates/cadrs_drawing" }
+cadrs_eda = { path = "crates/cadrs_eda" }
+cadrs_kicad = { path = "crates/cadrs_kicad" }
+cadrs_easyeda = { path = "crates/cadrs_easyeda" }
 cadrs_idf = { path = "crates/cadrs_idf" }
 cadrs_pcb = { path = "crates/cadrs_pcb" }
 cadrs_fea = { path = "crates/cadrs_fea" }

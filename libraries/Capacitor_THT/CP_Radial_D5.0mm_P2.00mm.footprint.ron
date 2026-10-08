@@ -1,0 +1,87 @@
+(
+  id: "CP_Radial_D5.0mm_P2.00mm",
+  description: "Radial electrolytic capacitor, diameter 5 mm, pitch 2 mm",
+  keywords: "CP radial electrolytic",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 1000000, y: 3800000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "CP_Radial_D5.0mm_P2.00mm", at: (x: 1000000, y: -3800000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: ThroughHole,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: Rect,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 1600000, h: 1600000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 2000000, y: 0),
+      angle: 0.0,
+      size: (w: 1600000, h: 1600000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Circle(center: (x: 1000000, y: 0), radius: 2500000), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Circle(center: (x: 1000000, y: 0), radius: 2620000), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -1500000, y: 1500000), b: (x: -500000, y: 1500000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -1000000, y: 1000000), b: (x: -1000000, y: 2000000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Circle(center: (x: 1000000, y: 0), radius: 3000000), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 1000000, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Capacitor_THT.3dshapes/CP_Radial_D5.0mm_P2.00mm.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Cylinder(base: (1.0, 0.0, 0.0), axis: Z, radius: 2.5, length: 10.7), color: (30, 50, 120)), (solid: Cylinder(base: (1.0, 0.0, 10.7), axis: Z, radius: 2.3, length: 0.3), color: (200, 202, 206)), (solid: Box(min: (-0.25, -0.25, -3.0), max: (0.25, 0.25, 0.0)), color: (196, 198, 202)), (solid: Box(min: (1.75, -0.25, -3.0), max: (2.25, 0.25, 0.0)), color: (196, 198, 202))])),
+    ),
+  ],
+  zones: [],
+)

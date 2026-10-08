@@ -59,6 +59,9 @@ fn main() -> AppExit {
     let scripted = scenario.is_some();
     // Scenarios and headless runs export into their output folder (a BOM's CSV, P3B.6), never
     // into the user's Downloads (Final part 3: golden runs had written there).
+    // Nor do they see or add to the user's own libraries.
+    // ($CADRS_USER_LIBRARIES still picks a folder: a run that uses the user's parts, read only.)
+    let user_libraries = (scripted || opts.headless).then(|| std::env::var_os("CADRS_USER_LIBRARIES").map(std::path::PathBuf::from).unwrap_or_else(|| opts.resolved_out_dir().join("libraries")));
     if scripted || opts.headless {
         app.insert_resource(cadrs_app::ExportDirOverride(Some(opts.resolved_out_dir().join("exports"))));
     }
@@ -73,6 +76,9 @@ fn main() -> AppExit {
     }
     if let Some(dir) = data_dir {
         app.insert_resource(DocumentStore(Store::new(dir)));
+    }
+    if let Some(dir) = user_libraries {
+        app.insert_resource(cadrs_app::eda::libraries::UserLibraries::load(Some(dir)));
     }
     if scripted {
         let user = UserProfile {
@@ -124,11 +130,33 @@ fn share_sketch_mapping(
     }
 }
 
-/// Lets scenarios address points of the sheet metal flat view (`flat(x, y)`).
-fn share_flat_mapping(table: Res<cadrs_app::sheetmetal_table::SmTable>, out: Option<ResMut<cadrs_harness::FlatToScreen>>) {
+/// Lets scenarios address points of the sheet metal flat view, or of a native board's
+/// Schematic or Layout view (design millimetres), as `flat(x, y)`.
+fn share_flat_mapping(
+    table: Res<cadrs_app::sheetmetal_table::SmTable>,
+    eda: Res<cadrs_app::eda::Eda2d>,
+    eda_ui: Res<cadrs_app::eda::EdaUi>,
+    rect: Res<cadrs_app::viewport::ViewportRect>,
+    out: Option<ResMut<cadrs_harness::FlatToScreen>>,
+) {
     let Some(mut out) = out else {
         return;
     };
+    if let Some(key) = eda.0.filter(|_| eda.flat())
+        && let Some((v, _)) = eda_ui.views.get(&key)
+    {
+        let s = v.to_screen([0.0, 0.0]);
+        let k = v.scale as f32;
+        let want = Some(cadrs_harness::Affine {
+            origin: rect.0.min + Vec2::new(s[0] as f32, s[1] as f32),
+            x_axis: Vec2::new(k, 0.0),
+            y_axis: Vec2::new(0.0, -k),
+        });
+        if out.0 != want {
+            out.0 = want;
+        }
+        return;
+    }
     let want = table.body.filter(|_| table.scene.is_some()).map(|(_, rect)| {
         let v = table.view;
         let z = table.scene.as_ref().map_or(0.0, |s| s.thickness as f32);

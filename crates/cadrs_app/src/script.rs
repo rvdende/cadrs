@@ -388,6 +388,7 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             }
             // P3H.3: `pcb-studio`, `pcb-import …` and `pcb-choose …` are `crate::pcb`'s.
             _ if crate::pcb::is_script_command(&m.0) => {}
+            _ if crate::eda::is_script_command(&m.0) => {}
             // P3I.6: `crate::sketch_dxf` reads its own folder command.
             _ if m.0.starts_with("sketch-dxf-dir ") => {}
             _ => warn!("unknown script command {:?}", m.0),

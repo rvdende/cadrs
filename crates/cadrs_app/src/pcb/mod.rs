@@ -27,7 +27,10 @@
 
 pub mod create_assembly;
 pub mod dialogs;
+#[cfg(feature = "kicad")]
+pub mod kicad;
 pub mod manipulator;
+pub mod naming;
 pub mod panes;
 pub mod sync;
 pub mod transfer;
@@ -44,7 +47,7 @@ use cadrs_core::pcb::{BoardId, DeleteBoard, ItemId, PartTransform, PcbStudio};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::{ContextMenuAnchor, LastPointerButton};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{ScriptCommand, TextSubmit, TreeToggle};
+use cadrs_ui::{DoubleClickable, ScriptCommand, TextSubmit, TreeToggle};
 
 use crate::viewport::{ActiveKind, PickRequest, ViewportArea, ViewportDrag, ViewportRect, ViewportView};
 use crate::{ActiveDocument, AppState};
@@ -81,6 +84,7 @@ impl Plugin for PcbPlugin {
                     on_viewport_pick,
                     view::sync_pcb_view,
                     view::fit_on_switch,
+                    view::orbit_about_selection,
                     view::shade_pcb,
                     view::draw_pcb_edges,
                     spawn_chrome,
@@ -102,9 +106,12 @@ impl Plugin for PcbPlugin {
             .add_observer(on_tree_toggle)
             .add_observer(on_board_menu)
             .add_observer(on_board_menu_action)
+            .add_observer(on_component_menu)
+            .add_observer(on_component_menu_action)
             .add_observer(on_search_submit)
             .add_observer(dialogs::on_path_browse);
         panes::register(app);
+        naming::register(app);
         manipulator::register(app);
         dialogs::register(app);
         transfer::register(app);
@@ -518,6 +525,10 @@ struct ComponentsRow(ElementId, BoardId);
 #[derive(Component, Clone)]
 struct PackageRow(ElementId, BoardId, String);
 
+/// A component made in the studio (+ under Components), listed first under Components.
+#[derive(Component, Clone, Copy)]
+struct NativeComponentRow(ElementId, cadrs_core::pcb::ComponentId);
+
 /// The Components nodes that are expanded (view state, not saved).
 #[derive(Resource, Default)]
 struct ComponentsOpen(HashSet<(ElementId, BoardId)>);
@@ -545,6 +556,7 @@ type PackageInfo = (String, String, usize);
 struct TreeSnap {
     element: Option<ElementId>,
     boards: Vec<(BoardId, String, bool, Vec<PackageInfo>)>,
+    components: Vec<(cadrs_core::pcb::ComponentId, String)>,
     open: Vec<BoardId>,
     viewing: Option<(BoardId, String)>,
     tree: Option<Entity>,
@@ -582,6 +594,7 @@ fn rebuild_tree(
     let snap = TreeSnap {
         element: Some(el),
         boards: s.boards.iter().map(|b| (b.id, b.name().to_string(), shown == Some(b.id), packages(&b.board))).collect(),
+        components: s.components.iter().map(|c| (c.id, c.component.name.clone())).collect(),
         open: s.boards.iter().filter(|b| open.0.contains(&(el, b.id))).map(|b| b.id).collect(),
         viewing: match &ui.view {
             PcbView::Component { element, board, package } if *element == el => Some((*board, package.clone())),
@@ -596,13 +609,15 @@ fn rebuild_tree(
     let t = theme.clone();
     commands.entity(tree).despawn_children();
     commands.entity(tree).with_children(|p| {
-        p.spawn(TreeItem::new("pcb-boards", "Boards").icon("board", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t)).insert(Pickable::IGNORE);
+        p.spawn(TreeItem::new("pcb-boards", "Boards").icon("board", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t))
+            .insert(Pickable::IGNORE)
+            .with_children(|h| header_add(h, &t, "pcb-add-board", "Create board"));
         for (id, name, active, _) in &snap.boards {
-            let mut item = TreeItem::new(format!("pcb-board-{}", slug(name)), name.clone()).icon("board", 16.0).left(26.0).height(24.0);
+            let mut item = TreeItem::new(format!("pcb-board-{}", slug(name)), name.clone()).icon("board", 16.0).left(26.0).height(24.0).editable();
             if *active {
                 item = item.weight(FontWeight::BOLD).foreground(t.primary).icon_color(t.primary);
             }
-            let mut row = p.spawn((item.build(&t), BoardRow(el, *id), ContextMenuTarget, Tooltip::new(name.clone())));
+            let mut row = p.spawn((item.build(&t), BoardRow(el, *id), ContextMenuTarget, DoubleClickable, Tooltip::new(name.clone())));
             if *active {
                 row.with_child((
                     Name::new("pcb-board-active-bar"),
@@ -626,7 +641,18 @@ fn rebuild_tree(
             BackgroundColor(t.separator),
             Pickable::IGNORE,
         ));
-        p.spawn(TreeItem::new("pcb-components", "Components").icon("chip", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t)).insert(Pickable::IGNORE);
+        p.spawn(TreeItem::new("pcb-components", "Components").icon("chip", 16.0).icon_color(t.foreground).left(4.0).height(24.0).build(&t))
+            .insert(Pickable::IGNORE)
+            .with_children(|h| header_add(h, &t, "pcb-add-component", "Create component"));
+        for (id, name) in &snap.components {
+            p.spawn((
+                TreeItem::new(format!("pcb-part-{}", slug(name)), name.clone()).icon("chip", 16.0).left(26.0).height(24.0).editable().build(&t),
+                NativeComponentRow(el, *id),
+                ContextMenuTarget,
+                DoubleClickable,
+                Tooltip::new(format!("{name}: click to edit, double-click to rename, right-click for more")),
+            ));
+        }
         for (id, name, _, pkgs) in &snap.boards {
             let is_open = snap.open.contains(id);
             p.spawn((
@@ -654,6 +680,16 @@ fn rebuild_tree(
     });
 }
 
+/// The + at the right end of a section header (Boards, Components).
+fn header_add(h: &mut ChildSpawnerCommands, t: &Theme, name: &'static str, tip: &str) {
+    h.spawn(Node { flex_grow: 1.0, ..default() });
+    h.spawn(IconButton::new(name, "plus").tooltip(tip).build(t)).entry::<Node>().and_modify(|mut n| {
+        n.width = Val::Px(18.0);
+        n.height = Val::Px(18.0);
+        n.margin.right = Val::Px(6.0);
+    });
+}
+
 /// A click on a board (under Boards or Components) shows it in the board view; a click on a
 /// package opens its component view (PCB4.5).
 #[allow(clippy::too_many_arguments)]
@@ -662,12 +698,18 @@ fn on_tree_activate(
     q_board: Query<&BoardRow>,
     q_comp: Query<&ComponentsRow>,
     q_pkg: Query<&PackageRow>,
+    q_native: Query<&NativeComponentRow>,
     last: Option<Res<LastPointerButton>>,
     mut open: ResMut<ComponentsOpen>,
     mut commands: Commands,
 ) {
     // A right-click on a row also activates it; only a left click switches.
     if last.is_some_and(|l| l.0 != bevy::picking::pointer::PointerButton::Primary) {
+        return;
+    }
+    // A component made here opens in its editor (`crate::eda::part_tools`).
+    if let Ok(&NativeComponentRow(el, c)) = q_native.get(a.entity) {
+        commands.queue(move |w: &mut World| crate::eda::edit_component(w, el, c));
         return;
     }
     if let Ok(PackageRow(el, b, pkg)) = q_pkg.get(a.entity).cloned() {
@@ -683,7 +725,10 @@ fn on_tree_activate(
         }
         _ => return,
     };
-    commands.queue(move |w: &mut World| show_board(w, el, id));
+    commands.queue(move |w: &mut World| {
+        crate::eda::stop_editing(w, el);
+        show_board(w, el, id);
+    });
 }
 
 /// Opens the component view of a package (PCB4.5): the package alone on a grid, with the
@@ -752,6 +797,62 @@ pub fn delete_board(world: &mut World, el: ElementId, id: BoardId) {
     world.flush();
 }
 
+
+/// The context menu anchor of a component row's menu.
+#[derive(Component, Clone, Copy)]
+struct ComponentMenuFor(ElementId, cadrs_core::pcb::ComponentId);
+
+/// Right-click a component → Edit, Rename, Delete.
+fn on_component_menu(ev: On<ContextMenuRequested>, q: Query<(&NativeComponentRow, &UiGlobalTransform, &ComputedNode)>, theme: Res<Theme>, mut commands: Commands) {
+    let Ok((r, tf, node)) = q.get(ev.entity) else { return };
+    let s = node.inverse_scale_factor();
+    let bottom = (tf.translation.y + node.size().y / 2.0) * s;
+    let at = Vec2::new(ev.position.x + 2.0, bottom.max(ev.position.y) + 4.0);
+    let menu = Menu::new("pcb-component-menu")
+        .min_width(170.0)
+        .item(MenuItem::new("pcb-edit-component", "Edit").icon("edit"))
+        .item(MenuItem::new("pcb-rename-component", "Rename"))
+        .item(MenuItem::new("pcb-delete-component", "Delete").icon("delete"));
+    let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
+    commands.entity(anchor).insert((ComponentMenuFor(r.0, r.1), DespawnOnExit(AppState::Document)));
+}
+
+fn on_component_menu_action(ev: On<MenuAction>, q: Query<&ComponentMenuFor, With<ContextMenuAnchor>>, mut commands: Commands) {
+    let Ok(&ComponentMenuFor(el, id)) = q.get(ev.entity) else { return };
+    match ev.item.as_str() {
+        "pcb-edit-component" => commands.queue(move |w: &mut World| crate::eda::edit_component(w, el, id)),
+        "pcb-rename-component" => commands.queue(move |w: &mut World| naming::rename_component(w, el, id)),
+        "pcb-delete-component" => commands.queue(move |w: &mut World| delete_component(w, el, id)),
+        _ => {}
+    }
+}
+
+/// Deletes a component (undoable, Undo in a toast). Placed parts keep their copies.
+pub fn delete_component(world: &mut World, el: ElementId, id: cadrs_core::pcb::ComponentId) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+    let name = doc.doc.element(el).and_then(|e| e.pcb()).and_then(|s| s.component(id)).map(|c| c.component.name.clone()).unwrap_or_default();
+    if let Err(e) = doc.execute(&cadrs_core::pcb::DeleteComponent { element: el, component: id }) {
+        warn!("delete component: {e}");
+        return;
+    }
+    // Its editor closes (an undo brings the component back, not the editor).
+    if world.resource::<crate::eda::EdaUi>().editing.get(&el) == Some(&id) {
+        crate::eda::stop_editing(world, el);
+    }
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    let toast = cadrs_ui::show_toast_for(&mut commands, &theme, format!("Deleted component {name}."), 3.0);
+    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    commands.entity(undo).insert(observe(|_: On<Activate>, mut commands: Commands| {
+        commands.queue(|world: &mut World| {
+            if let Some(mut d) = world.get_resource_mut::<ActiveDocument>() {
+                d.undo();
+            }
+            cadrs_ui::close_toasts(world);
+        });
+    }));
+    world.flush();
+}
 // ---------------------------------------------------------------------------------------------
 // Viewport chrome: the empty-state hint and the right-edge toggles
 
@@ -836,17 +937,20 @@ fn spawn_chrome(q_area: Query<Entity, With<ViewportArea>>, q_have: Query<(), Wit
 /// Shows the strip in PCB Studio tabs and the hint in an empty one; the strip's buttons show
 /// which pane is open.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn sync_chrome(
     kind: Res<ActiveKind>,
     doc: Option<Res<ActiveDocument>>,
     ui: Res<PcbUi>,
+    eda: Res<crate::eda::Eda2d>,
     mut q_hint: Query<&mut Visibility, (With<PcbHint>, Without<PcbStrip>)>,
     mut q_strip: Query<&mut Visibility, (With<PcbStrip>, Without<PcbHint>)>,
     q_btn: Query<(Entity, &Name, Has<Selected>)>,
     mut commands: Commands,
 ) {
     let pcb = *kind == ActiveKind::PcbStudio;
-    let empty = pcb && doc.as_deref().and_then(active_studio).is_some_and(|(_, s)| s.boards.is_empty());
+    // Not over a component being edited.
+    let empty = pcb && eda.component().is_none() && doc.as_deref().and_then(active_studio).is_some_and(|(_, s)| s.boards.is_empty());
     let vis = |on: bool| if on { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut q_hint {
         v.set_if_neq(vis(empty));

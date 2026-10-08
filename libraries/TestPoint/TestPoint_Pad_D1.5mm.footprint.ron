@@ -1,0 +1,54 @@
+(
+  id: "TestPoint_Pad_D1.5mm",
+  description: "Test point, 1.5 mm pad",
+  keywords: "test point",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 0, y: 2050000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "TestPoint_Pad_D1.5mm", at: (x: 0, y: -2050000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: Smd,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: true,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: Smd,
+      shape: Circle,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 1500000, h: 1500000),
+      drill: None,
+      layers: [TopCopper, TopMask, TopPaste],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Circle(center: (x: 0, y: 0), radius: 950000), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Circle(center: (x: 0, y: 0), radius: 1250000), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 0, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [],
+  zones: [],
+)

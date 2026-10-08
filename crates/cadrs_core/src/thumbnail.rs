@@ -7,6 +7,10 @@ use image::{Rgba, RgbaImage};
 /// Thumbnail size in pixels (2x the 60x34 the list shows, so it stays crisp).
 pub const THUMB_W: u32 = 120;
 pub const THUMB_H: u32 = 68;
+/// The large thumbnail's size: 2x the 150 px high the details panel shows it, in the same
+/// shape as the small one.
+pub const THUMB_LARGE_W: u32 = 540;
+pub const THUMB_LARGE_H: u32 = 306;
 
 const TOP: [f32; 3] = [0.80, 0.84, 0.89];
 const LEFT: [f32; 3] = [0.56, 0.63, 0.71];

@@ -1,0 +1,40 @@
+// + under Boards and Components in the PCB Studio panel: each makes a new item with its name
+// ready to edit in place. 01 the empty studio, its two + buttons; 02 + under Boards: "Board 1",
+// shown (its 100 × 80 mm outline), the name field open; 03 named "Power monitor"; 04 + under
+// Components: "Component 1" being named; 05 named "RA-01SH"; 06 one undo removes the
+// component (create and name were one step); 07 double-click the board to rename it again.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("insert-tab")),
+        WaitFor("create-pcb-studio"),
+        Click(ui("create-pcb-studio")),
+        WaitFor("pcb-tree"),
+        Hover(ui("pcb-add-board")),
+        Screenshot("01-empty-studio"),
+        Click(ui("pcb-add-board")),
+        WaitFor("pcb-name-edit"),
+        MoveTo(1100, 900),
+        Screenshot("02-board-created"),
+        Key("Ctrl+A"),
+        Type("Power monitor"),
+        Key("Enter"),
+        WaitFor("pcb-board-power-monitor"),
+        Screenshot("03-board-named"),
+        Click(ui("pcb-add-component")),
+        WaitFor("pcb-name-edit"),
+        Screenshot("04-component-created"),
+        Key("Ctrl+A"),
+        Type("RA-01SH"),
+        Key("Enter"),
+        WaitFor("pcb-part-ra-01sh"),
+        Screenshot("05-component-named"),
+        Key("Ctrl+Z"),
+        Screenshot("06-undo-removes-component"),
+        DoubleClick(ui("pcb-board-power-monitor")),
+        WaitFor("pcb-name-edit"),
+        Screenshot("07-rename-board"),
+        Key("Escape"),
+    ],
+)

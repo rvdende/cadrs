@@ -335,6 +335,16 @@ impl ViewState {
         self.roll = 0.0;
     }
 
+    /// Turns the view with `turn` (one of the orbits above) about the world point `pivot`
+    /// instead of the focus: the pivot stays where it is on screen and the view swings
+    /// around it.
+    pub fn orbit_about(&mut self, pivot: Vec3, turn: impl FnOnce(&mut Self)) {
+        let before = self.rotation();
+        turn(self);
+        let q = self.rotation() * before.inverse();
+        self.focus = pivot + q * (self.focus - pivot);
+    }
+
     /// Rotates by fixed angles about the screen axes (view cube arrows, arrow keys): positive
     /// `yaw` turns the model to the right, positive `pitch` tips its top toward the viewer.
     pub fn rotate_by(&mut self, yaw: f32, pitch: f32) {
@@ -410,12 +420,14 @@ impl ViewState {
             scale,
             ..self
         };
+        // The focus on the points' middle in depth too: the view orbits about the focus, so
+        // it turns about the middle of what was fitted, not a point in front of or behind it.
+        let depths = points.iter().map(|p| (*p - out.focus).dot(out.back()));
+        let (dlo, dhi) = depths.fold((f32::MAX, f32::MIN), |(a, b), d| (a.min(d), b.max(d)));
+        out.focus += out.back() * (dlo + dhi) / 2.0;
         if self.perspective {
-            // The focus on the points' middle in depth too, then a few rounds of measuring the
-            // drawn (magnified) box and correcting the zoom and centre.
-            let depths = points.iter().map(|p| (*p - out.focus).dot(out.back()));
-            let (dlo, dhi) = depths.fold((f32::MAX, f32::MIN), |(a, b), d| (a.min(d), b.max(d)));
-            out.focus += out.back() * (dlo + dhi) / 2.0;
+            // A few rounds of measuring the drawn (magnified) box and correcting the zoom and
+            // centre.
             for _ in 0..6 {
                 let (mut plo, mut phi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
                 for p in points {
@@ -646,6 +658,36 @@ mod tests {
         let mut w = ViewState::default();
         w.orbit_turntable(Vec2::new(50.0, 0.0));
         assert!(w.azimuth < 30.0);
+    }
+
+    #[test]
+    fn zoom_to_fit_centres_the_focus_in_depth() {
+        // A board far from the origin: after F the view orbits about its middle, not a point
+        // on the line of sight in front of or behind it.
+        let mid = Vec3::new(100.0, -80.0, 0.8);
+        let pts: Vec<Vec3> = (0..8).map(|i| mid + Vec3::new(15.0, 20.0, 0.8) * Vec3::new([-1.0, 1.0][i & 1], [-1.0, 1.0][(i >> 1) & 1], [-1.0, 1.0][i >> 2])).collect();
+        // (In perspective the drawn box is centred, which is a few mm off its middle.)
+        for (perspective, tol) in [(false, 0.01), (true, 5.0)] {
+            let v = ViewState { perspective, ..ViewState::default() }.fitted(&pts, Vec2::new(1200.0, 800.0), 0.8);
+            assert!((v.focus - mid).length() < tol, "{perspective}: {:?}", v.focus);
+        }
+    }
+
+    #[test]
+    fn orbit_about_a_pivot_keeps_it_in_place() {
+        let mut v = ViewState { focus: Vec3::new(100.0, -80.0, 0.0), ..ViewState::default() };
+        let pivot = Vec3::new(110.0, -72.0, 3.0);
+        let on_screen = v.project(pivot);
+        let depth = (pivot - v.focus).dot(v.back());
+        v.orbit_about(pivot, |v| v.orbit(Vec2::new(70.0, -40.0)));
+        assert!((v.project(pivot) - on_screen).length() < 1e-2);
+        assert!(((pivot - v.focus).dot(v.back()) - depth).abs() < 1e-3);
+        v.orbit_about(pivot, |v| v.orbit_turntable(Vec2::new(-50.0, 30.0)));
+        assert!((v.project(pivot) - on_screen).length() < 1e-2);
+        // Without a pivot the focus stays put and the pivot moves on screen.
+        let mut w = v;
+        w.orbit(Vec2::new(70.0, 0.0));
+        assert!((w.project(pivot) - on_screen).length() > 1.0);
     }
 
     #[test]

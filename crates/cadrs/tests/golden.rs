@@ -2222,3 +2222,93 @@ fn golden_surfacing_thicken() {
 fn golden_course_pcb_component_documents() {
     run_scenario("course_pcb_component_documents");
 }
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_pcb_create_board_component() {
+    run_scenario("pcb_create_board_component");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_course_views() {
+    run_scenario("eda_course_views");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_schematic_gs04_12() {
+    run_scenario("eda_schematic_gs04_12");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_gs13_21() {
+    run_scenario("eda_layout_gs13_21");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_parts_gs22_26() {
+    run_scenario("eda_parts_gs22_26");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_library_browser() {
+    run_scenario("eda_library_browser");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_power_monitor() {
+    run_scenario("eda_power_monitor");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_schematic_editing() {
+    run_scenario("eda_schematic_editing");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_part_tools() {
+    run_scenario("eda_part_tools");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_drawing() {
+    run_scenario("eda_layout_drawing");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_online_parts() {
+    run_scenario("eda_online_parts");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_component_list() {
+    run_scenario("eda_component_list");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_schematic_wiring() {
+    run_scenario("eda_schematic_wiring");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_wire_colour_footprint() {
+    run_scenario("eda_wire_colour_footprint");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_eda_layout_properties() {
+    run_scenario("eda_layout_properties");
+}

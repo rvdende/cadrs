@@ -122,7 +122,12 @@ pub fn open_import_dialog(world: &mut World) {
                         ));
                         row.spawn((Name::new("pcb-import-chosen"), t.text("No file chosen", t.font_base, FontWeight::NORMAL, t.foreground)));
                     });
-                b.spawn(wrapped(t, "pcb-import-hint", "Choose an IDF board file (.emn) and its library file (.emp).", false, t.muted_foreground));
+                let hint = if cfg!(feature = "kicad") {
+                    "Choose an IDF board file (.emn) and its library file (.emp), or a KiCad project (.kicad_pro)."
+                } else {
+                    "Choose an IDF board file (.emn) and its library file (.emp)."
+                };
+                b.spawn(wrapped(t, "pcb-import-hint", hint, false, t.muted_foreground));
             })
             .footer(move |f| {
                 let t = &tf;
@@ -154,7 +159,10 @@ fn open_import_picker(world: &mut World) {
     let theme = world.resource::<Theme>().clone();
     let dir = import_dir(world);
     let mut commands = world.commands();
-    open_files_picker(&mut commands, &theme, "pcb-import-picker", "Choose ECAD files", "pcb-import", dir, &["emn", "emp"]);
+    let mut exts = vec!["emn", "emp"];
+    #[cfg(feature = "kicad")]
+    exts.extend(super::kicad::EXTENSIONS);
+    open_files_picker(&mut commands, &theme, "pcb-import-picker", "Choose ECAD files", "pcb-import", dir, &exts);
     world.flush();
 }
 
@@ -196,10 +204,20 @@ fn accept_import(world: &mut World) {
 /// Imports the files into the active PCB Studio: one board (and one undo step) per `.emn`,
 /// the last one shown; a toast says what happened.
 pub fn import_paths(world: &mut World, paths: &[PathBuf]) {
-    let report = import_files(paths);
+    // KiCad projects become native boards; the rest goes the IDF way.
+    #[cfg(feature = "kicad")]
+    let (kicad_names, kicad_warnings, kicad_errors) = super::kicad::import(world, paths);
+    #[cfg(not(feature = "kicad"))]
+    let (kicad_names, kicad_warnings, kicad_errors) = (Vec::<String>::new(), Vec::<String>::new(), Vec::<String>::new());
+    let idf: Vec<PathBuf> = paths.iter().filter(|p| p.extension().is_some_and(|x| x == "emn" || x == "emp")).cloned().collect();
+    // Only KiCad files picked: nothing for the IDF pairing to complain about.
+    let only_kicad = idf.is_empty() && (!kicad_names.is_empty() || !kicad_errors.is_empty());
+    let mut report = if only_kicad { Default::default() } else { import_files(&idf) };
+    report.warnings.extend(kicad_warnings);
     let theme = world.resource::<Theme>().clone();
-    let mut names = Vec::new();
+    let mut names = kicad_names;
     let mut errors = report.errors.clone();
+    errors.extend(kicad_errors);
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
         match doc.active_element().filter(|e| e.pcb().is_some()).map(|e| e.id) {
             Some(element) => {
@@ -842,10 +860,10 @@ pub fn store_sample_part_document(world: &mut World) {
 // Help
 
 const HELP: &[(&str, &str)] = &[
-    ("Boards", "A PCB Studio holds any number of boards. Click a board under Boards to show it; the board shown is bold and blue. Right-click a board to delete it (Undo brings it back)."),
+    ("Boards", "A PCB Studio holds any number of boards. + creates a new board (a 100 × 80 mm outline) and lets you type its name; double-click a board to rename it. Click a board under Boards to show it; the board shown is bold and blue. Right-click a board to delete it (Undo brings it back)."),
     ("Import ECAD files", "Click the upload button, choose a board's .emn file and its .emp library (Ctrl+click picks both), then Import. Each import adds a board."),
     ("Viewport", "The board is green and components are coloured by package. Orbit with the right mouse button, pan with the middle button, zoom with the wheel; F fits the board. Click a component to select it."),
-    ("Components", "Click a board under Components to list its packages; click a package for its component view (the part alone on a grid). Click the board again to go back."),
+    ("Components", "+ creates a component and lets you type its name; double-click it to rename it. Click a board under Components to list its packages; click a package for its component view (the part alone on a grid). Click the board again to go back."),
     ("Component properties", "The right edge's first button shows the selected component's part name, part number and representation: None, From ECAD data (a box from the outline and height) or Custom part (a part from a Part Studio, moved with Translate, Center and Rotate, then Accept). The choice is kept in the component library, so every PCB Studio follows."),
     ("Bill of materials", "The right edge's second button lists the board's components grouped by part number. Click a row to select its components; double-click a designator to rename it."),
     ("Search", "Type in Search and press Enter (or the magnifier): matching designators, packages, part numbers and boards light up. The arrows step through them; the cross clears."),

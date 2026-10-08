@@ -324,17 +324,20 @@ fn deactivate_outside_documents(mut q: Query<&mut Camera, With<DrawingCamera>>) 
 #[allow(clippy::type_complexity)]
 fn sync_drawing_chrome(
     kind: Res<ActiveKind>,
+    eda2d: Res<crate::eda::Eda2d>,
     mut q_cam: Query<(&mut Camera, Option<&DrawingCamera>, &Name)>,
     mut q_nodes: Query<(&Name, &mut Node, &mut Visibility), With<Node>>,
 ) {
     let drawing = *kind == ActiveKind::Drawing;
+    // A native board's Schematic or Layout view is flat too (`crate::eda`, its own camera).
+    let flat2d = eda2d.flat();
     for (mut cam, is_drawing, name) in &mut q_cam {
         if is_drawing.is_some() {
             if cam.is_active != drawing {
                 cam.is_active = drawing;
             }
-        } else if name.as_str() == "occluded-camera" && cam.is_active == drawing {
-            cam.is_active = !drawing;
+        } else if name.as_str() == "occluded-camera" && cam.is_active == (drawing || flat2d) {
+            cam.is_active = !(drawing || flat2d);
         }
     }
     for (name, mut node, mut vis) in &mut q_nodes {
@@ -347,7 +350,7 @@ fn sync_drawing_chrome(
             }
             "view-cube" | "right-panel-strip" | "viewport-tools" | "origin" => {
                 // P3H.3: a PCB Studio keeps the view cube and has its own right-edge toggles.
-                let pcb = *kind == ActiveKind::PcbStudio && name.as_str() != "view-cube";
+                let pcb = *kind == ActiveKind::PcbStudio && (name.as_str() != "view-cube" || flat2d);
                 let v = if kind.is_flat() || pcb {
                     Visibility::Hidden
                 } else {

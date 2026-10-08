@@ -1,0 +1,83 @@
+// Schematic editing beyond the course, on its GS7 stage (BT1, R1, D1 wired, VCC/GND, label):
+// 01 R1 copied (Ctrl+C) and pasted (Ctrl+V) as R2; 02 BT1 duplicated (Ctrl+D) as BT2; 03 D1
+// mirrored left for right (X); 04 a global label SDA (Ctrl+L) and a text note (T); 05 the GND
+// net highlighted (`); 06 Find (Ctrl+F) "BT2": selected and centred; 07 the symbol fields table:
+// R1 to 330 with an LCSC part number; 08 R1 reads 330.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Custom("eda-example gs07"),
+        WaitFor("eda-mode-bar"),
+        Click(ui("eda-mode-schematic")),
+        WaitFor("sch-erc"),
+        Custom("eda-zoom 70 60 260 145"),
+        // Copy R1 from under the pointer, paste it to the right.
+        Hover(flat(203.2, 114.3)),
+        Key("Ctrl+C"),
+        Key("Ctrl+V"),
+        Click(flat(241.3, 114.3)),
+        Key("Escape"),
+        MoveTo(1100, 900),
+        Screenshot("01-paste"),
+        // Duplicate BT1.
+        Hover(flat(101.6, 101.6)),
+        Key("Ctrl+D"),
+        Click(flat(127.0, 101.6)),
+        Key("Escape"),
+        MoveTo(1100, 900),
+        Screenshot("02-duplicate"),
+        // Mirror D1.
+        Hover(flat(203.2, 93.98)),
+        Key("X"),
+        MoveTo(1100, 900),
+        Screenshot("03-mirror"),
+        // A global label on the top wire, a note below the battery.
+        MoveTo(800, 500),
+        Key("Ctrl+L"),
+        WaitFor("eda-glabel-dialog"),
+        Click(ui("eda-glabel-text-field")),
+        Type("SDA"),
+        Click(ui("eda-glabel-ok")),
+        Click(flat(127.0, 127.0)),
+        MoveTo(800, 500),
+        Key("T"),
+        WaitFor("eda-text-dialog"),
+        Click(ui("eda-text-text-field")),
+        Type("Power section"),
+        Click(ui("eda-text-ok")),
+        Click(flat(88.9, 68.58)),
+        MoveTo(1100, 900),
+        Screenshot("04-global-label-and-text"),
+        // Highlight the GND net.
+        Hover(flat(152.4, 73.66)),
+        Key("`"),
+        MoveTo(1100, 900),
+        Screenshot("05-net-highlight"),
+        Key("Escape"),
+        Key("Escape"),
+        // Find BT2.
+        Key("Ctrl+F"),
+        WaitFor("eda-find-dialog"),
+        Click(ui("eda-find-text-field")),
+        Type("BT2"),
+        Click(ui("eda-find-ok")),
+        MoveTo(1100, 900),
+        Screenshot("06-find"),
+        // The fields table: R1 becomes 330 Ω with an LCSC part number.
+        Click(ui("sch-fields")),
+        WaitFor("eda-fields-table"),
+        Click(ui("eda-fields-3-value-field")),
+        Key("Ctrl+A"),
+        Type("330"),
+        Click(ui("eda-fields-3-lcsc-field")),
+        Type("C17630"),
+        Screenshot("07-fields-table"),
+        Click(ui("eda-fields-ok")),
+        Custom("eda-zoom 70 60 260 145"),
+        MoveTo(1100, 900),
+        Screenshot("08-r1-330"),
+    ],
+)

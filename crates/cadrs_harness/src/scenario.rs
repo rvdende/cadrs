@@ -97,7 +97,9 @@ pub enum Target {
     #[serde(rename = "ui_at")]
     UiAt(String, f32, f32),
     /// A point of the sheet metal flat view's flat, in the flat's millimetres (the view's
-    /// scene: the parts side by side), wherever that view shows it: `flat(40, -20)`.
+    /// scene: the parts side by side), wherever that view shows it: `flat(40, -20)`. While a
+    /// native board's Schematic or Layout view is shown, a point of the sheet or board in
+    /// millimetres (Y up): `flat(101.6, 105.41)`.
     #[serde(rename = "flat")]
     Flat(f32, f32),
 }

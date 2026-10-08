@@ -1,0 +1,111 @@
+(
+  id: "JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical",
+  description: "JST PH series connector, B4B-PH-K, 4 pins, vertical",
+  keywords: "connector JST PH vertical",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 3000000, y: 3000000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical", at: (x: 3000000, y: -4100000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: ThroughHole,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: RoundRect(ratio: 0.25),
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 1200000, h: 1750000),
+      drill: Some((size: (w: 750000, h: 750000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Oval,
+      at: (x: 2000000, y: 0),
+      angle: 0.0,
+      size: (w: 1200000, h: 1750000),
+      drill: Some((size: (w: 750000, h: 750000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "3",
+      kind: ThroughHole,
+      shape: Oval,
+      at: (x: 4000000, y: 0),
+      angle: 0.0,
+      size: (w: 1200000, h: 1750000),
+      drill: Some((size: (w: 750000, h: 750000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "4",
+      kind: ThroughHole,
+      shape: Oval,
+      at: (x: 6000000, y: 0),
+      angle: 0.0,
+      size: (w: 1200000, h: 1750000),
+      drill: Some((size: (w: 750000, h: 750000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Rect(a: (x: -1950000, y: -2800000), b: (x: 7950000, y: 1700000)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Line(a: (x: -2060000, y: -2910000), b: (x: 8060000, y: -2910000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: 8060000, y: -2910000), b: (x: 8060000, y: 1810000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -2060000, y: 1810000), b: (x: 8060000, y: 1810000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Line(a: (x: -2060000, y: -2910000), b: (x: -2060000, y: 1810000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -2460000, y: -3300000), b: (x: 8450000, y: 2210000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 3000000, y: -550000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Connector_JST.3dshapes/JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Box(min: (-1.95, -2.8, 0.0), max: (7.95, 1.7, 6.0)), color: (235, 235, 228)), (solid: Box(min: (-0.32, -0.32, -3.0), max: (0.32, 0.32, 5.0)), color: (196, 198, 202)), (solid: Box(min: (1.68, -0.32, -3.0), max: (2.32, 0.32, 5.0)), color: (196, 198, 202)), (solid: Box(min: (3.68, -0.32, -3.0), max: (4.32, 0.32, 5.0)), color: (196, 198, 202)), (solid: Box(min: (5.68, -0.32, -3.0), max: (6.32, 0.32, 5.0)), color: (196, 198, 202))])),
+    ),
+  ],
+  zones: [],
+)

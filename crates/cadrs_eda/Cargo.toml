@@ -1,0 +1,20 @@
+[package]
+name = "cadrs_eda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Electronics design: schematics, symbols, footprints and board layouts, with connectivity and
+# rules. No Bevy, and no KiCad: `cadrs_kicad` converts to and from this model.
+[dependencies]
+serde.workspace = true
+uuid.workspace = true
+ron.workspace = true
+# Artwork imported as board graphics (SVG paths flattened to polygons).
+resvg.workspace = true
+clipper2-rust.workspace = true
+earcutr.workspace = true
+
+[dev-dependencies]
+gerber_parser.workspace = true

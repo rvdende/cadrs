@@ -213,6 +213,9 @@ pub struct ViewportView {
     /// with, fitted to the instances once they are there ([`fit_assembly_when_built`]) unless the
     /// view moved meanwhile.
     pub fit_pending: Option<(ElementId, ViewState)>,
+    /// The point a drag orbits about, when not the focus (the PCB Studio's selected
+    /// components' centre, [`crate::pcb::view`]).
+    pub pivot: Option<Vec3>,
 }
 
 impl ViewportView {
@@ -947,13 +950,14 @@ fn viewport_pointer(
     kind: Res<ActiveKind>,
     mut picks: MessageWriter<PickRequest>,
     planes: Res<PlanesVisible>,
-    (parts, sketch, extrude, applied, create, pick_override): (
+    (parts, sketch, extrude, applied, create, pick_override, eda2d): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::sketch::SketchSession>>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
         Option<Res<crate::create_selection::CreateSelection>>,
         Res<PickFilterOverride>,
+        Res<crate::eda::Eda2d>,
     ),
     (mut focus, q_number, mut grab, zoom_window): (
         ResMut<bevy::input_focus::InputFocus>,
@@ -964,7 +968,7 @@ fn viewport_pointer(
     prefs: Res<crate::preferences_ui::LocalPreferences>,
     mut commands: Commands,
 ) {
-    if kind.is_flat() {
+    if kind.is_flat() || eda2d.flat() {
         // The sheet has its own navigation (`crate::drawing`); a render has none.
         inputs.clear();
         return;
@@ -997,8 +1001,14 @@ fn viewport_pointer(
                         .filter(|(i, _)| drag.buttons[*i])
                         .find_map(|(_, b)| mouse.action(crate::preferences_ui::mouse_button(b), mods));
                     match action {
-                        Some(ViewAction::Rotate) => view.view.orbit(delta),
-                        Some(ViewAction::RotateTurntable) => view.view.orbit_turntable(delta),
+                        Some(ViewAction::Rotate) => match view.pivot {
+                            Some(p) => view.view.orbit_about(p, |v| v.orbit(delta)),
+                            None => view.view.orbit(delta),
+                        },
+                        Some(ViewAction::RotateTurntable) => match view.pivot {
+                            Some(p) => view.view.orbit_about(p, |v| v.orbit_turntable(delta)),
+                            None => view.view.orbit_turntable(delta),
+                        },
                         Some(ViewAction::Pan) => view.view.pan(delta),
                         Some(ViewAction::Zoom) => {
                             let at = rect.offset(drag.nav_start);
@@ -1332,9 +1342,9 @@ fn view_shortcuts(
     doc: Option<Res<ActiveDocument>>,
     mut planes: ResMut<PlanesVisible>,
     inset: Res<DialogInset>,
-    (cache, asm_parts, pcb_scene): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>),
+    (cache, asm_parts, pcb_scene, eda2d): (Res<crate::parts::PartCache>, Res<crate::assembly::AssemblyParts>, Option<Res<crate::pcb::view::PcbScene>>, Res<crate::eda::Eda2d>),
 ) {
-    if kind.is_flat() {
+    if kind.is_flat() || eda2d.flat() {
         // No 3D views on a sheet or a render; F and Ctrl+S are handled by `crate::drawing`.
         keys_in.clear();
         return;

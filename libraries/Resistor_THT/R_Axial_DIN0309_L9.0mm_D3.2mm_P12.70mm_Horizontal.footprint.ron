@@ -1,0 +1,87 @@
+(
+  id: "R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal",
+  description: "Axial, horizontal, pin pitch 12.7 mm, body 9 × 3.2 mm",
+  keywords: "",
+  fields: [
+    (
+      name: "Reference",
+      text: (text: (text: "REF**", at: (x: 6350000, y: 2600000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopSilk, keep_upright: true),
+    ),
+    (
+      name: "Value",
+      text: (text: (text: "R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal", at: (x: 6350000, y: -2600000), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true), layer: TopFab, keep_upright: true),
+    ),
+  ],
+  attrs: (
+    mount: ThroughHole,
+    board_only: false,
+    exclude_from_pos: false,
+    exclude_from_bom: false,
+    dnp: false,
+    allow_missing_courtyard: false,
+  ),
+  pads: [
+    (
+      number: "1",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 0, y: 0),
+      angle: 0.0,
+      size: (w: 1600000, h: 1600000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+    (
+      number: "2",
+      kind: ThroughHole,
+      shape: Circle,
+      at: (x: 12700000, y: 0),
+      angle: 0.0,
+      size: (w: 1600000, h: 1600000),
+      drill: Some((size: (w: 800000, h: 800000), offset: (x: 0, y: 0))),
+      layers: [TopCopper, Inner(1), Inner(2), Inner(3), Inner(4), Inner(5), Inner(6), Inner(7), Inner(8), Inner(9), Inner(10), Inner(11), Inner(12), Inner(13), Inner(14), Inner(15), Inner(16), Inner(17), Inner(18), Inner(19), Inner(20), Inner(21), Inner(22), Inner(23), Inner(24), Inner(25), Inner(26), Inner(27), Inner(28), Inner(29), Inner(30), BottomCopper, TopMask, BottomMask],
+    ),
+  ],
+  shapes: [
+    (
+      shape: (geom: Rect(a: (x: 1850000, y: -1600000), b: (x: 10850000, y: 1600000)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Line(a: (x: 0, y: 0), b: (x: 1850000, y: 0)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Line(a: (x: 12700000, y: 0), b: (x: 10850000, y: 0)), stroke: (width: 100000, style: Default, color: None), fill: r#None),
+      layer: TopFab,
+    ),
+    (
+      shape: (geom: Rect(a: (x: 1730000, y: -1720000), b: (x: 10970000, y: 1720000)), stroke: (width: 120000, style: Default, color: None), fill: r#None),
+      layer: TopSilk,
+    ),
+    (
+      shape: (geom: Rect(a: (x: -1050000, y: -1970000), b: (x: 13750000, y: 1970000)), stroke: (width: 50000, style: Default, color: None), fill: r#None),
+      layer: TopCourtyard,
+    ),
+  ],
+  texts: [
+    (
+      text: (text: "${REFERENCE}", at: (x: 6350000, y: 0), angle: 0.0, style: (size: (w: 1000000, h: 1000000), thickness: Some(150000), h_align: Center, v_align: Center), visible: true),
+      layer: TopFab,
+      keep_upright: true,
+    ),
+  ],
+  models: [
+    (
+      source: "Resistor_THT.3dshapes/R_Axial_DIN0309_L9.0mm_D3.2mm_P12.70mm_Horizontal.step",
+      blob: None,
+      offset: (0.0, 0.0, 0.0),
+      rotation: (0.0, 0.0, 0.0),
+      scale: (1.0, 1.0, 1.0),
+      visible: true,
+      opacity: 1.0,
+      body: Some((parts: [(solid: Cylinder(base: (1.8499999999999996, 0.0, 1.6), axis: X, radius: 1.6, length: 9.0), color: (210, 190, 140)), (solid: Box(min: (-0.3, -0.3, -3.0), max: (0.3, 0.3, 1.6)), color: (196, 198, 202)), (solid: Box(min: (12.399999999999999, -0.3, -3.0), max: (13.0, 0.3, 1.6)), color: (196, 198, 202)), (solid: Box(min: (0.0, -0.3, 1.3), max: (1.8499999999999996, 0.3, 1.9000000000000001)), color: (196, 198, 202)), (solid: Box(min: (10.85, -0.3, 1.3), max: (12.7, 0.3, 1.9000000000000001)), color: (196, 198, 202))])),
+    ),
+  ],
+  zones: [],
+)

@@ -1,0 +1,46 @@
+// A part from the JLCPCB catalogue into the user's library, without rebuilding cadrs (the
+// saved EasyEDA answer for the Ra-01SH LoRa module, LCSC C2764087, stands in for the network).
+// 01 the symbol browser's JLCPCB parts tab; 02 "ra-01sh" searched, the module chosen: its
+// symbol and footprint previewed; 03 Add to library: the part on the Libraries tab, in LCSC;
+// 04 OK: placed on the sheet; 05 close up (thick strokes join without gaps).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("pcb-studio"),
+        WaitFor("pcb-tree"),
+        Click(ui("pcb-add-board")),
+        WaitFor("pcb-name-edit"),
+        Key("Ctrl+A"),
+        Type("Radio"),
+        Key("Enter"),
+        WaitFor("eda-mode-bar"),
+        Click(ui("eda-mode-schematic")),
+        WaitFor("sch-erc"),
+        Custom("eda-lcsc-fixtures crates/cadrs_easyeda/tests/data"),
+        MoveTo(900, 500),
+        Key("A"),
+        WaitFor("eda-chooser"),
+        Click(ui("eda-chooser-source-1")),
+        WaitFor("eda-chooser-search"),
+        Screenshot("01-jlcpcb-tab"),
+        Click(ui("eda-chooser-filter-field")),
+        Type("ra-01sh"),
+        Key("Enter"),
+        WaitFor("eda-chooser-lcsc-c2764087"),
+        Click(ui("eda-chooser-lcsc-c2764087")),
+        Wait(5),
+        Screenshot("02-part-preview"),
+        Click(ui("eda-chooser-add")),
+        WaitFor("eda-chooser-lcsc-ra-01sh"),
+        Wait(3),
+        Screenshot("03-added"),
+        Click(ui("eda-chooser-ok")),
+        Click(flat(101.6, 101.6)),
+        Custom("eda-zoom 70 75 135 125"),
+        MoveTo(1100, 860),
+        Screenshot("04-placed"),
+        Custom("eda-zoom 88 104 104 114"),
+        Screenshot("05-close-up"),
+    ],
+)

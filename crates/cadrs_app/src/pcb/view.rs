@@ -51,17 +51,39 @@ pub struct PcbGridGizmos;
 pub const COMPONENT_TOP: [u8; 4] = [120, 10, 10, 255];
 pub const COMPONENT_SIDE: [u8; 4] = [245, 32, 32, 255];
 
+/// A model file's meshes and its unit (mm).
+type ModelMeshes = Arc<(Vec<cadrs_eda::model3d::Mesh>, f64)>;
+
 /// Built board meshes, per (tab, board), with the board each was built from.
 #[derive(Resource, Default)]
 pub struct PcbMeshCache {
     entries: HashMap<(ElementId, BoardId), (PcbBoard, Arc<BoardMesh>)>,
     /// Package boxes for the component view, by (package name, its outline and height).
     packages: HashMap<String, Option<Arc<BodyMesh>>>,
+    /// 3D model files' meshes and units by blob hash (`None`: unreadable, reported once).
+    models: HashMap<String, Option<ModelMeshes>>,
     /// How many boards were tessellated (a switch back to a cached board adds none).
     pub builds: usize,
 }
 
 impl PcbMeshCache {
+    /// The meshes of a model file (by its blob hash; `ext` its type), read once.
+    pub fn model(&mut self, hash: &str, ext: &str) -> Option<ModelMeshes> {
+        if let Some(m) = self.models.get(hash) {
+            return m.clone();
+        }
+        let bytes = cadrs_core::blobs::get(hash)?;
+        let m = match cadrs_pcb::mesh::file_meshes(&bytes, ext) {
+            Ok(m) => Some(Arc::new(m)),
+            Err(e) => {
+                warn!("3D model {hash}.{ext}: {e}");
+                None
+            }
+        };
+        self.models.insert(hash.to_string(), m.clone());
+        m
+    }
+
     /// The meshes of `board`, built now unless the cache has them for this very board.
     pub fn get_or_build(&mut self, key: (ElementId, BoardId), board: &PcbBoard) -> Arc<BoardMesh> {
         if let Some((b, m)) = self.entries.get(&key)
@@ -255,6 +277,24 @@ pub struct PcbBodyMesh {
     base: FaceBase,
 }
 
+
+/// The board id a component's 3D preview is shown under (its footprint on a board patch,
+/// [`cadrs_core::pcb::design::footprint_patch`]): from the top of the id range down.
+pub fn part_board_id(c: cadrs_core::pcb::ComponentId) -> BoardId {
+    BoardId(u64::MAX - c.0)
+}
+
+/// The preview design of the component a [`part_board_id`] stands for.
+fn part_design(world: &World, el: ElementId, b: BoardId) -> Option<cadrs_eda::Design> {
+    let c = cadrs_core::pcb::ComponentId(u64::MAX.checked_sub(b.0).filter(|c| *c < u64::MAX / 2)?);
+    let fp = world.get_resource::<ActiveDocument>()?.doc.element(el)?.pcb()?.component(c)?.component.footprint.clone()?;
+    Some(cadrs_core::pcb::design::footprint_patch(&fp))
+}
+
+/// The design a shown board was made from: a native board's, or a component preview's.
+fn shown_design(world: &World, el: ElementId, b: BoardId) -> Option<cadrs_eda::Design> {
+    part_design(world, el, b).or_else(|| crate::eda::design(world.get_resource::<ActiveDocument>()?, el, b).cloned())
+}
 /// The tab, board and view mode the viewport should show.
 fn wanted(world: &World) -> Option<(SceneKey, PcbBoard)> {
     if *world.resource::<ActiveKind>() != ActiveKind::PcbStudio {
@@ -262,6 +302,14 @@ fn wanted(world: &World) -> Option<(SceneKey, PcbBoard)> {
     }
     let doc = world.get_resource::<ActiveDocument>()?;
     let el = doc.active_element()?;
+    // The component editor's 3D mode: the component's footprint on a board patch.
+    if let Some((pel, c, crate::eda::Mode::ThreeD)) = world.resource::<crate::eda::Eda2d>().component()
+        && pel == el.id
+    {
+        let b = part_board_id(c);
+        let d = part_design(world, pel, b)?;
+        return Some((SceneKey::Board(pel, b), cadrs_core::pcb::design::pcb_board("part", &d)));
+    }
     let s = el.pcb()?;
     let b = s.board(world.resource::<PcbUi>().shown_board(el.id, s)?)?;
     let key = match &world.resource::<PcbUi>().view {
@@ -292,10 +340,22 @@ fn custom_part(world: &mut World, rep: &Representation) -> Option<(Arc<Solid>, [
 }
 
 /// The bodies of the board view (see the module docs).
-fn board_bodies(world: &mut World, el: ElementId, board: &PcbBoard, mesh: &BoardMesh, sig: &mut impl Hasher) -> Vec<BodyMesh> {
+fn board_bodies(world: &mut World, el: ElementId, board_id: BoardId, board: &PcbBoard, mesh: &BoardMesh, sig: &mut impl Hasher) -> Vec<BodyMesh> {
     let t = board.thickness();
     type Shown = (Representation, Option<(Arc<Solid>, [u8; 4], PartTransform)>);
     let mut reps: HashMap<String, Shown> = HashMap::new();
+    // A native board's footprint models by reference (shown in place of the box); footprints
+    // with no model show nothing, as in KiCad.
+    let mut models: HashMap<String, cadrs_eda::footprint::Model3d> = HashMap::new();
+    let mut bare: std::collections::HashSet<String> = Default::default();
+    for f in shown_design(world, el, board_id).iter().flat_map(|d| d.board.footprints.iter()) {
+        let r = f.reference().to_string();
+        if f.footprint.models.iter().all(|m| !m.visible) {
+            bare.insert(r);
+        } else if let Some(m) = f.footprint.models.iter().find(|m| m.visible && (m.body.is_some() || m.blob.is_some())) {
+            models.insert(r, m.clone());
+        }
+    }
     let mut out = Vec::with_capacity(mesh.bodies.len());
     for b in &mesh.bodies {
         let placement = b.item.filter(|_| b.class.is_component()).and_then(|i| board.component(i));
@@ -316,7 +376,26 @@ fn board_bodies(world: &mut World, el: ElementId, board: &PcbBoard, mesh: &Board
                 let m = cadrs_pcb::placement::custom_motion(p, t, tr);
                 out.push(cadrs_pcb::mesh::solid_body(solid, &b.name, b.class, *col, b.item).moved(&m));
             }
-            _ => out.push(b.clone()),
+            _ if bare.contains(&p.refdes) => {}
+            _ => match models.get(&p.refdes) {
+                Some(model) => {
+                    format!("{:?}{:?}{:?}{:?}{}", model.blob, model.offset, model.rotation, model.scale, model.opacity).hash(sig);
+                    model.body.as_ref().map(|b| format!("{b:?}")).hash(sig);
+                    let m = cadrs_pcb::placement::placement_motion(p, t);
+                    // The model's file when it is loaded and readable, else its generated body.
+                    let ext = std::path::Path::new(&model.source).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+                    let file = model.blob.as_ref().and_then(|h| world.resource_mut::<PcbMeshCache>().model(h, &ext));
+                    let shown = match &file {
+                        Some(f) => cadrs_pcb::mesh::file_bodies(&f.0, f.1, model, &b.name, b.class, b.item),
+                        None => cadrs_pcb::mesh::generated_bodies(model, &b.name, b.class, b.item),
+                    };
+                    if shown.is_empty() {
+                        out.push(b.clone());
+                    }
+                    out.extend(shown.into_iter().map(|g| g.moved(&m)));
+                }
+                None => out.push(b.clone()),
+            },
         }
     }
     out
@@ -380,6 +459,23 @@ fn bottom_keep_overlays(bodies: &[BodyMesh], thickness: f64) -> Vec<BodyMesh> {
         .collect()
 }
 
+/// The bodies of a board view: the board, its components as shown and the keep-outs (see the
+/// module docs). Also what the document's thumbnail shows of a board ([`crate::thumbnail`]).
+pub fn board_view_bodies(world: &mut World, e: ElementId, b: BoardId, board: &PcbBoard, sig: &mut impl Hasher) -> Vec<BodyMesh> {
+    let mesh = world.resource_mut::<PcbMeshCache>().get_or_build((e, b), board);
+    (Arc::as_ptr(&mesh) as usize).hash(sig);
+    let mut v = board_bodies(world, e, b, board, &mesh, sig);
+    v.extend(bottom_keep_overlays(&v, board.thickness()));
+    // A native board is made: its edges the solder mask's green, as its faces.
+    if crate::eda::design(world.resource::<ActiveDocument>(), e, b).is_some() {
+        let m = cadrs_eda::render::made::MASK;
+        for body in v.iter_mut().filter(|x| x.class == BodyClass::Board) {
+            body.color = [m[0], m[1], m[2], body.color[3]];
+        }
+    }
+    v
+}
+
 /// Keeps the body entities in step with the active board, the view mode and the library (see
 /// the module docs).
 pub fn sync_pcb_view(world: &mut World) {
@@ -404,13 +500,7 @@ pub fn sync_pcb_view(world: &mut World) {
     let mut grid = None;
     let bodies = match &want {
         None => vec![],
-        Some((SceneKey::Board(e, b), board)) => {
-            let mesh = world.resource_mut::<PcbMeshCache>().get_or_build((*e, *b), board);
-            (Arc::as_ptr(&mesh) as usize).hash(&mut sig);
-            let mut v = board_bodies(world, *e, board, &mesh, &mut sig);
-            v.extend(bottom_keep_overlays(&v, board.thickness()));
-            v
-        }
+        Some((SceneKey::Board(e, b), board)) => board_view_bodies(world, *e, *b, board, &mut sig),
         Some((SceneKey::Component(e, _, pkg), board)) => {
             let (fp, size) = footprint(board, pkg);
             footprint_loops = fp;
@@ -426,6 +516,16 @@ pub fn sync_pcb_view(world: &mut World) {
     let old: Vec<Entity> = world.query_filtered::<Entity, With<PcbBodyMesh>>().iter(world).collect();
     for e in old {
         world.despawn(e);
+    }
+    let old: Vec<Entity> = world.query_filtered::<Entity, With<PcbSkin>>().iter(world).collect();
+    for e in old {
+        world.despawn(e);
+    }
+    // A native board shows as made: mask, copper, pads and silkscreen on its faces.
+    if let Some((SceneKey::Board(e, b), board)) = &want
+        && let Some(design) = shown_design(world, *e, *b).filter(|_| part_design(world, *e, *b).is_none())
+    {
+        spawn_skins(world, &design, board.thickness());
     }
     let bounds = {
         let mut b = BoardMesh { bodies: bodies.clone(), warnings: vec![] }.bounds();
@@ -473,6 +573,76 @@ pub fn sync_pcb_view(world: &mut World) {
     }
 }
 
+
+/// A native board's made look over its top and bottom faces: the mask, copper, pads and
+/// silkscreen of [`cadrs_eda::render::board_surface`] as a texture on the outline, a hair off
+/// each face.
+#[derive(Component)]
+pub struct PcbSkin;
+
+/// Pixels per mm of the board's texture.
+const SKIN_PX_PER_MM: f32 = 24.0;
+
+fn spawn_skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) {
+    for (name, mesh, material) in skins(world, design, thickness) {
+        world.spawn((Name::new(name), PcbSkin, Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, DespawnOnExit(AppState::Document)));
+    }
+}
+
+/// A native board's top and bottom skins (see [`PcbSkin`]): name, mesh and material. Also
+/// what the document's thumbnail shows of a native board ([`crate::thumbnail`]).
+pub fn skins(world: &mut World, design: &cadrs_eda::Design, thickness: f64) -> Vec<(&'static str, Handle<Mesh>, Handle<StandardMaterial>)> {
+    use cadrs_eda::layer::Side;
+    use resvg::{tiny_skia, usvg};
+    let mut out = vec![];
+    let region = cadrs_eda::outline::board_region(&design.board);
+    let tris = cadrs_eda::poly::triangulate(&region);
+    let Some(bounds) = region.iter().flatten().fold(None, |acc, p| Some(cadrs_eda::units::Bounds::union(acc, cadrs_eda::units::Bounds::of(*p)))) else { return out };
+    if tris.is_empty() {
+        return out;
+    }
+    let (x0, y1) = (bounds.min.x as f64 / 1e6, bounds.max.y as f64 / 1e6);
+    let (w, h) = (bounds.size().w as f64 / 1e6, bounds.size().h as f64 / 1e6);
+    for (side, z, up) in [(Side::Top, thickness + 0.02, true), (Side::Bottom, -0.02, false)] {
+        let mut d = cadrs_eda::render::board_surface(&design.board, side);
+        d.bounds = Some(bounds);
+        let Ok(tree) = usvg::Tree::from_str(&cadrs_eda::render::to_svg(&d), &usvg::Options::default()) else { continue };
+        let (pw, ph) = ((w as f32 * SKIN_PX_PER_MM).ceil() as u32, (h as f32 * SKIN_PX_PER_MM).ceil() as u32);
+        let Some(mut pix) = tiny_skia::Pixmap::new(pw.max(1), ph.max(1)) else { continue };
+        let k = pw as f32 / tree.size().width();
+        resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pix.as_mut());
+        let image = Image::new(
+            bevy::render::render_resource::Extent3d { width: pw.max(1), height: ph.max(1), depth_or_array_layers: 1 },
+            bevy::render::render_resource::TextureDimension::D2,
+            pix.take(),
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let mut positions = vec![];
+        let mut uvs = vec![];
+        for t in tris.chunks(3) {
+            // Wound to face out of its side.
+            let order: [usize; 3] = if up { [0, 1, 2] } else { [0, 2, 1] };
+            for i in order {
+                let (x, y) = (t[i][0] / 1e6, t[i][1] / 1e6);
+                positions.push([x as f32, y as f32, z as f32]);
+                uvs.push([((x - x0) / w) as f32, ((y1 - y) / h) as f32]);
+            }
+        }
+        let n = positions.len();
+        let normal = if up { [0.0, 0.0, 1.0] } else { [0.0, 0.0, -1.0] };
+        let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![normal; n])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+            .with_inserted_indices(Indices::U32((0..n as u32).collect()));
+        let image = world.resource_mut::<Assets<Image>>().add(image);
+        let material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color_texture: Some(image), unlit: true, double_sided: true, cull_mode: None, ..default() });
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+        out.push((if up { "pcb-skin-top" } else { "pcb-skin-bottom" }, mesh, material));
+    }
+    out
+}
 /// The grid of a component view for a part `size` mm across: (half extent, spacing).
 fn grid_of(size: f32) -> (f32, f32) {
     let raw = size / 8.0;
@@ -517,7 +687,7 @@ fn colors(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Vec<[f32
         .collect()
 }
 
-fn body_mesh(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Mesh {
+pub(crate) fn body_mesh(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Mesh {
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, b.positions.clone())
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, b.normals.clone())
@@ -690,6 +860,25 @@ pub fn frame_item(world: &mut World, item: ItemId) {
     let box_pts: Vec<Vec3> = [Vec3::new(lo.x - m, lo.y - m, lo.z), Vec3::new(hi.x + m, lo.y - m, lo.z), Vec3::new(lo.x - m, hi.y + m, lo.z), Vec3::new(hi.x + m, hi.y + m, hi.z)].to_vec();
     let to = view.target().fitted(&box_pts, size, crate::viewport::FIT_FILL);
     view.animate_to(to);
+}
+
+/// While components are selected in a board view, the view orbits about the centre of their
+/// bodies' box; with none, about the focus (the board's middle after zoom to fit).
+pub fn orbit_about_selection(kind: Res<ActiveKind>, scene: Res<PcbScene>, ui: Res<PcbUi>, mut view: ResMut<ViewportView>) {
+    let mut pivot = None;
+    if *kind == ActiveKind::PcbStudio && !scene.is_component_view() && !ui.selected.is_empty() {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for b in scene.bodies.iter().filter(|b| b.item.is_some_and(|i| ui.selected.contains(&i))) {
+            for p in &b.positions {
+                lo = lo.min(Vec3::from_array(*p));
+                hi = hi.max(Vec3::from_array(*p));
+            }
+        }
+        pivot = (lo.x <= hi.x).then(|| (lo + hi) / 2.0);
+    }
+    if view.pivot != pivot {
+        view.pivot = pivot;
+    }
 }
 
 /// The component under a screen offset: the nearest hit of the pick ray on a shown component
