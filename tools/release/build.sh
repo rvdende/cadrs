@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the release archives for Linux and Windows into dist/:
 #   cadrs-v<version>-x86_64-linux.tar.gz, cadrs-v<version>-x86_64-windows.zip, SHA256SUMS.txt
-# (each archive: the stripped executable, README.md and the licenses).
+# (each archive: the stripped executable, the built-in libraries/, README.md and the licenses).
 #
 # - Linux is built in the `cadrs-linux-build` container (Ubuntu 22.04, see the Dockerfile here),
 #   so the binary needs only glibc 2.35. Its build output stays in target/linux-release and it
@@ -53,6 +53,9 @@ package() { # <dir name> <executable> <exe name in archive> <strip>
     cp "$2" "$dir/$3"
     "$4" "$dir/$3"
     cp README.md LICENSE-APACHE LICENSE-MIT "$dir/"
+    # The built-in symbols, footprints and 3D models: the app reads them from `libraries/`
+    # beside the executable.
+    cp -r libraries "$dir/"
 }
 
 rm -rf "$dist"
