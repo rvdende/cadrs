@@ -28,6 +28,7 @@ pub mod feature_list;
 pub mod ids;
 pub mod hole;
 pub mod import;
+pub mod picture;
 pub mod dxf_export;
 pub mod dxf_import;
 pub mod flat_export;

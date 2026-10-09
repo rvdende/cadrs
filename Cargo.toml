@@ -34,10 +34,15 @@ serde = { version = "1", features = ["derive", "rc"] }
 ron = "0.12"
 uuid = { version = "1", features = ["v4", "serde"] }
 slotmap = { version = "1", features = ["serde"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 resvg = "0.45"
 icon-rs = "0.3.12"
 directories = "6"
+# Wayland file drops (`cadrs_app::file_drop`): winit has no Wayland drag-and-drop, so the app
+# reads drops off winit's own Wayland connection. The versions winit already pulls in.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+raw-window-handle = "0.6"
 earcutr = "0.4"
 proptest = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

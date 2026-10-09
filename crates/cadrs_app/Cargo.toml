@@ -30,6 +30,11 @@ cadrs_kicad = { workspace = true, optional = true }
 cadrs_easyeda = { workspace = true, optional = true }
 directories.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client.workspace = true
+wayland-backend.workspace = true
+raw-window-handle.workspace = true
+
 [features]
 default = ["kicad", "easyeda"]
 kicad = ["dep:cadrs_kicad"]

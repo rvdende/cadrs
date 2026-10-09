@@ -1,0 +1,22 @@
+// Pictures in a Part Studio: fixtures/logo.png dropped on the window (as from a file manager)
+// becomes "Image 1", a 100 × 50 mm surface part "logo" on the plane facing the view, showing
+// the picture upright (01, seen from the top: the gear on the left, the bars on the right).
+// Turned (02), it is a flat part like any other; seen from below (03), its back shows the
+// picture mirrored.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("view 0 90"),
+        Wait(10),
+        Custom("drop-file fixtures/logo.png"),
+        Wait(20),
+        Screenshot("01-dropped-on-top"),
+        Custom("view -30 25"),
+        Wait(10),
+        Screenshot("02-turned"),
+        Custom("view -30 -40"),
+        Wait(10),
+        Screenshot("03-from-below"),
+    ],
+)

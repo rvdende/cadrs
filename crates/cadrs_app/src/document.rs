@@ -2960,6 +2960,7 @@ enum RowKind {
     Transform,
     /// A file's parts: STEP, IGES or STL (Onshape import; P3F.2).
     Import,
+    Image,
     /// P3G.4.
     Derived,
     /// P3H.6.
@@ -3008,6 +3009,7 @@ impl RowKind {
             RowKind::Transform => "transform",
             RowKind::Composite => "composite-part",
             RowKind::Import => "file-import",
+            RowKind::Image => "image",
             RowKind::Thicken => "thicken",
             // icon-rs has no helix or fill icon yet (recorded in PROGRESS.md).
             RowKind::Helix => "thread",
@@ -3101,6 +3103,7 @@ fn rebuild_feature_rows(
                 cadrs_core::FeatureKind::Transform(_) => RowKind::Transform,
                 cadrs_core::FeatureKind::Composite(_) => RowKind::Composite,
                 cadrs_core::FeatureKind::Import(_) => RowKind::Import,
+                cadrs_core::FeatureKind::Image(_) => RowKind::Image,
                 cadrs_core::FeatureKind::Derived(_) => RowKind::Derived,
                 cadrs_core::FeatureKind::Thicken(_) => RowKind::Thicken,
                 cadrs_core::FeatureKind::Helix(_) => RowKind::Helix,

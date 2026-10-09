@@ -604,6 +604,7 @@ impl Feature {
             FeatureKind::Transform(x) => x.problem().is_none(),
             FeatureKind::Composite(x) => x.problem().is_none(),
             FeatureKind::Import(x) => x.problem().is_none(),
+            FeatureKind::Image(x) => x.problem().is_none(),
             FeatureKind::Derived(x) => x.problem().is_none(),
             FeatureKind::Thicken(x) => x.problem().is_none(),
             FeatureKind::Helix(x) => x.problem().is_none(),
@@ -643,6 +644,7 @@ impl Feature {
             FeatureKind::Transform(x) => x.problem(),
             FeatureKind::Composite(x) => x.problem(),
             FeatureKind::Import(x) => x.problem(),
+            FeatureKind::Image(x) => x.problem(),
             FeatureKind::Derived(x) => x.problem(),
             FeatureKind::Thicken(x) => x.problem(),
             FeatureKind::Helix(x) => x.problem(),
@@ -774,6 +776,7 @@ impl Feature {
             | FeatureKind::Transform(_)
             | FeatureKind::Import(_)
             | FeatureKind::Variable(_) => {}
+            FeatureKind::Image(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Derived(x) => x.parents().into_iter().for_each(&mut add),
             // P3H.6: the features that made the members (context parts aren't features).
             FeatureKind::Composite(x) => x.parts.iter().filter(|p| !crate::assembly::context::is_context(p.feature)).for_each(|p| add(p.feature)),
@@ -913,6 +916,8 @@ pub enum FeatureKind {
     /// Parts made from a CAD file stored with the document: STEP, IGES or STL (Onshape import;
     /// P3F.2, T8, X5; [`crate::import`]).
     Import(crate::import::ImportFeature),
+    /// A picture (PNG, JPEG or GIF) shown on a flat surface part ([`crate::picture`]).
+    Image(crate::picture::ImageFeature),
     /// Parts grouped into a composite part (P3H.6, PCB7.9, [`crate::transform`]).
     Composite(crate::transform::CompositeFeature),
     /// Surfaces and faces made solid with a thickness (Onshape's Thicken).

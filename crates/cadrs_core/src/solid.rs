@@ -159,6 +159,10 @@ pub struct Solid {
     /// The Part Studio's explicit mate connectors this part owns (P3B.7, A22.2): they travel
     /// with the part into every assembly instance of it (the rebuild attaches them).
     pub connectors: Vec<SolidConnector>,
+    /// The pictures it shows (an Image feature's surface, [`crate::picture`]): they move and
+    /// are copied with the part.
+    #[serde(default)]
+    pub images: Vec<SolidImage>,
     /// Faces with an appearance the rebuild gives them (P3H.6: a Transform's copies of context
     /// parts keep their Part Studio's colours, and a composite part its members'). A part's own
     /// and its faces' appearances still win (`crate::appearance::face_appearance`).
@@ -267,6 +271,27 @@ pub struct FaceAlias {
 pub struct SolidConnector {
     pub feature: crate::ids::FeatureId,
     pub frame: PlaneFrame,
+}
+
+/// A picture on a part ([`Solid::images`]): the image blob ([`crate::blobs`]) stretched over the
+/// parallelogram from `corner` along `u` (its width, left to right) and `v` (its height, bottom
+/// to top), seen from the side `u × v` points to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SolidImage {
+    pub blob: String,
+    pub corner: Vec3,
+    pub u: Vec3,
+    pub v: Vec3,
+}
+
+impl SolidImage {
+    /// The picture with its corners moved by `f` (a point map: a Transform's motion or scale).
+    pub fn mapped(&self, f: impl Fn(Vec3) -> Vec3) -> Self {
+        let add = |a: Vec3, b: Vec3| [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+        let sub = |a: Vec3, b: Vec3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let corner = f(self.corner);
+        Self { blob: self.blob.clone(), corner, u: sub(f(add(self.corner, self.u)), corner), v: sub(f(add(self.corner, self.v)), corner) }
+    }
 }
 
 /// A doubly curved face sampled as a grid (P3.4): rows of points on the surface (a revolve's

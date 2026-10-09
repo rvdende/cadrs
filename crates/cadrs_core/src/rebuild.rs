@@ -1088,6 +1088,8 @@ impl Rebuilder {
             #[cfg(feature = "occt")]
             FeatureKind::Import(x) => self.import(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
+            FeatureKind::Image(x) => self.picture(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
             FeatureKind::Thicken(x) => self.thicken(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Helix(x) => self.helix(before, f.id, x, state).unwrap_or_else(fail),
@@ -1126,7 +1128,7 @@ impl Rebuilder {
             #[cfg(not(feature = "occt"))]
             FeatureKind::FlatExtrude(_) => fail("Sheet metal needs the solid-modelling kernel".into()),
             #[cfg(not(feature = "occt"))]
-            FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) => {
+            FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_) | FeatureKind::Image(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
             }
             #[cfg(not(feature = "occt"))]
@@ -1387,6 +1389,7 @@ mod kernel_ops {
     mod sheetmetal_loft;
     mod sheetmetal_features;
     mod sheetmetal_flat;
+    mod picture;
     mod surfacing;
     mod transform;
     pub(super) use advanced::plane_of;

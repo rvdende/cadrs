@@ -35,7 +35,7 @@ use crate::parts::{Part, PartKind};
 use crate::solid::Solid;
 
 /// The blob format: bump when [`Snapshot`] or a `Saved` form changes.
-pub const FORMAT: u32 = 4;
+pub const FORMAT: u32 = 5;
 
 const MAGIC: &[u8; 8] = b"CADRSNAP";
 

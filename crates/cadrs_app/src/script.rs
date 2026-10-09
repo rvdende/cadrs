@@ -289,6 +289,19 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // `drop-file <path>`: the file dropped on the window (as from a file manager).
+        if let Some(path) = m.0.strip_prefix("drop-file ") {
+            let path_buf = std::path::PathBuf::from(path.trim());
+            commands.queue(move |world: &mut World| {
+                let window = world
+                    .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+                    .iter(world)
+                    .next()
+                    .unwrap_or(Entity::PLACEHOLDER);
+                world.write_message(bevy::window::FileDragAndDrop::DroppedFile { window, path_buf });
+            });
+            continue;
+        }
         if let Some(rest) = m.0.strip_prefix("view ") {
             let v: Vec<f32> = rest.split_whitespace().filter_map(|w| w.parse().ok()).collect();
             commands.queue(move |world: &mut World| {

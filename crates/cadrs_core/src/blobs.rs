@@ -1,4 +1,4 @@
-//! File data stored with documents (the Import feature's CAD files).
+//! File data stored with documents (the Import feature's CAD files, the Image feature's pictures).
 //!
 //! A **blob** is the bytes of a file, named by a hash of its content ([`hash_of`]: 32 hex
 //! digits). Features refer to blobs by that hash ([`crate::import::ImportFeature::blob`]), so a
@@ -97,6 +97,7 @@ fn used_in(features: &[crate::document::Feature], out: &mut Vec<(String, String)
     for f in features {
         match &f.kind {
             FeatureKind::Import(x) if !out.iter().any(|(h, _)| *h == x.blob) => out.push((x.blob.clone(), x.extension())),
+            FeatureKind::Image(x) if !out.iter().any(|(h, _)| *h == x.blob) => out.push((x.blob.clone(), x.extension())),
             FeatureKind::Derived(x) => used_in(&x.studio, out),
             _ => {}
         }

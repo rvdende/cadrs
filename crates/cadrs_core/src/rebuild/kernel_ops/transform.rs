@@ -5,8 +5,8 @@
 //!   face for face, the faces take their originals' names and, where the copy's edges and
 //!   vertices are its original's in the same order (checked by position), their names too. The
 //!   swept geometry of the operations whose faces are only on moved parts moves with them (a
-//!   scale drops it), so their faces' frames and silhouettes follow; the mate connectors the
-//!   parts own move with them.
+//!   scale drops it), so their faces' frames and silhouettes follow; the mate connectors and
+//!   pictures the parts own move with them.
 //! - **Copies** (Copy part, Copy in place) are new parts named as a pattern's copies
 //!   (`FaceOrigin::Instance` under the Transform's id, instance 1), showing their original's
 //!   appearance and material.
@@ -51,6 +51,12 @@ impl Map {
             Map::Rigid(m) => m.point(p),
             Map::Scale { center, factor } => center + (p - center) * *factor,
         }
+    }
+
+    /// [`Self::point`] of a point given as an array.
+    fn world(&self, p: [f64; 3]) -> [f64; 3] {
+        let q = self.point(&Point3::from(p));
+        [q.x, q.y, q.z]
     }
 
     fn frame(&self, f: &PlaneFrame) -> PlaneFrame {
@@ -347,12 +353,18 @@ impl Rebuilder {
             }
         }
         let mut out = self.finish(id, placed, next, id.0, geoms, PartKind::Solid)?;
-        // P3H.6: moved parts keep their faces' colours (their faces keep their names).
+        // P3H.6: moved parts keep their faces' colours (their faces keep their names), and
+        // their pictures move with them.
         if let Some(st) = Arc::get_mut(&mut out.state) {
             for pid in parts {
-                let Some(looks) = state.part(*pid).map(|p| p.part.solid.looks.clone()).filter(|l| !l.is_empty()) else { continue };
+                let Some(old) = state.part(*pid).map(|p| &p.part.solid) else { continue };
+                if old.looks.is_empty() && old.images.is_empty() {
+                    continue;
+                }
                 if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == *pid) {
-                    Arc::make_mut(&mut p.part.solid).looks = looks;
+                    let solid = Arc::make_mut(&mut p.part.solid);
+                    solid.looks = old.looks.clone();
+                    solid.images = old.images.iter().map(|i| i.mapped(|q| map.world(q))).collect();
                 }
             }
         }
@@ -366,6 +378,8 @@ impl Rebuilder {
         let mut placed: Vec<Placed> = Vec::new();
         // Each copy's original (none for a context part's), palette entry, kind and colour.
         let mut sources: Vec<CopyLook> = Vec::new();
+        // The pictures each copy shows, moved with it.
+        let mut pictures: Vec<(PartId, Vec<crate::solid::SolidImage>)> = Vec::new();
         let release = |this: &mut Self, placed: &[Placed]| {
             for (_, p) in placed {
                 this.kernel.release(p.body);
@@ -400,6 +414,9 @@ impl Rebuilder {
                 let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
                 let new = Self::new_id(id, &next, &taken);
                 sources.push((new, Some(*pid), p.part.palette, p.part.kind, p.part.solid.looks.first().map(|(_, a)| *a)));
+                if !p.part.solid.images.is_empty() {
+                    pictures.push((new, p.part.solid.images.iter().map(|i| i.mapped(|q| map.world(q))).collect()));
+                }
                 placed.push((new, piece));
             }
         }
@@ -478,6 +495,9 @@ impl Rebuilder {
                     if let Some(a) = look {
                         let solid = Arc::make_mut(&mut p.part.solid);
                         solid.looks = solid.faces.iter().map(|f| (f.name, a)).collect();
+                    }
+                    if let Some((_, images)) = pictures.iter().find(|(q, _)| *q == pid) {
+                        Arc::make_mut(&mut p.part.solid).images = images.clone();
                     }
                 }
             }

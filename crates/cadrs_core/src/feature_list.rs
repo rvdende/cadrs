@@ -50,6 +50,7 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Transform(_) => "Transform",
         FeatureKind::Composite(_) => "Composite part",
         FeatureKind::Import(_) => "Import",
+        FeatureKind::Image(_) => "Image",
         FeatureKind::Derived(_) => "Derived",
         FeatureKind::Thicken(_) => "Thicken",
         FeatureKind::Helix(_) => "Helix",
