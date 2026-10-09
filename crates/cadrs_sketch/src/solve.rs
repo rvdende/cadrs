@@ -1494,6 +1494,72 @@ impl System {
         r.amax() < TOLERANCE && !self.degenerate(vars)
     }
 
+    /// The constraints and dimensions of one component (`vars`, `eqs`) whose removal alone
+    /// frees one of `conflicting`, when its conflict is a dependency between equations at the
+    /// current values: its row of the Jacobian is a combination of others (an over-defined
+    /// length). Then removing a candidate frees it when no such combination is left without the
+    /// candidate's rows: one SVD for the left null space, then a small one per candidate,
+    /// instead of a solve each. `None` when no conflicting row is dependent (the conflict is
+    /// another kind: the caller tries removals by solving).
+    fn dependent_set(&self, vars: &[usize], eqs: &[usize], conflicting: &[Source]) -> Option<Vec<Source>> {
+        let m = eqs.len();
+        if m == 0 || vars.is_empty() {
+            return None;
+        }
+        // Rows scaled to unit length (an equation's scale says nothing about dependency), and
+        // the matrix padded square so the SVD's U spans every row combination.
+        let mut j = self.jacobian(vars, eqs);
+        for mut row in j.row_iter_mut() {
+            let n = row.norm();
+            if n > 1e-12 {
+                row /= n;
+            }
+        }
+        let n = m.max(vars.len());
+        let mut a = DMatrix::zeros(m, n);
+        a.view_mut((0, 0), (m, vars.len())).copy_from(&j);
+        let svd = a.svd(true, false);
+        let u = svd.u?;
+        let smax = svd.singular_values.max().max(1e-12);
+        let null: Vec<usize> = (0..svd.singular_values.len()).filter(|i| svd.singular_values[*i] < smax * 1e-8).collect();
+        if null.is_empty() {
+            return None;
+        }
+        // The left null space: each column a combination of rows that is zero.
+        let nl = DMatrix::from_fn(m, null.len(), |r, c| u[(r, null[c])]);
+        let rows_of = |src: Source| -> Vec<usize> { (0..m).filter(|r| self.eqs[eqs[*r]].source == src).collect() };
+        // A conflicting source's rows in some combination: its conflict is a dependency.
+        let involved = |rows: &[usize], basis: &DMatrix<f64>| rows.iter().any(|r| basis.row(*r).norm() > 1e-6);
+        let targets: Vec<Vec<usize>> = conflicting.iter().map(|c| rows_of(*c)).filter(|rows| involved(rows, &nl)).collect();
+        if targets.is_empty() {
+            return None;
+        }
+        let mut sources: Vec<Source> = Vec::new();
+        for &e in eqs {
+            let src = self.eqs[e].source;
+            if matches!(src, Source::Constraint(_) | Source::Dimension(_)) && !conflicting.contains(&src) && !sources.contains(&src) {
+                sources.push(src);
+            }
+        }
+        let k = null.len();
+        let mut out = Vec::new();
+        for src in sources {
+            let rows = rows_of(src);
+            // The combinations that don't use the candidate's rows: z with nl[rows] z = 0.
+            let b = DMatrix::from_fn(rows.len(), k, |r, c| nl[(rows[r], c)]);
+            let btb = b.transpose() * &b;
+            let eig = nalgebra::SymmetricEigen::new(btb);
+            let keep: Vec<usize> = (0..k).filter(|i| eig.eigenvalues[*i].abs() < 1e-10).collect();
+            let left = DMatrix::from_fn(k, keep.len(), |r, c| eig.eigenvectors[(r, keep[c])]);
+            let remaining = &nl * left;
+            // Freed when some conflicting source is in no combination left.
+            if targets.iter().any(|t| !involved(t, &remaining)) {
+                out.push(src);
+            }
+        }
+        Some(out)
+    }
+
     /// Solves every component, finding the conflicting constraints and dimensions of those that
     /// cannot be satisfied. Returns the conflicting sources.
     pub fn solve_all(&mut self) -> Vec<Source> {
@@ -1739,6 +1805,25 @@ pub fn conflict_set(s: &Sketch, conflicting: &[Source]) -> Vec<Source> {
     }
     let sys = System::new(s, &HashSet::new());
     let all: Vec<usize> = (0..sys.eqs.len()).collect();
+    // The quick way: where the conflict is a dependency between equations (an over-defined
+    // length, say), linear algebra on the Jacobian finds whose removal frees it.
+    let mut quick = false;
+    for (vars, eqs) in sys.components(&all) {
+        if !eqs.iter().any(|e| conflicting.contains(&sys.eqs[*e].source)) {
+            continue;
+        }
+        if let Some(found) = sys.dependent_set(&vars, &eqs, conflicting) {
+            quick = true;
+            for c in found {
+                if !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    if quick {
+        return out;
+    }
     let mut candidates: Vec<Source> = Vec::new();
     for (_, eqs) in sys.components(&all) {
         if !eqs.iter().any(|e| conflicting.contains(&sys.eqs[*e].source)) {
@@ -2111,6 +2196,32 @@ fn involved_dimensions(
         .filter(|src| !matches!(src, Source::Dimension(_)))
         .copied()
         .collect();
+    // The quick way, where the flagged dimensions depend on the others (see
+    // [`System::dependent_set`]): no solve per candidate.
+    let targets: Vec<Source> = flagged.iter().map(|k| Source::Dimension(*k)).collect();
+    let sys = System::new(s, &base);
+    let all: Vec<usize> = (0..sys.eqs.len()).collect();
+    let mut quick: Option<Vec<DimensionId>> = None;
+    for (vars, eqs) in sys.components(&all) {
+        if !eqs.iter().any(|e| targets.contains(&sys.eqs[*e].source)) {
+            continue;
+        }
+        if let Some(found) = sys.dependent_set(&vars, &eqs, &targets) {
+            let out = quick.get_or_insert_with(Vec::new);
+            for src in found {
+                if let Source::Dimension(k) = src
+                    && s.dimensions.get(k).is_some_and(|d| !d.driven)
+                    && !flagged.contains(&k)
+                    && !out.contains(&k)
+                {
+                    out.push(k);
+                }
+            }
+        }
+    }
+    if let Some(out) = quick {
+        return out;
+    }
     let candidates: Vec<DimensionId> = s
         .dimensions
         .iter()
