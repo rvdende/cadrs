@@ -777,6 +777,36 @@ impl Dimension {
 }
 
 impl DimensionKind {
+    /// The dimension with its points passed through `pt` and its curves through `cv` (`None`
+    /// if one isn't mapped). The origin and the sketch axes stay.
+    pub fn map_ids(self, pt: impl Fn(PointId) -> Option<PointId>, cv: impl Fn(CurveId) -> Option<CurveId>) -> Option<Self> {
+        use DimensionKind as K;
+        let pref = |p: PointRef| match p {
+            PointRef::Point(k) => pt(k).map(PointRef::Point),
+            PointRef::Origin => Some(PointRef::Origin),
+        };
+        let cref = |c: CurveRef| match c {
+            CurveRef::Curve(k) => cv(k).map(CurveRef::Curve),
+            other => Some(other),
+        };
+        match self {
+            K::Horizontal { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Horizontal { a, b }),
+            K::Vertical { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Vertical { a, b }),
+            K::Aligned { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Aligned { a, b }),
+            K::Diameter { curve } => cv(curve).map(|curve| K::Diameter { curve }),
+            K::Radius { curve } => cv(curve).map(|curve| K::Radius { curve }),
+            K::PointLine { p, line } => pref(p).zip(cref(line)).map(|(p, line)| K::PointLine { p, line }),
+            K::Diametral { p, line } => pref(p).zip(cref(line)).map(|(p, line)| K::Diametral { p, line }),
+            K::Angle { a, b, flip_a, flip_b } => cref(a).zip(cref(b)).map(|(a, b)| K::Angle { a, b, flip_a, flip_b }),
+            K::PointCircle { p, circle, far } => pref(p).zip(cv(circle)).map(|(p, circle)| K::PointCircle { p, circle, far }),
+            K::LineCircle { line, circle, far } => cref(line).zip(cv(circle)).map(|(line, circle)| K::LineCircle { line, circle, far }),
+            K::CircleCircle { a, b, far_a, far_b, axis } => cv(a).zip(cv(b)).map(|(a, b)| K::CircleCircle { a, b, far_a, far_b, axis }),
+            K::Offset { source, target } => cv(source).zip(cv(target)).map(|(source, target)| K::Offset { source, target }),
+            K::EllipseRadius { curve, major } => cv(curve).map(|curve| K::EllipseRadius { curve, major }),
+            K::Sides { circle, inscribed } => cv(circle).map(|circle| K::Sides { circle, inscribed }),
+        }
+    }
+
     /// True if the dimension refers to this point or curve.
     pub fn uses_point(&self, p: PointId) -> bool {
         match *self {

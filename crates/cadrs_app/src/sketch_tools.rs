@@ -641,6 +641,7 @@ fn prune_selection(
     doc: Option<Res<ActiveDocument>>,
     mut selection: ResMut<SketchSelection>,
     mut hover: ResMut<SketchHover>,
+    external: Res<ExternalSnap>,
 ) {
     let Some(sketch) = session_sketch(session.as_deref(), doc.as_deref()) else {
         if !selection.0.is_empty() {
@@ -660,7 +661,16 @@ fn prune_selection(
     if !selection.0.iter().all(exists) {
         selection.0.retain(exists);
     }
-    if hover.0.is_some_and(|h| !exists(&h)) {
+    // The Dimension tool hovers the face's part edges too (on the snap copy).
+    let on_copy = |e: &SketchEntity| {
+        let Some((_, ext)) = session.as_deref().and_then(|s| external.get(s.feature)) else { return false };
+        match *e {
+            SketchEntity::Point(p) => ext.sketch.points.contains_key(p),
+            SketchEntity::Curve(c) => ext.is_edge(c),
+            _ => false,
+        }
+    };
+    if hover.0.is_some_and(|h| !exists(&h) && !on_copy(&h)) {
         hover.0 = None;
     }
 }
@@ -842,7 +852,9 @@ pub(crate) fn sketch_pointer(
                     .map(SketchEntity::Dimension)
             })
             .or_else(|| {
-                let hit = hit_test(sketch, SVec2::new(pos.x as f64, pos.y as f64), |p| {
+                // The Dimension tool measures to the face's part edges too (`sketch_dimension`).
+                let on = if dimension_tool { snap_sketch } else { sketch };
+                let hit = hit_test(on, SVec2::new(pos.x as f64, pos.y as f64), |p| {
                     map.to_screen64(p)
                 })
                 .map(|h| h.entity);

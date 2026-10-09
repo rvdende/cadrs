@@ -689,7 +689,8 @@ fn draw_sketches(
                 lines.line(world(&frame, a), world(&frame, b), hover_core());
             });
         }
-        // Snapped part edges in the sketch plane (they aren't sketch curves).
+        // Snapped part edges in the sketch plane (they aren't sketch curves), and the ones the
+        // Dimension tool hovers or picked, and their ends.
         if let Some((_, ext)) = session.as_ref().and_then(|s| external.get(s.feature)) {
             for r in &hot {
                 if let CurveRef::Curve(k) = *r
@@ -700,6 +701,23 @@ fn draw_sketches(
                         hover_g.linestrip(pts.iter().map(|p| world(&frame, *p)), hover_band());
                         stroke(&mut lines, &frame, &pts, hover_core(), false, ppm);
                     });
+                }
+            }
+            let dim_entities = hover.0.into_iter().map(|e| (e, false)).chain(dim_tool.picks.iter().map(|e| (*e, true)));
+            for (e, picked) in dim_entities {
+                let (band, core) = if picked { (picked_band(), picked_core()) } else { (hover_band(), hover_core()) };
+                match e {
+                    SketchEntity::Curve(k) if ext.is_edge(k) => {
+                        let pts = curve_polyline(&ext.sketch, k);
+                        unnudged(|| {
+                            hover_g.linestrip(pts.iter().map(|p| world(&frame, *p)), band);
+                            stroke(&mut lines, &frame, &pts, core, false, ppm);
+                        });
+                    }
+                    SketchEntity::Point(p) if !sketch.points.contains_key(p) && ext.sketch.points.contains_key(p) => {
+                        dot(&mut dots, &frame, ext.sketch.pos(p), 4.0, map.px_per_mm(), band);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -981,6 +999,7 @@ fn draw_sketches(
             // The Dimension tool's dimension following the cursor too, so glyphs move out of
             // its way while it is placed.
             .chain(dim_tool.preview.into_iter().flat_map(|d| {
+                let sketch = session.as_ref().and_then(|s| external.get(s.feature)).map_or(sketch, |(_, e)| &e.sketch);
                 let text = crate::sketch_dimension::dimension_text(&d, true, &units.0);
                 let d = clear_of_arrows(sketch, &map, d, &text);
                 dimension_obstacles(sketch, &map, &d, &text)
@@ -1099,17 +1118,19 @@ fn draw_sketches(
                 });
             }
         }
-        // The Dimension tool's dimension following the cursor, with its live value.
+        // The Dimension tool's dimension following the cursor, with its live value (measured on the
+        // copy with the face's part edges, which it may measure to).
+        let dim_sketch = session.as_ref().and_then(|s| external.get(s.feature)).map_or(sketch, |(_, e)| &e.sketch);
         if let Some(d) = dim_tool.preview {
             let text = crate::sketch_dimension::dimension_text(&d, true, &units.0);
             // The value sits on the cursor, clear of the arrowheads (`screens/16a`).
-            let d = clear_of_arrows(sketch, &map, d, &text);
-            let style = if cadrs_sketch::dimension::over_defines(sketch, &d) {
+            let d = clear_of_arrows(dim_sketch, &map, d, &text);
+            let style = if cadrs_sketch::dimension::over_defines(dim_sketch, &d) {
                 DimStyle::driven()
             } else {
                 DimStyle::normal()
             };
-            draw_dimension(sketch, &map, &d, text, style, &knock, &mut thin, &mut out);
+            draw_dimension(dim_sketch, &map, &d, text, style, &knock, &mut thin, &mut out);
         }
         let first_live_label = out.len();
         // Rubber band. A line inferred parallel to another is drawn dotted

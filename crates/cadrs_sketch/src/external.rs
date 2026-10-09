@@ -173,6 +173,59 @@ impl External {
         }
     }
 
+    /// The part edges a dimension made against [`Self::sketch`] measures, or whose ends it
+    /// measures from, to use (construction, linked) before it goes into `base`, the sketch the
+    /// copy was made from. Empty when it measures only the sketch's own geometry.
+    pub fn dimension_uses(&self, base: &Sketch, d: &crate::DimensionKind) -> Vec<(Projected, Link)> {
+        let mut edges: Vec<CurveId> = d.curves().into_iter().filter(|c| self.is_edge(*c)).collect();
+        for p in d.points() {
+            if self.edge_point(base, p)
+                && let Some(c) = self.edges_at(p).next()
+            {
+                edges.push(c);
+            }
+        }
+        let mut items: Vec<(Projected, Link)> = Vec::new();
+        for c in edges {
+            if let Some(item) = self.curves.get(&c)
+                && !items.iter().any(|(_, l)| *l == item.1)
+            {
+                items.push(item.clone());
+            }
+        }
+        items
+    }
+
+    /// A dimension made against [`Self::sketch`], for `used`: `base` (the sketch the copy was
+    /// made from) after the edges of [`Self::dimension_uses`] were used. Part edges become the
+    /// used curves linked to them, and their ends the used curves' points there. `None` if an
+    /// edge it measures wasn't used.
+    pub fn relinked_dimension(&self, base: &Sketch, used: &Sketch, d: crate::DimensionKind) -> Option<crate::DimensionKind> {
+        let used_curve = |link: Link| {
+            used.constraints.values().find_map(|c| match *c {
+                ConstraintOf::Use(crate::CurveRef::Curve(k), l) if l == link => Some(k),
+                _ => None,
+            })
+        };
+        let cv = |c: CurveId| {
+            if !self.is_edge(c) {
+                return Some(c);
+            }
+            used_curve(self.curves.get(&c)?.1)
+        };
+        let pt = |p: PointId| {
+            if !self.edge_point(base, p) {
+                return Some(p);
+            }
+            let at = self.sketch.pos(p);
+            self.edges_at(p).find_map(|e| {
+                let k = used_curve(self.curves.get(&e)?.1)?;
+                used.curve_points(k).into_iter().find(|q| used.pos(*q).distance(at) <= crate::MERGE_EPS)
+            })
+        };
+        d.map_ids(pt, cv)
+    }
+
     /// `op` with its constraints' references to part edges by position.
     fn rewrite(&self, op: SketchOp) -> SketchOp {
         match op {
@@ -328,5 +381,48 @@ mod tests {
         let ext = External::of(&base).unwrap();
         let op = SketchOp::AddCircle { center: Vec2::new(10.0, 10.0), radius: 2.0, construction: false };
         assert_eq!(ext.commit(&base, op.clone()), op);
+    }
+
+    /// The Dimension tool on a face: a distance from a sketch line to the face's top edge uses
+    /// the edge first (construction, linked) and measures to it; a sketch-only dimension uses
+    /// nothing.
+    #[test]
+    fn a_dimension_to_a_face_edge_uses_the_edge() {
+        use crate::{CurveRef, Dimension, DimensionKind, PointRef};
+        let mut base = face();
+        let line = base.add_line(Vec2::new(5.0, 30.0), Vec2::new(25.0, 30.0));
+        let ext = External::of(&base).unwrap();
+        // The top edge, (40, 40) to (0, 40), in the copy.
+        let top = ext
+            .sketch
+            .curves
+            .keys()
+            .find(|k| ext.is_edge(*k) && ext.sketch.curve_ends(*k).is_some_and(|(a, b)| ext.sketch.pos(a).y == 40.0 && ext.sketch.pos(b).y == 40.0))
+            .unwrap();
+        let Some(CurveKind::Line { a, .. }) = base.curves.get(line).map(|c| c.kind) else { unreachable!() };
+        let d = DimensionKind::PointLine { p: PointRef::Point(a), line: CurveRef::Curve(top) };
+        let items = ext.dimension_uses(&base, &d);
+        assert_eq!(items.len(), 1);
+        let mut s = base.clone();
+        SketchOp::UseConstruction { items }.apply(&mut s).unwrap();
+        let kind = ext.relinked_dimension(&base, &s, d).expect("the edge was used");
+        let DimensionKind::PointLine { p, line: CurveRef::Curve(k) } = kind else { panic!("{kind:?}") };
+        assert_eq!(p, PointRef::Point(a));
+        assert!(s.is_projected(k) && s.curves[k].construction);
+        // Setting it moves the sketch line (the edge is fixed): 4 below the top.
+        SketchOp::SetDimension { dimension: Dimension::new(kind, 4.0, 3.0), moves: vec![], radii: vec![] }.apply(&mut s).unwrap();
+        assert!((s.pos(a).y - 36.0).abs() < 1e-6, "{:?}", s.pos(a));
+        // Between the sketch's own points: nothing to use.
+        let Some(CurveKind::Line { a, b }) = base.curves.get(line).map(|c| c.kind) else { unreachable!() };
+        assert!(ext.dimension_uses(&base, &DimensionKind::Aligned { a, b }).is_empty());
+        // From a face corner (an edge's end): that edge is used and the corner is its point.
+        let corner = ext.sketch.point_at(Vec2::new(0.0, 40.0), crate::MERGE_EPS).unwrap();
+        let d = DimensionKind::Horizontal { a: corner, b: a };
+        let items = ext.dimension_uses(&base, &d);
+        assert_eq!(items.len(), 1);
+        let mut s = base.clone();
+        SketchOp::UseConstruction { items }.apply(&mut s).unwrap();
+        let DimensionKind::Horizontal { a: c, .. } = ext.relinked_dimension(&base, &s, d).unwrap() else { unreachable!() };
+        assert!(s.point_is_linked(c) && s.pos(c).distance(Vec2::new(0.0, 40.0)) < 1e-9);
     }
 }

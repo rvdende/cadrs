@@ -1,0 +1,49 @@
+// The Dimension tool on a part face: an 80 × 50 × 20 plate and a sketch on its top face with a
+// horizontal line inside it.
+// 01 D, the line picked, the pointer on the plate's far (top) edge: the edge highlighted.
+// 02 the edge picked: the distance between them follows the cursor.
+// 03 placed and set to 5: the edge is used (construction, linked, so the dimension follows the
+//    part), and the line moves 5 below it.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch top rect 0 0 80 50"),
+        Key("P"),
+        Key("Shift+7"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(10, 10, 0)),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("20"),
+        Key("Enter"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(xyz(10, 10, 20)),
+        Key("N"),
+        MoveTo(913, 520),
+        Key("L"),
+        ClickWorld(20, 35),
+        ClickWorld(60, 35),
+        Key("Escape"),
+        Key("Escape"),
+        Key("D"),
+        ClickWorld(40, 35),
+        MoveWorld(70, 50),
+        Wait(5),
+        Screenshot("01-hovering-the-top-edge"),
+        ClickWorld(70, 50),
+        MoveWorld(90, 42),
+        Wait(5),
+        Screenshot("02-distance-to-the-edge"),
+        ClickWorld(90, 42),
+        Wait(5),
+        Key("Ctrl+A"),
+        Type("5"),
+        Key("Enter"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("03-set-to-5"),
+    ],
+)

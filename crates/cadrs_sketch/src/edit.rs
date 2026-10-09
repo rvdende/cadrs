@@ -1157,24 +1157,7 @@ pub fn paste(dst: &mut Sketch, src: &Sketch, offset: Vec2) -> Vec<CurveId> {
         }
     }
     for d in src.dimensions.values() {
-        use crate::DimensionKind as K;
-        let kind = match d.kind {
-            K::Horizontal { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Horizontal { a, b }),
-            K::Vertical { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Vertical { a, b }),
-            K::Aligned { a, b } => pt(a).zip(pt(b)).map(|(a, b)| K::Aligned { a, b }),
-            K::Diameter { curve } => cv(curve).map(|curve| K::Diameter { curve }),
-            K::Radius { curve } => cv(curve).map(|curve| K::Radius { curve }),
-            K::PointLine { p, line } => pref(p).zip(cref(line)).map(|(p, line)| K::PointLine { p, line }),
-            K::Diametral { p, line } => pref(p).zip(cref(line)).map(|(p, line)| K::Diametral { p, line }),
-            K::Angle { a, b, flip_a, flip_b } => cref(a).zip(cref(b)).map(|(a, b)| K::Angle { a, b, flip_a, flip_b }),
-            K::PointCircle { p, circle, far } => pref(p).zip(cv(circle)).map(|(p, circle)| K::PointCircle { p, circle, far }),
-            K::LineCircle { line, circle, far } => cref(line).zip(cv(circle)).map(|(line, circle)| K::LineCircle { line, circle, far }),
-            K::CircleCircle { a, b, far_a, far_b, axis } => cv(a).zip(cv(b)).map(|(a, b)| K::CircleCircle { a, b, far_a, far_b, axis }),
-            K::Offset { source, target } => cv(source).zip(cv(target)).map(|(source, target)| K::Offset { source, target }),
-            K::EllipseRadius { curve, major } => cv(curve).map(|curve| K::EllipseRadius { curve, major }),
-            K::Sides { circle, inscribed } => cv(circle).map(|circle| K::Sides { circle, inscribed }),
-        };
-        if let Some(kind) = kind {
+        if let Some(kind) = d.kind.map_ids(pt, cv) {
             dst.dimensions.insert(crate::Dimension { kind, ..*d });
         }
     }

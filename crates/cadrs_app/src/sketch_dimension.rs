@@ -189,6 +189,7 @@ fn dimension_pointer(
     editor: Res<DimensionEditor>,
     q_edit: Query<(&ComputedNode, &UiGlobalTransform), With<DimEditBox>>,
     mut state: Local<PointerState>,
+    external: Res<crate::sketch_tools::ExternalSnap>,
     mut commands: Commands,
 ) {
     let (Some(map), Some(sketch)) = (
@@ -198,6 +199,9 @@ fn dimension_pointer(
         inputs.clear();
         return;
     };
+    // Picks and proposals are made on the copy with the face's part edges (a sketch on a
+    // face measures to them; `place` uses the ones measured).
+    let sketch: &cadrs_sketch::Sketch = session.as_deref().and_then(|s| external.get(s.feature)).map_or(sketch, |(_, e)| &e.sketch);
     let active = tool.tool == SketchTool::Dimension;
     if !active && (!dim.picks.is_empty() || dim.preview.is_some()) {
         dim.picks.clear();
@@ -343,6 +347,31 @@ fn place(world: &mut World, mut d: Dimension) {
         return;
     };
     let (element, feature) = (s.element, s.feature);
+    // Measured to a part edge of the face (or its end), picked on the snap copy: the edge is
+    // used first (construction, linked, as Onshape does), and the dimension measures to the
+    // used curve. The two edits undo as one.
+    let mut mark = None;
+    let ext = world.resource::<crate::sketch_tools::ExternalSnap>().get(feature).map(|(_, e)| e.clone());
+    if let Some(ext) = ext
+        && let Some(base) = world_sketch(world).cloned()
+    {
+        let items = ext.dimension_uses(&base, &d.kind);
+        if !items.is_empty() {
+            let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else { return };
+            let m = doc.history.undo_len();
+            if let Err(e) = doc.execute(&EditSketch { element, feature, op: SketchOp::UseConstruction { items } }) {
+                warn!("cannot use the part edge to dimension to: {e}");
+                return;
+            }
+            let Some(kind) = world_sketch(world).and_then(|used| ext.relinked_dimension(&base, used, d.kind)) else {
+                warn!("the part edge to dimension to was not used");
+                world.resource_mut::<ActiveDocument>().undo();
+                return;
+            };
+            d.kind = kind;
+            mark = Some(m);
+        }
+    }
     let map = world.resource::<crate::sketch_tools::SketchScreen>().active;
     // The first dimension of a sketch scales it (S13.3), when its value is typed.
     let mut first = false;
@@ -369,7 +398,13 @@ fn place(world: &mut World, mut d: Dimension) {
         })
     {
         warn!("cannot add the dimension: {e}");
+        if mark.is_some() {
+            world.resource_mut::<ActiveDocument>().undo();
+        }
         return;
+    }
+    if let Some(m) = mark {
+        world.resource_mut::<ActiveDocument>().history.squash_since(m, "Dimension");
     }
     let id = world_sketch(world).and_then(|s| {
         s.dimensions
