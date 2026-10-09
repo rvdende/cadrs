@@ -138,7 +138,10 @@ pub struct AddFeature {
     pub kind: String,
     /// The feature's fields as JSON, merged over the type's defaults (so only the fields that
     /// differ are needed). get_feature shows a feature's full JSON; face and edge references
-    /// come from list_faces and list_edges ("ref"), sketch regions from add_sketch.
+    /// come from list_faces and list_edges ("ref"). Instead of `regions`, `region_points`:
+    /// {"sketch": "Sketch 1", "points": [[x, y], …]} picks the sketch's regions containing the
+    /// points (all of them without "points"). A revolve about a sketch line: "axis":
+    /// {"SketchCurve": {"sketch": <sketch id>, "curve": <curve id>}} (from add_sketch).
     #[serde(default)]
     pub params: serde_json::Value,
     /// The Part Studio tab's name; omitted: the active tab.

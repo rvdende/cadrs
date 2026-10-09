@@ -496,6 +496,8 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     let frame = plane.frame();
     let feature = FeatureId::new();
     d.execute(&AddSketch { element, feature, plane: Some(plane) }).map_err(|e| e.to_string())?;
+    let before: std::collections::HashSet<cadrs_sketch::CurveId> =
+        d.doc.element(element).and_then(|e| e.feature(feature)).and_then(|f| f.sketch()).map(|s| s.geometry.curves.keys().collect()).unwrap_or_default();
     if !ops.is_empty() {
         d.execute(&cadrs_core::commands::EditSketch { element, feature, op: SketchOp::Batch(ops) }).map_err(|e| e.to_string())?;
     }
@@ -503,8 +505,17 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     let f = e.feature(feature).ok_or("the sketch is gone")?;
     let s = f.sketch().ok_or("not a sketch")?;
     let n = cross(frame.u, frame.v);
+    let curves: Vec<Value> = s
+        .geometry
+        .curves
+        .iter()
+        .filter(|(id, _)| !before.contains(id))
+        .map(|(id, c)| json!({ "id": id, "kind": format!("{c:?}").split(['(', ' ', '{']).next().unwrap_or("") }))
+        .collect();
     Ok(json!({
         "sketch": f.name,
+        "id": f.id.0.to_string(),
+        "curves": curves,
         "frame": { "origin": frame.origin.map(round), "x": frame.u.map(round), "y": frame.v.map(round), "normal": n.map(round) },
         "regions": sketch_regions(&s.geometry),
     }))
@@ -585,14 +596,42 @@ fn feature_named(d: &ActiveDocument, element: ElementId, name: &str) -> Result<c
     e.features().iter().find(|f| f.name == name).cloned().ok_or_else(|| format!("no feature named {name:?}"))
 }
 
+/// Replaces a patch's `region_points` ({"sketch": name, "points": [[x, y], …]}, the points
+/// omitted for every region) with the `regions` they pick.
+fn expand_regions(d: &ActiveDocument, element: ElementId, patch: &Value) -> Result<Value, String> {
+    let mut patch = patch.clone();
+    let Some(rp) = patch.as_object_mut().and_then(|o| o.remove("region_points")) else { return Ok(patch) };
+    let name = rp["sketch"].as_str().ok_or("region_points needs a sketch name")?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let sketch = e.features().iter().find(|f| f.name == name).ok_or_else(|| format!("no feature named {name:?}"))?;
+    let FeatureKind::Sketch(s) = &sketch.kind else { return Err(format!("{name:?} is not a sketch")) };
+    let regions = cadrs_sketch::region::regions(&s.geometry);
+    let picked: Vec<usize> = match rp.get("points").and_then(|p| p.as_array()) {
+        None => (0..regions.len()).collect(),
+        Some(points) => points
+            .iter()
+            .map(|q| {
+                let (x, y) = (q[0].as_f64().unwrap_or(f64::NAN), q[1].as_f64().unwrap_or(f64::NAN));
+                cadrs_sketch::region::region_at(&regions, SVec2::new(x, y)).ok_or_else(|| format!("no region of {name:?} contains [{x}, {y}]"))
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    let refs: Vec<cadrs_core::RegionRef> = picked.iter().map(|&i| cadrs_core::RegionRef::new(sketch.id, &regions[i])).collect();
+    if let Some(o) = patch.as_object_mut() {
+        o.insert("regions".into(), serde_json::to_value(refs).map_err(|e| e.to_string())?);
+    }
+    Ok(patch)
+}
+
 fn add_feature(world: &mut World, p: &tools::AddFeature) -> Result<Value, String> {
     let base = template(&p.kind).ok_or_else(|| format!("unknown feature type {:?}", p.kind))?;
-    let kind = patched(&base, &p.params)?;
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    let params = expand_regions(doc(world)?, element, &p.params)?;
+    let kind = patched(&base, &params)?;
     if matches!(kind, FeatureKind::Sketch(_)) {
         return Err("use add_sketch for sketches".into());
     }
     let mut d = doc_mut(world)?;
-    let element = part_studio(&d, p.part_studio.as_deref())?;
     let feature = FeatureId::new();
     let base_name = cadrs_core::feature_list::type_label(&kind).to_string();
     d.execute(&cadrs_core::commands::AddFeature { element, feature, base_name, kind }).map_err(|e| e.to_string())?;
@@ -603,7 +642,8 @@ fn edit_feature(world: &mut World, p: &tools::EditFeature) -> Result<Value, Stri
     let mut d = doc_mut(world)?;
     let element = part_studio(&d, p.part_studio.as_deref())?;
     let f = feature_named(&d, element, &p.name)?;
-    let kind = patched(&f.kind, &p.params)?;
+    let params = expand_regions(&d, element, &p.params)?;
+    let kind = patched(&f.kind, &params)?;
     d.execute(&cadrs_core::commands::SetFeature { element, feature: f.id, kind, label: format!("Edit {}", f.name) }).map_err(|e| e.to_string())?;
     outcome(world, element, f.id)
 }
