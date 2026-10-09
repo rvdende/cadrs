@@ -1424,6 +1424,8 @@ pub fn part_material(preview: bool) -> StandardMaterial {
 #[derive(Default)]
 pub struct LinesCache {
     back: Vec3,
+    /// The zoom (mm per pixel) the silhouettes were lifted for.
+    scale: f32,
     lines: HashMap<(usize, bool), std::sync::Arc<Vec<Vec<Vec3>>>>,
 }
 
@@ -1454,6 +1456,10 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
         .filter(|e| !e.smooth && !(cull && e.name.faces[0] != e.name.faces[1] && e.name.faces.iter().all(faces_away)))
         .map(|e| e.points.iter().map(|p| v3(*p)).collect())
         .collect();
+    // How far outside the surface a silhouette is drawn: a third of a pixel, so it stays in
+    // front of the facets it outlines, but never more than the mesh's own tolerance (0.05 mm):
+    // a fixed 0.05 mm floated the line pixels off a close-up's cylinder.
+    let lift = (view.scale * 0.33).min(0.05);
     for w in s.rulings.windows(2) {
         let (a, b) = (w[0], w[1]);
         if a.face != b.face || a.run != b.run {
@@ -1461,20 +1467,22 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
         }
         let (da, db) = (v3(a.normal).dot(back), v3(b.normal).dot(back));
         if da.signum() != db.signum() {
-            let t = da / (da - db);
-            // A hair outside the surface (the mesh's own tolerance, 0.05 mm, along the normal
-            // there): between two rulings the line runs inside the true surface and would dip
-            // behind the facets it outlines (P3.4: a torus's silhouette drew dotted).
-            let n = v3(a.normal).lerp(v3(b.normal), t).normalize_or_zero() * 0.05;
-            let p0 = v3(a.start).lerp(v3(b.start), t) + n;
-            let p1 = v3(a.end).lerp(v3(b.end), t) + n;
-            out.push(vec![p0, p1]);
+            // Where the facets turn from facing the viewer to facing away: the ruling between
+            // a front facet and a back one (the facet between `a` and `b` faces as their mean
+            // normal does). The rulings of an extrude's side are its mesh's own vertex lines, so
+            // the line lies on the drawn outline, not between rulings inside it.
+            let r = if da + db > 0.0 { b } else { a };
+            let n = v3(r.normal).normalize_or_zero() * lift;
+            out.push(vec![v3(r.start) + n, v3(r.end) + n]);
         }
     }
-    // Doubly curved faces (a revolve's torus): their grids' silhouettes, as a hair outside.
+    // Doubly curved faces (a revolve's torus): their grids' silhouettes, a little outside
+    // (between grid points the line runs inside the true surface and would dip behind the
+    // facets it outlines: P3.4, a torus's silhouette drew dotted).
+    let grid_lift = (view.scale * 1.5).min(0.05);
     for g in &s.grids {
         for [(p0, n0), (p1, n1)] in g.silhouette([back.x as f64, back.y as f64, back.z as f64]) {
-            out.push(vec![v3(p0) + v3(n0) * 0.05, v3(p1) + v3(n1) * 0.05]);
+            out.push(vec![v3(p0) + v3(n0) * grid_lift, v3(p1) + v3(n1) * grid_lift]);
         }
     }
     out
@@ -1711,8 +1719,9 @@ fn draw_part_edges(
     // Each part's lines for this view direction, kept while neither changes (working them out for
     // every part every frame cost a large assembly most of its frame).
     let back = view.view.back();
-    if lines_cache.back != back {
+    if lines_cache.back != back || lines_cache.scale != view.view.scale {
         lines_cache.back = back;
+        lines_cache.scale = view.view.scale;
         lines_cache.lines.clear();
     }
     let alive: std::collections::HashSet<usize> = cache.parts.iter().chain(cache.tool.iter()).map(|p| std::sync::Arc::as_ptr(&p.solid) as usize).collect();

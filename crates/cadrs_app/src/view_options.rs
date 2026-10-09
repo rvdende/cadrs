@@ -180,10 +180,19 @@ impl CameraProjection for ViewportPerspective {
     }
 }
 
-/// How much the depth biases of lines over faces grow in this view: 1 in orthographic; in
-/// perspective so they still pull about half a millimetre (see [`perspective_gizmo_bias`]).
+/// The zoom (mm per pixel) at which the lines' depth biases pull about 1.5 px: their base
+/// values pull about half a millimetre.
+const BIAS_REFERENCE_SCALE: f32 = 0.37;
+
+/// How much the depth biases of lines over faces grow in this view: in perspective so they
+/// still pull about half a millimetre (see [`perspective_gizmo_bias`]); zoomed in closer than
+/// [`BIAS_REFERENCE_SCALE`], less, so they pull about 1.5 px. A fixed half millimetre let edges
+/// that far behind a face show through it in a close view: stubs where an edge passes behind
+/// a wall's corner.
 pub fn bias_factor(view: &ViewState) -> f32 {
-    if view.perspective { (2990.0 / view.eye_distance().max(1e-3)).clamp(1.0, 400.0) } else { 1.0 }
+    let perspective = if view.perspective { (2990.0 / view.eye_distance().max(1e-3)).clamp(1.0, 400.0) } else { 1.0 };
+    let zoom = (view.scale / BIAS_REFERENCE_SCALE).clamp(0.02, 1.0);
+    perspective * zoom
 }
 
 /// The part gizmos' depth bias pulls lines toward the eye by a share of their depth; in
