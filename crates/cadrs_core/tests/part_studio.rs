@@ -530,3 +530,34 @@ fn new_commands_undo_and_documents_round_trip() {
     assert_eq!(back.document, doc.d);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A piece of a face that a later cut split off can be sketched on: a slot cut across a
+/// block's top leaves its top in two pieces, both of them sketch planes at the top's height.
+#[test]
+fn a_face_split_by_a_later_cut_is_a_sketch_plane() {
+    let mut doc = Doc::new();
+    let s = doc.sketch(PlaneRef::Top, vec![rect(0.0, 0.0, 40.0, 20.0)]);
+    let block = doc.extrude(s, &[Vec2::new(5.0, 5.0)], depth(10.0));
+    let s = doc.sketch(PlaneRef::Top, vec![rect(15.0, -5.0, 25.0, 25.0)]);
+    doc.extrude(s, &[Vec2::new(20.0, 10.0)], |e| {
+        e.op = BooleanOp::Remove;
+        e.depth = 10.0;
+        e.depth_expr = "10 mm".into();
+    });
+    let ps = doc.parts();
+    let features = doc.features();
+    // (Cut right across, the block is two parts, one top each.)
+    let tops: Vec<_> = ps
+        .iter()
+        .flat_map(|p| p.solid.faces.iter())
+        .filter(|f| f.name.op == block.0 && f.plane.is_some_and(|p| (p.origin[2] - 10.0).abs() < 1e-9 && p.normal()[2] > 0.5))
+        .collect();
+    assert_eq!(tops.len(), 2, "the slot splits the top in two");
+    assert!(tops.iter().any(|f| f.name.split > 0));
+    for f in tops {
+        let Some(PlaneRef::Face(fp)) = cadrs_core::parts::face_plane(&features, block, f.name) else {
+            panic!("no sketch plane on {:?}", f.name);
+        };
+        assert!((fp.origin[2] - 10.0).abs() < 1e-9);
+    }
+}

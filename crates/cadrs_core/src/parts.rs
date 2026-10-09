@@ -320,7 +320,12 @@ pub fn cap_name(features: &[Feature], extrude: FeatureId, index: usize, end: boo
 
 /// A sketch plane on a face of the part `extrude` made.
 pub fn face_plane(features: &[Feature], extrude: FeatureId, face: FaceName) -> Option<PlaneRef> {
-    let part = part_with(features, extrude, Some(&face))?;
+    // A piece of the face a later feature split off (a cut through it: `split` > 0) exists only
+    // after that feature: then it is found in the parts `features` build (as the sketch's
+    // regeneration finds it, [`regenerate`]).
+    let part = part_with(features, extrude, Some(&face)).filter(|p| p.solid.face(&face).is_some()).or_else(|| {
+        rebuild::build(features).parts.iter().find(|p| p.solid.face(&face).is_some()).cloned()
+    })?;
     let named = part.solid.canonical_face(&face);
     let i = part.solid.faces.iter().position(|f| f.name == named)?;
     let frame = part.solid.face_plane_as(i, &face)?;
