@@ -311,6 +311,10 @@ pub enum Link {
     /// the centre line of the bend of joint `bend`, else the edge of its outline or of a
     /// cut-out nearest where the used curve lies.
     FlatLine { model: uuid::Uuid, part: u8, bend: Option<u32> },
+    /// A vertex (corner) of the part made by `feature`, seen along the sketch normal: a point,
+    /// held by a [`ConstraintOf::Pierce`] constraint (a model vertex picked in the sketch to
+    /// constrain to, as Onshape uses it).
+    Vertex { feature: uuid::Uuid, vertex: VertexName },
 }
 
 impl Link {
@@ -319,7 +323,8 @@ impl Link {
         match *self {
             Link::Edge { feature, .. }
             | Link::Silhouette { feature, .. }
-            | Link::SketchCurve { feature, .. } => feature,
+            | Link::SketchCurve { feature, .. }
+            | Link::Vertex { feature, .. } => feature,
             Link::FlatLine { model, .. } => model,
             Link::Plane(PlaneRef::Feature(fp)) => fp.feature,
             Link::Plane(PlaneRef::Face(fp)) => fp.feature,
@@ -344,6 +349,14 @@ impl Link {
                 face: f(face, feature),
                 index,
             },
+            Link::Vertex { feature, vertex } => {
+                let mut faces = vertex.faces.map(|x| f(x, feature));
+                faces.sort();
+                Link::Vertex {
+                    feature,
+                    vertex: VertexName { faces, index: vertex.index },
+                }
+            }
             l => l,
         }
     }

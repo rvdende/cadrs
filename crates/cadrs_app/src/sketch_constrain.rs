@@ -22,9 +22,10 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 use cadrs_core::FeatureId;
 use cadrs_core::commands::EditSketch;
+use cadrs_sketch::constraint::{FitOp, fit_op};
 use cadrs_sketch::solve::{self, Analysis, Drag, Source};
 use cadrs_sketch::{
-    ConstraintId, ConstraintKind, CurveId, CurveKind, Fit, PointId, Sketch, SketchEntity, SketchOp,
+    ConstraintId, ConstraintKind, CurveId, CurveKind, PointId, Sketch, SketchEntity, SketchOp,
 };
 use cadrs_ui::menu::{Menu, MenuAction, MenuItem};
 use cadrs_ui::{Notification, Theme, show_notification, show_toast};
@@ -274,17 +275,22 @@ pub fn add_constraints(
     kind: ConstraintKind,
     constraints: Vec<cadrs_sketch::Constraint>,
 ) {
+    edit_sketch(
+        commands,
+        session,
+        SketchOp::AddConstraint {
+            constraints,
+            label: kind.undo_label(),
+        },
+    );
+}
+
+/// Applies a constraint tool's edit to the sketch being edited, as one undoable step.
+fn edit_sketch(commands: &mut Commands, session: &SketchSession, op: SketchOp) {
     let (element, feature) = (session.element, session.feature);
     commands.queue(move |world: &mut World| {
         if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
-            && let Err(e) = doc.execute(&EditSketch {
-                element,
-                feature,
-                op: SketchOp::AddConstraint {
-                    constraints,
-                    label: kind.undo_label(),
-                },
-            })
+            && let Err(e) = doc.execute(&EditSketch { element, feature, op })
         {
             warn!("cannot add the constraint: {e}");
         }
@@ -300,6 +306,7 @@ fn constraint_activation(
     mut selection: ResMut<SketchSelection>,
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
+    cache: Res<crate::parts::PartCache>,
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
@@ -310,8 +317,9 @@ fn constraint_activation(
     let SketchTool::Constrain(kind) = tool.tool else {
         return;
     };
-    let (Some(s), Some(sketch)) = (
+    let (Some(s), Some(d), Some(sketch)) = (
         session.as_deref(),
+        doc.as_deref(),
         session_sketch(session.as_deref(), doc.as_deref()),
     ) else {
         return;
@@ -319,16 +327,17 @@ fn constraint_activation(
     if selection.0.is_empty() {
         return;
     }
-    match cadrs_sketch::constraint::fit(kind, sketch, &selection.0) {
-        Fit::Complete(cs) => {
-            add_constraints(&mut commands, s, kind, cs);
+    let at = crate::sketch_links::sketch_vertex_at(d, s, &cache);
+    match fit_op(kind, sketch, &selection.0, at) {
+        FitOp::Complete(op) => {
+            edit_sketch(&mut commands, s, *op);
             selection.0.clear();
             tool.tool = SketchTool::Select;
             *last = SketchTool::Select;
         }
         // The selection is the first pick; the tool waits for the rest.
-        Fit::Partial => {}
-        Fit::Invalid => {
+        FitOp::Partial => {}
+        FitOp::Invalid => {
             show_toast(
                 &mut commands,
                 &theme,
@@ -413,7 +422,8 @@ fn normal_to_plane(
 }
 
 /// A pick with a constraint tool active: adds the entity to the picks and applies the
-/// constraint once they fit.
+/// constraint once they fit. `at` places part vertices in the sketch (see
+/// [`crate::sketch_links::sketch_vertex_at`]).
 pub fn pick_for_constraint(
     kind: ConstraintKind,
     sketch: &Sketch,
@@ -421,6 +431,7 @@ pub fn pick_for_constraint(
     selection: &mut SketchSelection,
     commands: &mut Commands,
     session: &SketchSession,
+    at: impl Fn(cadrs_sketch::Link) -> Option<SVec2>,
 ) {
     if matches!(e, SketchEntity::Constraint(_) | SketchEntity::Dimension(_)) {
         return;
@@ -428,9 +439,9 @@ pub fn pick_for_constraint(
     if !selection.0.contains(&e) {
         selection.0.push(e);
     }
-    match cadrs_sketch::constraint::fit(kind, sketch, &selection.0) {
-        Fit::Complete(cs) => {
-            add_constraints(commands, session, kind, cs);
+    match fit_op(kind, sketch, &selection.0, &at) {
+        FitOp::Complete(op) => {
+            edit_sketch(commands, session, *op);
             // Symmetric keeps its axis for the next pair (Onshape "pre-selects the axis line",
             // `constraints.md`).
             let axis = (kind == ConstraintKind::Symmetric)
@@ -439,11 +450,11 @@ pub fn pick_for_constraint(
             selection.0.clear();
             selection.0.extend(axis);
         }
-        Fit::Partial => {}
-        Fit::Invalid => {
+        FitOp::Partial => {}
+        FitOp::Invalid => {
             // Start again from this pick if it can begin a set.
             selection.0.clear();
-            if cadrs_sketch::constraint::fit(kind, sketch, &[e]) != Fit::Invalid {
+            if fit_op(kind, sketch, &[e], &at) != FitOp::Invalid {
                 selection.0.push(e);
             }
         }

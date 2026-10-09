@@ -316,6 +316,8 @@ fn classify(s: &Sketch, e: SketchEntity) -> Option<Pick> {
             // A Bézier curve is sized by its points (dimension those).
             CurveKind::Bezier { .. } => return None,
         },
+        // A used part vertex: its point.
+        SketchEntity::Link(l) => Pick::Point(PointRef::Point(s.linked_point(l)?)),
         SketchEntity::Dimension(_) | SketchEntity::Constraint(_) | SketchEntity::Text(_) => return None,
     })
 }

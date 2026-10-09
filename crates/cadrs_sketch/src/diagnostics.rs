@@ -419,6 +419,7 @@ pub fn constraint_type(c: &crate::Constraint) -> Option<ItemType> {
         SymmetricPoints(..) | SymmetricCurves(..) => ItemType::Symmetric,
         EqualOffset(..) => ItemType::Offset,
         Use(..) => ItemType::Projected,
+        Pierce(_, crate::Link::Vertex { .. }) => ItemType::Projected,
         Pierce(..) => ItemType::Pierce,
         Curvature(..) => ItemType::Curvature,
         Center(..) | EqualDistance(..) | TextAspect(_) => return None,

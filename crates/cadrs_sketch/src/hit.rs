@@ -20,6 +20,10 @@ pub enum Entity {
     Origin,
     /// A text entity (S16), picked on its outlines.
     Text(crate::TextId),
+    /// Geometry outside the sketch picked in it: a part vertex ([`crate::Link::Vertex`]),
+    /// which a constraint tool takes as the point it projects to (used first if it isn't; see
+    /// [`crate::constraint::fit_op`]).
+    Link(crate::Link),
 }
 
 /// A hit-test result.

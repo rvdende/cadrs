@@ -535,6 +535,8 @@ pub fn glyph_groups(s: &Sketch) -> Vec<(Host, Vec<GroupGlyph>)> {
             }
             // The link of a projected curve sits on it (S20.2: it can be deleted).
             ConstraintOf::Use(CurveRef::Curve(k), _) => add(Host::Curve(k), GlyphIcon::Use, true, id),
+            // A used part vertex is a projected point: the Use link.
+            ConstraintOf::Pierce(p, cadrs_sketch::Link::Vertex { .. }) => add(Host::Point(p), GlyphIcon::Use, true, id),
             ConstraintOf::Pierce(p, _) => add(Host::Point(p), GlyphIcon::Pierce, true, id),
             // The offset chain's shared distance and a rectangle's center are not drawn.
             ConstraintOf::EqualOffset(..)

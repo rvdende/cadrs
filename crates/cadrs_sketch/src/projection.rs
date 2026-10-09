@@ -133,6 +133,32 @@ impl Sketch {
         Some(id)
     }
 
+    /// Adds a point held where a link puts it (a used part vertex, [`Link::Vertex`]), with its
+    /// Pierce constraint. Returns `None` if the link is used already.
+    pub fn add_projected_point(&mut self, at: Vec2, link: Link) -> Option<PointId> {
+        if self.linked_point(link).is_some() {
+            return None;
+        }
+        let p = self.add_point(at);
+        self.constraints.insert(ConstraintOf::Pierce(PointRef::Point(p), link));
+        Some(p)
+    }
+
+    /// True for the point of a used part vertex ([`Link::Vertex`]).
+    pub fn is_used_vertex(&self, p: PointId) -> bool {
+        self.constraints
+            .values()
+            .any(|c| matches!(*c, ConstraintOf::Pierce(PointRef::Point(q), Link::Vertex { .. }) if q == p))
+    }
+
+    /// The point a Pierce constraint with this link holds.
+    pub fn linked_point(&self, link: Link) -> Option<PointId> {
+        self.constraints.values().find_map(|c| match *c {
+            ConstraintOf::Pierce(PointRef::Point(p), l) if l == link => Some(p),
+            _ => None,
+        })
+    }
+
     /// Moves a projected curve to its shape as it is now. Returns false if the shape is of
     /// another kind than the curve (the source changed type: the link is broken).
     pub fn set_projected(&mut self, curve: CurveId, shape: Projected) -> bool {

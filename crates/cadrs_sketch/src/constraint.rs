@@ -64,6 +64,11 @@ pub enum PointSpec {
     /// The sketch point at this position.
     At(Vec2),
     Origin,
+    /// An existing point.
+    Point(PointId),
+    /// The point held where a link puts it (a used part vertex; see
+    /// [`Sketch::add_projected_point`](crate::Sketch::add_projected_point)).
+    Linked(crate::Link),
 }
 
 /// A curve a constraint spec refers to.
@@ -301,6 +306,8 @@ fn resolve_point(s: &Sketch, p: PointSpec) -> Option<PointRef> {
     match p {
         PointSpec::At(pos) => s.point_at(pos, MERGE_EPS).map(PointRef::Point),
         PointSpec::Origin => Some(PointRef::Origin),
+        PointSpec::Point(id) => s.points.contains_key(id).then_some(PointRef::Point(id)),
+        PointSpec::Linked(link) => s.linked_point(link).map(PointRef::Point),
     }
 }
 
@@ -492,8 +499,80 @@ fn classify(s: &Sketch, e: crate::SketchEntity) -> Option<Pick> {
             CurveKind::Bezier { .. } => Pick::Bezier(CurveRef::Curve(c)),
             _ => Pick::Round(CurveRef::Curve(c)),
         },
+        // A used part vertex: its point.
+        E::Link(l) => Pick::Point(PointRef::Point(s.linked_point(l)?)),
         E::Dimension(_) | E::Constraint(_) | E::Text(_) => return None,
     })
+}
+
+/// What a constraint tool does with a selection: [`fit`], as the edit to make.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FitOp {
+    Complete(Box<crate::SketchOp>),
+    Partial,
+    Invalid,
+}
+
+/// [`fit`] for a selection that may hold part vertices ([`crate::SketchEntity::Link`]): those
+/// not used yet are used first, as points where `at` projects them, and the constraints refer
+/// to them by link (one undoable edit). `None` from `at`: the vertex is gone (invalid).
+pub fn fit_op(kind: ConstraintKind, s: &Sketch, sel: &[crate::SketchEntity], at: impl Fn(crate::Link) -> Option<Vec2>) -> FitOp {
+    let mut items = Vec::new();
+    for e in sel {
+        if let crate::SketchEntity::Link(l) = *e
+            && s.linked_point(l).is_none()
+        {
+            let Some(p) = at(l) else { return FitOp::Invalid };
+            items.push((crate::projection::Projected::Point(p), l));
+        }
+    }
+    let add = |constraints| crate::SketchOp::AddConstraint {
+        constraints,
+        label: kind.undo_label(),
+    };
+    if items.is_empty() {
+        return match fit(kind, s, sel) {
+            Fit::Complete(cs) => FitOp::Complete(Box::new(add(cs))),
+            Fit::Partial => FitOp::Partial,
+            Fit::Invalid => FitOp::Invalid,
+        };
+    }
+    let mut trial = s.clone();
+    for (shape, l) in &items {
+        if let crate::projection::Projected::Point(p) = shape {
+            trial.add_projected_point(*p, *l);
+        }
+    }
+    match fit(kind, &trial, sel) {
+        Fit::Complete(cs) => {
+            // The new points by their links; everything else by id.
+            let point = |p: PointRef| {
+                Some(match p {
+                    PointRef::Point(id) if s.points.contains_key(id) => PointSpec::Point(id),
+                    PointRef::Point(id) => {
+                        PointSpec::Linked(items.iter().map(|(_, l)| *l).find(|l| trial.linked_point(*l) == Some(id))?)
+                    }
+                    PointRef::Origin => PointSpec::Origin,
+                })
+            };
+            let curve = |c: CurveRef| {
+                Some(match c {
+                    CurveRef::Curve(id) => CurveSpec::Id(id),
+                    CurveRef::XAxis => CurveSpec::XAxis,
+                    CurveRef::YAxis => CurveSpec::YAxis,
+                })
+            };
+            let Some(specs) = cs.iter().map(|c| c.map(&point, &curve)).collect::<Option<Vec<ConstraintSpec>>>() else {
+                return FitOp::Invalid;
+            };
+            FitOp::Complete(Box::new(crate::SketchOp::Batch(vec![
+                crate::SketchOp::UseConstruction { items },
+                crate::SketchOp::AddConstraints(specs),
+            ])))
+        }
+        Fit::Partial => FitOp::Partial,
+        Fit::Invalid => FitOp::Invalid,
+    }
 }
 
 /// The constraints a tool adds for a selection (in pick order), following Onshape: two points
@@ -846,5 +925,47 @@ mod tests {
         assert!(s.add_constraint(h.resolve(&s).unwrap()));
         assert!(!s.add_constraint(h.resolve(&s).unwrap()));
         assert!(!s.add_constraint(ConstraintOf::Coincident(PointRef::Origin, PointRef::Origin)));
+    }
+
+    /// A part vertex picked with a constraint tool is used first (a point held where it
+    /// projects), then constrained to as that point; it stays its own point, and a second
+    /// constraint to it reuses it.
+    #[test]
+    fn constraining_to_a_part_vertex_uses_it_first() {
+        use crate::{FaceName, FaceOrigin, Link, SketchEntity, VertexName};
+        let face = |curve| FaceName::new(uuid::Uuid::nil(), FaceOrigin::Side { region: 1, curve });
+        let vertex = Link::Vertex {
+            feature: uuid::Uuid::nil(),
+            vertex: VertexName { faces: [face(1), face(2), face(3)], index: 0 },
+        };
+        let corner = Vec2::new(20.0, 10.0);
+        let mut s = Sketch::new();
+        let line = s.add_line(Vec2::new(0.0, 0.0), Vec2::new(15.0, 5.0));
+        let Some(CurveKind::Line { a, b }) = s.curves.get(line).map(|c| c.kind) else { unreachable!() };
+        let sel = [SketchEntity::Point(b), SketchEntity::Link(vertex)];
+        let FitOp::Complete(op) = fit_op(ConstraintKind::Coincident, &s, &sel, |_| Some(corner)) else {
+            panic!("a point and a vertex fit Coincident");
+        };
+        op.apply(&mut s).unwrap();
+        let p = s.linked_point(vertex).expect("the vertex is used");
+        assert_ne!(p, b, "the vertex keeps its own point");
+        assert!(s.is_used_vertex(p));
+        assert!(s.pos(b).distance(corner) < 1e-9, "the line's end is on the vertex");
+        // Horizontal from the other end to the (now used) vertex: no second point.
+        let points = s.points.len();
+        let sel = [SketchEntity::Point(a), SketchEntity::Link(vertex)];
+        let FitOp::Complete(op) = fit_op(ConstraintKind::Horizontal, &s, &sel, |_| Some(corner)) else {
+            panic!("two points fit Horizontal");
+        };
+        op.apply(&mut s).unwrap();
+        assert_eq!(s.points.len(), points);
+        assert!((s.pos(a).y - corner.y).abs() < 1e-9);
+        // A vertex that is gone does not fit.
+        let other = Link::Vertex {
+            feature: uuid::Uuid::nil(),
+            vertex: VertexName { faces: [face(4), face(5), face(6)], index: 0 },
+        };
+        let sel = [SketchEntity::Point(a), SketchEntity::Link(other)];
+        assert_eq!(fit_op(ConstraintKind::Coincident, &s, &sel, |_| None), FitOp::Invalid);
     }
 }

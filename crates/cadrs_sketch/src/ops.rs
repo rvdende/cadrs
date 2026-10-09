@@ -476,6 +476,9 @@ impl SketchOp {
                         || !s.points.contains_key(b)
                         || s.pos(a).distance(s.pos(b)) > 1e-6
                         || s.curves_at(a).any(|k| s.curve_points(k).contains(&b))
+                        // A used part vertex stays its own point, coincident (as in Onshape).
+                        || s.is_used_vertex(a)
+                        || s.is_used_vertex(b)
                     {
                         continue;
                     }
@@ -908,9 +911,12 @@ impl SketchOp {
             SketchOp::Use { items } => {
                 let mut added = 0;
                 for (shape, link) in items {
-                    if s.add_projected(shape.clone(), *link).is_some() {
-                        added += 1;
-                    }
+                    // A part vertex is a point; anything else a curve.
+                    let new = match shape {
+                        crate::projection::Projected::Point(p) => s.add_projected_point(*p, *link).is_some(),
+                        _ => s.add_projected(shape.clone(), *link).is_some(),
+                    };
+                    added += new as usize;
                 }
                 if added == 0 {
                     return Err("nothing new to use".into());
@@ -919,6 +925,10 @@ impl SketchOp {
             }
             SketchOp::UseConstruction { items } => {
                 for (shape, link) in items {
+                    if let crate::projection::Projected::Point(p) = shape {
+                        s.add_projected_point(*p, *link);
+                        continue;
+                    }
                     if let Some(c) = s.add_projected(shape.clone(), *link)
                         && let Some(c) = s.curves.get_mut(c)
                     {

@@ -654,7 +654,8 @@ fn prune_selection(
         SketchEntity::Dimension(d) => sketch.dimensions.contains_key(d),
         SketchEntity::Constraint(c) => sketch.constraints.contains_key(c),
         SketchEntity::Text(t) => sketch.texts.contains_key(t),
-        SketchEntity::Origin => true,
+        // A part vertex: drawn while it exists (`sketch_links`).
+        SketchEntity::Origin | SketchEntity::Link(_) => true,
     };
     if !selection.0.iter().all(exists) {
         selection.0.retain(exists);
@@ -778,7 +779,7 @@ pub(crate) fn sketch_pointer(
     mut hover: ResMut<SketchHover>,
     mut selection: ResMut<SketchSelection>,
     mut flow: ResMut<QuickDimFlow>,
-    (overlay, analysis, mut glyph_offsets, mut region_sel, units, time, external): (
+    (overlay, analysis, mut glyph_offsets, mut region_sel, units, time, external, (cache, view, rect)): (
         Res<crate::sketch_glyphs::SketchOverlay>,
         Res<crate::sketch_constrain::SketchAnalysis>,
         ResMut<crate::sketch_glyphs::GlyphOffsets>,
@@ -786,6 +787,7 @@ pub(crate) fn sketch_pointer(
         Res<crate::WorkspaceUnits>,
         Res<Time>,
         Res<ExternalSnap>,
+        (Res<crate::parts::PartCache>, Res<crate::viewport::ViewportView>, Res<ViewportRect>),
     ),
     mut commands: Commands,
 ) {
@@ -817,8 +819,17 @@ pub(crate) fn sketch_pointer(
     };
     let select = tool.tool == SketchTool::Select;
     let dimension_tool = tool.tool == SketchTool::Dimension;
+    // A part vertex (selecting, or with a constraint tool): constrained to as a used point.
+    let features = doc.as_deref().and_then(|d| d.doc.element(s.element)).map_or(&[][..], |el| el.features());
+    let frame = features.iter().find(|f| f.id == s.feature).and_then(|f| f.sketch()?.plane).map(|p| p.frame());
+    let vertex_at = |pos: Vec2| {
+        (select || constraint_tool.is_some())
+            .then(|| crate::sketch_links::vertex_under(features, s.feature, &cache, &view.view, &rect, pos))
+            .flatten()
+            .map(SketchEntity::Link)
+    };
     // What is under the pointer for selecting: a constraint glyph (with no tool), a dimension
-    // value (with no tool or the Dimension tool), else a point or curve.
+    // value (with no tool or the Dimension tool), else a point, a part vertex or a curve.
     let pick_at = |pos: Vec2| {
         select
             .then(|| crate::sketch_glyphs::glyph_at(&overlay, pos))
@@ -831,10 +842,14 @@ pub(crate) fn sketch_pointer(
                     .map(SketchEntity::Dimension)
             })
             .or_else(|| {
-                hit_test(sketch, SVec2::new(pos.x as f64, pos.y as f64), |p| {
+                let hit = hit_test(sketch, SVec2::new(pos.x as f64, pos.y as f64), |p| {
                     map.to_screen64(p)
                 })
-                .map(|h| h.entity)
+                .map(|h| h.entity);
+                match hit {
+                    Some(SketchEntity::Point(_) | SketchEntity::Origin) => hit,
+                    _ => vertex_at(pos).or(hit),
+                }
             })
     };
     let mut drag_moved = false;
@@ -908,7 +923,8 @@ pub(crate) fn sketch_pointer(
                     && tool.tool == SketchTool::Select
                     && let Some(p) = draw.press
                     && !p.began
-                    && p.hit.is_none()
+                    // A part vertex under the press doesn't stop a box selection.
+                    && matches!(p.hit, None | Some(SketchEntity::Link(_)))
                     && p.screen.distance(pos) > DRAG_THRESHOLD
                 {
                     draw.state = DrawState::BoxSelect { start: p.screen };
@@ -1015,6 +1031,11 @@ pub(crate) fn sketch_pointer(
                                 &mut selection,
                                 &mut commands,
                                 s,
+                                |l| {
+                                    let frame = frame?;
+                                    crate::sketch_links::vertex_at(features, s.feature, &frame, &cache, l)
+                                        .map(|(p, _)| p)
+                                },
                             ),
                             // Pierce's curve is outside the sketch (`sketch_links`).
                             None if kind != cadrs_sketch::ConstraintKind::Pierce => selection.0.clear(),
@@ -2345,8 +2366,8 @@ fn sketch_edit_keys(
                                 curves.push(tx.lines[0]);
                             }
                         }
-                        // The origin cannot be deleted.
-                        SketchEntity::Origin => {}
+                        // The origin and part vertices cannot be deleted.
+                        SketchEntity::Origin | SketchEntity::Link(_) => {}
                     }
                 }
                 // A point selected together with its curve goes with the curve; on its own,

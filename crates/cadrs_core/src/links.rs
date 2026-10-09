@@ -466,6 +466,10 @@ impl<'a> LinkContext<'a> {
         self.solid_where(feature, |s| s.faces.iter().any(|f| f.name.base() == face.base()))
     }
 
+    fn solid_with_vertex(&self, feature: uuid::Uuid, vertex: &cadrs_sketch::VertexName) -> Option<&'a Solid> {
+        self.solid_where(feature, |s| s.vertices.iter().any(|v| v.name.base() == vertex.base()))
+    }
+
     /// The exact curve of an edge an extrude swept from a sketch ellipse or offset ellipse (P3.7,
     /// PS21.4: the Funnel's rim is an offset ellipse, which its mesh polyline can't tell): the
     /// sketch curve moved along the sketch's normal to where the edge is. `None` for other
@@ -538,6 +542,8 @@ impl<'a> LinkContext<'a> {
             // A flat pattern's line lies in the flat, not in space ([`crate::parts::regenerate`]
             // places it from the build's flat pattern).
             Link::FlatLine { .. } => None,
+            // A vertex is a point (see [`LinkContext::pierce`]).
+            Link::Vertex { .. } => None,
             Link::SketchCurve { feature, curve } => {
                 let f = self.features.iter().find(|f| f.id.0 == feature)?;
                 let sk = f.sketch()?;
@@ -638,6 +644,22 @@ impl<'a> LinkContext<'a> {
                     index,
                 })
             }
+            Link::Vertex { feature, vertex } => {
+                let solid = self.solid_with_vertex(feature, &vertex)?;
+                if solid.vertex(&vertex).is_some() {
+                    return Some(link);
+                }
+                // Re-indexed: the vertex between the same faces nearest where the point was.
+                let base = solid.canonical_vertex(&vertex).base();
+                let near = *at.first()?;
+                let d = |v: &crate::solid::SolidVertex| frame.to_sketch(v.point).distance(near);
+                solid
+                    .vertices
+                    .iter()
+                    .filter(|v| v.name.base() == base)
+                    .min_by(|a, b| d(a).total_cmp(&d(b)))
+                    .map(|v| Link::Vertex { feature, vertex: v.name })
+            }
             Link::SketchCurve { .. } | Link::Plane(_) | Link::FlatLine { .. } => Some(link),
         }
     }
@@ -650,6 +672,10 @@ impl<'a> LinkContext<'a> {
 
     /// Where the linked curve pierces the plane: the crossing nearest `near`.
     pub fn pierce(&self, link: Link, frame: &PlaneFrame, near: Vec2) -> Option<Vec2> {
+        // A part vertex: where it is seen along the normal.
+        if let Link::Vertex { feature, vertex } = link {
+            return Some(frame.to_sketch(self.solid_with_vertex(feature, &vertex)?.vertex(&vertex)?.point));
+        }
         crossings(self.curve(link, frame)?, frame)
             .into_iter()
             .min_by(|a, b| a.distance(near).total_cmp(&b.distance(near)))

@@ -599,6 +599,7 @@ fn a_v3_document_loads_and_resolves() {
             links += 1;
             match l {
                 Link::Edge { edge, .. } => assert!(edge.faces.iter().all(|f| f.op == e1.0)),
+                Link::Vertex { vertex, .. } => assert!(vertex.faces.iter().all(|f| f.op == e1.0)),
                 Link::Silhouette { face, .. } => assert_eq!(face.op, e1.0),
                 Link::SketchCurve { .. } | Link::Plane(_) | Link::FlatLine { .. } => {}
             }

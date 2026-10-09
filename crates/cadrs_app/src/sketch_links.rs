@@ -9,6 +9,10 @@
 //! - **Pierce:** with the Pierce constraint tool, a sketch point and a part edge (or another
 //!   sketch's curve) that crosses the sketch plane, in either order: the point is held where
 //!   the curve pierces the plane.
+//! - **Part vertices:** selecting, or with a constraint tool, a part corner under the pointer
+//!   is hovered and picked (Shift adds it) like a sketch point. A constraint to it uses it
+//!   first: a point held where the vertex projects, with a Use link, constrained to as any
+//!   point ([`cadrs_sketch::constraint::fit_op`]).
 //!
 //! Only parts and sketches made before the edited sketch can be used, as in Onshape.
 
@@ -23,7 +27,7 @@ use cadrs_sketch::{
 };
 
 use crate::camera::ViewState;
-use crate::parts::{FaceOutlineGizmos, PartCache, pick_face};
+use crate::parts::{FaceOutlineGizmos, PartCache, pick_face, pick_vertex};
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
 use crate::sketch_tools::{SketchSelection, SketchToolsSet, execute, over_viewport};
 use crate::viewport::{ViewportArea, ViewportRect, ViewportView};
@@ -46,6 +50,13 @@ impl Plugin for SketchLinksPlugin {
                 Update,
                 draw_link_hover
                     .after(crate::sketch_draw::SketchDrawSet)
+                    .run_if(in_state(AppState::Document)),
+            )
+            .add_systems(
+                Update,
+                draw_vertex_picks
+                    .after(crate::sketch_draw::SketchDrawSet)
+                    .run_if(in_state(PartStudioMode::Sketching))
                     .run_if(in_state(AppState::Document)),
             )
             .add_systems(
@@ -266,6 +277,67 @@ fn same_shape(a: &Projected, b: &Projected) -> bool {
     }
 }
 
+/// The part vertex under the pointer, for a constraint to take (as Onshape lets a sketch
+/// constrain to a model vertex): a visible vertex of a part made before the sketch.
+pub fn vertex_under(
+    features: &[Feature],
+    sketch: FeatureId,
+    cache: &PartCache,
+    view: &ViewState,
+    rect: &ViewportRect,
+    cursor: Vec2,
+) -> Option<Link> {
+    let (part, vertex, _) = pick_vertex(cache, view, rect.offset(cursor))?;
+    let feature = cache.part(part)?.feature;
+    let (_, solids) = before(features, sketch, cache);
+    solids
+        .iter()
+        .any(|(f, _)| *f == feature)
+        .then_some(Link::Vertex { feature: feature.0, vertex })
+}
+
+/// Where a part vertex is in the sketch plane (seen along its normal), and in space; `None` if
+/// it is gone.
+pub fn vertex_at(
+    features: &[Feature],
+    sketch: FeatureId,
+    frame: &PlaneFrame,
+    cache: &PartCache,
+    link: Link,
+) -> Option<(cadrs_sketch::Vec2, Vec3)> {
+    let Link::Vertex { feature, vertex } = link else { return None };
+    let (earlier, solids) = before(features, sketch, cache);
+    let ctx = LinkContext {
+        solids: solids.clone(),
+        features: earlier,
+    };
+    let at = ctx.pierce(link, frame, cadrs_sketch::Vec2::ZERO)?;
+    let point = solids
+        .iter()
+        .filter(|(f, _)| f.0 == feature)
+        .find_map(|(_, s)| s.vertex(&vertex))
+        .or_else(|| solids.iter().find_map(|(_, s)| s.vertex(&vertex)))?
+        .point;
+    Some((at, v3(point)))
+}
+
+/// [`vertex_at`] in the plane of the edited sketch, for
+/// [`cadrs_sketch::constraint::fit_op`].
+pub fn sketch_vertex_at<'a>(
+    doc: &'a ActiveDocument,
+    s: &SketchSession,
+    cache: &'a PartCache,
+) -> impl Fn(Link) -> Option<cadrs_sketch::Vec2> + 'a {
+    let features = doc.doc.element(s.element).map_or(&[][..], |el| el.features());
+    let sketch = s.feature;
+    let frame = features
+        .iter()
+        .find(|f| f.id == sketch)
+        .and_then(|f| f.sketch()?.plane)
+        .map(|p| p.frame());
+    move |l| vertex_at(features, sketch, &frame?, cache, l).map(|(p, _)| p)
+}
+
 /// What Pierce would take under the pointer: an edge or curve that crosses the plane.
 fn pierce_hover(
     features: &[Feature],
@@ -483,6 +555,45 @@ fn draw_link_hover(pick: Res<LinkPick>, view: Res<ViewportView>, mut g: Gizmos<F
                     g.circle(Isometry3d::new(w(p), rot), r * px, color).resolution(24);
                 }
             }
+        }
+    }
+}
+
+/// A hovered or selected part vertex (a constraint takes it): an orange disc on the vertex,
+/// facing the viewer, larger when selected.
+#[allow(clippy::too_many_arguments)]
+fn draw_vertex_picks(
+    hover: Res<crate::sketch_tools::SketchHover>,
+    selection: Res<SketchSelection>,
+    session: Option<Res<SketchSession>>,
+    doc: Option<Res<ActiveDocument>>,
+    cache: Res<PartCache>,
+    view: Res<ViewportView>,
+    mut g: Gizmos<FaceOutlineGizmos>,
+) {
+    let (Some(s), Some(doc)) = (session.as_deref(), doc.as_deref()) else { return };
+    let links = selection.0.iter().map(|e| (*e, true)).chain(hover.0.map(|e| (e, false)));
+    let features = doc.doc.element(s.element).map_or(&[][..], |el| el.features());
+    let Some(frame) = features
+        .iter()
+        .find(|f| f.id == s.feature)
+        .and_then(|f| f.sketch()?.plane)
+        .map(|p| p.frame())
+    else {
+        return;
+    };
+    let px = view.view.scale;
+    let rot = Quat::from_rotation_arc(Vec3::Z, view.view.back());
+    for (e, selected) in links {
+        let SketchEntity::Link(link) = e else { continue };
+        let Some((_, at)) = vertex_at(features, s.feature, &frame, &cache, link) else { continue };
+        let (color, radii): (Color, &[f32]) = if selected {
+            (Color::srgb_u8(0xf6, 0xbc, 0x1a), &[1.0, 2.0, 3.0, 4.0, 5.0])
+        } else {
+            (Color::srgb_u8(0xf2, 0xb1, 0x3a), &[1.0, 2.0, 3.0, 4.0])
+        };
+        for r in radii {
+            g.circle(Isometry3d::new(at, rot), r * px, color).resolution(24);
         }
     }
 }
