@@ -16,6 +16,7 @@ default-members = [
     "crates/cadrs_idf",
     "crates/cadrs_kicad",
     "crates/cadrs_kernel",
+    "crates/cadrs_mcp",
     "crates/cadrs_pcb",
     "crates/cadrs_render",
     "crates/cadrs_sheetmetal",
@@ -69,6 +70,12 @@ ureq = "3"
 blake3 = "1"
 bincode = "1"
 base64 = "0.22"
+# The MCP server (cadrs_mcp): the official Rust SDK over Streamable HTTP, served by axum on a
+# tokio runtime of its own (MIT/Apache-2.0).
+rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros"] }
+tokio-util = "0.7"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 opencascade = { git = "https://github.com/rvdende/opencascade-rs", branch = "main" }
 
 cadrs_core = { path = "crates/cadrs_core" }
@@ -87,6 +94,7 @@ cadrs_fea = { path = "crates/cadrs_fea" }
 cadrs_render = { path = "crates/cadrs_render" }
 cadrs_onshape = { path = "crates/cadrs_onshape" }
 cadrs_sheetmetal = { path = "crates/cadrs_sheetmetal" }
+cadrs_mcp = { path = "crates/cadrs_mcp" }
 
 # Small optimization for our own code, full optimization for dependencies (Bevy is slow in pure debug).
 [profile.dev]

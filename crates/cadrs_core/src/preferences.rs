@@ -6,6 +6,9 @@
 //! ([`MousePreset::sheet_action`]), as Onshape's do (D2.2: right- or middle-drag pans).
 //!
 //! The wheel zooms in every preset.
+//!
+//! And the **MCP server** ([`McpPreferences`]): whether AI assistants may drive the app over
+//! the Model Context Protocol, and on which loopback port.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -219,11 +222,36 @@ impl MousePreset {
     }
 }
 
+/// The MCP server (Model Context Protocol, `cadrs_mcp`): off unless turned on; when on, the app
+/// serves `http://127.0.0.1:<port>/mcp` for AI assistants on this machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpPreferences {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_port")]
+    pub port: u16,
+}
+
+/// `cadrs_mcp::DEFAULT_PORT` (this crate doesn't depend on the server).
+pub const DEFAULT_MCP_PORT: u16 = 7680;
+
+fn default_mcp_port() -> u16 {
+    DEFAULT_MCP_PORT
+}
+
+impl Default for McpPreferences {
+    fn default() -> Self {
+        Self { enabled: false, port: DEFAULT_MCP_PORT }
+    }
+}
+
 /// The local preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Preferences {
     #[serde(default)]
     pub mouse: MousePreset,
+    #[serde(default)]
+    pub mcp: McpPreferences,
 }
 
 impl Preferences {
@@ -311,9 +339,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cadrs-prefs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Preferences::load(&dir), Preferences::default());
-        let p = Preferences { mouse: MousePreset::SolidWorks };
+        let p = Preferences { mouse: MousePreset::SolidWorks, mcp: McpPreferences { enabled: true, port: 7700 } };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
+        // A file from before the MCP server reads with it off.
+        std::fs::write(Preferences::path(&dir), "(mouse: Creo)").unwrap();
+        assert_eq!(Preferences::load(&dir), Preferences { mouse: MousePreset::Creo, mcp: McpPreferences::default() });
         // An unreadable file reads as the defaults.
         std::fs::write(Preferences::path(&dir), "not ron").unwrap();
         assert_eq!(Preferences::load(&dir), Preferences::default());

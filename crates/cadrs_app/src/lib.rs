@@ -45,6 +45,7 @@ pub mod rebuild_indicator;
 pub mod reference_manager;
 pub mod manipulator;
 pub mod mass_props;
+pub mod mcp;
 pub mod measure;
 pub mod material_dialog;
 pub mod panel_tab;
@@ -621,7 +622,7 @@ impl Plugin for CadrsAppPlugin {
             // P3I.3: the Sheet metal table and flat view, and the Modify joint dialog.
             .add_plugins((sheetmetal_table::SheetMetalTablePlugin, sheetmetal_joint_ui::ModifyJointUiPlugin))
             .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
-            .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin, analysis::AnalysisPlugin, preferences_ui::PreferencesPlugin, manipulator::ManipulatorPlugin))
+            .add_plugins((tab_folders::TabFoldersPlugin, tab_manager::TabManagerPlugin, analysis::AnalysisPlugin, preferences_ui::PreferencesPlugin, manipulator::ManipulatorPlugin, mcp::McpPlugin))
             .add_plugins((variables_ui::VariablesPlugin, scale_ui::ScalePlugin, threads_ui::ThreadsPlugin, simulation_ui::SimulationPlugin, render_ui::RenderUiPlugin, export_image::ExportImagePlugin))
             .add_plugins((import_dialog::ImportDialogPlugin, import_file::ImportFilePlugin, picture::PicturePlugin, file_drop::FileDropPlugin))
             .init_resource::<ExportDirOverride>()

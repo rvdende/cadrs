@@ -1,0 +1,20 @@
+[package]
+name = "cadrs_mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The MCP (Model Context Protocol) server that lets AI assistants drive cadrs: the protocol and
+# the tools' parameters, without Bevy. The app runs the calls (`cadrs_app::mcp`).
+[dependencies]
+rmcp.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }

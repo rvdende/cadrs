@@ -1,0 +1,33 @@
+// MCP phase 1: the Preferences' AI assistants (MCP) section.
+// 01 the Preferences dialog: the mouse controls, then "AI assistants (MCP)" with the Enable MCP
+//    server switch off and the endpoint (http://127.0.0.1:7680/mcp).
+// 02 the switch on; 03 OK: the server starts ("MCP server on http://127.0.0.1:7680/mcp").
+// 04 Preferences again: the switch is still on (kept in the store's preferences.ron).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("account")),
+        WaitFor("account-preferences"),
+        Click(ui("account-preferences")),
+        WaitFor("preferences-dialog"),
+        ExpectText("pref-mcp-heading", "AI assistants (MCP)"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-preferences-mcp-off"),
+        Click(ui("pref-mcp-enabled")),
+        Wait(3),
+        Screenshot("02-mcp-switch-on"),
+        Click(ui("pref-ok")),
+        Wait(5),
+        Screenshot("03-mcp-server-started"),
+        Click(ui("account")),
+        WaitFor("account-preferences"),
+        Click(ui("account-preferences")),
+        WaitFor("preferences-dialog"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-preferences-mcp-kept"),
+        Click(ui("pref-cancel")),
+    ],
+)

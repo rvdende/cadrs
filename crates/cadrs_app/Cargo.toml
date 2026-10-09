@@ -28,6 +28,8 @@ cadrs_eda.workspace = true
 # KiCad project import: a crutch that can be dropped (remove the feature and `pcb::kicad`).
 cadrs_kicad = { workspace = true, optional = true }
 cadrs_easyeda = { workspace = true, optional = true }
+cadrs_mcp.workspace = true
+serde_json.workspace = true
 directories.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -4,6 +4,9 @@
 //! `preferences.ron` ([`cadrs_core::preferences`]); it is this machine's, not a document's, so
 //! nothing is undone. The Part Studio and Assembly viewports (`crate::viewport`) and the
 //! drawing sheet (`crate::drawing`) read it for their drags.
+//!
+//! Below it, **AI assistants (MCP)**: the *Enable MCP server* switch and the endpoint it serves
+//! (`crate::mcp` starts and stops the server as OK changes it).
 
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
@@ -11,7 +14,7 @@ use bevy::text::FontWeight;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{Modifiers, MouseButton, MousePreset, Preferences, ViewAction};
 use cadrs_ui::prelude::*;
-use cadrs_ui::{Button, DialogClose, MenuAction, MenuItem, Select, SelectChange, SelectState, form_row, open_menu};
+use cadrs_ui::{Button, DialogClose, MenuAction, MenuItem, Select, SelectChange, SelectState, Switch, SwitchState, form_row, open_menu};
 
 use crate::{AppState, DocumentStore};
 
@@ -64,6 +67,16 @@ pub fn mouse_button(b: PointerButton) -> MouseButton {
 /// Sets and saves the mouse preset (the dialog's OK; scenarios too).
 pub fn set_mouse_preset(world: &mut World, preset: MousePreset) {
     world.resource_mut::<LocalPreferences>().0.mouse = preset;
+    save(world);
+}
+
+/// Turns the MCP server on or off and saves the choice (the dialog's OK; scenarios too).
+pub fn set_mcp_enabled(world: &mut World, on: bool) {
+    world.resource_mut::<LocalPreferences>().0.mcp.enabled = on;
+    save(world);
+}
+
+fn save(world: &mut World) {
     let prefs = world.resource::<LocalPreferences>().0;
     if let Some(store) = world.get_resource::<DocumentStore>()
         && let Err(e) = prefs.save(store.0.root())
@@ -121,6 +134,8 @@ fn gesture_text(preset: MousePreset, action: ViewAction) -> String {
 /// Opens the Preferences dialog with the preferences in force.
 pub fn open_preferences(world: &mut World) {
     let preset = world.resource::<LocalPreferences>().mouse();
+    let mcp = world.resource::<LocalPreferences>().0.mcp;
+    let endpoint = cadrs_mcp::url(std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, mcp.port)));
     let state = *world.resource::<State<AppState>>().get();
     let theme = world.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
@@ -148,8 +163,29 @@ pub fn open_preferences(world: &mut World) {
                         t.text(gesture_text(preset, action), t.font_base, FontWeight::NORMAL, t.muted_foreground),
                     ));
                 }
-                // Room for the preset list, which opens down over the rows.
-                b.spawn(Node { height: Val::Px(36.0), ..default() });
+                b.spawn((
+                    Name::new("pref-mcp-heading"),
+                    t.text("AI assistants (MCP)", t.font_base, FontWeight::BOLD, t.foreground),
+                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
+                ));
+                b.spawn(form_row(t, "pref-mcp-row", "MCP server", 150.0))
+                    .with_child(Switch::new("pref-mcp-enabled").label("Enabled").on(mcp.enabled).build(t));
+                b.spawn(form_row(t, "pref-mcp-endpoint-row", "Endpoint", 150.0)).with_child((
+                    Name::new("pref-mcp-endpoint"),
+                    t.text(endpoint, t.font_base, FontWeight::NORMAL, t.muted_foreground),
+                ));
+                b.spawn((
+                    Name::new("pref-mcp-note"),
+                    t.text(
+                        "While it is on, AI assistants on this computer (Claude, Cursor, …) can create and edit documents.",
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Node { width: Val::Px(400.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
+                ))
+                // Wrapped (the theme's text doesn't wrap).
+                .insert(TextLayout::default());
             })
             .footer(move |f| {
                 let t = &tf;
@@ -192,6 +228,11 @@ fn save_preferences(world: &mut World) {
     let preset = qs.iter(world).find(|(n, _)| n.as_str() == "pref-mouse-preset").and_then(|(_, s)| MousePreset::ALL.get(s.selected).copied());
     if let Some(p) = preset {
         set_mouse_preset(world, p);
+    }
+    let mut qm = world.query::<(&Name, &SwitchState)>();
+    let mcp = qm.iter(world).find(|(n, _)| n.as_str() == "pref-mcp-enabled").map(|(_, s)| s.on);
+    if let Some(on) = mcp {
+        set_mcp_enabled(world, on);
     }
     world.trigger(DialogClose { entity: dialog });
 }
