@@ -46,6 +46,16 @@ pub enum Call {
     AddSketch(AddSketch),
     Extrude(Extrude),
     Screenshot(Screenshot),
+    AddFeature(AddFeature),
+    EditFeature(EditFeature),
+    GetFeature(FeatureName),
+    DeleteFeature(FeatureName),
+    ListFaces(PartStudio),
+    ListEdges(PartStudio),
+    Undo,
+    ImportStep(ImportStep),
+    ExportStep(ExportStep),
+    RunScenario(RunScenario),
 }
 
 /// What the app answers.
@@ -204,6 +214,63 @@ impl Cadrs {
         self.call(Call::Extrude(p)).await
     }
 
+    #[tool(description = "Add any feature to a Part Studio from JSON: its type and the fields that differ from \
+        the type's defaults (lengths in mm, angles in degrees). Returns its name, any rebuild error and the parts.")]
+    async fn add_feature(&self, Parameters(p): Parameters<AddFeature>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddFeature(p)).await
+    }
+
+    #[tool(description = "Change a feature: the given JSON fields are merged over its current ones.")]
+    async fn edit_feature(&self, Parameters(p): Parameters<EditFeature>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::EditFeature(p)).await
+    }
+
+    #[tool(description = "A feature's full JSON (its type and every field), to learn the format or edit it.")]
+    async fn get_feature(&self, Parameters(p): Parameters<FeatureName>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetFeature(p)).await
+    }
+
+    #[tool(description = "Delete a feature.")]
+    async fn delete_feature(&self, Parameters(p): Parameters<FeatureName>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::DeleteFeature(p)).await
+    }
+
+    #[tool(description = "Every face of the Part Studio's parts: its reference (\"ref\", for features and \
+        sketches), part, surface type, area, centre, plane normal, axis and radius.")]
+    async fn list_faces(&self, Parameters(p): Parameters<PartStudio>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ListFaces(p)).await
+    }
+
+    #[tool(description = "Every edge of the Part Studio's parts: its reference (\"ref\", for fillets, chamfers \
+        and directions), part, ends, length, and circle (centre, normal, radius) if it is one.")]
+    async fn list_edges(&self, Parameters(p): Parameters<PartStudio>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ListEdges(p)).await
+    }
+
+    #[tool(description = "Undo the open document's last change.")]
+    async fn undo(&self) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::Undo).await
+    }
+
+    #[tool(description = "Import a STEP file as a new document (its parts in a Part Studio) and open it.")]
+    async fn import_step(&self, Parameters(p): Parameters<ImportStep>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ImportStep(p)).await
+    }
+
+    #[tool(description = "Write the Part Studio's parts to a STEP file.")]
+    async fn export_step(&self, Parameters(p): Parameters<ExportStep>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ExportStep(p)).await
+    }
+
+    #[tool(description = "Run a script of UI steps in the app, as its scenario files do: Click(ui(\"name\")) on a \
+        named element, Click(xyz(x, y, z)) on a 3D point, ClickAt(x, y), DoubleClick, RightClick, Drag(from, to), \
+        MoveTo(x, y), Hover, Key(\"Ctrl+Z\"), Type(\"text\"), Wait(frames), WaitFor(\"name\"), \
+        ExpectText(\"name\", \"text\"), Custom(\"command\") and Screenshot(\"label\"). Each step waits for the app \
+        to settle. Returns the screenshots' paths (the last one as an image), or the step that failed.")]
+    async fn run_scenario(&self, Parameters(p): Parameters<RunScenario>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::RunScenario(p)).await
+    }
+
     #[tool(description = "Take a screenshot of the whole cadrs window (toolbar, feature list, 3D view, dialogs) \
         as it is now, scaled to fit max_size pixels. Use it to check what a change looks like.")]
     async fn screenshot(&self, Parameters(p): Parameters<Screenshot>) -> Result<CallToolResult, ErrorData> {
@@ -255,7 +322,7 @@ mod tests {
         // A screenshot comes back as an image block and its caption.
         let (tx, rx) = mpsc::channel();
         let cadrs = Cadrs::new(tx);
-        let call = rt.spawn(async move { cadrs.call(Call::Screenshot(Screenshot { max_size: None })).await });
+        let call = rt.spawn(async move { cadrs.call(Call::Screenshot(Screenshot { max_size: None, view: None })).await });
         rx.recv_timeout(Duration::from_secs(5)).unwrap().reply_image(vec![0x89, b'P', b'N', b'G'], "1600 × 1000".into());
         let result = rt.block_on(call).unwrap().unwrap();
         assert_eq!(result.content.len(), 2);

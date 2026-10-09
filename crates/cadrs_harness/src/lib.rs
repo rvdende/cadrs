@@ -298,6 +298,9 @@ impl Plugin for HarnessPlugin {
             app.insert_resource(RenderSurface { size, ..default() });
         }
 
+        // The scenario driver runs while there is a scenario: this one, or a live one an MCP
+        // client starts (`runner::start_live`).
+        app.add_systems(First, runner::drive);
         if let Some(scenario) = &self.scenario {
             app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
                 1.0 / 60.0,

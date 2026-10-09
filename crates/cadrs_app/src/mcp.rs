@@ -52,6 +52,15 @@ impl McpServer {
     }
 }
 
+/// How the app runs a scenario for run_scenario: set by the binary, which has the scenario
+/// runner (`cadrs_harness`). It gets the scenario's RON and an answer to call with the
+/// screenshots it took, or why it failed.
+#[derive(Resource, Clone, Copy)]
+pub struct McpScenarioHook(pub fn(&mut World, &str, ScenarioDone) -> Result<(), String>);
+
+/// How a scenario run answers.
+pub type ScenarioDone = Box<dyn FnOnce(Result<Vec<std::path::PathBuf>, String>) + Send>;
+
 /// Screenshots waiting for the app to settle.
 #[derive(Resource, Default)]
 struct WaitingShots(Vec<WaitingShot>);
@@ -104,8 +113,44 @@ fn run_calls(world: &mut World) {
     let Some(server) = world.resource::<McpServer>().server.as_ref() else { return };
     let requests: Vec<_> = std::iter::from_fn(|| server.try_next()).collect();
     for req in requests {
+        if let Call::RunScenario(p) = &req.call {
+            let ron = p.scenario.clone();
+            let Some(hook) = world.get_resource::<McpScenarioHook>().copied() else {
+                req.reply(Err("this build of cadrs can't run scenarios".into()));
+                continue;
+            };
+            // The request is answered when the scenario ends (or now, if it can't start).
+            let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(req)));
+            let answer = slot.clone();
+            let done: ScenarioDone = Box::new(move |result| {
+                let Some(req) = answer.lock().ok().and_then(|mut r| r.take()) else { return };
+                match result {
+                    Ok(shots) => {
+                        let paths: Vec<String> = shots.iter().map(|p| p.display().to_string()).collect();
+                        let caption = json!({ "screenshots": paths }).to_string();
+                        match shots.last().and_then(|p| std::fs::read(p).ok()) {
+                            Some(png) => req.reply_image(png, caption),
+                            None => req.reply(Ok(json!({ "screenshots": paths }))),
+                        }
+                    }
+                    Err(e) => req.reply(Err(e)),
+                }
+            });
+            if let Err(e) = hook.0(world, &ron, done)
+                && let Some(req) = slot.lock().ok().and_then(|mut r| r.take())
+            {
+                req.reply(Err(e));
+            }
+            continue;
+        }
         if let Call::Screenshot(p) = &req.call {
             let max = p.max_size.unwrap_or(1600).clamp(64, 8192);
+            if let Some(v) = &p.view {
+                if let Err(e) = turn_view(world, v) {
+                    req.reply(Err(e));
+                    continue;
+                }
+            }
             world.resource_mut::<WaitingShots>().0.push(WaitingShot { req, max, frames: 0, idle: 0 });
             continue;
         }
@@ -125,8 +170,41 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::AddPartStudio(p) => add_part_studio(world, p),
         Call::AddSketch(p) => add_sketch(world, p),
         Call::Extrude(p) => extrude(world, p),
-        Call::Screenshot(_) => Err("a screenshot is taken by take_screenshots".into()),
+        Call::Screenshot(_) | Call::RunScenario(_) => Err("handled by run_calls".into()),
+        Call::AddFeature(p) => add_feature(world, p),
+        Call::EditFeature(p) => edit_feature(world, p),
+        Call::GetFeature(p) => get_feature(world, p),
+        Call::DeleteFeature(p) => delete_feature(world, p),
+        Call::ListFaces(p) => list_faces(world, p.part_studio.as_deref()),
+        Call::ListEdges(p) => list_edges(world, p.part_studio.as_deref()),
+        Call::Undo => {
+            let mut d = doc_mut(world)?;
+            let what = d.undo().ok_or("nothing to undo")?;
+            Ok(json!({ "undone": what }))
+        }
+        Call::ImportStep(p) => import_step(world, &p.path),
+        Call::ExportStep(p) => export_step(world, p),
     }
+}
+
+/// Turns the 3D view to a standard view and zooms to fit.
+fn turn_view(world: &mut World, name: &str) -> Result<(), String> {
+    use crate::camera::StandardView as V;
+    let s = match name.to_ascii_lowercase().as_str() {
+        "front" => V::Front,
+        "back" => V::Back,
+        "left" => V::Left,
+        "right" => V::Right,
+        "top" => V::Top,
+        "bottom" => V::Bottom,
+        "iso" | "isometric" => V::Isometric,
+        _ => return Err(format!("unknown view {name:?}: front, back, left, right, top, bottom or iso")),
+    };
+    let mut view = world.resource_mut::<crate::viewport::ViewportView>();
+    let to = view.target().oriented(s);
+    view.animate_to(to);
+    crate::viewport::zoom_to_fit(world);
+    Ok(())
 }
 
 /// Takes the waiting screenshots once the app has settled (after every system that flags
@@ -402,15 +480,247 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     let ops = sketch_ops(&p.entities)?;
     let mut d = doc_mut(world)?;
     let element = part_studio(&d, p.part_studio.as_deref())?;
+    let features = d.doc.element(element).ok_or("the Part Studio is gone")?.features().to_vec();
+    let plane = match (&p.plane, &p.face, &p.plane_feature) {
+        (Some(pl), None, None) => plane_ref(*pl),
+        (None, Some(face), None) => {
+            let face: cadrs_core::FaceRef = serde_json::from_value(face.clone()).map_err(|e| format!("face: {e}"))?;
+            cadrs_core::parts::face_plane(&features, FeatureId(face.face.op), face.face).ok_or("that face is not a planar face of a part")?
+        }
+        (None, None, Some(name)) => {
+            let f = features.iter().find(|f| &f.name == name).ok_or_else(|| format!("no feature named {name:?}"))?;
+            cadrs_core::parts::plane_feature_ref(&features, f.id).ok_or_else(|| format!("{name:?} is not a Plane feature"))?
+        }
+        _ => return Err("give exactly one of plane, face or plane_feature".into()),
+    };
+    let frame = plane.frame();
     let feature = FeatureId::new();
-    d.execute(&AddSketch { element, feature, plane: Some(plane_ref(p.plane)) }).map_err(|e| e.to_string())?;
+    d.execute(&AddSketch { element, feature, plane: Some(plane) }).map_err(|e| e.to_string())?;
     if !ops.is_empty() {
         d.execute(&cadrs_core::commands::EditSketch { element, feature, op: SketchOp::Batch(ops) }).map_err(|e| e.to_string())?;
     }
     let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
     let f = e.feature(feature).ok_or("the sketch is gone")?;
     let s = f.sketch().ok_or("not a sketch")?;
-    Ok(json!({ "sketch": f.name, "plane": format!("{:?}", p.plane), "regions": sketch_regions(&s.geometry) }))
+    let n = cross(frame.u, frame.v);
+    Ok(json!({
+        "sketch": f.name,
+        "frame": { "origin": frame.origin.map(round), "x": frame.u.map(round), "y": frame.v.map(round), "normal": n.map(round) },
+        "regions": sketch_regions(&s.geometry),
+    }))
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// A feature type's defaults, for add_feature.
+fn template(kind: &str) -> Option<FeatureKind> {
+    use cadrs_core::{advanced, applied, draft, pattern, plane, surfacing, transform};
+    Some(match kind.to_ascii_lowercase().replace([' ', '_'], "").as_str() {
+        "extrude" => FeatureKind::Extrude(ExtrudeFeature::default()),
+        "revolve" => FeatureKind::Revolve(Default::default()),
+        "fillet" => FeatureKind::Fillet(applied::FilletFeature::default()),
+        "chamfer" => FeatureKind::Chamfer(applied::ChamferFeature::default()),
+        "hole" => FeatureKind::Hole(applied::HoleFeature::default()),
+        "shell" => FeatureKind::Shell(applied::ShellFeature::default()),
+        "plane" => FeatureKind::Plane(plane::PlaneFeature::default()),
+        "sweep" => FeatureKind::Sweep(advanced::SweepFeature::default()),
+        "loft" => FeatureKind::Loft(advanced::LoftFeature::default()),
+        "split" => FeatureKind::Split(advanced::SplitFeature::default()),
+        "pattern" | "linearpattern" => FeatureKind::Pattern(pattern::PatternFeature::new(pattern::PatternKind::Linear)),
+        "circularpattern" => FeatureKind::Pattern(pattern::PatternFeature::new(pattern::PatternKind::Circular)),
+        "mirror" => FeatureKind::Mirror(pattern::MirrorFeature::default()),
+        "draft" => FeatureKind::Draft(draft::DraftFeature::default()),
+        "boolean" => FeatureKind::Boolean(Default::default()),
+        "deletepart" => FeatureKind::DeletePart(Default::default()),
+        "transform" => FeatureKind::Transform(transform::TransformFeature::default()),
+        "thicken" => FeatureKind::Thicken(surfacing::ThickenFeature::default()),
+        "helix" => FeatureKind::Helix(surfacing::HelixFeature::default()),
+        _ => return None,
+    })
+}
+
+/// `patch` merged into `base`: objects key by key, anything else replaced.
+fn merge(base: &mut Value, patch: &Value) {
+    match (base, patch) {
+        (Value::Object(b), Value::Object(p)) => {
+            for (k, v) in p {
+                merge(b.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (b, p) => *b = p.clone(),
+    }
+}
+
+/// `kind` with the JSON fields of `patch` merged over its own.
+fn patched(kind: &FeatureKind, patch: &Value) -> Result<FeatureKind, String> {
+    let mut v = serde_json::to_value(kind).map_err(|e| e.to_string())?;
+    if !patch.is_null() {
+        let inner = v.as_object_mut().and_then(|o| o.values_mut().next()).ok_or("this feature has no fields to set")?;
+        merge(inner, patch);
+    }
+    serde_json::from_value(v).map_err(|e| format!("bad params: {e}"))
+}
+
+/// What a change left: the feature's name, its error or warning, and the parts.
+fn outcome(world: &World, element: ElementId, feature: FeatureId) -> Result<Value, String> {
+    let d = doc(world)?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let name = e.feature(feature).map(|f| f.name.clone()).unwrap_or_default();
+    let state = studio_state(e.name.as_str(), e.features());
+    let mut out = json!({ "feature": name, "parts": state["parts"] });
+    if let Some(f) = state["features"].as_array().and_then(|fs| fs.iter().find(|f| f["name"] == name.as_str())) {
+        for k in ["error", "warning"] {
+            if let Some(m) = f.get(k) {
+                out[k] = m.clone();
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn feature_named(d: &ActiveDocument, element: ElementId, name: &str) -> Result<cadrs_core::Feature, String> {
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    e.features().iter().find(|f| f.name == name).cloned().ok_or_else(|| format!("no feature named {name:?}"))
+}
+
+fn add_feature(world: &mut World, p: &tools::AddFeature) -> Result<Value, String> {
+    let base = template(&p.kind).ok_or_else(|| format!("unknown feature type {:?}", p.kind))?;
+    let kind = patched(&base, &p.params)?;
+    if matches!(kind, FeatureKind::Sketch(_)) {
+        return Err("use add_sketch for sketches".into());
+    }
+    let mut d = doc_mut(world)?;
+    let element = part_studio(&d, p.part_studio.as_deref())?;
+    let feature = FeatureId::new();
+    let base_name = cadrs_core::feature_list::type_label(&kind).to_string();
+    d.execute(&cadrs_core::commands::AddFeature { element, feature, base_name, kind }).map_err(|e| e.to_string())?;
+    outcome(world, element, feature)
+}
+
+fn edit_feature(world: &mut World, p: &tools::EditFeature) -> Result<Value, String> {
+    let mut d = doc_mut(world)?;
+    let element = part_studio(&d, p.part_studio.as_deref())?;
+    let f = feature_named(&d, element, &p.name)?;
+    let kind = patched(&f.kind, &p.params)?;
+    d.execute(&cadrs_core::commands::SetFeature { element, feature: f.id, kind, label: format!("Edit {}", f.name) }).map_err(|e| e.to_string())?;
+    outcome(world, element, f.id)
+}
+
+fn get_feature(world: &mut World, p: &tools::FeatureName) -> Result<Value, String> {
+    let d = doc(world)?;
+    let element = part_studio(d, p.part_studio.as_deref())?;
+    let f = feature_named(d, element, &p.name)?;
+    let kind = serde_json::to_value(&f.kind).map_err(|e| e.to_string())?;
+    Ok(json!({ "name": f.name, "id": f.id.0.to_string(), "feature": kind }))
+}
+
+fn delete_feature(world: &mut World, p: &tools::FeatureName) -> Result<Value, String> {
+    let mut d = doc_mut(world)?;
+    let element = part_studio(&d, p.part_studio.as_deref())?;
+    let f = feature_named(&d, element, &p.name)?;
+    d.execute(&cadrs_core::commands::DeleteFeature { element, feature: f.id, label: format!("Delete {}", f.name) }).map_err(|e| e.to_string())?;
+    describe(world)
+}
+
+/// The parts of a Part Studio as the rebuild makes them.
+fn parts_of(world: &World, studio: Option<&str>) -> Result<Vec<cadrs_core::parts::Part>, String> {
+    let d = doc(world)?;
+    let element = part_studio(d, studio)?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    Ok(cadrs_core::rebuild::build(e.features()).parts.clone())
+}
+
+fn list_faces(world: &mut World, studio: Option<&str>) -> Result<Value, String> {
+    let mut out = Vec::new();
+    for p in parts_of(world, studio)? {
+        for (i, f) in p.solid.faces.iter().enumerate() {
+            let Some(seed) = p.solid.face_point(i) else { continue };
+            let r = cadrs_core::FaceRef { part: p.id, face: f.name, seed };
+            let mut v = json!({ "ref": r, "part": p.name });
+            if let Some(k) = &f.kind {
+                v["surface"] = json!(format!("{k:?}"));
+            }
+            if let Some(a) = f.area {
+                v["area"] = json!(round(a));
+            }
+            if let Some(c) = f.center {
+                v["center"] = json!(c.map(round));
+            }
+            if let Some(pl) = &f.plane {
+                v["normal"] = json!(cross(pl.u, pl.v).map(round));
+            }
+            if let Some((o, d)) = f.axis {
+                v["axis"] = json!({ "point": o.map(round), "direction": d.map(round) });
+            }
+            if let Some(r) = f.radius {
+                v["radius"] = json!(round(r));
+            }
+            out.push(v);
+        }
+    }
+    Ok(json!({ "faces": out }))
+}
+
+fn list_edges(world: &mut World, studio: Option<&str>) -> Result<Value, String> {
+    let mut out = Vec::new();
+    for p in parts_of(world, studio)? {
+        for e in &p.solid.edges {
+            let (Some(a), Some(b)) = (e.points.first(), e.points.last()) else { continue };
+            let r = cadrs_core::EdgeRef { part: p.id, edge: e.name, seed: e.midpoint() };
+            let len: f64 = e.points.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2) + (w[1][2] - w[0][2]).powi(2)).sqrt()).sum();
+            let mut v = json!({ "ref": r, "part": p.name, "start": a.map(round), "end": b.map(round), "length": round(len) });
+            if let Some(c) = &e.circle {
+                v["circle"] = json!({ "center": c.center.map(round), "normal": c.normal.map(round), "radius": round(c.radius) });
+            } else if e.points.len() == 2 {
+                v["line"] = json!(true);
+            }
+            out.push(v);
+        }
+    }
+    Ok(json!({ "edges": out }))
+}
+
+/// Imports a STEP file as a new stored document (its parts flattened into a Part Studio) and
+/// opens it, as the documents page's Import files does.
+fn import_step(world: &mut World, path: &str) -> Result<Value, String> {
+    use cadrs_core::import::{ImportAs, ImportFormat, ImportIds, imported_document};
+    let path = std::path::Path::new(path);
+    let format = ImportFormat::of_path(path).filter(|f| f.kernel().is_some()).ok_or("only STEP and IGES files can be imported")?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let data = String::from_utf8_lossy(&bytes).into_owned();
+    let plan = cadrs_core::rebuild::exchange::plan_import(format, data.clone().into_bytes()).wait().ok_or("the kernel thread stopped")??;
+    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let doc = imported_document(&plan, &file_name, data, ImportAs::PartStudio, ImportIds::fresh());
+    let store = world.resource::<DocumentStore>().0.clone();
+    let now = world.resource::<AppClock>().now();
+    let user = world.resource::<UserProfile>().id.clone();
+    let meta = DocumentMeta::new(&user, now);
+    let id = doc.id;
+    store.create(&doc, &meta).map_err(|e| format!("cannot create the document: {e}"))?;
+    crate::move_document::open_document(world, id);
+    let mut d = doc_mut(world)?;
+    d.fresh = true;
+    if let Some(ps) = d.doc.elements.iter().find(|e| matches!(e.kind, ElementKind::PartStudio { .. })).map(|e| e.id) {
+        d.set_active(ps);
+    }
+    describe(world)
+}
+
+fn export_step(world: &mut World, p: &tools::ExportStep) -> Result<Value, String> {
+    let d = doc(world)?;
+    let element = part_studio(d, p.part_studio.as_deref())?;
+    let features = d.doc.element(element).ok_or("the Part Studio is gone")?.features().to_vec();
+    let parts = cadrs_core::rebuild::build(&features).parts.clone();
+    if parts.is_empty() {
+        return Err("the Part Studio has no parts".into());
+    }
+    let request = cadrs_core::export::StepRequest { parts: parts.iter().map(|p| (p.id, p.name.clone())).collect(), y_up: false, individual: false };
+    let files = cadrs_core::rebuild::export_step(features, request).wait()?;
+    let file = files.into_iter().next().ok_or("nothing was written")?;
+    std::fs::write(&p.path, &file.bytes).map_err(|e| format!("{}: {e}", p.path))?;
+    Ok(json!({ "path": p.path, "bytes": file.bytes.len(), "parts": parts.iter().map(|p| p.name.clone()).collect::<Vec<_>>() }))
 }
 
 fn extrude(world: &mut World, p: &tools::Extrude) -> Result<Value, String> {

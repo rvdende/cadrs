@@ -112,6 +112,7 @@ fn main() -> AppExit {
     // The harness plugin clears the scenario's output directory (and with it the scenario's
     // data dir), so seed documents after adding it.
     app.add_plugins(HarnessPlugin { opts, scenario });
+    app.insert_resource(cadrs_app::mcp::McpScenarioHook(run_live_scenario));
     if let (Some(from), Some(dir)) = (&data_from, &data_dir)
         && let Err(e) = cadrs_harness::prepare_data_from(from, dir)
     {
@@ -234,4 +235,16 @@ fn share_view_mapping(
     if out.0 != want {
         out.0 = want;
     }
+}
+
+/// Runs a scenario an MCP client sent (`run_scenario`) in the running app: its RON is a list of
+/// steps or a whole `Scenario(...)`; screenshots go to a temporary folder.
+fn run_live_scenario(world: &mut World, ron_text: &str, done: cadrs_app::mcp::ScenarioDone) -> Result<(), String> {
+    let text = ron_text.trim();
+    let text = if text.starts_with('[') { format!("Scenario(steps: {text})") } else { text.to_string() };
+    let scenario: cadrs_harness::Scenario = cadrs_harness::Scenario::parse(&text).map_err(|e| format!("bad scenario: {e}"))?;
+    static RUNS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!("cadrs-mcp-{}", std::process::id())).join(format!("run-{n}"));
+    cadrs_harness::runner::start_live(world, scenario, out, done)
 }

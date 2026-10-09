@@ -55,8 +55,15 @@ pub enum SketchEntity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddSketch {
-    /// The plane to sketch on.
-    pub plane: Plane,
+    /// A default plane to sketch on; or give `face` or `plane_feature` instead.
+    #[serde(default)]
+    pub plane: Option<Plane>,
+    /// A planar part face to sketch on: its `ref` as list_faces gives it.
+    #[serde(default)]
+    pub face: Option<serde_json::Value>,
+    /// A Plane feature to sketch on, by name ("Plane 1").
+    #[serde(default)]
+    pub plane_feature: Option<String>,
     /// The curves and shapes.
     pub entities: Vec<SketchEntity>,
     /// The Part Studio tab's name; omitted: the active tab.
@@ -107,4 +114,74 @@ pub struct Screenshot {
     /// The longest side of the image in pixels (it is scaled down to fit); omitted: 1600.
     #[serde(default)]
     pub max_size: Option<u32>,
+    /// Turn the 3D view first and zoom to fit: front, back, left, right, top, bottom or iso.
+    /// Omitted: the view as it is.
+    #[serde(default)]
+    pub view: Option<String>,
+}
+
+/// A feature of the active (or named) Part Studio, by name.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FeatureName {
+    /// The feature's name ("Fillet 1").
+    pub name: String,
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddFeature {
+    /// The feature type: Extrude, Revolve, Fillet, Chamfer, Hole, Shell, Plane, Sweep, Loft,
+    /// Split, Pattern, Mirror, Draft, Boolean, DeletePart, Transform, Thicken, Helix.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The feature's fields as JSON, merged over the type's defaults (so only the fields that
+    /// differ are needed). get_feature shows a feature's full JSON; face and edge references
+    /// come from list_faces and list_edges ("ref"), sketch regions from add_sketch.
+    #[serde(default)]
+    pub params: serde_json::Value,
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EditFeature {
+    /// The feature's name.
+    pub name: String,
+    /// The fields to change, as JSON merged over the feature's current fields.
+    pub params: serde_json::Value,
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PartStudio {
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ImportStep {
+    /// The STEP file's path on this computer.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExportStep {
+    /// Where to write the STEP file (every part of the Part Studio in one file).
+    pub path: String,
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RunScenario {
+    /// The steps in the app's scenario RON: a list like `[Click(ui("extrude")), Key("Enter"),
+    /// Type("25"), Wait(5), Screenshot("after")]`, or a whole `Scenario(steps: [...])`.
+    pub scenario: String,
 }

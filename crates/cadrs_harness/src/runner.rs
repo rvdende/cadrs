@@ -133,7 +133,17 @@ pub struct Runner {
     quiet: u8,
     /// Shared with the [`watchdog`]: when the last frame ran and the step timeout (both ms).
     heartbeat: Arc<Heartbeat>,
+    /// A live run in the running app (an MCP client's, [`start_live`]): it answers here when
+    /// it finishes or fails, instead of quitting the app.
+    live: Option<LiveDone>,
+    /// The screenshots taken so far.
+    shots: Vec<PathBuf>,
+    /// Why a live run failed (it answers at the start of the next frame).
+    failed: Option<String>,
 }
+
+/// How a live run answers: the screenshots it took, or why it failed.
+pub type LiveDone = std::sync::Mutex<Option<Box<dyn FnOnce(Result<Vec<PathBuf>, String>) + Send>>>;
 
 /// What the [`watchdog`] thread watches: the last frame's time since the start (ms, 0 before the
 /// first) and the current step timeout (ms).
@@ -187,6 +197,59 @@ fn watchdog(heartbeat: Arc<Heartbeat>, out_dir: PathBuf) {
         .ok();
 }
 
+/// Runs `scenario` in the running app (live: no fixed time step, no watchdog, and the app keeps
+/// running after it). `done` gets its screenshots (in `out_dir`) or why it failed. Fails if a
+/// scenario is already running.
+pub fn start_live(world: &mut World, scenario: Scenario, out_dir: PathBuf, done: Box<dyn FnOnce(Result<Vec<PathBuf>, String>) + Send>) -> Result<(), String> {
+    if world.contains_resource::<Runner>() {
+        return Err("a scenario is already running".into());
+    }
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    world.init_resource::<WorldToScreen>();
+    world.init_resource::<SpaceToScreen>();
+    world.init_resource::<FlatToScreen>();
+    world.insert_resource(Runner {
+        name: "live".into(),
+        out_dir,
+        steps: scenario.steps.into(),
+        frames: VecDeque::new(),
+        warmup: 0,
+        pointer: Vec2::ZERO,
+        retries: 0,
+        shot_index: 0,
+        pending: Arc::new(AtomicUsize::new(0)),
+        pending_frames: 0,
+        done: false,
+        cursor: false,
+        pointer_known: false,
+        measure: None,
+        settle: None,
+        work_frames: 0,
+        timeout: std::time::Duration::from_secs_f32(scenario.timeout.max(0.1)),
+        waiting: None,
+        quiet: 0,
+        heartbeat: Arc::new(Heartbeat::default()),
+        live: Some(std::sync::Mutex::new(Some(done))),
+        shots: Vec::new(),
+        failed: None,
+    });
+    Ok(())
+}
+
+/// Ends a live run: answers it and removes the runner.
+fn end_live(world: &mut World, result: Result<Vec<PathBuf>, String>) {
+    if let Some(runner) = world.remove_resource::<Runner>()
+        && let Some(done) = runner.live.and_then(|l| l.into_inner().ok().flatten())
+    {
+        done(result);
+    }
+}
+
+fn is_live(world: &World) -> bool {
+    world.get_resource::<Runner>().is_some_and(|r| r.live.is_some())
+}
+
 pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: PathBuf) {
     let _ = std::fs::remove_dir_all(&out_dir);
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
@@ -222,21 +285,35 @@ pub fn add_runner(app: &mut App, scenario: Scenario, name: String, out_dir: Path
         waiting: None,
         quiet: 0,
         heartbeat: heartbeat.clone(),
-    })
-    .add_systems(First, drive);
+        live: None,
+        shots: Vec::new(),
+        failed: None,
+    });
 }
 
 fn fail(world: &mut World, msg: String) {
+    if is_live(world) {
+        warn!("live scenario failed: {msg}");
+        let mut runner = world.resource_mut::<Runner>();
+        runner.done = true;
+        runner.failed.get_or_insert(msg);
+        return;
+    }
     error!("scenario failed: {msg}");
     eprintln!("scenario failed: {msg}");
     world.resource_mut::<Runner>().done = true;
     world.write_message(AppExit::error());
 }
 
-fn drive(world: &mut World) {
-    let mut runner = world.resource_mut::<Runner>();
+/// Runs the scenario's steps, a frame at a time (while there is a [`Runner`]).
+pub fn drive(world: &mut World) {
+    let Some(mut runner) = world.get_resource_mut::<Runner>() else { return };
     runner.heartbeat.beat();
     if runner.done {
+        if runner.live.is_some() {
+            let why = runner.failed.take().unwrap_or_else(|| "stopped".into());
+            end_live(world, Err(why));
+        }
         return;
     }
     if let Some(m) = runner.measure.as_mut() {
@@ -269,6 +346,10 @@ fn drive(world: &mut World) {
             runner.shot_index,
         );
         runner.done = true;
+        if runner.live.is_some() {
+            let shots = std::mem::take(&mut runner.shots);
+            return end_live(world, Ok(shots));
+        }
         info!(
             "scenario {name} finished: {n} screenshot(s) in {}",
             dir.display()
@@ -872,7 +953,9 @@ fn execute(world: &mut World, op: Op) {
                 } else {
                     format!("{:02}-{label}.png", runner.shot_index)
                 };
-                (runner.out_dir.join(file), runner.pending.clone())
+                let path = runner.out_dir.join(file);
+                runner.shots.push(path.clone());
+                (path, runner.pending.clone())
             };
             pending.fetch_add(1, Ordering::SeqCst);
             let target = world.resource::<RenderSurface>().target.clone();
