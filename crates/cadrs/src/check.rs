@@ -40,6 +40,30 @@ pub fn parse(args: &[String]) -> Option<Result<Check, String>> {
     Some(Ok(Check { document, data_dir, studio: value("--part-studio"), sketch: value("--sketch"), steps: args.iter().any(|a| a == "--steps"), dof: args.iter().any(|a| a == "--dof"), feature: value("--feature") }))
 }
 
+/// `cadrs --list-documents [--data-dir <dir>] [--trash]`: the store's documents, most recently
+/// modified first: id, last modified (UTC) and name (in the trash only with `--trash`).
+pub fn list_documents(args: &[String]) -> Option<u8> {
+    if !args.iter().any(|a| a == "--list-documents") {
+        return None;
+    }
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    let Some(root) = value("--data-dir").map(PathBuf::from).or_else(|| std::env::var_os("CADRS_DATA_DIR").map(PathBuf::from)).or_else(Store::default_root) else {
+        eprintln!("no document store: pass --data-dir");
+        return Some(2);
+    };
+    let trash = args.iter().any(|a| a == "--trash");
+    let (lib, _) = Store::new(&root).list();
+    let mut entries: Vec<_> = lib.entries.iter().filter(|e| e.meta.trashed.is_some() == trash).collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.meta.modified));
+    println!("{} document(s) in {}", entries.len(), root.display());
+    for e in entries {
+        let t = cadrs_core::time::DateTime::from_timestamp(e.meta.modified, 0);
+        let when = format!("{:04}-{:02}-{:02} {:02}:{:02}", t.year, t.month, t.day, t.hour, t.minute);
+        println!("{}  {when}  {}", e.id, e.name);
+    }
+    Some(0)
+}
+
 pub fn run(c: &Check) -> u8 {
     let Some(root) = &c.data_dir else {
         eprintln!("no document store: pass --data-dir");

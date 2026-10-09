@@ -2,6 +2,8 @@
 //!
 //! `cadrs [--headless] [--scenario <name>] [--window-size WxH] [--out <dir>] [--data-dir <dir>]`
 //!
+//! `cadrs --list-documents [--data-dir <dir>] [--trash]` lists the stored documents with their ids.
+//!
 //! `cadrs --headless --jobs N (--scenarios a,b,... | --all)` renders many scenarios, N at a
 //! time, each in its own process (see [`batch`]).
 //!
@@ -26,9 +28,35 @@ const SCENARIO_NOW: i64 = 1_790_263_800;
 mod batch;
 mod check;
 
+/// Every way to run cadrs (`-h`, `--help`).
+const HELP: &str = "\
+cadrs: an Onshape-style CAD app.
+
+Usage:
+  cadrs [--headless] [--scenario <name>] [--window-size WxH] [--out <dir>] [--data-dir <dir>] [--no-cursor]
+      Runs the app (with --scenario, a scripted scenario; --headless needs one).
+  cadrs --list-documents [--data-dir <dir>] [--trash]
+      Lists the stored documents, newest first: id, last modified (UTC), name.
+  cadrs --document <name or id> --check [--data-dir <dir>] [--part-studio <name>] [--sketch <name>]
+        [--feature <name>] [--steps] [--dof]
+      Rebuilds a stored document without a window and reports its features in error or warning.
+  cadrs --headless --jobs N (--scenarios a,b,... | --all)
+      Renders many scenarios, N at a time, each in its own process.
+
+Documents live in --data-dir, else $CADRS_DATA_DIR, else the platform data dir
+(~/.local/share/cadrs/documents on Linux).";
+
 fn main() -> AppExit {
     // `--jobs N` / `--scenarios a,b` / `--all`: many scenarios in parallel child processes.
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{HELP}");
+        return AppExit::Success;
+    }
+    // `--list-documents`: the store's documents with their ids, no window.
+    if let Some(code) = check::list_documents(&args) {
+        return AppExit::from_code(code);
+    }
     // `--document <name> --check`: a stored document's rebuild issues, no window.
     if let Some(c) = check::parse(&args) {
         return match c {
@@ -51,7 +79,8 @@ fn main() -> AppExit {
     let opts = match HarnessOptions::from_args(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("{e}");
+            // The harness's own usage line knows only the app's options: point to all of them.
+            eprintln!("{}\ncadrs --help lists every option.", e.lines().next().unwrap_or(""));
             return AppExit::from_code(2);
         }
     };

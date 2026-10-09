@@ -289,6 +289,20 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // `open-document <name or id>`: opens a document of the store (`--data-dir`), as
+        // the documents page does.
+        if let Some(name) = m.0.strip_prefix("open-document ") {
+            let name = name.trim().to_string();
+            commands.queue(move |world: &mut World| {
+                let (lib, _) = world.resource::<crate::DocumentStore>().0.list();
+                let id = lib.entries.iter().find(|e| (e.id.to_string() == name || e.name == name) && e.meta.trashed.is_none()).map(|e| e.id);
+                match id {
+                    Some(id) => crate::move_document::open_document(world, id),
+                    None => warn!("open-document: no document {name:?}"),
+                }
+            });
+            continue;
+        }
         // `drop-file <path>`: the file dropped on the window (as from a file manager).
         if let Some(path) = m.0.strip_prefix("drop-file ") {
             let path_buf = std::path::PathBuf::from(path.trim());
