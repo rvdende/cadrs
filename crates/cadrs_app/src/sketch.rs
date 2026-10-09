@@ -11,13 +11,13 @@
 //!    name marks the sketch plane and the sketch toolbar becomes active. `N` turns the view
 //!    normal to the sketch plane.
 //! 3. ✓ or Enter accepts: everything done in the dialog becomes one undo step ("Insert Sketch
-//!    1" or "Edit Sketch 1"). ✕ or Esc (with no tool active) cancels: a new sketch is removed and
-//!    an edit is reverted, as an undoable step; the toast "Sketch 1 has been cancelled.
-//!    Restore" offers to bring it back.
+//!    1" or "Edit Sketch 1"). Only ✕ cancels (Esc never leaves the sketch: one press too many
+//!    would throw it away): a new sketch is removed and an edit is reverted, as an undoable step;
+//!    the toast "Sketch 1 has been cancelled. Restore" offers to bring it back.
 //! 4. Double-click a sketch in the feature list (or right-click → Edit) to edit it again.
 //!
 //! Every change goes through the command layer ([`ActiveDocument::execute`]). Tools (M4 on)
-//! plug into [`ActiveSketchTool`]; Esc first leaves the active tool, then cancels the sketch.
+//! plug into [`ActiveSketchTool`]; Esc first leaves the active tool, then clears the selection.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -788,7 +788,8 @@ pub fn delete_features(world: &mut World, features: &[FeatureId]) {
     doc.squash_since(mark, label);
 }
 
-/// Sketching: Enter accepts; Esc leaves the active tool, then cancels; tool shortcuts.
+/// Sketching: Enter accepts; Esc leaves the active tool, then clears the selection (it never
+/// cancels the sketch); tool shortcuts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sketch_keys(
     mut keys_in: MessageReader<KeyboardInput>,
@@ -863,7 +864,9 @@ pub(crate) fn sketch_keys(
             KeyCode::Enter | KeyCode::NumpadEnter => commands.queue(accept_sketch),
             KeyCode::Escape => {
                 // Esc ends what the tool is drawing (a line chain), then leaves the tool, then
-                // clears the selection, then cancels the sketch. A drag in progress is undone.
+                // clears the selection. A drag in progress is undone. It never leaves the
+                // sketch: Esc pressed once too often would throw the sketch away, so only the
+                // dialog's ✕ cancels it (and ✓ or Enter accepts it).
                 if let Some(d) = draw.drag.take() {
                     let base = d.base;
                     commands.queue(move |world: &mut World| {
@@ -882,8 +885,6 @@ pub(crate) fn sketch_keys(
                 } else if !selection.0.is_empty() || !regions.0.is_empty() {
                     selection.0.clear();
                     regions.0.clear();
-                } else {
-                    commands.queue(cancel_sketch);
                 }
             }
             code if has_plane => {
