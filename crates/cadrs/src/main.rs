@@ -5,6 +5,10 @@
 //! `cadrs --headless --jobs N (--scenarios a,b,... | --all)` renders many scenarios, N at a
 //! time, each in its own process (see [`batch`]).
 //!
+//! `cadrs --document <name or id> --check [--headless] [--data-dir <dir>] [--part-studio <name>]
+//! [--sketch <name>]` rebuilds a stored
+//! document and reports the features in error or warning, in detail (see [`check`]).
+//!
 //! Documents live in `--data-dir`, else `CADRS_DATA_DIR`, else the platform data dir
 //! (`~/.local/share/cadrs/documents`, `%APPDATA%\cadrs\documents`). Scenarios use a fresh
 //! `<out dir>/data` instead, a fixed clock and a fixed user, so their screenshots are
@@ -20,10 +24,21 @@ use cadrs_ui::CadrsUiPlugin;
 const SCENARIO_NOW: i64 = 1_790_263_800;
 
 mod batch;
+mod check;
 
 fn main() -> AppExit {
     // `--jobs N` / `--scenarios a,b` / `--all`: many scenarios in parallel child processes.
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--document <name> --check`: a stored document's rebuild issues, no window.
+    if let Some(c) = check::parse(&args) {
+        return match c {
+            Ok(c) => AppExit::from_code(check::run(&c)),
+            Err(e) => {
+                eprintln!("{e}");
+                AppExit::from_code(2)
+            }
+        };
+    }
     if let Some(b) = batch::parse(&args) {
         return match b {
             Ok(b) => AppExit::from_code(batch::run(&b) as u8),

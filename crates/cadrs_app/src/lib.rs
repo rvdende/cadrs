@@ -523,6 +523,12 @@ impl ActiveDocument {
         self.doc != self.opened
     }
 
+    /// True if `doc` (read from the store) is the document as this session last loaded or saved
+    /// it; false when it was changed elsewhere since (a re-import while it was open).
+    pub fn is_last_saved(&self, doc: &Document) -> bool {
+        self.saved == *doc
+    }
+
     /// True if the document changed since it was last saved.
     pub fn is_dirty(&self) -> bool {
         self.meta.is_some() && self.doc != self.saved

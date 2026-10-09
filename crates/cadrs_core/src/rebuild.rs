@@ -2532,7 +2532,14 @@ mod kernel_ops {
     fn face_frame(part: &PartState, f: &crate::document::FaceRef) -> Option<cadrs_sketch::PlaneFrame> {
         let solid = &part.part.solid;
         let (i, _) = solid.resolve_face(&f.face, None, Some(f.seed)).ok()?;
-        solid.faces[i].plane
+        let pl = solid.faces[i].plane?;
+        // Out of the material, as Onshape extrudes a face: a cut's faces carry the frame of the
+        // tool that made them (a pocket's wall faces into the part), so it is checked against
+        // the mesh.
+        Some(match solid.face_normal(i) {
+            Some(n) if { let m = pl.normal(); n[0] * m[0] + n[1] * m[1] + n[2] * m[2] } < 0.0 => cadrs_sketch::PlaneFrame { origin: pl.origin, u: pl.u, v: [-pl.v[0], -pl.v[1], -pl.v[2]] },
+            _ => pl,
+        })
     }
 }
 
@@ -2942,6 +2949,15 @@ pub fn run_on_worker<T: Send + 'static>(f: impl FnOnce(&mut Rebuilder) -> T + Se
     }));
     let _ = worker().lock().map(|tx| tx.send(job));
     PendingJob { rx: Mutex::new(rx) }
+}
+
+/// The Document menu's Full rebuild: drops everything the rebuild thread has cached (it starts
+/// a new kernel session) and no longer restores the session snapshots written so far, so the
+/// next rebuild of each Part Studio (and its Derived sources) computes every feature.
+pub fn clear_cache() {
+    session::forget_written();
+    // Later requests queue behind it, so they find the new session.
+    let _ = run_on_worker(|r| *r = Rebuilder::new());
 }
 
 /// Rebuilds `features` (from the cache, mostly) and writes their session snapshot now, instead

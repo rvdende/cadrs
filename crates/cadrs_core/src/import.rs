@@ -563,7 +563,8 @@ fn step_entities(text: &str) -> std::collections::BTreeMap<u64, Entity> {
 /// The solids of a STEP file as its assembly structure places them, in order: for each, the
 /// name of the product it belongs to and its number of faces. Products are visited depth first
 /// from the top-level ones through their `NEXT_ASSEMBLY_USAGE_OCCURRENCE`s (a product used
-/// twice appears twice), each product's own solids first.
+/// twice appears twice), each product's own solids first. Then the shells of its surface models
+/// (silkscreen, say), the same way: the reader gives the surfaces after the solids.
 pub fn step_occurrences(text: &str) -> Vec<(String, usize)> {
     use std::collections::{BTreeMap, HashMap};
     let ents = step_entities(text);
@@ -577,6 +578,7 @@ pub fn step_occurrences(text: &str) -> Vec<(String, usize)> {
     let mut srr: Vec<(u64, u64)> = Vec::new();
     let mut brep_shells: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     let mut shell_faces: HashMap<u64, usize> = HashMap::new();
+    let mut surface_shells: HashMap<u64, Vec<u64>> = HashMap::new();
     let mut nauo: Vec<(u64, u64)> = Vec::new();
     for (id, e) in &ents {
         match e.kind.as_str() {
@@ -618,7 +620,11 @@ pub fn step_occurrences(text: &str) -> Vec<(String, usize)> {
                 s.extend(arg(e, 2).refs());
                 brep_shells.insert(*id, s);
             }
-            "CLOSED_SHELL" | "ORIENTED_CLOSED_SHELL" => {
+            // A surface model: each of its shells is a surface body of its own.
+            "SHELL_BASED_SURFACE_MODEL" => {
+                surface_shells.insert(*id, arg(e, 1).refs());
+            }
+            "CLOSED_SHELL" | "ORIENTED_CLOSED_SHELL" | "OPEN_SHELL" | "ORIENTED_OPEN_SHELL" => {
                 shell_faces.insert(*id, arg(e, 1).refs().len());
             }
             "NEXT_ASSEMBLY_USAGE_OCCURRENCE" => {
@@ -661,13 +667,16 @@ pub fn step_occurrences(text: &str) -> Vec<(String, usize)> {
             break;
         }
     }
-    let mut pd_breps: HashMap<u64, Vec<(u64, usize)>> = HashMap::new();
+    let mut pd_breps: HashMap<u64, Vec<(u64, usize, bool)>> = HashMap::new();
     for (rep, items) in &rep_items {
         let Some(pd) = rep_pd.get(rep) else { continue };
         for it in items {
             if let Some(shells) = brep_shells.get(it) {
                 let faces = shells.iter().filter_map(|s| shell_faces.get(s)).sum();
-                pd_breps.entry(*pd).or_default().push((*it, faces));
+                pd_breps.entry(*pd).or_default().push((*it, faces, false));
+            }
+            for s in surface_shells.get(it).into_iter().flatten() {
+                pd_breps.entry(*pd).or_default().push((*s, shell_faces.get(s).copied().unwrap_or(0), true));
             }
         }
     }
@@ -683,26 +692,37 @@ pub fn step_occurrences(text: &str) -> Vec<(String, usize)> {
         pd: u64,
         depth: usize,
         nauo: &[(u64, u64)],
-        pd_breps: &HashMap<u64, Vec<(u64, usize)>>,
+        pd_breps: &HashMap<u64, Vec<(u64, usize, bool)>>,
         name: &dyn Fn(u64) -> String,
-        out: &mut Vec<(String, usize)>,
+        out: &mut Vec<(String, usize, bool)>,
+        uses: &mut HashMap<u64, usize>,
     ) {
         if depth > 64 {
             return;
         }
-        for (_, faces) in pd_breps.get(&pd).map_or(&[][..], |v| v) {
-            out.push((name(pd), *faces));
+        // A product used again: its name numbered, as Onshape numbers it (`R_0805`, `R_0805_1`).
+        if let Some(items) = pd_breps.get(&pd) {
+            let n = uses.entry(pd).or_default();
+            let label = if *n == 0 { name(pd) } else { format!("{}_{n}", name(pd)) };
+            *n += 1;
+            for (_, faces, surface) in items {
+                out.push((label.clone(), *faces, *surface));
+            }
         }
         for (p, c) in nauo {
             if *p == pd {
-                visit(*c, depth + 1, nauo, pd_breps, name, out);
+                visit(*c, depth + 1, nauo, pd_breps, name, out, uses);
             }
         }
     }
+    let mut uses = HashMap::new();
     for r in roots {
-        visit(r, 0, &nauo, &pd_breps, &pd_name, &mut out);
+        visit(r, 0, &nauo, &pd_breps, &pd_name, &mut out, &mut uses);
     }
-    out
+    // The solids first, then the surfaces, as the reader gives its bodies.
+    let (surfaces, mut solids): (Vec<_>, Vec<_>) = out.into_iter().partition(|o| o.2);
+    solids.extend(surfaces);
+    solids.into_iter().map(|(n, f, _)| (n, f)).collect()
 }
 
 /// Names for the solids a STEP file gave, in the reader's order with their face counts: each
@@ -750,11 +770,11 @@ ENDSEC;\nEND-ISO-10303-21;\n";
         let occ = step_occurrences(ASM);
         assert_eq!(
             occ,
-            vec![("plate".to_string(), 6), ("Bolt é".to_string(), 3), ("Bolt é".to_string(), 3)]
+            vec![("plate".to_string(), 6), ("Bolt é".to_string(), 3), ("Bolt é_1".to_string(), 3)]
         );
-        // The reader's order differs: matched by face count.
+        // The reader's order differs: matched by face count. The second bolt is numbered.
         let names = assign_names(&[3, 6, 3, 9], &occ, "file");
-        assert_eq!(names, ["Bolt é", "plate", "Bolt é", "file"]);
+        assert_eq!(names, ["Bolt é", "plate", "Bolt é_1", "file"]);
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub struct Options {
     /// Import only this Part Studio (Onshape element id) and those it derives from in the same
     /// document (for another document's Derived feature, which only needs its source).
     pub only: Option<String>,
+    /// The store it imports into (another document's versions are read from it).
+    pub store: Option<cadrs_core::Store>,
 }
 
 /// The skip list and progress file of the import a supervisor runs, for the imports it makes
@@ -52,7 +54,7 @@ impl Options {
     /// it) and a feature of it that hung is skipped next time.
     pub fn nested(only: Option<String>) -> Self {
         let (skip, progress) = SUPERVISED.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
-        Options { skip, progress, only }
+        Options { skip, progress, only, store: None }
     }
 }
 
@@ -427,7 +429,7 @@ pub(crate) struct PartStudio<'a> {
     doc_id: &'a str,
     raw: &'a RawElement,
     pub(crate) vars: HashMap<String, Var>,
-    report: &'a mut ElementReport,
+    pub(crate) report: &'a mut ElementReport,
     /// Onshape feature id → cadrs feature.
     pub(crate) features: HashMap<String, FeatureId>,
     /// Onshape sketch feature id → its id maps and final geometry.
@@ -435,12 +437,15 @@ pub(crate) struct PartStudio<'a> {
     /// The model as of the last rebuild, and how many features it covers.
     /// (The features it was built from: an edit that keeps their count must rebuild too.)
     built: Option<(Vec<cadrs_core::document::Feature>, Arc<cadrs_core::rebuild::Build>)>,
-    options: &'a Options,
+    pub(crate) options: &'a Options,
     /// Its Derived features' sources (to resolve queries on derived parts).
     pub(crate) derived: crate::eval::DerivedSources,
     /// The parts of its assembly contexts (`managed-in-context-design.md`), for the features
     /// Onshape made in context.
     context: Vec<Part>,
+    /// Onshape's vertices and edges of the final parts by topology id (mm), from
+    /// `bodydetails.json`: where a sketch's bare topology ids are.
+    model_points: HashMap<String, Vec<[f64; 3]>>,
 }
 
 impl<'a> PartStudio<'a> {
@@ -454,13 +459,19 @@ impl<'a> PartStudio<'a> {
         options: &'a Options,
     ) -> Self {
         let context = cadrs_core::assembly::context::parts(&s.doc, el, |_, f| Some(cadrs_core::rebuild::build(f))).0;
-        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new(), context }
+        let model_points = read_json(&raw.dir.join("bodydetails.json")).map(|d| body_topology(&d)).unwrap_or_default();
+        Self { s, el, doc_id, raw, vars, report, features: HashMap::new(), sketches: HashMap::new(), built: None, options, derived: HashMap::new(), context, model_points }
     }
 
     /// A query model of `parts` with this studio's features, sketches and derived sources.
     pub(crate) fn model<'m>(&'m self, parts: &'m [Part]) -> crate::eval::Model<'m> {
         let doc = self.s.doc.element(self.el).map(|e| e.features()).unwrap_or(&[]);
         crate::eval::Model::new(parts, &self.features, &self.sketches).with_derived(&self.derived).with_doc(doc)
+    }
+
+    /// A JSON file Onshape gave for this Part Studio (`bodydetails.json`, …).
+    pub(crate) fn raw_json(&self, name: &str) -> Option<Value> {
+        read_json(&self.raw.dir.join(name))
     }
 
     /// The folder of all scraped documents.
@@ -505,6 +516,12 @@ impl<'a> PartStudio<'a> {
             self.built = Some((feats, build));
         }
         self.built.as_ref().map(|(_, b)| b.parts.clone()).unwrap_or_default()
+    }
+
+    /// The frame of mate connector feature `c` in the model as it is now.
+    pub(crate) fn connector_frame(&mut self, c: FeatureId) -> Option<cadrs_sketch::PlaneFrame> {
+        self.parts();
+        self.built.as_ref()?.1.connectors.get(&c).copied()
     }
 
     /// A query in brief, for debugging: `TYPE:QUERY(op feature, imported?)` with what it was
@@ -820,6 +837,19 @@ impl<'a> PartStudio<'a> {
             if let Err(e) = result {
                 fr.outcome = Outcome::Skipped;
                 fr.notes.push(e.to_string());
+                let fails_there = json["featureStates"][&fid]["featureStatus"].as_str() == Some("ERROR");
+                if fails_there {
+                    fr.notes.push("it fails in Onshape too".into());
+                }
+                // A mate connector stays in the list, with no origin to pick one in cadrs: in
+                // error, as it is in Onshape when it fails there too (then that is the import).
+                if kind == "mateConnector" {
+                    let kind = cadrs_core::document::FeatureKind::MateConnector(cadrs_core::mate::MateConnectorFeature::default());
+                    if self.add(f, &fid, "Mate connector", kind, &mut fr).is_ok() {
+                        fr.outcome = if fails_there { Outcome::Full } else { Outcome::Partial };
+                        fr.notes.push("added without its origin: pick it in cadrs".into());
+                    }
+                }
             }
             if trace {
                 eprintln!("  {:>8.3} s  {} ({}) {:?}", started.elapsed().as_secs_f64(), fr.name, fr.kind, fr.outcome);
@@ -948,7 +978,7 @@ impl<'a> PartStudio<'a> {
                 eprintln!("IN-CONTEXT {}: {} parts, {} of them the context's", f["name"].as_str().unwrap_or_default(), parts.len(), self.context.len());
             }
         }
-        let map = sketch::import(self.s, self.el, id, f, &solved, plane, &parts, fr)?;
+        let map = sketch::import(self.s, self.el, id, f, &solved, plane, &parts, &self.model_points, fr)?;
         let g = sketch::sketch_of(self.s, self.el, id)?;
         self.features.insert(fid.to_string(), id);
         self.sketches.insert(fid.to_string(), (map, g));
@@ -1524,8 +1554,7 @@ impl<'a> PartStudio<'a> {
             let v = |i: usize| b["volume"].as_array().and_then(|v| v.get(i)).and_then(Value::as_f64).unwrap_or(0.0) * 1e9;
             let body = details["bodies"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_str() == Some(pid)));
             let bbox = body.and_then(|b| bbox_of(b["vertices"].as_array()?.iter().filter_map(|v| {
-                let p = &v["point"];
-                Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
+                point_mm(&v["point"])
             })));
             onshape.push(Os { pid: pid.clone(), name: info.as_ref().and_then(|p| p["name"].as_str()).unwrap_or(pid).to_string(), volume: v(0), band: (v(1), v(2)), bbox, info, sheet: false });
         }
@@ -1533,8 +1562,7 @@ impl<'a> PartStudio<'a> {
         let box_of = |pid: &str| {
             let body = details["bodies"].as_array().and_then(|a| a.iter().find(|x| x["id"].as_str() == Some(pid)))?;
             bbox_of(body["vertices"].as_array()?.iter().filter_map(|v| {
-                let p = &v["point"];
-                Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0])
+                point_mm(&v["point"])
             }))
         };
         for info in parts_json.as_array().into_iter().flatten().filter(|p| p["bodyType"].as_str() == Some("sheet")) {
@@ -1549,7 +1577,8 @@ impl<'a> PartStudio<'a> {
             .iter()
             .enumerate()
             .filter(|(_, p)| !in_composites.contains(&p.id))
-            .map(|(i, p)| (i, p.mass.as_ref().map(|m| m.volume).unwrap_or_else(|| p.solid.volume()), bbox_of(p.solid.positions.iter().copied())))
+            // The box of its vertices, as Onshape's is (a mesh reaches past them round a curve).
+            .map(|(i, p)| (i, p.mass.as_ref().map(|m| m.volume).unwrap_or_else(|| p.solid.volume()), bbox_of(p.solid.vertices.iter().map(|v| v.point)).or_else(|| bbox_of(p.solid.positions.iter().copied()))))
             .collect();
         if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
             for o in &onshape {
@@ -1643,8 +1672,14 @@ impl<'a> PartStudio<'a> {
             {
                 check.cadrs_volume = Some(o.volume);
             }
+            // Moved: Onshape's vertices reach outside the part's mesh here (its vertex box can
+            // differ without that, where the kernels split a round face's seam differently).
+            let inside = |a: [f64; 6], i: usize| {
+                bbox_of(parts[i].solid.positions.iter().copied()).is_some_and(|b| (0..3).all(|k| a[k] >= b[k] - 0.01 && a[k + 3] <= b[k + 3] + 0.01))
+            };
             if let (Some(c), Some(a)) = (m, o.bbox)
                 && let Some(b) = c.2
+                && !inside(a, c.0)
             {
                 let d: Vec<String> = ["x-", "y-", "z-", "x+", "y+", "z+"]
                     .iter()
@@ -1897,6 +1932,94 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// A point of Onshape's body details in mm: `{x, y, z}` or `[x, y, z]` (m), as the API versions
+/// give it.
+pub(crate) fn point_mm(p: &Value) -> Option<[f64; 3]> {
+    match p {
+        Value::Array(a) => Some([a.first()?.as_f64()? * 1000.0, a.get(1)?.as_f64()? * 1000.0, a.get(2)?.as_f64()? * 1000.0]),
+        _ => Some([p["x"].as_f64()? * 1000.0, p["y"].as_f64()? * 1000.0, p["z"].as_f64()? * 1000.0]),
+    }
+}
+
+/// Onshape's vertices and edges of the final parts in `bodydetails.json`: topology id → a
+/// vertex's position, or an edge's start, middle and end (mm). Ids are a body's own: a solid's
+/// win over a sheet's that happen to match.
+fn body_topology(details: &Value) -> HashMap<String, Vec<[f64; 3]>> {
+    let mm = point_mm;
+    let mut out = HashMap::new();
+    // Solids first.
+    let mut bodies: Vec<&Value> = details["bodies"].as_array().into_iter().flatten().collect();
+    bodies.sort_by_key(|b| !b["type"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("solid")));
+    for b in bodies {
+        for v in b["vertices"].as_array().into_iter().flatten() {
+            if let (Some(id), Some(p)) = (v["id"].as_str(), mm(&v["point"])) {
+                out.entry(id.to_string()).or_insert_with(|| vec![p]);
+            }
+        }
+        for e in b["edges"].as_array().into_iter().flatten() {
+            let g = &e["geometry"];
+            if let (Some(id), Some(a), Some(m), Some(z)) = (e["id"].as_str(), mm(&g["startPoint"]), mm(&g["midPoint"]), mm(&g["endPoint"])) {
+                out.entry(id.to_string()).or_insert_with(|| vec![a, m, z]);
+            }
+        }
+    }
+    out
+}
+
+/// The cadrs id of Onshape version `version` of document `doc`.
+pub fn version_id(doc: &str, version: &str) -> cadrs_core::history_log::VersionId {
+    cadrs_core::history_log::VersionId(uuid::Uuid::from_u128(stable_u128(&[doc, "version", version])))
+}
+
+/// The imported document's history with Onshape's versions whose Part Studios were scraped
+/// (`versions/<version>/<element>/features.json`): each a state of the document whose
+/// Part Studios hold the features they had then (the feature lists Onshape's versions keep are
+/// a prefix of today's, the features since added after them), then today's. So another
+/// document's Derived feature can pin one, as Onshape's does. `None` when no version was scraped
+/// or one isn't a prefix of today's features.
+pub fn history_with_versions(raw: &RawDocument, doc: &Document, meta: &DocumentMeta, user: &str) -> Option<cadrs_core::history_log::HistoryLog> {
+    let versions_json = read_json(&raw.dir.join("versions.json"))?;
+    let mut states: Vec<(i64, String, String, Document)> = Vec::new();
+    for v in versions_json.as_array().into_iter().flatten() {
+        let (Some(vid), Some(name)) = (v["id"].as_str(), v["name"].as_str()) else { continue };
+        let Ok(files) = std::fs::read_dir(raw.dir.join("versions").join(vid)) else { continue };
+        let mut at = doc.clone();
+        // One folder per Part Studio, with its feature list at the version.
+        for dir in files.flatten() {
+            let Some(el_id) = dir.file_name().to_str().map(String::from) else { continue };
+            let Some(list) = read_json(&dir.path().join("features.json")) else { continue };
+            let ids: Vec<cadrs_core::ids::FeatureId> = list["features"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f["featureId"].as_str().or_else(|| f["message"]["featureId"].as_str()))
+                .map(|fid| cadrs_core::ids::FeatureId::from_u128(stable_u128(&[&raw.id, &el_id, fid])))
+                .collect();
+            let element = ElementId::from_u128(stable_u128(&[&raw.id, &el_id]));
+            let el = at.elements.iter_mut().find(|e| e.id == element)?;
+            let cadrs_core::document::ElementKind::PartStudio { features, .. } = &mut el.kind else { return None };
+            // Up to the last of its features; every one of them must be there.
+            let last = features.iter().rposition(|f| ids.contains(&f.id))?;
+            if ids.iter().any(|id| !features[..=last].iter().any(|f| f.id == *id)) {
+                return None;
+            }
+            features.truncate(last + 1);
+        }
+        states.push((timestamp(v["createdAt"].as_str()).unwrap_or(meta.created), vid.to_string(), name.to_string(), at));
+    }
+    if states.is_empty() {
+        return None;
+    }
+    states.sort_by_key(|s| s.0);
+    let mut log = cadrs_core::history_log::HistoryLog::start(&states[0].3, states[0].0, user);
+    for (time, vid, name, at) in &states {
+        log.catch_up(at, *time, user);
+        log.create_version_with_id(version_id(&raw.id, vid), name, "", *time, user);
+    }
+    log.catch_up(doc, meta.modified.max(states.last().map_or(0, |s| s.0)), user);
+    Some(log)
 }
 
 #[cfg(test)]

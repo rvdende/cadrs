@@ -516,6 +516,13 @@ pub fn name_vertices(
         around.dedup();
         if around.len() >= 3 {
             keyed.push((i, [around[0], around[1], around[2]]));
+        } else if !around.is_empty()
+            && v.edges.iter().filter_map(|e| edges.get(e.0 as usize)).any(|e| e.faces.iter().flatten().count() < 2)
+        {
+            // A sheet's corner (on an edge with one face): its one or two faces, the last
+            // repeated; told apart from the others there by `index`.
+            let last = around[around.len() - 1];
+            keyed.push((i, [around[0], *around.get(1).unwrap_or(&last), last]));
         }
     }
     let mut groups: HashMap<[FaceName; 3], Vec<usize>> = HashMap::new();

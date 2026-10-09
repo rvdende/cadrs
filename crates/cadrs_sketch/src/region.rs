@@ -1114,11 +1114,18 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
                 regions(&d)
             })
         };
+        // A face piece across an imprinted edge from a region the sketch bounds: that region is
+        // closed by the face's edge, and in Onshape the face on the other side of it is a region
+        // too (an extrude can take both: the profile and the face it rests on).
+        let edges_of = |r: &Region| -> std::collections::HashSet<CurveId> { r.outer_curves.iter().chain(r.hole_curves.iter().flatten()).copied().filter(|c| imprinted(*c)).collect() };
+        // (Its outer edge: a hole the face has through the region is no region.)
+        let bound_edges: std::collections::HashSet<CurveId> = out.iter().zip(&bound).filter(|(_, b)| **b).flat_map(|(r, _)| r.outer_curves.iter().copied().filter(|c| imprinted(*c))).collect();
         let keep: Vec<bool> = out
             .iter()
             .enumerate()
             .map(|(i, r)| {
                 bound[i]
+                    || edges_of(r).iter().any(|c| bound_edges.contains(c))
                     || lone && std::iter::once(&r.outer).chain(r.holes.iter()).any(|poly| drawn_points.iter().any(|p| polyline_distance(poly, *p) < tol))
                     || inner_point(r).is_some_and(|p| {
                         out.iter().enumerate().any(|(j, q)| j != i && bound[j] && point_in_polygon(p, &q.outer))
@@ -1301,6 +1308,20 @@ mod tests {
         let r = regions(&s);
         assert_eq!(r.len(), 1);
         assert!(close(r[0].area(), PI * 0.09));
+    }
+
+    #[test]
+    fn a_face_across_the_edge_closing_a_profile_is_a_region() {
+        // A U drawn down onto the face's top edge, its opening closed by that edge (a sketch
+        // on a small cap, its profile reaching out past the cap): the profile, and the face
+        // below the edge it rests on (Onshape's extrude took both).
+        let mut s = Sketch::new();
+        imprint_square(&mut s);
+        poly(&mut s, &[(10.0, 40.0), (10.0, 60.0), (30.0, 60.0), (30.0, 40.0)], false);
+        let r = regions(&s);
+        let mut areas: Vec<f64> = r.iter().map(Region::area).collect();
+        areas.sort_by(f64::total_cmp);
+        assert!(areas.len() == 2 && close(areas[0], 400.0) && close(areas[1], 1600.0), "{areas:?}");
     }
 
     #[test]

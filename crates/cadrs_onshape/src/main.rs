@@ -165,6 +165,7 @@ fn import_one(raw_dir: &Path, store: &Store, id: &str, skip: &[String], dry_run:
         skip: skip.iter().cloned().collect(),
         progress: std::env::var_os("CADRS_ONSHAPE_PROGRESS").map(PathBuf::from),
         only: None,
+        store: Some(store.clone()),
     };
     // Derived features read other documents from the store.
     cadrs_core::derived::set_document_loader(Some(cadrs_core::derived::store_loader(store.clone())));
@@ -192,6 +193,12 @@ fn import_one(raw_dir: &Path, store: &Store, id: &str, skip: &[String], dry_run:
                 let thumb = d.dir.join("thumbnail.png");
                 if thumb.exists() {
                     std::fs::copy(&thumb, store.thumbnail_path(imported.doc.id)).ok();
+                }
+                // Onshape's versions other documents may pin (those scraped), as its history.
+                if let Some(log) = cadrs_onshape::history_with_versions(&d, &imported.doc, &imported.meta, user)
+                    && let Err(e) = log.save(store)
+                {
+                    line += &format!("  ! versions not saved: {e}\n");
                 }
                 // It must load back as the app will load it.
                 if let Err(e) = store.load(imported.doc.id) {

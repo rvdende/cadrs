@@ -41,6 +41,7 @@ pub mod mate;
 pub mod named_views;
 pub mod measure;
 pub mod brep;
+pub mod check;
 pub mod parts;
 pub mod pcb;
 pub mod pattern;

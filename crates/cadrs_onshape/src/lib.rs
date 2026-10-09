@@ -19,4 +19,4 @@ pub mod report;
 pub mod sketch;
 pub mod studio;
 
-pub use import::{Imported, Options, import_document};
+pub use import::{Imported, Options, history_with_versions, import_document, version_id};

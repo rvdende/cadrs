@@ -766,6 +766,21 @@ impl Solid {
             })
             .sum()
     }
+
+    /// The centre of mass of a closed solid of uniform density (mm), from the same
+    /// tetrahedra as [`Self::volume`]; `None` with no volume.
+    pub fn centroid(&self) -> Option<Vec3> {
+        let (mut v, mut m) = (0.0, [0.0; 3]);
+        for t in 0..self.triangle_count() {
+            let [a, b, c] = [0, 1, 2].map(|k| self.positions[self.indices[3 * t + k] as usize]);
+            let dv = dot(a, cross(b, c)) / 6.0;
+            v += dv;
+            for i in 0..3 {
+                m[i] += dv * (a[i] + b[i] + c[i]) / 4.0;
+            }
+        }
+        (v.abs() > 1e-12).then(|| [m[0] / v, m[1] / v, m[2] / v])
+    }
 }
 
 /// Möller–Trumbore: the ray parameter where it hits the triangle (either side).

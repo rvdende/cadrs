@@ -236,6 +236,10 @@ pub struct TransformFeature {
     /// snapshot of the Part Studios they come from (see the module docs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ContextCopy>,
+    /// Mate connectors to transform (Onshape's entities may be mate connectors): moved with the
+    /// parts, or with Copy part, one copied (the copy is this feature's own connector).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connectors: Vec<ConnectorRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<ContextSource>,
 }
@@ -292,6 +296,7 @@ impl Default for TransformFeature {
             scale: 1.0,
             scale_expr: one_expr(),
             context: Vec::new(),
+            connectors: Vec::new(),
             sources: Vec::new(),
         }
     }
@@ -338,11 +343,14 @@ impl TransformFeature {
 
     /// Why it can't be built, if it can't.
     pub fn problem(&self) -> Option<&'static str> {
-        if self.parts.is_empty() && self.context.is_empty() {
+        if self.parts.is_empty() && self.context.is_empty() && self.connectors.is_empty() {
             return Some("Select parts to transform");
         }
         if !self.context.is_empty() && !self.copies() {
             return Some("Parts of the assembly context can only be copied: check Copy part");
+        }
+        if self.copies() && self.connectors.len() > 1 {
+            return Some("Copy one mate connector at a time");
         }
         match self.transform_type {
             TransformType::TranslateByLine if self.line.is_none() => Some("Select a line to translate along"),

@@ -80,7 +80,7 @@ impl Plugin for PartsPlugin {
             .add_systems(Update, set_snapshot_store.run_if(resource_changed::<crate::DocumentStore>))
             .add_systems(
                 Update,
-                (update_part_cache, crate::assembly::in_context::sync_context_parts, sync_part_meshes, shade_parts, draw_part_edges, tint_selection)
+                (update_part_cache, crate::assembly::in_context::sync_context_parts, sync_part_meshes, shade_parts, draw_part_edges, draw_sketch_curve_picks, tint_selection)
                     .chain()
                     .in_set(PartsSet)
                     .after(crate::viewport::apply_view_to_camera)
@@ -511,6 +511,13 @@ fn sectioned_hit<T>(section: Option<&SectionPick>, part: PartId, o: Vec3, d: Vec
 }
 
 impl PartCache {
+    /// Rebuilds the open Part Studio on the next frame though nothing changed (the Document
+    /// menu's Full rebuild, after [`cadrs_core::rebuild::clear_cache`]).
+    pub fn rebuild_again(&mut self) {
+        self.key = None;
+        self.pending = None;
+    }
+
     /// P3D.3: the Part Studio and features the parts on screen were rebuilt from, and the
     /// override they were rebuilt with, once that rebuild is done (`None` while one runs).
     pub fn settled(&self) -> Option<(ElementId, &[Feature], &PartOverride)> {
@@ -1663,6 +1670,24 @@ fn shade_parts(
 
 /// Part edges, hover and selection outlines.
 #[allow(clippy::too_many_arguments)]
+/// A visible sketch's curve under the pointer or in the selection, in the hover or selection
+/// colour over everything: a sketch behind a wall is picked through it, as in Onshape.
+fn draw_sketch_curve_picks(cache: Res<PartCache>, highlight: Res<PlaneHighlight>, selection: Res<Selection>, mut g: Gizmos<PickedEdgeGizmos>) {
+    for sc in &cache.sketch_curves {
+        for (id, pts) in &sc.curves {
+            let pick = Pick::SketchCurve(sc.sketch, *id);
+            let color = if highlight.is_hovered(pick) {
+                EDGE_HOVER
+            } else if selection.contains(pick) {
+                SELECTED
+            } else {
+                continue;
+            };
+            g.linestrip(pts.iter().map(|p| v3(*p)), color);
+        }
+    }
+}
+
 fn draw_part_edges(
     cache: Res<PartCache>,
     over: Res<PartOverride>,
@@ -2136,7 +2161,8 @@ impl PickFilter {
             edges: true,
             // Sketch regions are selectable (their area shows at the bottom right).
             regions: true,
-            sketch_curves: false,
+            // And a visible sketch's curves, behind a part too (Onshape's hover).
+            sketch_curves: true,
             sketch_points: false,
             plane_features: true,
             connectors: true,
@@ -2366,7 +2392,8 @@ pub fn pick_region(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<
     best.map(|(s, i, t, _)| (s, i, t))
 }
 
-/// The nearest sketch point within [`VERTEX_PICK_PX`] of a screen offset, not behind a part.
+/// The nearest sketch point within [`VERTEX_PICK_PX`] of a screen offset, behind a part too (its
+/// dot shows through the wall).
 pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::PointId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::PointId, Vec3)> = Vec::new();
     for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
@@ -2379,12 +2406,11 @@ pub fn pick_sketch_point(cache: &PartCache, view: &ViewState, offset: Vec2) -> O
         }
     }
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.into_iter()
-        .find(|(_, _, _, p)| visible(cache, view, *p))
-        .map(|(d, s, c, _)| (s, c, d))
+    near.into_iter().next().map(|(d, s, c, _)| (s, c, d))
 }
 
-/// The nearest sketch curve within [`EDGE_PICK_PX`] of a screen offset, not behind a part.
+/// The nearest sketch curve within [`EDGE_PICK_PX`] of a screen offset, behind a part too (it
+/// shows dashed there, and Onshape picks it through the wall).
 pub fn pick_sketch_curve(cache: &PartCache, view: &ViewState, offset: Vec2) -> Option<(FeatureId, cadrs_sketch::CurveId, f32)> {
     let mut near: Vec<(f32, FeatureId, cadrs_sketch::CurveId, Vec3)> = Vec::new();
     for sc in cache.sketch_curves.iter().filter(|sc| !cache.flat_sketches.contains(&sc.sketch)) {
@@ -2406,9 +2432,7 @@ pub fn pick_sketch_curve(cache: &PartCache, view: &ViewState, offset: Vec2) -> O
         }
     }
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.into_iter()
-        .find(|(_, _, _, p)| visible(cache, view, *p))
-        .map(|(d, s, c, _)| (s, c, d))
+    near.into_iter().next().map(|(d, s, c, _)| (s, c, d))
 }
 
 /// What is under the pointer: the origin (within 6 px), else a part vertex or edge (if the

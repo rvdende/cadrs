@@ -41,6 +41,11 @@ impl PartCheck {
     pub fn error(&self) -> Option<f64> {
         self.cadrs_volume.map(|v| (v - self.onshape_volume).abs() / self.onshape_volume.abs().max(1e-9))
     }
+
+    /// Matched: within 0.1 % of Onshape's volume, and where Onshape has it (its box).
+    pub fn matches(&self) -> bool {
+        self.error().is_some_and(|e| e < 1e-3) && self.bbox_note.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,9 +85,9 @@ impl ElementReport {
         self.features.iter().filter(|f| f.outcome == o).count()
     }
 
-    /// Every part matched, within 0.1 % of Onshape's volume.
+    /// Every part matched, within 0.1 % of Onshape's volume and where Onshape has it.
     pub fn parts_match(&self) -> bool {
-        !self.parts.is_empty() && self.parts.iter().all(|p| p.error().is_some_and(|e| e < 1e-3))
+        !self.parts.is_empty() && self.parts.iter().all(PartCheck::matches)
     }
 }
 
@@ -100,7 +105,7 @@ impl fmt::Display for DocumentReport {
                     el.count(Outcome::Skipped)
                 )?;
                 if !el.parts.is_empty() {
-                    let matched = el.parts.iter().filter(|p| p.error().is_some_and(|e| e < 1e-3)).count();
+                    let matched = el.parts.iter().filter(|p| p.matches()).count();
                     write!(f, "; parts {matched}/{} match Onshape", el.parts.len())?;
                 }
             }
@@ -131,7 +136,11 @@ impl fmt::Display for DocumentReport {
             }
             for p in &el.parts {
                 match p.error() {
-                    Some(e) if e < 1e-3 => {}
+                    Some(e) if e < 1e-3 => {
+                        if let Some(n) = &p.bbox_note {
+                            writeln!(f, "      placed     {}: {n}", p.name)?;
+                        }
+                    }
                     Some(e) => {
                         writeln!(f, "      volume     {}: {:.1} % off ({:.1} vs {:.1} mm³)", p.name, e * 100.0, p.cadrs_volume.unwrap_or(0.0), p.onshape_volume)?;
                         if let Some(n) = &p.bbox_note {

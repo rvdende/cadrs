@@ -73,6 +73,7 @@ impl Plugin for SketchDrawPlugin {
             .init_gizmo_group::<SketchRingGizmos>()
             .init_gizmo_group::<SketchAcceptedGizmos>()
             .init_gizmo_group::<SketchAcceptedDotGizmos>()
+            .init_gizmo_group::<SketchHiddenGizmos>()
             .init_resource::<SketchLabels>()
             .init_resource::<SketchOverlay>()
             .init_resource::<crate::sketch_glyphs::GlyphOffsets>()
@@ -261,6 +262,11 @@ pub struct SketchAcceptedGizmos;
 /// Their point dots.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct SketchAcceptedDotGizmos;
+/// Their edges again, thin and dashed, over everything: where a part hides an edge only these
+/// show (Onshape draws a sketch behind a wall dashed); where it is in view its solid line
+/// covers them.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct SketchHiddenGizmos;
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let layers = RenderLayers::layer(OVERLAY_LAYER);
@@ -287,11 +293,12 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     accepted.render_layers = RenderLayers::layer(crate::viewport::OCCLUDED_LAYER);
     set(3.0, store.config_mut::<SketchAcceptedDotGizmos>().0);
     let accepted_dots = store.config_mut::<SketchAcceptedDotGizmos>().0;
-    // The dots a little further forward than the edges: the sketch's own fill (pulled in front of a
-    // face it lies on) hid half of each dot after P3.3 moved them behind parts (P3.3 judge: the
-    // dots got smaller and lighter).
-    accepted_dots.depth_bias = -1e-3;
+    // The dots over everything, as Onshape's: a sketch behind a wall still shows its corners
+    // (its edges show dashed, [`SketchHiddenGizmos`]).
+    accepted_dots.depth_bias = -1.0;
     accepted_dots.render_layers = RenderLayers::layer(crate::viewport::OCCLUDED_LAYER);
+    set(1.3, store.config_mut::<SketchHiddenGizmos>().0);
+    store.config_mut::<SketchHiddenGizmos>().0.render_layers = RenderLayers::layer(crate::viewport::OCCLUDED_LAYER);
 }
 
 /// The edited sketch's gizmos draw in the flat view while a sketch on a flat pattern is edited
@@ -510,8 +517,8 @@ fn draw_sketches(
         Res<crate::feature_menu::ShownDimensions>,
         Res<crate::sketch_tools::ExternalSnap>,
     ),
-    section: Res<crate::section_view::SectionClip>,
-    (mut lines, mut thin, mut rubber_g, mut hover_g, mut dots, mut accepted, mut rings, mut wide_g, mut accepted_dots): (
+    (section, plane_highlight): (Res<crate::section_view::SectionClip>, Res<crate::viewport::PlaneHighlight>),
+    (mut lines, mut thin, mut rubber_g, mut hover_g, mut dots, mut accepted, mut rings, mut wide_g, mut accepted_dots, mut hidden): (
         Gizmos<SketchLineGizmos>,
         Gizmos<SketchThinGizmos>,
         Gizmos<SketchRubberGizmos>,
@@ -521,6 +528,7 @@ fn draw_sketches(
         Gizmos<SketchRingGizmos>,
         Gizmos<SketchWideGizmos>,
         Gizmos<SketchAcceptedDotGizmos>,
+        Gizmos<SketchHiddenGizmos>,
     ),
 ) {
     set_nudge(&area.flat.map_or(view.view, |f| f.view));
@@ -572,7 +580,23 @@ fn draw_sketches(
         // Its appearance (PS9.5), else grey.
         let color = parts.sketch_color(f.id);
         let curve_color = |c: cadrs_sketch::CurveId| parts.curve_color(f.id, c);
-        draw_accepted(&sk.geometry, plane, &map, &skip, (whole, error, color, &curve_color), &mut accepted, &mut accepted_dots);
+        // The curves around a hovered or selected region: its orange outline lies over them, so
+        // their behind-a-wall dashes are left out (grey dashes over it read as a dashed edge).
+        let mut outlined: std::collections::HashSet<cadrs_sketch::CurveId> = Default::default();
+        for sr in parts.regions.iter().filter(|r| r.sketch == f.id) {
+            for (i, r) in sr.regions.iter().enumerate() {
+                let pick = crate::viewport::Pick::Region(f.id, i as u32);
+                if plane_highlight.is_hovered(pick) || picked_features.contains(pick) {
+                    outlined.extend(r.curves.iter().chain(r.hole_curves.iter().flatten()).copied());
+                }
+            }
+        }
+        // A hovered or selected curve is drawn orange over everything too.
+        let outlined = |c: cadrs_sketch::CurveId| {
+            let pick = crate::viewport::Pick::SketchCurve(f.id, c);
+            outlined.contains(&c) || plane_highlight.is_hovered(pick) || picked_features.contains(pick)
+        };
+        draw_accepted(&sk.geometry, plane, &map, &skip, (whole, error, color, &curve_color, &outlined), &mut accepted, &mut accepted_dots, &mut hidden);
         // P3D.1 (IR5.5): the feature menu's Show dimensions.
         if shown_dims.0.contains(&f.id) {
             let knock = |_: SVec2| knockout(false);
@@ -589,7 +613,7 @@ fn draw_sketches(
         session_sketch(session.as_deref(), Some(&doc)),
     ) {
         let frame = map.plane.frame();
-        let ppm = map.px_per_mm() as f64;
+        let ppm = map.zoom() as f64;
         // What the cursor snapped to (only while a tool places points).
         // ... or where a dragged point snapped (S11.4).
         let inference = draw
@@ -1127,7 +1151,7 @@ fn draw_sketches(
         // dragged with the spline it makes.
         {
             let frame = map.plane.frame();
-            let ppm = map.px_per_mm();
+            let ppm = map.zoom();
             for (h, end) in crate::sketch_tools::spline_handles(sketch, &selection) {
                 let h = match draw.spline_handle {
                     Some(d) if d.curve == h.curve && d.at_start == h.at_start => d,
@@ -1493,7 +1517,7 @@ fn draw_rubber(
     labels: &mut Vec<LabelSpec>,
 ) {
     let frame = map.plane.frame();
-    let ppm = map.px_per_mm();
+    let ppm = map.zoom();
     let color = rubber();
     let mut dot_at = |p: SVec2| dot(dots, &frame, p, 1.5, ppm, color);
     // The free end, under the cursor: a hollow ring (`screens/19`).
@@ -2274,18 +2298,19 @@ fn upright_angle(dir: Vec2) -> f32 {
 
 /// A sketch that is not being edited: thin grey edges and small grey points, no dimensions
 /// (`screens/20`).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn draw_accepted(
     s: &Sketch,
     plane: PlaneRef,
     map: &ScreenMap,
     skip: &dyn Fn(cadrs_sketch::CurveId) -> bool,
-    (selected, error, color, curve_color): (bool, bool, Option<Color>, &dyn Fn(cadrs_sketch::CurveId) -> Option<Color>),
+    (selected, error, color, curve_color, outlined): (bool, bool, Option<Color>, &dyn Fn(cadrs_sketch::CurveId) -> Option<Color>, &dyn Fn(cadrs_sketch::CurveId) -> bool),
     g: &mut Gizmos<SketchAcceptedGizmos>,
     dots: &mut Gizmos<SketchAcceptedDotGizmos>,
+    hidden: &mut Gizmos<SketchHiddenGizmos>,
 ) {
     let frame = plane.frame();
-    let ppm = map.px_per_mm();
+    let ppm = map.zoom();
     let edge = if selected {
         Color::srgb_u8(0xf0, 0x9a, 0x1e)
     } else if error {
@@ -2306,6 +2331,17 @@ fn draw_accepted(
         // A curve's own appearance (PS9.5) unless the sketch is selected or in error.
         let own = (!selected && !error).then(|| curve_color(id)).flatten();
         stroke(g, &frame, &pts, own.unwrap_or(edge), c.construction, ppm as f64);
+        // Behind a wall: dashed (8 px dash, 5 px gap), a construction curve dash-dotted as in
+        // view; on the plane, so the dashes stay put as the view turns.
+        // Not along a hovered or selected region's outline, which lies over the edge.
+        if outlined(id) {
+            continue;
+        }
+        let px = |v: f64| v / ppm as f64;
+        let pattern = if c.construction { [px(12.0), px(4.0), px(2.0), px(4.0)].to_vec() } else { vec![px(8.0), px(5.0)] };
+        for d in dash_pattern(&pts, &pattern) {
+            hidden.linestrip(d.into_iter().map(|p| world(&frame, p)), own.unwrap_or(edge).with_alpha(0.7));
+        }
     }
     for id in s.texts.keys() {
         for c in cadrs_sketch::text::outlines(s, id) {
@@ -2437,10 +2473,12 @@ fn sync_fills(
         .material
         .get_or_insert_with(|| {
             materials.add(StandardMaterial {
-                base_color: fill(),
+                // Half see-through, as Onshape's: the model shows through a sketch's regions.
+                base_color: fill().with_alpha(0.5),
                 unlit: true,
                 cull_mode: None,
                 double_sided: true,
+                alpha_mode: AlphaMode::Blend,
                 // In front of a part face the sketch lies on, by a hair: [`FILL_BIAS`].
                 depth_bias: FILL_BIAS,
                 ..default()

@@ -357,6 +357,7 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
         (FeatureKind::MateConnector(x), AppliedField::ConnectorOrigin) => {
             let Some(o) = implicit_origin(cache, pick) else { return false };
             x.origin = if x.origin == Some(o) { None } else { Some(o) };
+            x.at = None;
             // The owner follows the first pick (A22.5, P3.11: check it, and change it if needed).
             if x.owner_on && x.owner.is_none() {
                 x.owner = pick.part().or_else(|| x.origin.and_then(|o| o.part()));

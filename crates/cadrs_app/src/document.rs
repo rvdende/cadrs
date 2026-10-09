@@ -428,6 +428,7 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, user: &Us
             observe(|ev: On<MenuAction>, q: Query<Entity, With<DocumentName>>, mut commands: Commands| {
                 match ev.item.as_str() {
                     "document-menu-units" => commands.queue(crate::units_dialog::open_units_dialog),
+                    "document-menu-full-rebuild" => commands.queue(full_rebuild),
                     // P3D.3: a version of the document as it is.
                     "document-menu-create-version" => commands.queue(|world: &mut World| crate::linked::open_create_version_dialog(world, crate::linked::VersionTarget::Current)),
                     "document-menu-rename" => {
@@ -939,7 +940,8 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
 }
 
 /// The "+" menu, like Onshape's: only Part Studios and Assemblies can be created.
-/// The document menu (☰): rename, and the workspace units (X1). The rest is shown disabled.
+/// The document menu (☰): rename, a version, the workspace units (X1) and a full rebuild. The
+/// rest is shown disabled.
 fn document_menu() -> Menu {
     Menu::new("document-menu-popup")
         .min_width(200.0)
@@ -954,7 +956,51 @@ fn document_menu() -> Menu {
         .separator()
         .item(MenuItem::new("document-menu-units", "Workspace units…").icon("measure"))
         .separator()
+        .item(MenuItem::new("document-menu-full-rebuild", "Full rebuild (clear cache)").icon("sync-document"))
+        .separator()
         .item(MenuItem::new("document-menu-print", "Print…").disabled(true))
+}
+
+/// Document menu › Full rebuild: reloads the document from the store (a re-import made while it
+/// was open comes in; edits not yet saved are saved first, unless the stored file changed
+/// elsewhere, which then wins), empties the rebuild cache and stops restoring saved rebuild
+/// snapshots, so the open tab is rebuilt from scratch (other tabs when next shown).
+fn full_rebuild(world: &mut World) {
+    cadrs_core::rebuild::clear_cache();
+    let stored = world.get_resource::<ActiveDocument>().filter(|d| d.meta.is_some()).map(|d| (d.doc.id, d.active));
+    if let Some((id, active)) = stored {
+        let store = world.resource::<crate::DocumentStore>().0.clone();
+        match store.load(id) {
+            Ok(file) => {
+                let elsewhere = !world.resource::<ActiveDocument>().is_last_saved(&file.document);
+                let file = if elsewhere {
+                    file
+                } else {
+                    let now = world.resource::<crate::AppClock>().now();
+                    let user = world.resource::<crate::UserProfile>().id.clone();
+                    if let Err(e) = world.resource_mut::<ActiveDocument>().save_if_changed(&store, now, &user) {
+                        warn!("cannot save: {e}");
+                    }
+                    match store.load(id) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            crate::linked::error_toast(world, e.to_string());
+                            return;
+                        }
+                    }
+                };
+                let mut doc = ActiveDocument::stored(file.document, file.meta);
+                // The same tab, if it is still there.
+                if active.is_some_and(|a| doc.doc.element(a).is_some()) {
+                    doc.active = active;
+                }
+                world.insert_resource(doc);
+                world.resource_mut::<crate::linked::LinkStatus>().invalidate();
+            }
+            Err(e) => crate::linked::error_toast(world, e.to_string()),
+        }
+    }
+    world.resource_mut::<crate::parts::PartCache>().rebuild_again();
 }
 
 /// `paste`: the name of a tab copied with "Copy to clipboard", offered as "Paste …".

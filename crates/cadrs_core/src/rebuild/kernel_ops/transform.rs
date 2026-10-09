@@ -94,7 +94,7 @@ impl Rebuilder {
                 parts.push(*p);
             }
         }
-        if parts.is_empty() && x.context.is_empty() {
+        if parts.is_empty() && x.context.is_empty() && x.connectors.is_empty() {
             return Err(if x.parts.len() == 1 {
                 "The part to transform no longer exists".into()
             } else {
@@ -103,7 +103,35 @@ impl Rebuilder {
         }
         let missing = x.parts.iter().filter(|p| state.part(**p).is_none()).count();
         let map = self.transform_map(before, x, state)?;
-        let mut out = if x.copies() { self.transform_copies(id, &parts, x, &map, state)? } else { self.transform_moves(id, &parts, &map, state)? };
+        let mut out = if parts.is_empty() && x.context.is_empty() {
+            Output { state: state.clone(), error: None, warning: None, contacts: None, owned: Vec::new(), stage: None, axis: None, dots: None, uses: Vec::new(), arrows: Vec::new() }
+        } else if x.copies() {
+            self.transform_copies(id, &parts, x, &map, state)?
+        } else {
+            self.transform_moves(id, &parts, &map, state)?
+        };
+        // Its mate connectors: moved (an explicit one's frame), or copied as its own.
+        if !x.connectors.is_empty() {
+            let mut next = (*out.state).clone();
+            for c in &x.connectors {
+                let frame = super::super::connector_frame(before, state, c).map_err(|e| if e.is_empty() { "A mate connector to transform no longer exists".to_string() } else { e })?;
+                let moved = map.frame(&frame);
+                let owner = match c {
+                    crate::mate::ConnectorRef::Feature(f) => state.connector_owners.get(f).copied(),
+                    crate::mate::ConnectorRef::Implicit(o) => o.part(),
+                };
+                let key = match (x.copies(), c) {
+                    (false, crate::mate::ConnectorRef::Feature(f)) => *f,
+                    (false, _) => return Err("An implicit mate connector can only be copied: check Copy part".into()),
+                    (true, _) => id,
+                };
+                next.connectors.insert(key, moved);
+                if let Some(o) = owner {
+                    next.connector_owners.insert(key, o);
+                }
+            }
+            out.state = Arc::new(next);
+        }
         // PS11.1: the others moved; a warning, as Onshape's yellow.
         if missing > 0 {
             out.warning = Some(if missing == 1 {

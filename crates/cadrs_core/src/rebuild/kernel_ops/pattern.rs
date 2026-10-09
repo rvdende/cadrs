@@ -598,6 +598,25 @@ impl Rebuilder {
             return Ok(out);
         }
         let joined = self.join(id, copies.into_iter().map(|(b, n, ..)| (b, n)).collect())?;
+        // Add with no merge scope: the copies merge with the seed parts they touch, as Onshape's
+        // part pattern and mirror do, not with every part they touch (a mirrored half of a cover
+        // that reaches the frame stays part of the cover); touching none, they are new parts.
+        let own: Vec<PartId>;
+        let narrowed;
+        let merge = if merge.op == BooleanOp::Add && !merge.merge_all && merge.scope.is_empty() {
+            let touches = self.contacts(joined.0, state).touches;
+            own = seeds.iter().copied().filter(|s| touches.contains(s)).collect();
+            narrowed = Merge { op: if own.is_empty() { BooleanOp::New } else { BooleanOp::Add }, merge_all: false, scope: &own, surface: merge.surface };
+            &narrowed
+        } else if merge.op == BooleanOp::Add && !merge.merge_all {
+            // Add with a merge scope: the seeds merge too, with the scope and their copies (as
+            // Onshape's do); a seed touching none of them stays a part of its own.
+            own = merge.scope.iter().copied().chain(seeds.iter().copied().filter(|s| !merge.scope.contains(s))).collect();
+            narrowed = Merge { op: BooleanOp::Add, merge_all: false, scope: &own, surface: merge.surface };
+            &narrowed
+        } else {
+            merge
+        };
         self.combine(id, merge, joined, state, state.geoms.clone())
     }
 

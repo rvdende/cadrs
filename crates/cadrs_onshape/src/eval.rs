@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use cadrs_core::document::{EdgeRef, FaceRef};
+use cadrs_core::document::{EdgeRef, FaceRef, VertexRef};
 use cadrs_core::ids::FeatureId;
 use cadrs_core::parts::Part;
 use cadrs_kernel::naming::{FaceName, FaceOrigin};
@@ -109,6 +109,75 @@ fn strip_prefix(q: &Value, prefix: &str) -> Value {
     }
 }
 
+/// The queries of the three faces a vertex query's vertex is the corner of: a `CAP_VERTEX`'s
+/// cap face and the side faces its two sketch curves swept, each wrapped in the copies around it.
+fn vertex_faces(q: &Value, depth: usize) -> Option<Vec<Value>> {
+    if depth > 8 {
+        return None;
+    }
+    let s = |x: &str| Value::Str(x.into());
+    let map = |kv: Vec<(&str, Value)>| Value::Map(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+    match q.get("queryType")?.as_str()? {
+        "COPY" => {
+            let inner = q.get("derivedFrom")?;
+            let inner = inner.items().first().unwrap_or(inner);
+            let fields = match q {
+                Value::Typed(_, v) => v.as_ref(),
+                v => v,
+            };
+            let Value::Map(fields) = fields else { return None };
+            let faces = vertex_faces(inner, depth + 1)?;
+            Some(
+                faces
+                    .into_iter()
+                    .map(|f| {
+                        let mut m: Vec<(String, Value)> = fields.iter().filter(|(k, _)| k != "entityType" && k != "derivedFrom").cloned().collect();
+                        m.push(("entityType".into(), s("FACE")));
+                        m.push(("derivedFrom".into(), f));
+                        Value::Map(m)
+                    })
+                    .collect(),
+            )
+        }
+        "CAP_VERTEX" => {
+            let op = q.get("operationId")?.clone();
+            let mut originals: Vec<Value> = q
+                .get("disambiguationData")
+                .map(Value::items)
+                .unwrap_or_default()
+                .iter()
+                .filter(|d| d.get("disambiguationType").and_then(Value::as_str) == Some("ORIGINAL_DEPENDENCY"))
+                .flat_map(|d| d.get("originals").map(Value::items).unwrap_or_default().iter().cloned())
+                .collect();
+            if originals.len() != 2 {
+                // The INTERSECT of the two curves it was derived from.
+                let from = q.get("derivedFrom")?;
+                let from = from.items().first().unwrap_or(from);
+                originals = from.get("derivedFrom")?.items().to_vec();
+            }
+            if originals.len() != 2 {
+                return None;
+            }
+            let mut cap = vec![("queryType", s("CAP_FACE")), ("entityType", s("FACE")), ("operationId", op.clone())];
+            if let Some(start) = q.get("isStart") {
+                cap.push(("isStart", start.clone()));
+            }
+            let mut out = vec![map(cap)];
+            for o in originals {
+                let dis = map(vec![("disambiguationType", s("ORIGINAL_DEPENDENCY")), ("originals", Value::Array(vec![o]))]);
+                out.push(map(vec![
+                    ("queryType", s("SWEPT_FACE")),
+                    ("entityType", s("FACE")),
+                    ("operationId", op.clone()),
+                    ("disambiguationData", Value::Array(vec![dis])),
+                ]));
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 /// A Derived feature's source, loaded the first time a query needs it (loading another
 /// document's studio means importing it).
 pub struct LazySource {
@@ -192,6 +261,15 @@ impl Model<'_> {
         }
     }
 
+    /// A face's name and the names of the faces merged into it (the kernel merges neighbouring
+    /// faces on one surface, keeping one name; Onshape's queries can name any of them).
+    fn face_names(&self, e: Ent) -> Vec<FaceName> {
+        let Ent::Face(p, f) = e else { return Vec::new() };
+        let s = &self.parts[p].solid;
+        let name = s.faces[f].name;
+        std::iter::once(name).chain(s.face_aliases.iter().filter(|a| a.face == name).map(|a| a.name)).collect()
+    }
+
     /// The persistent hash of an edge's name (what `FaceOrigin::FromEdge` holds).
     fn edge_hash(&self, e: Ent) -> Option<u64> {
         match e {
@@ -244,6 +322,207 @@ impl Model<'_> {
         out
     }
 
+    /// Whether face `i` of `part` (lying in the plane the line `a`–`b` swept along `n`) covers
+    /// part of that sweep: points along the line, a little way off the sketch plane either way
+    /// (the face's edge at the sketch plane may have been trimmed since).
+    fn covers_sweep(part: &Part, i: usize, a: [f64; 3], b: [f64; 3], n: [f64; 3]) -> bool {
+        [0.5, 0.25, 0.75].iter().any(|t| {
+            let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+            [1e-3, -1e-3, 1e-2, -1e-2, 0.1, -0.1, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 3.0, -3.0, 5.0, -5.0].iter().any(|s| part.solid.face_contains(i, [p[0] + n[0] * s, p[1] + n[1] * s, p[2] + n[2] * s]))
+        })
+    }
+
+    /// The faces lying where the sketch lines in `originals` were swept (the side faces an
+    /// extrude of them made), found by geometry: the face in the plane through the line and
+    /// its sketch's normal, over the line. For a face a later boolean merged into a coplanar one
+    /// of another feature, keeping only that one's name (Onshape keeps both histories).
+    fn swept_by_geometry(&self, originals: &[Value]) -> Vec<Ent> {
+        let unit = |v: [f64; 3]| {
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-300);
+            [v[0] / l, v[1] / l, v[2] / l]
+        };
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let mut out = Vec::new();
+        for o in originals {
+            if o.get("queryType").and_then(Value::as_str) != Some("SKETCH_ENTITY") {
+                continue;
+            }
+            let (Some(op), Some(id)) = (o.get("operationId").and_then(Value::as_str), o.get("sketchEntityId").and_then(Value::as_str)) else { continue };
+            let Some((map, g)) = self.sketches.get(op_feature(op)) else { continue };
+            let Some(cadrs_sketch::CurveKind::Line { a, b }) = map.curves.get(id).and_then(|c| g.curves.get(*c)).map(|c| c.kind) else { continue };
+            let Some(frame) = self.doc.iter().find(|f| f.id == map.feature).and_then(|f| f.sketch()?.plane).map(|p| p.frame()) else { continue };
+            let (Some(pa), Some(pb)) = (g.points.get(a), g.points.get(b)) else { continue };
+            let (wa, wb) = (frame.to_world(pa.pos), frame.to_world(pb.pos));
+            let n = unit(frame.normal());
+            let m = unit(cross([wb[0] - wa[0], wb[1] - wa[1], wb[2] - wa[2]], n));
+            let mid = [(wa[0] + wb[0]) / 2.0, (wa[1] + wb[1]) / 2.0, (wa[2] + wb[2]) / 2.0];
+            if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                eprintln!("  swept line {id}: {wa:?} → {wb:?}, plane normal {m:?}");
+            }
+            for (p, part) in self.parts.iter().enumerate() {
+                for (i, face) in part.solid.faces.iter().enumerate() {
+                    let Some(pl) = face.plane else { continue };
+                    let fnrm = unit(pl.normal());
+                    let off = [mid[0] - pl.origin[0], mid[1] - pl.origin[1], mid[2] - pl.origin[2]];
+                    if dot(fnrm, m).abs() < 1.0 - 1e-6 || dot(off, fnrm).abs() > 1e-4 {
+                        continue;
+                    }
+                    // Over the line: just off the sketch plane, to either side.
+                    let over = Self::covers_sweep(part, i, wa, wb, n);
+                    if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                        eprintln!("  in plane: {:?} over the line {over} (line middle {mid:?}, sweep {n:?})", face.name.origin);
+                    }
+                    if over && !out.contains(&Ent::Face(p, i)) {
+                        out.push(Ent::Face(p, i));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// For a face query that is copies (by mirrors) and merges of a side face swept from a
+    /// sketch line: where that face is now, by geometry. The line is reflected by each mirror
+    /// along the way, and the face sought lies in the plane through it and its sweep, over it.
+    /// Names can't find such a face once its original is gone (a later boolean consumed or
+    /// renamed it) while its copy lives on. `None` when the query isn't such a chain.
+    fn chain_by_geometry(&self, q: &Value) -> Option<Vec<Ent>> {
+        self.chain_geo(q, Vec::new(), false)
+    }
+
+    /// [`Self::chain_by_geometry`] from `q` down, with the mirrors met above it (outermost
+    /// first: a point on the plane and its unit normal), and whether there was one.
+    fn chain_geo(&self, q: &Value, mut mirrors: Vec<([f64; 3], [f64; 3])>, mut copied: bool) -> Option<Vec<Ent>> {
+        type V3 = [f64; 3];
+        let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let unit = |v: V3| {
+            let l = dot(v, v).sqrt().max(1e-300);
+            [v[0] / l, v[1] / l, v[2] / l]
+        };
+        let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let mut node = q;
+        loop {
+            let qtype = node.get("queryType").and_then(Value::as_str)?;
+            let derived = match node.get("derivedFrom") {
+                Some(Value::Array(a)) if a.len() == 1 => Some(&a[0]),
+                Some(Value::Array(_)) => None,
+                Some(v) => Some(v),
+                None => None,
+            };
+            match qtype {
+                "COPY" => {
+                    let fid = node.get("operationId").and_then(Value::as_str).and_then(|o| self.features.get(op_feature(o)))?;
+                    let f = self.doc.iter().find(|f| f.id == *fid)?;
+                    match &f.kind {
+                        cadrs_core::document::FeatureKind::Mirror(m) => {
+                            mirrors.push(self.mirror_frame(m)?);
+                            copied = true;
+                        }
+                        // A boolean's own copy of a face (an extrude's): where it was.
+                        cadrs_core::document::FeatureKind::Extrude(_) | cadrs_core::document::FeatureKind::Boolean(_) => {}
+                        _ => return None,
+                    }
+                    node = derived?;
+                }
+                "MERGE" => match derived {
+                    Some(d) => node = d,
+                    // Several faces merged into one: whichever of them leads to a swept line.
+                    None => {
+                        let Some(Value::Array(all)) = node.get("derivedFrom") else { return None };
+                        return all.iter().find_map(|d| self.chain_geo(d, mirrors.clone(), copied).filter(|f| !f.is_empty()));
+                    }
+                },
+                "SWEPT_FACE" => {
+                    // Only worth it where a copy is involved (else the names do).
+                    if !copied {
+                        return None;
+                    }
+                    let originals = node.get("disambiguationData").map(Value::items).unwrap_or_default().iter().find(|d| d.get("disambiguationType").and_then(Value::as_str) == Some("ORIGINAL_DEPENDENCY")).map(|d| d.get("originals").map(Value::items).unwrap_or_default())?;
+                    let o = originals.iter().find(|o| o.get("queryType").and_then(Value::as_str) == Some("SKETCH_ENTITY"))?;
+                    let (op, id) = (o.get("operationId").and_then(Value::as_str)?, o.get("sketchEntityId").and_then(Value::as_str)?);
+                    let (map, g) = self.sketches.get(op_feature(op))?;
+                    let cadrs_sketch::CurveKind::Line { a, b } = g.curves.get(*map.curves.get(id)?)?.kind else { return None };
+                    let frame = self.doc.iter().find(|f| f.id == map.feature).and_then(|f| f.sketch()?.plane)?.frame();
+                    let (mut wa, mut wb) = (frame.to_world(g.points.get(a)?.pos), frame.to_world(g.points.get(b)?.pos));
+                    let mut n = unit(frame.normal());
+                    // Innermost mirror first.
+                    for (o, m) in mirrors.iter().rev() {
+                        let reflect = |p: V3| {
+                            let d = 2.0 * dot(sub(p, *o), *m);
+                            [p[0] - d * m[0], p[1] - d * m[1], p[2] - d * m[2]]
+                        };
+                        let dn = 2.0 * dot(n, *m);
+                        n = [n[0] - dn * m[0], n[1] - dn * m[1], n[2] - dn * m[2]];
+                        (wa, wb) = (reflect(wa), reflect(wb));
+                    }
+                    let plane_n = unit(cross(sub(wb, wa), n));
+                    let mid = [(wa[0] + wb[0]) / 2.0, (wa[1] + wb[1]) / 2.0, (wa[2] + wb[2]) / 2.0];
+                    let mut out = Vec::new();
+                    // The faces in that plane, and how near each comes to the line's middle.
+                    let mut near: Vec<(f64, Ent)> = Vec::new();
+                    for (p, part) in self.parts.iter().enumerate() {
+                        for (i, face) in part.solid.faces.iter().enumerate() {
+                            let Some(pl) = face.plane else { continue };
+                            let fnrm = unit(pl.normal());
+                            if dot(fnrm, plane_n).abs() < 1.0 - 1e-6 || dot(sub(mid, pl.origin), fnrm).abs() > 1e-4 {
+                                continue;
+                            }
+                            let over = Self::covers_sweep(part, i, wa, wb, n);
+                            if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                                eprintln!("  chain in plane: {:?} over {over}", self.face_names(Ent::Face(p, i)).iter().map(|n| n.origin).collect::<Vec<_>>());
+                            }
+                            if over {
+                                out.push(Ent::Face(p, i));
+                            } else {
+                                let d = face.loops.iter().flatten().map(|q| dot(sub(*q, mid), sub(*q, mid)).sqrt()).fold(f64::MAX, f64::min);
+                                near.push((d, Ent::Face(p, i)));
+                            }
+                        }
+                    }
+                    // None over the line (the face it was merged with reshaped the part there):
+                    // the face in that plane nearest it.
+                    if out.is_empty()
+                        && let Some((_, e)) = near.iter().min_by(|a, b| a.0.total_cmp(&b.0))
+                    {
+                        out.push(*e);
+                    }
+                    if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                        eprintln!("CHAIN {id} through {} mirror(s): line {wa:?} → {wb:?}, found {}", mirrors.len(), out.len());
+                    }
+                    return Some(out);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// A mirror's plane, as a point on it and its unit normal: a default or feature plane, or a
+    /// part face (found by its name now).
+    fn mirror_frame(&self, m: &cadrs_core::pattern::MirrorFeature) -> Option<([f64; 3], [f64; 3])> {
+        let frame = match m.plane? {
+            cadrs_core::pattern::MirrorPlane::Plane(p) => p.frame(),
+            cadrs_core::pattern::MirrorPlane::Face(r) => match self.all_faces().find(|e| self.face_names(*e).contains(&r.face)) {
+                Some(Ent::Face(p, i)) => self.parts[p].solid.faces[i].plane?,
+                // Gone since: where it was when the mirror was made.
+                _ => {
+                    let at = self.doc.iter().position(|f| matches!(&f.kind, cadrs_core::document::FeatureKind::Mirror(x) if x == m))?;
+                    let b = cadrs_core::rebuild::build(&self.doc[..at]);
+                    let found = b.parts.iter().find_map(|p| {
+                        let name = p.solid.canonical_face(&r.face);
+                        p.solid.faces.iter().find(|f| f.name == name)
+                    });
+                    found?.plane?
+                }
+            },
+            cadrs_core::pattern::MirrorPlane::Connector(_) => return None,
+        };
+        let n = frame.normal();
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-300);
+        Some((frame.origin, [n[0] / l, n[1] / l, n[2] / l]))
+    }
+
     /// The region key the sketch entities in `originals` bound, if they bound one.
     fn original_region(&self, originals: &[Value]) -> Option<u64> {
         let first = originals.iter().find_map(|o| o.get("operationId").and_then(Value::as_str))?;
@@ -275,17 +554,49 @@ impl Model<'_> {
                 None => Vec::new(),
             }
         };
+        // A mirrored copy of a side face swept from a sketch line: by geometry, when it finds it.
+        if entity_type == "FACE"
+            && matches!(qtype, "COPY" | "MERGE")
+            && let Some(found) = self.chain_by_geometry(q)
+            && !found.is_empty()
+        {
+            return found;
+        }
         let mut cands: Vec<Ent> = match qtype {
             "COPY" => self.copies(q, &derived(), depth),
             "MERGE" | "SPLIT" => {
                 // A merge is the one entity all its histories describe: what they have in common,
-                // else (cadrs kept only one of the names) any of them.
+                // else (cadrs kept only one of the names) what the most precise of them describes
+                // (a side face found by the curve that swept it, not every copy a pattern made).
                 let sets: Vec<Vec<Ent>> = derived().into_iter().map(|d| self.eval_depth(d, depth + 1)).collect();
+                if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                    for (i, s) in sets.iter().enumerate() {
+                        let names: Vec<String> = s.iter().take(6).map(|e| format!("{:?}", self.face_name(*e).map(|n| n.origin))).collect();
+                        eprintln!("MERGE depth {depth} branch {i}: {} candidate(s) {}", s.len(), names.join(" ; "));
+                    }
+                }
                 let common: Vec<Ent> = match sets.split_first() {
                     Some((first, rest)) if qtype == "MERGE" => first.iter().copied().filter(|e| rest.iter().all(|r| r.contains(e))).collect(),
                     _ => Vec::new(),
                 };
-                let mut v: Vec<Ent> = if common.is_empty() { sets.into_iter().flatten().collect() } else { common };
+                let none_found = sets.iter().all(Vec::is_empty);
+                let mut v: Vec<Ent> = if !common.is_empty() {
+                    common
+                } else if qtype == "MERGE" {
+                    sets.into_iter().filter(|s| !s.is_empty()).min_by_key(Vec::len).unwrap_or_default()
+                } else {
+                    sets.into_iter().flatten().collect()
+                };
+                // None of its histories found (a face whose name a boolean merged away): the
+                // faces of the operation that merged it, narrowed by its own disambiguation
+                // below (cadrs named the merged face after the operation's piece of it).
+                if none_found
+                    && entity_type == "FACE"
+                    && let Some(f) = q.get("operationId").and_then(Value::as_str).and_then(|o| self.features.get(op_feature(o)))
+                {
+                    let op = f.0;
+                    v = self.all_faces().filter(|e| self.face_names(*e).iter().any(|n| n.op == op)).collect();
+                }
                 v.sort();
                 v.dedup();
                 v
@@ -294,6 +605,11 @@ impl Model<'_> {
                 let sides: Vec<HashSet<Ent>> = derived().into_iter().map(|d| self.eval_depth(d, depth + 1).into_iter().collect()).collect();
                 if sides.len() < 2 {
                     return Vec::new();
+                }
+                if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                    for (i, s) in sides.iter().enumerate() {
+                        eprintln!("INTERSECT side {i}: {:?}", s.iter().map(|e| self.face_names(*e).iter().map(|n| n.origin).collect::<Vec<_>>()).collect::<Vec<_>>());
+                    }
                 }
                 // The edges whose faces include one of each operand.
                 self.all_edges()
@@ -307,8 +623,17 @@ impl Model<'_> {
                 let Some(op) = q.get("operationId").and_then(Value::as_str) else { return Vec::new() };
                 let Some(f) = self.features.get(op_feature(op)) else { return Vec::new() };
                 let op = f.0;
+                // An imported file's entity by Onshape's own tag for it, which cadrs can't
+                // read: only when the import made just the one.
+                if qtype == "IMPORT" {
+                    let all: Vec<Ent> = match entity_type {
+                        "FACE" => self.all_faces().filter(|e| self.face_names(*e).iter().any(|n| n.op == op)).collect(),
+                        _ => Vec::new(),
+                    };
+                    return if all.len() == 1 { all } else { Vec::new() };
+                }
                 match entity_type {
-                    "FACE" => self.all_faces().filter(|e| self.face_name(*e).is_some_and(|n| n.op == op)).collect(),
+                    "FACE" => self.all_faces().filter(|e| self.face_names(*e).iter().any(|n| n.op == op)).collect(),
                     "EDGE" => self
                         .all_edges()
                         .filter(|e| {
@@ -340,17 +665,18 @@ impl Model<'_> {
                 let end = is_start.map(|s| !s);
                 cands = narrow(cands, &|e| self.face_name(e).and_then(|n| cap_end(&n)).is_some_and(|x| end.is_none_or(|end| end == x)));
             }
-            "SWEPT_FACE" => cands = narrow(cands, &|e| self.face_name(e).is_some_and(|n| cap_end(&n).is_none())),
+            "SWEPT_FACE" => cands = narrow(cands, &|e| self.face_names(e).iter().any(|n| Some(n.op) == op_id && cap_end(n).is_none())),
             "CAP_EDGE" => {
                 let end = is_start.map(|s| !s);
                 cands = narrow(cands, &|e| {
-                    self.adjacent(e).iter().filter_map(|f| self.face_name(*f)).any(|n| Some(n.op) == op_id && cap_end(&n).is_some_and(|x| end.is_none_or(|end| end == x)))
+                    self.adjacent(e).iter().flat_map(|f| self.face_names(*f)).any(|n| Some(n.op) == op_id && cap_end(&n).is_some_and(|x| end.is_none_or(|end| end == x)))
                 });
             }
             "SWEPT_EDGE" => {
                 cands = narrow(cands, &|e| {
-                    let faces: Vec<FaceName> = self.adjacent(e).iter().filter_map(|f| self.face_name(*f)).collect();
-                    faces.len() == 2 && faces.iter().all(|n| Some(n.op) == op_id && cap_end(n).is_none())
+                    // (A face's merged-away names count: the side a boolean merged into another.)
+                    let faces = self.adjacent(e);
+                    faces.len() == 2 && faces.iter().all(|f| self.face_names(*f).iter().any(|n| Some(n.op) == op_id && cap_end(n).is_none()))
                 });
             }
             _ => {}
@@ -358,10 +684,13 @@ impl Model<'_> {
 
         // Disambiguation.
         for d in q.get("disambiguationData").map(Value::items).unwrap_or_default() {
-            if cands.len() <= 1 {
+            let kind = d.get("disambiguationType").and_then(Value::as_str).unwrap_or_default();
+            // One candidate left is the answer, unless the sketch curve it was swept from says
+            // otherwise (the face it means was merged into another feature's and renamed).
+            if cands.is_empty() || (cands.len() == 1 && (kind != "ORIGINAL_DEPENDENCY" || qtype != "SWEPT_FACE")) {
                 break;
             }
-            match d.get("disambiguationType").and_then(Value::as_str).unwrap_or_default() {
+            match kind {
                 "ORIGINAL_DEPENDENCY" => {
                     let originals = d.get("originals").map(Value::items).unwrap_or_default();
                     let curves = self.original_curves(originals);
@@ -373,15 +702,60 @@ impl Model<'_> {
                         .filter(|e| self.adjacent(*e).iter().filter_map(|f| self.face_name(*f)).any(|n| matches!(n.origin, FaceOrigin::Side { curve, .. } if curves.contains(&curve))))
                         .filter_map(|e| self.edge_hash(e))
                         .collect();
-                    cands = narrow(cands, &|e| match e {
-                        Ent::Face(..) => self.face_name(e).is_some_and(|n| match n.origin {
+                    let by_name = |e: Ent| {
+                        self.face_names(e).iter().any(|n| match n.origin {
                             FaceOrigin::Side { curve, .. } => curves.contains(&curve),
                             FaceOrigin::Cap { region: r, .. } => region.is_some_and(|x| x == r),
                             FaceOrigin::FromEdge { edge } => from_curves.contains(&edge),
                             _ => false,
-                        }),
+                        })
+                    };
+                    // Curves of a sketch the extrude didn't sweep (another sketch's edges imprinted
+                    // on its profile's plane): their ids are that sketch's, so a face named after
+                    // the same id is another curve's. Found by where the curve swept to.
+                    let foreign = op_id.and_then(|op| self.doc.iter().find(|f| f.id.0 == op)).and_then(|f| match &f.kind {
+                        cadrs_core::document::FeatureKind::Extrude(x) => Some(x.sketches()),
+                        _ => None,
+                    }).is_some_and(|swept| {
+                        !swept.is_empty()
+                            && originals.iter().filter_map(|o| o.get("operationId").and_then(Value::as_str)).filter_map(|o| self.sketches.get(op_feature(o))).all(|(m, _)| !swept.contains(&m.feature))
+                    });
+                    // A side face no face is named after any more: where the curve swept to.
+                    if qtype == "SWEPT_FACE" && (foreign || !cands.iter().any(|e| matches!(e, Ent::Face(..)) && by_name(*e))) {
+                        let found = self.swept_by_geometry(originals);
+                        if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() {
+                            eprintln!("SWEPT by geometry: {} candidate(s) had no matching name; found {} face(s) {:?}", cands.len(), found.len(), found.iter().map(|e| self.face_name(*e).map(|n| n.origin)).collect::<Vec<_>>());
+                        }
+                        if !found.is_empty() {
+                            cands = found;
+                            continue;
+                        }
+                        // Not there by name nor by place: say so (a merge above it then looks
+                        // at its own operation's faces) rather than guess another side face.
+                        return Vec::new();
+                    }
+                    // Curve ids are a sketch's own: an edge along side faces the query's own
+                    // operation swept from them, when there is one (not another sketch's curve
+                    // with the same id); the edge whose faces were swept from the most of them
+                    // (an edge where two of the curves meet, not one along just one of them).
+                    let coverage = |e: Ent| {
+                        let names: Vec<FaceName> = self.adjacent(e).iter().flat_map(|f| self.face_names(*f)).filter(|n| Some(n.op) == op_id).collect();
+                        curves.iter().filter(|c| names.iter().any(|n| matches!(n.origin, FaceOrigin::Side { curve, .. } if curve == **c))).count()
+                    };
+                    let best = cands.iter().copied().filter(|e| matches!(e, Ent::Edge(..))).map(coverage).max().unwrap_or(0);
+                    let own: Vec<Ent> = if best == 0 {
+                        Vec::new()
+                    } else {
+                        cands.iter().copied().filter(|e| matches!(e, Ent::Edge(..)) && coverage(*e) == best).collect()
+                    };
+                    if !own.is_empty() {
+                        cands = own;
+                        continue;
+                    }
+                    cands = narrow(cands, &|e| match e {
+                        Ent::Face(..) => by_name(e),
                         // An edge made from these curves: a side face of it is made from one.
-                        Ent::Edge(..) => self.adjacent(e).iter().filter_map(|f| self.face_name(*f)).any(|n| match n.origin {
+                        Ent::Edge(..) => self.adjacent(e).iter().flat_map(|f| self.face_names(*f)).any(|n| match n.origin {
                             FaceOrigin::Side { curve, .. } => curves.contains(&curve),
                             FaceOrigin::FromEdge { edge } => from_curves.contains(&edge),
                             _ => false,
@@ -434,6 +808,10 @@ impl Model<'_> {
                 }
                 _ => {}
             }
+        }
+        if std::env::var_os("CADRS_ONSHAPE_DEBUG_MERGE").is_some() && matches!(qtype, "MERGE" | "COPY") {
+            let names: Vec<String> = cands.iter().take(6).map(|e| format!("{:?}", self.face_names(*e).iter().map(|n| n.origin).collect::<Vec<_>>())).collect();
+            eprintln!("{qtype} depth {depth} result: {} {}", cands.len(), names.join(" ; "));
         }
         cands
     }
@@ -502,8 +880,9 @@ impl Model<'_> {
             for seed in &seeds {
                 match *seed {
                     Ent::Face(..) => {
-                        let s = self.face_name(*seed).expect("a face");
-                        out.extend(self.all_faces().filter(|f| self.face_name(*f).is_some_and(|n| copy_of(&n, &s, k))));
+                        // By any of their names (a merged face answers to its pieces' names).
+                        let seed_names = self.face_names(*seed);
+                        out.extend(self.all_faces().filter(|f| self.face_names(*f).iter().any(|n| seed_names.iter().any(|s| copy_of(n, s, k)))));
                     }
                     Ent::Edge(p, i) => {
                         let [a, b] = self.parts[p].solid.edges[i].name.faces;
@@ -588,6 +967,66 @@ impl Model<'_> {
     fn open_edge(&self, p: usize, i: usize) -> bool {
         let f = &self.edge_faces[p][i];
         !f.is_empty() && f.iter().all(|x| *x == f[0])
+    }
+
+    /// The vertex `q` refers to: a cap corner of an extrude (`CAP_VERTEX`, where the cap meets
+    /// the side faces its two sketch curves swept), or a copy of one (a derived part's), found
+    /// as the vertex of the three faces the same queries name.
+    pub fn vertex(&self, q: &Value) -> Option<VertexRef> {
+        let mut sets: Vec<HashSet<Ent>> = vertex_faces(q, 0)?.iter().map(|f| self.eval(f).into_iter().collect()).collect();
+        let is_start = q.get("isStart").and_then(Value::as_bool);
+        // The cap face of an extrude here (not a copy's): only by its name, since a cap that
+        // merged into the face the extrude started from leaves none (its corner is still there).
+        let op_id = q.get("operationId").and_then(Value::as_str).and_then(|o| self.features.get(op_feature(o))).map(|f| f.0);
+        let direct = q.get("queryType").and_then(Value::as_str) == Some("CAP_VERTEX");
+        if direct && let Some(cap) = sets.first_mut() {
+            cap.retain(|e| {
+                self.face_names(*e)
+                    .iter()
+                    .any(|n| Some(n.op) == op_id && matches!(n.origin, FaceOrigin::Cap { end, .. } if is_start.is_none_or(|s| s != end)))
+            });
+        }
+        let on = |p: usize, v: &cadrs_core::solid::SolidVertex, s: &HashSet<Ent>| {
+            s.iter().any(|e| matches!(*e, Ent::Face(fp, _) if fp == p) && self.face_names(*e).iter().any(|n| v.name.faces.contains(n)))
+        };
+        let at = |p: usize, v: &cadrs_core::solid::SolidVertex| VertexRef { part: self.parts[p].id, vertex: v.name, point: v.point };
+        if sets.iter().all(|s| !s.is_empty())
+            && let Some(found) = self
+                .parts
+                .iter()
+                .enumerate()
+                .find_map(|(p, part)| part.solid.vertices.iter().find(|v| sets.iter().all(|s| on(p, v, s))).map(|v| at(p, v)))
+        {
+            return Some(found);
+        }
+        if !direct || sets.len() != 3 || sets[1..].iter().any(HashSet::is_empty) {
+            return None;
+        }
+        // No cap by name: the corner of the two side faces nearest the sketch plane (the start
+        // cap) or farthest from it (the end cap).
+        let sketch_op = q
+            .get("disambiguationData")
+            .map(Value::items)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|d| d.get("originals").map(Value::items).unwrap_or_default())
+            .find_map(|o| o.get("operationId").and_then(Value::as_str))?;
+        let (map, _) = self.sketches.get(op_feature(sketch_op))?;
+        let frame = self.doc.iter().find(|f| f.id == map.feature).and_then(|f| f.sketch()?.plane)?.frame();
+        let (n, o) = (frame.normal(), frame.origin);
+        let dist = |v: &cadrs_core::solid::SolidVertex| ((v.point[0] - o[0]) * n[0] + (v.point[1] - o[1]) * n[1] + (v.point[2] - o[2]) * n[2]).abs();
+        let sides = (&sets[1], &sets[2]);
+        let corners = self
+            .parts
+            .iter()
+            .enumerate()
+            .flat_map(|(p, part)| part.solid.vertices.iter().filter(move |v| on(p, v, sides.0) && on(p, v, sides.1)).map(move |v| (p, v)));
+        let pick = if is_start == Some(false) {
+            corners.max_by(|a, b| dist(a.1).total_cmp(&dist(b.1)))
+        } else {
+            corners.min_by(|a, b| dist(a.1).total_cmp(&dist(b.1)))
+        };
+        pick.map(|(p, v)| at(p, v))
     }
 
     pub fn edges(&self, q: &Value) -> Vec<EdgeRef> {

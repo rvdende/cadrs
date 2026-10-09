@@ -765,11 +765,12 @@ pub fn spawn_viewport_overlay(p: &mut ChildSpawnerCommands, theme: &Theme) {
         OriginMarker,
         Node {
             position_type: PositionType::Absolute,
-            width: Val::Px(11.0),
-            height: Val::Px(11.0),
-            // A 1.5 px ring with a white fill, so geometry meeting at the origin (a rectangle
-            // corner, its dot) stays under it (`screens/13`, `17a`).
-            border: UiRect::all(Val::Px(1.5)),
+            width: Val::Px(12.0),
+            height: Val::Px(12.0),
+            // A 2 px ring with a white fill around a 4 px dot, Onshape's bullseye: geometry
+            // meeting at the origin (a rectangle corner, its dot) stays under it (`screens/13`,
+            // `17a`).
+            border: UiRect::all(Val::Px(2.0)),
             border_radius: BorderRadius::MAX,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
@@ -782,8 +783,8 @@ pub fn spawn_viewport_overlay(p: &mut ChildSpawnerCommands, theme: &Theme) {
     .with_child((
         OriginDot,
         Node {
-            width: Val::Px(2.5),
-            height: Val::Px(2.5),
+            width: Val::Px(4.0),
+            height: Val::Px(4.0),
             border_radius: BorderRadius::MAX,
             ..default()
         },
@@ -2214,7 +2215,7 @@ fn place_origin_marker(
     let fill = if snapped { Color::NONE } else { Color::WHITE };
     for (mut node, mut border, mut bg) in &mut q {
         bg.set_if_neq(BackgroundColor(fill));
-        let (l, t) = (Val::Px(p.x - 5.5), Val::Px(p.y - 5.5));
+        let (l, t) = (Val::Px(p.x - 6.0), Val::Px(p.y - 6.0));
         if node.left != l || node.top != t {
             node.left = l;
             node.top = t;

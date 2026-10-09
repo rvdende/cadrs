@@ -734,7 +734,10 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         },
         (FeatureKind::Mirror(x), Role::MirrorPlane) => x.plane = None,
         (FeatureKind::Mirror(x), Role::MergeScope) => take(&mut x.merge_scope, i),
-        (FeatureKind::MateConnector(x), Role::ConnectorOrigin) => x.origin = None,
+        (FeatureKind::MateConnector(x), Role::ConnectorOrigin) => {
+            x.origin = None;
+            x.at = None;
+        }
         (FeatureKind::MateConnector(x), Role::ConnectorBetween) => x.between = None,
         (FeatureKind::MateConnector(x), Role::ConnectorPrimary) => x.primary_axis = None,
         (FeatureKind::MateConnector(x), Role::ConnectorSecondary) => x.secondary_axis = None,

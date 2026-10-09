@@ -266,7 +266,7 @@ impl PartStudio<'_> {
     }
 
     /// Adds a finished feature and names it as in Onshape.
-    fn add(&mut self, f: &Value, fid: &str, base: &str, kind: FeatureKind, fr: &mut FeatureReport) -> Result<(), CommandError> {
+    pub(crate) fn add(&mut self, f: &Value, fid: &str, base: &str, kind: FeatureKind, fr: &mut FeatureReport) -> Result<(), CommandError> {
         let id = self.feature_id(fid);
         self.s.run(&AddFeature { element: self.el, feature: id, base_name: base.into(), kind })?;
         if let Some(name) = f["name"].as_str() {
@@ -510,6 +510,7 @@ impl PartStudio<'_> {
         match q.get("entityType").and_then(Q::as_str) {
             Some("FACE") => model.face(q).map(ConnectorOrigin::Face),
             Some("EDGE") => model.edges(q).into_iter().next().map(ConnectorOrigin::Edge),
+            Some("VERTEX") => model.vertex(q).map(ConnectorOrigin::Vertex),
             _ => None,
         }
     }
@@ -521,7 +522,7 @@ impl PartStudio<'_> {
         }
         match pick {
             Pick::Query(q) => {
-                let r = self.connector_origin(&q);
+                let r = self.connector_origin(&q).or_else(|| self.connector_by_geometry(f, id));
                 if r.is_none() && std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
                     let parts = self.parts();
                     let found = self.model(&parts).eval(&q);
@@ -588,7 +589,12 @@ impl PartStudio<'_> {
                 fr.notes.push(format!("rotation {} imported as about Z", Self::text(f, "rotationType")));
             }
         }
-        if Self::text(f, "entityInferenceType") == "POINT" && !matches!(origin, ConnectorOrigin::SketchPoint { .. }) {
+        // The point Onshape inferred on the entity (a face's corner): the second origin query.
+        let inferred = param(f, "secondaryOriginQuery").and_then(|p| p["queries"].as_array()).is_some_and(|a| !a.is_empty());
+        if inferred {
+            x.at = self.connector_param(f, "secondaryOriginQuery");
+        }
+        if Self::text(f, "entityInferenceType") == "POINT" && x.at.is_none() && !matches!(origin, ConnectorOrigin::SketchPoint { .. } | ConnectorOrigin::Vertex(_)) {
             fr.notes.push("placed at cadrs's implicit point of the entity (Onshape picked a point on it)".into());
         }
         self.add(f, fid, "Mate connector", FeatureKind::MateConnector(x), fr)
@@ -694,14 +700,17 @@ impl PartStudio<'_> {
             .or_else(|| TransformType::from_onshape(&kind)).ok_or_else(|| CommandError::Invalid(format!("transform type {kind} not imported yet")))?;
         let mut lost = 0;
         let parts = self.parts_param(f, "entities", &mut lost);
-        if parts.is_empty() {
+        // Mate connectors (a feature's, or a Transform's copy of one) are transformed too.
+        let connectors = if parts.is_empty() { self.connector_entities(f) } else { Vec::new() };
+        if parts.is_empty() && connectors.is_empty() {
             return Err(CommandError::Invalid("its parts could not be translated".into()));
         }
-        Self::lost_note(fr, lost, "part selections");
+        Self::lost_note(fr, lost.saturating_sub(connectors.len()), "part selections");
         let subs: HashMap<String, Value> =
             f["subFeatures"].as_array().into_iter().flatten().filter_map(|s| Some((s["featureId"].as_str()?.to_string(), s.clone()))).collect();
         let mut x = TransformFeature::new(t);
         x.parts = parts;
+        x.connectors = connectors;
         x.copy = Self::flag(f, "makeCopy");
         x.flip = Self::flag(f, "oppositeDirection");
         let missing = |what: &str| CommandError::Invalid(format!("its {what} could not be translated"));
@@ -727,6 +736,7 @@ impl PartStudio<'_> {
                 x.to = Some(self.connector_ref(f, "destinationConnector", &subs, fr).ok_or_else(|| missing("destination mate connector"))?);
                 x.flip_primary = Self::flag(f, "oppositeDirectionMateAxis");
                 x.secondary = SecondaryAxis::from_onshape(&Self::text(f, "secondaryAxisType")).unwrap_or_default();
+                self.solve_base_connector(&x);
             }
             TransformType::ScaleUniformly => {
                 if !param(f, "uniform").and_then(|p| p["value"].as_bool()).unwrap_or(true) {
@@ -805,7 +815,17 @@ impl PartStudio<'_> {
         let (doc, el) = namespace_ref(p["namespace"].as_str().unwrap_or_default());
         let el = el.ok_or_else(|| CommandError::Invalid("no Part Studio reference".into()))?;
         let src_doc = doc.clone().unwrap_or_else(|| self.doc_id().to_string());
-        if doc.is_some() {
+        // Another document's: at the version Onshape pins, when that document's import has it.
+        let version = p["namespace"].as_str().unwrap_or_default().split("::").find_map(|s| s.strip_prefix('v')).map(String::from);
+        let pinned = match (&doc, &version, &self.options.store) {
+            (Some(d), Some(v), Some(store)) => {
+                let document = DocumentId::from_u128(stable_u128(&[d]));
+                let vid = crate::import::version_id(d, v);
+                cadrs_core::history_log::HistoryLog::load(store, document).ok().flatten().filter(|log| log.version(vid).is_some()).map(|_| (store.clone(), document, vid))
+            }
+            _ => None,
+        };
+        if doc.is_some() && pinned.is_none() {
             fr.notes.push("from another document, at its current state (Onshape pins a version)".into());
         }
         if Self::text(f, "placement") != "AT_ORIGIN" && !Self::text(f, "placement").is_empty() {
@@ -825,7 +845,15 @@ impl PartStudio<'_> {
         let mut x = DerivedFeature::new(document, element);
         x.include_connectors = Self::flag(f, "includeMateConnectors");
         let id = self.feature_id(fid);
-        self.s.run(&AddFeature::derived(self.el, id, x))?;
+        match pinned {
+            Some((store, document, vid)) => {
+                let r = cadrs_core::external::SourceRef::version(Some(document), element, vid);
+                let mut res = cadrs_core::external::Resolver::new(store);
+                let got = cadrs_core::derived::resolve(&mut res, &self.s.doc, None, x, r).map_err(CommandError::from)?;
+                self.s.run(&cadrs_core::derived::AddDerived { element: self.el, feature: id, derived: got.derived, links: got.links })?;
+            }
+            None => self.s.run(&AddFeature::derived(self.el, id, x))?,
+        }
         if let Some(root) = self.raw_root() {
             let lazy = crate::eval::LazySource::new(root, src_doc.clone(), el.clone());
             self.derived.insert(fid.to_string(), (id, std::sync::Arc::new(lazy)));
@@ -1044,6 +1072,16 @@ fn body_parts_in(q: &Q, features: &std::collections::HashMap<String, FeatureId>,
             let copies = if of_seeds.is_empty() { made } else { of_seeds };
             if !copies.is_empty() {
                 let k: Option<usize> = q.get("instanceName").and_then(Q::as_str).and_then(|s| s.parse().ok());
+                // A body of an imported file by Onshape's tag for it (which cadrs can't read):
+                // any of the copies, not the instance's (a Derived feature's one instance
+                // holds them all).
+                let tagged = q.get("derivedFrom").is_some_and(|d| {
+                    let d = d.items().first().unwrap_or(d);
+                    d.get("importTag").is_some()
+                });
+                if tagged {
+                    return copies.iter().map(|p| p.id).collect();
+                }
                 if copies.len() > 1
                     && let Some(p) = k.and_then(|k| copies.get(k.saturating_sub(1)))
                 {
@@ -1063,4 +1101,216 @@ fn body_parts_in(q: &Q, features: &std::collections::HashMap<String, FeatureId>,
         return made;
     }
     parts.iter().filter(|p| p.features.contains(f)).map(|p| p.id).collect()
+}
+
+
+impl PartStudio<'_> {
+    /// A Transform by mate connectors whose base connector cadrs couldn't place (it is on an
+    /// entity of an imported file, named by Onshape's own tag): the vertex and flat face of the
+    /// moved part it must be on, found as the ones whose connector carries the part onto where
+    /// Onshape's final model has it. Places the connector there; false when none does.
+    fn solve_base_connector(&mut self, x: &TransformFeature) -> bool {
+        let (Some(ConnectorRef::Feature(base)), Some(ConnectorRef::Feature(dest))) = (x.from, x.to) else { return false };
+        let Some(FeatureKind::MateConnector(mc)) = self.s.doc.element(self.el).and_then(|e| e.feature(base)).map(|f| f.kind.clone()) else { return false };
+        if mc.origin.is_some() {
+            return false;
+        }
+        let parts = self.parts();
+        let Some(dest_frame) = self.connector_frame(dest) else { return false };
+        let features: Vec<cadrs_core::document::Feature> = self.s.doc.element(self.el).map(|e| e.features().to_vec()).unwrap_or_default();
+        // Onshape's final bodies: their vertices.
+        let Some(details) = self.raw_json("bodydetails.json") else { return false };
+        let mm = crate::import::point_mm;
+        let bodies: Vec<Vec<[f64; 3]>> =
+            details["bodies"].as_array().into_iter().flatten().map(|b| b["vertices"].as_array().into_iter().flatten().filter_map(|v| mm(&v["point"])).collect()).collect();
+        let summary = |vs: &[[f64; 3]]| {
+            let n = vs.len().max(1) as f64;
+            let mut c = [0.0; 3];
+            let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for v in vs {
+                for i in 0..3 {
+                    c[i] += v[i] / n;
+                    lo[i] = lo[i].min(v[i]);
+                    hi[i] = hi[i].max(v[i]);
+                }
+            }
+            (vs.len(), c, lo, hi)
+        };
+        let targets: Vec<_> = bodies.iter().map(|b| summary(b)).collect();
+        // The destination frame as the transform uses it (flipped, turned).
+        let (mut du, mut dv) = (dest_frame.u, dest_frame.v);
+        if x.flip_primary {
+            dv = [-dv[0], -dv[1], -dv[2]];
+        }
+        let turn = x.secondary.degrees().to_radians();
+        let (s, c) = turn.sin_cos();
+        (du, dv) = ([du[0] * c + dv[0] * s, du[1] * c + dv[1] * s, du[2] * c + dv[2] * s], [dv[0] * c - du[0] * s, dv[1] * c - du[1] * s, dv[2] * c - du[2] * s]);
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let dn = cross(du, dv);
+        let fits = |a: &(usize, [f64; 3], [f64; 3], [f64; 3]), b: &(usize, [f64; 3], [f64; 3], [f64; 3])| {
+            a.0 == b.0 && (0..3).all(|i| (a.1[i] - b.1[i]).abs() < 1e-3 && (a.2[i] - b.2[i]).abs() < 1e-3 && (a.3[i] - b.3[i]).abs() < 1e-3)
+        };
+        for pid in &x.parts {
+            let Some(part) = parts.iter().find(|p| p.id == *pid) else { continue };
+            let n = part.solid.vertices.len();
+            if !targets.iter().any(|t| t.0 == n) {
+                continue;
+            }
+            for v in &part.solid.vertices {
+                for face in &part.solid.faces {
+                    if face.plane.is_none() || !v.name.faces.contains(&face.name) {
+                        continue;
+                    }
+                    let fref = cadrs_core::document::FaceRef { part: part.id, face: face.name, seed: v.point };
+                    let vref = cadrs_core::document::VertexRef { part: part.id, vertex: v.name, point: v.point };
+                    let cand = MateConnectorFeature { origin: Some(ConnectorOrigin::Face(fref)), at: Some(ConnectorOrigin::Vertex(vref)), ..mc.clone() };
+                    let Ok(b) = cand.frame(&features, &parts) else { continue };
+                    let bn = cross(b.u, b.v);
+                    // Where the part's vertices go: into the base frame, out of the destination's.
+                    let moved: Vec<[f64; 3]> = part
+                        .solid
+                        .vertices
+                        .iter()
+                        .map(|p| {
+                            let d = [p.point[0] - b.origin[0], p.point[1] - b.origin[1], p.point[2] - b.origin[2]];
+                            let (l0, l1, l2) = (dot(d, b.u), dot(d, b.v), dot(d, bn));
+                            [0, 1, 2].map(|i| dest_frame.origin[i] + du[i] * l0 + dv[i] * l1 + dn[i] * l2)
+                        })
+                        .collect();
+                    let got = summary(&moved);
+                    if targets.iter().any(|t| fits(t, &got)) {
+                        let kind = FeatureKind::MateConnector(cand);
+                        if self.s.run(&cadrs_core::commands::SetFeature { element: self.el, feature: base, kind, label: "Mate connector".into() }).is_ok() {
+                            // The connector's own report: placed (by the part its Transform moves).
+                            let name = self.s.doc.element(self.el).and_then(|e| e.feature(base)).map(|f| f.name.clone()).unwrap_or_default();
+                            if let Some(r) = self.report.features.iter_mut().rev().find(|r| r.name == name && r.kind == "mateConnector") {
+                                r.outcome = crate::report::Outcome::Full;
+                                r.notes = vec!["on an imported entity Onshape names by its own tag: placed where its final model puts the part a Transform moves by it".into()];
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+impl PartStudio<'_> {
+    /// A connector parameter's entity by Onshape's topology id for it (`features-geometry.json`)
+    /// and where Onshape's final model has that (`bodydetails.json`, and `bodydetails-extra.json`
+    /// for sheet bodies), in the owner part's body: for an entity cadrs can't name otherwise (an
+    /// imported file's, by Onshape's own tag). A vertex at that point; a flat face in that plane
+    /// (through the connector's own vertex, if it has one).
+    fn connector_by_geometry(&mut self, f: &Value, param_id: &str) -> Option<ConnectorOrigin> {
+        let geometry = self.raw_json("features-geometry.json")?;
+        let fid = f["featureId"].as_str()?;
+        fn find<'v>(fs: &'v Value, fid: &str) -> Option<&'v Value> {
+            for x in fs.as_array().into_iter().flatten() {
+                let m = if x["message"].is_object() { &x["message"] } else { x };
+                if m["featureId"].as_str() == Some(fid) {
+                    return Some(m);
+                }
+                if let Some(s) = find(&m["subFeatures"], fid) {
+                    return Some(s);
+                }
+            }
+            None
+        }
+        let feature = find(&geometry["features"], fid)?;
+        let ids_of = |pid: &str| -> Vec<String> {
+            feature["parameters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| if p["message"].is_object() { &p["message"] } else { p })
+                .find(|p| p["parameterId"].as_str() == Some(pid))
+                .and_then(|p| p["queries"].as_array())
+                .map(|qs| {
+                    qs.iter()
+                        .map(|q| if q["message"].is_object() { &q["message"] } else { q })
+                        .flat_map(|q| q["geometryIds"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let ids = ids_of(param_id);
+        if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+            eprintln!("GEOMETRY {fid} {param_id}: ids {ids:?}");
+        }
+        let [id] = ids.try_into().ok()?;
+        let owner = ids_of("ownerPart").into_iter().next();
+        let mut bodies: Vec<Value> = Vec::new();
+        for file in ["bodydetails.json", "bodydetails-extra.json"] {
+            if let Some(d) = self.raw_json(file) {
+                bodies.extend(d["bodies"].as_array().into_iter().flatten().cloned());
+            }
+        }
+        let mm = crate::import::point_mm;
+        // The entity, in the owner's body when that is known (ids are a body's own).
+        let in_body = |b: &Value| owner.as_deref().is_none_or(|o| b["id"].as_str() == Some(o));
+        let entity = |kind: &str, id: &str| bodies.iter().filter(|b| in_body(b)).find_map(|b| b[kind].as_array()?.iter().find(|x| x["id"].as_str() == Some(id)).cloned());
+        let parts = self.parts();
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt() < 1e-3;
+        let vertex_at = |p: [f64; 3]| {
+            parts.iter().find_map(|part| {
+                part.solid.vertices.iter().find(|v| near(v.point, p)).map(|v| (part, v))
+            })
+        };
+        if let Some(v) = entity("vertices", &id) {
+            let p = mm(&v["point"])?;
+            let (part, v) = vertex_at(p)?;
+            return Some(ConnectorOrigin::Vertex(cadrs_core::document::VertexRef { part: part.id, vertex: v.name, point: v.point }));
+        }
+        let face = entity("faces", &id)?;
+        let s = &face["surface"];
+        if !s["type"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("plane")) {
+            return None;
+        }
+        let (o, n) = (mm(&s["origin"])?, mm(&s["normal"]).map(|v| v.map(|x| x / 1000.0))?);
+        // The connector's own vertex picks the face among those in the plane.
+        let at = ids_of("secondaryOriginQuery").into_iter().next().and_then(|v| entity("vertices", &v)).and_then(|v| mm(&v["point"]));
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        parts.iter().find_map(|part| {
+            part.solid.faces.iter().enumerate().find_map(|(i, x)| {
+                let pl = x.plane?;
+                let pn = pl.normal();
+                let len = dot(pn, pn).sqrt();
+                if (dot(pn, n) / len).abs() < 1.0 - 1e-6 || (dot([pl.origin[0] - o[0], pl.origin[1] - o[1], pl.origin[2] - o[2]], n)).abs() > 1e-3 {
+                    return None;
+                }
+                let on = match at {
+                    Some(p) => part.solid.vertices.iter().any(|v| near(v.point, p) && v.name.faces.contains(&x.name)),
+                    None => true,
+                };
+                on.then(|| ConnectorOrigin::Face(cadrs_core::document::FaceRef { part: part.id, face: x.name, seed: part.solid.face_point(i).unwrap_or(o) }))
+            })
+        })
+    }
+}
+
+impl PartStudio<'_> {
+    /// The mate connectors a parameter's queries pick: a Mate connector feature's
+    /// (`<id>.mateConnectorOp`), or the copy a Transform made of one (`<id>.opPattern`).
+    fn connector_entities(&self, f: &Value) -> Vec<ConnectorRef> {
+        let mut out = Vec::new();
+        for q in param(f, "entities").and_then(|p| p["queries"].as_array()).into_iter().flatten() {
+            let Some(v) = q["queryString"].as_str().and_then(|s| crate::query::decode(s).ok().flatten()) else { continue };
+            let Some(op) = v.get("operationId").and_then(Q::as_str) else { continue };
+            let Some(id) = self.features.get(op_feature(op)) else { continue };
+            let kind = self.s.doc.element(self.el).and_then(|e| e.feature(*id)).map(|x| &x.kind);
+            let connector = match kind {
+                Some(FeatureKind::MateConnector(_)) => true,
+                Some(FeatureKind::Transform(t)) => !t.connectors.is_empty() && t.copies(),
+                _ => false,
+            };
+            if connector && !out.contains(&ConnectorRef::Feature(*id)) {
+                out.push(ConnectorRef::Feature(*id));
+            }
+        }
+        out
+    }
 }

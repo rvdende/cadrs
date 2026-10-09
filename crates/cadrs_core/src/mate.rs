@@ -139,6 +139,10 @@ pub struct MateConnectorFeature {
     /// "Between entity" (Between entities).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between: Option<ConnectorOrigin>,
+    /// A point picked on the origin entity (Onshape's inferred point, such as a face's corner):
+    /// the connector sits there, with the origin entity's axes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<ConnectorOrigin>,
     /// **Realign**: Z along `primary_axis`'s direction, X along `secondary_axis`'s (made square
     /// to Z); either may be empty.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -205,6 +209,7 @@ impl Default for MateConnectorFeature {
         Self {
             origin_type: OriginType::OnEntity,
             between: None,
+            at: None,
             realign: false,
             primary_axis: None,
             secondary_axis: None,
@@ -236,7 +241,7 @@ impl MateConnectorFeature {
         let mut out = Vec::new();
         let between = if self.origin_type == OriginType::BetweenEntities { self.between } else { None };
         let axes = if self.realign { [self.primary_axis, self.secondary_axis] } else { [None, None] };
-        for o in [self.origin, between].into_iter().chain(axes).flatten() {
+        for o in [self.origin, between, self.at].into_iter().chain(axes).flatten() {
             if let Some(p) = o.parent()
                 && !out.contains(&p)
             {
@@ -271,6 +276,9 @@ impl MateConnectorFeature {
     pub fn base_frame(&self, features: &[Feature], parts: &[Part]) -> Result<PlaneFrame, String> {
         let origin = self.origin.as_ref().ok_or("Select an origin entity")?;
         let mut f = origin_frame(origin, features, parts)?;
+        if let Some(at) = &self.at {
+            f.origin = origin_frame(at, features, parts)?.origin;
+        }
         if self.origin_type == OriginType::BetweenEntities {
             let b = self.between.as_ref().ok_or("Select a between entity")?;
             let q = between_point(b, f.origin, features, parts)?;
@@ -396,12 +404,14 @@ pub fn origin_frame(o: &ConnectorOrigin, features: &[Feature], parts: &[Part]) -
             let center = face.center.or_else(|| part.solid.face_point(i)).ok_or_else(lost)?;
             if let Some(pl) = face.plane {
                 // Z out of the material: a cut's faces carry the frame of the tool that made
-                // them (a pocket floor's points down), so it is checked against the mesh.
+                // them (a pocket floor's points down), so it is checked against the mesh. X is
+                // the world's X (or Y) made square to Z, as Onshape's are, not the face's own
+                // (a side face's runs along whichever way its sketch line was drawn).
                 let v = match part.solid.face_normal(i) {
                     Some(n) if dot(n, pl.normal()) < 0.0 => scale(pl.v, -1.0),
                     _ => pl.v,
                 };
-                return Ok(PlaneFrame { origin: center, u: pl.u, v });
+                return Ok(frame_with_z(center, PlaneFrame { origin: center, u: pl.u, v }.normal()));
             }
             if let Some((o, d)) = face.axis {
                 let at = add(o, scale(d, dot(sub(center, o), d)));

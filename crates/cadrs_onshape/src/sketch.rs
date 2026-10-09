@@ -158,6 +158,7 @@ pub fn import(
     solved: &Solved,
     plane: PlaneRef,
     parts: &[cadrs_core::parts::Part],
+    model_points: &HashMap<String, Vec<[f64; 3]>>,
     report: &mut FeatureReport,
 ) -> Result<SketchMap, CommandError> {
     let trace = |what: &str| {
@@ -217,15 +218,22 @@ pub fn import(
                 endpoint_ids.extend(
                     ["startPointId", "endPointId", "centerId"].iter().filter_map(|k| e[*k].as_str()).map(String::from),
                 );
-                let span = (e["endParameter"].as_f64().unwrap_or(0.0) - e["startParameter"].as_f64().unwrap_or(0.0)).abs();
+                let (t0, t1) = (e["startParameter"].as_f64().unwrap_or(0.0), e["endParameter"].as_f64().unwrap_or(0.0));
+                // The arc's middle, in Onshape's coordinates: its parameter is the angle from
+                // the start's, counter-clockwise, or clockwise for a `clockWise` arc (a mirrored
+                // one). The span alone can't tell the two halves of a half circle apart.
+                let dir = if g["clockWise"].as_bool().unwrap_or(false) { -1.0 } else { 1.0 };
+                let (r, at_start) = (((a[0] - c[0]).powi(2) + (a[1] - c[1]).powi(2)).sqrt(), (a[1] - c[1]).atan2(a[0] - c[0]));
+                let tm = at_start + dir * (t1 - t0) / 2.0;
+                let mid = xf.apply([c[0] + r * tm.cos(), c[1] + r * tm.sin()]);
                 let (c, a, b) = (xf.apply(c), xf.apply(a), xf.apply(b));
-                // cadrs arcs run counter-clockwise from start to end: pick the order whose
-                // sweep matches Onshape's.
+                // cadrs arcs run counter-clockwise from start to end: the order whose sweep
+                // passes through the middle.
                 let ccw = |p: Vec2, q: Vec2| {
                     let t = (q.y - c.y).atan2(q.x - c.x) - (p.y - c.y).atan2(p.x - c.x);
                     t.rem_euclid(TAU)
                 };
-                let forward = (ccw(a, b) - span).abs() <= (ccw(b, a) - span).abs();
+                let forward = ccw(a, mid) <= ccw(a, b);
                 let (start, end) = if forward { (a, b) } else { (b, a) };
                 reversed = !forward;
                 SketchOp::AddArc { center: c, start, end, construction }
@@ -314,11 +322,6 @@ pub fn import(
         }
     }
 
-    // Constraints and dimensions.
-    // Model edges the constraints refer to (Onshape keeps them as bare topology ids): found by
-    // where the constrained points are, and brought in as construction Use curves.
-    let uses = model_edges(s, el, id, feature, &map, &g, &plane, parts, report)?;
-    let g = sketch_of(s, el, id)?;
     // Where Onshape's x axis points in cadrs's sketch frame (the frames can differ on a face).
     let (p0, p1) = (xf.apply([0.0, 0.0]), xf.apply([0.001, 0.0]));
     let (ax, ay) = ((p1.x - p0.x).abs(), (p1.y - p0.y).abs());
@@ -329,7 +332,21 @@ pub fn import(
     } else {
         None
     };
-    let ctx = Ctx { map: &map, g: &g, plane: &plane, swap, uses: &uses };
+    // Constraints and dimensions.
+    // Model edges the constraints refer to (Onshape keeps them as bare topology ids): found by
+    // where the constrained points are, and brought in as construction Use curves.
+    let vertices = model_vertices(feature, &map, &g, &plane, parts);
+    let (uses, unmatched) = model_edges(s, el, id, feature, &map, &g, &plane, parts, &vertices, model_points, swap, report)?;
+    let projected = projected_vertices(s, el, id, feature, &map, &plane, swap, parts, model_points, &vertices, &uses)?;
+    // (A bare id no edge took may be a vertex or another sketch's point the search above found.)
+    let left = unmatched.iter().filter(|e| !projected.contains_key(*e)).count();
+    if left > 0 {
+        report.notes.push(format!("{left} model edge(s) not found"));
+    }
+    let origin_at = origin_traces(s, el, id, feature, &plane)?;
+    let pattern_lines = pattern_lines(s, el, id, feature, &map)?;
+    let g = sketch_of(s, el, id)?;
+    let ctx = Ctx { map: &map, g: &g, plane: &plane, swap, uses: &uses, vertices: &vertices, projected: &projected, origin_at, pattern_lines: &pattern_lines };
     let mut specs = Vec::new();
     let mut dims = Vec::new();
     let mut dropped: HashMap<String, usize> = HashMap::new();
@@ -342,6 +359,7 @@ pub fn import(
             Converted::Dropped(why) => *dropped.entry(format!("{kind} ({why})")).or_default() += 1,
         }
     }
+
     trace(&format!("{} constraints, {} dimensions", specs.len(), dims.len()));
     // Constraints and dimensions must hold the geometry where Onshape solved it. Any that
     // would move it (a translation that means something else in cadrs, a tangency that picks
@@ -380,6 +398,28 @@ pub fn import(
     dropped.sort();
     for (k, n) in dropped {
         report.notes.push(format!("{n} × {k} constraint dropped"));
+    }
+    // A constraint that still conflicts holds nothing in place (the solver leaves it unsolved,
+    // so the check above can't see it move anything), but it puts the sketch in error: one
+    // tied to the wrong model edge (a parallel to a projected line that isn't the edge
+    // Onshape's was to). Left out.
+    let a = cadrs_sketch::solve::analyze(&sketch_of(s, el, id)?);
+    if a.has_conflicts() {
+        if std::env::var_os("CADRS_ONSHAPE_DEBUG_MOVES").is_some() {
+            let g = sketch_of(s, el, id)?;
+            for c in &a.conflicting {
+                eprintln!("CONFLICT {:?}", g.constraints.get(*c));
+            }
+            for d in &a.conflicting_dimensions {
+                eprintln!("CONFLICT dim {:?}", g.dimensions.get(*d).map(|x| (x.kind, x.value)));
+            }
+        }
+        let n = a.conflicting.len() + a.conflicting_dimensions.len();
+        let op = SketchOp::Delete { curves: Vec::new(), points: Vec::new(), dimensions: a.conflicting_dimensions, constraints: a.conflicting };
+        match s.run(&EditSketch { element: el, feature: id, op }) {
+            Ok(()) => report.notes.push(format!("{n} constraint(s) or dimension(s) left out: they conflict with the others")),
+            Err(e) => report.notes.push(format!("conflicting constraints: {e}")),
+        }
     }
 
     // How far the solve moved the geometry from Onshape's (it should not move at all).
@@ -472,11 +512,264 @@ fn keep_in_place(g: &Sketch, ops: Vec<SketchOp>) -> (Vec<SketchOp>, usize, usize
                 trial = next;
                 kept.push(op);
             }
-            Ok(()) => moved += 1,
+            Ok(()) => {
+                moved += 1;
+                if std::env::var_os("CADRS_ONSHAPE_DEBUG_MOVES").is_some() {
+                    eprintln!("MOVED by {} mm: {op:?}", drift(g, &next));
+                }
+            }
             Err(_) => refused += 1,
         }
     }
     (kept, moved, refused)
+}
+
+/// The model vertices the sketch's COINCIDENT constraints name by bare topology id: an id all
+/// of whose constrained sketch points sit at one spot where a part edge pierces the sketch plane
+/// (a corner of the part the sketch lies on), with that edge as the link a Pierce constraint
+/// fixes the point by: fully, as Onshape's coincidence with a vertex, and with no projected
+/// curve drawn.
+fn model_vertices(feature: &Value, map: &SketchMap, g: &Sketch, plane: &PlaneRef, parts: &[cadrs_core::parts::Part]) -> HashMap<String, (Vec2, cadrs_sketch::Link)> {
+    let tol = 1e-4;
+    let mut at: HashMap<String, Vec<Vec2>> = HashMap::new();
+    for c in feature["constraints"].as_array().into_iter().flatten() {
+        if c["constraintType"].as_str() != Some("COINCIDENT") {
+            continue;
+        }
+        let params = c["parameters"].as_array().cloned().unwrap_or_default();
+        let point = params.iter().find_map(|p| {
+            let local = p["parameterId"].as_str().is_some_and(|i| i.starts_with("local"));
+            local.then(|| p["value"].as_str().and_then(|v| map.points.get(v)).and_then(|q| g.points.get(*q)).map(|q| q.pos)).flatten()
+        });
+        let Some(point) = point else { continue };
+        for p in params.iter().filter(|p| p["parameterId"].as_str().is_some_and(|i| i.starts_with("external"))) {
+            let ids: Vec<&str> = p["queries"].as_array().into_iter().flatten().flat_map(|q| q["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str)).collect();
+            if let [eid] = ids.as_slice()
+                && !matches!(*eid, ORIGIN_ID | TOP_ID | FRONT_ID | RIGHT_ID)
+            {
+                at.entry(eid.to_string()).or_default().push(point);
+            }
+        }
+    }
+    let frame = plane.frame();
+    let mut out = HashMap::new();
+    for (eid, pts) in at {
+        let p = pts[0];
+        if pts.iter().any(|q| q.distance(p) > tol) {
+            continue;
+        }
+        'search: for part in parts {
+            for e in &part.solid.edges {
+                let Some(curve) = cadrs_core::links::edge_curve(e) else { continue };
+                if cadrs_core::links::crossings(curve, &frame).iter().any(|x| x.distance(p) < tol) {
+                    out.insert(eid.clone(), (p, cadrs_sketch::Link::Edge { feature: part.id.feature.0, edge: e.name }));
+                    break 'search;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// For a sketch whose constraints name the Part Studio's origin while the sketch's own origin is
+/// elsewhere (a sketch on a face): two default planes' traces through the origin's projection,
+/// brought in as construction Use lines (they follow the planes), and where they meet.
+fn origin_traces(s: &mut dyn Studio, el: ElementId, id: FeatureId, feature: &Value, plane: &PlaneRef) -> Result<Option<(Vec2, CurveId, CurveId)>, CommandError> {
+    let names_origin = feature["constraints"].as_array().into_iter().flatten().flat_map(|c| c["parameters"].as_array().into_iter().flatten()).any(|p| {
+        p["queries"].as_array().into_iter().flatten().any(|q| q["deterministicIds"].as_array().is_some_and(|ids| matches!(ids.as_slice(), [i] if i.as_str() == Some(ORIGIN_ID))))
+    });
+    let frame = plane.frame();
+    let q = frame.to_sketch([0.0; 3]);
+    if !names_origin || q.length() < 1e-9 {
+        return Ok(None);
+    }
+    // The default planes the projection lies on (seen edge-on from the sketch).
+    let mut traces = Vec::new();
+    for p in [PlaneRef::Top, PlaneRef::Front, PlaneRef::Right] {
+        let Some(curve) = cadrs_core::links::plane_trace(&p.frame(), &frame) else { continue };
+        let Some(shape) = cadrs_core::links::project(curve, &frame) else { continue };
+        let cadrs_sketch::projection::Projected::Line(a, b) = shape else { continue };
+        let ab = b - a;
+        if ((q - a).x * ab.y - (q - a).y * ab.x).abs() / ab.length().max(1e-300) < 1e-6 {
+            traces.push((shape, p, ab));
+        }
+    }
+    let [(s1, p1, d1), (s2, p2, d2), ..] = traces.as_slice() else { return Ok(None) };
+    if (d1.x * d2.y - d1.y * d2.x).abs() < 1e-9 * d1.length() * d2.length() {
+        return Ok(None);
+    }
+    let mut lines = Vec::new();
+    for (shape, p) in [(s1.clone(), *p1), (s2.clone(), *p2)] {
+        let before = sketch_of(s, el, id)?;
+        s.run(&EditSketch { element: el, feature: id, op: SketchOp::Use { items: vec![(shape, cadrs_sketch::Link::Plane(p))] } })?;
+        let after = sketch_of(s, el, id)?;
+        let Some(c) = after.curves.keys().find(|c| !before.curves.contains_key(*c)) else { return Ok(None) };
+        s.run(&EditSketch { element: el, feature: id, op: SketchOp::SetConstruction { curves: vec![c], construction: true } })?;
+        lines.push(c);
+    }
+    Ok(Some((q, lines[0], lines[1])))
+}
+
+/// The model vertices off the sketch plane its constraints name by bare topology id (Onshape
+/// projects them onto the plane): each found where Onshape's final parts have it (else, for a
+/// Horizontal or Vertical, the nearest model vertex level with its point), and brought in as a
+/// point pierced by the straight part edge through it along the plane's normal (so it sits at
+/// the projection and follows the edge). Returns id → where the point is.
+#[allow(clippy::too_many_arguments)]
+fn projected_vertices(
+    s: &mut dyn Studio,
+    el: ElementId,
+    id: FeatureId,
+    feature: &Value,
+    map: &SketchMap,
+    plane: &PlaneRef,
+    swap: Option<bool>,
+    parts: &[cadrs_core::parts::Part],
+    model_points: &HashMap<String, Vec<[f64; 3]>>,
+    vertices: &HashMap<String, (Vec2, cadrs_sketch::Link)>,
+    uses: &HashMap<String, CurveId>,
+) -> Result<HashMap<String, Vec2>, CommandError> {
+    let mut out = HashMap::new();
+    let frame = plane.frame();
+    let unit = |v: Vec3| {
+        let l = dot(v, v).sqrt().max(1e-300);
+        [v[0] / l, v[1] / l, v[2] / l]
+    };
+    let n = unit(frame.normal());
+    let near = |a: Vec3, b: Vec3| dot(sub(a, b), sub(a, b)).sqrt() < 1e-3;
+    // The straight edge through a vertex along the normal (its line pierces the plane at the
+    // vertex's projection).
+    let normal_edge = |v: Vec3| {
+        parts.iter().find_map(|part| {
+            part.solid.edges.iter().find_map(|e| {
+                let Some(cadrs_core::links::Curve3::Line(a, b)) = cadrs_core::links::edge_curve(e) else { return None };
+                let along = dot(unit(sub(b, a)), n).abs() > 1.0 - 1e-9;
+                (along && (near(a, v) || near(b, v))).then_some(cadrs_sketch::Link::Edge { feature: part.id.feature.0, edge: e.name })
+            })
+        })
+    };
+    // What holds a point at a vertex's projection: a point pierced by that edge, else (no edge
+    // along the normal) an edge ending at the vertex, used: its projection ends there.
+    let anchor = |v: Vec3| -> Option<(Option<cadrs_sketch::projection::Projected>, cadrs_sketch::Link)> {
+        normal_edge(v).map(|l| (None, l)).or_else(|| {
+            parts.iter().find_map(|part| {
+                part.solid.edges.iter().find_map(|e| {
+                    let curve = cadrs_core::links::edge_curve(e)?;
+                    let cadrs_core::links::Curve3::Line(a, b) = curve else { return None };
+                    if !(near(a, v) || near(b, v)) {
+                        return None;
+                    }
+                    let shape = cadrs_core::links::project(curve, &frame)?;
+                    Some((Some(shape), cadrs_sketch::Link::Edge { feature: part.id.feature.0, edge: e.name }))
+                })
+            })
+        })
+    };
+    let g = sketch_of(s, el, id)?;
+    for c in feature["constraints"].as_array().into_iter().flatten() {
+        let kind = c["constraintType"].as_str().unwrap_or_default();
+        let params = c["parameters"].as_array().cloned().unwrap_or_default();
+        for p in params.iter().filter(|p| p["parameterId"].as_str().is_some_and(|i| i.starts_with("external"))) {
+            let ids: Vec<&str> = p["queries"].as_array().into_iter().flatten().flat_map(|q| q["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str)).collect();
+            let [vid] = ids.as_slice() else { continue };
+            if matches!(*vid, ORIGIN_ID | TOP_ID | FRONT_ID | RIGHT_ID) || vertices.contains_key(*vid) || uses.contains_key(*vid) || out.contains_key(*vid) {
+                continue;
+            }
+            // Where Onshape's final parts have it, when the model here has it there too.
+            let recorded = match model_points.get(*vid).map(Vec::as_slice) {
+                Some(&[v]) => anchor(v).map(|l| (frame.to_sketch(v), l)),
+                _ => None,
+            };
+            // Else (gone from the final parts, or moved since): for a Horizontal or Vertical (or a
+            // Distance along an axis), the nearest model vertex level with (that far from) the point.
+            let level = || {
+                let at = params
+                    .iter()
+                    .filter(|p| p["parameterId"].as_str().is_some_and(|i| i.starts_with("local")))
+                    .find_map(|p| map.points.get(p["value"].as_str()?).and_then(|k| g.points.get(*k)).map(|x| x.pos))?;
+                // Which coordinate they share in cadrs's frame (0: x, 1: y), and how far apart in it
+                // (a Horizontal or Vertical Distance: its value, along the axis it measures).
+                let length = || {
+                    params.iter().find(|p| p["parameterId"] == "length").and_then(|p| p["expression"].as_str()).and_then(|e| crate::expr::eval(e, &HashMap::<String, String>::new()).ok()).filter(|q| q.len == 1).map(|q| q.v)
+                };
+                let direction = params.iter().find(|p| p["parameterId"] == "direction").and_then(|p| p["value"].as_str());
+                let (axis, apart) = match (kind, direction, swap?) {
+                    ("HORIZONTAL", _, sw) => (if sw { 0 } else { 1 }, 0.0),
+                    ("VERTICAL", _, sw) => (if sw { 1 } else { 0 }, 0.0),
+                    ("DISTANCE", Some("HORIZONTAL"), sw) => (if sw { 1 } else { 0 }, length()?),
+                    ("DISTANCE", Some("VERTICAL"), sw) => (if sw { 0 } else { 1 }, length()?),
+                    _ => return None,
+                };
+                let coord = |q: Vec2| if axis == 0 { q.x } else { q.y };
+                let found = parts
+                    .iter()
+                    .flat_map(|part| part.solid.vertices.iter())
+                    .map(|v| (frame.to_sketch(v.point), v.point))
+                    .filter(|(q, _)| ((coord(*q) - coord(at)).abs() - apart).abs() < 1e-4 && q.distance(at) > 1e-6)
+                    .filter_map(|(q, v)| anchor(v).map(|l| (q, l)))
+                    .min_by(|a, b| a.0.distance(at).total_cmp(&b.0.distance(at)))
+                    // Else an end of an earlier sketch's line there: that line used, its
+                    // projection ending at the point.
+                    .or_else(|| {
+                        let doc = s.document().element(el)?;
+                        let mut best: Option<(Vec2, (Option<cadrs_sketch::projection::Projected>, cadrs_sketch::Link))> = None;
+                        for f in doc.features().iter().take_while(|f| f.id != id) {
+                            let Some(sk) = f.sketch() else { continue };
+                            let Some(pl) = sk.plane else { continue };
+                            let other = pl.frame();
+                            for (k, c) in &sk.geometry.curves {
+                                let CurveKind::Line { a, b } = c.kind else { continue };
+                                let (qa, qb) = (frame.to_sketch(other.to_world(sk.geometry.pos(a))), frame.to_sketch(other.to_world(sk.geometry.pos(b))));
+                                if qa.distance(qb) < 1e-6 {
+                                    continue;
+                                }
+                                for q in [qa, qb] {
+                                    if ((coord(q) - coord(at)).abs() - apart).abs() < 1e-4 && q.distance(at) > 1e-6 && best.as_ref().is_none_or(|(b, _)| q.distance(at) < b.distance(at)) {
+                                        best = Some((q, (Some(cadrs_sketch::projection::Projected::Line(qa, qb)), cadrs_sketch::Link::SketchCurve { feature: f.id.0, curve: k })));
+                                    }
+                                }
+                            }
+                        }
+                        best
+                    });
+                if found.is_none() && std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
+                    let level: Vec<(Vec2, bool)> = parts.iter().flat_map(|part| part.solid.vertices.iter()).map(|v| (frame.to_sketch(v.point), anchor(v.point).is_some())).filter(|(q, _)| ((coord(*q) - coord(at)).abs() - apart).abs() < 1e-3).collect();
+                    eprintln!("LEVEL {vid} {kind} at {at:?}: {} vertices level with it {level:?}", level.len());
+                }
+                found
+            };
+            let found = recorded.or_else(level);
+            let Some((q, (shape, link))) = found else { continue };
+            // A sketch point already there (as a rule, one held to the same model point): that
+            // one, rather than a second point tied to it.
+            let before = sketch_of(s, el, id)?;
+            if nearest_point(&before, q).is_some() {
+                out.insert(vid.to_string(), q);
+                continue;
+            }
+            match shape {
+                None => {
+                    if s.run(&EditSketch { element: el, feature: id, op: SketchOp::AddPoint { pos: q } }).is_err() {
+                        continue;
+                    }
+                    s.run(&EditSketch { element: el, feature: id, op: SketchOp::AddConstraints(vec![ConstraintOf::Pierce(PointSpec::At(q), link)]) }).ok();
+                }
+                Some(shape) => {
+                    if s.run(&EditSketch { element: el, feature: id, op: SketchOp::Use { items: vec![(shape, link)] } }).is_err() {
+                        continue;
+                    }
+                    let after = sketch_of(s, el, id)?;
+                    let new: Vec<CurveId> = after.curves.keys().filter(|c| !before.curves.contains_key(*c)).collect();
+                    s.run(&EditSketch { element: el, feature: id, op: SketchOp::SetConstruction { curves: new, construction: true } }).ok();
+                    if nearest_point(&after, q).is_none() {
+                        continue;
+                    }
+                }
+            }
+            out.insert(vid.to_string(), q);
+        }
+    }
+    Ok(out)
 }
 
 /// The model edges the sketch's constraints name by bare topology id, found by geometry: for
@@ -494,12 +787,20 @@ fn model_edges(
     g: &Sketch,
     plane: &PlaneRef,
     parts: &[cadrs_core::parts::Part],
+    vertices: &HashMap<String, (Vec2, cadrs_sketch::Link)>,
+    model_points: &HashMap<String, Vec<[f64; 3]>>,
+    swap: Option<bool>,
     report: &mut FeatureReport,
-) -> Result<HashMap<String, CurveId>, CommandError> {
+) -> Result<(HashMap<String, CurveId>, Vec<String>), CommandError> {
     // Per edge id: the points on it, and the points at its middle.
     let mut hints: std::collections::BTreeMap<String, (Vec<Vec2>, Vec<Vec2>)> = Default::default();
     // Per edge id: the centres of the circles concentric with it.
     let mut centres: HashMap<String, Vec<Vec2>> = HashMap::new();
+    // Per edge id: points a Distance dimension holds off it, and how far (mm).
+    // (A distance along one of cadrs's axes, 0: x, 1: y, holds along it.)
+    let mut dists: HashMap<String, Vec<(Vec2, f64, Option<usize>)>> = HashMap::new();
+    // Per edge id: lines of the sketch parallel (false) or perpendicular (true) to it.
+    let mut squares: HashMap<String, Vec<(Vec2, Vec2, bool)>> = HashMap::new();
     let point_of = |v: &str| map.points.get(v).and_then(|p| g.points.get(*p)).map(|p| p.pos);
     // Points on a curve: a line's ends, three points round a circle, an arc's ends and middle
     // (counterclockwise from its start).
@@ -530,10 +831,52 @@ fn model_edges(
         }
     };
     for c in feature["constraints"].as_array().into_iter().flatten() {
+        // A horizontal or vertical alignment with a model entity says nothing about which
+        // edge its point is on (it is level with a vertex): finding an edge through the point
+        // projected a stray line into the sketch.
+        if matches!(c["constraintType"].as_str(), Some("HORIZONTAL" | "VERTICAL")) {
+            continue;
+        }
         let params = c["parameters"].as_array().cloned().unwrap_or_default();
         let midpoint = c["constraintType"].as_str() == Some("MIDPOINT");
-        let concentric = c["constraintType"].as_str() == Some("CONCENTRIC");
+        let kind = c["constraintType"].as_str();
+        // An Offset of a circle or arc shares its centre; of a line, it is parallel.
+        let round_offset = kind == Some("OFFSET")
+            && params.iter().filter(|p| p["parameterId"].as_str().is_some_and(|i| i.starts_with("local"))).any(|p| {
+                p["value"].as_str().and_then(|v| map.curves.get(v)).and_then(|k| g.curves.get(*k)).is_some_and(|x| matches!(x.kind, CurveKind::Circle { .. } | CurveKind::Arc { .. }))
+            });
+        let concentric = kind == Some("CONCENTRIC") || round_offset;
+        let square = match kind {
+            Some("PARALLEL" | "OFFSET") => Some(false),
+            Some("PERPENDICULAR") => Some(true),
+            _ => None,
+        };
+        // A distance from a point (or a line: both its ends): the edge is that far off it,
+        // not through it.
+        // A Horizontal or Vertical distance: along which of cadrs's axes.
+        let along = match (params.iter().find(|p| p["parameterId"] == "direction").and_then(|p| p["value"].as_str()), swap) {
+            (Some("HORIZONTAL"), Some(sw)) => Some(if sw { 1 } else { 0 }),
+            (Some("VERTICAL"), Some(sw)) => Some(if sw { 0 } else { 1 }),
+            _ => None,
+        };
+        let distance = (c["constraintType"].as_str() == Some("DISTANCE"))
+            .then(|| params.iter().find(|p| p["parameterId"] == "length").and_then(|p| p["expression"].as_str()))
+            .flatten()
+            .and_then(|e| crate::expr::eval(e, &HashMap::<String, String>::new()).ok())
+            .filter(|q| q.len == 1)
+            .map(|q| q.v);
         let mut local_points = Vec::new();
+        // A distance from a circle or arc: from its centre, its radius further.
+        let round = distance.and_then(|d| {
+            params.iter().filter(|p| p["parameterId"].as_str().is_some_and(|i| i.starts_with("local"))).find_map(|p| {
+                let pos = |k: PointId| g.points.get(k).map(|x| x.pos);
+                match map.curves.get(p["value"].as_str()?).and_then(|c| g.curves.get(*c)).map(|c| c.kind)? {
+                    CurveKind::Circle { center, radius } => Some((pos(center)?, d + radius)),
+                    CurveKind::Arc { center, start, .. } => Some((pos(center)?, d + pos(center)?.distance(pos(start)?))),
+                    _ => None,
+                }
+            })
+        });
         for p in &params {
             if p["parameterId"].as_str().is_some_and(|i| i.starts_with("local"))
                 && let Some(v) = p["value"].as_str()
@@ -554,11 +897,54 @@ fn model_edges(
             }
             let ids: Vec<&str> = p["queries"].as_array().into_iter().flatten().flat_map(|q| q["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str)).collect();
             let [eid] = ids.as_slice() else { continue };
-            if matches!(*eid, ORIGIN_ID | TOP_ID | FRONT_ID | RIGHT_ID) {
+            if matches!(*eid, ORIGIN_ID | TOP_ID | FRONT_ID | RIGHT_ID) || vertices.contains_key(*eid) {
                 continue;
             }
             let h = hints.entry(eid.to_string()).or_default();
-            if concentric {
+            // An Offset's master: the offset curves it is the master of (a corner's second
+            // master has the second curve), parallel or concentric.
+            if kind == Some("OFFSET") {
+                let has_second = params.iter().any(|q| matches!(q["parameterId"].as_str(), Some("externalSecond" | "localSecond")) && (q["value"].is_string() || q["queries"].as_array().is_some_and(|a| !a.is_empty())));
+                let keys: &[&str] = match p["parameterId"].as_str() {
+                    Some("externalSecond") => &["localSecondOffset"],
+                    _ if has_second => &["localOffset"],
+                    _ => &["localOffset", "localSecondOffset"],
+                };
+                // The Offset's distance: the Distance on its first curve (both pairs are that far).
+                let first = params.iter().find(|q| q["parameterId"] == "localOffset").and_then(|q| q["value"].as_str());
+                let apart = first.and_then(|first| {
+                    feature["constraints"].as_array().into_iter().flatten().filter(|d| d["constraintType"].as_str() == Some("DISTANCE")).find_map(|d| {
+                        let ps = d["parameters"].as_array()?;
+                        ps.iter().any(|p| p["value"].as_str() == Some(first)).then(|| ps.iter().find(|p| p["parameterId"] == "length").and_then(|p| p["expression"].as_str()))?
+                    })
+                })
+                .and_then(|e| crate::expr::eval(e, &HashMap::<String, String>::new()).ok())
+                .filter(|q| q.len == 1)
+                .map(|q| q.v);
+                for k in keys {
+                    let Some(v) = params.iter().find(|q| q["parameterId"] == *k).and_then(|q| q["value"].as_str()) else { continue };
+                    match map.curves.get(v).and_then(|c| g.curves.get(*c)).map(|c| c.kind) {
+                        Some(CurveKind::Circle { .. } | CurveKind::Arc { .. }) => centres.entry(eid.to_string()).or_default().extend(centre_of(v)),
+                        _ => {
+                            if let [a, b] = curve_points(v).as_slice() {
+                                squares.entry(eid.to_string()).or_default().push((*a, *b, false));
+                                if let Some(d) = apart {
+                                    dists.entry(eid.to_string()).or_default().extend([(*a, d, None), (*b, d, None)]);
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // Each line its own pair of ends (an Offset may have one each side).
+            if let Some(perp) = square.filter(|_| !concentric && !local_points.is_empty() && local_points.len() % 2 == 0) {
+                squares.entry(eid.to_string()).or_default().extend(local_points.chunks(2).map(|ab| (ab[0], ab[1], perp)));
+            } else if let Some(r) = round {
+                dists.entry(eid.to_string()).or_default().push((r.0, r.1, None));
+            } else if distance.is_some() && matches!(local_points.as_slice(), [_] | [_, _]) {
+                dists.entry(eid.to_string()).or_default().extend(local_points.iter().map(|p| (*p, distance.unwrap_or_default(), along)));
+            } else if concentric {
                 centres.entry(eid.to_string()).or_default().extend(local_points.iter().copied());
             } else if midpoint {
                 h.1.extend(local_points.iter().copied());
@@ -570,18 +956,32 @@ fn model_edges(
     let frame = plane.frame();
     let tol = 1e-4;
     let mut out = HashMap::new();
-    let mut unmatched = 0;
-    for (eid, (on, mids)) in hints {
+    let mut unmatched: Vec<String> = Vec::new();
+    // The ids with the most hints first; an edge one of them took is another's last resort
+    // (each id is its own edge).
+    let count = |eid: &String, on: usize| on + centres.get(eid).map_or(0, Vec::len) + dists.get(eid).map_or(0, Vec::len) + squares.get(eid).map_or(0, Vec::len);
+    let mut order: Vec<_> = hints.into_iter().collect();
+    order.sort_by_key(|(eid, (on, mids))| std::cmp::Reverse(count(eid, on.len() + mids.len())));
+    let mut taken: Vec<cadrs_sketch::Link> = Vec::new();
+    for (eid, (on, mids)) in order {
         let centred = centres.get(&eid).cloned().unwrap_or_default();
-        if on.is_empty() && mids.is_empty() && centred.is_empty() {
+        let off = dists.get(&eid).cloned().unwrap_or_default();
+        let along = squares.get(&eid).cloned().unwrap_or_default();
+        // Where Onshape's final parts have the edge, when they still do: its start, middle and
+        // end on the sketch plane (they pick among the edges the hints fit equally: ids name
+        // the final parts', which can differ from the model this sketch saw).
+        let known: Vec<Vec2> = model_points.get(&eid).filter(|p| p.len() == 3).map(|p| p.iter().map(|q| frame.to_sketch(*q)).collect()).unwrap_or_default();
+        if on.is_empty() && mids.is_empty() && centred.is_empty() && off.is_empty() && along.is_empty() {
             if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
                 eprintln!("EDGE {eid}: no points to find it by");
             }
-            unmatched += 1;
+            unmatched.push(eid.clone());
             continue;
         }
         // The edge satisfying the most hints (then the one closest to them).
-        let mut best: Option<(usize, f64, cadrs_sketch::projection::Projected, cadrs_sketch::Link)> = None;
+        // (Score, error, the edge as projected, its link, the hints on it.)
+        type Best = ((usize, bool, usize), f64, cadrs_sketch::projection::Projected, cadrs_sketch::Link, usize);
+        let mut best: Option<Best> = None;
         for part in parts {
             for e in &part.solid.edges {
                 let Some(shape) = cadrs_core::links::edge_curve(e).and_then(|c| cadrs_core::links::project(c, &frame)) else { continue };
@@ -589,7 +989,17 @@ fn model_edges(
                 let mut err = 0.0;
                 for p in &on {
                     let d = cadrs_core::links::projected_distance(&shape, *p).unwrap_or(f64::MAX);
-                    if d < tol {
+                    // On a straight edge's line counts (a point at the end of an edge Onshape
+                    // keeps whole that cadrs has in collinear pieces); the piece it is on is
+                    // the closer.
+                    let on_line = match shape {
+                        cadrs_sketch::projection::Projected::Line(a, b) if (b - a).length() > 1e-9 => {
+                            let ab = b - a;
+                            ((*p - a).x * ab.y - (*p - a).y * ab.x).abs() / ab.length()
+                        }
+                        _ => d,
+                    };
+                    if on_line < tol {
                         hits += 1;
                     }
                     err += d.min(1.0);
@@ -604,6 +1014,44 @@ fn model_edges(
                     }
                     err += d.min(1.0);
                 }
+                for (a0, b0, perp) in &along {
+                    // A straight edge square to (or along) the line: the nearest such.
+                    let cadrs_sketch::projection::Projected::Line(a, b) = shape else { continue };
+                    let (u, w) = (b - a, *b0 - *a0);
+                    let (lu, lw) = (u.length(), w.length());
+                    if lu < 1e-9 || lw < 1e-9 {
+                        continue;
+                    }
+                    let (sin, cos) = ((u.x * w.y - u.y * w.x) / (lu * lw), u.dot(w) / (lu * lw));
+                    if (if *perp { cos } else { sin }).abs() < 1e-9 {
+                        hits += 1;
+                    }
+                    let mid = (*a0 + *b0) * 0.5;
+                    err += cadrs_core::links::projected_distance(&shape, mid).unwrap_or(1e6);
+                }
+                for (p, want, axis) in &off {
+                    // A straight edge: its line that far from the point (then the one whose
+                    // segment the point is beside).
+                    let cadrs_sketch::projection::Projected::Line(a, b) = shape else { continue };
+                    let ab = b - a;
+                    let l = ab.length();
+                    if l < 1e-9 {
+                        continue;
+                    }
+                    let t = (*p - a).dot(ab) / (l * l);
+                    let coord = |v: Vec2, k: usize| if k == 0 { v.x } else { v.y };
+                    // Along an axis: an edge across it (a vertical one for a horizontal distance),
+                    // that far along it.
+                    let across = match axis {
+                        Some(k) if coord(ab, *k).abs() > 1e-9 * l => continue,
+                        Some(k) => (coord(*p, *k) - coord(a, *k)).abs(),
+                        None => ((*p - a).x * ab.y - (*p - a).y * ab.x).abs() / l,
+                    };
+                    if (across - want).abs() < tol {
+                        hits += 1;
+                    }
+                    err += (across - want).abs().min(1.0) + (if t < 0.0 { -t } else if t > 1.0 { t - 1.0 } else { 0.0 }) * l;
+                }
                 for p in &centred {
                     let d = match shape {
                         cadrs_sketch::projection::Projected::Circle(c, _) | cadrs_sketch::projection::Projected::Arc { center: c, .. } => p.distance(c),
@@ -614,15 +1062,20 @@ fn model_edges(
                     }
                     err += d.min(1.0);
                 }
+                let fits = known.iter().filter(|q| cadrs_core::links::projected_distance(&shape, **q).is_some_and(|d| d < tol)).count();
                 if hits == 0 {
                     continue;
                 }
-                if best.as_ref().is_none_or(|(h, e2, ..)| hits > *h || (hits == *h && err < *e2)) {
-                    best = Some((hits, err, shape, cadrs_sketch::Link::Edge { feature: part.id.feature.0, edge: e.name }));
+                // The most hints, then one no other id took, then the most of Onshape's own
+                // points, then the closest.
+                let link = cadrs_sketch::Link::Edge { feature: part.id.feature.0, edge: e.name };
+                let score = (hits, !taken.contains(&link), fits);
+                if best.as_ref().is_none_or(|(h, e2, ..)| score > *h || (score == *h && err < *e2)) {
+                    best = Some((score, err, shape, link, hits));
                 }
             }
         }
-        let Some((hits, _, shape, link)) = best else {
+        let Some((_, _, shape, link, hits)) = best else {
             if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
                 // The nearest any edge comes to the hints.
                 let mut near = f64::MAX;
@@ -636,11 +1089,12 @@ fn model_edges(
                 }
                 eprintln!("EDGE {eid}: {} hints, nearest edge {near:.6} mm, {} parts", on.len() + mids.len(), parts.len());
             }
-            unmatched += 1;
+            unmatched.push(eid.clone());
             continue;
         };
-        if hits < on.len() + mids.len() + centred.len() {
-            report.notes.push(format!("model edge {eid}: {hits} of {} constrained points on it", on.len() + mids.len() + centred.len()));
+        taken.push(link);
+        if hits < on.len() + mids.len() + centred.len() + off.len() + along.len() {
+            report.notes.push(format!("model edge {eid}: {hits} of {} constrained points on it", on.len() + mids.len() + centred.len() + off.len() + along.len()));
         }
         let current = sketch_of(s, el, id)?;
         // Used already (by another reference to the same edge, or to one of its ends): that curve.
@@ -656,7 +1110,7 @@ fn model_edges(
             if std::env::var_os("CADRS_ONSHAPE_DEBUG_EDGES").is_some() {
                 eprintln!("EDGE {eid}: found ({hits} hits), but Use failed: {e}");
             }
-            unmatched += 1;
+            unmatched.push(eid.clone());
             continue;
         }
         let after = sketch_of(s, el, id)?;
@@ -665,10 +1119,7 @@ fn model_edges(
             out.insert(eid, c);
         }
     }
-    if unmatched > 0 {
-        report.notes.push(format!("{unmatched} model edge(s) not found"));
-    }
-    Ok(out)
+    Ok((out, unmatched))
 }
 
 /// The geometry of sketch `id`.
@@ -708,6 +1159,10 @@ enum Ent {
     YAxis,
     /// A default plane seen edge-on, not through the origin along an axis.
     Model,
+    /// A model vertex: the part edge piercing the sketch plane there.
+    Vertex(cadrs_sketch::Link),
+    /// The Part Studio's origin away from the sketch's: on both these default-plane traces.
+    OriginTraces(CurveId, CurveId),
 }
 
 struct Ctx<'a> {
@@ -720,6 +1175,16 @@ struct Ctx<'a> {
     swap: Option<bool>,
     /// Onshape model-edge ids → the construction Use curves standing for them.
     uses: &'a HashMap<String, CurveId>,
+    /// Onshape model-vertex ids → where they are and the edge piercing the plane there.
+    vertices: &'a HashMap<String, (Vec2, cadrs_sketch::Link)>,
+    /// Onshape model-vertex ids off the plane → the construction point pierced at its projection.
+    projected: &'a HashMap<String, Vec2>,
+    /// Where the Part Studio's origin projects when that isn't the sketch's origin, and the
+    /// two default planes' traces (construction Use lines) that meet there.
+    origin_at: Option<(Vec2, CurveId, CurveId)>,
+    /// Each sketch Linear pattern's (by its entity id) rows of points: the construction line
+    /// added through each.
+    pattern_lines: &'a HashMap<String, Vec<(usize, CurveId)>>,
 }
 
 impl Ctx<'_> {
@@ -743,8 +1208,10 @@ impl Ctx<'_> {
                     .flat_map(|q| q["deterministicIds"].as_array().into_iter().flatten().filter_map(Value::as_str))
                     .collect();
                 return match ids.as_slice() {
-                    [ORIGIN_ID] => Some(Ent::Origin),
+                    [ORIGIN_ID] => Some(self.origin_at.map_or(Ent::Origin, |(_, a, b)| Ent::OriginTraces(a, b))),
                     [plane @ (TOP_ID | FRONT_ID | RIGHT_ID)] => Some(self.axis_of_plane(plane)),
+                    [v] if self.vertices.contains_key(*v) => Some(Ent::Vertex(self.vertices[*v].1)),
+                    [v] if let Some(&q) = self.projected.get(*v) => nearest_point(self.g, q).map(|p| Ent::Point(p, q)),
                     [edge] if self.uses.contains_key(*edge) => Some(Ent::Curve(self.uses[*edge])),
                     _ => Some(Ent::Model),
                 };
@@ -801,6 +1268,12 @@ impl Ctx<'_> {
         match kind {
             "COINCIDENT" => match (first, second) {
                 (Some(Ent::Point(a, _)), Some(Ent::Point(b, _))) if a == b => Nothing,
+                // On a model vertex: pierced by the part edge there.
+                (Some(Ent::Point(_, p)), Some(Ent::Vertex(l))) | (Some(Ent::Vertex(l)), Some(Ent::Point(_, p))) => one(ConstraintOf::Pierce(PointSpec::At(p), l)),
+                // On the origin, away from the sketch's: on the two plane traces through it.
+                (Some(Ent::Point(_, p)), Some(Ent::OriginTraces(a, b))) | (Some(Ent::OriginTraces(a, b)), Some(Ent::Point(_, p))) => {
+                    Specs(vec![ConstraintOf::PointOnCurve(PointSpec::At(p), CurveSpec::Id(a)), ConstraintOf::PointOnCurve(PointSpec::At(p), CurveSpec::Id(b))])
+                }
                 _ if model(first) || model(second) => Dropped("to model geometry"),
                 _ => {
                     if let (Some(a), Some(b)) = (pt(first), pt(second)) {
@@ -817,9 +1290,14 @@ impl Ctx<'_> {
                 }
             },
             "HORIZONTAL" | "VERTICAL" => {
+                // A model vertex on the plane: the sketch point pierced there.
+                let at_vertex = |e: Option<Ent>| match e {
+                    Some(Ent::Vertex(l)) => self.vertices.values().find(|(_, x)| *x == l).map(|(p, _)| PointSpec::At(*p)),
+                    e => pt(e),
+                };
                 let o = match (first, second) {
                     (Some(Ent::Curve(l)), None) => Some(Orient::Line(CurveSpec::Id(l))),
-                    _ => pt(first).zip(pt(second)).map(|(a, b)| Orient::Points(a, b)),
+                    _ => at_vertex(first).zip(at_vertex(second)).map(|(a, b)| Orient::Points(a, b)),
                 };
                 let Some(swap) = self.swap else {
                     return Dropped("the sketch's axes are turned against cadrs's");
@@ -828,6 +1306,7 @@ impl Ctx<'_> {
                     Some(o) if (kind == "HORIZONTAL") != swap => one(ConstraintOf::Horizontal(o)),
                     Some(o) => one(ConstraintOf::Vertical(o)),
                     None if model(first) || model(second) => Dropped("to model geometry"),
+                    None if matches!(first, Some(Ent::Vertex(_))) || matches!(second, Some(Ent::Vertex(_))) => Dropped("level with a model vertex: cadrs has no such reference yet"),
                     None => Dropped("unsupported references"),
                 }
             }
@@ -889,6 +1368,78 @@ impl Ctx<'_> {
                     _ => Dropped("unsupported references"),
                 }
             }
+            // Onshape's Offset: an offset curve parallel to (or concentric with) its master, and,
+            // with a second pair, as far from its master as the first is from its own (one
+            // distance for the Offset tool's curves; the first pair's is a Distance of its own).
+            "OFFSET" => {
+                let round = |e: Option<Ent>| matches!(e, Some(Ent::Curve(k)) if matches!(self.g.curves.get(k).map(|x| x.kind), Some(CurveKind::Circle { .. } | CurveKind::Arc { .. })));
+                // Each offset curve with its own master (a corner's second side has its own).
+                let master = self.ent(c, "localMaster");
+                let second = self.ent(c, "localSecond").or(master);
+                let mut out = Vec::new();
+                for (offset, master) in [(self.ent(c, "localOffset"), master), (self.ent(c, "localSecondOffset"), second)] {
+                    if offset.is_none() {
+                        continue;
+                    }
+                    match (cv(offset), cv(master)) {
+                        (Some(a), Some(b)) if round(offset) && round(master) => out.push(ConstraintOf::Concentric(a, b)),
+                        (Some(a), Some(b)) if !round(offset) && !round(master) => out.push(ConstraintOf::Parallel(a, b)),
+                        _ if model(master) => return Dropped("offset of a model edge cadrs didn't find"),
+                        _ => return Dropped("unsupported references"),
+                    }
+                }
+                let (o1, o2) = (self.ent(c, "localOffset"), self.ent(c, "localSecondOffset"));
+                if let (Some(m1), Some(o1), Some(m2), Some(o2)) = (cv(master), cv(o1), cv(second), cv(o2)) {
+                    out.push(ConstraintOf::EqualOffset(m1, o1, m2, o2));
+                }
+                if out.is_empty() { Dropped("unsupported references") } else { Specs(out) }
+            }
+            // A sketch Linear pattern (one row): each copy of a curve the seed's size (a line its
+            // direction too), each row of points equally spaced along its construction line, the
+            // rows' lines alike. (The step is the pattern's own direction line, already tied to
+            // a seed and its first copy.)
+            "LINEAR_PATTERN" => {
+                let (instances, n1, n2) = pattern_instances(c);
+                let Some(lines) = c["entityId"].as_str().and_then(|k| self.pattern_lines.get(k)) else {
+                    return Dropped(if n2 > 1 { "two-way pattern: no cadrs equivalent yet" } else { "unsupported references" });
+                };
+                let mut out = Vec::new();
+                let groups: std::collections::BTreeSet<usize> = instances.keys().map(|k| k.0).collect();
+                for g in groups {
+                    let ent = |i: usize| instances.get(&(g, i, 0)).and_then(|v| self.map.points.get(v).map(|p| Ent::Point(*p, self.g.points.get(*p).map(|x| x.pos).unwrap_or_default())).or_else(|| self.map.curves.get(v).map(|k| Ent::Curve(*k))));
+                    match lines.iter().find(|(lg, _)| *lg == g) {
+                        // A row of points.
+                        Some((_, line)) => {
+                            let l = CurveSpec::Id(*line);
+                            for i in 1..n1 - 1 {
+                                let (Some(p), Some(a), Some(b)) = (pt(ent(i)), pt(ent(i - 1)), pt(ent(i + 1))) else { return Dropped("unsupported references") };
+                                out.push(ConstraintOf::PointOnCurve(p, l));
+                                out.push(ConstraintOf::EqualDistance(p, a, b));
+                            }
+                        }
+                        // A copied curve.
+                        None => {
+                            let Some(Ent::Curve(seed)) = ent(0) else { continue };
+                            let line = matches!(self.g.curves.get(seed).map(|x| x.kind), Some(CurveKind::Line { .. }));
+                            for i in 1..n1 {
+                                let Some(Ent::Curve(k)) = ent(i) else { return Dropped("unsupported references") };
+                                out.push(ConstraintOf::Equal(CurveSpec::Id(k), CurveSpec::Id(seed)));
+                                if line {
+                                    out.push(ConstraintOf::Parallel(CurveSpec::Id(k), CurveSpec::Id(seed)));
+                                }
+                            }
+                        }
+                    }
+                }
+                // The rows alike.
+                if let Some(((_, first), rest)) = lines.split_first() {
+                    for (_, l) in rest {
+                        out.push(ConstraintOf::Parallel(CurveSpec::Id(*l), CurveSpec::Id(*first)));
+                        out.push(ConstraintOf::Equal(CurveSpec::Id(*l), CurveSpec::Id(*first)));
+                    }
+                }
+                if out.is_empty() { Dropped("unsupported references") } else { Specs(out) }
+            }
             "PROJECTED" => match first {
                 // The projected curve keeps its place; the link to the model is not imported.
                 Some(Ent::Curve(l)) => one(ConstraintOf::FixCurve(CurveSpec::Id(l))),
@@ -896,11 +1447,13 @@ impl Ctx<'_> {
                 _ => Dropped("unsupported references"),
             },
             "DISTANCE" | "LENGTH" | "DIAMETER" | "RADIUS" | "ANGLE" => {
-                if c["parameters"].as_array().into_iter().flatten().any(|p| p["parameterId"] == "driven" && p["value"] == true) {
-                    return Dropped("driven dimension");
-                }
+                // A driven one shows its measured value and holds nothing.
+                let driven = c["parameters"].as_array().into_iter().flatten().any(|p| p["parameterId"] == "driven" && p["value"] == true);
                 match self.dimension(kind, c, first, second) {
-                    Some(d) => Dimension(d),
+                    Some(mut d) => {
+                        d.driven = driven;
+                        Dimension(d)
+                    }
                     None if model(first) || model(second) => Dropped("to model geometry"),
                     None => Dropped("unsupported references"),
                 }
@@ -1027,4 +1580,56 @@ impl Ctx<'_> {
         let value = cadrs_sketch::dimension::measure(self.g, kind)?;
         Some(Dimension::new(kind, value, 10.0))
     }
+}
+
+/// A sketch Linear pattern's instances: `localInstance<entity>,<i>,<j>` → its entity id, with
+/// the pattern's counts.
+fn pattern_instances(c: &Value) -> (std::collections::BTreeMap<(usize, usize, usize), String>, usize, usize) {
+    let mut out = std::collections::BTreeMap::new();
+    let mut counts = (0, 0);
+    for p in c["parameters"].as_array().into_iter().flatten() {
+        let pid = p["parameterId"].as_str().unwrap_or_default();
+        if let Some(rest) = pid.strip_prefix("localInstance")
+            && let [g, i, j] = rest.split(',').filter_map(|x| x.parse::<usize>().ok()).collect::<Vec<_>>().as_slice()
+            && let Some(v) = p["value"].as_str()
+        {
+            out.insert((*g, *i, *j), v.to_string());
+        }
+        let n = || p["expression"].as_str().and_then(|e| e.trim().parse::<f64>().ok()).map(|x| x as usize).unwrap_or(0);
+        match pid {
+            "patternc1" => counts.0 = n(),
+            "patternc2" => counts.1 = n(),
+            _ => {}
+        }
+    }
+    (out, counts.0, counts.1)
+}
+
+/// For each sketch Linear pattern (one row of copies): a construction line through each of its
+/// rows of points (a copied circle's centres), from the seed's to the last copy's, which the
+/// pattern's constraints keep the points on.
+fn pattern_lines(s: &mut dyn Studio, el: ElementId, id: FeatureId, feature: &Value, map: &SketchMap) -> Result<HashMap<String, Vec<(usize, CurveId)>>, CommandError> {
+    let mut out = HashMap::new();
+    for c in feature["constraints"].as_array().into_iter().flatten().filter(|c| c["constraintType"].as_str() == Some("LINEAR_PATTERN")) {
+        let (instances, n1, n2) = pattern_instances(c);
+        if n1 < 3 || n2 > 1 {
+            continue;
+        }
+        let groups: std::collections::BTreeSet<usize> = instances.keys().map(|k| k.0).collect();
+        let mut lines = Vec::new();
+        for g in groups {
+            let g_now = sketch_of(s, el, id)?;
+            let pos = |i: usize| instances.get(&(g, i, 0)).and_then(|v| map.points.get(v)).and_then(|p| g_now.points.get(*p)).map(|p| p.pos);
+            let (Some(a), Some(b)) = (pos(0), pos(n1 - 1)) else { continue };
+            let before: std::collections::HashSet<CurveId> = g_now.curves.keys().collect();
+            s.run(&EditSketch { element: el, feature: id, op: SketchOp::AddPolyline { points: vec![a, b], closed: false, construction: true, label: "Add line" } })?;
+            if let Some(line) = sketch_of(s, el, id)?.curves.keys().find(|k| !before.contains(k)) {
+                lines.push((g, line));
+            }
+        }
+        if let Some(key) = c["entityId"].as_str() {
+            out.insert(key.to_string(), lines);
+        }
+    }
+    Ok(out)
 }

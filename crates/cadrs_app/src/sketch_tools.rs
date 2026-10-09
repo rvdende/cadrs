@@ -155,6 +155,17 @@ impl ScreenMap {
     pub fn px_per_mm(&self) -> f32 {
         self.x.length().max(1e-9)
     }
+
+    /// Screen pixels per millimetre at the view's zoom, however the plane is turned: the
+    /// largest stretch of the plane's projection (every plane has a direction square to the
+    /// view, drawn at full scale). Lengths set in pixels by it (construction dashes) stay put
+    /// on the plane while the view turns, and change only when it zooms.
+    pub fn zoom(&self) -> f32 {
+        let (a, b, c, d) = (self.x.x, self.y.x, self.x.y, self.y.y);
+        let s = a * a + b * b + c * c + d * d;
+        let det = a * d - b * c;
+        ((s + (s * s - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt().max(1e-9)
+    }
 }
 
 /// The screen mapping of the plane being sketched on (`None` when not sketching), and of the

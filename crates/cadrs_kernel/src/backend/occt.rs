@@ -1014,31 +1014,12 @@ impl Kernel for OcctKernel {
     fn split_imported(&mut self, body: BodyId) -> Result<Vec<OpResult>> {
         let shape = self.body(body)?;
         let solids = shape.sub_shapes(SubKind::Solid).map_err(occt)?;
-        // The shells that aren't a solid's: their faces aren't any solid's.
-        let mut in_solids: HashMap<u64, Vec<Face>> = HashMap::new();
-        for s in &solids {
-            for f in faces_of(s) {
-                in_solids.entry(f.identity_hash()).or_default().push(f);
-            }
-        }
-        let owned = |f: &Face| in_solids.get(&f.identity_hash()).is_some_and(|v| v.iter().any(|g| g.is_same(f)));
-        let loose: Vec<Shape> = shape
-            .sub_shapes(SubKind::Shell)
-            .map_err(occt)?
-            .into_iter()
-            .filter(|sh| !faces_of(sh).iter().any(owned))
-            .collect();
+        let loose = loose_shells(shape, &solids)?;
         if loose.is_empty() {
             return self.split_solids(body);
         }
         let mut pieces: Vec<Shape> = solids.iter().map(clone_shape).collect();
-        for sh in loose {
-            // Closed: sewn into a solid; open (or not sewable): the surface as it is.
-            match Shape::try_sew_solid(&[&sh], 1e-6) {
-                Ok(s) if s.sub_count(SubKind::Solid).unwrap_or(0) == 1 && s.is_valid().unwrap_or(false) => pieces.push(s),
-                _ => pieces.push(clone_shape(&sh)),
-            }
-        }
+        pieces.extend(loose);
         pieces.into_iter().map(|s| self.insert_raw(s, History::default())).collect()
     }
 
@@ -1341,9 +1322,15 @@ impl Kernel for OcctKernel {
             }
         };
         let selected = select_edges(shape, &all)?;
-        let (result, h) = shape
-            .try_fillet_variable_h(selected.iter().zip(radii.iter().map(Vec::as_slice)))
-            .map_err(occt)?;
+        // OpenCASCADE fails where the fillet exactly consumes a face (a 1 mm round across a
+        // face 1 mm wide), which Parasolid takes: then once more a millionth smaller.
+        let (result, h) = match shape.try_fillet_variable_h(selected.iter().zip(radii.iter().map(Vec::as_slice))) {
+            Ok(r) => r,
+            Err(e) => {
+                let shrunk: Vec<Vec<(f64, f64)>> = radii.iter().map(|v| v.iter().map(|(t, r)| (*t, r * (1.0 - 1e-6))).collect()).collect();
+                shape.try_fillet_variable_h(selected.iter().zip(shrunk.iter().map(Vec::as_slice))).map_err(|_| occt(e))?
+            }
+        };
         if !spec.allow_overflow {
             let infos = self.edges(body)?;
             let vertices = self.vertices(body)?;
@@ -1987,7 +1974,9 @@ impl Kernel for OcctKernel {
             out.extend(self.insert_raw(body, History::default())?.bodies);
             return Ok(out);
         }
-        for s in solids {
+        // The solids, then the surfaces no solid holds.
+        let loose = loose_shells(&shape, &solids)?;
+        for s in solids.into_iter().chain(loose) {
             match self.insert_raw(s, History::default()) {
                 Ok(r) => out.extend(r.bodies),
                 Err(e) => {
@@ -2128,6 +2117,29 @@ fn to_na(v: DVec3) -> Vector3<f64> {
 fn clone_shape(shape: &Shape) -> Shape {
     // A zero translation copies the shape (BRepBuilderAPI_Transform with copy = true).
     shape.translated(DVec3::ZERO)
+}
+
+/// The shells of `shape` that aren't one of `solids`' (none of their faces is a solid's), each
+/// a piece of its own: sewn into a solid when it closes, else the surface as it is (an imported
+/// file's surface bodies, such as a board's silkscreen).
+fn loose_shells(shape: &Shape, solids: &[Shape]) -> Result<Vec<Shape>> {
+    let mut in_solids: HashMap<u64, Vec<Face>> = HashMap::new();
+    for s in solids {
+        for f in faces_of(s) {
+            in_solids.entry(f.identity_hash()).or_default().push(f);
+        }
+    }
+    let owned = |f: &Face| in_solids.get(&f.identity_hash()).is_some_and(|v| v.iter().any(|g| g.is_same(f)));
+    Ok(shape
+        .sub_shapes(SubKind::Shell)
+        .map_err(occt)?
+        .into_iter()
+        .filter(|sh| !faces_of(sh).iter().any(owned))
+        .map(|sh| match Shape::try_sew_solid(&[&sh], 1e-6) {
+            Ok(s) if s.sub_count(SubKind::Solid).unwrap_or(0) == 1 && s.is_valid().unwrap_or(false) => s,
+            _ => clone_shape(&sh),
+        })
+        .collect())
 }
 
 fn select_edges(shape: &Shape, ids: &[EdgeId]) -> Result<Vec<Edge>> {

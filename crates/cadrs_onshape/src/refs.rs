@@ -333,11 +333,14 @@ pub fn region_with_sides(sketch: FeatureId, g: &Sketch, curves: &BTreeSet<CurveI
 }
 
 /// When no region of `g` has every one of `direct` (the sketch curves a query names) on its
-/// boundary but several regions are bounded only by them and imprinted face edges, and
-/// together have them all: those regions (Onshape's one region, which cadrs cuts with the face
-/// edges the sketch lies across). Otherwise empty.
+/// boundary, but the sketch without its imprint has one that does: the pieces the imprinted face
+/// edges cut it into (Onshape's one region, which cadrs cuts with the face edges the sketch lies
+/// across). Their areas must add up to the whole's. Otherwise empty.
+///
+/// (Onshape names a sketch line that lies along a face edge by the edge, so `direct` can miss
+/// some of the lines around the region: the whole is the smallest region that has them all.)
 pub fn pieces_bounded_by(sketch: FeatureId, g: &Sketch, direct: &BTreeSet<CurveId>) -> Vec<RegionRef> {
-    if direct.len() < 3 {
+    if direct.len() < 3 || g.imprint.is_empty() {
         return Vec::new();
     }
     let all = regions_shared(g);
@@ -347,13 +350,15 @@ pub fn pieces_bounded_by(sketch: FeatureId, g: &Sketch, direct: &BTreeSet<CurveI
     if all.iter().any(|r| direct.is_subset(&drawn(r))) {
         return Vec::new();
     }
-    let pieces: Vec<&cadrs_sketch::region::Region> = all.iter().filter(|r| {
-        let d = drawn(r);
-        !d.is_empty() && d.is_subset(direct) && r.curves.iter().chain(r.hole_curves.iter().flatten()).any(|c| cadrs_sketch::is_synthetic(*c))
-    }).collect();
-    let covered: BTreeSet<CurveId> = pieces.iter().flat_map(|r| drawn(r)).collect();
-    if pieces.len() > 1 && covered == *direct {
-        pieces.into_iter().map(|r| RegionRef::new(sketch, r)).collect()
+    let mut bare = g.clone();
+    bare.imprint.clear();
+    let Some(whole) = regions_shared(&bare).iter().filter(|r| direct.is_subset(&drawn(r))).min_by(|a, b| region_area(a).total_cmp(&region_area(b))).cloned() else {
+        return Vec::new();
+    };
+    let pieces: Vec<RegionRef> = all.iter().map(|r| RegionRef::new(sketch, r)).filter(|r| whole.contains(r.seed)).collect();
+    let sum: f64 = all.iter().filter(|r| whole.contains(RegionRef::new(sketch, r).seed)).map(region_area).sum();
+    if pieces.len() > 1 && (sum - region_area(&whole)).abs() <= 1e-6 * region_area(&whole).max(1.0) {
+        pieces
     } else {
         Vec::new()
     }

@@ -853,7 +853,7 @@ impl Feature {
                     Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
                     None => {}
                 }
-                for c in [&x.from, &x.to, &x.scale_point].into_iter().flatten() {
+                for c in [&x.from, &x.to, &x.scale_point].into_iter().flatten().chain(x.connectors.iter()) {
                     c.parent().into_iter().for_each(&mut add);
                 }
             }

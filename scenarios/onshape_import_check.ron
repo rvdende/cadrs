@@ -1,0 +1,26 @@
+// Not a golden: run on a copy of a document store holding an imported Onshape Part Studio
+// (`--data-dir <copy>`, owners set to the scenario user). Shows its first sketches and
+// photographs them from two angles: their regions are half see-through, their construction
+// lines keep their dashes as the view turns, and their edges behind a wall show dashed.
+Scenario(
+    start: Some("landing"),
+    timeout: 600.0,
+    steps: [
+        WaitFor("doc-row-0"),
+        DoubleClick(ui("doc-name-0")),
+        WaitFor("document-shell"),
+        Wait(10),
+        Click(ui("feature-sketch-1-visibility")),
+        Click(ui("feature-sketch-2-visibility")),
+        Click(ui("feature-sketch-3-visibility")),
+        Click(ui("feature-sketch-4-visibility")),
+        Click(ui("feature-sketch-5-visibility")),
+        Click(ui("feature-sketch-6-visibility")),
+        Custom("view -30 25"),
+        Wait(10),
+        Screenshot("01-sketches"),
+        Custom("view -60 10"),
+        Wait(10),
+        Screenshot("02-sketches-turned"),
+    ],
+)

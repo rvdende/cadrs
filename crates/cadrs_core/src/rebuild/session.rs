@@ -25,6 +25,22 @@ pub const SAVE_AFTER: Duration = Duration::from_secs(3);
 
 static STORE: Mutex<Option<Arc<dyn BlobStore>>> = Mutex::new(None);
 
+/// After a full rebuild ([`super::clear_cache`]): the snapshots written since, the only ones
+/// restored for the rest of the session (`None`: every snapshot is).
+static WRITTEN_SINCE_CLEAR: Mutex<Option<Vec<BlobKey>>> = Mutex::new(None);
+
+/// Stops restoring the snapshots written so far: each Part Studio is rebuilt from scratch once,
+/// and its new snapshot is used from then on.
+pub(super) fn forget_written() {
+    if let Ok(mut v) = WRITTEN_SINCE_CLEAR.lock() {
+        *v = Some(Vec::new());
+    }
+}
+
+fn restorable(key: &BlobKey) -> bool {
+    WRITTEN_SINCE_CLEAR.lock().is_ok_and(|v| v.as_ref().is_none_or(|v| v.contains(key)))
+}
+
 /// Keeps snapshots in `store` (`None`: none are read or written; tests and benchmarks build
 /// every time). The app gives it a [`crate::blob_store::DiskStore`] next to the documents.
 pub fn set_store(store: Option<Arc<dyn BlobStore>>) {
@@ -61,7 +77,11 @@ impl Rebuilder {
             return 0;
         }
         let Some(store) = store() else { return 0 };
-        let Some(blob) = store.get(&snapshot_key(features)) else { return 0 };
+        let key = snapshot_key(features);
+        if !restorable(&key) {
+            return 0;
+        }
+        let Some(blob) = store.get(&key) else { return 0 };
         self.restore(&blob).unwrap_or(0)
     }
 
@@ -77,6 +97,11 @@ impl Rebuilder {
         let Some(store) = store() else { return };
         if let Ok(blob) = self.snapshot(&save.outputs) {
             store.put(&save.key, &blob);
+            if let Ok(mut v) = WRITTEN_SINCE_CLEAR.lock()
+                && let Some(v) = v.as_mut()
+            {
+                v.push(save.key);
+            }
         }
     }
 }

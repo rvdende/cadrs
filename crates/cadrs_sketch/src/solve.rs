@@ -1796,12 +1796,38 @@ pub fn conflict_set_cached(s: &Sketch, conflicting: &[Source]) -> Vec<Source> {
     v
 }
 
+/// The sketch solved with each driving dimension a hair off its value (a different small
+/// fraction each), for [`analyze`]'s rank; `None` when it has none or doesn't solve so.
+fn generic_configuration(s: &Sketch) -> Option<Sketch> {
+    let mut g = s.clone();
+    let mut nudged = false;
+    for (i, d) in g.dimensions.values_mut().enumerate() {
+        if d.driven || d.value.abs() < 1e-9 {
+            continue;
+        }
+        let h = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40;
+        d.value *= 1.0 + 1e-4 * (0.5 + (h % 1000) as f64 / 1000.0);
+        nudged = true;
+    }
+    if !nudged {
+        return None;
+    }
+    solve(&mut g).conflicting.is_empty().then_some(g)
+}
+
 /// Analyses a (solved) sketch: degrees of freedom, conflicts, redundancy and every entity's
 /// status.
 pub fn analyze(s: &Sketch) -> Analysis {
     let conflicting = conflicts(s);
     let skip: HashSet<Source> = conflicting.iter().copied().collect();
-    let sys = System::new(s, &skip);
+    // The rank is the generic one (as Onshape's definition status is): taken where the sketch
+    // solves with its dimensions a hair off their values, so a dimension that looks redundant
+    // only because two values coincide (a chord across a circle as long as its diameter, the
+    // arcs' radii equal) still counts. Constraints that repeat one another stay redundant: the
+    // sketch still satisfies them there.
+    let generic = generic_configuration(s);
+    let s_rank = generic.as_ref().unwrap_or(s);
+    let sys = System::new(s_rank, &skip);
     let mut out = Analysis { conflict_set: conflict_set_cached(s, &conflicting), ..Analysis::default() };
     for src in &conflicting {
         match *src {

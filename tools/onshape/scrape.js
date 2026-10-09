@@ -10,9 +10,13 @@
 //   <did>/document.json, workspaces.json, versions.json, history.json, elements.json,
 //         externalreferences.json, thumbnail.png
 //   <did>/<eid>/...                         per element, depending on its type (see ELEMENT_FETCHES)
+//   <did>/versions/<vid>/<eid>/features.json  a Part Studio at a version another document pins
 (() => {
   const SINK = 'http://127.0.0.1:8765';
-  const API = '/api/v10';
+  // The REST API version: the one Onshape calls current (`/api/versions`), looked up when a scrape
+  // starts; v17 until then (as of 2026-10-09; its responses are shaped as v10's, which the raw
+  // data was first scraped with).
+  let API = '/api/v17';
   const PACE_MS = 300;
   const JSON_ACCEPT = 'application/json;charset=UTF-8; qs=0.09';
 
@@ -102,8 +106,14 @@
   const ELEMENT_FETCHES = {
     PARTSTUDIO: [
       ['features.json', (d, w, e) => `${API}/partstudios/${dwe(d, w, e)}/features`],
+      // The same, with each query's entities as Onshape's topology ids (`geometryIds`): what
+      // bodydetails.json lists, for queries the importer can't evaluate (an imported file's
+      // entities by Onshape's own tags).
+      // (Only the unversioned API fills in `geometryIds`; the numbered ones, v5 to v17, leave them out.)
+      ['features-geometry.json', (d, w, e) => `/api/partstudios/${dwe(d, w, e)}/features?includeGeometryIds=true`],
       ['sketches.json', (d, w, e) => `${API}/partstudios/${dwe(d, w, e)}/sketches?includeGeometry=true`],
-      ['bodydetails.json', (d, w, e) => `${API}/partstudios/${dwe(d, w, e)}/bodydetails`],
+      // With surfaces: sheet bodies (a board's silkscreen and soldermask) are parts too.
+      ['bodydetails.json', (d, w, e) => `${API}/partstudios/${dwe(d, w, e)}/bodydetails?includeSurfaces=true`],
       ['parts.json', (d, w, e) => `${API}/parts/${dwe(d, w, e)}?withThumbnails=false&includePropertyDefaults=true`],
       ['massproperties.json', (d, w, e) => `${API}/partstudios/${dwe(d, w, e)}/massproperties?massAsGroup=false`],
       ['metadata-parts.json', (d, w, e) => `${API}/metadata/${dwe(d, w, e)}/p?depth=1`],
@@ -135,7 +145,18 @@
     await save(`${d}/versions.json`, `${API}/documents/d/${d}/versions`);
     if (!w) { await log(`no default workspace for ${d}`); return; }
     await save(`${d}/history.json`, `${API}/documents/d/${d}/w/${w}/documenthistory`);
-    await save(`${d}/externalreferences.json`, `${API}/documents/d/${d}/w/${w}/externalreferences`);
+    const refs = await save(`${d}/externalreferences.json`, `${API}/documents/d/${d}/w/${w}/externalreferences`);
+    // The versions of other documents its elements reference (a Derived feature pins one): their
+    // Part Studios' feature lists then, under the referenced document's folder, so its import
+    // can keep those versions in its history.
+    for (const list of Object.values((refs && refs.elementExternalReferences) || {})) {
+      for (const r of list || []) {
+        if (r.type !== 'version' || !r.documentId || !r.id) continue;
+        for (const e of r.referencedElements || []) {
+          await save(`${r.documentId}/versions/${r.id}/${e}/features.json`, `${API}/partstudios/d/${r.documentId}/v/${r.id}/e/${e}/features`);
+        }
+      }
+    }
     await save(`${d}/thumbnail.png`, `${API}/thumbnails/d/${d}/w/${w}/s/300x170`, { binary: true, accept: 'image/png' });
     const elements = await save(`${d}/elements.json`, `${API}/documents/d/${d}/w/${w}/elements`);
     for (const el of elements || []) {
@@ -157,6 +178,16 @@
     return docs;
   }
 
+  // The API version Onshape marks current; the default above if it can't say.
+  async function useCurrentApi() {
+    try {
+      const r = await fetch('/api/versions', { credentials: 'include', headers: { Accept: JSON_ACCEPT } });
+      const current = r.ok && ((await r.json()).availableVersions || []).find(v => v.current);
+      if (current && /^v\d+$/.test(current.urlSafeName)) API = `/api/${current.urlSafeName}`;
+    } catch (e) { /* keep the default */ }
+    await log(`api ${API}`);
+  }
+
   async function start({ only } = {}) {
     if (state.phase === 'running') return 'already running';
     state.phase = 'running';
@@ -164,6 +195,7 @@
     (async () => {
       try {
         if ((await (await sink('ping')).text()) !== 'pong') throw new Error('receiver not answering');
+        await useCurrentApi();
         await log('scrape start');
         let docs = await listDocuments();
         if (only) docs = docs.filter(x => only.includes(x.id));
