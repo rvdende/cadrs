@@ -4,6 +4,8 @@
 //! Every edit ends by solving the sketch ([`crate::solve::solve`]), so geometry always satisfies
 //! its constraints and dimensions (conflicting ones are left unsolved, and drawn red).
 
+use serde::{Deserialize, Serialize};
+
 use crate::constraint::{Constraint, ConstraintOf, CurveRef, PointRef};
 use crate::solve::{self, Source};
 use crate::{
@@ -11,8 +13,15 @@ use crate::{
     Sketch, Vec2,
 };
 
-/// One edit of a sketch's geometry.
-#[derive(Debug, Clone, PartialEq)]
+/// The undo-menu label of an edit that came in as data (JSON), which has none.
+fn default_label() -> &'static str {
+    "Sketch edit"
+}
+
+/// One edit of a sketch's geometry. Serialized as data (`{"type": "add_circle", …}`), so an
+/// assistant can make any edit the sketch engine makes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SketchOp {
     /// Lines through `points` in order (closing back to the first if `closed`). A point placed
     /// where one already exists shares it, so chained lines and rectangle corners connect.
@@ -21,6 +30,7 @@ pub enum SketchOp {
         closed: bool,
         construction: bool,
         /// Shown in the undo menu ("Add line", "Add rectangle").
+        #[serde(skip_deserializing, default = "default_label")]
         label: &'static str,
     },
     AddCircle {
@@ -69,6 +79,7 @@ pub enum SketchOp {
     AddConstraint {
         constraints: Vec<Constraint>,
         /// Shown in the undo menu ("Add horizontal").
+        #[serde(skip_deserializing, default = "default_label")]
         label: &'static str,
     },
     /// Records a driving dimension (replacing one of the same kind on the same geometry). The

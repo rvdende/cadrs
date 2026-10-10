@@ -173,6 +173,7 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::Screenshot(_) | Call::RunScenario(_) => Err("handled by run_calls".into()),
         Call::AddFeature(p) => add_feature(world, p),
         Call::EditFeature(p) => edit_feature(world, p),
+        Call::EditSketch(p) => edit_sketch(world, p).and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         Call::GetFeature(p) => get_feature(world, p),
         Call::DeleteFeature(p) => delete_feature(world, p),
         Call::ListFaces(p) => list_faces(world, p.part_studio.as_deref()),
@@ -184,7 +185,141 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         }
         Call::ImportStep(p) => import_step(world, &p.path),
         Call::ExportStep(p) => export_step(world, p),
+        Call::CreateDrawing(p) => create_drawing(world, p),
+        Call::AddAnnotation(p) => add_annotation(world, p),
+        Call::RenameTab(p) => rename_tab(world, p),
     }
+}
+
+/// The sheet template a drawing uses when the call names none: third angle, as the course's
+/// drawings are.
+const DEFAULT_TEMPLATE: &str = "ANSI_C_MM.dwt";
+
+/// "1:1" or "2:1" as a scale.
+fn parse_scale(s: &str) -> Result<cadrs_drawing::standard::Scale, String> {
+    let bad = || format!("scale {s:?}: write it as 1:1 or 2:1");
+    let (a, b) = s.split_once(':').ok_or_else(bad)?;
+    let num: u32 = a.trim().parse().map_err(|_| bad())?;
+    let den: u32 = b.trim().parse().map_err(|_| bad())?;
+    if num == 0 || den == 0 {
+        return Err(bad());
+    }
+    Ok(cadrs_drawing::standard::Scale { num, den })
+}
+
+/// A view as create_drawing and add_annotation describe it.
+fn view_json(v: &cadrs_drawing::View) -> Value {
+    json!({
+        "name": v.name,
+        "id": serde_json::to_value(v.id).unwrap_or(Value::Null),
+        "scale": format!("{}:{}", v.scale.num, v.scale.den),
+        "anchor": v.anchor.map(round),
+        "frame": { "dir": v.frame.dir.map(round), "x": v.frame.x.map(round) },
+    })
+}
+
+/// Creates a drawing of a Part Studio, as the Create Drawing dialog's OK does with its four
+/// views, and opens it.
+fn create_drawing(world: &mut World, p: &tools::CreateDrawing) -> Result<Value, String> {
+    let template_name = p.template.as_deref().unwrap_or(DEFAULT_TEMPLATE);
+    let templates = cadrs_drawing::template::builtin_templates();
+    let template = templates.iter().find(|t| t.name.eq_ignore_ascii_case(template_name)).cloned().ok_or_else(|| {
+        let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
+        format!("no sheet template named {template_name:?}; the built-in ones are {}", names.join(", "))
+    })?;
+    let scale = p.scale.as_deref().map(parse_scale).transpose()?;
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    let r = cadrs_drawing::ObjectRef { element: element.0, part: None };
+    let drawings = doc(world)?.doc.elements.iter().filter(|e| matches!(e.kind, ElementKind::Drawing(_))).count();
+    let name = p.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Drawing {}", drawings + 1));
+    let mut drawing = cadrs_drawing::Drawing::from_template(&template, Some(r));
+    drawing.title.drawn_by = Some(world.resource::<UserProfile>().display_name.clone());
+    drawing.title.drawn_date = Some(crate::drawing::create_dialog::today(world.resource::<AppClock>()));
+    if p.four_views.unwrap_or(true) {
+        let mut views = crate::drawing::create_dialog::four_views_of(&doc(world)?.doc, &drawing, r);
+        if views.is_empty() {
+            return Err("the Part Studio has no parts to draw".into());
+        }
+        // P3C.6: the drawing shows the studio as it is now, until it is updated.
+        if let Some(src) = cadrs_core::drawing_source::live_source(&doc(world)?.doc, element) {
+            for v in &mut views {
+                v.source_hash = src.hash_of(v.reference.part);
+            }
+            drawing.sources.push(src);
+        }
+        if let Some(sheet) = drawing.sheets.first_mut() {
+            if let Some(f) = views.first() {
+                sheet.scale = f.scale;
+            }
+            sheet.views = views;
+        }
+    }
+    if let Some(s) = scale
+        && let Some(sheet) = drawing.sheets.first_mut()
+    {
+        sheet.scale = s;
+        for v in &mut sheet.views {
+            v.scale = s;
+        }
+    }
+    let views: Vec<Value> = drawing.sheets.first().map(|s| s.views.iter().map(view_json).collect()).unwrap_or_default();
+    let sheet_scale = drawing.sheets.first().map(|s| format!("{}:{}", s.scale.num, s.scale.den)).unwrap_or_default();
+    let element_drawing = cadrs_core::Element::drawing(name.clone(), drawing);
+    let id = element_drawing.id;
+    let mut d = doc_mut(world)?;
+    let after = d.active;
+    d.execute(&cadrs_core::commands::InsertElement { element: element_drawing, after, label: "Create Drawing".into() })
+        .map_err(|e| e.to_string())?;
+    d.set_active(id);
+    Ok(json!({ "drawing": name, "template": template.name, "scale": sheet_scale, "views": views }))
+}
+
+/// Adds an annotation to a view of a drawing (the drawing is made the active tab first).
+fn add_annotation(world: &mut World, p: &tools::AddAnnotation) -> Result<Value, String> {
+    let kind: cadrs_drawing::annotation::AnnotationKind =
+        serde_json::from_value(p.annotation.clone()).map_err(|e| format!("annotation: {e}"))?;
+    if let Some(name) = &p.drawing {
+        let mut d = doc_mut(world)?;
+        let id = d
+            .doc
+            .elements
+            .iter()
+            .find(|e| e.name == *name && matches!(e.kind, ElementKind::Drawing(_)))
+            .map(|e| e.id)
+            .ok_or_else(|| format!("no drawing named {name:?}"))?;
+        d.set_active(id);
+    }
+    let view = {
+        let d = doc(world)?;
+        let el = d.active_element().ok_or("no tab is active")?;
+        let ElementKind::Drawing(drawing) = &el.kind else {
+            return Err(format!("{:?} is not a drawing", el.name));
+        };
+        let views: Vec<(&str, cadrs_drawing::ViewId)> =
+            drawing.sheets.iter().flat_map(|s| s.views.iter()).map(|v| (v.name.as_str(), v.id)).collect();
+        views
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(&p.view))
+            .map(|(_, id)| *id)
+            .ok_or_else(|| {
+                let names: Vec<&str> = views.iter().map(|(n, _)| *n).collect();
+                format!("no view named {:?} in {:?}; its views are {}", p.view, el.name, names.join(", "))
+            })?
+    };
+    let annotation = cadrs_drawing::annotation::Annotation::new(kind);
+    let id = annotation.id;
+    if !crate::drawing::view_tools::edit_drawing(world, cadrs_drawing::DrawingOp::AddAnnotation { view, annotation }) {
+        return Err("the annotation could not be added".into());
+    }
+    Ok(json!({ "view": p.view, "annotation": serde_json::to_value(id).unwrap_or(Value::Null) }))
+}
+
+/// Renames a tab.
+fn rename_tab(world: &mut World, p: &tools::RenameTab) -> Result<Value, String> {
+    let mut d = doc_mut(world)?;
+    let id = d.doc.elements.iter().find(|e| e.name == p.name).map(|e| e.id).ok_or_else(|| format!("no tab named {:?}", p.name))?;
+    d.execute(&cadrs_core::commands::RenameElement { id, name: p.to.clone() }).map_err(|e| e.to_string())?;
+    describe(world)
 }
 
 /// Turns the 3D view to a standard view and zooms to fit.
@@ -443,11 +578,53 @@ fn sketch_ops(entities: &[SketchEntity]) -> Result<Vec<SketchOp>, String> {
             SketchEntity::Line { x0, y0, x1, y1 } => {
                 ops.push(SketchOp::AddPolyline { points: vec![v(x0, y0), v(x1, y1)], closed: false, construction: false, label: "Add line" });
             }
+            SketchEntity::Outline { start, ref segments } => ops.extend(outline_ops(start, segments)?),
             SketchEntity::Arc { cx, cy, sx, sy, ex, ey } => {
                 ops.push(SketchOp::AddArc { center: v(cx, cy), start: v(sx, sy), end: v(ex, ey), construction: false });
             }
             SketchEntity::Point { x, y } => ops.push(SketchOp::AddPoint { pos: v(x, y) }),
         }
+    }
+    Ok(ops)
+}
+
+/// An outline's segments as sketch lines and arcs. Each line and arc is its own curve; the sketch
+/// merges their ends where they meet, so the segments close into one loop.
+fn outline_ops(start: [f64; 2], segments: &[tools::PathSegment]) -> Result<Vec<SketchOp>, String> {
+    let v = |p: [f64; 2]| SVec2::new(p[0], p[1]);
+    if segments.len() < 2 {
+        return Err("an outline needs at least two segments to close".into());
+    }
+    let mut ops = Vec::new();
+    let mut from = start;
+    for (i, seg) in segments.iter().enumerate() {
+        let n = i + 1;
+        match seg {
+            tools::PathSegment::Line { to } => {
+                if v(*to).distance(v(from)) < 1e-9 {
+                    return Err(format!("outline segment {n} has no length"));
+                }
+                ops.push(SketchOp::AddPolyline { points: vec![v(from), v(*to)], closed: false, construction: false, label: "Add line" });
+                from = *to;
+            }
+            tools::PathSegment::Arc { to, center, ccw } => {
+                let c = v(*center);
+                let r = c.distance(v(from));
+                if r < 1e-9 || (c.distance(v(*to)) - r).abs() > 1e-6 * r.max(1.0) {
+                    return Err(format!("outline segment {n}: the arc's end is not on its circle about its center"));
+                }
+                if v(*to).distance(v(from)) < 1e-9 {
+                    return Err(format!("outline segment {n} has no length"));
+                }
+                // AddArc runs counter-clockwise from its start: a clockwise arc is one from `to` back to `from`.
+                let (s, e) = if *ccw { (from, *to) } else { (*to, from) };
+                ops.push(SketchOp::AddArc { center: c, start: v(s), end: v(e), construction: false });
+                from = *to;
+            }
+        }
+    }
+    if v(from).distance(v(start)) > 1e-6 {
+        return Err("the outline must end where it starts".into());
     }
     Ok(ops)
 }
@@ -657,6 +834,96 @@ fn edit_feature(world: &mut World, p: &tools::EditFeature) -> Result<Value, Stri
     outcome(world, element, f.id)
 }
 
+/// A sketch edit as the engine's op. An array is a batch (one undoable step), and an
+/// {"type": "batch", "ops": [...]}, or {"type": "add_constraints", "specs": [...]}, is read by
+/// hand: the engine's `Batch` and `AddConstraints` are tuple variants, which tagged JSON can't carry.
+fn sketch_op_from_json(v: &Value) -> Result<SketchOp, String> {
+    let ops = |items: &Value| -> Result<Vec<SketchOp>, String> {
+        items.as_array().ok_or("expected an array of edits")?.iter().map(sketch_op_from_json).collect()
+    };
+    if v.is_array() {
+        return Ok(SketchOp::Batch(ops(v)?));
+    }
+    match v.get("type").and_then(Value::as_str) {
+        Some("batch") => Ok(SketchOp::Batch(ops(v.get("ops").unwrap_or(&Value::Null))?)),
+        Some("add_constraints") => {
+            let specs = serde_json::from_value(v.get("specs").cloned().unwrap_or(Value::Null)).map_err(|e| format!("specs: {e}"))?;
+            Ok(SketchOp::AddConstraints(specs))
+        }
+        _ => serde_json::from_value(v.clone()).map_err(|e| format!("bad sketch edit: {e}")),
+    }
+}
+
+/// A sketch key as the id get_feature shows it ({"idx", "version"}).
+fn entity_id(k: impl serde::Serialize) -> tools::EntityId {
+    let v = serde_json::to_value(k).expect("a sketch key serializes");
+    serde_json::from_value(v).expect("a sketch key is {idx, version}")
+}
+
+/// A sketch's ids of each kind, to tell what an edit created and removed.
+fn sketch_ids(s: &Sketch) -> tools::SketchIds {
+    tools::SketchIds {
+        curves: s.curves.keys().map(entity_id).collect(),
+        points: s.points.keys().map(entity_id).collect(),
+        dimensions: s.dimensions.keys().map(entity_id).collect(),
+        constraints: s.constraints.keys().map(entity_id).collect(),
+    }
+}
+
+/// The ids in `now` that `was` lacks.
+fn new_ids(now: &tools::SketchIds, was: &tools::SketchIds) -> tools::SketchIds {
+    let only = |a: &[tools::EntityId], b: &[tools::EntityId]| a.iter().copied().filter(|id| !b.contains(id)).collect::<Vec<_>>();
+    tools::SketchIds {
+        curves: only(&now.curves, &was.curves),
+        points: only(&now.points, &was.points),
+        dimensions: only(&now.dimensions, &was.dimensions),
+        constraints: only(&now.constraints, &was.constraints),
+    }
+}
+
+/// The sketch's closed regions, each with a point inside it.
+fn typed_regions(g: &Sketch) -> Vec<tools::SketchRegion> {
+    cadrs_sketch::region::regions(g)
+        .iter()
+        .map(|r| {
+            let p = inside(r);
+            tools::SketchRegion { point: [round(p.x), round(p.y)], area_mm2: round(r.area()) }
+        })
+        .collect()
+}
+
+/// Any sketch edit: its ids created and removed, the regions, and the solve's state.
+fn edit_sketch(world: &mut World, p: &tools::EditSketch) -> Result<tools::SketchEdited, String> {
+    let op = sketch_op_from_json(&p.op)?;
+    let mut d = doc_mut(world)?;
+    let element = part_studio(&d, p.part_studio.as_deref())?;
+    let f = feature_named(&d, element, &p.sketch)?;
+    let before = sketch_ids(&f.sketch().ok_or_else(|| format!("{:?} is not a sketch", p.sketch))?.geometry);
+    d.execute(&cadrs_core::commands::EditSketch { element, feature: f.id, op }).map_err(|e| e.to_string())?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let g = &e.feature(f.id).and_then(|f| f.sketch()).ok_or("the sketch is gone")?.geometry;
+    let after = sketch_ids(g);
+    let analysis = cadrs_sketch::solve::analyze(g);
+    let conflicts = cadrs_sketch::solve::conflicts(g)
+        .into_iter()
+        .map(|c| match c {
+            cadrs_sketch::solve::Source::Constraint(id) => tools::SketchConflict::Constraint { id: entity_id(id) },
+            cadrs_sketch::solve::Source::Dimension(id) => tools::SketchConflict::Dimension { id: entity_id(id) },
+            cadrs_sketch::solve::Source::Arc(curve) => tools::SketchConflict::Arc { curve: entity_id(curve) },
+            _ => tools::SketchConflict::Other { description: format!("{c:?}") },
+        })
+        .collect();
+    Ok(tools::SketchEdited {
+        sketch: p.sketch.clone(),
+        created: new_ids(&after, &before),
+        removed: new_ids(&before, &after),
+        regions: typed_regions(g),
+        fully_constrained: analysis.fully_constrained(),
+        has_conflicts: analysis.has_conflicts(),
+        conflicts,
+    })
+}
+
 fn get_feature(world: &mut World, p: &tools::FeatureName) -> Result<Value, String> {
     let d = doc(world)?;
     let element = part_studio(d, p.part_studio.as_deref())?;
@@ -820,4 +1087,273 @@ fn extrude(world: &mut World, p: &tools::Extrude) -> Result<Value, String> {
         out["error"] = e;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadrs_core::Feature;
+    use cadrs_core::plane::{PlaneEntity, PlaneFeature};
+
+    fn line(x: f64, y: f64) -> tools::PathSegment {
+        tools::PathSegment::Line { to: [x, y] }
+    }
+
+    fn arc(to: [f64; 2], center: [f64; 2], ccw: bool) -> tools::PathSegment {
+        tools::PathSegment::Arc { to, center, ccw }
+    }
+
+    fn hole(cx: f64, cy: f64, r: f64) -> SketchEntity {
+        SketchEntity::Circle { cx, cy, r }
+    }
+
+    #[test]
+    fn a_rounded_outline_with_holes_is_one_region() {
+        // The bracket's base: 72 × 35, R12 at the front corners, two Ø12 holes 48 apart.
+        let base = SketchEntity::Outline {
+            start: [-24.0, 0.0],
+            segments: vec![
+                line(24.0, 0.0),
+                arc([36.0, 12.0], [24.0, 12.0], true),
+                line(36.0, 35.0),
+                line(-36.0, 35.0),
+                line(-36.0, 12.0),
+                arc([-24.0, 0.0], [-24.0, 12.0], true),
+            ],
+        };
+        let entities = [base, hole(24.0, 12.0, 6.0), hole(-24.0, 12.0, 6.0)];
+        let ops = sketch_ops(&entities).unwrap();
+        let mut s = Sketch::new();
+        for op in &ops {
+            op.apply(&mut s).unwrap();
+        }
+        let regions = cadrs_sketch::region::regions(&s);
+        // Each hole circle is also a region of its own; the outline's region has both as holes.
+        assert_eq!(regions.len(), 3);
+        let base = regions.iter().find(|r| r.holes.len() == 2).expect("the outline with its holes");
+        // 72 × 35, less two R12 corners (2 × (144 − 36π)), less two Ø12 holes (2 × 36π).
+        assert!((base.area() - 2232.0).abs() < 0.01, "area {}", base.area());
+        // Extrude takes the region at a point: the outline at (0, 17.5) keeps the holes, the hole at (24, 12) is the pin.
+        let at = |x, y| cadrs_sketch::region::region_at(&regions, SVec2::new(x, y)).map(|i| regions[i].holes.len());
+        assert_eq!(at(0.0, 17.5), Some(2));
+        assert_eq!(at(24.0, 12.0), Some(0));
+    }
+
+    #[test]
+    fn an_arc_must_end_on_its_circle_and_the_outline_must_close() {
+        let off_circle = [line(10.0, 0.0), arc([0.0, 5.0], [0.0, 0.0], true)];
+        assert!(outline_ops([10.0, 0.0], &off_circle).is_err());
+        let open = [line(10.0, 0.0), line(10.0, 10.0)];
+        assert!(outline_ops([0.0, 0.0], &open).is_err());
+    }
+
+    /// A sketch feature on `plane` with `entities`, and its id.
+    fn sketch(features: &mut Vec<Feature>, name: &str, plane: PlaneRef, entities: &[SketchEntity]) -> FeatureId {
+        let mut geometry = Sketch::new();
+        for op in sketch_ops(entities).unwrap() {
+            op.apply(&mut geometry).unwrap();
+        }
+        let id = FeatureId::new();
+        let kind = FeatureKind::Sketch(cadrs_core::document::SketchFeature { plane: Some(plane), disable_imprinting: false, geometry });
+        features.push(Feature::new(id, name, kind));
+        id
+    }
+
+    /// An extrude of the sketch region at `point` (the loop's point, not a hole's).
+    fn extrude(features: &mut Vec<Feature>, sketch_id: FeatureId, point: [f64; 2], depth: f64, op: BooleanOp, flip: bool, symmetric: bool) {
+        let geometry = match &features.iter().find(|f| f.id == sketch_id).unwrap().kind {
+            FeatureKind::Sketch(s) => s.geometry.clone(),
+            _ => unreachable!(),
+        };
+        let regions = cadrs_sketch::region::regions(&geometry);
+        let i = cadrs_sketch::region::region_at(&regions, SVec2::new(point[0], point[1])).expect("no region at the point");
+        let feature = ExtrudeFeature {
+            regions: vec![cadrs_core::RegionRef::new(sketch_id, &regions[i])],
+            depth,
+            depth_expr: format!("{depth} mm"),
+            op,
+            symmetric,
+            flip,
+            ..ExtrudeFeature::default()
+        };
+        features.push(Feature::new(FeatureId::new(), "Extrude", FeatureKind::Extrude(feature)));
+    }
+
+    /// A Plane offset from the Front plane (as the add_feature call would make it).
+    fn plane_from_front(features: &mut Vec<Feature>, offset: f64) -> PlaneRef {
+        let plane = PlaneFeature {
+            entities: vec![PlaneEntity::Plane(PlaneRef::Front)],
+            offset,
+            offset_expr: format!("{offset} mm"),
+            flip: true,
+            ..PlaneFeature::default()
+        };
+        let id = FeatureId::new();
+        features.push(Feature::new(id, "Plane", FeatureKind::Plane(plane)));
+        cadrs_core::parts::plane_feature_ref(features, id).expect("the plane")
+    }
+
+    /// The bracket: a base in two layers, an upright (its lower part 8 deep, the boss at its top
+    /// 13 deep), and a 60° gusset. Sketch coordinates are as the sketch's plane gives them.
+    #[test]
+    fn the_bracket_rebuilds_to_its_drawing() {
+        let rounded_base = |back: f64| SketchEntity::Outline {
+            start: [-24.0, 0.0],
+            segments: vec![
+                line(24.0, 0.0),
+                arc([36.0, 12.0], [24.0, 12.0], true),
+                line(36.0, back),
+                line(-36.0, back),
+                line(-36.0, 12.0),
+                arc([-24.0, 0.0], [-24.0, 12.0], true),
+            ],
+        };
+        let mut f = Vec::new();
+
+        // Base: the full 72 × 35 footprint 6 thick, then the 72 × 30 part 10 high.
+        let base_low = sketch(&mut f, "Sketch 1", PlaneRef::Top, &[rounded_base(35.0), hole(24.0, 12.0, 6.0), hole(-24.0, 12.0, 6.0)]);
+        extrude(&mut f, base_low, [0.0, 17.5], 6.0, BooleanOp::New, false, false);
+        let base_high = sketch(&mut f, "Sketch 2", PlaneRef::Top, &[rounded_base(30.0), hole(24.0, 12.0, 6.0), hole(-24.0, 12.0, 6.0)]);
+        extrude(&mut f, base_high, [0.0, 15.0], 10.0, BooleanOp::Add, false, false);
+
+        // Upright, 22 mm from the front (its face), 8 deep toward the back.
+        let face = plane_from_front(&mut f, 22.0);
+        let upright = [
+            SketchEntity::Outline {
+                start: [-30.0, 10.0],
+                segments: vec![
+                    arc([-15.0, 25.0], [-30.0, 25.0], true),
+                    line(-15.0, 60.0),
+                    arc([15.0, 60.0], [0.0, 60.0], false),
+                    line(15.0, 25.0),
+                    arc([30.0, 10.0], [30.0, 25.0], true),
+                    line(-30.0, 10.0),
+                ],
+            },
+            hole(0.0, 60.0, 6.0),
+        ];
+        let upright_id = sketch(&mut f, "Sketch 3", face, &upright);
+        extrude(&mut f, upright_id, [0.0, 30.0], 8.0, BooleanOp::Add, true, false);
+
+        // Boss: the top 13 deep, 5 more toward the back.
+        let back = plane_from_front(&mut f, 30.0);
+        let boss = [
+            SketchEntity::Outline {
+                start: [-15.0, 45.0],
+                segments: vec![line(15.0, 45.0), line(15.0, 60.0), arc([-15.0, 60.0], [0.0, 60.0], true), line(-15.0, 45.0)],
+            },
+            hole(0.0, 60.0, 6.0),
+        ];
+        let boss_id = sketch(&mut f, "Sketch 4", back, &boss);
+        extrude(&mut f, boss_id, [0.0, 50.0], 5.0, BooleanOp::Add, true, false);
+
+        // Gusset: 10 wide, from the front edge up the 60° slope to the upright.
+        let gusset = [SketchEntity::Polygon { points: vec![[0.0, 10.0], [22.0, 10.0], [22.0, 48.0]] }];
+        let gusset_id = sketch(&mut f, "Sketch 5", PlaneRef::Right, &gusset);
+        extrude(&mut f, gusset_id, [15.0, 25.0], 10.0, BooleanOp::Add, false, true);
+
+        let build = cadrs_core::rebuild::build(&f);
+        assert!(build.errors.is_empty(), "rebuild errors: {:?}", build.errors);
+        assert_eq!(build.parts.len(), 1);
+        let part = &build.parts[0];
+        let (lo, hi) = part.solid.bounds().expect("bounds");
+        for (got, want) in lo.iter().chain(hi.iter()).zip([-36.0, 0.0, 0.0, 36.0, 35.0, 75.0]) {
+            assert!((got - want).abs() < 1e-3, "bounds {lo:?} {hi:?}");
+        }
+        // Base 2232 × 6 + 1872 × 4, upright 1836.9 × 8, boss 690.3 × 5, gusset 418 × 10.
+        let volume = part.mass.as_ref().expect("mass").volume;
+        assert!((volume - 43206.8).abs() < 5.0, "volume {volume}");
+    }
+
+    #[test]
+    fn a_plane_offset_from_front_takes_json_params() {
+        // The upright's front face: 22 mm from the Front plane, on the side it faces away from.
+        let params = json!({ "entities": [{ "Plane": "Front" }], "offset": 22.0, "offset_expr": "22 mm", "flip": true });
+        let FeatureKind::Plane(p) = patched(&template("plane").unwrap(), &params).unwrap() else { panic!("not a plane") };
+        assert_eq!(p.kind, cadrs_core::plane::PlaneType::Offset);
+        assert_eq!(p.entities, vec![cadrs_core::plane::PlaneEntity::Plane(PlaneRef::Front)]);
+        assert_eq!(p.offset, 22.0);
+        assert!(p.flip);
+    }
+
+    #[test]
+    fn sketch_ids_are_the_ids_the_sketch_serializes_with() {
+        let mut s = Sketch::new();
+        SketchOp::AddCircle { center: SVec2::new(0.0, 0.0), radius: 5.0, construction: false }.apply(&mut s).unwrap();
+        let ids = sketch_ids(&s);
+        assert_eq!(ids.curves.len(), 1);
+        assert_eq!(ids.points.len(), 1);
+        assert_ne!(ids.curves[0].idx, 0);
+        let json = serde_json::to_string(&s).unwrap();
+        let c = ids.curves[0];
+        assert!(json.contains(&format!("{{\"idx\":{},\"version\":{}}}", c.idx, c.version)), "curve id {c:?} not in {json}");
+        // Created: what is in `after` and not `before`.
+        let created = new_ids(&ids, &tools::SketchIds::default());
+        assert_eq!(created, ids);
+        assert_eq!(new_ids(&tools::SketchIds::default(), &ids), tools::SketchIds::default());
+    }
+
+    #[test]
+    fn sketch_edits_come_as_an_object_an_array_or_a_batch() {
+        let circle = json!({ "type": "add_circle", "center": { "x": 0.0, "y": 0.0 }, "radius": 5.0, "construction": false });
+        assert!(matches!(sketch_op_from_json(&circle), Ok(SketchOp::AddCircle { .. })));
+        let array = json!([circle.clone(), circle.clone()]);
+        assert!(matches!(sketch_op_from_json(&array), Ok(SketchOp::Batch(ops)) if ops.len() == 2));
+        let batch = json!({ "type": "batch", "ops": [circle.clone()] });
+        assert!(matches!(sketch_op_from_json(&batch), Ok(SketchOp::Batch(ops)) if ops.len() == 1));
+        let specs = json!({ "type": "add_constraints", "specs": [] });
+        assert!(matches!(sketch_op_from_json(&specs), Ok(SketchOp::AddConstraints(v)) if v.is_empty()));
+        assert!(sketch_op_from_json(&json!({ "type": "not_an_edit" })).is_err());
+    }
+
+    /// The forms the edit_sketch reference gives, each as the engine reads it.
+    #[test]
+    fn the_edit_sketch_reference_examples_parse() {
+        let p = json!({ "x": 1.0, "y": 2.0 });
+        let id = json!({ "idx": 1, "version": 1 });
+        let examples = [
+            json!({ "type": "add_polyline", "points": [p, p], "closed": false, "construction": false }),
+            json!({ "type": "add_center_rectangle", "center": p, "corners": [p, p, p, p], "construction": false }),
+            json!({ "type": "add_arc", "center": p, "start": p, "end": p, "construction": false }),
+            json!({ "type": "add_point", "pos": p }),
+            json!({ "type": "add_ellipse", "center": p, "major": p, "minor": 2.0, "construction": false }),
+            json!({ "type": "add_bezier", "points": [p, p, p, p], "construction": false }),
+            json!({ "type": "add_spline", "points": [p, p, p], "periodic": false, "start_tangent": null, "end_tangent": null, "construction": false }),
+            json!({ "type": "add_polygon", "center": p, "radius": 10.0, "angle": 0.0, "sides": 6, "inscribed": false, "construction": false }),
+            json!({ "type": "slot", "source": id, "width": 4.0, "equal_to": null, "construction": false }),
+            json!({ "type": "fillet", "corner": id, "radius": 3.0, "equal_to": null }),
+            json!({ "type": "chamfer", "corner": id, "d1": 1.0, "d2": 1.0, "equal_to": null }),
+            json!({ "type": "trim", "picks": [[id, p]], "points": [] }),
+            json!({ "type": "extend", "curve": id, "end": id, "to": p, "by": null }),
+            json!({ "type": "split", "curve": id, "at": [p] }),
+            json!({ "type": "delete", "curves": [id], "points": [], "dimensions": [], "constraints": [] }),
+            json!({ "type": "set_construction", "curves": [id], "construction": true }),
+            json!({ "type": "move_points", "moves": [[id, p]] }),
+            json!({ "type": "set_geometry", "points": [[id, p]], "radii": [[id, 5.0]] }),
+            json!({ "type": "scale", "center": p, "factor": 2.0 }),
+            json!({ "type": "mirror", "axis": id, "curves": [id] }),
+            json!({ "type": "offset", "chain": [[id, false]], "distance": 2.0, "left": true, "label": [0.0, 0.0] }),
+            json!({ "type": "add_constraint", "constraints": [{ "Coincident": [{ "Point": id }, { "Point": id }] }], "label": "Add coincident" }),
+            json!({ "type": "add_constraint", "constraints": [{ "Horizontal": { "Line": { "Curve": id } } }] }),
+            json!({ "type": "add_constraint", "constraints": [{ "Equal": [{ "Curve": id }, { "Curve": id }] }] }),
+            json!({ "type": "add_constraint", "constraints": [{ "FixPoint": { "Point": id } }] }),
+            json!({ "type": "add_constraints", "specs": [{ "Coincident": [{ "At": p }, { "Origin": null }] }] }),
+            json!({ "type": "set_dimension_value", "id": id, "value": 12.0 }),
+            json!({ "type": "set_dimension_driven", "id": id, "driven": true }),
+            json!({ "type": "set_dimension_expr", "id": id, "expr": null }),
+            json!({ "type": "move_dimension_label", "id": id, "offset": 1.0, "along": 0.0 }),
+            json!({
+                "type": "set_dimension",
+                "dimension": { "kind": { "Horizontal": { "a": id, "b": id } }, "value": 30.0, "offset": 5.0, "along": 0.0, "driven": false },
+                "moves": [], "radii": []
+            }),
+            json!({ "type": "set_dimension", "dimension": { "kind": { "Diameter": { "curve": id } }, "value": 12.0, "offset": 0.0 }, "moves": [], "radii": [] }),
+            json!({ "type": "add_text", "origin": p, "dir": p, "height": 5.0, "style": { "text": "Hi", "font": "Inter", "bold": false, "italic": false, "mirror_h": false, "mirror_v": false } }),
+        ];
+        for ex in &examples {
+            if let Err(e) = sketch_op_from_json(ex) {
+                panic!("{ex} does not parse: {e}");
+            }
+        }
+    }
 }

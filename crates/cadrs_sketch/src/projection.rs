@@ -9,7 +9,7 @@ use crate::geom::ArcGeom;
 use crate::{ConstraintId, Curve, CurveId, CurveKind, Link, PointId, Sketch, Vec2};
 
 /// A shape in sketch coordinates that a link projects to.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Projected {
     Line(Vec2, Vec2),
     Circle(Vec2, f64),

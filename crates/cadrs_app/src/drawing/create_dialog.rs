@@ -684,7 +684,7 @@ fn on_select_change(ev: On<SelectChange>, q: Query<&Name>, mut commands: Command
 }
 
 /// The date a drawing is drawn on, `YYYY-MM-DD`.
-fn today(clock: &AppClock) -> String {
+pub(crate) fn today(clock: &AppClock) -> String {
     chrono::DateTime::from_timestamp(clock.now() + clock.utc_offset, 0)
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_default()
@@ -775,7 +775,7 @@ fn accept(world: &mut World) {
 }
 
 /// The Four views of `r` on the first sheet of `d` (above the title block).
-fn four_views_of(doc: &cadrs_core::Document, d: &Drawing, r: ObjectRef) -> Vec<cadrs_drawing::View> {
+pub(crate) fn four_views_of(doc: &cadrs_core::Document, d: &Drawing, r: ObjectRef) -> Vec<cadrs_drawing::View> {
     let Some(sheet) = d.sheets.first() else {
         return Vec::new();
     };

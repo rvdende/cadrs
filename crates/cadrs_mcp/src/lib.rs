@@ -48,6 +48,7 @@ pub enum Call {
     Screenshot(Screenshot),
     AddFeature(AddFeature),
     EditFeature(EditFeature),
+    EditSketch(EditSketch),
     GetFeature(FeatureName),
     DeleteFeature(FeatureName),
     ListFaces(PartStudio),
@@ -56,6 +57,9 @@ pub enum Call {
     ImportStep(ImportStep),
     ExportStep(ExportStep),
     RunScenario(RunScenario),
+    CreateDrawing(CreateDrawing),
+    AddAnnotation(AddAnnotation),
+    RenameTab(RenameTab),
 }
 
 /// What the app answers.
@@ -194,6 +198,24 @@ impl Cadrs {
         self.call(Call::GetDocument).await
     }
 
+    #[tool(description = "Create a drawing of a Part Studio and open it as a tab: its front, top, side and \
+        isometric views (four_views) on a sheet, at the largest scale that fits or at the given scale. Returns \
+        the drawing's name and its views (names, ids, anchors and frames) for add_annotation.")]
+    async fn create_drawing(&self, Parameters(p): Parameters<CreateDrawing>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::CreateDrawing(p)).await
+    }
+
+    #[tool(description = "Add an annotation to a drawing view: a dimension (Diameter, Radius, Distance or Angle, \
+        between edges or points of the part), in the view's 2D coordinates (mm). Returns the annotation's id.")]
+    async fn add_annotation(&self, Parameters(p): Parameters<AddAnnotation>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddAnnotation(p)).await
+    }
+
+    #[tool(description = "Rename a tab: a Part Studio (the title block of its drawings shows the name) or a drawing.")]
+    async fn rename_tab(&self, Parameters(p): Parameters<RenameTab>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::RenameTab(p)).await
+    }
+
     #[tool(description = "Add a Part Studio tab to the open document and make it the active tab.")]
     async fn add_part_studio(&self, Parameters(p): Parameters<AddPartStudio>) -> Result<CallToolResult, ErrorData> {
         self.call(Call::AddPartStudio(p)).await
@@ -202,7 +224,8 @@ impl Cadrs {
     #[tool(description = "Add a sketch on a default plane (Top, Front or Right) of a Part Studio, with rectangles, \
         circles, polygons, lines and arcs in the plane's 2D coordinates (mm). Top: x = world X, y = world Y \
         (normal +Z). Front: x = world X, y = world Z (normal -Y). Right: x = world Y, y = world Z (normal +X). \
-        Returns the sketch's name and its closed regions, each with a point inside it to pass to extrude.")]
+        Outlines are closed loops of lines and arcs (rounded corners, fillets); circles inside a loop are \
+        holes. Returns the sketch's name and its closed regions, each with a point inside it to pass to extrude.")]
     async fn add_sketch(&self, Parameters(p): Parameters<AddSketch>) -> Result<CallToolResult, ErrorData> {
         self.call(Call::AddSketch(p)).await
     }
@@ -223,6 +246,14 @@ impl Cadrs {
     #[tool(description = "Change a feature: the given JSON fields are merged over its current ones.")]
     async fn edit_feature(&self, Parameters(p): Parameters<EditFeature>) -> Result<CallToolResult, ErrorData> {
         self.call(Call::EditFeature(p)).await
+    }
+
+    #[tool(description = "Make any edit the sketch engine makes, on a sketch: geometry, trims and fillets, \
+        mirrors and offsets, constraints, dimensions and text (the op's reference is in its doc). Returns the \
+        ids of what the edit created and removed, the sketch's regions, and whether it is fully constrained or \
+        has conflicting constraints or dimensions. Read a sketch's ids and state with get_feature.")]
+    async fn edit_sketch(&self, Parameters(p): Parameters<EditSketch>) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::EditSketch(p)).await
     }
 
     #[tool(description = "A feature's full JSON (its type and every field), to learn the format or edit it.")]

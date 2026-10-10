@@ -73,6 +73,29 @@ toward the cursor. **Shift+S** starts a sketch, **Shift+E** an extrude, **N** vi
 the sketch plane, **Shift+7** gives the isometric view, and **F** zooms to fit. **Shift+/**
 (or Help › Keyboard shortcuts) lists the rest.
 
+## AI assistants (MCP)
+
+cadrs has an MCP server (Model Context Protocol), so an AI assistant on your machine (Claude
+Code, Claude Desktop, Cursor, …) can drive the running app: create documents, draw sketches,
+add and edit features, read back faces and edges, export STEP and take screenshots. Turn it on
+in **Preferences › AI assistants (MCP)**; the app then serves Streamable HTTP on
+`http://127.0.0.1:7680/mcp` (loopback only; the port is a preference). Every tool call runs
+through the command layer, so the assistant's steps show in the feature list and undo like
+your own.
+
+The repository's `.mcp.json` registers the server with Claude Code for this project (approve
+it with `/mcp` the first time; `claude mcp list` shows whether it is connected). Elsewhere,
+`claude mcp add --transport http cadrs http://127.0.0.1:7680/mcp` does the same, and other
+clients take the URL in their MCP settings.
+
+The tools: `create_document`, `open_document` and `get_document`; `add_part_studio`;
+`add_sketch` (rectangles, circles, polygons, lines and arcs on a default plane, a part face or
+a Plane feature); `extrude`; `add_feature`, `edit_feature`, `get_feature` and `delete_feature`
+for any feature type from JSON; `list_faces` and `list_edges` for the references fillets,
+chamfers and sketches take; `import_step` and `export_step`; `screenshot`; `run_scenario` for
+scripted UI steps; and `undo`. `crates/cadrs_mcp` is the server and the tools' schemas;
+`crates/cadrs_app/src/mcp.rs` runs the calls on the app.
+
 ## Development
 
 ```sh
@@ -102,6 +125,7 @@ them, and `CADRS_BLESS=1` saves new ones.
 | `cadrs_idf`, `cadrs_pcb` | IDF files and PCB boards |
 | `cadrs_onshape` | The Onshape document importer |
 | `cadrs_harness` | Scripted scenarios, synthetic input and screenshots |
+| `cadrs_mcp` | The MCP server through which AI assistants drive the app |
 
 [crates/cadrs_kernel/README.md](crates/cadrs_kernel/README.md) describes the modeling layer:
 the kernel API, persistent face and edge naming, and the OpenCASCADE backend. The notes in
