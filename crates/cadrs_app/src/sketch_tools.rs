@@ -103,31 +103,49 @@ impl Plugin for SketchToolsPlugin {
 // ---------------------------------------------------------------------------------------------
 // Sketch plane ↔ screen
 
-/// How the sketch plane maps to the screen: `screen = origin + x·p.x + y·p.y` (logical px).
-/// The view is orthographic, so this is exact.
+/// How the sketch plane maps to the screen: `screen = origin + (x·p.x + y·p.y) / (1 + w·p)`
+/// (logical px). `w` is zero in orthographic, where the map is affine; in perspective the plane
+/// maps projectively, and `x`, `y` are the map's directions at the sketch origin (the axes'
+/// images stay straight lines along them).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScreenMap {
     pub plane: PlaneRef,
     pub origin: Vec2,
     pub x: Vec2,
     pub y: Vec2,
+    pub w: Vec2,
 }
 
 impl ScreenMap {
     pub fn new(plane: PlaneRef, view: &crate::camera::ViewState, rect: &ViewportRect) -> Self {
         let f = plane.frame();
         let w = |p: [f64; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
-        let origin = rect.to_screen(view.project(w(f.origin)));
+        let (o, u, v) = (w(f.origin), w(f.u), w(f.v));
+        let at = view.project(o);
+        let m = view.magnification(o);
+        // The point's depth in front of the eye shrinks by `(d·back)` per mm along a direction
+        // `d`, which divides the drawn size by `1 + w·p`.
+        let (wx, wy) = if view.perspective {
+            let depth = view.eye_distance() - (o - view.focus).dot(view.back());
+            let depth = depth.max(view.eye_distance() * 1e-3);
+            (-u.dot(view.back()) / depth, -v.dot(view.back()) / depth)
+        } else {
+            (0.0, 0.0)
+        };
         Self {
             plane,
-            origin,
-            x: view.project_vector(w(f.u)),
-            y: view.project_vector(w(f.v)),
+            origin: rect.to_screen(at),
+            x: view.project_vector(u) * m - at * wx,
+            y: view.project_vector(v) * m - at * wy,
+            w: Vec2::new(wx, wy),
         }
     }
 
     pub fn to_screen(&self, p: SVec2) -> Vec2 {
-        self.origin + self.x * p.x as f32 + self.y * p.y as f32
+        let p = Vec2::new(p.x as f32, p.y as f32);
+        // (Behind the eye, kept just in front of it as `ViewState::magnification` does.)
+        let den = (1.0 + self.w.dot(p)).max(1e-3);
+        self.origin + (self.x * p.x + self.y * p.y) / den
     }
 
     /// The same, in f64 (for `cadrs_sketch`'s pixel-space picking).
@@ -136,19 +154,23 @@ impl ScreenMap {
         SVec2::new(s.x as f64, s.y as f64)
     }
 
-    /// The sketch point under a screen position, or `None` when the plane is seen edge-on.
+    /// The sketch point under a screen position, or `None` when the plane is seen edge-on (or,
+    /// in perspective, the position is above its horizon).
     pub fn to_sketch(&self, s: Vec2) -> Option<SVec2> {
         // In f64: an f32 solve put clicked points a few 1e-6 mm off (30.0000038 in a DXF).
         let v = |p: Vec2| (p.x as f64, p.y as f64);
+        let (dx, dy) = (s.x as f64 - self.origin.x as f64, s.y as f64 - self.origin.y as f64);
+        let (wx, wy) = v(self.w);
+        // `d·(1 + w·p) = x·p.x + y·p.y`, linear in `p`.
         let ((xx, xy), (yx, yy)) = (v(self.x), v(self.y));
-        let det = xx * yy - xy * yx;
+        let ((ax, ay), (bx, by)) = ((xx - dx * wx, xy - dy * wx), (yx - dx * wy, yy - dy * wy));
+        let det = ax * by - ay * bx;
         if det.abs() < 1e-3 * (xx.hypot(xy) * yx.hypot(yy)) {
             return None;
         }
-        let (dx, dy) = (s.x as f64 - self.origin.x as f64, s.y as f64 - self.origin.y as f64);
-        let a = (dx * yy - dy * yx) / det;
-        let b = (xx * dy - xy * dx) / det;
-        Some(SVec2::new(a, b))
+        let a = (dx * by - dy * bx) / det;
+        let b = (ax * dy - ay * dx) / det;
+        (1.0 + wx * a + wy * b > 0.0).then_some(SVec2::new(a, b))
     }
 
     /// Screen pixels per sketch millimetre (along the plane's X).
@@ -3252,6 +3274,28 @@ mod tests {
                 centered,
             },
         )
+    }
+
+    /// In perspective the sketch plane maps to the screen projectively: the map puts every
+    /// sketch point where the view draws it (a circle far from the sketch origin was hovered a
+    /// few pixels off its drawn curve), and `to_sketch` inverts it.
+    #[test]
+    fn screen_map_follows_perspective() {
+        let rect = ViewportRect(Rect::new(0.0, 0.0, 1200.0, 800.0));
+        for perspective in [false, true] {
+            let view = crate::camera::ViewState { perspective, focus: Vec3::new(5.0, -3.0, 2.0), ..Default::default() };
+            for plane in [PlaneRef::Top, PlaneRef::Front, PlaneRef::Right] {
+                let map = ScreenMap::new(plane, &view, &rect);
+                for p in [SVec2::new(0.0, 0.0), SVec2::new(80.0, -40.0), SVec2::new(-60.0, 90.0)] {
+                    let q = plane.frame().to_world(p);
+                    let want = rect.to_screen(view.project(Vec3::new(q[0] as f32, q[1] as f32, q[2] as f32)));
+                    let got = map.to_screen(p);
+                    assert!(got.distance(want) < 1e-2, "{perspective} {plane:?} {p:?}: {got} vs {want}");
+                    let back = map.to_sketch(got).unwrap();
+                    assert!((back - p).length() < 1e-2, "{perspective} {plane:?}: {back:?} vs {p:?}");
+                }
+            }
+        }
     }
 
     #[test]

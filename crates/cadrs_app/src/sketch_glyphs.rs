@@ -1268,6 +1268,7 @@ mod tests {
             origin: Vec2::new(400.0, 400.0),
             x: Vec2::new(4.0, 0.0),
             y: Vec2::new(0.0, -4.0),
+            w: Vec2::ZERO,
         };
         let l = layout_glyphs(&s, &map, GlyphObstacles::default(), &GlyphOffsets::default(), |_| true);
         // The top edge's row is centered below its midpoint (500, 280).
