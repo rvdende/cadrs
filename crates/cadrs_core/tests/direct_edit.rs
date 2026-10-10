@@ -176,3 +176,22 @@ fn a_direct_edit_without_faces_says_what_to_pick() {
     let b = d.build();
     assert!(b.errors.iter().any(|(id, e)| *id == f && e.contains("Select the faces to delete")));
 }
+
+#[test]
+fn a_plane_first_in_the_list_has_a_frame() {
+    // An offset plane 2 above Top, before any part: its frame is at z = 2.
+    let mut d = Doc::new();
+    let p = d.add(
+        "Plane",
+        FeatureKind::Plane(cadrs_core::plane::PlaneFeature {
+            kind: cadrs_core::plane::PlaneType::Offset,
+            entities: vec![cadrs_core::plane::PlaneEntity::Plane(PlaneRef::Top)],
+            offset: 2.0,
+            offset_expr: "2 mm".into(),
+            ..Default::default()
+        }),
+    );
+    let f = d.features();
+    let r = cadrs_core::parts::plane_feature_ref(&f, p).expect("the plane has a frame");
+    close(r.frame().origin[2], 2.0, 1e-9);
+}

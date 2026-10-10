@@ -351,7 +351,7 @@ pub fn chain_keys(features: &[Feature]) -> Vec<u64> {
     let mut keys = Vec::new();
     for i in 0..last.map_or(0, |l| l + 1) {
         let f = &features[i];
-        key = chain_key(key, &f.kind);
+        key = chain_key(key, f);
         if !f.is_part_feature() {
             continue;
         }
@@ -396,11 +396,14 @@ impl std::fmt::Write for HashWriter<'_> {
 }
 
 /// The cache key of a feature: its parameters chained onto the key of the features before it.
-fn chain_key(before: u64, kind: &FeatureKind) -> u64 {
+/// The cache key after feature `f`: its id and every parameter. (The id too: outputs are filed
+/// under it, such as a Plane's frame, and two documents can hold features with equal parameters.)
+fn chain_key(before: u64, f: &Feature) -> u64 {
     let mut h = DefaultHasher::new();
     before.hash(&mut h);
+    f.id.0.hash(&mut h);
     // Every parameter is in the derived Debug output (floats in full precision).
-    let _ = write!(HashWriter(&mut h), "{kind:?}");
+    let _ = write!(HashWriter(&mut h), "{:?}", f.kind);
     h.finish()
 }
 
@@ -486,7 +489,7 @@ impl Rebuilder {
         }
         for i in 0..last.map_or(0, |l| l + 1) {
             let f = &features[i];
-            key = chain_key(key, &f.kind);
+            key = chain_key(key, f);
             if !f.is_part_feature() {
                 continue;
             }
@@ -599,7 +602,7 @@ impl Rebuilder {
         // sketch being drawn at the end of the list costs nothing).
         for f in &features[..last.map_or(0, |l| l + 1)] {
             let Some(sk) = f.sketch() else { continue };
-            let k = chain_key(0, &f.kind);
+            let k = chain_key(0, f);
             let t = match self.sketch_times.get(&f.id) {
                 Some((key, t)) if *key == k => *t,
                 _ => {
