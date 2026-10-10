@@ -1412,6 +1412,67 @@ pub fn union_merges_coplanar_faces(k: &mut dyn Kernel) {
     close(volume(k, body), 1000.0, 1e-6);
 }
 
+/// A cylinder continued flush is one cylindrical face, as in Onshape: a circle r 10 with a tab
+/// on its side extruded 20 (the tab breaks the cylinder's face into an open sheet), then a
+/// circle r 10 on its top added 10 higher. The union's cylinder pieces lie on one surface, so
+/// they merge, with no ring where the second extrude starts.
+pub fn union_merges_flush_cylinders(k: &mut dyn Kernel) {
+    let r = 10.0f64;
+    let h = 3.0f64;
+    let x = (r * r - h * h).sqrt();
+    let a0 = (h / r).asin();
+    let outer = Loop {
+        curves: vec![
+            arc(p(0.0, 0.0), r, a0, TAU - 2.0 * a0),
+            line(p(x, -h), p(16.0, -h)),
+            line(p(16.0, -h), p(16.0, h)),
+            line(p(16.0, h), p(x, h)),
+        ],
+    };
+    let a = one(k.extrude(&top(vec![region(outer)]), Extent::Blind(20.0)).unwrap());
+    let b = one(k.extrude(&at_height(20.0, vec![region(circle(p(0.0, 0.0), r))]), Extent::Blind(10.0)).unwrap());
+    let fused = one(k.boolean(BoolOp::Union, a, &[b]).unwrap());
+    let cylinders: Vec<FaceInfo> = k
+        .faces(fused)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.kind == SurfaceKind::Cylinder && f.radius.is_some_and(|fr| (fr - r).abs() < 1e-6))
+        .collect();
+    assert_eq!(cylinders.len(), 1, "one cylindrical face r 10: {cylinders:?}");
+
+    // A tube (r 3, bore r 2.4) with a rib on each side, its outer cylinder in two pieces, and a
+    // 1.5 long tube of the same section added on its end: each piece merges with the end tube's
+    // outer cylinder, and the bores merge into one.
+    let (r, bore, h, w) = (3.0f64, 2.4f64, 0.75f64, 6.0f64);
+    let x = (r * r - h * h).sqrt();
+    let a0 = (h / r).asin();
+    let outer = Loop {
+        curves: vec![
+            arc(p(0.0, 0.0), r, a0, PI - 2.0 * a0),
+            line(p(-x, h), p(-w, h)),
+            line(p(-w, h), p(-w, -h)),
+            line(p(-w, -h), p(-x, -h)),
+            arc(p(0.0, 0.0), r, PI + a0, PI - 2.0 * a0),
+            line(p(x, -h), p(w, -h)),
+            line(p(w, -h), p(w, h)),
+            line(p(w, h), p(x, h)),
+        ],
+    };
+    let ribbed = Region { outer, holes: vec![circle(p(0.0, 0.0), bore)], source: None };
+    let a = one(k.extrude(&top(vec![ribbed]), Extent::Blind(14.77)).unwrap());
+    let end = Region { outer: circle(p(0.0, 0.0), r), holes: vec![circle(p(0.0, 0.0), bore)], source: None };
+    let b = one(k.extrude(&at_height(14.77, vec![end]), Extent::Blind(1.5)).unwrap());
+    let fused = one(k.boolean(BoolOp::Union, a, &[b]).unwrap());
+    let count = |radius: f64| {
+        k.faces(fused)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == SurfaceKind::Cylinder && f.radius.is_some_and(|fr| (fr - radius).abs() < 1e-6))
+            .count()
+    };
+    assert_eq!((count(r), count(bore)), (1, 1), "one outer cylinder, one bore");
+}
+
 // ---------------------------------------------------------------------------------------------
 // P3.4: the full revolve, face axes and edge circles
 
@@ -3123,7 +3184,7 @@ macro_rules! conformance {
                 extrude_up_to_face_parallel, extrude_up_to_face_oblique, extrude_up_to_face_through_origin,
                 extrude_up_to_part_conforms, extrude_up_to_next_from_a_face, extrude_through_all,
                 extrude_options, surface_extrude, thin_extrude, split_solids_rays_and_boxes, compound_gathers_bodies,
-                extrude_a_face, union_merges_coplanar_faces, revolve_torus, revolve_types,
+                extrude_a_face, union_merges_coplanar_faces, union_merges_flush_cylinders, revolve_torus, revolve_types,
                 revolve_up_to, revolve_surface_and_thin, face_axes_and_edge_circles, revolve_a_face,
                 inertia_tensor, fillet_cube_all_edges, fillet_width, fillet_overflow,
                 chamfer_options, shell_options, shell_around_a_counterbore, edge_face_radius,
