@@ -318,7 +318,8 @@ pub fn cap_name(features: &[Feature], extrude: FeatureId, index: usize, end: boo
     Some(crate::solid::cap_name(extrude.0, e.regions.get(index)?.key(), end))
 }
 
-/// A sketch plane on a face of the part `extrude` made.
+/// A sketch plane on a face of the part `extrude` made, its axes turned upright
+/// ([`cadrs_sketch::PlaneFrame::upright`]).
 pub fn face_plane(features: &[Feature], extrude: FeatureId, face: FaceName) -> Option<PlaneRef> {
     // A piece of the face a later feature split off (a cut through it: `split` > 0) exists only
     // after that feature: then it is found in the parts `features` build (as the sketch's
@@ -330,6 +331,7 @@ pub fn face_plane(features: &[Feature], extrude: FeatureId, face: FaceName) -> O
     let i = part.solid.faces.iter().position(|f| f.name == named)?;
     let frame = part.solid.face_plane_as(i, &face)?;
     let seed = part.solid.face_point(i);
+    let frame = frame.upright();
     Some(PlaneRef::Face(FacePlane {
         feature: extrude.0,
         face,
@@ -337,6 +339,7 @@ pub fn face_plane(features: &[Feature], extrude: FeatureId, face: FaceName) -> O
         u: frame.u,
         v: frame.v,
         seed,
+        upright: true,
     }))
 }
 

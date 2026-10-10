@@ -161,7 +161,7 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
         }),
     })?;
     s.run(&RenameFeature { element: el, feature: PATTERN_AXIS, name: "Pattern Axis".into() })?;
-    let plane = PlaneRef::Face(FacePlane { feature: EXTRUDE_1.0, face: top, origin: frame.origin, u: frame.u, v: frame.v, seed: Some(center) });
+    let plane = PlaneRef::Face(FacePlane { feature: EXTRUDE_1.0, face: top, origin: frame.origin, u: frame.u, v: frame.v, seed: Some(center), upright: false });
     s.run(&AddSketch { element: el, feature: FEATURE_SKETCH, plane: Some(plane) })?;
     for op in [poly(&TRIANGLE_A), poly(&TRIANGLE_B), poly(&[[RECT[0], RECT[1]], [RECT[2], RECT[1]], [RECT[2], RECT[3]], [RECT[0], RECT[3]]])] {
         s.run(&EditSketch { element: el, feature: FEATURE_SKETCH, op })?;

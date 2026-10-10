@@ -1862,6 +1862,7 @@ fn plane_on(features: &[cadrs_core::document::Feature], part: &Part, fi: usize) 
         u: frame.u,
         v: frame.v,
         seed: part.solid.face_point(fi),
+        upright: false,
     }))
 }
 

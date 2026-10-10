@@ -380,6 +380,12 @@ pub struct FacePlane {
     /// until they regenerate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<Vec3>,
+    /// The sketch's axes are the face's turned upright ([`PlaneFrame::upright`]) rather than
+    /// the face's own (an edge and the extrude direction on a side face, which can show the
+    /// sketch turned a quarter). False in documents from before, whose sketches keep the
+    /// face's frame so their geometry stays where it was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub upright: bool,
 }
 
 impl FacePlane {
@@ -391,8 +397,10 @@ impl FacePlane {
         }
     }
 
-    /// The same face with a new frame.
+    /// The same face with a new frame: the face's frame `f` (turned upright if this sketch
+    /// plane is).
     pub fn with_frame(self, f: PlaneFrame) -> Self {
+        let f = if self.upright { f.upright() } else { f };
         Self {
             origin: f.origin,
             u: f.u,
@@ -411,6 +419,7 @@ impl PartialEq for FacePlane {
             && bits(&self.u) == bits(&other.u)
             && bits(&self.v) == bits(&other.v)
             && self.seed.map(|s| bits(&s)) == other.seed.map(|s| bits(&s))
+            && self.upright == other.upright
     }
 }
 
@@ -424,6 +433,7 @@ impl std::hash::Hash for FacePlane {
             v.map(f64::to_bits).hash(state);
         }
         self.seed.map(|s| s.map(f64::to_bits)).hash(state);
+        self.upright.hash(state);
     }
 }
 
@@ -529,6 +539,33 @@ impl PlaneFrame {
     pub fn to_sketch(&self, p: Vec3) -> Vec2 {
         let d = sub(p, self.origin);
         Vec2::new(dot(d, self.u), dot(d, self.v))
+    }
+
+    /// The same plane (origin and facing) with its axes turned upright, as the default planes'
+    /// are: a face looking sideways gets `v` up (world +Z) and `u` level, as seen from in front
+    /// of it; a face looking mostly up or down gets `u` along world +X. Normal To then shows
+    /// the sketch the way the standard views show the part, so Horizontal and Vertical read
+    /// as they look.
+    pub fn upright(&self) -> PlaneFrame {
+        let unit = |a: Vec3| {
+            let l = dot(a, a).sqrt();
+            [a[0] / l, a[1] / l, a[2] / l]
+        };
+        let cross = |a: Vec3, b: Vec3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        // The world axis projected onto the plane.
+        let onto = |n: Vec3, a: Vec3| {
+            let d = dot(a, n);
+            unit([a[0] - d * n[0], a[1] - d * n[1], a[2] - d * n[2]])
+        };
+        let n = unit(self.normal());
+        let (u, v) = if n[2].abs() >= n[0].abs().max(n[1].abs()) {
+            let u = onto(n, [1.0, 0.0, 0.0]);
+            (u, cross(n, u))
+        } else {
+            let v = onto(n, [0.0, 0.0, 1.0]);
+            (cross(v, n), v)
+        };
+        PlaneFrame { origin: self.origin, u, v }
     }
 
     /// Signed distance of a world point from the plane, along the normal.
@@ -1562,6 +1599,32 @@ mod tests {
 
     fn close3(a: Vec3, b: Vec3) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9)
+    }
+
+    #[test]
+    fn upright_frames_match_the_default_planes() {
+        // A side face whose frame runs along -Z and the extrude direction (+X), facing -Y:
+        // upright, it reads as the Front plane.
+        let side = PlaneFrame { origin: [0.0, 26.0, 0.0], u: [0.0, 0.0, -1.0], v: [1.0, 0.0, 0.0] };
+        let up = side.upright();
+        assert!(close3(up.u, PlaneRef::Front.frame().u) && close3(up.v, PlaneRef::Front.frame().v));
+        assert!(close3(up.origin, side.origin));
+        // Each default plane and its reverse: the facing kept, the default plane's axes when
+        // facing the same way, seen from the other side (v still up, or u still +X) otherwise.
+        for plane in PlaneRef::ALL {
+            let f = plane.frame();
+            let turned = PlaneFrame { origin: f.origin, u: f.v, v: f.u.map(|x| -x) };
+            let up = turned.upright();
+            assert!(close3(up.u, f.u) && close3(up.v, f.v), "{plane:?}");
+            let back = PlaneFrame { origin: f.origin, u: f.v, v: f.u }.upright();
+            assert!(close3(back.normal(), f.normal().map(|x| -x)), "{plane:?}");
+            let level = if plane == PlaneRef::Top { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
+            assert!(close3(if plane == PlaneRef::Top { back.u } else { back.v }, level), "{plane:?}");
+        }
+        // A tilted face keeps its normal and gets a level u.
+        let tilted = PlaneFrame { origin: [0.0; 3], u: [0.0, 1.0, 0.0], v: [-0.6, 0.0, 0.8] }.upright();
+        assert!(close3(tilted.normal(), [0.8, 0.0, 0.6]));
+        assert!(tilted.u[2].abs() < 1e-12 && tilted.v[2] > 0.0);
     }
 
     #[test]

@@ -769,10 +769,10 @@ pub fn assembly_used_in(doc: &Document, element: ElementId) -> Vec<(ElementId, u
 }
 
 /// A sketch plane on the planar face `face` of the solid `s`, a part made by `feature` (a
-/// context part's, [`context_id`]): the face's frame and a point on it now.
+/// context part's, [`context_id`]): the face's frame turned upright and a point on it now.
 pub fn face_plane_on(s: &crate::solid::Solid, feature: FeatureId, face: cadrs_sketch::FaceName) -> Option<cadrs_sketch::PlaneRef> {
     let i = s.faces.iter().position(|f| f.name == face)?;
-    let frame = s.faces[i].plane?;
+    let frame = s.faces[i].plane?.upright();
     Some(cadrs_sketch::PlaneRef::Face(cadrs_sketch::FacePlane {
         feature: feature.0,
         face,
@@ -780,6 +780,7 @@ pub fn face_plane_on(s: &crate::solid::Solid, feature: FeatureId, face: cadrs_sk
         u: frame.u,
         v: frame.v,
         seed: s.face_point(i),
+        upright: true,
     }))
 }
 

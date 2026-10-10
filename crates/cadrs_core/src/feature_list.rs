@@ -340,6 +340,7 @@ mod tests {
             u: [1.0, 0.0, 0.0],
             v: [0.0, 1.0, 0.0],
             seed: None,
+            upright: false,
         };
         let features = vec![
             sketch(s1, Some(cadrs_sketch::PlaneRef::Top)),
