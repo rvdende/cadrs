@@ -195,3 +195,21 @@ fn a_plane_first_in_the_list_has_a_frame() {
     let r = cadrs_core::parts::plane_feature_ref(&f, p).expect("the plane has a frame");
     close(r.frame().origin[2], 2.0, 1e-9);
 }
+
+#[test]
+fn simplify_merges_coplanar_faces() {
+    // Two blocks side by side joined: Simplify leaves one box with 6 faces, volume unchanged.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 10.0, 10.0, 10.0);
+    let s = d.sketch(PlaneRef::Top, vec![rect(10.0, 0.0, 20.0, 10.0)]);
+    d.extrude(s, &[Vec2::new(15.0, 5.0)], |e| {
+        e.op = BooleanOp::Add;
+        e.depth = 10.0;
+        e.depth_expr = "10 mm".into();
+    });
+    let any = faces_where(&d.parts()[0], |_| true).into_iter().take(1).collect();
+    d.add("Simplify", FeatureKind::DirectEdit(DirectEditFeature { kind: DirectEditKind::Simplify, faces: any, ..Default::default() }));
+    let p = &d.parts()[0];
+    close(p.mass.unwrap().volume, 2000.0, 1e-6);
+    assert_eq!(p.solid.faces.len(), 6);
+}

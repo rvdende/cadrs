@@ -6,6 +6,8 @@
 //!   gap: a fillet, a chamfer, a hole, a boss or a groove taken away.
 //! - **Move face** (Offset): the faces move along their outward normals by the distance
 //!   (negative: inward) and the faces round them follow: a wall moved, a bore's radius changed.
+//! - **Simplify**: the parts of the picked faces with faces and edges on the same surface or
+//!   curve merged (an imported part's seams), nothing else changed.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +19,8 @@ pub enum DirectEditKind {
     #[default]
     DeleteFace,
     MoveFace,
+    /// Faces and edges on the same surface or curve merged across the picked faces' parts.
+    Simplify,
 }
 
 impl DirectEditKind {
@@ -24,6 +28,7 @@ impl DirectEditKind {
         match self {
             DirectEditKind::DeleteFace => "Delete face",
             DirectEditKind::MoveFace => "Move face",
+            DirectEditKind::Simplify => "Simplify",
         }
     }
 }
@@ -53,6 +58,7 @@ impl DirectEditFeature {
             return Some(match self.kind {
                 DirectEditKind::DeleteFace => "Select the faces to delete",
                 DirectEditKind::MoveFace => "Select the faces to move",
+                DirectEditKind::Simplify => "Select a face of each part to simplify",
             });
         }
         if self.kind == DirectEditKind::MoveFace && !self.distance.is_finite() {

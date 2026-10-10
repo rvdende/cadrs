@@ -508,6 +508,7 @@ impl Rebuilder {
         let (kind, distance) = (x.kind, x.distance);
         self.per_part(id, kind.label(), state, bodies, |this, i, body| match kind {
             DirectEditKind::DeleteFace => this.kernel.delete_faces(body, &faces[i]),
+            DirectEditKind::Simplify => this.kernel.simplify(body),
             DirectEditKind::MoveFace => {
                 let spec = cadrs_kernel::OffsetSpec { distance: 0.0, faces: faces[i].iter().map(|f| (*f, distance)).collect(), sharp: true };
                 this.kernel.offset(body, &spec)

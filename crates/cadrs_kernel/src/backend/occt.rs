@@ -1303,6 +1303,15 @@ impl Kernel for OcctKernel {
         self.insert(result, single_input_history(body, &h))
     }
 
+    fn simplify(&mut self, body: BodyId) -> Result<OpResult> {
+        let shape = self.body(body)?;
+        let (result, h) = clone_shape(shape).try_clean_h().map_err(occt)?;
+        if !result.is_valid().map_err(occt)? || result.sub_count(SubKind::Solid).map_err(occt)? != 1 {
+            return Err(KernelError::OperationFailed("the simplified body is not a valid solid".into()));
+        }
+        self.insert(result, single_input_history(body, &h))
+    }
+
     fn fillet_with(&mut self, body: BodyId, edges: &[EdgeId], spec: &FilletSpec) -> Result<OpResult> {
         if edges.is_empty() {
             return Err(KernelError::InvalidParameter("Select edges or faces to fillet".into()));

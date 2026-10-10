@@ -373,7 +373,7 @@ fn studio_state(name: &str, features: &[cadrs_core::Feature]) -> Value {
         .parts
         .iter()
         .map(|p| {
-            let mut v = json!({ "name": p.name });
+            let mut v = json!({ "name": p.name, "id": p.id });
             if let Some(m) = &p.mass {
                 v["volume_mm3"] = json!(round(m.volume));
             }
@@ -549,6 +549,10 @@ fn template(kind: &str) -> Option<FeatureKind> {
         "thicken" => FeatureKind::Thicken(surfacing::ThickenFeature::default()),
         "helix" => FeatureKind::Helix(surfacing::HelixFeature::default()),
         "deleteface" => FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature::default()),
+        "simplify" => FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature {
+            kind: cadrs_core::direct_edit::DirectEditKind::Simplify,
+            ..Default::default()
+        }),
         "moveface" => FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature {
             kind: cadrs_core::direct_edit::DirectEditKind::MoveFace,
             ..Default::default()

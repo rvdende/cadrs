@@ -183,6 +183,11 @@ pub trait Kernel {
     fn delete_faces(&mut self, _body: BodyId, _faces: &[FaceId]) -> Result<OpResult> {
         Err(KernelError::Unsupported("delete face"))
     }
+    /// Simplify: faces and edges lying on the same surface or curve merged (an imported part's
+    /// seams and split faces), the body otherwise unchanged.
+    fn simplify(&mut self, _body: BodyId) -> Result<OpResult> {
+        Err(KernelError::Unsupported("simplify"))
+    }
 
     /// The fillet of Onshape's Edge tab (P3.6, PS14.2–14.6): a radius or a constant width, and
     /// whether it may run over onto neighbouring faces. The edges' tangent chains are filleted
