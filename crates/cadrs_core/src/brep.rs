@@ -1030,14 +1030,23 @@ fn rulings(
         along.push(along[0]);
     }
     // A new run wherever the rulings jump (a gap between two pieces of the face): no
-    // silhouette is looked for across it.
-    let mut gaps: Vec<f64> = along.windows(2).map(|w| dist(w[0].0, w[1].0)).collect();
+    // silhouette is looked for across it. The jump is measured across the sweep, not along
+    // it: where the face's extent along its rulings steps (a boss's cylinder that runs further
+    // back below its axis than above), the rulings' starts move along them but there is no gap,
+    // and a run broken there lost the silhouette that lay on the step.
+    let axis = normalize(dir);
+    let apart = |a: Vec3, b: Vec3| {
+        let d = sub(b, a);
+        let l = dot(d, axis);
+        (dot(d, d) - l * l).max(0.0).sqrt()
+    };
+    let mut gaps: Vec<f64> = along.windows(2).map(|w| apart(w[0].0, w[1].0)).collect();
     gaps.sort_by(f64::total_cmp);
     let usual = gaps.get(gaps.len() / 2).copied().unwrap_or(0.0);
     let mut run = out.rulings.last().map_or(0, |r| r.run + 1);
     let mut prev: Option<Vec3> = None;
     for (start, end, normal) in along {
-        if prev.is_some_and(|p| dist(p, start) > 4.0 * usual + tol) {
+        if prev.is_some_and(|p| apart(p, start) > 4.0 * usual + tol) {
             run += 1;
         }
         prev = Some(start);
