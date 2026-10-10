@@ -1488,47 +1488,80 @@ fn sync_texts(
     items: Res<super::sheet_items::ItemScene>,
     kind: Res<ActiveKind>,
     theme: Res<Theme>,
-    q: Query<(Entity, &AnnotationText)>,
+    mut q: Query<(Entity, &mut AnnotationText, &mut Text2d, &mut TextFont, &mut TextColor, &mut SheetText, &mut Transform)>,
     mut commands: Commands,
 ) {
     let all: Vec<SceneText> = scene.texts.iter().chain(&notes.texts).chain(&items.texts).cloned().collect();
     let want: &[SceneText] = if *kind == ActiveKind::Drawing { &all } else { &[] };
-    let mut have: Vec<&SceneText> = Vec::new();
-    for (e, t) in &q {
-        if want.contains(&t.0) && !have.contains(&&t.0) {
-            have.push(&t.0);
-        } else {
-            commands.entity(e).despawn();
-        }
-    }
-    let layer = RenderLayers::layer(DRAWING_LAYER);
+    // The texts are updated in place, in order: a text that moves (a dragged dimension) keeps
+    // its entity, so its size, set by `size_sheet_texts`, is not reset. Respawning it each frame
+    // drew it at its spawn size, which showed as flicker and blur while dragging.
+    let mut existing = q.iter_mut();
     for t in want {
-        if have.contains(&t) {
-            continue;
+        match existing.next() {
+            Some((_, mut held, mut text, mut font, mut color, mut sheet, mut tr)) => {
+                if held.0 == *t {
+                    continue;
+                }
+                if held.0.bold != t.bold || held.0.italic != t.italic {
+                    let fresh = text_font(&theme, t);
+                    font.font = fresh.font;
+                    font.weight = fresh.weight;
+                    font.style = fresh.style;
+                }
+                if text.0 != t.text.text {
+                    text.0 = t.text.text.clone();
+                }
+                if color.0 != t.color {
+                    color.0 = t.color;
+                }
+                if sheet.height != t.text.height as f32 {
+                    sheet.height = t.text.height as f32;
+                }
+                let placed = text_transform(t);
+                tr.translation = placed.translation;
+                tr.rotation = placed.rotation;
+                held.0 = t.clone();
+            }
+            None => {
+                commands.spawn((
+                    Name::new("annotation-text"),
+                    AnnotationText(t.clone()),
+                    SheetText { height: t.text.height as f32 },
+                    Text2d::new(t.text.text.clone()),
+                    text_font(&theme, t),
+                    TextColor(t.color),
+                    Anchor::CENTER_LEFT,
+                    text_transform(t),
+                    RenderLayers::layer(DRAWING_LAYER),
+                    DespawnOnExit(AppState::Document),
+                ));
+            }
         }
-        // Medium and ExtraBold: Regular draws grey at sheet sizes (see `cadrs_drawing::rich`).
-        let weight = FontWeight(if t.bold { cadrs_drawing::rich::FACE_BOLD } else { cadrs_drawing::rich::FACE_REGULAR });
-        let mut font = theme.font(12.0, weight);
-        if t.italic {
-            font.style = bevy::text::FontStyle::Italic;
-        }
-        let rot = t.rotation.to_radians();
-        let drop = Vec2::new(0.0, TEXT_DROP * t.text.height as f32);
-        let d = Vec2::new(drop.x * rot.cos() - drop.y * rot.sin(), drop.x * rot.sin() + drop.y * rot.cos());
-        commands.spawn((
-            Name::new("annotation-text"),
-            AnnotationText(t.clone()),
-            SheetText { height: t.text.height as f32 },
-            Text2d::new(t.text.text.clone()),
-            font,
-            TextColor(t.color),
-            Anchor::CENTER_LEFT,
-            Transform::from_xyz(t.text.pos[0] as f32 + d.x, t.text.pos[1] as f32 + d.y, 2.0)
-                .with_rotation(Quat::from_rotation_z(rot)),
-            layer.clone(),
-            DespawnOnExit(AppState::Document),
-        ));
     }
+    // Texts that are no longer on the sheet.
+    for (e, ..) in existing {
+        commands.entity(e).despawn();
+    }
+}
+
+/// A text's font at the sheet's size (set by `size_sheet_texts` once spawned): Medium and
+/// ExtraBold, as Regular draws grey at sheet sizes (see `cadrs_drawing::rich`).
+fn text_font(theme: &Theme, t: &SceneText) -> TextFont {
+    let weight = FontWeight(if t.bold { cadrs_drawing::rich::FACE_BOLD } else { cadrs_drawing::rich::FACE_REGULAR });
+    let mut font = theme.font(12.0, weight);
+    if t.italic {
+        font.style = bevy::text::FontStyle::Italic;
+    }
+    font
+}
+
+/// Where a text sits: its anchor, dropped to the capitals' middle, turned about it.
+fn text_transform(t: &SceneText) -> Transform {
+    let rot = t.rotation.to_radians();
+    let drop = Vec2::new(0.0, TEXT_DROP * t.text.height as f32);
+    let d = Vec2::new(drop.x * rot.cos() - drop.y * rot.sin(), drop.x * rot.sin() + drop.y * rot.cos());
+    Transform::from_xyz(t.text.pos[0] as f32 + d.x, t.text.pos[1] as f32 + d.y, 2.0).with_rotation(Quat::from_rotation_z(rot))
 }
 
 /// Text2d centres a line's box, which sits a little above the capitals' middle in Inter: this
