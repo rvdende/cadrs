@@ -1964,6 +1964,22 @@ impl Kernel for OcctKernel {
                 source: None,
             });
         }
+        // The backend can hide edges that nothing covers (faces seen edge-on sharing a plane);
+        // the bodies' meshes settle it, as the 3D view's depth buffer does.
+        let mut triangles = Vec::new();
+        for &id in bodies {
+            let m = self.tessellate(id, quality)?;
+            triangles.extend(m.indices.iter().map(|t| t.map(|i| m.positions[i as usize])));
+        }
+        let lists: Vec<&crate::projection::EdgePolylines> = edge_lists.iter().map(|l| l.as_slice()).collect();
+        crate::projection::reveal_unoccluded(
+            &mut out,
+            frame,
+            &lists,
+            &triangles,
+            quality.deflection + 2.0 * tolerance + 1e-3,
+            2.0 * quality.deflection + tolerance,
+        );
         let sources: Vec<crate::projection::SourceBody> = edge_lists
             .iter()
             .zip(&face_lists)

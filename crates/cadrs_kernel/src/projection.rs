@@ -392,9 +392,290 @@ pub fn attach_sources(proj: &mut Projection, frame: &ViewFrame, bodies: &[Source
     });
 }
 
+/// A body's edges as 3D polylines, by edge.
+pub type EdgePolylines = [(EdgeId, Vec<Point3<f64>>)];
+
+/// Re-tests the hidden pieces of `proj` against the bodies' triangles, the way the 3D view's
+/// depth buffer sees them, and shows the parts of them that are not behind anything.
+///
+/// The backend's hidden-line removal can hide an edge that nothing covers where faces seen
+/// edge-on share a plane: a base's back wall and a boss's back face, both on the back plane of
+/// a top view, hid the base's back edge beside the boss. Here each hidden sharp or smooth piece
+/// is sampled along its length; a sample is visible if a 3D edge that projects onto it (within
+/// `tol`) has a point there from which a ray towards the eye meets no triangle, ignoring
+/// triangles seen edge-on and hits within `skin` of the point (the edge's own faces). Visible
+/// runs become visible pieces (their ends found by bisection); a piece with no visible sample
+/// is left as it was, so curves keep their exact shapes. Finally, pieces covered by other
+/// visible pieces are dropped: new visible ones that repeat a line already drawn, and hidden
+/// ones behind visible lines.
+pub fn reveal_unoccluded(
+    proj: &mut Projection,
+    frame: &ViewFrame,
+    edges: &[&EdgePolylines],
+    triangles: &[[Point3<f64>; 3]],
+    tol: f64,
+    skin: f64,
+) {
+    if !proj.edges.iter().any(|e| e.visibility == ProjVisibility::Hidden) {
+        return;
+    }
+    struct Cand {
+        p2: Vec<Point2<f64>>,
+        p3: Vec<Point3<f64>>,
+        min: Point2<f64>,
+        max: Point2<f64>,
+    }
+    let cands: Vec<Cand> = edges
+        .iter()
+        .flat_map(|list| list.iter())
+        .filter(|(_, poly)| poly.len() >= 2)
+        .map(|(_, poly)| {
+            let p2: Vec<Point2<f64>> = poly.iter().map(|p| frame.to_2d(p)).collect();
+            let (mut min, mut max) = (p2[0], p2[0]);
+            for p in &p2 {
+                min = Point2::new(min.x.min(p.x), min.y.min(p.y));
+                max = Point2::new(max.x.max(p.x), max.y.max(p.y));
+            }
+            Cand { p2, p3: poly.clone(), min, max }
+        })
+        .collect();
+    // The triangles that can hide anything (not seen edge-on), with their 2D bounds.
+    let dir = frame.dir;
+    // A triangle and its 2D bounds.
+    type Bounded = ([Point3<f64>; 3], Point2<f64>, Point2<f64>);
+    let tris: Vec<Bounded> = triangles
+        .iter()
+        .filter(|t| {
+            let n = (t[1] - t[0]).cross(&(t[2] - t[0]));
+            let len = n.norm();
+            len > 1e-12 && n.dot(&dir).abs() > 1e-6 * len
+        })
+        .map(|t| {
+            let q = t.map(|p| frame.to_2d(&p));
+            let min = Point2::new(q[0].x.min(q[1].x).min(q[2].x), q[0].y.min(q[1].y).min(q[2].y));
+            let max = Point2::new(q[0].x.max(q[1].x).max(q[2].x), q[0].y.max(q[1].y).max(q[2].y));
+            (*t, min, max)
+        })
+        .collect();
+    // Whether a ray from `p` towards the eye leaves the bodies without meeting a triangle.
+    let clear = |p: Point3<f64>| -> bool {
+        let q = frame.to_2d(&p);
+        let rd = -dir;
+        for (t, min, max) in &tris {
+            if q.x < min.x - 1e-9 || q.y < min.y - 1e-9 || q.x > max.x + 1e-9 || q.y > max.y + 1e-9 {
+                continue;
+            }
+            let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+            let h = rd.cross(&e2);
+            let det = e1.dot(&h);
+            if det.abs() < 1e-15 {
+                continue;
+            }
+            let f = 1.0 / det;
+            let sv = p - t[0];
+            let u = f * sv.dot(&h);
+            if !(-1e-9..=1.0 + 1e-9).contains(&u) {
+                continue;
+            }
+            let qv = sv.cross(&e1);
+            let v = f * rd.dot(&qv);
+            if v < -1e-9 || u + v > 1.0 + 1e-9 {
+                continue;
+            }
+            if f * e2.dot(&qv) > skin {
+                return false;
+            }
+        }
+        true
+    };
+    // Whether a 3D edge running along direction `along` through 2D point `q` (an edge that
+    // crosses there doesn't count) is seen from the eye there.
+    let seen = |q: Point2<f64>, along: nalgebra::Vector2<f64>| -> bool {
+        for c in &cands {
+            if q.x < c.min.x - tol || q.y < c.min.y - tol || q.x > c.max.x + tol || q.y > c.max.y + tol {
+                continue;
+            }
+            for (i, w) in c.p2.windows(2).enumerate() {
+                let (d, t) = segment_distance(q, w[0], w[1]);
+                let sd = w[1] - w[0];
+                let sl = sd.norm();
+                // Parallel to within about 17°: a mesh's chords of a small circle turn that much.
+                if d > tol || sl < 1e-12 || (sd.x * along.y - sd.y * along.x).abs() > 0.3 * sl {
+                    continue;
+                }
+                if clear(c.p3[i] + (c.p3[i + 1] - c.p3[i]) * t) {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    // Whether 2D point `q` lies on one of the `by` pieces running along `along` there (a line
+    // that only meets it, at a corner, doesn't cover it).
+    let on = |q: Point2<f64>, along: nalgebra::Vector2<f64>, by: &[ProjEdge]| {
+        by.iter().any(|o| {
+            o.points.windows(2).any(|w| {
+                let sd = w[1] - w[0];
+                let sl = sd.norm();
+                let (d, t) = segment_distance(q, w[0], w[1]);
+                // Beside the segment, not past its end: a line ending short of `q` leaves it bare.
+                let beside = (t > 1e-9 && t < 1.0 - 1e-9) || d < 1e-6;
+                sl > 1e-12 && d <= tol && beside && (sd.x * along.y - sd.y * along.x).abs() <= 0.3 * sl
+            })
+        })
+    };
+    #[derive(Clone, Copy, PartialEq)]
+    enum At {
+        /// Seen from the eye and not drawn yet: shown.
+        Revealed,
+        /// Under a visible line already: dropped.
+        Covered,
+        /// Behind material: stays hidden.
+        Hidden,
+    }
+    let originals = std::mem::take(&mut proj.edges);
+    let mut visible: Vec<ProjEdge> = originals.iter().filter(|e| e.visibility == ProjVisibility::Visible).cloned().collect();
+    let mut hidden: Vec<ProjEdge> = Vec::new();
+    for e in originals.into_iter().filter(|e| e.visibility == ProjVisibility::Hidden) {
+        let len = e.length();
+        if e.class == ProjClass::Outline || len <= 2.0 * tol {
+            hidden.push(e);
+            continue;
+        }
+        let at = |t: f64| -> At {
+            let q = e.point_at(t);
+            let dt = (0.25 / len).min(0.01);
+            let along = e.point_at((t + dt).min(1.0)) - e.point_at((t - dt).max(0.0));
+            if along.norm() <= 1e-12 {
+                At::Hidden
+            } else if on(q, along.normalize(), &visible) {
+                At::Covered
+            } else if seen(q, along.normalize()) {
+                At::Revealed
+            } else {
+                At::Hidden
+            }
+        };
+        let n = ((len / 0.5).ceil() as usize).clamp(8, 400);
+        let ts: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        let states: Vec<At> = ts.iter().map(|&t| at(t)).collect();
+        // Nothing to show: the piece stays as the backend gave it (exact curve and all).
+        if !states.contains(&At::Revealed) {
+            hidden.push(e);
+            continue;
+        }
+        // Where the state changes between two samples, to within a micron.
+        let cut = |mut a: f64, mut b: f64, sa: At| -> f64 {
+            for _ in 0..40 {
+                let m = 0.5 * (a + b);
+                if at(m) == sa {
+                    a = m;
+                } else {
+                    b = m;
+                }
+                if (b - a) * len < 1e-3 {
+                    break;
+                }
+            }
+            0.5 * (a + b)
+        };
+        let mut runs: Vec<(f64, f64, At)> = Vec::new();
+        let mut start = 0.0;
+        for k in 1..ts.len() {
+            if states[k] != states[k - 1] {
+                let c = cut(ts[k - 1], ts[k], states[k - 1]);
+                runs.push((start, c, states[k - 1]));
+                start = c;
+            }
+        }
+        runs.push((start, 1.0, *states.last().unwrap_or(&At::Hidden)));
+        for (t0, t1, state) in runs {
+            if (t1 - t0) * len <= tol {
+                continue;
+            }
+            match state {
+                At::Revealed => visible.push(sub_piece(&e, t0, t1, true)),
+                At::Hidden => hidden.push(sub_piece(&e, t0, t1, false)),
+                At::Covered => {}
+            }
+        }
+    }
+    proj.edges = visible;
+    proj.edges.extend(hidden);
+}
+
+/// The part of `e` between arc-length fractions `t0` and `t1`, visible or hidden. A straight
+/// piece stays a line; anything else becomes a polyline.
+fn sub_piece(e: &ProjEdge, t0: f64, t1: f64, visible: bool) -> ProjEdge {
+    let (a, b) = (e.point_at(t0), e.point_at(t1));
+    let total = e.length();
+    let mut points = vec![a];
+    let mut run = 0.0;
+    for w in e.points.windows(2) {
+        run += (w[1] - w[0]).norm();
+        let f = if total > 0.0 { run / total } else { 0.0 };
+        if f > t0 && f < t1 {
+            points.push(w[1]);
+        }
+    }
+    points.push(b);
+    let curve = match e.curve {
+        ProjCurve::Line { .. } => ProjCurve::Line { start: a, end: b },
+        _ => ProjCurve::Polyline,
+    };
+    ProjEdge {
+        visibility: if visible { ProjVisibility::Visible } else { ProjVisibility::Hidden },
+        class: e.class,
+        curve,
+        points,
+        source: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_pieces_nothing_covers_are_revealed() {
+        // A top view of a base's back edge (y = 35, z = 6) that the backend wrongly hid whole: a
+        // boss above its middle (x within ±15, z = 75) hides only that part, and the back wall
+        // in the plane y = 35, seen edge-on, hides nothing.
+        let f = ViewFrame::new(-Vector3::z(), Vector3::x());
+        let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+        let edges = vec![(EdgeId(0), vec![p(-36.0, 35.0, 6.0), p(36.0, 35.0, 6.0)])];
+        let triangles = vec![
+            [p(-15.0, 22.0, 75.0), p(15.0, 22.0, 75.0), p(15.0, 35.0, 75.0)],
+            [p(-15.0, 22.0, 75.0), p(15.0, 35.0, 75.0), p(-15.0, 35.0, 75.0)],
+            [p(-36.0, 35.0, 0.0), p(36.0, 35.0, 0.0), p(36.0, 35.0, 6.0)],
+            [p(-36.0, 35.0, 0.0), p(36.0, 35.0, 6.0), p(-36.0, 35.0, 6.0)],
+        ];
+        let line = |a: Point2<f64>, b: Point2<f64>| ProjEdge {
+            visibility: ProjVisibility::Hidden,
+            class: ProjClass::Sharp,
+            curve: ProjCurve::Line { start: a, end: b },
+            points: vec![a, b],
+            source: None,
+        };
+        let mut proj = Projection {
+            edges: vec![line(Point2::new(36.0, 35.0), Point2::new(-36.0, 35.0))],
+        };
+        reveal_unoccluded(&mut proj, &f, &[&edges], &triangles, 0.05, 0.1);
+        let mut spans: Vec<(ProjVisibility, f64, f64)> = proj
+            .edges
+            .iter()
+            .map(|e| {
+                let (a, b) = (e.points[0].x, e.points[e.points.len() - 1].x);
+                (e.visibility, a.min(b), a.max(b))
+            })
+            .collect();
+        spans.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+        assert!(spans[0].0 == ProjVisibility::Visible && near(spans[0].1, -36.0) && near(spans[0].2, -15.0), "{spans:?}");
+        assert!(spans[1].0 == ProjVisibility::Hidden && near(spans[1].1, -15.0) && near(spans[1].2, 15.0), "{spans:?}");
+        assert!(spans[2].0 == ProjVisibility::Visible && near(spans[2].1, 15.0) && near(spans[2].2, 36.0), "{spans:?}");
+    }
 
     #[test]
     fn frames_follow_the_hlr_convention() {
