@@ -34,6 +34,7 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Fillet(_) => "Fillet",
         FeatureKind::Chamfer(_) => "Chamfer",
         FeatureKind::Shell(_) => "Shell",
+        FeatureKind::DirectEdit(x) => x.kind.label(),
         FeatureKind::Hole(_) => "Hole",
         FeatureKind::Plane(_) => "Plane",
         FeatureKind::Sweep(_) => "Sweep",

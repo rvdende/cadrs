@@ -548,6 +548,11 @@ fn template(kind: &str) -> Option<FeatureKind> {
         "transform" => FeatureKind::Transform(transform::TransformFeature::default()),
         "thicken" => FeatureKind::Thicken(surfacing::ThickenFeature::default()),
         "helix" => FeatureKind::Helix(surfacing::HelixFeature::default()),
+        "deleteface" => FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature::default()),
+        "moveface" => FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature {
+            kind: cadrs_core::direct_edit::DirectEditKind::MoveFace,
+            ..Default::default()
+        }),
         _ => return None,
     })
 }

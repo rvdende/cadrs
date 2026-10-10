@@ -15,6 +15,7 @@ pub mod blobs;
 pub mod command;
 pub mod commands;
 pub mod derived;
+pub mod direct_edit;
 pub mod document;
 pub mod documents_page;
 pub mod drawing_assembly;

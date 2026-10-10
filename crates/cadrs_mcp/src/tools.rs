@@ -133,7 +133,11 @@ pub struct FeatureName {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddFeature {
     /// The feature type: Extrude, Revolve, Fillet, Chamfer, Hole, Shell, Plane, Sweep, Loft,
-    /// Split, Pattern, Mirror, Draft, Boolean, DeletePart, Transform, Thicken, Helix.
+    /// Split, Pattern, Mirror, Draft, Boolean, DeletePart, Transform, Thicken, Helix,
+    /// DeleteFace ({"faces": [refs]}: faces removed, their neighbours healing the gap: a fillet,
+    /// chamfer, hole, boss or groove taken away) or MoveFace ({"faces": [refs], "distance": mm}:
+    /// faces offset along their outward normals, negative inward: a wall moved, a bore's radius
+    /// changed).
     #[serde(rename = "type")]
     pub kind: String,
     /// The feature's fields as JSON, merged over the type's defaults (so only the fields that

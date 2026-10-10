@@ -482,6 +482,39 @@ impl Rebuilder {
         })
     }
 
+    /// Delete face and Move face (direct edits): per part, its picked faces removed (healed)
+    /// or offset by the distance, the faces round them following.
+    pub(in crate::rebuild) fn direct_edit(
+        &mut self,
+        id: FeatureId,
+        x: &crate::direct_edit::DirectEditFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        use crate::direct_edit::DirectEditKind;
+        if let Some(p) = x.problem() {
+            return Err(p.into());
+        }
+        let mut groups: Vec<(PartId, BodyId, Vec<cadrs_kernel::FaceId>)> = Vec::new();
+        for f in &x.faces {
+            let (part, ids) = face_ids(state, f).ok_or("A selected face no longer exists")?;
+            let body = part.body.ok_or("A part has no body")?;
+            match groups.iter_mut().find(|g| g.0 == part.part.id) {
+                Some(g) => g.2.extend(ids.into_iter().filter(|i| !g.2.contains(i)).collect::<Vec<_>>()),
+                None => groups.push((part.part.id, body, ids)),
+            }
+        }
+        let faces: Vec<Vec<cadrs_kernel::FaceId>> = groups.iter().map(|g| g.2.clone()).collect();
+        let bodies = groups.iter().map(|g| (g.0, g.1)).collect();
+        let (kind, distance) = (x.kind, x.distance);
+        self.per_part(id, kind.label(), state, bodies, |this, i, body| match kind {
+            DirectEditKind::DeleteFace => this.kernel.delete_faces(body, &faces[i]),
+            DirectEditKind::MoveFace => {
+                let spec = cadrs_kernel::OffsetSpec { distance: 0.0, faces: faces[i].iter().map(|f| (*f, distance)).collect(), sharp: true };
+                this.kernel.offset(body, &spec)
+            }
+        })
+    }
+
     /// The Hole feature (PS15): a revolved tool per point, subtracted from the parts in scope.
     pub(in crate::rebuild) fn hole(
         &mut self,

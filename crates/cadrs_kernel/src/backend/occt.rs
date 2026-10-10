@@ -1281,6 +1281,28 @@ impl Kernel for OcctKernel {
         self.insert(result, single_input_history(body, &h))
     }
 
+    fn delete_faces(&mut self, body: BodyId, remove: &[FaceId]) -> Result<OpResult> {
+        if remove.is_empty() {
+            return Err(KernelError::InvalidParameter("Select the faces to delete".into()));
+        }
+        let shape = self.body(body)?;
+        let mut faces: Vec<Option<Face>> = faces_of(shape).into_iter().map(Some).collect();
+        let removed = remove
+            .iter()
+            .map(|id| {
+                faces
+                    .get_mut(id.0 as usize)
+                    .and_then(Option::take)
+                    .ok_or_else(|| KernelError::OperationFailed(format!("unknown or repeated {id:?}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let (result, h) = shape.try_delete_faces_h(&removed).map_err(occt)?;
+        if !result.is_valid().map_err(occt)? || result.sub_count(opencascade::safe::SubKind::Solid).map_err(occt)? != 1 {
+            return Err(KernelError::OperationFailed("the faces can't be deleted: the healed body is not a valid solid".into()));
+        }
+        self.insert(result, single_input_history(body, &h))
+    }
+
     fn fillet_with(&mut self, body: BodyId, edges: &[EdgeId], spec: &FilletSpec) -> Result<OpResult> {
         if edges.is_empty() {
             return Err(KernelError::InvalidParameter("Select edges or faces to fillet".into()));

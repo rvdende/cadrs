@@ -178,6 +178,11 @@ pub trait Kernel {
     fn shell(&mut self, _body: BodyId, _remove: &[FaceId], _thickness: f64) -> Result<OpResult> {
         Err(KernelError::Unsupported("shell"))
     }
+    /// Delete face (Heal): the faces removed and their neighbours extended to close the gap.
+    /// Faces that can't be healed over are an `OperationFailed` error, never a wrong body.
+    fn delete_faces(&mut self, _body: BodyId, _faces: &[FaceId]) -> Result<OpResult> {
+        Err(KernelError::Unsupported("delete face"))
+    }
 
     /// The fillet of Onshape's Edge tab (P3.6, PS14.2–14.6): a radius or a constant width, and
     /// whether it may run over onto neighbouring faces. The edges' tangent chains are filleted

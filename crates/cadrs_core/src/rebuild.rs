@@ -1062,6 +1062,8 @@ impl Rebuilder {
             #[cfg(feature = "occt")]
             FeatureKind::Shell(x) => self.shell(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
+            FeatureKind::DirectEdit(x) => self.direct_edit(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "occt")]
             FeatureKind::Hole(x) => self.hole(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "occt")]
             FeatureKind::Plane(x) => self.plane(before, f.id, x, state).unwrap_or_else(fail),
@@ -1144,7 +1146,7 @@ impl Rebuilder {
                 fail("This feature needs the solid-modelling kernel".into())
             }
             #[cfg(not(feature = "occt"))]
-            FeatureKind::Fillet(_) | FeatureKind::Chamfer(_) | FeatureKind::Shell(_) | FeatureKind::Hole(_) => {
+            FeatureKind::Fillet(_) | FeatureKind::Chamfer(_) | FeatureKind::Shell(_) | FeatureKind::Hole(_) | FeatureKind::DirectEdit(_) => {
                 fail("This feature needs the solid-modelling kernel".into())
             }
             #[cfg(not(feature = "occt"))]

@@ -592,6 +592,7 @@ impl Feature {
             FeatureKind::Fillet(x) => x.problem().is_none(),
             FeatureKind::Chamfer(x) => x.problem().is_none(),
             FeatureKind::Shell(x) => x.problem().is_none(),
+            FeatureKind::DirectEdit(x) => x.problem().is_none(),
             FeatureKind::Hole(x) => x.problem().is_none(),
             FeatureKind::Plane(x) => x.problem().is_none(),
             FeatureKind::Sweep(x) => x.problem().is_none(),
@@ -632,6 +633,7 @@ impl Feature {
             FeatureKind::Fillet(x) => x.problem(),
             FeatureKind::Chamfer(x) => x.problem(),
             FeatureKind::Shell(x) => x.problem(),
+            FeatureKind::DirectEdit(x) => x.problem(),
             FeatureKind::Hole(x) => x.problem(),
             FeatureKind::Plane(x) => x.problem(),
             FeatureKind::Sweep(x) => x.problem(),
@@ -717,6 +719,7 @@ impl Feature {
                 x.faces.iter().map(face).for_each(&mut add);
                 x.parts.iter().for_each(|p| add(p.feature));
             }
+            FeatureKind::DirectEdit(x) => x.faces.iter().map(face).for_each(&mut add),
             FeatureKind::Hole(x) => {
                 x.sketch_ids().into_iter().for_each(&mut add);
                 x.merge_scope.iter().for_each(|p| add(p.feature));
@@ -890,6 +893,8 @@ pub enum FeatureKind {
     Chamfer(crate::applied::ChamferFeature),
     /// Hollows parts (P3.6, PS16).
     Shell(crate::applied::ShellFeature),
+    /// Delete face or Move face (direct edits).
+    DirectEdit(crate::direct_edit::DirectEditFeature),
     /// Holes at sketch points (P3.6, PS15).
     Hole(crate::applied::HoleFeature),
     /// A reference plane (P3.7, PS12).
