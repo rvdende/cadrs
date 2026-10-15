@@ -50,6 +50,8 @@ directories = "6"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 raw-window-handle = "0.6"
+# The window icon (cadrs_app::app_icon); the version Bevy uses.
+winit = { version = "0.30", default-features = false }
 earcutr = "0.4"
 proptest = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
