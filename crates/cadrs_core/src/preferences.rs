@@ -246,12 +246,35 @@ impl Default for McpPreferences {
 }
 
 /// The local preferences.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preferences {
     #[serde(default)]
     pub mouse: MousePreset,
     #[serde(default)]
     pub mcp: McpPreferences,
+    /// How large the interface is drawn, in percent of the display's own scale (issue #12).
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: u16,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self { mouse: MousePreset::default(), mcp: McpPreferences::default(), ui_scale: 100 }
+    }
+}
+
+/// The interface sizes offered (percent).
+pub const UI_SCALES: [u16; 8] = [75, 90, 100, 110, 125, 150, 175, 200];
+
+fn default_ui_scale() -> u16 {
+    100
+}
+
+impl Preferences {
+    /// The interface's scale as a factor (1 is the display's own), kept within the sizes offered.
+    pub fn ui_scale_factor(&self) -> f32 {
+        f32::from(self.ui_scale.clamp(UI_SCALES[0], UI_SCALES[UI_SCALES.len() - 1])) / 100.0
+    }
 }
 
 impl Preferences {
@@ -339,15 +362,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cadrs-prefs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(Preferences::load(&dir), Preferences::default());
-        let p = Preferences { mouse: MousePreset::SolidWorks, mcp: McpPreferences { enabled: true, port: 7700 } };
+        let p = Preferences { mouse: MousePreset::SolidWorks, mcp: McpPreferences { enabled: true, port: 7700 }, ui_scale: 125 };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
         // A file from before the MCP server reads with it off.
         std::fs::write(Preferences::path(&dir), "(mouse: Creo)").unwrap();
-        assert_eq!(Preferences::load(&dir), Preferences { mouse: MousePreset::Creo, mcp: McpPreferences::default() });
+        assert_eq!(Preferences::load(&dir), Preferences { mouse: MousePreset::Creo, mcp: McpPreferences::default(), ui_scale: 100 });
         // An unreadable file reads as the defaults.
         std::fs::write(Preferences::path(&dir), "not ron").unwrap();
         assert_eq!(Preferences::load(&dir), Preferences::default());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_file_without_a_ui_scale_reads_as_100_percent() {
+        let p: Preferences = ron::from_str("(mcp: (enabled: true, port: 7690))").unwrap();
+        assert_eq!(p.ui_scale, 100);
+        assert_eq!(p.ui_scale_factor(), 1.0);
+        assert_eq!(Preferences { ui_scale: 150, ..p }.ui_scale_factor(), 1.5);
+        // Out of range: the nearest size offered.
+        assert_eq!(Preferences { ui_scale: 1000, ..p }.ui_scale_factor(), 2.0);
     }
 }

@@ -309,6 +309,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // `ui-scale <percent>`: Preferences › UI scale (issue #12), saved like the dialog's OK.
+        if let Some(p) = m.0.strip_prefix("ui-scale ") {
+            let percent = p.trim().parse::<u16>().unwrap_or(100);
+            commands.queue(move |world: &mut World| crate::preferences_ui::set_ui_scale(world, percent));
+            continue;
+        }
         // `drop-file <path>`: the file dropped on the window (as from a file manager).
         if let Some(path) = m.0.strip_prefix("drop-file ") {
             let path_buf = std::path::PathBuf::from(path.trim());
