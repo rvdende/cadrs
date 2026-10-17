@@ -74,12 +74,132 @@ pub struct OcctKernel {
     /// once stored, and a face's area and centroid are exact integrals over its surface (seconds
     /// for a model of B-spline faces), asked for again by every feature that looks at the body.
     face_infos: std::sync::Mutex<HashMap<BodyId, std::sync::Arc<Vec<FaceInfo>>>>,
+    /// The same for its edges, vertices and mass properties: an imported mesh of 265 000
+    /// triangles took 2.5 s for its edges and vertices and 5 s for its mass, and its import
+    /// asked for each two or three times (issue #11).
+    edge_infos: std::sync::Mutex<HashMap<BodyId, std::sync::Arc<Vec<EdgeInfo>>>>,
+    vertex_infos: std::sync::Mutex<HashMap<BodyId, std::sync::Arc<Vec<VertexInfo>>>>,
+    masses: std::sync::Mutex<HashMap<BodyId, MassProperties>>,
+    /// A mesh body's display mesh: its triangles as they came (OCCT's mesher took 5 s to
+    /// triangulate again the 265 000 triangles of an imported STL).
+    meshes: HashMap<BodyId, std::sync::Arc<TriMesh>>,
     next_id: u64,
 }
 
 impl OcctKernel {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn edges_uncached(&self, body: BodyId) -> Result<Vec<EdgeInfo>> {
+        let shape = self.body(body)?;
+        let geometry = shape.edges_geometry().map_err(occt)?;
+        let around = shape.edge_faces().map_err(occt)?;
+        let circles = shape.edge_circles().map_err(occt)?;
+        if around.len() != geometry.len() || circles.len() != geometry.len() {
+            return Err(KernelError::OperationFailed("inconsistent edge lists".into()));
+        }
+        // An edge with one face is a seam if the face runs along it twice (a cylinder's), else
+        // a free edge (the boundary of a surface body).
+        let single: Vec<usize> = around
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| f.len() == 1 && geometry[*i].curve != CurveType::Degenerate)
+            .map(|(i, _)| i)
+            .collect();
+        let mut free = vec![false; around.len()];
+        if !single.is_empty() {
+            let faces = faces_of(shape);
+            let edges = Edges::of(shape);
+            for i in single {
+                let Some(face) = faces.get(around[i][0]) else { continue };
+                let Some(edge) = edges.list.get(i) else { continue };
+                let uses = face.edges().filter(|e| e.is_same(edge)).count();
+                free[i] = uses < 2;
+            }
+        }
+        Ok(geometry
+            .iter()
+            .zip(around)
+            .enumerate()
+            .map(|(i, (g, faces))| {
+                let face = |k: usize| faces.get(k).map(|f| FaceId(*f as u64));
+                // A seam lists its face once: it is on both sides. A free edge has one side.
+                let second = if faces.len() == 1 && g.curve != CurveType::Degenerate && !free[i] {
+                    face(0)
+                } else {
+                    face(1)
+                };
+                let p = |v: DVec3| Point3::from(to_na(v));
+                EdgeInfo {
+                    id: EdgeId(i as u64),
+                    faces: [face(0), second],
+                    length: g.length,
+                    curve: match g.curve {
+                        CurveType::Line => CurveKind::Line,
+                        CurveType::Circle => CurveKind::Circle,
+                        CurveType::Ellipse => CurveKind::Ellipse,
+                        CurveType::Degenerate => CurveKind::Degenerate,
+                        CurveType::Other => CurveKind::Other,
+                    },
+                    start: p(g.start),
+                    end: p(g.end),
+                    mid: p(g.mid),
+                    start_tangent: to_na(g.start_tangent),
+                    end_tangent: to_na(g.end_tangent),
+                    circle: circles[i].and_then(|c| {
+                        let n = to_na(c.dir);
+                        (n.norm() > 0.5).then(|| Circle3 {
+                            center: Point3::from(to_na(c.origin)),
+                            normal: Unit::new_normalize(n),
+                            radius: c.radius,
+                        })
+                    }),
+                }
+            })
+            .collect())
+    }
+
+    fn vertices_uncached(&self, body: BodyId) -> Result<Vec<VertexInfo>> {
+        let shape = self.body(body)?;
+        Ok(shape
+            .vertices_info()
+            .map_err(occt)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, (p, edges))| VertexInfo {
+                id: VertexId(i as u64),
+                point: Point3::from(to_na(p)),
+                edges: edges.into_iter().map(|e| EdgeId(e as u64)).collect(),
+            })
+            .collect())
+    }
+
+    fn mass_uncached(&self, body: BodyId) -> Result<MassProperties> {
+        let shape = self.body(body)?;
+        let props = shape.mass_properties();
+        if shape.sub_count(SubKind::Solid).map_err(occt)? == 0 {
+            // A surface body: no volume; its centre is the area centroid.
+            let faces = self.faces(body)?;
+            let area: f64 = faces.iter().map(|f| f.area).sum();
+            let center = if area > 0.0 {
+                Point3::from(faces.iter().fold(Vector3::zeros(), |acc, f| acc + f.center.coords * f.area) / area)
+            } else {
+                Point3::origin()
+            };
+            return Ok(MassProperties {
+                volume: 0.0,
+                surface_area: props.surface_area,
+                center_of_mass: center,
+                inertia: nalgebra::Matrix3::zeros(),
+            });
+        }
+        Ok(MassProperties {
+            volume: props.volume,
+            surface_area: props.surface_area,
+            center_of_mass: Point3::from(to_na(props.center_of_mass)),
+            inertia: nalgebra::Matrix3::from_fn(|r, c| props.inertia[r][c]),
+        })
     }
 
     /// OCCT's thick solid of a body with faces removed (P3.6).
@@ -1661,6 +1781,16 @@ impl Kernel for OcctKernel {
         if let Ok(mut c) = self.face_infos.lock() {
             c.remove(&body);
         }
+        if let Ok(mut c) = self.edge_infos.lock() {
+            c.remove(&body);
+        }
+        if let Ok(mut c) = self.vertex_infos.lock() {
+            c.remove(&body);
+        }
+        if let Ok(mut c) = self.masses.lock() {
+            c.remove(&body);
+        }
+        self.meshes.remove(&body);
     }
 
     fn write_body(&self, body: BodyId) -> Result<Vec<u8>> {
@@ -1684,114 +1814,36 @@ impl Kernel for OcctKernel {
     }
 
     fn edges(&self, body: BodyId) -> Result<Vec<EdgeInfo>> {
-        let shape = self.body(body)?;
-        let geometry = shape.edges_geometry().map_err(occt)?;
-        let around = shape.edge_faces().map_err(occt)?;
-        let circles = shape.edge_circles().map_err(occt)?;
-        if around.len() != geometry.len() || circles.len() != geometry.len() {
-            return Err(KernelError::OperationFailed("inconsistent edge lists".into()));
+        if let Some(e) = self.edge_infos.lock().ok().and_then(|c| c.get(&body).cloned()) {
+            return Ok(e.as_ref().clone());
         }
-        // An edge with one face is a seam if the face runs along it twice (a cylinder's), else
-        // a free edge (the boundary of a surface body).
-        let single: Vec<usize> = around
-            .iter()
-            .enumerate()
-            .filter(|(i, f)| f.len() == 1 && geometry[*i].curve != CurveType::Degenerate)
-            .map(|(i, _)| i)
-            .collect();
-        let mut free = vec![false; around.len()];
-        if !single.is_empty() {
-            let faces = faces_of(shape);
-            let edges = Edges::of(shape);
-            for i in single {
-                let Some(face) = faces.get(around[i][0]) else { continue };
-                let Some(edge) = edges.list.get(i) else { continue };
-                let uses = face.edges().filter(|e| e.is_same(edge)).count();
-                free[i] = uses < 2;
-            }
+        let infos = std::sync::Arc::new(self.edges_uncached(body)?);
+        if let Ok(mut c) = self.edge_infos.lock() {
+            c.insert(body, infos.clone());
         }
-        Ok(geometry
-            .iter()
-            .zip(around)
-            .enumerate()
-            .map(|(i, (g, faces))| {
-                let face = |k: usize| faces.get(k).map(|f| FaceId(*f as u64));
-                // A seam lists its face once: it is on both sides. A free edge has one side.
-                let second = if faces.len() == 1 && g.curve != CurveType::Degenerate && !free[i] {
-                    face(0)
-                } else {
-                    face(1)
-                };
-                let p = |v: DVec3| Point3::from(to_na(v));
-                EdgeInfo {
-                    id: EdgeId(i as u64),
-                    faces: [face(0), second],
-                    length: g.length,
-                    curve: match g.curve {
-                        CurveType::Line => CurveKind::Line,
-                        CurveType::Circle => CurveKind::Circle,
-                        CurveType::Ellipse => CurveKind::Ellipse,
-                        CurveType::Degenerate => CurveKind::Degenerate,
-                        CurveType::Other => CurveKind::Other,
-                    },
-                    start: p(g.start),
-                    end: p(g.end),
-                    mid: p(g.mid),
-                    start_tangent: to_na(g.start_tangent),
-                    end_tangent: to_na(g.end_tangent),
-                    circle: circles[i].and_then(|c| {
-                        let n = to_na(c.dir);
-                        (n.norm() > 0.5).then(|| Circle3 {
-                            center: Point3::from(to_na(c.origin)),
-                            normal: Unit::new_normalize(n),
-                            radius: c.radius,
-                        })
-                    }),
-                }
-            })
-            .collect())
+        Ok(infos.as_ref().clone())
     }
 
     fn vertices(&self, body: BodyId) -> Result<Vec<VertexInfo>> {
-        let shape = self.body(body)?;
-        Ok(shape
-            .vertices_info()
-            .map_err(occt)?
-            .into_iter()
-            .enumerate()
-            .map(|(i, (p, edges))| VertexInfo {
-                id: VertexId(i as u64),
-                point: Point3::from(to_na(p)),
-                edges: edges.into_iter().map(|e| EdgeId(e as u64)).collect(),
-            })
-            .collect())
+        if let Some(v) = self.vertex_infos.lock().ok().and_then(|c| c.get(&body).cloned()) {
+            return Ok(v.as_ref().clone());
+        }
+        let infos = std::sync::Arc::new(self.vertices_uncached(body)?);
+        if let Ok(mut c) = self.vertex_infos.lock() {
+            c.insert(body, infos.clone());
+        }
+        Ok(infos.as_ref().clone())
     }
 
     fn mass_properties(&self, body: BodyId) -> Result<MassProperties> {
-        let shape = self.body(body)?;
-        let props = shape.mass_properties();
-        if shape.sub_count(SubKind::Solid).map_err(occt)? == 0 {
-            // A surface body: no volume; its centre is the area centroid.
-            let faces = self.faces(body)?;
-            let area: f64 = faces.iter().map(|f| f.area).sum();
-            let center = if area > 0.0 {
-                Point3::from(faces.iter().fold(Vector3::zeros(), |acc, f| acc + f.center.coords * f.area) / area)
-            } else {
-                Point3::origin()
-            };
-            return Ok(MassProperties {
-                volume: 0.0,
-                surface_area: props.surface_area,
-                center_of_mass: center,
-                inertia: nalgebra::Matrix3::zeros(),
-            });
+        if let Some(m) = self.masses.lock().ok().and_then(|c| c.get(&body).copied()) {
+            return Ok(m);
         }
-        Ok(MassProperties {
-            volume: props.volume,
-            surface_area: props.surface_area,
-            center_of_mass: Point3::from(to_na(props.center_of_mass)),
-            inertia: nalgebra::Matrix3::from_fn(|r, c| props.inertia[r][c]),
-        })
+        let m = self.mass_uncached(body)?;
+        if let Ok(mut c) = self.masses.lock() {
+            c.insert(body, m);
+        }
+        Ok(m)
     }
 
     fn solid_count(&self, body: BodyId) -> Result<usize> {
@@ -1835,6 +1887,10 @@ impl Kernel for OcctKernel {
     }
 
     fn tessellate(&self, body: BodyId, quality: Tessellation) -> Result<TriMesh> {
+        // A mesh body's own flat triangles are exact at any quality.
+        if let Some(m) = self.meshes.get(&body) {
+            return Ok(m.as_ref().clone());
+        }
         let shape = self.body(body)?;
         let deflection = quality.deflection.max(1e-4);
         let angle = quality.angle.clamp(1e-3, 1.0);
@@ -2049,21 +2105,27 @@ impl Kernel for OcctKernel {
     fn mesh_solid(&mut self, triangles: &[[Point3<f64>; 3]], tol: f64) -> Result<BodyId> {
         let failed = |why: String| KernelError::OperationFailed(format!("mesh: {why}"));
         let g = |p: &Point3<f64>| dvec3(p.x, p.y, p.z);
-        let mut faces: Vec<Shape> = Vec::with_capacity(triangles.len());
-        for t in triangles {
+        let usable = |t: &[Point3<f64>; 3]| {
             let [a, b, c] = [g(&t[0]), g(&t[1]), g(&t[2])];
-            if (b - a).cross(c - a).length() <= LINEAR_EPS {
-                continue;
-            }
-            let edges = [Edge::try_segment(a, b), Edge::try_segment(b, c), Edge::try_segment(c, a)];
-            let Ok(edges) = edges.into_iter().collect::<std::result::Result<Vec<Edge>, _>>() else { continue };
-            let Ok(wire) = Wire::try_from_edges(edges.iter()) else { continue };
-            let Ok(face) = Face::try_from_wires(&wire, &[]) else { continue };
-            faces.push(Shape::from(&face));
-        }
-        if faces.len() < 4 {
+            (b - a).cross(c - a).length() > LINEAR_EPS
+        };
+        if triangles.iter().filter(|t| usable(t)).count() < 4 {
             return Err(failed("fewer than four usable triangles".into()));
         }
+        // A face of each triangle, for sewing: only made when it is needed (a seventh of the
+        // time of a 265 000-triangle import, issue #11).
+        let separate_faces = || -> Vec<Shape> {
+            let mut faces: Vec<Shape> = Vec::with_capacity(triangles.len());
+            for t in triangles.iter().filter(|t| usable(t)) {
+                let [a, b, c] = [g(&t[0]), g(&t[1]), g(&t[2])];
+                let edges = [Edge::try_segment(a, b), Edge::try_segment(b, c), Edge::try_segment(c, a)];
+                let Ok(edges) = edges.into_iter().collect::<std::result::Result<Vec<Edge>, _>>() else { continue };
+                let Ok(wire) = Wire::try_from_edges(edges.iter()) else { continue };
+                let Ok(face) = Face::try_from_wires(&wire, &[]) else { continue };
+                faces.push(Shape::from(&face));
+            }
+            faces
+        };
         // Closed: every edge (between corners welded within `tol`) is used by an even number of
         // triangles. OCCT makes a "solid" of an open shell too.
         let key = |p: &Point3<f64>| [p.x, p.y, p.z].map(|c| (c / tol.max(1e-12)).round() as i64);
@@ -2104,15 +2166,27 @@ impl Kernel for OcctKernel {
             }
             tris.extend(ids);
         }
-        let wound = directed.iter().all(|(&(a, b), n)| *n == 1 && directed.get(&(b, a)) == Some(&1));
+        // An edge where two parts of the surface touch has four triangles, two each way: still
+        // wound (sewing a 265 000-triangle STL with two such edges never finished: issue #11).
+        let wound = directed.iter().all(|(&(a, b), n)| directed.get(&(b, a)) == Some(n));
+        // Its mass from the triangles themselves, exact for a polyhedron and instant (OCCT's
+        // integration over 265 000 faces took 5 s).
+        let mut mass = None;
         let solid = match wound.then(|| Shape::try_mesh_solid(&points, &tris, tol)) {
-            Some(Ok(s)) => s,
+            Some(Ok(s)) => {
+                mass = Some(polyhedron_mass(&points, &tris));
+                s
+            }
             _ => {
+                let faces = separate_faces();
+                if faces.len() < 4 {
+                    return Err(failed("fewer than four usable triangles".into()));
+                }
                 let refs: Vec<&Shape> = faces.iter().collect();
                 Shape::try_sew_solid(&refs, tol).map_err(|e| failed(e.to_string()))?
             }
         };
-        let v = solid.mass_properties().volume;
+        let v = mass.map_or_else(|| solid.mass_properties().volume, |(m, _)| m.volume);
         if !v.is_finite() || v <= 0.0 {
             return Err(failed("the triangles do not enclose a volume".into()));
         }
@@ -2121,11 +2195,32 @@ impl Kernel for OcctKernel {
         // triangles while it was slow; a 27 000-triangle baseplate now merges in about a second
         // and every later feature on it is faster for it.)
         const UNIFY_MAX: usize = 200_000;
-        let solid = match (triangles.len() <= UNIFY_MAX).then(|| solid.try_clean()) {
-            Some(Ok(u)) if (u.mass_properties().volume - v).abs() <= v * 1e-9 && u.sub_count(SubKind::Solid).map_err(occt)? == 1 => u,
-            _ => solid,
+        let (solid, unified) = match (triangles.len() <= UNIFY_MAX).then(|| solid.try_clean()) {
+            Some(Ok(u)) if (u.mass_properties().volume - v).abs() <= v * 1e-9 && u.sub_count(SubKind::Solid).map_err(occt)? == 1 => (u, true),
+            _ => (solid, false),
         };
-        Ok(self.insert_raw(solid, History::default())?.bodies[0])
+        let body = self.insert_raw(solid, History::default())?.bodies[0];
+        if let Some((m, inward)) = mass {
+            if let Ok(mut c) = self.masses.lock() {
+                c.insert(body, m);
+            }
+            // Its faces are still the triangles, one each, in order: its display mesh and faces
+            // from them (OCCT's integrals over each face took 8 s for 265 000).
+            if !unified {
+                let (mesh, faces, edges, vertices) = mesh_body_mesh(&points, &tris, inward);
+                self.meshes.insert(body, std::sync::Arc::new(mesh));
+                if let Ok(mut c) = self.face_infos.lock() {
+                    c.insert(body, std::sync::Arc::new(faces));
+                }
+                if let Ok(mut c) = self.edge_infos.lock() {
+                    c.insert(body, std::sync::Arc::new(edges));
+                }
+                if let Ok(mut c) = self.vertex_infos.lock() {
+                    c.insert(body, std::sync::Arc::new(vertices));
+                }
+            }
+        }
+        Ok(body)
     }
 
     fn export_step(&self, bodies: &[BodyId]) -> Result<Vec<u8>> {
@@ -2641,6 +2736,123 @@ fn ellipse_axes(a: f64, b: f64, rotation: f64, _start: f64, sweep: f64) -> Resul
 // Queries
 
 /// Every face's [`FaceInfo`], with the axes of curved faces.
+/// The mass properties of a closed polyhedron, `points` (xyz triples) and `triangles` (three
+/// point indices each, all wound the same way), as OCCT gives them (density 1; the inertia
+/// about the centroid): sums over the tetrahedra from a reference point to each triangle. Wound
+/// inward, the signs turn over; the flag says so.
+fn polyhedron_mass(points: &[f64], triangles: &[i32]) -> (MassProperties, bool) {
+    let p = |i: i32| Vector3::new(points[3 * i as usize], points[3 * i as usize + 1], points[3 * i as usize + 2]);
+    // About a point of the mesh, for accuracy far from the origin.
+    let o = if points.len() >= 3 { p(0) } else { Vector3::zeros() };
+    let (mut v, mut area, mut first) = (0.0, 0.0, Vector3::zeros());
+    // ∫ x_i x_j over the volume.
+    let mut second = nalgebra::Matrix3::<f64>::zeros();
+    for t in triangles.as_chunks::<3>().0 {
+        let (a, b, c) = (p(t[0]) - o, p(t[1]) - o, p(t[2]) - o);
+        area += (b - a).cross(&(c - a)).norm() / 2.0;
+        let dv = a.dot(&b.cross(&c)) / 6.0;
+        v += dv;
+        first += (a + b + c) * (dv / 4.0);
+        for i in 0..3 {
+            for j in 0..3 {
+                second[(i, j)] += dv / 20.0
+                    * (2.0 * (a[i] * a[j] + b[i] * b[j] + c[i] * c[j])
+                        + a[i] * b[j] + a[j] * b[i] + a[i] * c[j] + a[j] * c[i] + b[i] * c[j] + b[j] * c[i]);
+            }
+        }
+    }
+    let inward = v < 0.0;
+    if inward {
+        (v, first, second) = (-v, -first, -second);
+    }
+    let g = if v > 0.0 { first / v } else { Vector3::zeros() };
+    // About the centroid, then I = tr(S)·1 − S.
+    let s = second - g * g.transpose() * v;
+    let inertia = nalgebra::Matrix3::identity() * s.trace() - s;
+    (MassProperties { volume: v, surface_area: area, center_of_mass: Point3::from(g + o), inertia }, inward)
+}
+
+/// The display mesh of the solid `cadrs_mesh_solid` makes of `points` and `triangles`, as
+/// [`Kernel::tessellate`] would give it, without meshing it again: a face per triangle it
+/// keeps (in order, the zero-area ones left out as it leaves them out), and its edges in the
+/// order the shape lists them (first use, along each face's wire), each a straight line; and
+/// its faces, edges and vertices as [`Kernel::faces`], [`Kernel::edges`] and
+/// [`Kernel::vertices`] give them (the vertices in order of first use too, along the edges).
+/// `inward`: the triangles are wound inward, so the solid's faces were turned over.
+fn mesh_body_mesh(points: &[f64], triangles: &[i32], inward: bool) -> (TriMesh, Vec<FaceInfo>, Vec<EdgeInfo>, Vec<VertexInfo>) {
+    let p = |i: i32| Point3::new(points[3 * i as usize], points[3 * i as usize + 1], points[3 * i as usize + 2]);
+    let mut out = TriMesh::default();
+    let mut faces = Vec::new();
+    let mut edge_ids: HashMap<(i32, i32), u64> = HashMap::new();
+    let mut edges: Vec<EdgeInfo> = Vec::new();
+    let mut vertex_ids: HashMap<i32, usize> = HashMap::new();
+    let mut vertices: Vec<VertexInfo> = Vec::new();
+    for t in triangles.as_chunks::<3>().0 {
+        let (a, c, d) = (t[0], t[1], t[2]);
+        let n = (p(c) - p(a)).cross(&(p(d) - p(a)));
+        if n.norm() <= 1e-300 {
+            continue;
+        }
+        let face = FaceId(out.triangle_faces.len() as u64);
+        let area = n.norm() / 2.0;
+        let (n, order) = if inward { (-n.normalize(), [a, d, c]) } else { (n.normalize(), [a, c, d]) };
+        let center = Point3::from((p(a).coords + p(c).coords + p(d).coords) / 3.0);
+        let helper = if n.x.abs() < 0.9 { Vector3::x() } else { Vector3::y() };
+        faces.push(FaceInfo {
+            id: face,
+            kind: SurfaceKind::Plane,
+            plane: Some(Plane { origin: center, x_dir: Unit::new_normalize(helper - n * helper.dot(&n)), normal: Unit::new_normalize(n) }),
+            area,
+            center,
+            axis: None,
+            radius: None,
+        });
+        let base = out.positions.len() as u32;
+        for i in order {
+            out.positions.push(p(i));
+            out.normals.push(n);
+        }
+        out.indices.push([base, base + 1, base + 2]);
+        out.triangle_faces.push(face);
+        for (u, w) in [(a, c), (c, d), (d, a)] {
+            let key = (u.min(w), u.max(w));
+            match edge_ids.get(&key) {
+                Some(&e) => edges[e as usize].faces[1] = Some(face),
+                None => {
+                    let id = EdgeId(out.edges.len() as u64);
+                    edge_ids.insert(key, id.0);
+                    // Running as the face that first uses it runs it (its orientation there, turned
+                    // over with the faces).
+                    let (start, end) = if inward { (p(w), p(u)) } else { (p(u), p(w)) };
+                    let along = end - start;
+                    let dir = along.normalize();
+                    out.edges.push((id, vec![start, end]));
+                    edges.push(EdgeInfo {
+                        id,
+                        faces: [Some(face), None],
+                        length: along.norm(),
+                        curve: CurveKind::Line,
+                        start,
+                        end,
+                        mid: Point3::from((start.coords + end.coords) / 2.0),
+                        start_tangent: dir,
+                        end_tangent: dir,
+                        circle: None,
+                    });
+                    for v in [key.0, key.1] {
+                        let at = *vertex_ids.entry(v).or_insert_with(|| {
+                            vertices.push(VertexInfo { id: VertexId(vertices.len() as u64), point: p(v), edges: Vec::new() });
+                            vertices.len() - 1
+                        });
+                        vertices[at].edges.push(id);
+                    }
+                }
+            }
+        }
+    }
+    (out, faces, edges, vertices)
+}
+
 fn face_infos(shape: &Shape) -> Vec<FaceInfo> {
     let axes = shape.face_axes().unwrap_or_default();
     faces_of(shape)
@@ -2703,5 +2915,122 @@ fn face_info(id: FaceId, face: &Face) -> FaceInfo {
         center,
         axis: None,
         radius: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mesh's mass from its triangles is OCCT's for the solid made of them: a lopsided
+    /// pyramid far from the origin, wound outward and inward.
+    #[test]
+    fn polyhedron_mass_matches_occt() {
+        let points = [100.0, 50.0, -20.0, 130.0, 52.0, -20.0, 104.0, 75.0, -18.0, 112.0, 58.0, 9.0, 101.0, 70.0, -19.0];
+        // Base quad 0 1 2 4 (triangles 0 2 1, 0 4 2) and four sides up to 3, wound outward.
+        let outward = [0, 2, 1, 0, 4, 2, 0, 1, 3, 1, 2, 3, 2, 4, 3, 4, 0, 3];
+        let solid = Shape::try_mesh_solid(&points, &outward, 1e-7).unwrap();
+        let occt = solid.mass_properties();
+        let inward: Vec<i32> = outward.as_chunks::<3>().0.iter().flat_map(|t| [t[0], t[2], t[1]]).collect();
+        for tris in [&outward[..], &inward[..]] {
+            let (m, _) = polyhedron_mass(&points, tris);
+            let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+            assert!(near(m.volume, occt.volume), "{} vs {}", m.volume, occt.volume);
+            assert!(near(m.surface_area, occt.surface_area));
+            for k in 0..3 {
+                assert!(near(m.center_of_mass[k], occt.center_of_mass[k]));
+                for j in 0..3 {
+                    assert!((m.inertia[(k, j)] - occt.inertia[k][j]).abs() <= 1e-7 * occt.inertia[0][0].abs(), "I{k}{j}: {} vs {}", m.inertia[(k, j)], occt.inertia[k][j]);
+                }
+            }
+        }
+    }
+
+    /// The mesh body's display mesh without meshing is OCCT's mesh of it: the same faces,
+    /// triangles (corners, winding and normals) and edges, wound outward and inward.
+    #[test]
+    fn mesh_body_mesh_matches_occt() {
+        let pyramid = (
+            vec![100.0, 50.0, -20.0, 130.0, 52.0, -20.0, 104.0, 75.0, -18.0, 112.0, 58.0, 9.0, 101.0, 70.0, -19.0],
+            vec![0, 2, 1, 0, 4, 2, 0, 1, 3, 1, 2, 3, 2, 4, 3, 4, 0, 3],
+        );
+        // A 10 mm cube, each side a 4 × 4 grid of squares split in two, wound outward.
+        let cube = {
+            let (mut points, mut tris, mut index) = (Vec::new(), Vec::new(), HashMap::new());
+            let mut at = |q: [i64; 3]| -> i32 {
+                *index.entry(q).or_insert_with(|| {
+                    points.extend(q.map(|c| c as f64 * 2.5 + 7.0));
+                    (points.len() / 3 - 1) as i32
+                })
+            };
+            for axis in 0..3 {
+                for side in [0i64, 4] {
+                    for i in 0..4 {
+                        for j in 0..4 {
+                            let corner = |di: i64, dj: i64| {
+                                let mut q = [0i64; 3];
+                                q[axis] = side;
+                                q[(axis + 1) % 3] = i + di;
+                                q[(axis + 2) % 3] = j + dj;
+                                q
+                            };
+                            let c = [corner(0, 0), corner(1, 0), corner(1, 1), corner(0, 1)].map(&mut at);
+                            let quad = if side == 0 { [c[0], c[3], c[2], c[1]] } else { c };
+                            tris.extend([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
+                        }
+                    }
+                }
+            }
+            (points, tris)
+        };
+        for (points, outward) in [pyramid, cube] {
+            let inward: Vec<i32> = outward.as_chunks::<3>().0.iter().flat_map(|t| [t[0], t[2], t[1]]).collect();
+            for (tris, flag) in [(&outward[..], false), (&inward[..], true)] {
+                let mut k = OcctKernel::new();
+                let body = k.insert_raw(Shape::try_mesh_solid(&points, tris, 1e-7).unwrap(), History::default()).unwrap().bodies[0];
+                let occt = k.tessellate(body, Tessellation { deflection: 0.05, angle: 0.1 }).unwrap();
+                let (ours, faces, edges, vertices) = mesh_body_mesh(&points, tris, flag);
+                let (occt_edges, occt_vertices) = (k.edges_uncached(body).unwrap(), k.vertices_uncached(body).unwrap());
+                assert_eq!(edges.len(), occt_edges.len());
+                for (a, b) in edges.iter().zip(&occt_edges) {
+                    assert_eq!((a.id, a.faces, a.curve, a.circle), (b.id, b.faces, b.curve, b.circle), "edge");
+                    let pts = |e: &EdgeInfo| [e.start, e.end, e.mid];
+                    assert!(pts(a).iter().zip(pts(b)).all(|(x, y)| (x - y).norm() < 1e-9), "{a:?} vs {b:?}");
+                    assert!((a.length - b.length).abs() < 1e-9 && (a.start_tangent - b.start_tangent).norm() < 1e-9 && (a.end_tangent - b.end_tangent).norm() < 1e-9, "{a:?} vs {b:?}");
+                }
+                assert_eq!(vertices.len(), occt_vertices.len());
+                for (a, b) in vertices.iter().zip(&occt_vertices) {
+                    assert!(a.id == b.id && a.edges == b.edges && (a.point - b.point).norm() < 1e-9, "{a:?} vs {b:?}");
+                }
+                let occt_faces = face_infos(k.body(body).unwrap());
+                assert_eq!(faces.len(), occt_faces.len());
+                for (a, b) in faces.iter().zip(&occt_faces) {
+                    assert_eq!((a.id, a.kind, a.axis, a.radius), (b.id, b.kind, b.axis, b.radius));
+                    assert!((a.area - b.area).abs() < 1e-9 * b.area && (a.center - b.center).norm() < 1e-9, "{a:?} vs {b:?}");
+                    let (pa, pb) = (a.plane.unwrap(), b.plane.unwrap());
+                    assert!((pa.origin - pb.origin).norm() < 1e-9 && (pa.normal.into_inner() - pb.normal.into_inner()).norm() < 1e-6 && (pa.x_dir.into_inner() - pb.x_dir.into_inner()).norm() < 1e-6, "{pa:?} vs {pb:?}");
+                }
+                assert_eq!(polyhedron_mass(&points, tris).1, flag);
+                assert_eq!(ours.triangle_faces, occt.triangle_faces);
+                let corners = |m: &TriMesh, t: usize| m.indices[t].map(|i| m.positions[i as usize]);
+                for t in 0..occt.indices.len() {
+                    let (o, w) = (corners(&occt, t), corners(&ours, t));
+                    // The same corners in the same turning order.
+                    let turn = (0..3).find(|r| (0..3).all(|i| (o[i] - w[(i + r) % 3]).norm() < 1e-9));
+                    assert!(turn.is_some(), "triangle {t}: {o:?} vs {w:?}");
+                    let n_occt = occt.normals[occt.indices[t][0] as usize];
+                    let n_ours = ours.normals[ours.indices[t][0] as usize];
+                    assert!((n_occt - n_ours).norm() < 1e-6, "normal {t}: {n_occt:?} vs {n_ours:?}");
+                }
+                assert_eq!(ours.edges.len(), occt.edges.len());
+                for ((ia, a), (ib, b)) in ours.edges.iter().zip(&occt.edges) {
+                    assert_eq!(ia, ib);
+                    let ends = |p: &Vec<Point3<f64>>| [p[0], p[p.len() - 1]];
+                    let (ea, eb) = (ends(a), ends(b));
+                    let same = |x: [Point3<f64>; 2], y: [Point3<f64>; 2]| (x[0] - y[0]).norm() < 1e-9 && (x[1] - y[1]).norm() < 1e-9;
+                    assert!(same(ea, eb) || same(ea, [eb[1], eb[0]]), "edge {ia:?}: {ea:?} vs {eb:?}");
+                }
+            }
+        }
     }
 }

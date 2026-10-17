@@ -1569,12 +1569,16 @@ pub fn part_lines_culled(part: &Part, view: &ViewState, cull: bool) -> Vec<Vec<V
     let cull = cull && part.kind == cadrs_core::PartKind::Solid;
     // The mesh's normal, not the plane frame's: a face a cut left keeps its tool's frame, whose
     // normal points into the material (the U-joint flange's pockets lost visible edges).
-    let faces_away = |f: &FaceName| {
-        s.face(f).filter(|x| x.plane.is_some() && x.triangle_count > 0).is_some_and(|x| {
+    let away = |x: &cadrs_core::solid::SolidFace| {
+        x.plane.is_some() && x.triangle_count > 0 && {
             let n = s.indices.get(3 * x.first_triangle).and_then(|&i| s.normals.get(i as usize));
             n.is_some_and(|n| v3(*n).dot(back) < -1e-4)
-        })
+        }
     };
+    // By name from one pass, not `Solid::face` per edge: that scans the faces, and an imported
+    // mesh's every facet is a face (an STL of 48 000 triangles froze the app: issue #11).
+    let by_name: HashMap<FaceName, bool> = if cull { s.faces.iter().map(|x| (x.name, away(x))).collect() } else { HashMap::new() };
+    let faces_away = |f: &FaceName| by_name.get(f).copied().unwrap_or_else(|| s.face(f).is_some_and(away));
     let mut out: Vec<Vec<Vec3>> = s
         .edges
         .iter()
@@ -1902,12 +1906,10 @@ fn draw_part_edges(
         } else if preview {
             // Edges between faces facing the viewer are dark; the others show faintly through.
             let back = v.back();
-            let faces_viewer = |t: &FaceName| {
-                part.solid
-                    .face(t)
-                    .and_then(|f| f.plane)
-                    .is_none_or(|p| v3(p.normal()).dot(back) > 1e-4)
-            };
+            // The faces by name from one pass (issue #11: per edge, `Solid::face` scans them all).
+            let by_name: HashMap<FaceName, &cadrs_core::solid::SolidFace> = part.solid.faces.iter().map(|f| (f.name, f)).collect();
+            let face = |t: &FaceName| by_name.get(t).copied().or_else(|| part.solid.face(t));
+            let faces_viewer = |t: &FaceName| face(t).and_then(|f| f.plane).is_none_or(|p| v3(p.normal()).dot(back) > 1e-4);
             for e in part.solid.edges.iter().filter(|e| !e.smooth) {
                 // The edges on the sketch plane lie under the selected region's outline.
                 let on_start = e
@@ -1920,7 +1922,7 @@ fn draw_part_edges(
                 // 14, P3.4 judge).
                 let end_cap_on_outline = e.name.faces.iter().any(|f| {
                     matches!(f.origin, FaceOrigin::Cap { end: true, .. })
-                        && part.solid.face(f).and_then(|x| x.plane).is_some_and(|p| v3(p.normal()).normalize().dot(back).abs() > 0.999)
+                        && face(f).and_then(|x| x.plane).is_some_and(|p| v3(p.normal()).normalize().dot(back).abs() > 0.999)
                 });
                 if on_start || end_cap_on_outline {
                     continue;

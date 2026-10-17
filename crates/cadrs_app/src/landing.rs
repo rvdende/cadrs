@@ -58,6 +58,7 @@ impl Plugin for LandingPlugin {
             .init_resource::<Thumbnails>()
             .init_resource::<LandingDetails>()
             .init_resource::<details::SampleThumbs>()
+            .add_systems(Update, details::poll_import_thumbnails)
             .add_systems(
                 OnEnter(AppState::Landing),
                 (load_library, spawn_landing).chain(),

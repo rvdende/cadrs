@@ -1224,9 +1224,14 @@ pub fn import_file(world: &mut World, path: &Path) {
             return;
         }
     };
-    if let Some(img) = crate::script::studio_thumbnail(&doc) {
-        let _ = store.write_thumbnail(doc.id, &img);
-    }
+    // The thumbnail rebuilds the Part Studio: on its own thread, as a large mesh takes most of a
+    // minute (issue #11). `poll_import_thumbnails` saves it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let snapshot = doc.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::script::studio_thumbnail(&snapshot));
+    });
+    world.spawn((Name::new("import-thumbnail"), ImportThumbnail { id: doc.id, rx: std::sync::Mutex::new(rx) }));
     world.resource_mut::<Thumbnails>().0.remove(&doc.id);
     world.resource_mut::<Thumbnails>().1.remove(&doc.id);
     let id = doc.id;
@@ -1242,4 +1247,38 @@ pub fn import_file(world: &mut World, path: &Path) {
     }
     select(world, Pick::Doc(id), true);
     undo_toast(world, format!("Imported \u{201c}{file_name}\u{201d} as a new document"));
+}
+
+/// An imported document's thumbnail, rendering on its own thread.
+#[derive(Component)]
+pub struct ImportThumbnail {
+    id: DocumentId,
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<Option<image::RgbaImage>>>,
+}
+
+/// Saves the imported documents' thumbnails once they are rendered, and shows them.
+pub fn poll_import_thumbnails(
+    mut commands: Commands,
+    q: Query<(Entity, &ImportThumbnail)>,
+    store: Res<DocumentStore>,
+    mut lib: ResMut<DocLibrary>,
+    mut thumbs: ResMut<Thumbnails>,
+) {
+    for (e, job) in &q {
+        let img = match job.rx.lock().map(|rx| rx.try_recv()) {
+            Ok(Ok(img)) => img,
+            Ok(Err(std::sync::mpsc::TryRecvError::Empty)) => continue,
+            _ => None,
+        };
+        commands.entity(e).despawn();
+        // Not for a document the import's undo took away meanwhile.
+        let Some(img) = img.filter(|_| lib.lib.entries.iter().any(|d| d.id == job.id)) else { continue };
+        if let Err(e) = store.0.write_thumbnail(job.id, &img) {
+            warn!("cannot save the imported document's thumbnail: {e}");
+            continue;
+        }
+        thumbs.0.remove(&job.id);
+        thumbs.1.remove(&job.id);
+        lib.set_changed();
+    }
 }
