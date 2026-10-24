@@ -1611,7 +1611,9 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Shell(x) => self.shell(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
-            FeatureKind::DirectEdit(x) => self.direct_edit(f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::DirectEdit(x) => self
+                .direct_edit(before, f.id, x, state)
+                .unwrap_or_else(fail),
             #[cfg(feature = "brep")]
             FeatureKind::Hole(x) => self.hole(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]

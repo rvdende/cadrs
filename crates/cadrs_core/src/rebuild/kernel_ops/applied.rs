@@ -660,15 +660,17 @@ impl Rebuilder {
         })
     }
 
-    /// Delete face and Move face (direct edits): per part, its picked faces removed (healed)
-    /// or offset by the distance, the faces round them following.
+    /// Delete face and Move face (direct edits): per part, its picked faces removed (healed),
+    /// or translated, rotated or offset, the faces round them following.
     pub(in crate::rebuild) fn direct_edit(
         &mut self,
+        before: &[Feature],
         id: FeatureId,
         x: &crate::direct_edit::DirectEditFeature,
         state: &Arc<State>,
     ) -> Result<Output, String> {
-        use crate::direct_edit::DirectEditKind;
+        use crate::direct_edit::{DirectEditKind, MoveType};
+        use cadrs_kernel::Motion;
         if let Some(p) = x.problem() {
             return Err(p.into());
         }
@@ -690,6 +692,27 @@ impl Rebuilder {
         let faces: Vec<Vec<cadrs_kernel::FaceId>> = groups.iter().map(|g| g.2.clone()).collect();
         let bodies = groups.iter().map(|g| (g.0, g.1)).collect();
         let (kind, distance) = (x.kind, x.distance);
+        let motion = match (kind, x.move_type) {
+            (DirectEditKind::MoveFace, MoveType::Translate) => {
+                let u = match &x.direction {
+                    Some(d) => self
+                        .direction(before, state, d)
+                        .map_err(|e| e.replace("extrude direction", "direction"))?
+                        .into_inner(),
+                    None => first_face_normal(state, &x.faces[0])
+                        .ok_or("The first face has no normal to move along")?,
+                };
+                Some(Motion::translation(u * distance))
+            }
+            (DirectEditKind::MoveFace, MoveType::Rotate) => {
+                let a = x.axis.as_ref().ok_or("Select an axis of rotation")?;
+                let axis = self
+                    .axis(before, state, a)
+                    .map_err(|e| e.replace("revolve axis", "axis of rotation"))?;
+                Some(Motion::rotation(&axis, x.angle.to_radians()))
+            }
+            _ => None,
+        };
         self.per_part(
             id,
             kind.label(),
@@ -698,6 +721,10 @@ impl Rebuilder {
             |this, i, body| match kind {
                 DirectEditKind::DeleteFace => this.kernel.delete_faces(body, &faces[i]),
                 DirectEditKind::Simplify => this.kernel.simplify(body),
+                DirectEditKind::MoveFace if motion.is_some() => {
+                    this.kernel
+                        .move_faces(body, &faces[i], motion.as_ref().expect("checked"))
+                }
                 DirectEditKind::MoveFace => {
                     let spec = cadrs_kernel::OffsetSpec {
                         distance: 0.0,
@@ -1106,4 +1133,17 @@ pub(super) fn hole_points(before: &[Feature], h: &HoleFeature) -> Result<Vec<Hol
         });
     }
     Ok(out)
+}
+
+/// The outward normal of a Move face's first face: Translate's direction when none is picked.
+fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Option<Vector3<f64>> {
+    let parts = state
+        .part(f.part)
+        .into_iter()
+        .chain(state.parts.iter().filter(|p| p.part.id != f.part));
+    parts.into_iter().find_map(|p| {
+        let s = &p.part.solid;
+        let (i, _) = s.resolve_face(&f.face, None, Some(f.seed)).ok()?;
+        s.face_normal(i).map(Vector3::from)
+    })
 }

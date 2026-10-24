@@ -6,8 +6,10 @@
 use std::f64::consts::PI;
 
 use cadrs_core::commands::{AddExtrude, AddFeature, AddSketch, EditSketch, SetExtrude, SetFeature};
-use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind};
-use cadrs_core::document::{BooleanOp, Document, ExtrudeFeature, FaceRef, FeatureKind};
+use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind, MoveType};
+use cadrs_core::document::{
+    AxisRef, BooleanOp, DirectionRef, Document, EdgeRef, ExtrudeFeature, FaceRef, FeatureKind,
+};
 use cadrs_core::rebuild::{self, Build};
 use cadrs_core::{ElementId, Feature, FeatureId, History, Part, samples};
 use cadrs_sketch::{PlaneRef, SketchOp, Vec2};
@@ -252,6 +254,7 @@ fn move_face_moves_a_wall() {
             faces: top,
             distance: 5.0,
             distance_expr: "5 mm".into(),
+            ..Default::default()
         }),
     );
     close(d.volume(), v * 1.5, 1e-6);
@@ -269,9 +272,130 @@ fn move_face_resizes_a_hole() {
             faces: wall,
             distance: 1.0,
             distance_expr: "1 mm".into(),
+            ..Default::default()
         }),
     );
     close(d.volume(), 8000.0 - PI * 16.0 * 10.0, 1e-6);
+}
+
+/// The block's top face (z = 10).
+fn top_face(p: &Part) -> Vec<FaceRef> {
+    faces_where(p, |f| {
+        f.plane
+            .is_some_and(|p| p.normal()[2] > 0.5 && (p.origin[2] - 10.0).abs() < 1e-9)
+    })
+}
+
+#[test]
+fn translate_without_a_direction_moves_along_the_first_faces_normal() {
+    // The top translated 5 along its own normal (up): 15 high, as the offset above.
+    let (mut d, v) = block_with_hole();
+    let top = top_face(&d.parts()[0]);
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Translate,
+            faces: top,
+            distance: 5.0,
+            distance_expr: "5 mm".into(),
+            ..Default::default()
+        }),
+    );
+    close(d.volume(), v * 1.5, 1e-6);
+}
+
+#[test]
+fn translate_moves_a_hole_along_a_direction() {
+    // The hole's wall translated 5 along X (the Right plane's normal): the hole is at x = 25,
+    // the volume is the same and the centroid moves away from the hole, to
+    // (8000·20 − 250π·25) / (8000 − 250π).
+    let (mut d, v) = block_with_hole();
+    let wall = faces_where(&d.parts()[0], is_cylinder);
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Translate,
+            faces: wall,
+            direction: Some(DirectionRef::PlaneNormal(PlaneRef::Right)),
+            distance: 5.0,
+            distance_expr: "5 mm".into(),
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let m = parts[0].mass.unwrap();
+    close(m.volume, v, 1e-6);
+    let hole = 250.0 * PI;
+    close(
+        m.center_of_mass.x,
+        (8000.0 * 20.0 - hole * 25.0) / (8000.0 - hole),
+        1e-6,
+    );
+}
+
+#[test]
+fn rotate_tilts_a_face_about_an_axis() {
+    // The top turned 10° about its edge along y = 0: its height is 10 + y·tan 10° (or
+    // 10 − y·tan 10°, by which way the edge runs), so the block and the hole (whose mean height
+    // is at y = 10) both grow or shrink by tan 10°; −10° does the opposite.
+    let (mut d, v) = block_with_hole();
+    let part = d.parts()[0].clone();
+    let top = top_face(&part);
+    let edge = part
+        .solid
+        .edges
+        .iter()
+        .find(|e| {
+            e.points
+                .iter()
+                .all(|p| p[1].abs() < 1e-9 && (p[2] - 10.0).abs() < 1e-9)
+        })
+        .expect("the top edge along y = 0");
+    let axis = AxisRef::Edge(EdgeRef {
+        part: part.id,
+        edge: edge.name,
+        seed: edge.points[0],
+    });
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::MoveFace,
+        move_type: MoveType::Rotate,
+        faces: top,
+        axis: Some(axis),
+        angle: 10.0,
+        angle_expr: "10 deg".into(),
+        ..Default::default()
+    };
+    let f = d.add("Move face", FeatureKind::DirectEdit(x.clone()));
+    let turned = d.volume();
+    let t = 10f64.to_radians().tan();
+    close((turned - v).abs(), v * t, 1e-6);
+    x.angle = -10.0;
+    x.angle_expr = "-10 deg".into();
+    d.set(f, FeatureKind::DirectEdit(x));
+    close(d.volume() + turned, 2.0 * v, 1e-6);
+}
+
+#[test]
+fn rotate_without_an_axis_says_what_to_pick() {
+    let (mut d, _) = block_with_hole();
+    let top = top_face(&d.parts()[0]);
+    let f = d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Rotate,
+            faces: top,
+            ..Default::default()
+        }),
+    );
+    let b = d.build();
+    assert!(
+        b.errors
+            .iter()
+            .any(|(id, e)| *id == f && e.contains("Select an axis of rotation"))
+    );
 }
 
 #[test]
@@ -358,6 +482,7 @@ fn sweep_moves(
                 faces,
                 distance,
                 distance_expr: format!("{distance} mm"),
+                ..Default::default()
             }),
         );
         let b = d.build();

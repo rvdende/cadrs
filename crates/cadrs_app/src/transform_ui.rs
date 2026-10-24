@@ -241,6 +241,7 @@ pub fn takes_connectors(kind: &FeatureKind, field: AppliedField) -> bool {
                 | AppliedField::TransformAxis
                 | AppliedField::TransformDirection
         )
+        || crate::direct_edit_ui::takes_connectors(kind, field)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -276,7 +277,7 @@ fn name_of(features: &[Feature], id: cadrs_core::FeatureId) -> String {
         .map_or("sketch".into(), |f| f.name.clone())
 }
 
-fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
+pub(crate) fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
     match d {
         DirectionRef::Edge(r) => format!(
             "Edge of {}",

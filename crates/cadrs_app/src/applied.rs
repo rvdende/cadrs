@@ -264,6 +264,9 @@ pub enum AppliedField {
     FlatRegions,
     /// The faces a Move face, Delete face or Simplify works on.
     DirectEditFaces,
+    /// Move face's Translate direction and Rotate axis.
+    DirectEditDirection,
+    DirectEditAxis,
 }
 
 /// The applied feature whose dialog is open.
@@ -561,6 +564,24 @@ impl AppliedSession {
             },
             AppliedField::DirectEditFaces => PickFilter {
                 faces: true,
+                ..none
+            },
+            AppliedField::DirectEditDirection => PickFilter {
+                planes,
+                plane_features: true,
+                faces: true,
+                planar_only: true,
+                edges: true,
+                sketch_curves: true,
+                connectors: true,
+                ..none
+            },
+            AppliedField::DirectEditAxis => PickFilter {
+                origin: true,
+                faces: true,
+                edges: true,
+                sketch_curves: true,
+                connectors: true,
                 ..none
             },
             f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),
@@ -1563,6 +1584,7 @@ fn show_references(
         }
         k @ FeatureKind::Draft(_) => want.extend(crate::draft_ui::references(k, &cache)),
         k @ FeatureKind::Transform(_) => want.extend(crate::transform_ui::references(k, &cache)),
+        k @ FeatureKind::DirectEdit(_) => want.extend(crate::direct_edit_ui::references(k, &cache)),
         k @ (FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_)) => {
             want.extend(crate::surfacing_ui::references(k, &cache))
         }
@@ -1885,14 +1907,16 @@ fn arrow_size(k: &FeatureKind) -> Option<f64> {
         {
             Some(x.depth)
         }
-        FeatureKind::DirectEdit(x)
-            if x.kind == cadrs_core::direct_edit::DirectEditKind::MoveFace =>
-        {
-            Some(x.distance)
-        }
+        FeatureKind::DirectEdit(x) if offsets(x) => Some(x.distance),
         FeatureKind::Shell(x) => Some(x.thickness),
         _ => None,
     }
+}
+
+/// A Move face that offsets its faces (its arrow is along the first face's normal).
+fn offsets(x: &cadrs_core::direct_edit::DirectEditFeature) -> bool {
+    x.kind == cadrs_core::direct_edit::DirectEditKind::MoveFace
+        && x.move_type == cadrs_core::direct_edit::MoveType::Offset
 }
 
 /// A Move face's distance may go either way (inward when negative); the other sizes stay above
@@ -2199,7 +2223,7 @@ fn place_radius_arrow(
             else {
                 return None;
             };
-            if x.kind != cadrs_core::direct_edit::DirectEditKind::MoveFace {
+            if !offsets(x) {
                 return None;
             }
             let first = x.faces.first()?;

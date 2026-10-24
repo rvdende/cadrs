@@ -775,7 +775,19 @@ impl Feature {
                 x.faces.iter().map(face).for_each(&mut add);
                 x.parts.iter().for_each(|p| add(p.feature));
             }
-            FeatureKind::DirectEdit(x) => x.faces.iter().map(face).for_each(&mut add),
+            FeatureKind::DirectEdit(x) => {
+                x.faces.iter().map(face).for_each(&mut add);
+                if let Some(d) = &x.direction {
+                    direction_parent(d).into_iter().for_each(&mut add);
+                }
+                match &x.axis {
+                    Some(AxisRef::SketchCurve { sketch, .. }) => add(*sketch),
+                    Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
+                    Some(AxisRef::Face(f)) => add(face(f)),
+                    Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
+                    None => {}
+                }
+            }
             FeatureKind::Hole(x) => {
                 x.sketch_ids().into_iter().for_each(&mut add);
                 x.merge_scope.iter().for_each(|p| add(p.feature));

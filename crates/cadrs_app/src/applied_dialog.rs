@@ -288,8 +288,12 @@ pub(crate) enum Role {
     FillEdges,
     FillContinuity,
     // The direct edits (`crate::direct_edit_ui`).
+    DirectEditType,
     DirectEditFaces,
+    DirectEditDirection,
+    DirectEditAxis,
     DirectEditDistance,
+    DirectEditAngle,
     // P3I.2: the Sheet metal model (`crate::sheetmetal_ui`). Tabs:
     SmOpTab,
     // Lists
@@ -720,6 +724,8 @@ fn dialog(
         Role::SmSecondUpTo,
         Role::FlatRegions,
         Role::DirectEditFaces,
+        Role::DirectEditDirection,
+        Role::DirectEditAxis,
     ]
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
@@ -1933,6 +1939,7 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::DiameterTolPrecision | Role::DepthTolPrecision | Role::StyleTol(_, 3) => "Precision",
         Role::TipAngle => "Tip angle",
         Role::TransformType => "Transform type",
+        Role::DirectEditType => "Move type",
         _ => return,
     };
     change(&mut commands, label, move |k| match (k, role) {
@@ -2002,6 +2009,10 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::TransformType => cadrs_core::transform::TransformType::ALL
             .get(i)
             .map(|t| crate::transform_ui::first_field(*t)),
+        // Move face's: Rotate's axis.
+        Role::DirectEditType => cadrs_core::direct_edit::MoveType::ALL
+            .get(i)
+            .and_then(|t| crate::direct_edit_ui::first_field(*t)),
         _ => None,
     };
     if let Some(f) = next {
