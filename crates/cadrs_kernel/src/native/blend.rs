@@ -2747,26 +2747,14 @@ pub fn chamfer(
         && std::env::var_os("CADRS_NO_LOCAL_FILLET").is_none()
     {
         let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
-        if let Some(local) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d) {
-            let local = local.and_then(|(out, src)| {
-                // (The local result's edges are merged and its tolerances fitted already.)
-                match local_problem(&b, &out) {
-                    Some(e) => Err(KernelError::InvalidResult {
-                        op: "chamfer",
-                        why: format!("the local chamfer isn't valid: {e}"),
-                    }),
-                    None => Ok((out, src)),
+        match equal_chamfer_local(&b, body, &sharp, d) {
+            Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
+            Err(e) => {
+                if std::env::var_os("CADRS_LOCAL_FILLET_ONLY").is_some() {
+                    return Err(e);
                 }
-            });
-            match local {
-                Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
-                Err(e) => {
-                    if std::env::var_os("CADRS_LOCAL_FILLET_ONLY").is_some() {
-                        return Err(e);
-                    }
-                    if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
-                        eprintln!("local chamfer: {e}; falling back to the blend tool");
-                    }
+                if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
+                    eprintln!("local chamfer: {e}; falling back to the blend tool");
                 }
             }
         }
@@ -3165,16 +3153,40 @@ pub fn chamfer_local(
     let edges = &real_edges(&b, edges)?[..];
     let sharp = sharp_edges(&b, edges)?;
     let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
-    let (out, src) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d).ok_or(
-        KernelError::Unsupported("a chamfer whose faces' angle can't be followed along its edge"),
-    )??;
-    if let Some(e) = local_problem(&b, &out) {
-        return Err(KernelError::InvalidResult {
-            op: "chamfer",
-            why: format!("the local chamfer isn't valid: {e}"),
-        });
-    }
+    let (out, src) = equal_chamfer_local(&b, body, &sharp, d)?;
     Ok(Tracked { body: out, src }.into_result(k, body))
+}
+
+/// The equal-distance chamfer `d` on `edges` by local trimming, its contacts measured along the
+/// faces ([`super::fillet::chamfer_equal_edges`]); where that fails, by the ball rule alone
+/// (exact between planes, near on gently curved faces) before giving up. Checked.
+fn equal_chamfer_local(
+    b: &Body,
+    body: BodyId,
+    edges: &[usize],
+    d: f64,
+) -> Result<(Body, Vec<Vec<FaceSrc>>)> {
+    let attempt = |along: bool| -> Result<(Body, Vec<Vec<FaceSrc>>)> {
+        let (out, src) = super::fillet::chamfer_equal_edges(b, body, edges, d, along).ok_or(
+            KernelError::Unsupported(
+                "a chamfer whose faces' angle can't be followed along its edge",
+            ),
+        )??;
+        // (The local result's edges are merged and its tolerances fitted already.)
+        match local_problem(b, &out) {
+            Some(e) => Err(KernelError::InvalidResult {
+                op: "chamfer",
+                why: format!("the local chamfer isn't valid: {e}"),
+            }),
+            None => Ok((out, src)),
+        }
+    };
+    attempt(true).or_else(|e| {
+        if std::env::var_os("CADRS_BLEND_DEBUG").is_some() {
+            eprintln!("local chamfer along the faces: {e}; by the ball rule");
+        }
+        attempt(false)
+    })
 }
 
 /// A variable fillet: circular sections whose radius follows a law along each edge, lofted

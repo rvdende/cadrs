@@ -24,11 +24,23 @@ fn chamfer_over_fillets() {
     // About the chain's length (176 mm) times the section (2 mm² where the faces are square,
     // 1.5 down the side where the pocket meets it at 49°), less where it bends. The local
     // chamfer builds it (the piece a hair long by edge 26's roll at its end goes, its sections
-    // the neighbour's): its rails through the contacts of the ball d·tan(θ/2), as everywhere.
-    // The blend tool measures d round the pocket's face instead: 323.15, the two differing by
-    // a sliver along the side's two vertical rims.
+    // the neighbour's), its contacts 2 along the faces (round the pocket's face and the fillets
+    // they roll over): the same as the blend tool's, whose sections are solved on the faces
+    // and lofted, within the laws' fit (the ball rule d·tan(θ/2) took off 316.3).
     let removed = v0 - k.mass_properties(out).unwrap().volume;
-    assert!((316.0..316.7).contains(&removed), "{removed}");
+    let tool = blend::chamfer_tool(
+        &mut k,
+        b,
+        &edges,
+        &ChamferOpts::new(ChamferSpec::EqualDistance(2.0)),
+    )
+    .unwrap()
+    .bodies[0];
+    let by_tool = v0 - k.mass_properties(tool).unwrap().volume;
+    assert!(
+        (removed - by_tool).abs() < 1e-4 * by_tool,
+        "removed {removed}, by the tool {by_tool}"
+    );
     // The chamfer ends flush with the round cut's floor (z = 15.5) instead of digging into it:
     // the floor only gains the chamfer's two end sections (under 2 mm² each).
     let floor = |id: BodyId| -> f64 {
