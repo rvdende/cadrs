@@ -7,10 +7,13 @@
 //! Fillet's or Chamfer's entities, a Plane's entities) as one command, or to the selection when
 //! no dialog is open, and closes the panel.
 //!
-//! P3.8 (`ex5-step12.png`): **Faces → Pocket**: a clicked face is the seed and the panel selects
-//! the pocket it is in (the faces reached across concave or smooth edges, [`cadrs_core::Solid::
-//! pocket_faces`]): "9 faces selected" for the Reflector's filleted pocket. Opened from a
-//! pattern's or mirror's Create selection button, Add selection puts them in its faces.
+//! P3.8 (`ex5-step12.png`): **Faces**: a clicked face is the seed and the rule selects the faces
+//! that go with it, as Onshape's rules ([`FaceRule`]): **Protrusion** (across convex or smooth
+//! edges), **Pocket** (concave or smooth: "9 faces selected" for the Reflector's filleted
+//! pocket), **Hole** (the round hole's walls, floors and point), **Fillets** (every fillet of
+//! the seed's radius) and **Tangent connected**. Opened from a pattern's, mirror's or direct
+//! edit's Create selection button, Add selection puts them in its faces (#22: an imported
+//! part's pocket or boss deleted or moved in one go).
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
@@ -36,6 +39,7 @@ impl Plugin for CreateSelectionPlugin {
         app.add_observer(on_cancel)
             .add_observer(on_add)
             .add_observer(on_tab)
+            .add_observer(on_rule)
             .add_systems(
                 Update,
                 (create_selection_picks, sync_panel)
@@ -50,12 +54,56 @@ impl Plugin for CreateSelectionPlugin {
     }
 }
 
+/// How the Faces tab grows a seed face into a selection (Onshape's order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FaceRule {
+    Protrusion,
+    #[default]
+    Pocket,
+    Hole,
+    Fillets,
+    TangentConnected,
+}
+
+impl FaceRule {
+    pub const ALL: [FaceRule; 5] = [
+        FaceRule::Protrusion,
+        FaceRule::Pocket,
+        FaceRule::Hole,
+        FaceRule::Fillets,
+        FaceRule::TangentConnected,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FaceRule::Protrusion => "Protrusion",
+            FaceRule::Pocket => "Pocket",
+            FaceRule::Hole => "Hole",
+            FaceRule::Fillets => "Fillets",
+            FaceRule::TangentConnected => "Tangent connected",
+        }
+    }
+
+    /// The faces (indices) the rule selects from the seed face `i`.
+    pub fn faces(self, solid: &cadrs_core::Solid, i: usize) -> Vec<usize> {
+        match self {
+            FaceRule::Protrusion => solid.protrusion_faces(i),
+            FaceRule::Pocket => solid.pocket_faces(i),
+            FaceRule::Hole => solid.hole_faces(i),
+            FaceRule::Fillets => solid.fillet_faces(i),
+            FaceRule::TangentConnected => solid.tangent_faces(i),
+        }
+    }
+}
+
 /// The panel is open: its seed edge and the edges its rule selects, or (Faces) its seed face and
-/// the pocket's faces.
+/// the faces its rule selects.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
 pub struct CreateSelection {
-    /// The Faces tab (Pocket) rather than Edges (Tangent connected).
+    /// The Faces tab rather than Edges (Tangent connected).
     pub faces_mode: bool,
+    /// The Faces tab's rule.
+    pub rule: FaceRule,
     pub seed: Option<(PartId, EdgeName)>,
     pub edges: Vec<(PartId, EdgeName)>,
     pub face_seed: Option<(PartId, cadrs_sketch::FaceName)>,
@@ -77,6 +125,20 @@ struct AddButton;
 /// Opens the panel (the viewport menu's Select → Create selection…) on its Edges tab.
 pub fn open(world: &mut World) {
     open_with(world, false);
+}
+
+/// Opens the panel on its Faces tab with `face` as the seed (the face's right-click menu):
+/// the selection shows the rule's faces, ready for Add selection.
+pub fn open_from_face(world: &mut World, part: PartId, face: cadrs_sketch::FaceName) {
+    open_with(world, true);
+    let Some(rule) = world.get_resource::<CreateSelection>().map(|c| c.rule) else {
+        return;
+    };
+    let faces = faces_of(world, rule, part, face);
+    if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
+        c.face_seed = Some((part, face));
+        c.faces = faces;
+    }
 }
 
 /// Opens the panel on its Faces tab (Pocket), as a pattern's or mirror's button does.
@@ -137,18 +199,26 @@ fn open_with(world: &mut World, faces_mode: bool) {
                     })
                     .with_children(|c| {
                         let rule = if faces_mode {
-                            Select::new("create-selection-rule")
-                                .option("Pocket", true)
-                                .option("Boss", false)
-                                .option("Tangent connected", false)
-                                .option("Feature", false)
+                            FaceRule::ALL
+                                .iter()
+                                .fold(Select::new("create-selection-rule"), |s, r| {
+                                    s.option(r.label(), true)
+                                })
+                                .option("Bounded faces", false)
+                                .selected(
+                                    FaceRule::ALL
+                                        .iter()
+                                        .position(|r| *r == FaceRule::default())
+                                        .unwrap_or(0),
+                                )
                         } else {
                             Select::new("create-selection-rule")
                                 .option("Tangent connected", true)
                                 .option("Loop", false)
                                 .option("Boundary", false)
+                                .selected(0)
                         };
-                        c.spawn(rule.selected(0).build(t));
+                        c.spawn(rule.build(t));
                         c.spawn((
                             SeedField,
                             SelectionList::new("create-selection-field")
@@ -232,6 +302,57 @@ fn on_tab(ev: On<cadrs_ui::TabStripSelect>, q: Query<&Name>, mut commands: Comma
     }
 }
 
+/// Faces: another rule, applied to the seed face.
+fn on_rule(ev: On<cadrs_ui::SelectChange>, q: Query<&Name>, mut commands: Commands) {
+    if !q
+        .get(ev.entity)
+        .is_ok_and(|n| n.as_str() == "create-selection-rule")
+    {
+        return;
+    }
+    let Some(rule) = FaceRule::ALL.get(ev.index).copied() else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        let Some(c) = world.get_resource::<CreateSelection>() else {
+            return;
+        };
+        if !c.faces_mode {
+            return;
+        }
+        let faces = c
+            .face_seed
+            .map(|(part, face)| faces_of(world, rule, part, face))
+            .unwrap_or_default();
+        if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
+            c.rule = rule;
+            c.faces = faces;
+        }
+    });
+}
+
+/// The faces `rule` selects from the seed face of `part`.
+fn faces_of(
+    world: &World,
+    rule: FaceRule,
+    part: PartId,
+    face: cadrs_sketch::FaceName,
+) -> Vec<(PartId, cadrs_sketch::FaceName)> {
+    world
+        .resource::<PartCache>()
+        .part(part)
+        .and_then(|p| {
+            let i = p.solid.faces.iter().position(|f| f.name == face)?;
+            Some(
+                rule.faces(&p.solid, i)
+                    .into_iter()
+                    .map(|j| (part, p.solid.faces[j].name))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
 /// While the panel is open, a clicked edge is its seed.
 fn create_selection_picks(
     mut picks: MessageReader<PickRequest>,
@@ -244,24 +365,17 @@ fn create_selection_picks(
     for p in picks.read() {
         if let Some(Pick::Face(part, face)) = p.0 {
             commands.queue(move |world: &mut World| {
-                let faces = world
-                    .resource::<PartCache>()
-                    .part(part)
-                    .map_or(Vec::new(), |p| {
-                        let seed = p.solid.faces.iter().position(|f| f.name == face);
-                        seed.map_or(Vec::new(), |i| {
-                            p.solid
-                                .pocket_faces(i)
-                                .into_iter()
-                                .map(|j| p.solid.faces[j].name)
-                                .collect()
-                        })
-                    });
-                if let Some(mut c) = world.get_resource_mut::<CreateSelection>()
-                    && c.faces_mode
-                {
+                let Some(rule) = world
+                    .get_resource::<CreateSelection>()
+                    .filter(|c| c.faces_mode)
+                    .map(|c| c.rule)
+                else {
+                    return;
+                };
+                let faces = faces_of(world, rule, part, face);
+                if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
                     c.face_seed = Some((part, face));
-                    c.faces = faces.into_iter().map(|f| (part, f)).collect();
+                    c.faces = faces;
                 }
             });
             continue;
@@ -435,8 +549,8 @@ pub fn add_edges(world: &mut World, edges: &[(PartId, EdgeName)]) {
     }
 }
 
-/// Adds faces to the open pattern's or mirror's faces (those it doesn't have yet), or to the
-/// selection.
+/// Adds faces to the open pattern's, mirror's or direct edit's faces (those it doesn't have
+/// yet), or to the selection.
 pub fn add_faces(world: &mut World, faces: &[(PartId, cadrs_sketch::FaceName)]) {
     let refs: Vec<cadrs_core::FaceRef> = {
         let cache = world.resource::<PartCache>();
@@ -466,6 +580,7 @@ pub fn add_faces(world: &mut World, faces: &[(PartId, cadrs_sketch::FaceName)]) 
         FeatureKind::Mirror(x) if x.mirror_type == cadrs_core::pattern::PatternType::Face => {
             &mut x.faces
         }
+        FeatureKind::DirectEdit(x) => &mut x.faces,
         _ => return,
     };
     for r in refs {

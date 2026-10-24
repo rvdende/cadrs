@@ -839,6 +839,100 @@ impl Solid {
     /// Faces → Pocket, PS27.12): `seed` and every face reached from it across concave or smooth
     /// edges; convex edges (the pocket's rim) stop it.
     pub fn pocket_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| {
+            matches!(d, Some(Dihedral::Concave | Dihedral::Smooth))
+        })
+    }
+
+    /// The faces of the protrusion (a boss, a rib) `seed` belongs to (Create selection → Faces →
+    /// Protrusion): `seed` and every face reached from it across convex or smooth edges;
+    /// concave edges (where the protrusion stands on the part) stop it.
+    pub fn protrusion_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| {
+            matches!(d, Some(Dihedral::Convex | Dihedral::Smooth))
+        })
+    }
+
+    /// The faces tangent-connected to `seed` (Create selection → Faces → Tangent connected):
+    /// `seed` and every face reached from it across smooth edges.
+    pub fn tangent_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| d == Some(Dihedral::Smooth))
+    }
+
+    /// The faces of the round hole `seed` is a face of (Create selection → Faces → Hole): the
+    /// faces of revolution about its axis that it reaches (walls, a countersink, a drill
+    /// point) and the flat faces across that axis bounded by circles round it (a counterbore's
+    /// floor, a flat bottom). Empty when `seed` isn't a face of revolution.
+    pub fn hole_faces(&self, seed: usize) -> Vec<usize> {
+        const TOL: f64 = 1e-6;
+        let Some((o, d)) = self.faces.get(seed).and_then(|f| f.axis) else {
+            return Vec::new();
+        };
+        let d = normalize(d);
+        let parallel = |v: Vec3| len(cross(normalize(v), d)) <= TOL;
+        let on_axis = |p: Vec3| len(cross(sub(p, o), d)) <= TOL;
+        let round = |i: usize| {
+            let f = &self.faces[i];
+            match (f.axis, f.plane) {
+                (Some((p, v)), _) => parallel(v) && on_axis(p),
+                (None, Some(pl)) => {
+                    parallel(pl.normal())
+                        && self.face_edges(&f.name).iter().all(|e| {
+                            self.edge(e)
+                                .and_then(|e| e.circle)
+                                .is_some_and(|c| parallel(c.normal) && on_axis(c.center))
+                        })
+                }
+                (None, None) => false,
+            }
+        };
+        self.spread(seed, |_, i| round(i))
+    }
+
+    /// The radius of the constant-radius fillet `face` is (a cylinder, a torus's tube or a
+    /// sphere at a corner, tangent to at least two of its neighbours), or `None`.
+    pub fn fillet_radius(&self, face: usize) -> Option<f64> {
+        use cadrs_kernel::SurfaceKind;
+        let f = self.faces.get(face)?;
+        let r = match f.kind? {
+            SurfaceKind::Cylinder | SurfaceKind::Sphere => f.radius?,
+            // The tube's radius: any of its vertices' distance from the core circle (the
+            // reported radius is the major one, the axis's point the torus's centre).
+            SurfaceKind::Torus => {
+                let ((c, d), big) = (f.axis?, f.radius?);
+                let d = normalize(d);
+                let p = self.positions[*self.indices.get(3 * f.first_triangle)? as usize];
+                let cp = sub(p, c);
+                let h = dot(cp, d);
+                let rho = len(sub(cp, scale(d, h)));
+                ((rho - big).powi(2) + h * h).sqrt()
+            }
+            _ => return None,
+        };
+        let smooth = self
+            .edges
+            .iter()
+            .filter(|e| e.name.touches(&f.name) && e.name.faces[0] != e.name.faces[1])
+            .filter(|e| self.dihedral(e) == Some(Dihedral::Smooth))
+            .count();
+        (smooth >= 2).then_some(r)
+    }
+
+    /// The fillets of the part with the same radius as the fillet `seed` (Create selection →
+    /// Faces → Fillets, Onshape's `qFilletFaces` with `EQUAL`). Empty when `seed` isn't one.
+    pub fn fillet_faces(&self, seed: usize) -> Vec<usize> {
+        let Some(r0) = self.fillet_radius(seed) else {
+            return Vec::new();
+        };
+        let tol = 1e-6 * r0.max(1.0);
+        (0..self.faces.len())
+            .filter(|&i| self.fillet_radius(i).is_some_and(|r| (r - r0).abs() <= tol))
+            .collect()
+    }
+
+    /// `seed` and every face reached from it across edges `cross` accepts (given the edge's
+    /// dihedral and the face on its other side).
+    fn spread(&self, seed: usize, cross: impl Fn(Option<Dihedral>, usize) -> bool) -> Vec<usize> {
         let Some(first) = self.faces.get(seed).map(|f| f.name) else {
             return Vec::new();
         };
@@ -854,7 +948,10 @@ impl Solid {
                 if other == cur || names.contains(&other) {
                     continue;
                 }
-                if matches!(self.dihedral(e), Some(Dihedral::Concave | Dihedral::Smooth)) {
+                let Some(i) = self.faces.iter().position(|f| f.name == other) else {
+                    continue;
+                };
+                if cross(self.dihedral(e), i) {
                     names.push(other);
                     todo.push(other);
                 }

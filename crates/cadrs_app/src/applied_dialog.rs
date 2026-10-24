@@ -2530,8 +2530,13 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
             }
         }),
         Ok(Role::CreateSelectionFaces) => commands.queue(|world: &mut World| {
+            // The faces field Add selection fills: a direct edit's, or a pattern's or mirror's.
+            let field = match crate::applied::current(world).map(|f| f.kind) {
+                Some(FeatureKind::DirectEdit(_)) => AppliedField::DirectEditFaces,
+                _ => AppliedField::PatternEntities,
+            };
             if let Some(mut s) = world.get_resource_mut::<AppliedSession>() {
-                s.field = AppliedField::PatternEntities;
+                s.field = field;
             }
             crate::create_selection::open_faces(world);
         }),

@@ -243,12 +243,11 @@ pub(crate) fn body(
                 index_of(&MoveType::ALL, &x.move_type),
                 None,
             );
-            list(
+            faces_list(
                 b,
                 t,
-                "move-face-faces-field",
+                "move-face",
                 "Faces to move",
-                Role::DirectEditFaces,
                 items_of(Role::DirectEditFaces),
                 active,
             );
@@ -295,12 +294,11 @@ pub(crate) fn body(
             }
         }
         DirectEditKind::DeleteFace => {
-            list(
+            faces_list(
                 b,
                 t,
-                "delete-face-faces-field",
+                "delete-face",
                 "Faces to delete",
-                Role::DirectEditFaces,
                 items_of(Role::DirectEditFaces),
                 active,
             );
@@ -317,6 +315,34 @@ pub(crate) fn body(
             );
         }
     });
+}
+
+/// The faces field, with Create selection beside it (the faces of a pocket, a protrusion, a
+/// hole or the fillets in one go: an imported part's features).
+fn faces_list(
+    b: &mut ChildSpawner,
+    t: &Theme,
+    name: &str,
+    label: &str,
+    items: Vec<String>,
+    active: bool,
+) {
+    crate::pattern_dialog::list_with_button(
+        b,
+        t,
+        &format!("{name}-faces-field"),
+        label,
+        Role::DirectEditFaces,
+        items,
+        active,
+        (
+            &format!("{name}-create-selection"),
+            Role::CreateSelectionFaces,
+            "plus",
+            "Create selection",
+            false,
+        ),
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
