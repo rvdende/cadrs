@@ -1209,16 +1209,14 @@ fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vect
 }
 
 /// Delete face's faces with the fillets next to them (Delete fillet faces): each fillet
-/// (`Solid::fillet_radius`) across an edge of a face to delete, and next to those, in turn.
+/// ([`crate::Solid::is_small_fillet`]) across an edge of a face to delete (not on through
+/// other fillets: a fully rounded boss's other fillets stay).
 fn with_fillets(
     state: &State,
     faces: &[crate::document::FaceRef],
 ) -> Vec<crate::document::FaceRef> {
     let mut out = faces.to_vec();
-    let mut i = 0;
-    while i < out.len() {
-        let f = out[i];
-        i += 1;
+    for f in faces {
         let Some(part) = state.part(f.part) else {
             continue;
         };
@@ -1228,7 +1226,7 @@ fn with_fillets(
         };
         for j in s.neighbours(at) {
             let name = s.faces[j].name;
-            if s.fillet_radius(j).is_some()
+            if s.is_small_fillet(j)
                 && !out.iter().any(|g| g.face == name)
                 && let Some(seed) = s.face_point(j)
             {
@@ -1296,15 +1294,30 @@ fn up_to_distance(
         // A part: its nearest point ahead (its mesh's vertices: exact for flat faces), else
         // behind.
         UpTo::Part(id) => {
+            if *id == first.part {
+                return Err("Move up to another part (not the one being edited)".into());
+            }
             let s = &state
                 .part(*id)
                 .ok_or("The part to move up to no longer exists")?
                 .part
                 .solid;
+            // Only its points the face meets on its way (projected along `u` onto the face).
+            let moved = &part.part.solid;
+            let at = moved
+                .resolve_face(&first.face, None, Some(first.seed))
+                .map_err(|_| "A selected face no longer exists")?
+                .0;
             let ts = s
                 .positions
                 .iter()
-                .map(|q| (Vector3::from(*q) - o).dot(&n) / along);
+                .map(|q| {
+                    let q = Vector3::from(*q);
+                    let t = (q - o).dot(&n) / along;
+                    (t, q - u * t)
+                })
+                .filter(|(_, p)| moved.face_contains(at, [p.x, p.y, p.z]))
+                .map(|(t, _)| t);
             let ahead = ts.clone().filter(|t| *t > 1e-9).min_by(f64::total_cmp);
             let behind = ts.filter(|t| *t < -1e-9).max_by(f64::total_cmp);
             let t = ahead

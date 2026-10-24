@@ -1687,4 +1687,50 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn one_cone_written_two_ways_is_one_surface() {
+        // The cone narrowing upward to an apex at z = 18 (45°): radius 8 at z = 10 with a = 135°,
+        // and radius 28 at z = −10 with a = −45° (its frame's origin lower on the axis). One
+        // point set; the natural normals Su × Sv = ρ(cos a·radial − sin a·z) point opposite
+        // ways (in and down, out and up), the same way once the second's frame is left-handed;
+        // another apex is another cone. Checked against the normals at a point on both.
+        let frame = |z: f64, left: bool| Frame {
+            o: P3::new(0.0, 0.0, z),
+            x: V3::x(),
+            y: if left { -V3::y() } else { V3::y() },
+            z: V3::z(),
+        };
+        let pi = std::f64::consts::PI;
+        let a = Surface::Cone {
+            f: frame(10.0, false),
+            r: 8.0,
+            a: 0.75 * pi,
+        };
+        let b = Surface::Cone {
+            f: frame(-10.0, false),
+            r: 28.0,
+            a: -0.25 * pi,
+        };
+        let c = Surface::Cone {
+            f: frame(-10.0, true),
+            r: 28.0,
+            a: -0.25 * pi,
+        };
+        let d = Surface::Cone {
+            f: frame(-10.0, false),
+            r: 29.0,
+            a: -0.25 * pi,
+        };
+        assert_eq!(a.same_domain(&b, 1e-9), Some(false));
+        assert_eq!(a.same_domain(&c, 1e-9), Some(true));
+        assert_eq!(a.same_domain(&d, 1e-9), None);
+        let p = a.eval(0.3, 1.0);
+        for (other, same) in [(&b, false), (&c, true)] {
+            let q = other.project(&p, None);
+            assert!((other.eval(q.0, q.1) - p).norm() < 1e-9, "on both");
+            let d = a.normal(0.3, 1.0).dot(&other.normal(q.0, q.1));
+            assert!(if same { d > 0.999 } else { d < -0.999 }, "{d}");
+        }
+    }
 }

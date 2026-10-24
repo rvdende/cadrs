@@ -1323,12 +1323,15 @@ pub trait Kernel {
             .iter()
             .map(|(n, i)| (*n, i.face))
             .collect();
+        // Faces the steps make that aren't a fillet put back (carried as generated).
+        let mut fresh: Vec<(FaceId, Origin)> = Vec::new();
         let now = |from: &[(FaceId, FaceId)], f: FaceId| {
             from.iter().find(|(_, o)| *o == f).map(|(n, _)| *n)
         };
         let step = |this: &mut Self,
                     cur: &mut BodyId,
                     from: &mut Vec<(FaceId, FaceId)>,
+                    fresh: &mut Vec<(FaceId, Origin)>,
                     r: Result<OpResult>,
                     made: &dyn Fn(EdgeId) -> Option<FaceId>|
          -> Result<()> {
@@ -1340,26 +1343,31 @@ pub trait Kernel {
                 }
             };
             let mut next: Vec<(FaceId, FaceId)> = Vec::new();
+            let mut next_fresh: Vec<(FaceId, Origin)> = Vec::new();
             for (n, i) in &r.history.modified {
                 if let Some((_, o)) = from.iter().find(|(c, _)| *c == i.face) {
                     next.push((*n, *o));
+                } else if let Some((_, o)) = fresh.iter().find(|(c, _)| *c == i.face) {
+                    next_fresh.push((*n, *o));
                 }
             }
             for (n, o) in &r.history.generated {
-                if let Origin::FromEdge { edge, .. } = o
-                    && let Some(f) = made(*edge)
-                {
-                    next.push((*n, f));
+                match o {
+                    Origin::FromEdge { edge, .. } if made(*edge).is_some() => {
+                        next.push((*n, made(*edge).expect("checked")));
+                    }
+                    o => next_fresh.push((*n, *o)),
                 }
             }
             this.release(*cur);
             *cur = r.bodies[0];
             *from = next;
+            *fresh = next_fresh;
             Ok(())
         };
         let moved: Vec<FaceId> = faces.iter().filter_map(|f| now(&from, *f)).collect();
         let r = self.move_faces(cur, &moved, motion);
-        step(self, &mut cur, &mut from, r, &|_| None)?;
+        step(self, &mut cur, &mut from, &mut fresh, r, &|_| None)?;
         let mut radii: Vec<f64> = Vec::new();
         for j in &joins {
             if !radii.iter().any(|r| (r - j.2).abs() < 1e-9) {
@@ -1382,17 +1390,24 @@ pub trait Kernel {
                 }
             }
             if chosen.is_empty() {
-                continue;
+                self.release(cur);
+                return Err(KernelError::InvalidResult {
+                    op: "move face",
+                    why: format!(
+                        "the R{r} fillet can't be put back: its faces no longer meet after the move"
+                    ),
+                });
             }
             let ids: Vec<EdgeId> = chosen.iter().map(|c| c.0).collect();
             let res = self.fillet(cur, &ids, r);
             let made = |e: EdgeId| chosen.iter().find(|c| c.0 == e).map(|c| c.1);
-            step(self, &mut cur, &mut from, res, &made)?;
+            step(self, &mut cur, &mut from, &mut fresh, res, &made)?;
         }
         let mut history = History::default();
         for (n, o) in &from {
             history.modified.push((*n, InputFace { body, face: *o }));
         }
+        history.generated = fresh;
         Ok(OpResult {
             bodies: vec![cur],
             history,

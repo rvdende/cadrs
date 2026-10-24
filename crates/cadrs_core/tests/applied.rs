@@ -1570,3 +1570,90 @@ fn delete_face_heals_a_fillet_against_a_cone() {
     close(g.surface_area, w.surface_area, 1e-6 * w.surface_area);
     assert_eq!(got.solid.faces.len(), want.solid.faces.len());
 }
+
+#[test]
+fn a_slots_round_ends_arent_fillets_to_take() {
+    // A 40 × 20 × 10 block with an obround slot through it (10 wide, centres 10 apart): its
+    // round ends are half turns tangent to its sides (full rounds, so Fillets counts them) but
+    // Delete fillet faces doesn't take them with a face next to them.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let v = Vec2::new;
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![
+            SketchOp::AddPolyline {
+                points: vec![v(15.0, 5.0), v(25.0, 5.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddArc {
+                center: v(25.0, 10.0),
+                start: v(25.0, 5.0),
+                end: v(25.0, 15.0),
+                construction: false,
+            },
+            SketchOp::AddPolyline {
+                points: vec![v(25.0, 15.0), v(15.0, 15.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddArc {
+                center: v(15.0, 10.0),
+                start: v(15.0, 15.0),
+                end: v(15.0, 5.0),
+                construction: false,
+            },
+        ],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[v(20.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    close(
+        part.mass.unwrap().volume,
+        8000.0 - (100.0 + 25.0 * PI) * 10.0,
+        1e-6,
+    );
+    let ends: Vec<usize> = (0..s.faces.len())
+        .filter(|&i| s.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Cylinder))
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for &i in &ends {
+        assert!(s.fillet_radius(i).is_some(), "a full round");
+        assert!(!s.is_small_fillet(i), "not one to take with a face");
+    }
+}
+
+#[test]
+fn a_boxs_bottom_isnt_a_copy_of_its_top() {
+    // Select patterns: the bottom has the top's shape but faces the other way; the sides of a
+    // cube face other ways too. No copies.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 10.0, 10.0, 10.0);
+    let part = d.parts()[0].clone();
+    let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [5.0, 5.0, 10.0]));
+    assert!(part.solid.pattern_copies(top).is_empty());
+}

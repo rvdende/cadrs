@@ -926,8 +926,10 @@ impl Solid {
         region
     }
 
-    /// The other faces like `seed` (Create selection's Select patterns): the same kind of
-    /// surface, area and radius, facing the same way (a pattern's or mirror's copies of it).
+    /// The other faces like `seed` (Create selection's Select patterns, a linear pattern's
+    /// copies of it): the same kind of surface, area, radius, perimeter and number of edges,
+    /// facing the same way (not the opposite: a box's bottom isn't a copy of its top), and not
+    /// next to it. A circular pattern's flat faces (turned) aren't found.
     pub fn pattern_copies(&self, seed: usize) -> Vec<usize> {
         const TOL: f64 = 1e-6;
         let Some(f) = self.faces.get(seed) else {
@@ -938,20 +940,41 @@ impl Solid {
             (None, None) => true,
             _ => false,
         };
-        let facing = |v: Option<Vec3>, w: Option<Vec3>| match (v, w) {
-            (Some(v), Some(w)) => len(cross(normalize(v), normalize(w))) <= TOL,
-            (None, None) => true,
+        // Planes the same way round; faces of revolution on parallel axes.
+        let facing = |g: &SolidFace| match (g.plane, f.plane, g.axis, f.axis) {
+            (Some(p), Some(q), ..) => {
+                let (n, m) = (normalize(p.normal()), normalize(q.normal()));
+                len(cross(n, m)) <= TOL && dot(n, m) > 0.0
+            }
+            (None, None, Some((_, v)), Some((_, w))) => {
+                len(cross(normalize(v), normalize(w))) <= TOL
+            }
+            (None, None, None, None) => true,
             _ => false,
         };
-        let dir = |g: &SolidFace| g.plane.map(|p| p.normal()).or(g.axis.map(|a| a.1));
+        let perimeter = |g: &SolidFace| -> f64 {
+            g.loops
+                .iter()
+                .map(|l| {
+                    (0..l.len())
+                        .map(|k| len(sub(l[(k + 1) % l.len()], l[k])))
+                        .sum::<f64>()
+                })
+                .sum()
+        };
+        let edges = |i: usize| self.face_edges(&self.faces[i].name).len();
+        let next = self.neighbours(seed);
+        let (p0, e0) = (perimeter(f), edges(seed));
         (0..self.faces.len())
-            .filter(|&i| i != seed)
+            .filter(|&i| i != seed && !next.contains(&i))
             .filter(|&i| {
                 let g = &self.faces[i];
                 g.kind == f.kind
                     && same(g.area, f.area)
                     && same(g.radius, f.radius)
-                    && facing(dir(g), dir(f))
+                    && facing(g)
+                    && edges(i) == e0
+                    && (perimeter(g) - p0).abs() <= 1e-4 * p0.max(1.0)
             })
             .collect()
     }
@@ -1125,6 +1148,16 @@ impl Solid {
         }
         let mean = normalize(mean);
         normals.iter().map(|n| dot(*n, mean)).min_by(f64::total_cmp)
+    }
+
+    /// Whether `face` is a fillet that Delete face's "Delete fillet faces" takes with a face
+    /// next to it: a fillet ([`Solid::fillet_radius`]) short of half a turn (a slot's round end
+    /// is part of the slot, not a fillet to take).
+    pub fn is_small_fillet(&self, face: usize) -> bool {
+        use cadrs_kernel::SurfaceKind;
+        self.fillet_radius(face).is_some()
+            && (self.faces[face].kind != Some(SurfaceKind::Cylinder)
+                || self.turn_span_cos(face).is_some_and(|c| c > 0.1))
     }
 
     /// The fillets of the part with the same radius as the fillet `seed` (Create selection →

@@ -264,6 +264,11 @@ struct OverflowButton;
 #[derive(Component, Debug, Clone, Copy)]
 struct Overflowed;
 
+/// A child its owner showed again while the row had it hidden: kept shown until its owner
+/// hides it.
+#[derive(Component, Debug, Clone, Copy)]
+struct OwnerShown;
+
 /// The width a child took when last shown (logical px, with its margins).
 #[derive(Component, Debug, Clone, Copy)]
 struct ShownWidth(f32);
@@ -351,6 +356,7 @@ fn fit_toolbars(
             Has<Overflowed>,
             Has<OverflowKeep>,
             Has<OverflowWithPrevious>,
+            Has<OwnerShown>,
         ),
         Without<ToolbarOverflow>,
     >,
@@ -398,15 +404,26 @@ fn fit_toolbars(
         // as last shown. Children hidden by something else take no room and aren't touched.
         let mut units: Vec<(Vec<Entity>, f32, bool)> = Vec::new();
         for &c in children.iter().filter(|c| **c != button) {
-            let Ok((cn, node, shown, _, overflowed, keep, with_previous)) = items.get(c) else {
+            let Ok((cn, node, shown, _, overflowed, keep, with_previous, owner_shown)) =
+                items.get(c)
+            else {
                 continue;
             };
             if node.display == Display::None && !overflowed {
+                // Hidden by its owner: it takes no room (and its owner decides again).
+                if owner_shown {
+                    commands.entity(c).remove::<OwnerShown>();
+                }
                 continue;
             }
-            // Shown again by its owner while hidden here (a button that shows itself): measured
-            // as shown, and hidden again below if it still doesn't fit.
-            let overflowed = overflowed && node.display == Display::None;
+            // Shown again by its owner while hidden here (a button that shows itself): it stays
+            // shown (kept) until its owner hides it, rather than both flipping it every frame.
+            let reshown = overflowed && node.display != Display::None;
+            if reshown {
+                commands.entity(c).remove::<Overflowed>().insert(OwnerShown);
+            }
+            let keep = keep || owner_shown || reshown;
+            let overflowed = overflowed && !reshown;
             let w = if overflowed {
                 shown.map_or(0.0, |s| s.0)
             } else {
@@ -428,7 +445,7 @@ fn fit_toolbars(
         for (i, (members, _, _)) in units.iter().enumerate() {
             let hidden = hide.as_ref().is_some_and(|h| h[i]);
             for &c in members {
-                let Ok((_, mut node, _, _, overflowed, _, _)) = items.get_mut(c) else {
+                let Ok((_, mut node, _, _, overflowed, ..)) = items.get_mut(c) else {
                     continue;
                 };
                 let overflowed = overflowed && node.display == Display::None;

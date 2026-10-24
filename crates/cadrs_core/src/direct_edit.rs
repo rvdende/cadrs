@@ -97,8 +97,9 @@ pub struct DirectEditFeature {
     #[serde(default)]
     pub void: VoidFill,
     /// Delete face: the fillets next to the faces are deleted too (Onshape's "Delete fillet
-    /// faces", on by default).
-    #[serde(default = "yes")]
+    /// faces"): on for a new Delete face, off for one saved before it was an option (it
+    /// rebuilds as it did).
+    #[serde(default)]
     pub delete_fillets: bool,
     /// Move face: how it moves the faces.
     #[serde(default)]

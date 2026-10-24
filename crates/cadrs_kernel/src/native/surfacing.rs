@@ -954,34 +954,49 @@ pub fn delete_faces_with(
             history,
         });
     }
-    // The openings: the sheet's free edges chained into loops at their vertices.
+    // The openings: the sheet's free edges walked end to end into loops; coming back to a
+    // vertex already passed closes a loop there (two openings touching at a vertex are two).
     let ef = sheet.edge_faces();
     let mut free: Vec<usize> = (0..sheet.edges.len())
         .filter(|&e| ef[e].len() == 1)
         .collect();
     let mut loops: Vec<Vec<usize>> = Vec::new();
     while let Some(first) = free.pop() {
-        let mut lp = vec![first];
-        let mut grew = true;
-        while grew {
-            grew = false;
-            let ends: Vec<usize> = lp.iter().flat_map(|&e| sheet.edges[e].v).collect();
-            if let Some(i) = free
-                .iter()
-                .position(|&e| sheet.edges[e].v.iter().any(|v| ends.contains(v)))
-            {
-                lp.push(free.remove(i));
-                grew = true;
+        let [start, mut at] = sheet.edges[first].v;
+        let mut path = vec![first];
+        let mut passed = vec![start];
+        while at != start {
+            if let Some(k) = passed.iter().position(|&v| v == at) {
+                // A loop closed at a vertex passed before: cut it off and walk on.
+                loops.push(path.split_off(k));
+                passed.truncate(k + 1);
+            } else {
+                passed.push(at);
             }
+            let Some(i) = free.iter().position(|&e| sheet.edges[e].v.contains(&at)) else {
+                break;
+            };
+            let e = free.remove(i);
+            let [a, b] = sheet.edges[e].v;
+            at = if a == at { b } else { a };
+            path.push(e);
         }
-        loops.push(lp);
+        if at != start {
+            return Err(invalid("An opening the faces leave isn't closed"));
+        }
+        loops.push(path);
     }
     if loops.is_empty() {
         return Err(invalid("The faces left have no opening to cap"));
     }
+    let sheet_edges: Vec<(Edge, P3, P3)> = sheet
+        .edges
+        .iter()
+        .map(|e| (e.clone(), sheet.verts[e.v[0]].p, sheet.verts[e.v[1]].p))
+        .collect();
     let sid = k.insert(sheet.clone());
     let mut caps = Vec::new();
-    for lp in &loops {
+    for (li, lp) in loops.iter().enumerate() {
         let spec = FillSpec {
             curves: lp
                 .iter()
@@ -993,10 +1008,10 @@ pub fn delete_faces_with(
             source: 0,
         };
         match fill(k, &spec) {
-            Ok(r) => caps.extend(r.bodies),
+            Ok(r) => caps.extend(r.bodies.into_iter().map(|c| (c, li))),
             Err(e) => {
                 k.release(sid);
-                for c in caps {
+                for (c, _) in caps {
                     k.release(c);
                 }
                 return Err(e);
@@ -1005,8 +1020,12 @@ pub fn delete_faces_with(
     }
     k.release(sid);
     let mut all = sheet;
-    for c in caps {
-        all.append(k.get(c)?);
+    // The opening each cap face is over.
+    let mut cap_loops: Vec<&Vec<usize>> = Vec::new();
+    for (c, li) in caps {
+        let cap = k.get(c)?.clone();
+        cap_loops.extend(std::iter::repeat_n(&loops[li], cap.faces.len()));
+        all.append(&cap);
         k.release(c);
     }
     let mut all = sew_faces(all, tol::POINT)?;
@@ -1021,12 +1040,24 @@ pub fn delete_faces_with(
             Body::reverse_face(f);
         }
     }
-    for i in keep.len()..all.faces.len() {
+    // Each cap comes from its opening: its first edge in the body the faces were deleted from.
+    for (i, lp) in (keep.len()..all.faces.len()).zip(&cap_loops) {
+        let se = &sheet_edges[lp[0]];
+        let p = |e: &Edge, k: usize, b: &Body| b.verts[e.v[k]].p;
+        let edge = b
+            .edges
+            .iter()
+            .position(|e| {
+                e.t == se.0.t
+                    && (p(e, 0, &b) - se.1).norm() <= tol::POINT
+                    && (p(e, 1, &b) - se.2).norm() <= tol::POINT
+            })
+            .unwrap_or(lp[0]);
         history.generated.push((
             FaceId(i as u64),
-            Origin::ProfileCurve {
-                region: u64::MAX,
-                curve: i as u64,
+            Origin::FromEdge {
+                body,
+                edge: EdgeId(edge as u64),
             },
         ));
     }

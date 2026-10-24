@@ -556,6 +556,10 @@ fn a_move_face_from_before_move_types_loads_as_an_offset() {
     assert_eq!(x.move_type, MoveType::Offset);
     assert_eq!((x.distance, x.direction, x.axis), (2.0, None, None));
     assert_eq!((x.angle, x.angle_expr.as_str()), (0.0, "0 deg"));
+    // Delete fillet faces stays off for a Delete face saved before it (it rebuilds as it did);
+    // a new one has it on.
+    assert!(!x.delete_fillets);
+    assert!(DirectEditFeature::default().delete_fillets);
 }
 
 #[test]
@@ -998,20 +1002,48 @@ fn rotate_reapplies_the_fillet() {
 
 #[test]
 fn offset_up_to_a_part() {
-    // Offset up to the taller block (a part): the top stops at its nearest point ahead, its
-    // top (z = 15): 15 high.
+    // A 10 × 10 block floating over the top (z 15…20): Offset up to it stops the top at its
+    // nearest point over the face, 15 high (1.5 V). Up to the part being edited, or to the
+    // taller block beside it (nothing over the face), is refused.
     let (mut d, v, corner, _) = block_with_a_taller_one();
-    let top = top_face(&d.parts()[0]);
-    d.add(
-        "Move face",
-        FeatureKind::DirectEdit(DirectEditFeature {
-            kind: DirectEditKind::MoveFace,
-            move_type: MoveType::Offset,
-            end: cadrs_core::direct_edit::MoveEnd::UpTo,
-            up_to: Some(cadrs_core::document::UpTo::Part(corner.part)),
-            faces: top,
-            ..Default::default()
-        }),
-    );
+    let s = d.sketch(PlaneRef::Top, vec![rect(10.0, 2.0, 20.0, 12.0)]);
+    d.extrude(s, &[Vec2::new(15.0, 7.0)], |e| {
+        e.depth = 5.0;
+        e.depth_expr = "5 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let parts = d.parts();
+    let first = parts[0].clone();
+    let floating = parts
+        .iter()
+        .find(|p| (p.mass.unwrap().volume - 500.0).abs() < 1e-6)
+        .expect("the floating block")
+        .id;
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::MoveFace,
+        move_type: MoveType::Offset,
+        end: cadrs_core::direct_edit::MoveEnd::UpTo,
+        up_to: Some(cadrs_core::document::UpTo::Part(floating)),
+        faces: top_face(&first),
+        ..Default::default()
+    };
+    let f = d.add("Move face", FeatureKind::DirectEdit(x.clone()));
     close(d.parts()[0].mass.unwrap().volume, v * 1.5, 1e-6);
+    for (target, why) in [
+        (first.id, "not the one being edited"),
+        (corner.part, "is where the face is"),
+    ] {
+        x.up_to = Some(cadrs_core::document::UpTo::Part(target));
+        d.set(f, FeatureKind::DirectEdit(x.clone()));
+        let b = d.build();
+        assert!(
+            b.errors.iter().any(|(id, e)| *id == f && e.contains(why)),
+            "{:?}",
+            b.errors
+        );
+    }
 }
