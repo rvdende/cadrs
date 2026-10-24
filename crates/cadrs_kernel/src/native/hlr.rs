@@ -27,10 +27,12 @@
 //!
 //! Then, as OCCT's post-processing does: a hidden piece lying on a visible one (a box's back
 //! edges behind its front ones) is dropped, and of two pieces of the same visibility lying on
-//! each other the one nearer the eye stays (an edge before an outline on a tie). Consecutive
-//! pieces of one line with the same visibility are merged back, round the closing point of a
-//! whole circle too (so an unbroken circle is one full arc). Sources: the body's edge index for
-//! edges, its face index for outlines.
+//! each other the one nearer the eye stays (an edge before an outline on a tie); a smooth edge
+//! lying on an outline (a tube's faces meeting along its silhouette) is drawn as an outline,
+//! not as a tangent edge a view may hide. Consecutive pieces of one line with the same
+//! visibility are merged back, round the closing point of a whole circle too (so an unbroken
+//! circle is one full arc). Sources: the body's edge index for edges, its face index for
+//! outlines.
 
 use rayon::prelude::*;
 
@@ -899,64 +901,89 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
         );
     }
     let rank = |c: ProjClass| u8::from(c == ProjClass::Outline);
+    // Whether piece `pi` lies along other pieces at its three sample points: `meets` is asked,
+    // for each piece lying beside a sample, with that piece and its depth there.
+    let lies_along = |pi: usize, meets: &(dyn Fn(usize, f64, f64) -> bool + Sync)| -> bool {
+        let pc = &pieces[pi];
+        let s = &srcs[pc.src];
+        [0.25, 0.5, 0.75].iter().all(|f| {
+            let t = pc.a + (pc.b - pc.a) * f;
+            let p = s.point(t);
+            let (q, d) = (frame.to_2d(&p), frame.depth(&p));
+            let tg = frame.dir_2d(&s.deriv(t));
+            if tg.norm() < tol::DEGENERATE {
+                return false;
+            }
+            let tg = tg.normalize();
+            grid.at(q).iter().any(|&k| {
+                let (oi, j) = segs[k as usize];
+                let (oi, j) = (oi as usize, j as usize);
+                if oi == pi {
+                    return false;
+                }
+                let (pts, dep) = &polys[oi];
+                let (a, b) = (pts[j], pts[j + 1]);
+                let ab = b - a;
+                let l = ab.norm();
+                if l < tol::DEGENERATE || cross2(&ab, &tg).abs() > PARALLEL * l {
+                    return false;
+                }
+                // Beside the segment, not past its end (a line ending short of `q` leaves
+                // it bare).
+                let f = (q - a).dot(&ab) / (l * l);
+                if !(-tol::REL..=1.0 + tol::REL).contains(&f) {
+                    return false;
+                }
+                let f = f.clamp(0.0, 1.0);
+                if (a + ab * f - q).norm() > cov {
+                    return false;
+                }
+                meets(oi, dep[j] + (dep[j + 1] - dep[j]) * f, d)
+            })
+        })
+    };
     // A piece lying along a visible one (hidden), or along a nearer one of its own visibility.
     let dropped: Vec<bool> = (0..pieces.len())
         .into_par_iter()
         .map(|pi| {
             let pc = &pieces[pi];
             let s = &srcs[pc.src];
-            [0.25, 0.5, 0.75].iter().all(|f| {
-                let t = pc.a + (pc.b - pc.a) * f;
-                let p = s.point(t);
-                let (q, d) = (frame.to_2d(&p), frame.depth(&p));
-                let tg = frame.dir_2d(&s.deriv(t));
-                if tg.norm() < tol::DEGENERATE {
+            lies_along(pi, &|oi, od, d| {
+                let o = &pieces[oi];
+                if !o.visible && pc.visible {
                     return false;
                 }
-                let tg = tg.normalize();
-                grid.at(q).iter().any(|&k| {
-                    let (oi, j) = segs[k as usize];
-                    let (oi, j) = (oi as usize, j as usize);
-                    if oi == pi {
-                        return false;
-                    }
-                    let o = &pieces[oi];
-                    if !o.visible && pc.visible {
-                        return false;
-                    }
-                    let (pts, dep) = &polys[oi];
-                    let (a, b) = (pts[j], pts[j + 1]);
-                    let ab = b - a;
-                    let l = ab.norm();
-                    if l < tol::DEGENERATE || cross2(&ab, &tg).abs() > PARALLEL * l {
-                        return false;
-                    }
-                    // Beside the segment, not past its end (a line ending short of `q` leaves
-                    // it bare).
-                    let f = (q - a).dot(&ab) / (l * l);
-                    if !(-tol::REL..=1.0 + tol::REL).contains(&f) {
-                        return false;
-                    }
-                    let f = f.clamp(0.0, 1.0);
-                    if (a + ab * f - q).norm() > cov {
-                        return false;
-                    }
-                    // A hidden silhouette stays even under a visible line (as the OCCT backend's
-                    // post-processing kept them); hidden edges there are dropped.
-                    if o.visible && !pc.visible {
-                        return s.class != ProjClass::Outline;
-                    }
-                    let od = dep[j] + (dep[j + 1] - dep[j]) * f;
-                    if (od - d).abs() > tol::POINT {
-                        return od < d;
-                    }
-                    (rank(srcs[o.src].class), oi) < (rank(s.class), pi)
-                })
+                // A hidden silhouette stays even under a visible line (as the OCCT backend's
+                // post-processing kept them); hidden edges there are dropped.
+                if o.visible && !pc.visible {
+                    return s.class != ProjClass::Outline;
+                }
+                if (od - d).abs() > tol::POINT {
+                    return od < d;
+                }
+                (rank(srcs[o.src].class), oi) < (rank(s.class), pi)
             })
         })
         .collect();
+    // A smooth edge lying on a face's outline (a swept tube whose profile circle was split
+    // into arcs at the bend's equators, a cylinder split along the generators seen side-on)
+    // is part of the outline: drawn as one, not as a tangent edge a view may hide (#56).
+    let outlined: Vec<bool> = (0..pieces.len())
+        .into_par_iter()
+        .map(|pi| {
+            let pc = &pieces[pi];
+            srcs[pc.src].class == ProjClass::Smooth
+                && lies_along(pi, &|oi, od, d| {
+                    let o = &pieces[oi];
+                    srcs[o.src].class == ProjClass::Outline
+                        && o.visible == pc.visible
+                        && (od - d).abs() <= tol::POINT
+                })
+        })
+        .collect();
     // Merge consecutive kept pieces of a line with the same visibility.
-    let mut runs: Vec<(usize, f64, f64, bool, bool)> = Vec::new(); // src, a, b, visible, full
+    // src, a, b, visible, full, class
+    let mut runs: Vec<(usize, f64, f64, bool, bool, ProjClass)> = Vec::new();
     let mut k = 0;
     while k < pieces.len() {
         let si = pieces[k].src;
@@ -966,15 +993,21 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
         while k < pieces.len() && pieces[k].src == si {
             let pc = &pieces[k];
             if !dropped[k] {
+                let class = if outlined[k] {
+                    ProjClass::Outline
+                } else {
+                    s.class
+                };
                 let joins = prev.is_some_and(|p| {
                     !dropped[p]
                         && pieces[p].visible == pc.visible
+                        && outlined[p] == outlined[k]
                         && !pieces[p].turn_end
                         && k == p + 1
                 });
                 match runs.last_mut().filter(|_| joins) {
                     Some(run) => run.2 = pc.b,
-                    None => runs.push((si, pc.a, pc.b, pc.visible, false)),
+                    None => runs.push((si, pc.a, pc.b, pc.visible, false, class)),
                 }
             }
             prev = Some(k);
@@ -988,8 +1021,13 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
                 if r0.1 == s.t.0 && r0.2 == s.t.1 {
                     runs[first].4 = true;
                 }
-            } else if r0.1 == s.t.0 && rl.2 == s.t.1 && r0.3 == rl.3 && !s.turn_at_start {
-                runs[first] = (si, rl.1, r0.2 + period, r0.3, false);
+            } else if r0.1 == s.t.0
+                && rl.2 == s.t.1
+                && r0.3 == rl.3
+                && r0.5 == rl.5
+                && !s.turn_at_start
+            {
+                runs[first] = (si, rl.1, r0.2 + period, r0.3, false, r0.5);
                 runs.pop();
             }
         }
@@ -997,7 +1035,7 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
     let edges: Vec<ProjEdge> = runs
         .par_iter()
         .filter(|r| r.3 || opts.hidden)
-        .map(|&(si, a, b, visible, full)| {
+        .map(|&(si, a, b, visible, full, class)| {
             let s = &srcs[si];
             let points: Vec<P2> = s.params(a, b, tol).iter().map(|&t| p2(s, t)).collect();
             let (start, end) = (points[0], points[points.len() - 1]);
@@ -1022,7 +1060,7 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
                 } else {
                     ProjVisibility::Hidden
                 },
-                class: s.class,
+                class,
                 curve,
                 points,
                 source: Some(ProjSource {
@@ -1166,6 +1204,89 @@ mod tests {
             top.edges[0].curve,
             ProjCurve::Arc { full: true, .. }
         ));
+    }
+
+    /// #56: a Ø20 tube swept round a quarter bend of radius 30, its profile circle two
+    /// half-arcs split in the bend's plane, so its two faces meet along the bend's outer and
+    /// inner equators. Seen along the bend's axis those edges are its outlines, arcs of radius
+    /// 40 and 20: drawn as outlines, not as tangent edges (which a view may hide).
+    #[test]
+    fn a_bend_whose_faces_meet_on_its_outline() {
+        let mut k = native::NativeKernel::new();
+        let (rr, r) = (30.0, 10.0);
+        let half = |start_angle: f64| Curve2::Arc {
+            center: Point2::origin(),
+            radius: r,
+            start_angle,
+            sweep: PI,
+            source: None,
+        };
+        let profile = Profile::new(
+            Plane {
+                origin: Point3::new(-rr, 0.0, 0.0),
+                x_dir: Vector3::x_axis(),
+                normal: -Vector3::y_axis(),
+            },
+            vec![Region {
+                outer: Loop {
+                    curves: vec![half(0.0), half(PI)],
+                },
+                holes: vec![],
+                source: None,
+            }],
+        );
+        let spec = SweepSpec {
+            body: BodyKind::Solid,
+            path: vec![PathCurve::Sketch {
+                plane: Plane::top(),
+                curve: Curve2::Arc {
+                    center: Point2::origin(),
+                    radius: rr,
+                    start_angle: PI,
+                    sweep: PI / 2.0,
+                    source: None,
+                },
+            }],
+            control: SweepControl::None,
+            faces: vec![],
+        };
+        let b = k.sweep_with(&profile, &spec).unwrap().bodies[0];
+        for dir in [-Vector3::z(), Vector3::z()] {
+            let p = k
+                .project(
+                    &[b],
+                    &ViewFrame::new(dir, Vector3::x()),
+                    &ProjectOptions::default(),
+                )
+                .unwrap();
+            assert_eq!(
+                count(&p, ProjVisibility::Visible, ProjClass::Smooth),
+                0,
+                "{p:#?}"
+            );
+            let mut radii: Vec<f64> = p
+                .of(ProjVisibility::Visible, ProjClass::Outline)
+                .map(|e| match e.curve {
+                    ProjCurve::Arc { radius, .. } => {
+                        assert!((e.length() - radius * PI / 2.0).abs() < 0.01, "{p:#?}");
+                        radius
+                    }
+                    _ => panic!("{p:#?}"),
+                })
+                .collect();
+            radii.sort_by(f64::total_cmp);
+            assert_eq!(radii.len(), 2, "{p:#?}");
+            assert!((radii[0] - 20.0).abs() < 1e-6 && (radii[1] - 40.0).abs() < 1e-6);
+            // The outlines keep the edges they lie on.
+            assert!(
+                p.of(ProjVisibility::Visible, ProjClass::Outline).all(|e| e
+                    .source
+                    .unwrap()
+                    .edge
+                    .is_some()),
+                "{p:#?}"
+            );
+        }
     }
 
     #[test]

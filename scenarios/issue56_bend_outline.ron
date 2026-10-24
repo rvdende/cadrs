@@ -1,0 +1,53 @@
+// Issue #56: a curve missing from a drawing. A Ø20 tube swept round a quarter bend of radius 30:
+// Sketch 1 on Front is the path (an arc about the origin from (−30, 0) to (0, −30)); Sketch 2 on
+// Top is the profile, a circle drawn as two half arcs about (−30, 0) that meet at (−40, 0) and
+// (−20, 0), in the bend's plane. So the tube's two faces meet along the bend's
+// outer and inner equators, which are its outline in a Front view (seen along the bend's axis).
+// 01 the swept bend in the Part Studio.
+// 02 a drawing's Front view of it, tangent edges Solid (the default): both arcs drawn.
+// 03 the view's tangent edges Hidden: both arcs still drawn, as outlines (before the fix they
+//    were tangent edges and went with them, leaving only the straight end lines).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch front arc 0 0 -30 0 0 -30"),
+        Custom("sketch top arc -30 0 -20 0 -40 0 arc -30 0 -40 0 -20 0"),
+        Key("Shift+7"),
+        Key("F"),
+        Click(ui("sweep")),
+        WaitFor("sweep-dialog"),
+        Click(xyz(-30, 5, 0)),
+        Click(ui("sweep-path-field")),
+        Click(xyz(-21.213, 0, -21.213)),
+        Click(ui("sweep-dialog-accept")),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-swept-bend"),
+        Click(ui("insert-tab")),
+        Click(ui("create-drawing")),
+        WaitFor("create-drawing-dialog"),
+        Click(ui("template-filter-1")),
+        Click(ui("template-row-ANSI_A_INCH.dwt")),
+        Click(ui("create-drawing-ok")),
+        WaitFor("insert-view-dialog"),
+        Click(ui("browser-part-1-1")),
+        MoveTo(620, 552),
+        Wait(20),
+        MoveTo(623, 552),
+        Wait(10),
+        Click(at(623, 552)),
+        Key("Escape"),
+        MoveTo(1500, 960),
+        Wait(10),
+        Screenshot("02-front-view-tangent-solid"),
+        RightClick(at(623, 552)),
+        Hover(ui("view-menu-tangent-edges")),
+        Wait(8),
+        Click(ui("view-menu-tangent-hidden")),
+        MoveTo(1500, 960),
+        Wait(10),
+        Screenshot("03-front-view-tangent-hidden"),
+    ],
+)
