@@ -1035,7 +1035,7 @@ fn offset_up_to_a_part() {
     close(d.parts()[0].mass.unwrap().volume, v * 1.5, 1e-6);
     for (target, why) in [
         (first.id, "not the one being edited"),
-        (corner.part, "is where the face is"),
+        (corner.part, "Nothing of the part"),
     ] {
         x.up_to = Some(cadrs_core::document::UpTo::Part(target));
         d.set(f, FeatureKind::DirectEdit(x.clone()));
@@ -1046,4 +1046,66 @@ fn offset_up_to_a_part() {
             b.errors
         );
     }
+}
+
+#[test]
+fn offset_up_to_a_part_larger_than_the_face() {
+    // A 100 × 100 plate floating over the 40 × 20 top (z 15…17), none of its corners over the
+    // face: the top still stops at it, 15 high (1.5 V).
+    let (mut d, v) = block_with_hole();
+    let s = d.sketch(PlaneRef::Top, vec![rect(-30.0, -40.0, 70.0, 60.0)]);
+    d.extrude(s, &[Vec2::new(20.0, 10.0)], |e| {
+        e.depth = 2.0;
+        e.depth_expr = "2 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let parts = d.parts();
+    let block = parts
+        .iter()
+        .find(|p| (p.mass.unwrap().volume - v).abs() < 1e-6)
+        .unwrap()
+        .clone();
+    let plate = parts.iter().find(|p| p.id != block.id).unwrap().id;
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(plate)),
+            faces: top_face(&block),
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let grown = parts.iter().find(|p| p.id == block.id).unwrap();
+    close(grown.mass.unwrap().volume, v * 1.5, 1e-6);
+}
+
+#[test]
+fn delete_face_caps_two_openings() {
+    // The block's top and bottom deleted with Cap: two openings, each capped (the caps faces of
+    // their own): the block with its hole again.
+    let (mut d, v) = block_with_hole();
+    let part = d.parts()[0].clone();
+    let ends = faces_where(&part, |f| {
+        f.plane.is_some_and(|p| p.normal()[2].abs() > 0.5)
+    });
+    assert_eq!(ends.len(), 2);
+    d.add(
+        "Delete face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::DeleteFace,
+            faces: ends,
+            void: cadrs_core::direct_edit::VoidFill::Cap,
+            ..Default::default()
+        }),
+    );
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, v, 1e-6);
+    assert_eq!(part.solid.faces.len(), 7);
 }

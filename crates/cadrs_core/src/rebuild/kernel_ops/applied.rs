@@ -1318,11 +1318,33 @@ fn up_to_distance(
                 })
                 .filter(|(_, p)| moved.face_contains(at, [p.x, p.y, p.z]))
                 .map(|(t, _)| t);
-            let ahead = ts.clone().filter(|t| *t > 1e-9).min_by(f64::total_cmp);
-            let behind = ts.filter(|t| *t < -1e-9).max_by(f64::total_cmp);
+            // And where the face's own points hit it going along `u` (a part larger than the
+            // face: its corners are off to the sides).
+            let face = &moved.faces[at];
+            let own: Vec<Vector3<f64>> = (face.first_triangle
+                ..face.first_triangle + face.triangle_count)
+                .flat_map(|t| (0..3).map(move |k| moved.indices[3 * t + k] as usize))
+                .map(|i| Vector3::from(moved.positions[i]))
+                .collect();
+            let cast = |sign: f64| {
+                own.iter().filter_map(move |p| {
+                    let d = u * sign;
+                    s.pick([p.x, p.y, p.z], [d.x, d.y, d.z])
+                        .map(|(_, t)| t * sign)
+                })
+            };
+            let ahead = ts
+                .clone()
+                .chain(cast(1.0))
+                .filter(|t| *t > 1e-9)
+                .min_by(f64::total_cmp);
+            let behind = ts
+                .chain(cast(-1.0))
+                .filter(|t| *t < -1e-9)
+                .max_by(f64::total_cmp);
             let t = ahead
                 .or(behind)
-                .ok_or("The part to move up to is where the face is")?;
+                .ok_or("Nothing of the part to move up to lies ahead of or behind the face")?;
             return Ok(t - x.offset * t.signum());
         }
     };

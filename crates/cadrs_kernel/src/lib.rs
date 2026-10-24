@@ -1407,7 +1407,12 @@ pub trait Kernel {
         for (n, o) in &from {
             history.modified.push((*n, InputFace { body, face: *o }));
         }
-        history.generated = fresh;
+        // New faces made on the way (an origin naming an edge or vertex of a body in between
+        // means nothing to the caller: those are left out).
+        history.generated = fresh
+            .into_iter()
+            .filter(|(_, o)| !matches!(o, Origin::FromEdge { .. } | Origin::FromVertex { .. }))
+            .collect();
         Ok(OpResult {
             bodies: vec![cur],
             history,
