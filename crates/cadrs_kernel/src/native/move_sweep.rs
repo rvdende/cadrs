@@ -306,9 +306,7 @@ pub fn move_faces_swept(
         .map(|f| super::classify::face_polygons(&cur, f))
         .collect();
     for (_, pts) in &swept {
-        if pts.iter().any(|(p, _)| {
-            super::classify::classify_point(&cur, &polys, p, 1e-6) == PointClass::OnBoundary
-        }) {
+        if left_behind(&cur, &polys, pts) {
             return Err(refused("part of a moved face is left behind"));
         }
     }
@@ -348,6 +346,18 @@ pub fn move_faces_swept(
     Ok(OpResult {
         bodies: vec![id],
         history,
+    })
+}
+
+/// Whether a moved face, by points inside it where it was, is still on the boundary of `cur`
+/// there: on it, and on a face whose surface holds all those points (a point beside a tangent
+/// neighbour that stays is within the tolerance of that neighbour's surface too).
+fn left_behind(cur: &Body, polys: &[Vec<Vec<P2>>], pts: &[(P3, V3)]) -> bool {
+    pts.iter().any(|(p, _)| {
+        super::classify::classify_point(cur, polys, p, 1e-6) == PointClass::OnBoundary
+            && cur.faces.iter().any(|g| {
+                g.surf.distance(p) < 1e-6 && pts.iter().all(|(q, _)| g.surf.distance(q) < 1e-6)
+            })
     })
 }
 
@@ -427,5 +437,42 @@ mod tests {
         );
         let e = r.expect_err("refused").to_string();
         assert!(e.contains("runs along"), "{e}");
+    }
+
+    #[test]
+    fn a_point_by_a_tangent_neighbour_is_not_left_behind() {
+        // A 10 mm cube; a sphere's points as a moved face's old place, the sphere touching the
+        // cube's top at (5, 5, 10): its point there is on the top (within the tolerance), but the
+        // top's plane doesn't hold the sphere, so nothing is left behind. Points of the top
+        // itself are.
+        let mut k = NativeKernel::new();
+        let id = body(k.box_at(0.0, 0.0, 0.0, 10.0, 10.0, 10.0).unwrap());
+        let b = (**k.get(id).unwrap()).clone();
+        let polys: Vec<_> = b
+            .faces
+            .iter()
+            .map(|f| super::super::classify::face_polygons(&b, f))
+            .collect();
+        let c = P3::new(5.0, 5.0, 15.0);
+        let on_sphere: Vec<(P3, V3)> = [
+            V3::new(0.0, 0.0, -1.0),
+            V3::new(1.0, 0.0, -1.0),
+            V3::new(0.0, 1.0, -1.0),
+            V3::new(-1.0, -1.0, -1.0),
+        ]
+        .iter()
+        .map(|d| {
+            (
+                c + d.normalize() * 5.0 + V3::new(0.0, 0.0, 1e-7),
+                d.normalize(),
+            )
+        })
+        .collect();
+        assert!(!left_behind(&b, &polys, &on_sphere));
+        let on_top: Vec<(P3, V3)> = [(2.0, 3.0), (7.0, 6.0)]
+            .iter()
+            .map(|&(x, y)| (P3::new(x, y, 10.0), V3::z()))
+            .collect();
+        assert!(left_behind(&b, &polys, &on_top));
     }
 }

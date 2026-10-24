@@ -1476,63 +1476,78 @@ fn moving_one_piece_of_a_split_top_leaves_a_step() {
 }
 
 #[test]
-fn offset_a_filleted_end_with_its_fillets_reapplied() {
+fn moving_a_filleted_end_with_its_fillets_reapplied() {
     // A 40 × 20 × 10 block with R4 fillets on its right end's top and front edges and on the
-    // top front edge running along it, meeting in a corner (a sphere). The right end offset 5
+    // top front edge running along it, meeting in a corner (a sphere). The right end moved out
     // with Reapply fillet: its two fillets and the corner go along with it (the faces they join
-    // the end to slide along the move), the fillet along x grows 5 longer (#22, as Onshape: a
-    // wall end moved with the rounds on it). Its volume grows by 5 × the block's filleted cross
-    // section, 200 − (4² − π 4²/4).
-    let mut d = Doc::new();
-    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
-    let part = d.parts()[0].clone();
-    d.add(
-        "Fillet",
-        FeatureKind::Fillet(cadrs_core::applied::FilletFeature {
-            entities: [[40.0, 10.0, 10.0], [40.0, 0.0, 5.0], [20.0, 0.0, 10.0]]
-                .into_iter()
-                .map(|p| cadrs_core::applied::EdgeOrFace::Edge(edge_near(&part, p)))
-                .collect(),
-            size: 4.0,
-            size_expr: "4 mm".into(),
-            ..Default::default()
-        }),
-    );
-    let part = d.parts()[0].clone();
-    let before = part.mass.unwrap().volume;
-    let end = faces_where(&part, |f| {
-        f.plane
-            .is_some_and(|p| p.normal()[0] > 0.5 && (p.origin[0] - 40.0).abs() < 1e-9)
-    });
-    assert_eq!(end.len(), 1);
-    d.add(
-        "Move face",
-        FeatureKind::DirectEdit(DirectEditFeature {
-            kind: DirectEditKind::MoveFace,
-            move_type: MoveType::Offset,
-            faces: end,
-            distance: 5.0,
-            distance_expr: "5 mm".into(),
-            ..Default::default()
-        }),
-    );
-    let part = d.parts()[0].clone();
-    let section = 200.0 - (16.0 - PI * 16.0 / 4.0);
-    close(part.mass.unwrap().volume, before + 5.0 * section, 1e-6);
-    // The end's two fillets are R4 again, their axes 5 further along x (41: 40 − 4 + 5).
-    let rounds: Vec<_> = part
-        .solid
-        .faces
-        .iter()
-        .filter(|f| is_cylinder(f) && f.radius.is_some_and(|r| (r - 4.0).abs() < 1e-9))
-        .filter_map(|f| f.axis)
-        .collect();
-    assert!(
-        rounds
+    // the end to slide along the move), the fillet along x grows longer (#22, as Onshape: a
+    // wall end moved with the rounds on it). Its volume grows by the distance × the block's
+    // filleted cross section, 200 − (4² − π 4²/4). Offset or Translate, 5 or 9 mm, and with the
+    // end's front fillet picked too (put back, not offset: the "kernel tests" document's pick).
+    for (move_type, distance, with_fillet) in [
+        (MoveType::Offset, 5.0, false),
+        (MoveType::Translate, 5.0, false),
+        (MoveType::Offset, 9.0, true),
+        (MoveType::Translate, 9.0, true),
+    ] {
+        let mut d = Doc::new();
+        d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+        let part = d.parts()[0].clone();
+        d.add(
+            "Fillet",
+            FeatureKind::Fillet(cadrs_core::applied::FilletFeature {
+                entities: [[40.0, 10.0, 10.0], [40.0, 0.0, 5.0], [20.0, 0.0, 10.0]]
+                    .into_iter()
+                    .map(|p| cadrs_core::applied::EdgeOrFace::Edge(edge_near(&part, p)))
+                    .collect(),
+                size: 4.0,
+                size_expr: "4 mm".into(),
+                ..Default::default()
+            }),
+        );
+        let part = d.parts()[0].clone();
+        let before = part.mass.unwrap().volume;
+        let mut faces = faces_where(&part, |f| {
+            f.plane
+                .is_some_and(|p| p.normal()[0] > 0.5 && (p.origin[0] - 40.0).abs() < 1e-9)
+        });
+        assert_eq!(faces.len(), 1);
+        if with_fillet {
+            // The front fillet of the end: about z, its axis at x = 36.
+            faces.extend(faces_where(&part, |f| {
+                is_cylinder(f) && f.axis.is_some_and(|(o, z)| z[2].abs() > 0.5 && o[0] > 30.0)
+            }));
+            assert_eq!(faces.len(), 2);
+        }
+        d.add(
+            "Move face",
+            FeatureKind::DirectEdit(DirectEditFeature {
+                kind: DirectEditKind::MoveFace,
+                move_type,
+                faces,
+                distance,
+                distance_expr: format!("{distance} mm"),
+                ..Default::default()
+            }),
+        );
+        let part = d.parts()[0].clone();
+        let section = 200.0 - (16.0 - PI * 16.0 / 4.0);
+        close(part.mass.unwrap().volume, before + distance * section, 1e-6);
+        // The end's two fillets are R4 again, their axes further along x (40 − 4 + distance).
+        let rounds: Vec<_> = part
+            .solid
+            .faces
             .iter()
-            .filter(|(o, z)| z[0].abs() < 1e-9 && (o[0] - 41.0).abs() < 1e-6)
-            .count()
-            == 2,
-        "{rounds:?}"
-    );
+            .filter(|f| is_cylinder(f) && f.radius.is_some_and(|r| (r - 4.0).abs() < 1e-9))
+            .filter_map(|f| f.axis)
+            .collect();
+        assert!(
+            rounds
+                .iter()
+                .filter(|(o, z)| z[0].abs() < 1e-9 && (o[0] - 36.0 - distance).abs() < 1e-6)
+                .count()
+                == 2,
+            "{move_type:?} {distance}: {rounds:?}"
+        );
+    }
 }
