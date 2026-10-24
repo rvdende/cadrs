@@ -159,6 +159,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             step_fixture(path.trim());
             continue;
         }
+        // #22: the carriage core (`cadrs_core::samples::carriage`): a teardrop bore into a
+        // hex-nut recess and across a bearing slot, as a STEP file with no history.
+        if let Some(path) = m.0.strip_prefix("carriage-step ") {
+            write_step(path.trim(), cadrs_core::samples::StepFixture::Carriage);
+            continue;
+        }
         // P3I.8 (SM17): the legacy C-channel's STEP file (`samples::sheetmetal_legacy`).
         if let Some(path) = m.0.strip_prefix("sm-legacy-step ") {
             write_step(

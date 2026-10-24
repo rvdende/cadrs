@@ -862,9 +862,9 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
             }
             let all = l.iter().all(|c| boundary.contains(&c.edge));
             if li == 0 || !all {
-                return Err(KernelError::Unsupported(
-                    "deleting faces that aren't closed off by whole inner loops (a fillet or a chamfer between faces)",
-                ));
+                // Not whole inner loops (a teardrop's sides, a fillet, a chamfer): the faces
+                // round them extended over the gap.
+                return super::defeature::heal(k, body, &gone);
             }
         }
         out.faces[fi].loops = kept;

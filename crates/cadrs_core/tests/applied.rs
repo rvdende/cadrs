@@ -1110,3 +1110,161 @@ fn create_selection_fillets_take_torus_fillets_by_their_tube_radius() {
     close(solid.fillet_radius(torus).unwrap(), 2.0, 1e-9);
     assert_eq!(solid.fillet_faces(torus), vec![torus]);
 }
+
+/// A Delete face of `faces` added to `d`.
+fn delete_faces(d: &mut Doc, faces: Vec<FaceRef>) {
+    d.add(AddFeature {
+        element: d.el,
+        feature: FeatureId::new(),
+        base_name: "Delete face".into(),
+        kind: FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature {
+            faces,
+            ..Default::default()
+        }),
+    });
+}
+
+/// The faces of `part` that `pick` accepts, as references.
+fn faces_of(part: &Part, pick: impl Fn(&cadrs_core::solid::SolidFace) -> bool) -> Vec<FaceRef> {
+    let s = &part.solid;
+    (0..s.faces.len())
+        .filter(|&i| pick(&s.faces[i]))
+        .map(|i| FaceRef {
+            part: part.id,
+            face: s.faces[i].name,
+            seed: s.face_point(i).unwrap(),
+        })
+        .collect()
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_and_a_chamfer() {
+    // A 40 × 20 × 10 block, an R3 fillet on its vertical edge at (40, 20) and a 2 mm chamfer on
+    // the one at (0, 0): 8000 − (1 − π/4)·9·10 − 2·2/2·10. Deleting the fillet's face makes the
+    // corner sharp again (the chamfer stays); deleting the chamfer's too gives the whole block.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let part = d.parts()[0].clone();
+    let (fillet_edge, chamfer_edge) = (
+        edge_at(&part, [40.0, 20.0, 5.0]),
+        edge_at(&part, [0.0, 0.0, 5.0]),
+    );
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(fillet_edge)],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    d.add(AddFeature::chamfer(
+        d.el,
+        FeatureId::new(),
+        ChamferFeature {
+            entities: vec![EdgeOrFace::Edge(chamfer_edge)],
+            distance: 2.0,
+            distance_expr: "2 mm".into(),
+            ..ChamferFeature::default()
+        },
+    ));
+    let (round, bevel) = ((1.0 - PI / 4.0) * 9.0 * 10.0, 20.0);
+    close(d.volume(), 8000.0 - round - bevel, 1e-6);
+    let fillet = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+    });
+    assert_eq!(fillet.len(), 1);
+    delete_faces(&mut d, fillet);
+    close(d.volume(), 8000.0 - bevel, 1e-6);
+    let chamfer = faces_of(&d.parts()[0], |f| {
+        f.plane.is_some_and(|p| {
+            let n = p.normal();
+            n[2].abs() < 1e-9 && n[0].abs() > 1e-3 && n[1].abs() > 1e-3
+        })
+    });
+    assert_eq!(chamfer.len(), 1);
+    delete_faces(&mut d, chamfer);
+    close(d.volume(), 8000.0, 1e-6);
+    assert_eq!(d.parts()[0].solid.faces.len(), 6, "a plain block again");
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_in_an_inside_corner() {
+    // An L: a 40 × 20 × 10 block and a 10 × 20 × 20 upright on its end (12 000), the inside
+    // edge at x = 10, z = 10 filleted R3, which adds (1 − π/4)·9·20. Deleting the fillet (a
+    // protrusion: the corner's material) leaves the sharp corner.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    d.extrude_rect(0.0, 0.0, 10.0, 20.0, 30.0, BooleanOp::Add);
+    close(d.volume(), 12_000.0, 1e-6);
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 10.0, 10.0]))],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    close(d.volume(), 12_000.0 + (1.0 - PI / 4.0) * 9.0 * 20.0, 1e-6);
+    let fillet = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+    });
+    assert_eq!(fillet.len(), 1);
+    delete_faces(&mut d, fillet);
+    close(d.volume(), 12_000.0, 1e-6);
+}
+
+#[test]
+fn delete_face_takes_off_a_round_edges_fillet() {
+    // A Ø20 × 10 cylinder with its top edge filleted R2 (a torus between the top and the wall):
+    // deleting it gives the plain cylinder, π·10²·10.
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        }],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 0.0, 10.0]))],
+            size: 2.0,
+            size_expr: "2 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let torus = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Torus)
+    });
+    assert_eq!(torus.len(), 1);
+    delete_faces(&mut d, torus);
+    close(d.volume(), PI * 1000.0, 1e-6);
+}
