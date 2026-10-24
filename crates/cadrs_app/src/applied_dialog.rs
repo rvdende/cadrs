@@ -2009,10 +2009,10 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::TransformType => cadrs_core::transform::TransformType::ALL
             .get(i)
             .map(|t| crate::transform_ui::first_field(*t)),
-        // Move face's: Rotate's axis.
+        // Move face's: Rotate's axis, else its faces (never a field it no longer shows).
         Role::DirectEditType => cadrs_core::direct_edit::MoveType::ALL
             .get(i)
-            .and_then(|t| crate::direct_edit_ui::first_field(*t)),
+            .map(|t| crate::direct_edit_ui::first_field(*t)),
         _ => None,
     };
     if let Some(f) = next {

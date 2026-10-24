@@ -14,7 +14,7 @@
 
 use bevy::prelude::*;
 use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind, MoveType};
-use cadrs_core::document::{AxisRef, DirectionRef, FaceRef};
+use cadrs_core::document::FaceRef;
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_ui::prelude::*;
 
@@ -22,6 +22,7 @@ use crate::ActiveDocument;
 use crate::applied::{AppliedField, AppliedKind};
 use crate::applied_dialog::{Role, body_column, index_of, list, number, opts, select_row};
 use crate::parts::PartCache;
+use crate::transform_ui::{axis_pick, direction_pick, set_or_clear};
 use crate::viewport::Pick;
 
 fn face_ref(cache: &PartCache, pick: Pick) -> Option<FaceRef> {
@@ -53,9 +54,13 @@ pub fn initial(
     ))
 }
 
-/// The field the move type's picks go to first: Rotate's axis (it has none until picked).
-pub fn first_field(t: MoveType) -> Option<AppliedField> {
-    (t == MoveType::Rotate).then_some(AppliedField::DirectEditAxis)
+/// The field that takes the picks after the move type changes: Rotate's axis (it has none
+/// until picked), else the faces (a field the dialog shows).
+pub fn first_field(t: MoveType) -> AppliedField {
+    match t {
+        MoveType::Rotate => AppliedField::DirectEditAxis,
+        MoveType::Translate | MoveType::Offset => AppliedField::DirectEditFaces,
+    }
 }
 
 /// A pick into a direct edit's fields: a face added to the faces, or removed if it is there; a
@@ -80,12 +85,12 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
             let Some(d) = crate::pattern::direction_of(&features, cache, pick) else {
                 return false;
             };
-            x.direction = (x.direction != Some(d)).then_some(d);
+            set_or_clear(&mut x.direction, d);
         } else {
             let Some(a) = crate::pattern::axis_of(&features, cache, pick) else {
                 return false;
             };
-            x.axis = (x.axis != Some(a)).then_some(a);
+            set_or_clear(&mut x.axis, a);
         }
         return true;
     }
@@ -140,8 +145,8 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             "direct-edit {:?} {:?} {} {}",
             x.kind,
             x.move_type,
-            x.distance < 0.0,
-            x.angle < 0.0
+            x.distance.is_sign_negative(),
+            x.angle.is_sign_negative()
         )),
         _ => None,
     }
@@ -193,44 +198,13 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::DirectEdit(x) = kind else {
         return Vec::new();
     };
-    let face = |f: &FaceRef| {
-        cache
-            .parts
-            .iter()
-            .find(|p| p.solid.face(&f.face).is_some())
-            .map(|p| Pick::Face(p.id, f.face))
-    };
-    let edge = |e: &cadrs_core::EdgeRef| {
-        cache
-            .parts
-            .iter()
-            .find(|p| p.solid.edge(&e.edge).is_some())
-            .map(|p| Pick::Edge(p.id, e.edge))
-    };
     match x.move_type {
         MoveType::Translate => x
             .direction
             .iter()
-            .filter_map(|d| match d {
-                DirectionRef::Edge(e) => edge(e),
-                DirectionRef::FaceNormal(f) => face(f),
-                DirectionRef::SketchLine { sketch, curve } => {
-                    Some(Pick::SketchCurve(*sketch, *curve))
-                }
-                DirectionRef::PlaneNormal(p) => crate::viewport::plane_pick(*p),
-                DirectionRef::Connector(c) => crate::pattern::connector_pick(c),
-            })
+            .filter_map(|d| direction_pick(cache, d))
             .collect(),
-        MoveType::Rotate => x
-            .axis
-            .iter()
-            .filter_map(|a| match a {
-                AxisRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
-                AxisRef::Edge(e) => edge(e),
-                AxisRef::Face(f) => face(f),
-                AxisRef::Connector(c) => crate::pattern::connector_pick(c),
-            })
-            .collect(),
+        MoveType::Rotate => x.axis.iter().filter_map(|a| axis_pick(cache, a)).collect(),
         MoveType::Offset => Vec::new(),
     }
 }
@@ -305,7 +279,7 @@ pub(crate) fn body(
                     "Angle",
                     Role::DirectEditAngle,
                     &x.angle_expr,
-                    Some(x.angle < 0.0),
+                    Some(x.angle.is_sign_negative()),
                 ),
                 MoveType::Translate | MoveType::Offset => number(
                     b,
@@ -314,7 +288,7 @@ pub(crate) fn body(
                     "Distance",
                     Role::DirectEditDistance,
                     &x.distance_expr,
-                    Some(x.distance < 0.0),
+                    Some(x.distance.is_sign_negative()),
                 ),
             }
         }
@@ -459,6 +433,30 @@ mod tests {
         };
         assert_eq!((x.distance, x.distance_expr.as_str()), (-1.0, "-1 mm"));
         assert_eq!(x.angle, -15.0, "the angle is left alone");
+    }
+
+    #[test]
+    fn a_flipped_zero_angle_shows_as_flipped() {
+        // Rotate starts at 0°: the flip still turns the arrow (its layout changes).
+        let mut k = FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Rotate,
+            ..DirectEditFeature::default()
+        });
+        let before = layout(&k);
+        flip(&mut k, Role::Flip);
+        assert_ne!(layout(&k), before);
+    }
+
+    #[test]
+    fn a_type_change_never_leaves_the_picks_on_a_hidden_field() {
+        // Back from Rotate (its axis field gone), the faces take the picks again.
+        assert_eq!(first_field(MoveType::Rotate), AppliedField::DirectEditAxis);
+        assert_eq!(
+            first_field(MoveType::Translate),
+            AppliedField::DirectEditFaces
+        );
+        assert_eq!(first_field(MoveType::Offset), AppliedField::DirectEditFaces);
     }
 
     #[test]

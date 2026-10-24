@@ -699,8 +699,7 @@ impl Rebuilder {
                         .direction(before, state, d)
                         .map_err(|e| e.replace("extrude direction", "direction"))?
                         .into_inner(),
-                    None => first_face_normal(state, &x.faces[0])
-                        .ok_or("The first face has no normal to move along")?,
+                    None => first_face_normal(state, &x.faces[0])?,
                 };
                 Some(Motion::translation(u * distance))
             }
@@ -708,24 +707,17 @@ impl Rebuilder {
                 let a = x.axis.as_ref().ok_or("Select an axis of rotation")?;
                 let axis = self
                     .axis(before, state, a)
-                    .map_err(|e| e.replace("revolve axis", "axis of rotation"))?;
+                    .map_err(|e| rotation_axis_error(&e))?;
                 Some(Motion::rotation(&axis, x.angle.to_radians()))
             }
             _ => None,
         };
-        self.per_part(
-            id,
-            kind.label(),
-            state,
-            bodies,
-            |this, i, body| match kind {
-                DirectEditKind::DeleteFace => this.kernel.delete_faces(body, &faces[i]),
-                DirectEditKind::Simplify => this.kernel.simplify(body),
-                DirectEditKind::MoveFace if motion.is_some() => {
-                    this.kernel
-                        .move_faces(body, &faces[i], motion.as_ref().expect("checked"))
-                }
-                DirectEditKind::MoveFace => {
+        self.per_part(id, kind.label(), state, bodies, |this, i, body| {
+            match (kind, &motion) {
+                (DirectEditKind::DeleteFace, _) => this.kernel.delete_faces(body, &faces[i]),
+                (DirectEditKind::Simplify, _) => this.kernel.simplify(body),
+                (DirectEditKind::MoveFace, Some(m)) => this.kernel.move_faces(body, &faces[i], m),
+                (DirectEditKind::MoveFace, None) => {
                     let spec = cadrs_kernel::OffsetSpec {
                         distance: 0.0,
                         faces: faces[i].iter().map(|f| (*f, distance)).collect(),
@@ -733,8 +725,8 @@ impl Rebuilder {
                     };
                     this.kernel.offset(body, &spec)
                 }
-            },
-        )
+            }
+        })
     }
 
     /// The Hole feature (PS15): a revolved tool per point, subtracted from the parts in scope.
@@ -1135,15 +1127,16 @@ pub(super) fn hole_points(before: &[Feature], h: &HoleFeature) -> Result<Vec<Hol
     Ok(out)
 }
 
-/// The outward normal of a Move face's first face: Translate's direction when none is picked.
-fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Option<Vector3<f64>> {
-    let parts = state
-        .part(f.part)
-        .into_iter()
-        .chain(state.parts.iter().filter(|p| p.part.id != f.part));
-    parts.into_iter().find_map(|p| {
-        let s = &p.part.solid;
-        let (i, _) = s.resolve_face(&f.face, None, Some(f.seed)).ok()?;
-        s.face_normal(i).map(Vector3::from)
-    })
+/// Translate's direction when none is picked: the first face's outward normal, which only a
+/// flat face has (the face found as the faces being moved are, [`face_ids`]).
+fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vector3<f64>, String> {
+    let (part, _) = face_ids(state, f).ok_or("A selected face no longer exists")?;
+    let frame = face_frame(part, f).ok_or("Select a direction (the first face isn't flat)")?;
+    Ok(Vector3::from(frame.normal()).normalize())
+}
+
+/// An axis error worded for a rotation ("A spline can't be an axis of rotation").
+pub(super) fn rotation_axis_error(e: &str) -> String {
+    e.replace("a revolve axis", "an axis of rotation")
+        .replace("revolve axis", "axis of rotation")
 }

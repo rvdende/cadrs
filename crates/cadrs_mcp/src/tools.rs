@@ -225,12 +225,14 @@ pub struct AddFeature {
     /// The feature type: Extrude, Revolve, Fillet, Chamfer, Hole, Shell, Plane, Sweep, Loft,
     /// Split, Pattern, Mirror, Draft, Boolean, DeletePart, Transform, Thicken, Helix,
     /// DeleteFace ({"faces": [refs]}: faces removed, their neighbours healing the gap: a fillet,
-    /// chamfer, hole, boss or groove taken away) or MoveFace ({"faces": [refs], "distance": mm}:
-    /// faces offset along their outward normals, negative inward: a wall moved, a bore's radius
-    /// changed; "move_type": "Translate" moves them along "direction" (as an extrude's, e.g.
-    /// {"PlaneNormal": "Top"}; the first face's normal when left out) by "distance", "Rotate"
-    /// turns them about "axis" (as a revolve's) by "angle" degrees), or Simplify ({"faces": [a face of each part]}: faces and edges on the same
-    /// surface merged, which repairs imported parts split along seams).
+    /// chamfer, hole, boss or groove taken away), MoveFace ({"faces": [refs], "move_type":
+    /// "Translate" | "Rotate" | "Offset" (the default)}: Translate moves the faces along
+    /// "direction", as an extrude's, e.g. {"PlaneNormal": "Top"} (the first face's normal when
+    /// left out; it must then be flat), by "distance" mm; Rotate turns them about "axis", as a
+    /// revolve's, by "angle" degrees; Offset moves each along its outward normal by "distance",
+    /// negative inward: a wall moved, a bore's radius changed), or Simplify ({"faces": [a face
+    /// of each part]}: faces and edges on the same surface merged, which repairs imported parts
+    /// split along seams).
     #[serde(rename = "type")]
     pub kind: String,
     /// The feature's fields as JSON, merged over the type's defaults (so only the fields that

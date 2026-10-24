@@ -511,7 +511,7 @@ impl AppliedSession {
                 sketch_curves: true,
                 ..none
             },
-            AppliedField::TransformDirection => PickFilter {
+            AppliedField::TransformDirection | AppliedField::DirectEditDirection => PickFilter {
                 planes,
                 plane_features: true,
                 faces: true,
@@ -532,7 +532,7 @@ impl AppliedSession {
                 connectors: true,
                 ..none
             },
-            AppliedField::TransformAxis => PickFilter {
+            AppliedField::TransformAxis | AppliedField::DirectEditAxis => PickFilter {
                 origin: true,
                 faces: true,
                 edges: true,
@@ -564,24 +564,6 @@ impl AppliedSession {
             },
             AppliedField::DirectEditFaces => PickFilter {
                 faces: true,
-                ..none
-            },
-            AppliedField::DirectEditDirection => PickFilter {
-                planes,
-                plane_features: true,
-                faces: true,
-                planar_only: true,
-                edges: true,
-                sketch_curves: true,
-                connectors: true,
-                ..none
-            },
-            AppliedField::DirectEditAxis => PickFilter {
-                origin: true,
-                faces: true,
-                edges: true,
-                sketch_curves: true,
-                connectors: true,
                 ..none
             },
             f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),

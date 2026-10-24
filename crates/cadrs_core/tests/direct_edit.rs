@@ -399,6 +399,157 @@ fn rotate_without_an_axis_says_what_to_pick() {
 }
 
 #[test]
+fn translate_without_a_direction_needs_a_flat_first_face() {
+    // A hole's wall has no single normal: Translate asks for a direction instead of guessing.
+    let (mut d, _) = block_with_hole();
+    let wall = faces_where(&d.parts()[0], is_cylinder);
+    let f = d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Translate,
+            faces: wall,
+            distance: 5.0,
+            distance_expr: "5 mm".into(),
+            ..Default::default()
+        }),
+    );
+    let b = d.build();
+    assert!(
+        b.errors
+            .iter()
+            .any(|(id, e)| *id == f && e.contains("Select a direction")),
+        "{:?}",
+        b.errors
+    );
+}
+
+#[test]
+fn a_move_faces_parents_are_its_faces_and_the_reference_its_type_uses() {
+    // The direction (a sketch line) is a parent of a Translate; switched to Rotate, the axis
+    // (an edge of the block) is, and the sketch no longer holds it back.
+    let (mut d, _) = block_with_hole();
+    let part = d.parts()[0].clone();
+    let line = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddPolyline {
+            points: vec![Vec2::new(0.0, -10.0), Vec2::new(10.0, -10.0)],
+            closed: false,
+            construction: false,
+            label: "Add line",
+        }],
+    );
+    let curve =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(line)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .curves
+            .keys()
+            .next()
+            .unwrap();
+    let edge = &part.solid.edges[0];
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::MoveFace,
+        move_type: MoveType::Translate,
+        faces: top_face(&part),
+        direction: Some(DirectionRef::SketchLine {
+            sketch: line,
+            curve,
+        }),
+        axis: Some(AxisRef::Edge(EdgeRef {
+            part: part.id,
+            edge: edge.name,
+            seed: edge.points[0],
+        })),
+        ..Default::default()
+    };
+    let parents = |x: &DirectEditFeature| {
+        Feature {
+            id: FeatureId::new(),
+            name: "Move face 1".into(),
+            kind: FeatureKind::DirectEdit(x.clone()),
+            suppress_by: None,
+        }
+        .parents()
+    };
+    let block = part.feature;
+    assert!(parents(&x).contains(&line));
+    x.move_type = MoveType::Rotate;
+    let p = parents(&x);
+    assert!(!p.contains(&line), "the unused direction is not a parent");
+    assert!(p.contains(&block));
+    // The sketch line works as the direction too: the top moved 5 along +X stays where it is
+    // (a face moved in its own plane), the block unchanged.
+    x.move_type = MoveType::Translate;
+    x.distance = 5.0;
+    x.distance_expr = "5 mm".into();
+    d.add("Move face", FeatureKind::DirectEdit(x));
+    close(d.volume(), 8000.0 - 250.0 * PI, 1e-6);
+}
+
+#[test]
+fn rotate_follows_an_angle_variable() {
+    // #a = 10 deg drives the angle; set to −10 deg the top tilts the other way: as in
+    // `rotate_tilts_a_face_about_an_axis`, the two volumes add up to 2V.
+    use cadrs_core::variables::{VariableFeature, VariableKind, VariableType};
+    let (mut d, v) = block_with_hole();
+    let part = d.parts()[0].clone();
+    let angle = |expr: &str, value: f64| VariableFeature {
+        name: "a".into(),
+        var_type: VariableType::Angle,
+        expr: expr.into(),
+        value,
+        kind: VariableKind::Angle,
+        ..VariableFeature::default()
+    };
+    let var = d.add("Variable", FeatureKind::Variable(angle("10 deg", 10.0)));
+    let edge = part
+        .solid
+        .edges
+        .iter()
+        .find(|e| {
+            e.points
+                .iter()
+                .all(|p| p[1].abs() < 1e-9 && (p[2] - 10.0).abs() < 1e-9)
+        })
+        .expect("the top edge along y = 0");
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Rotate,
+            faces: top_face(&part),
+            axis: Some(AxisRef::Edge(EdgeRef {
+                part: part.id,
+                edge: edge.name,
+                seed: edge.points[0],
+            })),
+            angle: 10.0,
+            angle_expr: "#a".into(),
+            ..Default::default()
+        }),
+    );
+    let turned = d.volume();
+    close((turned - v).abs(), v * 10f64.to_radians().tan(), 1e-6);
+    d.set(var, FeatureKind::Variable(angle("-10 deg", -10.0)));
+    close(d.volume() + turned, 2.0 * v, 1e-6);
+}
+
+#[test]
+fn a_move_face_from_before_move_types_loads_as_an_offset() {
+    // A document saved before Translate and Rotate: no move type, direction, axis or angle.
+    let old = r#"(kind: MoveFace, faces: [], distance: 2.0, distance_expr: "2 mm")"#;
+    let x: DirectEditFeature = ron::from_str(old).unwrap();
+    assert_eq!(x.move_type, MoveType::Offset);
+    assert_eq!((x.distance, x.direction, x.axis), (2.0, None, None));
+    assert_eq!((x.angle, x.angle_expr.as_str()), (0.0, "0 deg"));
+}
+
+#[test]
 fn a_direct_edit_without_faces_says_what_to_pick() {
     let mut d = Doc::new();
     d.block(0.0, 0.0, 10.0, 10.0, 10.0);
