@@ -31,7 +31,7 @@ impl Plugin for ViewCubePlugin {
             .init_gizmo_group::<CubeArcGizmos>()
             .init_resource::<CubeHover>()
             .init_resource::<CornerHover>()
-            .add_systems(Startup, setup_cube)
+            .add_systems(Startup, (setup_cube, pair_axis_labels))
             .add_systems(
                 Update,
                 (sync_cube_camera, cube_hover, draw_cube, fade_face_labels)
@@ -554,6 +554,16 @@ fn recolor_cube(
     }
 }
 
+/// The cube's X and Y letters (more saturated than the triad lines), lighter on dark.
+const AXIS_LABEL_X: Color = Color::srgb_u8(0xd0, 0x30, 0x30);
+const AXIS_LABEL_Y: Color = Color::srgb_u8(0x3a, 0x9a, 0x3a);
+
+fn pair_axis_labels(mut map: ResMut<cadrs_ui::SchemeMap>) {
+    let ink = cadrs_ui::ColorRole::Ink;
+    map.pair(ink, AXIS_LABEL_X, Color::srgb_u8(0xff, 0x6b, 0x63));
+    map.pair(ink, AXIS_LABEL_Y, Color::srgb_u8(0x6a, 0xd8, 0x6a));
+}
+
 /// Spawns the view cube widget (inside the viewport area, top right).
 pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handle<Image>) {
     p.spawn((
@@ -599,8 +609,8 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
         ));
         for (axis, letter, color) in [
             // Label colors measured in `screens/09`: more saturated than the triad lines.
-            (Vec3::X, "X", Color::srgb_u8(0xd0, 0x30, 0x30)),
-            (Vec3::Y, "Y", Color::srgb_u8(0x3a, 0x9a, 0x3a)),
+            (Vec3::X, "X", AXIS_LABEL_X),
+            (Vec3::Y, "Y", AXIS_LABEL_Y),
             (Vec3::Z, "Z", theme.axis_z),
         ] {
             w.spawn((

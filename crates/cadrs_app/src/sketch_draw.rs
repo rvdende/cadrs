@@ -160,7 +160,7 @@ fn draw_list_hovered_sketch(
 fn regular() -> Color {
     by_scheme(
         Color::srgb_u8(0x00, 0x00, 0xd0),
-        Color::srgb_u8(0x74, 0x95, 0xff),
+        Color::srgb_u8(0x8a, 0xa6, 0xff),
     )
 }
 /// Fully constrained geometry.

@@ -381,7 +381,7 @@ pub(crate) fn sync_icon_layers(
             let alpha = if disabled {
                 // Faded further on dark, where the dark artwork faded as much still reads.
                 if crate::color_scheme::dark_in_force() {
-                    0.22
+                    0.18
                 } else {
                     0.35
                 }

@@ -52,6 +52,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<FeatureSplit>()
             .add_observer(remember_feature_split)
             .init_resource::<crate::WorkspaceUnits>()
+            .add_systems(Startup, pair_document_colors)
             .add_systems(OnEnter(AppState::Document), spawn_shell)
             .add_systems(
                 Update,
@@ -780,6 +781,18 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
             });
         }
     });
+}
+
+/// A feature-list row for a sketch the selected feature references: a faint grey, in dark a
+/// faint lift over the panel.
+const REFERENCED_SKETCH_BG: Color = Color::srgb_u8(0xe6, 0xe9, 0xec);
+
+fn pair_document_colors(mut map: ResMut<cadrs_ui::SchemeMap>) {
+    map.pair(
+        cadrs_ui::ColorRole::Fill,
+        REFERENCED_SKETCH_BG,
+        Color::srgb_u8(0x2b, 0x2e, 0x35),
+    );
 }
 
 /// The bottom-right tools over the 3D view.
@@ -3938,7 +3951,7 @@ fn rebuild_feature_rows(
                 // Show dependencies (P3.9, PS11.2): parents amber, children blue.
                 bg
             } else if *kind == RowKind::ReferencedSketch {
-                Color::srgb_u8(0xe6, 0xe9, 0xec)
+                REFERENCED_SKETCH_BG
             } else {
                 Color::NONE
             };
