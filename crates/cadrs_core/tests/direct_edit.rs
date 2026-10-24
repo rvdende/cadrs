@@ -1308,3 +1308,42 @@ fn offset_up_to_a_part_over_one_piece_of_a_split_top() {
     let grown = parts.iter().find(|p| p.id == part.id).unwrap();
     close(grown.mass.unwrap().volume, 12_000.0, 1e-6);
 }
+
+#[test]
+fn offset_up_to_a_part_moves_each_face_along_its_own_normal() {
+    // A plain 40 × 20 × 10 block, its right side (x = 40, picked first) and left side (x = 0)
+    // offset up to a block beyond the left side only (x −20…−10): the left side reaches it 10
+    // out along its own normal (−x), so both sides go 10 out: 60 wide, 12 000. (Measured along
+    // the first face's normal, the left side would have been taken 10 in.)
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    d.block(-20.0, 0.0, -10.0, 20.0, 10.0);
+    let parts = d.parts();
+    let block = parts
+        .iter()
+        .find(|p| (p.mass.unwrap().volume - 8000.0).abs() < 1e-6)
+        .unwrap()
+        .clone();
+    let target = parts.iter().find(|p| p.id != block.id).unwrap().id;
+    let side = |sign: f64| {
+        faces_where(&block, move |f| {
+            f.plane.is_some_and(|p| p.normal()[0] * sign > 0.5)
+        })
+    };
+    let mut faces = side(1.0);
+    faces.extend(side(-1.0));
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(target)),
+            faces,
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let grown = parts.iter().find(|p| p.id == block.id).unwrap();
+    close(grown.mass.unwrap().volume, 12_000.0, 1e-6);
+}

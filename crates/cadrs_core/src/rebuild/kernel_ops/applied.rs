@@ -824,8 +824,10 @@ impl Rebuilder {
         let tbody = state.part(target)?.body?;
         // The faces move together: the nearest any of them meets ahead, else behind.
         let (mut ahead, mut behind): (Option<f64>, Option<f64>) = (None, None);
+        // Offset moves each face along its own normal (by one distance); Translate all along u.
+        let own = x.move_type == crate::direct_edit::MoveType::Offset;
         for f in &x.faces {
-            let (a, b) = self.face_up_to_exact(state, f, tbody, u)?;
+            let (a, b) = self.face_up_to_exact(state, f, tbody, u, own)?;
             if let Some(a) = a {
                 ahead = Some(ahead.map_or(a, |t| t.min(a)));
             }
@@ -836,14 +838,16 @@ impl Rebuilder {
         ahead.or(behind)
     }
 
-    /// [`Self::part_up_to_exact`] for one face (flat): how far along `u` it goes to meet the
-    /// part `tbody` ahead and behind. `None` when the kernel can't say.
+    /// [`Self::part_up_to_exact`] for one face (flat): how far along `u` (with `own`, along the
+    /// face's own normal: an Offset) it goes to meet the part `tbody` ahead and behind. `None`
+    /// when the kernel can't say.
     fn face_up_to_exact(
         &mut self,
         state: &State,
         first: &crate::document::FaceRef,
         tbody: BodyId,
         u: &Vector3<f64>,
+        own: bool,
     ) -> Option<(Option<f64>, Option<f64>)> {
         use cadrs_kernel::{DistanceTarget, ExtrudeEnd, ExtrudeSpec, FaceInput};
         // Every kernel face the face is now (one named face in pieces is swept whole).
@@ -854,6 +858,7 @@ impl Rebuilder {
         }
         let frame = face_frame(moved, first)?;
         let n = Vector3::from(frame.normal()).normalize();
+        let u = if own { n } else { *u };
         let along = u.dot(&n);
         if along.abs() < 1e-9 {
             return None;
@@ -1444,6 +1449,19 @@ fn up_to_distance(
             // every face moved); else from the part's mesh, from the first face.
             if let Some(t) = exact {
                 return Ok(t - x.offset * t.signum());
+            }
+            // The mesh measures from the first face only: an Offset of faces facing other ways
+            // (each moving along its own normal) would be measured the wrong way for them.
+            if x.move_type == crate::direct_edit::MoveType::Offset
+                && x.faces[1..].iter().any(|f| {
+                    face_ids(state, f)
+                        .and_then(|(p, _)| face_frame(p, f))
+                        .is_none_or(|t| Vector3::from(t.normal()).normalize().dot(&n) < 1.0 - 1e-6)
+                })
+            {
+                return Err(
+                    "Up to this part can't be measured for faces facing different ways".into(),
+                );
             }
             let s = &state
                 .part(*id)
