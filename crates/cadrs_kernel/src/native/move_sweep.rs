@@ -38,18 +38,16 @@ fn outward_at(b: &Body, fi: usize, p: &P3) -> Option<(P3, V3)> {
     Some((f.surf.eval(u, v), if f.sense { n } else { -n }))
 }
 
-/// Points inside face `fi` (the middles of up to 32 of its mesh's triangles, on its surface)
+/// Points inside face `fi` (the middles of its mesh's triangles, on its surface)
 /// with its outward normals there: unlike its area centroid, inside it whatever its shape.
 fn inside(k: &mut NativeKernel, b: &Body, fi: usize) -> Result<Inside> {
     let id = k.insert(super::kernel::subset(b, &[fi], false));
     let mesh = k.tessellate(id, Tessellation::default());
     k.release(id);
     let mesh = mesh?;
-    let step = mesh.indices.len().div_ceil(32).max(1);
     Ok(mesh
         .indices
         .iter()
-        .step_by(step)
         .filter_map(|t| {
             let c = t
                 .iter()
@@ -88,34 +86,34 @@ fn runs_along(b: &Body, fi: usize, v: &V3) -> bool {
 }
 
 /// What each face of `b` sweeps by: the faces moved by `how`, the fillets of `fillets` whose
-/// other faces the move slides along, and the corners between two of those. `None` when a face
-/// can't be swept (a rotation, an offset of a curved face).
+/// other faces the move slides along, and the corners between two of those; else why they
+/// can't be swept.
 fn sweeps(
     k: &mut NativeKernel,
     b: &Body,
     faces: &[FaceId],
     how: &FaceMove,
     fillets: &[Refillet],
-) -> Option<Vec<(usize, V3)>> {
+) -> std::result::Result<Vec<(usize, V3)>, &'static str> {
     let mut out: Vec<(usize, V3)> = Vec::new();
     for f in faces {
         let fi = f.0 as usize;
         let v = match how {
             FaceMove::Motion(m) => {
                 if (m.linear - nalgebra::Matrix3::identity()).norm() > tol::ANGULAR_POINT {
-                    return None;
+                    return Err("only straight moves are swept, not turns");
                 }
                 m.translation
             }
             FaceMove::Offset(d) => {
-                if !matches!(b.faces.get(fi)?.surf, Surface::Plane { .. }) {
-                    return None;
+                if !matches!(b.faces[fi].surf, Surface::Plane { .. }) {
+                    return Err("only flat faces' offsets are swept");
                 }
-                outward(k, b, fi)?.1 * *d
+                outward(k, b, fi).ok_or("a face with no area")?.1 * *d
             }
         };
         if v.norm() < tol::POINT {
-            return None;
+            return Err("the faces don't move");
         }
         out.push((fi, v));
     }
@@ -132,7 +130,7 @@ fn sweeps(
             continue;
         };
         if vs.iter().any(|w| (w - v).norm() > tol::POINT) {
-            return None;
+            return Err("a fillet joins faces that move different ways");
         }
         let others = r
             .tangent
@@ -150,7 +148,7 @@ fn sweeps(
             })
             .all(|t| runs_along(b, t, &v));
         if !slides {
-            return None;
+            return Err("a fillet to put back joins a face the move doesn't slide along");
         }
         out.push((r.face.0 as usize, v));
         swept_fillets.push(r.face.0 as usize);
@@ -179,18 +177,26 @@ fn sweeps(
             }
         }
     }
-    // Faces next to each other moving different ways leave the corner between their sweeps out.
-    let ef = b.edge_faces();
+    // Faces next to each other (along an edge or at a vertex) moving different ways leave the
+    // corner between their sweeps out.
     let way = |fi: usize| out.iter().find(|(f, _)| *f == fi).map(|(_, v)| *v);
-    for fs in &ef {
-        if let [a, c] = fs[..]
-            && let (Some(va), Some(vc)) = (way(a), way(c))
-            && (va - vc).norm() > tol::POINT
-        {
-            return None;
+    let mut at_vertex: Vec<Vec<usize>> = vec![Vec::new(); b.verts.len()];
+    for (fi, face) in b.faces.iter().enumerate() {
+        for c in face.loops.iter().flatten() {
+            for v in b.edges[c.edge].v {
+                if !at_vertex[v].contains(&fi) {
+                    at_vertex[v].push(fi);
+                }
+            }
         }
     }
-    Some(out)
+    for fs in &at_vertex {
+        let ways: Vec<V3> = fs.iter().filter_map(|&f| way(f)).collect();
+        if ways.iter().any(|w| (w - ways[0]).norm() > tol::POINT) {
+            return Err("faces next to each other move different ways");
+        }
+    }
+    Ok(out)
 }
 
 /// [`Kernel::move_faces_swept`]: see the module docs.
@@ -205,9 +211,7 @@ pub fn move_faces_swept(
     if let Some(f) = faces.iter().find(|f| f.0 as usize >= b.faces.len()) {
         return Err(KernelError::InvalidParameter(format!("unknown {f:?}")));
     }
-    let sweeps = sweeps(k, &b, faces, how, fillets).ok_or_else(|| {
-        refused("only straight moves of faces that don't move apart from each other are swept")
-    })?;
+    let sweeps = sweeps(k, &b, faces, how, fillets).map_err(refused)?;
     let mut cur = b.clone();
     // Each face of `cur`: the faces of `b` it continues (none: a side of a sweep).
     let mut sources: Vec<Vec<usize>> = (0..b.faces.len()).map(|f| vec![f]).collect();
@@ -388,7 +392,8 @@ mod tests {
         let top = facing(&mut k, id, [0.0, 0.0, 1.0]);
         let side = facing(&mut k, id, [1.0, 0.0, 0.0]);
         let r = move_faces_swept(&mut k, id, &[top, side], &FaceMove::Offset(2.0), &[]);
-        assert!(r.is_err(), "{r:?}");
+        let e = r.expect_err("refused").to_string();
+        assert!(e.contains("move different ways"), "{e}");
         // Translated together (one vector) they sweep as one: the cube drawn out along
         // (2, 0, 2), 1000 + |v| × the cube seen along v, 2√2 × 100√2.
         let r = move_faces_swept(
