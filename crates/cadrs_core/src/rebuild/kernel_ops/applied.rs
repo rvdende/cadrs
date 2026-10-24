@@ -1333,13 +1333,59 @@ fn up_to_distance(
                         .map(|(_, t)| t * sign)
                 })
             };
+            // And where its edges, seen along `u`, cross the face's outline (a bar across the
+            // face, nothing of it over the face's points or its points over the face).
+            let (eu, ev) = (
+                Vector3::from(frame.u).normalize(),
+                Vector3::from(frame.v).normalize(),
+            );
+            let flat = |q: Vector3<f64>| {
+                let t = (q - o).dot(&n) / along;
+                let p = q - u * t - o;
+                (t, nalgebra::Vector2::new(p.dot(&eu), p.dot(&ev)))
+            };
+            let outline: Vec<[nalgebra::Vector2<f64>; 2]> = face
+                .loops
+                .iter()
+                .flat_map(|l| {
+                    (0..l.len()).map(move |k| {
+                        [
+                            flat(Vector3::from(l[k])).1,
+                            flat(Vector3::from(l[(k + 1) % l.len()])).1,
+                        ]
+                    })
+                })
+                .collect();
+            let mut crossings: Vec<f64> = Vec::new();
+            for e in &s.edges {
+                for w in e.points.windows(2) {
+                    let ((t0, b0), (t1, b1)) =
+                        (flat(Vector3::from(w[0])), flat(Vector3::from(w[1])));
+                    let db = b1 - b0;
+                    for [a0, a1] in &outline {
+                        let da = a1 - a0;
+                        let den = da.x * db.y - da.y * db.x;
+                        if den.abs() < 1e-12 {
+                            continue;
+                        }
+                        let r = b0 - a0;
+                        let sa = (r.x * db.y - r.y * db.x) / den;
+                        let sb = (r.x * da.y - r.y * da.x) / den;
+                        if (0.0..=1.0).contains(&sa) && (0.0..=1.0).contains(&sb) {
+                            crossings.push(t0 + (t1 - t0) * sb);
+                        }
+                    }
+                }
+            }
             let ahead = ts
                 .clone()
                 .chain(cast(1.0))
+                .chain(crossings.iter().copied())
                 .filter(|t| *t > 1e-9)
                 .min_by(f64::total_cmp);
             let behind = ts
                 .chain(cast(-1.0))
+                .chain(crossings.iter().copied())
                 .filter(|t| *t < -1e-9)
                 .max_by(f64::total_cmp);
             let t = ahead

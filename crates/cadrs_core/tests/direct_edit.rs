@@ -1109,3 +1109,89 @@ fn delete_face_caps_two_openings() {
     close(part.mass.unwrap().volume, v, 1e-6);
     assert_eq!(part.solid.faces.len(), 7);
 }
+
+#[test]
+fn delete_face_caps_openings_nested_three_deep() {
+    // A 60 × 60 × 20 block with a ring groove 5 deep round an island (radii 10 to 20): its
+    // top's opening holds the groove's (r 20), which holds the island's (r 10). Deleting the
+    // top and the island's top with Cap puts back a top round the groove and the island's own
+    // cap: the same part (volume and faces).
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 60.0, 60.0, 20.0);
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![circle(30.0, 30.0, 20.0), circle(30.0, 30.0, 10.0)],
+    );
+    d.extrude(s, &[Vec2::new(45.0, 30.0)], |e| {
+        e.op = BooleanOp::Remove;
+        e.depth = 5.0;
+        e.depth_expr = "5 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let before = d.parts()[0].clone();
+    let groove = PI * (400.0 - 100.0) * 5.0;
+    close(before.mass.unwrap().volume, 72_000.0 - groove, 1e-6);
+    let tops = faces_where(&before, |f| {
+        f.plane
+            .is_some_and(|p| p.normal()[2] > 0.5 && (p.origin[2] - 20.0).abs() < 1e-9)
+    });
+    assert_eq!(tops.len(), 2, "the block's top and the island's");
+    d.add(
+        "Delete face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::DeleteFace,
+            faces: tops,
+            void: cadrs_core::direct_edit::VoidFill::Cap,
+            ..Default::default()
+        }),
+    );
+    let after = d.parts()[0].clone();
+    close(after.mass.unwrap().volume, 72_000.0 - groove, 1e-6);
+    assert_eq!(after.solid.faces.len(), before.solid.faces.len());
+}
+
+#[test]
+fn offset_up_to_a_bar_across_the_face() {
+    // A plain 40 × 20 × 10 block (its top meshed by its 4 corners) and a 4 × 4 bar floating
+    // over the top across its middle (x −10…50, y 8…12, z 15…19), its ends off to the sides:
+    // none of its corners over the face and none of the face's under it, only its edges cross
+    // the face's outline. The top still stops under it, 15 high (12 000).
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let v = 8000.0;
+    let s = d.sketch(PlaneRef::Top, vec![rect(-10.0, 8.0, 50.0, 12.0)]);
+    d.extrude(s, &[Vec2::new(20.0, 10.0)], |e| {
+        e.depth = 4.0;
+        e.depth_expr = "4 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let parts = d.parts();
+    let block = parts
+        .iter()
+        .find(|p| (p.mass.unwrap().volume - v).abs() < 1e-6)
+        .unwrap()
+        .clone();
+    let bar = parts.iter().find(|p| p.id != block.id).unwrap().id;
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(bar)),
+            faces: top_face(&block),
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let grown = parts.iter().find(|p| p.id == block.id).unwrap();
+    close(grown.mass.unwrap().volume, v * 1.5, 1e-6);
+}

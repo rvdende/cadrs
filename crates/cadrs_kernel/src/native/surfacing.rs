@@ -1047,7 +1047,9 @@ pub fn delete_faces_with(
 
 /// Caps nested in one plane made one face (a top's opening round a hole's: the hole's cap
 /// becomes a hole in the top's, which keeps the hole open), each a single planar face; the
-/// others as they are.
+/// others as they are. Going in, openings alternate faces and holes: only those directly inside
+/// a face are its holes, and one deeper (an island's top inside a groove's ring) is a face of
+/// its own, round its own holes in turn.
 fn nest_caps(mut caps: Vec<(Body, usize)>) -> Vec<(Body, usize)> {
     let plane = |b: &Body| match (&b.faces.as_slice(), b.faces.first().map(|f| &f.surf)) {
         ([_], Some(Surface::Plane { f })) => Some(*f),
@@ -1077,24 +1079,35 @@ fn nest_caps(mut caps: Vec<(Body, usize)>) -> Vec<(Body, usize)> {
         }
         odd
     };
-    let mut gone = vec![false; caps.len()];
-    for i in 0..caps.len() {
+    // Which caps lie inside which (in one plane), before any is merged.
+    let count = caps.len();
+    let mut within = vec![vec![false; count]; count];
+    for i in 0..count {
         let Some(fi) = plane(&caps[i].0) else {
             continue;
         };
         let n = fi.x.cross(&fi.y);
-        for j in 0..caps.len() {
-            if i == j || gone[i] || gone[j] {
-                continue;
-            }
+        let outer = outline(&caps[i].0, &fi);
+        for j in (0..count).filter(|&j| j != i) {
             let Some(fj) = plane(&caps[j].0) else {
                 continue;
             };
             let coplanar = fj.x.cross(&fj.y).cross(&n).norm() < tol::ANGULAR_POINT
                 && (fj.o - fi.o).dot(&n).abs() < tol::POINT;
-            let outer = outline(&caps[i].0, &fi);
             let inner = outline(&caps[j].0, &fi);
-            if !coplanar || inner.is_empty() || !inner.iter().all(|q| inside(&outer, *q)) {
+            within[j][i] =
+                coplanar && !inner.is_empty() && inner.iter().all(|q| inside(&outer, *q));
+        }
+    }
+    let depth: Vec<usize> = (0..count)
+        .map(|j| within[j].iter().filter(|w| **w).count())
+        .collect();
+    let mut gone = vec![false; count];
+    for i in 0..count {
+        for j in 0..count {
+            // Openings alternate faces and holes going in: a face (even depth) takes the ones
+            // directly inside it (one level deeper) as holes; a hole takes none.
+            if i == j || gone[j] || depth[i] % 2 == 1 || !within[j][i] || depth[j] != depth[i] + 1 {
                 continue;
             }
             // j's loop into i's face as a hole: its p-curves on i's plane, running against the
