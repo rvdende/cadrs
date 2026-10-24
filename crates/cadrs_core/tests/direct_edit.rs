@@ -1347,3 +1347,46 @@ fn offset_up_to_a_part_moves_each_face_along_its_own_normal() {
     let grown = parts.iter().find(|p| p.id == block.id).unwrap();
     close(grown.mass.unwrap().volume, 12_000.0, 1e-6);
 }
+
+#[test]
+fn up_to_a_part_refuses_several_faces_when_one_is_curved() {
+    // The top and the hole's wall translated up to a block floating over the top: the kernel
+    // can't sweep the wall exactly, and the mesh measures from the first face only (the wall
+    // could meet the part first), so it's refused rather than guessed.
+    let (mut d, _) = block_with_hole();
+    let s = d.sketch(PlaneRef::Top, vec![rect(0.0, 0.0, 40.0, 20.0)]);
+    d.extrude(s, &[Vec2::new(2.0, 2.0)], |e| {
+        e.op = BooleanOp::New;
+        e.depth = 5.0;
+        e.depth_expr = "5 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let parts = d.parts();
+    let first = parts[0].clone();
+    let floating = parts.iter().find(|p| p.id != first.id).unwrap().id;
+    let mut faces = top_face(&first);
+    faces.extend(faces_where(&first, is_cylinder));
+    let f = d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Translate,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(floating)),
+            faces,
+            ..Default::default()
+        }),
+    );
+    let b = d.build();
+    assert!(
+        b.errors
+            .iter()
+            .any(|(id, e)| *id == f && e.contains("several faces")),
+        "{:?}",
+        b.errors
+    );
+}

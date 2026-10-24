@@ -1450,17 +1450,12 @@ fn up_to_distance(
             if let Some(t) = exact {
                 return Ok(t - x.offset * t.signum());
             }
-            // The mesh measures from the first face only: an Offset of faces facing other ways
-            // (each moving along its own normal) would be measured the wrong way for them.
-            if x.move_type == crate::direct_edit::MoveType::Offset
-                && x.faces[1..].iter().any(|f| {
-                    face_ids(state, f)
-                        .and_then(|(p, _)| face_frame(p, f))
-                        .is_none_or(|t| Vector3::from(t.normal()).normalize().dot(&n) < 1.0 - 1e-6)
-                })
-            {
+            // The mesh measures from the first face only: any other face moved could meet the
+            // part first (or, for an Offset, move along another normal), so refuse those.
+            if x.faces.len() > 1 {
                 return Err(
-                    "Up to this part can't be measured for faces facing different ways".into(),
+                    "Up to this part can only be measured for several faces when all are flat"
+                        .into(),
                 );
             }
             let s = &state
