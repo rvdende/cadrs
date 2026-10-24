@@ -997,6 +997,20 @@ fn create_selection_hole_takes_the_counterbore_and_drill_point() {
         "the block's top is not part of the hole"
     );
     assert_eq!(solid.pocket_faces(wall).len(), 2);
+    // From the counterbore's floor: the same hole.
+    let floor = (0..solid.faces.len())
+        .find(|&i| {
+            solid.faces[i].plane.is_some()
+                && solid.faces[i]
+                    .area
+                    .is_some_and(|a| (a - PI * (25.0 - 6.25)).abs() < 1e-6)
+        })
+        .expect("the counterbore's floor");
+    let mut from_floor = solid.hole_faces(floor);
+    let mut from_wall = hole.clone();
+    from_floor.sort();
+    from_wall.sort();
+    assert_eq!(from_floor, from_wall);
     // A flat face isn't a face of revolution: no hole.
     let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [5.0, 5.0, 0.0]));
     assert!(solid.hole_faces(top).is_empty());

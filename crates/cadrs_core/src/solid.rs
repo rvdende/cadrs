@@ -862,11 +862,24 @@ impl Solid {
     /// The faces of the round hole `seed` is a wall of (Create selection → Faces → Hole): the
     /// walls about its axis that it reaches (faces of revolution facing the axis: walls, a
     /// countersink, a drill point) and the flat faces across the axis with only walls round them
-    /// (a counterbore's floor, a flat bottom; not a tube's end). Empty when `seed` isn't a wall.
+    /// (a counterbore's floor, a flat bottom; not a tube's end). From a floor, its hole; empty
+    /// when `seed` is neither a wall nor a floor.
     pub fn hole_faces(&self, seed: usize) -> Vec<usize> {
         const TOL: f64 = 1e-6;
         let Some((o, d)) = self.faces.get(seed).and_then(|f| f.axis) else {
-            return Vec::new();
+            // A floor (a counterbore's): the hole of a wall next to it that takes it in.
+            return self
+                .faces
+                .get(seed)
+                .filter(|f| f.plane.is_some())
+                .and_then(|_| {
+                    self.neighbours(seed)
+                        .into_iter()
+                        .filter(|&j| self.faces[j].axis.is_some())
+                        .map(|j| self.hole_faces(j))
+                        .find(|h| h.contains(&seed))
+                })
+                .unwrap_or_default();
         };
         let d = normalize(d);
         let parallel = |v: Vec3| len(cross(normalize(v), d)) <= TOL;
@@ -940,13 +953,13 @@ impl Solid {
 
     /// The radius of the constant-radius fillet `face` is (a cylinder, a torus's tube or a
     /// sphere at a corner, tangent to at least two other surfaces), or `None`. A cylinder round
-    /// half a turn or more (a teardrop's bore, a slot's end) isn't a fillet.
+    /// more than half a turn (a teardrop's bore) isn't a fillet; a full round's half turn is.
     pub fn fillet_radius(&self, face: usize) -> Option<f64> {
         use cadrs_kernel::SurfaceKind;
         let f = self.faces.get(face)?;
         let r = match f.kind? {
             SurfaceKind::Cylinder => {
-                if self.turn_span_cos(face)? < 0.1 {
+                if self.turn_span_cos(face)? < -0.1 {
                     return None;
                 }
                 f.radius?

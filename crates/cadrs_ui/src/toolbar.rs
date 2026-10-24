@@ -318,7 +318,8 @@ fn fit(units: &[(f32, bool)], gap: f32, available: f32) -> Option<Vec<bool>> {
     }
     // Room for the tools that may go: what the kept ones and the » leave.
     let kept: f32 = units.iter().filter(|u| u.1).map(|u| u.0 + gap).sum();
-    let room = available - kept - MORE;
+    // The » and the gap before it.
+    let room = available - kept - MORE - gap;
     let mut used = 0.0;
     let mut hiding = false;
     Some(
@@ -403,6 +404,9 @@ fn fit_toolbars(
             if node.display == Display::None && !overflowed {
                 continue;
             }
+            // Shown again by its owner while hidden here (a button that shows itself): measured
+            // as shown, and hidden again below if it still doesn't fit.
+            let overflowed = overflowed && node.display == Display::None;
             let w = if overflowed {
                 shown.map_or(0.0, |s| s.0)
             } else {
@@ -427,6 +431,7 @@ fn fit_toolbars(
                 let Ok((_, mut node, _, _, overflowed, _, _)) = items.get_mut(c) else {
                     continue;
                 };
+                let overflowed = overflowed && node.display == Display::None;
                 if hidden && !overflowed {
                     node.display = Display::None;
                     commands.entity(c).insert(Overflowed);
@@ -564,7 +569,7 @@ mod tests {
 
     #[test]
     fn the_tools_past_the_room_go_but_kept_ones_stay() {
-        // 200 across, a kept 60 (the search box): 200 − 63 − 32 = 105 for tools of 30 + 3:
+        // 200 across, a kept 60 (the search box): 200 − 63 − 32 − 3 = 102 for tools of 30 + 3:
         // three fit (99), the fourth and fifth go, the kept one stays.
         let units = [
             (30.0, false),
@@ -577,6 +582,16 @@ mod tests {
         assert_eq!(
             fit(&units, 3.0, 200.0),
             Some(vec![false, false, false, true, true, false])
+        );
+    }
+
+    #[test]
+    fn the_more_button_and_its_gap_fit_after_the_last_tool() {
+        // 4 × 30 with gaps of 3 (129) in 128: the » (32) and the gap before it must fit after the
+        // tools left, so two stay (30 + 3 + 30 + 3 + 32 = 98); three would be 131.
+        assert_eq!(
+            fit(&[(30.0, false); 4], 3.0, 128.0),
+            Some(vec![false, false, true, true])
         );
     }
 }
