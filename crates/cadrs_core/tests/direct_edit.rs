@@ -482,13 +482,22 @@ fn a_move_faces_parents_are_its_faces_and_the_reference_its_type_uses() {
     let p = parents(&x);
     assert!(!p.contains(&line), "the unused direction is not a parent");
     assert!(p.contains(&block));
-    // The sketch line works as the direction too: the top moved 5 along +X stays where it is
-    // (a face moved in its own plane), the block unchanged.
+    // The sketch line (drawn from x = 0 to x = 10) works as the direction too: the hole's
+    // wall moved 5 along it goes to x = 25, as with the Right plane's normal in
+    // `translate_moves_a_hole_along_a_direction` (the volume the same, the centroid away).
     x.move_type = MoveType::Translate;
+    x.faces = faces_where(&part, is_cylinder);
     x.distance = 5.0;
     x.distance_expr = "5 mm".into();
     d.add("Move face", FeatureKind::DirectEdit(x));
-    close(d.volume(), 8000.0 - 250.0 * PI, 1e-6);
+    let m = d.parts()[0].mass.unwrap();
+    let hole = 250.0 * PI;
+    close(m.volume, 8000.0 - hole, 1e-6);
+    close(
+        m.center_of_mass.x,
+        (8000.0 * 20.0 - hole * 25.0) / (8000.0 - hole),
+        1e-6,
+    );
 }
 
 #[test]

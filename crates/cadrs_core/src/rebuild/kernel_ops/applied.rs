@@ -1134,9 +1134,3 @@ fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vect
     let frame = face_frame(part, f).ok_or("Select a direction (the first face isn't flat)")?;
     Ok(Vector3::from(frame.normal()).normalize())
 }
-
-/// An axis error worded for a rotation ("A spline can't be an axis of rotation").
-pub(super) fn rotation_axis_error(e: &str) -> String {
-    e.replace("a revolve axis", "an axis of rotation")
-        .replace("revolve axis", "axis of rotation")
-}

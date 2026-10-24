@@ -145,7 +145,9 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
             "direct-edit {:?} {:?} {} {}",
             x.kind,
             x.move_type,
-            x.distance.is_sign_negative(),
+            // The distance as the Offset arrow reads it; the angle (no arrow) by its sign, so a
+            // flipped 0° shows as flipped.
+            x.distance < 0.0,
             x.angle.is_sign_negative()
         )),
         _ => None,
@@ -288,7 +290,7 @@ pub(crate) fn body(
                     "Distance",
                     Role::DirectEditDistance,
                     &x.distance_expr,
-                    Some(x.distance.is_sign_negative()),
+                    Some(x.distance < 0.0),
                 ),
             }
         }
