@@ -866,6 +866,7 @@ mod tests {
             start_tangent: Vector3::x(),
             end_tangent: Vector3::x(),
             circle: None,
+            smooth: false,
         }
     }
 

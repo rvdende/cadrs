@@ -21,9 +21,14 @@ fn chamfer_over_fillets() {
         .unwrap();
     let out = r.bodies[0];
     assert!(k.get(out).unwrap().check().is_empty());
-    // About the chain's length (176 mm) times the section (2 mm²), less where it bends.
+    // About the chain's length (176 mm) times the section (2 mm² where the faces are square,
+    // 1.5 down the side where the pocket meets it at 49°), less where it bends. The local
+    // chamfer builds it (the piece a hair long by edge 26's roll at its end goes, its sections
+    // the neighbour's): its rails through the contacts of the ball d·tan(θ/2), as everywhere.
+    // The blend tool measures d round the pocket's face instead: 323.15, the two differing by
+    // a sliver along the side's two vertical rims.
     let removed = v0 - k.mass_properties(out).unwrap().volume;
-    assert!((320.0..352.0).contains(&removed), "{removed}");
+    assert!((316.0..316.7).contains(&removed), "{removed}");
     // The chamfer ends flush with the round cut's floor (z = 15.5) instead of digging into it:
     // the floor only gains the chamfer's two end sections (under 2 mm² each).
     let floor = |id: BodyId| -> f64 {
@@ -207,29 +212,143 @@ fn cross_hole_fillet() {
     assert!((1880.0..2040.0).contains(&removed), "{removed}");
 }
 
-/// The rims of an outward shell's opening filleted 3.25 mm (a user's document: a 30 mm cube
-/// with every edge rounded 5, shelled 6.5 outward with its top, two top rounds and their corner
-/// taken away). Five of the rounds run into the inside corners of the opening and end at a
-/// pole of a corner sphere, where the faces past their rails (the top, the sphere) only touch:
-/// each end is capped on the surface of the round the shell took away there, the local fillet
-/// covering them all (the blend tool's flat ends stood out of the outer wall).
+/// The same document's Chamfer 1 round the opening (its rim edges, by tangent propagation),
+/// on the body Fillet 2 left, chamfered 0.5 to 2 by the local chamfer alone: valid, and each
+/// taking off about w²/2 a mm of rim (the narrowest's times (w/w₀)², a little more where corners
+/// grow faster). `want` pins what it takes off now (not an independent answer: a change that
+/// moves it should explain why); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
+/// at fillet 4, two loops round the opening less its rounds' corners.
+fn shell_opening_chamfer(data: &[u8], edges: &[u64], want: [f64; 4]) {
+    let mut k = NativeKernel::new();
+    let b = k.insert(bodyio::read(data).unwrap());
+    let v0 = k.mass_properties(b).unwrap().volume;
+    let edges: Vec<EdgeId> = edges.iter().map(|&e| EdgeId(e)).collect();
+    for (w, want) in [0.5, 1.0, 1.5, 2.0].into_iter().zip(want) {
+        let out = blend::chamfer_local(&mut k, b, &edges, w)
+            .unwrap_or_else(|e| panic!("w {w}: {e}"))
+            .bodies[0];
+        let issues = k.get(out).unwrap().check();
+        assert!(issues.is_empty(), "w {w}: {issues:?}");
+        let removed = v0 - k.mass_properties(out).unwrap().volume;
+        assert!(
+            (removed - want).abs() < 1e-6 * want,
+            "w {w}: takes off {removed}, want {want}"
+        );
+    }
+    // The ratios to the narrowest, against (w/w₀)².
+    for (i, w) in [1.0, 1.5, 2.0].into_iter().enumerate() {
+        let ratio = want[i + 1] / (want[0] * (w / 0.5f64).powi(2));
+        assert!((0.99..1.05).contains(&ratio), "w {w}: {ratio}");
+    }
+}
+
+/// At fillet 1 mm the chamfer runs round and down rounds as narrow as itself or narrower: at 1
+/// the corners' cones have their apexes on the top (a rail of no length); past it they fan (the
+/// neighbours' rails meeting in a point short of the corner, a cone from there to its other
+/// rail); rolls onto rounds and back the strips trace.
+#[test]
+fn shell_opening_chamfer_fillet1() {
+    shell_opening_chamfer(
+        include_bytes!("data/docs/shell_opening_fillet1.body"),
+        &[
+            0, 10, 18, 19, 34, 47, 48, 55, 64, 68, 75, 129, 131, 133, 135, 137, 2, 8, 16, 21, 49,
+            60, 70, 71, 78, 100, 111, 128, 130, 132, 134, 136,
+        ],
+        [
+            39.00744516247505,
+            156.56053346663975,
+            356.892814267776,
+            648.179111849131,
+        ],
+    );
+}
+
+/// At fillet 4 mm the chain ends where the rim runs on, past a 7° kink, into an edge between
+/// the same faces: square there, its cut crossing the round the strip rolled onto near its end;
+/// at 2 a roll by a corner of four tangent faces is traced onto the face it lands on.
+#[test]
+fn shell_opening_chamfer_fillet4() {
+    shell_opening_chamfer(
+        include_bytes!("data/docs/shell_opening_fillet4.body"),
+        &[
+            0, 10, 18, 19, 34, 47, 48, 55, 64, 68, 75, 128, 131, 135, 137, 139, 2, 8, 16, 21, 49,
+            60, 70, 71, 99, 110, 127, 129, 134, 136, 138,
+        ],
+        [
+            36.63395889811363,
+            147.10515071999544,
+            334.9092740553824,
+            607.2381007844815,
+        ],
+    );
+}
+
+/// Tangent propagation over the same opening (rounded all over: most of its edges are smooth,
+/// their faces tangent): a chain from a sharp edge runs on along sharp edges only. A smooth
+/// edge has nothing to blend; a chamfer's chain ran on from the opening's rim along every
+/// smooth edge of the rounded body.
+#[test]
+fn tangent_chains_skip_smooth_edges() {
+    let mut k = NativeKernel::new();
+    let b = k.insert(bodyio::read(include_bytes!("data/docs/shell_opening_rounds.body")).unwrap());
+    let edges = k.edges(b).unwrap();
+    let smooth: Vec<EdgeId> = edges.iter().filter(|e| e.smooth).map(|e| e.id).collect();
+    assert!(smooth.len() > 50, "{} smooth edges", smooth.len());
+    for e in edges.iter().filter(|e| !e.smooth) {
+        let chain = k.tangent_chain(b, e.id).unwrap();
+        assert!(
+            chain.iter().all(|x| !smooth.contains(x)),
+            "{:?}'s chain {chain:?} runs onto a smooth edge",
+            e.id
+        );
+    }
+    // One rim's chain: it and its tangent neighbour.
+    assert_eq!(
+        k.tangent_chain(b, EdgeId(17)).unwrap(),
+        [EdgeId(17), EdgeId(18)]
+    );
+}
+
+/// The rims of an outward shell's opening filleted (a user's document: a 30 mm cube with every
+/// edge rounded 5, shelled 6.5 outward with its back, two top rounds and their corner taken
+/// away), from 0.5 to 4.5 mm. Five of the rounds run into the inside corners of the opening and
+/// end at a pole of a corner sphere, where the faces past their rails (the top, the sphere)
+/// only touch: each end is capped on the surface of the round the shell took away there, the
+/// local fillet covering them all (the blend tool's flat ends stood out of the outer wall; a
+/// cut traced on one of those faces reached the other rail's exit only roughly). From 3.54 the
+/// two either side of the pie-shaped face weld across it.
 #[test]
 fn shell_opening_rounds() {
     let mut k = NativeKernel::new();
     let b = k.insert(bodyio::read(include_bytes!("data/docs/shell_opening_rounds.body")).unwrap());
     let v0 = k.mass_properties(b).unwrap().volume;
-    let laws: Vec<FilletLaw> = [3, 1, 10, 16, 19, 49, 43]
-        .map(|e| FilletLaw {
-            edge: EdgeId(e),
-            radii: vec![(0.0, 3.25), (1.0, 3.25)],
-        })
-        .to_vec();
-    let out = blend::fillet_laws_local(&mut k, b, &laws).unwrap().bodies[0];
-    assert!(k.get(out).unwrap().check().is_empty());
-    // Five inside rounds of 6.5 mm or so add (1 − π/4)·3.25² a mm each, two outside ones take
-    // as much off.
-    let added = k.mass_properties(out).unwrap().volume - v0;
-    assert!((44.3..44.5).contains(&added), "{added}");
+    let mut last = 0.0;
+    for r in [0.5, 1.0, 1.5, 2.0, 2.8, 3.25, 4.0, 4.5] {
+        let laws: Vec<FilletLaw> = [3, 1, 10, 16, 19, 49, 43]
+            .map(|e| FilletLaw {
+                edge: EdgeId(e),
+                radii: vec![(0.0, r), (1.0, r)],
+            })
+            .to_vec();
+        let out = blend::fillet_laws_local(&mut k, b, &laws)
+            .unwrap_or_else(|e| panic!("r {r}: {e}"))
+            .bodies[0];
+        assert!(k.get(out).unwrap().check().is_empty(), "r {r}");
+        // Five inside rounds add (1 − π/4)·r² a mm each, two outside ones take as much off:
+        // (1 − π/4)·r²·L, L the net length, 19.5 mm or so (a little more the larger, by the
+        // ends); and more the larger.
+        let added = k.mass_properties(out).unwrap().volume - v0;
+        assert!(added > last, "r {r}: adds {added}, no more than {last}");
+        let l = added / ((1.0 - std::f64::consts::FRAC_PI_4) * r * r);
+        assert!(
+            (19.45..19.75).contains(&l),
+            "r {r}: adds {added}, a net length {l}"
+        );
+        last = added;
+        if r == 3.25 {
+            assert!((44.3..44.5).contains(&added), "{added}");
+        }
+    }
 }
 
 /// The same opening's two inside rounds either side of the pie-shaped face where the shell
@@ -1982,7 +2101,9 @@ fn chamfer_mixed_corner_at_135_degrees() {
 /// there, the cylinder's top rim beside it and the concave edge where the cylinder leaves the
 /// box: a mixed chamfer corner closed by a triangle, its side across the rim's chamfer (a cone)
 /// the curve the triangle's plane cuts that in (remote sentry, Chamfer 1). The volume is this
-/// construction's (no reference chamfers this corner).
+/// construction's (no reference chamfers this corner); the concave edge's contacts lie 1 along
+/// the box's side and 1 round the cylinder, its fill under the top chamfer about 0.97 more than
+/// the ball rule's (0.480 against 0.372 a section).
 #[test]
 fn chamfer_mixed_corner_on_a_cone() {
     use nalgebra::Point2;
@@ -2038,7 +2159,7 @@ fn chamfer_mixed_corner_on_a_cone() {
                 .any(|c| !matches!(o.edges[c.edge].curve, curve::Curve::Line { .. }))
     });
     assert!(cap, "no corner triangle with a curved side");
-    let (want_v, want_a) = (4385.981425680911, 1719.6502524262403);
+    let (want_v, want_a) = (4386.985846155351, 1719.332028409182);
     assert!(
         (v - want_v).abs() < 1e-6 * want_v,
         "volume {v}, want {want_v}"
@@ -2054,8 +2175,8 @@ fn chamfer_mixed_corner_on_a_cone() {
 /// rim's cone meet in a point, where the line the flat ones meet in crosses the cone; the
 /// cone's ends there the conics the flat ones cut it in (gridfinity, Chamfer 2). The volume is
 /// that of the prism cut by every chamfer's plane and the rim's cone (integrated over z by
-/// clipping the sections; the chamfers up the sides through the contacts of the ball of radius
-/// d·tan(θ/2) the local chamfer rolls, θ the faces' angle).
+/// clipping the sections; the chamfers up the sides through their contacts 1 along the flat
+/// face and 1 round the cylinder, as `chamfer_plane_to_cylinder_measures_round_the_cylinder`).
 #[test]
 fn chamfer_corner_of_two_planes_and_a_cone() {
     let mut k = NativeKernel::new();
@@ -2074,8 +2195,167 @@ fn chamfer_corner_of_two_planes_and_a_cone() {
         .collect();
     assert_eq!(edges.len(), 5, "{edges:?}");
     let (_, v, _) = local_chamfer(&mut k, b, &edges, 1.0);
-    let want = 2655.1457202931565;
+    let want = 2657.5007292150626;
     assert!((v - want).abs() < 1e-8 * want, "volume {v}, want {want}");
+}
+
+/// The D-shaped prism's chamfer section (a cylinder of radius `r` cut at x = −6, the edge at
+/// (−6, 8)), its contacts `along` down the flat face and `alpha` (radians) round the cylinder:
+/// the triangle between the edge and the contacts and the circular segment over its curved side.
+fn d_prism_section(r: f64, along: f64, alpha: f64) -> f64 {
+    let (ex, ey) = (-6.0_f64, 8.0_f64);
+    let (px, py) = (ex, ey - along);
+    let q = ey.atan2(ex) - alpha;
+    let (qx, qy) = (r * q.cos(), r * q.sin());
+    let triangle = ((px - ex) * (qy - ey) - (qx - ex) * (py - ey)).abs() / 2.0;
+    triangle + r * r / 2.0 * (alpha - alpha.sin())
+}
+
+/// A cylinder of radius 10 cut at x = −6 (a D-shaped prism) and its two edges where the cut
+/// meets the cylinder.
+fn d_prism(k: &mut NativeKernel) -> (BodyId, Vec<EdgeId>) {
+    let c = k.pcylinder(10.0, 10.0).unwrap();
+    let bx = k.box_at(-20.0, -20.0, -1.0, 14.0, 40.0, 12.0).unwrap();
+    let draw::Shape::Body(b) = k.bcut(&c, &bx).unwrap() else {
+        panic!("not a body")
+    };
+    let edges: Vec<EdgeId> = k
+        .edges(b)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.mid.x + 6.0).abs() < 1e-9 && e.mid.y.abs() > 7.0)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(edges.len(), 2, "{edges:?}");
+    (b, edges)
+}
+
+/// The D-shaped prism ([`d_prism`]) chamfered 1 up its two edges: the contacts lie 1 from each
+/// edge along the flat face and 1 round the cylinder (Offset measures along the faces; the ball
+/// whose contacts on the faces' tangent planes are 1 away, of radius tan(θ/2) = 2 here, would
+/// touch the flat face 1.07 from the edge and the cylinder 1.20 round it). Each section takes
+/// off [`d_prism_section`] with α = 1/R, over the height 10.
+#[test]
+fn chamfer_plane_to_cylinder_measures_round_the_cylinder() {
+    let mut k = NativeKernel::new();
+    let (b, edges) = d_prism(&mut k);
+    let before = k.mass_properties(b).unwrap().volume;
+    let (_, v, _) = local_chamfer(&mut k, b, &edges, 1.0);
+    let want = before - 2.0 * 10.0 * d_prism_section(10.0, 1.0, 0.1);
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
+}
+
+/// Equal-distance chamfers `d` measured along the faces' tangent planes (ChamferMeasure::Tangent)
+/// on `edges` by local trimming alone (no fallback to the blend tool): the result checked, its
+/// volume.
+fn local_tangent_chamfer(
+    k: &mut NativeKernel,
+    b: BodyId,
+    edges: &[EdgeId],
+    d: f64,
+) -> (BodyId, f64) {
+    let body = (**k.get(b).unwrap()).clone();
+    let dists: Vec<(usize, [f64; 2])> = edges.iter().map(|e| (e.0 as usize, [d, d])).collect();
+    let (out, _) = fillet::chamfer_edges_measured(&body, b, &dists, true).unwrap();
+    assert_eq!(out.check_with(topo::CheckLevel::Full), Vec::<String>::new());
+    let out = k.insert(out);
+    (out, k.mass_properties(out).unwrap().volume)
+}
+
+/// The D-shaped prism ([`d_prism`]) chamfered 2 up one edge measured along the faces' tangent
+/// planes by the blend tool alone: the same tool as the chamfer of 2 along the flat face and the
+/// arc R·atan(2/R) round the cylinder (to where the tangent distance's chord ends), as the local
+/// chamfer's ([`chamfer_plane_to_cylinder_tangent_measure`]); not the chord taken as an arc.
+#[test]
+fn tool_chamfer_plane_to_cylinder_tangent_measure() {
+    let mut k = NativeKernel::new();
+    let (b, edges) = d_prism(&mut k);
+    let edge = &edges[..1];
+    let mut volume = |spec: ChamferSpec, measurement: ChamferMeasure| {
+        let opts = ChamferOpts {
+            measurement,
+            ..ChamferOpts::new(spec)
+        };
+        let out = blend::chamfer_tool(&mut k, b, edge, &opts).unwrap().bodies[0];
+        assert_eq!(
+            k.get(out).unwrap().check_with(topo::CheckLevel::Full),
+            Vec::<String>::new()
+        );
+        k.mass_properties(out).unwrap().volume
+    };
+    let tangent = volume(ChamferSpec::EqualDistance(2.0), ChamferMeasure::Tangent);
+    let arc = 10.0 * (0.2_f64).atan();
+    let chord = 20.0 * ((0.2_f64).atan() / 2.0).sin();
+    // (Which side the cylinder is on in the edge's order: one of the two.)
+    let near = |x: f64| (x - tangent).abs() < 1e-9 * tangent;
+    let mut two = |a: f64, c: f64| volume(ChamferSpec::TwoDistances(a, c), ChamferMeasure::Offset);
+    let by_arc = [two(2.0, arc), two(arc, 2.0)];
+    let by_chord = [two(2.0, chord), two(chord, 2.0)];
+    assert!(
+        by_arc.iter().any(|&v| near(v)) && !by_chord.iter().any(|&v| near(v)),
+        "tangent {tangent}, by arc {by_arc:?}, by chord {by_chord:?}"
+    );
+}
+
+/// A cylinder of radius 10 under a hemisphere of the same radius, cut at x = −6, chamfered 1 up
+/// each side and over the top (Tangent measure): each straight plane-to-cylinder edge runs on
+/// smoothly into the plane-to-sphere arc, which isn't measured round its sphere, so the whole
+/// chain takes the ball rule with the tangent distance itself, the ball whose offsets put its
+/// contacts on the faces' tangent planes 1 from the edge: of radius tan(θ/2) = 2 (θ ≈ 126.9°),
+/// centre 2 from the cut and 8 from the axis, so the cut's contact lies 8 − 4√3 from each
+/// straight edge (measured round the cylinder, 1; with the chord of 1 taken as a tangent
+/// distance, nearer).
+#[test]
+fn chamfer_tangent_chain_round_a_cylinder_onto_a_sphere() {
+    use nalgebra::{Point3, Vector3};
+    let mut k = NativeKernel::new();
+    let ax = draw::Ax3 {
+        origin: Point3::new(0.0, 0.0, -10.0),
+        z: Vector3::z(),
+        x: Vector3::x(),
+    };
+    let c = k.pcylinder_on(&ax, 10.0, 10.0).unwrap();
+    let s = k.psphere(10.0).unwrap();
+    let cap = k.bfuse(&c, &s).unwrap();
+    let bx = k.box_at(-20.0, -20.0, -21.0, 14.0, 40.0, 42.0).unwrap();
+    let draw::Shape::Body(b) = k.bcut(&cap, &bx).unwrap() else {
+        panic!("not a body")
+    };
+    let edges: Vec<EdgeId> = k
+        .edges(b)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.mid.x + 6.0).abs() < 1e-9 && e.mid.z > -10.0 + 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert!(edges.len() >= 3, "{edges:?}");
+    let (out, _) = local_tangent_chamfer(&mut k, b, &edges, 1.0);
+    // The cut's straight boundaries up the sides, halfway up.
+    let ys: Vec<f64> = k
+        .edges(out)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.mid.x + 6.0).abs() < 1e-9 && (e.mid.z + 5.0).abs() < 1e-6)
+        .map(|e| e.mid.y.abs())
+        .collect();
+    let want = 4.0 * 3.0_f64.sqrt();
+    assert!(
+        ys.len() == 2 && ys.iter().all(|y| (y - want).abs() < 1e-9),
+        "{ys:?}, want ±{want}"
+    );
+}
+
+/// The D-shaped prism ([`d_prism`]) chamfered 2 up its two edges measured along the faces'
+/// tangent planes: 2 down the flat face, and round the cylinder to the chord's end of the
+/// tangent distance, the angle atan(2/R).
+#[test]
+fn chamfer_plane_to_cylinder_tangent_measure() {
+    let mut k = NativeKernel::new();
+    let (b, edges) = d_prism(&mut k);
+    let before = k.mass_properties(b).unwrap().volume;
+    let v = local_tangent_chamfer(&mut k, b, &edges, 2.0).1;
+    let want = before - 2.0 * 10.0 * d_prism_section(10.0, 2.0, (0.2_f64).atan());
+    assert!((v - want).abs() < 1e-9 * want, "volume {v}, want {want}");
 }
 
 /// remote sentry, Chamfer 1 (its input outside the repo): 0.5 mm chamfers round a plate's

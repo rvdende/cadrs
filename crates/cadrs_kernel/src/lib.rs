@@ -1289,7 +1289,8 @@ pub trait Kernel {
 
     /// The edges tangent-connected to `edge` (Onshape's "tangent propagation"): `edge` and
     /// every edge reached from it through vertices where the two edges' tangents are parallel
-    /// (within [`TANGENT_ANGLE`]). In id order.
+    /// (within [`TANGENT_ANGLE`]), but for smooth edges (their faces tangent: nothing to
+    /// round). In id order.
     fn tangent_chain(&self, body: BodyId, edge: EdgeId) -> Result<Vec<EdgeId>> {
         tangent_chain_of(&self.edges(body)?, &self.vertices(body)?, edge, &|_, _| {
             true
@@ -1334,6 +1335,9 @@ pub(crate) fn tangent_chain_of(
                     continue;
                 }
                 let Some(o) = get(other) else { continue };
+                if o.smooth {
+                    continue;
+                }
                 let tangent = tangents_at(o, v.point)
                     .iter()
                     .any(|t| mine.iter().any(|m| m.dot(t).abs() >= cos));

@@ -872,7 +872,14 @@ impl FilletSpec {
 /// Where a chamfer's distances are measured (P3.6, PS14.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ChamferMeasure {
-    /// Along each face from the edge.
+    /// Along each face from the edge: exact between faces straight across the edge (planes, a
+    /// cylinder's rim) and round a cylinder running along a straight edge. Where a face curves
+    /// across the edge otherwise (a cone along its line, a sphere, a torus), and along a tangent
+    /// chain any edge of which is such, the local chamfer puts its contacts where the ball whose
+    /// contacts on the faces' tangent planes lie that far touches the faces: off by more the
+    /// more a face curves within the distance (were it used on a cylinder of radius 10 meeting a
+    /// plane at 127°, 1 would land 1.07 along the plane and 1.20 round the cylinder). The
+    /// tool-and-boolean fallback measures round the faces.
     #[default]
     Offset,
     /// Along the faces' tangent planes at the edge, from where they meet. The same as Offset
@@ -1036,6 +1043,13 @@ pub struct EdgeInfo {
     /// and Use projects the exact curve).
     #[serde(default)]
     pub circle: Option<Circle3>,
+    /// The faces either side meet tangentially along it (within [`crate::TANGENT_ANGLE`]): a
+    /// smooth edge, which tangent propagation doesn't run along. (Picked on its own, an edge
+    /// whose faces meet at a hair under that is still blended: only one whose faces' normals
+    /// agree to a point's tolerance has nothing to take off.) Only with the edges' lengths
+    /// ([`crate::Kernel::edges`]).
+    #[serde(default)]
+    pub smooth: bool,
 }
 
 impl EdgeInfo {

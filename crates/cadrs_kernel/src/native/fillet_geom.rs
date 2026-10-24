@@ -25,7 +25,7 @@ use super::nurbs::{H, NurbsCurve, NurbsSurface, hom};
 use super::surface::Surface;
 use super::tol;
 use super::topo::Face;
-use nalgebra::{Matrix3, Matrix4, SMatrix, SVector, Vector2};
+use nalgebra::{Matrix2, Matrix3, Matrix4, SMatrix, SVector, Vector2};
 
 /// A point where the ball touches a face: (u, v) on the face's surface, the point and the
 /// face's outward unit normal there.
@@ -122,11 +122,21 @@ struct Offset {
     du: V3,
     dv: V3,
     contact: Contact,
+    /// The direction offset along: the normal, or in a section plane the normal's part in it.
+    dir: V3,
+    /// The length of the normal's part in the section plane (1 without one).
+    part: f64,
 }
 
 /// The offset point of face `f` at (u, v) for offset `k`, with derivatives. `None` where the
-/// surface is singular (a pole, an apex).
-fn offset(f: &Face, k: f64, uv: P2) -> Option<Offset> {
+/// surface is singular (a pole, an apex). In the section plane square to `plane` (a chamfer's:
+/// its section is a circle in that plane touching the faces' sections there, not a sphere
+/// touching the faces), along the normal's part in the plane: the offset of the face's section
+/// (`None` where the face is square to the plane). The same where the normal lies in the plane
+/// (planes, a cylinder along a straight edge, surfaces of revolution round a circle's axis);
+/// elsewhere a sphere sees the face's curvature across the plane too, and a chamfer along a
+/// round narrower than it has no sphere at all.
+fn offset(f: &Face, k: f64, uv: P2, plane: Option<&V3>) -> Option<Offset> {
     let d = f.surf.d2(uv.x, uv.y);
     let s = P3::from(d[0]);
     let nn = d[1].cross(&d[2]);
@@ -142,11 +152,30 @@ fn offset(f: &Face, k: f64, uv: P2) -> Option<Offset> {
     let dn = |x: V3| (x - n * n.dot(&x)) / l;
     let (nu, nv) = (dn(dnu) * sg, dn(dnv) * sg);
     let n = n * sg;
+    let (dir, part, du, dv) = match plane {
+        None => (n, 1.0, nu, nv),
+        Some(t) => {
+            // m = n − t (t·n), its direction and that's derivative as n's.
+            let m = n - t * t.dot(&n);
+            let part = m.norm();
+            if !(part > tol::ANGULAR_POINT) {
+                return None;
+            }
+            let dir = m / part;
+            let turn = |dn: V3| {
+                let dm = dn - t * t.dot(&dn);
+                (dm - dir * dir.dot(&dm)) / part
+            };
+            (dir, part, turn(nu), turn(nv))
+        }
+    };
     Some(Offset {
-        o: s + n * k,
-        du: d[1] + nu * k,
-        dv: d[2] + nv * k,
+        o: s + dir * k,
+        du: d[1] + du * k,
+        dv: d[2] + dv * k,
         contact: Contact { uv, p: s, n },
+        dir,
+        part,
     })
 }
 
@@ -194,15 +223,24 @@ fn damp(len: f64, lim: f64) -> f64 {
 }
 
 /// The ball touching faces `f[0]` and `f[1]` (offsets `k`) whose centre lies in the plane
-/// through `p0` square to `t`, from contacts near `guess`.
-pub fn ball_in_plane(f: [&Face; 2], k: [f64; 2], p0: &P3, t: &V3, guess: [P2; 2]) -> Option<Ball> {
+/// through `p0` square to `t`, from contacts near `guess`. A flat ball (a chamfer's) touches the
+/// faces' sections in the plane ([`offset`]).
+pub fn ball_in_plane(
+    f: [&Face; 2],
+    k: [f64; 2],
+    p0: &P3,
+    t: &V3,
+    guess: [P2; 2],
+    flat: bool,
+) -> Option<Ball> {
+    let plane = flat.then_some(t);
     let mut x = guess;
     let sc = scale(p0, k[0].abs());
     // Steps no longer than the ball's size, or (a ball shrinking to nothing) the guess's gap.
     let mut lim = 2.0 * k[0].abs();
     for it in 0..60 {
-        let a = offset(f[0], k[0], x[0])?;
-        let b = offset(f[1], k[1], x[1])?;
+        let a = offset(f[0], k[0], x[0], plane)?;
+        let b = offset(f[1], k[1], x[1], plane)?;
         if it == 0 {
             lim = lim
                 .max(2.0 * (a.contact.p - b.contact.p).norm())
@@ -215,7 +253,7 @@ pub fn ball_in_plane(f: [&Face; 2], k: [f64; 2], p0: &P3, t: &V3, guess: [P2; 2]
             return Some(Ball {
                 c: P3::from((a.o.coords + b.o.coords) * 0.5),
                 q: [a.contact, b.contact],
-                flat: false,
+                flat,
             });
         }
         let m = Matrix4::new(
@@ -254,7 +292,8 @@ pub fn ball_in_plane(f: [&Face; 2], k: [f64; 2], p0: &P3, t: &V3, guess: [P2; 2]
 /// point's and normal's derivatives along the spine and `dk` the offsets' (a varying radius),
 /// the derivatives of the contacts' points and (u, v) along the spine, from one linear solve
 /// on the ball's own Newton matrix. `None` where that matrix is singular (the faces tangent:
-/// the contacts coincide).
+/// the contacts coincide). A flat ball's offsets lie in the plane ([`offset`]), turning with
+/// it.
 #[allow(clippy::too_many_arguments)]
 pub fn ball_tangent(
     f: [&Face; 2],
@@ -266,8 +305,9 @@ pub fn ball_tangent(
     dp0: &V3,
     dt: &V3,
 ) -> Option<[(V3, Vector2<f64>); 2]> {
-    let a = offset(f[0], k[0], ball.q[0].uv)?;
-    let b = offset(f[1], k[1], ball.q[1].uv)?;
+    let plane = ball.flat.then_some(t);
+    let a = offset(f[0], k[0], ball.q[0].uv, plane)?;
+    let b = offset(f[1], k[1], ball.q[1].uv, plane)?;
     let m = Matrix4::new(
         a.du.x,
         a.dv.x,
@@ -287,8 +327,19 @@ pub fn ball_tangent(
         0.0,
     );
     // The residual's derivative along the spine at fixed (u, v): the offsets grow with the
-    // radius, the plane moves and turns.
-    let (na, nb) = (a.contact.n * dk[0], b.contact.n * dk[1]);
+    // radius, the plane moves and turns (and a flat ball's offset directions with it: m =
+    // n − t (t·n) turns by −(t' (t·n) + t (t'·n))).
+    let grow = |o: &Offset, k: f64, dk: f64| {
+        let turn = if ball.flat {
+            let n = o.contact.n;
+            let dm = -(dt * t.dot(&n) + t * dt.dot(&n));
+            (dm - o.dir * o.dir.dot(&dm)) / o.part
+        } else {
+            V3::zeros()
+        };
+        o.dir * dk + turn * k
+    };
+    let (na, nb) = (grow(&a, k[0], dk[0]), grow(&b, k[1], dk[1]));
     let r3 = na - nb;
     let rp = (a.o - p0).dot(dt) + (na - dp0).dot(t);
     let d = SVector::<f64, 4>::new(r3.x, r3.y, r3.z, rp);
@@ -312,9 +363,9 @@ pub fn ball3(f: [&Face; 3], k: [f64; 3], guess: [P2; 3]) -> Option<(P3, [Contact
     let mut x = guess;
     let mut sc = 0.0;
     for _ in 0..80 {
-        let a = offset(f[0], k[0], x[0])?;
-        let b = offset(f[1], k[1], x[1])?;
-        let c = offset(f[2], k[2], x[2])?;
+        let a = offset(f[0], k[0], x[0], None)?;
+        let b = offset(f[1], k[1], x[1], None)?;
+        let c = offset(f[2], k[2], x[2], None)?;
         if sc == 0.0 {
             sc = scale(&a.o, k[0].abs());
         }
@@ -374,21 +425,69 @@ pub fn rail_crossings(
     bd: &Boundary,
     near: &P3,
     reach: f64,
+    plane: Option<&dyn Fn(&P3) -> V3>,
 ) -> Vec<(f64, Ball)> {
     let other = 1 - side;
     let (fs, fo) = (f[side], f[other]);
-    // The ball centre the contact at boundary parameter t would have, and its derivative.
-    let centre = |t: f64| -> Option<(P3, V3, Contact)> {
+    // A flat ball's section plane through a point (its normal), none for a round one.
+    let plane_at = |p: &P3| plane.map(|pl| pl(p));
+    // The ball centre the contact at boundary parameter t would have, its derivative and the
+    // section plane there.
+    let centre = |t: f64| -> Option<(P3, V3, Contact, Option<V3>)> {
         let (q, dp, _) = bd.pc.d2(t);
-        let o = offset(fs, k[side], P2::new(q.x, q.y))?;
-        // The contact moves along the p-curve; the centre with it (chain rule through uv).
-        Some((o.o, o.du * dp.x + o.dv * dp.y, o.contact))
+        let uv = P2::new(q.x, q.y);
+        let pl = plane_at(&fs.surf.eval(uv.x, uv.y));
+        let o = offset(fs, k[side], uv, pl.as_ref())?;
+        // The contact moves along the p-curve; the centre with it (chain rule through uv; a
+        // flat ball's plane turning with it too, in differences).
+        let dc = match pl {
+            None => o.du * dp.x + o.dv * dp.y,
+            Some(_) => {
+                let h = 1e-7 * (1.0 + t.abs());
+                let (q2, _, _) = bd.pc.d2(t + h);
+                let uv2 = P2::new(q2.x, q2.y);
+                let pl2 = plane_at(&fs.surf.eval(uv2.x, uv2.y));
+                (offset(fs, k[side], uv2, pl2.as_ref())?.o - o.o) / h
+            }
+        };
+        Some((o.o, dc, o.contact, pl))
     };
-    let sd = |c: &P3, hint: &mut Option<P2>| -> (f64, P2) {
-        let uv = foot(fo, c, *hint);
+    // The other offset's signed distance from a centre (in a flat ball's plane: from the foot
+    // of the centre on the face's section, where the section's tangent t × n is square to
+    // the centre's direction).
+    let sd = |c: &P3, pl: Option<&V3>, hint: &mut Option<P2>| -> Option<(f64, P2)> {
+        let mut uv = foot(fo, c, *hint);
+        if let Some(t) = pl {
+            let res = |uv: P2| {
+                let q = contact(fo, uv);
+                Vector2::new((q.p - c).dot(t), (c - q.p).dot(&t.cross(&q.n)))
+            };
+            // (Differences a hair of the parameters' size; a foot Newton doesn't settle on is
+            // none.)
+            let sc = 1.0 + c.coords.abs().max();
+            let mut settled = false;
+            for _ in 0..20 {
+                let r = res(uv);
+                if r.norm() < 1e-12 * sc {
+                    settled = true;
+                    break;
+                }
+                let h = 1e-7 * (1.0 + uv.x.abs().max(uv.y.abs()));
+                let (ru, rv) = (
+                    (res(uv + Vector2::new(h, 0.0)) - r) / h,
+                    (res(uv + Vector2::new(0.0, h)) - r) / h,
+                );
+                let m = Matrix2::from_columns(&[ru, rv]);
+                let d = m.lu().solve(&(-r))?;
+                uv = clamp_uv(fo, uv + d);
+            }
+            if !settled && res(uv).norm() > tol::REL_POINT * sc {
+                return None;
+            }
+        }
         *hint = Some(uv);
-        let q = contact(fo, uv);
-        ((c - q.p).dot(&q.n) - k[other], uv)
+        let o = offset(fo, 0.0, uv, pl)?;
+        Some(((c - o.o).dot(&o.dir) - k[other], uv))
     };
     let (t0, t1) = (bd.t[0], bd.t[1]);
     // Samples a tenth of the reach apart at most (on a long boundary, a large circle, the ball
@@ -406,7 +505,7 @@ pub fn rail_crossings(
             prev = None;
             continue;
         }
-        let Some((c, _, _)) = centre(t) else {
+        let Some((c, _, _, pl)) = centre(t) else {
             prev = None;
             continue;
         };
@@ -415,7 +514,10 @@ pub fn rail_crossings(
             prev = None;
             continue;
         }
-        let (g, _) = sd(&c, &mut hint);
+        let Some((g, _)) = sd(&c, pl.as_ref(), &mut hint) else {
+            prev = None;
+            continue;
+        };
         if let Some((tp, gp)) = prev
             && (g == 0.0 || (gp < 0.0) != (g < 0.0))
         {
@@ -428,7 +530,11 @@ pub fn rail_crossings(
         // Bisection on the signed distance to near the root, then Newton on the full system.
         let (mut lo, mut hi) = (a, b);
         let mut h2: Option<P2> = None;
-        let g_at = |t: f64, h: &mut Option<P2>| centre(t).map(|(c, _, _)| sd(&c, h).0);
+        let g_at = |t: f64, h: &mut Option<P2>| {
+            centre(t)
+                .and_then(|(c, _, _, pl)| sd(&c, pl.as_ref(), h))
+                .map(|x| x.0)
+        };
         let (Some(glo), Some(_)) = (g_at(lo, &mut h2), g_at(hi, &mut h2)) else {
             continue;
         };
@@ -439,14 +545,17 @@ pub fn rail_crossings(
             if (gm < 0.0) == slo { lo = m } else { hi = m }
         }
         let mut t = 0.5 * (lo + hi);
-        let Some((c0, _, _)) = centre(t) else {
+        let Some((c0, _, _, _)) = centre(t) else {
             continue;
         };
-        let mut uvo = foot(fo, &c0, h2);
+        let mut uvo = h2.unwrap_or_else(|| foot(fo, &c0, None));
         let mut ok = None;
         let sc = scale(&c0, k[0].abs());
         for _ in 0..40 {
-            let (Some((c, dc, cs)), Some(o)) = (centre(t), offset(fo, k[other], uvo)) else {
+            let Some((c, dc, cs, pl)) = centre(t) else {
+                break;
+            };
+            let Some(o) = offset(fo, k[other], uvo, pl.as_ref()) else {
                 break;
             };
             let r = c - o.o;
@@ -461,7 +570,7 @@ pub fn rail_crossings(
                     Ball {
                         c: P3::from((c.coords + o.o.coords) * 0.5),
                         q,
-                        flat: false,
+                        flat: pl.is_some(),
                     },
                 ));
                 break;
@@ -558,18 +667,19 @@ impl Spine {
                 (t, best) = (s, d);
             }
         }
+        // Newton on g(t) = (c − p)·T, with the derivatives of the spine as `at` runs it (straight
+        // on past its ends: the curve's own there sent a step near an end cycling short of the
+        // root).
+        let g = |t: f64| {
+            let (p, d, d1, dd) = self.at_d(t);
+            ((c - p).dot(&d), -d1.dot(&d) + (c - p).dot(&dd))
+        };
         for _ in 0..50 {
-            let (p, d) = self.at(t);
-            let (_, d1, d2) = self.curve.d2(self.on_curve(t));
-            let speed = d1.norm().max(tol::TINY);
-            let g = (c - p).dot(&d);
-            // d/dt of (c − p)·T ≈ −|p'| + (c − p)·T' (T' = curvature normal · speed).
-            let tp = (d2 - d * d2.dot(&d)) / speed;
-            let dg = -speed + (c - p).dot(&tp);
+            let (gt, dg) = g(t);
             if dg.abs() < tol::TINY {
                 break;
             }
-            let dt = -g / dg;
+            let dt = -gt / dg;
             t += dt;
             if dt.abs() < 1e-14 * (1.0 + t.abs()) {
                 break;
@@ -759,7 +869,16 @@ fn exact_flat(kind: Exact, b: &Ball, spine: &Spine) -> Option<Strip> {
                 let h = (q - c).dot(&z);
                 (h, (q - (c + z * h)).norm())
             };
-            let ((h0, r0), (h1, r1)) = (ring(&q0), ring(&q1));
+            let ((h0, mut r0), (h1, mut r1)) = (ring(&q0), ring(&q1));
+            // A ring within a point's tolerance of the axis is the axis (a chamfer as wide as
+            // the corner's radius, give or take a hair: the cone's apex, not a circle too small
+            // to cut a face with, nor one turned round past the axis).
+            let snap = tol::REL_POINT * (1.0 + (q1 - q0).norm());
+            for rr in [&mut r0, &mut r1] {
+                if *rr <= snap {
+                    *rr = 0.0;
+                }
+            }
             let rail = |h: f64, rr: f64| Curve::Circle {
                 c: c + z * h,
                 x: *x,

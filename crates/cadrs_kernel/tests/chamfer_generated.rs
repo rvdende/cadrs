@@ -13,11 +13,19 @@
 //!   them. The expected solid is clipped from the block here, plane by plane, and compared by
 //!   volume and number of faces.
 //!
+//! - **Chamfered rounded prisms**: regular polygons with their corners rounded R, extruded, their
+//!   top outline chamfered d, narrower than R, as wide, a hair either side, and wider. At depth
+//!   t below the top the section is the sharp polygon inset by t, A − P·t + K·t², its corners
+//!   rounded ρ, which takes C·ρ² off (C = Σ (cot(θ/2) − (π − θ)/2)). Round a corner narrower
+//!   than the chamfer the points d in from the outline are the sides' lines, meeting in a point,
+//!   and the corner's chamfer a cone from there down to the round: ρ = R − t while d ≤ R, else
+//!   R·(1 − t/d). The removed volume is P·d²/2 − K·d³/3 + C·∫₀ᵈ (ρ² − R²) dt.
+//!
 //! Each run prints every failing case with what it expected, so one run shows the whole picture.
 
 use cadrs_kernel::native::NativeKernel;
 use cadrs_kernel::*;
-use nalgebra::{Point2, Point3, Vector3};
+use nalgebra::{Point2, Point3, Vector2, Vector3};
 
 type P2 = Point2<f64>;
 type V3 = Vector3<f64>;
@@ -350,6 +358,116 @@ impl Poly {
             })
             .count()
     }
+}
+
+/// A regular n-gon round (10, 10), of inradius `ri`, its corners rounded `r`: the outline, and
+/// the sharp polygon's area, perimeter and K = Σ cot(θ/2) (θ its interior angle).
+fn rounded_polygon(n: usize, ri: f64, r: f64) -> (Loop, f64, f64, f64) {
+    use std::f64::consts::PI;
+    let c0 = P2::new(10.0, 10.0);
+    let turn = 2.0 * PI / n as f64;
+    let theta = PI - turn;
+    let rc = ri / (PI / n as f64).cos();
+    let corner = |i: usize| {
+        let a = turn * i as f64;
+        c0 + Vector2::new(a.cos(), a.sin()) * rc
+    };
+    // Each side's line, cut back where the rounds start, and the round at its far corner.
+    let cut = r / (theta / 2.0).tan();
+    let mut curves = Vec::new();
+    for i in 0..n {
+        let (a, b) = (corner(i), corner(i + 1));
+        let dir = (b - a).normalize();
+        curves.push(Curve2::Line {
+            a: a + dir * cut,
+            b: b - dir * cut,
+            source: None,
+        });
+        let centre = b + (c0 - b).normalize() * (r / (theta / 2.0).sin());
+        let from = b - dir * cut - centre;
+        curves.push(Curve2::Arc {
+            center: centre,
+            radius: r,
+            start_angle: from.y.atan2(from.x),
+            sweep: turn,
+            source: None,
+        });
+    }
+    let side = 2.0 * ri * (PI / n as f64).tan();
+    let k = n as f64 / (theta / 2.0).tan();
+    (
+        Loop { curves },
+        n as f64 * side * ri / 2.0,
+        n as f64 * side,
+        k,
+    )
+}
+
+#[test]
+fn chamfered_rounded_prisms() {
+    use std::f64::consts::PI;
+    let h = 10.0;
+    let mut failures = Vec::new();
+    let mut cases = 0;
+    for (n, ri, r) in [(3, 6.0, 1.0), (4, 6.0, 1.5), (5, 6.0, 0.7), (6, 6.0, 1.0)] {
+        let (outline, _, p, kk) = rounded_polygon(n, ri, r);
+        let theta = PI - 2.0 * PI / n as f64;
+        let c = n as f64 * (1.0 / (theta / 2.0).tan() - (PI - theta) / 2.0);
+        for d in [0.5 * r, r - 1e-6, r, r + 1e-6, 1.5 * r, 3.0 * r] {
+            cases += 1;
+            let rounds = if d <= r {
+                d * d * d / 3.0 - r * d * d
+            } else {
+                -2.0 * r * r * d / 3.0
+            };
+            let want = p * d * d / 2.0 - kk * d * d * d / 3.0 + c * rounds;
+            let mut k = NativeKernel::new();
+            let profile = Profile::new(
+                Plane::top(),
+                vec![Region {
+                    outer: outline.clone(),
+                    holes: vec![],
+                    source: None,
+                }],
+            );
+            let body = k.extrude(&profile, Extent::Blind(h)).unwrap().bodies[0];
+            let v0 = k.mass_properties(body).unwrap().volume;
+            let top: Vec<EdgeId> = k
+                .edges(body)
+                .unwrap()
+                .iter()
+                .filter(|e| (e.mid.z - h).abs() < 1e-6)
+                .map(|e| e.id)
+                .collect();
+            // By the local chamfer alone (the blend tool's, matching by chance, would hide a
+            // broken corner): the prism's faces (its sides, rounds, top and bottom) and one per
+            // chamfer, the corners' cones (fanning or not).
+            match cadrs_kernel::native::blend::chamfer_local(&mut k, body, &top, d) {
+                Ok(out) => {
+                    let o = out.bodies[0];
+                    let body = k.get(o).unwrap();
+                    let issues = body.check();
+                    let faces = body.faces.len();
+                    let removed = v0 - k.mass_properties(o).unwrap().volume;
+                    if !issues.is_empty()
+                        || faces != 2 + 4 * n
+                        || (removed - want).abs() > 1e-6 * (1.0 + want)
+                    {
+                        failures.push(format!(
+                            "{n}-gon r {r} d {d}: removed {removed:.9}, want {want:.9}, {faces} faces, {issues:?}"
+                        ));
+                    }
+                }
+                Err(e) => failures.push(format!("{n}-gon r {r} d {d}: {e}")),
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {cases} failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]

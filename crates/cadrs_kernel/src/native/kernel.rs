@@ -401,6 +401,9 @@ fn edge_infos_with(b: &Body, lengths: bool) -> Vec<EdgeInfo> {
                 start_tangent: tan(t0),
                 end_tangent: tan(t1),
                 circle,
+                // (Not without the lengths, for tangent chains: those ask of the edges they
+                // reach only, [`NativeKernel::tangent_chain`].)
+                smooth: lengths && super::blend::smooth_within(b, ei, TANGENT_ANGLE),
             }
         })
         .collect()
@@ -1253,15 +1256,18 @@ impl Kernel for NativeKernel {
         // Along tangent edges of the same kind: a blend filling a concave corner can't run on
         // round a convex one (an edge continuing in line where one face turns the other way:
         // Onshape's tangent propagation stops there too).
+        // Not onto a smooth edge (nothing to blend there), asked of the edges reached only.
         let b = self.get(body)?;
         let convex = |e: EdgeId| super::blend::edge_convex(b, e.0 as usize);
         crate::tangent_chain_of(
             &edge_infos_with(b, false),
             &self.vertices(body)?,
             edge,
-            &|a, c| match (convex(a), convex(c)) {
-                (Some(x), Some(y)) => x == y,
-                _ => true,
+            &|a, c| {
+                (match (convex(a), convex(c)) {
+                    (Some(x), Some(y)) => x == y,
+                    _ => true,
+                }) && !super::blend::smooth_within(b, c.0 as usize, TANGENT_ANGLE)
             },
         )
     }

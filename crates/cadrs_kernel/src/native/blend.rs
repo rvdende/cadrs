@@ -1028,6 +1028,11 @@ pub(crate) fn edge_convex(b: &Body, e: usize) -> Option<bool> {
 /// Whether the faces at edge `e` join smoothly all along it (their normals the same at every
 /// sample): the edge marks no corner, and a blend there has nothing to take off or fill.
 fn smooth_edge(b: &Body, e: usize) -> bool {
+    smooth_within(b, e, tol::ANGULAR_POINT)
+}
+
+/// Whether the faces at edge `e` join smoothly all along it, their normals within `angle`.
+pub(crate) fn smooth_within(b: &Body, e: usize, angle: f64) -> bool {
     let ed = &b.edges[e];
     let Ok([s1, s2]) = edge_sides(b, e) else {
         return false;
@@ -1044,7 +1049,7 @@ fn smooth_edge(b: &Body, e: usize) -> bool {
             f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 }
         };
         let (n1, n2) = (normal(s1.0), normal(s2.0));
-        n1.dot(&n2) > 0.0 && n1.cross(&n2).norm() < tol::ANGULAR_POINT
+        n1.dot(&n2) > 0.0 && n1.cross(&n2).norm() < angle.sin()
     })
 }
 
@@ -2735,35 +2740,24 @@ pub fn chamfer(
     let edges = &real_edges(&b, edges)?[..];
     // (Local trimming passes over edges whose faces join smoothly.)
     let sharp = sharp_edges(&b, edges)?;
-    // Equal distances where the faces meet at a constant angle: by local trimming, as the
-    // ball whose contacts are that far along the faces, cut straight across.
+    // Equal distances: by local trimming, their contacts that far along the faces
+    // ([`super::fillet::chamfer_equal_edges`]), cut straight across.
     if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) = (spec, opts.measurement)
         && d > 0.0
         && std::env::var_os("CADRS_NO_LOCAL_FILLET").is_none()
     {
-        let laws: Option<Vec<super::fillet::RadiusLaw>> = sharp
-            .iter()
-            .map(|e| {
-                let e = e.0 as usize;
-                // (Where the faces' angle varies along the edge, a law of radii.)
-                match super::fillet::chamfer_radius(&b, e, d) {
-                    Some(r) => Some((e, vec![(0.0, r), (1.0, r)])),
-                    None => Some((e, super::fillet::chamfer_law(&b, e, d)?)),
+        let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
+        if let Some(local) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d) {
+            let local = local.and_then(|(out, src)| {
+                // (The local result's edges are merged and its tolerances fitted already.)
+                match local_problem(&b, &out) {
+                    Some(e) => Err(KernelError::InvalidResult {
+                        op: "chamfer",
+                        why: format!("the local chamfer isn't valid: {e}"),
+                    }),
+                    None => Ok((out, src)),
                 }
-            })
-            .collect();
-        if let Some(laws) = laws {
-            let local =
-                super::fillet::fillet_edges_laws(&b, body, &laws, true).and_then(|(out, src)| {
-                    // (The local result's edges are merged and its tolerances fitted already.)
-                    match local_problem(&b, &out) {
-                        Some(e) => Err(KernelError::InvalidResult {
-                            op: "chamfer",
-                            why: format!("the local chamfer isn't valid: {e}"),
-                        }),
-                        None => Ok((out, src)),
-                    }
-                });
+            });
             match local {
                 Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
                 Err(e) => {
@@ -2778,7 +2772,7 @@ pub fn chamfer(
         }
     }
     // The other specs and measures: by local trimming too, each edge with its distances along
-    // its two faces (tangent ones as chords where a face curves across the edge, as below). Two
+    // its two faces (tangent ones converted once the edge's rule is chosen, as below). Two
     // distances that differ only along straight edges between flat faces; equal ones wherever
     // the faces meet at one angle (as the equal-distance chamfer above).
     if !matches!(
@@ -2792,26 +2786,11 @@ pub fn chamfer(
                 let ei = e.0 as usize;
                 let ed = b.edges.get(ei)?;
                 let sides = edge_sides(&b, ei).ok()?;
-                let chord = |side: usize, d: f64| -> f64 {
-                    if opts.measurement != ChamferMeasure::Tangent {
-                        return d;
-                    }
-                    let across = match (&b.faces[sides[side].0].surf, &ed.curve) {
-                        (Surface::Cylinder { f: fr, r }, Curve::Line { d: dl, .. })
-                            if dl.normalize().cross(&fr.z).norm() < tol::ANGULAR =>
-                        {
-                            Some(*r)
-                        }
-                        (Surface::Sphere { r, .. }, _) => Some(*r),
-                        _ => None,
-                    };
-                    across.map_or(d, |r| 2.0 * r * ((d / r).atan() / 2.0).sin())
-                };
                 let flip = opts.flip != opts.flipped.contains(&e);
                 let (s0, s1) = if flip { (1, 0) } else { (0, 1) };
                 let (d1, d2) = match spec {
-                    ChamferSpec::EqualDistance(d) => (chord(s0, d), chord(s1, d)),
-                    ChamferSpec::TwoDistances(a, c) => (chord(s0, a), chord(s1, c)),
+                    ChamferSpec::EqualDistance(d) => (d, d),
+                    ChamferSpec::TwoDistances(a, c) => (a, c),
                     ChamferSpec::DistanceAngle { distance, angle } => {
                         // As the blend tool's section: d₂ = d sin(a) / sin(π − a − θ).
                         let theta = super::fillet::chamfer_angle(&b, ei)?;
@@ -2838,16 +2817,19 @@ pub fn chamfer(
             })
             .collect();
         if let Some(dists) = dists {
-            let local = super::fillet::chamfer_edges(&b, body, &dists).and_then(|(out, src)| {
-                // (The local result's edges are merged and its tolerances fitted already.)
-                match local_problem(&b, &out) {
-                    Some(e) => Err(KernelError::InvalidResult {
-                        op: "chamfer",
-                        why: format!("the local chamfer isn't valid: {e}"),
-                    }),
-                    None => Ok((out, src)),
-                }
-            });
+            let tangent = opts.measurement == ChamferMeasure::Tangent;
+            let local = super::fillet::chamfer_edges_measured(&b, body, &dists, tangent).and_then(
+                |(out, src)| {
+                    // (The local result's edges are merged and its tolerances fitted already.)
+                    match local_problem(&b, &out) {
+                        Some(e) => Err(KernelError::InvalidResult {
+                            op: "chamfer",
+                            why: format!("the local chamfer isn't valid: {e}"),
+                        }),
+                        None => Ok((out, src)),
+                    }
+                },
+            );
             match local {
                 Ok((out, src)) => return Ok(Tracked { body: out, src }.into_result(k, body)),
                 Err(e) => {
@@ -2861,12 +2843,28 @@ pub fn chamfer(
             }
         }
     }
+    chamfer_tool(k, body, edges, opts)
+}
+
+/// The chamfer by a tool and boolean alone (the sections solved on the exact faces, their
+/// contacts the distances along the faces), as [`chamfer`] makes it where local trimming
+/// doesn't.
+pub fn chamfer_tool(
+    k: &mut NativeKernel,
+    body: BodyId,
+    edges: &[EdgeId],
+    opts: &ChamferOpts,
+) -> Result<OpResult> {
+    let spec = opts.spec;
+    let b = (**k.get(body)?).clone();
+    let edges = &real_edges(&b, edges)?[..];
     let mut list: Vec<EdgeBlend> = Vec::new();
     for &e in edges {
         let flip = opts.flip != opts.flipped.contains(&e);
         let ei = e.0 as usize;
         // Tangent measurement: a face curving across the edge (a cylinder along a straight edge,
-        // a sphere) takes the chord of the tangent distance on that side.
+        // a sphere) of radius R takes the arc R·atan(d/R) round it on that side (its chord
+        // 2R sin(atan(d/R)/2)).
         let chord = |side: usize, d: f64| -> f64 {
             if opts.measurement != ChamferMeasure::Tangent {
                 return d;
@@ -2885,8 +2883,9 @@ pub fn chamfer(
                 (Surface::Sphere { r, .. }, _) => Some(*r),
                 _ => None,
             };
+            // (The section's distance is along the face: the arc to the chord's end.)
             match across {
-                Some(r) => 2.0 * r * ((d / r).atan() / 2.0).sin(),
+                Some(r) => r * (d / r).atan(),
                 None => d,
             }
         };
@@ -3165,20 +3164,10 @@ pub fn chamfer_local(
     let b = (**k.get(body)?).clone();
     let edges = &real_edges(&b, edges)?[..];
     let sharp = sharp_edges(&b, edges)?;
-    let laws: Option<Vec<super::fillet::RadiusLaw>> = sharp
-        .iter()
-        .map(|e| {
-            let e = e.0 as usize;
-            match super::fillet::chamfer_radius(&b, e, d) {
-                Some(r) => Some((e, vec![(0.0, r), (1.0, r)])),
-                None => Some((e, super::fillet::chamfer_law(&b, e, d)?)),
-            }
-        })
-        .collect();
-    let laws = laws.ok_or(KernelError::Unsupported(
-        "a chamfer whose faces' angle can't be followed along its edge",
-    ))?;
-    let (out, src) = super::fillet::fillet_edges_laws(&b, body, &laws, true)?;
+    let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
+    let (out, src) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d).ok_or(
+        KernelError::Unsupported("a chamfer whose faces' angle can't be followed along its edge"),
+    )??;
     if let Some(e) = local_problem(&b, &out) {
         return Err(KernelError::InvalidResult {
             op: "chamfer",
