@@ -12,7 +12,7 @@
 //! - **Simplify**: *Faces of the parts to simplify* (faces and edges on the same surface or
 //!   curve merged).
 //!
-//! The toolbar's Move face button (▾: Move face, Delete face, Simplify) starts them with the
+//! The toolbar's Move face, Delete face and Simplify buttons start them with the
 //! selection.
 
 use bevy::prelude::*;

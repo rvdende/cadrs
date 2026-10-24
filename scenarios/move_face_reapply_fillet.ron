@@ -28,7 +28,6 @@ Scenario(
         Key("Tab"),
         Click(ui("fillet-dialog-accept")),
         Click(ui("move-face")),
-        Click(ui("direct-edit-menu-move-face")),
         WaitFor("move-face-dialog"),
         Click(ui("move-face-type")),
         Click(ui("move-face-type-option-2")),

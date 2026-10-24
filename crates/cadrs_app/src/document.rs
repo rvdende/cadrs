@@ -1664,12 +1664,9 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("shell", "shell", false, "Shell"),
             ("hole", "hole", false, "Hole"),
             ("thread", "thread", false, "Thread"),
-            (
-                "move-face",
-                "offset",
-                true,
-                "Move face, Delete face, Simplify",
-            ),
+            ("move-face", "offset", false, "Move face"),
+            ("delete-face", "delete", false, "Delete face"),
+            ("simplify", "surface", false, "Simplify"),
         ],
         &[
             ("pattern", "linear-pattern", true, "Linear pattern"),
@@ -1881,50 +1878,6 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                                     };
                                     commands.queue(move |world: &mut World| {
                                         crate::applied::begin(world, kind)
-                                    });
-                                },
-                            );
-                        },
-                    ),
-                ));
-                continue;
-            }
-            if *name == "move-face" {
-                // The direct edits: Move face, and from its menu Delete face and Simplify.
-                tb.spawn((
-                    ToolButton::new(*name, *icon_name)
-                        .dropdown(true)
-                        .tooltip(*tip)
-                        .build(t),
-                    observe(
-                        |a: On<Activate>,
-                         q: Query<(&ComputedNode, &UiGlobalTransform)>,
-                         origin: Res<cadrs_ui::OverflowOrigin>,
-                         theme: Res<Theme>,
-                         mut commands: Commands| {
-                            let at =
-                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
-                            let anchor = cadrs_ui::menu::open_context_menu(
-                                &mut commands,
-                                at,
-                                direct_edit_menu().build(&theme),
-                            );
-                            commands.entity(anchor).observe(
-                                |ev: On<MenuAction>, mut commands: Commands| {
-                                    use cadrs_core::direct_edit::DirectEditKind;
-                                    let kind = match ev.item.as_str() {
-                                        "direct-edit-menu-move-face" => DirectEditKind::MoveFace,
-                                        "direct-edit-menu-delete-face" => {
-                                            DirectEditKind::DeleteFace
-                                        }
-                                        "direct-edit-menu-simplify" => DirectEditKind::Simplify,
-                                        _ => return,
-                                    };
-                                    commands.queue(move |world: &mut World| {
-                                        crate::applied::begin(
-                                            world,
-                                            crate::applied::AppliedKind::DirectEdit(kind),
-                                        )
                                     });
                                 },
                             );
@@ -2170,16 +2123,6 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
         .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
         .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
-}
-
-/// The Move face button's menu: the direct edits (icon-rs has no move face, delete face or
-/// simplify icon yet: offset, delete and surface stand in).
-fn direct_edit_menu() -> Menu {
-    Menu::new("direct-edit-menu")
-        .min_width(160.0)
-        .item(MenuItem::new("direct-edit-menu-move-face", "Move face").icon("offset"))
-        .item(MenuItem::new("direct-edit-menu-delete-face", "Delete face").icon("delete"))
-        .item(MenuItem::new("direct-edit-menu-simplify", "Simplify").icon("surface"))
 }
 
 /// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,

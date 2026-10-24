@@ -2694,6 +2694,17 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
+        // The direct edits (icon-rs has no move face, delete face or simplify icon yet: offset,
+        // delete and surface stand in).
+        "move-face" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::MoveFace,
+        )),
+        "delete-face" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::DeleteFace,
+        )),
+        "simplify" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::Simplify,
+        )),
         n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }
 }

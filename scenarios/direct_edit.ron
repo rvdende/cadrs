@@ -1,6 +1,6 @@
-// Direct edits from the toolbar's Move face ▾ menu (Move face, Delete face, Simplify), on a
-// 60 × 40 × 20 block with a Ø10 hole (volumes asserted in `cadrs_core/tests/direct_edit.rs`).
-// 01 the menu.
+// Direct edits from the toolbar's Move face and Delete face buttons, on a 60 × 40 × 20 block
+// with a Ø10 hole (volumes asserted in `cadrs_core/tests/direct_edit.rs`).
+// 01 the toolbar: Move face, Delete face and Simplify side by side.
 // 02 Move face: the top face picked, Distance 5 mm: the block is 25 tall.
 // 02a the arrow on the top face dragged up: the distance follows (snapped), the block grows.
 // 02b dragged down past the face: a negative distance, the block is lower than 20; the arrow
@@ -25,9 +25,9 @@ Scenario(
         Type("20"),
         Key("Enter"),
         Key("F"),
+        MoveTo(1420, 900),
+        Screenshot("01-direct-edit-buttons"),
         Click(ui("move-face")),
-        Screenshot("01-direct-edit-menu"),
-        Click(ui("direct-edit-menu-move-face")),
         WaitFor("move-face-dialog"),
         Click(xyz(5, 5, 20)),
         Click(ui("move-face-distance-field")),
@@ -57,8 +57,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-move-face-accepted"),
-        Click(ui("move-face")),
-        Click(ui("direct-edit-menu-delete-face")),
+        Click(ui("delete-face")),
         WaitFor("delete-face-dialog"),
         ClickAt(1051, 367),
         MoveTo(1420, 900),
