@@ -107,9 +107,11 @@ struct OffsetDistance;
 #[derive(Component)]
 struct OffsetFlip;
 
-/// Starts a new Boolean in the active Part Studio (the toolbar's Boolean button).
-/// Starts a Boolean as `op` (the toolbar ▾ menu).
+/// Starts a new Boolean as `op` (the toolbar ▾ menu), finishing one being edited first.
 pub fn begin_boolean_as(world: &mut World, op: BooleanKind) {
+    if world.contains_resource::<BooleanSession>() {
+        finish(world);
+    }
     begin_boolean(world);
     if let Some(mut b) = params(world)
         && b.op != op
@@ -119,6 +121,7 @@ pub fn begin_boolean_as(world: &mut World, op: BooleanKind) {
     }
 }
 
+/// Starts a new Boolean in the active Part Studio (the toolbar's Boolean button).
 pub fn begin_boolean(world: &mut World) {
     if world.contains_resource::<BooleanSession>() {
         return;

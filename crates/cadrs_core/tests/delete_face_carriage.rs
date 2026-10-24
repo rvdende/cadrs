@@ -194,6 +194,45 @@ fn a_teardrop_into_a_hex_recess_and_across_a_slot_heals_round_after_step() {
     heals_round(Case::Both, true);
 }
 
+#[test]
+fn a_healed_bore_keeps_its_name() {
+    // The bore's wall, picked before the heal, still names it after: a Move face after the
+    // Delete face offsets it 1 mm into the bore (Ø8 to Ø6): 24 000 − π·3²·30.
+    let mut features = features(Case::Plain, true);
+    let before = Rebuilder::new().rebuild(&features);
+    let part = &before.parts[0];
+    let s = &part.solid;
+    let wall = (0..s.faces.len())
+        .find(|&i| s.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Cylinder))
+        .unwrap();
+    let wall = FaceRef {
+        part: part.id,
+        face: s.faces[wall].name,
+        seed: s.face_point(wall).unwrap(),
+    };
+    features.push(delete_faces(v_faces(part)));
+    features.push(Feature {
+        id: FeatureId::new(),
+        name: "Move face".into(),
+        kind: FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            faces: vec![wall],
+            distance: 1.0,
+            distance_expr: "1 mm".into(),
+            ..Default::default()
+        }),
+        suppress_by: None,
+    });
+    let after = Rebuilder::new().rebuild(&features);
+    assert!(after.errors.is_empty(), "{:?}", after.errors);
+    let (_, _, r) = BORE;
+    close(
+        after.parts[0].mass.unwrap().volume,
+        24_000.0 - std::f64::consts::PI * (r - 1.0).powi(2) * 30.0,
+        1e-6,
+    );
+}
+
 /// Writes each case, teardrop and round, to `target/carriage/<case>-<bore>.step`.
 #[test]
 #[ignore = "writes files: run on demand"]

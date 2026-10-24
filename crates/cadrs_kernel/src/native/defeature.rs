@@ -24,9 +24,10 @@ use super::tol;
 use super::topo::Body;
 use crate::*;
 
-/// Box margins tried, as fractions of the group's size: its own bounding box first (enough for
-/// a teardrop or a right-angled fillet), then larger for gaps that reach past it.
-const MARGINS: [f64; 4] = [0.0, 0.1, 0.5, 1.5];
+/// Box margins tried, as fractions of the group's size: just past its own bounding box first
+/// (enough for a teardrop or a right-angled fillet, and well clear of the booleans' tolerance),
+/// then larger for gaps that reach past it.
+const MARGINS: [f64; 4] = [1e-3, 0.1, 0.5, 1.5];
 
 /// A neighbour's surface, as the heal splits space by it.
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +50,7 @@ impl Side {
             }),
             Surface::Cylinder { f: fr, r } => Ok(Side::Cylinder {
                 o: fr.o,
-                z: fr.z,
+                z: fr.z.normalize(),
                 x: fr.x,
                 r: *r,
             }),
@@ -58,19 +59,61 @@ impl Side {
             )),
         }
     }
+
+    /// Whether `other` splits space the same way (a STEP file's face cut in two: one surface).
+    fn same(&self, other: &Side, tol: f64) -> bool {
+        let parallel = |a: &V3, b: &V3| a.cross(b).norm() <= tol::ANGULAR_POINT;
+        match (self, other) {
+            (Side::Plane { o, n, .. }, Side::Plane { o: p, n: m, .. }) => {
+                parallel(n, m) && (p - o).dot(n).abs() <= tol
+            }
+            (
+                Side::Cylinder { o, z, r, .. },
+                Side::Cylinder {
+                    o: p, z: w, r: q, ..
+                },
+            ) => {
+                let d = p - o;
+                parallel(z, w) && (d - z * d.dot(z)).norm() <= tol && (r - q).abs() <= tol
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `p` is on the material side of this neighbour (as the face is oriented).
+    fn material(&self, b: &Body, f: usize, p: &P3) -> bool {
+        match *self {
+            Side::Plane { o, n, .. } => (p - o).dot(&n) < 0.0,
+            // The natural normal points away from the axis: a face facing that way is a boss's
+            // side (material inside).
+            Side::Cylinder { o, z, r, .. } => {
+                let d = p - o;
+                let inside = (d - z * d.dot(&z)).norm() < r;
+                inside == b.faces[f].sense
+            }
+        }
+    }
 }
 
 /// Delete face's heal by extending the neighbours (see the module docs). `gone` are the faces
 /// to delete (indices into the body's faces).
 pub fn heal(k: &mut NativeKernel, body: BodyId, gone: &[usize]) -> Result<OpResult> {
     let original = (**k.get(body)?).clone();
-    // Where each original face is in the working body (None once deleted or merged away).
-    let mut at: Vec<Option<usize>> = (0..original.faces.len()).map(Some).collect();
     // Which original faces each working face continues.
     let mut sources: Vec<Vec<usize>> = (0..original.faces.len()).map(|f| vec![f]).collect();
     let mut cur = original.clone();
     for group in groups(&original, gone) {
-        let now: Vec<usize> = group.iter().filter_map(|&f| at[f]).collect();
+        // The group's faces now: every face continuing one of them (an earlier group's heal can
+        // split one). One merged with a kept face can't be deleted alone.
+        let now: Vec<usize> = (0..cur.faces.len())
+            .filter(|&g| sources[g].iter().any(|s| group.contains(s)))
+            .collect();
+        if now
+            .iter()
+            .any(|&g| sources[g].iter().any(|s| !gone.contains(s)))
+        {
+            return Err(refused("a face to delete was merged with one to keep"));
+        }
         if now.is_empty() {
             continue;
         }
@@ -85,16 +128,12 @@ pub fn heal(k: &mut NativeKernel, body: BodyId, gone: &[usize]) -> Result<OpResu
                 }
             }
         }
-        for a in at.iter_mut() {
-            *a = None;
-        }
-        for (g, srcs) in next_sources.iter().enumerate() {
-            for &s in srcs {
-                at[s].get_or_insert(g);
-            }
-        }
         sources = next_sources;
         cur = healed;
+    }
+    // No piece of a deleted face is left.
+    if sources.iter().flatten().any(|s| gone.contains(s)) {
+        return Err(refused("part of a face to delete is left"));
     }
     let mut history = History::default();
     for (g, srcs) in sources.iter().enumerate() {
@@ -119,6 +158,14 @@ pub fn heal(k: &mut NativeKernel, body: BodyId, gone: &[usize]) -> Result<OpResu
         bodies: vec![id],
         history,
     })
+}
+
+/// A refusal, saying why.
+fn refused(why: &str) -> KernelError {
+    KernelError::InvalidResult {
+        op: "delete face",
+        why: format!("the faces can't be deleted: {why}"),
+    }
 }
 
 /// The deleted faces in groups joined by their edges.
@@ -164,12 +211,8 @@ fn heal_group(k: &mut NativeKernel, b: &Body, group: &[usize]) -> Result<Healed>
             }
         }
     }
-    let sides: Vec<Side> = neighbours
-        .iter()
-        .map(|&f| Side::of(b, f))
-        .collect::<Result<_>>()?;
-    // The group's extent (from its mesh).
-    let id = k.insert(b.clone());
+    // The group's faces' mesh: its extent, and a point just off its largest triangle.
+    let id = k.insert(super::kernel::subset(b, group, false));
     let mesh = k.tessellate(id, Tessellation::default());
     k.release(id);
     let mesh = mesh?;
@@ -177,34 +220,52 @@ fn heal_group(k: &mut NativeKernel, b: &Body, group: &[usize]) -> Result<Healed>
         P3::new(f64::MAX, f64::MAX, f64::MAX),
         P3::new(f64::MIN, f64::MIN, f64::MIN),
     );
-    for (t, tri) in mesh.indices.iter().enumerate() {
-        if group.contains(&(mesh.triangle_faces[t].0 as usize)) {
-            for &i in tri {
-                lo = lo.inf(&mesh.positions[i as usize]);
-                hi = hi.sup(&mesh.positions[i as usize]);
-            }
-        }
+    for p in &mesh.positions {
+        lo = lo.inf(p);
+        hi = hi.sup(p);
     }
-    if lo.x > hi.x {
+    let probe = mesh
+        .indices
+        .iter()
+        .map(|t| t.map(|i| mesh.positions[i as usize]))
+        .map(|p| ((p[1] - p[0]).cross(&(p[2] - p[0])), p))
+        .max_by(|a, b| a.0.norm().total_cmp(&b.0.norm()));
+    let Some((n, tri)) = probe.filter(|(n, _)| n.norm() > 0.0) else {
         return Err(KernelError::InvalidParameter(
             "the faces to delete have no area".into(),
         ));
-    }
+    };
     let size = (hi - lo).norm().max(tol::POINT);
-    let mut last = None;
-    for cut in [true, false] {
+    let mut sides: Vec<(usize, Side)> = Vec::new();
+    for f in neighbours {
+        let s = Side::of(b, f)?;
+        if !sides.iter().any(|(_, t)| t.same(&s, 1e-6 * size.max(1.0))) {
+            sides.push((f, s));
+        }
+    }
+    // A cut if just off the faces (in the gap) is on the material side of most neighbours,
+    // else a protrusion; the other is tried after.
+    let off = P3::from((tri[0].coords + tri[1].coords + tri[2].coords) / 3.0)
+        + n.normalize() * (size * 1e-3);
+    let material = sides
+        .iter()
+        .filter(|(f, s)| s.material(b, *f, &off))
+        .count();
+    let first_cut = 2 * material >= sides.len();
+    let sides: Vec<Side> = sides.into_iter().map(|(_, s)| s).collect();
+    let mut first = None;
+    for cut in [first_cut, !first_cut] {
         for m in MARGINS {
             let pad = V3::repeat(m * size + 10.0 * tol::POINT);
             match try_heal(k, b, group, &sides, cut, lo - pad, hi + pad, size) {
                 Ok(r) => return Ok(r),
-                Err(e) => last = Some(e),
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
             }
         }
     }
-    Err(last.unwrap_or_else(|| KernelError::InvalidResult {
-        op: "delete face",
-        why: "the faces can't be deleted: the healed body is not a valid solid".into(),
-    }))
+    Err(first.unwrap_or_else(|| refused("the healed body is not a valid solid")))
 }
 
 /// A cell of the space round the gap: a solid, and which of its faces lie on a deleted face.
@@ -225,10 +286,6 @@ fn try_heal(
     hi: P3,
     size: f64,
 ) -> Result<Healed> {
-    let refused = |why: &str| KernelError::InvalidResult {
-        op: "delete face",
-        why: format!("the faces can't be deleted: {why}"),
-    };
     let far = 4.0 * ((hi - lo).norm() + size);
     let centre = P3::from((lo.coords + hi.coords) / 2.0);
     let bx = Cell {
@@ -308,19 +365,19 @@ fn split(
             on_gone,
         }]);
     }
-    Ok((0..r.body.solids.len())
+    (0..r.body.solids.len())
         .map(|s| {
             let faces = r.body.solid_faces(s);
             let mut body = super::kernel::subset(&r.body, &faces, true);
             body.shells.clear();
             body.solids.clear();
-            let _ = super::boolean::assemble_shells(&mut body);
-            Cell {
+            super::boolean::assemble_shells(&mut body)?;
+            Ok(Cell {
                 body,
                 on_gone: faces.iter().map(|&f| on_gone[f]).collect(),
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// The body of an extrude of `profile`.

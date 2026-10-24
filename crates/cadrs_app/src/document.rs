@@ -1610,6 +1610,7 @@ pub(crate) fn search_tools(tb: &mut ChildSpawnerCommands, t: &Theme) {
         },
         BackgroundColor(t.search_background),
         SearchTools,
+        cadrs_ui::OverflowKeep,
         Tooltip::new("Search tools (Alt+C)"),
     ))
     .with_children(|s| {
@@ -1755,13 +1756,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1808,19 +1807,21 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     cadrs_ui::IconButton::new("sheet-metal-model-caret", "chevron-down")
                         .icon_size(14.0)
+                        .tooltip("Sheet metal tools")
                         .build(t),
+                    cadrs_ui::OverflowWithPrevious,
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                // Under the Sheet metal model button, to its left.
-                                t.translation * s
-                                    + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
-                            });
+                            // Under the Sheet metal model button, to its left.
+                            let at = cadrs_ui::tool_menu_at(
+                                q.get(a.entity).ok(),
+                                Vec2::new(-32.0, 0.0),
+                                &origin,
+                            );
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1856,13 +1857,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1900,13 +1899,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1952,11 +1949,12 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         move |d: On<ToolDropdown>,
                               q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                              origin: Res<cadrs_ui::OverflowOrigin>,
                               theme: Res<Theme>,
                               mut commands: Commands| {
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
-                                menu_under(&q, d.entity),
+                                menu_under(&q, d.entity, &origin),
                                 variant_menu(n).build(&theme),
                             );
                             commands.entity(anchor).observe(
@@ -2050,14 +2048,14 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     search_tools(tb, t);
 }
 
-/// Where a toolbar button's menu opens: at its lower left corner. The toolbar clips its
-/// children, so the menu opens on its own anchor.
-fn menu_under(q: &Query<(&ComputedNode, &UiGlobalTransform)>, e: Entity) -> Vec2 {
-    q.get(e).map_or(Vec2::ZERO, |(n, t)| {
-        let s = n.inverse_scale_factor();
-        let size = n.size() * s;
-        t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-    })
+/// Where a toolbar button's menu opens: at its lower left corner (under the » for a button it
+/// hid). The toolbar clips its children, so the menu opens on its own anchor.
+fn menu_under(
+    q: &Query<(&ComputedNode, &UiGlobalTransform)>,
+    e: Entity,
+    origin: &cadrs_ui::OverflowOrigin,
+) -> Vec2 {
+    cadrs_ui::tool_menu_at(q.get(e).ok(), Vec2::ZERO, origin)
 }
 
 /// A tool whose ▾ lists its variants, and how it starts (`None`: from the button, the default).
@@ -2288,13 +2286,11 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,

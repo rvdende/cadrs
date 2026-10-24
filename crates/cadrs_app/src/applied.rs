@@ -893,7 +893,6 @@ pub fn current(world: &World) -> Option<Feature> {
         .cloned()
 }
 
-/// Replaces the feature's parameters (a command).
 /// Starts `kind` as a variant (a toolbar ▾ menu's item): `change` sets its parameters, and
 /// `field` (if any) takes the picks, as the dialog does when the variant is chosen there.
 pub fn begin_as(
@@ -915,6 +914,7 @@ pub fn begin_as(
     }
 }
 
+/// Replaces the feature's parameters (a command).
 pub fn set(world: &mut World, kind: FeatureKind, label: &str) {
     let Some(s) = world.get_resource::<AppliedSession>().cloned() else {
         return;

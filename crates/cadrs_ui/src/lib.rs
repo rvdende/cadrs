@@ -170,7 +170,10 @@ pub use toast::{
     Notification, ToastHost, close_toasts, close_transient_toasts, show_notification, show_toast,
     show_toast_for, toast_action,
 };
-pub use toolbar::{Kbd, ToolButton, ToolDropdown, ToolbarOverflow, toolbar_separator};
+pub use toolbar::{
+    Kbd, OverflowKeep, OverflowOrigin, OverflowWithPrevious, SplitTool, ToolButton, ToolDropdown,
+    ToolbarOverflow, tool_menu_at, toolbar_separator,
+};
 pub use tooltip::{Tooltip, TooltipStyle};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};
 pub use version_graph::{

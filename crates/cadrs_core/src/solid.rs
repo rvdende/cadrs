@@ -859,10 +859,10 @@ impl Solid {
         self.spread(seed, |d, _| d == Some(Dihedral::Smooth))
     }
 
-    /// The faces of the round hole `seed` is a face of (Create selection → Faces → Hole): the
-    /// faces of revolution about its axis that it reaches (walls, a countersink, a drill
-    /// point) and the flat faces across that axis bounded by circles round it (a counterbore's
-    /// floor, a flat bottom). Empty when `seed` isn't a face of revolution.
+    /// The faces of the round hole `seed` is a wall of (Create selection → Faces → Hole): the
+    /// walls about its axis that it reaches (faces of revolution facing the axis: walls, a
+    /// countersink, a drill point) and the flat faces across the axis with only walls round them
+    /// (a counterbore's floor, a flat bottom; not a tube's end). Empty when `seed` isn't a wall.
     pub fn hole_faces(&self, seed: usize) -> Vec<usize> {
         const TOL: f64 = 1e-6;
         let Some((o, d)) = self.faces.get(seed).and_then(|f| f.axis) else {
@@ -871,31 +871,87 @@ impl Solid {
         let d = normalize(d);
         let parallel = |v: Vec3| len(cross(normalize(v), d)) <= TOL;
         let on_axis = |p: Vec3| len(cross(sub(p, o), d)) <= TOL;
-        let round = |i: usize| {
+        let wall = |i: usize| {
             let f = &self.faces[i];
-            match (f.axis, f.plane) {
-                (Some((p, v)), _) => parallel(v) && on_axis(p),
-                (None, Some(pl)) => {
-                    parallel(pl.normal())
-                        && self.face_edges(&f.name).iter().all(|e| {
-                            self.edge(e)
-                                .and_then(|e| e.circle)
-                                .is_some_and(|c| parallel(c.normal) && on_axis(c.center))
-                        })
-                }
-                (None, None) => false,
-            }
+            let facing_axis = || {
+                let (Some(p), Some(n)) = (self.face_point(i), self.face_normal(i)) else {
+                    return false;
+                };
+                let foot = add(o, scale(d, dot(sub(p, o), d)));
+                dot(n, sub(p, foot)) < 0.0
+            };
+            f.axis
+                .is_some_and(|(p, v)| parallel(v) && on_axis(p) && facing_axis())
         };
-        self.spread(seed, |_, i| round(i))
+        if !wall(seed) {
+            return Vec::new();
+        }
+        let floor = |i: usize| {
+            self.faces[i].plane.is_some_and(|pl| parallel(pl.normal()))
+                && self.neighbours(i).into_iter().all(wall)
+        };
+        self.spread(seed, |_, i| wall(i) || floor(i))
+    }
+
+    /// The faces across the edges of `face` (indices, each once).
+    fn neighbours(&self, face: usize) -> Vec<usize> {
+        let name = self.faces[face].name;
+        let mut out = Vec::new();
+        for e in self.edges.iter().filter(|e| e.name.touches(&name)) {
+            let other = if e.name.faces[0] == name {
+                e.name.faces[1]
+            } else {
+                e.name.faces[0]
+            };
+            if let Some(i) = self.faces.iter().position(|f| f.name == other)
+                && i != face
+                && !out.contains(&i)
+            {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// Whether two faces lie on one surface (a STEP file's cylinder in halves): the same kind,
+    /// axis and radius, or the same plane.
+    fn same_surface(&self, a: usize, b: usize) -> bool {
+        const TOL: f64 = 1e-6;
+        let (f, g) = (&self.faces[a], &self.faces[b]);
+        if f.kind != g.kind {
+            return false;
+        }
+        match (f.plane, g.plane, f.axis, g.axis) {
+            (Some(p), Some(q), ..) => {
+                let (n, m) = (normalize(p.normal()), normalize(q.normal()));
+                len(cross(n, m)) <= TOL && dot(sub(q.origin, p.origin), n).abs() <= TOL
+            }
+            (_, _, Some((o, d)), Some((p, e))) => {
+                let d = normalize(d);
+                len(cross(d, normalize(e))) <= TOL
+                    && len(cross(sub(p, o), d)) <= TOL
+                    && f.radius
+                        .zip(g.radius)
+                        .is_some_and(|(r, s)| (r - s).abs() <= TOL)
+            }
+            _ => false,
+        }
     }
 
     /// The radius of the constant-radius fillet `face` is (a cylinder, a torus's tube or a
-    /// sphere at a corner, tangent to at least two of its neighbours), or `None`.
+    /// sphere at a corner, tangent to at least two other surfaces), or `None`. A cylinder round
+    /// half a turn or more (a teardrop's bore, a slot's end) isn't a fillet.
     pub fn fillet_radius(&self, face: usize) -> Option<f64> {
         use cadrs_kernel::SurfaceKind;
         let f = self.faces.get(face)?;
         let r = match f.kind? {
-            SurfaceKind::Cylinder | SurfaceKind::Sphere => f.radius?,
+            SurfaceKind::Cylinder => {
+                if self.turn_span_cos(face)? < 0.1 {
+                    return None;
+                }
+                f.radius?
+            }
+            SurfaceKind::Sphere => f.radius?,
             // The tube's radius: any of its vertices' distance from the core circle (the
             // reported radius is the major one, the axis's point the torus's centre).
             SurfaceKind::Torus => {
@@ -909,13 +965,46 @@ impl Solid {
             }
             _ => return None,
         };
+        // Tangent to other surfaces (not to the rest of its own, cut in pieces).
         let smooth = self
             .edges
             .iter()
             .filter(|e| e.name.touches(&f.name) && e.name.faces[0] != e.name.faces[1])
             .filter(|e| self.dihedral(e) == Some(Dihedral::Smooth))
+            .filter(|e| {
+                let other = if e.name.faces[0] == f.name {
+                    e.name.faces[1]
+                } else {
+                    e.name.faces[0]
+                };
+                self.faces
+                    .iter()
+                    .position(|g| g.name == other)
+                    .is_some_and(|i| !self.same_surface(face, i))
+            })
             .count();
         (smooth >= 2).then_some(r)
+    }
+
+    /// How far round its axis a cylindrical face turns, as the least cosine between its mesh
+    /// normals (across the axis) and their mean: near 1 for a sliver, 0 at half a turn.
+    fn turn_span_cos(&self, face: usize) -> Option<f64> {
+        let f = &self.faces[face];
+        let (_, d) = f.axis?;
+        let d = normalize(d);
+        let normals: Vec<Vec3> = (f.first_triangle..f.first_triangle + f.triangle_count)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| self.positions[self.indices[3 * t + k] as usize]);
+                let n = cross(sub(b, a), sub(c, a));
+                normalize(sub(n, scale(d, dot(n, d))))
+            })
+            .collect();
+        let mean = normals.iter().fold([0.0; 3], |m, n| add(m, *n));
+        if len(mean) < 1e-9 {
+            return Some(-1.0);
+        }
+        let mean = normalize(mean);
+        normals.iter().map(|n| dot(*n, mean)).min_by(f64::total_cmp)
     }
 
     /// The fillets of the part with the same radius as the fillet `seed` (Create selection →

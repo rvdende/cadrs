@@ -1216,6 +1216,61 @@ fn delete_face_takes_off_a_fillet_in_an_inside_corner() {
     assert_eq!(fillet.len(), 1);
     delete_faces(&mut d, fillet);
     close(d.volume(), 12_000.0, 1e-6);
+    // The L's 8 faces again: its section 40·10 + 10·20 = 600 at each end and its 140 mm
+    // perimeter 20 across, 2·600 + 140·20.
+    let part = d.parts()[0].clone();
+    assert_eq!(part.solid.faces.len(), 8);
+    close(
+        part.mass.unwrap().surface_area,
+        2.0 * 600.0 + 140.0 * 20.0,
+        1e-6,
+    );
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_and_a_chamfer_at_once() {
+    // As above, both faces in one Delete face (two groups healed in turn): the whole block,
+    // 6 faces of 2·(800 + 400 + 200).
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let part = d.parts()[0].clone();
+    let (fillet_edge, chamfer_edge) = (
+        edge_at(&part, [40.0, 20.0, 5.0]),
+        edge_at(&part, [0.0, 0.0, 5.0]),
+    );
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(fillet_edge)],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    d.add(AddFeature::chamfer(
+        d.el,
+        FeatureId::new(),
+        ChamferFeature {
+            entities: vec![EdgeOrFace::Edge(chamfer_edge)],
+            distance: 2.0,
+            distance_expr: "2 mm".into(),
+            ..ChamferFeature::default()
+        },
+    ));
+    let faces = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+            || f.plane.is_some_and(|p| {
+                let n = p.normal();
+                n[2].abs() < 1e-9 && n[0].abs() > 1e-3 && n[1].abs() > 1e-3
+            })
+    });
+    assert_eq!(faces.len(), 2);
+    delete_faces(&mut d, faces);
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, 8000.0, 1e-6);
+    close(part.mass.unwrap().surface_area, 2800.0, 1e-6);
+    assert_eq!(part.solid.faces.len(), 6);
 }
 
 #[test]
@@ -1266,5 +1321,77 @@ fn delete_face_takes_off_a_round_edges_fillet() {
     });
     assert_eq!(torus.len(), 1);
     delete_faces(&mut d, torus);
-    close(d.volume(), PI * 1000.0, 1e-6);
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, PI * 1000.0, 1e-6);
+    // The plain cylinder's 3 faces: 2π·10·10 + 2·π·10².
+    assert_eq!(part.solid.faces.len(), 3);
+    close(part.mass.unwrap().surface_area, 400.0 * PI, 1e-6);
+}
+
+#[test]
+fn create_selection_hole_is_the_bore_not_the_tube_round_it() {
+    // A tube: Ø20 outside, Ø10 bore, 10 long. Hole from the bore takes the bore alone (not the
+    // ends, which a wall and the outside bound, nor the outside, which faces away); from the
+    // outside (facing away from the axis) it is no hole.
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![
+            SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 10.0,
+                construction: false,
+            },
+            SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 5.0,
+                construction: false,
+            },
+        ],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(7.5, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    close(d.volume(), PI * 75.0 * 10.0, 1e-6);
+    let s = &part.solid;
+    let radius = |r: f64| {
+        (0..s.faces.len())
+            .find(|&i| s.faces[i].radius.is_some_and(|x| (x - r).abs() < 1e-9))
+            .unwrap()
+    };
+    let (bore, outside) = (radius(5.0), radius(10.0));
+    assert_eq!(s.hole_faces(bore), vec![bore]);
+    assert!(s.hole_faces(outside).is_empty());
+    // Neither is a fillet: no surfaces they're tangent to.
+    assert!(s.fillet_radius(bore).is_none() && s.fillet_radius(outside).is_none());
+}
+
+#[test]
+fn create_selection_fillets_leave_out_a_teardrop_bore() {
+    // The carriage's teardrop bore is tangent to the two flat faces over it, but it turns three
+    // quarters round: not a fillet. Its flat faces aren't either.
+    let b = rebuild::build(&samples::carriage::features(
+        samples::carriage::Case::Plain,
+        true,
+    ));
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    let s = &b.parts[0].solid;
+    assert!((0..s.faces.len()).all(|i| s.fillet_radius(i).is_none()));
 }

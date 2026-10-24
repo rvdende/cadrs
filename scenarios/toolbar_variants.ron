@@ -15,7 +15,7 @@ Scenario(
         WaitFor("fillet-menu"),
         Screenshot("02-fillet-variants"),
         Click(ui("fillet-menu-1")),
-        WaitFor("fillet-dialog"),
+        WaitFor("fillet-side1-field"),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("03-full-round"),
