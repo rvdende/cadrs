@@ -894,6 +894,27 @@ pub fn current(world: &World) -> Option<Feature> {
 }
 
 /// Replaces the feature's parameters (a command).
+/// Starts `kind` as a variant (a toolbar ▾ menu's item): `change` sets its parameters, and
+/// `field` (if any) takes the picks, as the dialog does when the variant is chosen there.
+pub fn begin_as(
+    world: &mut World,
+    kind: AppliedKind,
+    label: &str,
+    change: impl FnOnce(&mut FeatureKind),
+    field: Option<AppliedField>,
+) {
+    begin(world, kind);
+    let Some(f) = current(world) else { return };
+    let mut k = f.kind.clone();
+    change(&mut k);
+    if k != f.kind {
+        set(world, k, label);
+    }
+    if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+        s.field = field;
+    }
+}
+
 pub fn set(world: &mut World, kind: FeatureKind, label: &str) {
     let Some(s) = world.get_resource::<AppliedSession>().cloned() else {
         return;

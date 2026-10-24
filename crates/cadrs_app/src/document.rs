@@ -37,7 +37,7 @@ use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     DialogClose, InlineEdit, InlineEditLabel, InlineEditOptions, StateColors, ToggleDockPanel,
-    TreeToggle, Visuals, begin_inline_edit, show_toast, tree_guide,
+    ToolDropdown, TreeToggle, Visuals, begin_inline_edit, show_toast, tree_guide,
 };
 
 use crate::sketch::{PartStudioMode, SketchSession};
@@ -322,6 +322,7 @@ fn spawn_shell(
                     main.spawn((
                         Name::new("toolbar"),
                         ToolbarRow,
+                        cadrs_ui::ToolbarOverflow,
                         Node {
                             height: Val::Px(t.toolbar_height),
                             flex_shrink: 0.0,
@@ -1657,7 +1658,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         &[
             ("fillet", "fillet", true, "Fillet (Shift+F)"),
             ("chamfer", "chamfer", false, "Chamfer"),
-            ("draft", "draft", true, "Draft"),
+            ("draft", "draft", false, "Draft"),
             ("rib", "rib", false, "Rib"),
             ("shell", "shell", false, "Shell"),
             ("hole", "hole", false, "Hole"),
@@ -1678,11 +1679,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 true,
                 "Boolean (Union, Subtract, Intersect)",
             ),
-            ("split", "split", true, "Split"),
+            ("split", "split", false, "Split"),
             ("transform", "transform", true, "Transform"),
             ("composite-part", "composite-part", false, "Composite part"),
             ("plane", "plane", true, "Plane"),
-            ("mate-connector", "mate-connector", true, "Mate connector"),
+            ("mate-connector", "mate-connector", false, "Mate connector"),
             ("variable", "variables", false, "Variable"),
         ],
         // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
@@ -1935,6 +1936,47 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 ));
                 continue;
             }
+            if let Some(start) = variant_tool(name) {
+                // #22: Onshape's split buttons: the button starts the tool, its ▾ lists the
+                // variants (Fillet's Full round, Boolean's operations, Transform's and Plane's
+                // types).
+                let n: &'static str = name;
+                tb.spawn((
+                    ToolButton::new(*name, *icon_name)
+                        .split()
+                        .tooltip(*tip)
+                        .build(t),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.queue(move |world: &mut World| start(world, None));
+                    }),
+                    observe(
+                        move |d: On<ToolDropdown>,
+                              q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                              theme: Res<Theme>,
+                              mut commands: Commands| {
+                            let anchor = cadrs_ui::menu::open_context_menu(
+                                &mut commands,
+                                menu_under(&q, d.entity),
+                                variant_menu(n).build(&theme),
+                            );
+                            commands.entity(anchor).observe(
+                                move |ev: On<MenuAction>, mut commands: Commands| {
+                                    let Some(i) = ev
+                                        .item
+                                        .rsplit('-')
+                                        .next()
+                                        .and_then(|i| i.parse::<usize>().ok())
+                                    else {
+                                        return;
+                                    };
+                                    commands.queue(move |world: &mut World| start(world, Some(i)));
+                                },
+                            );
+                        },
+                    ),
+                ));
+                continue;
+            }
             if let Some(kind) = crate::applied_dialog::toolbar_kind(name) {
                 // P3.6: Fillet, Chamfer, Shell and Hole.
                 tb.spawn((
@@ -2006,6 +2048,121 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }
     }
     search_tools(tb, t);
+}
+
+/// Where a toolbar button's menu opens: at its lower left corner. The toolbar clips its
+/// children, so the menu opens on its own anchor.
+fn menu_under(q: &Query<(&ComputedNode, &UiGlobalTransform)>, e: Entity) -> Vec2 {
+    q.get(e).map_or(Vec2::ZERO, |(n, t)| {
+        let s = n.inverse_scale_factor();
+        let size = n.size() * s;
+        t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
+    })
+}
+
+/// A tool whose ▾ lists its variants, and how it starts (`None`: from the button, the default).
+fn variant_tool(name: &str) -> Option<fn(&mut World, Option<usize>)> {
+    Some(match name {
+        "fillet" => start_fillet,
+        "boolean" => start_boolean,
+        "transform" => start_transform,
+        "plane" => start_plane,
+        _ => return None,
+    })
+}
+
+/// The ▾ menu of a [`variant_tool`]: item `<tool>-menu-<i>` is variant `i`.
+fn variant_menu(name: &str) -> Menu {
+    use cadrs_core::document::BooleanKind;
+    use cadrs_core::plane::PlaneType;
+    use cadrs_core::transform::TransformType;
+    let labels: Vec<&'static str> = match name {
+        "fillet" => vec!["Fillet", "Full round"],
+        "boolean" => BooleanKind::ALL.iter().map(|k| k.label()).collect(),
+        "transform" => TransformType::ALL.iter().map(|k| k.label()).collect(),
+        "plane" => PlaneType::ALL.iter().map(|k| k.label()).collect(),
+        _ => Vec::new(),
+    };
+    labels.into_iter().enumerate().fold(
+        Menu::new(format!("{name}-menu")).min_width(160.0),
+        |m, (i, l)| m.item(MenuItem::new(format!("{name}-menu-{i}"), l)),
+    )
+}
+
+fn start_fillet(world: &mut World, variant: Option<usize>) {
+    use crate::applied::{AppliedField, AppliedKind};
+    use cadrs_core::applied::FilletType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Fillet);
+    };
+    let kind = FilletType::ALL[i.min(FilletType::ALL.len() - 1)];
+    let field = if kind == FilletType::FullRound {
+        AppliedField::Side1
+    } else {
+        AppliedField::Entities
+    };
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Fillet,
+        "Fillet type",
+        |k| {
+            if let cadrs_core::FeatureKind::Fillet(x) = k {
+                x.kind = kind;
+            }
+        },
+        Some(field),
+    );
+}
+
+fn start_boolean(world: &mut World, variant: Option<usize>) {
+    use cadrs_core::document::BooleanKind;
+    match variant {
+        None => crate::boolean::begin_boolean(world),
+        Some(i) => crate::boolean::begin_boolean_as(
+            world,
+            BooleanKind::ALL[i.min(BooleanKind::ALL.len() - 1)],
+        ),
+    }
+}
+
+fn start_transform(world: &mut World, variant: Option<usize>) {
+    use crate::applied::AppliedKind;
+    use cadrs_core::transform::TransformType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Transform);
+    };
+    let t = TransformType::ALL[i.min(TransformType::ALL.len() - 1)];
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Transform,
+        "Transform type",
+        |k| {
+            if let cadrs_core::FeatureKind::Transform(x) = k {
+                x.transform_type = t;
+            }
+        },
+        Some(crate::transform_ui::first_field(t)),
+    );
+}
+
+fn start_plane(world: &mut World, variant: Option<usize>) {
+    use crate::applied::AppliedKind;
+    use cadrs_core::plane::PlaneType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Plane);
+    };
+    let t = PlaneType::ALL[i.min(PlaneType::ALL.len() - 1)];
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Plane,
+        "Plane type",
+        |k| {
+            if let cadrs_core::FeatureKind::Plane(x) = k {
+                x.kind = t;
+            }
+        },
+        None,
+    );
 }
 
 /// The Thicken button's menu: Thicken, Fill and Helix (icon-rs has no fill or helix icon yet).

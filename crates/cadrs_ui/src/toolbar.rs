@@ -3,7 +3,9 @@
 //! [`toolbar_separator`] (the thin rule between groups) and [`Kbd`] (a keycap, as in
 //! "Search tools… alt c").
 //!
-//! Tool buttons trigger `bevy::ui_widgets::Activate` like every other button.
+//! Tool buttons trigger `bevy::ui_widgets::Activate` like every other button. A split button's
+//! ▾ ([`ToolButton::split`]) triggers [`ToolDropdown`] instead (Onshape's: the button starts the
+//! tool, its ▾ lists the variants); on other buttons the ▾ is part of the button.
 
 use std::borrow::Cow;
 
@@ -19,6 +21,21 @@ use crate::icon::icon;
 use crate::style::{InheritFg, InitState, StateColors, VisualState, Visuals};
 use crate::theme::Theme;
 
+/// A [`ToolButton`]'s ▾ was clicked (the button isn't activated): its menu of variants should
+/// open. Targets the button.
+#[derive(EntityEvent, Debug, Clone, Copy)]
+pub struct ToolDropdown {
+    pub entity: Entity,
+}
+
+/// The ▾'s click: the button's [`ToolDropdown`] instead of its `Activate`.
+fn caret_click(mut click: On<Pointer<Click>>, parents: Query<&ChildOf>, mut commands: Commands) {
+    click.propagate(false);
+    if let Ok(p) = parents.get(click.entity) {
+        commands.trigger(ToolDropdown { entity: p.parent() });
+    }
+}
+
 /// Builder for a toolbar button: a 20 px icon in a 28 px square, or a wider button when it has a
 /// dropdown caret or a label (like "✎ Sketch").
 #[derive(Debug, Clone)]
@@ -27,6 +44,7 @@ pub struct ToolButton {
     icon: Cow<'static, str>,
     label: Option<String>,
     dropdown: bool,
+    split: bool,
     disabled: bool,
     selected: bool,
     force: Option<VisualState>,
@@ -41,6 +59,7 @@ impl ToolButton {
             icon: icon.into(),
             label: None,
             dropdown: false,
+            split: false,
             disabled: false,
             selected: false,
             force: None,
@@ -58,6 +77,14 @@ impl ToolButton {
     /// Adds a small ▾ after the icon, for tools with a menu of variants.
     pub fn dropdown(mut self, d: bool) -> Self {
         self.dropdown = d;
+        self
+    }
+
+    /// A ▾ of its own: clicking it triggers [`ToolDropdown`] rather than `Activate` (the tool's
+    /// menu of variants, while the button starts the tool).
+    pub fn split(mut self) -> Self {
+        self.dropdown = true;
+        self.split = true;
         self
     }
 
@@ -109,6 +136,7 @@ impl ToolButton {
         let icon_name = self.icon;
         let icon_size = self.icon_size;
         let dropdown = self.dropdown;
+        let split = self.split;
         let label = self.label.clone();
         // The caret gets its own name so scenarios can open the dropdown without coordinates.
         let caret_name = format!("{}-caret", self.name);
@@ -156,7 +184,14 @@ impl ToolButton {
                         Pickable::IGNORE,
                     ));
                 }
-                if dropdown {
+                if split {
+                    p.spawn((
+                        Name::new(caret_name),
+                        icon("chevron-down", 14.0, fg),
+                        InheritFg,
+                    ))
+                    .observe(caret_click);
+                } else if dropdown {
                     p.spawn((
                         Name::new(caret_name),
                         icon("chevron-down", 14.0, fg),
@@ -167,6 +202,186 @@ impl ToolButton {
             })),
         )
     }
+}
+
+/// A toolbar row that fits its width (#22: at 1224 px the Part Studio's tools ran off the
+/// right edge): the children that don't fit are hidden, from the end, and a » button at the
+/// end lists them in a menu; choosing one activates its button.
+#[derive(Component, Debug, Default)]
+pub struct ToolbarOverflow;
+
+/// The » button of a [`ToolbarOverflow`] row.
+#[derive(Component)]
+struct OverflowButton;
+
+/// A child a [`ToolbarOverflow`] row hid.
+#[derive(Component, Debug, Clone, Copy)]
+struct Overflowed;
+
+/// The width a child took when last shown.
+#[derive(Component, Debug, Clone, Copy)]
+struct ShownWidth(f32);
+
+pub(crate) struct ToolbarPlugin;
+
+impl Plugin for ToolbarPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PostUpdate, fit_toolbars.after(bevy::ui::UiSystems::Layout))
+            .add_observer(on_overflow);
+    }
+}
+
+fn px(v: Val) -> f32 {
+    match v {
+        Val::Px(p) => p,
+        _ => 0.0,
+    }
+}
+
+/// Hides what doesn't fit and shows the » when anything is hidden (the layout catches up next
+/// frame).
+#[allow(clippy::type_complexity)]
+fn fit_toolbars(
+    rows: Query<(Entity, &ComputedNode, &Node, Option<&Children>), With<ToolbarOverflow>>,
+    mut items: Query<
+        (
+            &ComputedNode,
+            &mut Node,
+            Option<&ShownWidth>,
+            Has<OverflowButton>,
+        ),
+        Without<ToolbarOverflow>,
+    >,
+    theme: Res<Theme>,
+    mut commands: Commands,
+) {
+    for (row, computed, row_node, children) in &rows {
+        let children: Vec<Entity> = children.map_or(Vec::new(), |c| c.to_vec());
+        let button = children
+            .iter()
+            .copied()
+            .find(|c| items.get(*c).is_ok_and(|i| i.3));
+        // The » goes last (a toolbar rebuilt for another tab drops it).
+        if children.last() != button.as_ref() || button.is_none() {
+            if let Some(b) = button {
+                commands.entity(b).despawn();
+            }
+            let b = commands
+                .spawn((
+                    OverflowButton,
+                    ToolButton::new("toolbar-overflow", "chevron-right")
+                        .tooltip("More tools")
+                        .build(&theme),
+                ))
+                .id();
+            commands.entity(row).add_child(b);
+            continue;
+        }
+        let Some(button) = button else { continue };
+        let k = computed.inverse_scale_factor();
+        let gap = px(row_node.column_gap);
+        let available =
+            computed.size().x * k - px(row_node.padding.left) - px(row_node.padding.right);
+        // Each tool's width: as laid out when shown, else as last shown.
+        let mut widths = Vec::new();
+        for &c in children.iter().filter(|c| **c != button) {
+            let Ok((cn, node, shown, _)) = items.get(c) else {
+                continue;
+            };
+            let w = if node.display == Display::None {
+                shown.map_or(0.0, |s| s.0)
+            } else {
+                cn.size().x * k + px(node.margin.left) + px(node.margin.right)
+            };
+            if node.display != Display::None && shown.is_none_or(|s| (s.0 - w).abs() > 0.5) {
+                commands.entity(c).insert(ShownWidth(w));
+            }
+            widths.push((c, w));
+        }
+        let all: f32 = widths.iter().map(|(_, w)| w + gap).sum();
+        let fits = all <= available + 0.5;
+        let room = available - if fits { 0.0 } else { 32.0 + gap };
+        let mut used = 0.0;
+        let mut hiding = false;
+        for (c, w) in widths {
+            hiding |= !fits && used + w > room;
+            used += w + gap;
+            let Ok((_, mut node, _, _)) = items.get_mut(c) else {
+                continue;
+            };
+            let display = if hiding { Display::None } else { Display::Flex };
+            if node.display != display {
+                node.display = display;
+                if hiding {
+                    commands.entity(c).insert(Overflowed);
+                } else {
+                    commands.entity(c).remove::<Overflowed>();
+                }
+            }
+        }
+        if let Ok((_, mut node, _, _)) = items.get_mut(button) {
+            let display = if fits { Display::None } else { Display::Flex };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+    }
+}
+
+type HiddenTools<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Name,
+        Option<&'static ButtonTooltip>,
+        Has<bevy::ui::InteractionDisabled>,
+    ),
+    With<Overflowed>,
+>;
+
+/// The »: a menu of the hidden tools (by their tooltips); choosing one activates it.
+fn on_overflow(
+    a: On<bevy::ui_widgets::Activate>,
+    buttons: Query<&ChildOf, With<OverflowButton>>,
+    rows: Query<&Children, With<ToolbarOverflow>>,
+    hidden: HiddenTools,
+    at: Query<(&ComputedNode, &UiGlobalTransform)>,
+    theme: Res<Theme>,
+    mut commands: Commands,
+) {
+    let Ok(row) = buttons.get(a.entity).map(|p| p.parent()) else {
+        return;
+    };
+    let Ok(children) = rows.get(row) else { return };
+    let mut menu = crate::menu::Menu::new("toolbar-overflow-menu").min_width(180.0);
+    let mut targets = Vec::new();
+    for &c in children {
+        let Ok((name, tip, disabled)) = hidden.get(c) else {
+            continue;
+        };
+        // Tools only (the search box is reached with Alt+C).
+        let Some(label) = tip.and_then(|t| t.0.clone()) else {
+            continue;
+        };
+        menu = menu.item(
+            crate::menu::MenuItem::new(format!("toolbar-overflow-{}", name.as_str()), label)
+                .disabled(disabled),
+        );
+        targets.push((format!("toolbar-overflow-{}", name.as_str()), c));
+    }
+    let pos = at.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
+        let s = n.inverse_scale_factor();
+        let size = n.size() * s;
+        t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
+    });
+    let anchor = crate::menu::open_context_menu(&mut commands, pos, menu.build(&theme));
+    commands.entity(anchor).observe(
+        move |ev: On<crate::menu::MenuAction>, mut commands: Commands| {
+            if let Some((_, e)) = targets.iter().find(|(n, _)| *n == ev.item) {
+                commands.trigger(bevy::ui_widgets::Activate { entity: *e });
+            }
+        },
+    );
 }
 
 /// The thin vertical rule between toolbar groups.

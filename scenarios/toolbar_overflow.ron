@@ -1,0 +1,21 @@
+// #22 "Also noticed": at 1224 px across the Part Studio's tools ran off the right edge.
+// 01 the tools that don't fit are hidden behind a » at the end.
+// 02 the »: a menu of the hidden tools (by their tooltips).
+// 03 Derived from it: the Derived dialog, as its button starts it.
+Scenario(
+    start: Some("document"),
+    window_size: Some((1224, 800)),
+    steps: [
+        WaitFor("document-shell"),
+        MoveTo(1100, 600),
+        Wait(3),
+        Screenshot("01-overflow"),
+        Click(ui("toolbar-overflow")),
+        WaitFor("toolbar-overflow-menu"),
+        Screenshot("02-overflow-menu"),
+        Click(ui("toolbar-overflow-derived")),
+        MoveTo(1100, 600),
+        Wait(3),
+        Screenshot("03-derived-from-the-menu"),
+    ],
+)

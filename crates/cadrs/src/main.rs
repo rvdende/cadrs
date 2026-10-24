@@ -116,7 +116,7 @@ fn main() -> AppExit {
             }
         };
     }
-    let opts = match HarnessOptions::from_args(args) {
+    let mut opts = match HarnessOptions::from_args(args) {
         Ok(o) => o,
         Err(e) => {
             // The harness's own usage line knows only the app's options: point to all of them.
@@ -134,6 +134,11 @@ fn main() -> AppExit {
             return AppExit::from_code(2);
         }
     };
+    if let Some((w, h)) = scenario.as_ref().and_then(|s| s.window_size)
+        && !opts.window_size_given
+    {
+        opts.size = bevy::math::UVec2::new(w.max(64), h.max(64));
+    }
 
     let mut app = App::new();
     // The frame panel's CPU times: every system's and schedule's tracing span, added up.

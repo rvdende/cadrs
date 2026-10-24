@@ -170,7 +170,7 @@ pub use toast::{
     Notification, ToastHost, close_toasts, close_transient_toasts, show_notification, show_toast,
     show_toast_for, toast_action,
 };
-pub use toolbar::{Kbd, ToolButton, toolbar_separator};
+pub use toolbar::{Kbd, ToolButton, ToolDropdown, ToolbarOverflow, toolbar_separator};
 pub use tooltip::{Tooltip, TooltipStyle};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};
 pub use version_graph::{
@@ -292,6 +292,7 @@ impl Plugin for CadrsUiPlugin {
                 splitter::SplitterPlugin,
                 selection_box::SelectionBoxPlugin,
                 color_editor::ColorEditorPlugin,
+                toolbar::ToolbarPlugin,
             ))
             .add_message::<ScriptCommand>();
     }
