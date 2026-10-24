@@ -1657,3 +1657,92 @@ fn a_boxs_bottom_isnt_a_copy_of_its_top() {
     let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [5.0, 5.0, 10.0]));
     assert!(part.solid.pattern_copies(top).is_empty());
 }
+
+#[test]
+fn select_patterns_finds_a_circular_patterns_copies() {
+    // A Ø60 × 10 disc with three 6 wide slots cut in from its rim at 90°, 210° and 330° (from
+    // r = 20 out): the back wall of one (flat, facing out) has the other two as copies, turned
+    // 120° about the disc's axis; a box's lone bottom isn't its top's (above).
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 30.0,
+            construction: false,
+        }],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let at = |r: f64, t: f64, a: f64| {
+        let (c, s) = (a.to_radians().cos(), a.to_radians().sin());
+        Vec2::new(r * c - t * s, r * s + t * c)
+    };
+    let angles = [90.0, 210.0, 330.0];
+    let slots: Vec<SketchOp> = angles
+        .iter()
+        .map(|&a| SketchOp::AddPolyline {
+            points: vec![
+                at(20.0, -3.0, a),
+                at(35.0, -3.0, a),
+                at(35.0, 3.0, a),
+                at(20.0, 3.0, a),
+            ],
+            closed: true,
+            construction: false,
+            label: "Add rectangle",
+        })
+        .collect();
+    let s = d.sketch(PlaneRef::Top, slots);
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let seeds: Vec<Vec2> = angles.iter().map(|&a| at(25.0, 0.0, a)).collect();
+    let regions = samples::region_refs(s, &g, &seeds);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    let back = |a: f64| {
+        let p = at(20.0, 0.0, a);
+        let (c, sn) = (a.to_radians().cos(), a.to_radians().sin());
+        index_of(&part, &face_at(&part, [c, sn, 0.0], [p.x, p.y, 5.0]))
+    };
+    let walls: Vec<usize> = angles.iter().map(|&a| back(a)).collect();
+    let mut want = vec![walls[1], walls[2]];
+    want.sort();
+    assert_eq!(s.pattern_copies(walls[0]), want);
+}

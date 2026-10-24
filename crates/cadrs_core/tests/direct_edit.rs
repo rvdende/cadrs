@@ -1195,3 +1195,52 @@ fn offset_up_to_a_bar_across_the_face() {
     let grown = parts.iter().find(|p| p.id == block.id).unwrap();
     close(grown.mass.unwrap().volume, v * 1.5, 1e-6);
 }
+
+#[test]
+fn offset_up_to_a_round_bar_exactly() {
+    // A wide R100 cylinder along x floating over the plain 40 × 20 top (its axis at y = 10,
+    // z = 117, its lowest line z = 17, between its mesh's vertices): Offset up to it stops the
+    // top exactly there (the kernel's distance, not its mesh's), 17 high: 40·20·17.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let s = d.sketch(PlaneRef::Right, vec![circle(10.0, 117.0, 100.0)]);
+    d.extrude(s, &[Vec2::new(10.0, 117.0)], |e| {
+        e.depth = 60.0;
+        e.depth_expr = "60 mm".into();
+    });
+    let parts = d.parts();
+    let block = parts
+        .iter()
+        .find(|p| (p.mass.unwrap().volume - 8000.0).abs() < 1e-6)
+        .unwrap()
+        .clone();
+    let rod_part = parts.iter().find(|p| p.id != block.id).unwrap().clone();
+    let rod = rod_part.id;
+    // Turned 7° about its own axis (its end circle's): the same cylinder, its mesh's vertices
+    // no longer on its lowest line.
+    d.add(
+        "Transform",
+        FeatureKind::Transform(cadrs_core::transform::TransformFeature {
+            transform_type: cadrs_core::transform::TransformType::Rotate,
+            parts: vec![rod],
+            axis: Some(AxisRef::Edge(edge_near(&rod_part, [0.0, 110.0, 117.0]))),
+            angle: 7.0,
+            angle_expr: "7 deg".into(),
+            ..Default::default()
+        }),
+    );
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(rod)),
+            faces: top_face(&block),
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let grown = parts.iter().find(|p| p.id == block.id).unwrap();
+    close(grown.mass.unwrap().volume, 40.0 * 20.0 * 17.0, 1e-6);
+}

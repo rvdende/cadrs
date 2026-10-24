@@ -756,7 +756,8 @@ impl Rebuilder {
                     None => first_face_normal(state, &x.faces[0])?,
                 };
                 if up_to {
-                    distance = up_to_distance(state, x, &u)?;
+                    let exact = self.part_up_to_exact(state, x, &u);
+                    distance = up_to_distance(state, x, &u, exact)?;
                 }
                 Some(Motion::translation(u * distance))
             }
@@ -769,7 +770,8 @@ impl Rebuilder {
             }
             (DirectEditKind::MoveFace, MoveType::Offset) if up_to => {
                 let n = first_face_normal(state, &x.faces[0])?;
-                distance = up_to_distance(state, x, &n)?;
+                let exact = self.part_up_to_exact(state, x, &n);
+                distance = up_to_distance(state, x, &n, exact)?;
                 None
             }
             _ => None,
@@ -800,6 +802,116 @@ impl Rebuilder {
             }
         };
         self.per_part_as(id, kind.label(), state, bodies, op, |_, _| true, part_kind)
+    }
+
+    /// Move face's Up to a part, exactly: the first face swept along `u` (ahead, then behind)
+    /// is cut from the part, and the exact distance from the face's plane to that piece (to a
+    /// large slab on the plane's other side) is how far the face goes, along `u`. `None` when the
+    /// target isn't a part, is the part being edited, or the kernel can't say (the mesh then
+    /// answers, [`up_to_distance`]).
+    fn part_up_to_exact(
+        &mut self,
+        state: &State,
+        x: &crate::direct_edit::DirectEditFeature,
+        u: &Vector3<f64>,
+    ) -> Option<f64> {
+        use cadrs_kernel::{DistanceTarget, ExtrudeEnd, ExtrudeSpec, FaceInput};
+        let Some(crate::document::UpTo::Part(target)) = x.up_to else {
+            return None;
+        };
+        let first = x.faces.first()?;
+        if target == first.part {
+            return None;
+        }
+        let (moved, ids) = face_ids(state, first)?;
+        let (body, face) = (moved.body?, *ids.first()?);
+        let tbody = state.part(target)?.body?;
+        let frame = face_frame(moved, first)?;
+        let n = Vector3::from(frame.normal()).normalize();
+        let along = u.dot(&n);
+        if along.abs() < 1e-9 {
+            return None;
+        }
+        let (a, b) = (
+            self.kernel.bounding_box(body).ok()?,
+            self.kernel.bounding_box(tbody).ok()?,
+        );
+        let far = 4.0 * ((a.max - a.min).norm() + (b.max - b.min).norm() + (b.min - a.min).norm());
+        let plane = Plane {
+            origin: Point3::from(frame.origin),
+            x_dir: Unit::new_normalize(Vector3::from(frame.u)),
+            normal: Unit::new_normalize(n),
+        };
+        let release = |this: &mut Self, ids: &[BodyId]| {
+            for id in ids {
+                this.kernel.release(*id);
+            }
+        };
+        for sign in [1.0, -1.0] {
+            let spec = ExtrudeSpec {
+                faces: vec![FaceInput {
+                    body,
+                    face,
+                    source: 0,
+                }],
+                end: ExtrudeEnd::Blind(far),
+                ..ExtrudeSpec::blind(Unit::new_normalize(u * sign), far)
+            };
+            let Ok(prism) = self
+                .kernel
+                .extrude_with(&Profile::new(plane, Vec::new()), &spec)
+            else {
+                return None;
+            };
+            let hit = self.kernel.boolean(BoolOp::Intersect, tbody, &prism.bodies);
+            release(self, &prism.bodies);
+            let pieces = match hit {
+                Ok(r) => r.bodies,
+                Err(cadrs_kernel::KernelError::EmptyResult(_)) => continue,
+                Err(_) => return None,
+            };
+            // A slab on the plane, on the side away from the pieces.
+            let away = -n * (sign * along).signum();
+            let slab_plane = Plane {
+                normal: Unit::new_normalize(away),
+                ..plane
+            };
+            let slab = self.kernel.extrude(
+                &Profile::new(
+                    slab_plane,
+                    vec![Region {
+                        outer: Loop {
+                            curves: vec![
+                                rect_line(-far, -far, far, -far),
+                                rect_line(far, -far, far, far),
+                                rect_line(far, far, -far, far),
+                                rect_line(-far, far, -far, -far),
+                            ],
+                        },
+                        holes: Vec::new(),
+                        source: None,
+                    }],
+                ),
+                cadrs_kernel::Extent::Blind(1.0),
+            );
+            let Ok(slab) = slab else {
+                release(self, &pieces);
+                return None;
+            };
+            let mut nearest: Option<f64> = None;
+            for p in &pieces {
+                if let Ok(r) = self.kernel.min_distance(
+                    &DistanceTarget::Body(slab.bodies[0]),
+                    &DistanceTarget::Body(*p),
+                ) {
+                    nearest = Some(nearest.map_or(r.distance, |d: f64| d.min(r.distance)));
+                }
+            }
+            release(self, &pieces);
+            release(self, &slab.bodies);
+            return nearest.map(|d| sign * d / along.abs());
+        }
+        None
     }
 
     /// The Hole feature (PS15): a revolved tool per point, subtracted from the parts in scope.
@@ -1248,6 +1360,7 @@ fn up_to_distance(
     state: &State,
     x: &crate::direct_edit::DirectEditFeature,
     u: &Vector3<f64>,
+    exact: Option<f64>,
 ) -> Result<f64, String> {
     use crate::document::UpTo;
     let first = &x.faces[0];
@@ -1296,6 +1409,11 @@ fn up_to_distance(
         UpTo::Part(id) => {
             if *id == first.part {
                 return Err("Move up to another part (not the one being edited)".into());
+            }
+            // The kernel's exact answer when it has one (`Rebuilder::part_up_to_exact`); else
+            // from the part's mesh.
+            if let Some(t) = exact {
+                return Ok(t - x.offset * t.signum());
             }
             let s = &state
                 .part(*id)
@@ -1444,4 +1562,13 @@ fn fillets_next_to(
         }
     }
     out
+}
+
+/// A side of a square, for [`Rebuilder::part_up_to_exact`]'s slab.
+fn rect_line(x0: f64, y0: f64, x1: f64, y1: f64) -> Curve2 {
+    Curve2::Line {
+        a: Point2::new(x0, y0),
+        b: Point2::new(x1, y1),
+        source: None,
+    }
 }

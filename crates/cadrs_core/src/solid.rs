@@ -926,10 +926,11 @@ impl Solid {
         region
     }
 
-    /// The other faces like `seed` (Create selection's Select patterns, a linear pattern's
-    /// copies of it): the same kind of surface, area, radius, perimeter and number of edges,
-    /// facing the same way (not the opposite: a box's bottom isn't a copy of its top), and not
-    /// next to it. A circular pattern's flat faces (turned) aren't found.
+    /// The other faces like `seed` (Create selection's Select patterns): the same kind of
+    /// surface, area, radius, perimeter and number of edges, not next to it, and either facing
+    /// the same way (a linear pattern's copies) or turned from it about an axis that carries the
+    /// seed's outline onto them, with at least two on one axis (a circular pattern's: three or
+    /// more round it). A lone face turned over (a box's bottom against its top) isn't one.
     pub fn pattern_copies(&self, seed: usize) -> Vec<usize> {
         const TOL: f64 = 1e-6;
         let Some(f) = self.faces.get(seed) else {
@@ -965,18 +966,94 @@ impl Solid {
         let edges = |i: usize| self.face_edges(&self.faces[i].name).len();
         let next = self.neighbours(seed);
         let (p0, e0) = (perimeter(f), edges(seed));
-        (0..self.faces.len())
+        let alike: Vec<usize> = (0..self.faces.len())
             .filter(|&i| i != seed && !next.contains(&i))
             .filter(|&i| {
                 let g = &self.faces[i];
                 g.kind == f.kind
                     && same(g.area, f.area)
                     && same(g.radius, f.radius)
-                    && facing(g)
                     && edges(i) == e0
                     && (perimeter(g) - p0).abs() <= 1e-4 * p0.max(1.0)
             })
-            .collect()
+            .collect();
+        let mut out: Vec<usize> = alike
+            .iter()
+            .copied()
+            .filter(|&i| facing(&self.faces[i]))
+            .collect();
+        // Turned copies, grouped by the axis that turns the seed onto each.
+        let mut axes: Vec<(Vec3, Vec3, Vec<usize>)> = Vec::new();
+        for &i in alike.iter().filter(|i| !out.contains(i)) {
+            let Some((c, a)) = self.turn_onto(seed, i) else {
+                continue;
+            };
+            let on = |(o, b): (&Vec3, &Vec3)| {
+                len(cross(*b, a)) <= 1e-6 && len(cross(sub(c, *o), *b)) <= 1e-5
+            };
+            match axes.iter_mut().find(|(o, b, _)| on((o, b))) {
+                Some(g) => g.2.push(i),
+                None => axes.push((c, a, vec![i])),
+            }
+        }
+        for (_, _, g) in axes.into_iter().filter(|g| g.2.len() >= 2) {
+            out.extend(g);
+        }
+        out.sort();
+        out
+    }
+
+    /// The axis (a point on it and its direction) of a turn that carries face `from` onto face
+    /// `to`: found from their centres and directions (a plane's normal, a face of revolution's
+    /// axis), and checked by turning `from`'s outline onto `to`.
+    fn turn_onto(&self, from: usize, to: usize) -> Option<(Vec3, Vec3)> {
+        let (f, g) = (&self.faces[from], &self.faces[to]);
+        let dir = |h: &SolidFace| {
+            h.plane
+                .map(|p| normalize(p.normal()))
+                .or(h.axis.map(|a| normalize(a.1)))
+        };
+        let (df, dg, pf, pg) = (dir(f)?, dir(g)?, f.center?, g.center?);
+        // Every difference a turn makes is square to its axis; when the two differences lie
+        // along each other (faces looking away from the axis), the axis is square to both
+        // directions.
+        let a = cross(sub(dg, df), sub(pg, pf));
+        let a = if len(a) > 1e-9 { a } else { cross(df, dg) };
+        if len(a) < 1e-9 {
+            return None;
+        }
+        let a = normalize(a);
+        let flat = |v: Vec3| sub(v, scale(a, dot(v, a)));
+        let (uf, ug) = (normalize(flat(df)), normalize(flat(dg)));
+        let angle = dot(cross(uf, ug), a).atan2(dot(uf, ug));
+        if angle.abs() < 1e-9 {
+            return None;
+        }
+        // The axis's point: on the bisector of the centres' chord, where the turn takes one
+        // centre to the other.
+        let chord = sub(flat(pg), flat(pf));
+        let half = len(chord) / 2.0;
+        let mid = scale(add(pf, pg), 0.5);
+        let side = normalize(cross(a, chord));
+        let turn = |p: Vec3, c: Vec3| {
+            let r = sub(p, c);
+            let (cs, sn) = (angle.cos(), angle.sin());
+            let along = scale(a, dot(r, a));
+            let rr = sub(r, along);
+            add(c, add(along, add(scale(rr, cs), scale(cross(a, rr), sn))))
+        };
+        let h = half / (angle / 2.0).tan();
+        let c = [scale(side, h), scale(side, -h)]
+            .into_iter()
+            .map(|o| add(mid, o))
+            .find(|c| len(sub(turn(pf, *c), pg)) <= 1e-6 * (1.0 + len(pf)))?;
+        // The outline turned lies on `to`.
+        let fits = f
+            .loops
+            .iter()
+            .flatten()
+            .all(|p| self.face_contains(to, turn(*p, c)));
+        fits.then_some((c, a))
     }
 
     /// `seed` and every face reached from it across edges `cross` accepts (given the edge and
