@@ -71,7 +71,8 @@ impl MoveType {
 pub enum MoveEnd {
     #[default]
     Blind,
-    /// Until the first face's plane goes through a vertex, or lies on a face parallel to it.
+    /// Until the first face's plane goes through a vertex, lies on a face parallel to it, or
+    /// touches a part.
     UpTo,
 }
 

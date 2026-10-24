@@ -1244,8 +1244,8 @@ fn with_fillets(
 }
 
 /// Move face's Up to entity: how far along `u` the first face (flat) goes for its plane to
-/// pass through the vertex, or to lie on the face (flat and parallel to it), less the offset
-/// (towards where it started).
+/// pass through the vertex, to lie on the face (flat and parallel to it), or to touch the part,
+/// less the offset (towards where it started).
 fn up_to_distance(
     state: &State,
     x: &crate::direct_edit::DirectEditFeature,
@@ -1293,7 +1293,25 @@ fn up_to_distance(
             }
             t.origin
         }
-        UpTo::Part(_) => return Err("Move up to a vertex or a face".into()),
+        // A part: its nearest point ahead (its mesh's vertices: exact for flat faces), else
+        // behind.
+        UpTo::Part(id) => {
+            let s = &state
+                .part(*id)
+                .ok_or("The part to move up to no longer exists")?
+                .part
+                .solid;
+            let ts = s
+                .positions
+                .iter()
+                .map(|q| (Vector3::from(*q) - o).dot(&n) / along);
+            let ahead = ts.clone().filter(|t| *t > 1e-9).min_by(f64::total_cmp);
+            let behind = ts.filter(|t| *t < -1e-9).max_by(f64::total_cmp);
+            let t = ahead
+                .or(behind)
+                .ok_or("The part to move up to is where the face is")?;
+            return Ok(t - x.offset * t.signum());
+        }
     };
     let t = (Vector3::from(target) - o).dot(&n) / along;
     Ok(t - x.offset * t.signum())

@@ -5,7 +5,8 @@
 //!   move*; then Translate's *Direction* (the first face's normal when empty), Rotate's *Axis of
 //!   rotation*, *Angle* and **Reapply fillet**; Translate and Offset (each face along its own
 //!   normal: a wall slides, a hole's radius changes) go Blind, by the *Distance*, or *Up to
-//!   entity* (a vertex or a parallel face), stopping the *Offset distance* short of it.
+//!   entity* (a vertex, a parallel face or a part from the parts list), stopping the *Offset
+//!   distance* short of it.
 //! - **Delete face**: Heal, Cap or Leave open (what is done with the void); *Faces to delete*;
 //!   **Delete fillet faces** (the fillets next to them go too).
 //! - **Simplify**: *Faces of the parts to simplify* (faces and edges on the same surface or
@@ -85,6 +86,8 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
         let cache = world.resource::<PartCache>();
         let to = match pick {
             Pick::Face(..) => face_ref(cache, pick).map(UpTo::Face),
+            // A part from the parts list.
+            Pick::Part(part) => Some(UpTo::Part(part)),
             Pick::Vertex(part, vertex) => cache
                 .part(part)
                 .and_then(|p| p.solid.vertex(&vertex))

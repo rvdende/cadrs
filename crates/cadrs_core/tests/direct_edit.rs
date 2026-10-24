@@ -995,3 +995,23 @@ fn rotate_reapplies_the_fillet() {
         "an R2 fillet"
     );
 }
+
+#[test]
+fn offset_up_to_a_part() {
+    // Offset up to the taller block (a part): the top stops at its nearest point ahead, its
+    // top (z = 15): 15 high.
+    let (mut d, v, corner, _) = block_with_a_taller_one();
+    let top = top_face(&d.parts()[0]);
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(corner.part)),
+            faces: top,
+            ..Default::default()
+        }),
+    );
+    close(d.parts()[0].mass.unwrap().volume, v * 1.5, 1e-6);
+}
