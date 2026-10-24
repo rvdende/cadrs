@@ -1027,7 +1027,7 @@ fn std_keys(
     mut keys: MessageReader<KeyboardInput>,
     form: Option<ResMut<StdForm>>,
     focus: Res<bevy::input_focus::InputFocus>,
-    q_fields: Query<(), With<cadrs_ui::input::TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
 ) {
     let Some(mut form) = form else {
         keys.clear();

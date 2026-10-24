@@ -31,7 +31,6 @@ use cadrs_core::commands::{
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId};
 use cadrs_sketch::{ConstraintKind, PlaneRef};
 use cadrs_ui::ShortcutKey;
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, CheckboxState, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState,
@@ -757,7 +756,7 @@ fn modeling_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     kind: Res<crate::viewport::ActiveKind>,
@@ -838,7 +837,7 @@ pub(crate) fn sketch_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     session: Option<Res<SketchSession>>,

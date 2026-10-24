@@ -17,9 +17,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::{Activate, Button as WidgetButton};
 use cadrs_ui::ShortcutKey;
 use cadrs_ui::prelude::*;
-use cadrs_ui::{
-    CommandPalette, CommandPaletteClose, CommandPaletteResults, TextInputField, palette_row,
-};
+use cadrs_ui::{CommandPalette, CommandPaletteClose, CommandPaletteResults, palette_row};
 
 use crate::AppState;
 
@@ -327,7 +325,7 @@ fn open_on_key(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     mut commands: Commands,
 ) {

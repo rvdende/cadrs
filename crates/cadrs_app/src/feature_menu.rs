@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use cadrs_core::FeatureId;
 use cadrs_core::commands::{EditSketch, SetSketchVisibility};
 use cadrs_sketch::{Sketch, SketchOp, Vec2 as SVec2};
-use cadrs_ui::{Notification, TextInputField, Theme, show_notification};
+use cadrs_ui::{Notification, Theme, show_notification};
 
 use crate::sketch::SketchSession;
 use crate::{ActiveDocument, AppState};
@@ -73,7 +73,7 @@ fn paste_shortcut(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     session: Option<Res<SketchSession>>,
     clipboard: Res<SketchClipboard>,
     mut commands: Commands,

@@ -1,5 +1,6 @@
-// #67: clicking a value in the Mass properties panel copies it, with its unit, to the clipboard
-// (a toast says what was copied).
+// #67: the values in the Mass properties panel are selectable text (drag, double-click a word,
+// Ctrl+C), with a copy icon beside each, shown on hover, that copies the value with its unit
+// and turns into a ✓ for a moment. Needs a clipboard (a display) for the ExpectClipboard steps.
 Scenario(
     start: Some("document"),
     steps: [
@@ -14,11 +15,25 @@ Scenario(
         WaitFor("mass-dialog"),
         Click(xyz(50, 30, 25)),
         Wait(3),
-        Hover(ui("mass-volume")),
+        ExpectText("mass-volume", "150000.000 mm³"),
+        Hover(ui("mass-volume-field")),
         Wait(10),
-        Screenshot("01-hover-click-to-copy"),
-        Click(ui("mass-volume")),
+        Screenshot("01-hover-copy-icon"),
+        // Double-click selects the number; Ctrl+C copies just that.
+        DoubleClick(ui("mass-volume-field")),
         Wait(2),
-        Screenshot("02-copied-toast"),
+        Screenshot("02-word-selected"),
+        Key("Ctrl+C"),
+        ExpectClipboard("150000.000"),
+        // Typing into a value changes nothing.
+        Type("12"),
+        Key("Backspace"),
+        Wait(2),
+        ExpectText("mass-volume", "150000.000 mm³"),
+        // The copy icon copies the whole value.
+        Click(ui("mass-volume-copy")),
+        ExpectClipboard("150000.000 mm³"),
+        Wait(2),
+        Screenshot("03-copied-check"),
     ],
 )

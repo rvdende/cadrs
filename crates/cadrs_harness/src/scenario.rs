@@ -164,6 +164,10 @@ pub enum Step {
     /// [`Step::WaitFor`]; fails after the timeout. `ExpectText("hole-tapped-depth", "10.02 mm")`
     /// catches a typed value that got lost.
     ExpectText(String, String),
+    /// Check that the system clipboard holds exactly this text, waiting for it like
+    /// [`Step::WaitFor`]; fails after the timeout (and wherever there is no clipboard, as on a
+    /// machine with no display). `ExpectClipboard("150000.000")` after a `Key("Ctrl+C")`.
+    ExpectClipboard(String),
     /// Fails unless the UI node with this name exists and is enabled (a dialog's ✓ that
     /// should be ready before it is clicked).
     AssertEnabled(String),

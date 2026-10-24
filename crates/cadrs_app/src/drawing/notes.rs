@@ -1714,7 +1714,7 @@ fn notes_keys(
     kind: Res<ActiveKind>,
     focus: Res<InputFocus>,
     editor_focus: Option<Res<EditorFocus>>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     ann: Res<AnnotationUi>,
@@ -1874,7 +1874,7 @@ fn keep_editor_focus(
     ui: Res<NotesUi>,
     editor: Option<Res<EditorFocus>>,
     mut focus: ResMut<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
 ) {
     let Some(editor) = editor else {

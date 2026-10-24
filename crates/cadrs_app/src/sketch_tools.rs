@@ -54,7 +54,6 @@ use cadrs_sketch::{
     ArcGeom, ConstraintOf, ConstraintSpec, CurveId, CurveKind, CurveSpec, Dimension, DimensionKind,
     PlaneRef, PointId, PointRef, PointSpec, Sketch, SketchEntity, SketchOp,
 };
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::{QuickDim, QuickDimBox, QuickDimCancel, QuickDimCommit, Theme};
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
@@ -2713,7 +2712,7 @@ fn sketch_edit_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     session: Option<Res<SketchSession>>,
     doc: Option<Res<ActiveDocument>>,
@@ -2854,7 +2853,7 @@ pub(crate) fn close_passive_quick_dim(world: &mut World) {
 pub(crate) fn clear_regions_on_space(
     mut keys_in: MessageReader<KeyboardInput>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     mut regions: ResMut<crate::region_select::SketchRegionSelection>,
 ) {
     let typing = focus.get().is_some_and(|e| q_fields.contains(e));

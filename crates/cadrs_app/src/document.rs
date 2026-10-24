@@ -32,7 +32,6 @@ use cadrs_core::commands::{
 use cadrs_core::{ElementId, FeatureId};
 use cadrs_ui::Button;
 use cadrs_ui::ShortcutKey;
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -5043,7 +5042,7 @@ fn document_shortcuts(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     doc: Option<ResMut<ActiveDocument>>,
     (session, extrude): (

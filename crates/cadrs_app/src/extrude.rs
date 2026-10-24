@@ -30,7 +30,6 @@ use cadrs_core::document::{BooleanOp, DirectionRef, EdgeRef, EndType, FaceRef, U
 use cadrs_core::{ElementId, ElementKind, ExtrudeFeature, Feature, FeatureId, PartId, RegionRef};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::ShortcutKey;
-use cadrs_ui::input::TextInputField;
 
 use crate::parts::{PartCache, PartOverride};
 use crate::viewport::{
@@ -1040,7 +1039,7 @@ fn extrude_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     session: Option<Res<ExtrudeSession>>,

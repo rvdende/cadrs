@@ -32,7 +32,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/rvdende/cadrs"
 
 [workspace.dependencies]
-bevy = { version = "0.19.1", features = ["bevy_dev_tools"] }
+bevy = { version = "0.19.1", features = ["bevy_dev_tools", "system_clipboard"] }
 serde = { version = "1", features = ["derive", "rc"] }
 ron = "0.12"
 # The kernel process's messages (`cadrs_core::rebuild::process`): self-describing, so the

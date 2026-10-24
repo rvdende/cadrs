@@ -28,7 +28,6 @@ use cadrs_sketch::infer::{self, ToolContext};
 use cadrs_sketch::modify::{closest_on, extension, free_end_near, trim_removed_path};
 use cadrs_sketch::{CurveId, CurveKind, PlaneFrame, PointId, Sketch, SketchOp};
 use cadrs_ui::ShortcutKey;
-use cadrs_ui::input::TextInputField;
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
 use crate::sketch_draw::{SketchDotGizmos, SketchRubberGizmos, SketchThinGizmos};
@@ -146,7 +145,7 @@ fn is_modify(t: SketchTool) -> bool {
 fn modify_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     tool: Res<ActiveSketchTool>,
     mut t: ResMut<ModifyTool>,
     mut flow: ResMut<QuickDimFlow>,

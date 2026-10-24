@@ -30,7 +30,6 @@ use cadrs_drawing::annotation::PlacedText;
 use cadrs_drawing::sheet_sketch::{
     self as sk, Entity as DxfEntity, ItemGrip, ItemId, ItemKind, SketchItem,
 };
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::{FilePicked, Notification, Theme, show_notification};
 
 use super::annotations::{AnnTool, AnnotationUi, SceneText, blue, hover_orange, orange, square};
@@ -657,7 +656,7 @@ fn items_keys(
     keys: Res<ButtonInput<KeyCode>>,
     kind: Res<ActiveKind>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     ann: Res<AnnotationUi>,

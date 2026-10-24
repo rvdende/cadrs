@@ -31,7 +31,6 @@ use bevy::text::FontWeight;
 use bevy::ui::{UiGlobalTransform, UiTransform};
 use cadrs_core::{ElementId, FeatureId, PartId};
 use cadrs_sketch::PlaneRef;
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::{FinishAnimations, RenderSurface, Selected, Theme};
 
 use crate::camera::{self, StandardView, ViewState, ease_in_out, ray_square};
@@ -1513,7 +1512,7 @@ fn view_shortcuts(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     mut view: ResMut<ViewportView>,
     mut selection: ResMut<Selection>,

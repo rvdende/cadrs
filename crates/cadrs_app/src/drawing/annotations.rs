@@ -41,7 +41,6 @@ use cadrs_drawing::annotation::{
     Shape,
 };
 use cadrs_drawing::{Drawing, DrawingOp, View, ViewId};
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 
 use super::view_tools::{ViewTool, edit_drawing};
@@ -1220,7 +1219,7 @@ fn annotation_keys(
     keys: Res<ButtonInput<KeyCode>>,
     kind: Res<ActiveKind>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     items: Res<super::sheet_items::SheetItemsUi>,

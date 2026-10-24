@@ -82,7 +82,6 @@ use cadrs_core::assembly::commands::DeleteMateFeatures;
 use cadrs_core::assembly::{Instance, InstanceId, Pose};
 use cadrs_core::rebuild::Build;
 use cadrs_core::{Element, ElementId, Feature, FeatureId, PartId};
-use cadrs_ui::input::TextInputField;
 
 use crate::parts::{PartCache, PickFilter};
 use crate::viewport::{Pick, PlaneHighlight, Selection};
@@ -809,7 +808,7 @@ fn assembly_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_features: Query<(), With<cadrs_ui::FeatureDialogState>>,
     doc: Option<Res<ActiveDocument>>,
@@ -1007,6 +1006,7 @@ pub fn part_of(i: InstanceId) -> PartId {
 mod deletion_tests {
     use super::*;
     use cadrs_core::assembly::InstanceSource;
+    use cadrs_ui::input::TextInputField;
 
     fn scene() -> (App, ElementId, [InstanceId; 3]) {
         let mut doc = cadrs_core::Document::new("Delete instances");

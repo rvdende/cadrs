@@ -504,6 +504,10 @@ pub fn drive(world: &mut World) {
             let since = *runner.waiting.get_or_insert_with(std::time::Instant::now);
             let timed_out = since.elapsed() > runner.timeout;
             if runner.retries > TARGET_MIN_FRAMES && timed_out {
+                if let Step::ExpectClipboard(_) = &step {
+                    let got = clipboard_text(world);
+                    return fail(world, format!("{step:?}: the clipboard holds {got:?}"));
+                }
                 if let Step::ExpectText(name, _) = &step {
                     let got = node_text(world, name);
                     if !got.is_empty() {
@@ -692,6 +696,12 @@ fn expand(world: &mut World, step: &Step) -> Result<Vec<Vec<Op>>, String> {
             let got = node_text(world, name);
             if !got.iter().any(|t| t.contains(want.as_str())) {
                 return Err(name.clone());
+            }
+            vec![vec![]]
+        }
+        Step::ExpectClipboard(want) => {
+            if clipboard_text(world).as_deref() != Ok(want.as_str()) {
+                return Err("clipboard".into());
             }
             vec![vec![]]
         }
@@ -1114,6 +1124,17 @@ fn allow_ptrace() {
     // SAFETY: prctl with PR_SET_PTRACER only changes who may trace this process.
     unsafe {
         prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    }
+}
+
+/// The text on the system clipboard (or why there is none).
+fn clipboard_text(world: &mut World) -> Result<String, String> {
+    let mut clip = world
+        .get_resource_mut::<bevy::clipboard::Clipboard>()
+        .ok_or("no clipboard")?;
+    match clip.fetch_text().poll_result() {
+        Some(r) => r.map_err(|e| format!("{e:?}")),
+        None => Err("pending".into()),
     }
 }
 

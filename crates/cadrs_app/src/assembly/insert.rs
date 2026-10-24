@@ -1395,7 +1395,7 @@ fn insert_keys(
     session: Option<Res<InsertSession>>,
     std_form: Option<Res<super::standard::StdForm>>,
     focus: Res<bevy::input_focus::InputFocus>,
-    q_fields: Query<(), With<cadrs_ui::input::TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     mut commands: Commands,
 ) {
     if session.is_none() {

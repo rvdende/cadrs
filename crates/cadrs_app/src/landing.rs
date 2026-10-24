@@ -1746,7 +1746,7 @@ fn landing_shortcuts(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<LandingDialog>>,
     mut lib: ResMut<DocLibrary>,
     store: Res<DocumentStore>,

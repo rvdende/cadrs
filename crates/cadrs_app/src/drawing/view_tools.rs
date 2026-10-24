@@ -33,7 +33,6 @@ use cadrs_core::commands::EditDrawing;
 use cadrs_core::{ElementId, ElementKind, PartId};
 use cadrs_drawing::view::{Placement, auxiliary_view, placement_for, projected_view, rotate};
 use cadrs_drawing::{DrawingOp, NamedView, ObjectRef, Scale, SheetId, View, ViewId};
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Select, SelectChange, TabStrip, TabStripSelect, TreeToggle};
 
@@ -1484,7 +1483,7 @@ fn view_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     kind: Res<ActiveKind>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     mut ui: ResMut<DrawingUi>,

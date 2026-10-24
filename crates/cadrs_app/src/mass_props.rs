@@ -22,7 +22,8 @@
 //!   it (parallel axes). The inertia is about the centre of mass with axes parallel to the Part
 //!   Studio's (Onshape's convention without a reference mate connector; see
 //!   `cadrs_core::parts::mass_report`).
-//! - Clicking a value copies it, with its unit, to the clipboard (#67).
+//! - Values are selectable text (drag, double-click, Ctrl+C), and a copy icon beside each,
+//!   shown on hover, copies it with its unit (`cadrs_ui::SelectableText`, #67).
 //! - ✕ (or Esc) closes it; ✓ stays greyed, as in Onshape (there is nothing to accept).
 //! - While it shows a mass, the **centre of mass** is marked in the view with the quartered
 //!   circle (P3.6, `ex4-step18.png`, `ex3-step10.png`).
@@ -36,7 +37,8 @@ use cadrs_sketch::units::Units;
 use cadrs_ui::ShortcutKey;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
-    FeatureDialogCancel, SelectionList, SelectionListRemove, SelectionListState, TabStrip,
+    FeatureDialogCancel, SelectableText, SelectableValue, SelectionList, SelectionListRemove,
+    SelectionListState, TabStrip,
 };
 
 use crate::parts::PartCache;
@@ -79,8 +81,7 @@ impl Plugin for MassPropsPlugin {
         .add_observer(on_override)
         .add_observer(on_override_value)
         .add_observer(on_reference_activate)
-        .add_observer(on_reference_clear)
-        .add_observer(on_value_click);
+        .add_observer(on_reference_clear);
     }
 }
 
@@ -121,7 +122,6 @@ struct FacesField;
 
 /// A Face tab readout.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[require(Tooltip = Tooltip::new("Click to copy"))]
 enum FaceValue {
     Area,
     X,
@@ -203,7 +203,6 @@ struct MassDialog;
 
 /// A value cell of the panel.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[require(Tooltip = Tooltip::new("Click to copy"))]
 enum Value {
     Mass,
     Volume,
@@ -598,33 +597,14 @@ fn mass_keys(
     }
 }
 
-/// The panel's values, Part and Face tabs.
-type ValueText<'w, 's> = Query<'w, 's, &'static Text, Or<(With<Value>, With<FaceValue>)>>;
-
-/// A click on a value copies its text ("0.337 kg") to the clipboard (#67).
-fn on_value_click(click: On<Pointer<Click>>, q: ValueText, mut commands: Commands) {
-    let Ok(text) = q.get(click.entity) else {
-        return;
-    };
-    if click.button != PointerButton::Primary || text.0.is_empty() {
-        return;
-    }
-    let value = text.0.clone();
-    commands.queue(move |world: &mut World| {
-        if let Some(mut clip) = world.get_resource_mut::<bevy::clipboard::Clipboard>()
-            && let Err(e) = clip.set_text(value.clone())
-        {
-            warn!("clipboard: {e:?}");
-        }
-        let theme = world.resource::<Theme>().clone();
-        let mut c = world.commands();
-        cadrs_ui::toast::show_notification(
-            &mut c,
-            &theme,
-            cadrs_ui::toast::Notification::info(format!("Copied {value}")).name("mass-toast"),
-        );
-        world.flush();
-    });
+/// A value of the panel: selectable, right-aligned, with a copy icon on hover (#67).
+fn value_text(t: &Theme, name: String, size: f32) -> impl Bundle {
+    SelectableText::new(name)
+        .font(size, FontWeight::MEDIUM)
+        .color(t.tool_foreground)
+        .align_right()
+        .copy_button()
+        .build(t)
 }
 
 fn value_row(p: &mut ChildSpawner, t: &Theme, label: &str, label_color: Color, v: Option<Value>) {
@@ -655,12 +635,10 @@ fn value_row(p: &mut ChildSpawner, t: &Theme, label: &str, label_color: Color, v
             BorderColor::all(Color::srgb_u8(0xd8, 0xd8, 0xd8)),
         ))
         .with_children(|c| {
-            let mut text =
-                c.spawn(t.text(String::new(), 12.0, FontWeight::MEDIUM, t.tool_foreground));
             if let Some(v) = v {
-                text.insert((
+                c.spawn((
+                    value_text(t, format!("mass-{}", format!("{v:?}").to_lowercase()), 12.0),
                     v,
-                    Name::new(format!("mass-{}", format!("{v:?}").to_lowercase())),
                 ));
             }
         });
@@ -696,9 +674,12 @@ fn face_row(p: &mut ChildSpawner, t: &Theme, label: &str, label_color: Color, v:
             BorderColor::all(Color::srgb_u8(0xd8, 0xd8, 0xd8)),
         ))
         .with_child((
-            t.text(String::new(), 12.0, FontWeight::MEDIUM, t.tool_foreground),
+            value_text(
+                t,
+                format!("mass-face-{}", format!("{v:?}").to_lowercase()),
+                12.0,
+            ),
             v,
-            Name::new(format!("mass-face-{}", format!("{v:?}").to_lowercase())),
         ));
     });
 }
@@ -744,9 +725,8 @@ fn axis_row(
         ))
         .with_children(|c| {
             c.spawn((
-                t.text(String::new(), 12.0, FontWeight::MEDIUM, t.tool_foreground),
+                value_text(t, format!("mass-{}", label.to_lowercase()), 12.0),
                 v,
-                Name::new(format!("mass-{}", label.to_lowercase())),
             ));
         });
     });
@@ -936,11 +916,7 @@ fn mass_dialog(
                             },
                             BorderColor::all(Color::srgb_u8(0xd8, 0xd8, 0xd8)),
                         ))
-                        .with_child((
-                            t.text(String::new(), 12.0, FontWeight::MEDIUM, t.tool_foreground),
-                            Value::Mass,
-                            Name::new("mass-mass"),
-                        ));
+                        .with_child((value_text(t, "mass-mass".into(), 12.0), Value::Mass));
                         // The unit the mass and inertia are shown in (the workspace's to start).
                         let mut sel = cadrs_ui::Select::new("mass-unit").width(Val::Px(52.0));
                         for m in cadrs_sketch::units::MassUnit::ALL {
@@ -1014,14 +990,8 @@ fn mass_dialog(
                                         t.muted_foreground,
                                     ));
                                     cell.spawn((
-                                        t.text(
-                                            String::new(),
-                                            11.0,
-                                            FontWeight::MEDIUM,
-                                            t.tool_foreground,
-                                        ),
+                                        value_text(t, format!("mass-{}", l.to_lowercase()), 11.0),
                                         Value::Inertia(i, j),
-                                        Name::new(format!("mass-{}", l.to_lowercase())),
                                     ));
                                 });
                             }
@@ -1044,7 +1014,7 @@ fn sync_mass_panel(
     q_area: Query<Entity, With<ViewportArea>>,
     q_dialog: Query<Entity, With<MassDialog>>,
     mut q_field: Query<&mut SelectionListState, With<PartsField>>,
-    mut q_values: Query<(&Value, &mut Text), Without<InertiaHeading>>,
+    mut q_values: Query<(&Value, &mut SelectableValue)>,
     mut q_heading: Query<&mut Text, With<InertiaHeading>>,
     mut q_needs_mass: Query<&mut cadrs_ui::CheckboxState, With<NeedsMass>>,
     (mut q_override, focus, q_edit): (
@@ -1056,7 +1026,7 @@ fn sync_mass_panel(
         Query<&MassLayout>,
         Query<&mut cadrs_ui::SelectionFieldState, With<ReferenceField>>,
         Query<&mut SelectionListState, (With<FacesField>, Without<PartsField>)>,
-        Query<(&FaceValue, &mut Text), (Without<Value>, Without<InertiaHeading>)>,
+        Query<(&FaceValue, &mut SelectableValue), Without<Value>>,
         Option<Res<ActiveDocument>>,
     ),
     mut commands: Commands,

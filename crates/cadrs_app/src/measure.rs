@@ -9,7 +9,8 @@
 //!   them has a centre: a circle, an arc, a cylinder, a sphere) with its **ΔX ΔY ΔZ**
 //!   components, and the **Angle** between them where both have a direction; for one entity its
 //!   X Y Z, Length, Radius and Diameter, or Area; several edges or faces their total. The panel
-//!   can be dragged by its header; ✕ or Esc closes it.
+//!   can be dragged by its header; ✕ or Esc closes it. Its values can be selected and copied,
+//!   or copied whole with the copy icon beside each (`cadrs_ui::SelectableText`, #67).
 //! - The distance is drawn in the view between the two points it runs between; while the panel
 //!   is open its X, Y and Z components are drawn too, in the axis colours (red, green, blue).
 //! - Measuring is a view: nothing in the document changes, and nothing is undone.
@@ -400,7 +401,7 @@ fn measure_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<cadrs_ui::input::TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     q_menus: Query<(), With<cadrs_ui::menu::MenuDismissLayer>>,
     kind: Res<ActiveKind>,
@@ -584,15 +585,15 @@ fn value_row(
             },
             BorderColor::all(Color::srgb_u8(0xd8, 0xd8, 0xd8)),
         ))
-        .with_child((
-            Name::new(name.to_string()),
-            t.text(
-                value.to_string(),
-                12.0,
-                FontWeight::MEDIUM,
-                t.tool_foreground,
-            ),
-        ));
+        .with_child(
+            cadrs_ui::SelectableText::new(name.to_string())
+                .value(value)
+                .font(12.0, FontWeight::MEDIUM)
+                .color(t.tool_foreground)
+                .align_right()
+                .copy_button()
+                .build(t),
+        );
     });
 }
 

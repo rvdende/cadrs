@@ -99,7 +99,7 @@ fn ui_cursor(
     q_buttons: &Query<(&Hovered, Has<InteractionDisabled>), With<WidgetButton>>,
     q_inputs: &Query<(&Hovered, &Children), With<TextInputFrame>>,
     q_disabled: &Query<(), With<InteractionDisabled>>,
-    q_fields: &Query<(&Hovered, Has<InteractionDisabled>), With<crate::input::TextInputField>>,
+    q_fields: &Query<(&Hovered, Has<InteractionDisabled>), With<crate::input::KeyboardField>>,
 ) -> Option<CursorKind> {
     for (h, children) in q_inputs {
         if h.get() && !children.iter().any(|c| q_disabled.contains(c)) {
@@ -127,7 +127,7 @@ fn resolve_cursor(
     q_buttons: Query<(&Hovered, Has<InteractionDisabled>), With<WidgetButton>>,
     q_inputs: Query<(&Hovered, &Children), With<TextInputFrame>>,
     q_disabled: Query<(), With<InteractionDisabled>>,
-    q_fields: Query<(&Hovered, Has<InteractionDisabled>), With<crate::input::TextInputField>>,
+    q_fields: Query<(&Hovered, Has<InteractionDisabled>), With<crate::input::KeyboardField>>,
     mut state: ResMut<CursorState>,
 ) {
     // An element with its own cursor (a divider): while dragged (over anything), else while

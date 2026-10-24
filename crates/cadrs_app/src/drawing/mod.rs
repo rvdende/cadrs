@@ -63,7 +63,6 @@ use bevy::text::FontWeight;
 use cadrs_core::{ElementId, ElementKind};
 use cadrs_drawing::graphics::{Align, Weight};
 use cadrs_drawing::{Drawing, Graphics, ObjectRef, ReferenceProps, SheetId};
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::{RenderSurface, Theme};
 
 use crate::viewport::{ActiveKind, ViewportArea, ViewportRect};
@@ -654,7 +653,7 @@ pub(crate) fn drawing_keys(
     keys: Res<ButtonInput<KeyCode>>,
     kind: Res<ActiveKind>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     q_dialogs: Query<(), With<cadrs_ui::DialogRoot>>,
     doc: Option<Res<ActiveDocument>>,
     rect: Res<ViewportRect>,

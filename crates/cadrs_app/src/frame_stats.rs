@@ -11,7 +11,6 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
-use cadrs_ui::input::TextInputField;
 use cadrs_ui::{ShortcutKey, Theme};
 use serde_json::{Value, json};
 
@@ -216,7 +215,7 @@ pub fn spawn_frame_stats(p: &mut ChildSpawnerCommands, t: &Theme) {
 fn toggle_on_key(
     mut keys_in: MessageReader<KeyboardInput>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     mut stats: ResMut<FrameStats>,
 ) {
     let typing = focus.get().is_some_and(|e| q_fields.contains(e));

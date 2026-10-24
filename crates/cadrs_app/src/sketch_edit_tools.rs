@@ -36,7 +36,6 @@ use cadrs_sketch::hit::hit_test;
 use cadrs_sketch::{
     CurveId, CurveKind, CurveRef, DimensionKind, PlaneFrame, Sketch, SketchEntity, SketchOp,
 };
-use cadrs_ui::input::TextInputField;
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
 use crate::sketch_draw::SketchRubberGizmos;
@@ -441,7 +440,7 @@ const ARROW_LEN: f32 = 28.0;
 fn edit_tools_keys(
     mut keys_in: MessageReader<KeyboardInput>,
     focus: Res<InputFocus>,
-    q_fields: Query<(), With<TextInputField>>,
+    q_fields: Query<(), With<cadrs_ui::KeyboardField>>,
     keys: Res<ButtonInput<KeyCode>>,
     dialogs: (
         Query<(), With<cadrs_ui::DialogRoot>>,
