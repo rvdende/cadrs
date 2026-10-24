@@ -686,13 +686,18 @@ impl Rebuilder {
         state: &Arc<State>,
     ) -> Result<Output, String> {
         use crate::direct_edit::{DirectEditKind, MoveType};
-        use cadrs_kernel::Motion;
+        use cadrs_kernel::{FaceMove, Motion};
         if let Some(p) = x.problem() {
             return Err(p.into());
         }
         let mut groups: Vec<(PartId, BodyId, Vec<cadrs_kernel::FaceId>)> = Vec::new();
+        let reapply = x.kind == DirectEditKind::MoveFace && x.reapply_fillets;
         let picked = if x.kind == DirectEditKind::DeleteFace && x.delete_fillets {
             with_fillets(state, &x.faces)
+        } else if reapply {
+            // Onshape's Reapply fillet: a picked fillet next to a face moved is put back (at its
+            // radius) after the move, not moved or offset itself.
+            without_fillets_of(state, &x.faces)
         } else {
             x.faces.clone()
         };
@@ -711,22 +716,19 @@ impl Rebuilder {
             }
         }
         let faces: Vec<Vec<cadrs_kernel::FaceId>> = groups.iter().map(|g| g.2.clone()).collect();
-        // Rotate with Reapply fillet: each part's fillets next to the faces turned, and their
-        // radii, as the kernel's faces.
+        // Reapply fillet: each part's fillets next to the faces moved, and their radii, as the
+        // kernel's faces.
         let refillet: Vec<Vec<cadrs_kernel::Refillet>> = groups
             .iter()
             .map(|g| {
-                if x.kind != DirectEditKind::MoveFace
-                    || x.move_type != MoveType::Rotate
-                    || !x.reapply_fillets
-                {
+                if !reapply {
                     return Vec::new();
                 }
                 let ids_of = |f: &crate::document::FaceRef| {
                     face_ids(state, f).map_or(Vec::new(), |(_, ids)| ids)
                 };
                 let mut out: Vec<cadrs_kernel::Refillet> = Vec::new();
-                for (f, radius, tangent) in fillets_next_to(state, &x.faces, g.0) {
+                for (f, radius, tangent) in fillets_next_to(state, &picked, g.0) {
                     let tangent: Vec<cadrs_kernel::FaceId> =
                         tangent.iter().flat_map(ids_of).collect();
                     for face in ids_of(&f).into_iter().filter(|id| !g.2.contains(id)) {
@@ -759,21 +761,25 @@ impl Rebuilder {
                     let exact = self.part_up_to_exact(state, x, &u);
                     distance = up_to_distance(state, x, &u, exact)?;
                 }
-                Some(Motion::translation(u * distance))
+                Some(FaceMove::Motion(Motion::translation(u * distance)))
             }
             (DirectEditKind::MoveFace, MoveType::Rotate) => {
                 let a = x.axis.as_ref().ok_or("Select an axis of rotation")?;
                 let axis = self
                     .axis(before, state, a)
                     .map_err(|e| rotation_axis_error(&e))?;
-                Some(Motion::rotation(&axis, x.angle.to_radians()))
+                Some(FaceMove::Motion(Motion::rotation(
+                    &axis,
+                    x.angle.to_radians(),
+                )))
             }
             (DirectEditKind::MoveFace, MoveType::Offset) if up_to => {
                 let n = first_face_normal(state, &x.faces[0])?;
                 let exact = self.part_up_to_exact(state, x, &n);
                 distance = up_to_distance(state, x, &n, exact)?;
-                None
+                Some(FaceMove::Offset(distance))
             }
+            (DirectEditKind::MoveFace, MoveType::Offset) => Some(FaceMove::Offset(distance)),
             _ => None,
         };
         let (void, part_kind) = (
@@ -792,14 +798,7 @@ impl Rebuilder {
                 this.kernel
                     .move_faces_refilleting(body, &faces[i], m, &refillet[i])
             }
-            (DirectEditKind::MoveFace, None) => {
-                let spec = cadrs_kernel::OffsetSpec {
-                    distance: 0.0,
-                    faces: faces[i].iter().map(|f| (*f, distance)).collect(),
-                    sharp: true,
-                };
-                this.kernel.offset(body, &spec)
-            }
+            (DirectEditKind::MoveFace, None) => unreachable!("Move face always has a motion"),
         };
         self.per_part_as(id, kind.label(), state, bodies, op, |_, _| true, part_kind)
     }
@@ -1358,6 +1357,39 @@ fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vect
 /// Delete face's faces with the fillets next to them (Delete fillet faces): each fillet
 /// ([`crate::Solid::is_small_fillet`]) across an edge of a face to delete (not on through
 /// other fillets: a fully rounded boss's other fillets stay).
+/// `faces` less the fillets among them that are tangent to another of them (not a fillet):
+/// Move face's Reapply fillet puts those back after the move.
+fn without_fillets_of(
+    state: &State,
+    faces: &[crate::document::FaceRef],
+) -> Vec<crate::document::FaceRef> {
+    let at = |f: &crate::document::FaceRef| {
+        let s = &state.part(f.part)?.part.solid;
+        let (i, _) = s.resolve_face(&f.face, None, Some(f.seed)).ok()?;
+        Some((s, i))
+    };
+    let fillet =
+        |f: &crate::document::FaceRef| at(f).is_some_and(|(s, i)| s.fillet_radius(i).is_some());
+    faces
+        .iter()
+        .filter(|f| {
+            let Some((s, i)) = at(f) else {
+                return true;
+            };
+            if s.fillet_radius(i).is_none() {
+                return true;
+            }
+            !s.tangent_neighbours(i).into_iter().any(|k| {
+                let name = s.faces[k].name;
+                faces
+                    .iter()
+                    .any(|g| g.part == f.part && g.face == name && !fillet(g))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 fn with_fillets(
     state: &State,
     faces: &[crate::document::FaceRef],
@@ -1577,9 +1609,13 @@ fn fillets_next_to(
             if faces.iter().any(|g| g.face == name) || out.iter().any(|(g, ..)| g.face == name) {
                 continue;
             }
+            // Only a fillet the face runs into (tangent): one it merely ends on just follows.
+            let touching = s.tangent_neighbours(j);
+            if !touching.contains(&at) {
+                continue;
+            }
             if let (Some(r), Some(seed)) = (s.fillet_radius(j), s.face_point(j)) {
-                let tangent = s
-                    .tangent_neighbours(j)
+                let tangent = touching
                     .into_iter()
                     .filter_map(|k| {
                         Some(crate::document::FaceRef {

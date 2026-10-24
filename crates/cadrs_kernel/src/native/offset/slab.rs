@@ -203,9 +203,44 @@ fn side_surface(c: &Curve, t0: f64, t1: f64, o: &Curve) -> Surface {
     )))
 }
 
+/// How a slab's face is swept.
+#[derive(Clone, Copy)]
+enum Sweep {
+    /// By a distance along its outward normals (out of the body when positive).
+    Normal(f64),
+    /// Translated by a vector (Move face's sweeps: [`face_prism`]).
+    Along(V3),
+}
+
 /// The slab of face `fi` of `b` swept by `d` along its outward normals.
 pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
+    slab(b, fi, Sweep::Normal(d))
+}
+
+/// The solid face `fi` of `b` sweeps moving by `v` (a straight translation): bounded by the
+/// face, the face moved, and a side between each boundary edge and the edge moved (a plane, a
+/// cylinder for a circle moved along its axis, else a ruled surface). `v` must not run along
+/// the face anywhere inside it.
+pub fn face_prism(b: &Body, fi: usize, v: V3) -> Result<Body> {
+    slab(b, fi, Sweep::Along(v))
+}
+
+fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
     let f = &b.faces[fi];
+    // The sweep's length, and whether it goes out of the body (by the face's normal at a point
+    // inside it).
+    let (d, out) = match how {
+        Sweep::Normal(d) => (d, d > 0.0),
+        Sweep::Along(v) => {
+            let body = crate::native::kernel::subset(b, &[fi], false);
+            let p = crate::native::smb::face_centroids(&body)
+                .first()
+                .copied()
+                .ok_or(unsupported("a prism of a face with no area"))?;
+            let n = normal_at(&f.surf, f.sense, &p);
+            (v.norm(), v.dot(&n) > 0.0)
+        }
+    };
     // A B-spline face that is a plane, cylinder, cone or sphere is slabbed as one: its offset
     // is exact, and its poles (a cone's apex as a collapsed side) are ones the build knows.
     let seamless = {
@@ -242,8 +277,12 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         },
         s => (s.clone(), f.sense),
     };
-    let top_surf = super::sharp::offset_surface(&surf, sense, d)
-        .ok_or(unsupported("slabs of this kind of face"))?;
+    let shift = |v: V3| Affine::translation(v);
+    let top_surf = match how {
+        Sweep::Normal(d) => super::sharp::offset_surface(&surf, sense, d)
+            .ok_or(unsupported("slabs of this kind of face"))?,
+        Sweep::Along(v) => surf.transformed(&shift(v)),
+    };
     // The outward normal along a coedge at t: from its p-curve on the face's own surface (where
     // a projection near a pole could land on any meridian), else projected on the recognised one.
     let own = !matches!(f.surf, Surface::Nurbs(_)) || matches!(surf, Surface::Nurbs(_));
@@ -276,7 +315,10 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
             let n = end_normal(&|t| normal_on(c, t), e.t[k], e.t[0], e.t[1]);
             if let std::collections::hash_map::Entry::Vacant(e) = vb.entry(v) {
                 let p = b.verts[v].p;
-                let q = p + n * d;
+                let q = match how {
+                    Sweep::Normal(d) => p + n * d,
+                    Sweep::Along(v) => p + v,
+                };
                 // (A read model's vertex lies up to its tolerance off its edges: the edges'
                 // tolerances, below, cover that.)
                 e.insert(xb.vertex(p));
@@ -292,14 +334,17 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
             continue;
         }
         let (v0, v1) = (e.v[0], e.v[1]);
-        let oc = offset_curve(
-            &|t| normal_on(c, t),
-            &e.curve,
-            e.t[0],
-            e.t[1],
-            d,
-            (FIT * (1.0 + d.abs())).max(0.1 * e.tol),
-        );
+        let oc = match how {
+            Sweep::Normal(d) => offset_curve(
+                &|t| normal_on(c, t),
+                &e.curve,
+                e.t[0],
+                e.t[1],
+                d,
+                (FIT * (1.0 + d.abs())).max(0.1 * e.tol),
+            ),
+            Sweep::Along(v) => e.curve.transformed(&shift(v)),
+        };
         let a = xb
             .edge(e.curve.clone(), vb[&v0], vb[&v1])
             .ok_or(unsupported("an empty edge in a slab"))?;
@@ -307,7 +352,12 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         // surface's seam: that iso line itself, so its two uses lie on the seam's two sides
         // (a fit strays off it, most near a pole, where its p-curve can't say which side).
         let seam_iso = match &top_surf {
-            Surface::Nurbs(tn) if own && uses[&ei] > 1 && matches!(f.surf, Surface::Nurbs(_)) => {
+            Surface::Nurbs(tn)
+                if matches!(how, Sweep::Normal(_))
+                    && own
+                    && uses[&ei] > 1
+                    && matches!(f.surf, Surface::Nurbs(_)) =>
+            {
                 let (q0, q1) = (c.pc.point(e.t[0]), c.pc.point(e.t[1]));
                 let tol = tol::REL_FINE * (1.0 + q0.coords.norm() + q1.coords.norm());
                 let iso = |along_v: bool, at: f64| {
@@ -363,7 +413,25 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         if uses[&ei] > 1 {
             continue;
         }
-        let surf = side_surface(&e.curve, e.t[0], e.t[1], &oc);
+        let surf = match (how, &e.curve) {
+            // A circle moved along its axis sweeps its cylinder (one surface with a cylinder
+            // of the body's it continues, for booleans to merge).
+            (Sweep::Along(v), Curve::Circle { c, x, y, r })
+                if x.cross(y).normalize().cross(&v.normalize()).norm() < tol::ANGULAR_POINT =>
+            {
+                let z = x.cross(y).normalize();
+                Surface::Cylinder {
+                    f: Frame {
+                        o: *c,
+                        x: x.normalize(),
+                        y: z.cross(&x.normalize()),
+                        z,
+                    },
+                    r: *r,
+                }
+            }
+            _ => side_surface(&e.curve, e.t[0], e.t[1], &oc),
+        };
         // A side sampled where the curves' knots won't merge strays by its fit.
         let side =
             1.5 * stray(&surf, &e.curve, e.t[0], e.t[1]).max(stray(&surf, &oc, e.t[0], e.t[1]));
@@ -415,7 +483,7 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
     // offset face, and the fan a side between the point and it.
     for c in f.loops.iter().flatten() {
         let (ei, e) = (c.edge, &b.edges[c.edge]);
-        if !e.degenerate || et.contains_key(&ei) {
+        if !e.degenerate || et.contains_key(&ei) || matches!(how, Sweep::Along(_)) {
             continue;
         }
         let v = e.v[0];
@@ -487,12 +555,12 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
     let mut faces = vec![
         XFace {
             surf: surf.clone(),
-            sense: if d > 0.0 { !sense } else { sense },
+            sense: if out { !sense } else { sense },
             loops: map_loops(&eb),
         },
         XFace {
             surf: top_surf,
-            sense: if d > 0.0 { sense } else { !sense },
+            sense: if out { sense } else { !sense },
             loops: map_loops(&et),
         },
     ];
@@ -603,7 +671,13 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
             .map_or(0.0, |x| crate::native::mass::face_area(&body, x).0.abs())
     };
     let prismoid = d.abs() * 0.5 * (area(0) + area(1));
-    if !(volume < 2.0 * prismoid && volume > 0.5 * prismoid) {
+    // A translated face sweeps its area seen along the move: at most the face's, and less the
+    // more the face slants towards the move.
+    let fits = match how {
+        Sweep::Normal(_) => volume < 2.0 * prismoid && volume > 0.5 * prismoid,
+        Sweep::Along(_) => volume <= prismoid * (1.0 + 1e-6),
+    };
+    if !fits {
         return Err(KernelError::InvalidResult {
             op: "slab",
             why: format!(

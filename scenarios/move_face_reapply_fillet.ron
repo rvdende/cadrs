@@ -1,0 +1,48 @@
+// #22: Move face's Offset with Reapply fillet on a wall end with fillets round it. A 120 × 60 × 30
+// block with R12 fillets on its right end's top and front edges and on the top front edge running
+// along it (the three meet in a corner).
+// 01 Move face, Offset 15, the right end picked: Reapply fillet (on) under the distance; the end
+//    goes 15 out and its two fillets and the corner with it, the fillet along x 15 longer.
+// 02 Accepted: the same, as a feature.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch top rect 0 0 120 60"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(5, 5, 0)),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("30"),
+        Key("Enter"),
+        Key("F"),
+        Click(ui("fillet")),
+        WaitFor("fillet-dialog"),
+        Click(xyz(120, 30, 30)),
+        Click(xyz(120, 0, 15)),
+        Click(xyz(60, 0, 30)),
+        Click(ui("fillet-size-field")),
+        Key("Ctrl+A"),
+        Type("12"),
+        Key("Tab"),
+        Click(ui("fillet-dialog-accept")),
+        Click(ui("move-face")),
+        Click(ui("direct-edit-menu-move-face")),
+        WaitFor("move-face-dialog"),
+        Click(ui("move-face-type")),
+        Click(ui("move-face-type-option-2")),
+        Click(xyz(120, 36, 9)),
+        Click(ui("move-face-distance-field")),
+        Key("Ctrl+A"),
+        Type("15"),
+        Key("Tab"),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("01-offset-reapply-fillet"),
+        Click(ui("move-face-dialog-accept")),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("02-accepted"),
+    ],
+)

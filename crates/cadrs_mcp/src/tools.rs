@@ -230,7 +230,10 @@ pub struct AddFeature {
     /// "direction", as an extrude's, e.g. {"PlaneNormal": "Top"} (the first face's normal when
     /// left out; it must then be flat), by "distance" mm; Rotate turns them about "axis", as a
     /// revolve's, by "angle" degrees; Offset moves each along its outward normal by "distance",
-    /// negative inward: a wall moved, a bore's radius changed), or Simplify ({"faces": [a face
+    /// negative inward: a wall moved, a bore's radius changed; "reapply_fillets" (default
+    /// true) puts the fillets next to the faces back at their radius after the move; where the
+    /// faces round them can't follow, the gap is filled by the faces' sweep, e.g. a step), or
+    /// Simplify ({"faces": [a face
     /// of each part]}: faces and edges on the same surface merged, which repairs imported parts
     /// split along seams).
     #[serde(rename = "type")]

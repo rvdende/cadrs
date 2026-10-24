@@ -191,6 +191,7 @@ pub mod meshsolid;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod meshsolid;
+pub mod move_sweep;
 #[cfg(feature = "testkit")]
 pub mod nurbs;
 #[cfg(not(feature = "testkit"))]

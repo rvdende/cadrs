@@ -774,6 +774,17 @@ impl Kernel for NativeKernel {
         self.colored(r)
     }
 
+    fn move_faces_swept(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        how: &FaceMove,
+        fillets: &[Refillet],
+    ) -> Result<OpResult> {
+        let r = super::move_sweep::move_faces_swept(self, body, faces, how, fillets);
+        self.colored(r)
+    }
+
     fn shell(&mut self, body: BodyId, remove: &[FaceId], thickness: f64) -> Result<OpResult> {
         dump(
             "shell",

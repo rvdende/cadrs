@@ -768,7 +768,16 @@ pub enum VoidFill {
     Open,
 }
 
-/// A fillet next to faces Move face turns, to put back after
+/// How Move face moves its faces ([`crate::Kernel::move_faces_refilleting`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum FaceMove {
+    /// Translated or turned together ([`crate::Kernel::move_faces`]).
+    Motion(Motion),
+    /// Each offset along its own normal by this distance ([`crate::Kernel::offset`], sharp).
+    Offset(f64),
+}
+
+/// A fillet next to faces Move face moves, to put back after
 /// ([`crate::Kernel::move_faces_refilleting`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Refillet {

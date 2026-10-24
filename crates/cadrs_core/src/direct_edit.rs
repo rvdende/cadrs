@@ -120,8 +120,8 @@ pub struct DirectEditFeature {
     pub offset: f64,
     #[serde(default = "zero_mm")]
     pub offset_expr: String,
-    /// Rotate: the fillets next to the faces taken off and put back after the turn (Onshape's
-    /// "Reapply fillet", on by default).
+    /// The fillets next to the faces (and picked fillets tangent to a face moved) taken off and
+    /// put back after the move, at their radius (Onshape's "Reapply fillet", on by default).
     #[serde(default = "yes")]
     pub reapply_fillets: bool,
     /// Translate: the direction (an edge, a sketch line, a face's or plane's normal or a mate

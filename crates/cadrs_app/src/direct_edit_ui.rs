@@ -349,11 +349,6 @@ pub(crate) fn body(
                         &x.angle_expr,
                         Some(x.angle.is_sign_negative()),
                     );
-                    b.spawn(
-                        OptionRow::new("move-face-reapply-fillets", "Reapply fillet")
-                            .checked(x.reapply_fillets)
-                            .build(t),
-                    );
                 }
                 (_, end) => {
                     select_row(
@@ -398,6 +393,12 @@ pub(crate) fn body(
                     }
                 }
             }
+            // Every move type, as Onshape's (under the distance or angle).
+            b.spawn(
+                OptionRow::new("move-face-reapply-fillets", "Reapply fillet")
+                    .checked(x.reapply_fillets)
+                    .build(t),
+            );
         }
         DirectEditKind::DeleteFace => {
             select_row(

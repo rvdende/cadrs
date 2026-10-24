@@ -1287,20 +1287,69 @@ pub trait Kernel {
         }
         Ok(out)
     }
-    /// Move face's Rotate with Reapply fillet (Onshape's): the fillets next to the faces
-    /// ([`Refillet`]s) healed away ([`Kernel::delete_faces`]), the faces moved
-    /// ([`Kernel::move_faces`]), and the edges between a moved face and the faces each fillet
-    /// joined it to filleted again with that fillet's radius. Faces are `modified` from the
-    /// input's (a fillet made again from its old one), so later features keep them.
+    /// Move face where the faces round the moved ones can't just be extended to meet them:
+    /// each moved face (and the fillets it carries along) swept to where it goes, the sweeps
+    /// added to the body or cut from it, the gaps filled by their sides (see
+    /// `native::move_sweep`).
+    fn move_faces_swept(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        how: &FaceMove,
+        fillets: &[Refillet],
+    ) -> Result<OpResult> {
+        let _ = (body, faces, how, fillets);
+        Err(KernelError::Unsupported("moving faces by sweeping them"))
+    }
+
+    /// Move face (Onshape's): the faces moved with the topology kept where the faces round them
+    /// extend to meet them ([`Self::move_faces_kept`]), else swept ([`Self::move_faces_swept`]);
+    /// the first error when neither can.
     fn move_faces_refilleting(
         &mut self,
         body: BodyId,
         faces: &[FaceId],
-        motion: &Motion,
+        how: &FaceMove,
         fillets: &[Refillet],
     ) -> Result<OpResult> {
+        let kept = self.move_faces_kept(body, faces, how, fillets);
+        if kept.is_ok() {
+            return kept;
+        }
+        let swept = self.move_faces_swept(body, faces, how, fillets);
+        if let Err(e) = &swept
+            && std::env::var_os("CADRS_MOVE_DEBUG").is_some()
+        {
+            eprintln!("move face: kept: {kept:?}; swept: {e}");
+        }
+        swept.or(kept)
+    }
+
+    /// Move face with Reapply fillet (Onshape's): the fillets next to the faces ([`Refillet`]s)
+    /// healed away ([`Kernel::delete_faces`]), the faces moved ([`FaceMove`]: together, or
+    /// each offset along its own normal), and the edges between a moved face and the faces each fillet
+    /// joined it to filleted again with that fillet's radius. Faces are `modified` from the
+    /// input's (a fillet made again from its old one), so later features keep them.
+    fn move_faces_kept(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        how: &FaceMove,
+        fillets: &[Refillet],
+    ) -> Result<OpResult> {
+        let shift = |this: &mut Self, body: BodyId, faces: &[FaceId]| match how {
+            FaceMove::Motion(m) => this.move_faces(body, faces, m),
+            FaceMove::Offset(d) => this.offset(
+                body,
+                &OffsetSpec {
+                    distance: 0.0,
+                    faces: faces.iter().map(|f| (*f, *d)).collect(),
+                    sharp: true,
+                },
+            ),
+        };
         if fillets.is_empty() {
-            return self.move_faces(body, faces, motion);
+            return shift(self, body, faces);
         }
         // What each fillet joined: (moved face, other face, radius, the fillet).
         let mut joins: Vec<(FaceId, FaceId, f64, FaceId)> = Vec::new();
@@ -1366,7 +1415,7 @@ pub trait Kernel {
             Ok(())
         };
         let moved: Vec<FaceId> = faces.iter().filter_map(|f| now(&from, *f)).collect();
-        let r = self.move_faces(cur, &moved, motion);
+        let r = shift(self, cur, &moved);
         step(self, &mut cur, &mut from, &mut fresh, r, &|_| None)?;
         let mut radii: Vec<f64> = Vec::new();
         for j in &joins {
