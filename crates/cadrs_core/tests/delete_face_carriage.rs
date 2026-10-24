@@ -273,3 +273,71 @@ fn create_selection_finds_the_imported_bore_as_a_hole() {
     );
     assert_eq!(s.hole_faces(wall), vec![wall]);
 }
+
+#[test]
+fn neighbours_cut_in_pieces_heal_as_one() {
+    // A STEP file often has a face in pieces: here every face the plane x = 19 crosses is split
+    // there (a Split, Face type, by a plane 19 off Right): the
+    // bore's wall into two pieces on one cylinder, the ends into pieces on one plane, and one
+    // flat face of the teardrop in two. Deleting the teardrop's pieces still heals it round.
+    let mut f = features(Case::Plain, true);
+    let plane = Feature {
+        id: FeatureId::new(),
+        name: "Plane".into(),
+        kind: FeatureKind::Plane(cadrs_core::plane::PlaneFeature {
+            kind: cadrs_core::plane::PlaneType::Offset,
+            entities: vec![cadrs_core::plane::PlaneEntity::Plane(
+                cadrs_sketch::PlaneRef::Right,
+            )],
+            offset: 19.0,
+            offset_expr: "19 mm".into(),
+            ..Default::default()
+        }),
+        suppress_by: None,
+    };
+    f.push(plane.clone());
+    let tool = cadrs_core::parts::plane_feature_ref(&f, plane.id).expect("the plane's frame");
+    let built = Rebuilder::new().rebuild(&f);
+    let part = &built.parts[0];
+    let s = &part.solid;
+    let all: Vec<FaceRef> = (0..s.faces.len())
+        .map(|i| FaceRef {
+            part: part.id,
+            face: s.faces[i].name,
+            seed: s.face_point(i).unwrap(),
+        })
+        .collect();
+    let split = Feature {
+        id: FeatureId::new(),
+        name: "Split".into(),
+        kind: FeatureKind::Split(cadrs_core::advanced::SplitFeature {
+            split_type: cadrs_core::advanced::SplitType::Face,
+            parts: vec![part.id],
+            faces: all,
+            tool: Some(cadrs_core::advanced::SplitToolRef::Plane(tool)),
+            ..Default::default()
+        }),
+        suppress_by: None,
+    };
+    f.push(split);
+    let before = Rebuilder::new().rebuild(&f);
+    assert!(before.errors.is_empty(), "{:?}", before.errors);
+    let s = &before.parts[0].solid;
+    let cylinders = (0..s.faces.len())
+        .filter(|&i| s.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Cylinder))
+        .count();
+    assert_eq!(cylinders, 2, "the bore's wall in two");
+    let faces = v_faces(&before.parts[0]);
+    assert_eq!(faces.len(), 3, "the teardrop's faces, one in two");
+    f.push(delete_faces(faces));
+    let healed = Rebuilder::new().rebuild(&f);
+    assert!(healed.errors.is_empty(), "{:?}", healed.errors);
+    let round = Rebuilder::new().rebuild(&features(Case::Plain, false));
+    let (got, want) = (healed.parts[0].mass.unwrap(), round.parts[0].mass.unwrap());
+    close(got.volume, want.volume, 1e-6 * want.volume);
+    close(
+        got.surface_area,
+        want.surface_area,
+        1e-6 * want.surface_area,
+    );
+}
