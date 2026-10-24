@@ -367,7 +367,7 @@ impl Theme {
             overlay: Color::srgba(0.0, 0.0, 0.0, 0.79),
             shadow: Color::srgba(0.0, 0.0, 0.0, 0.45),
 
-            foreground: hex("#e3e4e6"),
+            foreground: hex("#dcdee1"),
             muted_foreground: hex("#a9abb0"),
             subtle_foreground: hex("#8b8e95"),
             disabled_foreground: hex("#7a7d84"),
@@ -451,12 +451,12 @@ impl Theme {
 
             plane_fill: hex("#3b4456"),
             plane_edge: hex("#7189ab"),
-            plane_label: hex("#a8bfe6"),
+            plane_label: hex("#cbd9f2"),
             highlight: hex("#f0a860"),
             selection_3d: hex("#ff8c1a"),
             axis_x: hex("#ff5a52"),
             axis_y: hex("#5fd255"),
-            axis_z: hex("#6278ff"),
+            axis_z: hex("#8fa2ff"),
             ..Self::light()
         }
     }
