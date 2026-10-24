@@ -4,7 +4,9 @@
 //    has slid along the block (the volume is the same).
 // 03 accepted: Move face 1 in the list.
 // 04 Rotate then back to Translate: the faces field takes the picks again (not Rotate's hidden
-//    axis field): the right face is picked (moved 1 mm out along its normal).
+//    axis field): the right face is picked (moved 1 mm out along its normal), with the drag
+//    arrow on it along its normal (Translate's, as Offset's).
+// 04b the arrow dragged out to x = 70: the face follows it, 10 mm.
 // 05 Rotate: the axis field takes the picks: the top right edge (along Y); 15°: the right face
 //    leans, the block wider at the top or the bottom.
 // 06 the opposite direction arrow: it leans the other way.
@@ -56,6 +58,10 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-back-to-translate-the-faces-take-picks"),
+        Drag(ui("move-face-arrow"), xyz(70, 30, 10)),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04b-translate-arrow-dragged"),
         Click(ui("move-face-type")),
         Click(ui("move-face-type-option-1")),
         Click(xyz(60, 20, 20)),

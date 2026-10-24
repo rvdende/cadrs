@@ -1923,10 +1923,12 @@ fn arrow_size(k: &FeatureKind) -> Option<f64> {
     }
 }
 
-/// A Move face that offsets its faces (its arrow is along the first face's normal).
+/// A Move face that moves its faces a distance (Offset, or Translate: its arrow is along the
+/// first face's normal or the direction), not up to an entity nor turned.
 fn offsets(x: &cadrs_core::direct_edit::DirectEditFeature) -> bool {
     x.kind == cadrs_core::direct_edit::DirectEditKind::MoveFace
-        && x.move_type == cadrs_core::direct_edit::MoveType::Offset
+        && x.move_type != cadrs_core::direct_edit::MoveType::Rotate
+        && x.end == cadrs_core::direct_edit::MoveEnd::Blind
 }
 
 /// A Move face's distance may go either way (inward when negative); the other sizes stay above
@@ -2100,6 +2102,7 @@ fn place_radius_arrow(
     session: Option<Res<AppliedSession>>,
     doc: Option<Res<ActiveDocument>>,
     before: Res<BeforeParts>,
+    cache: Res<crate::parts::PartCache>,
     view: Res<crate::viewport::ViewportView>,
     rect: Res<crate::viewport::ViewportRect>,
     mut arrow: ResMut<RadiusArrow>,
@@ -2218,8 +2221,9 @@ fn place_radius_arrow(
             crate::sheetmetal_ui::depth_arrow(el.features(), x, dragged.unwrap_or(x.depth))
         });
     // Move face: on the first face (on the parts before it), standing off it by the distance,
-    // pointing the way the face moves (along its outward normal, or against it when negative:
-    // then it stays on the same side of the face, turned end for end, its head at the face).
+    // pointing the way the face moves (along its outward normal, or Translate's direction as the
+    // rebuild resolved it; against it when negative: then it stays on the same side of the face,
+    // turned end for end, its head at the face).
     let face_target = session
         .as_ref()
         .filter(|s| matches!(s.kind, AppliedKind::DirectEdit(_)))
@@ -2240,6 +2244,16 @@ fn place_radius_arrow(
             let solid = &before.parts.iter().find(|p| p.id == first.part)?.solid;
             let i = solid.faces.iter().position(|f| f.name == first.face)?;
             let (p, n) = (solid.face_point(i)?, solid.face_normal(i)?);
+            let resolved = cache
+                .arrows
+                .get(&s.feature)
+                .and_then(|a| a.first())
+                .map(|(_, d)| *d);
+            let n = match (x.move_type, &x.direction) {
+                (cadrs_core::direct_edit::MoveType::Translate, Some(_)) => resolved?,
+                (cadrs_core::direct_edit::MoveType::Translate, None) => resolved.unwrap_or(n),
+                _ => n,
+            };
             let normal = Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32).normalize_or_zero();
             let distance = dragged.unwrap_or(x.distance) as f32;
             let dir = if distance < 0.0 { -normal } else { normal };

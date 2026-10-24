@@ -748,6 +748,8 @@ impl Rebuilder {
         let kind = x.kind;
         let up_to = x.end == crate::direct_edit::MoveEnd::UpTo;
         let mut distance = x.distance;
+        // Translate's direction, for the dialog's drag arrow (as the build's arrows).
+        let mut along: Option<Vector3<f64>> = None;
         let motion = match (kind, x.move_type) {
             (DirectEditKind::MoveFace, MoveType::Translate) => {
                 let u = match &x.direction {
@@ -761,6 +763,7 @@ impl Rebuilder {
                     let exact = self.part_up_to_exact(state, x, &u);
                     distance = up_to_distance(state, x, &u, exact)?;
                 }
+                along = Some(u);
                 Some(FaceMove::Motion(Motion::translation(u * distance)))
             }
             (DirectEditKind::MoveFace, MoveType::Rotate) => {
@@ -800,7 +803,14 @@ impl Rebuilder {
             }
             (DirectEditKind::MoveFace, None) => unreachable!("Move face always has a motion"),
         };
+        let seed = x.faces[0].seed;
         self.per_part_as(id, kind.label(), state, bodies, op, |_, _| true, part_kind)
+            .map(|mut o| {
+                if let Some(u) = along.and_then(|u| u.try_normalize(1e-12)) {
+                    o.arrows = vec![(seed, [u.x, u.y, u.z])];
+                }
+                o
+            })
     }
 
     /// Move face's Up to a part, exactly: each face swept along `u` (ahead and behind) is cut
