@@ -1453,10 +1453,7 @@ fn up_to_distance(
             // The mesh measures from the first face only: any other face moved could meet the
             // part first (or, for an Offset, move along another normal), so refuse those.
             if x.faces.len() > 1 {
-                return Err(
-                    "Up to this part can only be measured for several faces when all are flat"
-                        .into(),
-                );
+                return Err("Up to this part can't be measured for several faces here".into());
             }
             let s = &state
                 .part(*id)
