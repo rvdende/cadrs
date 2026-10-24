@@ -740,6 +740,21 @@ pub trait Kernel {
     /// Faces that can't be healed over are an error (`Unsupported` or `InvalidResult`), never a
     /// wrong body.
     fn delete_faces(&mut self, body: BodyId, faces: &[FaceId]) -> Result<OpResult>;
+    /// Delete face with what is done with the void ([`VoidFill`]): healed as
+    /// [`Kernel::delete_faces`], capped (a solid) or left open (a sheet).
+    fn delete_faces_with(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        void: VoidFill,
+    ) -> Result<OpResult> {
+        match void {
+            VoidFill::Heal => self.delete_faces(body, faces),
+            _ => Err(KernelError::Unsupported(
+                "capping or leaving open deleted faces",
+            )),
+        }
+    }
     /// Simplify: faces and edges lying on the same surface or curve merged (an imported part's
     /// seams and split faces), the body otherwise unchanged.
     fn simplify(&mut self, body: BodyId) -> Result<OpResult>;
@@ -1271,6 +1286,117 @@ pub trait Kernel {
             }
         }
         Ok(out)
+    }
+    /// Move face's Rotate with Reapply fillet (Onshape's): the fillets next to the faces
+    /// ([`Refillet`]s) healed away ([`Kernel::delete_faces`]), the faces moved
+    /// ([`Kernel::move_faces`]), and the edges between a moved face and the faces each fillet
+    /// joined it to filleted again with that fillet's radius. Faces are `modified` from the
+    /// input's (a fillet made again from its old one), so later features keep them.
+    fn move_faces_refilleting(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        motion: &Motion,
+        fillets: &[Refillet],
+    ) -> Result<OpResult> {
+        if fillets.is_empty() {
+            return self.move_faces(body, faces, motion);
+        }
+        // What each fillet joined: (moved face, other face, radius, the fillet).
+        let mut joins: Vec<(FaceId, FaceId, f64, FaceId)> = Vec::new();
+        for f in fillets {
+            let mut tangent = f.tangent.clone();
+            tangent.sort_by_key(|g| g.0);
+            for a in tangent.iter().filter(|a| faces.contains(a)) {
+                for b in tangent.iter().filter(|b| !faces.contains(b)) {
+                    joins.push((*a, *b, f.radius, f.face));
+                }
+            }
+        }
+        // Each face of the body being worked on, as faces of `body`.
+        let ids: Vec<FaceId> = fillets.iter().map(|f| f.face).collect();
+        let healed = self.delete_faces(body, &ids)?;
+        let mut cur = healed.bodies[0];
+        let mut from: Vec<(FaceId, FaceId)> = healed
+            .history
+            .modified
+            .iter()
+            .map(|(n, i)| (*n, i.face))
+            .collect();
+        let now = |from: &[(FaceId, FaceId)], f: FaceId| {
+            from.iter().find(|(_, o)| *o == f).map(|(n, _)| *n)
+        };
+        let step = |this: &mut Self,
+                    cur: &mut BodyId,
+                    from: &mut Vec<(FaceId, FaceId)>,
+                    r: Result<OpResult>,
+                    made: &dyn Fn(EdgeId) -> Option<FaceId>|
+         -> Result<()> {
+            let r = match r {
+                Ok(r) => r,
+                Err(e) => {
+                    this.release(*cur);
+                    return Err(e);
+                }
+            };
+            let mut next: Vec<(FaceId, FaceId)> = Vec::new();
+            for (n, i) in &r.history.modified {
+                if let Some((_, o)) = from.iter().find(|(c, _)| *c == i.face) {
+                    next.push((*n, *o));
+                }
+            }
+            for (n, o) in &r.history.generated {
+                if let Origin::FromEdge { edge, .. } = o
+                    && let Some(f) = made(*edge)
+                {
+                    next.push((*n, f));
+                }
+            }
+            this.release(*cur);
+            *cur = r.bodies[0];
+            *from = next;
+            Ok(())
+        };
+        let moved: Vec<FaceId> = faces.iter().filter_map(|f| now(&from, *f)).collect();
+        let r = self.move_faces(cur, &moved, motion);
+        step(self, &mut cur, &mut from, r, &|_| None)?;
+        let mut radii: Vec<f64> = Vec::new();
+        for j in &joins {
+            if !radii.iter().any(|r| (r - j.2).abs() < 1e-9) {
+                radii.push(j.2);
+            }
+        }
+        for r in radii {
+            let edges = self.edges(cur)?;
+            let mut chosen: Vec<(EdgeId, FaceId)> = Vec::new();
+            for &(a, b, _, fillet) in joins.iter().filter(|j| (j.2 - r).abs() < 1e-9) {
+                let (Some(a), Some(b)) = (now(&from, a), now(&from, b)) else {
+                    continue;
+                };
+                for e in &edges {
+                    if (e.faces == [Some(a), Some(b)] || e.faces == [Some(b), Some(a)])
+                        && !chosen.iter().any(|c| c.0 == e.id)
+                    {
+                        chosen.push((e.id, fillet));
+                    }
+                }
+            }
+            if chosen.is_empty() {
+                continue;
+            }
+            let ids: Vec<EdgeId> = chosen.iter().map(|c| c.0).collect();
+            let res = self.fillet(cur, &ids, r);
+            let made = |e: EdgeId| chosen.iter().find(|c| c.0 == e).map(|c| c.1);
+            step(self, &mut cur, &mut from, res, &made)?;
+        }
+        let mut history = History::default();
+        for (n, o) in &from {
+            history.modified.push((*n, InputFace { body, face: *o }));
+        }
+        Ok(OpResult {
+            bodies: vec![cur],
+            history,
+        })
     }
 
     /// The faces that share an edge with `face` (each once, in id order).

@@ -904,6 +904,139 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     })
 }
 
+/// Delete face's Cap and Leave open (Heal is [`delete_faces`]): the faces removed; left open,
+/// the rest is a sheet; capped, each opening (a loop of the sheet's free edges) gets a face
+/// ([`fill`]: a plane on a flat opening, else a fill) and the faces are sewn into a solid.
+pub fn delete_faces_with(
+    k: &mut NativeKernel,
+    body: BodyId,
+    remove: &[FaceId],
+    void: VoidFill,
+) -> Result<OpResult> {
+    if void == VoidFill::Heal {
+        return delete_faces(k, body, remove);
+    }
+    if remove.is_empty() {
+        return Err(invalid("Select the faces to delete"));
+    }
+    let b = (**k.get(body)?).clone();
+    let gone: Vec<usize> = remove.iter().map(|f| f.0 as usize).collect();
+    if gone.iter().any(|&f| f >= b.faces.len()) {
+        return Err(KernelError::InvalidParameter("unknown face".into()));
+    }
+    let keep: Vec<usize> = (0..b.faces.len()).filter(|f| !gone.contains(f)).collect();
+    if keep.is_empty() {
+        return Err(invalid("Deleting every face leaves nothing"));
+    }
+    let mut sheet = super::kernel::subset(&b, &keep, false);
+    sheet.shells.clear();
+    super::boolean::assemble_shells(&mut sheet)?;
+    let mut history = History::default();
+    for (i, &f) in keep.iter().enumerate() {
+        history.modified.push((
+            FaceId(i as u64),
+            InputFace {
+                body,
+                face: FaceId(f as u64),
+            },
+        ));
+    }
+    for &f in &gone {
+        history.deleted.push(InputFace {
+            body,
+            face: FaceId(f as u64),
+        });
+    }
+    if void == VoidFill::Open {
+        let id = k.insert(sheet);
+        return Ok(OpResult {
+            bodies: vec![id],
+            history,
+        });
+    }
+    // The openings: the sheet's free edges chained into loops at their vertices.
+    let ef = sheet.edge_faces();
+    let mut free: Vec<usize> = (0..sheet.edges.len())
+        .filter(|&e| ef[e].len() == 1)
+        .collect();
+    let mut loops: Vec<Vec<usize>> = Vec::new();
+    while let Some(first) = free.pop() {
+        let mut lp = vec![first];
+        let mut grew = true;
+        while grew {
+            grew = false;
+            let ends: Vec<usize> = lp.iter().flat_map(|&e| sheet.edges[e].v).collect();
+            if let Some(i) = free
+                .iter()
+                .position(|&e| sheet.edges[e].v.iter().any(|v| ends.contains(v)))
+            {
+                lp.push(free.remove(i));
+                grew = true;
+            }
+        }
+        loops.push(lp);
+    }
+    if loops.is_empty() {
+        return Err(invalid("The faces left have no opening to cap"));
+    }
+    let sid = k.insert(sheet.clone());
+    let mut caps = Vec::new();
+    for lp in &loops {
+        let spec = FillSpec {
+            curves: lp
+                .iter()
+                .map(|&e| FillCurve::Edge {
+                    body: sid,
+                    edge: EdgeId(e as u64),
+                })
+                .collect(),
+            source: 0,
+        };
+        match fill(k, &spec) {
+            Ok(r) => caps.extend(r.bodies),
+            Err(e) => {
+                k.release(sid);
+                for c in caps {
+                    k.release(c);
+                }
+                return Err(e);
+            }
+        }
+    }
+    k.release(sid);
+    let mut all = sheet;
+    for c in caps {
+        all.append(k.get(c)?);
+        k.release(c);
+    }
+    let mut all = sew_faces(all, tol::POINT)?;
+    all.shells.clear();
+    all.solids.clear();
+    super::boolean::assemble_shells(&mut all)?;
+    if all.solids.len() != 1 {
+        return Err(invalid("The caps don't close the part"));
+    }
+    if super::mass::body_volume(&all) < 0.0 {
+        for f in &mut all.faces {
+            Body::reverse_face(f);
+        }
+    }
+    for i in keep.len()..all.faces.len() {
+        history.generated.push((
+            FaceId(i as u64),
+            Origin::ProfileCurve {
+                region: u64::MAX,
+                curve: i as u64,
+            },
+        ));
+    }
+    let id = k.insert(all);
+    Ok(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
 /// Splits edge `e` at parameter `t` at the existing vertex `w`, in every face using it.
 fn split_edge_at(b: &mut Body, e: usize, t: f64, w: usize) {
     let old = b.edges[e].clone();

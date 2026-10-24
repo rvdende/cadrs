@@ -1409,3 +1409,164 @@ fn create_selection_fillets_leave_out_a_teardrop_bore() {
     let s = &b.parts[0].solid;
     assert!((0..s.faces.len()).all(|i| s.fillet_radius(i).is_none()));
 }
+
+#[test]
+fn create_selection_bounded_faces_and_pattern_copies() {
+    // A 40 × 20 × 10 block with two Ø6 holes and a Ø8 boss 5 high. Bounded faces from the
+    // boss's top, bounded by the block's top: the boss's top and wall. With no boundary (it
+    // doesn't close) the seed and the faces next to it. The holes' walls are copies of each
+    // other (Select patterns); the boss's wall isn't one of them.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let circle = |x: f64, y: f64, r: f64| SketchOp::AddCircle {
+        center: Vec2::new(x, y),
+        radius: r,
+        construction: false,
+    };
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![circle(8.0, 10.0, 3.0), circle(32.0, 10.0, 3.0)],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(8.0, 10.0), Vec2::new(32.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let s = d.sketch(PlaneRef::Top, vec![circle(20.0, 10.0, 4.0)]);
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(20.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Add,
+                ..samples::extrude_of(regions, 15.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    let at = |n: [f64; 3], p: [f64; 3]| index_of(&part, &face_at(&part, n, p));
+    let (boss_top, block_top) = (
+        at([0.0, 0.0, 1.0], [20.0, 10.0, 15.0]),
+        at([0.0, 0.0, 1.0], [2.0, 2.0, 10.0]),
+    );
+    let boss = s.bounded_faces(boss_top, &[block_top], &[]);
+    assert_eq!(boss.len(), 2, "{:?}", names(&part, boss));
+    let mut open = s.bounded_faces(block_top, &[], &[]);
+    open.sort();
+    let mut next = vec![block_top];
+    next.extend(s.neighbours(block_top));
+    next.sort();
+    assert_eq!(open, next);
+    let radius = |r: f64| {
+        (0..s.faces.len())
+            .filter(|&i| s.faces[i].radius.is_some_and(|x| (x - r).abs() < 1e-9))
+            .collect::<Vec<_>>()
+    };
+    let (holes, boss_wall) = (radius(3.0), radius(4.0));
+    assert_eq!(holes.len(), 2);
+    assert_eq!(s.pattern_copies(holes[0]), vec![holes[1]]);
+    assert!(s.pattern_copies(boss_wall[0]).is_empty());
+}
+
+#[test]
+fn delete_face_heals_a_fillet_against_a_cone() {
+    // A Ø20 × 10 cylinder, its top edge chamfered 2 (a cone), the edge between the chamfer and
+    // the top filleted R0.5. Deleting the fillet extends the cone and the top to meet again:
+    // the chamfered cylinder (its volume, area and 4 faces).
+    let cylinder = |d: &mut Doc| {
+        let s = d.sketch(
+            PlaneRef::Top,
+            vec![SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 10.0,
+                construction: false,
+            }],
+        );
+        let g =
+            d.d.element(d.el)
+                .unwrap()
+                .feature(s)
+                .unwrap()
+                .sketch()
+                .unwrap()
+                .geometry
+                .clone();
+        let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+        d.h.execute(
+            &mut d.d,
+            &AddExtrude {
+                element: d.el,
+                feature: FeatureId::new(),
+                extrude: samples::extrude_of(regions, 10.0),
+            },
+        )
+        .unwrap();
+        let part = d.parts()[0].clone();
+        d.add(AddFeature::chamfer(
+            d.el,
+            FeatureId::new(),
+            ChamferFeature {
+                entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 0.0, 10.0]))],
+                distance: 2.0,
+                distance_expr: "2 mm".into(),
+                ..ChamferFeature::default()
+            },
+        ));
+    };
+    let mut plain = Doc::new();
+    cylinder(&mut plain);
+    let want = plain.parts()[0].clone();
+    let mut d = Doc::new();
+    cylinder(&mut d);
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [8.0, 0.0, 10.0]))],
+            size: 0.5,
+            size_expr: "0.5 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let torus = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Torus)
+    });
+    assert_eq!(torus.len(), 1);
+    delete_faces(&mut d, torus);
+    let got = d.parts()[0].clone();
+    let (g, w) = (got.mass.unwrap(), want.mass.unwrap());
+    close(g.volume, w.volume, 1e-6 * w.volume);
+    close(g.surface_area, w.surface_area, 1e-6 * w.surface_area);
+    assert_eq!(got.solid.faces.len(), want.solid.faces.len());
+}

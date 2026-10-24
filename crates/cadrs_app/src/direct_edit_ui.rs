@@ -2,10 +2,12 @@
 //! [`crate::flat_ui`]'s and [`crate::surfacing_ui`]'s hand-on chains:
 //!
 //! - **Move face**: the move type (Translate, Rotate, Offset, as Onshape orders them); *Faces to
-//!   move*; then Translate's *Direction* (the first face's normal when empty) and *Distance*,
-//!   Rotate's *Axis of rotation* and *Angle*, or Offset's *Distance* (each face along its own
-//!   normal: a wall slides, a hole's radius changes), each with the opposite direction arrow.
-//! - **Delete face**: *Faces to delete* (the faces around them extend to close the gap).
+//!   move*; then Translate's *Direction* (the first face's normal when empty), Rotate's *Axis of
+//!   rotation*, *Angle* and **Reapply fillet**; Translate and Offset (each face along its own
+//!   normal: a wall slides, a hole's radius changes) go Blind, by the *Distance*, or *Up to
+//!   entity* (a vertex or a parallel face), stopping the *Offset distance* short of it.
+//! - **Delete face**: Heal, Cap or Leave open (what is done with the void); *Faces to delete*;
+//!   **Delete fillet faces** (the fillets next to them go too).
 //! - **Simplify**: *Faces of the parts to simplify* (faces and edges on the same surface or
 //!   curve merged).
 //!
@@ -13,9 +15,11 @@
 //! selection.
 
 use bevy::prelude::*;
-use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind, MoveType};
+use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind, MoveEnd, MoveType, VoidFill};
 use cadrs_core::document::FaceRef;
+use cadrs_core::document::{UpTo, VertexRef};
 use cadrs_core::{Feature, FeatureKind};
+use cadrs_ui::OptionRow;
 use cadrs_ui::prelude::*;
 
 use crate::ActiveDocument;
@@ -56,6 +60,14 @@ pub fn initial(
 
 /// The field that takes the picks after the move type changes: Rotate's axis (it has none
 /// until picked), else the faces (a field the dialog shows).
+/// The field that takes the picks after the end type changes: Up to entity's.
+pub fn end_field(e: MoveEnd) -> AppliedField {
+    match e {
+        MoveEnd::UpTo => AppliedField::DirectEditUpTo,
+        MoveEnd::Blind => AppliedField::DirectEditFaces,
+    }
+}
+
 pub fn first_field(t: MoveType) -> AppliedField {
     match t {
         MoveType::Rotate => AppliedField::DirectEditAxis,
@@ -69,6 +81,26 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
     let FeatureKind::DirectEdit(x) = kind else {
         return false;
     };
+    if field == AppliedField::DirectEditUpTo {
+        let cache = world.resource::<PartCache>();
+        let to = match pick {
+            Pick::Face(..) => face_ref(cache, pick).map(UpTo::Face),
+            Pick::Vertex(part, vertex) => cache
+                .part(part)
+                .and_then(|p| p.solid.vertex(&vertex))
+                .map(|v| {
+                    UpTo::Vertex(VertexRef {
+                        part,
+                        vertex,
+                        point: v.point,
+                    })
+                }),
+            _ => None,
+        };
+        let Some(to) = to else { return false };
+        set_or_clear(&mut x.up_to, to);
+        return true;
+    }
     if matches!(
         field,
         AppliedField::DirectEditDirection | AppliedField::DirectEditAxis
@@ -142,9 +174,13 @@ pub(crate) fn layout(kind: &FeatureKind) -> Option<String> {
         // The flip button's icon shows the direction, so a flip rebuilds the rows, as does the
         // move type (its fields).
         FeatureKind::DirectEdit(x) => Some(format!(
-            "direct-edit {:?} {:?} {} {}",
+            "direct-edit {:?} {:?} {:?} {:?} {} {} {} {}",
             x.kind,
             x.move_type,
+            x.end,
+            x.void,
+            x.delete_fillets,
+            x.reapply_fillets,
             // The distance as the Offset arrow reads it; the angle (no arrow) by its sign, so a
             // flipped 0° shows as flipped.
             x.distance < 0.0,
@@ -181,6 +217,18 @@ pub(crate) fn items(features: &[Feature], kind: &FeatureKind, role: Role) -> Opt
                 .map(|a| crate::revolve::axis_label(features, a))
                 .collect(),
         ),
+        (FeatureKind::DirectEdit(x), Role::DirectEditUpTo) => Some(
+            x.up_to
+                .iter()
+                .map(|t| match t {
+                    UpTo::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+                    UpTo::Vertex(v) => {
+                        format!("Vertex of {}", op_name(features, v.vertex.faces[0].op))
+                    }
+                    UpTo::Part(_) => "Part".to_string(),
+                })
+                .collect(),
+        ),
         _ => None,
     }
 }
@@ -190,6 +238,7 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
         Role::DirectEditFaces => AppliedField::DirectEditFaces,
         Role::DirectEditDirection => AppliedField::DirectEditDirection,
         Role::DirectEditAxis => AppliedField::DirectEditAxis,
+        Role::DirectEditUpTo => AppliedField::DirectEditUpTo,
         _ => return None,
     })
 }
@@ -200,7 +249,7 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::DirectEdit(x) = kind else {
         return Vec::new();
     };
-    match x.move_type {
+    let mut out: Vec<Pick> = match x.move_type {
         MoveType::Translate => x
             .direction
             .iter()
@@ -208,7 +257,21 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
             .collect(),
         MoveType::Rotate => x.axis.iter().filter_map(|a| axis_pick(cache, a)).collect(),
         MoveType::Offset => Vec::new(),
+    };
+    if x.move_type != MoveType::Rotate && x.end == MoveEnd::UpTo {
+        out.extend(x.up_to.iter().filter_map(|t| {
+            match t {
+                UpTo::Face(f) => cache
+                    .parts
+                    .iter()
+                    .find(|p| p.solid.face(&f.face).is_some())
+                    .map(|p| Pick::Face(p.id, f.face)),
+                UpTo::Vertex(v) => Some(Pick::Vertex(v.part, v.vertex)),
+                UpTo::Part(p) => Some(Pick::Part(*p)),
+            }
+        }));
     }
+    out
 }
 
 /// True when the active field takes mate connectors (their hover preview shows).
@@ -272,28 +335,78 @@ pub(crate) fn body(
                 ),
                 MoveType::Offset => {}
             }
-            match x.move_type {
-                MoveType::Rotate => number(
-                    b,
-                    t,
-                    "move-face-angle",
-                    "Angle",
-                    Role::DirectEditAngle,
-                    &x.angle_expr,
-                    Some(x.angle.is_sign_negative()),
-                ),
-                MoveType::Translate | MoveType::Offset => number(
-                    b,
-                    t,
-                    "move-face-distance",
-                    "Distance",
-                    Role::DirectEditDistance,
-                    &x.distance_expr,
-                    Some(x.distance < 0.0),
-                ),
+            match (x.move_type, x.end) {
+                (MoveType::Rotate, _) => {
+                    number(
+                        b,
+                        t,
+                        "move-face-angle",
+                        "Angle",
+                        Role::DirectEditAngle,
+                        &x.angle_expr,
+                        Some(x.angle.is_sign_negative()),
+                    );
+                    b.spawn(
+                        OptionRow::new("move-face-reapply-fillets", "Reapply fillet")
+                            .checked(x.reapply_fillets)
+                            .build(t),
+                    );
+                }
+                (_, end) => {
+                    select_row(
+                        b,
+                        t,
+                        "move-face-end",
+                        "",
+                        Role::DirectEditEnd,
+                        &opts(&MoveEnd::ALL, |e| e.label(), |_| true),
+                        index_of(&MoveEnd::ALL, &end),
+                        None,
+                    );
+                    if end == MoveEnd::UpTo {
+                        list(
+                            b,
+                            t,
+                            "move-face-up-to-field",
+                            "Up to entity",
+                            Role::DirectEditUpTo,
+                            items_of(Role::DirectEditUpTo),
+                            field == AppliedField::DirectEditUpTo,
+                        );
+                        number(
+                            b,
+                            t,
+                            "move-face-offset",
+                            "Offset distance",
+                            Role::DirectEditOffset,
+                            &x.offset_expr,
+                            None,
+                        );
+                    } else {
+                        number(
+                            b,
+                            t,
+                            "move-face-distance",
+                            "Distance",
+                            Role::DirectEditDistance,
+                            &x.distance_expr,
+                            Some(x.distance < 0.0),
+                        );
+                    }
+                }
             }
         }
         DirectEditKind::DeleteFace => {
+            select_row(
+                b,
+                t,
+                "delete-face-void",
+                "",
+                Role::DirectEditVoid,
+                &opts(&VOIDS, void_label, |_| true),
+                index_of(&VOIDS, &x.void),
+                None,
+            );
             faces_list(
                 b,
                 t,
@@ -301,6 +414,11 @@ pub(crate) fn body(
                 "Faces to delete",
                 items_of(Role::DirectEditFaces),
                 active,
+            );
+            b.spawn(
+                OptionRow::new("delete-face-fillets", "Delete fillet faces")
+                    .checked(x.delete_fillets)
+                    .build(t),
             );
         }
         DirectEditKind::Simplify => {
@@ -352,7 +470,19 @@ pub(crate) fn number_text(kind: &FeatureKind, role: Role) -> Option<String> {
     match (kind, role) {
         (FeatureKind::DirectEdit(x), Role::DirectEditDistance) => Some(x.distance_expr.clone()),
         (FeatureKind::DirectEdit(x), Role::DirectEditAngle) => Some(x.angle_expr.clone()),
+        (FeatureKind::DirectEdit(x), Role::DirectEditOffset) => Some(x.offset_expr.clone()),
         _ => None,
+    }
+}
+
+/// Delete face's treatments of the void, in Onshape's order.
+const VOIDS: [VoidFill; 3] = [VoidFill::Heal, VoidFill::Cap, VoidFill::Open];
+
+fn void_label(v: VoidFill) -> &'static str {
+    match v {
+        VoidFill::Heal => "Heal",
+        VoidFill::Cap => "Cap",
+        VoidFill::Open => "Leave open",
     }
 }
 
@@ -361,20 +491,56 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
         (FeatureKind::DirectEdit(x), Role::DirectEditType) => {
             Some(index_of(&MoveType::ALL, &x.move_type))
         }
+        (FeatureKind::DirectEdit(x), Role::DirectEditVoid) => Some(index_of(&VOIDS, &x.void)),
+        (FeatureKind::DirectEdit(x), Role::DirectEditEnd) => Some(index_of(&MoveEnd::ALL, &x.end)),
         _ => None,
     }
 }
 
 pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
-    if let (FeatureKind::DirectEdit(x), Role::DirectEditType) = (k, role) {
-        x.move_type = MoveType::ALL[i.min(MoveType::ALL.len() - 1)];
+    match (k, role) {
+        (FeatureKind::DirectEdit(x), Role::DirectEditType) => {
+            x.move_type = MoveType::ALL[i.min(MoveType::ALL.len() - 1)];
+        }
+        (FeatureKind::DirectEdit(x), Role::DirectEditVoid) => {
+            x.void = VOIDS[i.min(VOIDS.len() - 1)];
+        }
+        (FeatureKind::DirectEdit(x), Role::DirectEditEnd) => {
+            x.end = MoveEnd::ALL[i.min(MoveEnd::ALL.len() - 1)];
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn is_checkbox(name: &str) -> bool {
+    matches!(
+        name,
+        "delete-face-fillets-checkbox" | "move-face-reapply-fillets-checkbox"
+    )
+}
+
+/// A checkbox by its name: its undo label, or `None` if it isn't one of these.
+pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'static str> {
+    match (k, name) {
+        (FeatureKind::DirectEdit(x), "delete-face-fillets-checkbox") => {
+            x.delete_fillets = on;
+            Some("Delete fillet faces")
+        }
+        (FeatureKind::DirectEdit(x), "move-face-reapply-fillets-checkbox") => {
+            x.reapply_fillets = on;
+            Some("Reapply fillet")
+        }
+        _ => None,
     }
 }
 
 /// The distance and the angle: either sign (negative moves the faces the other way, inward
 /// for an offset).
 pub(crate) fn is_signed(role: Role) -> bool {
-    matches!(role, Role::DirectEditDistance | Role::DirectEditAngle)
+    matches!(
+        role,
+        Role::DirectEditDistance | Role::DirectEditAngle | Role::DirectEditOffset
+    )
 }
 
 pub(crate) fn is_angle(role: Role) -> bool {
@@ -385,6 +551,7 @@ pub(crate) fn number_label(role: Role) -> Option<&'static str> {
     match role {
         Role::DirectEditDistance => Some("Distance"),
         Role::DirectEditAngle => Some("Angle"),
+        Role::DirectEditOffset => Some("Offset distance"),
         _ => None,
     }
 }
@@ -401,6 +568,10 @@ pub(crate) fn set_number(k: &mut FeatureKind, role: Role, v: f64, expr: String) 
         Role::DirectEditAngle => {
             x.angle = v;
             x.angle_expr = expr;
+        }
+        Role::DirectEditOffset => {
+            x.offset = v;
+            x.offset_expr = expr;
         }
         _ => {}
     }
@@ -431,6 +602,7 @@ pub(crate) fn remove(k: &mut FeatureKind, role: Role, i: usize) {
         }
         Role::DirectEditDirection => x.direction = None,
         Role::DirectEditAxis => x.axis = None,
+        Role::DirectEditUpTo => x.up_to = None,
         _ => {}
     }
 }

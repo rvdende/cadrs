@@ -1087,16 +1087,27 @@ impl Surface {
                 if (pa - pb).norm() > tol * 10.0 {
                     return None;
                 }
-                let da = a.z * aa.cos() + V3::zeros();
-                let _ = da;
-                let open_a = if aa.sin() > 0.0 { a.z } else { -a.z };
-                let open_b = if ab.sin() > 0.0 { b.z } else { -b.z };
-                if open_a.dot(&open_b) < 1.0 - tol::ANGULAR
+                // It opens (its radius r + v sin a grows) towards v cos a·z with v of the sign of
+                // sin a: towards z when sin a and cos a agree. One cone can be written with a
+                // and with a ± π (its frame's origin elsewhere on the axis).
+                let opens = |f: &Frame, ang: f64| {
+                    if ang.sin() * ang.cos() > 0.0 {
+                        f.z
+                    } else {
+                        -f.z
+                    }
+                };
+                if opens(a, *aa).dot(&opens(b, *ab)) < 1.0 - tol::ANGULAR
                     || (aa.sin().abs() - ab.sin().abs()).abs() > tol::ANGULAR
                 {
                     return None;
                 }
-                Some(a.right_handed() == b.right_handed())
+                // The natural normal Su × Sv is ρ(cos a·radial − sin a·z) in a right-handed
+                // frame: its side of the surface turns with the frame and with cos a's sign.
+                Some(
+                    (a.right_handed() == b.right_handed())
+                        == ((aa.cos() > 0.0) == (ab.cos() > 0.0)),
+                )
             }
             (Surface::Revolution { f: a, m: ma }, Surface::Revolution { f: b, m: mb }) => {
                 // About the same axis, each meridian on the other surface (two lines that are

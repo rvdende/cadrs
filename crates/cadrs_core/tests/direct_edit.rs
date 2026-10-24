@@ -727,3 +727,271 @@ fn moving_faces_too_far_fails_without_crashing() {
     sweep_moves(boss, top(15.0), steps(-12.0, 5.0, 0.5));
     sweep_moves(boss, is_cylinder, steps(-6.0, 8.0, 0.5));
 }
+
+#[test]
+fn delete_face_caps_a_hole() {
+    // Cap: the hole's wall deleted and its two openings capped: the whole block again, the caps
+    // faces of their own (8).
+    let (mut d, _) = block_with_hole();
+    let wall = faces_where(&d.parts()[0], is_cylinder);
+    d.add(
+        "Delete face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::DeleteFace,
+            faces: wall,
+            void: cadrs_core::direct_edit::VoidFill::Cap,
+            ..Default::default()
+        }),
+    );
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, 8000.0, 1e-6);
+    assert_eq!(part.solid.faces.len(), 8);
+}
+
+#[test]
+fn delete_face_leaves_the_top_open() {
+    // Leave open: the top deleted, nothing put in its place: a surface of the other 6 faces
+    // (the bottom, 4 sides and the hole's wall).
+    let (mut d, _) = block_with_hole();
+    let top = top_face(&d.parts()[0]);
+    d.add(
+        "Delete face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::DeleteFace,
+            faces: top,
+            void: cadrs_core::direct_edit::VoidFill::Open,
+            ..Default::default()
+        }),
+    );
+    let part = d.parts()[0].clone();
+    assert_eq!(part.kind, cadrs_core::parts::PartKind::Surface);
+    assert_eq!(part.solid.faces.len(), 6);
+}
+
+#[test]
+fn delete_face_takes_the_fillets_next_to_it() {
+    // A Ø10 boss 5 high on a 40 × 20 × 10 block, its base edge filleted R1 (a torus). Deleting
+    // the boss's wall and top with Delete fillet faces (the default) takes the fillet too: the
+    // plain block, 8000, 6 faces. With it off, the fillet is left with nothing to heal to.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let s = d.sketch(PlaneRef::Top, vec![circle(20.0, 10.0, 5.0)]);
+    d.extrude(s, &[Vec2::new(20.0, 10.0)], |e| {
+        e.op = BooleanOp::Add;
+        e.depth = 15.0;
+        e.depth_expr = "15 mm".into();
+    });
+    let part = d.parts()[0].clone();
+    let base = part
+        .solid
+        .edges
+        .iter()
+        .min_by(|a, b| {
+            a.distance([25.0, 10.0, 10.0])
+                .total_cmp(&b.distance([25.0, 10.0, 10.0]))
+        })
+        .unwrap();
+    d.add(
+        "Fillet",
+        FeatureKind::Fillet(cadrs_core::applied::FilletFeature {
+            entities: vec![cadrs_core::applied::EdgeOrFace::Edge(EdgeRef {
+                part: part.id,
+                edge: base.name,
+                seed: [25.0, 10.0, 10.0],
+            })],
+            size: 1.0,
+            size_expr: "1 mm".into(),
+            ..Default::default()
+        }),
+    );
+    let part = d.parts()[0].clone();
+    let boss = faces_where(&part, |f| {
+        is_cylinder(f) || f.plane.is_some_and(|p| (p.origin[2] - 15.0).abs() < 1e-9)
+    });
+    assert_eq!(boss.len(), 2, "the boss's wall and top");
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::DeleteFace,
+        faces: boss,
+        delete_fillets: false,
+        ..Default::default()
+    };
+    let f = d.add("Delete face", FeatureKind::DirectEdit(x.clone()));
+    assert!(d.build().errors.iter().any(|(id, _)| *id == f));
+    x.delete_fillets = true;
+    d.set(f, FeatureKind::DirectEdit(x));
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, 8000.0, 1e-6);
+    assert_eq!(part.solid.faces.len(), 6);
+}
+
+/// The edge of `part` nearest `p`, as a reference.
+fn edge_near(part: &Part, p: [f64; 3]) -> EdgeRef {
+    let e = part
+        .solid
+        .edges
+        .iter()
+        .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)))
+        .unwrap();
+    assert!(e.distance(p) < 1e-3, "no edge at {p:?}");
+    EdgeRef {
+        part: part.id,
+        edge: e.name,
+        seed: p,
+    }
+}
+
+/// The block with the hole and a 15 high block beside it (x 50..60): its top corner and top.
+fn block_with_a_taller_one() -> (Doc, f64, cadrs_core::document::VertexRef, FaceRef) {
+    let (mut d, v) = block_with_hole();
+    d.block(50.0, 0.0, 60.0, 10.0, 15.0);
+    let parts = d.parts();
+    let tall = parts.iter().find(|p| p.solid.faces.len() == 6).unwrap();
+    let corner = tall
+        .solid
+        .vertices
+        .iter()
+        .find(|x| {
+            let p = x.point;
+            (p[0] - 50.0).abs() < 1e-9 && p[1].abs() < 1e-9 && (p[2] - 15.0).abs() < 1e-9
+        })
+        .unwrap();
+    let corner = cadrs_core::document::VertexRef {
+        part: tall.id,
+        vertex: corner.name,
+        point: corner.point,
+    };
+    let top = faces_where(tall, |f| {
+        f.plane
+            .is_some_and(|p| p.normal()[2] > 0.5 && (p.origin[2] - 15.0).abs() < 1e-9)
+    })[0];
+    (d, v, corner, top)
+}
+
+#[test]
+fn translate_up_to_a_vertex_with_an_offset() {
+    // The block's top translated up to the taller block's corner (z = 15): 15 high (1.5 V);
+    // with an offset distance of 2 it stops 2 short: 13 high (1.3 V).
+    let (mut d, v, corner, _) = block_with_a_taller_one();
+    let top = top_face(&d.parts()[0]);
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::MoveFace,
+        move_type: MoveType::Translate,
+        end: cadrs_core::direct_edit::MoveEnd::UpTo,
+        up_to: Some(cadrs_core::document::UpTo::Vertex(corner)),
+        faces: top,
+        ..Default::default()
+    };
+    let f = d.add("Move face", FeatureKind::DirectEdit(x.clone()));
+    let first = |d: &Doc| d.parts()[0].mass.unwrap().volume;
+    close(first(&d), v * 1.5, 1e-6);
+    x.offset = 2.0;
+    x.offset_expr = "2 mm".into();
+    d.set(f, FeatureKind::DirectEdit(x));
+    close(first(&d), v * 1.3, 1e-6);
+}
+
+#[test]
+fn offset_up_to_a_parallel_face_and_not_a_slanted_one() {
+    // Offset up to the taller block's top: 15 high. Translate up to one of its sides (not
+    // parallel to the top) is refused with a reason.
+    let (mut d, v, _, tall_top) = block_with_a_taller_one();
+    let top = top_face(&d.parts()[0]);
+    let mut x = DirectEditFeature {
+        kind: DirectEditKind::MoveFace,
+        move_type: MoveType::Offset,
+        end: cadrs_core::direct_edit::MoveEnd::UpTo,
+        up_to: Some(cadrs_core::document::UpTo::Face(tall_top)),
+        faces: top,
+        ..Default::default()
+    };
+    let f = d.add("Move face", FeatureKind::DirectEdit(x.clone()));
+    close(d.parts()[0].mass.unwrap().volume, v * 1.5, 1e-6);
+    let parts = d.parts();
+    let tall = parts.iter().find(|p| p.solid.faces.len() == 6).unwrap();
+    let side = faces_where(tall, |f| f.plane.is_some_and(|p| p.normal()[0] > 0.5))[0];
+    x.move_type = MoveType::Translate;
+    x.up_to = Some(cadrs_core::document::UpTo::Face(side));
+    d.set(f, FeatureKind::DirectEdit(x));
+    assert!(
+        d.build()
+            .errors
+            .iter()
+            .any(|(id, e)| *id == f && e.contains("isn't parallel")),
+        "{:?}",
+        d.build().errors
+    );
+}
+
+#[test]
+fn rotate_reapplies_the_fillet() {
+    // A 40 × 20 × 10 block, the edge between its front (y = 0) and top filleted R2; the front
+    // turned 10° about its bottom edge with Reapply fillet: the same as turning the plain front
+    // and filleting that edge R2 after (volume), with an R2 fillet there still.
+    let fillet = |d: &mut Doc| {
+        // The edge between the front (facing −y, turned or not) and the top.
+        let part = d.parts()[0].clone();
+        let face = |pick: &dyn Fn([f64; 3]) -> bool| {
+            part.solid
+                .faces
+                .iter()
+                .find(|f| f.plane.is_some_and(|p| pick(p.normal())))
+                .unwrap()
+                .name
+        };
+        let (front, top) = (face(&|n| n[1] < -0.5), face(&|n| n[2] > 0.9));
+        let e = part
+            .solid
+            .edges
+            .iter()
+            .find(|e| e.name.touches(&front) && e.name.touches(&top))
+            .unwrap();
+        let edge = EdgeRef {
+            part: part.id,
+            edge: e.name,
+            seed: e.midpoint(),
+        };
+        d.add(
+            "Fillet",
+            FeatureKind::Fillet(cadrs_core::applied::FilletFeature {
+                entities: vec![cadrs_core::applied::EdgeOrFace::Edge(edge)],
+                size: 2.0,
+                size_expr: "2 mm".into(),
+                ..Default::default()
+            }),
+        );
+    };
+    let turn = |d: &mut Doc| {
+        let part = d.parts()[0].clone();
+        let front = faces_where(&part, |f| f.plane.is_some_and(|p| p.normal()[1] < -0.5));
+        d.add(
+            "Move face",
+            FeatureKind::DirectEdit(DirectEditFeature {
+                kind: DirectEditKind::MoveFace,
+                move_type: MoveType::Rotate,
+                faces: front,
+                axis: Some(AxisRef::Edge(edge_near(&part, [20.0, 0.0, 0.0]))),
+                angle: 10.0,
+                angle_expr: "10 deg".into(),
+                ..Default::default()
+            }),
+        );
+    };
+    let mut a = Doc::new();
+    a.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    fillet(&mut a);
+    turn(&mut a);
+    let mut b = Doc::new();
+    b.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    turn(&mut b);
+    fillet(&mut b);
+    let (pa, pb) = (a.parts()[0].clone(), b.parts()[0].clone());
+    close(pa.mass.unwrap().volume, pb.mass.unwrap().volume, 1e-6);
+    assert_eq!(pa.solid.faces.len(), 7);
+    assert!(
+        (0..pa.solid.faces.len()).any(|i| pa
+            .solid
+            .fillet_radius(i)
+            .is_some_and(|r| (r - 2.0).abs() < 1e-9)),
+        "an R2 fillet"
+    );
+}

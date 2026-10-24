@@ -11,7 +11,9 @@
 //! that go with it, as Onshape's rules ([`FaceRule`]): **Protrusion** (across convex or smooth
 //! edges), **Pocket** (concave or smooth: "9 faces selected" for the Reflector's filleted
 //! pocket), **Hole** (the round hole's walls, floors and point), **Fillets** (every fillet of
-//! the seed's radius) and **Tangent connected**. Opened from a pattern's, mirror's or direct
+//! the seed's radius), **Tangent connected** and **Bounded faces** (the faces between the seed
+//! and the faces or edges picked after it). **Select patterns** adds the rule's faces from every
+//! face like the seed (a pattern's copies). Opened from a pattern's, mirror's or direct
 //! edit's Create selection button, Add selection puts them in its faces (#22: an imported
 //! part's pocket or boss deleted or moved in one go).
 
@@ -40,6 +42,7 @@ impl Plugin for CreateSelectionPlugin {
             .add_observer(on_add)
             .add_observer(on_tab)
             .add_observer(on_rule)
+            .add_observer(on_patterns)
             .add_systems(
                 Update,
                 (create_selection_picks, sync_panel)
@@ -63,15 +66,17 @@ pub enum FaceRule {
     Hole,
     Fillets,
     TangentConnected,
+    Bounded,
 }
 
 impl FaceRule {
-    pub const ALL: [FaceRule; 5] = [
+    pub const ALL: [FaceRule; 6] = [
         FaceRule::Protrusion,
         FaceRule::Pocket,
         FaceRule::Hole,
         FaceRule::Fillets,
         FaceRule::TangentConnected,
+        FaceRule::Bounded,
     ];
 
     pub fn label(self) -> &'static str {
@@ -81,12 +86,21 @@ impl FaceRule {
             FaceRule::Hole => "Hole",
             FaceRule::Fillets => "Fillets",
             FaceRule::TangentConnected => "Tangent connected",
+            FaceRule::Bounded => "Bounded faces",
         }
     }
 
-    /// The faces (indices) the rule selects from the seed face `i`.
-    pub fn faces(self, solid: &cadrs_core::Solid, i: usize) -> Vec<usize> {
+    /// The faces (indices) the rule selects from the seed face `i` (Bounded faces: with the
+    /// boundary's faces and edges).
+    pub fn faces(
+        self,
+        solid: &cadrs_core::Solid,
+        i: usize,
+        bound_faces: &[usize],
+        bound_edges: &[EdgeName],
+    ) -> Vec<usize> {
         match self {
+            FaceRule::Bounded => solid.bounded_faces(i, bound_faces, bound_edges),
             FaceRule::Protrusion => solid.protrusion_faces(i),
             FaceRule::Pocket => solid.pocket_faces(i),
             FaceRule::Hole => solid.hole_faces(i),
@@ -104,6 +118,11 @@ pub struct CreateSelection {
     pub faces_mode: bool,
     /// The Faces tab's rule.
     pub rule: FaceRule,
+    /// Bounded faces' boundary: faces and edges picked after the seed.
+    pub bound_faces: Vec<(PartId, cadrs_sketch::FaceName)>,
+    pub bound_edges: Vec<(PartId, EdgeName)>,
+    /// Select patterns: the rule's faces from the faces like the seed too.
+    pub patterns: bool,
     pub seed: Option<(PartId, EdgeName)>,
     pub edges: Vec<(PartId, EdgeName)>,
     pub face_seed: Option<(PartId, cadrs_sketch::FaceName)>,
@@ -120,6 +139,9 @@ struct SeedField;
 struct CountText;
 
 #[derive(Component)]
+struct BoundField;
+
+#[derive(Component)]
 struct AddButton;
 
 /// Opens the panel (the viewport menu's Select → Create selection…) on its Edges tab.
@@ -131,14 +153,7 @@ pub fn open(world: &mut World) {
 /// the selection shows the rule's faces, ready for Add selection.
 pub fn open_from_face(world: &mut World, part: PartId, face: cadrs_sketch::FaceName) {
     open_with(world, true);
-    let Some(rule) = world.get_resource::<CreateSelection>().map(|c| c.rule) else {
-        return;
-    };
-    let faces = faces_of(world, rule, part, face);
-    if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
-        c.face_seed = Some((part, face));
-        c.faces = faces;
-    }
+    update(world, |c| c.face_seed = Some((part, face)));
 }
 
 /// Opens the panel on its Faces tab (Pocket), as a pattern's or mirror's button does.
@@ -204,7 +219,6 @@ fn open_with(world: &mut World, faces_mode: bool) {
                                 .fold(Select::new("create-selection-rule"), |s, r| {
                                     s.option(r.label(), true)
                                 })
-                                .option("Bounded faces", false)
                                 .selected(
                                     FaceRule::ALL
                                         .iter()
@@ -226,9 +240,17 @@ fn open_with(world: &mut World, faces_mode: bool) {
                                 .active(true)
                                 .build(t),
                         ));
+                        if faces_mode {
+                            c.spawn((
+                                BoundField,
+                                SelectionList::new("create-selection-boundary")
+                                    .placeholder("Boundary (Bounded faces)")
+                                    .build(t),
+                            ));
+                        }
                         c.spawn(
                             OptionRow::new("create-selection-patterns", "Select patterns")
-                                .disabled(true)
+                                .disabled(!faces_mode)
                                 .build(t),
                         );
                         c.spawn((
@@ -314,43 +336,75 @@ fn on_rule(ev: On<cadrs_ui::SelectChange>, q: Query<&Name>, mut commands: Comman
         return;
     };
     commands.queue(move |world: &mut World| {
-        let Some(c) = world.get_resource::<CreateSelection>() else {
-            return;
-        };
-        if !c.faces_mode {
-            return;
-        }
-        let faces = c
-            .face_seed
-            .map(|(part, face)| faces_of(world, rule, part, face))
-            .unwrap_or_default();
-        if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
-            c.rule = rule;
-            c.faces = faces;
-        }
+        update(world, |c| c.rule = rule);
     });
 }
 
-/// The faces `rule` selects from the seed face of `part`.
-fn faces_of(
-    world: &World,
-    rule: FaceRule,
-    part: PartId,
-    face: cadrs_sketch::FaceName,
-) -> Vec<(PartId, cadrs_sketch::FaceName)> {
-    world
-        .resource::<PartCache>()
-        .part(part)
-        .and_then(|p| {
-            let i = p.solid.faces.iter().position(|f| f.name == face)?;
-            Some(
-                rule.faces(&p.solid, i)
-                    .into_iter()
-                    .map(|j| (part, p.solid.faces[j].name))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default()
+/// Select patterns.
+fn on_patterns(ev: On<cadrs_ui::CheckboxChange>, q: Query<&Name>, mut commands: Commands) {
+    if !q
+        .get(ev.entity)
+        .is_ok_and(|n| n.as_str() == "create-selection-patterns-checkbox")
+    {
+        return;
+    }
+    let on = ev.checked;
+    commands.queue(move |world: &mut World| update(world, |c| c.patterns = on));
+}
+
+/// Changes the Faces tab's inputs and selects again.
+fn update(world: &mut World, change: impl FnOnce(&mut CreateSelection)) {
+    let Some(mut c) = world.get_resource::<CreateSelection>().cloned() else {
+        return;
+    };
+    if !c.faces_mode {
+        return;
+    }
+    change(&mut c);
+    c.faces = select_faces(world, &c);
+    world.insert_resource(c);
+}
+
+/// The faces the Faces tab selects: the rule's from the seed (with the boundary), and with
+/// Select patterns from each face like the seed.
+fn select_faces(world: &World, c: &CreateSelection) -> Vec<(PartId, cadrs_sketch::FaceName)> {
+    let Some((part, face)) = c.face_seed else {
+        return Vec::new();
+    };
+    let Some(p) = world.resource::<PartCache>().part(part) else {
+        return Vec::new();
+    };
+    let s = &p.solid;
+    let index = |n: cadrs_sketch::FaceName| s.faces.iter().position(|f| f.name == n);
+    let Some(seed) = index(face) else {
+        return Vec::new();
+    };
+    let bound_faces: Vec<usize> = c
+        .bound_faces
+        .iter()
+        .filter(|(q, _)| *q == part)
+        .filter_map(|(_, f)| index(*f))
+        .collect();
+    let bound_edges: Vec<EdgeName> = c
+        .bound_edges
+        .iter()
+        .filter(|(q, _)| *q == part)
+        .map(|(_, e)| *e)
+        .collect();
+    let mut seeds = vec![seed];
+    if c.patterns {
+        seeds.extend(s.pattern_copies(seed));
+    }
+    let mut out: Vec<(PartId, cadrs_sketch::FaceName)> = Vec::new();
+    for i in seeds {
+        for j in c.rule.faces(s, i, &bound_faces, &bound_edges) {
+            let f = (part, s.faces[j].name);
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+    }
+    out
 }
 
 /// While the panel is open, a clicked edge is its seed.
@@ -365,24 +419,48 @@ fn create_selection_picks(
     for p in picks.read() {
         if let Some(Pick::Face(part, face)) = p.0 {
             commands.queue(move |world: &mut World| {
-                let Some(rule) = world
-                    .get_resource::<CreateSelection>()
-                    .filter(|c| c.faces_mode)
-                    .map(|c| c.rule)
-                else {
-                    return;
-                };
-                let faces = faces_of(world, rule, part, face);
-                if let Some(mut c) = world.get_resource_mut::<CreateSelection>() {
-                    c.face_seed = Some((part, face));
-                    c.faces = faces;
-                }
+                update(world, |c| {
+                    let f = (part, face);
+                    // Bounded faces: after the seed, faces are the boundary (the seed again
+                    // starts over).
+                    if c.rule == FaceRule::Bounded && c.face_seed.is_some() {
+                        if c.face_seed == Some(f) {
+                            c.face_seed = None;
+                            c.bound_faces.clear();
+                            c.bound_edges.clear();
+                        } else if let Some(i) = c.bound_faces.iter().position(|g| *g == f) {
+                            c.bound_faces.remove(i);
+                        } else {
+                            c.bound_faces.push(f);
+                        }
+                    } else {
+                        c.face_seed = Some(f);
+                    }
+                });
             });
             continue;
         }
         let Some(Pick::Edge(part, edge)) = p.0 else {
             continue;
         };
+        // Bounded faces: an edge of the boundary.
+        if create
+            .as_ref()
+            .is_some_and(|c| c.faces_mode && c.rule == FaceRule::Bounded)
+        {
+            commands.queue(move |world: &mut World| {
+                update(world, |c| {
+                    let e = (part, edge);
+                    match c.bound_edges.iter().position(|g| *g == e) {
+                        Some(i) => {
+                            c.bound_edges.remove(i);
+                        }
+                        None => c.bound_edges.push(e),
+                    }
+                });
+            });
+            continue;
+        }
         commands.queue(move |world: &mut World| {
             let edges =
                 crate::advanced::tangent_connected(world.resource::<PartCache>(), part, edge);
@@ -398,7 +476,8 @@ fn create_selection_picks(
 fn sync_panel(
     create: Option<Res<CreateSelection>>,
     doc: Option<Res<ActiveDocument>>,
-    mut q_field: Query<&mut SelectionListState, With<SeedField>>,
+    mut q_field: Query<&mut SelectionListState, (With<SeedField>, Without<BoundField>)>,
+    mut q_bounds: Query<&mut SelectionListState, (With<BoundField>, Without<SeedField>)>,
     mut q_count: Query<&mut Text, With<CountText>>,
     mut selection: ResMut<Selection>,
     session: Option<Res<AppliedSession>>,
@@ -433,6 +512,21 @@ fn sync_panel(
     for mut l in &mut q_field {
         if l.items != items {
             l.items = items.clone();
+        }
+    }
+    let bounds: Vec<String> = c
+        .bound_faces
+        .iter()
+        .map(|(_, f)| format!("Face of {}", name(f.op)))
+        .chain(
+            c.bound_edges
+                .iter()
+                .map(|(_, e)| format!("Edge of {}", name(crate::parts::edge_maker(&features, e)))),
+        )
+        .collect();
+    for mut l in &mut q_bounds {
+        if l.items != bounds {
+            l.items = bounds.clone();
         }
     }
     let (n, what) = if c.faces_mode {

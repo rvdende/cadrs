@@ -14,8 +14,8 @@
 //! The heal is right when the result has no face of its own: each face continues a face of
 //! the body (only extended surfaces bound the gap), none is a deleted face's, and it is one
 //! solid. A box too small leaves its own faces in the gap; then the next, larger box is tried,
-//! and a cut that doesn't heal is tried as a protrusion. Neighbours other than planes and
-//! cylinders are refused for now.
+//! and a cut that doesn't heal is tried as a protrusion. Neighbours other than planes,
+//! cylinders, cones and spheres (B-spline faces) are refused for now.
 
 use super::kernel::NativeKernel;
 use super::math::*;
@@ -36,6 +36,16 @@ enum Side {
     Plane { o: P3, n: V3, x: V3 },
     /// A cylinder about `o` + t·`z`, radius `r`.
     Cylinder { o: P3, z: V3, x: V3, r: f64 },
+    /// A cone about `o` + t·`z`: radius `r` at `o`, growing by `tan` per unit along `z`.
+    Cone {
+        o: P3,
+        z: V3,
+        x: V3,
+        r: f64,
+        tan: f64,
+    },
+    /// A sphere about `o`, radius `r`.
+    Sphere { o: P3, z: V3, x: V3, r: f64 },
 }
 
 impl Side {
@@ -54,8 +64,23 @@ impl Side {
                 x: fr.x,
                 r: *r,
             }),
+            // `o + (r + v sin a)(…) + v cos a·z`: radius r + t·tan a at t = v cos a along z.
+            Surface::Cone { f: fr, r, a } => Ok(Side::Cone {
+                o: fr.o,
+                z: fr.z.normalize(),
+                x: fr.x,
+                r: *r,
+                tan: a.tan(),
+            }),
+            Surface::Sphere { f: fr, r } => Ok(Side::Sphere {
+                o: fr.o,
+                z: fr.z.normalize(),
+                x: fr.x,
+                r: *r,
+            }),
             _ => Err(KernelError::Unsupported(
-                "healing deleted faces next to faces other than planes and cylinders",
+                "healing deleted faces next to faces other than planes, cylinders, cones and \
+                 spheres",
             )),
         }
     }
@@ -76,6 +101,27 @@ impl Side {
                 let d = p - o;
                 parallel(z, w) && (d - z * d.dot(z)).norm() <= tol && (r - q).abs() <= tol
             }
+            (
+                Side::Cone { o, z, r, tan, .. },
+                Side::Cone {
+                    o: p,
+                    z: w,
+                    r: q,
+                    tan: u,
+                    ..
+                },
+            ) => {
+                // On one axis, the same radius where the other's origin is, the same slope.
+                let d = p - o;
+                let t = d.dot(z);
+                parallel(z, w)
+                    && (d - z * t).norm() <= tol
+                    && (r + t * tan - q).abs() <= tol
+                    && (tan - u * z.dot(w).signum()).abs() <= tol::ANGULAR_POINT
+            }
+            (Side::Sphere { o, r, .. }, Side::Sphere { o: p, r: q, .. }) => {
+                (p - o).norm() <= tol && (r - q).abs() <= tol
+            }
             _ => false,
         }
     }
@@ -91,6 +137,13 @@ impl Side {
                 let inside = (d - z * d.dot(&z)).norm() < r;
                 inside == b.faces[f].sense
             }
+            Side::Cone { o, z, r, tan, .. } => {
+                let d = p - o;
+                let t = d.dot(&z);
+                let inside = (d - z * t).norm() < r + t * tan;
+                inside == b.faces[f].sense
+            }
+            Side::Sphere { o, r, .. } => ((p - o).norm() < r) == b.faces[f].sense,
         }
     }
 }
@@ -310,6 +363,22 @@ fn try_heal(
                 let at = o + z * (centre - o).dot(&z);
                 solid(k, &disc(at, x, z, r), Extent::Symmetric(2.0 * far))?
             }
+            Side::Cone { o, z, x, r, tan } => cone_solid(k, o, z, x, r, tan, centre, far)?,
+            Side::Sphere { o, z, x, r } => turned(
+                k,
+                o,
+                z,
+                x,
+                vec![Curve2::Arc {
+                    center: nalgebra::Point2::origin(),
+                    radius: r,
+                    start_angle: -std::f64::consts::FRAC_PI_2,
+                    sweep: std::f64::consts::PI,
+                    source: None,
+                }],
+                (0.0, r),
+                (0.0, -r),
+            )?,
         };
         let mut next = Vec::new();
         for c in &cells {
@@ -378,6 +447,89 @@ fn split(
             })
         })
         .collect()
+}
+
+/// The solid inside a cone (its part near `centre`, out to `far` along the axis and short of
+/// its apex).
+#[allow(clippy::too_many_arguments)]
+fn cone_solid(
+    k: &mut NativeKernel,
+    o: P3,
+    z: V3,
+    x: V3,
+    r: f64,
+    tan: f64,
+    centre: P3,
+    far: f64,
+) -> Result<Body> {
+    let mid = (centre - o).dot(&z);
+    let (mut t0, mut t1) = (mid - far, mid + far);
+    // Short of the apex, on the side where the cone's radius is positive.
+    if tan.abs() > 1e-12 {
+        let apex = -r / tan;
+        if tan > 0.0 {
+            t0 = t0.max(apex);
+        } else {
+            t1 = t1.min(apex);
+        }
+    }
+    let rad = |t: f64| (r + t * tan).max(0.0);
+    let mut pts = vec![(0.0, t0), (rad(t0), t0), (rad(t1), t1), (0.0, t1)];
+    pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-12 && (a.1 - b.1).abs() < 1e-12);
+    let curves: Vec<Curve2> = (0..pts.len())
+        .filter_map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            ((a.0 - b.0).hypot(a.1 - b.1) > 1e-12).then(|| line(a, b))
+        })
+        .collect();
+    let profile = Profile::new(
+        plane(o, x, x.cross(&z)),
+        vec![Region {
+            outer: Loop { curves },
+            holes: Vec::new(),
+            source: None,
+        }],
+    );
+    revolved(k, &profile, o, z)
+}
+
+/// The solid turned from `curves` closed by a line along the axis from `start` to `end` (in
+/// the plane through the axis, x radial and y along it).
+fn turned(
+    k: &mut NativeKernel,
+    o: P3,
+    z: V3,
+    x: V3,
+    mut curves: Vec<Curve2>,
+    start: (f64, f64),
+    end: (f64, f64),
+) -> Result<Body> {
+    curves.push(line(start, end));
+    let profile = Profile::new(
+        plane(o, x, x.cross(&z)),
+        vec![Region {
+            outer: Loop { curves },
+            holes: Vec::new(),
+            source: None,
+        }],
+    );
+    revolved(k, &profile, o, z)
+}
+
+/// The body of a whole turn of `profile` about `o` + t·`z`.
+fn revolved(k: &mut NativeKernel, profile: &Profile, o: P3, z: V3) -> Result<Body> {
+    let axis = Axis {
+        origin: o,
+        dir: nalgebra::Unit::new_normalize(z),
+    };
+    let r = k.revolve(profile, axis, std::f64::consts::TAU)?;
+    let id = *r
+        .bodies
+        .first()
+        .ok_or_else(|| refused("no solid for the heal's tool"))?;
+    let b = (**k.get(id)?).clone();
+    k.release(id);
+    Ok(b)
 }
 
 /// The body of an extrude of `profile`.

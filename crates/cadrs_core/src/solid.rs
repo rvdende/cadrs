@@ -906,11 +906,118 @@ impl Solid {
         self.spread(seed, |_, i| wall(i) || floor(i))
     }
 
+    /// The faces between `seed` and a boundary (Create selection → Faces → Bounded faces):
+    /// every face reached from `seed` without crossing an edge of `edges` or entering a face of
+    /// `faces`. When the boundary doesn't close (the spread reaches every face not in it), the
+    /// seed and the faces next to it, as Onshape does.
+    pub fn bounded_faces(&self, seed: usize, faces: &[usize], edges: &[EdgeName]) -> Vec<usize> {
+        if seed >= self.faces.len() || faces.contains(&seed) {
+            return Vec::new();
+        }
+        let region: Vec<usize> =
+            self.spread_edges(seed, |e, i| !edges.contains(&e.name) && !faces.contains(&i));
+        let open = region.len() + faces.iter().filter(|f| **f < self.faces.len()).count()
+            >= self.faces.len();
+        if open {
+            let mut out = vec![seed];
+            out.extend(self.neighbours(seed));
+            return out;
+        }
+        region
+    }
+
+    /// The other faces like `seed` (Create selection's Select patterns): the same kind of
+    /// surface, area and radius, facing the same way (a pattern's or mirror's copies of it).
+    pub fn pattern_copies(&self, seed: usize) -> Vec<usize> {
+        const TOL: f64 = 1e-6;
+        let Some(f) = self.faces.get(seed) else {
+            return Vec::new();
+        };
+        let same = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() <= TOL * a.abs().max(1.0),
+            (None, None) => true,
+            _ => false,
+        };
+        let facing = |v: Option<Vec3>, w: Option<Vec3>| match (v, w) {
+            (Some(v), Some(w)) => len(cross(normalize(v), normalize(w))) <= TOL,
+            (None, None) => true,
+            _ => false,
+        };
+        let dir = |g: &SolidFace| g.plane.map(|p| p.normal()).or(g.axis.map(|a| a.1));
+        (0..self.faces.len())
+            .filter(|&i| i != seed)
+            .filter(|&i| {
+                let g = &self.faces[i];
+                g.kind == f.kind
+                    && same(g.area, f.area)
+                    && same(g.radius, f.radius)
+                    && facing(dir(g), dir(f))
+            })
+            .collect()
+    }
+
+    /// `seed` and every face reached from it across edges `cross` accepts (given the edge and
+    /// the face on its other side).
+    fn spread_edges(&self, seed: usize, cross: impl Fn(&SolidEdge, usize) -> bool) -> Vec<usize> {
+        let Some(first) = self.faces.get(seed).map(|f| f.name) else {
+            return Vec::new();
+        };
+        let mut names = vec![first];
+        let mut todo = vec![first];
+        while let Some(cur) = todo.pop() {
+            for e in self.edges.iter().filter(|e| e.name.touches(&cur)) {
+                let other = if e.name.faces[0] == cur {
+                    e.name.faces[1]
+                } else {
+                    e.name.faces[0]
+                };
+                if other == cur || names.contains(&other) {
+                    continue;
+                }
+                let Some(i) = self.faces.iter().position(|f| f.name == other) else {
+                    continue;
+                };
+                if cross(e, i) {
+                    names.push(other);
+                    todo.push(other);
+                }
+            }
+        }
+        names
+            .iter()
+            .filter_map(|n| self.faces.iter().position(|f| f.name == *n))
+            .collect()
+    }
+
     /// The faces across the edges of `face` (indices, each once).
-    fn neighbours(&self, face: usize) -> Vec<usize> {
+    pub fn neighbours(&self, face: usize) -> Vec<usize> {
         let name = self.faces[face].name;
         let mut out = Vec::new();
         for e in self.edges.iter().filter(|e| e.name.touches(&name)) {
+            let other = if e.name.faces[0] == name {
+                e.name.faces[1]
+            } else {
+                e.name.faces[0]
+            };
+            if let Some(i) = self.faces.iter().position(|f| f.name == other)
+                && i != face
+                && !out.contains(&i)
+            {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// The faces across the smooth (tangent) edges of `face` (a fillet's: the faces it rounds,
+    /// not its ends).
+    pub fn tangent_neighbours(&self, face: usize) -> Vec<usize> {
+        let name = self.faces[face].name;
+        let mut out = Vec::new();
+        for e in self.edges.iter().filter(|e| e.name.touches(&name)) {
+            if self.dihedral(e) != Some(Dihedral::Smooth) {
+                continue;
+            }
             let other = if e.name.faces[0] == name {
                 e.name.faces[1]
             } else {

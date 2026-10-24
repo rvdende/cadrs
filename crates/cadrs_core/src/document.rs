@@ -776,7 +776,7 @@ impl Feature {
                 x.parts.iter().for_each(|p| add(p.feature));
             }
             FeatureKind::DirectEdit(x) => {
-                use crate::direct_edit::{DirectEditKind, MoveType};
+                use crate::direct_edit::{DirectEditKind, MoveEnd, MoveType};
                 x.faces.iter().map(face).for_each(&mut add);
                 // Only the reference its move type uses (a direction left from Translate
                 // doesn't hold a Rotate back).
@@ -787,6 +787,14 @@ impl Feature {
                     .filter(|_| moves && x.move_type == MoveType::Translate)
                 {
                     direction_parent(d).into_iter().for_each(&mut add);
+                }
+                if moves && x.move_type != MoveType::Rotate && x.end == MoveEnd::UpTo {
+                    match &x.up_to {
+                        Some(UpTo::Face(f)) => add(face(f)),
+                        Some(UpTo::Part(p)) => add(p.feature),
+                        Some(UpTo::Vertex(v)) => add(v.part.feature),
+                        None => {}
+                    }
                 }
                 match x
                     .axis

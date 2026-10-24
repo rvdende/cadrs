@@ -289,6 +289,10 @@ pub(crate) enum Role {
     FillContinuity,
     // The direct edits (`crate::direct_edit_ui`).
     DirectEditType,
+    DirectEditVoid,
+    DirectEditEnd,
+    DirectEditUpTo,
+    DirectEditOffset,
     DirectEditFaces,
     DirectEditDirection,
     DirectEditAxis,
@@ -726,6 +730,7 @@ fn dialog(
         Role::DirectEditFaces,
         Role::DirectEditDirection,
         Role::DirectEditAxis,
+        Role::DirectEditUpTo,
     ]
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
@@ -1940,6 +1945,8 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::TipAngle => "Tip angle",
         Role::TransformType => "Transform type",
         Role::DirectEditType => "Move type",
+        Role::DirectEditVoid => "Void",
+        Role::DirectEditEnd => "End type",
         _ => return,
     };
     change(&mut commands, label, move |k| match (k, role) {
@@ -2013,6 +2020,10 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::DirectEditType => cadrs_core::direct_edit::MoveType::ALL
             .get(i)
             .map(|t| crate::direct_edit_ui::first_field(*t)),
+        // Move face's end type: Up to entity's field takes the picks.
+        Role::DirectEditEnd => cadrs_core::direct_edit::MoveEnd::ALL
+            .get(i)
+            .map(|e| crate::direct_edit_ui::end_field(*e)),
         _ => None,
     };
     if let Some(f) = next {

@@ -150,8 +150,24 @@ impl Rebuilder {
         what: &str,
         state: &Arc<State>,
         groups: Vec<(PartId, BodyId)>,
+        op: impl FnMut(&mut Self, usize, BodyId) -> cadrs_kernel::Result<OpResult>,
+        keep: impl FnMut(&mut Self, BodyId) -> bool,
+    ) -> Result<Output, String> {
+        self.per_part_as(id, what, state, groups, op, keep, PartKind::Solid)
+    }
+
+    /// [`Self::per_part_keeping`], the results parts of `kind` (Delete face's Leave open makes
+    /// surfaces).
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::rebuild) fn per_part_as(
+        &mut self,
+        id: FeatureId,
+        what: &str,
+        state: &Arc<State>,
+        groups: Vec<(PartId, BodyId)>,
         mut op: impl FnMut(&mut Self, usize, BodyId) -> cadrs_kernel::Result<OpResult>,
         mut keep: impl FnMut(&mut Self, BodyId) -> bool,
+        kind: PartKind,
     ) -> Result<Output, String> {
         let mut next = (**state).clone();
         let mut placed: Vec<Placed> = Vec::new();
@@ -200,7 +216,7 @@ impl Rebuilder {
         }
         let geoms = state.geoms.clone();
         next.geoms = geoms.clone();
-        self.finish(id, placed, next, id.0, geoms, PartKind::Solid)
+        self.finish(id, placed, next, id.0, geoms, kind)
     }
 
     /// The features of the faces along the edges' tangent chains (P3.11, PS11.2): a fillet
@@ -675,7 +691,12 @@ impl Rebuilder {
             return Err(p.into());
         }
         let mut groups: Vec<(PartId, BodyId, Vec<cadrs_kernel::FaceId>)> = Vec::new();
-        for f in &x.faces {
+        let picked = if x.kind == DirectEditKind::DeleteFace && x.delete_fillets {
+            with_fillets(state, &x.faces)
+        } else {
+            x.faces.clone()
+        };
+        for f in &picked {
             let (part, ids) = face_ids(state, f).ok_or("A selected face no longer exists")?;
             let Some(body) = self.body_or_skip(part) else {
                 continue;
@@ -690,8 +711,41 @@ impl Rebuilder {
             }
         }
         let faces: Vec<Vec<cadrs_kernel::FaceId>> = groups.iter().map(|g| g.2.clone()).collect();
+        // Rotate with Reapply fillet: each part's fillets next to the faces turned, and their
+        // radii, as the kernel's faces.
+        let refillet: Vec<Vec<cadrs_kernel::Refillet>> = groups
+            .iter()
+            .map(|g| {
+                if x.kind != DirectEditKind::MoveFace
+                    || x.move_type != MoveType::Rotate
+                    || !x.reapply_fillets
+                {
+                    return Vec::new();
+                }
+                let ids_of = |f: &crate::document::FaceRef| {
+                    face_ids(state, f).map_or(Vec::new(), |(_, ids)| ids)
+                };
+                let mut out: Vec<cadrs_kernel::Refillet> = Vec::new();
+                for (f, radius, tangent) in fillets_next_to(state, &x.faces, g.0) {
+                    let tangent: Vec<cadrs_kernel::FaceId> =
+                        tangent.iter().flat_map(ids_of).collect();
+                    for face in ids_of(&f).into_iter().filter(|id| !g.2.contains(id)) {
+                        if !out.iter().any(|o| o.face == face) {
+                            out.push(cadrs_kernel::Refillet {
+                                face,
+                                radius,
+                                tangent: tangent.clone(),
+                            });
+                        }
+                    }
+                }
+                out
+            })
+            .collect();
         let bodies = groups.iter().map(|g| (g.0, g.1)).collect();
-        let (kind, distance) = (x.kind, x.distance);
+        let kind = x.kind;
+        let up_to = x.end == crate::direct_edit::MoveEnd::UpTo;
+        let mut distance = x.distance;
         let motion = match (kind, x.move_type) {
             (DirectEditKind::MoveFace, MoveType::Translate) => {
                 let u = match &x.direction {
@@ -701,6 +755,9 @@ impl Rebuilder {
                         .into_inner(),
                     None => first_face_normal(state, &x.faces[0])?,
                 };
+                if up_to {
+                    distance = up_to_distance(state, x, &u)?;
+                }
                 Some(Motion::translation(u * distance))
             }
             (DirectEditKind::MoveFace, MoveType::Rotate) => {
@@ -710,23 +767,39 @@ impl Rebuilder {
                     .map_err(|e| rotation_axis_error(&e))?;
                 Some(Motion::rotation(&axis, x.angle.to_radians()))
             }
+            (DirectEditKind::MoveFace, MoveType::Offset) if up_to => {
+                let n = first_face_normal(state, &x.faces[0])?;
+                distance = up_to_distance(state, x, &n)?;
+                None
+            }
             _ => None,
         };
-        self.per_part(id, kind.label(), state, bodies, |this, i, body| {
-            match (kind, &motion) {
-                (DirectEditKind::DeleteFace, _) => this.kernel.delete_faces(body, &faces[i]),
-                (DirectEditKind::Simplify, _) => this.kernel.simplify(body),
-                (DirectEditKind::MoveFace, Some(m)) => this.kernel.move_faces(body, &faces[i], m),
-                (DirectEditKind::MoveFace, None) => {
-                    let spec = cadrs_kernel::OffsetSpec {
-                        distance: 0.0,
-                        faces: faces[i].iter().map(|f| (*f, distance)).collect(),
-                        sharp: true,
-                    };
-                    this.kernel.offset(body, &spec)
+        let (void, part_kind) = (
+            x.void,
+            match (kind, x.void) {
+                (DirectEditKind::DeleteFace, crate::direct_edit::VoidFill::Open) => {
+                    PartKind::Surface
                 }
+                _ => PartKind::Solid,
+            },
+        );
+        let op = |this: &mut Self, i: usize, body| match (kind, &motion) {
+            (DirectEditKind::DeleteFace, _) => this.kernel.delete_faces_with(body, &faces[i], void),
+            (DirectEditKind::Simplify, _) => this.kernel.simplify(body),
+            (DirectEditKind::MoveFace, Some(m)) => {
+                this.kernel
+                    .move_faces_refilleting(body, &faces[i], m, &refillet[i])
             }
-        })
+            (DirectEditKind::MoveFace, None) => {
+                let spec = cadrs_kernel::OffsetSpec {
+                    distance: 0.0,
+                    faces: faces[i].iter().map(|f| (*f, distance)).collect(),
+                    sharp: true,
+                };
+                this.kernel.offset(body, &spec)
+            }
+        };
+        self.per_part_as(id, kind.label(), state, bodies, op, |_, _| true, part_kind)
     }
 
     /// The Hole feature (PS15): a revolved tool per point, subtracted from the parts in scope.
@@ -1133,4 +1206,143 @@ fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vect
     let (part, _) = face_ids(state, f).ok_or("A selected face no longer exists")?;
     let frame = face_frame(part, f).ok_or("Select a direction (the first face isn't flat)")?;
     Ok(Vector3::from(frame.normal()).normalize())
+}
+
+/// Delete face's faces with the fillets next to them (Delete fillet faces): each fillet
+/// (`Solid::fillet_radius`) across an edge of a face to delete, and next to those, in turn.
+fn with_fillets(
+    state: &State,
+    faces: &[crate::document::FaceRef],
+) -> Vec<crate::document::FaceRef> {
+    let mut out = faces.to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        let f = out[i];
+        i += 1;
+        let Some(part) = state.part(f.part) else {
+            continue;
+        };
+        let s = &part.part.solid;
+        let Ok((at, _)) = s.resolve_face(&f.face, None, Some(f.seed)) else {
+            continue;
+        };
+        for j in s.neighbours(at) {
+            let name = s.faces[j].name;
+            if s.fillet_radius(j).is_some()
+                && !out.iter().any(|g| g.face == name)
+                && let Some(seed) = s.face_point(j)
+            {
+                out.push(crate::document::FaceRef {
+                    part: f.part,
+                    face: name,
+                    seed,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Move face's Up to entity: how far along `u` the first face (flat) goes for its plane to
+/// pass through the vertex, or to lie on the face (flat and parallel to it), less the offset
+/// (towards where it started).
+fn up_to_distance(
+    state: &State,
+    x: &crate::direct_edit::DirectEditFeature,
+    u: &Vector3<f64>,
+) -> Result<f64, String> {
+    use crate::document::UpTo;
+    let first = &x.faces[0];
+    let (part, _) = face_ids(state, first).ok_or("A selected face no longer exists")?;
+    let frame = face_frame(part, first).ok_or("Up to entity moves a flat face")?;
+    let (o, n) = (
+        Vector3::from(frame.origin),
+        Vector3::from(frame.normal()).normalize(),
+    );
+    let along = u.dot(&n);
+    if along.abs() < 1e-9 {
+        return Err("The direction runs along the face: it never reaches the entity".into());
+    }
+    let target = match x
+        .up_to
+        .as_ref()
+        .ok_or("Select a vertex or a face to move up to")?
+    {
+        UpTo::Vertex(v) => {
+            let s = &state
+                .part(v.part)
+                .ok_or("The vertex to move up to no longer exists")?
+                .part
+                .solid;
+            s.vertex(&v.vertex)
+                .map(|p| p.point)
+                .or_else(|| {
+                    s.vertices
+                        .iter()
+                        .find(|p| crate::solid::dist3(p.point, v.point) < 1e-6)
+                        .map(|p| p.point)
+                })
+                .ok_or("The vertex to move up to no longer exists")?
+        }
+        UpTo::Face(f) => {
+            let (part, _) = face_ids(state, f).ok_or("The face to move up to no longer exists")?;
+            let t = face_frame(part, f).ok_or("Move up to a flat face")?;
+            let m = Vector3::from(t.normal()).normalize();
+            if m.cross(&n).norm() > 1e-6 {
+                return Err("The face to move up to isn't parallel to the face moved".into());
+            }
+            t.origin
+        }
+        UpTo::Part(_) => return Err("Move up to a vertex or a face".into()),
+    };
+    let t = (Vector3::from(target) - o).dot(&n) / along;
+    Ok(t - x.offset * t.signum())
+}
+
+/// The fillets across an edge of the faces of `part` among `faces`: each with its radius and
+/// the faces it is tangent to.
+fn fillets_next_to(
+    state: &State,
+    faces: &[crate::document::FaceRef],
+    part: PartId,
+) -> Vec<(crate::document::FaceRef, f64, Vec<crate::document::FaceRef>)> {
+    let mut out: Vec<(crate::document::FaceRef, f64, Vec<crate::document::FaceRef>)> = Vec::new();
+    for f in faces.iter().filter(|f| f.part == part) {
+        let Some(p) = state.part(f.part) else {
+            continue;
+        };
+        let s = &p.part.solid;
+        let Ok((at, _)) = s.resolve_face(&f.face, None, Some(f.seed)) else {
+            continue;
+        };
+        for j in s.neighbours(at) {
+            let name = s.faces[j].name;
+            if faces.iter().any(|g| g.face == name) || out.iter().any(|(g, ..)| g.face == name) {
+                continue;
+            }
+            if let (Some(r), Some(seed)) = (s.fillet_radius(j), s.face_point(j)) {
+                let tangent = s
+                    .tangent_neighbours(j)
+                    .into_iter()
+                    .filter_map(|k| {
+                        Some(crate::document::FaceRef {
+                            part: f.part,
+                            face: s.faces[k].name,
+                            seed: s.face_point(k)?,
+                        })
+                    })
+                    .collect();
+                out.push((
+                    crate::document::FaceRef {
+                        part: f.part,
+                        face: name,
+                        seed,
+                    },
+                    r,
+                    tangent,
+                ));
+            }
+        }
+    }
+    out
 }

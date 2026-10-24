@@ -712,12 +712,12 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
     matches!(
         name,
         "thicken-mid-plane-checkbox" | "thicken-keep-tools-checkbox" | "thicken-merge-all-checkbox"
-    )
+    ) || crate::direct_edit_ui::is_checkbox(name)
 }
 
 pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'static str> {
     let FeatureKind::Thicken(x) = k else {
-        return None;
+        return crate::direct_edit_ui::checkbox(k, name, on);
     };
     Some(match name {
         "thicken-mid-plane-checkbox" => {

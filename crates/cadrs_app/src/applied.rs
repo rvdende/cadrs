@@ -264,9 +264,10 @@ pub enum AppliedField {
     FlatRegions,
     /// The faces a Move face, Delete face or Simplify works on.
     DirectEditFaces,
-    /// Move face's Translate direction and Rotate axis.
+    /// Move face's Translate direction, Rotate axis and Up to entity.
     DirectEditDirection,
     DirectEditAxis,
+    DirectEditUpTo,
 }
 
 /// The applied feature whose dialog is open.
@@ -564,6 +565,12 @@ impl AppliedSession {
             },
             AppliedField::DirectEditFaces => PickFilter {
                 faces: true,
+                ..none
+            },
+            // A vertex or a face (edges come with the vertices; the field refuses them).
+            AppliedField::DirectEditUpTo => PickFilter {
+                faces: true,
+                edges: true,
                 ..none
             },
             f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),

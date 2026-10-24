@@ -2438,6 +2438,10 @@ mod kernel_ops {
                         p.names = names;
                         p.part.solid = Arc::new(solid);
                         p.part.mass = Some(mass);
+                        // A part opened up into a surface (Delete face's Leave open).
+                        if kind == PartKind::Surface {
+                            p.part.kind = kind;
+                        }
                         if !p.part.features.contains(&id) {
                             p.part.features.push(id);
                         }

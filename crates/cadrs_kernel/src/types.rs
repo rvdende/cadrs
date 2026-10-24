@@ -755,6 +755,31 @@ pub enum Extent {
     },
 }
 
+/// What Delete face does with the void the faces leave ([`crate::Kernel::delete_faces_with`],
+/// Onshape's Heal, Cap and Leave open).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum VoidFill {
+    /// The faces round it extended until they meet.
+    #[default]
+    Heal,
+    /// A face over each opening: a plane on a flat one, else a fill.
+    Cap,
+    /// The openings left: the rest of the faces as a sheet.
+    Open,
+}
+
+/// A fillet next to faces Move face turns, to put back after
+/// ([`crate::Kernel::move_faces_refilleting`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Refillet {
+    /// The fillet's face.
+    pub face: FaceId,
+    /// Its radius.
+    pub radius: f64,
+    /// The faces it is tangent to (one of them moved; not its end faces).
+    pub tangent: Vec<FaceId>,
+}
+
 /// A boolean operation ([`crate::Kernel::boolean`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoolOp {
