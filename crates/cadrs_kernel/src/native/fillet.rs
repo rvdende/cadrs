@@ -9768,7 +9768,7 @@ fn along_faces(b: &Body, fi: usize, p: &P3, t: &V3, w: &V3, dist: f64) -> Option
 
 /// How far (as a fraction of a chamfer's distance) a law of offsets measured along the faces
 /// may stray from them between its samples ([`chamfer_along_laws`]).
-const ALONG_FIT: f64 = 1e-4;
+const ALONG_FIT: f64 = 1e-5;
 /// How many times a span of 1/16 of the edge may be halved to fit it ([`chamfer_along_laws`]).
 const ALONG_DEPTH: u32 = 6;
 
