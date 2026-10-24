@@ -268,7 +268,9 @@ impl<L: DataLoader> WebRenderSync<L> for Downloads {
                             {CardTitle { class: Some("text-lg"), children: Some("Download") }}
                             {CardDescription {
                                 class: None,
-                                children: Some(html_sync! { <span data-release-label>{latest}</span> }),
+                                children: Some(html_sync! {
+                                    <span data-release-label>{latest}</span>
+                                }),
                             }}
                         }),
                     }}
