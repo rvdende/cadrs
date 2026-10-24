@@ -45,6 +45,8 @@ pub struct HarnessOptions {
     pub headless: bool,
     pub scenario: Option<String>,
     pub size: UVec2,
+    /// `--window-size` was given (a scenario's own size doesn't override it).
+    pub window_size_given: bool,
     /// Where screenshots go; defaults to `target/scenarios/<name>/` in the workspace.
     pub out_dir: Option<PathBuf>,
     /// Where documents are stored (`--data-dir`). Scenarios default to a fresh
@@ -63,6 +65,7 @@ impl Default for HarnessOptions {
             headless: false,
             scenario: None,
             size: UVec2::new(1600, 1000),
+            window_size_given: false,
             out_dir: None,
             data_dir: None,
             no_cursor: false,
@@ -90,6 +93,7 @@ impl HarnessOptions {
                     let w: u32 = w.parse().map_err(|_| format!("bad width in {v:?}"))?;
                     let h: u32 = h.parse().map_err(|_| format!("bad height in {v:?}"))?;
                     o.size = UVec2::new(w.max(64), h.max(64));
+                    o.window_size_given = true;
                 }
                 "--out" => o.out_dir = Some(args.next().ok_or("--out needs a directory")?.into()),
                 "--data-dir" => {

@@ -1,0 +1,35 @@
+// #22 "Also noticed": at 1224 px across the Part Studio's tools ran off the right edge.
+// 01 the tools that don't fit are hidden behind a » at the end; the search box stays.
+// 02 the »: a menu of the hidden tools (by their tooltips), Sheet metal model's ▾ among them.
+// 03 Plane from it (a split tool): its types, under the ».
+// 04 the sheet metal tools (Sheet metal model's ▾) from it: under the » too.
+// 05 Derived from it: the Derived dialog, as its button starts it.
+Scenario(
+    start: Some("document"),
+    window_size: Some((1224, 800)),
+    steps: [
+        WaitFor("document-shell"),
+        MoveTo(1100, 600),
+        Wait(3),
+        Screenshot("01-overflow"),
+        Click(ui("toolbar-overflow")),
+        WaitFor("toolbar-overflow-menu"),
+        Screenshot("02-overflow-menu"),
+        Click(ui("toolbar-overflow-plane")),
+        WaitFor("plane-menu"),
+        Screenshot("03-plane-types-under-the-more-button"),
+        Key("Escape"),
+        Click(ui("toolbar-overflow")),
+        WaitFor("toolbar-overflow-menu"),
+        Click(ui("toolbar-overflow-sheet-metal-model-caret")),
+        WaitFor("sheet-metal-menu"),
+        Screenshot("04-sheet-metal-tools-under-the-more-button"),
+        Key("Escape"),
+        Click(ui("toolbar-overflow")),
+        WaitFor("toolbar-overflow-menu"),
+        Click(ui("toolbar-overflow-derived")),
+        MoveTo(1100, 600),
+        Wait(3),
+        Screenshot("05-derived-from-the-menu"),
+    ],
+)

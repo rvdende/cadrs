@@ -93,7 +93,7 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, x: T) {
     }
 }
 
-fn set_or_clear<T: PartialEq>(slot: &mut Option<T>, x: T) {
+pub(crate) fn set_or_clear<T: PartialEq>(slot: &mut Option<T>, x: T) {
     *slot = if slot.as_ref() == Some(&x) {
         None
     } else {
@@ -183,43 +183,21 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
     let FeatureKind::Transform(x) = kind else {
         return Vec::new();
     };
-    let face = |f: &cadrs_core::FaceRef| {
-        cache
-            .parts
-            .iter()
-            .find(|p| p.solid.face(&f.face).is_some())
-            .map(|p| Pick::Face(p.id, f.face))
-    };
-    let edge = |e: &cadrs_core::EdgeRef| {
-        cache
-            .parts
-            .iter()
-            .find(|p| p.solid.edge(&e.edge).is_some())
-            .map(|p| Pick::Edge(p.id, e.edge))
-    };
-    let direction = |d: &DirectionRef| match d {
-        DirectionRef::Edge(e) => edge(e),
-        DirectionRef::FaceNormal(f) => face(f),
-        DirectionRef::SketchLine { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
-        DirectionRef::PlaneNormal(p) => crate::viewport::plane_pick(*p),
-        DirectionRef::Connector(c) => crate::pattern::connector_pick(c),
-    };
     let mut out: Vec<Pick> = x.picked().into_iter().map(Pick::Part).collect();
     match x.transform_type {
-        TransformType::TranslateByLine => out.extend(x.line.iter().filter_map(direction)),
-        TransformType::TranslateByDistance => out.extend(x.direction.iter().filter_map(direction)),
+        TransformType::TranslateByLine => {
+            out.extend(x.line.iter().filter_map(|d| direction_pick(cache, d)))
+        }
+        TransformType::TranslateByDistance => {
+            out.extend(x.direction.iter().filter_map(|d| direction_pick(cache, d)))
+        }
         TransformType::MateConnectors => out.extend(
             [&x.from, &x.to]
                 .into_iter()
                 .flatten()
                 .filter_map(crate::pattern::connector_pick),
         ),
-        TransformType::Rotate => out.extend(x.axis.iter().filter_map(|a| match a {
-            AxisRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
-            AxisRef::Edge(e) => edge(e),
-            AxisRef::Face(f) => face(f),
-            AxisRef::Connector(c) => crate::pattern::connector_pick(c),
-        })),
+        TransformType::Rotate => out.extend(x.axis.iter().filter_map(|a| axis_pick(cache, a))),
         TransformType::ScaleUniformly => out.extend(
             x.scale_point
                 .iter()
@@ -228,6 +206,43 @@ pub fn references(kind: &FeatureKind, cache: &PartCache) -> Vec<Pick> {
         TransformType::TranslateXyz | TransformType::CopyInPlace => {}
     }
     out
+}
+
+/// What a direction refers to, as a pick (to show it selected).
+pub(crate) fn direction_pick(cache: &PartCache, d: &DirectionRef) -> Option<Pick> {
+    match d {
+        DirectionRef::Edge(e) => edge_pick(cache, e),
+        DirectionRef::FaceNormal(f) => face_pick(cache, f),
+        DirectionRef::SketchLine { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        DirectionRef::PlaneNormal(p) => crate::viewport::plane_pick(*p),
+        DirectionRef::Connector(c) => crate::pattern::connector_pick(c),
+    }
+}
+
+/// What an axis refers to, as a pick.
+pub(crate) fn axis_pick(cache: &PartCache, a: &AxisRef) -> Option<Pick> {
+    match a {
+        AxisRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        AxisRef::Edge(e) => edge_pick(cache, e),
+        AxisRef::Face(f) => face_pick(cache, f),
+        AxisRef::Connector(c) => crate::pattern::connector_pick(c),
+    }
+}
+
+fn face_pick(cache: &PartCache, f: &cadrs_core::FaceRef) -> Option<Pick> {
+    cache
+        .parts
+        .iter()
+        .find(|p| p.solid.face(&f.face).is_some())
+        .map(|p| Pick::Face(p.id, f.face))
+}
+
+fn edge_pick(cache: &PartCache, e: &cadrs_core::EdgeRef) -> Option<Pick> {
+    cache
+        .parts
+        .iter()
+        .find(|p| p.solid.edge(&e.edge).is_some())
+        .map(|p| Pick::Edge(p.id, e.edge))
 }
 
 /// True when the active field takes mate connectors (their hover preview shows).
@@ -241,6 +256,7 @@ pub fn takes_connectors(kind: &FeatureKind, field: AppliedField) -> bool {
                 | AppliedField::TransformAxis
                 | AppliedField::TransformDirection
         )
+        || crate::direct_edit_ui::takes_connectors(kind, field)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -276,7 +292,7 @@ fn name_of(features: &[Feature], id: cadrs_core::FeatureId) -> String {
         .map_or("sketch".into(), |f| f.name.clone())
 }
 
-fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
+pub(crate) fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
     match d {
         DirectionRef::Edge(r) => format!(
             "Edge of {}",

@@ -1611,7 +1611,9 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Shell(x) => self.shell(f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
-            FeatureKind::DirectEdit(x) => self.direct_edit(f.id, x, state).unwrap_or_else(fail),
+            FeatureKind::DirectEdit(x) => self
+                .direct_edit(before, f.id, x, state)
+                .unwrap_or_else(fail),
             #[cfg(feature = "brep")]
             FeatureKind::Hole(x) => self.hole(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
@@ -2447,6 +2449,10 @@ mod kernel_ops {
                         p.names = names;
                         p.part.solid = Arc::new(solid);
                         p.part.mass = Some(mass);
+                        // A part opened up into a surface (Delete face's Leave open).
+                        if kind == PartKind::Surface {
+                            p.part.kind = kind;
+                        }
                         if !p.part.features.contains(&id) {
                             p.part.features.push(id);
                         }
@@ -3438,6 +3444,13 @@ mod kernel_ops {
             }
         }
         None
+    }
+
+    /// An axis error ([`Rebuilder::axis`] words them for a revolve) worded for a rotation ("A
+    /// spline can't be an axis of rotation"): Transform's and Move face's Rotate.
+    fn rotation_axis_error(e: &str) -> String {
+        e.replace("a revolve axis", "an axis of rotation")
+            .replace("revolve axis", "axis of rotation")
     }
 
     /// A planar face's frame (u × v is its outward normal).

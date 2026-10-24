@@ -249,6 +249,8 @@ pub enum StepFixture {
     SheetMetalLegacy,
     /// [`sheetmetal_legacy::case_round_step`].
     SheetMetalLegacyCase,
+    /// [`carriage::step`] with its teardrop, recess and slot ([`carriage::Case::Both`]).
+    Carriage,
 }
 
 impl crate::rebuild::task::Task for StepFixture {
@@ -259,9 +261,11 @@ impl crate::rebuild::task::Task for StepFixture {
             StepFixture::BracketPair => bracket_pair::step(r),
             StepFixture::SheetMetalLegacy => sheetmetal_legacy::step(r),
             StepFixture::SheetMetalLegacyCase => sheetmetal_legacy::case_round_step(r),
+            StepFixture::Carriage => carriage::step(r, carriage::Case::Both, true),
         }
     }
 }
+pub mod carriage;
 pub mod conrod;
 pub mod design_intent;
 pub mod drawing_bar;

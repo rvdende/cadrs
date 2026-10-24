@@ -6,7 +6,8 @@
 //! - **Modeling**, on a default plane or a planar part face: **New sketch** (the plane fills
 //!   the sketch dialog's plane field), hide the plane, view normal to it, zoom to fit. On a face
 //!   also **Add appearance to face…**, the part's **Edit appearance…** and **Assign material…**
-//!   (P3.5).
+//!   (P3.5), and (#22, any face) **Move face…**, **Delete face…** and **Select → Create
+//!   selection…** from that face.
 //! - **Modeling**, on a sketch's region or curve: **Edit…**, **Rename**, **Delete**, **Edit sketch
 //!   appearance…** and, on a curve, **Edit curve appearance…** (P3.5), view normal to the sketch
 //!   plane, zoom to fit.
@@ -197,7 +198,15 @@ pub fn open_modeling_menu(world: &mut World, at: Vec2, pick: Option<Pick>) {
             } else {
                 m
             };
+            // #22: the direct edits (on the selection, or this face), and Create selection from
+            // this face (its pocket, protrusion, hole or fillets).
             m.separator()
+                .item(MenuItem::new("viewport-move-face", "Move face…").icon("offset"))
+                .item(MenuItem::new("viewport-delete-face", "Delete face…").icon("delete"))
+                .item(MenuItem::new("viewport-select", "Select").submenu(vec![
+                    MenuItem::new("viewport-create-selection-face", "Create selection…").into(),
+                ]))
+                .separator()
                 .item(
                     MenuItem::new("viewport-normal-to", "View normal to face")
                         .disabled(!planar_face),
@@ -386,6 +395,24 @@ fn act(world: &mut World, target: MenuTarget, item: &str) {
         }
         ("viewport-toggle-planes", _) => world.resource_mut::<PlanesVisible>().toggle_all(),
         ("viewport-create-selection", _) => crate::create_selection::open(world),
+        ("viewport-create-selection-face", MenuTarget::Face(part, face)) => {
+            crate::create_selection::open_from_face(world, part, face)
+        }
+        ("viewport-move-face" | "viewport-delete-face", MenuTarget::Face(part, face)) => {
+            use cadrs_core::direct_edit::DirectEditKind;
+            // The selected faces, or this one when it isn't among them.
+            let pick = Pick::Face(part, face);
+            let mut sel = world.resource_mut::<Selection>();
+            if !sel.contains(pick) {
+                sel.0 = vec![pick];
+            }
+            let kind = if item == "viewport-move-face" {
+                DirectEditKind::MoveFace
+            } else {
+                DirectEditKind::DeleteFace
+            };
+            crate::applied::begin(world, crate::applied::AppliedKind::DirectEdit(kind));
+        }
         ("viewport-zoom-to-fit", _) => crate::viewport::zoom_to_fit(world),
         // P3E.3a: whatever is selected (what was right-clicked is).
         ("viewport-zoom-to-selection", _) => crate::view_options::zoom_to_selection(world),

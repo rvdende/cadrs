@@ -775,7 +775,39 @@ impl Feature {
                 x.faces.iter().map(face).for_each(&mut add);
                 x.parts.iter().for_each(|p| add(p.feature));
             }
-            FeatureKind::DirectEdit(x) => x.faces.iter().map(face).for_each(&mut add),
+            FeatureKind::DirectEdit(x) => {
+                use crate::direct_edit::{DirectEditKind, MoveEnd, MoveType};
+                x.faces.iter().map(face).for_each(&mut add);
+                // Only the reference its move type uses (a direction left from Translate
+                // doesn't hold a Rotate back).
+                let moves = x.kind == DirectEditKind::MoveFace;
+                if let Some(d) = x
+                    .direction
+                    .as_ref()
+                    .filter(|_| moves && x.move_type == MoveType::Translate)
+                {
+                    direction_parent(d).into_iter().for_each(&mut add);
+                }
+                if moves && x.move_type != MoveType::Rotate && x.end == MoveEnd::UpTo {
+                    match &x.up_to {
+                        Some(UpTo::Face(f)) => add(face(f)),
+                        Some(UpTo::Part(p)) => add(p.feature),
+                        Some(UpTo::Vertex(v)) => add(v.part.feature),
+                        None => {}
+                    }
+                }
+                match x
+                    .axis
+                    .as_ref()
+                    .filter(|_| moves && x.move_type == MoveType::Rotate)
+                {
+                    Some(AxisRef::SketchCurve { sketch, .. }) => add(*sketch),
+                    Some(AxisRef::Edge(e)) => edge(e).into_iter().for_each(&mut add),
+                    Some(AxisRef::Face(f)) => add(face(f)),
+                    Some(AxisRef::Connector(c)) => c.parent().into_iter().for_each(&mut add),
+                    None => {}
+                }
+            }
             FeatureKind::Hole(x) => {
                 x.sketch_ids().into_iter().for_each(&mut add);
                 x.merge_scope.iter().for_each(|p| add(p.feature));

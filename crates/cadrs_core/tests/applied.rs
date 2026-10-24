@@ -89,6 +89,19 @@ impl Doc {
 
     /// A box x0..x1 × y0..y1 on Top, `h` high (New).
     fn block(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, h: f64) -> FeatureId {
+        self.extrude_rect(x0, y0, x1, y1, h, BooleanOp::New)
+    }
+
+    /// A box x0..x1 × y0..y1 up from Top, `h` high, made with `op`.
+    fn extrude_rect(
+        &mut self,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        h: f64,
+        op: BooleanOp,
+    ) -> FeatureId {
         let s = self.sketch(PlaneRef::Top, vec![rect(x0, y0, x1, y1)]);
         let g = self
             .d
@@ -102,7 +115,7 @@ impl Doc {
             .clone();
         let regions = samples::region_refs(s, &g, &[Vec2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0)]);
         let e = ExtrudeFeature {
-            op: BooleanOp::New,
+            op,
             ..samples::extrude_of(regions, h)
         };
         let f = FeatureId::new();
@@ -899,4 +912,837 @@ fn folders_hold_runs_of_features() {
     assert_eq!(d.features().len(), 4);
     d.h.undo(&mut d.d).unwrap();
     assert_eq!(d.d.element(d.el).unwrap().folders().len(), 1);
+}
+
+/// The index of the face of `part` with the reference `f`.
+fn index_of(part: &Part, f: &FaceRef) -> usize {
+    part.solid
+        .faces
+        .iter()
+        .position(|g| g.name == f.face)
+        .expect("the face")
+}
+
+/// The faces at the indices, as sorted names (to compare selections).
+fn names(part: &Part, faces: Vec<usize>) -> Vec<String> {
+    let mut out: Vec<String> = faces
+        .into_iter()
+        .map(|i| format!("{:?}", part.solid.faces[i].name))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn create_selection_protrusion_stops_where_the_boss_stands() {
+    // A 40 × 20 × 10 block with a 10 × 10 boss standing 5 above its top (Add): from the boss's
+    // top, Protrusion takes its top and four sides (convex edges) and stops at the block's top
+    // (concave); Pocket from the same face is only the face itself.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    d.extrude_rect(15.0, 5.0, 25.0, 15.0, 15.0, BooleanOp::Add);
+    let part = d.parts()[0].clone();
+    let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [20.0, 10.0, 15.0]));
+    let boss = part.solid.protrusion_faces(top);
+    assert_eq!(boss.len(), 5, "{:?}", names(&part, boss));
+    for i in &boss {
+        let c = part.solid.faces[*i].center.unwrap();
+        assert!(c[2] > 10.0 - 1e-9, "a face below the boss: {c:?}");
+    }
+    assert_eq!(part.solid.pocket_faces(top), vec![top]);
+}
+
+#[test]
+fn create_selection_hole_takes_the_counterbore_and_drill_point() {
+    // A blind Ø5 × 20 counterbored hole (Ø10 × 4) with a drill point in a 60 × 60 × 30 block:
+    // from the small wall, Hole takes the two walls, the counterbore's floor and the point (4
+    // faces), never the block's top; Pocket stops at the floor's convex rim (the wall and the
+    // point).
+    let (mut d, s) = hole_doc(0.0);
+    let mut spec = HoleSpec::default();
+    spec.style = HoleStyle::Counterbore;
+    spec.diameter = Length::mm(5.0);
+    spec.depth = Length::mm(20.0);
+    spec.cbore_diameter = Length::mm(10.0);
+    spec.cbore_depth = Length::mm(4.0);
+    d.add(AddFeature::hole(
+        d.el,
+        FeatureId::new(),
+        HoleFeature {
+            points: vec![point_of(&d, s)],
+            spec,
+            ..HoleFeature::default()
+        },
+    ));
+    let part = d.parts()[0].clone();
+    let solid = &part.solid;
+    let wall = (0..solid.faces.len())
+        .find(|&i| {
+            solid.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+                && solid.faces[i]
+                    .radius
+                    .is_some_and(|r| (r - 2.5).abs() < 1e-9)
+        })
+        .expect("the Ø5 wall");
+    let hole = solid.hole_faces(wall);
+    assert_eq!(hole.len(), 4, "{:?}", names(&part, hole));
+    let kinds: Vec<_> = hole.iter().map(|i| solid.faces[*i].kind).collect();
+    use cadrs_kernel::SurfaceKind::{Cone, Cylinder, Plane};
+    for k in [Cylinder, Plane, Cone] {
+        assert!(kinds.contains(&Some(k)), "no {k:?} in {kinds:?}");
+    }
+    assert!(
+        hole.iter()
+            .all(|i| solid.faces[*i].area.unwrap() < 100.0 * PI),
+        "the block's top is not part of the hole"
+    );
+    assert_eq!(solid.pocket_faces(wall).len(), 2);
+    // From the counterbore's floor: the same hole.
+    let floor = (0..solid.faces.len())
+        .find(|&i| {
+            solid.faces[i].plane.is_some()
+                && solid.faces[i]
+                    .area
+                    .is_some_and(|a| (a - PI * (25.0 - 6.25)).abs() < 1e-6)
+        })
+        .expect("the counterbore's floor");
+    let mut from_floor = solid.hole_faces(floor);
+    let mut from_wall = hole.clone();
+    from_floor.sort();
+    from_wall.sort();
+    assert_eq!(from_floor, from_wall);
+    // A flat face isn't a face of revolution: no hole.
+    let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [5.0, 5.0, 0.0]));
+    assert!(solid.hole_faces(top).is_empty());
+}
+
+#[test]
+fn create_selection_fillets_of_one_radius_and_tangent_faces() {
+    // A 40 × 20 × 10 block, its vertical edges at (0, 0) and (40, 20) filleted R2 and at
+    // (40, 0) R3: Fillets from an R2 face takes both R2 faces, from the R3 face only it, from
+    // a flat face nothing. Tangent connected from the front (y = 0) runs round the fillets to
+    // the left, right and back faces (7 faces) but not over the sharp (0, 20) edge to the top.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let part = d.parts()[0].clone();
+    let edges = |pts: &[[f64; 3]]| {
+        pts.iter()
+            .map(|p| EdgeOrFace::Edge(edge_at(&part, *p)))
+            .collect::<Vec<_>>()
+    };
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: edges(&[[0.0, 0.0, 5.0], [40.0, 20.0, 5.0]]),
+            size: 2.0,
+            size_expr: "2 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: edges(&[[40.0, 0.0, 5.0]]),
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let part = d.parts()[0].clone();
+    let solid = &part.solid;
+    let radius = |r: f64| {
+        (0..solid.faces.len())
+            .filter(|&i| solid.fillet_radius(i).is_some_and(|x| (x - r).abs() < 1e-9))
+            .collect::<Vec<_>>()
+    };
+    let (r2, r3) = (radius(2.0), radius(3.0));
+    assert_eq!((r2.len(), r3.len()), (2, 1));
+    assert_eq!(solid.fillet_faces(r2[0]), r2);
+    assert_eq!(solid.fillet_faces(r3[0]), r3);
+    let front = index_of(&part, &face_at(&part, [0.0, -1.0, 0.0], [20.0, 0.0, 5.0]));
+    assert!(solid.fillet_faces(front).is_empty());
+    let chain = solid.tangent_faces(front);
+    assert_eq!(chain.len(), 7, "{:?}", names(&part, chain));
+    assert!(chain.iter().all(|i| {
+        solid.faces[*i]
+            .plane
+            .is_none_or(|p| p.normal()[2].abs() < 1e-9)
+    }));
+}
+
+#[test]
+fn create_selection_fillets_take_torus_fillets_by_their_tube_radius() {
+    // A Ø20 × 10 cylinder with its top edge filleted R2: the fillet is a torus (major radius
+    // 8, tube 2), found as an R2 fillet.
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        }],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+    let f = FeatureId::new();
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: f,
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 0.0, 10.0]))],
+            size: 2.0,
+            size_expr: "2 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let part = d.parts()[0].clone();
+    let solid = &part.solid;
+    let torus = (0..solid.faces.len())
+        .find(|&i| solid.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Torus))
+        .expect("the fillet's torus");
+    close(solid.fillet_radius(torus).unwrap(), 2.0, 1e-9);
+    assert_eq!(solid.fillet_faces(torus), vec![torus]);
+}
+
+/// A Delete face of `faces` added to `d`.
+fn delete_faces(d: &mut Doc, faces: Vec<FaceRef>) {
+    d.add(AddFeature {
+        element: d.el,
+        feature: FeatureId::new(),
+        base_name: "Delete face".into(),
+        kind: FeatureKind::DirectEdit(cadrs_core::direct_edit::DirectEditFeature {
+            faces,
+            ..Default::default()
+        }),
+    });
+}
+
+/// The faces of `part` that `pick` accepts, as references.
+fn faces_of(part: &Part, pick: impl Fn(&cadrs_core::solid::SolidFace) -> bool) -> Vec<FaceRef> {
+    let s = &part.solid;
+    (0..s.faces.len())
+        .filter(|&i| pick(&s.faces[i]))
+        .map(|i| FaceRef {
+            part: part.id,
+            face: s.faces[i].name,
+            seed: s.face_point(i).unwrap(),
+        })
+        .collect()
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_and_a_chamfer() {
+    // A 40 × 20 × 10 block, an R3 fillet on its vertical edge at (40, 20) and a 2 mm chamfer on
+    // the one at (0, 0): 8000 − (1 − π/4)·9·10 − 2·2/2·10. Deleting the fillet's face makes the
+    // corner sharp again (the chamfer stays); deleting the chamfer's too gives the whole block.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let part = d.parts()[0].clone();
+    let (fillet_edge, chamfer_edge) = (
+        edge_at(&part, [40.0, 20.0, 5.0]),
+        edge_at(&part, [0.0, 0.0, 5.0]),
+    );
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(fillet_edge)],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    d.add(AddFeature::chamfer(
+        d.el,
+        FeatureId::new(),
+        ChamferFeature {
+            entities: vec![EdgeOrFace::Edge(chamfer_edge)],
+            distance: 2.0,
+            distance_expr: "2 mm".into(),
+            ..ChamferFeature::default()
+        },
+    ));
+    let (round, bevel) = ((1.0 - PI / 4.0) * 9.0 * 10.0, 20.0);
+    close(d.volume(), 8000.0 - round - bevel, 1e-6);
+    let fillet = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+    });
+    assert_eq!(fillet.len(), 1);
+    delete_faces(&mut d, fillet);
+    close(d.volume(), 8000.0 - bevel, 1e-6);
+    let chamfer = faces_of(&d.parts()[0], |f| {
+        f.plane.is_some_and(|p| {
+            let n = p.normal();
+            n[2].abs() < 1e-9 && n[0].abs() > 1e-3 && n[1].abs() > 1e-3
+        })
+    });
+    assert_eq!(chamfer.len(), 1);
+    delete_faces(&mut d, chamfer);
+    close(d.volume(), 8000.0, 1e-6);
+    assert_eq!(d.parts()[0].solid.faces.len(), 6, "a plain block again");
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_in_an_inside_corner() {
+    // An L: a 40 × 20 × 10 block and a 10 × 20 × 20 upright on its end (12 000), the inside
+    // edge at x = 10, z = 10 filleted R3, which adds (1 − π/4)·9·20. Deleting the fillet (a
+    // protrusion: the corner's material) leaves the sharp corner.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    d.extrude_rect(0.0, 0.0, 10.0, 20.0, 30.0, BooleanOp::Add);
+    close(d.volume(), 12_000.0, 1e-6);
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 10.0, 10.0]))],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    close(d.volume(), 12_000.0 + (1.0 - PI / 4.0) * 9.0 * 20.0, 1e-6);
+    let fillet = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+    });
+    assert_eq!(fillet.len(), 1);
+    delete_faces(&mut d, fillet);
+    close(d.volume(), 12_000.0, 1e-6);
+    // The L's 8 faces again: its section 40·10 + 10·20 = 600 at each end and its 140 mm
+    // perimeter 20 across, 2·600 + 140·20.
+    let part = d.parts()[0].clone();
+    assert_eq!(part.solid.faces.len(), 8);
+    close(
+        part.mass.unwrap().surface_area,
+        2.0 * 600.0 + 140.0 * 20.0,
+        1e-6,
+    );
+}
+
+#[test]
+fn delete_face_takes_off_a_fillet_and_a_chamfer_at_once() {
+    // As above, both faces in one Delete face (two groups healed in turn): the whole block,
+    // 6 faces of 2·(800 + 400 + 200).
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let part = d.parts()[0].clone();
+    let (fillet_edge, chamfer_edge) = (
+        edge_at(&part, [40.0, 20.0, 5.0]),
+        edge_at(&part, [0.0, 0.0, 5.0]),
+    );
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(fillet_edge)],
+            size: 3.0,
+            size_expr: "3 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    d.add(AddFeature::chamfer(
+        d.el,
+        FeatureId::new(),
+        ChamferFeature {
+            entities: vec![EdgeOrFace::Edge(chamfer_edge)],
+            distance: 2.0,
+            distance_expr: "2 mm".into(),
+            ..ChamferFeature::default()
+        },
+    ));
+    let faces = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+            || f.plane.is_some_and(|p| {
+                let n = p.normal();
+                n[2].abs() < 1e-9 && n[0].abs() > 1e-3 && n[1].abs() > 1e-3
+            })
+    });
+    assert_eq!(faces.len(), 2);
+    delete_faces(&mut d, faces);
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, 8000.0, 1e-6);
+    close(part.mass.unwrap().surface_area, 2800.0, 1e-6);
+    assert_eq!(part.solid.faces.len(), 6);
+}
+
+#[test]
+fn delete_face_takes_off_a_round_edges_fillet() {
+    // A Ø20 × 10 cylinder with its top edge filleted R2 (a torus between the top and the wall):
+    // deleting it gives the plain cylinder, π·10²·10.
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        }],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 0.0, 10.0]))],
+            size: 2.0,
+            size_expr: "2 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let torus = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Torus)
+    });
+    assert_eq!(torus.len(), 1);
+    delete_faces(&mut d, torus);
+    let part = d.parts()[0].clone();
+    close(part.mass.unwrap().volume, PI * 1000.0, 1e-6);
+    // The plain cylinder's 3 faces: 2π·10·10 + 2·π·10².
+    assert_eq!(part.solid.faces.len(), 3);
+    close(part.mass.unwrap().surface_area, 400.0 * PI, 1e-6);
+}
+
+#[test]
+fn create_selection_hole_is_the_bore_not_the_tube_round_it() {
+    // A tube: Ø20 outside, Ø10 bore, 10 long. Hole from the bore takes the bore alone (not the
+    // ends, which a wall and the outside bound, nor the outside, which faces away); from the
+    // outside (facing away from the axis) it is no hole.
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![
+            SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 10.0,
+                construction: false,
+            },
+            SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 5.0,
+                construction: false,
+            },
+        ],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(7.5, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    close(d.volume(), PI * 75.0 * 10.0, 1e-6);
+    let s = &part.solid;
+    let radius = |r: f64| {
+        (0..s.faces.len())
+            .find(|&i| s.faces[i].radius.is_some_and(|x| (x - r).abs() < 1e-9))
+            .unwrap()
+    };
+    let (bore, outside) = (radius(5.0), radius(10.0));
+    assert_eq!(s.hole_faces(bore), vec![bore]);
+    assert!(s.hole_faces(outside).is_empty());
+    // Neither is a fillet: no surfaces they're tangent to.
+    assert!(s.fillet_radius(bore).is_none() && s.fillet_radius(outside).is_none());
+}
+
+#[test]
+fn create_selection_fillets_leave_out_a_teardrop_bore() {
+    // The carriage's teardrop bore is tangent to the two flat faces over it, but it turns three
+    // quarters round: not a fillet. Its flat faces aren't either.
+    let b = rebuild::build(&samples::carriage::features(
+        samples::carriage::Case::Plain,
+        true,
+    ));
+    assert!(b.errors.is_empty(), "{:?}", b.errors);
+    let s = &b.parts[0].solid;
+    assert!((0..s.faces.len()).all(|i| s.fillet_radius(i).is_none()));
+}
+
+#[test]
+fn create_selection_bounded_faces_and_pattern_copies() {
+    // A 40 × 20 × 10 block with two Ø6 holes and a Ø8 boss 5 high. Bounded faces from the
+    // boss's top, bounded by the block's top: the boss's top and wall. With no boundary (it
+    // doesn't close) the seed and the faces next to it. The holes' walls are copies of each
+    // other (Select patterns); the boss's wall isn't one of them.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let circle = |x: f64, y: f64, r: f64| SketchOp::AddCircle {
+        center: Vec2::new(x, y),
+        radius: r,
+        construction: false,
+    };
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![circle(8.0, 10.0, 3.0), circle(32.0, 10.0, 3.0)],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(8.0, 10.0), Vec2::new(32.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let s = d.sketch(PlaneRef::Top, vec![circle(20.0, 10.0, 4.0)]);
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(20.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Add,
+                ..samples::extrude_of(regions, 15.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    let at = |n: [f64; 3], p: [f64; 3]| index_of(&part, &face_at(&part, n, p));
+    let (boss_top, block_top) = (
+        at([0.0, 0.0, 1.0], [20.0, 10.0, 15.0]),
+        at([0.0, 0.0, 1.0], [2.0, 2.0, 10.0]),
+    );
+    let boss = s.bounded_faces(boss_top, &[block_top], &[]);
+    assert_eq!(boss.len(), 2, "{:?}", names(&part, boss));
+    let mut open = s.bounded_faces(block_top, &[], &[]);
+    open.sort();
+    let mut next = vec![block_top];
+    next.extend(s.neighbours(block_top));
+    next.sort();
+    assert_eq!(open, next);
+    let radius = |r: f64| {
+        (0..s.faces.len())
+            .filter(|&i| s.faces[i].radius.is_some_and(|x| (x - r).abs() < 1e-9))
+            .collect::<Vec<_>>()
+    };
+    let (holes, boss_wall) = (radius(3.0), radius(4.0));
+    assert_eq!(holes.len(), 2);
+    assert_eq!(s.pattern_copies(holes[0]), vec![holes[1]]);
+    assert!(s.pattern_copies(boss_wall[0]).is_empty());
+}
+
+#[test]
+fn delete_face_heals_a_fillet_against_a_cone() {
+    // A Ø20 × 10 cylinder, its top edge chamfered 2 (a cone), the edge between the chamfer and
+    // the top filleted R0.5. Deleting the fillet extends the cone and the top to meet again:
+    // the chamfered cylinder (its volume, area and 4 faces).
+    let cylinder = |d: &mut Doc| {
+        let s = d.sketch(
+            PlaneRef::Top,
+            vec![SketchOp::AddCircle {
+                center: Vec2::new(0.0, 0.0),
+                radius: 10.0,
+                construction: false,
+            }],
+        );
+        let g =
+            d.d.element(d.el)
+                .unwrap()
+                .feature(s)
+                .unwrap()
+                .sketch()
+                .unwrap()
+                .geometry
+                .clone();
+        let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+        d.h.execute(
+            &mut d.d,
+            &AddExtrude {
+                element: d.el,
+                feature: FeatureId::new(),
+                extrude: samples::extrude_of(regions, 10.0),
+            },
+        )
+        .unwrap();
+        let part = d.parts()[0].clone();
+        d.add(AddFeature::chamfer(
+            d.el,
+            FeatureId::new(),
+            ChamferFeature {
+                entities: vec![EdgeOrFace::Edge(edge_at(&part, [10.0, 0.0, 10.0]))],
+                distance: 2.0,
+                distance_expr: "2 mm".into(),
+                ..ChamferFeature::default()
+            },
+        ));
+    };
+    let mut plain = Doc::new();
+    cylinder(&mut plain);
+    let want = plain.parts()[0].clone();
+    let mut d = Doc::new();
+    cylinder(&mut d);
+    let part = d.parts()[0].clone();
+    d.add(AddFeature::fillet(
+        d.el,
+        FeatureId::new(),
+        FilletFeature {
+            entities: vec![EdgeOrFace::Edge(edge_at(&part, [8.0, 0.0, 10.0]))],
+            size: 0.5,
+            size_expr: "0.5 mm".into(),
+            ..FilletFeature::default()
+        },
+    ));
+    let torus = faces_of(&d.parts()[0], |f| {
+        f.kind == Some(cadrs_kernel::SurfaceKind::Torus)
+    });
+    assert_eq!(torus.len(), 1);
+    delete_faces(&mut d, torus);
+    let got = d.parts()[0].clone();
+    let (g, w) = (got.mass.unwrap(), want.mass.unwrap());
+    close(g.volume, w.volume, 1e-6 * w.volume);
+    close(g.surface_area, w.surface_area, 1e-6 * w.surface_area);
+    assert_eq!(got.solid.faces.len(), want.solid.faces.len());
+}
+
+#[test]
+fn a_slots_round_ends_arent_fillets_to_take() {
+    // A 40 × 20 × 10 block with an obround slot through it (10 wide, centres 10 apart): its
+    // round ends are half turns tangent to its sides (full rounds, so Fillets counts them) but
+    // Delete fillet faces doesn't take them with a face next to them.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let v = Vec2::new;
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![
+            SketchOp::AddPolyline {
+                points: vec![v(15.0, 5.0), v(25.0, 5.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddArc {
+                center: v(25.0, 10.0),
+                start: v(25.0, 5.0),
+                end: v(25.0, 15.0),
+                construction: false,
+            },
+            SketchOp::AddPolyline {
+                points: vec![v(25.0, 15.0), v(15.0, 15.0)],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddArc {
+                center: v(15.0, 10.0),
+                start: v(15.0, 15.0),
+                end: v(15.0, 5.0),
+                construction: false,
+            },
+        ],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[v(20.0, 10.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    close(
+        part.mass.unwrap().volume,
+        8000.0 - (100.0 + 25.0 * PI) * 10.0,
+        1e-6,
+    );
+    let ends: Vec<usize> = (0..s.faces.len())
+        .filter(|&i| s.faces[i].kind == Some(cadrs_kernel::SurfaceKind::Cylinder))
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for &i in &ends {
+        assert!(s.fillet_radius(i).is_some(), "a full round");
+        assert!(!s.is_small_fillet(i), "not one to take with a face");
+    }
+}
+
+#[test]
+fn a_boxs_bottom_isnt_a_copy_of_its_top() {
+    // Select patterns: the bottom has the top's shape but faces the other way; the sides of a
+    // cube face other ways too. No copies.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 10.0, 10.0, 10.0);
+    let part = d.parts()[0].clone();
+    let top = index_of(&part, &face_at(&part, [0.0, 0.0, 1.0], [5.0, 5.0, 10.0]));
+    assert!(part.solid.pattern_copies(top).is_empty());
+}
+
+#[test]
+fn select_patterns_finds_a_circular_patterns_copies() {
+    // A Ø60 × 10 disc with three 6 wide slots cut in from its rim at 90°, 210° and 330° (from
+    // r = 20 out): the back wall of one (flat, facing out) has the other two as copies, turned
+    // 120° about the disc's axis; a box's lone bottom isn't its top's (above).
+    let mut d = Doc::new();
+    let s = d.sketch(
+        PlaneRef::Top,
+        vec![SketchOp::AddCircle {
+            center: Vec2::new(0.0, 0.0),
+            radius: 30.0,
+            construction: false,
+        }],
+    );
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let regions = samples::region_refs(s, &g, &[Vec2::new(0.0, 0.0)]);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: samples::extrude_of(regions, 10.0),
+        },
+    )
+    .unwrap();
+    let at = |r: f64, t: f64, a: f64| {
+        let (c, s) = (a.to_radians().cos(), a.to_radians().sin());
+        Vec2::new(r * c - t * s, r * s + t * c)
+    };
+    let angles = [90.0, 210.0, 330.0];
+    let slots: Vec<SketchOp> = angles
+        .iter()
+        .map(|&a| SketchOp::AddPolyline {
+            points: vec![
+                at(20.0, -3.0, a),
+                at(35.0, -3.0, a),
+                at(35.0, 3.0, a),
+                at(20.0, 3.0, a),
+            ],
+            closed: true,
+            construction: false,
+            label: "Add rectangle",
+        })
+        .collect();
+    let s = d.sketch(PlaneRef::Top, slots);
+    let g =
+        d.d.element(d.el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry
+            .clone();
+    let seeds: Vec<Vec2> = angles.iter().map(|&a| at(25.0, 0.0, a)).collect();
+    let regions = samples::region_refs(s, &g, &seeds);
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: FeatureId::new(),
+            extrude: ExtrudeFeature {
+                op: BooleanOp::Remove,
+                ..samples::extrude_of(regions, 10.0)
+            },
+        },
+    )
+    .unwrap();
+    let part = d.parts()[0].clone();
+    let s = &part.solid;
+    let back = |a: f64| {
+        let p = at(20.0, 0.0, a);
+        let (c, sn) = (a.to_radians().cos(), a.to_radians().sin());
+        index_of(&part, &face_at(&part, [c, sn, 0.0], [p.x, p.y, 5.0]))
+    };
+    let walls: Vec<usize> = angles.iter().map(|&a| back(a)).collect();
+    let mut want = vec![walls[1], walls[2]];
+    want.sort();
+    assert_eq!(s.pattern_copies(walls[0]), want);
 }

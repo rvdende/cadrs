@@ -269,7 +269,7 @@ impl Rebuilder {
                 let a = x.axis.ok_or("Select an axis of rotation")?;
                 let axis = self
                     .axis(before, state, &a)
-                    .map_err(|e| e.replace("revolve axis", "axis of rotation"))?;
+                    .map_err(|e| rotation_axis_error(&e))?;
                 Map::Rigid(Motion::rotation(&axis, x.angle.to_radians() * sign))
             }
             TransformType::CopyInPlace => Map::Rigid(Motion::identity()),

@@ -288,8 +288,16 @@ pub(crate) enum Role {
     FillEdges,
     FillContinuity,
     // The direct edits (`crate::direct_edit_ui`).
+    DirectEditType,
+    DirectEditVoid,
+    DirectEditEnd,
+    DirectEditUpTo,
+    DirectEditOffset,
     DirectEditFaces,
+    DirectEditDirection,
+    DirectEditAxis,
     DirectEditDistance,
+    DirectEditAngle,
     // P3I.2: the Sheet metal model (`crate::sheetmetal_ui`). Tabs:
     SmOpTab,
     // Lists
@@ -720,6 +728,9 @@ fn dialog(
         Role::SmSecondUpTo,
         Role::FlatRegions,
         Role::DirectEditFaces,
+        Role::DirectEditDirection,
+        Role::DirectEditAxis,
+        Role::DirectEditUpTo,
     ]
     .into_iter()
     .chain(crate::sheetmetal_features_ui::LIST_ROLES)
@@ -1933,6 +1944,9 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::DiameterTolPrecision | Role::DepthTolPrecision | Role::StyleTol(_, 3) => "Precision",
         Role::TipAngle => "Tip angle",
         Role::TransformType => "Transform type",
+        Role::DirectEditType => "Move type",
+        Role::DirectEditVoid => "Void",
+        Role::DirectEditEnd => "End type",
         _ => return,
     };
     change(&mut commands, label, move |k| match (k, role) {
@@ -2002,6 +2016,14 @@ fn on_select(ev: On<SelectChange>, q: Query<&Role>, mut commands: Commands) {
         Role::TransformType => cadrs_core::transform::TransformType::ALL
             .get(i)
             .map(|t| crate::transform_ui::first_field(*t)),
+        // Move face's: Rotate's axis, else its faces (never a field it no longer shows).
+        Role::DirectEditType => cadrs_core::direct_edit::MoveType::ALL
+            .get(i)
+            .map(|t| crate::direct_edit_ui::first_field(*t)),
+        // Move face's end type: Up to entity's field takes the picks.
+        Role::DirectEditEnd => cadrs_core::direct_edit::MoveEnd::ALL
+            .get(i)
+            .map(|e| crate::direct_edit_ui::end_field(*e)),
         _ => None,
     };
     if let Some(f) = next {
@@ -2519,8 +2541,13 @@ fn on_button(a: On<Activate>, q: Query<&Role>, mut commands: Commands) {
             }
         }),
         Ok(Role::CreateSelectionFaces) => commands.queue(|world: &mut World| {
+            // The faces field Add selection fills: a direct edit's, or a pattern's or mirror's.
+            let field = match crate::applied::current(world).map(|f| f.kind) {
+                Some(FeatureKind::DirectEdit(_)) => AppliedField::DirectEditFaces,
+                _ => AppliedField::PatternEntities,
+            };
             if let Some(mut s) = world.get_resource_mut::<AppliedSession>() {
-                s.field = AppliedField::PatternEntities;
+                s.field = field;
             }
             crate::create_selection::open_faces(world);
         }),
@@ -2667,6 +2694,17 @@ pub fn toolbar_kind(name: &str) -> Option<AppliedKind> {
         "helix" => Some(AppliedKind::Helix),
         "fill" => Some(AppliedKind::Fill),
         "sheet-metal-model" => Some(AppliedKind::SheetMetal),
+        // The direct edits (icon-rs has no move face, delete face or simplify icon yet: offset,
+        // delete and surface stand in).
+        "move-face" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::MoveFace,
+        )),
+        "delete-face" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::DeleteFace,
+        )),
+        "simplify" => Some(AppliedKind::DirectEdit(
+            cadrs_core::direct_edit::DirectEditKind::Simplify,
+        )),
         n => crate::sheetmetal_tools_ui::SmTool::named(n).map(AppliedKind::SheetMetalTool),
     }
 }

@@ -744,6 +744,16 @@ impl Kernel for NativeKernel {
         self.colored(r)
     }
 
+    fn delete_faces_with(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        void: VoidFill,
+    ) -> Result<OpResult> {
+        let r = super::surfacing::delete_faces_with(self, body, faces, void);
+        self.colored(r)
+    }
+
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
         let r = super::offset::offset(self, body, spec);
         self.colored(r)
@@ -761,6 +771,17 @@ impl Kernel for NativeKernel {
 
     fn move_faces(&mut self, body: BodyId, faces: &[FaceId], motion: &Motion) -> Result<OpResult> {
         let r = super::local::move_faces(self, body, faces, motion);
+        self.colored(r)
+    }
+
+    fn move_faces_swept(
+        &mut self,
+        body: BodyId,
+        faces: &[FaceId],
+        how: &FaceMove,
+        fillets: &[Refillet],
+    ) -> Result<OpResult> {
+        let r = super::move_sweep::move_faces_swept(self, body, faces, how, fillets);
         self.colored(r)
     }
 

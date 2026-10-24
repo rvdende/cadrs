@@ -670,7 +670,7 @@ pub(crate) fn select_index(kind: &FeatureKind, role: Role) -> Option<usize> {
             &Continuity::ALL,
             &x.continuity.first().copied().unwrap_or_default(),
         ),
-        _ => return None,
+        (k, r) => return crate::direct_edit_ui::select_index(k, r),
     })
 }
 
@@ -692,7 +692,7 @@ pub(crate) fn select(k: &mut FeatureKind, role: Role, i: usize) {
             let c = Continuity::ALL[i.min(2)];
             x.continuity = vec![c; x.edges.len().max(1)];
         }
-        _ => {}
+        (k, r) => crate::direct_edit_ui::select(k, r, i),
     }
 }
 
@@ -712,12 +712,12 @@ pub(crate) fn is_checkbox(name: &str) -> bool {
     matches!(
         name,
         "thicken-mid-plane-checkbox" | "thicken-keep-tools-checkbox" | "thicken-merge-all-checkbox"
-    )
+    ) || crate::direct_edit_ui::is_checkbox(name)
 }
 
 pub(crate) fn checkbox(k: &mut FeatureKind, name: &str, on: bool) -> Option<&'static str> {
     let FeatureKind::Thicken(x) = k else {
-        return None;
+        return crate::direct_edit_ui::checkbox(k, name, on);
     };
     Some(match name {
         "thicken-mid-plane-checkbox" => {
@@ -748,7 +748,7 @@ pub(crate) fn is_plain(role: Role) -> bool {
 }
 
 pub(crate) fn is_angle(role: Role) -> bool {
-    role == Role::HelixStartAngle
+    role == Role::HelixStartAngle || crate::direct_edit_ui::is_angle(role)
 }
 
 pub(crate) fn number_label(role: Role) -> Option<&'static str> {

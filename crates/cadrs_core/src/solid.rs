@@ -839,6 +839,226 @@ impl Solid {
     /// Faces → Pocket, PS27.12): `seed` and every face reached from it across concave or smooth
     /// edges; convex edges (the pocket's rim) stop it.
     pub fn pocket_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| {
+            matches!(d, Some(Dihedral::Concave | Dihedral::Smooth))
+        })
+    }
+
+    /// The faces of the protrusion (a boss, a rib) `seed` belongs to (Create selection → Faces →
+    /// Protrusion): `seed` and every face reached from it across convex or smooth edges;
+    /// concave edges (where the protrusion stands on the part) stop it.
+    pub fn protrusion_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| {
+            matches!(d, Some(Dihedral::Convex | Dihedral::Smooth))
+        })
+    }
+
+    /// The faces tangent-connected to `seed` (Create selection → Faces → Tangent connected):
+    /// `seed` and every face reached from it across smooth edges.
+    pub fn tangent_faces(&self, seed: usize) -> Vec<usize> {
+        self.spread(seed, |d, _| d == Some(Dihedral::Smooth))
+    }
+
+    /// The faces of the round hole `seed` is a wall of (Create selection → Faces → Hole): the
+    /// walls about its axis that it reaches (faces of revolution facing the axis: walls, a
+    /// countersink, a drill point) and the flat faces across the axis with only walls round them
+    /// (a counterbore's floor, a flat bottom; not a tube's end). From a floor, its hole; empty
+    /// when `seed` is neither a wall nor a floor.
+    pub fn hole_faces(&self, seed: usize) -> Vec<usize> {
+        const TOL: f64 = 1e-6;
+        let Some((o, d)) = self.faces.get(seed).and_then(|f| f.axis) else {
+            // A floor (a counterbore's): the hole of a wall next to it that takes it in.
+            return self
+                .faces
+                .get(seed)
+                .filter(|f| f.plane.is_some())
+                .and_then(|_| {
+                    self.neighbours(seed)
+                        .into_iter()
+                        .filter(|&j| self.faces[j].axis.is_some())
+                        .map(|j| self.hole_faces(j))
+                        .find(|h| h.contains(&seed))
+                })
+                .unwrap_or_default();
+        };
+        let d = normalize(d);
+        let parallel = |v: Vec3| len(cross(normalize(v), d)) <= TOL;
+        let on_axis = |p: Vec3| len(cross(sub(p, o), d)) <= TOL;
+        let wall = |i: usize| {
+            let f = &self.faces[i];
+            let facing_axis = || {
+                let (Some(p), Some(n)) = (self.face_point(i), self.face_normal(i)) else {
+                    return false;
+                };
+                let foot = add(o, scale(d, dot(sub(p, o), d)));
+                dot(n, sub(p, foot)) < 0.0
+            };
+            f.axis
+                .is_some_and(|(p, v)| parallel(v) && on_axis(p) && facing_axis())
+        };
+        if !wall(seed) {
+            return Vec::new();
+        }
+        let floor = |i: usize| {
+            self.faces[i].plane.is_some_and(|pl| parallel(pl.normal()))
+                && self.neighbours(i).into_iter().all(wall)
+        };
+        self.spread(seed, |_, i| wall(i) || floor(i))
+    }
+
+    /// The faces between `seed` and a boundary (Create selection → Faces → Bounded faces):
+    /// every face reached from `seed` without crossing an edge of `edges` or entering a face of
+    /// `faces`. When the boundary doesn't close (the spread reaches every face not in it), the
+    /// seed and the faces next to it, as Onshape does.
+    pub fn bounded_faces(&self, seed: usize, faces: &[usize], edges: &[EdgeName]) -> Vec<usize> {
+        if seed >= self.faces.len() || faces.contains(&seed) {
+            return Vec::new();
+        }
+        let region: Vec<usize> =
+            self.spread_edges(seed, |e, i| !edges.contains(&e.name) && !faces.contains(&i));
+        let open = region.len() + faces.iter().filter(|f| **f < self.faces.len()).count()
+            >= self.faces.len();
+        if open {
+            let mut out = vec![seed];
+            out.extend(self.neighbours(seed));
+            return out;
+        }
+        region
+    }
+
+    /// The other faces like `seed` (Create selection's Select patterns): the same kind of
+    /// surface, area, radius, perimeter and number of edges, not next to it, and either facing
+    /// the same way (a linear pattern's copies) or turned from it about an axis that carries the
+    /// seed's outline onto them, with at least two on one axis (a circular pattern's: three or
+    /// more round it). A lone face turned over (a box's bottom against its top) isn't one.
+    pub fn pattern_copies(&self, seed: usize) -> Vec<usize> {
+        const TOL: f64 = 1e-6;
+        let Some(f) = self.faces.get(seed) else {
+            return Vec::new();
+        };
+        let same = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() <= TOL * a.abs().max(1.0),
+            (None, None) => true,
+            _ => false,
+        };
+        // Planes the same way round; faces of revolution on parallel axes.
+        let facing = |g: &SolidFace| match (g.plane, f.plane, g.axis, f.axis) {
+            (Some(p), Some(q), ..) => {
+                let (n, m) = (normalize(p.normal()), normalize(q.normal()));
+                len(cross(n, m)) <= TOL && dot(n, m) > 0.0
+            }
+            (None, None, Some((_, v)), Some((_, w))) => {
+                len(cross(normalize(v), normalize(w))) <= TOL
+            }
+            (None, None, None, None) => true,
+            _ => false,
+        };
+        let perimeter = |g: &SolidFace| -> f64 {
+            g.loops
+                .iter()
+                .map(|l| {
+                    (0..l.len())
+                        .map(|k| len(sub(l[(k + 1) % l.len()], l[k])))
+                        .sum::<f64>()
+                })
+                .sum()
+        };
+        let edges = |i: usize| self.face_edges(&self.faces[i].name).len();
+        let next = self.neighbours(seed);
+        let (p0, e0) = (perimeter(f), edges(seed));
+        let alike: Vec<usize> = (0..self.faces.len())
+            .filter(|&i| i != seed && !next.contains(&i))
+            .filter(|&i| {
+                let g = &self.faces[i];
+                g.kind == f.kind
+                    && same(g.area, f.area)
+                    && same(g.radius, f.radius)
+                    && edges(i) == e0
+                    && (perimeter(g) - p0).abs() <= 1e-4 * p0.max(1.0)
+            })
+            .collect();
+        let mut out: Vec<usize> = alike
+            .iter()
+            .copied()
+            .filter(|&i| facing(&self.faces[i]))
+            .collect();
+        // Turned copies, grouped by the axis that turns the seed onto each.
+        let mut axes: Vec<(Vec3, Vec3, Vec<usize>)> = Vec::new();
+        for &i in alike.iter().filter(|i| !out.contains(i)) {
+            let Some((c, a)) = self.turn_onto(seed, i) else {
+                continue;
+            };
+            let on = |(o, b): (&Vec3, &Vec3)| {
+                len(cross(*b, a)) <= 1e-6 && len(cross(sub(c, *o), *b)) <= 1e-5
+            };
+            match axes.iter_mut().find(|(o, b, _)| on((o, b))) {
+                Some(g) => g.2.push(i),
+                None => axes.push((c, a, vec![i])),
+            }
+        }
+        for (_, _, g) in axes.into_iter().filter(|g| g.2.len() >= 2) {
+            out.extend(g);
+        }
+        out.sort();
+        out
+    }
+
+    /// The axis (a point on it and its direction) of a turn that carries face `from` onto face
+    /// `to`: found from their centres and directions (a plane's normal, a face of revolution's
+    /// axis), and checked by turning `from`'s outline onto `to`.
+    fn turn_onto(&self, from: usize, to: usize) -> Option<(Vec3, Vec3)> {
+        let (f, g) = (&self.faces[from], &self.faces[to]);
+        let dir = |h: &SolidFace| {
+            h.plane
+                .map(|p| normalize(p.normal()))
+                .or(h.axis.map(|a| normalize(a.1)))
+        };
+        let (df, dg, pf, pg) = (dir(f)?, dir(g)?, f.center?, g.center?);
+        // Every difference a turn makes is square to its axis; when the two differences lie
+        // along each other (faces looking away from the axis), the axis is square to both
+        // directions.
+        let a = cross(sub(dg, df), sub(pg, pf));
+        let a = if len(a) > 1e-9 { a } else { cross(df, dg) };
+        if len(a) < 1e-9 {
+            return None;
+        }
+        let a = normalize(a);
+        let flat = |v: Vec3| sub(v, scale(a, dot(v, a)));
+        let (uf, ug) = (normalize(flat(df)), normalize(flat(dg)));
+        let angle = dot(cross(uf, ug), a).atan2(dot(uf, ug));
+        if angle.abs() < 1e-9 {
+            return None;
+        }
+        // The axis's point: on the bisector of the centres' chord, where the turn takes one
+        // centre to the other.
+        let chord = sub(flat(pg), flat(pf));
+        let half = len(chord) / 2.0;
+        let mid = scale(add(pf, pg), 0.5);
+        let side = normalize(cross(a, chord));
+        let turn = |p: Vec3, c: Vec3| {
+            let r = sub(p, c);
+            let (cs, sn) = (angle.cos(), angle.sin());
+            let along = scale(a, dot(r, a));
+            let rr = sub(r, along);
+            add(c, add(along, add(scale(rr, cs), scale(cross(a, rr), sn))))
+        };
+        let h = half / (angle / 2.0).tan();
+        let c = [scale(side, h), scale(side, -h)]
+            .into_iter()
+            .map(|o| add(mid, o))
+            .find(|c| len(sub(turn(pf, *c), pg)) <= 1e-6 * (1.0 + len(pf)))?;
+        // The outline turned lies on `to`.
+        let fits = f
+            .loops
+            .iter()
+            .flatten()
+            .all(|p| self.face_contains(to, turn(*p, c)));
+        fits.then_some((c, a))
+    }
+
+    /// `seed` and every face reached from it across edges `cross` accepts (given the edge and
+    /// the face on its other side).
+    fn spread_edges(&self, seed: usize, cross: impl Fn(&SolidEdge, usize) -> bool) -> Vec<usize> {
         let Some(first) = self.faces.get(seed).map(|f| f.name) else {
             return Vec::new();
         };
@@ -854,7 +1074,203 @@ impl Solid {
                 if other == cur || names.contains(&other) {
                     continue;
                 }
-                if matches!(self.dihedral(e), Some(Dihedral::Concave | Dihedral::Smooth)) {
+                let Some(i) = self.faces.iter().position(|f| f.name == other) else {
+                    continue;
+                };
+                if cross(e, i) {
+                    names.push(other);
+                    todo.push(other);
+                }
+            }
+        }
+        names
+            .iter()
+            .filter_map(|n| self.faces.iter().position(|f| f.name == *n))
+            .collect()
+    }
+
+    /// The faces across the edges of `face` (indices, each once).
+    pub fn neighbours(&self, face: usize) -> Vec<usize> {
+        let name = self.faces[face].name;
+        let mut out = Vec::new();
+        for e in self.edges.iter().filter(|e| e.name.touches(&name)) {
+            let other = if e.name.faces[0] == name {
+                e.name.faces[1]
+            } else {
+                e.name.faces[0]
+            };
+            if let Some(i) = self.faces.iter().position(|f| f.name == other)
+                && i != face
+                && !out.contains(&i)
+            {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// The faces across the smooth (tangent) edges of `face` (a fillet's: the faces it rounds,
+    /// not its ends).
+    pub fn tangent_neighbours(&self, face: usize) -> Vec<usize> {
+        let name = self.faces[face].name;
+        let mut out = Vec::new();
+        for e in self.edges.iter().filter(|e| e.name.touches(&name)) {
+            if self.dihedral(e) != Some(Dihedral::Smooth) {
+                continue;
+            }
+            let other = if e.name.faces[0] == name {
+                e.name.faces[1]
+            } else {
+                e.name.faces[0]
+            };
+            if let Some(i) = self.faces.iter().position(|f| f.name == other)
+                && i != face
+                && !out.contains(&i)
+            {
+                out.push(i);
+            }
+        }
+        out
+    }
+
+    /// Whether two faces lie on one surface (a STEP file's cylinder in halves): the same kind,
+    /// axis and radius, or the same plane.
+    fn same_surface(&self, a: usize, b: usize) -> bool {
+        const TOL: f64 = 1e-6;
+        let (f, g) = (&self.faces[a], &self.faces[b]);
+        if f.kind != g.kind {
+            return false;
+        }
+        match (f.plane, g.plane, f.axis, g.axis) {
+            (Some(p), Some(q), ..) => {
+                let (n, m) = (normalize(p.normal()), normalize(q.normal()));
+                len(cross(n, m)) <= TOL && dot(sub(q.origin, p.origin), n).abs() <= TOL
+            }
+            (_, _, Some((o, d)), Some((p, e))) => {
+                let d = normalize(d);
+                len(cross(d, normalize(e))) <= TOL
+                    && len(cross(sub(p, o), d)) <= TOL
+                    && f.radius
+                        .zip(g.radius)
+                        .is_some_and(|(r, s)| (r - s).abs() <= TOL)
+            }
+            _ => false,
+        }
+    }
+
+    /// The radius of the constant-radius fillet `face` is (a cylinder, a torus's tube or a
+    /// sphere at a corner, tangent to at least two other surfaces), or `None`. A cylinder round
+    /// more than half a turn (a teardrop's bore) isn't a fillet; a full round's half turn is.
+    pub fn fillet_radius(&self, face: usize) -> Option<f64> {
+        use cadrs_kernel::SurfaceKind;
+        let f = self.faces.get(face)?;
+        let r = match f.kind? {
+            SurfaceKind::Cylinder => {
+                if self.turn_span_cos(face)? < -0.1 {
+                    return None;
+                }
+                f.radius?
+            }
+            SurfaceKind::Sphere => f.radius?,
+            // The tube's radius: any of its vertices' distance from the core circle (the
+            // reported radius is the major one, the axis's point the torus's centre).
+            SurfaceKind::Torus => {
+                let ((c, d), big) = (f.axis?, f.radius?);
+                let d = normalize(d);
+                let p = self.positions[*self.indices.get(3 * f.first_triangle)? as usize];
+                let cp = sub(p, c);
+                let h = dot(cp, d);
+                let rho = len(sub(cp, scale(d, h)));
+                ((rho - big).powi(2) + h * h).sqrt()
+            }
+            _ => return None,
+        };
+        // Tangent to other surfaces (not to the rest of its own, cut in pieces).
+        let smooth = self
+            .edges
+            .iter()
+            .filter(|e| e.name.touches(&f.name) && e.name.faces[0] != e.name.faces[1])
+            .filter(|e| self.dihedral(e) == Some(Dihedral::Smooth))
+            .filter(|e| {
+                let other = if e.name.faces[0] == f.name {
+                    e.name.faces[1]
+                } else {
+                    e.name.faces[0]
+                };
+                self.faces
+                    .iter()
+                    .position(|g| g.name == other)
+                    .is_some_and(|i| !self.same_surface(face, i))
+            })
+            .count();
+        (smooth >= 2).then_some(r)
+    }
+
+    /// How far round its axis a cylindrical face turns, as the least cosine between its mesh
+    /// normals (across the axis) and their mean: near 1 for a sliver, 0 at half a turn.
+    fn turn_span_cos(&self, face: usize) -> Option<f64> {
+        let f = &self.faces[face];
+        let (_, d) = f.axis?;
+        let d = normalize(d);
+        let normals: Vec<Vec3> = (f.first_triangle..f.first_triangle + f.triangle_count)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| self.positions[self.indices[3 * t + k] as usize]);
+                let n = cross(sub(b, a), sub(c, a));
+                normalize(sub(n, scale(d, dot(n, d))))
+            })
+            .collect();
+        let mean = normals.iter().fold([0.0; 3], |m, n| add(m, *n));
+        if len(mean) < 1e-9 {
+            return Some(-1.0);
+        }
+        let mean = normalize(mean);
+        normals.iter().map(|n| dot(*n, mean)).min_by(f64::total_cmp)
+    }
+
+    /// Whether `face` is a fillet that Delete face's "Delete fillet faces" takes with a face
+    /// next to it: a fillet ([`Solid::fillet_radius`]) short of half a turn (a slot's round end
+    /// is part of the slot, not a fillet to take).
+    pub fn is_small_fillet(&self, face: usize) -> bool {
+        use cadrs_kernel::SurfaceKind;
+        self.fillet_radius(face).is_some()
+            && (self.faces[face].kind != Some(SurfaceKind::Cylinder)
+                || self.turn_span_cos(face).is_some_and(|c| c > 0.1))
+    }
+
+    /// The fillets of the part with the same radius as the fillet `seed` (Create selection →
+    /// Faces → Fillets, Onshape's `qFilletFaces` with `EQUAL`). Empty when `seed` isn't one.
+    pub fn fillet_faces(&self, seed: usize) -> Vec<usize> {
+        let Some(r0) = self.fillet_radius(seed) else {
+            return Vec::new();
+        };
+        let tol = 1e-6 * r0.max(1.0);
+        (0..self.faces.len())
+            .filter(|&i| self.fillet_radius(i).is_some_and(|r| (r - r0).abs() <= tol))
+            .collect()
+    }
+
+    /// `seed` and every face reached from it across edges `cross` accepts (given the edge's
+    /// dihedral and the face on its other side).
+    fn spread(&self, seed: usize, cross: impl Fn(Option<Dihedral>, usize) -> bool) -> Vec<usize> {
+        let Some(first) = self.faces.get(seed).map(|f| f.name) else {
+            return Vec::new();
+        };
+        let mut names = vec![first];
+        let mut todo = vec![first];
+        while let Some(cur) = todo.pop() {
+            for e in self.edges.iter().filter(|e| e.name.touches(&cur)) {
+                let other = if e.name.faces[0] == cur {
+                    e.name.faces[1]
+                } else {
+                    e.name.faces[0]
+                };
+                if other == cur || names.contains(&other) {
+                    continue;
+                }
+                let Some(i) = self.faces.iter().position(|f| f.name == other) else {
+                    continue;
+                };
+                if cross(self.dihedral(e), i) {
                     names.push(other);
                     todo.push(other);
                 }

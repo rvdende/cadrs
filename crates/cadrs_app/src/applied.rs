@@ -264,6 +264,10 @@ pub enum AppliedField {
     FlatRegions,
     /// The faces a Move face, Delete face or Simplify works on.
     DirectEditFaces,
+    /// Move face's Translate direction, Rotate axis and Up to entity.
+    DirectEditDirection,
+    DirectEditAxis,
+    DirectEditUpTo,
 }
 
 /// The applied feature whose dialog is open.
@@ -515,7 +519,7 @@ impl AppliedSession {
                 sketch_curves: true,
                 ..none
             },
-            AppliedField::TransformDirection => PickFilter {
+            AppliedField::TransformDirection | AppliedField::DirectEditDirection => PickFilter {
                 planes,
                 plane_features: true,
                 faces: true,
@@ -536,7 +540,7 @@ impl AppliedSession {
                 connectors: true,
                 ..none
             },
-            AppliedField::TransformAxis => PickFilter {
+            AppliedField::TransformAxis | AppliedField::DirectEditAxis => PickFilter {
                 origin: true,
                 faces: true,
                 edges: true,
@@ -568,6 +572,12 @@ impl AppliedSession {
             },
             AppliedField::DirectEditFaces => PickFilter {
                 faces: true,
+                ..none
+            },
+            // A vertex or a face (edges come with the vertices; the field refuses them).
+            AppliedField::DirectEditUpTo => PickFilter {
+                faces: true,
+                edges: true,
                 ..none
             },
             f @ AppliedField::SmTool(_) => crate::sheetmetal_tools_ui::pick_filter(f, none),
@@ -895,6 +905,27 @@ pub fn current(world: &World) -> Option<Feature> {
         .element(s.element)?
         .feature(s.feature)
         .cloned()
+}
+
+/// Starts `kind` as a variant (a toolbar ▾ menu's item): `change` sets its parameters, and
+/// `field` (if any) takes the picks, as the dialog does when the variant is chosen there.
+pub fn begin_as(
+    world: &mut World,
+    kind: AppliedKind,
+    label: &str,
+    change: impl FnOnce(&mut FeatureKind),
+    field: Option<AppliedField>,
+) {
+    begin(world, kind);
+    let Some(f) = current(world) else { return };
+    let mut k = f.kind.clone();
+    change(&mut k);
+    if k != f.kind {
+        set(world, k, label);
+    }
+    if let (Some(field), Some(mut s)) = (field, world.get_resource_mut::<AppliedSession>()) {
+        s.field = field;
+    }
 }
 
 /// Replaces the feature's parameters (a command).
@@ -1570,6 +1601,7 @@ fn show_references(
         }
         k @ FeatureKind::Draft(_) => want.extend(crate::draft_ui::references(k, &cache)),
         k @ FeatureKind::Transform(_) => want.extend(crate::transform_ui::references(k, &cache)),
+        k @ FeatureKind::DirectEdit(_) => want.extend(crate::direct_edit_ui::references(k, &cache)),
         k @ (FeatureKind::Thicken(_) | FeatureKind::Helix(_) | FeatureKind::Fill(_)) => {
             want.extend(crate::surfacing_ui::references(k, &cache))
         }
@@ -1892,14 +1924,18 @@ fn arrow_size(k: &FeatureKind) -> Option<f64> {
         {
             Some(x.depth)
         }
-        FeatureKind::DirectEdit(x)
-            if x.kind == cadrs_core::direct_edit::DirectEditKind::MoveFace =>
-        {
-            Some(x.distance)
-        }
+        FeatureKind::DirectEdit(x) if offsets(x) => Some(x.distance),
         FeatureKind::Shell(x) => Some(x.thickness),
         _ => None,
     }
+}
+
+/// A Move face that moves its faces a distance (Offset, or Translate: its arrow is along the
+/// first face's normal or the direction), not up to an entity nor turned.
+fn offsets(x: &cadrs_core::direct_edit::DirectEditFeature) -> bool {
+    x.kind == cadrs_core::direct_edit::DirectEditKind::MoveFace
+        && x.move_type != cadrs_core::direct_edit::MoveType::Rotate
+        && x.end == cadrs_core::direct_edit::MoveEnd::Blind
 }
 
 /// A Move face's distance may go either way (inward when negative); the other sizes stay above
@@ -2073,6 +2109,7 @@ fn place_radius_arrow(
     session: Option<Res<AppliedSession>>,
     doc: Option<Res<ActiveDocument>>,
     before: Res<BeforeParts>,
+    cache: Res<crate::parts::PartCache>,
     view: Res<crate::viewport::ViewportView>,
     rect: Res<crate::viewport::ViewportRect>,
     mut arrow: ResMut<RadiusArrow>,
@@ -2191,8 +2228,9 @@ fn place_radius_arrow(
             crate::sheetmetal_ui::depth_arrow(el.features(), x, dragged.unwrap_or(x.depth))
         });
     // Move face: on the first face (on the parts before it), standing off it by the distance,
-    // pointing the way the face moves (along its outward normal, or against it when negative:
-    // then it stays on the same side of the face, turned end for end, its head at the face).
+    // pointing the way the face moves (along its outward normal, or Translate's direction as the
+    // rebuild resolved it; against it when negative: then it stays on the same side of the face,
+    // turned end for end, its head at the face).
     let face_target = session
         .as_ref()
         .filter(|s| matches!(s.kind, AppliedKind::DirectEdit(_)))
@@ -2206,13 +2244,23 @@ fn place_radius_arrow(
             else {
                 return None;
             };
-            if x.kind != cadrs_core::direct_edit::DirectEditKind::MoveFace {
+            if !offsets(x) {
                 return None;
             }
             let first = x.faces.first()?;
             let solid = &before.parts.iter().find(|p| p.id == first.part)?.solid;
             let i = solid.faces.iter().position(|f| f.name == first.face)?;
             let (p, n) = (solid.face_point(i)?, solid.face_normal(i)?);
+            let resolved = cache
+                .arrows
+                .get(&s.feature)
+                .and_then(|a| a.first())
+                .map(|(_, d)| *d);
+            let n = match (x.move_type, &x.direction) {
+                (cadrs_core::direct_edit::MoveType::Translate, Some(_)) => resolved?,
+                (cadrs_core::direct_edit::MoveType::Translate, None) => resolved.unwrap_or(n),
+                _ => n,
+            };
             let normal = Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32).normalize_or_zero();
             let distance = dragged.unwrap_or(x.distance) as f32;
             let dir = if distance < 0.0 { -normal } else { normal };

@@ -1,0 +1,48 @@
+// #22 point 3: Create selection from a direct edit's faces field, on the imported carriage
+// stand-in (`delete_face_carriage.ron`): a pocket's faces in one go, then deleted.
+// 01 Delete face's Create selection (+): the panel on its Faces tab, the rules listed
+//    (Protrusion, Pocket, Hole, Fillets, Tangent connected; Bounded faces not yet).
+// 02 Pocket, a wall of the hex-nut recess clicked: its six walls and floor selected.
+// 03 Add selection: the seven faces in Faces to delete; the recess heals away, the bore
+//    running on to the back face.
+// 04 Hole from the panel again, seen from the front, the bore's wall clicked: the bore's face
+//    (the flat faces round it aren't a round hole's).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("carriage-step target/imports/carriage.step"),
+        Custom("drop-file target/imports/carriage.step"),
+        Wait(30),
+        Click(ui("import-dialog-accept")),
+        Custom("view 180 -25 20 -15 13 0.03"),
+        Wait(10),
+        Click(ui("delete-face")),
+        WaitFor("delete-face-dialog"),
+        Click(ui("delete-face-create-selection")),
+        WaitFor("create-selection-dialog"),
+        Click(ui("create-selection-rule")),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-rules"),
+        Click(ui("create-selection-rule-option-1")),
+        Click(xyz(20, -3, 16.5)),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("02-pocket-selected"),
+        Click(ui("create-selection-add")),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("03-recess-deleted"),
+        Click(ui("delete-face-create-selection")),
+        WaitFor("create-selection-dialog"),
+        Click(ui("create-selection-rule")),
+        Click(ui("create-selection-rule-option-2")),
+        Custom("view 0 -25 20 -15 13 0.03"),
+        Wait(10),
+        Click(xyz(16.06, -29.5, 10.69)),
+        MoveTo(1420, 900),
+        Wait(5),
+        Screenshot("04-hole-selected"),
+    ],
+)

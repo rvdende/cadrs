@@ -1,0 +1,82 @@
+// #22: Move face's Translate and Rotate, on a 60 × 40 × 20 block with a Ø10 hole at (30, 20).
+// 01 the move type dropdown: Translate, Rotate, Offset.
+// 02 Translate: the hole's wall picked, Direction the top front edge (along X), 15 mm: the hole
+//    has slid along the block (the volume is the same).
+// 03 accepted: Move face 1 in the list.
+// 04 Rotate then back to Translate: the faces field takes the picks again (not Rotate's hidden
+//    axis field): the right face is picked (moved 1 mm out along its normal), with the drag
+//    arrow on it along its normal (Translate's, as Offset's).
+// 04b the arrow dragged out to x = 70: the face follows it, 10 mm.
+// 05 Rotate: the axis field takes the picks: the top right edge (along Y); 15°: the right face
+//    leans, the block wider at the top or the bottom.
+// 06 the opposite direction arrow: it leans the other way.
+// 07 accepted: Move face 2 in the list.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("sketch top rect 0 0 60 40 circle 30 20 5"),
+        Key("Shift+7"),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        Click(xyz(5, 5, 0)),
+        Click(ui("extrude-depth-field")),
+        Key("Ctrl+A"),
+        Type("20"),
+        Key("Enter"),
+        Key("F"),
+        Click(ui("move-face")),
+        WaitFor("move-face-dialog"),
+        Click(ui("move-face-type")),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-move-type-dropdown"),
+        Click(ui("move-face-type-option-0")),
+        Click(xyz(26.46, 23.54, 18)),
+        Click(ui("move-face-direction-field")),
+        Click(xyz(45, 0, 20)),
+        Click(ui("move-face-distance-field")),
+        Key("Ctrl+A"),
+        Type("15"),
+        Key("Tab"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-translate-hole-along-edge"),
+        Click(ui("move-face-dialog-accept")),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-translate-accepted"),
+        Click(ui("move-face")),
+        WaitFor("move-face-dialog"),
+        Click(ui("move-face-type")),
+        Click(ui("move-face-type-option-1")),
+        Click(ui("move-face-type")),
+        Click(ui("move-face-type-option-0")),
+        Click(xyz(60, 30, 10)),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04-back-to-translate-the-faces-take-picks"),
+        Drag(ui("move-face-arrow"), xyz(70, 30, 10)),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("04b-translate-arrow-dragged"),
+        Click(ui("move-face-type")),
+        Click(ui("move-face-type-option-1")),
+        Click(xyz(60, 20, 20)),
+        Click(ui("move-face-angle-field")),
+        Key("Ctrl+A"),
+        Type("15"),
+        Key("Tab"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("05-rotate-right-face"),
+        Click(ui("move-face-angle-flip")),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("06-rotate-opposite"),
+        Click(ui("move-face-dialog-accept")),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("07-rotate-accepted"),
+    ],
+)

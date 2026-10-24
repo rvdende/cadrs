@@ -60,6 +60,10 @@ pub struct Scenario {
     /// scenario fails.
     #[serde(default = "default_timeout")]
     pub timeout: f32,
+    /// The window's size (width, height) when the scenario needs another than 1600 × 1000 (a
+    /// narrow window); `--window-size` still wins.
+    #[serde(default)]
+    pub window_size: Option<(u32, u32)>,
     pub steps: Vec<Step>,
 }
 

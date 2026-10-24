@@ -37,7 +37,7 @@ use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     DialogClose, InlineEdit, InlineEditLabel, InlineEditOptions, StateColors, ToggleDockPanel,
-    TreeToggle, Visuals, begin_inline_edit, show_toast, tree_guide,
+    ToolDropdown, TreeToggle, Visuals, begin_inline_edit, show_toast, tree_guide,
 };
 
 use crate::sketch::{PartStudioMode, SketchSession};
@@ -322,6 +322,7 @@ fn spawn_shell(
                     main.spawn((
                         Name::new("toolbar"),
                         ToolbarRow,
+                        cadrs_ui::ToolbarOverflow,
                         Node {
                             height: Val::Px(t.toolbar_height),
                             flex_shrink: 0.0,
@@ -1609,6 +1610,7 @@ pub(crate) fn search_tools(tb: &mut ChildSpawnerCommands, t: &Theme) {
         },
         BackgroundColor(t.search_background),
         SearchTools,
+        cadrs_ui::OverflowKeep,
         Tooltip::new("Search tools (Alt+C)"),
     ))
     .with_children(|s| {
@@ -1657,17 +1659,14 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         &[
             ("fillet", "fillet", true, "Fillet (Shift+F)"),
             ("chamfer", "chamfer", false, "Chamfer"),
-            ("draft", "draft", true, "Draft"),
+            ("draft", "draft", false, "Draft"),
             ("rib", "rib", false, "Rib"),
             ("shell", "shell", false, "Shell"),
             ("hole", "hole", false, "Hole"),
             ("thread", "thread", false, "Thread"),
-            (
-                "move-face",
-                "offset",
-                true,
-                "Move face, Delete face, Simplify",
-            ),
+            ("move-face", "offset", false, "Move face"),
+            ("delete-face", "delete", false, "Delete face"),
+            ("simplify", "surface", false, "Simplify"),
         ],
         &[
             ("pattern", "linear-pattern", true, "Linear pattern"),
@@ -1678,11 +1677,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 true,
                 "Boolean (Union, Subtract, Intersect)",
             ),
-            ("split", "split", true, "Split"),
+            ("split", "split", false, "Split"),
             ("transform", "transform", true, "Transform"),
             ("composite-part", "composite-part", false, "Composite part"),
             ("plane", "plane", true, "Plane"),
-            ("mate-connector", "mate-connector", true, "Mate connector"),
+            ("mate-connector", "mate-connector", false, "Mate connector"),
             ("variable", "variables", false, "Variable"),
         ],
         // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
@@ -1754,13 +1753,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1807,19 +1804,21 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     cadrs_ui::IconButton::new("sheet-metal-model-caret", "chevron-down")
                         .icon_size(14.0)
+                        .tooltip("Sheet metal tools")
                         .build(t),
+                    cadrs_ui::OverflowWithPrevious,
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                // Under the Sheet metal model button, to its left.
-                                t.translation * s
-                                    + Vec2::new(-size.x / 2.0 - 32.0, size.y / 2.0 + 2.0)
-                            });
+                            // Under the Sheet metal model button, to its left.
+                            let at = cadrs_ui::tool_menu_at(
+                                q.get(a.entity).ok(),
+                                Vec2::new(-32.0, 0.0),
+                                &origin,
+                            );
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1855,13 +1854,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,
@@ -1889,45 +1886,41 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 ));
                 continue;
             }
-            if *name == "move-face" {
-                // The direct edits: Move face, and from its menu Delete face and Simplify.
+            if let Some(start) = variant_tool(name) {
+                // #22: Onshape's split buttons: the button starts the tool, its ▾ lists the
+                // variants (Fillet's Full round, Boolean's operations, Transform's and Plane's
+                // types).
+                let n: &'static str = name;
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
-                        .dropdown(true)
+                        .split()
                         .tooltip(*tip)
                         .build(t),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.queue(move |world: &mut World| start(world, None));
+                    }),
                     observe(
-                        |a: On<Activate>,
-                         q: Query<(&ComputedNode, &UiGlobalTransform)>,
-                         theme: Res<Theme>,
-                         mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                        move |d: On<ToolDropdown>,
+                              q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                              origin: Res<cadrs_ui::OverflowOrigin>,
+                              theme: Res<Theme>,
+                              mut commands: Commands| {
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
-                                at,
-                                direct_edit_menu().build(&theme),
+                                menu_under(&q, d.entity, &origin),
+                                variant_menu(n).build(&theme),
                             );
                             commands.entity(anchor).observe(
-                                |ev: On<MenuAction>, mut commands: Commands| {
-                                    use cadrs_core::direct_edit::DirectEditKind;
-                                    let kind = match ev.item.as_str() {
-                                        "direct-edit-menu-move-face" => DirectEditKind::MoveFace,
-                                        "direct-edit-menu-delete-face" => {
-                                            DirectEditKind::DeleteFace
-                                        }
-                                        "direct-edit-menu-simplify" => DirectEditKind::Simplify,
-                                        _ => return,
+                                move |ev: On<MenuAction>, mut commands: Commands| {
+                                    let Some(i) = ev
+                                        .item
+                                        .rsplit('-')
+                                        .next()
+                                        .and_then(|i| i.parse::<usize>().ok())
+                                    else {
+                                        return;
                                     };
-                                    commands.queue(move |world: &mut World| {
-                                        crate::applied::begin(
-                                            world,
-                                            crate::applied::AppliedKind::DirectEdit(kind),
-                                        )
-                                    });
+                                    commands.queue(move |world: &mut World| start(world, Some(i)));
                                 },
                             );
                         },
@@ -2008,6 +2001,121 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     search_tools(tb, t);
 }
 
+/// Where a toolbar button's menu opens: at its lower left corner (under the » for a button it
+/// hid). The toolbar clips its children, so the menu opens on its own anchor.
+fn menu_under(
+    q: &Query<(&ComputedNode, &UiGlobalTransform)>,
+    e: Entity,
+    origin: &cadrs_ui::OverflowOrigin,
+) -> Vec2 {
+    cadrs_ui::tool_menu_at(q.get(e).ok(), Vec2::ZERO, origin)
+}
+
+/// A tool whose ▾ lists its variants, and how it starts (`None`: from the button, the default).
+fn variant_tool(name: &str) -> Option<fn(&mut World, Option<usize>)> {
+    Some(match name {
+        "fillet" => start_fillet,
+        "boolean" => start_boolean,
+        "transform" => start_transform,
+        "plane" => start_plane,
+        _ => return None,
+    })
+}
+
+/// The ▾ menu of a [`variant_tool`]: item `<tool>-menu-<i>` is variant `i`.
+fn variant_menu(name: &str) -> Menu {
+    use cadrs_core::document::BooleanKind;
+    use cadrs_core::plane::PlaneType;
+    use cadrs_core::transform::TransformType;
+    let labels: Vec<&'static str> = match name {
+        "fillet" => vec!["Fillet", "Full round"],
+        "boolean" => BooleanKind::ALL.iter().map(|k| k.label()).collect(),
+        "transform" => TransformType::ALL.iter().map(|k| k.label()).collect(),
+        "plane" => PlaneType::ALL.iter().map(|k| k.label()).collect(),
+        _ => Vec::new(),
+    };
+    labels.into_iter().enumerate().fold(
+        Menu::new(format!("{name}-menu")).min_width(160.0),
+        |m, (i, l)| m.item(MenuItem::new(format!("{name}-menu-{i}"), l)),
+    )
+}
+
+fn start_fillet(world: &mut World, variant: Option<usize>) {
+    use crate::applied::{AppliedField, AppliedKind};
+    use cadrs_core::applied::FilletType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Fillet);
+    };
+    let kind = FilletType::ALL[i.min(FilletType::ALL.len() - 1)];
+    let field = if kind == FilletType::FullRound {
+        AppliedField::Side1
+    } else {
+        AppliedField::Entities
+    };
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Fillet,
+        "Fillet type",
+        |k| {
+            if let cadrs_core::FeatureKind::Fillet(x) = k {
+                x.kind = kind;
+            }
+        },
+        Some(field),
+    );
+}
+
+fn start_boolean(world: &mut World, variant: Option<usize>) {
+    use cadrs_core::document::BooleanKind;
+    match variant {
+        None => crate::boolean::begin_boolean(world),
+        Some(i) => crate::boolean::begin_boolean_as(
+            world,
+            BooleanKind::ALL[i.min(BooleanKind::ALL.len() - 1)],
+        ),
+    }
+}
+
+fn start_transform(world: &mut World, variant: Option<usize>) {
+    use crate::applied::AppliedKind;
+    use cadrs_core::transform::TransformType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Transform);
+    };
+    let t = TransformType::ALL[i.min(TransformType::ALL.len() - 1)];
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Transform,
+        "Transform type",
+        |k| {
+            if let cadrs_core::FeatureKind::Transform(x) = k {
+                x.transform_type = t;
+            }
+        },
+        Some(crate::transform_ui::first_field(t)),
+    );
+}
+
+fn start_plane(world: &mut World, variant: Option<usize>) {
+    use crate::applied::AppliedKind;
+    use cadrs_core::plane::PlaneType;
+    let Some(i) = variant else {
+        return crate::applied::begin(world, AppliedKind::Plane);
+    };
+    let t = PlaneType::ALL[i.min(PlaneType::ALL.len() - 1)];
+    crate::applied::begin_as(
+        world,
+        AppliedKind::Plane,
+        "Plane type",
+        |k| {
+            if let cadrs_core::FeatureKind::Plane(x) = k {
+                x.kind = t;
+            }
+        },
+        None,
+    );
+}
+
 /// The Thicken button's menu: Thicken, Fill and Helix (icon-rs has no fill or helix icon yet).
 fn surfacing_menu() -> Menu {
     Menu::new("surfacing-menu")
@@ -2015,16 +2123,6 @@ fn surfacing_menu() -> Menu {
         .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
         .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
         .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
-}
-
-/// The Move face button's menu: the direct edits (icon-rs has no move face, delete face or
-/// simplify icon yet: offset, delete and surface stand in).
-fn direct_edit_menu() -> Menu {
-    Menu::new("direct-edit-menu")
-        .min_width(160.0)
-        .item(MenuItem::new("direct-edit-menu-move-face", "Move face").icon("offset"))
-        .item(MenuItem::new("direct-edit-menu-delete-face", "Delete face").icon("delete"))
-        .item(MenuItem::new("direct-edit-menu-simplify", "Simplify").icon("surface"))
 }
 
 /// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,
@@ -2131,13 +2229,11 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     observe(
                         |a: On<Activate>,
                          q: Query<(&ComputedNode, &UiGlobalTransform)>,
+                         origin: Res<cadrs_ui::OverflowOrigin>,
                          theme: Res<Theme>,
                          mut commands: Commands| {
-                            let at = q.get(a.entity).map_or(Vec2::ZERO, |(n, t)| {
-                                let s = n.inverse_scale_factor();
-                                let size = n.size() * s;
-                                t.translation * s + Vec2::new(-size.x / 2.0, size.y / 2.0 + 2.0)
-                            });
+                            let at =
+                                cadrs_ui::tool_menu_at(q.get(a.entity).ok(), Vec2::ZERO, &origin);
                             let anchor = cadrs_ui::menu::open_context_menu(
                                 &mut commands,
                                 at,

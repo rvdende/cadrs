@@ -1,0 +1,28 @@
+// #22 "Also noticed": the ▾ next to some tools started them (`toolbar_overflow` has the
+// narrow window).
+// 01 the toolbar at full width: every tool, no ».
+// 02 Fillet's ▾: a menu (Fillet, Full round) rather than starting a fillet.
+// 03 Full round from it: the Fillet dialog on its Full round tab.
+// 04 Transform's ▾: the transform types.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-full-width"),
+        Click(ui("fillet-caret")),
+        WaitFor("fillet-menu"),
+        Screenshot("02-fillet-variants"),
+        Click(ui("fillet-menu-1")),
+        WaitFor("fillet-side1-field"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("03-full-round"),
+        Key("Escape"),
+        Click(ui("transform-caret")),
+        WaitFor("transform-menu"),
+        Screenshot("04-transform-variants"),
+        Key("Escape"),
+    ],
+)

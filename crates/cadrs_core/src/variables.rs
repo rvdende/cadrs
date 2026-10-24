@@ -435,7 +435,9 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         }
         FeatureKind::Shell(x) => s("Thickness", &mut x.thickness_expr, &mut x.thickness, L),
         FeatureKind::DirectEdit(x) if x.kind == crate::direct_edit::DirectEditKind::MoveFace => {
-            s("Distance", &mut x.distance_expr, &mut x.distance, L)
+            s("Distance", &mut x.distance_expr, &mut x.distance, L);
+            s("Offset distance", &mut x.offset_expr, &mut x.offset, L);
+            s("Angle", &mut x.angle_expr, &mut x.angle, A);
         }
         FeatureKind::DirectEdit(_) => {}
         FeatureKind::Hole(h) => {

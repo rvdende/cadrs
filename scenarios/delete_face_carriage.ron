@@ -1,0 +1,51 @@
+// #22: the reporter's job on a stand-in for their imported carriage core
+// (`cadrs_core::samples::carriage`, written by `Custom("carriage-step …")` and dropped on the
+// window): a 40 × 30 × 20 block with an Ø8 bore whose 3D-printing teardrop runs into an M8
+// hex-nut recess at the back and across a 608 bearing slot. From STEP it has no history.
+// 01 the imported part.
+// 02 from behind, looking up into the recess: the teardrop's flat faces run into its floor.
+// 03 a teardrop face right-clicked: Move face…, Delete face… and Select ▸ Create selection….
+// 04 Delete face… from it, the other face on this side of the slot picked: the bore heals
+//    round into the recess.
+// 05 from the front, the two faces beyond the slot picked too: healed there as well.
+// 06 accepted: Delete face 1 in the list.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Custom("carriage-step target/imports/carriage.step"),
+        Custom("drop-file target/imports/carriage.step"),
+        Wait(30),
+        Click(ui("import-dialog-accept")),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("01-imported"),
+        Custom("view 180 -25 20 -15 13 0.03"),
+        Wait(10),
+        Screenshot("02-teardrop-into-the-recess"),
+        RightClick(xyz(21.41, -9, 14.24)),
+        WaitFor("viewport-delete-face"),
+        Hover(ui("viewport-delete-face")),
+        Wait(3),
+        Screenshot("03-face-menu"),
+        Click(ui("viewport-delete-face")),
+        WaitFor("delete-face-dialog"),
+        Click(xyz(18.59, -9, 14.24)),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("04-healed-into-the-recess"),
+        Custom("view 0 -25 20 -15 13 0.03"),
+        Wait(10),
+        Click(xyz(21.41, -25, 14.24)),
+        Click(xyz(18.59, -25, 14.24)),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("05-healed-beyond-the-slot"),
+        Click(ui("delete-face-dialog-accept")),
+        Key("F"),
+        MoveTo(1420, 900),
+        Wait(10),
+        Screenshot("06-accepted"),
+    ],
+)

@@ -862,9 +862,9 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
             }
             let all = l.iter().all(|c| boundary.contains(&c.edge));
             if li == 0 || !all {
-                return Err(KernelError::Unsupported(
-                    "deleting faces that aren't closed off by whole inner loops (a fillet or a chamfer between faces)",
-                ));
+                // Not whole inner loops (a teardrop's sides, a fillet, a chamfer): the faces
+                // round them extended over the gap.
+                return super::defeature::heal(k, body, &gone);
             }
         }
         out.faces[fi].loops = kept;
@@ -904,6 +904,282 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     })
 }
 
+/// Delete face's Cap and Leave open (Heal is [`delete_faces`]): the faces removed; left open,
+/// the rest is a sheet; capped, each opening (a loop of the sheet's free edges) gets a face
+/// ([`fill`]: a plane on a flat opening, else a fill) and the faces are sewn into a solid.
+pub fn delete_faces_with(
+    k: &mut NativeKernel,
+    body: BodyId,
+    remove: &[FaceId],
+    void: VoidFill,
+) -> Result<OpResult> {
+    if void == VoidFill::Heal {
+        return delete_faces(k, body, remove);
+    }
+    if remove.is_empty() {
+        return Err(invalid("Select the faces to delete"));
+    }
+    let b = (**k.get(body)?).clone();
+    let gone: Vec<usize> = remove.iter().map(|f| f.0 as usize).collect();
+    if gone.iter().any(|&f| f >= b.faces.len()) {
+        return Err(KernelError::InvalidParameter("unknown face".into()));
+    }
+    let keep: Vec<usize> = (0..b.faces.len()).filter(|f| !gone.contains(f)).collect();
+    if keep.is_empty() {
+        return Err(invalid("Deleting every face leaves nothing"));
+    }
+    let mut sheet = super::kernel::subset(&b, &keep, false);
+    sheet.shells.clear();
+    super::boolean::assemble_shells(&mut sheet)?;
+    let mut history = History::default();
+    for (i, &f) in keep.iter().enumerate() {
+        history.modified.push((
+            FaceId(i as u64),
+            InputFace {
+                body,
+                face: FaceId(f as u64),
+            },
+        ));
+    }
+    for &f in &gone {
+        history.deleted.push(InputFace {
+            body,
+            face: FaceId(f as u64),
+        });
+    }
+    if void == VoidFill::Open {
+        let id = k.insert(sheet);
+        return Ok(OpResult {
+            bodies: vec![id],
+            history,
+        });
+    }
+    let ef = sheet.edge_faces();
+    let free: Vec<usize> = (0..sheet.edges.len())
+        .filter(|&e| ef[e].len() == 1)
+        .collect();
+    let ends: Vec<[usize; 2]> = sheet.edges.iter().map(|e| e.v).collect();
+    let loops = openings(&ends, free)?;
+    if loops.is_empty() {
+        return Err(invalid("The faces left have no opening to cap"));
+    }
+    let sheet_edges: Vec<(Edge, P3, P3)> = sheet
+        .edges
+        .iter()
+        .map(|e| (e.clone(), sheet.verts[e.v[0]].p, sheet.verts[e.v[1]].p))
+        .collect();
+    let sid = k.insert(sheet.clone());
+    let mut caps = Vec::new();
+    for (li, lp) in loops.iter().enumerate() {
+        let spec = FillSpec {
+            curves: lp
+                .iter()
+                .map(|&e| FillCurve::Edge {
+                    body: sid,
+                    edge: EdgeId(e as u64),
+                })
+                .collect(),
+            source: 0,
+        };
+        match fill(k, &spec) {
+            Ok(r) => caps.extend(r.bodies.into_iter().map(|c| (c, li))),
+            Err(e) => {
+                k.release(sid);
+                for (c, _) in caps {
+                    k.release(c);
+                }
+                return Err(e);
+            }
+        }
+    }
+    k.release(sid);
+    let mut bodies: Vec<(Body, usize)> = Vec::new();
+    for (c, li) in caps {
+        bodies.push(((**k.get(c)?).clone(), li));
+        k.release(c);
+    }
+    let bodies = nest_caps(bodies);
+    let mut all = sheet;
+    // The opening each cap face is over.
+    let mut cap_loops: Vec<&Vec<usize>> = Vec::new();
+    for (cap, li) in &bodies {
+        cap_loops.extend(std::iter::repeat_n(&loops[*li], cap.faces.len()));
+        all.append(cap);
+    }
+    let mut all = sew_faces(all, tol::POINT)?;
+    all.shells.clear();
+    all.solids.clear();
+    super::boolean::assemble_shells(&mut all)?;
+    if all.solids.len() != 1 {
+        return Err(invalid("The caps don't close the part"));
+    }
+    if super::mass::body_volume(&all) < 0.0 {
+        for f in &mut all.faces {
+            Body::reverse_face(f);
+        }
+    }
+    // Each cap comes from its opening: its first edge in the body the faces were deleted from.
+    for (i, lp) in (keep.len()..all.faces.len()).zip(&cap_loops) {
+        let se = &sheet_edges[lp[0]];
+        let p = |e: &Edge, k: usize, b: &Body| b.verts[e.v[k]].p;
+        let edge = b.edges.iter().position(|e| {
+            e.t == se.0.t
+                && (p(e, 0, &b) - se.1).norm() <= tol::POINT
+                && (p(e, 1, &b) - se.2).norm() <= tol::POINT
+        });
+        // (Always found: the sheet's edges are copies of the body's.)
+        if let Some(edge) = edge {
+            history.generated.push((
+                FaceId(i as u64),
+                Origin::FromEdge {
+                    body,
+                    edge: EdgeId(edge as u64),
+                },
+            ));
+        }
+    }
+    let id = k.insert(all);
+    Ok(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
+/// Caps nested in one plane made one face (a top's opening round a hole's: the hole's cap
+/// becomes a hole in the top's, which keeps the hole open), each a single planar face; the
+/// others as they are. Going in, openings alternate faces and holes: only those directly inside
+/// a face are its holes, and one deeper (an island's top inside a groove's ring) is a face of
+/// its own, round its own holes in turn.
+fn nest_caps(mut caps: Vec<(Body, usize)>) -> Vec<(Body, usize)> {
+    let plane = |b: &Body| match (&b.faces.as_slice(), b.faces.first().map(|f| &f.surf)) {
+        ([_], Some(Surface::Plane { f })) => Some(*f),
+        _ => None,
+    };
+    // The outline of a single-face cap in its plane's coordinates.
+    let outline = |b: &Body, f: &Frame| -> Vec<P2> {
+        b.faces[0].loops[0]
+            .iter()
+            .flat_map(|c| {
+                let e = &b.edges[c.edge];
+                (0..16).map(move |i| e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 16.0))
+            })
+            .map(|p| {
+                let d = p - f.o;
+                P2::new(d.dot(&f.x), d.dot(&f.y))
+            })
+            .collect()
+    };
+    let inside = |pts: &[P2], q: P2| {
+        let mut odd = false;
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    // Which caps lie inside which (in one plane), before any is merged.
+    let count = caps.len();
+    let mut within = vec![vec![false; count]; count];
+    for i in 0..count {
+        let Some(fi) = plane(&caps[i].0) else {
+            continue;
+        };
+        let n = fi.x.cross(&fi.y);
+        let outer = outline(&caps[i].0, &fi);
+        for j in (0..count).filter(|&j| j != i) {
+            let Some(fj) = plane(&caps[j].0) else {
+                continue;
+            };
+            let coplanar = fj.x.cross(&fj.y).cross(&n).norm() < tol::ANGULAR_POINT
+                && (fj.o - fi.o).dot(&n).abs() < tol::POINT;
+            let inner = outline(&caps[j].0, &fi);
+            within[j][i] =
+                coplanar && !inner.is_empty() && inner.iter().all(|q| inside(&outer, *q));
+        }
+    }
+    let depth: Vec<usize> = (0..count)
+        .map(|j| within[j].iter().filter(|w| **w).count())
+        .collect();
+    let mut gone = vec![false; count];
+    for i in 0..count {
+        for j in 0..count {
+            // Openings alternate faces and holes going in: a face (even depth) takes the ones
+            // directly inside it (one level deeper) as holes; a hole takes none.
+            if i == j || gone[j] || depth[i] % 2 == 1 || !within[j][i] || depth[j] != depth[i] + 1 {
+                continue;
+            }
+            // j's loop into i's face as a hole: its p-curves on i's plane, running against the
+            // outer loop.
+            let hole_body = caps[j].0.clone();
+            let b = &mut caps[i].0;
+            let (_, eo, _) = b.append(&hole_body);
+            b.faces.truncate(1);
+            b.shells.truncate(1);
+            let surf = b.faces[0].surf.clone();
+            let mut hole: Vec<Coedge> = hole_body.faces[0].loops[0]
+                .iter()
+                .map(|c| {
+                    let e = &b.edges[c.edge + eo];
+                    Coedge {
+                        edge: c.edge + eo,
+                        fwd: c.fwd,
+                        pc: super::pcurve::pcurve(&surf, &e.curve, e.t[0], e.t[1], None),
+                    }
+                })
+                .collect();
+            let outer_area = super::build::loop_uv_area(b, &b.faces[0].loops[0]);
+            if super::build::loop_uv_area(b, &hole).signum() == outer_area.signum() {
+                hole.reverse();
+                for c in &mut hole {
+                    c.fwd = !c.fwd;
+                }
+            }
+            b.faces[0].loops.push(hole);
+            gone[j] = true;
+        }
+    }
+    caps.into_iter()
+        .zip(gone)
+        .filter(|(_, g)| !g)
+        .map(|(c, _)| c)
+        .collect()
+}
+
+/// The openings Cap closes: the free edges (`free`, with every edge's end vertices `ends`)
+/// walked end to end into loops; coming back to a vertex already passed closes a loop there, so
+/// two openings touching at a vertex are two loops.
+pub(crate) fn openings(ends: &[[usize; 2]], mut free: Vec<usize>) -> Result<Vec<Vec<usize>>> {
+    let mut loops: Vec<Vec<usize>> = Vec::new();
+    while let Some(first) = free.pop() {
+        let [start, mut at] = ends[first];
+        let mut path = vec![first];
+        let mut passed = vec![start];
+        while at != start {
+            if let Some(k) = passed.iter().position(|&v| v == at) {
+                // A loop closed at a vertex passed before: cut it off and walk on.
+                loops.push(path.split_off(k));
+                passed.truncate(k + 1);
+            } else {
+                passed.push(at);
+            }
+            let Some(i) = free.iter().position(|&e| ends[e].contains(&at)) else {
+                break;
+            };
+            let e = free.remove(i);
+            let [a, b] = ends[e];
+            at = if a == at { b } else { a };
+            path.push(e);
+        }
+        if at != start {
+            return Err(invalid("An opening the faces leave isn't closed"));
+        }
+        loops.push(path);
+    }
+    Ok(loops)
+}
+
 /// Splits edge `e` at parameter `t` at the existing vertex `w`, in every face using it.
 fn split_edge_at(b: &mut Body, e: usize, t: f64, w: usize) {
     let old = b.edges[e].clone();
@@ -941,5 +1217,42 @@ fn split_edge_at(b: &mut Body, e: usize, t: f64, w: usize) {
             }
             *l = nl;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openings;
+
+    /// The loops as sorted edge lists, sorted (to compare whatever the walk's order).
+    fn sorted(mut loops: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
+        for l in &mut loops {
+            l.sort();
+        }
+        loops.sort();
+        loops
+    }
+
+    #[test]
+    fn openings_are_loops_of_free_edges() {
+        // A triangle 0-1-2 and, apart, a square 3-4-5-6: two openings.
+        let ends = [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 6], [6, 3]];
+        let loops = openings(&ends, (0..7).collect()).unwrap();
+        assert_eq!(sorted(loops), vec![vec![0, 1, 2], vec![3, 4, 5, 6]]);
+    }
+
+    #[test]
+    fn openings_touching_at_a_vertex_are_two() {
+        // Two triangles sharing vertex 0 (a figure 8), walked from either end of the list.
+        let ends = [[0, 1], [1, 2], [2, 0], [0, 3], [3, 4], [4, 0]];
+        for free in [(0..6).collect::<Vec<_>>(), (0..6).rev().collect()] {
+            let loops = openings(&ends, free).unwrap();
+            assert_eq!(sorted(loops), vec![vec![0, 1, 2], vec![3, 4, 5]]);
+        }
+    }
+
+    #[test]
+    fn an_opening_that_doesnt_close_is_refused() {
+        assert!(openings(&[[0, 1], [1, 2]], vec![0, 1]).is_err());
     }
 }

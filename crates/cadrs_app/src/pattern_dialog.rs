@@ -504,7 +504,7 @@ pub(crate) fn icon_button(
 
 /// A list with a small button beside it.
 #[allow(clippy::too_many_arguments)]
-fn list_with_button(
+pub(crate) fn list_with_button(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
