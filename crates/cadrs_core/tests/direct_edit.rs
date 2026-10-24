@@ -1244,3 +1244,67 @@ fn offset_up_to_a_round_bar_exactly() {
     let grown = parts.iter().find(|p| p.id == block.id).unwrap();
     close(grown.mass.unwrap().volume, 40.0 * 20.0 * 17.0, 1e-6);
 }
+
+#[test]
+fn offset_up_to_a_part_over_one_piece_of_a_split_top() {
+    // A plain 40 × 20 × 10 block, its top split along x = 19 (a Split, Face type, by a plane 19
+    // off Right) into two pieces of one face; a 10 × 10 block floating over the second piece
+    // only (x 25…35, z 15…20). Offset up to it moves the top's pieces up to z = 15 (12 000).
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 40.0, 20.0, 10.0);
+    let plane = d.add(
+        "Plane",
+        FeatureKind::Plane(cadrs_core::plane::PlaneFeature {
+            kind: cadrs_core::plane::PlaneType::Offset,
+            entities: vec![cadrs_core::plane::PlaneEntity::Plane(PlaneRef::Right)],
+            offset: 19.0,
+            offset_expr: "19 mm".into(),
+            ..Default::default()
+        }),
+    );
+    let part = d.parts()[0].clone();
+    let top = top_face(&part);
+    let tool = cadrs_core::parts::plane_feature_ref(&d.features(), plane).unwrap();
+    d.add(
+        "Split",
+        FeatureKind::Split(cadrs_core::advanced::SplitFeature {
+            split_type: cadrs_core::advanced::SplitType::Face,
+            parts: vec![part.id],
+            faces: top.clone(),
+            tool: Some(cadrs_core::advanced::SplitToolRef::Plane(tool)),
+            ..Default::default()
+        }),
+    );
+    let s = d.sketch(PlaneRef::Top, vec![rect(25.0, 5.0, 35.0, 15.0)]);
+    d.extrude(s, &[Vec2::new(30.0, 10.0)], |e| {
+        e.depth = 5.0;
+        e.depth_expr = "5 mm".into();
+        e.start_offset = Some(cadrs_core::Offset {
+            value: 15.0,
+            expr: "15 mm".into(),
+            flip: false,
+        });
+    });
+    let parts = d.parts();
+    let block = parts.iter().find(|p| p.id == part.id).unwrap().clone();
+    let pieces = faces_where(&block, |f| {
+        f.plane
+            .is_some_and(|p| p.normal()[2] > 0.5 && (p.origin[2] - 10.0).abs() < 1e-9)
+    });
+    assert_eq!(pieces.len(), 2, "the top in two pieces");
+    let target = parts.iter().find(|p| p.id != part.id).unwrap().id;
+    d.add(
+        "Move face",
+        FeatureKind::DirectEdit(DirectEditFeature {
+            kind: DirectEditKind::MoveFace,
+            move_type: MoveType::Offset,
+            end: cadrs_core::direct_edit::MoveEnd::UpTo,
+            up_to: Some(cadrs_core::document::UpTo::Part(target)),
+            faces: pieces,
+            ..Default::default()
+        }),
+    );
+    let parts = d.parts();
+    let grown = parts.iter().find(|p| p.id == part.id).unwrap();
+    close(grown.mass.unwrap().volume, 12_000.0, 1e-6);
+}

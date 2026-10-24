@@ -804,28 +804,54 @@ impl Rebuilder {
         self.per_part_as(id, kind.label(), state, bodies, op, |_, _| true, part_kind)
     }
 
-    /// Move face's Up to a part, exactly: the first face swept along `u` (ahead, then behind)
-    /// is cut from the part, and the exact distance from the face's plane to that piece (to a
-    /// large slab on the plane's other side) is how far the face goes, along `u`. `None` when the
-    /// target isn't a part, is the part being edited, or the kernel can't say (the mesh then
-    /// answers, [`up_to_distance`]).
+    /// Move face's Up to a part, exactly: each face swept along `u` (ahead and behind) is cut
+    /// from the part, and the exact distance from the face's plane to that piece (to a large slab
+    /// on the plane's other side) is how far it goes, along `u`; the faces move together, so the
+    /// nearest ahead (else behind) wins. `None` when the target isn't a part, is a part being
+    /// edited, or the kernel can't say (the mesh then answers, [`up_to_distance`]).
     fn part_up_to_exact(
         &mut self,
         state: &State,
         x: &crate::direct_edit::DirectEditFeature,
         u: &Vector3<f64>,
     ) -> Option<f64> {
-        use cadrs_kernel::{DistanceTarget, ExtrudeEnd, ExtrudeSpec, FaceInput};
         let Some(crate::document::UpTo::Part(target)) = x.up_to else {
             return None;
         };
-        let first = x.faces.first()?;
-        if target == first.part {
+        if x.faces.iter().any(|f| f.part == target) {
             return None;
         }
-        let (moved, ids) = face_ids(state, first)?;
-        let (body, face) = (moved.body?, *ids.first()?);
         let tbody = state.part(target)?.body?;
+        // The faces move together: the nearest any of them meets ahead, else behind.
+        let (mut ahead, mut behind): (Option<f64>, Option<f64>) = (None, None);
+        for f in &x.faces {
+            let (a, b) = self.face_up_to_exact(state, f, tbody, u)?;
+            if let Some(a) = a {
+                ahead = Some(ahead.map_or(a, |t| t.min(a)));
+            }
+            if let Some(b) = b {
+                behind = Some(behind.map_or(b, |t| t.max(b)));
+            }
+        }
+        ahead.or(behind)
+    }
+
+    /// [`Self::part_up_to_exact`] for one face (flat): how far along `u` it goes to meet the
+    /// part `tbody` ahead and behind. `None` when the kernel can't say.
+    fn face_up_to_exact(
+        &mut self,
+        state: &State,
+        first: &crate::document::FaceRef,
+        tbody: BodyId,
+        u: &Vector3<f64>,
+    ) -> Option<(Option<f64>, Option<f64>)> {
+        use cadrs_kernel::{DistanceTarget, ExtrudeEnd, ExtrudeSpec, FaceInput};
+        // Every kernel face the face is now (one named face in pieces is swept whole).
+        let (moved, ids) = face_ids(state, first)?;
+        let body = moved.body?;
+        if ids.is_empty() {
+            return None;
+        }
         let frame = face_frame(moved, first)?;
         let n = Vector3::from(frame.normal()).normalize();
         let along = u.dot(&n);
@@ -847,13 +873,17 @@ impl Rebuilder {
                 this.kernel.release(*id);
             }
         };
-        for sign in [1.0, -1.0] {
+        let mut found = [None, None];
+        for (k, sign) in [1.0, -1.0].into_iter().enumerate() {
             let spec = ExtrudeSpec {
-                faces: vec![FaceInput {
-                    body,
-                    face,
-                    source: 0,
-                }],
+                faces: ids
+                    .iter()
+                    .map(|&face| FaceInput {
+                        body,
+                        face,
+                        source: 0,
+                    })
+                    .collect(),
                 end: ExtrudeEnd::Blind(far),
                 ..ExtrudeSpec::blind(Unit::new_normalize(u * sign), far)
             };
@@ -909,9 +939,9 @@ impl Rebuilder {
             }
             release(self, &pieces);
             release(self, &slab.bodies);
-            return nearest.map(|d| sign * d / along.abs());
+            found[k] = nearest.map(|d| sign * d / along.abs());
         }
-        None
+        Some((found[0], found[1]))
     }
 
     /// The Hole feature (PS15): a revolved tool per point, subtracted from the parts in scope.
@@ -1410,8 +1440,8 @@ fn up_to_distance(
             if *id == first.part {
                 return Err("Move up to another part (not the one being edited)".into());
             }
-            // The kernel's exact answer when it has one (`Rebuilder::part_up_to_exact`); else
-            // from the part's mesh.
+            // The kernel's exact answer when it has one (`Rebuilder::part_up_to_exact`, from
+            // every face moved); else from the part's mesh, from the first face.
             if let Some(t) = exact {
                 return Ok(t - x.offset * t.signum());
             }
