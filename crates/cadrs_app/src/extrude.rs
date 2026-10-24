@@ -74,7 +74,7 @@ impl Plugin for ExtrudePlugin {
             .add_plugins(crate::extrude_dialog::ExtrudeDialogPlugin)
             .add_systems(
                 Update,
-                (automatic_operation, show_references)
+                (automatic_operation, flip_if_behind, show_references)
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
             );
@@ -100,6 +100,10 @@ pub struct ExtrudeSession {
     pub direction_on: bool,
     /// The dialog's Final button (P3.7): show the features after this one too.
     pub show_final: bool,
+    /// An "Up to" target was just picked for the first end: the parameters then and the
+    /// rebuilds taken by then. Once they are rebuilt, a target behind the start flips the
+    /// extrude (once) rather than leaving the error.
+    pub flip_check: Option<(ExtrudeFeature, u64)>,
 }
 
 /// The dialog's selection fields that take picks.
@@ -498,6 +502,7 @@ pub(crate) fn start_session(
         op_auto: is_new,
         direction_on,
         show_final: false,
+        flip_check: None,
     });
     *world.resource_mut::<ArrowState>() = ArrowState::default();
     *world.resource_mut::<crate::revolve::AngleArrow>() = Default::default();
@@ -765,12 +770,10 @@ struct Picked {
     face: Option<(FaceRef, bool)>,
     vertex: Option<VertexRef>,
     edge: Option<EdgeRef>,
-    auto_scope: Vec<PartId>,
 }
 
 fn take_pick_inner(world: &mut World, field: ExtrudeField, pick: Pick) -> Option<()> {
     let s = world.get_resource::<ExtrudeSession>().cloned()?;
-    let op = params(world).map(|e| e.op);
     let picked = {
         let cache = world.resource::<PartCache>();
         let face = match pick {
@@ -809,20 +812,7 @@ fn take_pick_inner(world: &mut World, field: ExtrudeField, pick: Pick) -> Option
             }
             _ => None,
         };
-        let auto_scope = cache
-            .contacts
-            .get(&s.feature)
-            .map(|c| match op {
-                Some(BooleanOp::Add) => c.touches.clone(),
-                _ => c.overlaps.clone(),
-            })
-            .unwrap_or_default();
-        Picked {
-            face,
-            vertex,
-            edge,
-            auto_scope,
-        }
+        Picked { face, vertex, edge }
     };
     // Nothing the extrude itself made can be its own input or target.
     let own = |op: cadrs_sketch::OpId| op == s.feature.0;
@@ -864,7 +854,11 @@ fn take_pick_inner(world: &mut World, field: ExtrudeField, pick: Pick) -> Option
             } else {
                 e.up_to = Some(target);
             }
+            let check = (!second).then(|| (e.clone(), world.resource::<PartCache>().builds));
             set_params(world, e, "Select up to");
+            if let Some(mut s) = world.get_resource_mut::<ExtrudeSession>() {
+                s.flip_check = check;
+            }
         }
         (ExtrudeField::Direction, pick) => {
             let dir = match pick {
@@ -889,21 +883,51 @@ fn take_pick_inner(world: &mut World, field: ExtrudeField, pick: Pick) -> Option
         }
         (ExtrudeField::MergeScope, pick) => {
             let part = pick.part()?;
-            let mut e = params(world)?;
-            if e.merge_scope.is_empty() {
-                // Starting from the parts found by themselves.
-                e.merge_scope = picked.auto_scope;
-            }
-            if let Some(i) = e.merge_scope.iter().position(|p| *p == part) {
-                e.merge_scope.remove(i);
-            } else {
-                e.merge_scope.push(part);
-            }
-            set_params(world, e, "Merge scope");
+            edit_scope(world, "Merge scope", |scope| {
+                if let Some(i) = scope.iter().position(|p| *p == part) {
+                    scope.remove(i);
+                } else {
+                    scope.push(part);
+                }
+            });
         }
         _ => {}
     }
     Some(())
+}
+
+/// Changes the merge scope by hand: it starts from the parts found by themselves (while it
+/// hasn't been edited) and from then on is exactly what it holds, even empty, so the parts
+/// found don't come back. The operation stops following what the body touches too.
+pub(crate) fn edit_scope(world: &mut World, label: &'static str, f: impl FnOnce(&mut Vec<PartId>)) {
+    let Some(feature) = world.get_resource::<ExtrudeSession>().map(|s| s.feature) else {
+        return;
+    };
+    let Some(mut e) = params(world) else { return };
+    if !e.merge_scope_set && e.merge_scope.is_empty() {
+        e.merge_scope = auto_scope(world.resource::<PartCache>(), feature, e.op);
+    }
+    let before = (e.merge_scope.clone(), e.merge_scope_set);
+    f(&mut e.merge_scope);
+    e.merge_scope_set = true;
+    if let Some(mut s) = world.get_resource_mut::<ExtrudeSession>() {
+        s.op_auto = false;
+    }
+    if (e.merge_scope.clone(), e.merge_scope_set) != before {
+        set_params(world, e, label);
+    }
+}
+
+/// The parts an Add (touching) or a Remove or Intersect (overlapping) finds by itself.
+pub(crate) fn auto_scope(cache: &PartCache, feature: FeatureId, op: BooleanOp) -> Vec<PartId> {
+    cache
+        .contacts
+        .get(&feature)
+        .map(|c| match op {
+            BooleanOp::Add => c.touches.clone(),
+            _ => c.overlaps.clone(),
+        })
+        .unwrap_or_default()
 }
 
 /// A sketch picked in the feature list toggles as a whole (PS1.1).
@@ -928,7 +952,7 @@ fn toggle_sketch(world: &mut World, sketch: FeatureId) {
 }
 
 /// The faces, vertices, parts and edges the open dialog refers to (its input faces, its Up to
-/// targets, its direction) are highlighted in the view as selected, as Onshape shows a dialog's
+/// targets, its direction, its merge scope's parts) are highlighted in the view as selected, as Onshape shows a dialog's
 /// picks.
 fn show_references(
     session: Option<Res<ExtrudeSession>>,
@@ -987,9 +1011,56 @@ fn show_references(
         Some(DirectionRef::Connector(c)) => want.extend(crate::pattern::connector_pick(&c)),
         None => {}
     }
+    // The parts the boolean acts on (as the Merge scope lists them).
+    if !matches!(e.op, BooleanOp::New) && e.body != cadrs_core::BodyType::Surface && !e.merge_all {
+        let scope = if e.merge_scope_set || !e.merge_scope.is_empty() {
+            e.merge_scope.clone()
+        } else {
+            auto_scope(&cache, s.feature, e.op)
+        };
+        want.extend(
+            scope
+                .into_iter()
+                .filter(|p| cache.part(*p).is_some())
+                .map(Pick::Part),
+        );
+    }
     if selection.0 != want {
         selection.0 = want;
     }
+}
+
+/// An "Up to" face, part or vertex picked behind the extrude's start: the extrude is flipped to
+/// reach it, instead of failing with "… is behind the start of the extrude". Tried once per
+/// pick, after the rebuild of that pick; nothing changes when the flip fails too.
+fn flip_if_behind(
+    session: Option<Res<ExtrudeSession>>,
+    cache: Res<PartCache>,
+    mut commands: Commands,
+) {
+    let Some((want, builds)) = session.as_ref().and_then(|s| s.flip_check.clone()) else {
+        return;
+    };
+    if cache.rebuilding || cache.builds == builds {
+        return;
+    }
+    let feature = session.map(|s| s.feature);
+    let behind = feature
+        .and_then(|f| cache.errors.get(&f))
+        .is_some_and(|e| e.contains("is behind the start of the extrude"));
+    commands.queue(move |world: &mut World| {
+        if let Some(mut s) = world.get_resource_mut::<ExtrudeSession>() {
+            s.flip_check = None;
+        }
+        // Not when something else has changed since the pick.
+        if let Some(mut e) = params(world)
+            && behind
+            && e == want
+        {
+            e.flip = !e.flip;
+            set_params(world, e, "Flip direction");
+        }
+    });
 }
 
 /// A new extrude picks New or Add by itself (PS5.2): Add once its body touches a part, New

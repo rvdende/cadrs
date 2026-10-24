@@ -151,7 +151,7 @@ pub use selection_field::{
     SelectionField, SelectionFieldActivate, SelectionFieldClear, SelectionFieldState,
 };
 pub use selection_list::{
-    SelectionList, SelectionListActivate, SelectionListItem, SelectionListMove,
+    SelectionList, SelectionListActivate, SelectionListClear, SelectionListItem, SelectionListMove,
     SelectionListRemove, SelectionListReorder, SelectionListReplace, SelectionListReplaceable,
     SelectionListState,
 };

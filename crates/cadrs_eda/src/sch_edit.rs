@@ -240,7 +240,7 @@ fn label_bounds(l: &Label) -> Bounds {
     Bounds::union(Some(b), Bounds::of(l.text.at))
 }
 
-fn seg_dist(p: Pt, a: Pt, b: Pt) -> f64 {
+pub fn seg_dist(p: Pt, a: Pt, b: Pt) -> f64 {
     let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
     let l2 = dx * dx + dy * dy;
     let t = if l2 == 0.0 {

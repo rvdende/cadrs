@@ -27,6 +27,7 @@ use cadrs_core::document::{
 use cadrs_core::{ElementKind, FeatureId, RegionRef, RevolveFeature};
 use cadrs_sketch::units::Quantity;
 
+use crate::extrude::auto_scope;
 use crate::extrude::{ExtrudeField, ExtrudeSession};
 use crate::parts::{PartCache, PartOverride};
 use crate::viewport::{Pick, PickRequest, Selection, ViewportArea, ViewportRect, ViewportView};
@@ -247,8 +248,7 @@ fn revolve_picks(
 /// A pick goes to the active selection field.
 fn take_pick(world: &mut World, field: ExtrudeField, pick: Pick) -> Option<()> {
     let s = world.get_resource::<ExtrudeSession>().cloned()?;
-    let op = rparams(world).map(|r| r.op);
-    let (face, vertex, edge, auto_scope) = {
+    let (face, vertex, edge) = {
         let cache = world.resource::<PartCache>();
         let face = match pick {
             Pick::Face(part, face) => (|| {
@@ -286,15 +286,7 @@ fn take_pick(world: &mut World, field: ExtrudeField, pick: Pick) -> Option<()> {
             }
             _ => None,
         };
-        let auto_scope = cache
-            .contacts
-            .get(&s.feature)
-            .map(|c| match op {
-                Some(BooleanOp::Add) => c.touches.clone(),
-                _ => c.overlaps.clone(),
-            })
-            .unwrap_or_default();
-        (face, vertex, edge, auto_scope)
+        (face, vertex, edge)
     };
     let own = |op: cadrs_sketch::OpId| op == s.feature.0;
     match (field, pick) {
@@ -381,16 +373,13 @@ fn take_pick(world: &mut World, field: ExtrudeField, pick: Pick) -> Option<()> {
         }
         (ExtrudeField::MergeScope, pick) => {
             let part = pick.part()?;
-            let mut r = rparams(world)?;
-            if r.merge_scope.is_empty() {
-                r.merge_scope = auto_scope;
-            }
-            if let Some(i) = r.merge_scope.iter().position(|p| *p == part) {
-                r.merge_scope.remove(i);
-            } else {
-                r.merge_scope.push(part);
-            }
-            set_rparams(world, r, "Merge scope");
+            edit_rscope(world, "Merge scope", |scope| {
+                if let Some(i) = scope.iter().position(|p| *p == part) {
+                    scope.remove(i);
+                } else {
+                    scope.push(part);
+                }
+            });
         }
         _ => {}
     }
@@ -438,6 +427,30 @@ fn automatic_operation(
 }
 
 /// The dialog's references (the axis, the Up to targets) show as selected in the view.
+/// Changes the merge scope by hand, as [`crate::extrude::edit_scope`] does an extrude's.
+pub(crate) fn edit_rscope(
+    world: &mut World,
+    label: &'static str,
+    f: impl FnOnce(&mut Vec<cadrs_core::PartId>),
+) {
+    let Some(feature) = world.get_resource::<ExtrudeSession>().map(|s| s.feature) else {
+        return;
+    };
+    let Some(mut r) = rparams(world) else { return };
+    if !r.merge_scope_set && r.merge_scope.is_empty() {
+        r.merge_scope = auto_scope(world.resource::<PartCache>(), feature, r.op);
+    }
+    let before = (r.merge_scope.clone(), r.merge_scope_set);
+    f(&mut r.merge_scope);
+    r.merge_scope_set = true;
+    if let Some(mut s) = world.get_resource_mut::<ExtrudeSession>() {
+        s.op_auto = false;
+    }
+    if (r.merge_scope.clone(), r.merge_scope_set) != before {
+        set_rparams(world, r, label);
+    }
+}
+
 fn show_references(
     session: Option<Res<ExtrudeSession>>,
     doc: Option<Res<ActiveDocument>>,
@@ -488,6 +501,20 @@ fn show_references(
                 .map(|p| Pick::Vertex(p.id, v.vertex)),
         };
         want.extend(p);
+    }
+    // The parts the boolean acts on (as the Merge scope lists them).
+    if !matches!(r.op, BooleanOp::New) && r.body != cadrs_core::BodyType::Surface && !r.merge_all {
+        let scope = if r.merge_scope_set || !r.merge_scope.is_empty() {
+            r.merge_scope.clone()
+        } else {
+            auto_scope(&cache, s.feature, r.op)
+        };
+        want.extend(
+            scope
+                .into_iter()
+                .filter(|p| cache.part(*p).is_some())
+                .map(Pick::Part),
+        );
     }
     if selection.0 != want {
         selection.0 = want;

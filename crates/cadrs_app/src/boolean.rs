@@ -899,22 +899,40 @@ fn sync_boolean_dialog(
             *st = want;
         }
     }
+    // P3D.1: the parts that no longer exist are red ("Missing Part") in a red-tinted field.
+    let mut all = names(&b.tools);
+    all.extend(names(&b.targets));
+    let marks = crate::extrude_dialog::missing_marks(&cache, f.id, &mut all);
+    let targets = all.split_off(b.tools.len());
+    let (tools_red, targets_red) = if marks.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        let (a, b) = marks.split_at(b.tools.len());
+        let some = |m: &[bool]| {
+            if m.contains(&true) {
+                m.to_vec()
+            } else {
+                Vec::new()
+            }
+        };
+        (some(a), some(b))
+    };
     for (role, mut l) in &mut q_lists {
         let want = match role {
             ListRole::Tools => SelectionListState {
-                items: names(&b.tools),
+                items: all.clone(),
                 active: (!s.targets_active || b.op != BooleanKind::Subtract)
                     && !s.offset_faces_active,
-                error: false,
+                error: !tools_red.is_empty(),
                 red_items: false,
-                red: Vec::new(),
+                red: tools_red.clone(),
             },
             ListRole::Targets => SelectionListState {
-                items: names(&b.targets),
+                items: targets.clone(),
                 active: s.targets_active && !s.offset_faces_active,
-                error: false,
+                error: !targets_red.is_empty(),
                 red_items: false,
-                red: Vec::new(),
+                red: targets_red.clone(),
             },
             ListRole::OffsetFaces => SelectionListState {
                 items: face_names.clone(),

@@ -575,6 +575,7 @@ impl Rebuilder {
                 op: x.op,
                 merge_all: x.merge_all,
                 scope: &x.merge_scope,
+                scope_set: false,
                 surface: false,
             };
             match x.pattern_type {
@@ -627,6 +628,7 @@ impl Rebuilder {
             op: x.op,
             merge_all: x.merge_all,
             scope: &x.merge_scope,
+            scope_set: false,
             surface: false,
         };
         match x.mirror_type {
@@ -841,6 +843,7 @@ impl Rebuilder {
                 },
                 merge_all: false,
                 scope: &own,
+                scope_set: false,
                 surface: merge.surface,
             };
             &narrowed
@@ -857,6 +860,7 @@ impl Rebuilder {
                 op: BooleanOp::Add,
                 merge_all: false,
                 scope: &own,
+                scope_set: false,
                 surface: merge.surface,
             };
             &narrowed

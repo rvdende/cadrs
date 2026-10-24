@@ -51,6 +51,7 @@ impl Rebuilder {
             op: BooleanOp::New,
             merge_all: false,
             scope: &[],
+            scope_set: false,
             surface: true,
         };
         let geoms = state.geoms.clone();

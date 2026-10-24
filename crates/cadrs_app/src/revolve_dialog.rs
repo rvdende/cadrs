@@ -32,14 +32,14 @@ use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
     NumberFieldCommit, NumberFieldState, OptionRow, Select, SelectChange, SelectState,
-    SelectionList, SelectionListActivate, SelectionListRemove, SelectionListState, TabStrip,
-    TabStripSelect,
+    SelectionList, SelectionListActivate, SelectionListClear, SelectionListRemove,
+    SelectionListState, TabStrip, TabStripSelect,
 };
 
 use crate::extrude::{ExtrudeField, ExtrudeSession};
 use crate::extrude_dialog::flip_button_any;
 use crate::parts::PartCache;
-use crate::revolve::{rparams, set_rparams};
+use crate::revolve::{edit_rscope, rparams, set_rparams};
 use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
@@ -55,6 +55,7 @@ impl Plugin for RevolveDialogPlugin {
             .add_observer(on_number)
             .add_observer(on_button)
             .add_observer(on_list_remove)
+            .add_observer(on_list_clear)
             .add_observer(on_list_activate);
     }
 }
@@ -185,17 +186,13 @@ fn labels(
     );
     let input_missing = crate::extrude_dialog::missing_marks(cache, feature, &mut input);
     let part_name = |p: &PartId| cache.part_name(*p).unwrap_or("Part").to_string();
-    let merge_scope = if !r.merge_scope.is_empty() {
+    let merge_scope = if r.merge_scope_set || !r.merge_scope.is_empty() {
         r.merge_scope.iter().map(part_name).collect()
     } else {
-        cache
-            .contacts
-            .get(&feature)
-            .map(|c| match r.op {
-                BooleanOp::Add => c.touches.iter().map(part_name).collect(),
-                _ => c.overlaps.iter().map(part_name).collect(),
-            })
-            .unwrap_or_default()
+        crate::extrude::auto_scope(cache, feature, r.op)
+            .iter()
+            .map(part_name)
+            .collect()
     };
     Labels {
         input,
@@ -238,6 +235,7 @@ fn list(
             .placeholder(placeholder)
             .items(items)
             .active(active)
+            .clearable(role == Role::MergeScope)
             .build(t),
     ))
     .entry::<Node>()
@@ -1091,28 +1089,23 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Role>, mut commands: Co
         }),
         Ok(Role::MergeScope) => {
             commands.queue(move |world: &mut World| {
-                let Some(s) = world.get_resource::<ExtrudeSession>().map(|s| s.feature) else {
-                    return;
-                };
-                let Some(mut r) = rparams(world) else { return };
-                if r.merge_scope.is_empty() {
-                    let auto = world
-                        .resource::<PartCache>()
-                        .contacts
-                        .get(&s)
-                        .map(|c| match r.op {
-                            BooleanOp::Add => c.touches.clone(),
-                            _ => c.overlaps.clone(),
-                        });
-                    r.merge_scope = auto.unwrap_or_default();
-                }
-                if i < r.merge_scope.len() {
-                    r.merge_scope.remove(i);
-                    set_rparams(world, r, "Remove from merge scope");
-                }
+                edit_rscope(world, "Remove from merge scope", |scope| {
+                    if i < scope.len() {
+                        scope.remove(i);
+                    }
+                });
             });
         }
         _ => {}
+    }
+}
+
+/// **Clear all** on the Merge scope: an empty scope of its own (an Add then makes a new part).
+fn on_list_clear(ev: On<SelectionListClear>, q: Query<&Role>, mut commands: Commands) {
+    if let Ok(Role::MergeScope) = q.get(ev.entity) {
+        commands.queue(|world: &mut World| {
+            edit_rscope(world, "Clear merge scope", |scope| scope.clear());
+        });
     }
 }
 

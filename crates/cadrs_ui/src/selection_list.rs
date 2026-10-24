@@ -23,6 +23,9 @@
 //! handles at the rows' left (`<name>-item-<i>-handle`; the ✕ hide) and a **Done** button
 //! under them (`<name>-done`). Dropping a row sends [`SelectionListMove`]; the app reorders its
 //! items.
+//!
+//! **Clearing** ([`SelectionList::clearable`], a Merge scope): with two or more items the
+//! caption has a **Clear all** button (`<name>-clear`), which triggers [`SelectionListClear`].
 
 use std::borrow::Cow;
 
@@ -78,6 +81,12 @@ pub struct SelectionListState {
 pub struct SelectionListRemove {
     pub entity: Entity,
     pub index: usize,
+}
+
+/// The caption's **Clear all** was clicked. Targets the list.
+#[derive(EntityEvent, Debug, Clone, Copy)]
+pub struct SelectionListClear {
+    pub entity: Entity,
 }
 
 /// A row was dragged by its handle from `from` to `to` (reorder mode). Targets the list.
@@ -139,6 +148,7 @@ struct ListMeta {
     name: String,
     placeholder: String,
     reorderable: bool,
+    clearable: bool,
     chevrons: bool,
     /// An icon before each item's ✕ (named `<name>-item-<i>-icon`) and its tooltip.
     item_icon: Option<(Cow<'static, str>, String)>,
@@ -162,6 +172,7 @@ pub struct SelectionList {
     placeholder: String,
     state: SelectionListState,
     reorderable: bool,
+    clearable: bool,
     chevrons: bool,
     item_icon: Option<(Cow<'static, str>, String)>,
     middle_ellipsis: bool,
@@ -182,6 +193,7 @@ impl SelectionList {
             placeholder: String::new(),
             state: SelectionListState::default(),
             reorderable: false,
+            clearable: false,
             chevrons: false,
             item_icon: None,
             middle_ellipsis: false,
@@ -209,6 +221,12 @@ impl SelectionList {
     /// Items can be put in another order (the ↑↓ button and drag handles).
     pub fn reorderable(mut self, r: bool) -> Self {
         self.reorderable = r;
+        self
+    }
+
+    /// The caption has a **Clear all** button with two or more items.
+    pub fn clearable(mut self, c: bool) -> Self {
+        self.clearable = c;
         self
     }
 
@@ -256,6 +274,7 @@ impl SelectionList {
             name: self.name.to_string(),
             placeholder: self.placeholder,
             reorderable: self.reorderable,
+            clearable: self.clearable,
             chevrons: self.chevrons,
             item_icon: self.item_icon,
             middle_ellipsis: self.middle_ellipsis,
@@ -359,7 +378,8 @@ fn spawn_contents(
         return;
     }
     let reorder = meta.reorderable && s.items.len() >= 2;
-    if reorder {
+    let clear = meta.clearable && s.items.len() >= 2;
+    if reorder || clear {
         p.spawn((
             Node {
                 margin: UiRect::bottom(Val::Px(1.0)),
@@ -382,23 +402,39 @@ fn spawn_contents(
                 },
                 Pickable::IGNORE,
             ));
-            c.spawn((
-                Button::new(format!("{}-reorder", meta.name))
-                    .icon("reorder")
-                    .icon_size(12.0)
-                    .ghost()
-                    .selected(reordering)
-                    .tooltip("Reorder items")
-                    .build(t),
-                observe(
-                    move |_: On<Activate>, mut q: Query<&mut SelectionListReorder>| {
-                        if let Ok(mut r) = q.get_mut(list) {
-                            r.0 = !r.0;
-                        }
-                    },
-                ),
-            ))
-            .insert((ghost_visuals(t), small_square()));
+            if clear {
+                c.spawn((
+                    Button::new(format!("{}-clear", meta.name))
+                        .icon("delete")
+                        .icon_size(12.0)
+                        .ghost()
+                        .tooltip("Clear all")
+                        .build(t),
+                    observe(move |_: On<Activate>, mut commands: Commands| {
+                        commands.trigger(SelectionListClear { entity: list });
+                    }),
+                ))
+                .insert((ghost_visuals(t), small_square()));
+            }
+            if reorder {
+                c.spawn((
+                    Button::new(format!("{}-reorder", meta.name))
+                        .icon("reorder")
+                        .icon_size(12.0)
+                        .ghost()
+                        .selected(reordering)
+                        .tooltip("Reorder items")
+                        .build(t),
+                    observe(
+                        move |_: On<Activate>, mut q: Query<&mut SelectionListReorder>| {
+                            if let Ok(mut r) = q.get_mut(list) {
+                                r.0 = !r.0;
+                            }
+                        },
+                    ),
+                ))
+                .insert((ghost_visuals(t), small_square()));
+            }
         });
     } else {
         p.spawn((

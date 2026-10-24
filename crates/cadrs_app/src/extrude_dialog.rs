@@ -17,8 +17,11 @@
 //!   type, depth or target and offset, PS4.8). An "Up to" end's **Offset distance** sits inline
 //!   on its checkbox row (P3.8 judge).
 //! - The **Thin** tab: Thickness 1 with the Flip wall button, Mid plane, Thickness 2 (PS4.11).
-//! - **Merge with all**, and the **Merge scope** field below it (PS5.4): empty, it lists the
-//!   parts the boolean finds by itself (the ones the new body touches or overlaps).
+//! - **Merge with all**, and the **Merge scope** field below it (PS5.4): until it is edited, it
+//!   lists the parts the boolean finds by itself (the ones the new body touches or overlaps).
+//!   Removing one, picking one or **Clear all** makes it the scope as it stands, even empty
+//!   (the found parts don't come back), and stops the automatic New/Add. Its parts are
+//!   highlighted in the 3D view.
 //!
 //! One selection field at a time takes the viewport's picks (pale blue); clicking a field makes
 //! it the one. The dialog is rebuilt when its rows change (a tab, an end type, an option), and
@@ -37,11 +40,11 @@ use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
     NumberFieldCommit, NumberFieldState, OptionRow, Select, SelectChange, SelectState,
-    SelectionList, SelectionListActivate, SelectionListRemove, SelectionListState, TabStrip,
-    TabStripSelect,
+    SelectionList, SelectionListActivate, SelectionListClear, SelectionListRemove,
+    SelectionListState, TabStrip, TabStripSelect,
 };
 
-use crate::extrude::{ExtrudeField, ExtrudeSession, params, set_params};
+use crate::extrude::{ExtrudeField, ExtrudeSession, auto_scope, edit_scope, params, set_params};
 use crate::parts::PartCache;
 use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
@@ -58,6 +61,7 @@ impl Plugin for ExtrudeDialogPlugin {
             .add_observer(on_number)
             .add_observer(on_button)
             .add_observer(on_list_remove)
+            .add_observer(on_list_clear)
             .add_observer(on_list_activate);
     }
 }
@@ -266,18 +270,14 @@ pub(crate) fn labels(
         })
         .collect();
     let part_name = |p: &PartId| cache.part_name(*p).unwrap_or("Part").to_string();
-    let merge_scope = if !e.merge_scope.is_empty() {
+    let merge_scope = if e.merge_scope_set || !e.merge_scope.is_empty() {
         e.merge_scope.iter().map(part_name).collect()
     } else {
         // The parts the boolean finds by itself.
-        cache
-            .contacts
-            .get(&feature)
-            .map(|c| match e.op {
-                BooleanOp::Add => c.touches.iter().map(part_name).collect(),
-                _ => c.overlaps.iter().map(part_name).collect(),
-            })
-            .unwrap_or_default()
+        auto_scope(cache, feature, e.op)
+            .iter()
+            .map(part_name)
+            .collect()
     };
     Labels {
         input,
@@ -506,6 +506,7 @@ fn list(
             .placeholder(placeholder)
             .items(items)
             .active(active)
+            .clearable(role == Role::MergeScope)
             .build(t),
     ))
     .entry::<Node>()
@@ -1454,29 +1455,24 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Role>, mut commands: Co
         }
         Ok(Role::MergeScope) => {
             commands.queue(move |world: &mut World| {
-                let Some(s) = world.get_resource::<ExtrudeSession>().map(|s| s.feature) else {
-                    return;
-                };
-                let Some(mut e) = params(world) else { return };
-                if e.merge_scope.is_empty() {
-                    // Removing one of the automatic parts: the others become the scope.
-                    let auto = world
-                        .resource::<PartCache>()
-                        .contacts
-                        .get(&s)
-                        .map(|c| match e.op {
-                            BooleanOp::Add => c.touches.clone(),
-                            _ => c.overlaps.clone(),
-                        });
-                    e.merge_scope = auto.unwrap_or_default();
-                }
-                if i < e.merge_scope.len() {
-                    e.merge_scope.remove(i);
-                    set_params(world, e, "Remove from merge scope");
-                }
+                // Removing one of the automatic parts: the others become the scope.
+                edit_scope(world, "Remove from merge scope", |scope| {
+                    if i < scope.len() {
+                        scope.remove(i);
+                    }
+                });
             });
         }
         _ => {}
+    }
+}
+
+/// **Clear all** on the Merge scope: an empty scope of its own (an Add then makes a new part).
+fn on_list_clear(ev: On<SelectionListClear>, q: Query<&Role>, mut commands: Commands) {
+    if let Ok(Role::MergeScope) = q.get(ev.entity) {
+        commands.queue(|world: &mut World| {
+            edit_scope(world, "Clear merge scope", |scope| scope.clear());
+        });
     }
 }
 

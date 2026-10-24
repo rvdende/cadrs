@@ -1887,7 +1887,8 @@ fn pattern_seeds(f: &Feature) -> Vec<FeatureId> {
 }
 
 /// P3D.1 (IR5.2): the positions of `f`'s inputs that no longer resolve against the features
-/// before it and the parts they made (see [`Build::missing`]). Never guesses: a region is
+/// before it and the parts they made (see [`Build::missing`]; a Boolean's count its tools, then
+/// its targets). Never guesses: a region is
 /// missing when [`RegionRef::resolve`] finds nothing, an edge or face when no part has it.
 fn missing_inputs(before: &[Feature], f: &Feature, state: &State) -> Vec<usize> {
     let region_gone = |r: &RegionRef| {
@@ -1923,6 +1924,13 @@ fn missing_inputs(before: &[Feature], f: &Feature, state: &State) -> Vec<usize> 
         FeatureKind::Chamfer(x) => {
             flags.extend(x.entities.iter().map(|e| !entity_resolves(state, e)))
         }
+        // The tools, then the targets.
+        FeatureKind::Boolean(b) => flags.extend(
+            b.tools
+                .iter()
+                .chain(&b.targets)
+                .map(|p| state.part(*p).is_none()),
+        ),
         _ => {}
     }
     for (i, gone) in flags.into_iter().enumerate() {
@@ -1996,6 +2004,8 @@ mod kernel_ops {
         op: BooleanOp,
         merge_all: bool,
         scope: &'a [PartId],
+        /// `scope` is the whole scope even when empty (not the parts found by themselves).
+        scope_set: bool,
         surface: bool,
     }
 
@@ -2199,6 +2209,7 @@ mod kernel_ops {
                 op: e.op,
                 merge_all: e.merge_all,
                 scope: &e.merge_scope,
+                scope_set: e.merge_scope_set,
                 surface: e.body == BodyType::Surface,
             };
             self.combine(id, &merge, tool, state, geoms).map(|mut o| {
@@ -2275,7 +2286,7 @@ mod kernel_ops {
                 .collect();
             if e.merge_all {
                 solids
-            } else if !e.scope.is_empty() {
+            } else if e.scope_set || !e.scope.is_empty() {
                 e.scope
                     .iter()
                     .copied()
@@ -3098,6 +3109,7 @@ mod kernel_ops {
                 op: r.op,
                 merge_all: r.merge_all,
                 scope: &r.merge_scope,
+                scope_set: r.merge_scope_set,
                 surface: r.body == BodyType::Surface,
             };
             self.combine(id, &merge, tool, state, geoms).map(|mut o| {

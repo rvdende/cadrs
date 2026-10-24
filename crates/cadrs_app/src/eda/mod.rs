@@ -169,6 +169,41 @@ struct EdaEntity;
 pub struct EdaScene {
     key: Option<u64>,
     pub list: DrawList,
+    /// The schematic grid points (in grid steps) a drawn line runs over: the grid isn't drawn
+    /// there, so lines don't look dashed with its marks over them.
+    covered: std::collections::HashSet<(i64, i64)>,
+}
+
+/// The grid points (in steps of `step`) within `reach` of one of `lines`.
+fn covered_points(
+    lines: &[render::Line],
+    step: i64,
+    reach: i64,
+) -> std::collections::HashSet<(i64, i64)> {
+    use cadrs_eda::units::Pt;
+    let mut out = std::collections::HashSet::new();
+    for l in lines {
+        for w in l.pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (x0, x1) = (a.x.min(b.x) - reach, a.x.max(b.x) + reach);
+            let (y0, y1) = (a.y.min(b.y) - reach, a.y.max(b.y) + reach);
+            let (i0, i1) = (x0.div_euclid(step), x1.div_euclid(step));
+            let (j0, j1) = (y0.div_euclid(step), y1.div_euclid(step));
+            // A long diagonal's box is mostly far from it: skip what would take too long.
+            if (i1 - i0 + 1) * (j1 - j0 + 1) > 100_000 {
+                continue;
+            }
+            for i in i0..=i1 {
+                for j in j0..=j1 {
+                    let p = Pt::new(i * step, j * step);
+                    if cadrs_eda::sch_edit::seg_dist(p, a, b) <= reach as f64 {
+                        out.insert((i, j));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The scene's lines of one width (nm; 0 is the thinnest the canvas draws), as a retained
@@ -216,6 +251,7 @@ impl Plugin for EdaPlugin {
                     place_camera,
                     rebuild_scene,
                     set_line_widths,
+                    draw_grid_mesh,
                     draw_overlay,
                 )
                     .chain()
@@ -726,6 +762,8 @@ fn place_camera(
 #[derive(Resource, Default, Clone, Debug, PartialEq, Hash)]
 pub struct SceneInputs {
     pub sch_highlight: Vec<cadrs_eda::sch_edit::SchItem>,
+    /// The net of the wire under the pointer, drawn lit.
+    pub sch_hover: Vec<cadrs_eda::sch_edit::SchItem>,
     /// The schematic's pin ends marked where wires join, and the one a wire would join now.
     pub sch_pin_ends: render::PinEnds,
     pub sch_hot_pin: Option<cadrs_eda::units::Pt>,
@@ -794,17 +832,13 @@ fn rgba(c: render::Rgba) -> Color {
 /// A filled area's colour and depth: areas sharing one share a mesh.
 type AreaKey = (render::Rgba, i32);
 
-/// The schematic's colours: KiCad's, on its cream paper in both schemes; in dark, the ground
-/// around the paper is the drawing sheets' dark grey.
+/// The schematic's colours: KiCad's on its cream paper in light; in dark, Horizon EDA's look
+/// ([`render::SchematicTheme::dark`]: no paper, hairlines, flag labels).
 fn schematic_theme() -> render::SchematicTheme {
-    let th = render::SchematicTheme::default();
     if cadrs_ui::dark_in_force() {
-        render::SchematicTheme {
-            background: [0x2c, 0x2e, 0x33, 0xff],
-            ..th
-        }
+        render::SchematicTheme::dark()
     } else {
-        th
+        render::SchematicTheme::default()
     }
 }
 
@@ -863,6 +897,7 @@ fn rebuild_scene(
                 Mode::Schematic => {
                     let hl = render::Highlight {
                         items: inputs.sch_highlight.clone(),
+                        hover: inputs.sch_hover.clone(),
                         pin_ends: inputs.sch_pin_ends,
                         hot_pin: inputs.sch_hot_pin,
                     };
@@ -995,20 +1030,159 @@ fn rebuild_scene(
             layer.clone(),
         ));
     }
+    scene.covered = if matches!(mode, Mode::Schematic | Mode::Symbol) {
+        covered_points(&list.lines, cadrs_eda::units::SCHEMATIC_GRID, 300_000)
+    } else {
+        Default::default()
+    };
     scene.list = list;
     scene.key = Some(key);
 }
 
 /// Each line width's pixel width at the current zoom (at least a pixel): a line is as wide as
-/// it is in the design, so small stroke text stays in proportion.
+/// it is in the design, so small stroke text stays in proportion. Width 0 is a hairline of
+/// [`HAIRLINE_PX`] whatever the zoom.
 fn set_line_widths(eda: Res<Eda2d>, ui: Res<EdaUi>, mut q: Query<(&EdaLines, &mut Gizmo)>) {
     let Some(v) = current_view(&ui, &eda).filter(|_| eda.flat()) else {
         return;
     };
     for (lines, mut g) in &mut q {
-        let px = ((lines.0 as f64 / 1e6 * v.scale) as f32).max(1.0);
+        let px = if lines.0 == 0 {
+            HAIRLINE_PX
+        } else {
+            ((lines.0 as f64 / 1e6 * v.scale) as f32).max(1.0)
+        };
         if g.line_config.width != px {
             g.line_config.width = px;
+        }
+    }
+}
+
+/// A hairline's width in pixels (Horizon EDA's 1.5).
+const HAIRLINE_PX: f32 = 1.5;
+
+/// The Horizon theme's grid, as meshes under everything drawn: faint lines on every grid step
+/// (every 2nd, 4th, … when they'd be closer than 12 px), and a cross on every fifth line, its
+/// arms a fixed share of a step, so it keeps its size against the drawing as the view zooms.
+#[derive(Component)]
+struct GridMesh(bool);
+
+fn draw_grid_mesh(
+    eda: Res<Eda2d>,
+    ui: Res<EdaUi>,
+    mut q: Query<(
+        &GridMesh,
+        &Mesh2d,
+        &MeshMaterial2d<ColorMaterial>,
+        &mut Visibility,
+    )>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut last: Local<Option<(u64, bool)>>,
+    mut commands: Commands,
+) {
+    let th = schematic_theme();
+    let shown =
+        th.horizon && matches!(eda.0, Some((_, _, Mode::Schematic | Mode::Symbol))) && eda.flat();
+    let view = current_view(&ui, &eda).filter(|_| shown);
+    if q.is_empty() {
+        // The two meshes: lines below crosses, both over the ground (z -100), under the areas.
+        for (cross, color, z) in [(false, th.grid_line, -90.0), (true, th.grid, -89.0)] {
+            let mut m = ColorMaterial::from(rgba(color));
+            m.alpha_mode = bevy::sprite_render::AlphaMode2d::Blend;
+            commands.spawn((
+                Name::new(if cross {
+                    "eda-grid-crosses"
+                } else {
+                    "eda-grid-lines"
+                }),
+                GridMesh(cross),
+                Mesh2d(meshes.add(Mesh::new(
+                    bevy::mesh::PrimitiveTopology::TriangleList,
+                    bevy::asset::RenderAssetUsages::default(),
+                ))),
+                MeshMaterial2d(materials.add(m)),
+                Transform::from_xyz(0.0, 0.0, z),
+                Visibility::Hidden,
+                RenderLayers::layer(EDA_LAYER),
+            ));
+        }
+        return;
+    }
+    let Some(v) = view else {
+        for (.., mut vis) in &mut q {
+            if *vis != Visibility::Hidden {
+                *vis = Visibility::Hidden;
+            }
+        }
+        *last = None;
+        return;
+    };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        v.center.map(f64::to_bits),
+        v.scale.to_bits(),
+        v.size.map(f64::to_bits),
+    )
+        .hash(&mut h);
+    let key = (h.finish(), true);
+    if *last == Some(key) {
+        return;
+    }
+    *last = Some(key);
+    let mut step = cadrs_eda::units::SCHEMATIC_GRID;
+    while (step as f64 / 1e6) * v.scale < 12.0 {
+        step *= 2;
+    }
+    let vis = v.visible();
+    let (x0, x1) = (vis.min.x.div_euclid(step), vis.max.x.div_euclid(step) + 1);
+    let (y0, y1) = (vis.min.y.div_euclid(step), vis.max.y.div_euclid(step) + 1);
+    let mm = |nm: i64| nm as f32 / 1e6;
+    let px = (1.0 / v.scale) as f32;
+    // A quad from `a` to `b`, `w` wide.
+    let quad = |out: &mut Vec<[f32; 3]>, a: Vec2, b: Vec2, w: f32| {
+        let n = (b - a).normalize_or_zero().perp() * (w / 2.0);
+        for p in [a - n, b - n, b + n, a - n, b + n, a + n] {
+            out.push([p.x, p.y, 0.0]);
+        }
+    };
+    let (bottom, top) = (mm(y0 * step), mm(y1 * step));
+    let (left, right) = (mm(x0 * step), mm(x1 * step));
+    let mut lines = Vec::new();
+    for i in x0..=x1 {
+        let x = mm(i * step);
+        quad(&mut lines, Vec2::new(x, bottom), Vec2::new(x, top), px);
+    }
+    for j in y0..=y1 {
+        let y = mm(j * step);
+        quad(&mut lines, Vec2::new(left, y), Vec2::new(right, y), px);
+    }
+    let mut crosses = Vec::new();
+    let arm = mm(step) * 0.3;
+    let major = 5;
+    for i in x0.div_euclid(major)..=x1.div_euclid(major) + 1 {
+        for j in y0.div_euclid(major)..=y1.div_euclid(major) + 1 {
+            let c = Vec2::new(mm(i * major * step), mm(j * major * step));
+            quad(&mut crosses, c - Vec2::X * arm, c + Vec2::X * arm, 1.5 * px);
+            quad(&mut crosses, c - Vec2::Y * arm, c + Vec2::Y * arm, 1.5 * px);
+        }
+    }
+    for (g, mesh, material, mut vis) in &mut q {
+        let positions = if g.0 { &crosses } else { &lines };
+        let color = rgba(if g.0 { th.grid } else { th.grid_line });
+        if let Some(mut m) = materials.get_mut(&material.0)
+            && m.color != color
+        {
+            m.color = color;
+        }
+        if let Some(mut m) = meshes.get_mut(&mesh.0) {
+            let n = positions.len();
+            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
+            m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; n]);
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; n]);
+        }
+        if *vis != Visibility::Visible {
+            *vis = Visibility::Visible;
         }
     }
 }
@@ -1040,9 +1214,11 @@ fn draw_overlay(
     let (y0, y1) = (vis.min.y.div_euclid(step), vis.max.y.div_euclid(step) + 1);
     // A dot is a 2 px stroke a pixel and a half long.
     let len = (1.5 / v.scale) as f32;
-    let dot = Color::srgba(0.45, 0.45, 0.45, 0.7);
+    let th = schematic_theme();
+    let dot = rgba(th.grid);
+    let base = cadrs_eda::units::SCHEMATIC_GRID;
     // Filled symbol bodies hide the grid under them (KiCad's do): their boxes, in nm.
-    let body = render::SchematicTheme::default().body_fill;
+    let body = th.body_fill;
     let filled: Vec<[f64; 4]> = scene
         .list
         .areas
@@ -1066,10 +1242,13 @@ fn draw_overlay(
             (x as f64) > b[0] && (x as f64) < b[2] && (y as f64) > b[1] && (y as f64) < b[3]
         })
     };
-    if (x1 - x0) * (y1 - y0) < 40_000 {
+    // Horizon's grid is a mesh of its own ([`draw_grid_mesh`]).
+    if !th.horizon && (x1 - x0) * (y1 - y0) < 40_000 {
         for i in x0..=x1 {
             for j in y0..=y1 {
-                if hidden(i * step, j * step) {
+                if hidden(i * step, j * step)
+                    || scene.covered.contains(&(i * step / base, j * step / base))
+                {
                     continue;
                 }
                 let (x, y) = (mm(i * step), mm(j * step));
@@ -1084,7 +1263,7 @@ fn draw_overlay(
     if let Some((at, connects)) = cross.0 {
         let c = Vec2::new(mm(at.x), mm(at.y));
         let px = 1.0 / v.scale as f32;
-        let ink = Color::srgb(0.1, 0.1, 0.1);
+        let ink = rgba(th.cursor);
         cg.line_2d(c - Vec2::X * 36.0 * px, c + Vec2::X * 36.0 * px, ink);
         cg.line_2d(c - Vec2::Y * 36.0 * px, c + Vec2::Y * 36.0 * px, ink);
         let sq = if connects {

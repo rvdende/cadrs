@@ -111,6 +111,7 @@ impl Rebuilder {
             op: x.op,
             merge_all: x.merge_all,
             scope: &x.merge_scope,
+            scope_set: false,
             surface: false,
         };
         let geoms = state.geoms.clone();
@@ -378,6 +379,7 @@ impl Rebuilder {
                         op: BooleanOp::New,
                         merge_all: false,
                         scope: &[],
+                        scope_set: false,
                         surface: false,
                     };
                     let geoms = state.geoms.clone();
@@ -393,6 +395,7 @@ impl Rebuilder {
             op: BooleanOp::New,
             merge_all: false,
             scope: &[],
+            scope_set: false,
             surface: true,
         };
         let geoms = state.geoms.clone();

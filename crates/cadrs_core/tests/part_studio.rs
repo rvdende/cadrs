@@ -418,12 +418,21 @@ fn end_types() {
 }
 
 /// PS5.4: a bar that bridges two boxes. Add with the automatic scope joins all three into one
-/// part (PS5.3); with the scope set to the first box only, the second stays separate.
+/// part (PS5.3); with the scope set to the first box only, the second stays separate; with the
+/// scope cleared in the dialog (set, empty), the bar is a part of its own and doesn't fall back
+/// to the boxes it touches.
 /// A = 0..40 × 0..40, C = 60..100 × 0..40, bar = 30..70 × 10..30, all 10 deep:
 /// 1600·10 + 1600·10 + (40·20 − 2·10·20)·10 = 36 000 in all.
 #[test]
 fn merge_scope() {
-    for explicit in [false, true] {
+    // The scope, the parts and the total (an overlap of the bar with a box, 10·20·10, counts
+    // twice when they stay apart).
+    let cases: [(Option<bool>, usize, f64); 3] = [
+        (None, 1, 36_000.0),
+        (Some(true), 2, 36_000.0 + 2000.0),
+        (Some(false), 3, 36_000.0 + 4000.0),
+    ];
+    for (scope, parts, want) in cases {
         let mut doc = Doc::new();
         let s = doc.sketch(PlaneRef::Top, vec![rect(0.0, 0.0, 40.0, 40.0)]);
         let a = doc.extrude(s, &[Vec2::new(5.0, 5.0)], depth(10.0));
@@ -433,19 +442,16 @@ fn merge_scope() {
         doc.extrude(s, &[Vec2::new(50.0, 20.0)], |e| {
             e.depth = 10.0;
             e.op = BooleanOp::Add;
-            if explicit {
-                e.merge_scope = vec![PartId::new(a, 0)];
+            if let Some(first) = scope {
+                e.merge_scope_set = true;
+                if first {
+                    e.merge_scope = vec![PartId::new(a, 0)];
+                }
             }
         });
         let ps = doc.parts();
-        assert_eq!(ps.len(), if explicit { 2 } else { 1 });
+        assert_eq!(ps.len(), parts, "{scope:?}");
         let total: f64 = ps.iter().map(volume).sum();
-        // Explicit: the bar overlaps C by 10·20·10 counted twice.
-        let want = if explicit {
-            36_000.0 + 2000.0
-        } else {
-            36_000.0
-        };
         close(total, want, 1e-6);
     }
 }

@@ -221,6 +221,16 @@ pub struct SchematicTheme {
     pub highlight: Rgba,
     /// The marks on pin ends where wires join ([`PinEnds`]).
     pub pin_end: Rgba,
+    /// The grid's dots, or (Horizon) its crosses on every fifth line.
+    pub grid: Rgba,
+    /// The grid's faint lines (Horizon; none when transparent).
+    pub grid_line: Rgba,
+    /// The placing crosshair.
+    pub cursor: Rgba,
+    /// Drawn as Horizon EDA draws schematics: every line but a bus's a hairline (the canvas's
+    /// thinnest, whatever the zoom), small pin numbers by the body, every label in a flag
+    /// pointing at its anchor. Off, as KiCad: lines as wide as the design says.
+    pub horizon: bool,
 }
 
 impl Default for SchematicTheme {
@@ -243,6 +253,263 @@ impl Default for SchematicTheme {
             note: [0x00, 0x00, 0xc8, 0xff],
             highlight: [0xf9, 0x7a, 0x16, 0xff],
             pin_end: [0x1e, 0x6f, 0xd9, 0xff],
+            grid: [0x73, 0x73, 0x73, 0xb3],
+            grid_line: [0, 0, 0, 0],
+            cursor: [0x1a, 0x1a, 0x1a, 0xff],
+            horizon: false,
+        }
+    }
+}
+
+impl SchematicTheme {
+    /// The dark scheme, after Horizon EDA's "Nostalgia" colours: a warm near-black ground with
+    /// no paper, gold symbols with salmon pin names and numbers, green nets (wires, junctions,
+    /// labels), a faint grid, and Horizon's drawing ([`Self::horizon`]).
+    pub fn dark() -> Self {
+        let ground = [0x21, 0x20, 0x1d, 0xff];
+        let symbol = [0xc9, 0x9c, 0x49, 0xff];
+        let pin_text = [0xe6, 0x7b, 0x54, 0xff];
+        let net = [0x73, 0xbc, 0x74, 0xff];
+        SchematicTheme {
+            background: ground,
+            paper: ground,
+            frame: [0x2e, 0x6a, 0x50, 0xff],
+            body: symbol,
+            // Bodies aren't filled: the ground shows through.
+            body_fill: ground,
+            pin: symbol,
+            pin_number: pin_text,
+            pin_name: pin_text,
+            field: symbol,
+            wire: net,
+            bus: [0xff, 0x66, 0x00, 0xff],
+            junction: net,
+            label: net,
+            no_connect: [0xe6, 0x7b, 0x54, 0xff],
+            note: [0xa8, 0xa4, 0x98, 0xff],
+            highlight: [0xd1, 0x3e, 0x47, 0xff],
+            pin_end: [0x50, 0xbc, 0x8c, 0xff],
+            grid: [0x8a, 0x80, 0x66, 0x48],
+            grid_line: [0x5a, 0x52, 0x3e, 0x18],
+            cursor: [0xdd, 0x41, 0x1a, 0xff],
+            horizon: true,
+        }
+    }
+}
+
+/// The way a label's flag points from its anchor: the way its text runs (along its angle, or
+/// half a turn around when it lies the other side: a KiCad label justified right), unless a
+/// wire or pin in `taken` leaves the anchor that way and the other way is free; then the other
+/// way, so the flag doesn't lie over what the label joins.
+fn label_direction(t: &Text, taken: &[(Pt, Pt)]) -> f64 {
+    let a = t.angle;
+    let runs = font::bounds(t).map_or(a, |b| {
+        let c = Pt::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2) - t.at;
+        let (s, co) = a.to_radians().sin_cos();
+        if c.x as f64 * co + c.y as f64 * s < 0.0 {
+            a + 180.0
+        } else {
+            a
+        }
+    });
+    // Whether a segment leaves the anchor at `deg` (one through it leaves both ways).
+    let used = |deg: f64| {
+        let (s, c) = deg.to_radians().sin_cos();
+        taken.iter().any(|(p, q)| {
+            [(*p, *q), (*q, *p)].iter().any(|(from, to)| {
+                if !crate::connectivity::on_segment(t.at, *from, *to) || t.at == *to {
+                    return false;
+                }
+                let (dx, dy) = ((to.x - t.at.x) as f64, (to.y - t.at.y) as f64);
+                let len = dx.hypot(dy);
+                len > 0.0 && (dx * c + dy * s) / len > 0.999
+            })
+        })
+    };
+    if used(runs) && !used(runs + 180.0) {
+        runs + 180.0
+    } else {
+        runs
+    }
+}
+
+/// A Horizon flag's box in the label's frame (`t.at` the origin, `dir` along +x): from `x0` to
+/// `x1` along, `hh` either side.
+fn flag_box(t: &Text) -> (Nm, Nm, Nm) {
+    let size = t.style.size.h;
+    let len = font::line_width(&t.text, &t.style).round() as Nm;
+    let pad = size / 4;
+    (size - pad, size + len + pad, size / 2 + pad)
+}
+
+/// The pieces of the segment `a`–`b` outside the flags' boxes (a wire under a label's flag
+/// gives way to its text).
+fn outside_flags(a: Pt, b: Pt, flags: &[(Pt, f64, (Nm, Nm, Nm))]) -> Vec<(Pt, Pt)> {
+    // The parts of the segment (as 0..1) each box covers.
+    let mut cut: Vec<(f64, f64)> = Vec::new();
+    for (at, dir, (x0, x1, hh)) in flags {
+        let (s, c) = dir.to_radians().sin_cos();
+        let local = |p: Pt| {
+            let (x, y) = ((p.x - at.x) as f64, (p.y - at.y) as f64);
+            (x * c + y * s, -x * s + y * c)
+        };
+        let (p, q) = (local(a), local(b));
+        // Liang–Barsky against the box.
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        let mut inside = true;
+        for (pp, qq) in [
+            (-dx, p.0 - *x0 as f64),
+            (dx, *x1 as f64 - p.0),
+            (-dy, p.1 + *hh as f64),
+            (dy, *hh as f64 - p.1),
+        ] {
+            if pp == 0.0 {
+                if qq < 0.0 {
+                    inside = false;
+                }
+            } else {
+                let r = qq / pp;
+                if pp < 0.0 {
+                    t0 = t0.max(r);
+                } else {
+                    t1 = t1.min(r);
+                }
+            }
+        }
+        if inside && t0 < t1 {
+            cut.push((t0, t1));
+        }
+    }
+    if cut.is_empty() {
+        return vec![(a, b)];
+    }
+    cut.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let at = |t: f64| {
+        Pt::new(
+            a.x + ((b.x - a.x) as f64 * t).round() as Nm,
+            a.y + ((b.y - a.y) as f64 * t).round() as Nm,
+        )
+    };
+    let mut out = Vec::new();
+    let mut from = 0.0;
+    for (t0, t1) in cut {
+        if t0 > from {
+            out.push((at(from), at(t0)));
+        }
+        from = from.max(t1);
+    }
+    if from < 1.0 {
+        out.push((at(from), b));
+    }
+    out
+}
+
+/// Horizon EDA's net label flag: the text one text height out from `t.at` along `dir`, in a box
+/// a quarter of its height bigger all round, whose near corners run to `t.at` in a point.
+fn horizon_flag(d: &mut DrawList, t: &Text, dir: f64, c: Rgba) {
+    let size = t.style.size.h;
+    let (x0, x1, hh) = flag_box(t);
+    let pts: Vec<Pt> = [
+        Pt::new(0, 0),
+        Pt::new(x0, hh),
+        Pt::new(x1, hh),
+        Pt::new(x1, -hh),
+        Pt::new(x0, -hh),
+        Pt::new(0, 0),
+    ]
+    .iter()
+    .map(|p| t.at + p.rotated(dir))
+    .collect();
+    d.line(c, 0, pts);
+    let mut text = t.clone();
+    text.at = t.at + Pt::new(size, 0).rotated(dir);
+    text.angle = dir;
+    text.style.h_align = HAlign::Left;
+    text.style.v_align = VAlign::Center;
+    d.text(&text, c);
+}
+
+/// How far a wire's own colour turns the net colour's hue toward its own (Horizon theme): most
+/// of the way, so nets read apart (purple, pink, blue, yellow) at the net colour's lightness.
+const TINT: f64 = 0.9;
+
+/// `c` as hue (degrees), saturation and lightness (0–1).
+fn to_hsl(c: Rgba) -> (f64, f64, f64) {
+    let [r, g, b] = [c[0], c[1], c[2]].map(|v| v as f64 / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (max + min) / 2.0;
+    if max == min {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if max == r {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h * 60.0, s, l)
+}
+
+fn from_hsl(h: f64, s: f64, l: f64, a: u8) -> Rgba {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let v = |t: f64| ((t + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    [v(r), v(g), v(b), a]
+}
+
+/// The net colour `base` with its hue turned [`TINT`] of the way toward `own`'s (the shorter
+/// way round) and a little more saturated, at `base`'s lightness; black, white and greys leave
+/// it as it is, so no wire is dark on the ground.
+fn tint(base: Rgba, own: Rgba) -> Rgba {
+    let (h0, s0, l0) = to_hsl(base);
+    let (h1, s1, _) = to_hsl(own);
+    if s1 < 0.15 {
+        return base;
+    }
+    let turn = ((h1 - h0 + 540.0).rem_euclid(360.0)) - 180.0;
+    from_hsl(h0 + turn * TINT, (s0 + 0.2).min(0.75), l0, base[3])
+}
+
+/// A lit colour (the hovered net): fully saturated and bright, standing well clear of the rest.
+fn glow(c: Rgba) -> Rgba {
+    let (h, _, l) = to_hsl(c);
+    from_hsl(h, 1.0, (l + 0.25).clamp(0.72, 0.8), c[3])
+}
+
+/// A net faded while another is hovered: most of the way to the ground.
+fn fade(c: Rgba, ground: Rgba) -> Rgba {
+    let mix = |a: u8, b: u8| ((a as u32 * 2 + b as u32 * 3) / 5) as u8;
+    [
+        mix(c[0], ground[0]),
+        mix(c[1], ground[1]),
+        mix(c[2], ground[2]),
+        c[3],
+    ]
+}
+
+/// With [`SchematicTheme::horizon`], the lines from `from` on become hairlines (width 0).
+fn hairlines(d: &mut DrawList, th: &SchematicTheme, from: usize) {
+    if th.horizon {
+        for l in &mut d.lines[from..] {
+            l.width = 0;
         }
     }
 }
@@ -269,6 +536,8 @@ fn join_mark(d: &mut DrawList, th: &SchematicTheme, at: Pt, filled: bool) {
 }
 
 const BODY_W: Nm = 254_000;
+/// Horizon EDA's pin number size.
+const HORIZON_PIN_NUMBER: Nm = 750_000;
 
 fn text_at(s: &str, at: Pt, angle: f64, size: Nm, h: HAlign, v: VAlign) -> Text {
     Text {
@@ -293,6 +562,9 @@ pub struct Highlight {
     pub pin_ends: PinEnds,
     /// The pin end a wire would join now (under the pointer): its square filled.
     pub hot_pin: Option<Pt>,
+    /// The net under the pointer (its wires, labels and junctions): drawn lit, more saturated
+    /// and lighter ([`glow`]).
+    pub hover: Vec<crate::sch_edit::SchItem>,
 }
 
 /// Which pins' ends are marked.
@@ -328,6 +600,8 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
         .map(|n| n.pins[0].at)
         .collect();
     let lit = |it: &SchItem| hl.items.contains(it);
+    // The pins drawn (end to body), which a label's flag keeps clear of.
+    let mut pin_lines: Vec<(Pt, Pt)> = Vec::new();
 
     for s in &sh.symbols {
         let Some(def) = sch.symbol(&s.symbol) else {
@@ -370,6 +644,7 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
             let (a, b) = (s.placement.apply(p.at), s.placement.apply(p.inner_end()));
             if p.length > 0 {
                 d.line(pin, WIRE_W, vec![a, b]);
+                pin_lines.push((a, b));
             }
             let dir = s.placement.apply_angle(p.angle);
             if matches!(p.shape, PinShape::Inverted | PinShape::InvertedClock) {
@@ -414,7 +689,47 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
             }
             // Number above a level pin's middle (left of an upright one), reading as the
             // sheet does whichever way the pin points; name inside the body past its inner end.
-            if def.show_pin_numbers {
+            if def.show_pin_numbers && th.horizon {
+                // Horizon's: small, ending half a millimetre short of the body and as far above
+                // (left of an upright pin), running toward the pin's end.
+                let level = (dir.rem_euclid(180.0) - 90.0).abs() > 45.0;
+                let toward_end = Pt::new(-mm(0.5), 0).rotated(dir);
+                let (angle, up, h) = if level {
+                    // The end is left of the body when the pin points right (dir 0).
+                    let end_left = (a.x - b.x) < 0;
+                    (
+                        0.0,
+                        Pt::new(0, mm(0.5)),
+                        if end_left {
+                            HAlign::Right
+                        } else {
+                            HAlign::Left
+                        },
+                    )
+                } else {
+                    let end_below = (a.y - b.y) < 0;
+                    (
+                        90.0,
+                        Pt::new(-mm(0.5), 0),
+                        if end_below {
+                            HAlign::Right
+                        } else {
+                            HAlign::Left
+                        },
+                    )
+                };
+                d.text(
+                    &text_at(
+                        &p.number,
+                        b + toward_end + up,
+                        angle,
+                        HORIZON_PIN_NUMBER,
+                        h,
+                        VAlign::Bottom,
+                    ),
+                    th.pin_number,
+                );
+            } else if def.show_pin_numbers {
                 let mid = Pt::new((a.x + b.x) / 2, (a.y + b.y) / 2);
                 let level = (dir.rem_euclid(180.0) - 90.0).abs() > 45.0;
                 let (angle, up) = if level {
@@ -458,28 +773,68 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     // A wire's and a junction's own colour when they have one, else the theme's.
     let rgba =
         |c: Option<crate::graphics::Color>| c.filter(|c| c.a > 0).map(|c| [c.r, c.g, c.b, 255]);
+    // Horizon's label flags: wires give way under their boxes.
+    let taken: Vec<(Pt, Pt)> = sh
+        .wires
+        .iter()
+        .map(|w| (w.a, w.b))
+        .chain(pin_lines.iter().copied())
+        .collect();
+    let flags: Vec<(uuid::Uuid, Pt, f64, (Nm, Nm, Nm))> = if th.horizon {
+        sh.labels
+            .iter()
+            .filter(|l| l.text.visible && !l.text.text.is_empty())
+            .map(|l| {
+                let dir = label_direction(&l.text, &taken);
+                (l.id, l.text.at, dir, flag_box(&l.text))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let boxes: Vec<(Pt, f64, (Nm, Nm, Nm))> = flags
+        .iter()
+        .map(|(_, at, dir, b)| (*at, *dir, *b))
+        .collect();
+    // A wire's or junction's own colour: as is (KiCad), or (Horizon) only tinting the net
+    // colour so every wire stays a clear green on the dark ground ([`tint`]).
+    let own = |c: Option<crate::graphics::Color>, base: Rgba| match rgba(c) {
+        Some(c) if th.horizon => tint(base, c),
+        Some(c) => c,
+        None => base,
+    };
+    // While a net is hovered it glows and the other nets fade toward the ground.
+    let hovered = |it: &SchItem| hl.hover.contains(it);
+    let net_color = |it: &SchItem, c: Rgba| {
+        if hl.hover.is_empty() {
+            c
+        } else if hovered(it) {
+            glow(c)
+        } else {
+            fade(c, th.background)
+        }
+    };
     for wire in &sh.wires {
         let c = if lit(&SchItem::Wire(wire.id)) {
             th.highlight
         } else {
-            rgba(wire.stroke.color).unwrap_or(th.wire)
+            net_color(&SchItem::Wire(wire.id), own(wire.stroke.color, th.wire))
         };
-        d.line(
-            c,
-            if wire.stroke.width > 0 {
-                wire.stroke.width
-            } else {
-                WIRE_W
-            },
-            vec![wire.a, wire.b],
-        );
-    }
-    for b in &sh.buses {
-        d.line(th.bus, mm(0.3), vec![b.a, b.b]);
+        let w = if wire.stroke.width > 0 {
+            wire.stroke.width
+        } else {
+            WIRE_W
+        };
+        for (a, b) in outside_flags(wire.a, wire.b, &boxes) {
+            d.line(c, w, vec![a, b]);
+        }
     }
     for j in &sh.junctions {
+        // Horizon's 0.75 mm dot with hairlines, KiCad's 0.914 mm otherwise.
         let r = if j.diameter > 0 {
             j.diameter / 2
+        } else if th.horizon {
+            mm(0.375)
         } else {
             mm(0.457)
         };
@@ -492,7 +847,12 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
         let c = if lit(&SchItem::Junction(j.id)) {
             th.highlight
         } else {
-            rgba(j.color).or(wire_color).unwrap_or(th.junction)
+            let c = match rgba(j.color).or(wire_color) {
+                Some(c) if th.horizon => tint(th.junction, c),
+                Some(c) => c,
+                None => th.junction,
+            };
+            net_color(&SchItem::Junction(j.id), c)
         };
         d.region(c, 2, &poly::circle(j.at, r));
     }
@@ -527,9 +887,17 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
         let c = if lit(&SchItem::Label(l.id)) {
             th.highlight
         } else {
-            th.label
+            net_color(&SchItem::Label(l.id), th.label)
         };
         let mut t = l.text.clone();
+        if th.horizon {
+            // Horizon's flag around every label, its point on the anchor (which stays where it
+            // is, so what the label joins doesn't change; the flag may lie over its wire). It
+            // points the way the text runs from the anchor.
+            let dir = flags.iter().find(|f| f.0 == l.id).map_or(t.angle, |f| f.2);
+            horizon_flag(&mut d, &t, dir, c);
+            continue;
+        }
         if matches!(l.kind, LabelKind::Local) {
             // A local label's text stands just above its wire.
             t.at = t.at + Pt::new(0, mm(0.3)).rotated(t.angle);
@@ -563,6 +931,11 @@ pub fn schematic(sch: &Schematic, sheet: usize, th: &SchematicTheme, hl: &Highli
     }
     for g in &sh.drawings {
         d.shape(&g.shape, th.note, None, WIRE_W, 0);
+    }
+    hairlines(&mut d, th, 0);
+    // Buses stay wide.
+    for b in &sh.buses {
+        d.line(th.bus, mm(0.3), vec![b.a, b.b]);
     }
     // Fit shows what is drawn (an empty sheet: an A4's worth from the origin).
     d.bounds = Some(d.drawn_bounds().map_or(

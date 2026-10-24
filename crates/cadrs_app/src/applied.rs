@@ -304,6 +304,7 @@ impl AppliedSession {
             dots: matches!(self.kind, AppliedKind::Pattern(_)).then_some(self.feature),
             // The feature's own faces (a fillet's round) can't be picked for it.
             skip_op: Some(self.feature.0),
+            whole_parts: false,
         };
         let planes = [true; 3];
         match self.field {
@@ -316,9 +317,15 @@ impl AppliedSession {
                 edges: true,
                 ..none
             },
-            AppliedField::Faces | AppliedField::MergeScope => PickFilter {
+            AppliedField::Faces => PickFilter {
                 faces: true,
                 edges: true,
+                ..none
+            },
+            // Whole parts only: no edges or vertices to hover.
+            AppliedField::MergeScope => PickFilter {
+                faces: true,
+                whole_parts: true,
                 ..none
             },
             AppliedField::Points => PickFilter {
@@ -495,11 +502,11 @@ impl AppliedSession {
                 edges: true,
                 ..none
             },
-            // The parts' faces and edges pick the parts (the Transform keeps their names, so its
-            // own op never shows on them).
+            // Whole parts only, no edges or vertices to hover (the Transform keeps their names,
+            // so its own op never shows on them).
             AppliedField::TransformParts => PickFilter {
                 faces: true,
-                edges: true,
+                whole_parts: true,
                 skip_op: None,
                 ..none
             },

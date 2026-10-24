@@ -1369,6 +1369,7 @@ pub fn pick_filter(
             dots: None,
             // A click goes through the extrude's own preview.
             skip_op: Some(x.feature.0),
+            whole_parts: false,
         };
         return Some(match x.field {
             // Regions (a click through the translucent preview reaches the region under it) and
@@ -1380,13 +1381,17 @@ pub fn pick_filter(
                 ..none
             },
             // Faces, edges and vertices (a part through any of them).
-            ExtrudeField::UpTo | ExtrudeField::SecondUpTo | ExtrudeField::MergeScope => {
-                PickFilter {
-                    faces: true,
-                    edges: true,
-                    ..none
-                }
-            }
+            ExtrudeField::UpTo | ExtrudeField::SecondUpTo => PickFilter {
+                faces: true,
+                edges: true,
+                ..none
+            },
+            // Whole parts only: no edges or vertices to hover.
+            ExtrudeField::MergeScope => PickFilter {
+                faces: true,
+                whole_parts: true,
+                ..none
+            },
             // P3.7 (PS12.3): a plane's normal is a direction too; P3.8: a mate connector's Z.
             ExtrudeField::Direction => PickFilter {
                 faces: true,

@@ -162,6 +162,8 @@ pub struct SchState {
     pub orient: Orient,
     /// The net highlighted (` on a wire or pin): its name and items.
     pub net: Option<(String, Vec<SchItem>)>,
+    /// The net of the wire under the pointer (Select), drawn lit.
+    pub hover_net: Vec<SchItem>,
 }
 
 /// How a symbol or label being placed sits: quarter turns counter-clockwise, then mirrored left
@@ -996,6 +998,9 @@ fn mark_pins(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
         if s.pin_ends != PinEnds::None || s.hot_pin.is_some() {
             (s.pin_ends, s.hot_pin) = (PinEnds::None, None);
         }
+        if !s.hover_net.is_empty() {
+            s.hover_net.clear();
+        }
         return;
     }
     if *last == Some((at, generation)) {
@@ -1007,10 +1012,28 @@ fn mark_pins(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
         return;
     };
     let pin = se::pin_at(&d.schematic, 0, if wiring { snap(at) } else { at }, tol);
+    let hit = se::hit(&d.schematic, 0, at, tol);
+    // A wire or label under the pointer lights up its whole net (a label's from its anchor).
+    let net_at = |p: Pt| {
+        se::net_items_at(&d.schematic, 0, p, tol)
+            .map(|(_, items)| items)
+            .unwrap_or_default()
+    };
+    let hover_net = match &hit {
+        _ if wiring => Vec::new(),
+        Some(SchItem::Wire(_)) => net_at(at),
+        Some(SchItem::Label(id)) => d.schematic.sheets[0]
+            .labels
+            .iter()
+            .find(|l| l.id == *id)
+            .map(|l| net_at(l.text.at))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let ends = if wiring {
         PinEnds::All
     } else {
-        match (pin.as_ref(), se::hit(&d.schematic, 0, at, tol)) {
+        match (pin.as_ref(), hit.clone()) {
             (Some((id, _, _)), _) => PinEnds::Symbol(*id),
             (None, Some(SchItem::Symbol(id) | SchItem::Field(id, _))) => PinEnds::Symbol(id),
             _ => PinEnds::None,
@@ -1035,6 +1058,9 @@ fn mark_pins(world: &mut World, mut last: Local<Option<(Pt, u64)>>) {
     if s.pin_ends != ends || s.hot_pin != hot {
         (s.pin_ends, s.hot_pin) = (ends, hot);
     }
+    if s.hover_net != hover_net {
+        s.hover_net = hover_net;
+    }
 }
 
 /// The selection shown highlighted, and the pin ends marked.
@@ -1056,6 +1082,9 @@ fn publish(s: Res<SchState>, mut inputs: ResMut<SceneInputs>) {
     }
     if inputs.sch_highlight != hl {
         inputs.sch_highlight = hl;
+    }
+    if inputs.sch_hover != s.hover_net {
+        inputs.sch_hover = s.hover_net.clone();
     }
 }
 

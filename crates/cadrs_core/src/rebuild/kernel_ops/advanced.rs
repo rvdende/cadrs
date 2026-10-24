@@ -518,6 +518,7 @@ impl Rebuilder {
             op: x.op,
             merge_all: x.merge_all,
             scope: &x.merge_scope,
+            scope_set: false,
             surface: x.body == BodyType::Surface,
         };
         let geoms = state.geoms.clone();
@@ -675,6 +676,7 @@ impl Rebuilder {
             op: x.op,
             merge_all: x.merge_all,
             scope: &x.merge_scope,
+            scope_set: false,
             surface: x.body == BodyType::Surface,
         };
         let geoms = state.geoms.clone();

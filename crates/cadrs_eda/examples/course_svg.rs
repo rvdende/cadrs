@@ -40,6 +40,46 @@ fn main() {
         ),
         4.0,
     );
+    // The dark scheme, its hairlines 1.5 px wide as the app draws them.
+    let px_per_mm = 8.0;
+    let mut dark = schematic(
+        &d.schematic,
+        0,
+        &SchematicTheme::dark(),
+        &Highlight::default(),
+    );
+    for l in dark.lines.iter_mut().filter(|l| l.width == 0) {
+        l.width = (1.5e6 / px_per_mm) as i64;
+    }
+    save(&out, "schematic_dark", &dark, px_per_mm);
+    // A bigger one: the power monitor (an IC, horizontal labels).
+    let (pm, _) = cadrs_eda::power_monitor::design();
+    // As drawn, and with the MOSI net under the pointer (lit).
+    let mosi = pm.schematic.sheets[0]
+        .labels
+        .iter()
+        .find(|l| l.text.text == "MOSI")
+        .and_then(|l| cadrs_eda::sch_edit::net_items_at(&pm.schematic, 0, l.text.at, 100_000))
+        .map(|(_, items)| items)
+        .unwrap_or_default();
+    for (name, hover) in [
+        ("power_monitor_dark", vec![]),
+        ("power_monitor_hover", mosi),
+    ] {
+        let mut d = schematic(
+            &pm.schematic,
+            0,
+            &SchematicTheme::dark(),
+            &Highlight {
+                hover,
+                ..Default::default()
+            },
+        );
+        for l in d.lines.iter_mut().filter(|l| l.width == 0) {
+            l.width = (1.5e6 / px_per_mm) as i64;
+        }
+        save(&out, name, &d, px_per_mm);
+    }
     save(
         &out,
         "board",
