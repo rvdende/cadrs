@@ -1354,9 +1354,6 @@ fn first_face_normal(state: &State, f: &crate::document::FaceRef) -> Result<Vect
     Ok(Vector3::from(frame.normal()).normalize())
 }
 
-/// Delete face's faces with the fillets next to them (Delete fillet faces): each fillet
-/// ([`crate::Solid::is_small_fillet`]) across an edge of a face to delete (not on through
-/// other fillets: a fully rounded boss's other fillets stay).
 /// `faces` less the fillets among them that are tangent to another of them (not a fillet):
 /// Move face's Reapply fillet puts those back after the move.
 fn without_fillets_of(
@@ -1390,6 +1387,9 @@ fn without_fillets_of(
         .collect()
 }
 
+/// Delete face's faces with the fillets next to them (Delete fillet faces): each fillet
+/// ([`crate::Solid::is_small_fillet`]) across an edge of a face to delete (not on through
+/// other fillets: a fully rounded boss's other fillets stay).
 fn with_fillets(
     state: &State,
     faces: &[crate::document::FaceRef],

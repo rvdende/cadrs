@@ -8,7 +8,10 @@
 //! The fillets that Reapply fillet would put back ([`Refillet`]s) go along with the faces they
 //! join when their other faces run along the move (a fillet between a moved wall end and a side
 //! the move slides along stays the same fillet, moved), and so do the corners between two such
-//! fillets. A rotation, or a fillet whose other face the move doesn't slide along, isn't swept.
+//! fillets. A rotation, or a fillet whose other face the move doesn't slide along, isn't swept;
+//! nor a face the move runs along somewhere inside it (it would sweep over itself), nor two faces
+//! next to each other that move different ways (an offset top and side: the corner between their
+//! sweeps would be left out).
 
 use super::kernel::NativeKernel;
 use super::math::*;
@@ -24,15 +27,43 @@ fn refused(why: &str) -> KernelError {
     }
 }
 
-/// Face `fi`'s outward normal at a point inside it, and that point.
-fn outward(b: &Body, fi: usize) -> Option<(P3, V3)> {
-    let p = super::smb::face_centroids(&super::kernel::subset(b, &[fi], false))
-        .first()
-        .copied()?;
+/// Points inside a face, with its outward normals there.
+type Inside = Vec<(P3, V3)>;
+
+/// Face `fi`'s outward normal at the point of its surface nearest `p`, and that point.
+fn outward_at(b: &Body, fi: usize, p: &P3) -> Option<(P3, V3)> {
     let f = &b.faces[fi];
-    let (u, v) = f.surf.project(&p, None);
+    let (u, v) = f.surf.project(p, None);
     let n = f.surf.normal(u, v).try_normalize(tol::DEGENERATE)?;
     Some((f.surf.eval(u, v), if f.sense { n } else { -n }))
+}
+
+/// Points inside face `fi` (the middles of up to 32 of its mesh's triangles, on its surface)
+/// with its outward normals there: unlike its area centroid, inside it whatever its shape.
+fn inside(k: &mut NativeKernel, b: &Body, fi: usize) -> Result<Inside> {
+    let id = k.insert(super::kernel::subset(b, &[fi], false));
+    let mesh = k.tessellate(id, Tessellation::default());
+    k.release(id);
+    let mesh = mesh?;
+    let step = mesh.indices.len().div_ceil(32).max(1);
+    Ok(mesh
+        .indices
+        .iter()
+        .step_by(step)
+        .filter_map(|t| {
+            let c = t
+                .iter()
+                .map(|&i| mesh.positions[i as usize].coords)
+                .sum::<V3>()
+                / 3.0;
+            outward_at(b, fi, &P3::from(c))
+        })
+        .collect())
+}
+
+/// Face `fi`'s outward normal at a point inside it, and that point.
+fn outward(k: &mut NativeKernel, b: &Body, fi: usize) -> Option<(P3, V3)> {
+    inside(k, b, fi).ok()?.first().copied()
 }
 
 /// Whether face `fi` runs along `v` everywhere (its normal square to it at its middle and along
@@ -47,20 +78,20 @@ fn runs_along(b: &Body, fi: usize, v: &V3) -> bool {
             .try_normalize(tol::DEGENERATE)
             .is_none_or(|n| n.dot(&d).abs() < tol::ANGULAR_POINT)
     };
-    outward(b, fi).is_some_and(|(p, _)| square(&p))
-        && f.loops.iter().flatten().all(|c| {
-            let e = &b.edges[c.edge];
-            e.degenerate
-                || [0.0, 0.5, 1.0]
-                    .iter()
-                    .all(|s| square(&e.point(e.t[0] + (e.t[1] - e.t[0]) * s)))
-        })
+    f.loops.iter().flatten().all(|c| {
+        let e = &b.edges[c.edge];
+        e.degenerate
+            || [0.0, 0.5, 1.0]
+                .iter()
+                .all(|s| square(&e.point(e.t[0] + (e.t[1] - e.t[0]) * s)))
+    })
 }
 
 /// What each face of `b` sweeps by: the faces moved by `how`, the fillets of `fillets` whose
 /// other faces the move slides along, and the corners between two of those. `None` when a face
 /// can't be swept (a rotation, an offset of a curved face).
 fn sweeps(
+    k: &mut NativeKernel,
     b: &Body,
     faces: &[FaceId],
     how: &FaceMove,
@@ -80,7 +111,7 @@ fn sweeps(
                 if !matches!(b.faces.get(fi)?.surf, Surface::Plane { .. }) {
                     return None;
                 }
-                outward(b, fi)?.1 * *d
+                outward(k, b, fi)?.1 * *d
             }
         };
         if v.norm() < tol::POINT {
@@ -148,6 +179,17 @@ fn sweeps(
             }
         }
     }
+    // Faces next to each other moving different ways leave the corner between their sweeps out.
+    let ef = b.edge_faces();
+    let way = |fi: usize| out.iter().find(|(f, _)| *f == fi).map(|(_, v)| *v);
+    for fs in &ef {
+        if let [a, c] = fs[..]
+            && let (Some(va), Some(vc)) = (way(a), way(c))
+            && (va - vc).norm() > tol::POINT
+        {
+            return None;
+        }
+    }
     Some(out)
 }
 
@@ -163,40 +205,61 @@ pub fn move_faces_swept(
     if let Some(f) = faces.iter().find(|f| f.0 as usize >= b.faces.len()) {
         return Err(KernelError::InvalidParameter(format!("unknown {f:?}")));
     }
-    let sweeps =
-        sweeps(&b, faces, how, fillets).ok_or_else(|| refused("only straight moves are swept"))?;
+    let sweeps = sweeps(k, &b, faces, how, fillets).ok_or_else(|| {
+        refused("only straight moves of faces that don't move apart from each other are swept")
+    })?;
     let mut cur = b.clone();
     // Each face of `cur`: the faces of `b` it continues (none: a side of a sweep).
     let mut sources: Vec<Vec<usize>> = (0..b.faces.len()).map(|f| vec![f]).collect();
     // Whether it is (part of) a moved face where it landed.
     let mut landed: Vec<bool> = vec![false; b.faces.len()];
-    // Out first, so a sweep in doesn't cut what one out is about to add to.
-    let mut order: Vec<(usize, V3, bool)> = Vec::new();
+    // For a side of a sweep, the edge of `b` it was swept from.
+    let mut swept_from: Vec<Option<usize>> = vec![None; b.faces.len()];
+    // Out first, so a sweep in doesn't cut what one out is about to add to; each with points
+    // inside it.
+    let mut order: Vec<(usize, V3, bool, Inside)> = Vec::new();
     for &(fi, v) in &sweeps {
-        let (_, n) = outward(&b, fi).ok_or_else(|| refused("a face with no area"))?;
-        let dot = n.dot(&v.normalize());
-        if dot.abs() < tol::ANGULAR_POINT {
+        let pts = inside(k, &b, fi)?;
+        let dots: Vec<f64> = pts.iter().map(|(_, n)| n.dot(&v.normalize())).collect();
+        if dots.is_empty() {
+            return Err(refused("a face with no area"));
+        }
+        if dots.iter().all(|d| d.abs() < tol::ANGULAR_POINT) {
             // Sliding along itself: nothing to sweep (its neighbours' sweeps carry it).
             continue;
         }
-        order.push((fi, v, dot > 0.0));
+        // The move must cross it the same way all over (else it sweeps over itself).
+        let out = dots[0] > 0.0;
+        if dots
+            .iter()
+            .any(|d| d.abs() < tol::ANGULAR_POINT || (*d > 0.0) != out)
+        {
+            return Err(refused("the move runs along a face it moves"));
+        }
+        order.push((fi, v, out, pts));
     }
     order.sort_by_key(|o| !o.2);
-    let swept: Vec<usize> = order.iter().map(|o| o.0).collect();
-    for (fi, v, out) in order {
-        let prism = super::offset::slab::face_prism(&b, fi, v)?;
-        // The prism's face where the face lands: the one around its middle moved.
-        let (mid, _) = outward(&b, fi).ok_or_else(|| refused("a face with no area"))?;
+    let swept: Vec<(usize, Inside)> = order.iter().map(|o| (o.0, o.3.clone())).collect();
+    for (fi, v, out, pts) in order {
+        let (prism, edges) = super::offset::slab::face_prism(&b, fi, v, out)?;
+        // The prism's face where the face lands: an end (no edge swept to it) through a point
+        // inside the face, moved.
+        let target = pts[0].0 + v;
         let lands = (0..prism.faces.len()).find(|&g| {
-            outward(&prism, g).is_some_and(|(p, _)| {
-                let f = &prism.faces[g];
-                let target = mid + v;
-                f.surf.distance(&target) < 1e-6 * (1.0 + v.norm())
-                    && (p - target).norm() < (v.norm() + 1.0) * 1e3
-            })
+            edges[g].is_none() && prism.faces[g].surf.distance(&target) < 1e-6 * (1.0 + v.norm())
         });
         let op = if out { BoolOp::Union } else { BoolOp::Subtract };
         let r = super::boolean::boolean_bodies_flush(&cur, &prism, op)?;
+        swept_from = r
+            .from
+            .iter()
+            .map(|srcs| {
+                srcs.iter().find_map(|&(o, g)| match o {
+                    0 => swept_from[g],
+                    _ => edges[g],
+                })
+            })
+            .collect();
         landed = r
             .from
             .iter()
@@ -238,16 +301,17 @@ pub fn move_faces_swept(
         .iter()
         .map(|f| super::classify::face_polygons(&cur, f))
         .collect();
-    for &f in &swept {
-        let (p, _) = outward(&b, f).ok_or_else(|| refused("a face with no area"))?;
-        if super::classify::classify_point(&cur, &polys, &p, 1e-6) == PointClass::OnBoundary {
+    for (_, pts) in &swept {
+        if pts.iter().any(|(p, _)| {
+            super::classify::classify_point(&cur, &polys, p, 1e-6) == PointClass::OnBoundary
+        }) {
             return Err(refused("part of a moved face is left behind"));
         }
     }
     // A face it merged with elsewhere (a coplanar neighbour) doesn't continue it.
     for (srcs, l) in sources.iter_mut().zip(&landed) {
         if !l {
-            srcs.retain(|f| !swept.contains(f));
+            srcs.retain(|f| !swept.iter().any(|(s, _)| s == f));
         }
     }
     let mut history = History::default();
@@ -263,20 +327,7 @@ pub fn move_faces_swept(
         }
         if srcs.is_empty() {
             // A side of a sweep: named after the edge of the body it was swept from.
-            let edge = sweeps.iter().find_map(|&(fi, v)| {
-                b.faces[fi]
-                    .loops
-                    .iter()
-                    .flatten()
-                    .map(|c| c.edge)
-                    .find(|&e| {
-                        let ed = &b.edges[e];
-                        let p = ed.point(0.5 * (ed.t[0] + ed.t[1]));
-                        let s = &cur.faces[g].surf;
-                        let on = |q: P3| s.distance(&q) < 1e-6 * (1.0 + v.norm());
-                        !ed.degenerate && on(p) && on(p + v)
-                    })
-            });
+            let edge = swept_from[g];
             match edge {
                 Some(e) => history.generated.push((
                     FaceId(g as u64),
@@ -294,4 +345,82 @@ pub fn move_faces_swept(
         bodies: vec![id],
         history,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(s: super::super::draw::Shape) -> BodyId {
+        match s {
+            super::super::draw::Shape::Body(b) => b,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The face of `id` whose outward normal at its middle is `n`.
+    fn facing(k: &mut NativeKernel, id: BodyId, n: [f64; 3]) -> FaceId {
+        let b = (**k.get(id).unwrap()).clone();
+        let fi = (0..b.faces.len())
+            .find(|&f| outward(k, &b, f).is_some_and(|(_, m)| (m - V3::from(n)).norm() < 1e-9))
+            .unwrap();
+        FaceId(fi as u64)
+    }
+
+    #[test]
+    fn an_offset_top_is_swept_up() {
+        // A 10 mm cube's top offset 2 by sweeping it: 10 × 10 × 12, its sides grown to meet it.
+        let mut k = NativeKernel::new();
+        let id = body(k.box_at(0.0, 0.0, 0.0, 10.0, 10.0, 10.0).unwrap());
+        let top = facing(&mut k, id, [0.0, 0.0, 1.0]);
+        let r = move_faces_swept(&mut k, id, &[top], &FaceMove::Offset(2.0), &[]).unwrap();
+        let out = k.get(r.bodies[0]).unwrap();
+        assert!((super::super::mass::body_volume(out) - 1200.0).abs() < 1e-6);
+        assert_eq!(out.faces.len(), 6);
+    }
+
+    #[test]
+    fn faces_next_to_each_other_moving_apart_are_not_swept() {
+        // The cube's top and a side offset together: each goes along its own normal, and the
+        // corner between their sweeps would be left out, so the sweep refuses.
+        let mut k = NativeKernel::new();
+        let id = body(k.box_at(0.0, 0.0, 0.0, 10.0, 10.0, 10.0).unwrap());
+        let top = facing(&mut k, id, [0.0, 0.0, 1.0]);
+        let side = facing(&mut k, id, [1.0, 0.0, 0.0]);
+        let r = move_faces_swept(&mut k, id, &[top, side], &FaceMove::Offset(2.0), &[]);
+        assert!(r.is_err(), "{r:?}");
+        // Translated together (one vector) they sweep as one: the cube drawn out along
+        // (2, 0, 2), 1000 + |v| × the cube seen along v, 2√2 × 100√2.
+        let r = move_faces_swept(
+            &mut k,
+            id,
+            &[top, side],
+            &FaceMove::Motion(Motion::translation(V3::new(2.0, 0.0, 2.0))),
+            &[],
+        )
+        .unwrap();
+        let out = k.get(r.bodies[0]).unwrap();
+        assert!((super::super::mass::body_volume(out) - 1400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_wall_the_move_runs_along_is_not_swept() {
+        // A cylinder's wall moved sideways: the move runs along the wall on two lines, so it
+        // would sweep over itself; refused.
+        let mut k = NativeKernel::new();
+        let id = body(k.pcylinder(5.0, 10.0).unwrap());
+        let b = (**k.get(id).unwrap()).clone();
+        let wall = (0..b.faces.len())
+            .find(|&f| matches!(b.faces[f].surf, Surface::Cylinder { .. }))
+            .unwrap();
+        let r = move_faces_swept(
+            &mut k,
+            id,
+            &[FaceId(wall as u64)],
+            &FaceMove::Motion(Motion::translation(V3::new(2.0, 0.0, 0.0))),
+            &[],
+        );
+        let e = r.expect_err("refused").to_string();
+        assert!(e.contains("runs along"), "{e}");
+    }
 }

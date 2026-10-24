@@ -560,6 +560,9 @@ fn a_move_face_from_before_move_types_loads_as_an_offset() {
     // a new one has it on.
     assert!(!x.delete_fillets);
     assert!(DirectEditFeature::default().delete_fillets);
+    // Reapply fillet too: an Offset saved before it rebuilds as it did; a new one has it on.
+    assert!(!x.reapply_fillets);
+    assert!(DirectEditFeature::default().reapply_fillets);
 }
 
 #[test]

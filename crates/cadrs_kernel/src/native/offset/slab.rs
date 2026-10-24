@@ -208,38 +208,33 @@ fn side_surface(c: &Curve, t0: f64, t1: f64, o: &Curve) -> Surface {
 enum Sweep {
     /// By a distance along its outward normals (out of the body when positive).
     Normal(f64),
-    /// Translated by a vector (Move face's sweeps: [`face_prism`]).
-    Along(V3),
+    /// Translated by a vector, out of the body or into it (Move face's sweeps:
+    /// [`face_prism`]).
+    Along { v: V3, out: bool },
 }
 
 /// The slab of face `fi` of `b` swept by `d` along its outward normals.
 pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
-    slab(b, fi, Sweep::Normal(d))
+    slab(b, fi, Sweep::Normal(d)).map(|(body, _)| body)
 }
 
 /// The solid face `fi` of `b` sweeps moving by `v` (a straight translation): bounded by the
 /// face, the face moved, and a side between each boundary edge and the edge moved (a plane, a
-/// cylinder for a circle moved along its axis, else a ruled surface). `v` must not run along
-/// the face anywhere inside it.
-pub fn face_prism(b: &Body, fi: usize, v: V3) -> Result<Body> {
-    slab(b, fi, Sweep::Along(v))
+/// cylinder for a circle moved along its axis, else a ruled surface). `out`: the move goes out
+/// of the body (the face's outward normal and `v` agree), else into it; the caller checks that
+/// they agree in sign all over the face (`v` never runs along it inside). With, for each face of
+/// the prism, the edge of `b` its side was swept from.
+pub fn face_prism(b: &Body, fi: usize, v: V3, out: bool) -> Result<(Body, Vec<Option<usize>>)> {
+    slab(b, fi, Sweep::Along { v, out })
 }
 
-fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
+/// The slab, and for each of its faces the edge of `b` it is the side of (none for the ends).
+fn slab(b: &Body, fi: usize, how: Sweep) -> Result<(Body, Vec<Option<usize>>)> {
     let f = &b.faces[fi];
-    // The sweep's length, and whether it goes out of the body (by the face's normal at a point
-    // inside it).
+    // The sweep's length, and whether it goes out of the body.
     let (d, out) = match how {
         Sweep::Normal(d) => (d, d > 0.0),
-        Sweep::Along(v) => {
-            let body = crate::native::kernel::subset(b, &[fi], false);
-            let p = crate::native::smb::face_centroids(&body)
-                .first()
-                .copied()
-                .ok_or(unsupported("a prism of a face with no area"))?;
-            let n = normal_at(&f.surf, f.sense, &p);
-            (v.norm(), v.dot(&n) > 0.0)
-        }
+        Sweep::Along { v, out } => (v.norm(), out),
     };
     // A B-spline face that is a plane, cylinder, cone or sphere is slabbed as one: its offset
     // is exact, and its poles (a cone's apex as a collapsed side) are ones the build knows.
@@ -281,7 +276,7 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
     let top_surf = match how {
         Sweep::Normal(d) => super::sharp::offset_surface(&surf, sense, d)
             .ok_or(unsupported("slabs of this kind of face"))?,
-        Sweep::Along(v) => surf.transformed(&shift(v)),
+        Sweep::Along { v, .. } => surf.transformed(&shift(v)),
     };
     // The outward normal along a coedge at t: from its p-curve on the face's own surface (where
     // a projection near a pole could land on any meridian), else projected on the recognised one.
@@ -317,7 +312,7 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
                 let p = b.verts[v].p;
                 let q = match how {
                     Sweep::Normal(d) => p + n * d,
-                    Sweep::Along(v) => p + v,
+                    Sweep::Along { v, .. } => p + v,
                 };
                 // (A read model's vertex lies up to its tolerance off its edges: the edges'
                 // tolerances, below, cover that.)
@@ -326,7 +321,8 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             }
         }
     }
-    let mut sides: Vec<XFace> = Vec::new();
+    // Each side, with the edge it is swept from (none for a pole's fan).
+    let mut sides: Vec<(XFace, Option<usize>)> = Vec::new();
     for c in f.loops.iter().flatten() {
         let ei = c.edge;
         let e = &b.edges[ei];
@@ -343,7 +339,7 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
                 d,
                 (FIT * (1.0 + d.abs())).max(0.1 * e.tol),
             ),
-            Sweep::Along(v) => e.curve.transformed(&shift(v)),
+            Sweep::Along { v, .. } => e.curve.transformed(&shift(v)),
         };
         let a = xb
             .edge(e.curve.clone(), vb[&v0], vb[&v1])
@@ -416,7 +412,7 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
         let surf = match (how, &e.curve) {
             // A circle moved along its axis sweeps its cylinder (one surface with a cylinder
             // of the body's it continues, for booleans to merge).
-            (Sweep::Along(v), Curve::Circle { c, x, y, r })
+            (Sweep::Along { v, .. }, Curve::Circle { c, x, y, r })
                 if x.cross(y).normalize().cross(&v.normalize()).norm() < tol::ANGULAR_POINT =>
             {
                 let z = x.cross(y).normalize();
@@ -456,34 +452,43 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             // round the ruled surface, closed by a seam along the rail at its vertex (the
             // surface is closed but not periodic, so its loops can't wrap round it).
             if matches!(surf, Surface::Plane { .. }) {
-                sides.push(XFace {
-                    surf,
-                    sense: true,
-                    loops: vec![vec![(a, true)], vec![(t, false)]],
-                });
+                sides.push((
+                    XFace {
+                        surf,
+                        sense: true,
+                        loops: vec![vec![(a, true)], vec![(t, false)]],
+                    },
+                    Some(ei),
+                ));
             } else {
                 let r = rail(v0, &mut xb)?;
-                sides.push(XFace {
-                    surf,
-                    sense: true,
-                    loops: vec![vec![(a, true), (r, true), (t, false), (r, false)]],
-                });
+                sides.push((
+                    XFace {
+                        surf,
+                        sense: true,
+                        loops: vec![vec![(a, true), (r, true), (t, false), (r, false)]],
+                    },
+                    Some(ei),
+                ));
             }
             continue;
         }
         let (r0, r1) = (rail(v0, &mut xb)?, rail(v1, &mut xb)?);
-        sides.push(XFace {
-            surf,
-            sense: true,
-            loops: vec![vec![(a, true), (r1, true), (t, false), (r0, false)]],
-        });
+        sides.push((
+            XFace {
+                surf,
+                sense: true,
+                loops: vec![vec![(a, true), (r1, true), (t, false), (r0, false)]],
+            },
+            Some(ei),
+        ));
     }
     // A pole where the face's normals turn round (a B-spline closing to a cone-like apex): the
     // normals there sweep a fan, so the offset of the point is a closed curve, an edge of the
     // offset face, and the fan a side between the point and it.
     for c in f.loops.iter().flatten() {
         let (ei, e) = (c.edge, &b.edges[c.edge]);
-        if !e.degenerate || et.contains_key(&ei) || matches!(how, Sweep::Along(_)) {
+        if !e.degenerate || et.contains_key(&ei) || matches!(how, Sweep::Along { .. }) {
             continue;
         }
         let v = e.v[0];
@@ -534,11 +539,14 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             }
         };
         let surf = side_surface(&e.curve, t0, t1, &fan_top);
-        sides.push(XFace {
-            surf,
-            sense: true,
-            loops: vec![vec![(r, true), (t, false), (r, false)]],
-        });
+        sides.push((
+            XFace {
+                surf,
+                sense: true,
+                loops: vec![vec![(r, true), (t, false), (r, false)]],
+            },
+            None,
+        ));
     }
     let map_loops = |m: &HashMap<usize, usize>| -> Vec<Vec<(usize, bool)>> {
         f.loops
@@ -564,7 +572,11 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             loops: map_loops(&et),
         },
     ];
-    faces.extend(sides);
+    let swept_from: Vec<Option<usize>> = [None, None]
+        .into_iter()
+        .chain(sides.iter().map(|(_, e)| *e))
+        .collect();
+    faces.extend(sides.into_iter().map(|(f, _)| f));
     // The faces in groups joined by their edges: one closed shell, or for a face with no side
     // (a whole sphere, closed by its seam and poles) the face and its offset apart, the outer
     // one bounding the slab and the other its void.
@@ -608,8 +620,9 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
     }
     shells.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut ids: Vec<Option<XFace>> = faces.into_iter().map(Some).collect();
-    // The builder's ids of the face itself and its offset.
+    // The builder's ids of the face itself and its offset, and of each face.
     let mut ends = [usize::MAX; 2];
+    let mut built = vec![usize::MAX; swept_from.len()];
     let shells: Vec<usize> = shells
         .into_iter()
         .map(|(_, members)| {
@@ -620,6 +633,7 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
                     if i < 2 {
                         ends[i] = id;
                     }
+                    built[i] = id;
                     fs.push(id);
                 }
             }
@@ -671,11 +685,17 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             .map_or(0.0, |x| crate::native::mass::face_area(&body, x).0.abs())
     };
     let prismoid = d.abs() * 0.5 * (area(0) + area(1));
-    // A translated face sweeps its area seen along the move: at most the face's, and less the
-    // more the face slants towards the move.
+    // A translated face sweeps its area seen along the move: a flat one exactly its area times
+    // the move across it, a curved one at most its area times the move.
     let fits = match how {
         Sweep::Normal(_) => volume < 2.0 * prismoid && volume > 0.5 * prismoid,
-        Sweep::Along(_) => volume <= prismoid * (1.0 + 1e-6),
+        Sweep::Along { v, .. } => match &surf {
+            Surface::Plane { f: fr } => {
+                let across = area(0) * v.dot(&fr.z.normalize()).abs();
+                (volume - across).abs() <= 1e-6 * (1.0 + across)
+            }
+            _ => volume <= prismoid * (1.0 + 1e-6),
+        },
     };
     if !fits {
         return Err(KernelError::InvalidResult {
@@ -685,5 +705,11 @@ fn slab(b: &Body, fi: usize, how: Sweep) -> Result<Body> {
             ),
         });
     }
-    Ok(body)
+    let mut edges = vec![None; body.faces.len()];
+    for (i, &e) in swept_from.iter().enumerate() {
+        if let Some(Some(x)) = map.get(built[i]).copied() {
+            edges[x] = e;
+        }
+    }
+    Ok((body, edges))
 }

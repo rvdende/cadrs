@@ -263,6 +263,7 @@ Debug output (on stderr; results don't change):
   intersections, face splits and output faces; face splitting in uv; a shell's cavity steps;
   vertex merging; p-curve fits that don't converge; the offset's piece whose boolean fails
   (with `CADRS_DUMP_DIR`, both inputs are written); a face slab's build warnings.
+- `CADRS_MOVE_DEBUG=1`: why Move face's kept path and its swept fallback both refused a move.
 - `CADRS_SNAP_DEBUG=1`, `CADRS_TANGENT_DEBUG=1`, `CADRS_EBOP_DEBUG=1`: a boolean's snapping of
   B-spline faces onto planes and cylinders, its tangent B-spline contacts, an edge boolean's
   splits.

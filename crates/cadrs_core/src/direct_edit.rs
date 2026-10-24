@@ -121,8 +121,9 @@ pub struct DirectEditFeature {
     #[serde(default = "zero_mm")]
     pub offset_expr: String,
     /// The fillets next to the faces (and picked fillets tangent to a face moved) taken off and
-    /// put back after the move, at their radius (Onshape's "Reapply fillet", on by default).
-    #[serde(default = "yes")]
+    /// put back after the move, at their radius (Onshape's "Reapply fillet", on by default; off
+    /// for a Move face saved before it, which rebuilds as it did).
+    #[serde(default)]
     pub reapply_fillets: bool,
     /// Translate: the direction (an edge, a sketch line, a face's or plane's normal or a mate
     /// connector's Z axis); `None` is the first face's normal.
@@ -139,10 +140,6 @@ pub struct DirectEditFeature {
 
 fn zero_mm() -> String {
     "0 mm".into()
-}
-
-fn yes() -> bool {
-    true
 }
 
 fn zero_deg() -> String {
