@@ -16,6 +16,7 @@ gpu = ["cadrs_kernel/gpu"]
 
 [dependencies]
 cadrs_sketch.workspace = true
+cadrs_cam.workspace = true
 cadrs_kernel.workspace = true
 cadrs_fea.workspace = true
 cadrs_render.workspace = true

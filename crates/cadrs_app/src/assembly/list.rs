@@ -1143,6 +1143,7 @@ fn width_key(kind: crate::viewport::ActiveKind) -> &'static str {
         crate::viewport::ActiveKind::Assembly => "assembly",
         crate::viewport::ActiveKind::PcbStudio => "pcb",
         crate::viewport::ActiveKind::Render => "render",
+        crate::viewport::ActiveKind::CamStudio => "cam",
         _ => "studio",
     }
 }
@@ -1182,6 +1183,7 @@ fn list_width(
             // P3H.3: the PCB Studio's Boards/Components panel.
             crate::viewport::ActiveKind::PcbStudio => crate::pcb::PANEL_W,
             crate::viewport::ActiveKind::Render => crate::render_ui::PANEL_W,
+            crate::viewport::ActiveKind::CamStudio => crate::cam::PANEL_W,
             _ => 190.0,
         });
     for (n, mut st) in &mut q {

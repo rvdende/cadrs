@@ -57,6 +57,10 @@ fn registry() -> &'static RwLock<HashMap<&'static str, Handler>> {
         );
         add(crate::section::Caps::NAME, handle::<crate::section::Caps>);
         add(
+            crate::cam::geometry::CamModel::NAME,
+            handle::<crate::cam::geometry::CamModel>,
+        );
+        add(
             crate::assembly::interference::Check::NAME,
             handle::<crate::assembly::interference::Check>,
         );

@@ -2074,6 +2074,7 @@ name = "cadrs_app"
 version = "0.1.7"
 dependencies = [
  "bevy",
+ "blake3",
  "cadrs_core",
  "cadrs_drawing",
  "cadrs_easyeda",
@@ -2105,11 +2106,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cadrs_cam"
+version = "0.1.7"
+dependencies = [
+ "clipper2-rust",
+ "earcutr",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cadrs_core"
 version = "0.1.7"
 dependencies = [
  "bincode",
  "blake3",
+ "cadrs_cam",
  "cadrs_drawing",
  "cadrs_eda",
  "cadrs_fea",
@@ -4158,9 +4172,9 @@ dependencies = [
 
 [[package]]
 name = "icon-rs"
-version = "0.3.12"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36e738de1552ef6af184dafe186c42d467da9431e934921fc25512f2137b840c"
+checksum = "8a774236066f29af40b1704f75c13ec11e163950c709171720e129120f1e8ae4"
 
 [[package]]
 name = "icu_collections"

@@ -476,6 +476,7 @@ fn tab_icon(el: &cadrs_core::Element) -> &'static str {
         ElementKind::Drawing(_) => "details",
         ElementKind::PcbStudio(_) => "pcb-studio",
         ElementKind::Render(_) => "render-studio",
+        ElementKind::CamStudio(_) => "cam-studio",
     }
 }
 

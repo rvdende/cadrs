@@ -4097,6 +4097,25 @@ impl Rebuilder {
             .ok_or_else(|| "moving the part failed".to_string())
     }
 
+    /// [`Rebuilder::placed_body`] with the part's persistent face and edge names (CAM Studio
+    /// names the faces and edges a toolpath drives by them). The body's faces and edges are
+    /// the part's, moved, so the names index them alike.
+    pub fn placed_body_named(
+        &mut self,
+        features: &[Feature],
+        part: PartId,
+        rotation: [[f64; 3]; 3],
+        translation: [f64; 3],
+    ) -> Result<(BodyId, Arc<cadrs_kernel::BodyNames>), String> {
+        let body = self.placed_body(features, part, rotation, translation)?;
+        let names = self
+            .last
+            .part(part)
+            .map(|p| p.names.clone())
+            .unwrap_or_default();
+        Ok((body, names))
+    }
+
     /// The kernel, for queries on bodies from [`Rebuilder::placed_body`] (P3H.5: PCB Studio's
     /// Sync reads the board part's faces and edges).
     pub fn kernel(&self) -> &dyn cadrs_kernel::Kernel {

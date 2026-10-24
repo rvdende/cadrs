@@ -13,6 +13,7 @@ pub mod assembly;
 pub mod blob_store;
 pub mod blobs;
 pub mod brep;
+pub mod cam;
 pub mod check;
 pub mod command;
 pub mod commands;

@@ -96,6 +96,17 @@ pub fn tab_dependencies(doc: &Document, el: &Element) -> Vec<ElementId> {
     {
         add(src);
     }
+    // A CAM Studio's components: the Part Studios they follow at the workspace.
+    if let crate::document::ElementKind::CamStudio(c) = &el.kind {
+        for comp in &c.components {
+            if let Some(r) = comp.derived.source
+                && r.at == crate::external::RefAt::Workspace
+                && r.document_or(doc.id) == doc.id
+            {
+                add(r.element);
+            }
+        }
+    }
     if let Some(d) = el.drawing_data() {
         for s in &d.sources {
             add(ElementId(s.element));

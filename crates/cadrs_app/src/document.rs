@@ -1092,9 +1092,9 @@ fn insert_menu(paste: Option<String>) -> Menu {
                 .planned(),
         )
         .item(
-            MenuItem::new("create-cam-studio", "Create CAM Studio")
-                .icon("cam-studio")
-                .planned(),
+            // CAM Studio: jobs, setups, tools and toolpaths for mills, routers, lasers, plasma
+            // tables and waterjets.
+            MenuItem::new("create-cam-studio", "Create CAM Studio").icon("cam-studio"),
         )
         .item(
             // P3H.3: PCB Studio tabs.
@@ -1226,6 +1226,7 @@ enum TabKind {
     Drawing,
     PcbStudio,
     Render,
+    CamStudio,
 }
 
 impl TabKind {
@@ -1236,6 +1237,7 @@ impl TabKind {
             cadrs_core::ElementKind::Drawing(_) => TabKind::Drawing,
             cadrs_core::ElementKind::PcbStudio(_) => TabKind::PcbStudio,
             cadrs_core::ElementKind::Render(_) => TabKind::Render,
+            cadrs_core::ElementKind::CamStudio(_) => TabKind::CamStudio,
         }
     }
 
@@ -1247,6 +1249,7 @@ impl TabKind {
             TabKind::Drawing => "drawing",
             TabKind::PcbStudio => "pcb-studio",
             TabKind::Render => "render-studio",
+            TabKind::CamStudio => "cam-studio",
         }
     }
 
@@ -1258,6 +1261,7 @@ impl TabKind {
             TabKind::Drawing => "details",
             TabKind::PcbStudio => "pcb-studio",
             TabKind::Render => "render-studio",
+            TabKind::CamStudio => "cam-studio",
         }
     }
 }
@@ -1445,6 +1449,11 @@ fn rebuild_element_ui(
                     .entity(toolbar)
                     .with_children(|tb| crate::render_ui::render_toolbar(tb, &t));
             }
+            Some((_, TabKind::CamStudio, _)) => {
+                commands
+                    .entity(toolbar)
+                    .with_children(|tb| crate::cam::toolbar(tb, &t));
+            }
             Some((_, TabKind::PartStudio, true)) => {
                 commands
                     .entity(toolbar)
@@ -1476,6 +1485,10 @@ fn rebuild_element_ui(
         commands
             .entity(panel)
             .with_children(|p| crate::render_ui::render_panel(p, &t));
+    } else if kind == TabKind::CamStudio {
+        commands
+            .entity(panel)
+            .with_children(|p| crate::cam::panel(p, &t));
     } else if kind == TabKind::Assembly {
         commands
             .entity(panel)
@@ -3062,6 +3075,7 @@ fn open_properties_dialog(
         cadrs_core::ElementKind::Drawing(_) => "Drawing",
         cadrs_core::ElementKind::PcbStudio(_) => "PCB Studio",
         cadrs_core::ElementKind::Render(_) => "Render Studio",
+        cadrs_core::ElementKind::CamStudio(_) => "CAM Studio",
     };
     commands.spawn((
         Dialog::new("tab-properties-dialog")
@@ -3158,6 +3172,7 @@ fn on_insert_menu_action(
         "create-part-studio" => NewElementKind::PartStudio,
         "create-assembly" => NewElementKind::Assembly,
         "create-pcb-studio" => NewElementKind::PcbStudio,
+        "create-cam-studio" => NewElementKind::CamStudio,
         "create-render-studio" => {
             NewElementKind::RenderStudio(crate::render_ui::default_source(&doc))
         }

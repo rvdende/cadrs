@@ -270,7 +270,8 @@ impl Element {
             ElementKind::Assembly
             | ElementKind::Drawing(_)
             | ElementKind::PcbStudio(_)
-            | ElementKind::Render(_) => &[],
+            | ElementKind::Render(_)
+            | ElementKind::CamStudio(_) => &[],
         }
     }
 
@@ -458,6 +459,9 @@ pub enum ElementKind {
     PcbStudio(Box<crate::pcb::PcbStudio>),
     /// A Render Studio (P3F.6): renders a Part Studio or Assembly, see [`crate::render`].
     Render(Box<crate::render::RenderStudio>),
+    /// A CAM Studio: jobs, setups, tools and toolpaths machining parts of this document's Part
+    /// Studios, see [`crate::cam`].
+    CamStudio(Box<crate::cam::CamStudio>),
 }
 
 /// A folder in the feature list (P3.6): a name and the features in it, which follow each other

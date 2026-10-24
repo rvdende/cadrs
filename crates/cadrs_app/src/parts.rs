@@ -1335,7 +1335,12 @@ fn update_part_cache(
     {
         return;
     }
-    let features = el.features();
+    // A CAM Studio builds its components (Derived features of their Part Studios).
+    let features = if el.cam().is_some() {
+        el.part_features()
+    } else {
+        el.features()
+    };
     // Renames and hidden parts (and a change of element ends an isolation).
     if cache.props.as_slice() != el.part_props() {
         cache.props = el.part_props().to_vec();
@@ -1403,7 +1408,12 @@ fn update_part_cache(
         return;
     }
     // The features above the rollback bar and not suppressed (P3.9).
-    let effective = effective_features(&el.active_features(), &over);
+    let built = if el.cam().is_some() {
+        el.active_part_features()
+    } else {
+        el.active_features()
+    };
+    let effective = effective_features(&built, &over);
     // Rebuild on the kernel thread; wait a little so quick rebuilds show in this frame.
     // Restored from the session snapshot of these features when the session doesn't have them
     // (a document opened again), and snapshotted afterwards.

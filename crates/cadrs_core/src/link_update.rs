@@ -128,7 +128,8 @@ pub fn uses(doc: &Document) -> Vec<RefUse> {
             }
         }
         // P3G.4: Derived features referencing a version.
-        for f in el.features() {
+        // (A CAM Studio's components are Derived features too.)
+        for f in derived_features(el) {
             if let crate::document::FeatureKind::Derived(d) = &f.kind
                 && let (Some(mut r), Some(copy)) = (d.source, d.copy)
                 && matches!(r.at, RefAt::Version(_))
@@ -210,7 +211,8 @@ pub fn workspace_uses(doc: &Document, tab: Option<ElementId>) -> Vec<RefUse> {
             }
         }
         // P3G.4: Derived features following a tab of this document.
-        for f in el.features() {
+        // (A CAM Studio's components are Derived features too.)
+        for f in derived_features(el) {
             if let crate::document::FeatureKind::Derived(d) = &f.kind
                 && let Some(r) = d.source
                 && r.at == RefAt::Workspace
@@ -504,6 +506,14 @@ impl Command for UpdateReferences {
     }
 }
 
+/// An element's Derived-capable features: a Part Studio's list, a CAM Studio's components.
+fn derived_features(el: &crate::document::Element) -> &[crate::document::Feature] {
+    match &el.kind {
+        ElementKind::CamStudio(c) => c.part_features(),
+        _ => el.features(),
+    }
+}
+
 /// The Derived feature at a site.
 fn derived_site(
     doc: &mut Document,
@@ -513,6 +523,11 @@ fn derived_site(
     let el = doc
         .element_mut(element)
         .ok_or(CommandError::ElementNotFound(element))?;
+    if let ElementKind::CamStudio(c) = &mut el.kind {
+        return c
+            .component_derived_mut(feature)
+            .ok_or_else(|| CommandError::Invalid("CAM component not found".into()));
+    }
     let ElementKind::PartStudio { features, .. } = &mut el.kind else {
         return Err(CommandError::ElementNotFound(element));
     };
@@ -540,8 +555,8 @@ pub(crate) fn prune(doc: &mut Document, candidates: &[ElementId]) {
                 used.extend(s.views.iter().map(|v| ElementId(v.reference.element)));
             }
         }
-        // P3G.4: Derived features' copies.
-        for f in el.features() {
+        // P3G.4: Derived features' copies (CAM Studio components' too).
+        for f in el.part_features() {
             if let crate::document::FeatureKind::Derived(d) = &f.kind
                 && let Some(c) = d.copy
             {

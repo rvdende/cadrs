@@ -264,6 +264,8 @@ pub enum ActiveKind {
     PcbStudio,
     /// A Render Studio tab (P3F.6): the path-traced view of `crate::render_ui` replaces it.
     Render,
+    /// A CAM Studio tab: its components' parts, stock and toolpaths (`crate::cam`), no planes.
+    CamStudio,
 }
 
 impl ActiveKind {
@@ -897,6 +899,7 @@ fn track_active_element(
         cadrs_core::ElementKind::Drawing(_) => ActiveKind::Drawing,
         cadrs_core::ElementKind::PcbStudio(_) => ActiveKind::PcbStudio,
         cadrs_core::ElementKind::Render(_) => ActiveKind::Render,
+        cadrs_core::ElementKind::CamStudio(_) => ActiveKind::CamStudio,
     };
     kind.set_if_neq(k);
     if view.element != Some(el.id) {
@@ -913,6 +916,7 @@ fn track_active_element(
             // instances, with the assembly margin, `ex3-step5.png`) framed once they are built:
             // the rebuild goes on in the background (a big one takes seconds).
             None if k == ActiveKind::PartStudio
+                || k == ActiveKind::CamStudio
                 || (k == ActiveKind::Assembly
                     && el.assembly_model().is_some_and(|a| !a.instances.is_empty())) =>
             {
@@ -1850,6 +1854,12 @@ pub fn scene_points(
         }
         return pts;
     }
+    // A CAM Studio shows no planes: its parts alone are framed.
+    let planes = if kind == ActiveKind::CamStudio {
+        [false; 3]
+    } else {
+        planes
+    };
     {
         for k in PlaneKind::ALL.into_iter().filter(|k| planes[k.index()]) {
             for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {

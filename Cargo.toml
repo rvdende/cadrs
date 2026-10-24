@@ -8,6 +8,7 @@ members = ["crates/*"]
 # unambiguous: `cargo test -r -p cadrs_onshape`.
 default-members = [
     "crates/cadrs",
+    "crates/cadrs_cam",
     "crates/cadrs_core",
     "crates/cadrs_drawing",
     "crates/cadrs_eda",
@@ -46,7 +47,7 @@ bytemuck = "1"
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 resvg = "0.45"
-icon-rs = "0.3.12"
+icon-rs = "0.4.5"
 directories = "6"
 # Wayland file drops (`cadrs_app::file_drop`): winit has no Wayland drag-and-drop, so the app
 # reads drops off winit's own Wayland connection. The versions winit already pulls in.
@@ -90,6 +91,7 @@ tokio-util = "0.7"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 
 cadrs_core = { path = "crates/cadrs_core" }
+cadrs_cam = { path = "crates/cadrs_cam" }
 cadrs_sketch = { path = "crates/cadrs_sketch" }
 cadrs_ui = { path = "crates/cadrs_ui" }
 cadrs_app = { path = "crates/cadrs_app" }

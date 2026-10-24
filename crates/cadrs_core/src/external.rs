@@ -298,6 +298,13 @@ fn snap(
                 el.name
             )));
         }
+        // A CAM Studio machines parts here; nothing derives or inserts it.
+        ElementKind::CamStudio(_) => {
+            return Err(LinkError::NotLinkable(format!(
+                "The CAM Studio {}",
+                el.name
+            )));
+        }
         ElementKind::PartStudio { .. } => {
             copy.contexts.clear();
             // P3G.4: the copies its Derived features need come too, and their same-document

@@ -881,6 +881,7 @@ fn kind_label(kind: &ElementKind) -> &'static str {
         ElementKind::Drawing(_) => "Drawing",
         ElementKind::PcbStudio(_) => "PCB Studio",
         ElementKind::Render(_) => "Render Studio",
+        ElementKind::CamStudio(_) => "CAM Studio",
     }
 }
 

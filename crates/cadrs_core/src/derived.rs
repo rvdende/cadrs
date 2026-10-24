@@ -976,6 +976,8 @@ pub fn refresh(doc: &mut Document) {
     crate::sheetmetal_form::refresh(doc);
     // Board outlines that follow a sketch, before the boards are taken into Part Studios.
     crate::pcb::outline_link::refresh(doc);
+    // CAM Studio components that follow a Part Studio's workspace.
+    crate::cam::refresh(doc);
     if !any_derived(doc) {
         return;
     }

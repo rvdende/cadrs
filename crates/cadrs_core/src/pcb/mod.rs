@@ -514,6 +514,7 @@ impl Element {
     pub fn part_features(&self) -> &[crate::document::Feature] {
         match &self.kind {
             ElementKind::PcbStudio(p) => p.part_features(),
+            ElementKind::CamStudio(c) => c.part_features(),
             _ => self.features(),
         }
     }
@@ -523,6 +524,7 @@ impl Element {
     pub fn active_part_features(&self) -> Vec<crate::document::Feature> {
         match &self.kind {
             ElementKind::PcbStudio(p) => p.part_features().to_vec(),
+            ElementKind::CamStudio(c) => c.part_features().to_vec(),
             _ => self.active_features(),
         }
     }

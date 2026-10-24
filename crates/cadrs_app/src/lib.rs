@@ -16,6 +16,7 @@ pub mod assembly;
 pub mod board_fit;
 pub mod board_in_studio;
 pub mod boolean;
+pub mod cam;
 pub mod camera;
 pub mod change_preview;
 pub mod composite_ui;
@@ -739,6 +740,7 @@ impl Plugin for CadrsAppPlugin {
                 simulation_ui::SimulationPlugin,
                 render_ui::RenderUiPlugin,
                 export_image::ExportImagePlugin,
+                cam::CamUiPlugin,
             ))
             .add_plugins(native_document::NativeDocumentPlugin)
             .add_plugins((

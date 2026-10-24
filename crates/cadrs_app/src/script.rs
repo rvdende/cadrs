@@ -415,6 +415,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             });
             continue;
         }
+        // CAM Studio's own steps (`crate::cam::script`).
+        if let Some(rest) = m.0.trim().strip_prefix("cam ") {
+            let rest = rest.to_string();
+            commands.queue(move |world: &mut World| crate::cam::script(world, &rest));
+            continue;
+        }
         let mut parts = m.0.split_whitespace();
         match (
             parts.next(),

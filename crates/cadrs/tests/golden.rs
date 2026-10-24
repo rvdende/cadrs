@@ -129,6 +129,9 @@ fn render_and_compare(name: &str, extra: &[&std::ffi::OsStr]) -> Result<Option<P
     let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("golden")
         .join(name);
+    // From nothing: the last run's screenshots and its session cache (kernel results a
+    // different build left) would make a render depend on what ran before it.
+    let _ = std::fs::remove_dir_all(&out);
     let slot = JobSlot::take();
     let output = Command::new(env!("CARGO_BIN_EXE_cadrs"))
         .current_dir(workspace())
@@ -2485,4 +2488,77 @@ fn golden_vector_drop() {
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_image_placement() {
     run_scenario("image_placement");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_studio_mill() {
+    // CAM Studio on a Fanuc mill: the posted program and its setup sheet.
+    if run_scenario("cam_studio_mill").is_none() {
+        return;
+    }
+    let dir = workspace().join("target/exports/cam_studio_mill");
+    let nc = std::fs::read_to_string(dir.join("Job_1_Setup_1.nc")).unwrap();
+    assert!(nc.starts_with("%\nO1001 (JOB 1 SETUP 1)"), "{nc}");
+    assert!(nc.trim_end().ends_with('%'));
+    // The profile's tool, then the bore's helix (G3, climb) round the Ø16 hole.
+    assert!(nc.contains("T1 M6") && nc.contains("G43 H1"));
+    assert!(nc.contains("G3 "));
+    // Every coordinate with its decimal point.
+    for line in nc.lines().filter(|l| !l.starts_with('(')) {
+        for w in line.split_whitespace() {
+            let (a, v) = w.split_at(1);
+            if "XYZIJR".contains(a) && v.parse::<f64>().is_ok() {
+                assert!(v.contains('.'), "{w} in {line}");
+            }
+        }
+    }
+    let sheet = std::fs::read_to_string(dir.join("Job_1_Setup_1-setup-sheet.html")).unwrap();
+    assert!(sheet.contains("Program O1001") && sheet.contains("D6 end mill"));
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_studio_plasma() {
+    // CAM Studio on a QtPlasmaC table: the hole cut before the outline, no Z, the torch codes.
+    if run_scenario("cam_studio_plasma").is_none() {
+        return;
+    }
+    let nc = std::fs::read_to_string(
+        workspace().join("target/exports/cam_studio_plasma/Job_1_Setup_1.ngc"),
+    )
+    .unwrap();
+    let body: Vec<&str> = nc.lines().filter(|l| !l.starts_with('(')).collect();
+    assert!(body.iter().all(|l| !l.contains('Z')), "{nc}");
+    let ons = body.iter().filter(|l| **l == "M3 $0 S1").count();
+    assert_eq!(ons, 2, "{nc}");
+    assert_eq!(body.iter().filter(|l| **l == "M5 $0").count(), ons, "{nc}");
+    // The first cut (the hole) stays inside it: within 8 of its centre.
+    let first = body.iter().position(|l| *l == "M3 $0 S1").unwrap();
+    let off = body[first..].iter().position(|l| *l == "M5 $0").unwrap() + first;
+    for l in &body[first..off] {
+        let num = |a: char| {
+            l.split_whitespace()
+                .find_map(|w| w.strip_prefix(a).and_then(|v| v.parse::<f64>().ok()))
+        };
+        if let (Some(x), Some(y)) = (num('X'), num('Y')) {
+            assert!(x.hypot(y) < 8.0, "{l}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_studio_3d() {
+    // CAM Studio 3D: adaptive clearing and a parallel finish of the reflector's dish from
+    // below (the scenario checks Verify finds no gouges and no collisions).
+    run_scenario("cam_studio_3d");
+}
+
+#[test]
+#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
+fn golden_cam_studio_other_document() {
+    // CAM Studio taking its part from another document at a version (the scenario checks the
+    // component comes in at V1).
+    run_scenario("cam_studio_other_document");
 }

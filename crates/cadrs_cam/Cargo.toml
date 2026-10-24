@@ -1,0 +1,21 @@
+[package]
+name = "cadrs_cam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# CAM for CAM Studio: toolpath strategies for mills, routers, lasers, plasma and waterjet
+# cutters, the tool and machine libraries, stock simulation and G-code post processors. No Bevy
+# and no cadrs_core: the studio hands it the parts as triangles, faces and edges in the setup's
+# coordinates.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clipper2-rust.workspace = true
+rayon.workspace = true
+# Triangulating the regions Verify shows (a cut sheet's pieces).
+earcutr.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

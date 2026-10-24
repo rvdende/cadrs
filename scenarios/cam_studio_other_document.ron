@@ -1,0 +1,39 @@
+// CAM Studio taking its part from another document: `fixtures/linked_block_standin.cadrs` ("Block
+// source", the Part Studio "Block" at V1) stored in the library, the host document
+// (`fixtures/linked_block_host_standin.cadrs`) open. Insert part: Document "Block source", its
+// Part Studio "Block" at V1; the block comes in as a version reference.
+// 01 Insert part from the other document: Document, Part Studio, Version, the block ticked.
+// 02 Inserted: the component (the source's "Part 1") in the list at V1.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Key("F12"),
+        Key("F12"),
+        Custom("linked-fixture store linked_block_standin folder"),
+        Custom("linked-fixture open linked_block_host_standin"),
+        WaitFor("document-shell"),
+        Click(ui("insert-tab")),
+        WaitFor("create-cam-studio"),
+        Click(ui("create-cam-studio")),
+        WaitFor("cam-tree"),
+        Click(ui("cam-tb-insert")),
+        WaitFor("cam-insert-part"),
+        Click(ui("cam-insert-part")),
+        WaitFor("cam-dialog"),
+        Click(ui("cam-f-document")),
+        Click(ui("cam-f-document-option-1")),
+        ExpectText("cam-dialog", "Block"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("01-insert-from-other-document"),
+        Click(ui("cam-dialog-accept")),
+        Wait(5),
+        // The block's part ("Part 1" in the source) at V1.
+        ExpectText("cam-tree", "Part 1 V1"),
+        Custom("cam fit"),
+        MoveTo(1420, 900),
+        Wait(3),
+        Screenshot("02-inserted"),
+    ],
+)

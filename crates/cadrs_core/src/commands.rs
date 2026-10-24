@@ -75,6 +75,8 @@ pub enum NewElementKind {
     Assembly,
     /// P3H.3: "PCB Studio 1", with no boards.
     PcbStudio,
+    /// "CAM Studio 1", with no components or jobs.
+    CamStudio,
     /// P3F.6: a Render Studio of this Part Studio or Assembly.
     RenderStudio(Option<ElementId>),
 }
@@ -97,6 +99,7 @@ impl Command for AddElement {
             NewElementKind::PartStudio => "Create Part Studio".into(),
             NewElementKind::Assembly => "Create Assembly".into(),
             NewElementKind::PcbStudio => "Create PCB Studio".into(),
+            NewElementKind::CamStudio => "Create CAM Studio".into(),
             NewElementKind::RenderStudio(_) => "Create Render Studio".into(),
         }
     }
@@ -111,6 +114,7 @@ impl Command for AddElement {
             NewElementKind::PartStudio => "Part Studio",
             NewElementKind::Assembly => "Assembly",
             NewElementKind::PcbStudio => "PCB Studio",
+            NewElementKind::CamStudio => "CAM Studio",
             NewElementKind::RenderStudio(_) => "Render Studio",
         };
         let name = match &self.name {
@@ -121,6 +125,7 @@ impl Command for AddElement {
             NewElementKind::PartStudio => Element::part_studio(name),
             NewElementKind::Assembly => Element::assembly(name),
             NewElementKind::PcbStudio => Element::pcb_studio(name),
+            NewElementKind::CamStudio => Element::cam_studio(name),
             NewElementKind::RenderStudio(source) => {
                 if let Some(s) = source
                     && !doc.element(s).is_some_and(|e| {
