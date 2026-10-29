@@ -285,6 +285,14 @@ impl ViewportView {
     /// Animates to `to`, its orientation turned the shortest way.
     pub fn animate_to(&mut self, to: ViewState) {
         let to = self.keeping_mode(to);
+        // A turn or a move lets go of a framed selection's pivot; a zoom keeps it (issue #97:
+        // Zoom to selection sets it after this).
+        let from = self.target();
+        if from.rotation().angle_between(to.rotation()) > 1e-4
+            || from.focus.distance(to.focus) > 1e-3 * from.scale.max(1e-9)
+        {
+            self.drop_framed_pivot();
+        }
         if self.view.approx_eq(&to) {
             return;
         }
@@ -1113,6 +1121,8 @@ fn track_active_element(
     kind.set_if_neq(k);
     if view.element != Some(el.id) {
         let v = &mut *view;
+        // (Another tab's framed selection isn't this one's pivot.)
+        v.drop_framed_pivot();
         if let Some(old) = v.element {
             let current = v.target();
             v.per_element.insert(old, current);
@@ -1351,18 +1361,15 @@ fn viewport_pointer(
                         .find_map(|(_, b)| {
                             mouse.action(crate::preferences_ui::mouse_button(b), mods)
                         });
-                    // Walk mode looks round from the eye; keeping the camera up swaps the free
-                    // turn and the turntable one (issue #97).
+                    // Walk mode looks round from the eye; keeping the camera up, every rotate
+                    // gesture turns without roll (issue #97).
                     let action = match action {
                         Some(ViewAction::Rotate) if view.keep_up => {
                             Some(ViewAction::RotateTurntable)
                         }
-                        Some(ViewAction::RotateTurntable) if view.keep_up => {
-                            Some(ViewAction::Rotate)
-                        }
                         a => a,
                     };
-                    let look = walking.as_deref().is_some_and(|w| w.0)
+                    let look = walking.as_deref().is_some_and(|w| w.on)
                         && matches!(
                             action,
                             Some(ViewAction::Rotate | ViewAction::RotateTurntable)
@@ -1852,7 +1859,16 @@ fn view_shortcuts(
                 continue;
             }
             Some(NumpadKey::Opposite) => {
-                view.turn_by(180.0, 0.0);
+                if view.keep_up {
+                    // Upright: half a turn about Z and the other side's elevation (from the top,
+                    // the bottom).
+                    let mut to = view.target();
+                    to.rotate_upright(180.0, 0.0);
+                    to.elevation = -to.elevation;
+                    view.animate_to(to);
+                } else {
+                    view.turn_by(180.0, 0.0);
+                }
                 continue;
             }
             Some(NumpadKey::Perspective) => {

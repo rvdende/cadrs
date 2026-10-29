@@ -26,6 +26,9 @@
 //! (`autoconnect_p2p`, off by default: cadrs stays offline until the user connects,
 //! [`crate::network`]). It takes effect at the next start; the top bar's network button goes
 //! online or offline now.
+//!
+//! *Keep camera up* (`keep_camera_up`, off by default, issue #97) is set from the view menu
+//! ([`set_keep_camera_up`]): every rotate gesture turns without roll.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::picking::pointer::PointerButton;
@@ -287,6 +290,14 @@ pub fn set_autoconnect_p2p(world: &mut World, on: bool) {
 pub fn set_keep_camera_up(world: &mut World, on: bool) {
     world.resource_mut::<LocalPreferences>().0.keep_camera_up = on;
     save(world);
+    // Turned on, a rolled view levels.
+    if on && let Some(mut view) = world.get_resource_mut::<crate::viewport::ViewportView>() {
+        let mut to = view.target();
+        if to.roll != 0.0 {
+            to.roll = 0.0;
+            view.animate_to(to);
+        }
+    }
 }
 
 /// Remembers that the user has seen "What's new" up to `edition`

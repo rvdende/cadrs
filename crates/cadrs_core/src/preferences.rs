@@ -541,6 +541,7 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
+            keep_camera_up: true,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

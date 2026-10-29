@@ -1193,7 +1193,8 @@ pub fn orbit_about_selection(
     ui: Res<PcbUi>,
     mut view: ResMut<ViewportView>,
 ) {
-    // (Zoom to selection's pivot, in another tab, is its own: issue #97.)
+    // (Zoom to selection's pivot, framed in this Part Studio or Assembly, stays: issue #97; a
+    // tab switch drops it.)
     if view.framed_pivot {
         return;
     }

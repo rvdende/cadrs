@@ -788,6 +788,8 @@ pub struct ViewMenuState {
     pub keep_up: bool,
     /// Walk mode is on (issue #97, [`crate::walk`]).
     pub walking: bool,
+    /// A sketch is being edited (no walk mode: its tools have the keys).
+    pub sketching: bool,
 }
 
 impl ViewMenuState {
@@ -807,12 +809,17 @@ impl ViewMenuState {
                 kind,
                 crate::viewport::ActiveKind::PartStudio | crate::viewport::ActiveKind::Assembly
             ),
+            // (Walking keeps the camera up too.)
             keep_up: world
                 .get_resource::<crate::preferences_ui::LocalPreferences>()
-                .is_some_and(|p| p.0.keep_camera_up),
+                .is_some_and(|p| p.0.keep_camera_up)
+                || world
+                    .get_resource::<crate::walk::Walking>()
+                    .is_some_and(|w| w.on),
             walking: world
                 .get_resource::<crate::walk::Walking>()
-                .is_some_and(|w| w.0),
+                .is_some_and(|w| w.on),
+            sketching: world.contains_resource::<crate::sketch::SketchSession>(),
         }
     }
 }
@@ -854,8 +861,11 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
         ))
         .item(check(st.keep_up, I::new("view-keep-up", "Keep camera up")))
         .item(
-            check(st.walking, I::new("view-walk", "Walk mode (W A S D, Q E)"))
-                .disabled(!st.modeling),
+            check(
+                st.walking,
+                I::new("view-walk", "Walk mode (W A S D, Q E, Esc)"),
+            )
+            .disabled(!st.modeling || st.sketching),
         )
         .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
         .separator()
@@ -961,7 +971,7 @@ fn on_view_menu(ev: On<cadrs_ui::MenuAction>, view: Res<ViewportView>, mut comma
         }
         "view-walk" => {
             commands.queue(|world: &mut World| {
-                let on = !world.resource::<crate::walk::Walking>().0;
+                let on = !world.resource::<crate::walk::Walking>().on;
                 crate::walk::set_walking(world, on);
             });
             return;

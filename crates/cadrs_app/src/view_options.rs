@@ -928,10 +928,8 @@ mod tests {
     use super::*;
     use crate::camera::RenderMode;
 
-    /// Zoom to selection: the selection's points fill the fit fraction of the view beside a
-    /// dialog's inset, centred in what is left.
     /// Issue #97: Zoom to selection makes the selection the orbit pivot: a drag turns about
-    /// it (it stays put on screen), and zooming to fit lets go of it.
+    /// it (it stays put on screen), a zoom keeps it, and a turn to another view lets go of it.
     #[test]
     fn zoom_to_selection_orbits_about_the_selection() {
         let mut world = World::new();
@@ -952,7 +950,12 @@ mod tests {
         let on_screen = v.project(pivot);
         v.orbit_about(pivot, |v| v.orbit(Vec2::new(60.0, -35.0)));
         assert!((v.project(pivot) - on_screen).length() < 1e-2);
-        view.drop_framed_pivot();
+        // A zoom (Z) keeps it; a turn to a standard view lets go of it.
+        let zoomed = view.target().zoomed(0.8);
+        view.animate_to(zoomed);
+        assert_eq!(view.pivot, Some(pivot));
+        let top = view.target().oriented(crate::camera::StandardView::Top);
+        view.animate_to(top);
         assert_eq!(view.pivot, None);
         // A pivot that isn't the framed selection's (the PCB Studio's) stays.
         view.pivot = Some(Vec3::X);
@@ -960,6 +963,8 @@ mod tests {
         assert_eq!(view.pivot, Some(Vec3::X));
     }
 
+    /// Zoom to selection: the selection's points fill the fit fraction of the view beside a
+    /// dialog's inset, centred in what is left.
     #[test]
     fn zoom_to_selection_frames_the_points_beside_the_dialog() {
         let v = ViewState::default();

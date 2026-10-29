@@ -24,13 +24,25 @@ impl Plugin for WalkPlugin {
     }
 }
 
-/// Walk mode is on (`.0`), and whether the view was in perspective before it.
+/// Walk mode: whether it is on, the tab it was turned on in, and whether that tab's view was in
+/// perspective before (put back when it is left in the same tab).
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Walking(pub bool, bool);
+pub struct Walking {
+    pub on: bool,
+    element: Option<cadrs_core::ElementId>,
+    was_perspective: bool,
+}
 
-/// The walk keys held: forward, back, left, right, down, up.
+/// The walk keys held, by [`FORWARD`], [`BACK`], [`LEFT`], [`RIGHT`], [`DOWN`] and [`UP`].
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct WalkKeys([bool; 6]);
+
+const FORWARD: usize = 0;
+const BACK: usize = 1;
+const LEFT: usize = 2;
+const RIGHT: usize = 3;
+const DOWN: usize = 4;
+const UP: usize = 5;
 
 /// How far a second's walk goes, in eye distances (the eye's distance in front of the focus:
 /// walking in a room seen up close is slower than over a site seen from afar).
@@ -40,28 +52,41 @@ pub const WALK_PER_SECOND: f32 = 0.25;
 /// off, back to the projection it had.
 pub fn set_walking(world: &mut World, on: bool) {
     let was = *world.resource::<Walking>();
-    if was.0 == on {
+    if was.on == on {
         return;
     }
-    let perspective = world.resource::<ViewportView>().view.perspective;
-    world.insert_resource(Walking(on, if on { perspective } else { false }));
+    let view = world.resource::<ViewportView>();
+    let (perspective, element) = (view.view.perspective, view.element);
+    world.insert_resource(Walking {
+        on,
+        element,
+        was_perspective: perspective,
+    });
     world.insert_resource(WalkKeys::default());
-    match (on, perspective, was.1) {
-        (true, false, _) => crate::view_options::set_perspective(world, true),
-        (false, true, false) => crate::view_options::set_perspective(world, false),
-        _ => {}
+    // (What it does and how to leave it: walk mode shows nothing else.)
+    if on && world.contains_resource::<cadrs_ui::Theme>() {
+        crate::linked::toast(
+            world,
+            "Walk mode: W A S D to walk, Q E down and up, drag to look round, Esc to leave",
+        );
+    }
+    if on && !perspective {
+        crate::view_options::set_perspective(world, true);
+    } else if !on && was.element == element && !was.was_perspective && perspective {
+        // (Left in another tab, that tab's projection is its own.)
+        crate::view_options::set_perspective(world, false);
     }
 }
 
 /// The walk keys' index in [`WalkKeys`].
 fn walk_key(k: KeyCode) -> Option<usize> {
     Some(match k {
-        KeyCode::KeyW => 0,
-        KeyCode::KeyS => 1,
-        KeyCode::KeyA => 2,
-        KeyCode::KeyD => 3,
-        KeyCode::KeyQ => 4,
-        KeyCode::KeyE => 5,
+        KeyCode::KeyW => FORWARD,
+        KeyCode::KeyS => BACK,
+        KeyCode::KeyA => LEFT,
+        KeyCode::KeyD => RIGHT,
+        KeyCode::KeyQ => DOWN,
+        KeyCode::KeyE => UP,
         _ => return None,
     })
 }
@@ -72,29 +97,49 @@ fn keep_up(
     walking: Res<Walking>,
     mut view: ResMut<ViewportView>,
 ) {
-    let want = walking.0 || prefs.is_some_and(|p| p.0.keep_camera_up);
+    let want = walking.on || prefs.is_some_and(|p| p.0.keep_camera_up);
     if view.keep_up != want {
         view.keep_up = want;
     }
 }
 
-/// The walk keys pressed and let go, and Esc leaving walk mode; walk mode left in a sketch or
-/// another kind of tab.
+/// The walk keys pressed and let go, and Esc leaving walk mode; walk mode left in a sketch,
+/// another tab or another kind of tab. Keys typed into a field or a dialog don't walk, and the
+/// window losing the keyboard lets go of them all (its key-ups never come).
+#[allow(clippy::too_many_arguments)]
 fn walk_keys(
     mut keys_in: MessageReader<KeyboardInput>,
+    mut focus_lost: MessageReader<bevy::input::keyboard::KeyboardFocusLost>,
     walking: Res<Walking>,
     mut held: ResMut<WalkKeys>,
-    kind: Res<ActiveKind>,
+    (kind, view): (Res<ActiveKind>, Res<ViewportView>),
     sketch: Option<Res<crate::sketch::SketchSession>>,
     keys: Res<ButtonInput<KeyCode>>,
+    (focus, q_fields, q_dialogs): (
+        Res<bevy::input_focus::InputFocus>,
+        Query<(), With<cadrs_ui::KeyboardField>>,
+        Query<(), With<cadrs_ui::DialogRoot>>,
+    ),
     mut commands: Commands,
 ) {
-    if !walking.0 {
+    if !walking.on {
         keys_in.clear();
+        focus_lost.clear();
         return;
     }
-    if sketch.is_some() || !matches!(*kind, ActiveKind::PartStudio | ActiveKind::Assembly) {
+    if sketch.is_some()
+        || view.element != walking.element
+        || !matches!(*kind, ActiveKind::PartStudio | ActiveKind::Assembly)
+    {
         commands.queue(|world: &mut World| set_walking(world, false));
+        return;
+    }
+    let typing = focus.get().is_some_and(|e| q_fields.contains(e)) || !q_dialogs.is_empty();
+    if focus_lost.read().count() > 0 || typing {
+        *held = WalkKeys::default();
+    }
+    if typing {
+        keys_in.clear();
         return;
     }
     let modified = keys.any_pressed([
@@ -127,7 +172,7 @@ fn walk(
     time: Res<Time>,
     mut view: ResMut<ViewportView>,
 ) {
-    if !walking.0 || held.0 == [false; 6] {
+    if !walking.on || held.0 == [false; 6] {
         return;
     }
     let d = walk_step(&view.view, held.0, time.delta_secs());
@@ -143,7 +188,7 @@ fn walk(
 pub fn walk_step(v: &ViewState, held: [bool; 6], dt: f32) -> Vec3 {
     let axis =
         |pos: usize, neg: usize| f32::from(u8::from(held[pos])) - f32::from(u8::from(held[neg]));
-    let (ahead, side, up) = (axis(0, 1), axis(3, 2), axis(5, 4));
+    let (ahead, side, up) = (axis(FORWARD, BACK), axis(RIGHT, LEFT), axis(UP, DOWN));
     // (Unit vectors turned level; none for one within rounding of straight down or up.)
     let level = |d: Vec3| {
         let h = Vec3::new(d.x, d.y, 0.0);
@@ -203,6 +248,8 @@ mod tests {
     }
 }
 
+/// The view's keep-up turns (the arrow keys', the view cube's: [`ViewportView::turn_by`]),
+/// kept with walk mode's, which keeps the camera up too.
 #[cfg(test)]
 mod keep_up_tests {
     use crate::viewport::ViewportView;
@@ -225,5 +272,59 @@ mod keep_up_tests {
         free.view.rotate_screen(20.0, 50.0);
         free.turn_by(35.0, 25.0);
         assert!(free.target().right().z.abs() > 1e-3);
+    }
+}
+
+/// Leaving walk mode puts the projection back in the tab it was turned on in, not in another;
+/// the upright opposite view (Numpad 9 keeping the camera up) turns the top into the bottom.
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    use crate::camera::StandardView;
+
+    fn world() -> World {
+        let mut world = World::new();
+        world.init_resource::<Walking>();
+        world.init_resource::<WalkKeys>();
+        world.insert_resource(ViewportView {
+            element: Some(cadrs_core::ElementId::new()),
+            ..Default::default()
+        });
+        world
+    }
+
+    #[test]
+    fn leaving_walk_mode_puts_the_projection_back() {
+        let mut world = world();
+        set_walking(&mut world, true);
+        assert!(world.resource::<Walking>().on);
+        assert!(world.resource::<ViewportView>().view.perspective);
+        set_walking(&mut world, false);
+        assert!(!world.resource::<ViewportView>().view.perspective);
+        // Already in perspective: it stays so.
+        crate::view_options::set_perspective(&mut world, true);
+        set_walking(&mut world, true);
+        set_walking(&mut world, false);
+        assert!(world.resource::<ViewportView>().view.perspective);
+        // Left in another tab: that tab's projection is its own.
+        crate::view_options::set_perspective(&mut world, false);
+        set_walking(&mut world, true);
+        world.resource_mut::<ViewportView>().element = Some(cadrs_core::ElementId::new());
+        set_walking(&mut world, false);
+        assert!(world.resource::<ViewportView>().view.perspective);
+    }
+
+    #[test]
+    fn the_upright_opposite_of_the_top_is_the_bottom() {
+        let mut to = ViewState::standard(StandardView::Top);
+        to.rotate_upright(180.0, 0.0);
+        to.elevation = -to.elevation;
+        let bottom = ViewState::standard(StandardView::Bottom);
+        assert!(
+            (to.back() - bottom.back()).length() < 1e-4,
+            "{} {}",
+            to.back(),
+            bottom.back()
+        );
     }
 }
