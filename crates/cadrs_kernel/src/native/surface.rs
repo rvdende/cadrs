@@ -54,6 +54,23 @@ pub enum Surface {
 /// Point and derivatives: S, Su, Sv, Suu, Suv, Svv.
 pub type D2 = [V3; 6];
 
+/// The surface a kept grid ([`Surface::grid_points`]) is of: a B-spline surface, or an extrusion
+/// of a B-spline curve along a direction.
+enum GridOf {
+    Nurbs(Weak<NurbsSurface>),
+    Extrusion(Weak<NurbsCurve>, V3),
+}
+
+impl GridOf {
+    fn is(&self, other: &GridOf) -> bool {
+        match (self, other) {
+            (GridOf::Nurbs(a), GridOf::Nurbs(b)) => Weak::ptr_eq(a, b),
+            (GridOf::Extrusion(a, d), GridOf::Extrusion(b, e)) => Weak::ptr_eq(a, b) && d == e,
+            _ => false,
+        }
+    }
+}
+
 impl Surface {
     /// The kind the API reports ([`SurfaceKind`]).
     pub fn kind(&self) -> SurfaceKind {
@@ -110,7 +127,14 @@ impl Surface {
                     + f.z * (rmin * v.sin())
             }
             Surface::Nurbs(n) => n.point(u, v),
-            _ => P3::from(self.d2(u, v)[0]),
+            // (The point as [`Self::d2`] makes it, to the bit: a curve's point is its
+            // derivatives' first, the same sums.)
+            Surface::Extrusion { c, d } => c.point(u) + d * v,
+            Surface::Revolution { f, m } => {
+                let l = f.local(&m.point(v));
+                let (s, c) = u.sin_cos();
+                f.world_point(&V3::new(l.x * c - l.y * s, l.x * s + l.y * c, l.z))
+            }
         }
     }
 
@@ -408,21 +432,19 @@ impl Surface {
                     )
                 };
                 let grid = self.grid_points(n, &at);
-                let d: Vec<Vec<f64>> = (0..=n)
-                    .map(|i| {
-                        grid[i * (n + 1)..(i + 1) * (n + 1)]
-                            .iter()
-                            .map(|g| (g - p).norm_squared())
-                            .collect()
-                    })
-                    .collect();
-                for i in 0..=n {
-                    for j in 0..=n {
-                        let lowest = (i.saturating_sub(1)..=(i + 1).min(n)).all(|a| {
-                            (j.saturating_sub(1)..=(j + 1).min(n)).all(|b| d[a][b] >= d[i][j])
-                        });
+                let d: Vec<f64> = grid.iter().map(|g| (g - p).norm_squared()).collect();
+                // The grid's local minima (no neighbour nearer), row by row.
+                let w = n + 1;
+                for i in 0..w {
+                    let rows = i.saturating_sub(1)..(i + 1).min(n) + 1;
+                    for j in 0..w {
+                        let x = d[i * w + j];
+                        let (b0, b1) = (j.saturating_sub(1), (j + 1).min(n) + 1);
+                        let lowest = rows
+                            .clone()
+                            .all(|a| d[a * w + b0..a * w + b1].iter().all(|&y| y >= x));
                         if lowest {
-                            others.push((d[i][j], at(i, j)));
+                            others.push((x, at(i, j)));
                         }
                     }
                 }
@@ -583,12 +605,23 @@ impl Surface {
     }
 
     /// The points of [`Self::project_grid`]'s (n + 1)² grid, row by row (`at` gives a node's
-    /// parameters). They don't depend on the point projected, and a B-spline surface is
-    /// projected unhinted many times over (fitting p-curves, seeding intersections): its grids
-    /// are kept, per thread, for the last few surfaces (known by their `Arc`; the `Weak` held
-    /// keeps the allocation, so no other surface can come to share its address).
+    /// parameters). They don't depend on the point projected, and a B-spline surface (or an
+    /// extruded B-spline) is projected unhinted many times over (fitting p-curves, seeding
+    /// intersections, a fillet's balls against a wall): its grids are kept, per thread, for the
+    /// last few surfaces (known by their `Arc`; the `Weak` held keeps the allocation, so no
+    /// other surface can come to share its address).
     fn grid_points(&self, n: usize, at: &dyn Fn(usize, usize) -> (f64, f64)) -> Rc<[P3]> {
         let compute = || -> Rc<[P3]> {
+            // An extrusion's points of a row differ by v·d alone: its curve once per row, not
+            // per point (each point as `eval` makes it).
+            if let Surface::Extrusion { c, d } = self {
+                return (0..=n)
+                    .flat_map(|i| {
+                        let p = c.point(at(i, 0).0);
+                        (0..=n).map(move |j| p + d * at(i, j).1)
+                    })
+                    .collect();
+            }
             (0..=n)
                 .flat_map(|i| (0..=n).map(move |j| (i, j)))
                 .map(|(i, j)| {
@@ -597,36 +630,30 @@ impl Surface {
                 })
                 .collect()
         };
-        // An extrusion's points of a row differ by v·d alone: its curve once per row, not per
-        // point (each point as `eval` makes it).
-        if let Surface::Extrusion { c, d } = self {
-            return (0..=n)
-                .flat_map(|i| {
-                    let (p, ..) = c.d2(at(i, 0).0);
-                    (0..=n).map(move |j| P3::from((p + d * at(i, j).1).coords))
-                })
-                .collect();
-        }
-        let Surface::Nurbs(ns) = self else {
-            return compute();
+        let key = match self {
+            Surface::Nurbs(ns) => GridOf::Nurbs(Arc::downgrade(ns)),
+            Surface::Extrusion {
+                c: Curve::Nurbs(c),
+                d,
+            } => GridOf::Extrusion(Arc::downgrade(c), *d),
+            _ => return compute(),
         };
         /// The grids kept per thread.
         const KEPT: usize = 8;
-        type Kept = Vec<(Weak<NurbsSurface>, usize, Rc<[P3]>)>;
+        type Kept = Vec<(GridOf, usize, Rc<[P3]>)>;
         thread_local! {
             static GRIDS: RefCell<(Kept, usize)> = const { RefCell::new((Vec::new(), 0)) };
         }
-        let key = Arc::as_ptr(ns);
         if let Some(g) = GRIDS.with_borrow(|(kept, _)| {
             kept.iter()
-                .find(|(w, m, _)| *m == n && std::ptr::eq(w.as_ptr(), key))
+                .find(|(w, m, _)| *m == n && w.is(&key))
                 .map(|k| k.2.clone())
         }) {
             return g;
         }
         let g = compute();
         GRIDS.with_borrow_mut(|(kept, next)| {
-            let entry = (Arc::downgrade(ns), n, g.clone());
+            let entry = (key, n, g.clone());
             if kept.len() < KEPT {
                 kept.push(entry);
             } else {

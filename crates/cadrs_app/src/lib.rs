@@ -351,6 +351,9 @@ pub const READ_ONLY: &str = "This version is open read-only: it can't be edited"
 impl ActiveDocument {
     /// A scratch document that is not saved.
     pub fn new(mut doc: Document) -> Self {
+        // Its sketches as regenerated when it was last edited: an edit regenerates only those
+        // whose features above (or they themselves) change.
+        cadrs_core::parts::note_regenerated(&doc);
         // The Variable Studios' values, in case the file's copies in its Part Studios and
         // Assemblies are stale (a tab pasted from another document, an older file), then
         // Derived features take their sources' snapshots (neither is an edit).

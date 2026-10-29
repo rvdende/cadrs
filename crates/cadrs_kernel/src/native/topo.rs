@@ -917,12 +917,18 @@ impl Body {
         // Loops don't cross themselves in (u, v).
         for (fi, f) in self.faces.iter().enumerate() {
             for (li, l) in f.loops.iter().enumerate() {
-                let mut poly: Vec<P2> = Vec::new();
+                let mut poly: Vec<P2> = Vec::with_capacity(8 * l.len());
                 for c in l {
                     let e = &self.edges[c.edge];
                     let (t0, t1) = co_range(e, c.fwd);
-                    for i in 0..8 {
-                        let q = c.pc.point(t0 + (t1 - t0) * i as f64 / 8.0);
+                    // (A straight p-curve's samples are its start's line: the start alone.)
+                    let n = if matches!(c.pc, Curve::Line { .. }) {
+                        1
+                    } else {
+                        8
+                    };
+                    for i in 0..n {
+                        let q = c.pc.point(t0 + (t1 - t0) * i as f64 / n as f64);
                         poly.push(P2::new(q.x, q.y));
                     }
                 }
@@ -1528,7 +1534,7 @@ impl Body {
                     let e = &self.edges[c.edge];
                     let (t0, t1) = co_range(e, c.fwd);
                     let tol = e.tol.max(super::tol::LOOP_GAP);
-                    flatten(&c.pc, t0, t1, (su, sv), flat, tol, &mut r);
+                    flatten_kept(&c.pc, t0, t1, (su, sv), flat, tol, &mut r);
                 }
                 r
             })
@@ -1869,6 +1875,64 @@ impl Ring {
 /// Appends coedge p-curve `pc` from `t0` towards `t1` to `r` (its end is the next coedge's
 /// start): scaled by `scale`, split until each segment lies within `flat` of the curve (lines
 /// whole; at most 4 · 2¹⁰ segments, a segment left coarser carrying how far it strays).
+/// [`flatten`], a curved p-curve's points kept by what they are made from: the faces a boolean
+/// merges are checked anew each time ([`Body::check_face_domain`]), most of their loops' arcs
+/// (a thousand points each at [`super::tol::LOOP_GAP`]) as they were the time before.
+fn flatten_kept(
+    pc: &Curve,
+    t0: f64,
+    t1: f64,
+    scale: (f64, f64),
+    flat: f64,
+    tol: f64,
+    r: &mut Ring,
+) {
+    type Points = std::sync::Arc<(Vec<P2>, Vec<f64>)>;
+    /// Two generations of at most this many points each (24 bytes a point).
+    const KEPT: usize = 1 << 18;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Points>,
+        new_points: usize,
+        old: rustc_hash::FxHashMap<u128, Points>,
+    }
+    static KEPT_POINTS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    if matches!(pc, Curve::Line { .. }) {
+        flatten(pc, t0, t1, scale, flat, tol, r);
+        return;
+    }
+    let mut h = super::fingerprint::Key128::new();
+    h.curve(pc);
+    h.f64s(&[t0, t1, scale.0, scale.1, flat, tol]);
+    let key = h.key();
+    let kept = {
+        let mut k = KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner());
+        match k.new.get(&key).cloned() {
+            Some(p) => Some(p),
+            None => k.old.remove(&key).inspect(|p| {
+                k.new_points += p.0.len();
+                k.new.insert(key, p.clone());
+            }),
+        }
+    };
+    let points = kept.unwrap_or_else(|| {
+        let mut own = Ring::default();
+        flatten(pc, t0, t1, scale, flat, tol, &mut own);
+        let p: Points = std::sync::Arc::new((own.pts, own.tol));
+        let mut k = KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner());
+        if k.new_points + p.0.len() > KEPT {
+            k.old = std::mem::take(&mut k.new);
+            k.new_points = 0;
+        }
+        k.new_points += p.0.len();
+        k.new.insert(key, p.clone());
+        p
+    });
+    r.pts.extend_from_slice(&points.0);
+    r.tol.extend_from_slice(&points.1);
+}
+
 fn flatten(pc: &Curve, t0: f64, t1: f64, scale: (f64, f64), flat: f64, tol: f64, r: &mut Ring) {
     let at = |t: f64| {
         let q = pc.point(t);
@@ -2047,39 +2111,84 @@ fn loop_crossings(rings: &[Ring]) -> Vec<(usize, usize, P2)> {
         (((x - lo.x) / w * g as f64) as usize).min(g - 1)
             + g * (((y - lo.y) / h * g as f64) as usize).min(g - 1)
     };
-    let mut bins: Vec<Vec<usize>> = vec![Vec::new(); g * g];
-    for (k, s) in segs.iter().enumerate() {
+    // The bins in one array (bin c's segments at `start[c]..start[c + 1]`, in index order).
+    let cells = |s: &Seg| {
         let (c0, c1) = (cell(s.lo.x, s.lo.y), cell(s.hi.x, s.hi.y));
-        for cy in c0 / g..=c1 / g {
-            for cx in c0 % g..=c1 % g {
-                bins[cx + g * cy].push(k);
+        (c0 / g..=c1 / g).flat_map(move |cy| (c0 % g..=c1 % g).map(move |cx| cx + g * cy))
+    };
+    let mut start = vec![0usize; g * g + 1];
+    for s in &segs {
+        for c in cells(s) {
+            start[c + 1] += 1;
+        }
+    }
+    for c in 0..g * g {
+        start[c + 1] += start[c];
+    }
+    let mut members = vec![0usize; start[g * g]];
+    let mut fill = start.clone();
+    for (k, s) in segs.iter().enumerate() {
+        for c in cells(s) {
+            members[fill[c]] = k;
+            fill[c] += 1;
+        }
+    }
+    let bins = (0..g * g).map(|c| &members[start[c]..start[c + 1]]);
+    // Each bin's pairs whose boxes overlap, found by a sweep along x over its segments sorted
+    // by their left ends (a bin a dense arc runs through holds hundreds), each crossing with
+    // where the all-pairs scan (bins in turn, each segment with the ones before it) meets it:
+    // the first crossing so met of each pair of loops, in that order, as that scan finds them.
+    // ((bin, later segment, earlier segment), (loop, loop, the later segment's start))
+    type Met = ((usize, usize, usize), (usize, usize, P2));
+    let mut met: Vec<Met> = Vec::new();
+    let test = |bi: usize, j: usize, k: usize, met: &mut Vec<Met>| {
+        let (sj, sk) = (&segs[j], &segs[k]);
+        if sk.hi.y < sj.lo.y || sj.hi.y < sk.lo.y {
+            return;
+        }
+        if sk.lp == sj.lp {
+            let len = rings[sk.lp].pts.len();
+            if sk.i.abs_diff(sj.i) <= 1 || sk.i.abs_diff(sj.i) == len - 1 {
+                return;
+            }
+        }
+        if crosses(&sk.a, &sk.b, &sj.a, &sj.b, sk.tol.max(sj.tol)) {
+            let pair = (sk.lp.min(sj.lp), sk.lp.max(sj.lp));
+            met.push(((bi, j, k), (pair.0, pair.1, sj.a)));
+        }
+    };
+    let mut order: Vec<usize> = Vec::new();
+    for (bi, bin) in bins.enumerate() {
+        // (A bin's segments are in index order: of a pair, the later one is the larger index.)
+        let finite = bin
+            .iter()
+            .all(|&k| [segs[k].lo, segs[k].hi].iter().all(|q| q.x.is_finite()));
+        if !finite {
+            for (n, &j) in bin.iter().enumerate() {
+                for &k in &bin[..n] {
+                    if !(segs[k].hi.x < segs[j].lo.x || segs[j].hi.x < segs[k].lo.x) {
+                        test(bi, j, k, &mut met);
+                    }
+                }
+            }
+            continue;
+        }
+        order.clear();
+        order.extend_from_slice(bin);
+        order.sort_unstable_by(|&x, &y| segs[x].lo.x.total_cmp(&segs[y].lo.x));
+        for (n, &x) in order.iter().enumerate() {
+            for &y in &order[n + 1..] {
+                if segs[y].lo.x > segs[x].hi.x {
+                    break;
+                }
+                test(bi, x.max(y), x.min(y), &mut met);
             }
         }
     }
-    for bin in &bins {
-        for (n, &j) in bin.iter().enumerate() {
-            let sj = &segs[j];
-            for &k in &bin[..n] {
-                let sk = &segs[k];
-                let (pair_a, pair_b) = (sk.lp.min(sj.lp), sk.lp.max(sj.lp));
-                if sk.hi.x < sj.lo.x
-                    || sj.hi.x < sk.lo.x
-                    || sk.hi.y < sj.lo.y
-                    || sj.hi.y < sk.lo.y
-                    || found.iter().any(|&(a, b, _)| (a, b) == (pair_a, pair_b))
-                {
-                    continue;
-                }
-                if sk.lp == sj.lp {
-                    let len = rings[sk.lp].pts.len();
-                    if sk.i.abs_diff(sj.i) <= 1 || sk.i.abs_diff(sj.i) == len - 1 {
-                        continue;
-                    }
-                }
-                if crosses(&sk.a, &sk.b, &sj.a, &sj.b, sk.tol.max(sj.tol)) {
-                    found.push((pair_a, pair_b, sj.a));
-                }
-            }
+    met.sort_by_key(|m| m.0);
+    for (_, (a, b, p)) in met {
+        if !found.iter().any(|&(x, y, _)| (x, y) == (a, b)) {
+            found.push((a, b, p));
         }
     }
     found
@@ -2153,6 +2262,10 @@ fn orient2d(a: &P2, b: &P2, c: &P2) -> i32 {
 
 /// Two non-neighbouring segments of a closed polygon that cross (proper crossings only:
 /// touching at a point is allowed, as a loop through a pole or along a seam does).
+/// The points of a loop from which [`self_crossing`] sweeps its segments rather than testing
+/// every pair.
+const SWEEP_FROM: usize = 64;
+
 fn self_crossing(p: &[P2]) -> Option<(usize, usize)> {
     let n = p.len();
     if n < 4 {
@@ -2164,36 +2277,272 @@ fn self_crossing(p: &[P2]) -> Option<(usize, usize)> {
     }
     let eps = tol::REL * (1.0 + size);
     let cross = |a: &P2, b: &P2, c: &P2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    for i in 0..n {
+    let crosses = |i: usize, j: usize| {
         let (a, b) = (p[i], p[(i + 1) % n]);
-        for j in i + 2..n {
-            if (j + 1) % n == i {
-                continue;
-            }
-            let (c, d) = (p[j], p[(j + 1) % n]);
-            if a.x.max(b.x) < c.x.min(d.x) - eps
-                || c.x.max(d.x) < a.x.min(b.x) - eps
-                || a.y.max(b.y) < c.y.min(d.y) - eps
-                || c.y.max(d.y) < a.y.min(b.y) - eps
-            {
-                continue;
-            }
-            let (d1, d2, d3, d4) = (
-                cross(&a, &b, &c),
-                cross(&a, &b, &d),
-                cross(&c, &d, &a),
-                cross(&c, &d, &b),
-            );
-            let l1 = (b - a).norm() * eps.max(tol::TINY);
-            let l2 = (d - c).norm() * eps.max(tol::TINY);
-            if ((d1 > l1 && d2 < -l1) || (d1 < -l1 && d2 > l1))
-                && ((d3 > l2 && d4 < -l2) || (d3 < -l2 && d4 > l2))
-            {
-                return Some((i, j));
+        let (c, d) = (p[j], p[(j + 1) % n]);
+        if a.x.max(b.x) < c.x.min(d.x) - eps
+            || c.x.max(d.x) < a.x.min(b.x) - eps
+            || a.y.max(b.y) < c.y.min(d.y) - eps
+            || c.y.max(d.y) < a.y.min(b.y) - eps
+        {
+            return false;
+        }
+        let (d1, d2, d3, d4) = (
+            cross(&a, &b, &c),
+            cross(&a, &b, &d),
+            cross(&c, &d, &a),
+            cross(&c, &d, &b),
+        );
+        let l1 = (b - a).norm() * eps.max(tol::TINY);
+        let l2 = (d - c).norm() * eps.max(tol::TINY);
+        ((d1 > l1 && d2 < -l1) || (d1 < -l1 && d2 > l1))
+            && ((d3 > l2 && d4 < -l2) || (d3 < -l2 && d4 > l2))
+    };
+    // Every pair of a short loop.
+    if n <= SWEEP_FROM {
+        for i in 0..n {
+            for j in i + 2..n {
+                if (j + 1) % n != i && crosses(i, j) {
+                    return Some((i, j));
+                }
             }
         }
+        return None;
     }
-    None
+    // A long one's segments by where they start in x, swept: only pairs whose x ranges meet
+    // (within eps) are tested, the first crossing in the order of (i, j) kept (a loop of
+    // hundreds of edges' samples tested every pair).
+    let span: Vec<(f64, f64)> = (0..n)
+        .map(|k| {
+            let (a, b) = (p[k], p[(k + 1) % n]);
+            (a.x.min(b.x), a.x.max(b.x))
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by(|&x, &y| span[x].0.total_cmp(&span[y].0).then(x.cmp(&y)));
+    let mut active: Vec<usize> = Vec::new();
+    let mut first: Option<(usize, usize)> = None;
+    for &k in &order {
+        let lo = span[k].0;
+        active.retain(|&m| !(span[m].1 < lo - eps));
+        for &m in &active {
+            let (i, j) = (m.min(k), m.max(k));
+            if j < i + 2 || (j + 1) % n == i || first.is_some_and(|f| f <= (i, j)) {
+                continue;
+            }
+            if crosses(i, j) {
+                first = Some((i, j));
+            }
+        }
+        active.push(k);
+    }
+    first
+}
+
+/// The sweep finds the crossing every pair's test finds, the first in the order of (i, j).
+#[cfg(test)]
+mod crossing_tests {
+    use super::{P2, Ring, crosses, loop_crossings, self_crossing, tol};
+
+    fn every_pair(p: &[P2]) -> Option<(usize, usize)> {
+        let n = p.len();
+        if n < 4 {
+            return None;
+        }
+        let size = p
+            .iter()
+            .fold(0.0f64, |m, q| m.max(q.x.abs()).max(q.y.abs()));
+        let eps = tol::REL * (1.0 + size);
+        let cross = |a: &P2, b: &P2, c: &P2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        for i in 0..n {
+            let (a, b) = (p[i], p[(i + 1) % n]);
+            for j in i + 2..n {
+                if (j + 1) % n == i {
+                    continue;
+                }
+                let (c, d) = (p[j], p[(j + 1) % n]);
+                if a.x.max(b.x) < c.x.min(d.x) - eps
+                    || c.x.max(d.x) < a.x.min(b.x) - eps
+                    || a.y.max(b.y) < c.y.min(d.y) - eps
+                    || c.y.max(d.y) < a.y.min(b.y) - eps
+                {
+                    continue;
+                }
+                let (d1, d2, d3, d4) = (
+                    cross(&a, &b, &c),
+                    cross(&a, &b, &d),
+                    cross(&c, &d, &a),
+                    cross(&c, &d, &b),
+                );
+                let l1 = (b - a).norm() * eps.max(tol::TINY);
+                let l2 = (d - c).norm() * eps.max(tol::TINY);
+                if ((d1 > l1 && d2 < -l1) || (d1 < -l1 && d2 > l1))
+                    && ((d3 > l2 && d4 < -l2) || (d3 < -l2 && d4 > l2))
+                {
+                    return Some((i, j));
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn sweep_as_every_pair() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (mut crossing, mut simple) = (0, 0);
+        for k in 0..400 {
+            let n = 4 + k % 120;
+            let p: Vec<P2> = if k % 2 == 0 {
+                // Points anywhere: mostly crossing.
+                (0..n)
+                    .map(|_| P2::new(rnd() * 100.0, rnd() * 50.0))
+                    .collect()
+            } else {
+                // Round a wobbly circle: simple, but for the odd dent.
+                (0..n)
+                    .map(|i| {
+                        let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                        let r = 10.0 + rnd() * if k % 4 == 1 { 0.5 } else { 30.0 };
+                        P2::new(r * a.cos(), r * a.sin())
+                    })
+                    .collect()
+            };
+            let want = every_pair(&p);
+            assert_eq!(self_crossing(&p), want, "polygon {k}: {p:?}");
+            if want.is_some() {
+                crossing += 1;
+            } else {
+                simple += 1;
+            }
+        }
+        assert!(
+            crossing > 50 && simple > 50,
+            "{crossing} crossing, {simple} simple"
+        );
+    }
+
+    /// [`loop_crossings`] as every pair of segments of the loops taken in its bins' order (each
+    /// bin's segments in index order, each with the ones before it): the same first crossing of
+    /// each pair of loops, in the same order.
+    #[test]
+    fn loop_crossings_as_every_pair_in_order() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut found = 0;
+        for k in 0..60 {
+            // Loops round wobbly circles here and there (some crossing others or themselves),
+            // finely and coarsely sampled.
+            let rings: Vec<Ring> = (0..1 + k % 7)
+                .map(|_| {
+                    let (cx, cy, r) = (rnd() * 40.0, rnd() * 40.0, 2.0 + rnd() * 15.0);
+                    let n = 3 + (rnd() * 300.0) as usize;
+                    let wobble = if rnd() < 0.3 { 0.8 } else { 0.05 };
+                    let pts: Vec<P2> = (0..n)
+                        .map(|i| {
+                            let a = i as f64 / n as f64 * std::f64::consts::TAU;
+                            let rr = r * (1.0 + wobble * (rnd() - 0.5));
+                            P2::new(cx + rr * a.cos(), cy + rr * a.sin())
+                        })
+                        .collect();
+                    Ring {
+                        tol: vec![1e-6; pts.len()],
+                        pts,
+                    }
+                })
+                .collect();
+            let got = loop_crossings(&rings);
+            assert_eq!(got, every_pair_in_order(&rings), "case {k}");
+            found += got.len();
+        }
+        assert!(found > 20, "{found} crossings in all");
+    }
+
+    /// The scan [`loop_crossings`] answers as (its bins, each segment with those before it).
+    fn every_pair_in_order(rings: &[Ring]) -> Vec<(usize, usize, P2)> {
+        type S = (P2, P2, usize, usize, f64);
+        let mut segs: Vec<S> = Vec::new();
+        for (lp, r) in rings.iter().enumerate() {
+            if r.pts.len() < 2 {
+                continue;
+            }
+            for i in 0..r.pts.len() {
+                let (a, b) = r.seg(i);
+                segs.push((a, b, lp, i, r.tol[i]));
+            }
+        }
+        let mut found: Vec<(usize, usize, P2)> = Vec::new();
+        if segs.len() < 2 {
+            return found;
+        }
+        let lo_hi = |s: &S| {
+            (
+                P2::new(s.0.x.min(s.1.x), s.0.y.min(s.1.y)),
+                P2::new(s.0.x.max(s.1.x), s.0.y.max(s.1.y)),
+            )
+        };
+        let (mut lo, mut hi) = lo_hi(&segs[0]);
+        for s in &segs {
+            let (l, h) = lo_hi(s);
+            lo = P2::new(lo.x.min(l.x), lo.y.min(l.y));
+            hi = P2::new(hi.x.max(h.x), hi.y.max(h.y));
+        }
+        let g = ((segs.len() as f64).sqrt().ceil() as usize).clamp(1, 512);
+        let (w, h) = ((hi.x - lo.x).max(tol::TINY), (hi.y - lo.y).max(tol::TINY));
+        let cell = |x: f64, y: f64| {
+            (((x - lo.x) / w * g as f64) as usize).min(g - 1)
+                + g * (((y - lo.y) / h * g as f64) as usize).min(g - 1)
+        };
+        let mut bins: Vec<Vec<usize>> = vec![Vec::new(); g * g];
+        for (k, s) in segs.iter().enumerate() {
+            let (l, h) = lo_hi(s);
+            let (c0, c1) = (cell(l.x, l.y), cell(h.x, h.y));
+            for cy in c0 / g..=c1 / g {
+                for cx in c0 % g..=c1 % g {
+                    bins[cx + g * cy].push(k);
+                }
+            }
+        }
+        for bin in &bins {
+            for (n, &j) in bin.iter().enumerate() {
+                let sj = &segs[j];
+                let (jl, jh) = lo_hi(sj);
+                for &k in &bin[..n] {
+                    let sk = &segs[k];
+                    let (kl, kh) = lo_hi(sk);
+                    let pair = (sk.2.min(sj.2), sk.2.max(sj.2));
+                    if kh.x < jl.x
+                        || jh.x < kl.x
+                        || kh.y < jl.y
+                        || jh.y < kl.y
+                        || found.iter().any(|&(a, b, _)| (a, b) == pair)
+                    {
+                        continue;
+                    }
+                    if sk.2 == sj.2 {
+                        let len = rings[sk.2].pts.len();
+                        if sk.3.abs_diff(sj.3) <= 1 || sk.3.abs_diff(sj.3) == len - 1 {
+                            continue;
+                        }
+                    }
+                    if crosses(&sk.0, &sk.1, &sj.0, &sj.1, sk.4.max(sj.4)) {
+                        found.push((pair.0, pair.1, sj.0));
+                    }
+                }
+            }
+        }
+        found
+    }
 }
 
 /// The exact orientation predicate of the full check.

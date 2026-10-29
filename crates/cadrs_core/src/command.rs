@@ -249,6 +249,7 @@ impl History {
     pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
         let entry = self.undo.pop()?;
         entry.before.restore(doc);
+        crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
         let label = entry.label.clone();
@@ -261,6 +262,7 @@ impl History {
     pub fn redo(&mut self, doc: &mut Document) -> Option<String> {
         let entry = self.redo.pop()?;
         entry.after.restore(doc);
+        crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
         let label = entry.label.clone();

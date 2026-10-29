@@ -1030,6 +1030,25 @@ pub trait Kernel {
     /// tangents and (circular edges) the exact circle. A wire body's edges have no faces.
     fn edges(&self, body: BodyId) -> Result<Vec<EdgeInfo>>;
 
+    /// [`Kernel::edges`] for what lies where (naming): perhaps without the lengths (0) and the
+    /// smoothness (false), which cost integrals and projections along curved edges, and a tool
+    /// or a piece made in passing is named, not shown.
+    fn edges_light(&self, body: BodyId) -> Result<Vec<EdgeInfo>> {
+        self.edges(body)
+    }
+
+    /// How many faces the body has (what [`Kernel::faces`] lists, without working them out).
+    fn face_count(&self, body: BodyId) -> Result<usize> {
+        Ok(self.faces(body)?.len())
+    }
+
+    /// [`Kernel::edges`] for showing the body: the lengths exact below `short` (a sliver's), the
+    /// others perhaps only their chord (no more than the length, and no less than `short`).
+    fn edges_shown(&self, body: BodyId, short: f64) -> Result<Vec<EdgeInfo>> {
+        let _ = short;
+        self.edges(body)
+    }
+
     /// Volume, area, centroid and inertia (unit density) from the exact geometry: analytic
     /// faces integrated in closed form or by Gauss quadrature to near machine precision, not
     /// from a mesh. A sheet has zero volume; a wire body gives its `length`.
@@ -1113,6 +1132,12 @@ pub trait Kernel {
 
     /// A tight axis-aligned bounding box of the body's exact geometry.
     fn bounding_box(&self, body: BodyId) -> Result<Aabb>;
+
+    /// About how big the body is: the diagonal of a box sure to hold it, perhaps larger than
+    /// [`Kernel::bounding_box`]'s but quick (for choosing a mesh's tolerance).
+    fn size_hint(&self, body: BodyId) -> Result<f64> {
+        Ok(self.bounding_box(body)?.diagonal())
+    }
 
     /// Where the line through `origin` along the unit `dir` crosses the body's faces, sorted by
     /// `t` (hits behind the origin have negative `t`). Up to next uses it to find what lies

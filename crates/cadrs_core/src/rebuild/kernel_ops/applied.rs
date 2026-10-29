@@ -686,7 +686,7 @@ impl Rebuilder {
         }
         let tool = change.remove(0);
         Some(Stage {
-            before: before.parts.iter().map(|p| p.part.clone()).collect(),
+            before: before.parts.iter().map(|p| (*p.part).clone()).collect(),
             tool,
             more: change,
             remove: !outward,

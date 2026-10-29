@@ -316,7 +316,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
             break;
         }
     }
-    if std::env::var("CADRS_SPLIT_DEBUG").is_ok() {
+    if super::env_flag!("CADRS_SPLIT_DEBUG") {
         for (k, a) in arcs.iter().enumerate() {
             eprintln!(
                 "arc {k}: edge {} fwd {} cut {} alive {} nodes {:?} uv {:?} -> {:?}",
@@ -335,6 +335,10 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
     // shortest there), so that arcs leaving tangent to each other are told apart by how they
     // curve, not by how long they are (a cut leaving along a long boundary arc it touches).
     let length = |a: &Arc| -> f64 {
+        // (A straight p-curve's is its chord's.)
+        if matches!(a.pc, Curve::Line { .. }) {
+            return (o(a.uv_at(1.0)) - o(a.uv_at(0.0))).norm();
+        }
         (1..=16)
             .map(|i| (o(a.uv_at(i as f64 / 16.0)) - o(a.uv_at((i - 1) as f64 / 16.0))).norm())
             .sum()
@@ -539,7 +543,7 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
             faces[i].push(lp.iter().map(|&k| arcs[k].clone()).collect());
         }
     }
-    if std::env::var("CADRS_SPLIT_DEBUG").is_ok() {
+    if super::env_flag!("CADRS_SPLIT_DEBUG") {
         for (i, f) in faces.iter().enumerate() {
             eprintln!(
                 "split face {i}: {:?}",

@@ -467,8 +467,22 @@ struct PendingRebuild {
     /// progress counts).
     order: Vec<(FeatureId, bool)>,
     /// Its part features' cache keys ([`cadrs_core::rebuild::chain_keys`]): those it shares
-    /// with the rebuild before it are cached, done as soon as it starts.
-    keys: Vec<u64>,
+    /// with the rebuild before it are cached, done as soon as it starts. Worked out off the
+    /// frame (every feature's parameters hashed: milliseconds for a long list), so set once
+    /// that is done.
+    keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>>,
+}
+
+/// [`PendingRebuild::keys`] of `features`, worked out on a thread of their own (in a page, at
+/// once).
+fn rebuild_keys(features: &[Feature]) -> std::sync::Arc<std::sync::OnceLock<Vec<u64>>> {
+    let keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>> = Default::default();
+    let (to, features) = (keys.clone(), features.to_vec());
+    // (No thread to be had: none, the rows queued until the rebuild starts.)
+    let _ = cadrs_core::background::spawn("rebuild-keys", move || {
+        let _ = to.set(cadrs_core::rebuild::chain_keys(&features));
+    });
+    keys
 }
 
 /// Where a feature of the rebuild running stands ([`PartCache::rebuild_steps`]).
@@ -1052,13 +1066,15 @@ impl PartCache {
         let p = self.pending.as_ref().filter(|_| self.rebuilding)?;
         let done = p.rebuild.progress().map(|(done, _)| done);
         // Not started: as far as its keys are those of the rebuild before it (cached).
-        let shared = self.superseded.as_ref().map_or(0, |old| {
-            p.keys
-                .iter()
-                .zip(&old.keys)
-                .take_while(|(a, b)| a == b)
-                .count()
-        });
+        let shared =
+            self.superseded
+                .as_ref()
+                .map_or(0, |old| match (p.keys.get(), old.keys.get()) {
+                    (Some(new), Some(old)) => {
+                        new.iter().zip(old).take_while(|(a, b)| a == b).count()
+                    }
+                    _ => 0,
+                });
         let mut parts = 0;
         Some(
             p.order
@@ -1578,7 +1594,7 @@ fn update_part_cache(
                     .iter()
                     .map(|f| (f.id, f.is_part_feature()))
                     .collect(),
-                keys: cadrs_core::rebuild::chain_keys(&effective),
+                keys: rebuild_keys(&effective),
             });
         }
     }

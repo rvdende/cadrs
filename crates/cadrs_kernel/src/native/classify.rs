@@ -88,18 +88,25 @@ pub struct PolyBox {
     rows: Option<Rows>,
 }
 
-/// A polygon's sides (by their first point's index) in rows of equal height over its v range.
+/// A polygon's sides (by their first point's index) in rows of equal height over its v range:
+/// row k's at `sides[start[k]..start[k + 1]]`, in index order.
 #[derive(Debug, Clone)]
 struct Rows {
     y0: f64,
     dy: f64,
-    sides: Vec<Vec<u32>>,
+    start: Vec<u32>,
+    sides: Vec<u32>,
 }
 
 impl Rows {
+    /// Row k's sides.
+    fn row(&self, k: usize) -> &[u32] {
+        &self.sides[self.start[k] as usize..self.start[k + 1] as usize]
+    }
+
     /// The rows [y0, y1] reaches, clamped to the polygon's.
     fn span(&self, y0: f64, y1: f64) -> std::ops::RangeInclusive<usize> {
-        let n = self.sides.len() as f64;
+        let n = (self.start.len() - 1) as f64;
         let at = |y: f64| ((y - self.y0) / self.dy).floor().clamp(0.0, n - 1.0) as usize;
         at(y0)..=at(y1)
     }
@@ -132,12 +139,29 @@ pub fn poly_boxes(polys: &[Vec<P2>], surf: &Surface) -> PolyBoxes {
                 let mut r = Rows {
                     y0: b[2],
                     dy: (b[3] - b[2]) / count as f64,
-                    sides: vec![Vec::new(); count],
+                    start: vec![0; count + 1],
+                    sides: Vec::new(),
                 };
-                for i in 0..n {
-                    let (a, c) = (p[i], p[(i + 1) % n]);
-                    for k in r.span(a.y.min(c.y), a.y.max(c.y)) {
-                        r.sides[k].push(i as u32);
+                let spans: Vec<std::ops::RangeInclusive<usize>> = (0..n)
+                    .map(|i| {
+                        let (a, c) = (p[i], p[(i + 1) % n]);
+                        r.span(a.y.min(c.y), a.y.max(c.y))
+                    })
+                    .collect();
+                for sp in &spans {
+                    for k in sp.clone() {
+                        r.start[k + 1] += 1;
+                    }
+                }
+                for k in 0..count {
+                    r.start[k + 1] += r.start[k];
+                }
+                let mut fill = r.start.clone();
+                r.sides = vec![0; r.start[count] as usize];
+                for (i, sp) in spans.into_iter().enumerate() {
+                    for k in sp {
+                        r.sides[fill[k] as usize] = i as u32;
+                        fill[k] += 1;
                     }
                 }
                 r
@@ -200,7 +224,7 @@ pub fn in_face_boxed(
         // them is farther than `tol` everywhere.)
         let reach = gm / mv.max(tol::TINY) + gb;
         for k in rows.span(uv.y - reach, uv.y + reach) {
-            for &i in &rows.sides[k] {
+            for &i in rows.row(k) {
                 let (a, b) = side(i as usize);
                 if seg_dist2(&q, &a, &b) < tol {
                     return InFace::Boundary;
@@ -210,7 +234,7 @@ pub fn in_face_boxed(
         // Parity: the sides crossing the point's v, all in its row.
         let mut odd = false;
         for k in rows.span(uv.y, uv.y) {
-            for &i in &rows.sides[k] {
+            for &i in rows.row(k) {
                 let (a, c) = (p[i as usize], p[(i as usize + 1) % n]);
                 if (a.y > uv.y) != (c.y > uv.y) {
                     let x = a.x + (uv.y - a.y) / (c.y - a.y) * (c.x - a.x);

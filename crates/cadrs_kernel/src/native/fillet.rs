@@ -1423,7 +1423,10 @@ fn welds(b: &Body, efs: &mut [EdgeFillet]) -> Result<Vec<Weld>> {
             }
             // (Best effort: a pair it can't weld is left as before.)
             let law = |ef: &EdgeFillet, wall: usize| {
-                weld_law(b, ef, wall).unwrap_or_else(|e| {
+                let tt = std::time::Instant::now();
+                let r = weld_law(b, ef, wall);
+                eprintln!("TMPWL {} {}", match &r { Ok(None) => "none", Ok(Some(_)) => "some", Err(_) => "err" }, tt.elapsed().as_nanos());
+                r.unwrap_or_else(|e| {
                     debug(|| format!("edge {}: not welded: {e}", ef.e));
                     None
                 })
@@ -4697,11 +4700,19 @@ fn traced_roll(
     let tests = ef.faces.map(|fi| FaceTest::of(b, fi));
     let on = |ball: &Ball, k: usize| tests[k].holds(b, &ball.q[k].p);
     let (mut ta, mut ba) = (t0, *from);
+    // Each ball's tests as made (the ball a step ends at starts the next).
+    let mut on_a: [Option<bool>; 2] = [None; 2];
     for i in 1..=n {
         let tb = t0 + (t1 - t0) * i as f64 / n as f64;
         let bb = ef.ball(b, tb, Some([ba.q[0].uv, ba.q[1].uv]))?;
-        let Some(k) = (0..2).find(|&k| on(&ba, k) && !on(&bb, k)) else {
+        let mut on_b: [Option<bool>; 2] = [None; 2];
+        let left = (0..2).find(|&k| {
+            *on_a[k].get_or_insert_with(|| on(&ba, k))
+                && !*on_b[k].get_or_insert_with(|| on(&bb, k))
+        });
+        let Some(k) = left else {
             (ta, ba) = (tb, bb);
+            on_a = on_b;
             continue;
         };
         // Bisected to where the contact leaves.
@@ -9294,35 +9305,51 @@ fn point_in_face(b: &Body, fi: usize, p: &P3) -> bool {
 /// a face bounded by a spline's hundred spans).
 struct FaceTest {
     fi: usize,
-    polys: std::sync::Arc<Vec<Vec<P2>>>,
+    polys: FacePolys,
     slack: f64,
 }
 
-thread_local! {
-    /// The faces' polygons of the bodies the [`local_blend`]s on this thread are blending, the
-    /// innermost last (a thread waiting in one may take up another part's): made once per face
-    /// rather than per point tested (a fifth of a fillet's time).
-    static FACE_POLYS: std::cell::RefCell<Vec<(*const Body, HashMap<usize, FacePolys>)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+/// A face's polygons and their boxes ([`super::classify::poly_boxes`]), which a point well
+/// outside them is told by at once (and a long polygon's sides by rows).
+type FacePolys = std::sync::Arc<(Vec<Vec<P2>>, super::classify::PolyBoxes)>;
+
+/// The faces' polygons of the bodies [`local_blend`]s are blending (by address, while each is
+/// borrowed: [`PolysScope`]), on any thread (a blend plans its edges side by side): made once
+/// per face rather than per point tested (a fifth of a fillet's time).
+type KeptPolys = std::sync::Arc<Vec<std::sync::OnceLock<FacePolys>>>;
+static FACE_POLYS: std::sync::Mutex<Vec<(usize, KeptPolys)>> = std::sync::Mutex::new(Vec::new());
+
+/// [`FACE_POLYS`] kept for a body while it is borrowed (so nothing else is made at its
+/// address).
+struct PolysScope<'a> {
+    at: usize,
+    _body: std::marker::PhantomData<&'a Body>,
 }
 
-type FacePolys = std::sync::Arc<Vec<Vec<P2>>>;
-
-/// [`FACE_POLYS`] kept for a body while it lives.
-struct PolysScope;
-
-impl PolysScope {
-    /// (`b` is borrowed for as long as it lives: nothing else is made at its address.)
-    fn enter(b: &Body) -> Self {
-        FACE_POLYS.with_borrow_mut(|s| s.push((b as *const Body, HashMap::new())));
-        Self
+impl<'a> PolysScope<'a> {
+    fn enter(b: &'a Body) -> Self {
+        let at = std::ptr::from_ref(b) as usize;
+        let kept = (0..b.faces.len()).map(|_| Default::default()).collect();
+        kept_polys().push((at, std::sync::Arc::new(kept)));
+        Self {
+            at,
+            _body: std::marker::PhantomData,
+        }
     }
 }
 
-impl Drop for PolysScope {
+impl Drop for PolysScope<'_> {
     fn drop(&mut self) {
-        FACE_POLYS.with_borrow_mut(|s| s.pop());
+        // (Two scopes of the same body, on two threads, keep the same polygons: either goes.)
+        let mut s = kept_polys();
+        if let Some(i) = s.iter().rposition(|(at, _)| *at == self.at) {
+            s.remove(i);
+        }
     }
+}
+
+fn kept_polys() -> std::sync::MutexGuard<'static, Vec<(usize, KeptPolys)>> {
+    FACE_POLYS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl FaceTest {
@@ -9334,15 +9361,21 @@ impl FaceTest {
             .flatten()
             .map(|c| b.edges[c.edge].tol)
             .fold(1e3 * tol::POINT, f64::max);
-        let make = || std::sync::Arc::new(super::classify::face_polygons(b, f));
-        let polys = FACE_POLYS
-            .with_borrow_mut(|s| match s.last_mut() {
-                Some((at, kept)) if std::ptr::eq(*at, b) => {
-                    Some(kept.entry(fi).or_insert_with(make).clone())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(make);
+        let make = || {
+            let polys = super::classify::face_polygons(b, f);
+            let boxes = super::classify::poly_boxes(&polys, &f.surf);
+            std::sync::Arc::new((polys, boxes))
+        };
+        let at = std::ptr::from_ref(b) as usize;
+        let kept = kept_polys()
+            .iter()
+            .rev()
+            .find(|(x, _)| *x == at)
+            .map(|(_, k)| k.clone());
+        let polys = match kept.as_ref().and_then(|k| k.get(fi)) {
+            Some(cell) => cell.get_or_init(make).clone(),
+            None => make(),
+        };
         Self { fi, polys, slack }
     }
 
@@ -9354,10 +9387,11 @@ impl FaceTest {
         if (f.surf.eval(u, v) - p).norm() > self.slack {
             return false;
         }
-        super::classify::periodic_candidates(&f.surf, u, v, &self.polys)
+        let (polys, boxes) = &*self.polys;
+        super::classify::periodic_candidates_boxed(&f.surf, u, v, boxes)
             .into_iter()
             .any(|uv| {
-                super::classify::in_face(&self.polys, &f.surf, uv, tol::ROUNDOFF)
+                super::classify::in_face_boxed(polys, boxes, &f.surf, uv, tol::ROUNDOFF)
                     != super::classify::InFace::Outside
             })
     }

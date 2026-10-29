@@ -568,7 +568,9 @@ impl Remote {
                             let _ = write_msg(&mut w, &Request::Stop);
                             return;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        // (Woken when the reply is in: a sleep made every reply wait up to its
+                        // end.)
+                        std::thread::park_timeout(std::time::Duration::from_millis(10));
                     }
                 });
                 watch = Some((done, thread));
@@ -601,6 +603,7 @@ impl Remote {
         })();
         if let Some((done, thread)) = watch {
             done.store(true, Ordering::Relaxed);
+            thread.thread().unpark();
             let _ = thread.join();
         }
         result.map_err(|e| {

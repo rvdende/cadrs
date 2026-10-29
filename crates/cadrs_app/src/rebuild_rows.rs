@@ -1,8 +1,11 @@
 //! The feature list while a rebuild runs for longer than a moment: each feature it rebuilds
 //! shows where it stands, done (as it always looks), busy (a spinner at its end and a pulsing
 //! accent at its left edge) or queued (veiled), from [`PartCache::rebuild_steps`]; the parts in
-//! the view show how far it has got ([`PartCache`] takes them as it goes). The list scrolls to
-//! keep the busy row high in it, the queued rows below in view, until it is scrolled by hand.
+//! the view show how far it has got ([`PartCache`] takes them as it goes). A closed folder shows
+//! the step of the features in it. The list follows the busy row (or its closed folder), a page at
+//! a time: it holds still while the row shows, then brings it high in the list, the queued rows
+//! below in view, at most every [`FOLLOW_BEAT`] (a rebuild of hundreds of features a second
+//! turns its pages at a pace one can follow, not a blur), until it is scrolled by hand.
 //!
 //! The rows are spawned again whenever their key changes ([`crate::document::FeatureRowsSet`]),
 //! so each one's step is an overlay of its own, added, updated and faded out in place.
@@ -17,6 +20,7 @@ use cadrs_ui::spring::MotionSettings;
 
 use crate::AppState;
 use crate::document::FeatureRow;
+use crate::feature_folders::FolderRow;
 use crate::parts::{PartCache, RebuildStep};
 use crate::rebuild_indicator::SHOW_AFTER_SECS;
 
@@ -29,8 +33,13 @@ const ACCENT_WIDTH: f32 = 3.0;
 const PULSE_HZ: f32 = 1.2;
 /// Where the list keeps the busy row: this far down its height (its top edge).
 const FOLLOW_AT: f32 = 0.25;
-/// How fast the list eases to it (per second; the larger, the sooner).
+/// How fast the list glides to it (per second; the larger, the sooner).
 const FOLLOW_RATE: f32 = 10.0;
+/// How long the list holds still after it moves to the busy row (s).
+const FOLLOW_BEAT: f32 = 0.4;
+/// Where the busy row's top may be, as parts of the list's height down it, for the list to hold
+/// still.
+const FOLLOW_BAND: std::ops::RangeInclusive<f32> = 0.05..=0.8;
 
 pub struct RebuildRowsPlugin;
 
@@ -41,7 +50,8 @@ impl Plugin for RebuildRowsPlugin {
             (
                 sync_steps.after(crate::document::FeatureRowsSet),
                 animate_steps.after(sync_steps),
-                follow_busy.after(sync_steps),
+                // Before the rows are built: a list moved far gets its rows in the same frame.
+                follow_busy.before(crate::document::FeatureRowsSet),
             )
                 .run_if(in_state(AppState::Document)),
         );
@@ -74,14 +84,18 @@ type BusyMarks = (
 
 /// Puts each row's step on it: an overlay for a row of the rebuild running (once it has run
 /// as long as the "Rebuilding…" indicator waits), its step updated, and none left showing a
-/// step once the rebuild is over.
+/// step once the rebuild is over. A closed folder's row shows its features' step: busy while
+/// one of them is, queued while any is still to come.
+#[allow(clippy::too_many_arguments)]
 fn sync_steps(
     mut commands: Commands,
     cache: Res<PartCache>,
+    doc: Option<Res<crate::ActiveDocument>>,
     time: Res<Time<Real>>,
     theme: Res<Theme>,
     mut since: Local<Option<f32>>,
     rows: Query<(Entity, &FeatureRow, &Name)>,
+    folders: Query<(Entity, &FolderRow, &Name)>,
     mut overlays: Query<(&ChildOf, &mut StepOverlay)>,
 ) {
     let now = time.elapsed_secs();
@@ -93,12 +107,43 @@ fn sync_steps(
             HashMap::new()
         }
     };
+    let closed: HashMap<FeatureId, &[FeatureId]> = doc
+        .as_ref()
+        .and_then(|d| d.active_element())
+        .map(|el| {
+            el.folders()
+                .iter()
+                .filter(|f| !f.open)
+                .map(|f| (f.id, &f.features[..]))
+                .collect()
+        })
+        .unwrap_or_default();
+    let folder_step = |id: &FeatureId| {
+        let mut out = None;
+        for f in *closed.get(id)? {
+            match steps.get(f) {
+                Some(RebuildStep::Busy) => return Some(RebuildStep::Busy),
+                Some(RebuildStep::Queued) => out = Some(RebuildStep::Queued),
+                Some(RebuildStep::Done) => out = out.or(Some(RebuildStep::Done)),
+                None => {}
+            }
+        }
+        out
+    };
+    // A row built once the steps show (the list moved to it) shows its step at once: it hasn't
+    // changed, it has come into view.
+    let settled = since.is_some_and(|s| now - s >= SHOW_AFTER_SECS + FADE);
     let mut shown: HashMap<Entity, Mut<StepOverlay>> = overlays
         .iter_mut()
         .map(|(parent, o)| (parent.parent(), o))
         .collect();
-    for (row, FeatureRow(id), name) in &rows {
-        let step = steps.get(id).copied();
+    let feature_rows = rows
+        .iter()
+        .map(|(row, FeatureRow(id), name)| (row, steps.get(id).copied(), name));
+    let folder_rows = folders
+        .iter()
+        .map(|(row, FolderRow(id), name)| (row, folder_step(id), name));
+    for (row, step, name) in feature_rows.chain(folder_rows) {
         if let Some(o) = shown.get_mut(&row) {
             if o.step != step {
                 o.step = step;
@@ -108,12 +153,17 @@ fn sync_steps(
         let Some(step) = step else { continue };
         let busy = step == RebuildStep::Busy;
         let display = |on: bool| if on { Display::Flex } else { Display::None };
+        let veil = if settled && step == RebuildStep::Queued {
+            QUEUED_VEIL
+        } else {
+            0.0
+        };
         commands.entity(row).with_children(|r| {
             r.spawn((
                 Name::new(format!("{name}-step")),
                 StepOverlay {
                     step: Some(step),
-                    veil: 0.0,
+                    veil,
                 },
                 Node {
                     position_type: PositionType::Absolute,
@@ -123,7 +173,7 @@ fn sync_steps(
                     bottom: Val::Px(0.0),
                     ..default()
                 },
-                BackgroundColor(theme.sidebar.with_alpha(0.0)),
+                BackgroundColor(theme.sidebar.with_alpha(veil)),
                 Pickable::IGNORE,
             ))
             .with_children(|o| {
@@ -230,15 +280,22 @@ fn animate_steps(
 }
 
 /// Where the list is following the busy row: the scroll it last set, until the list is scrolled
-/// any other way (by hand), when it stops for the rest of the rebuild.
+/// any other way (by hand), when it stops for the rest of the rebuild; a move under way; when it
+/// last moved.
 #[derive(Default)]
 struct Follow {
     stopped: bool,
     set: Option<f32>,
+    /// Where the list is gliding to.
+    glide: Option<f32>,
+    moved_at: Option<f32>,
 }
 
-/// Scrolls the feature list to keep the busy row [`FOLLOW_AT`] down it, eased (at once with
-/// motion off), so the queued rows after it show below.
+/// Follows the busy row (a closed folder's, for a feature in it) a page at a time: holds still
+/// while the row's top is within [`FOLLOW_BAND`] of the list, else, a [`FOLLOW_BEAT`] after the
+/// last move, brings it [`FOLLOW_AT`] down the list (the queued rows after it below): gliding
+/// there if it's within a page, else at once (rows passed by in a blur tell nothing), the rows
+/// it shows built in the same frame.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_busy(
     time: Res<Time<Real>>,
@@ -247,11 +304,24 @@ fn follow_busy(
     overlays: Query<(&ChildOf, &StepOverlay)>,
     nodes: Query<(&Name, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     rows: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform)>,
-    mut lists: Query<(&Name, &ComputedNode, &mut ScrollPosition)>,
-    (cache, slots, container): (
+    mut lists: Query<(
+        &Name,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &mut ScrollPosition,
+    )>,
+    (cache, slots, doc, mut container): (
         Res<PartCache>,
         Res<crate::document::FeatureRowSlots>,
-        Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<crate::document::FeatureRows>>,
+        Option<Res<crate::ActiveDocument>>,
+        Query<
+            (
+                &ComputedNode,
+                &bevy::ui::UiGlobalTransform,
+                &mut cadrs_ui::virtual_rows::VirtualRows,
+            ),
+            With<crate::document::FeatureRows>,
+        >,
     ),
 ) {
     let busy = overlays
@@ -259,18 +329,24 @@ fn follow_busy(
         .find(|(_, o)| o.step == Some(RebuildStep::Busy))
         .map(|(row, _)| row.parent());
     // While the rebuild shows: a busy row out of a long list's window isn't built, so it has no
-    // overlay; it is placed by its feature's index.
+    // overlay; it is placed by its feature's index (its folder's, closed).
     let busy_feature = (busy.is_none() && overlays.iter().next().is_some())
         .then(|| cache.rebuild_steps())
         .flatten()
         .and_then(|steps| steps.into_iter().find(|(_, s)| *s == RebuildStep::Busy))
-        .map(|(id, _)| id);
+        .map(|(id, _)| {
+            doc.as_ref()
+                .and_then(|d| d.active_element())
+                .and_then(|el| el.folder_of(id))
+                .filter(|f| !f.open)
+                .map_or(id, |f| f.id)
+        });
     if busy.is_none() && busy_feature.is_none() {
         // The rebuild is over (or not showing yet): the next one follows again.
         *follow = Follow::default();
         return;
     }
-    let Some((_, list, mut pos)) = lists
+    let Some((_, list, list_at, mut pos)) = lists
         .iter_mut()
         .find(|(n, ..)| n.as_str() == "feature-scroll")
     else {
@@ -280,6 +356,23 @@ fn follow_busy(
         follow.stopped = true;
     }
     if follow.stopped {
+        return;
+    }
+    let glide = |pos: &mut ScrollPosition, follow: &mut Follow, target: f32| {
+        let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
+        let y = pos.y + (target - pos.y) * k;
+        let y = if (target - y).abs() < 1.0 {
+            follow.glide = None;
+            target
+        } else {
+            y
+        };
+        pos.y = y;
+        follow.set = Some(y);
+    };
+    // A move under way glides on to where it set out for (not after a row that runs on).
+    if let Some(target) = follow.glide {
+        glide(&mut pos, &mut follow, target);
         return;
     }
     // The row's top within the scrolled content (the list's logical pixels): from the content's
@@ -293,6 +386,7 @@ fn follow_busy(
     let top = |n: &ComputedNode, at: &bevy::ui::UiGlobalTransform| {
         (at.translation.y - n.size().y / 2.0) * s
     };
+    let mut container = container.single_mut().ok();
     let row_top = match busy {
         Some(busy) => match rows.get(busy) {
             Ok((row, row_at)) if row.size().y > 0.0 => top(row, row_at),
@@ -301,8 +395,8 @@ fn follow_busy(
         None => {
             let Some(row_top) =
                 busy_feature
-                    .zip(container.single().ok())
-                    .and_then(|(id, (n, at))| {
+                    .zip(container.as_ref())
+                    .and_then(|(id, (n, at, _))| {
                         crate::document::feature_row_screen_top(id, &slots, n, at)
                     })
             else {
@@ -312,21 +406,35 @@ fn follow_busy(
         }
     };
     let offset = row_top - top(content, content_at);
-    let max = ((list.content_size().y - list.size().y) * s).max(0.0);
-    let target = (offset - FOLLOW_AT * list.size().y * s)
-        .round()
-        .clamp(0.0, max);
-    if (target - pos.y).abs() < 1.0 {
-        follow.set = Some(pos.y);
+    let height = list.size().y * s;
+    if height <= 0.0 {
         return;
     }
-    let y = if motion.enabled {
-        let k = 1.0 - (-FOLLOW_RATE * time.delta_secs()).exp();
-        let y = pos.y + (target - pos.y) * k;
-        if (target - y).abs() < 1.0 { target } else { y }
-    } else {
-        target
-    };
-    pos.y = y;
-    follow.set = Some(y);
+    let now = time.elapsed_secs();
+    let shown_at = (offset - pos.y) / height;
+    if FOLLOW_BAND.contains(&shown_at) || follow.moved_at.is_some_and(|t| now - t < FOLLOW_BEAT) {
+        return;
+    }
+    let max = ((list.content_size().y - list.size().y) * s).max(0.0);
+    let target = (offset - FOLLOW_AT * height).round().clamp(0.0, max);
+    if (target - pos.y).abs() < 1.0 {
+        return;
+    }
+    follow.moved_at = Some(now);
+    if motion.enabled && (target - pos.y).abs() <= height {
+        follow.glide = Some(target);
+        glide(&mut pos, &mut follow, target);
+        return;
+    }
+    // At once: the rows it lands on are built this frame (the rows come after this).
+    if let Some((n, at, rows)) = container.as_mut() {
+        let rows_top = top(n, at) - (target - pos.y);
+        let view = (list_at.translation.y * s - height / 2.0, height);
+        let window = cadrs_ui::virtual_rows::window_at(rows, rows_top, view);
+        if rows.window != window {
+            rows.window = window;
+        }
+    }
+    pos.y = target;
+    follow.set = Some(target);
 }

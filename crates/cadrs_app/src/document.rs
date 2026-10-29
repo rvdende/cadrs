@@ -3912,6 +3912,10 @@ fn rebuild_feature_rows(
             let folder = folders.iter().find(|f| f.features.contains(id));
             if let Some(f) = folder {
                 let first_shown = f.features.iter().find(|x| state.shows(**x));
+                if first_shown == Some(id) {
+                    // (Placed by its index too: a rebuild's list follows a closed folder.)
+                    row_slots.0.insert(f.id, slots.next_index());
+                }
                 if first_shown == Some(id) && slots.take(FEATURE_ROW_PITCH) {
                     let open = f.open || state.filtering();
                     // Filtered: how many of its features match (P3.11).
