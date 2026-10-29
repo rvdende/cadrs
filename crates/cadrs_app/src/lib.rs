@@ -119,7 +119,7 @@ pub mod spacemouse;
 pub mod suppress_variable;
 pub mod surfacing_ui;
 pub mod tab_folders;
-pub mod tab_manager;
+pub mod tab_preview;
 pub mod thread_ui;
 pub mod threads_ui;
 pub mod thumbnail;
@@ -791,7 +791,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
             .add_plugins((
                 tab_folders::TabFoldersPlugin,
-                tab_manager::TabManagerPlugin,
+                tab_preview::TabPreviewPlugin,
                 analysis::AnalysisPlugin,
                 preferences_ui::PreferencesPlugin,
                 manipulator::ManipulatorPlugin,

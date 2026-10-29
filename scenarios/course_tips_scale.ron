@@ -6,7 +6,7 @@
 // `open` (the document opened with the interactive budget: the tabs and list at once, the 250
 // features rebuilt in the background; `perf-open-rebuilds.txt` has the rebuild's own time),
 // `edit-last`, `background` (#t_1 changed, so everything below the first plate rebuilds, while
-// frames wait at most 30 ms: none freezes), `switch` (a tab chosen from the Tab manager).
+// frames wait at most 30 ms: none freezes), `switch` (a tab clicked, the strip scrolled to it).
 // 01 the 250 features and 10 parts: "Features (250)".
 // 02 the feature list scrolled to its end (the list scrolls, with its scrollbar).
 // 03 a Variable added: 251 features.
@@ -14,12 +14,11 @@
 //    from below, where its pockets are.
 // 05 #t_1 = 12 mm in the Variable table: the first plate thicker; everything after it rebuilt in
 //    the background.
-// 06 the 40 tabs: the strip scrolls by whole tabs, a chevron and a fade at the end with more
-//    tabs; the Tab manager (left of the tabs) lists them all.
-// 07 Tab manager (the P3G.3 panel): its list of tabs at most about two thirds of the window
-//    tall, scrolled to its end: every tab, the current one in bold, Studio 38 hovered.
-// 08 "Studio 38" chosen, the manager closed: selected and scrolled into view (on a tab's edge;
-//    fades at both ends).
+// 06 the 40 tabs: the strip scrolls by whole tabs, chevrons while it overflows; ▾ (right of
+//    the tabs) hovered.
+// 07 ▾: the tabs scrolled out of sight listed above it.
+// 08 the strip scrolled to its end with the wheel and "Studio 38" clicked: selected, in view
+//    (on a tab's edge).
 // 09 the tabs scrolled back with the wheel, a whole tab at a time.
 Scenario(
     start: Some("document"),
@@ -87,23 +86,22 @@ Scenario(
         Wait(3),
         Screenshot("05-first-plate-rebuilt"),
         Click(ui("variables-panel-close")),
-        Hover(ui("tab-manager")),
+        Hover(ui("tab-overflow")),
         Wait(40),
         Screenshot("06-40-tabs"),
-        Click(ui("tab-manager")),
-        WaitFor("tab-manager-panel"),
-        // The Tab manager's list is capped at about two thirds of the window: the wheel scrolls it.
-        Scroll(ui("tab-manager-rows"), -40),
+        Click(ui("tab-overflow")),
+        WaitFor("tab-overflow-menu"),
         Wait(5),
-        Hover(ui("tab-manager-row-38")),
+        Screenshot("07-overflow-list"),
+        Key("Escape"),
         Wait(3),
-        Screenshot("07-tab-manager"),
+        Scroll(ui("tab-strip"), -40),
+        Wait(5),
         MeasureStart("switch"),
-        Click(ui("tab-manager-row-38")),
+        Click(ui("tab-studio-38")),
         Wait(20),
         MeasureEnd,
         Custom("scale-report switch"),
-        Click(ui("tab-manager-close")),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("08-tab-38-in-view"),

@@ -242,7 +242,7 @@ const SCHEDULE_COLORS: [(u8, u8, u8); 6] = [
     (0xb0, 0x7a, 0xa1),
 ];
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_panel(
     stats: Res<FrameStats>,
     profile: Res<FrameProfile>,
@@ -255,8 +255,19 @@ fn sync_panel(
     mut q_hint: Query<&mut Text, With<FrameStatsHint>>,
     q_rows: Query<Entity, With<FrameProfileRows>>,
     cpu: Res<CpuProfiling>,
+    q_over: Query<
+        (),
+        Or<(
+            With<cadrs_ui::menu::MenuDismissLayer>,
+            With<cadrs_ui::name_popup::NamePopupRoot>,
+            With<crate::tab_preview::PreviewCard>,
+            With<crate::tab_folders::OverflowPanel>,
+        )>,
+    >,
 ) {
-    let display = if stats.mode == PanelMode::Hidden {
+    // Out of the way while a menu, a name popup or a tab's card is up over it (a tab folder's
+    // list left slivers of it showing either side).
+    let display = if stats.mode == PanelMode::Hidden || !q_over.is_empty() {
         Display::None
     } else {
         Display::Flex

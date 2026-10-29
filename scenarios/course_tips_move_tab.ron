@@ -1,6 +1,5 @@
 // P3G.3 (essential-tips.md T1.3, X1; external-references.md ER7.2, ER7.3, ER7.7;
-// intro-to-drawings.md D2.10, X1): moving tabs to another document, from a drawing tab's menu and
-// from the Tab manager. "Exercise: Move to Document" (`move-doc setup`) with "Drawing 1", a Front
+// intro-to-drawings.md D2.10, X1): moving tabs to another document, from a tab's menu. "Exercise: Move to Document" (`move-doc setup`) with "Drawing 1", a Front
 // view of the Pneumatic Piston (`move-doc drawing`); "Plates library", a document with V1
 // (`move-doc plates`).
 // 01 (D2.10) right-click the Drawing 1 tab → "Move to document…" hovered.
@@ -11,17 +10,15 @@
 //    here.
 // 05 Piston drawings opened: Drawing 1, the Sheets pane: its reference "Pneumatic Piston" at V1
 //    with the version icon (a link back to the exercise document).
-// 06 (ER7.7) back in the exercise document: the Tab manager (the tab bar's leftmost icon) lists
-//    the tabs.
-// 07 Topplate clicked, Baseplate Ctrl+clicked: both selected; "Move 2 tabs to document…" hovered.
+// 06 (ER7.7) back in the exercise document: Topplate's tab menu, "Move to document…" hovered.
 // 08 (ER7.2) the dialog's Other documents: the locations.
 // 09 My documents → the documents; Plates library hovered.
-// 10 Plates library picked: its 1 version, "Version name" V2, "2 tabs will be moved", "Moving
-//    2 tabs to Plates library".
-// 11 moved: Hexapod, Pneumatic Piston, Piston Assembly left; the Hexapod's Baseplate and
-//    Topplate rows show the version icon (Plates library V2).
-// 12 Plates library opened: Part Studio 1, Assembly 1, Topplate, Baseplate; its History panel
-//    shows V2 "Moved from Exercise: Move to Document: Topplate, Baseplate".
+// 10 Plates library picked: its 1 version, "Version name" V2, "Moving 1 tab to Plates
+//    library".
+// 11 moved: Hexapod, Pneumatic Piston, Piston Assembly and Baseplate left; the Hexapod's
+//    Topplate row shows the version icon (Plates library V2).
+// 12 Plates library opened: Part Studio 1, Assembly 1, Topplate; its History panel shows V2
+//    "Moved from Exercise: Move to Document: Topplate".
 Scenario(
     start: Some("document"),
     steps: [
@@ -60,19 +57,12 @@ Scenario(
         Custom("move-doc open Exercise: Move to Document"),
         Click(ui("tab-hexapod")),
         Key("F"),
-        Click(ui("tab-manager")),
-        WaitFor("tab-manager-panel"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("06-tab-manager"),
-        Click(ui("tab-manager-row-4")),
-        KeyDown("Ctrl"),
-        Click(ui("tab-manager-row-5")),
-        KeyUp("Ctrl"),
-        Hover(ui("tab-manager-move")),
+        RightClick(ui("tab-topplate")),
+        WaitFor("tab-context-menu"),
+        Hover(ui("tab-move")),
         Wait(20),
-        Screenshot("07-two-tabs-selected"),
-        Click(ui("tab-manager-move")),
+        Screenshot("06-tab-menu"),
+        Click(ui("tab-move")),
         WaitFor("move-to-document-dialog"),
         Click(ui("move-tabs-1")),
         WaitFor("move-other-loc-mine"),

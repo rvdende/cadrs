@@ -1672,7 +1672,7 @@ fn log_opened(doc: &Document, meta: &DocumentMeta, dir: &std::path::Path) {
     let tabs = doc
         .elements
         .iter()
-        .map(|el| format!("{} ({})", el.name, crate::tab_manager::tab_type(el)))
+        .map(|el| format!("{} ({})", el.name, crate::tab_preview::tab_type(el)))
         .collect::<Vec<_>>()
         .join(", ");
     let shared = meta

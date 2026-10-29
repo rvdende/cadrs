@@ -1,23 +1,27 @@
 //! P3E.2: tab folders in the tab bar (`test-drive.md` TD5.3, X6; the model is
 //! [`cadrs_core::tab_tree`]).
 //!
-//! - **"+" → Create folder** makes "Folder N" in the bar's level, right of the active tab (or at
-//!   the end), and starts renaming it in place (Enter commits; one undo step with the create).
-//! - A **folder** is a tab with a folder icon. A click **opens** it: the bar then shows its
-//!   contents, with a **Home** button (back to the top level) and the folder's path as a
-//!   breadcrumb (a crumb opens that folder). Selecting a tab elsewhere (the Tab manager, undo)
-//!   opens the folder that holds it.
-//! - A folder's right-click menu: Open, Rename…, Delete folder… (the dialog asks about its tabs:
-//!   **Delete folder only** moves them up a level, **Delete folder and tabs** deletes them too).
+//! - **"+" → Create folder** makes "Folder N" right of the active tab (or at the end), and starts
+//!   renaming it in place (Enter commits; one undo step with the create).
+//! - The bar always shows the top level. A **folder** is a tab with a folder icon and a chevron:
+//!   ▲, or ▼ while its list is open. A click opens its **list** above it: its tabs (a click opens
+//!   one, the active one ticked) and its folders, each opening its own list to the side, as
+//!   deep as they go. A folder inside another has no tab of its own: its list ends with
+//!   Rename… (a name popup) and Delete folder…. The folder tab holding the active tab is marked.
+//! - A folder's right-click menu: Show tabs, Rename…, Delete folder… (the dialog asks about its
+//!   tabs: **Delete folder only** moves them up a level, **Delete folder and tabs** deletes them
+//!   too).
 //! - **Dragging** a tab or a folder along the bar shows a blue line where it will land; onto a
-//!   folder tab (a blue box), it goes into that folder; onto Home or a crumb, it goes to that
-//!   level. One undo step ([`cadrs_core::tab_tree::MoveTabItems`]).
+//!   folder tab (a blue box), it goes into that folder. One undo step
+//!   ([`cadrs_core::tab_tree::MoveTabItems`]).
 //! - A tab's menu has **Move to folder ▸** (the folders, "Top level", "New folder").
 //! - **▾** (right of the tab strip, while the tabs overflow) lists the tabs scrolled out of
 //!   sight; picking one opens it (T1.2).
 //!
-//! Names: `tab-folder-<name>` (a folder tab), `tab-folder-home`, `tab-folder-crumb-<k>`,
-//! `tab-folder-menu` (`tab-folder-open`, `tab-folder-rename`, `tab-folder-delete`),
+//! Names: `tab-folder-<name>` (a folder tab), `tab-folder-list` (`tab-folder-pick-<tab id>`,
+//! `tab-folder-sub-<folder id>`, `tab-folder-rename-<folder id>`, `tab-folder-delete-<folder
+//! id>`), `tab-folder-rename-popup`, `tab-folder-menu` (`tab-folder-open`, `tab-folder-rename`,
+//! `tab-folder-delete`),
 //! `delete-tab-folder-dialog` (`delete-tab-folder-keep`, `delete-tab-folder-all`,
 //! `delete-tab-folder-cancel`), `tab-drop-line`, `tab-drag-ghost`, `tab-overflow`,
 //! `tab-overflow-menu` (`tab-overflow-<k>`).
@@ -27,6 +31,7 @@ use bevy::text::FontWeight;
 use bevy::ui_widgets::Activate;
 use bevy::ui_widgets::popover::PopoverSide;
 use cadrs_core::ElementId;
+use cadrs_core::commands::{AddElement, NewElementKind};
 use cadrs_core::tab_tree::{
     self, CreateTabFolder, DeleteTabFolder, MoveTabItems, RenameTabFolder, TabItem, TabNode,
 };
@@ -44,28 +49,27 @@ pub struct TabFoldersPlugin;
 
 impl Plugin for TabFoldersPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TabFolderView>()
-            .init_resource::<PendingFolderRename>()
+        app.init_resource::<PendingFolderRename>()
             .init_resource::<TabDrag>()
             .add_systems(
                 Update,
                 (
-                    follow_active,
                     start_pending_rename,
+                    sync_folder_chevrons,
+                    mark_listed_tabs,
+                    quiet_hover_while_dragging,
+                    hide_covered_viewport_tools,
                     place_tab_drop,
                     close_overflow_on_escape,
                 )
                     .run_if(in_state(AppState::Document)),
             )
-            .add_systems(
-                OnExit(AppState::Document),
-                |mut v: ResMut<TabFolderView>, mut d: ResMut<TabDrag>| {
-                    *v = TabFolderView::default();
-                    *d = TabDrag::default();
-                },
-            )
+            .add_systems(OnExit(AppState::Document), |mut d: ResMut<TabDrag>| {
+                *d = TabDrag::default();
+            })
             .add_observer(on_folder_tab_activate)
-            .add_observer(on_nav_activate)
+            .add_observer(on_folder_list_action)
+            .add_observer(on_rename_popup_commit)
             .add_observer(on_folder_menu)
             .add_observer(on_folder_menu_action)
             .add_observer(on_folder_rename_commit)
@@ -79,32 +83,64 @@ impl Plugin for TabFoldersPlugin {
     }
 }
 
-/// The folder the tab bar shows (`None`: the top level).
-#[derive(Resource, Debug, Default, Clone)]
-pub struct TabFolderView {
-    pub folder: Option<ElementId>,
-    /// The active tab last seen, to open its folder when it changes.
-    seen_active: Option<ElementId>,
-    /// The undo and redo stacks' lengths last seen: after an undo or redo the bar opens the
-    /// active tab's folder too (P3E.2 judge r1).
-    seen_history: (usize, usize),
-    /// The folder that held the active tab when last seen: an undo or redo follows the tab only
-    /// when it moved it to another folder (P3E.3a: undoing a reorder of the top level stays
-    /// there).
-    seen_parent: Option<ElementId>,
-}
-
-/// The tab bar's Home button and breadcrumb container.
-#[derive(Component)]
-pub struct TabFolderNav;
-
 /// A folder's tab in the tab bar.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct FolderTab(pub ElementId);
 
-/// Home (`None`) or a crumb: a click opens that level, and tabs dropped on it go there.
+/// What a folder's list opened from: its picks come here, and what each of its items does.
+#[derive(Component, Debug, Clone, Default)]
+struct FolderListAnchor(Vec<(String, ListPick)>);
+
+/// What an item of a folder's list does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ListPick {
+    /// Opens the tab (and its right-click opens the tab's menu).
+    Tab(ElementId),
+    /// Makes a studio of this kind in the folder.
+    New(ElementId, NewKind),
+    Rename(ElementId),
+    Delete(ElementId),
+}
+
+/// The studios a folder's list can make in it (`New ▸`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum NewKind {
+    PartStudio,
+    Assembly,
+    VariableStudio,
+    PcbStudio,
+    CamStudio,
+    RenderStudio,
+}
+
+impl NewKind {
+    /// In the "+" menu's order (its studios, then the rest).
+    const ALL: [NewKind; 6] = [
+        NewKind::CamStudio,
+        NewKind::PcbStudio,
+        NewKind::RenderStudio,
+        NewKind::PartStudio,
+        NewKind::Assembly,
+        NewKind::VariableStudio,
+    ];
+
+    /// The item's label, icon and name part.
+    fn look(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            NewKind::PartStudio => ("Part Studio", "part-studio", "part-studio"),
+            NewKind::Assembly => ("Assembly", "assembly", "assembly"),
+            NewKind::VariableStudio => ("Variable Studio", "variable-studio", "variable-studio"),
+            NewKind::PcbStudio => ("PCB Studio", "pcb-studio", "pcb-studio"),
+            NewKind::CamStudio => ("CAM Studio", "cam-studio", "cam-studio"),
+            NewKind::RenderStudio => ("Render Studio", "render-studio", "render-studio"),
+        }
+    }
+}
+
+/// A tab in an open folder's list: its right-click opens the tab's menu
+/// (`document::on_tab_context_menu`), as a tab in the bar does.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct NavTarget(pub Option<ElementId>);
+pub struct ListedTab(pub ElementId);
 
 #[derive(Resource, Debug, Default)]
 struct PendingFolderRename(Option<ElementId>);
@@ -115,164 +151,340 @@ struct FolderMenuFor(ElementId);
 #[derive(Component)]
 struct DeleteFolderDialog(ElementId);
 
-/// Opens `folder` in the tab bar.
-pub fn open_folder(world: &mut World, folder: Option<ElementId>) {
-    world.resource_mut::<TabFolderView>().folder = folder;
+/// The name popup renaming a folder inside another.
+#[derive(Component)]
+struct RenamePopupFor(ElementId);
+
+/// The space between the tab bar and what opens over it (menus, lists, popups, the card).
+pub const ABOVE_BAR: f32 = 4.0;
+
+/// The tab bar's rectangle (logical px).
+pub fn tab_bar_rect(world: &mut World) -> Option<Rect> {
+    let mut q = world.query::<(&Name, &ComputedNode, &bevy::ui::UiGlobalTransform)>();
+    q.iter(world)
+        .find(|(n, ..)| n.as_str() == "tab-bar")
+        .map(|(_, n, t)| {
+            let s = n.inverse_scale_factor();
+            Rect::from_center_size(t.translation * s, n.size() * s)
+        })
 }
 
-/// When the active tab changes to one outside the bar's level, the bar opens its folder.
-fn follow_active(doc: Option<Res<ActiveDocument>>, mut view: ResMut<TabFolderView>) {
-    let Some(doc) = doc else { return };
-    let layout = tab_tree::layout(&doc.doc);
-    if let Some(f) = view.folder
-        && tab_tree::level_of(&layout, Some(f)).is_none()
-    {
-        view.folder = None;
-    }
-    let active = doc.active_element().map(|e| e.id);
-    let history = (doc.history.undo_len(), doc.history.redo_len());
-    let undo_redo = history.1 != view.seen_history.1;
-    view.seen_history = history;
-    let parent = active.and_then(|a| tab_tree::parent_of(&layout, TabItem::Tab(a)));
-    let moved = parent != view.seen_parent;
-    view.seen_parent = parent;
-    if active == view.seen_active && !(undo_redo && moved) {
-        return;
-    }
-    view.seen_active = active;
-    if active.is_some() && view.folder != parent {
-        view.folder = parent;
-    }
-}
-
-/// Home and the open folder's path, spawned into [`TabFolderNav`] by `document::rebuild_tabs`.
-pub fn spawn_nav(n: &mut ChildSpawnerCommands, t: &Theme, path: &[(ElementId, String)]) {
-    if path.is_empty() {
-        return;
-    }
-    let mut dark = cadrs_ui::button::visuals_for(t, cadrs_ui::ButtonVariant::Ghost);
-    dark.foreground = StateColors::all(t.tool_foreground);
-    dark.background = StateColors::new(
-        Color::NONE,
-        Color::srgb_u8(0xc8, 0xc8, 0xc8),
-        Color::srgb_u8(0xbc, 0xbc, 0xbc),
-        Color::NONE,
-    );
-    n.spawn((
-        IconButton::new("tab-folder-home", "home")
-            .icon_size(17.0)
-            .tooltip("Home: all tabs")
-            .build(t),
-        NavTarget(None),
-    ))
-    .insert(dark.clone())
-    .entry::<Node>()
-    .and_modify(|mut n| {
-        n.width = Val::Px(32.0);
-        n.height = Val::Auto;
-        n.border_radius = BorderRadius::ZERO;
-    });
-    for (k, (id, name)) in path.iter().enumerate() {
-        let last = k + 1 == path.len();
-        n.spawn((
-            t.text("›", t.font_base, FontWeight::NORMAL, t.muted_foreground),
-            Node {
-                align_self: AlignSelf::Center,
-                margin: UiRect::horizontal(Val::Px(2.0)),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ));
-        let mut b = n.spawn((
-            Name::new(format!("tab-folder-crumb-{}", k + 1)),
-            NavTarget(Some(*id)),
-            bevy::ui_widgets::Button,
-            bevy::picking::hover::Hovered::default(),
-            dark.clone(),
-            Node {
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(4.0),
-                padding: UiRect::horizontal(Val::Px(6.0)),
-                margin: UiRect::vertical(Val::Px(3.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..default()
-            },
-            Tooltip::new(if last {
-                format!("{name}: this folder")
-            } else {
-                format!("Open {name}")
-            }),
-        ));
-        b.with_children(|c| {
-            c.spawn((
-                cadrs_ui::icon::icon("folder", 15.0, t.tool_foreground),
-                Pickable::IGNORE,
-            ));
-            c.spawn((
-                t.text(
-                    name.clone(),
-                    t.font_base,
-                    if last {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::MEDIUM
-                    },
-                    t.foreground,
-                ),
-                Pickable::IGNORE,
-            ));
-        });
-    }
-    n.spawn((
-        Node {
-            width: Val::Px(1.0),
-            margin: UiRect::new(Val::Px(6.0), Val::Px(2.0), Val::Px(6.0), Val::Px(6.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgb_u8(0xb4, 0xb4, 0xb4)),
-        Pickable::IGNORE,
-    ));
-}
-
-/// A primary click opens the folder (a right-click only opens its menu).
+/// A primary click opens the folder's list above it (a right-click only opens its menu; a
+/// click on the tab while the list is open lands on the menus' dismiss layer and closes it).
 fn on_folder_tab_activate(
     a: On<PointerClick>,
     q: Query<&FolderTab>,
     drag: Res<TabDrag>,
-    mut view: ResMut<TabFolderView>,
+    mut commands: Commands,
 ) {
     if drag.moved || a.button != PointerButton::Primary {
         return;
     }
-    if let Ok(f) = q.get(a.entity) {
-        view.folder = Some(f.0);
+    if let Ok(f) = q.get(a.entity).copied() {
+        let anchor = a.entity;
+        commands.queue(move |world: &mut World| open_folder_list(world, anchor, f.0));
     }
 }
 
-fn on_nav_activate(
-    a: On<Activate>,
-    q: Query<&NavTarget>,
-    drag: Res<TabDrag>,
-    mut view: ResMut<TabFolderView>,
-) {
-    if drag.moved {
+/// Opens `folder`'s list above `anchor` (its tab, or ▾'s button).
+pub fn open_folder_list(world: &mut World, anchor: Entity, folder: ElementId) {
+    let Some(doc) = world.get_resource::<ActiveDocument>() else {
+        return;
+    };
+    let layout = tab_tree::layout(&doc.doc);
+    let Some(children) = tab_tree::level_of(&layout, Some(folder)) else {
+        return;
+    };
+    let accent = world.resource::<Theme>().primary;
+    let mut list = FolderList {
+        doc: &doc.doc,
+        active: doc.active,
+        accent,
+        picks: Vec::new(),
+        names: std::collections::HashSet::new(),
+    };
+    let entries = list.entries(children, folder, false);
+    let picks = std::mem::take(&mut list.picks);
+    let theme = world.resource::<Theme>().clone();
+    // (Its anchor, a tab, is inset 4 px in the bar: 8 px leaves the bar's 4 clear.)
+    let menu = Menu::new("tab-folder-list")
+        .side(PopoverSide::Top)
+        .gap(ABOVE_BAR + 4.0)
+        .min_width(210.0)
+        .item_height(25.0)
+        .entries(entries);
+    if let Ok(mut e) = world.get_entity_mut(anchor) {
+        e.insert(FolderListAnchor(picks));
+    }
+    open_menu(&mut world.commands(), anchor, menu.build(&theme));
+    world.flush();
+}
+
+/// Builds a folder's list, noting what each item does.
+struct FolderList<'a> {
+    doc: &'a cadrs_core::Document,
+    active: Option<ElementId>,
+    /// The accent colour, for the folders on the active tab's path.
+    accent: Color,
+    picks: Vec<(String, ListPick)>,
+    names: std::collections::HashSet<String>,
+}
+
+impl FolderList<'_> {
+    /// `tab-folder-<what>-<slug of label>`, unique in the list (the scenarios name items so).
+    fn name(&mut self, what: &str, label: &str) -> String {
+        let slug = crate::document::tab_node_name(label);
+        let slug = slug.strip_prefix("tab-").unwrap_or(&slug);
+        let base = format!("tab-folder-{what}-{slug}");
+        let mut name = base.clone();
+        let mut n = 2;
+        while !self.names.insert(name.clone()) {
+            name = format!("{base}-{n}");
+            n += 1;
+        }
+        name
+    }
+
+    fn item(&mut self, what: &str, label: &str, pick: ListPick) -> MenuItem {
+        let name = self.name(what, label);
+        self.picks.push((name.clone(), pick));
+        MenuItem::new(name, label.to_string())
+    }
+
+    /// A folder's tabs and folders in order, a folder's own list as its submenu (opening to the
+    /// side); then New ▸ (a studio made in the folder); a folder inside another (`nested`) ends
+    /// with Rename… and Delete folder…, as it has no tab to right-click.
+    fn entries(&mut self, nodes: &[TabNode], folder: ElementId, nested: bool) -> Vec<MenuEntry> {
+        let mut out: Vec<MenuEntry> = Vec::new();
+        for n in nodes {
+            match n {
+                TabNode::Tab(e) => {
+                    let Some(el) = self.doc.element(*e) else {
+                        continue;
+                    };
+                    let checked = self.active == Some(*e);
+                    let item = self
+                        .item("pick", &el.name.clone(), ListPick::Tab(*e))
+                        .icon(crate::tab_preview::tab_icon(el))
+                        .checked(checked);
+                    out.push(item.into());
+                }
+                TabNode::Folder { id, name, children } => {
+                    let sub = self.entries(children, *id, true);
+                    let item_name = self.name("sub", name);
+                    // A folder holding the active tab: its icon in the accent, as its tab's is.
+                    let holds_active = self.active.is_some_and(|a| n.tabs().contains(&a));
+                    let mut item = MenuItem::new(item_name, name.clone())
+                        .icon("folder")
+                        .submenu(sub);
+                    if holds_active {
+                        item = item.icon_color(self.accent);
+                    }
+                    out.push(item.into());
+                }
+            }
+        }
+        let folder_name = self
+            .doc
+            .tab_tree
+            .folder(folder)
+            .map(|f| f.name.clone())
+            .unwrap_or_default();
+        if nodes.is_empty() {
+            let name = self.name("empty", &folder_name);
+            out.push(MenuItem::new(name, "Empty folder").disabled(true).into());
+        }
+        out.push(MenuEntry::Separator);
+        let mut studios: Vec<MenuEntry> = Vec::new();
+        for k in NewKind::ALL {
+            // The "+" menu's separator, before Part Studio.
+            if k == NewKind::PartStudio {
+                studios.push(MenuEntry::Separator);
+            }
+            let (label, icon, slug) = k.look();
+            studios.push(
+                self.item(
+                    &format!("new-{slug}"),
+                    &folder_name,
+                    ListPick::New(folder, k),
+                )
+                .label(label)
+                .icon(icon)
+                .into(),
+            );
+        }
+        let new = self.name("new", &folder_name);
+        out.push(
+            MenuItem::new(new, "New")
+                .icon("plus")
+                .submenu(studios)
+                .into(),
+        );
+        if nested {
+            out.push(MenuEntry::Separator);
+            let rename = self
+                .item("rename", &folder_name, ListPick::Rename(folder))
+                .label("Rename…")
+                .icon("edit");
+            let delete = self
+                .item("delete", &folder_name, ListPick::Delete(folder))
+                .label("Delete folder…")
+                .icon("remove-circle")
+                .danger();
+            out.push(rename.into());
+            out.push(delete.into());
+        }
+        out
+    }
+}
+
+fn on_folder_list_action(ev: On<MenuAction>, q: Query<&FolderListAnchor>, mut commands: Commands) {
+    let Some(pick) = q.get(ev.entity).ok().and_then(|a| {
+        a.0.iter()
+            .find(|(name, _)| *name == ev.item)
+            .map(|(_, p)| *p)
+    }) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| match pick {
+        ListPick::Tab(tab) => {
+            if let Some(mut d) = world.get_resource_mut::<ActiveDocument>()
+                && d.active != Some(tab)
+            {
+                d.set_active(tab);
+            }
+        }
+        ListPick::New(folder, kind) => new_studio_in(world, folder, kind),
+        ListPick::Rename(f) => rename_folder(world, f),
+        ListPick::Delete(f) => ask_delete_folder(world, f),
+    });
+}
+
+/// Makes a studio in `folder`, at its end, and opens it: one undo step.
+fn new_studio_in(world: &mut World, folder: ElementId, kind: NewKind) {
+    if crate::linked_session::refuse(world) {
         return;
     }
-    if let Ok(t) = q.get(a.entity) {
-        view.folder = t.0;
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let kind = match kind {
+        NewKind::PartStudio => NewElementKind::PartStudio,
+        NewKind::Assembly => NewElementKind::Assembly,
+        NewKind::VariableStudio => NewElementKind::VariableStudio,
+        NewKind::PcbStudio => NewElementKind::PcbStudio,
+        NewKind::CamStudio => NewElementKind::CamStudio,
+        NewKind::RenderStudio => {
+            NewElementKind::RenderStudio(crate::render_ui::default_source(&doc))
+        }
+    };
+    let id = ElementId::new();
+    let mark = doc.history.undo_len();
+    let after = doc.active;
+    if doc
+        .execute(&AddElement {
+            id,
+            kind,
+            name: None,
+            after,
+        })
+        .is_err()
+    {
+        return;
+    }
+    let name = doc
+        .doc
+        .element(id)
+        .map(|e| e.name.clone())
+        .unwrap_or_default();
+    let folder_name = doc
+        .doc
+        .tab_tree
+        .folder(folder)
+        .map(|f| f.name.clone())
+        .unwrap_or_default();
+    let _ = doc.execute(&MoveTabItems {
+        items: vec![TabItem::Tab(id)],
+        parent: Some(folder),
+        before: None,
+        label: String::new(),
+    });
+    doc.squash_since(mark, format!("Create {name} in {folder_name}"));
+    doc.set_active(id);
+}
+
+/// The open folder list's tab items take right-clicks (the tab's menu).
+#[allow(clippy::type_complexity)]
+fn mark_listed_tabs(
+    q_anchor: Query<&FolderListAnchor, With<cadrs_ui::menu::MenuOpenAnchor>>,
+    q_items: Query<(Entity, &cadrs_ui::menu::MenuItemState), Without<ListedTab>>,
+    mut commands: Commands,
+) {
+    let Some(anchor) = q_anchor.iter().next() else {
+        return;
+    };
+    for (e, item) in &q_items {
+        if let Some((_, ListPick::Tab(tab))) = anchor.0.iter().find(|(n, _)| *n == item.item) {
+            commands
+                .entity(e)
+                .try_insert((ListedTab(*tab), ContextMenuTarget));
+        }
+    }
+}
+
+/// A folder tab whose list is open: pressed, not the active tab's fill (two tabs read as
+/// selected).
+#[derive(Component)]
+struct ListOpen;
+
+/// A folder tab's chevron: ▲ (its list opens upward), ▼ while the list is open; and the tab
+/// pressed then.
+#[allow(clippy::type_complexity)]
+fn sync_folder_chevrons(
+    q: Query<
+        (
+            Entity,
+            &Children,
+            Has<cadrs_ui::menu::MenuOpenAnchor>,
+            Has<ListOpen>,
+        ),
+        With<FolderTab>,
+    >,
+    mut q_icon: Query<&mut cadrs_ui::Icon, With<cadrs_ui::tabs::TabTrailingIcon>>,
+    mut commands: Commands,
+) {
+    for (tab, children, open, marked_open) in &q {
+        if open && !marked_open {
+            commands.entity(tab).try_insert((
+                ListOpen,
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Pressed),
+            ));
+        } else if !open && marked_open {
+            commands
+                .entity(tab)
+                .try_remove::<(ListOpen, cadrs_ui::ForceState)>();
+        }
+        let want = if open { "chevron-down" } else { "chevron-up" };
+        for c in children.iter() {
+            if let Ok(mut icon) = q_icon.get_mut(c)
+                && icon.name != want
+            {
+                icon.name = want.into();
+            }
+        }
     }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Create, rename, delete
 
-/// "+" → Create folder: "Folder N" in the bar's level, right of the active tab when it is in
-/// that level (else at the end), renamed in place right away.
+/// "+" → Create folder: "Folder N" at the top level, right of the active tab when it is there
+/// (else at the end), renamed in place right away.
 pub fn create_folder_here(world: &mut World) {
     if crate::linked_session::refuse(world) {
         return;
     }
-    let parent = world.resource::<TabFolderView>().folder;
+    let parent = None;
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -301,7 +513,7 @@ pub fn create_folder_here(world: &mut World) {
     }
 }
 
-/// Creates a folder holding `items` (the tab menu's "New folder", the Tab manager's New folder)
+/// Creates a folder holding `items` (the tab menu's "New folder")
 /// in the level of the first of them; `rename_in_bar`: its tab is renamed in place.
 pub fn create_folder_with(
     world: &mut World,
@@ -382,14 +594,19 @@ fn on_folder_menu(
     let Ok(f) = q.get(ev.entity).copied() else {
         return;
     };
+    let tab = ev.entity;
     let menu = Menu::new("tab-folder-menu")
         .side(PopoverSide::Top)
         .min_width(170.0)
-        .item_height(22.0)
-        .item(MenuItem::new("tab-folder-open", "Open").icon("folder"))
+        .item_height(25.0)
+        .item(MenuItem::new("tab-folder-open", "Show tabs").icon("folder"))
         .item(MenuItem::new("tab-folder-rename", "Rename…").icon("edit"))
         .separator()
-        .item(MenuItem::new("tab-folder-delete", "Delete folder…").icon("remove-circle"));
+        .item(
+            MenuItem::new("tab-folder-delete", "Delete folder…")
+                .icon("remove-circle")
+                .danger(),
+        );
     // Above the tab bar, at the cursor's x (like a tab's menu).
     let bar_top = q_bar
         .iter()
@@ -401,38 +618,123 @@ fn on_folder_menu(
         .unwrap_or(ev.position.y);
     let anchor = open_context_menu(
         &mut commands,
-        Vec2::new(ev.position.x, bar_top - 1.0),
+        Vec2::new(ev.position.x, bar_top - ABOVE_BAR),
         menu.build(&theme),
     );
-    commands
-        .entity(anchor)
-        .insert((FolderMenuFor(f.0), DespawnOnExit(AppState::Document)));
+    commands.entity(anchor).insert((
+        FolderMenuFor(f.0),
+        FolderTabOf(tab),
+        DespawnOnExit(AppState::Document),
+    ));
 }
+
+/// The folder tab a folder's right-click menu is for.
+#[derive(Component)]
+struct FolderTabOf(Entity);
 
 fn on_folder_menu_action(
     ev: On<MenuAction>,
-    q: Query<&FolderMenuFor, With<ContextMenuAnchor>>,
+    q: Query<(&FolderMenuFor, &FolderTabOf), With<ContextMenuAnchor>>,
     mut commands: Commands,
 ) {
-    let Ok(target) = q.get(ev.entity) else { return };
-    let folder = target.0;
+    let Ok((target, tab)) = q.get(ev.entity) else {
+        return;
+    };
+    let (folder, tab) = (target.0, tab.0);
     let item = ev.item.clone();
     commands.queue(move |world: &mut World| match item.as_str() {
-        "tab-folder-open" => open_folder(world, Some(folder)),
+        // (After the context menu has closed, so the list stays.)
+        "tab-folder-open" => {
+            world.commands().queue(move |world: &mut World| {
+                open_folder_list(world, tab, folder);
+            });
+        }
         "tab-folder-rename" => rename_folder(world, folder),
         "tab-folder-delete" => ask_delete_folder(world, folder),
         _ => {}
     });
 }
 
-/// Renames a folder in place: its tab in the bar (the bar opens its level first), or the Tab
-/// manager's row.
+/// Renames a folder: a top-level one in place on its tab; one inside another (no tab of its
+/// own) in a name popup above the tab of the folder it is in.
 pub fn rename_folder(world: &mut World, folder: ElementId) {
-    let parent = world
-        .get_resource::<ActiveDocument>()
-        .and_then(|d| tab_tree::parent_of(&tab_tree::layout(&d.doc), TabItem::Folder(folder)));
-    world.resource_mut::<TabFolderView>().folder = parent;
-    world.resource_mut::<PendingFolderRename>().0 = Some(folder);
+    let Some(doc) = world.get_resource::<ActiveDocument>() else {
+        return;
+    };
+    let layout = tab_tree::layout(&doc.doc);
+    if tab_tree::parent_of(&layout, TabItem::Folder(folder)).is_none() {
+        world.resource_mut::<PendingFolderRename>().0 = Some(folder);
+        return;
+    }
+    let name = doc
+        .doc
+        .tab_tree
+        .folder(folder)
+        .map(|f| f.name.clone())
+        .unwrap_or_default();
+    // The top-level folder it is in, whose tab the popup sits over.
+    let mut top = folder;
+    while let Some(p) = tab_tree::parent_of(&layout, TabItem::Folder(top)) {
+        top = p;
+    }
+    let at = popup_spot(world, top);
+    let theme = world.resource::<Theme>().clone();
+    let mut commands = world.commands();
+    let popup = cadrs_ui::NamePopup::new("tab-folder-rename-popup", "Folder name", at)
+        .value(name)
+        .above()
+        .spawn(&mut commands, &theme);
+    commands.entity(popup).insert(RenamePopupFor(folder));
+    world.flush();
+}
+
+/// Where a name popup for something in `folder` (a top-level folder) goes: its bottom-left
+/// corner over the folder's tab, just above the bar.
+pub fn popup_spot(world: &mut World, folder: ElementId) -> Vec2 {
+    let bar = tab_bar_rect(world);
+    let mut q = world.query::<(&FolderTab, &ComputedNode, &bevy::ui::UiGlobalTransform)>();
+    let left = q
+        .iter(world)
+        .find(|(f, ..)| f.0 == folder)
+        .map(|(_, n, t)| {
+            let s = n.inverse_scale_factor();
+            t.translation.x * s - n.size().x * s / 2.0
+        });
+    match (bar, left) {
+        (Some(bar), Some(left)) => Vec2::new(left, bar.min.y - ABOVE_BAR),
+        (Some(bar), None) => Vec2::new(bar.min.x + 40.0, bar.min.y - ABOVE_BAR),
+        _ => Vec2::new(120.0, 400.0),
+    }
+}
+
+/// The top-level folder holding `item` (itself when it is one).
+pub fn top_folder_of(doc: &cadrs_core::Document, item: TabItem) -> Option<ElementId> {
+    let layout = tab_tree::layout(doc);
+    let mut top = match item {
+        TabItem::Folder(f) => Some(f),
+        TabItem::Tab(_) => None,
+    };
+    let mut cur = item;
+    while let Some(p) = tab_tree::parent_of(&layout, cur) {
+        top = Some(p);
+        cur = TabItem::Folder(p);
+    }
+    top
+}
+
+fn on_rename_popup_commit(
+    ev: On<cadrs_ui::NamePopupCommit>,
+    q: Query<&RenamePopupFor>,
+    doc: Option<ResMut<ActiveDocument>>,
+) {
+    let (Ok(f), Some(mut doc)) = (q.get(ev.entity), doc) else {
+        return;
+    };
+    let name = ev.value.trim().to_string();
+    if name.is_empty() || doc.doc.tab_tree.folder(f.0).is_some_and(|x| x.name == name) {
+        return;
+    }
+    let _ = doc.execute(&RenameTabFolder { id: f.0, name });
 }
 
 /// Delete folder…: an empty folder goes at once; otherwise a dialog asks about its tabs.
@@ -448,6 +750,14 @@ pub fn ask_delete_folder(world: &mut World, folder: ElementId) {
     let Some(name) = doc.doc.tab_tree.folder(folder).map(|f| f.name.clone()) else {
         return;
     };
+    // What it holds itself (tabs and folders), and the tabs in all.
+    let (own_tabs, own_folders) = tab_tree::level_of(&layout, Some(folder))
+        .unwrap_or(&[])
+        .iter()
+        .fold((0, 0), |(t, f), n| match n {
+            TabNode::Tab(_) => (t + 1, f),
+            TabNode::Folder { .. } => (t, f + 1),
+        });
     let all = doc.doc.elements.len();
     if n == 0 {
         let _ = world
@@ -466,16 +776,28 @@ pub fn ask_delete_folder(world: &mut World, folder: ElementId) {
             .width(460.0)
             .body(move |b| {
                 b.spawn((Text::new(format!("Delete the folder \u{201c}{name}\u{201d}?")), tb.font(tb.font_base, FontWeight::NORMAL), TextColor(tb.foreground)));
-                let tabs = if n == 1 { "1 tab".to_string() } else { format!("{n} tabs") };
+                let count = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+                let mut holds = Vec::new();
+                if own_tabs > 0 {
+                    holds.push(count(own_tabs, "tab", "tabs"));
+                }
+                if own_folders > 0 {
+                    holds.push(count(own_folders, "folder", "folders"));
+                }
+                let mut what = holds.join(" and ");
+                if own_folders > 0 {
+                    what.push_str(&format!(" ({} in all)", count(n, "tab", "tabs")));
+                }
+                let them = if own_tabs + own_folders == 1 { "it" } else { "them" };
                 b.spawn((
-                    tb.text(format!("It holds {tabs}. Delete folder only moves them up a level; Delete folder and tabs deletes them too."), tb.font_base, FontWeight::NORMAL, tb.muted_foreground),
+                    tb.text(format!("It holds {what}. Delete folder only moves {them} up a level; Delete folder and tabs deletes every tab in it too."), tb.font_base, FontWeight::NORMAL, tb.muted_foreground),
                     Node { max_width: Val::Px(420.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
                 ))
                 .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
             })
             .footer(move |f| {
                 f.spawn(Button::new("delete-tab-folder-keep").label("Delete folder only").primary().build(&tf));
-                f.spawn(Button::new("delete-tab-folder-all").label("Delete folder and tabs").disabled(n >= all).build(&tf));
+                f.spawn(Button::new("delete-tab-folder-all").label("Delete folder and tabs").danger().disabled(n >= all).build(&tf));
                 f.spawn(Button::new("delete-tab-folder-cancel").label("Cancel").build(&tf));
             })
             .build(&theme),
@@ -544,18 +866,20 @@ pub fn move_to_folder_entries(doc: &cadrs_core::Document, id: ElementId) -> Vec<
     if parent.is_some() {
         out.push(MenuItem::new("tab-to-top", "Top level").icon("home").into());
     }
-    for (k, (f, name, depth)) in tab_tree::folders(&layout).into_iter().enumerate() {
+    for (k, (f, _, _)) in tab_tree::folders(&layout).into_iter().enumerate() {
         if Some(f) == parent {
             continue;
         }
-        let indent = "   ".repeat(depth);
+        // A folder inside another by its path: "Brackets › Fasteners".
+        let path = tab_tree::folder_path(&layout, f)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect::<Vec<_>>()
+            .join(" › ");
         out.push(
-            MenuItem::new(
-                format!("tab-to-folder-{}", k + 1),
-                format!("{indent}{name}"),
-            )
-            .icon("folder")
-            .into(),
+            MenuItem::new(format!("tab-to-folder-{}", k + 1), path)
+                .icon("folder")
+                .into(),
         );
     }
     out.push(MenuEntry::Separator);
@@ -624,6 +948,7 @@ fn on_overflow(
         Option<&FolderTab>,
     )>,
     doc: Option<Res<ActiveDocument>>,
+    windows: Query<&Window>,
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
@@ -638,6 +963,21 @@ fn on_overflow(
     let Some((_, sn, st)) = q_strip.iter().find(|(n, ..)| n.as_str() == "tab-strip") else {
         return;
     };
+    // Above the bar, its right edge on the bar's (and the view toolbar's over it).
+    let (Some((_, bn, bt)), Some(window)) = (
+        q_strip.iter().find(|(n, ..)| n.as_str() == "tab-bar"),
+        windows.iter().next(),
+    ) else {
+        return;
+    };
+    let bar = {
+        let s = bn.inverse_scale_factor();
+        Rect::from_center_size(bt.translation * s, bn.size() * s)
+    };
+    let (panel_right, panel_bottom) = (
+        window.width() - bar.max.x,
+        window.height() - bar.min.y + ABOVE_BAR,
+    );
     let s = sn.inverse_scale_factor();
     let (l, r) = (
         st.translation.x * s - sn.size().x * s / 2.0,
@@ -684,8 +1024,8 @@ fn on_overflow(
             OverflowPanel,
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(4.0),
-                bottom: Val::Px(t.tab_bar_height + 2.0),
+                right: Val::Px(panel_right),
+                bottom: Val::Px(panel_bottom),
                 width: Val::Px(240.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::vertical(Val::Px(4.0)),
@@ -716,7 +1056,7 @@ fn on_overflow(
                     let el = doc.doc.element(*e);
                     (
                         el.map(|e| e.name.clone()).unwrap_or_default(),
-                        el.map(crate::tab_manager::tab_icon)
+                        el.map(crate::tab_preview::tab_icon)
                             .unwrap_or("part-studio"),
                     )
                 }
@@ -807,7 +1147,7 @@ fn on_overflow(
                                 force: None,
                             },
                             Node {
-                                height: Val::Px(24.0),
+                                height: Val::Px(25.0),
                                 flex_shrink: 0.0,
                                 align_items: AlignItems::Center,
                                 column_gap: Val::Px(8.0),
@@ -864,7 +1204,7 @@ fn on_overflow(
 
 /// The ▾ list and its dismiss layer.
 #[derive(Component)]
-struct OverflowPanel;
+pub(crate) struct OverflowPanel;
 
 /// A tab (or folder) in the ▾ list.
 #[derive(Component, Clone, Copy)]
@@ -902,7 +1242,17 @@ fn on_overflow_row(a: On<Activate>, q: Query<&OverflowRow>, mut commands: Comman
                     d.set_active(e);
                 }
             }
-            TabItem::Folder(f) => open_folder(world, Some(f)),
+            // Its list, over ▾.
+            TabItem::Folder(f) => {
+                let mut q = world.query::<(Entity, &Name)>();
+                let anchor = q
+                    .iter(world)
+                    .find(|(_, n)| n.as_str() == "tab-overflow")
+                    .map(|(e, _)| e);
+                if let Some(anchor) = anchor {
+                    open_folder_list(world, anchor, f);
+                }
+            }
         }
     });
 }
@@ -934,7 +1284,7 @@ enum Drop {
 #[derive(Component)]
 struct DropMark;
 
-/// A veil over a dragged tab or Tab manager row (P3E.2 judge r1: the dragged item dims).
+/// A veil over a dragged tab (P3E.2 judge r1: the dragged item dims).
 #[derive(Component)]
 pub struct DragDim;
 
@@ -965,6 +1315,79 @@ pub fn dim_with(commands: &mut Commands, e: Entity, veil: Color) {
 
 #[derive(Component)]
 struct DragGhost;
+
+/// The view's bottom-right tools step aside while something the tab bar opened covers part of
+/// them (a folder's list or the tab's card at the window's right edge left half-cut icons
+/// showing beside it).
+#[allow(clippy::type_complexity)]
+fn hide_covered_viewport_tools(
+    mut q_tools: Query<
+        (&ComputedNode, &bevy::ui::UiGlobalTransform, &mut Visibility),
+        With<crate::document::ViewportTools>,
+    >,
+    q_over: Query<
+        (&ComputedNode, &bevy::ui::UiGlobalTransform),
+        Or<(
+            With<cadrs_ui::menu::MenuPopup>,
+            With<OverflowPanel>,
+            With<crate::tab_preview::PreviewCard>,
+            With<cadrs_ui::name_popup::NamePopupRoot>,
+        )>,
+    >,
+) {
+    let rect = |n: &ComputedNode, t: &bevy::ui::UiGlobalTransform| {
+        let s = n.inverse_scale_factor();
+        Rect::from_center_size(t.translation * s, n.size() * s)
+    };
+    for (n, t, mut v) in &mut q_tools {
+        let tools = rect(n, t);
+        let covered = q_over.iter().any(|(on, ot)| {
+            let r = rect(on, ot);
+            r.width() > 0.0 && !r.intersect(tools).is_empty()
+        });
+        v.set_if_neq(if covered {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
+}
+
+/// A tab whose hover fill is held off while another tab is dragged over it.
+#[derive(Component)]
+struct DragQuiet;
+
+/// While a tab is dragged, the tab under the pointer shows no hover fill: with the blue line
+/// beside it, a fill read as "drops onto it" (only a folder's blue box means that).
+#[allow(clippy::type_complexity)]
+fn quiet_hover_while_dragging(
+    drag: Res<TabDrag>,
+    q: Query<
+        (
+            Entity,
+            &bevy::picking::hover::Hovered,
+            Has<cadrs_ui::Selected>,
+            Has<DragQuiet>,
+        ),
+        Or<(With<TabButton>, With<FolderTab>)>,
+    >,
+    mut commands: Commands,
+) {
+    let dragging = drag.moved && !drag.items.is_empty();
+    for (e, hovered, selected, quiet) in &q {
+        let want = dragging && hovered.get() && !selected;
+        if want && !quiet {
+            commands.entity(e).try_insert((
+                DragQuiet,
+                cadrs_ui::ForceState(cadrs_ui::VisualState::Normal),
+            ));
+        } else if !want && quiet {
+            commands
+                .entity(e)
+                .try_remove::<(DragQuiet, cadrs_ui::ForceState)>();
+        }
+    }
+}
 
 fn item_of(e: Entity, q_tab: &Query<&TabButton>, q_folder: &Query<&FolderTab>) -> Option<TabItem> {
     q_tab
@@ -1027,12 +1450,11 @@ fn on_drag_end(
         let (true, Some(target)) = (drag.moved, drag.target) else {
             return;
         };
-        let view = world.resource::<TabFolderView>().folder;
-        drop_items(world, drag.items, target, view);
+        drop_items(world, drag.items, target);
     });
 }
 
-fn drop_items(world: &mut World, items: Vec<TabItem>, target: Drop, _view: Option<ElementId>) {
+fn drop_items(world: &mut World, items: Vec<TabItem>, target: Drop) {
     let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
         return;
     };
@@ -1095,13 +1517,11 @@ fn drop_items(world: &mut World, items: Vec<TabItem>, target: Drop, _view: Optio
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn place_tab_drop(
     mut drag: ResMut<TabDrag>,
-    view: Res<TabFolderView>,
     q_tabs: Query<(
         &ComputedNode,
         &bevy::ui::UiGlobalTransform,
         Option<&TabButton>,
         Option<&FolderTab>,
-        Option<&NavTarget>,
     )>,
     q_bar: Query<(&Name, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     mut q_mark: Query<
@@ -1148,17 +1568,12 @@ fn place_tab_drop(
     );
     let p = drag.pointer;
     let blue = Color::srgb_u8(0x2b, 0x64, 0xc0);
-    // (left, right, what) of the bar's tabs, folders and nav targets.
-    enum Hit {
-        Tab(TabItem),
-        Nav(Option<ElementId>),
-    }
-    let mut hits: Vec<(f32, f32, Hit)> = Vec::new();
-    for (n, t, tab, folder, nav) in &q_tabs {
-        let what = match (tab, folder, nav) {
-            (Some(b), ..) => Hit::Tab(TabItem::Tab(b.0)),
-            (_, Some(f), _) => Hit::Tab(TabItem::Folder(f.0)),
-            (.., Some(v)) => Hit::Nav(v.0),
+    // (left, right, what) of the bar's tabs and folders.
+    let mut hits: Vec<(f32, f32, TabItem)> = Vec::new();
+    for (n, t, tab, folder) in &q_tabs {
+        let what = match (tab, folder) {
+            (Some(b), _) => TabItem::Tab(b.0),
+            (_, Some(f)) => TabItem::Folder(f.0),
             _ => continue,
         };
         let (x, w) = (t.translation.x * s, n.size().x * s);
@@ -1173,43 +1588,31 @@ fn place_tab_drop(
     let mut mark: Option<(f32, f32, bool)> = None; // (left, width, box)
     drag.target = None;
     if near {
-        // Onto Home, a crumb or a folder's middle.
+        // Onto a folder's middle.
         for (l, r, what) in &hits {
             if p.x < *l || p.x > *r {
                 continue;
             }
-            match what {
-                Hit::Nav(v) => {
-                    drag.target = Some(Drop::Into(*v));
-                    mark = Some((*l, r - l, true));
-                }
-                Hit::Tab(TabItem::Folder(f))
-                    if !drag.items.contains(&TabItem::Folder(*f))
-                        && p.x > l + (r - l) * 0.25
-                        && p.x < r - (r - l) * 0.25 =>
-                {
-                    drag.target = Some(Drop::Into(Some(*f)));
-                    mark = Some((*l, r - l, true));
-                }
-                _ => {}
+            if let TabItem::Folder(f) = what
+                && !drag.items.contains(&TabItem::Folder(*f))
+                && p.x > l + (r - l) * 0.25
+                && p.x < r - (r - l) * 0.25
+            {
+                drag.target = Some(Drop::Into(Some(*f)));
+                mark = Some((*l, r - l, true));
             }
         }
-        if drag.target.is_none() {
-            let tabs: Vec<&(f32, f32, Hit)> =
-                hits.iter().filter(|h| matches!(h.2, Hit::Tab(_))).collect();
-            if let Some(first) = tabs.first() {
-                let k = tabs.iter().position(|(l, r, _)| p.x < (l + r) / 2.0);
-                let before = k.and_then(|k| match tabs[k].2 {
-                    Hit::Tab(i) => Some(i),
-                    Hit::Nav(_) => None,
-                });
-                let x = match k {
-                    Some(k) => tabs[k].0 - 1.0,
-                    None => tabs.last().map_or(first.1, |t| t.1 + 1.0),
-                };
-                drag.target = Some(Drop::Before(view.folder, before));
-                mark = Some((x - 1.5, 3.0, false));
-            }
+        if drag.target.is_none()
+            && let Some(first) = hits.first()
+        {
+            let k = hits.iter().position(|(l, r, _)| p.x < (l + r) / 2.0);
+            let before = k.map(|k| hits[k].2);
+            let x = match k {
+                Some(k) => hits[k].0 - 1.0,
+                None => hits.last().map_or(first.1, |t| t.1 + 1.0),
+            };
+            drag.target = Some(Drop::Before(None, before));
+            mark = Some((x - 1.5, 3.0, false));
         }
     }
     match mark {
@@ -1224,11 +1627,12 @@ fn place_tab_drop(
             } else {
                 (blue, blue)
             };
+            // The tabs' height: inside the bar's border and padding.
             let (lv, wv, tv, hv) = (
                 Val::Px(left),
                 Val::Px(width),
-                Val::Px(bar_top + 1.0),
-                Val::Px(bar_h - 2.0),
+                Val::Px(bar_top + 4.0),
+                Val::Px(bar_h - 8.0),
             );
             match q_mark.iter_mut().next() {
                 Some((_, mut n, mut b, mut bc)) => {
@@ -1265,8 +1669,8 @@ fn place_tab_drop(
             }
         }
     }
-    // A ghost of the dragged tab follows the pointer.
-    let (gx, gy) = (Val::Px(p.x + 14.0), Val::Px(p.y - 34.0));
+    // A ghost of the dragged tab follows the pointer, over the bar (clear of the drop mark).
+    let (gx, gy) = (Val::Px(p.x + 14.0), Val::Px(bar_top - ABOVE_BAR - 24.0));
     match q_ghost.iter_mut().next() {
         Some((_, mut n)) => {
             if n.left != gx || n.top != gy {
@@ -1281,7 +1685,7 @@ fn place_tab_drop(
                     let el = doc.doc.element(*e);
                     (
                         el.map(|e| e.name.clone()).unwrap_or_default(),
-                        el.map(crate::tab_manager::tab_icon)
+                        el.map(crate::tab_preview::tab_icon)
                             .unwrap_or("part-studio"),
                     )
                 }
@@ -1311,7 +1715,7 @@ fn place_tab_drop(
                     border_radius: BorderRadius::all(Val::Px(t.radius)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                BackgroundColor(t.popover.with_alpha(0.7)),
                 BorderColor::all(t.border),
                 GlobalZIndex(cadrs_ui::z::DIALOG - 19),
                 Pickable::IGNORE,
@@ -1336,7 +1740,7 @@ fn place_tab_drop(
     }
 }
 
-/// The tab tree's nodes at the bar's level (for the Tab manager and tests).
+/// The tab tree's nodes at a level (the top level: `None`).
 pub fn level_items(doc: &cadrs_core::Document, folder: Option<ElementId>) -> Vec<TabNode> {
     let layout = tab_tree::layout(doc);
     tab_tree::level_of(&layout, folder)
