@@ -3474,14 +3474,32 @@ mod kernel_ops {
             // Overlapping, else touching: their union is one solid. A body that adds is asked
             // whether it touches first (its union is the Add's); where that union fails or
             // falls apart, whether they overlap all the same (a boolean's trouble with them).
+            // For the dialog alone (a New), one boolean run each: no retries of a union a
+            // boolean can't make (a block touching a terrain along an edge, 0.3 s).
+            let joins = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
+                if only_ui {
+                    k.joins_once(b, tool)
+                } else {
+                    k.joins(b, tool)
+                }
+                .unwrap_or(false)
+            };
+            let overlaps = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
+                if only_ui {
+                    k.overlaps_once(b, tool)
+                } else {
+                    k.overlaps(b, tool)
+                }
+                .unwrap_or(false)
+            };
             let check = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
-                let joined = adds && k.joins(b, tool).unwrap_or(false);
+                let joined = adds && joins(k, b);
                 if joined {
-                    (true, k.overlaps(b, tool).unwrap_or(false))
-                } else if k.overlaps(b, tool).unwrap_or(false) {
+                    (true, overlaps(k, b))
+                } else if overlaps(k, b) {
                     (true, true)
                 } else {
-                    (!adds && k.joins(b, tool).unwrap_or(false), false)
+                    (!adds && joins(k, b), false)
                 }
             };
             // The parts near it side by side, each in a fork of the session (a boolean each),

@@ -1697,6 +1697,18 @@ pub(super) fn pcurve_gap(e: &Edge, pc: &Curve, surf: &Surface) -> f64 {
         let d = (surf.eval(uv.x, uv.y) - e.point(t)).norm();
         if d.is_nan() { f64::INFINITY } else { d }
     };
+    // A line on a plane along a straight p-curve: the gap is a length affine in t, largest at
+    // an end.
+    if matches!(
+        (&e.curve, pc, surf),
+        (
+            Curve::Line { .. },
+            Curve::Line { .. },
+            Surface::Plane { .. }
+        )
+    ) {
+        return gap(e.t[0]).max(gap(e.t[1]));
+    }
     let at = |i: usize| e.t[0] + (e.t[1] - e.t[0]) * i as f64 / N as f64;
     let (mut worst, mut wi) = (0.0, 0);
     for i in 0..=N {

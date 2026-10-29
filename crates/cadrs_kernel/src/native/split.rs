@@ -376,6 +376,14 @@ pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc
         if back { 1.0 - m } else { m }
     };
     let dir_at = |a: &Arc, s: f64, node: usize, frac: f64| -> V2 {
+        // A straight p-curve leaves along its chord at any distance: no bisection (a few
+        // hundred points an arc, the most of a boolean's split of planar faces).
+        if matches!(a.pc, Curve::Line { .. }) {
+            let (p, q) = (o(a.uv_at(0.0)), o(a.uv_at(1.0)));
+            let d = if s < 0.5 { q - p } else { p - q };
+            let l = d.norm();
+            return if l > 0.0 { d / l } else { d };
+        }
         let p0 = o(a.uv_at(s));
         let d = scale[node] * frac;
         let s1 = if d.is_finite() && d > ntol {

@@ -119,6 +119,10 @@ pub struct BoolOptions {
     /// the inputs' edges and vertices carry (a gap closed when they were made), at most
     /// [`FUZZY_MAX`] of their size.
     pub fuzzy: Option<f64>,
+    /// A run that leaves the result broken is tried again (fuzzy, a solid at a time, at
+    /// growing tolerances: the ladder); off, the first run's answer stands (a question that
+    /// needs no more, as whether a New's body touches a part).
+    pub retry: bool,
 }
 
 /// The largest default fuzzy value, as a part of the inputs' size.
@@ -137,6 +141,7 @@ impl Default for BoolOptions {
             merge_coplanar: true,
             work_budget: DEFAULT_WORK_BUDGET,
             fuzzy: None,
+            retry: true,
         }
     }
 }
@@ -985,8 +990,9 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
             .iter()
             .any(|w| m.contains(w))
     };
-    if !matches!(&first, Err(KernelError::OpenResult(_)))
-        && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message()))
+    if !opts.retry
+        || (!matches!(&first, Err(KernelError::OpenResult(_)))
+            && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message())))
     {
         return first;
     }
@@ -1338,6 +1344,35 @@ fn per_tool_solid(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<R
 /// run's tolerance): the two bodies with those faces' edges and vertices given the gap (with
 /// margin) as tolerance; None when there are none.
 /// The default fuzzy value of a boolean of `a` and `b` ([`BoolOptions::fuzzy`]).
+/// Whether the union of `a` and `b` is sure to be more than one solid: a solid of either lies
+/// apart from all the others (by their boxes, grown by the bodies' tolerances). Not for sheets
+/// (`false` when either has faces outside its solids).
+pub(crate) fn union_falls_apart(a: &Body, b: &Body) -> bool {
+    let mut boxes: Vec<Bbox> = Vec::new();
+    for x in [a, b] {
+        let in_solids: usize = (0..x.solids.len()).map(|s| x.solid_faces(s).len()).sum();
+        if x.solids.is_empty() || in_solids != x.faces.len() {
+            return false;
+        }
+        let tol = x
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(x.verts.iter().map(|v| v.tol))
+            .fold(tol::POINT, f64::max);
+        for s in 0..x.solids.len() {
+            let mut bb = Bbox::empty();
+            for f in x.solid_faces(s) {
+                bb.union(&x.face_bbox(f));
+            }
+            boxes.push(bb.grow(2.0 * tol));
+        }
+    }
+    boxes.len() > 1
+        && (0..boxes.len())
+            .any(|i| (0..boxes.len()).all(|j| i == j || !boxes[i].overlaps(&boxes[j])))
+}
+
 fn carried_fuzzy(a: &Body, b: &Body) -> f64 {
     let carried = [a, b]
         .iter()
@@ -4397,6 +4432,32 @@ pub fn boolean_with(
         merge_coplanar,
         ..BoolOptions::default()
     };
+    boolean_opts(k, op, target, tools, opts)
+}
+
+/// [`boolean`] with one run only ([`BoolOptions::retry`] off): for a question about the result
+/// (whether it is one solid, has volume), not a result to keep.
+pub fn boolean_once(
+    k: &mut NativeKernel,
+    op: BoolOp,
+    target: BodyId,
+    tools: &[BodyId],
+) -> Result<OpResult> {
+    let opts = BoolOptions {
+        tol: k.tolerances(),
+        retry: false,
+        ..BoolOptions::default()
+    };
+    boolean_opts(k, op, target, tools, opts)
+}
+
+fn boolean_opts(
+    k: &mut NativeKernel,
+    op: BoolOp,
+    target: BodyId,
+    tools: &[BodyId],
+    opts: BoolOptions,
+) -> Result<OpResult> {
     // Sheets, wires and points: their own rules (`boolean_kinds`).
     if let Some(r) = super::boolean_kinds::boolean(k, op, target, tools, opts) {
         return r;
@@ -4405,8 +4466,35 @@ pub fn boolean_with(
     // For each face of `cur`: where it came from (body, face).
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
+    // A union's inputs so far, each by a box grown by its tolerance (holding `cur` between
+    // them: a union lies within its inputs). A tool apart from them all joins `cur` as it is,
+    // no boolean: an Add of a rail onto 45 balusters unioned the balusters one by one, each a
+    // boolean over all those before it, before the rail.
+    let reach = |b: &Body| {
+        let tol = b
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(b.verts.iter().map(|v| v.tol))
+            .fold(opts.tol.point, f64::max);
+        b.bbox().grow(2.0 * tol)
+    };
+    let mut boxes: Vec<Bbox> = Vec::new();
+    if op == BoolOp::Union {
+        boxes.push(reach(&cur));
+    }
     for &t in tools {
         let tb = (**k.get(t)?).clone();
+        if op == BoolOp::Union {
+            let b = reach(&tb);
+            let apart = boxes.iter().all(|x| !x.overlaps(&b));
+            boxes.push(b);
+            if apart && !tb.faces.is_empty() {
+                cur.append(&tb);
+                origin.extend((0..tb.faces.len()).map(|f| vec![(t, f)]));
+                continue;
+            }
+        }
         let r = boolean_bodies_with(&cur, &tb, op, opts)?;
         origin = r
             .from
@@ -4460,6 +4548,60 @@ pub fn boolean_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A union of bodies apart puts them side by side without a boolean, as the boolean of
+    /// each pair does (the same faces, solids and volume), and a body touching them all then
+    /// joins them; whether a union is several solids is told from boxes alone where it can be.
+    #[test]
+    fn union_of_bodies_apart() {
+        let mut k = NativeKernel::new();
+        let block = |k: &mut NativeKernel, x: f64, z: f64, dx: f64, dz: f64| {
+            let super::super::draw::Shape::Body(id) = k.box_at(x, 0.0, z, dx, 1.0, dz).unwrap()
+            else {
+                unreachable!()
+            };
+            id
+        };
+        let posts: Vec<BodyId> = (0..5)
+            .map(|i| block(&mut k, 3.0 * i as f64, 0.0, 1.0, 3.0))
+            .collect();
+        let mut pairwise = (**k.get(posts[0]).unwrap()).clone();
+        for p in &posts[1..] {
+            pairwise = boolean_bodies(&pairwise, k.get(*p).unwrap(), BoolOp::Union)
+                .unwrap()
+                .body;
+        }
+        let r = boolean(&mut k, BoolOp::Union, posts[0], &posts[1..]).unwrap();
+        let side = (**k.get(r.bodies[0]).unwrap()).clone();
+        assert_eq!(side.faces.len(), pairwise.faces.len());
+        assert_eq!((side.solids.len(), pairwise.solids.len()), (5, 5));
+        let v = super::super::mass::body_volume;
+        assert!((v(&side) - v(&pairwise)).abs() < 1e-9);
+        assert_eq!(r.history.modified.len(), side.faces.len());
+        // A rail along their tops joins them.
+        let rail = block(&mut k, 0.0, 3.0, 13.0, 0.5);
+        let mut tools = posts[1..].to_vec();
+        tools.push(rail);
+        let r = boolean(&mut k, BoolOp::Union, posts[0], &tools).unwrap();
+        assert_eq!(k.solid_count(r.bodies[0]).unwrap(), 1);
+        assert!((v(k.get(r.bodies[0]).unwrap()) - (15.0 + 6.5)).abs() < 1e-9);
+        // Two posts as one body: a rail over one of them can't join both, by their boxes; one
+        // over both can (and does).
+        let pair = boolean(&mut k, BoolOp::Union, posts[0], &[posts[1]])
+            .unwrap()
+            .bodies[0];
+        let short = block(&mut k, 0.0, 3.0, 1.0, 0.5);
+        let long = block(&mut k, 0.0, 3.0, 4.0, 0.5);
+        let (pb, sb, lb) = (
+            k.get(pair).unwrap(),
+            k.get(short).unwrap(),
+            k.get(long).unwrap(),
+        );
+        assert!(union_falls_apart(pb, sb));
+        assert!(!union_falls_apart(pb, lb));
+        assert!(!crate::Kernel::joins(&mut k, pair, short).unwrap());
+        assert!(crate::Kernel::joins(&mut k, pair, long).unwrap());
+    }
 
     /// A boolean past its work budget fails (deterministically, at the same stage every
     /// time), and the default budget holds a plain one easily.

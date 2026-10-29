@@ -77,6 +77,18 @@ pub fn tessellation() -> Tessellation {
     }
 }
 
+/// [`tessellation`] for a body `size` across (its box's diagonal): within a hundred-thousandth
+/// of that when it's coarser than 0.05 mm (a body over 5 m). A site's 56 m terrain loft took
+/// 1.3 million triangles (1.1 s) at 0.05 mm; at 0.7 mm the mesh strays a fiftieth of a pixel
+/// with the whole body on screen.
+pub fn tessellation_for(size: f64) -> Tessellation {
+    let t = tessellation();
+    Tessellation {
+        deflection: t.deflection.max(1e-5 * size),
+        ..t
+    }
+}
+
 // Small vector helpers (world coordinates are `[f64; 3]`).
 fn add(a: Vec3, b: Vec3) -> Vec3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -682,8 +694,9 @@ pub fn solid_of(
     geoms: &Geoms,
     op: Option<OpId>,
 ) -> Result<Solid, String> {
+    let across = k.bounding_box(body).map_or(0.0, |b| b.diagonal());
     let mesh = k
-        .tessellate(body, tessellation())
+        .tessellate(body, tessellation_for(across))
         .map_err(|e| e.to_string())?;
     let edge_info = k.edges(body).map_err(|e| e.to_string())?;
     let face_info = k.faces(body).map_err(|e| e.to_string())?;

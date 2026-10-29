@@ -122,6 +122,33 @@ impl NativeKernel {
         BodyId(id)
     }
 
+    /// [`Kernel::joins`] from one boolean run (no retries when it leaves the union broken, and
+    /// the union not kept for an Add): a question only, as a New's dialog asks it.
+    pub fn joins_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
+        if super::boolean::union_falls_apart(self.get(a)?, self.get(b)?) {
+            return Ok(false);
+        }
+        let r = super::boolean::boolean_once(self, BoolOp::Union, a, &[b])?;
+        let joined = self.solid_count(r.bodies[0]).unwrap_or(2) == 1;
+        for x in r.bodies {
+            self.release(x);
+        }
+        Ok(joined)
+    }
+
+    /// [`Kernel::overlaps`] from one boolean run, like [`Self::joins_once`].
+    pub fn overlaps_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
+        let r = super::boolean::boolean_once(self, BoolOp::Intersect, a, &[b])?;
+        let v = self
+            .get(r.bodies[0])
+            .map(|x| super::mass::body_volume(x))
+            .unwrap_or(0.0);
+        for x in r.bodies {
+            self.release(x);
+        }
+        Ok(v > tol::ROUNDOFF)
+    }
+
     /// A session to run an operation in on another thread, its bodies, colours and
     /// tolerances this one's; [`Self::absorb`] takes back what it made. Its new bodies are
     /// numbered from a range of ids of its own ([`FORK_RANGES`]).
@@ -1336,6 +1363,11 @@ impl Kernel for NativeKernel {
         // next).
         if let Some((_, _, r)) = self.joined.iter().find(|(x, y, _)| *x == a && *y == b) {
             return Ok(self.solid_count(r.bodies[0]).unwrap_or(2) == 1);
+        }
+        // Sure to be several solids by their boxes (a window head of six blocks and the frame
+        // under one of them): no boolean.
+        if super::boolean::union_falls_apart(self.get(a)?, self.get(b)?) {
+            return Ok(false);
         }
         let r = self.boolean(BoolOp::Union, a, &[b])?;
         let joined = self.solid_count(r.bodies[0]).unwrap_or(2) == 1;
