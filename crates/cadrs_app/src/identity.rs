@@ -105,16 +105,20 @@ fn button_content(b: &mut ChildSpawnerCommands, t: &Theme, name: &str) {
         Avatar::new("identity-avatar", name).size(24.0).build(t),
         Pickable::IGNORE,
     ));
+    // On a phone, the avatar alone.
+    let phone = cadrs_ui::HideBelow(crate::top_bar::Fold::Phone.below());
     b.spawn((
         Name::new("identity-name"),
         t.text(name, t.font_base, FontWeight::MEDIUM, t.foreground),
         cadrs_ui::style::InheritFg,
         Pickable::IGNORE,
+        phone,
     ));
     b.spawn((
         icon("caret-down", 12.0, t.muted_foreground),
         cadrs_ui::style::InheritFg,
         Pickable::IGNORE,
+        phone,
     ));
 }
 
@@ -147,17 +151,26 @@ fn short_id(id: &str) -> String {
 
 fn on_identity(
     a: On<Activate>,
-    q: Query<(), With<IdentityButton>>,
-    list: Res<IdentityList>,
-    iroh: Option<Res<Iroh>>,
-    theme: Res<Theme>,
+    q: Query<&bevy::ui::ComputedUiRenderTargetInfo, With<IdentityButton>>,
     mut commands: Commands,
 ) {
-    if !q.contains(a.entity) {
+    let Ok(target) = q.get(a.entity) else {
         return;
-    }
-    let ids = &list.0;
-    let cadrs_id = cadrs_net::cadrs_id(iroh.as_deref());
+    };
+    // On a narrow window it also holds what the top bar folded (`crate::top_bar`).
+    let width = target.logical_size().x;
+    let anchor = a.entity;
+    commands.queue(move |world: &mut World| {
+        let theme = world.resource::<Theme>().clone();
+        let menu = identity_menu(world, width, &theme);
+        open_menu(&mut world.commands(), anchor, menu.build(&theme));
+        world.flush();
+    });
+}
+
+fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
+    let ids = &world.resource::<IdentityList>().0;
+    let cadrs_id = cadrs_net::cadrs_id(world.get_resource::<Iroh>());
     let subtitle = cadrs_id.as_deref().map_or_else(
         || "Offline: on this computer only".to_string(),
         |id| format!("cadrs ID {}", short_id(id)),
@@ -192,9 +205,12 @@ fn on_identity(
                 .disabled(true)
                 .tooltip("cadrs is offline: no cadrs ID to share")
         })
-        .separator()
-        .item(MenuItem::new("identity-preferences", "Preferences…").icon("settings"));
-    open_menu(&mut commands, a.entity, menu.build(&theme));
+        .separator();
+    for entry in crate::top_bar::menu_entries(world, width, theme) {
+        menu = menu.entry(entry);
+    }
+    menu.separator()
+        .item(MenuItem::new("identity-preferences", "Preferences…").icon("settings"))
 }
 
 fn on_identity_action(
@@ -202,7 +218,7 @@ fn on_identity_action(
     q: Query<(), With<IdentityButton>>,
     mut commands: Commands,
 ) {
-    if !q.contains(ev.entity) {
+    if !q.contains(ev.entity) || crate::top_bar::fold_action(&mut commands, ev.entity, &ev.item) {
         return;
     }
     let item = ev.item.clone();

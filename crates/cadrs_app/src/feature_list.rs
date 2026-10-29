@@ -665,9 +665,16 @@ fn on_bar_drag_end(
     });
 }
 
-/// While the bar is dragged: where it would go (the gap between rows nearest the pointer), and
-/// a grey ghost bar there.
-#[allow(clippy::type_complexity)]
+/// How near the feature list's top or bottom edge (px) a dragged rollback bar scrolls the list.
+const BAR_SCROLL_EDGE: f32 = 32.0;
+/// How fast it scrolls (px a second) with the pointer an edge's depth past the edge or more.
+const BAR_SCROLL_SPEED: f32 = 900.0;
+
+/// While the bar is dragged: where it would go (the gap between the shown rows nearest the
+/// pointer), and a grey ghost bar there. With the pointer near the list's top or bottom, or
+/// past it, the list scrolls that way, faster the further in, so a drop place out of sight can
+/// be reached (the ghost stays in the list, never over the Parts list below it).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn place_bar_ghost(
     mut drag: ResMut<BarDrag>,
     doc: Option<Res<ActiveDocument>>,
@@ -678,6 +685,13 @@ fn place_bar_ghost(
         Option<&FolderRow>,
     )>,
     mut q_ghost: Query<(Entity, &mut Node), With<BarGhost>>,
+    mut q_scroll: Query<(
+        &Name,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &mut ScrollPosition,
+    )>,
+    time: Res<Time>,
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
@@ -690,6 +704,35 @@ fn place_bar_ghost(
     let Some(el) = doc.as_ref().and_then(|d| d.active_element()) else {
         return;
     };
+    // The list's shown part (logical px), scrolled toward the pointer near its edges.
+    let Some((_, list, list_at, mut pos)) = q_scroll
+        .iter_mut()
+        .find(|(n, ..)| n.as_str() == "feature-scroll")
+    else {
+        return;
+    };
+    let s = list.inverse_scale_factor();
+    let half = list.size().y * s / 2.0;
+    let (view_top, view_bottom) = (
+        list_at.translation.y * s - half,
+        list_at.translation.y * s + half,
+    );
+    let y = drag.pointer.y;
+    let depth = if y < view_top + BAR_SCROLL_EDGE {
+        y - (view_top + BAR_SCROLL_EDGE)
+    } else if y > view_bottom - BAR_SCROLL_EDGE {
+        y - (view_bottom - BAR_SCROLL_EDGE)
+    } else {
+        0.0
+    };
+    let max = ((list.content_size().y - list.size().y) * s).max(0.0);
+    if depth != 0.0 && max > 0.0 {
+        let speed = (depth / BAR_SCROLL_EDGE).clamp(-2.0, 2.0) / 2.0 * BAR_SCROLL_SPEED;
+        let to = (pos.y + speed * time.delta_secs()).clamp(0.0, max);
+        if to != pos.y {
+            pos.y = to;
+        }
+    }
     let order: Vec<FeatureId> = el.features().iter().map(|f| f.id).collect();
     // The rows on screen, top to bottom: (top, bottom, left, index before, index after).
     let mut rows: Vec<(f32, f32, f32, usize, usize)> = Vec::new();
@@ -720,6 +763,10 @@ fn place_bar_ghost(
             continue;
         }
         let c = t.translation * node.inverse_scale_factor();
+        // Only the rows shown: one scrolled out of sight isn't a place to drop on.
+        if c.y + size.y / 2.0 <= view_top || c.y - size.y / 2.0 >= view_bottom {
+            continue;
+        }
         rows.push((
             c.y - size.y / 2.0,
             c.y + size.y / 2.0,
@@ -732,7 +779,6 @@ fn place_bar_ghost(
     if rows.is_empty() {
         return;
     }
-    let y = drag.pointer.y;
     let k = rows
         .iter()
         .position(|(top, bottom, ..)| y < (top + bottom) / 2.0)
@@ -745,6 +791,7 @@ fn place_bar_ghost(
         }
     };
     drag.target = Some(to);
+    let line_y = line_y.min(view_bottom - 2.0).max(view_top + 3.0);
     let top = Val::Px(line_y - 3.0);
     let lx = Val::Px(left + 3.0);
     match q_ghost.iter_mut().next() {

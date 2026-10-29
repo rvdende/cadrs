@@ -1,8 +1,5 @@
 //! Working at scale (P3F.3; `essential-tips.md` T1.2, T4.2, X7).
 //!
-//! - **The size notice**: past Onshape's budget for a Part Studio (250 features or 10 parts), a
-//!   gentle line under the feature list's header (`features-scale-notice`) says how big it is
-//!   and suggests splitting it; it doesn't block anything.
 //! - **Tab overflow**: the document's tab strip scrolls sideways (the mouse wheel over it), the
 //!   selected tab is kept in view, and the **Tab manager** button (left of the tabs) opens the
 //!   Tab manager panel (P3G.3, `crate::move_document`), whose list of every tab scrolls
@@ -16,25 +13,15 @@
 
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use bevy::text::FontWeight;
-use cadrs_core::ElementKind;
-use cadrs_ui::{Theme, Tooltip};
+use cadrs_ui::Theme;
 
-use crate::{ActiveDocument, AppState};
-
-/// Onshape's budget for one Part Studio.
-pub const FEATURE_BUDGET: usize = 250;
-pub const PART_BUDGET: usize = 10;
+use crate::ActiveDocument;
 
 pub struct ScalePlugin;
 
 impl Plugin for ScalePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RebuildLog>()
-            .add_systems(
-                Update,
-                sync_scale_notice.run_if(in_state(AppState::Document)),
-            )
             .add_systems(
                 PostUpdate,
                 (pad_strip_end, keep_active_tab_in_view, sync_tab_overflow)
@@ -43,126 +30,6 @@ impl Plugin for ScalePlugin {
             )
             .add_observer(on_strip_wheel)
             .add_observer(on_chevron);
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The size notice
-
-/// The notice row under the feature list's header.
-#[derive(Component)]
-pub struct ScaleNotice;
-
-/// Its text.
-#[derive(Component)]
-struct ScaleNoticeText;
-
-/// Spawns the (hidden) notice row; `document.rs` puts it under the header.
-pub fn notice_row(p: &mut ChildSpawnerCommands, t: &Theme) {
-    p.spawn((
-        Name::new("features-scale-notice"),
-        ScaleNotice,
-        Node {
-            display: Display::None,
-            flex_shrink: 0.0,
-            margin: UiRect::new(Val::Px(6.0), Val::Px(8.0), Val::ZERO, Val::Px(4.0)),
-            padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(3.0), Val::Px(3.0)),
-            column_gap: Val::Px(5.0),
-            align_items: AlignItems::Center,
-            overflow: Overflow::clip(),
-            border_radius: BorderRadius::all(Val::Px(3.0)),
-            ..default()
-        },
-        BackgroundColor(t.info_background),
-        Tooltip::new(
-            "Onshape's guidance: a Part Studio stays responsive up to about 250 features and 10 parts. Past that, consider splitting the parts into more Part Studios and bringing them together in an Assembly.",
-        ),
-        Pickable::default(),
-    ))
-    .with_children(|r| {
-        r.spawn(cadrs_ui::icon("info-filled", 13.0, t.link));
-        r.spawn((
-            ScaleNoticeText,
-            t.text(String::new(), 10.5, FontWeight::NORMAL, t.foreground),
-        ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap));
-    });
-}
-
-/// What the notice says for a studio of `features` features and `parts` parts, if anything.
-/// The count is the studio's own features; the list's "Features (N)" also counts the default
-/// geometry (the origin and three planes), so the notice says so (P3F.3–P3F.4 judge).
-pub fn notice(features: usize, parts: usize) -> Option<String> {
-    (features > FEATURE_BUDGET || parts > PART_BUDGET).then(|| {
-        let plural =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-        format!(
-            "Large studio: {}\n(excluding default geometry),\n{}. Consider splitting it.",
-            plural(features, "feature", "features"),
-            plural(parts, "part", "parts")
-        )
-    })
-}
-
-/// The studio's own parts, as its Parts list shows them (P3H.6 judge): an assembly context's
-/// parts are not the studio's, and a closed composite's members are not in the build's parts
-/// (the composite is one part).
-pub fn listed_parts(parts: &[cadrs_core::Part]) -> usize {
-    parts
-        .iter()
-        .filter(|p| !cadrs_core::assembly::context::is_context(p.feature))
-        .count()
-}
-
-fn sync_scale_notice(
-    doc: Option<Res<ActiveDocument>>,
-    cache: Res<crate::parts::PartCache>,
-    mut q_row: Query<&mut Node, With<ScaleNotice>>,
-    mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
-    q_new: Query<(), Added<ScaleNotice>>,
-    mut had_doc: Local<bool>,
-) {
-    // (Counting the parts and wording the notice each frame cost a large studio.)
-    let doc_changed = doc.as_ref().is_some_and(|d| d.is_changed())
-        || std::mem::replace(&mut *had_doc, doc.is_some()) != doc.is_some();
-    if !doc_changed && !cache.is_changed() && q_new.is_empty() {
-        return;
-    }
-    let want = doc
-        .as_ref()
-        .and_then(|d| d.active_element())
-        .and_then(|e| match e.kind {
-            // A derived board's components (mesh parts) cost little
-            // and aren't modelled: they don't count.
-            ElementKind::PartStudio { .. } => {
-                let components = cache
-                    .derived
-                    .values()
-                    .map(|o| o.footprints.len())
-                    .sum::<usize>();
-                notice(
-                    e.features().len(),
-                    listed_parts(&cache.parts).saturating_sub(components),
-                )
-            }
-            _ => None,
-        });
-    for mut n in &mut q_row {
-        let d = if want.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if n.display != d {
-            n.display = d;
-        }
-    }
-    if let Some(w) = want {
-        for mut t in &mut q_text {
-            if t.0 != w {
-                t.0 = w.clone();
-            }
-        }
     }
 }
 

@@ -501,9 +501,11 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
                         .map(|n| n.size().x * n.inverse_scale_factor())
                         .unwrap_or(200.0);
                     // The field replaces the label in place: same text position, a 1 px blue
-                    // border around the text plus 4 px each side, and no layout shift.
+                    // border around the text plus 4 px each side, and no layout shift. It
+                    // widens as a longer name is typed.
                     let mut opts = InlineEditOptions::new("document-name-input");
                     opts.width = Val::Px((w + 2.0).max(60.0));
+                    opts.grow_to = Some(480.0);
                     opts.height = 28.0;
                     opts.font_size = Some(20.0);
                     opts.weight = FontWeight::BOLD;
@@ -564,42 +566,52 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             ..default()
         })
         .with_children(|r| {
+            // On a narrow window these fold into the account menu (`crate::top_bar`).
+            use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
             // Online or not (`crate::network`).
-            crate::network::spawn_button(r, t);
+            spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             // Light, dark or the system's scheme.
-            r.spawn((
-                cadrs_ui::scheme_toggle(t),
-                cadrs_ui::glass::GlassFrame::bar(),
-            ))
-            .entry::<Node>()
-            .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            spawn_folding(r, Fold::Scheme, |r| {
+                r.spawn((
+                    cadrs_ui::scheme_toggle(t),
+                    cadrs_ui::glass::GlassFrame::bar(),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            });
             // Share (`crate::collab`).
-            r.spawn((
-                Button::new("document-share")
-                    .label("Share")
-                    .primary()
-                    .small()
-                    .tooltip("Share this document")
-                    .build(t),
-                observe(|_: On<Activate>, mut commands: Commands| {
-                    commands.queue(crate::collab::open_share);
-                }),
-            ))
-            .entry::<Node>()
-            .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
-            crate::notifications::spawn_bell(r, t);
+            spawn_folding(r, Fold::Phone, |r| {
+                r.spawn((
+                    Button::new("document-share")
+                        .label("Share")
+                        .primary()
+                        .small()
+                        .tooltip("Share this document")
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(crate::collab::open_share);
+                    }),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            });
+            spawn_folding(r, Fold::Notifications, |r| {
+                crate::notifications::spawn_bell(r, t)
+            });
             // The collaborators' avatars (`crate::collab::presence`), beside this user's own.
-            r.spawn((
-                Name::new("collab-people"),
-                crate::collab::presence::PeopleBar,
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(2.0),
-                    margin: UiRect::left(Val::Px(4.0)),
-                    ..default()
-                },
-            ));
+            spawn_folding(r, Fold::Phone, |r| {
+                r.spawn((
+                    Name::new("collab-people"),
+                    crate::collab::presence::PeopleBar,
+                    Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(2.0),
+                        margin: UiRect::left(Val::Px(4.0)),
+                        ..default()
+                    },
+                ));
+            });
             crate::identity::spawn_identity_button(r, t, profile);
         });
     });
@@ -2290,8 +2302,6 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                     4.0,
                 );
             });
-            // P3F.3 (T4.2): the gentle notice past 250 features or 10 parts.
-            crate::scale_ui::notice_row(pane, t);
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
             pane.spawn((
@@ -3309,6 +3319,10 @@ fn name_button_node(t: &Theme) -> Node {
         border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(t.radius)),
         align_items: AlignItems::Center,
+        // A long name gives way on a narrow window (a phone), cut off, so the account button
+        // stays on screen.
+        min_width: Val::ZERO,
+        overflow: Overflow::clip_x(),
         ..default()
     }
 }
@@ -3342,6 +3356,7 @@ fn on_pick_row_activate(
     button: Res<cadrs_ui::menu::LastPointerButton>,
     keys: Res<ButtonInput<KeyCode>>,
     doc: Option<Res<ActiveDocument>>,
+    shown_parts: Res<crate::parts_list::ShownParts>,
     mut row_click: ResMut<crate::viewport::FeatureRowClick>,
     mut selection: ResMut<crate::viewport::Selection>,
     mut picks: MessageWriter<PickRequest>,
@@ -3421,6 +3436,34 @@ fn on_pick_row_activate(
                         _ => crate::viewport::RowSelect::Only,
                     }
                 }
+                _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
+                _ => crate::viewport::RowSelect::Only,
+            };
+            row_click.pending = Some((row.0, how));
+        }
+        // A part row selects as a feature row does, Shift over the parts the list shows.
+        if let (Pick::Part(id), false) = (row.0, secondary) {
+            let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+            let ctrl = keys.any_pressed([
+                KeyCode::ControlLeft,
+                KeyCode::ControlRight,
+                KeyCode::SuperLeft,
+                KeyCode::SuperRight,
+            ]);
+            let order = &shown_parts.0;
+            let how = match (shift, row_click.anchor) {
+                (true, Some(Pick::Part(from))) => match (
+                    order.iter().position(|p| *p == from),
+                    order.iter().position(|p| *p == id),
+                ) {
+                    (Some(a), Some(b)) => crate::viewport::RowSelect::Range(
+                        order[a.min(b)..=a.max(b)]
+                            .iter()
+                            .map(|p| Pick::Part(*p))
+                            .collect(),
+                    ),
+                    _ => crate::viewport::RowSelect::Only,
+                },
                 _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
                 _ => crate::viewport::RowSelect::Only,
             };

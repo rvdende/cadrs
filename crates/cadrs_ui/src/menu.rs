@@ -457,6 +457,12 @@ impl Menu {
         self
     }
 
+    /// Adds an item, separator or header made elsewhere.
+    pub fn entry(mut self, entry: MenuEntry) -> Self {
+        self.entries.push(entry);
+        self
+    }
+
     pub fn entries(mut self, entries: Vec<MenuEntry>) -> Self {
         self.entries = entries;
         self

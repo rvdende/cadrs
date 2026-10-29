@@ -8,6 +8,8 @@ pub use applied::{
 pub use drawing::{EditDrawing, InsertElement};
 mod list;
 pub use list::{DeleteFolder, SetRollback, SetSuppressByVariable, SetSuppressed};
+mod part_folders;
+pub use part_folders::{CreatePartFolder, MovePartsToFolder, SetPartFolder, UnpackPartFolder};
 
 use cadrs_sketch::{CurveId, FaceName, PlaneRef, SketchOp, Vec2};
 

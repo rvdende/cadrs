@@ -68,9 +68,16 @@ impl Document {
 
     /// A new document as Onshape creates it: "Part Studio 1" and "Assembly 1".
     pub fn new(name: impl Into<String>) -> Self {
+        let mut doc = Self::with_part_studio(name);
+        doc.elements.push(Element::assembly("Assembly 1"));
+        doc
+    }
+
+    /// A new document with "Part Studio 1" alone, as the documents page creates one (an
+    /// Assembly is a tab's + away).
+    pub fn with_part_studio(name: impl Into<String>) -> Self {
         let mut doc = Self::empty(name);
         doc.elements.push(Element::part_studio("Part Studio 1"));
-        doc.elements.push(Element::assembly("Assembly 1"));
         doc
     }
 
@@ -170,6 +177,7 @@ impl Element {
                 folders: Vec::new(),
                 suppressed: Vec::new(),
                 rollback: None,
+                part_folders: Vec::new(),
             },
             assembly: Default::default(),
             contexts: Vec::new(),
@@ -296,6 +304,26 @@ impl Element {
             ElementKind::PartStudio { folders, .. } => Some(folders),
             _ => None,
         }
+    }
+
+    /// The Parts list's folders.
+    pub fn part_folders(&self) -> &[PartFolder] {
+        match &self.kind {
+            ElementKind::PartStudio { part_folders, .. } => part_folders,
+            _ => &[],
+        }
+    }
+
+    pub fn part_folders_mut(&mut self) -> Option<&mut Vec<PartFolder>> {
+        match &mut self.kind {
+            ElementKind::PartStudio { part_folders, .. } => Some(part_folders),
+            _ => None,
+        }
+    }
+
+    /// The Parts list folder `part` is in.
+    pub fn part_folder_of(&self, part: PartId) -> Option<&PartFolder> {
+        self.part_folders().iter().find(|f| f.parts.contains(&part))
     }
 
     /// The suppressed features (P3.9).
@@ -520,6 +548,9 @@ pub enum ElementKind {
         /// at the end. The features below it are rolled back (not built).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rollback: Option<usize>,
+        /// Folders in the Parts list: they group the parts' rows, nothing else.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        part_folders: Vec<PartFolder>,
     },
     Assembly,
     /// A drawing (P3C): sheets, templates and drawing properties, see `cadrs_drawing`.
@@ -544,6 +575,18 @@ pub struct FeatureFolder {
     pub id: FeatureId,
     pub name: String,
     pub features: Vec<FeatureId>,
+    #[serde(default)]
+    pub open: bool,
+}
+
+/// A folder in a Part Studio's Parts list: a name and the parts in it, listed under its row
+/// (closed, they are hidden from the list, not from the view). A part is in one folder at most;
+/// one a later edit no longer builds stays listed here until it builds again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartFolder {
+    pub id: FeatureId,
+    pub name: String,
+    pub parts: Vec<PartId>,
     #[serde(default)]
     pub open: bool,
 }

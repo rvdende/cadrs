@@ -106,7 +106,7 @@ pub enum UpdateStatus {
 }
 
 impl UpdateStatus {
-    fn release(&self) -> Option<&Release> {
+    pub(crate) fn release(&self) -> Option<&Release> {
         match self {
             Self::Available(r) | Self::Installing(r) | Self::Downloading { release: r, .. } => {
                 Some(r)
@@ -144,8 +144,10 @@ struct UpdateJob(Mutex<Receiver<Msg>>);
 struct UpdateSlot;
 
 /// The top bar's update button once a newer release is out, then the version: the same in the
-/// landing page's and the document's bars.
+/// landing page's and the document's bars. Both fold into the account menu on a narrow window
+/// (`crate::top_bar`).
 pub fn spawn_version(r: &mut ChildSpawnerCommands, t: &Theme) {
+    let fold = cadrs_ui::HideBelow(crate::top_bar::Fold::Version.below());
     r.spawn((
         Name::new("update-slot"),
         UpdateSlot,
@@ -154,6 +156,7 @@ pub fn spawn_version(r: &mut ChildSpawnerCommands, t: &Theme) {
             margin: UiRect::right(Val::Px(8.0)),
             ..default()
         },
+        fold,
     ));
     r.spawn((
         Name::new("version"),
@@ -163,6 +166,7 @@ pub fn spawn_version(r: &mut ChildSpawnerCommands, t: &Theme) {
             FontWeight::NORMAL,
             t.muted_foreground,
         ),
+        fold,
     ))
     .entry::<Node>()
     .and_modify(|mut n| n.margin = UiRect::right(Val::Px(10.0)));

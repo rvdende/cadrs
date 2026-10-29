@@ -7,9 +7,9 @@
 // features rebuilt in the background; `perf-open-rebuilds.txt` has the rebuild's own time),
 // `edit-last`, `background` (#t_1 changed, so everything below the first plate rebuilds, while
 // frames wait at most 30 ms: none freezes), `switch` (a tab chosen from the Tab manager).
-// 01 the 250 features and 10 parts: "Features (250)", no notice (at the budget).
+// 01 the 250 features and 10 parts: "Features (250)".
 // 02 the feature list scrolled to its end (the list scrolls, with its scrollbar).
-// 03 a Variable added: 251 features, the gentle notice under the header.
+// 03 a Variable added: 251 features.
 // 04 the last feature (Hole 10.11) edited, 6 mm deep: only it rebuilds; the last plate seen
 //    from below, where its pockets are.
 // 05 #t_1 = 12 mm in the Variable table: the first plate thicker; everything after it rebuilt in
@@ -44,7 +44,6 @@ Scenario(
         Screenshot("02-feature-list-scrolled"),
         Click(ui("variable")),
         WaitFor("variable-dialog"),
-        ExpectText("features-scale-notice", "251 features"),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("03-notice-past-250"),

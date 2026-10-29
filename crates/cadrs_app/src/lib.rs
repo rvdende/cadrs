@@ -69,6 +69,7 @@ pub mod move_document;
 pub mod native_document;
 pub mod network;
 pub mod notifications;
+pub mod part_folders;
 pub mod part_shading;
 pub mod parts;
 pub mod parts_list;
@@ -123,6 +124,7 @@ pub mod thread_ui;
 pub mod threads_ui;
 pub mod thumbnail;
 pub mod tool_input;
+pub mod top_bar;
 pub mod transform_ui;
 pub mod units_dialog;
 pub mod update;
@@ -698,6 +700,8 @@ impl Plugin for CadrsAppPlugin {
                 script::ScriptPlugin,
             ))
             .add_plugins(spacemouse::SpaceMousePlugin)
+            .add_plugins(top_bar::TopBarPlugin)
+            .add_plugins(part_folders::PartFoldersPlugin)
             .add_plugins((
                 rebuild_indicator::RebuildIndicatorPlugin,
                 rebuild_rows::RebuildRowsPlugin,

@@ -1,4 +1,4 @@
-// M2: the bottom tab bar. + opens the Insert new tab menu; Create Assembly adds "Assembly 2"
+// M2: the bottom tab bar. + opens the Insert new tab menu; Create Assembly adds "Assembly 1"
 // right of the active tab and opens its empty assembly shell. Double-click renames a tab in
 // place; right-click opens the tab menu above the tab bar; Delete removes the tab at once (as
 // Onshape does) and the toast's Undo brings it back.

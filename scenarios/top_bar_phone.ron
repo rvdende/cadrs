@@ -1,0 +1,27 @@
+// The top bar on a phone's width (an iPhone's 390 px, in the browser): the version, the network
+// button, the colour scheme toggle, Share, the bell and the account's name fold into the account
+// menu, which lists them, and only the avatar is left. 01 the bar; 02 the account menu with the
+// folded entries; 03 its Notifications opens the notices under the avatar; 04 its Dark switches
+// the scheme; 05 a long name gives way to the avatar. The bar folds piece by piece on the way
+// (`crate::top_bar::Fold`): `--window-size 950x800` shows 01 with the version folded, `750x800`
+// with the scheme and network folded too (the scenario stops there, the bell still out).
+Scenario(
+    start: Some("document"),
+    window_size: Some((390, 844)),
+    steps: [
+        Wait(10),
+        Screenshot("01-bar"),
+        Click(ui("identity")),
+        Screenshot("02-account-menu"),
+        Click(ui("account-notifications")),
+        Screenshot("03-notifications"),
+        Key("Escape"),
+        Click(ui("identity")),
+        Click(ui("account-scheme-1")),
+        Screenshot("04-dark"),
+        Click(ui("document-name")),
+        Type("Bracket for the left hinge, revision C"),
+        Key("Enter"),
+        Screenshot("05-long-name"),
+    ],
+)

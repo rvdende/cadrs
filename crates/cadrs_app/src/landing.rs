@@ -422,14 +422,20 @@ fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
             ..default()
         })
         .with_children(|r| {
+            // On a narrow window these fold into the account menu (`crate::top_bar`).
+            use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
-            crate::network::spawn_button(r, t);
-            crate::notifications::spawn_bell(r, t);
+            spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
+            spawn_folding(r, Fold::Notifications, |r| {
+                crate::notifications::spawn_bell(r, t)
+            });
             // Light, dark or the system's scheme.
-            r.spawn((
-                cadrs_ui::scheme_toggle(t),
-                cadrs_ui::glass::GlassFrame::bar(),
-            ));
+            spawn_folding(r, Fold::Scheme, |r| {
+                r.spawn((
+                    cadrs_ui::scheme_toggle(t),
+                    cadrs_ui::glass::GlassFrame::bar(),
+                ));
+            });
             crate::identity::spawn_identity_button(r, t, profile);
         });
     });
@@ -1711,7 +1717,7 @@ pub(crate) fn open_failed(world: &mut World, id: DocumentId, e: &cadrs_core::Sto
     world.flush();
 }
 
-/// Creates a document with Part Studio 1 and Assembly 1 and opens it.
+/// Creates a document with Part Studio 1 (no Assembly: a tab's + adds one) and opens it.
 fn create_document(world: &mut World, name: &str) {
     let name = match name.trim() {
         "" => "Untitled document",
@@ -1720,7 +1726,7 @@ fn create_document(world: &mut World, name: &str) {
     let store = world.resource::<DocumentStore>().0.clone();
     let now = world.resource::<AppClock>().now();
     let user = world.resource::<UserProfile>().id.clone();
-    let doc = Document::new(name);
+    let doc = Document::with_part_studio(name);
     let mut meta = DocumentMeta::new(&user, now);
     meta.last_opened = Some(now);
     if let Err(e) = store.create(&doc, &meta) {
