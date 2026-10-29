@@ -1,9 +1,9 @@
 //! Glass surfaces: see-through slabs over a soft wallpaper, after the glass themes of Raven
 //! (`src/widgets/common.c`, `rvn_glass_style`).
 //!
-//! - A [`Glass`] node gets a tint (its fill), a rim of light and a shadow. The tint is a
-//!   gradient a little brighter at the top than at the bottom; the rim is brightest where it
-//!   faces the light (top left) with a faint echo on the far side.
+//! - A [`Glass`] node gets a tint (its fill), a rim and a shadow, each flat: no gradients (issue
+//!   #137: they looked dated). They are still set as one-colour gradients, which the scheme
+//!   doesn't remap, so this module sets them again for each scheme.
 //! - The material ([`GlassMaterial`], one for the app in [`GlassStyle`] or one per node) says
 //!   how much shows through: **clear** glass is barely tinted with a bright rim, **frosted**
 //!   glass is milkier, **tinted** glass is frosted with the accent mixed into it (more on what
@@ -12,7 +12,7 @@
 //! - Gradients aren't mapped by [`crate::color_scheme`], so the tint and rim are set again
 //!   whenever the scheme or the material changes; the shadow is an ordinary [`BoxShadow`],
 //!   which the scheme deepens in dark.
-//! - [`wallpaper`] goes on a page's root: a cyan wash in light, deep teal in dark.
+//! - [`wallpaper`] goes on a page's root: a flat pale cyan in light, a warm dark ground in dark.
 //! - [`glow`] is the halo of a page's main action.
 //!
 //! ```ignore
@@ -204,25 +204,10 @@ fn sync_glass(
         }
         let (tint, rim) = glass_look(&theme, dark, g.kind, g.material.unwrap_or(style.material));
         let white = |a: f32| Color::WHITE.with_alpha(a.clamp(0.0, 1.0));
-        let border = if dark {
-            // Lit from the top left: bright there, dim across the middle, an echo at the far
-            // side.
-            BorderGradient::from(LinearGradient::to_bottom_right(vec![
-                ColorStop::new(white(rim), Val::Percent(0.0)),
-                ColorStop::new(white(rim * 0.22), Val::Percent(45.0)),
-                ColorStop::new(white(rim * 0.22), Val::Percent(70.0)),
-                ColorStop::new(white(rim * 0.5), Val::Percent(100.0)),
-            ]))
-        } else {
-            // A white rim vanishes on a pale page: light at the top edge over a soft dark
-            // outline that deepens toward the bottom.
-            let ink = |a: f32| Color::srgba(0.0, 0.2, 0.24, a);
-            BorderGradient::from(LinearGradient::to_bottom(vec![
-                ColorStop::new(white(0.95), Val::Percent(0.0)),
-                ColorStop::new(ink(0.12), Val::Percent(35.0)),
-                ColorStop::new(ink(0.2), Val::Percent(100.0)),
-            ]))
-        };
+        // One colour all round: a faint light line in dark, a soft dark outline in light (a
+        // white rim vanishes on a pale page).
+        let ink = |a: f32| Color::srgba(0.0, 0.2, 0.24, a);
+        let border = flat_border(if dark { white(rim * 0.35) } else { ink(0.16) });
         let mut ec = commands.entity(e);
         // Controls and fields have no outline: their fill is enough.
         if matches!(g.kind, GlassKind::Control | GlassKind::Input) {
@@ -232,14 +217,20 @@ fn sync_glass(
             ec.try_insert(border);
         }
         if g.fill {
-            // A slab is a little brighter at the top than at the bottom.
-            let top = mix(tint, Color::WHITE.with_alpha(tint.alpha()), rim * 0.08);
             ec.try_insert(BackgroundGradient::from(LinearGradient::to_bottom(vec![
-                ColorStop::new(top, Val::Percent(0.0)),
+                ColorStop::new(tint, Val::Percent(0.0)),
                 ColorStop::new(tint, Val::Percent(100.0)),
             ])));
         }
     }
+}
+
+/// A one-colour rim (a gradient, so the scheme leaves it to [`sync_glass`]).
+fn flat_border(c: Color) -> BorderGradient {
+    BorderGradient::from(LinearGradient::to_bottom(vec![
+        ColorStop::new(c, Val::Percent(0.0)),
+        ColorStop::new(c, Val::Percent(100.0)),
+    ]))
 }
 
 /// The soft shadow under a glass panel.
@@ -466,41 +457,19 @@ fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
 /// A wash from top left to bottom right with a cyan glow in one corner and a violet one in the
 /// other.
 fn wallpaper_layers(dark: bool) -> Vec<Gradient> {
-    let (from, to, cyan, violet) = if dark {
-        // The schematic's warm ground, a breath of cyan and of gold in the corners.
-        (
-            rgba(0x1d, 0x1c, 0x1a, 1.0),
-            rgba(0x23, 0x22, 0x1e, 1.0),
-            rgba(0x1c, 0x6e, 0x70, 0.07),
-            rgba(0xc9, 0x9c, 0x49, 0.07),
-        )
+    // One flat colour (issue #137: no gradients): the schematic's warm ground in dark, a pale
+    // cyan in light. A one-colour gradient, as the scheme doesn't remap gradients.
+    let ground = if dark {
+        rgba(0x20, 0x1f, 0x1c, 1.0)
     } else {
-        (
-            rgba(0xe3, 0xf2, 0xf4, 1.0),
-            rgba(0xec, 0xee, 0xf7, 1.0),
-            rgba(0x6c, 0xd4, 0xdd, 0.5),
-            rgba(0xb4, 0xaa, 0xf0, 0.36),
-        )
-    };
-    let glow = |at: UiPosition, c: Color| {
-        RadialGradient::new(
-            at,
-            RadialGradientShape::Ellipse(Val::Percent(75.0), Val::Percent(95.0)),
-            vec![
-                ColorStop::new(c, Val::Percent(0.0)),
-                ColorStop::new(c.with_alpha(0.0), Val::Percent(100.0)),
-            ],
-        )
-        .into()
+        rgba(0xe7, 0xf0, 0xf5, 1.0)
     };
     vec![
-        LinearGradient::to_bottom_right(vec![
-            ColorStop::new(from, Val::Percent(0.0)),
-            ColorStop::new(to, Val::Percent(100.0)),
+        LinearGradient::to_bottom(vec![
+            ColorStop::new(ground, Val::Percent(0.0)),
+            ColorStop::new(ground, Val::Percent(100.0)),
         ])
         .into(),
-        glow(UiPosition::TOP_LEFT, cyan),
-        glow(UiPosition::BOTTOM_RIGHT, violet),
     ]
 }
 

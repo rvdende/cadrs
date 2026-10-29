@@ -383,7 +383,6 @@ fn spawn_shell(
                 Pickable::IGNORE,
             ))
             .with_children(|body| {
-                icon_rail(body, &t);
                 // P3E.2 (judge r1, `tab_manager_open-01.png`): the Tab manager docks here, full
                 // height, pushing the feature list right (`tab_manager`).
                 body.spawn((
@@ -554,6 +553,7 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             bevy::picking::hover::Hovered::default(),
             Tooltip::new("Workspaces"),
         ));
+        document_tools(bar, t);
         bar.spawn(Node {
             flex_grow: 1.0,
             ..default()
@@ -605,43 +605,43 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
     });
 }
 
-fn icon_rail(body: &mut ChildSpawnerCommands, t: &Theme) {
-    // A floating column as tall as its icons.
-    body.spawn((
-        Name::new("icon-rail"),
+/// The document's tools in the top bar, after its name: the Tab manager, Insert, Comments,
+/// History, and the feature list's button while its panel is hidden. They were a rail down the
+/// left, as in other CAD apps (issue #137: cadrs should look like itself); the names stay
+/// `rail-*`, which scenarios click.
+fn document_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
+    bar.spawn((
+        Name::new("document-tools"),
         Node {
-            width: Val::Px(RAIL_WIDTH),
-            flex_shrink: 0.0,
-            align_self: AlignSelf::FlexStart,
-            flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
-            padding: UiRect::vertical(Val::Px(4.0)),
-            row_gap: Val::Px(4.0),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
+            column_gap: Val::Px(2.0),
+            padding: UiRect::horizontal(Val::Px(2.0)),
+            margin: UiRect::left(Val::Px(8.0)),
+            flex_shrink: 0.0,
             ..default()
         },
-        cadrs_ui::glass::panel(t),
+        cadrs_ui::glass::GlassFrame::bar(),
     ))
-    .with_children(|rail| {
+    .with_children(|g| {
+        g.spawn(
+            ToolButton::new("tab-manager", "tab-manager")
+                .tooltip("Tab manager")
+                .build(t),
+        );
         for (name, icon_name, tip) in [
             ("rail-insert", "file-import", "Insert"),
             ("rail-comments", "comments", "Comments"),
-            ("rail-details", "details", "Details"),
-            ("rail-properties", "properties", "Properties"),
             ("rail-history", "history", "History"),
-            ("rail-search", "find", "Search"),
         ] {
-            rail.spawn(ToolButton::new(name, icon_name).tooltip(tip).build(t));
+            g.spawn(ToolButton::new(name, icon_name).tooltip(tip).build(t));
         }
         // At the end, shown while the feature panel is hidden ([`sync_rail_toggle`]), so the
-        // other icons never move: it brings the panel back.
-        rail.spawn((
+        // other buttons never move: it brings the panel back.
+        g.spawn((
             RailPanelToggle,
             Node {
-                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(4.0),
+                column_gap: Val::Px(2.0),
                 display: Display::None,
                 ..default()
             },
@@ -649,8 +649,9 @@ fn icon_rail(body: &mut ChildSpawnerCommands, t: &Theme) {
         .with_children(|g| {
             g.spawn((
                 Node {
-                    width: Val::Px(20.0),
-                    height: Val::Px(1.0),
+                    width: Val::Px(1.0),
+                    height: Val::Px(20.0),
+                    margin: UiRect::horizontal(Val::Px(2.0)),
                     ..default()
                 },
                 BackgroundColor(t.separator),
@@ -671,8 +672,6 @@ fn icon_rail(body: &mut ChildSpawnerCommands, t: &Theme) {
         });
     });
 }
-
-const RAIL_WIDTH: f32 = 40.0;
 
 /// The rail's feature list button: there while the panel is hidden.
 #[derive(Component)]
@@ -832,42 +831,6 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
         dark.background =
             StateColors::new(Color::NONE, t.control_hover, t.list_active, Color::NONE)
                 .with_selected(t.control_hover);
-        bar.spawn(
-            IconButton::new("tab-manager", "tab-manager")
-                .icon_size(18.0)
-                .tooltip("Tab manager")
-                .build(t),
-        )
-        .insert(dark.clone())
-        .entry::<Node>()
-        .and_modify(|mut n| {
-            n.width = Val::Px(32.0);
-            n.height = Val::Auto;
-            n.border = UiRect::ZERO;
-        });
-        bar.spawn((
-            IconButton::new("insert-tab", "plus")
-                .icon_size(20.0)
-                .tooltip("Insert new tab")
-                .build(t),
-            InsertTabButton,
-            observe(
-                |a: On<Activate>,
-                 theme: Res<Theme>,
-                 clip: Res<crate::drawing::ElementClipboard>,
-                 mut commands: Commands| {
-                    let paste = clip.0.as_ref().map(|e| e.name.clone());
-                    open_menu(&mut commands, a.entity, insert_menu(paste).build(&theme));
-                },
-            ),
-        ))
-        .insert(dark.clone())
-        .entry::<Node>()
-        .and_modify(|mut n| {
-            n.width = Val::Px(32.0);
-            n.height = Val::Auto;
-            n.border = UiRect::ZERO;
-        });
         // P3F.3 (T1.2): 40 tabs scroll sideways (`scale_ui`): by whole tabs, with a chevron and
         // a fade at each end that has more tabs (P3F.3–P3F.4 judge).
         let chevron = |name: &'static str, icon_name: &'static str, tip: &'static str| {
@@ -964,7 +927,7 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
             });
         // P3E.2 (T1.2): ▾ lists every tab of this level, the hidden ones included.
         bar.spawn(chevron("tab-overflow", "chevron-down", "All tabs"))
-            .insert(dark)
+            .insert(dark.clone())
             .entry::<Node>()
             .and_modify(|mut n| {
                 n.width = Val::Px(22.0);
@@ -972,6 +935,30 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                 n.border_radius = BorderRadius::ZERO;
                 n.display = Display::None;
             });
+        // + at the strip's right end, after the tabs (the Tab manager is in the top bar).
+        bar.spawn((
+            IconButton::new("insert-tab", "plus")
+                .icon_size(20.0)
+                .tooltip("Insert new tab")
+                .build(t),
+            InsertTabButton,
+            observe(
+                |a: On<Activate>,
+                 theme: Res<Theme>,
+                 clip: Res<crate::drawing::ElementClipboard>,
+                 mut commands: Commands| {
+                    let paste = clip.0.as_ref().map(|e| e.name.clone());
+                    open_menu(&mut commands, a.entity, insert_menu(paste).build(&theme));
+                },
+            ),
+        ))
+        .insert(dark)
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.width = Val::Px(32.0);
+            n.height = Val::Auto;
+            n.border = UiRect::ZERO;
+        });
     });
 }
 
@@ -3304,6 +3291,9 @@ fn on_inline_commit(
 fn name_button_node(t: &Theme) -> Node {
     Node {
         height: Val::Px(30.0),
+        // A long name leaves room for the document's tools beside it.
+        max_width: Val::Px(420.0),
+        overflow: Overflow::clip(),
         padding: UiRect::horizontal(Val::Px(4.0)),
         margin: UiRect::left(Val::Px(4.0)),
         border: UiRect::all(Val::Px(1.0)),
