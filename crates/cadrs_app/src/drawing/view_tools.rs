@@ -630,8 +630,7 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                 },
                 BorderColor::all(if label.is_some() { Color::srgb_u8(0xc8, 0xc8, 0xc8) } else { t.primary }),
                 BackgroundColor(if label.is_some() { t.background } else { Color::srgb_u8(0xee, 0xf4, 0xfb) }),
-                Interaction::default(),
-                observe(|_: On<Pointer<Click>>, mut s: ResMut<InsertViewState>| {
+                observe(|_: On<PointerClick>, mut s: ResMut<InsertViewState>| {
                     s.browser_open = !s.browser_open;
                 }),
             ))

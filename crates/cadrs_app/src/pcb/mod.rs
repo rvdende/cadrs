@@ -38,6 +38,7 @@ pub mod view;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::GizmoGroups;
 use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight};
 use bevy::ui_widgets::{Activate, observe};
@@ -70,8 +71,8 @@ impl Plugin for PcbPlugin {
             .init_resource::<PartClipboard>()
             .init_resource::<dialogs::PcbDialogs>()
             .init_resource::<sync::PcbLibrarySync>()
-            .init_gizmo_group::<view::PcbEdgeGizmos>()
-            .init_gizmo_group::<view::PcbGridGizmos>()
+            .gizmo_group::<view::PcbEdgeGizmos>()
+            .gizmo_group::<view::PcbGridGizmos>()
             .add_systems(Startup, view::configure_gizmos)
             // The body entities go with the document; so does what the scene says it shows.
             .add_systems(

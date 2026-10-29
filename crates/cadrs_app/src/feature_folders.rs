@@ -366,7 +366,7 @@ fn on_folder_rename_commit(
 // Dragging rows
 
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q_feature: Query<&FeatureRow>,
     q_folder: Query<&FolderRow>,
     doc: Option<Res<ActiveDocument>>,
@@ -415,7 +415,7 @@ fn on_drag_start(
     };
     *drag = RowDrag {
         features,
-        pointer: ev.pointer_location.position,
+        pointer: ev.pointer.position,
         target: None,
     };
 }
@@ -423,13 +423,13 @@ fn on_drag_start(
 /// A feature or folder row.
 type AnyRow = Or<(With<FeatureRow>, With<FolderRow>)>;
 
-fn on_drag(ev: On<Pointer<Drag>>, q: Query<(), AnyRow>, mut drag: ResMut<RowDrag>) {
+fn on_drag(ev: On<PointerDrag>, q: Query<(), AnyRow>, mut drag: ResMut<RowDrag>) {
     if q.contains(ev.entity) && !drag.features.is_empty() {
-        drag.pointer = ev.pointer_location.position;
+        drag.pointer = ev.pointer.position;
     }
 }
 
-fn on_drag_end(ev: On<Pointer<DragEnd>>, q: Query<(), AnyRow>, mut commands: Commands) {
+fn on_drag_end(ev: On<PointerDragEnd>, q: Query<(), AnyRow>, mut commands: Commands) {
     if !q.contains(ev.entity) {
         return;
     }

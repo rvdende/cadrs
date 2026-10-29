@@ -103,6 +103,10 @@ struct BoardFolder(PartId);
 #[derive(Component, Debug, Clone, Copy)]
 struct PartMenuFor(PartId);
 
+/// A row's height with its margins (22 px and 1 px above and below), a group header's too: a
+/// long list builds only the rows it shows by it.
+pub const PART_ROW_PITCH: f32 = 24.0;
+
 /// What the rows were built from (and the boards with their components, and the open ones).
 type RowKey = (
     Vec<(PartId, String, PartKind, bool, bool, bool)>,
@@ -120,14 +124,24 @@ fn rebuild_part_list(
     over: Res<PartOverride>,
     open: Res<GroupsOpen>,
     boards_open: Res<BoardsOpen>,
-    q_rows: Query<(Entity, Ref<PartRows>)>,
+    mut q_rows: Query<(
+        Entity,
+        Ref<PartRows>,
+        &mut cadrs_ui::virtual_rows::VirtualRows,
+    )>,
     theme: Res<Theme>,
     mut last: Local<Option<RowKey>>,
     mut commands: Commands,
 ) {
-    let Some((container, added)) = q_rows.iter().next().map(|(e, r)| (e, r.is_added())) else {
+    let Some((container, added, mut window)) = q_rows
+        .iter_mut()
+        .next()
+        .map(|(e, r, w)| (e, r.is_added(), w))
+    else {
         return;
     };
+    // A long list scrolled to rows not built.
+    let moved = window.is_changed();
     // The rows only change with what they show: don't build their key every frame.
     let inputs_changed = cache.is_changed()
         || over.is_changed()
@@ -135,7 +149,7 @@ fn rebuild_part_list(
         || boards_open.is_changed()
         || theme.is_changed()
         || doc.as_ref().is_some_and(|d| d.is_changed());
-    if !added && !inputs_changed && last.is_some() {
+    if !added && !moved && !inputs_changed && last.is_some() {
         return;
     }
     // P3H.6 judge: a composite part's row has the composite part icon.
@@ -193,12 +207,19 @@ fn rebuild_part_list(
         boards,
         boards_open.0.clone(),
     );
-    if !added && last.as_ref() == Some(&key) {
+    if !added && !moved && last.as_ref() == Some(&key) {
         return;
     }
     let t = theme.clone();
+    // A long list builds the rows near what it shows, spacers standing in for the rest.
+    let windowed = window.window_for(window.total.max(key.0.len()));
+    let mut slots = cadrs_ui::virtual_rows::Slots::new(windowed.clone());
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
+        let above = windowed.is_some().then(|| {
+            c.spawn(cadrs_ui::virtual_rows::spacer("part-rows-above", 0.0))
+                .id()
+        });
         for kind in [PartKind::Solid, PartKind::Surface] {
             let members: Vec<&(PartId, String, PartKind, bool, bool, bool)> =
                 key.0.iter().filter(|r| r.2 == kind).collect();
@@ -212,13 +233,15 @@ fn rebuild_part_list(
                 PartKind::Surface => ("Surfaces", "surfaces-section-header"),
             };
             let is_open = open.get(kind);
-            c.spawn((
-                TreeItem::new(name, format!("{title} ({})", members.len()))
-                    .disclosure(Some(is_open))
-                    .left(2.0)
-                    .build(&t),
-                GroupHeader(kind),
-            ));
+            if slots.take(PART_ROW_PITCH) {
+                c.spawn((
+                    TreeItem::new(name, format!("{title} ({})", members.len()))
+                        .disclosure(Some(is_open))
+                        .left(2.0)
+                        .build(&t),
+                    GroupHeader(kind),
+                ));
+            }
             if !is_open {
                 continue;
             }
@@ -226,18 +249,31 @@ fn rebuild_part_list(
             for m in members.iter().filter(|m| !component(&m.0)) {
                 let folder = key.3.iter().find(|(b, _)| *b == m.0);
                 let open = folder.is_some_and(|(b, _)| key.4.contains(b));
-                spawn_row(c, &t, m, kind, 22.0, folder.map(|_| open));
+                if slots.take(PART_ROW_PITCH) {
+                    spawn_row(c, &t, m, kind, 22.0, folder.map(|_| open));
+                }
                 if let Some((_, comps)) = folder.filter(|_| open) {
                     for cm in comps
                         .iter()
                         .filter_map(|id| members.iter().find(|r| r.0 == *id))
                     {
-                        spawn_row(c, &t, cm, kind, 40.0, None);
+                        if slots.take(PART_ROW_PITCH) {
+                            spawn_row(c, &t, cm, kind, 40.0, None);
+                        }
                     }
                 }
             }
         }
+        if let Some(above) = above {
+            let (h_above, h_below) = slots.spacers();
+            c.commands()
+                .entity(above)
+                .entry::<Node>()
+                .and_modify(move |mut n| n.height = Val::Px(h_above));
+            c.spawn(cadrs_ui::virtual_rows::spacer("part-rows-below", h_below));
+        }
     });
+    window.bypass_change_detection().total = slots.count();
     *last = Some(key);
 }
 

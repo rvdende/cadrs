@@ -203,9 +203,11 @@ pub fn spawn_button(r: &mut ChildSpawnerCommands, t: &Theme) {
 
 /// Puts the network's state on every network button: icon, tooltip, and red after a failure.
 #[allow(clippy::type_complexity)]
-fn sync_buttons(world: &mut World) {
+fn sync_buttons(
+    world: &mut World,
+    q: &mut QueryState<(Entity, Option<&Shows>, &Children), With<NetButton>>,
+) {
     let state = NetState::of(world);
-    let mut q = world.query_filtered::<(Entity, Option<&Shows>, &Children), With<NetButton>>();
     let stale: Vec<(Entity, Vec<Entity>)> = q
         .iter(world)
         .filter(|(_, shows, _)| shows.map(|s| s.0) != Some(state))

@@ -210,7 +210,7 @@ fn box_colors(
 }
 
 fn on_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     mut q: Query<(&mut CheckboxState, Has<InteractionDisabled>)>,
     mut commands: Commands,
 ) {

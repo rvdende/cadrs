@@ -20,6 +20,7 @@
 
 use std::collections::HashSet;
 
+use crate::GizmoGroups;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -84,7 +85,7 @@ impl Plugin for SketchDiagnosticsPlugin {
                     .before(crate::sketch_draw::SketchDrawSet)
                     .run_if(in_state(AppState::Document)),
             )
-            .init_gizmo_group::<DiagnosticGizmos>()
+            .gizmo_group::<DiagnosticGizmos>()
             .add_systems(Startup, configure_diagnostic_gizmos);
     }
 }

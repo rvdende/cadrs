@@ -26,6 +26,7 @@ use cadrs_ui::ShortcutKey;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -45,7 +46,7 @@ impl Plugin for BoardInStudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardEditing>()
             .init_resource::<OverlayCache>()
-            .init_gizmo_group::<RatsnestGizmos>()
+            .gizmo_group::<RatsnestGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_observer(on_edit_bar)
             .add_observer(on_link_menu)
@@ -1083,7 +1084,12 @@ struct EditBar;
 
 /// Keeps the edit bar on screen while editing: "Layout of <board> (<studio>)", the fit tools,
 /// Move by…, Open in PCB Studio, Done.
-fn sync_edit_bar(world: &mut World) {
+fn sync_edit_bar(
+    world: &mut World,
+    q: &mut QueryState<Entity, With<EditBar>>,
+    qa: &mut QueryState<Entity, With<crate::viewport::ViewportArea>>,
+    mut was_editing: Local<bool>,
+) {
     let want = world
         .resource::<crate::eda::Eda2d>()
         .plane()
@@ -1098,11 +1104,9 @@ fn sync_edit_bar(world: &mut World) {
             .map_or_else(|| d.source_name.clone(), |e| e.name.clone());
         Some(format!("Layout of {} ({studio})", b.board_name))
     });
-    let mut q = world.query_filtered::<Entity, With<EditBar>>();
     let existing = q.iter(world).next();
     match (title, existing) {
         (Some(title), None) => {
-            let mut qa = world.query_filtered::<Entity, With<crate::viewport::ViewportArea>>();
             let Some(area) = qa.iter(world).next() else {
                 return;
             };
@@ -1183,7 +1187,14 @@ fn sync_edit_bar(world: &mut World) {
         }
         _ => {}
     }
-    sync_fit_buttons(world);
+    // The fit buttons and the status line are there only while a board's layout is edited (and
+    // the frame after, to take the status line away): looking for them went through every named
+    // entity every frame.
+    let editing = want.is_some();
+    if editing || *was_editing {
+        sync_fit_buttons(world);
+    }
+    *was_editing = editing;
 }
 
 /// The fit buttons show their state (on: selected); Align's prompt shows under the bar.
@@ -1462,6 +1473,13 @@ pub(crate) fn press_to_edit(
     {
         return;
     }
+    // (The press first: the rest builds queries, and most frames have none.)
+    let Some(k) = events.iter().position(|e| {
+        e.pointer_id == PointerId::Mouse
+            && matches!(e.action, PointerAction::Press(PointerButton::Primary))
+    }) else {
+        return;
+    };
     let modeling = world
         .get_resource::<State<crate::sketch::PartStudioMode>>()
         .is_some_and(|m| *m.get() == crate::sketch::PartStudioMode::Modeling);
@@ -1473,12 +1491,6 @@ pub(crate) fn press_to_edit(
     if !modeling || dialogs {
         return;
     }
-    let Some(k) = events.iter().position(|e| {
-        e.pointer_id == PointerId::Mouse
-            && matches!(e.action, PointerAction::Press(PointerButton::Primary))
-    }) else {
-        return;
-    };
     let over = {
         let areas: Vec<Entity> = world
             .query_filtered::<Entity, With<crate::viewport::ViewportArea>>()
@@ -1767,7 +1779,11 @@ fn motion_transform(m: &cadrs_kernel::Motion) -> Transform {
 
 /// Keeps a ghost on each component whose footprint the Layout's preview moves, turns or flips
 /// (live 3D while dragging); the ghost stays after the drop until the rebuilt part is there.
-fn sync_drag_ghosts(world: &mut World, mut ghosts: Local<Ghosts>) {
+fn sync_drag_ghosts(
+    world: &mut World,
+    mut ghosts: Local<Ghosts>,
+    q: &mut QueryState<(Entity, &'static DragGhost, &'static mut Transform)>,
+) {
     let host = world.resource::<crate::eda::Eda2d>().plane().copied();
     let preview = world.resource::<crate::eda::Preview>().get();
     // Each moved footprint's part and motion (preview placement ∘ stored placement⁻¹).
@@ -1830,7 +1846,6 @@ fn sync_drag_ghosts(world: &mut World, mut ghosts: Local<Ghosts>) {
         .map(|m| m.0)
         .chain(pending.iter().copied())
         .collect();
-    let mut q = world.query::<(Entity, &DragGhost, &mut Transform)>();
     let mut have: HashSet<PartId> = HashSet::new();
     let mut gone = vec![];
     for (e, g, mut tr) in q.iter_mut(world) {

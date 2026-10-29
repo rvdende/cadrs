@@ -389,12 +389,16 @@ fn lower_panel_strip(world: &mut World) {
 }
 
 /// Keeps the right-edge tool strip of the shown mode on screen.
-pub fn sync_strip(world: &mut World, mode: Mode, spec: StripSpec) {
+pub fn sync_strip(
+    world: &mut World,
+    q: &mut QueryState<(Entity, &'static ToolStrip)>,
+    mode: Mode,
+    spec: StripSpec,
+) {
     let show = world
         .resource::<Eda2d>()
         .0
         .is_some_and(|(_, _, m)| m == mode);
-    let mut q = world.query::<(Entity, &ToolStrip)>();
     let existing = q.iter(world).find(|(_, s)| s.0 == mode).map(|(e, _)| e);
     match (show, existing) {
         (true, None) => {
@@ -486,6 +490,14 @@ pub fn on_strip_button(
 
 /// Highlights the strip button of the active tool.
 pub fn mark_active(world: &mut World, mode: Mode, active: &str) {
+    // (A strip not shown is not built.)
+    if !world
+        .resource::<Eda2d>()
+        .0
+        .is_some_and(|(_, _, m)| m == mode)
+    {
+        return;
+    }
     let mut q = world.query::<(Entity, &StripButton, Has<cadrs_ui::style::Selected>)>();
     let changes: Vec<(Entity, bool)> = q
         .iter(world)
@@ -510,9 +522,12 @@ pub fn keys_for(world: &mut World, mode: Mode) -> bool {
         .is_some_and(|(_, _, m)| m == mode);
     // Typing: a text field has the focus (a closed dialog's button may leave a stale focus).
     let focus = world.resource::<bevy::input_focus::InputFocus>().get();
+    if !shown {
+        return false;
+    }
     let typing = focus.is_some_and(|e| world.get::<cadrs_ui::input::TextInputField>(e).is_some());
     let mut qd = world.query_filtered::<(), With<cadrs_ui::DialogRoot>>();
-    shown && !typing && qd.iter(world).next().is_none()
+    !typing && qd.iter(world).next().is_none()
 }
 
 /// Sets the text of the text node named `name`.

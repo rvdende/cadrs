@@ -191,6 +191,49 @@ pub struct SetFeatureVisible {
     pub part_studio: Option<String>,
 }
 
+/// What `get_frame_stats` lists.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GetFrameStats {
+    /// How many of the slowest schedules, systems and render passes to list; omitted: 25.
+    #[serde(default)]
+    pub top: Option<usize>,
+}
+
+/// Moves a Part Studio's rollback bar: the features below it are not built.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetRollback {
+    /// How many features stay above the bar (built), counted from the top of the feature list
+    /// without the default geometry. Omitted (and `after` too), or past the end: roll to the end.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Instead of `index`: the bar goes just below the feature with this name.
+    #[serde(default)]
+    pub after: Option<String>,
+    /// The Part Studio tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
+/// Lists UI nodes with where they are on screen.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetUiLayout {
+    /// Only nodes whose `Name` contains this (case-insensitive); omitted: every named node.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// At most this many nodes, top to bottom; omitted: 200.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Changes this machine's preferences, as the Preferences dialog's OK does (saved).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SetPreferences {
+    /// Vertical sync: frames wait for the display's refresh (true) or are drawn as fast as they
+    /// are made (false). Omitted: unchanged.
+    #[serde(default)]
+    pub vsync: Option<bool>,
+}
+
 /// Renames a part and/or sets its colour.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SetPart {

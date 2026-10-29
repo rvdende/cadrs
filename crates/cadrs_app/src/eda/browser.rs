@@ -419,8 +419,7 @@ fn accept(w: &mut World) {
 }
 
 /// Rebuilds the list when the filter or the open libraries change.
-fn refresh(world: &mut World) {
-    let mut q = world.query_filtered::<Entity, With<ChooserList>>();
+fn refresh(world: &mut World, q: &mut QueryState<Entity, With<ChooserList>>) {
     let Some(list) = q.iter(world).next() else {
         return;
     };

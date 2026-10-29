@@ -318,6 +318,14 @@ pub struct Preferences {
     /// takes effect at the next start (`cadrs_app::frame_profile::CpuProfiling`).
     #[serde(default)]
     pub profile_cpu: bool,
+    /// Vertical sync: frames wait for the display's refresh (on by default). Off, they are drawn
+    /// as fast as they are made, which shows what a frame really costs but uses more power.
+    #[serde(default = "default_vsync")]
+    pub vsync: bool,
+}
+
+fn default_vsync() -> bool {
+    true
 }
 
 fn default_rotation_snap_degrees() -> f64 {
@@ -339,6 +347,7 @@ impl Default for Preferences {
             whats_new_seen: 0,
             autoconnect_p2p: false,
             profile_cpu: false,
+            vsync: true,
         }
     }
 }
@@ -524,6 +533,7 @@ mod tests {
             whats_new_seen: 1,
             autoconnect_p2p: true,
             profile_cpu: true,
+            vsync: false,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
@@ -548,6 +558,8 @@ mod tests {
         assert_eq!(p.ui_scale, 100);
         assert_eq!(p.ui_scale_factor(), 1.0);
         assert_eq!(p.color_scheme, ColorScheme::System);
+        // From before the vsync switch: vsync on.
+        assert!(p.vsync);
         assert_eq!(Preferences { ui_scale: 150, ..p }.ui_scale_factor(), 1.5);
         // Out of range: the nearest size offered.
         assert_eq!(

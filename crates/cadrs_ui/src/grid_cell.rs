@@ -195,6 +195,7 @@ impl GridCell {
                         selection_color: t.selection,
                         unfocused_selection_color: Color::NONE,
                         selected_text_color: Some(t.selection_foreground),
+                        selection_radius: 0.0,
                     },
                     TabIndex(0),
                     Node {
@@ -361,7 +362,7 @@ fn on_cell_key(
 
 /// Pressing a cell's padding edits it, the caret at the end.
 fn on_cell_press(
-    mut press: On<Pointer<Press>>,
+    mut press: On<PointerPress>,
     mut q_edit: Query<(Entity, &GridCellEdit, &mut EditableText)>,
     q_root: Query<(), With<GridCellState>>,
     mut focus: ResMut<InputFocus>,

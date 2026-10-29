@@ -32,6 +32,7 @@ pub struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_field_key)
+            .add_observer(make_typeable)
             .add_observer(on_frame_press)
             .add_observer(on_clear_press)
             .add_systems(
@@ -48,9 +49,17 @@ impl Plugin for InputPlugin {
                 PostUpdate,
                 fix_selection_end
                     .in_set(bevy::ui::UiSystems::PostLayout)
-                    .after(bevy::ui::widget::scroll_editable_text),
+                    .after(bevy::ui::widget::update_editable_text_layout),
             );
     }
+}
+
+/// Since Bevy 0.20 an `EditableText` only holds the text, and Bevy's `TextInput` widget is what
+/// takes the keyboard (typing, selecting, copying): every editable text here gets both.
+fn make_typeable(add: On<Add<EditableText>>, mut commands: Commands) {
+    commands
+        .entity(add.entity)
+        .try_insert_if_new(bevy::ui_widgets::TextInput);
 }
 
 /// Enter was pressed in a text input. Targets the field entity and bubbles to its ancestors.
@@ -285,6 +294,7 @@ impl TextInput {
             selection_color: theme.selection,
             unfocused_selection_color: Color::NONE,
             selected_text_color: Some(theme.selection_foreground),
+            selection_radius: 0.0,
         };
         let placeholder_color = theme.subtle_foreground;
         let blink = theme.caret_blink_period;
@@ -445,7 +455,7 @@ impl TextInput {
 
 /// A press on a cleanable input's ✕ empties its field.
 fn on_clear_press(
-    mut press: On<Pointer<Press>>,
+    mut press: On<PointerPress>,
     q_clear: Query<&ChildOf, With<TextInputClear>>,
     q_frame: Query<&Children, With<TextInputFrame>>,
     mut q_field: Query<&mut EditableText, (With<TextInputField>, Without<InteractionDisabled>)>,
@@ -522,7 +532,7 @@ fn on_field_key(
 
 /// Clicking the frame's padding focuses the field and moves the caret to the end.
 fn on_frame_press(
-    mut press: On<Pointer<Press>>,
+    mut press: On<PointerPress>,
     q_frame: Query<&Children, With<TextInputFrame>>,
     mut q_field: Query<&mut EditableText, (With<TextInputField>, Without<InteractionDisabled>)>,
     mut focus: ResMut<InputFocus>,

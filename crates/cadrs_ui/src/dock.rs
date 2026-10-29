@@ -306,7 +306,7 @@ fn on_toggle(ev: On<ToggleDockPanel>, mut q: Query<&mut DockPanelState>, mut com
 }
 
 fn on_grip_drag_start(
-    mut ev: On<Pointer<DragStart>>,
+    mut ev: On<PointerDragStart>,
     mut q: Query<&mut DockGrip>,
     q_state: Query<&DockPanelState>,
 ) {
@@ -320,7 +320,7 @@ fn on_grip_drag_start(
 }
 
 fn on_grip_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q: Query<&DockGrip>,
     mut q_state: Query<&mut DockPanelState>,
 ) {
@@ -340,7 +340,7 @@ fn on_grip_drag(
 }
 
 fn on_grip_drag_end(
-    mut ev: On<Pointer<DragEnd>>,
+    mut ev: On<PointerDragEnd>,
     mut q: Query<&mut DockGrip>,
     q_state: Query<&DockPanelState>,
     mut commands: Commands,

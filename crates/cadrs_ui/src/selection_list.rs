@@ -664,7 +664,7 @@ fn rows_moved(dy: f32) -> isize {
 
 /// A handle's drag moves its row with the pointer.
 fn on_handle_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q: Query<&ItemHandle>,
     mut q_node: Query<(&mut Node, &mut ZIndex)>,
 ) {
@@ -678,7 +678,7 @@ fn on_handle_drag(
 
 /// Dropped: the row goes where it was dragged to.
 fn on_handle_drag_end(
-    mut ev: On<Pointer<DragEnd>>,
+    mut ev: On<PointerDragEnd>,
     q: Query<&ItemHandle>,
     q_state: Query<&SelectionListState>,
     mut q_node: Query<(&mut Node, &mut ZIndex)>,
@@ -705,7 +705,7 @@ fn on_handle_drag_end(
 }
 
 fn on_list_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<(), With<SelectionListState>>,
     mut commands: Commands,
 ) {

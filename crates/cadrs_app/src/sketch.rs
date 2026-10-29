@@ -19,6 +19,7 @@
 //! Every change goes through the command layer ([`ActiveDocument::execute`]). Tools (M4 on)
 //! plug into [`ActiveSketchTool`]; Esc first leaves the active tool, then clears the selection.
 
+use crate::GizmoGroups;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::InputFocus;
@@ -49,8 +50,8 @@ impl Plugin for SketchPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveSketchTool>()
             .init_resource::<SketchViewSettings>()
-            .init_gizmo_group::<SketchPlaneGizmos>()
-            .init_gizmo_group::<FacePlaneGizmos>()
+            .gizmo_group::<SketchPlaneGizmos>()
+            .gizmo_group::<FacePlaneGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

@@ -1193,9 +1193,12 @@ fn view(world: &World) -> Option<(View, bool)> {
 }
 
 /// Keeps the dialog in step with the feature and the session.
-fn sync_dialog(world: &mut World, mut last: Local<Option<View>>) {
+fn sync_dialog(
+    world: &mut World,
+    q: &mut QueryState<Entity, With<DerivedDialog>>,
+    mut last: Local<Option<View>>,
+) {
     let found = view(world);
-    let mut q = world.query_filtered::<Entity, With<DerivedDialog>>();
     let dialog = q.iter(world).next();
     let Some((v, valid)) = found else {
         if let Some(e) = dialog {

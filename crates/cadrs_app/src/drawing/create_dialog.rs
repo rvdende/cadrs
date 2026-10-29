@@ -734,8 +734,7 @@ fn options_row(b: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingSta
                             "Four views needs a referenced part: use Create Drawing of… on its tab"
                         }
                     }),
-                    Interaction::default(),
-                    observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    observe(move |_: On<PointerClick>, mut commands: Commands| {
                         if enabled {
                             commands.queue(move |w: &mut World| {
                                 update_state(w, |s| s.four_views = four)

@@ -1666,7 +1666,7 @@ fn on_column_resize(ev: On<TableColumnResize>, mut ui: ResMut<BomUi>) {
 }
 
 fn on_panel_resize_start(
-    mut ev: On<Pointer<DragStart>>,
+    mut ev: On<PointerDragStart>,
     mut q: Query<(&mut BomPanelResize, &ChildOf)>,
     q_node: Query<&Node>,
 ) {
@@ -1689,7 +1689,7 @@ fn on_panel_resize_start(
 
 /// Dragging the panel's left edge: wider to the left (kept for the session).
 fn on_panel_resize_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q: Query<(&BomPanelResize, &ChildOf)>,
     mut q_node: Query<&mut Node, With<BomPanelRoot>>,
     mut ui: ResMut<BomUi>,

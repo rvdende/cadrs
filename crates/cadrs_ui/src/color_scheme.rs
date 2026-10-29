@@ -729,8 +729,16 @@ pub struct MappedScheme(ColorScheme);
 /// What the scheme maps: UI nodes and their text spans (not world-space `Text2d`, like a
 /// drawing sheet's text, which sits on paper).
 type UiColor = Or<(With<Node>, With<TextSpan>)>;
-type Keep = (Has<KeepColors>, Has<KeepFill>);
-type Item<'a, T> = (Entity, Mut<'a, T>, Option<Mut<'a, Mapped<T>>>, (bool, bool));
+/// Left alone: [`KeepColors`], a [`KeepFill`] node's fill, and full-colour icons, which the icon
+/// atlas draws for the scheme itself (their tint only fades them; mapping it as ink fought
+/// `icon::sync_icon_layers` over the colour every frame, and every write laid the UI out again).
+type Keep = (Has<KeepColors>, Has<KeepFill>, Has<crate::icon::FullColour>);
+type Item<'a, T> = (
+    Entity,
+    Mut<'a, T>,
+    Option<Mut<'a, Mapped<T>>>,
+    (bool, bool, bool),
+);
 
 /// Maps the colors of `T` to the scheme in force: the ones changed since the last frame, or all
 /// of them when the scheme changes.
@@ -774,8 +782,8 @@ pub fn apply_scheme<T: SchemeColors>(
         surface: surface(e),
         marker: marker(e),
     };
-    let mut visit = |(e, mut c, mapped, (keep, keep_fill)): Item<T>| {
-        if keep || (T::FILL && keep_fill) {
+    let mut visit = |(e, mut c, mapped, (keep, keep_fill, full_colour)): Item<T>| {
+        if keep || full_colour || (T::FILL && keep_fill) {
             return;
         }
         let current = c.get();

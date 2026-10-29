@@ -487,11 +487,7 @@ impl TreeItem {
     }
 }
 
-fn on_toggle_click(
-    mut click: On<Pointer<Click>>,
-    q: Query<&TreeRowToggle>,
-    mut commands: Commands,
-) {
+fn on_toggle_click(mut click: On<PointerClick>, q: Query<&TreeRowToggle>, mut commands: Commands) {
     if let Ok(t) = q.get(click.entity) {
         click.propagate(false);
         commands.trigger(TreeRowToggled { entity: t.row });
@@ -523,7 +519,7 @@ fn sync_row_toggles(
     }
 }
 
-fn on_chevron_press(mut click: On<Pointer<Click>>, q: Query<&TreeChevron>, mut commands: Commands) {
+fn on_chevron_press(mut click: On<PointerClick>, q: Query<&TreeChevron>, mut commands: Commands) {
     if let Ok(c) = q.get(click.entity) {
         click.propagate(false);
         commands.trigger(TreeToggle { entity: c.0 });

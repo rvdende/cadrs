@@ -867,8 +867,10 @@ fn panel_model(world: &mut World) -> Option<PanelModel> {
     })
 }
 
-fn sync_panel(world: &mut World) {
-    let mut q = world.query_filtered::<(Entity, Option<&PanelKey>), With<RenderPanelHost>>();
+fn sync_panel(
+    world: &mut World,
+    q: &mut QueryState<(Entity, Option<&PanelKey>), With<RenderPanelHost>>,
+) {
     let Some((host, key)) = q.iter(world).next().map(|(e, k)| (e, k.copied())) else {
         return;
     };

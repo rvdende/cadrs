@@ -965,7 +965,7 @@ pub(crate) fn body_mesh(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u
 
 /// Re-lights the bodies when the view turns (the light follows the camera) or the highlight
 /// changes.
-pub fn shade_pcb(world: &mut World) {
+pub fn shade_pcb(world: &mut World, q: &mut QueryState<(&PcbBodyMesh, &Mesh3d)>) {
     let v = world.resource::<ViewportView>().view;
     let levels = highlight_levels(world);
     let scene = world.resource::<PcbScene>();
@@ -976,7 +976,6 @@ pub fn shade_pcb(world: &mut World) {
     lv.hash(&mut h);
     scene.signature.hash(&mut h);
     let key = (v.back(), v.up(), h.finish());
-    let mut q = world.query::<(&PcbBodyMesh, &Mesh3d)>();
     let items: Vec<(usize, FaceBase, Option<ItemId>, Handle<Mesh>)> = q
         .iter(world)
         .map(|(b, m)| (b.index, b.base, b.item, m.0.clone()))

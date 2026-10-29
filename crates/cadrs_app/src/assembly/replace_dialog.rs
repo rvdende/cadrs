@@ -417,7 +417,7 @@ fn sync_dialog(world: &mut World) {
                             Tooltip::new(format!("{name} (Part Studio {studio})")),
                         ));
                         row.observe(
-                            |click: On<Pointer<Click>>,
+                            |click: On<PointerClick>,
                              q: Query<&PartRow>,
                              mut commands: Commands| {
                                 if let Ok(r) = q.get(click.entity).copied() {

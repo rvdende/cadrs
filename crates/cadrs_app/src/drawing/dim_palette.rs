@@ -323,9 +323,8 @@ fn palette_panel(
                     },
                     BorderColor::all(t.input_border),
                     BackgroundColor(t.background),
-                    Interaction::default(),
                     cadrs_ui::Tooltip::new(tip),
-                    observe(move |_: On<Pointer<Click>>, mut commands: Commands| {
+                    observe(move |_: On<PointerClick>, mut commands: Commands| {
                         commands.queue(move |w: &mut World| insert_symbol(w, sym));
                     }),
                 ))

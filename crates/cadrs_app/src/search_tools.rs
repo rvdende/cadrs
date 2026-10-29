@@ -311,7 +311,7 @@ fn launch(world: &mut World, i: usize) {
     }
 }
 
-fn on_box_click(click: On<Pointer<Click>>, q: Query<&Name>, mut commands: Commands) {
+fn on_box_click(click: On<PointerClick>, q: Query<&Name>, mut commands: Commands) {
     if click.button == PointerButton::Primary
         && q.get(click.entity)
             .is_ok_and(|n| n.as_str() == "search-tools")

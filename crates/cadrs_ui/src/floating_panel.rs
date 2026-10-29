@@ -229,7 +229,7 @@ impl FloatingPanel {
 }
 
 /// Dragging the header moves the panel.
-fn on_header_drag(ev: On<Pointer<Drag>>, q: Query<&PanelHeader>, mut q_node: Query<&mut Node>) {
+fn on_header_drag(ev: On<PointerDrag>, q: Query<&PanelHeader>, mut q_node: Query<&mut Node>) {
     let Ok(h) = q.get(ev.entity) else { return };
     let Ok(mut n) = q_node.get_mut(h.0) else {
         return;

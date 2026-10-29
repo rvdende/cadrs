@@ -239,6 +239,7 @@ struct Follow {
 
 /// Scrolls the feature list to keep the busy row [`FOLLOW_AT`] down it, eased (at once with
 /// motion off), so the queued rows after it show below.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_busy(
     time: Res<Time<Real>>,
     motion: Res<MotionSettings>,
@@ -247,16 +248,28 @@ fn follow_busy(
     nodes: Query<(&Name, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     rows: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform)>,
     mut lists: Query<(&Name, &ComputedNode, &mut ScrollPosition)>,
+    (cache, slots, container): (
+        Res<PartCache>,
+        Res<crate::document::FeatureRowSlots>,
+        Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<crate::document::FeatureRows>>,
+    ),
 ) {
     let busy = overlays
         .iter()
         .find(|(_, o)| o.step == Some(RebuildStep::Busy))
         .map(|(row, _)| row.parent());
-    let Some(busy) = busy else {
+    // While the rebuild shows: a busy row out of a long list's window isn't built, so it has no
+    // overlay; it is placed by its feature's index.
+    let busy_feature = (busy.is_none() && overlays.iter().next().is_some())
+        .then(|| cache.rebuild_steps())
+        .flatten()
+        .and_then(|steps| steps.into_iter().find(|(_, s)| *s == RebuildStep::Busy))
+        .map(|(id, _)| id);
+    if busy.is_none() && busy_feature.is_none() {
         // The rebuild is over (or not showing yet): the next one follows again.
         *follow = Follow::default();
         return;
-    };
+    }
     let Some((_, list, mut pos)) = lists
         .iter_mut()
         .find(|(n, ..)| n.as_str() == "feature-scroll")
@@ -267,12 +280,6 @@ fn follow_busy(
         follow.stopped = true;
     }
     if follow.stopped {
-        return;
-    }
-    let Ok((row, row_at)) = rows.get(busy) else {
-        return;
-    };
-    if row.size().y <= 0.0 {
         return;
     }
     // The row's top within the scrolled content (the list's logical pixels): from the content's
@@ -286,7 +293,25 @@ fn follow_busy(
     let top = |n: &ComputedNode, at: &bevy::ui::UiGlobalTransform| {
         (at.translation.y - n.size().y / 2.0) * s
     };
-    let offset = top(row, row_at) - top(content, content_at);
+    let row_top = match busy {
+        Some(busy) => match rows.get(busy) {
+            Ok((row, row_at)) if row.size().y > 0.0 => top(row, row_at),
+            _ => return,
+        },
+        None => {
+            let Some(row_top) =
+                busy_feature
+                    .zip(container.single().ok())
+                    .and_then(|(id, (n, at))| {
+                        crate::document::feature_row_screen_top(id, &slots, n, at)
+                    })
+            else {
+                return;
+            };
+            row_top
+        }
+    };
+    let offset = row_top - top(content, content_at);
     let max = ((list.content_size().y - list.size().y) * s).max(0.0);
     let target = (offset - FOLLOW_AT * list.size().y * s)
         .round()

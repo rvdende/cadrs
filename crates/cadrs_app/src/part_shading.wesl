@@ -2,8 +2,8 @@
 // face's base colour (sRGB, 0–1) and opacity, UV x is 1 on a selected face. The light follows
 // the camera, so turning the view costs nothing on the CPU.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_view_bindings::view
+import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_pbr::render::mesh_view_bindings::view;
 
 // P3E.3a: the section view's planes and the render mode (`PartShadingParams`).
 struct PartShadingParams {
@@ -15,7 +15,7 @@ struct PartShadingParams {
     bands: array<vec4<f32>, 6>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: PartShadingParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> params: PartShadingParams;
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;

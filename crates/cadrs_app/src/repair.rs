@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ImageRenderTarget, RenderTarget, ScalingMode};
@@ -55,9 +56,9 @@ pub struct RepairPlugin;
 impl Plugin for RepairPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Repair>()
-            .init_gizmo_group::<RepairEdgeGizmos>()
-            .init_gizmo_group::<RepairHighlightGizmos>()
-            .init_gizmo_group::<RepairCubeArcGizmos>()
+            .gizmo_group::<RepairEdgeGizmos>()
+            .gizmo_group::<RepairHighlightGizmos>()
+            .gizmo_group::<RepairCubeArcGizmos>()
             .add_systems(Startup, (configure_gizmos, spawn_cameras))
             .add_observer(on_button)
             .add_observer(on_sync_checkbox)
@@ -969,14 +970,14 @@ fn mark_replaceable(
 // ---------------------------------------------------------------------------------------------
 // The Repair view's camera controls
 
-fn on_body_press(ev: On<Pointer<Press>>, mut repair: ResMut<Repair>) {
+fn on_body_press(ev: On<PointerPress>, mut repair: ResMut<Repair>) {
     if ev.button == PointerButton::Secondary {
-        repair.press = Some(ev.pointer_location.position);
+        repair.press = Some(ev.pointer.position);
     }
 }
 
 fn on_body_drag(
-    ev: On<Pointer<Drag>>,
+    ev: On<PointerDrag>,
     mut repair: ResMut<Repair>,
     keys: Res<ButtonInput<KeyCode>>,
     prefs: Res<crate::preferences_ui::LocalPreferences>,
@@ -1002,7 +1003,7 @@ fn on_body_drag(
 }
 
 fn on_body_scroll(
-    ev: On<Pointer<bevy::picking::events::Scroll>>,
+    ev: On<PointerScroll>,
     mut repair: ResMut<Repair>,
     q: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<RepairBody>>,
 ) {
@@ -1011,7 +1012,7 @@ fn on_body_scroll(
     };
     let s = node.inverse_scale_factor();
     let center = t.translation * s;
-    let cursor = ev.pointer_location.position - center;
+    let cursor = ev.pointer.position - center;
     let lines = if ev.unit == bevy::input::mouse::MouseScrollUnit::Line {
         ev.y
     } else {
@@ -1021,7 +1022,7 @@ fn on_body_scroll(
 }
 
 fn on_cube_click(
-    ev: On<Pointer<Click>>,
+    ev: On<PointerClick>,
     mut repair: ResMut<Repair>,
     q: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<RepairCubeImage>>,
 ) {
@@ -1033,9 +1034,7 @@ fn on_cube_click(
     };
     let s = node.inverse_scale_factor();
     let top_left = t.translation * s - crate::view_cube::CUBE_WIDGET / 2.0;
-    if let Some(v) =
-        crate::view_cube::view_at_spot(&repair.view, ev.pointer_location.position - top_left)
-    {
+    if let Some(v) = crate::view_cube::view_at_spot(&repair.view, ev.pointer.position - top_left) {
         repair.view = v;
     }
 }

@@ -46,6 +46,7 @@
 
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ImageRenderTarget, RenderTarget, ScalingMode};
@@ -112,9 +113,9 @@ pub struct SheetMetalTablePlugin;
 impl Plugin for SheetMetalTablePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SmTable>()
-            .init_gizmo_group::<FlatLineGizmos>()
-            .init_gizmo_group::<FlatHighlightGizmos>()
-            .init_gizmo_group::<FlatCubeArcGizmos>()
+            .gizmo_group::<FlatLineGizmos>()
+            .gizmo_group::<FlatHighlightGizmos>()
+            .gizmo_group::<FlatCubeArcGizmos>()
             .add_systems(Startup, (configure_gizmos, spawn_cameras))
             .add_observer(on_activate)
             .add_observer(on_context_menu)
@@ -908,18 +909,20 @@ fn units(world: &World) -> cadrs_sketch::units::Units {
 }
 
 /// The panel, rebuilt when what it shows changes.
-fn sync_panel(world: &mut World) {
+fn sync_panel(
+    world: &mut World,
+    q_panel: &mut QueryState<Entity, With<PanelRoot>>,
+    q_folded: &mut QueryState<Entity, With<FoldedLabel>>,
+) {
     let open = is_open(
         world.resource::<SidePanel>(),
         world.resource::<ActiveKind>(),
     );
-    let mut q_panel = world.query_filtered::<Entity, With<PanelRoot>>();
     let old: Vec<Entity> = q_panel.iter(world).collect();
     if !open {
         for e in old {
             world.entity_mut(e).despawn();
         }
-        let mut q_folded = world.query_filtered::<Entity, With<FoldedLabel>>();
         for e in q_folded.iter(world).collect::<Vec<_>>() {
             world.entity_mut(e).despawn();
         }
@@ -989,7 +992,6 @@ fn sync_panel(world: &mut World) {
     for e in old {
         world.entity_mut(e).despawn();
     }
-    let mut q_folded = world.query_filtered::<Entity, With<FoldedLabel>>();
     for e in q_folded.iter(world).collect::<Vec<_>>() {
         world.entity_mut(e).despawn();
     }
@@ -1131,7 +1133,7 @@ fn sync_panel(world: &mut World) {
         .observe(on_flat_scroll)
         .observe(on_flat_click)
         .observe(on_flat_move)
-        .observe(|_: On<Pointer<Out>>, mut t: ResMut<SmTable>| t.flat_hover = None)
+        .observe(|_: On<PointerOut>, mut t: ResMut<SmTable>| t.flat_hover = None)
         .with_children(|b| {
             b.spawn((
                 Name::new("smt-flat-image"),
@@ -1732,7 +1734,7 @@ fn dropdown(
 }
 
 fn on_dropdown_click(
-    mut c: On<Pointer<Click>>,
+    mut c: On<PointerClick>,
     q: Query<(&Dropdown, &Name, &ComputedNode, &UiGlobalTransform)>,
     theme: Res<Theme>,
     mut commands: Commands,
@@ -3729,13 +3731,13 @@ fn flat_point(
     Some((P2::new(p.x as f64, p.y as f64), 6.0 * t.view.scale as f64))
 }
 
-fn on_flat_press(ev: On<Pointer<Press>>, mut t: ResMut<SmTable>) {
+fn on_flat_press(ev: On<PointerPress>, mut t: ResMut<SmTable>) {
     if ev.button == PointerButton::Secondary {
-        t.press = Some(ev.pointer_location.position);
+        t.press = Some(ev.pointer.position);
     }
 }
 
-fn on_flat_drag(ev: On<Pointer<Drag>>, mut t: ResMut<SmTable>) {
+fn on_flat_drag(ev: On<PointerDrag>, mut t: ResMut<SmTable>) {
     match ev.button {
         PointerButton::Secondary => t.view.orbit(ev.delta),
         PointerButton::Middle => t.view.pan(ev.delta),
@@ -3744,7 +3746,7 @@ fn on_flat_drag(ev: On<Pointer<Drag>>, mut t: ResMut<SmTable>) {
 }
 
 fn on_flat_scroll(
-    ev: On<Pointer<bevy::picking::events::Scroll>>,
+    ev: On<PointerScroll>,
     mut t: ResMut<SmTable>,
     q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
 ) {
@@ -3752,7 +3754,7 @@ fn on_flat_scroll(
         return;
     };
     let s = node.inverse_scale_factor();
-    let cursor = ev.pointer_location.position - tr.translation * s;
+    let cursor = ev.pointer.position - tr.translation * s;
     let lines = if ev.unit == bevy::input::mouse::MouseScrollUnit::Line {
         ev.y
     } else {
@@ -3779,20 +3781,20 @@ fn flat_hit(cache: &PartCache, t: &SmTable, p: P2, tol: f64) -> Option<FlatHit> 
 }
 
 fn on_flat_move(
-    ev: On<Pointer<Move>>,
+    ev: On<PointerMove>,
     mut t: ResMut<SmTable>,
     cache: Res<PartCache>,
     q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
 ) {
-    let hit = flat_point(&t, &q, ev.pointer_location.position)
-        .and_then(|(p, tol)| flat_hit(&cache, &t, p, tol));
+    let hit =
+        flat_point(&t, &q, ev.pointer.position).and_then(|(p, tol)| flat_hit(&cache, &t, p, tol));
     if t.flat_hover != hit {
         t.flat_hover = hit;
     }
 }
 
 fn on_flat_click(
-    ev: On<Pointer<Click>>,
+    ev: On<PointerClick>,
     t: Res<SmTable>,
     cache: Res<PartCache>,
     q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatBody>>,
@@ -3803,7 +3805,7 @@ fn on_flat_click(
     if ev.button != PointerButton::Primary || sketching.is_some() {
         return;
     }
-    let Some((p, tol)) = flat_point(&t, &q, ev.pointer_location.position) else {
+    let Some((p, tol)) = flat_point(&t, &q, ev.pointer.position) else {
         return;
     };
     let hit = flat_hit(&cache, &t, p, tol);
@@ -3819,7 +3821,7 @@ fn on_flat_click(
 }
 
 fn on_cube_click(
-    mut ev: On<Pointer<Click>>,
+    mut ev: On<PointerClick>,
     mut t: ResMut<SmTable>,
     q: Query<(&ComputedNode, &UiGlobalTransform), With<FlatCubeImage>>,
 ) {
@@ -3832,9 +3834,7 @@ fn on_cube_click(
     };
     let s = node.inverse_scale_factor();
     let top_left = tr.translation * s - crate::view_cube::CUBE_WIDGET / 2.0;
-    if let Some(v) =
-        crate::view_cube::view_at_spot(&t.view, ev.pointer_location.position - top_left)
-    {
+    if let Some(v) = crate::view_cube::view_at_spot(&t.view, ev.pointer.position - top_left) {
         t.view = v;
     }
 }

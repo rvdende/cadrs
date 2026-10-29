@@ -99,7 +99,7 @@ pub fn horizontal_splitter(
 pub struct HoverCursor(pub CursorKind);
 
 fn on_drag_start(
-    mut ev: On<Pointer<DragStart>>,
+    mut ev: On<PointerDragStart>,
     mut q: Query<&mut Splitter>,
     q_node: Query<&ComputedNode>,
 ) {
@@ -115,7 +115,7 @@ fn on_drag_start(
 }
 
 fn on_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q: Query<(&Splitter, &ChildOf)>,
     q_computed: Query<&ComputedNode>,
     mut q_node: Query<&mut Node>,
@@ -143,7 +143,7 @@ fn on_drag(
 }
 
 fn on_drag_end(
-    mut ev: On<Pointer<DragEnd>>,
+    mut ev: On<PointerDragEnd>,
     mut q: Query<&mut Splitter>,
     q_node: Query<&Node>,
     mut commands: Commands,

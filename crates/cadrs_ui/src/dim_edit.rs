@@ -300,6 +300,7 @@ impl DimEdit {
                                 selection_color: colors.selection,
                                 unfocused_selection_color: colors.selection,
                                 selected_text_color: Some(Color::WHITE),
+                                selection_radius: 0.0,
                             },
                             TabIndex(0),
                             Node {
@@ -402,7 +403,7 @@ pub enum DimEditButton {
 }
 
 fn on_button_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     q_button: Query<(&DimEditButton, &ChildOf)>,
     q_children: Query<&Children>,
     q_field: Query<&EditableText, With<DimEditField>>,
@@ -820,7 +821,7 @@ fn row_box(
 
 #[allow(clippy::too_many_arguments)]
 fn on_row_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q_row: Query<&DimEditRow>,
     q_parent: Query<&ChildOf>,
     q_children: Query<&Children>,
@@ -850,7 +851,7 @@ fn on_row_click(
 }
 
 fn on_row_over(
-    over: On<Pointer<Over>>,
+    over: On<PointerOver>,
     q_row: Query<&DimEditRow>,
     q_parent: Query<&ChildOf>,
     q_children: Query<&Children>,

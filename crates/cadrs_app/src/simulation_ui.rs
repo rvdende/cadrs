@@ -32,6 +32,7 @@ use cadrs_ui::ShortcutKey;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -67,7 +68,7 @@ impl Plugin for SimulationPlugin {
         app.init_resource::<SimState>()
             .init_resource::<ResultGeometry>()
             .init_resource::<SimInputs>()
-            .init_gizmo_group::<LoadGizmos>()
+            .gizmo_group::<LoadGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

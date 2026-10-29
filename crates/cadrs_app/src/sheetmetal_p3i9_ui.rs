@@ -2943,11 +2943,11 @@ fn place_handles(world: &mut World) {
     }
 }
 
-fn on_handle_drag(ev: On<Pointer<Drag>>, q: Query<&ConnHandle>, mut commands: Commands) {
+fn on_handle_drag(ev: On<PointerDrag>, q: Query<&ConnHandle>, mut commands: Commands) {
     let Ok(h) = q.get(ev.entity).copied() else {
         return;
     };
-    let pos = ev.pointer_location.position;
+    let pos = ev.pointer.position;
     commands.queue(move |world: &mut World| {
         let Some((_, g)) = loft_state(world) else {
             return;
@@ -2966,7 +2966,7 @@ fn on_handle_drag(ev: On<Pointer<Drag>>, q: Query<&ConnHandle>, mut commands: Co
     });
 }
 
-fn on_handle_drag_end(_: On<Pointer<DragEnd>>, mut commands: Commands) {
+fn on_handle_drag_end(_: On<PointerDragEnd>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let Some((i, side, t)) = world.resource_mut::<ConnDrag>().0.take() else {
             return;

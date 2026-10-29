@@ -656,6 +656,10 @@ fn validate_tolerances(
     q_ok: Query<(Entity, &Name, Has<bevy::ui::InteractionDisabled>)>,
     mut commands: Commands,
 ) {
+    // (Only while the dialog is open: the rows' query looks through every named node.)
+    if q_err.is_empty() {
+        return;
+    }
     let shown = q_rows
         .iter()
         .any(|(n, node)| n.as_str() == "export-tolerance-row" && node.display != Display::None);

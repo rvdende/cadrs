@@ -42,7 +42,7 @@ pub enum Call {
     CreateDocument(CreateDocument),
     OpenDocument(OpenDocument),
     GetDocument,
-    GetFrameStats,
+    GetFrameStats(GetFrameStats),
     AddPartStudio(AddPartStudio),
     AddAssembly(AddPartStudio),
     AddSketch(AddSketch),
@@ -56,6 +56,10 @@ pub enum Call {
     RenameFeature(RenameFeature),
     SetPart(SetPart),
     SetFeatureVisible(SetFeatureVisible),
+    SetRollback(SetRollback),
+    ShowFeature(FeatureName),
+    GetUiLayout(GetUiLayout),
+    SetPreferences(SetPreferences),
     ListFaces(PartStudio),
     ListEdges(PartStudio),
     Undo,
@@ -266,8 +270,11 @@ impl Cadrs {
         the Time systems preference, or CADRS_FRAME_PROFILE=1. The panel at the bottom left of the 3D \
         view shows the same (F12 steps through it, the fps line, nothing)."
     )]
-    async fn get_frame_stats(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetFrameStats).await
+    async fn get_frame_stats(
+        &self,
+        Parameters(p): Parameters<GetFrameStats>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetFrameStats(p)).await
     }
 
     #[tool(
@@ -441,6 +448,46 @@ impl Cadrs {
         Parameters(p): Parameters<SetFeatureVisible>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::SetFeatureVisible(p)).await
+    }
+
+    #[tool(
+        description = "Move a Part Studio's rollback bar (one undo step): only the features above it are built, so the Part Studio shows what it was at that point. Give `index` (how many features stay above it) or `after` (a feature's name); neither: roll to the end. Returns where the bar is, the last feature built and the next one."
+    )]
+    async fn set_rollback(
+        &self,
+        Parameters(p): Parameters<SetRollback>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetRollback(p)).await
+    }
+
+    #[tool(
+        description = "Scroll the Part Studio's feature list to a feature's row (opening its folder), as double-clicking its part in the view does. Returns once asked; the list scrolls over the next frames."
+    )]
+    async fn show_feature(
+        &self,
+        Parameters(p): Parameters<FeatureName>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ShowFeature(p)).await
+    }
+
+    #[tool(
+        description = "List the app's named UI nodes (panels, lists, buttons, the viewport area) with their on-screen rectangle in logical pixels (x, y of the top-left corner, w, h), whether they are shown, and their parent's name. Filter by part of the name. Use it to find what is laid out wrong: a panel taller than the window, a list that does not scroll."
+    )]
+    async fn get_ui_layout(
+        &self,
+        Parameters(p): Parameters<GetUiLayout>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetUiLayout(p)).await
+    }
+
+    #[tool(
+        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs). Give only what changes; it answers with all the preferences in force."
+    )]
+    async fn set_preferences(
+        &self,
+        Parameters(p): Parameters<SetPreferences>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetPreferences(p)).await
     }
 
     #[tool(

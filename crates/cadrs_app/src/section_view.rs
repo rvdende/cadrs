@@ -18,7 +18,7 @@
 //!   only ones cut.
 //! - The gizmo: the arrow moves the plane along its normal, the arc turns it about its in-plane
 //!   axis (the angle shown beside it, "25 deg").
-//! - The material removed is clipped on the GPU (`part_shading.wgsl`), the edges on the CPU, and
+//! - The material removed is clipped on the GPU (`part_shading.wesl`), the edges on the CPU, and
 //!   picking ignores what was cut away (a pick through a cap stops at it). The caps are hatched.
 //! - During movement, the displayed mesh supplies immediate closing faces. After release,
 //!   one exact cap job at a time replaces these previews; obsolete drag positions are not queued.
@@ -41,6 +41,7 @@ mod preview;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -68,8 +69,8 @@ pub struct SectionViewPlugin;
 impl Plugin for SectionViewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SectionViews>()
-            .init_gizmo_group::<SectionPlaneGizmos>()
-            .init_gizmo_group::<SectionArcGizmos>()
+            .gizmo_group::<SectionPlaneGizmos>()
+            .gizmo_group::<SectionArcGizmos>()
             .add_systems(Startup, configure_gizmos)
             .init_resource::<SectionClip>()
             .init_resource::<SectionArrow>()
@@ -1050,7 +1051,7 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Name>, mut commands: Co
 }
 
 fn on_plane_row(
-    ev: On<Pointer<Click>>,
+    ev: On<PointerClick>,
     q_item: Query<&SelectionListItem>,
     q_name: Query<&Name>,
     mut commands: Commands,

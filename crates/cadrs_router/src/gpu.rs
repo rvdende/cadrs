@@ -142,7 +142,12 @@ impl Gpu {
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        let out = bytemuck::cast_slice::<u8, u32>(&slice.get_mapped_range()).to_vec();
+        let out = bytemuck::cast_slice::<u8, u32>(
+            &slice
+                .get_mapped_range()
+                .expect("the readback buffer is mapped"),
+        )
+        .to_vec();
         buf.unmap();
         out
     }

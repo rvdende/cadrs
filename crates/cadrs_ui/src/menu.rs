@@ -176,7 +176,7 @@ impl Default for LastPointerButton {
     }
 }
 
-fn record_pointer_button(press: On<Pointer<Press>>, mut last: ResMut<LastPointerButton>) {
+fn record_pointer_button(press: On<PointerPress>, mut last: ResMut<LastPointerButton>) {
     if last.0 != press.button {
         last.0 = press.button;
     }
@@ -919,7 +919,7 @@ pub struct ContextMenuRequested {
 pub struct ContextMenuAnchor;
 
 fn on_secondary_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<(), With<ContextMenuTarget>>,
     mut commands: Commands,
 ) {
@@ -929,7 +929,7 @@ fn on_secondary_click(
     click.propagate(false);
     commands.trigger(ContextMenuRequested {
         entity: click.entity,
-        position: click.pointer_location.position,
+        position: click.pointer.position,
     });
 }
 
@@ -1000,7 +1000,7 @@ pub fn any_menu_open(q: &Query<(), With<MenuDismissLayer>>) -> bool {
 }
 
 fn on_dismiss_press(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     q: Query<(), With<MenuDismissLayer>>,
     mut commands: Commands,
 ) {

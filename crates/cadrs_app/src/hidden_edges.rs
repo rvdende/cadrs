@@ -24,7 +24,7 @@ pub struct HiddenEdgesPlugin;
 
 impl Plugin for HiddenEdgesPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "hidden_edges.wgsl");
+        embedded_asset!(app, "hidden_edges.wesl");
         app.add_plugins(MaterialPlugin::<HiddenLineMaterial>::default())
             .add_systems(
                 Update,
@@ -67,13 +67,13 @@ pub struct HiddenLineParams {
     pub color: Vec4,
     /// The section view's clip plane (see [`crate::part_shading::PartShadingParams`]).
     pub clip: [Vec4; crate::section_view::MAX_PLANES],
-    /// x: the dash period (mm); y: the depth bias toward the eye (see `hidden_edges.wgsl`).
+    /// x: the dash period (mm); y: the depth bias toward the eye (see `hidden_edges.wesl`).
     pub dash: Vec4,
 }
 
 impl Material for HiddenLineMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://cadrs_app/hidden_edges.wgsl".into()
+        "embedded://cadrs_app/hidden_edges.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

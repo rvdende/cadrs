@@ -1,6 +1,6 @@
 //! The ground grid under the 3D view (on by default), drawn like the schematic's grid
 //! (`crate::eda`): a faint line on every step and a small cross on every fifth line, with the
-//! X and Y axes in their colours (`ground_grid.wgsl`). It is a quad on the XY plane around the
+//! X and Y axes in their colours (`ground_grid.wesl`). It is a quad on the XY plane around the
 //! focus, as wide as the grid is seen, with a material that draws the pattern per pixel, so the
 //! lines stay one pixel at any zoom. Its step follows the zoom ([`crate::viewport`]).
 
@@ -17,7 +17,7 @@ pub struct GroundGridPlugin;
 
 impl Plugin for GroundGridPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "ground_grid.wgsl");
+        embedded_asset!(app, "ground_grid.wesl");
         app.add_plugins(MaterialPlugin::<GroundGridMaterial>::default());
     }
 }
@@ -32,7 +32,7 @@ pub struct GroundGridMaterial {
     pub params: GroundGridParams,
 }
 
-/// What `ground_grid.wgsl` draws with. Colours are linear RGBA.
+/// What `ground_grid.wesl` draws with. Colours are linear RGBA.
 #[derive(Debug, Clone, Copy, PartialEq, ShaderType)]
 pub struct GroundGridParams {
     pub line: Vec4,
@@ -65,7 +65,7 @@ impl Default for GroundGridParams {
 
 impl Material for GroundGridMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://cadrs_app/ground_grid.wgsl".into()
+        "embedded://cadrs_app/ground_grid.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

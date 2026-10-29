@@ -656,9 +656,12 @@ fn thumb_of(world: &World, id: ElementId) -> Option<Handle<Image>> {
 
 /// Shows or hides the dock and spawns the panel's frame once (header, search, filters, the
 /// list's frame, footer and preview).
-fn sync_panel(world: &mut World) {
+fn sync_panel(
+    world: &mut World,
+    q_dock: &mut QueryState<(Entity, &mut Node), With<TabManagerDock>>,
+    q: &mut QueryState<Entity, With<TabManagerPanel>>,
+) {
     let open = world.resource::<TabManager>().open;
-    let mut q_dock = world.query_filtered::<(Entity, &mut Node), With<TabManagerDock>>();
     let Some((dock, mut node)) = q_dock.iter_mut(world).next() else {
         return;
     };
@@ -666,7 +669,6 @@ fn sync_panel(world: &mut World) {
     if node.display != want {
         node.display = want;
     }
-    let mut q = world.query_filtered::<Entity, With<TabManagerPanel>>();
     let existing: Vec<Entity> = q.iter(world).collect();
     if !open {
         for e in existing {
@@ -1339,7 +1341,7 @@ fn on_row_rename_commit(
 }
 
 fn on_row_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<&ManagerRow>,
     keys: Res<ButtonInput<KeyCode>>,
     drag: Res<ManagerDrag>,
@@ -1535,7 +1537,7 @@ struct DropLine;
 struct DragGhost;
 
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q: Query<&ManagerRow>,
     tm: Res<TabManager>,
     doc: Option<Res<ActiveDocument>>,
@@ -1558,23 +1560,23 @@ fn on_drag_start(
     };
     *drag = ManagerDrag {
         items,
-        start: ev.pointer_location.position,
-        pointer: ev.pointer_location.position,
+        start: ev.pointer.position,
+        pointer: ev.pointer.position,
         moved: false,
         target: None,
     };
 }
 
-fn on_drag(ev: On<Pointer<Drag>>, q: Query<(), With<ManagerRow>>, mut drag: ResMut<ManagerDrag>) {
+fn on_drag(ev: On<PointerDrag>, q: Query<(), With<ManagerRow>>, mut drag: ResMut<ManagerDrag>) {
     if q.contains(ev.entity) && !drag.items.is_empty() {
-        drag.pointer = ev.pointer_location.position;
+        drag.pointer = ev.pointer.position;
         if drag.pointer.distance(drag.start) > 5.0 {
             drag.moved = true;
         }
     }
 }
 
-fn on_drag_end(ev: On<Pointer<DragEnd>>, q: Query<(), With<ManagerRow>>, mut commands: Commands) {
+fn on_drag_end(ev: On<PointerDragEnd>, q: Query<(), With<ManagerRow>>, mut commands: Commands) {
     if !q.contains(ev.entity) {
         return;
     }

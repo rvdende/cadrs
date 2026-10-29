@@ -497,10 +497,13 @@ fn is_ghost_part(p: &cadrs_core::PartId) -> bool {
     (p.feature.0.as_u128() >> 64) == (GHOST >> 64)
 }
 
-fn sync_dialog(world: &mut World, mut dimmed: Local<Vec<cadrs_core::PartId>>) {
+fn sync_dialog(
+    world: &mut World,
+    q_open: &mut QueryState<Entity, With<ReplicateDialog>>,
+    mut dimmed: Local<Vec<cadrs_core::PartId>>,
+) {
     let Some(s) = world.get_resource::<ReplicateSession>().cloned() else {
-        let mut q = world.query_filtered::<Entity, With<ReplicateDialog>>();
-        let old: Vec<Entity> = q.iter(world).collect();
+        let old: Vec<Entity> = q_open.iter(world).collect();
         for e in old {
             world.entity_mut(e).despawn();
         }

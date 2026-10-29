@@ -7,7 +7,7 @@
 //!
 //! Input without a window: the harness writes `PointerInput` messages for the mouse pointer
 //! (see [`runner::HARNESS_POINTER`] for why not a custom one), located on the render surface, so hovering and clicking go
-//! through normal picking (UI buttons receive `Pointer<Press>`/`Pointer<Click>`). Keys are sent as
+//! through normal picking (UI buttons receive `PointerPress`/`PointerClick`). Keys are sent as
 //! `KeyboardInput` messages, which also update `ButtonInput<KeyCode>`. Keyboard focus dispatch in
 //! `bevy_input_focus` needs a primary window entity, so headless mode spawns a *virtual* one: a
 //! `Window` + `PrimaryWindow` entity that never gets an OS window (winit is disabled).
@@ -241,7 +241,16 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Bevy's default plugins, configured for windowed or headless runs.
 pub fn default_plugins(opts: &HarnessOptions) -> PluginGroupBuilder {
-    let plugins = DefaultPlugins.build();
+    // Bevy gives its pools a thread per core. The app runs hundreds of small systems a frame, and
+    // on many cores handing them out costs more than they do (lock contention, wake-ups): with 10
+    // threads in all a 32-core machine ran house_test (1,677 features) at 127 fps, 105 with 32.
+    // The kernel works in a process of its own, so the app's threads have no heavy work to spread.
+    let plugins = DefaultPlugins.build().set(bevy::app::TaskPoolPlugin {
+        task_pool_options: bevy::app::TaskPoolOptions {
+            max_total_threads: 10,
+            ..default()
+        },
+    });
     if opts.headless {
         plugins
             .set(WindowPlugin {

@@ -10,6 +10,7 @@
 //! 3D view does (components, and a native board's mask, copper and silkscreen). With geometry,
 //! the view zooms to fit it, so every document's thumbnail shows its own.
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{RenderTarget, ScalingMode};
@@ -28,7 +29,7 @@ pub struct ThumbnailPlugin;
 
 impl Plugin for ThumbnailPlugin {
     fn build(&self, app: &mut App) {
-        app.init_gizmo_group::<ThumbGizmos>()
+        app.gizmo_group::<ThumbGizmos>()
             .init_resource::<ThumbnailSketches>()
             .add_systems(Startup, setup_thumbnail)
             .add_systems(Update, (draw_thumbnail_scene, drive_close));

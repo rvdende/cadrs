@@ -150,9 +150,9 @@ pub fn register(app: &mut App) {
     super::part_dialogs::register(app);
 }
 
-fn strips(world: &mut World) {
-    ui::sync_strip(world, Mode::Symbol, SYMBOL_STRIP);
-    ui::sync_strip(world, Mode::Footprint, FOOTPRINT_STRIP);
+fn strips(world: &mut World, q: &mut QueryState<(Entity, &'static ui::ToolStrip)>) {
+    ui::sync_strip(world, q, Mode::Symbol, SYMBOL_STRIP);
+    ui::sync_strip(world, q, Mode::Footprint, FOOTPRINT_STRIP);
     let a = world.resource::<PartState>().tool.action();
     ui::mark_active(world, Mode::Symbol, a);
     ui::mark_active(world, Mode::Footprint, a);

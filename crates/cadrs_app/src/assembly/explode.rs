@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 
+use crate::GizmoGroups;
 use bevy::picking::hover::HoverMap;
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
 use bevy::prelude::*;
@@ -53,7 +54,7 @@ pub struct ExplodePlugin;
 impl Plugin for ExplodePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ExplodeUi>()
-            .init_gizmo_group::<TrailGizmos>()
+            .gizmo_group::<TrailGizmos>()
             .add_systems(Startup, |mut store: ResMut<GizmoConfigStore>| {
                 let (c, _) = store.config_mut::<TrailGizmos>();
                 c.line.width = 2.0;

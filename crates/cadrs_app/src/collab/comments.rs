@@ -415,10 +415,9 @@ fn shown(c: &Comment, filter: usize, me: &str) -> bool {
     }
 }
 
-fn sync_panel(world: &mut World) {
+fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static PanelRoot)>) {
     let panel = world.resource::<CommentsPanel>().clone();
     let generation = world.resource::<DocComments>().generation;
-    let mut q_root = world.query::<(Entity, &PanelRoot)>();
     let roots: Vec<(Entity, bool)> = q_root
         .iter(world)
         .map(|(e, r)| (e, r.0 == generation && r.1 == panel))

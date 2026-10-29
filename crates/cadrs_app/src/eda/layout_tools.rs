@@ -448,8 +448,8 @@ pub fn register(app: &mut App) {
     super::lay_dialogs::register(app);
 }
 
-fn strip(world: &mut World) {
-    ui::sync_strip(world, Mode::Layout, STRIP);
+fn strip(world: &mut World, q: &mut QueryState<(Entity, &'static ui::ToolStrip)>) {
+    ui::sync_strip(world, q, Mode::Layout, STRIP);
     let a = world.resource::<LayoutState>().tool.action();
     ui::mark_active(world, Mode::Layout, a);
 }

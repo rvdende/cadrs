@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::camera::visibility::RenderLayers;
 use bevy::gizmos::config::GizmoLineJoint;
 use bevy::picking::pointer::{PointerAction, PointerButton, PointerId, PointerInput};
@@ -51,9 +52,9 @@ pub struct TriadSet;
 impl Plugin for TriadPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Triad>()
-            .init_gizmo_group::<TriadHaloGizmos>()
-            .init_gizmo_group::<TriadGizmos>()
-            .init_gizmo_group::<SilhouetteGizmos>()
+            .gizmo_group::<TriadHaloGizmos>()
+            .gizmo_group::<TriadGizmos>()
+            .gizmo_group::<SilhouetteGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

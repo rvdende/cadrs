@@ -1097,7 +1097,7 @@ fn on_local_rename(ev: On<InlineEditCommit>, q: Query<&LocalConnectorRow>, mut c
     });
 }
 
-fn on_row_click(click: On<Pointer<Click>>, q: Query<&MateRow>, mut sel: ResMut<MateSelection>) {
+fn on_row_click(click: On<PointerClick>, q: Query<&MateRow>, mut sel: ResMut<MateSelection>) {
     if click.button == PointerButton::Primary
         && let Ok(row) = q.get(click.entity)
     {

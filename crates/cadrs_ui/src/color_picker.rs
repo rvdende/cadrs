@@ -405,7 +405,7 @@ fn mix_at(
 
 #[allow(clippy::type_complexity)]
 fn on_mixer_press(
-    mut ev: On<Pointer<Press>>,
+    mut ev: On<PointerPress>,
     q_square: Query<(&MixerSquare, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     q_hue: Query<(&MixerHue, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     mut q_state: Query<&mut ColorMixerState>,
@@ -413,7 +413,7 @@ fn on_mixer_press(
 ) {
     if mix_at(
         ev.entity,
-        ev.pointer_location.position,
+        ev.pointer.position,
         &q_square,
         &q_hue,
         &mut q_state,
@@ -425,7 +425,7 @@ fn on_mixer_press(
 
 #[allow(clippy::type_complexity)]
 fn on_mixer_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q_square: Query<(&MixerSquare, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     q_hue: Query<(&MixerHue, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
     mut q_state: Query<&mut ColorMixerState>,
@@ -433,7 +433,7 @@ fn on_mixer_drag(
 ) {
     if mix_at(
         ev.entity,
-        ev.pointer_location.position,
+        ev.pointer.position,
         &q_square,
         &q_hue,
         &mut q_state,

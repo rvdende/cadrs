@@ -127,9 +127,24 @@ fn sync_plane_quads(
     q_labels: Query<(Entity, &PlaneFeatureLabel, &Children)>,
     mut q_text: Query<&mut Text>,
     mut quad: Local<Option<Handle<Mesh>>>,
+    mut had_doc: Local<bool>,
+    q_new_area: Query<(), Added<ViewportArea>>,
     mut commands: Commands,
 ) {
     let Some(m) = materials else { return };
+    // Only when what they show changes (`shown` looks every plane's visibility up in a list:
+    // a Part Studio of thousands of features spent a good part of its frame on it).
+    let changed = doc.as_ref().is_none_or(|d| d.is_changed())
+        || std::mem::replace(&mut *had_doc, doc.is_some()) != doc.is_some()
+        || cache.is_changed()
+        || kind.is_changed()
+        || selection.is_changed()
+        || m.is_changed()
+        || theme.is_changed()
+        || !q_new_area.is_empty();
+    if !changed {
+        return;
+    }
     let want = shown(doc.as_deref(), &cache, *kind);
     let quad = quad
         .get_or_insert_with(|| meshes.add(Rectangle::new(PLANE_HALF * 2.0, PLANE_HALF * 2.0)))

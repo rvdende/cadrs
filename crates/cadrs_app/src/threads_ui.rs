@@ -8,6 +8,7 @@
 //! The threads come from [`cadrs_core::views::threads`] (the axis, entry and length recovered
 //! from the hole's edges) and are rebuilt when the parts change.
 
+use crate::GizmoGroups;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use cadrs_core::{ElementKind, Feature, Part};
@@ -19,7 +20,7 @@ pub struct ThreadsPlugin;
 
 impl Plugin for ThreadsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_gizmo_group::<ThreadGizmos>()
+        app.gizmo_group::<ThreadGizmos>()
             .init_resource::<CosmeticThreads>()
             .add_systems(Startup, configure)
             .add_systems(

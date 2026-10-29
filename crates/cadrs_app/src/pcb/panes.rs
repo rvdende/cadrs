@@ -68,7 +68,7 @@ pub fn register(app: &mut App) {
 
 /// The docked pane.
 #[derive(Component)]
-struct PaneRoot;
+pub struct PaneRoot;
 
 /// What the pane was built from.
 #[derive(Resource, Default)]
@@ -116,7 +116,7 @@ fn subject(world: &World) -> Option<Subject> {
 
 /// Rebuilds the docked pane when what it shows changed (selection and hover only restyle the
 /// BOM's rows, so a double click's two clicks land on the same cell).
-pub fn sync_panes(world: &mut World) {
+pub fn sync_panes(world: &mut World, q_panes: &mut QueryState<Entity, With<PaneRoot>>) {
     let pane = world.resource::<PcbUi>().pane;
     let pcb =
         *world.resource::<crate::viewport::ActiveKind>() == crate::viewport::ActiveKind::PcbStudio;
@@ -158,10 +158,7 @@ pub fn sync_panes(world: &mut World) {
             }
         }
     };
-    let have: Vec<Entity> = world
-        .query_filtered::<Entity, With<PaneRoot>>()
-        .iter(world)
-        .collect();
+    let have: Vec<Entity> = q_panes.iter(world).collect();
     if world.resource::<PaneKey>().0 == key && have.is_empty() == key.is_none() {
         return;
     }

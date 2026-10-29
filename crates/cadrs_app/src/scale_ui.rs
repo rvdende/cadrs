@@ -119,7 +119,15 @@ fn sync_scale_notice(
     cache: Res<crate::parts::PartCache>,
     mut q_row: Query<&mut Node, With<ScaleNotice>>,
     mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
+    q_new: Query<(), Added<ScaleNotice>>,
+    mut had_doc: Local<bool>,
 ) {
+    // (Counting the parts and wording the notice each frame cost a large studio.)
+    let doc_changed = doc.as_ref().is_some_and(|d| d.is_changed())
+        || std::mem::replace(&mut *had_doc, doc.is_some()) != doc.is_some();
+    if !doc_changed && !cache.is_changed() && q_new.is_empty() {
+        return;
+    }
     let want = doc
         .as_ref()
         .and_then(|d| d.active_element())
@@ -235,7 +243,7 @@ pub fn step_to_edge(edges: &[f32], max: f32, x: f32, forward: bool) -> f32 {
 
 /// The wheel over the tabs scrolls them sideways, a whole tab at a time (P3F.3–P3F.4 judge).
 fn on_strip_wheel(
-    mut ev: On<Pointer<Scroll>>,
+    mut ev: On<PointerScroll>,
     q_names: Query<(&Name, Option<&ChildOf>)>,
     mut q_strip: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition)>,
     q_tabs: StripTabs,

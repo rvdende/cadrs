@@ -17,6 +17,7 @@
 use cadrs_ui::ShortcutKey;
 use std::collections::HashMap;
 
+use crate::GizmoGroups;
 use crate::ground_grid::{GroundGrid, GroundGridMaterial, GroundGridParams, GroundGridPlugin};
 use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
@@ -40,6 +41,21 @@ pub struct ViewportPlugin;
 
 impl Plugin for ViewportPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            Last,
+            occluded_camera_when_drawn.after(bevy::gizmos::GizmoMeshSystems),
+        );
+        // The views shade their own (no Bevy lights), but Bevy's shadow-caster check queues a
+        // command every frame that builds a query over every archetype (thousands, with the UI).
+        use bevy::ecs::schedule::SystemCondition;
+        app.configure_sets(
+            PostUpdate,
+            bevy::light::SimulationLightSystems::CheckLightVisibility.run_if(
+                any_with_component::<DirectionalLight>
+                    .or_else(any_with_component::<PointLight>)
+                    .or_else(any_with_component::<SpotLight>),
+            ),
+        );
         app.add_plugins(GroundGridPlugin)
             .add_systems(
                 PreUpdate,
@@ -59,9 +75,9 @@ impl Plugin for ViewportPlugin {
             .init_resource::<FeatureRowClick>()
             .init_resource::<ViewportDrag>()
             .init_resource::<ActiveKind>()
-            .init_gizmo_group::<HighlightGizmos>()
-            .init_gizmo_group::<HoverGizmos>()
-            .init_gizmo_group::<EdgeOnGizmos>()
+            .gizmo_group::<HighlightGizmos>()
+            .gizmo_group::<HoverGizmos>()
+            .gizmo_group::<EdgeOnGizmos>()
             .add_systems(
                 PostUpdate,
                 flag_pending_work.run_if(in_state(AppState::Document)),
@@ -798,7 +814,46 @@ fn cpu_light_clusters(settings: Option<ResMut<bevy::light::cluster::GlobalCluste
     }
 }
 
-fn no_light_clusters(add: On<Add, Camera3d>, mut commands: Commands) {
+/// The occluded camera renders only while something is on its layer (a sketch shown, the Extrude
+/// dialog's regions): a camera costs the render thread its passes each frame with nothing to
+/// draw too (house_test went from 187 to 218 fps without it). Off in a drawing and a board's flat
+/// views, whose cameras take its order.
+#[allow(clippy::type_complexity)]
+fn occluded_camera_when_drawn(
+    kind: Res<ActiveKind>,
+    eda2d: Res<crate::eda::Eda2d>,
+    store: Res<GizmoConfigStore>,
+    handles: Res<bevy::gizmos::GizmoHandles>,
+    drawn: Query<
+        (&RenderLayers, &InheritedVisibility),
+        Or<(With<Mesh3d>, With<bevy::gizmos::retained::Gizmo>)>,
+    >,
+    mut q_cam: Query<(&mut Camera, &Name), With<OverlayCamera>>,
+) {
+    let layer = RenderLayers::layer(OCCLUDED_LAYER);
+    // Immediate gizmos drawn this frame (a group's handle is set when it drew).
+    let gizmos = || {
+        store.iter().any(|(id, config, _)| {
+            config.enabled
+                && config.render_layers.intersects(&layer)
+                && handles.handles().get(id).is_some_and(Option::is_some)
+        })
+    };
+    let meshes = || {
+        drawn
+            .iter()
+            .any(|(l, vis)| vis.get() && l.intersects(&layer))
+    };
+    let flat = *kind == ActiveKind::Drawing || eda2d.flat();
+    let want = !flat && (gizmos() || meshes());
+    for (mut cam, name) in &mut q_cam {
+        if name.as_str() == "occluded-camera" && cam.is_active != want {
+            cam.is_active = want;
+        }
+    }
+}
+
+fn no_light_clusters(add: On<Add<Camera3d>>, mut commands: Commands) {
     commands
         .entity(add.entity)
         .insert(bevy::light::cluster::ClusterConfig::None);
@@ -2732,21 +2787,32 @@ fn place_plane_labels(
     parts: Option<Res<crate::parts::PartCache>>,
     meshes: Res<Assets<Mesh>>,
     fills: Query<(&Mesh3d, &InheritedVisibility), With<crate::plane_display::LabelOccluder>>,
+    mut part_bounds: Local<Option<Vec<([f64; 3], [f64; 3])>>>,
 ) {
     let v = view.view;
     let sketch_plane = sketch.active.map(|m| m.plane);
+    if parts.as_ref().is_none_or(|p| p.is_changed()) {
+        *part_bounds = None;
+    }
     // The parts' screen bounds (viewport-relative): a label over a part would draw over its
     // edges, so it hides. From the corners of each part's 3D box (a little larger than its
     // outline; projecting every vertex of every part each frame cost a large assembly most of
     // its frame). Worked out once a label is shown (an assembly shows none, and building every
     // part's boxes cost a large one half a second on each switch to its tab).
     let mut part_boxes: Option<Vec<Rect>> = None;
+    // (Each part's 3D box kept until the parts change: reading every part's each frame cost
+    // a Part Studio of hundreds of parts a cache miss or two apiece.)
     let mut boxes = || -> Vec<Rect> {
-        parts
+        part_bounds
+            .get_or_insert_with(|| {
+                parts
+                    .iter()
+                    .flat_map(|c| c.parts.iter())
+                    .filter_map(|part| part.solid.pick_index().bounds)
+                    .collect()
+            })
             .iter()
-            .flat_map(|c| c.parts.iter())
-            .filter_map(|part| {
-                let (lo, hi) = part.solid.pick_index().bounds?;
+            .filter_map(|&(lo, hi)| {
                 let mut pts = (0..8).map(|k| {
                     let c = [
                         if k & 1 == 0 { lo[0] } else { hi[0] },

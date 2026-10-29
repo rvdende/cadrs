@@ -164,7 +164,7 @@ pub fn palette_row(
 }
 
 fn on_layer_press(
-    press: On<Pointer<Press>>,
+    press: On<PointerPress>,
     q: Query<(), With<CommandPaletteLayer>>,
     mut commands: Commands,
 ) {

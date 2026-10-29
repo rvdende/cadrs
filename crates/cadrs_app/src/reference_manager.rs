@@ -752,9 +752,12 @@ pub fn close(world: &mut World) {
     world.remove_resource::<RefManager>();
 }
 
-fn sync_panel(world: &mut World, mut built: Local<Option<RefManager>>) {
+fn sync_panel(
+    world: &mut World,
+    q: &mut QueryState<(Entity, &Node), With<RefManagerPanel>>,
+    mut built: Local<Option<RefManager>>,
+) {
     let m = world.get_resource::<RefManager>().cloned();
-    let mut q = world.query_filtered::<(Entity, &Node), With<RefManagerPanel>>();
     let panels: Vec<(Entity, Vec2)> = q
         .iter(world)
         .map(|(e, n)| (e, Vec2::new(px(n.left), px(n.top))))

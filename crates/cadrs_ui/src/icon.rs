@@ -12,6 +12,8 @@
 //! sharp instead of being upscaled.
 
 use std::borrow::Cow;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -31,10 +33,12 @@ impl Plugin for IconPlugin {
             .add_systems(PreStartup, load_icons)
             .add_systems(
                 PostUpdate,
-                (resolve_icons, sync_icon_layers)
+                (resolve_icons, sync_icon_layers, add_picked_rasters)
                     .chain()
                     .after(crate::style::apply_visuals)
-                    .before(bevy::ui::UiSystems::Prepare),
+                    .before(bevy::ui::UiSystems::Prepare)
+                    // (So the images added go to the GPU this frame.)
+                    .before(bevy::asset::AssetEventSystems),
             );
     }
 }
@@ -53,8 +57,10 @@ pub fn accent_color() -> Color {
 /// Handles to every rasterized icon, by name and pixel size.
 #[derive(Resource, Default)]
 pub struct IconAtlas {
-    images: HashMap<&'static str, Vec<(u32, Handle<Image>)>>,
-    accents: HashMap<&'static str, Vec<(u32, Handle<Image>)>>,
+    images: HashMap<&'static str, Vec<Raster>>,
+    accents: HashMap<&'static str, Vec<Raster>>,
+    /// Rasters picked through `&self` ([`IconAtlas::get`]), for [`add_picked_rasters`] to add.
+    picked: Mutex<Vec<(AssetId<Image>, u32, &'static [u8])>>,
     full_colour: HashSet<&'static str>,
     /// Rasters rendered at runtime, by (name, physical px, accent layer, dark artwork); `None`
     /// where rendering failed (the built-in raster is used).
@@ -64,12 +70,21 @@ pub struct IconAtlas {
 impl IconAtlas {
     /// The raster closest to `size` px, preferring the next larger one.
     pub fn get(&self, name: &str, size: f32) -> Option<Handle<Image>> {
-        pick(self.images.get(name)?, size)
+        Some(self.picked(pick(self.images.get(name)?, size)?))
     }
 
     /// The icon's accent layer at about `size` px, if it has one.
     pub fn accent(&self, name: &str, size: f32) -> Option<Handle<Image>> {
-        pick(self.accents.get(name)?, size)
+        Some(self.picked(pick(self.accents.get(name)?, size)?))
+    }
+
+    /// `r`'s handle, its image added by [`add_picked_rasters`] if it wasn't yet.
+    fn picked(&self, r: &Raster) -> Handle<Image> {
+        if !r.added.swap(true, Ordering::Relaxed) {
+            let mut picked = self.picked.lock().unwrap_or_else(|e| e.into_inner());
+            picked.push((r.handle.id(), r.size, r.rgba));
+        }
+        r.handle.clone()
     }
 
     /// Whether the icon keeps its own colours instead of being tinted.
@@ -92,22 +107,28 @@ impl IconAtlas {
     ) -> Option<Handle<Image>> {
         let dark = dark && self.is_full_colour(name);
         let table = if accent { &self.accents } else { &self.images };
-        let sizes = table.get(name)?;
-        let base = pick(sizes, size)?;
-        let built = sizes
-            .iter()
-            .find(|(_, h)| *h == base)
-            .map_or(0, |(s, _)| *s);
+        let raster = pick(table.get(name)?, size)?;
+        let built = raster.size;
+        // The built-in raster, its image added if it wasn't yet.
+        let base = |images: &mut Assets<Image>| {
+            if !raster.added.swap(true, Ordering::Relaxed) {
+                let _ = images.insert(raster.handle.id(), rgba_image(built, raster.rgba.to_vec()));
+            }
+            raster.handle.clone()
+        };
         let px = (built as f32 * scale).round().clamp(1.0, 512.0) as u32;
         // A tool family's colour is painted in at runtime.
         if px == built && !dark && (accent || family_accent(name).is_none()) {
-            return Some(base);
+            return Some(base(images));
         }
         let key = (name.to_owned(), px, accent, dark);
         let made = self.rendered.entry(key).or_insert_with(|| {
             render(name, built, px, accent, dark).map(|rgba| images.add(rgba_image(px, rgba)))
         });
-        Some(made.clone().unwrap_or(base))
+        Some(match made.clone() {
+            Some(h) => h,
+            None => base(images),
+        })
     }
 
     /// All icon names, sorted.
@@ -118,13 +139,27 @@ impl IconAtlas {
     }
 }
 
-fn pick(sizes: &[(u32, Handle<Image>)], size: f32) -> Option<Handle<Image>> {
+/// A raster `build.rs` made: its image is added the first time it is picked. (All of them added
+/// at the start made thousands of GPU textures, few of them ever shown, and wgpu's bookkeeping
+/// of every frame's commands grows with the number of textures.)
+struct Raster {
+    size: u32,
+    rgba: &'static [u8],
+    handle: Handle<Image>,
+    added: AtomicBool,
+}
+
+fn pick(sizes: &[Raster], size: f32) -> Option<&Raster> {
     let px = size.round() as u32;
-    sizes
-        .iter()
-        .find(|(s, _)| *s >= px)
-        .or_else(|| sizes.last())
-        .map(|(_, h)| h.clone())
+    sizes.iter().find(|r| r.size >= px).or_else(|| sizes.last())
+}
+
+/// Adds the images of the rasters picked through [`IconAtlas::get`] and [`IconAtlas::accent`].
+fn add_picked_rasters(atlas: Res<IconAtlas>, mut images: ResMut<Assets<Image>>) {
+    let picked = std::mem::take(&mut *atlas.picked.lock().unwrap_or_else(|e| e.into_inner()));
+    for (id, size, rgba) in picked {
+        let _ = images.insert(id, rgba_image(size, rgba.to_vec()));
+    }
 }
 
 /// The icon `name` (built in at `size` px) rendered at `px` px: its base or accent layer, from
@@ -201,23 +236,28 @@ fn load_icons(mut atlas: ResMut<IconAtlas>, mut images: ResMut<Assets<Image>>) {
 }
 
 impl IconAtlas {
-    /// The rasters `build.rs` made, added to `images`.
+    /// The rasters `build.rs` made, with handles reserved in `images` (their images added as
+    /// they are picked).
     fn built_in(images: &mut Assets<Image>) -> Self {
-        let mut add = |table: &'static [(&'static str, u32, &'static [u8])]| {
-            let mut out: HashMap<&'static str, Vec<(u32, Handle<Image>)>> = HashMap::default();
+        let add = |table: &'static [(&'static str, u32, &'static [u8])]| {
+            let mut out: HashMap<&'static str, Vec<Raster>> = HashMap::default();
             for &(name, size, rgba) in table {
-                out.entry(name)
-                    .or_default()
-                    .push((size, images.add(rgba_image(size, rgba.to_vec()))));
+                out.entry(name).or_default().push(Raster {
+                    size,
+                    rgba,
+                    handle: images.reserve_handle(),
+                    added: AtomicBool::new(false),
+                });
             }
             for sizes in out.values_mut() {
-                sizes.sort_by_key(|(s, _)| *s);
+                sizes.sort_by_key(|r| r.size);
             }
             out
         };
         Self {
             images: add(data::ICON_DATA),
             accents: add(data::ACCENT_DATA),
+            picked: Mutex::default(),
             full_colour: data::FULL_COLOUR.iter().copied().collect(),
             rendered: HashMap::default(),
         }
@@ -343,6 +383,8 @@ pub fn resolve_icons(
         if let Some(accent) = atlas.scaled(&icon.name, icon.size, scale, true, dark, &mut images) {
             let layer = (
                 IconAccent,
+                // Its colour follows the icon's, which the scheme has already mapped.
+                crate::color_scheme::KeepColors,
                 ImageNode {
                     image: accent,
                     color: if solid {

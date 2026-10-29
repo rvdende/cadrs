@@ -153,6 +153,11 @@ pub fn spawn_gallery(commands: &mut Commands, theme: &Theme, atlas: &IconAtlas) 
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                // A root sits in Bevy's implicit viewport grid, whose row (taffy 0.14, Bevy 0.20)
+                // grows to the root's content unless the root's minimum is 0: then 100% is the
+                // window, and long lists scroll inside it instead of stretching the screen.
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(t.space[6])),
                 row_gap: Val::Px(t.space[5]),

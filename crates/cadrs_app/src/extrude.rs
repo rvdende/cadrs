@@ -19,6 +19,7 @@
 //! Every change goes through the command layer; the arrow drag previews through
 //! [`PartOverride`] and records one step when released.
 
+use crate::GizmoGroups;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::InputFocus;
@@ -42,7 +43,7 @@ pub struct ExtrudePlugin;
 impl Plugin for ExtrudePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ArrowState>()
-            .init_gizmo_group::<RegionGizmos>()
+            .gizmo_group::<RegionGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,
@@ -1685,9 +1686,17 @@ fn draw_regions(
             Color::srgba_u8(0x9a, 0x67, 0x16, 0xd9),
         )
     };
+    // Hidden while there's nothing to fill: the occluded camera renders only while something on
+    // its layer shows (`crate::viewport::occluded_camera_when_drawn`).
+    let shown = if tris.is_empty() {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
     let mesh = region_fill_mesh(tris);
     match fill.as_mut() {
-        Some((_, handle, mat, k)) => {
+        Some((e, handle, mat, k)) => {
+            commands.entity(*e).insert(shown);
             if let Some(mut m) = meshes.get_mut(&*handle) {
                 *m = mesh;
             }
@@ -1720,6 +1729,7 @@ fn draw_regions(
                     Mesh3d(handle.clone()),
                     MeshMaterial3d(material.clone()),
                     Transform::IDENTITY,
+                    shown,
                     bevy::camera::visibility::RenderLayers::layer(layer),
                     DespawnOnExit(AppState::Document),
                 ))

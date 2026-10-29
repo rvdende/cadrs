@@ -559,10 +559,12 @@ fn checkbox(w: &mut World, name: &str) -> bool {
 }
 
 /// Rebuilds both lists when the selection, the filters or the design change.
-pub fn refresh_assign(w: &mut World) {
-    let mut q = w.query_filtered::<Entity, With<AssignSymbols>>();
+fn refresh_assign(
+    w: &mut World,
+    q: &mut QueryState<Entity, With<AssignSymbols>>,
+    q2: &mut QueryState<Entity, With<AssignCandidates>>,
+) {
     let Some(syms) = q.iter(w).next() else { return };
-    let mut q2 = w.query_filtered::<Entity, With<AssignCandidates>>();
     let Some(cands) = q2.iter(w).next() else {
         return;
     };

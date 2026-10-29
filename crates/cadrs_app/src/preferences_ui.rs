@@ -8,6 +8,9 @@
 //! **Interface › UI scale** (issue #12): 75–200 % of the display's own scale, for large or
 //! high-resolution screens; applied to the whole window as soon as OK is pressed. Ctrl+= and
 //! Ctrl+- step through its sizes anywhere, as a browser's zoom does ([`step_ui_scale`]).
+//! **Interface › Vertical sync** (`vsync`, on by default): frames wait for the display's refresh;
+//! off, they are drawn as fast as they are made. Applied as soon as OK is pressed
+//! ([`apply_vsync`]); `CADRS_NO_VSYNC=1` turns it off for one run without saving.
 //! **Frame panel › Time systems** (`profile_cpu`): the CPU time of every system and schedule in
 //! the frame panel's details (F12) and `get_frame_stats`. Off by default (it costs about a fifth of
 //! each frame), and it takes effect at the next start ([`crate::frame_profile::CpuProfiling`]).
@@ -49,7 +52,15 @@ impl Plugin for PreferencesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LocalPreferences>()
             .add_systems(Startup, load_preferences)
-            .add_systems(Update, (ui_scale_keys, apply_ui_scale, save_color_scheme))
+            .add_systems(
+                Update,
+                (
+                    ui_scale_keys,
+                    apply_ui_scale,
+                    apply_vsync,
+                    save_color_scheme,
+                ),
+            )
             .add_observer(on_preset_change)
             .add_observer(on_rotation_snap_commit);
     }
@@ -142,6 +153,39 @@ fn apply_ui_scale(
     };
     w.resolution.set_scale_factor_override(want);
     *applied = Some(k);
+}
+
+/// Presents frames with vertical sync or without, as the preference says (`CADRS_NO_VSYNC=1`
+/// turns it off for the run). On, the window's own present mode is put back.
+fn apply_vsync(
+    prefs: Res<LocalPreferences>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut applied: Local<Option<bool>>,
+    mut original: Local<Option<bevy::window::PresentMode>>,
+) {
+    let on = prefs.0.vsync && std::env::var_os("CADRS_NO_VSYNC").is_none();
+    if *applied == Some(on) {
+        return;
+    }
+    let Ok(mut w) = windows.single_mut() else {
+        return;
+    };
+    let own = *original.get_or_insert(w.present_mode);
+    let want = if on {
+        own
+    } else {
+        bevy::window::PresentMode::AutoNoVsync
+    };
+    if w.present_mode != want {
+        w.present_mode = want;
+    }
+    *applied = Some(on);
+}
+
+/// Sets and saves vertical sync (the dialog's OK; `set_preferences`).
+pub fn set_vsync(world: &mut World, on: bool) {
+    world.resource_mut::<LocalPreferences>().0.vsync = on;
+    save(world);
 }
 
 /// Sets and saves the interface size in percent (the dialog's OK; scenarios too).
@@ -304,6 +348,8 @@ pub fn open_preferences(world: &mut World) {
         .rotation_snap_tolerance_degrees();
     let ui_scale = world.resource::<LocalPreferences>().0.ui_scale;
     #[cfg(not(target_arch = "wasm32"))]
+    let vsync = world.resource::<LocalPreferences>().0.vsync;
+    #[cfg(not(target_arch = "wasm32"))]
     let endpoint = cadrs_mcp::url(std::net::SocketAddr::from((
         std::net::Ipv4Addr::LOCALHOST,
         mcp.port,
@@ -347,6 +393,23 @@ pub fn open_preferences(world: &mut World) {
                 }
                 let at = UI_SCALES.iter().position(|p| *p == ui_scale).unwrap_or(2);
                 b.spawn(form_row(t, "pref-ui-scale-row", "UI scale", 150.0)).with_child(sizes.selected(at).build(t));
+                // A page presents as the browser does.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                b.spawn(form_row(t, "pref-vsync-row", "Display", 150.0))
+                    .with_child(Switch::new("pref-vsync").label("Vertical sync (VSync)").on(vsync).build(t));
+                b.spawn((
+                    Name::new("pref-vsync-note"),
+                    t.text(
+                        "On, frames wait for the screen's refresh. Off, they are drawn as fast as they are made: the frame rate shows what a frame costs, but cadrs uses more power.",
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Node { width: Val::Px(400.0), margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(6.0), Val::Px(8.0)), ..default() },
+                ))
+                .insert(TextLayout::default());
+                }
                 // The browser build has no system times to show.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -476,7 +539,7 @@ fn on_preset_change(
     }
 }
 
-/// OK: the chosen preset, interface size and the MCP and P2P switches are kept.
+/// OK: the chosen preset, interface size, vertical sync and the MCP and P2P switches are kept.
 fn save_preferences(world: &mut World) {
     let mut q = world.query_filtered::<Entity, With<PreferencesDialog>>();
     let Some(dialog) = q.iter(world).next() else {
@@ -549,6 +612,13 @@ fn save_preferences(world: &mut World) {
         .map(|(_, s)| s.on);
     if let Some(on) = profile_cpu {
         world.resource_mut::<LocalPreferences>().0.profile_cpu = on;
+    }
+    let vsync = qm
+        .iter(world)
+        .find(|(n, _)| n.as_str() == "pref-vsync")
+        .map(|(_, s)| s.on);
+    if let Some(on) = vsync {
+        world.resource_mut::<LocalPreferences>().0.vsync = on;
     }
     save(world);
     world.trigger(DialogClose { entity: dialog });
@@ -720,6 +790,40 @@ mod tests {
             15.0
         );
         assert!(world.get::<NumberFieldState>(tolerance).unwrap().error);
+    }
+
+    /// Vertical sync, on by default: the dialog's switch shows it, OK keeps the switch's state,
+    /// and the window presents without waiting for the display while it's off (its own mode
+    /// back when it's on again).
+    #[test]
+    fn vsync_switch_is_kept_and_applied() {
+        use bevy::window::{PresentMode, PrimaryWindow};
+        let mut world = World::new();
+        world.init_resource::<LocalPreferences>();
+        world.init_resource::<Theme>();
+        world.insert_resource(State::new(AppState::Document));
+        assert!(world.resource::<LocalPreferences>().0.vsync);
+        open_preferences(&mut world);
+        world.flush();
+        let mut switches = world.query::<(Entity, &Name, &SwitchState)>();
+        let (switch, on) = switches
+            .iter(&world)
+            .find(|(_, n, _)| n.as_str() == "pref-vsync")
+            .map(|(e, _, s)| (e, s.on))
+            .unwrap();
+        assert!(on);
+        world.get_mut::<SwitchState>(switch).unwrap().on = false;
+        save_preferences(&mut world);
+        assert!(!world.resource::<LocalPreferences>().0.vsync);
+
+        let window = world.spawn((Window::default(), PrimaryWindow)).id();
+        let apply = world.register_system(apply_vsync);
+        world.run_system(apply).unwrap();
+        let mode = |w: &World| w.get::<Window>(window).unwrap().present_mode;
+        assert_eq!(mode(&world), PresentMode::AutoNoVsync);
+        world.resource_mut::<LocalPreferences>().0.vsync = true;
+        world.run_system(apply).unwrap();
+        assert_eq!(mode(&world), Window::default().present_mode);
     }
 
     #[test]

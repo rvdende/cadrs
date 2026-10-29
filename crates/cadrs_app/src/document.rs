@@ -54,6 +54,7 @@ impl Plugin for DocumentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShellSnapshot>()
             .init_resource::<FeatureSplit>()
+            .init_resource::<FeatureRowSlots>()
             .add_observer(remember_feature_split)
             .init_resource::<crate::WorkspaceUnits>()
             .add_systems(OnEnter(AppState::Document), spawn_shell)
@@ -196,6 +197,31 @@ enum StripEntry {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct FeatureRow(pub FeatureId);
 
+/// A feature list row's height with its margins (22 px and 1 px above and below), a folder's
+/// and a Derived feature's children's too: the list builds only the rows it shows by it.
+const FEATURE_ROW_PITCH: f32 = 24.0;
+/// The rollback bar's: 5 px and 3 px above and below; at the end, 8 px above.
+const ROLLBACK_BAR_PITCH: f32 = 11.0;
+const ROLLBACK_BAR_END_PITCH: f32 = 13.0;
+
+/// Each feature row's index among the list's rows (built or not), from the last rebuild.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct FeatureRowSlots(std::collections::HashMap<FeatureId, usize>);
+
+/// The on-screen top (logical px) of feature `id`'s row, built or not: a long list builds only
+/// the rows near what it shows, and one out of its window is placed by its index under the top
+/// of the rows container (`rows`).
+pub(crate) fn feature_row_screen_top(
+    id: FeatureId,
+    slots: &FeatureRowSlots,
+    rows: &ComputedNode,
+    rows_at: &bevy::ui::UiGlobalTransform,
+) -> Option<f32> {
+    let index = *slots.0.get(&id)?;
+    let s = rows.inverse_scale_factor();
+    Some((rows_at.translation.y - rows.size().y / 2.0) * s + index as f32 * FEATURE_ROW_PITCH)
+}
+
 /// Where the feature list's rows are spawned (again whenever they change): what styles them in
 /// place runs after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -203,7 +229,7 @@ pub struct FeatureRowsSet;
 
 /// The container of the feature rows (between Default geometry and the rollback bar).
 #[derive(Component)]
-struct FeatureRows;
+pub(crate) struct FeatureRows;
 
 /// "Features (N)" in the feature list header.
 #[derive(Component)]
@@ -304,6 +330,11 @@ fn spawn_shell(
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                // A root sits in Bevy's implicit viewport grid, whose row (taffy 0.14, Bevy 0.20)
+                // grows to the root's content unless the root's minimum is 0: then 100% is the
+                // window, and long lists scroll inside it instead of stretching the screen.
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(PANEL_GAP)),
                 row_gap: Val::Px(PANEL_GAP),
@@ -2347,6 +2378,7 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                 tree.spawn((
                                     Name::new("feature-rows"),
                                     FeatureRows,
+                                    cadrs_ui::virtual_rows::VirtualRows::new(FEATURE_ROW_PITCH),
                                     Node {
                                         flex_direction: FlexDirection::Column,
                                         ..default()
@@ -2384,6 +2416,7 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
             .spawn((
                 Name::new("part-rows"),
                 PartRows,
+                cadrs_ui::virtual_rows::VirtualRows::new(crate::parts_list::PART_ROW_PITCH),
                 bevy::ui_widgets::ScrollArea,
                 cadrs_ui::scrollbar::ScrollGutter(6.0),
                 Node {
@@ -3543,7 +3576,11 @@ impl RowKind {
 fn rebuild_feature_rows(
     doc: Option<Res<ActiveDocument>>,
     session: Option<Res<SketchSession>>,
-    q_rows: Query<(Entity, Ref<FeatureRows>)>,
+    mut q_rows: Query<(
+        Entity,
+        Ref<FeatureRows>,
+        &mut cadrs_ui::virtual_rows::VirtualRows,
+    )>,
     mut q_count: Query<&mut Text, With<FeatureCountLabel>>,
     mut q_error: Query<&mut Node, With<FeatureErrorIcon>>,
     theme: Res<Theme>,
@@ -3572,14 +3609,54 @@ fn rebuild_feature_rows(
         Option<Res<crate::derived_ui::DerivedSession>>,
         Res<crate::derived_ui::ComponentsOpen>,
     ),
+    mut row_slots: ResMut<FeatureRowSlots>,
+    mut was_present: Local<[bool; 5]>,
     mut commands: Commands,
 ) {
     let Some(doc) = doc else {
         return;
     };
-    let Some((container, added)) = q_rows.iter().next().map(|(e, r)| (e, r.is_added())) else {
+    let Some((container, added, mut window)) = q_rows
+        .iter_mut()
+        .next()
+        .map(|(e, r, w)| (e, r.is_added(), w))
+    else {
         return;
     };
+    // Nothing to build again while all that the rows show is as it was: the key over a large
+    // studio's features cost every frame half a millisecond. (Each optional input counts as
+    // changed when it comes or goes.)
+    let present = [
+        session.is_some(),
+        extrude.is_some(),
+        applied.is_some(),
+        strategy.is_some(),
+        derived_session.is_some(),
+    ];
+    let inputs_changed = doc.is_changed()
+        || theme.is_changed()
+        || session.as_ref().is_some_and(|r| r.is_changed())
+        || errors.is_changed()
+        || under.is_changed()
+        || faces_lost.is_changed()
+        || atlas.is_changed()
+        || cache.is_changed()
+        || extrude.as_ref().is_some_and(|r| r.is_changed())
+        || applied.as_ref().is_some_and(|r| r.is_changed())
+        || filter.is_changed()
+        || deps.is_changed()
+        || times.is_changed()
+        || over.is_changed()
+        || strategy.as_ref().is_some_and(|r| r.is_changed())
+        || derived_open.is_changed()
+        || link_status.is_changed()
+        || derived_session.as_ref().is_some_and(|r| r.is_changed())
+        || components_open.is_changed()
+        || *was_present != present;
+    *was_present = present;
+    if !added && !window.is_changed() && !inputs_changed && last.is_some() {
+        return;
+    }
     let Some(el) = doc.active_element() else {
         return;
     };
@@ -3596,6 +3673,14 @@ fn rebuild_feature_rows(
                     && matches!(&f.kind, cadrs_core::FeatureKind::Derived(d) if d.source.is_none())
             })
         });
+    // Each sketch's eye, looked up once (per feature, a search of the list cost a large studio
+    // a millisecond a frame).
+    let visibility: std::collections::HashMap<FeatureId, bool> = match &el.kind {
+        cadrs_core::ElementKind::PartStudio {
+            sketch_visibility, ..
+        } => sketch_visibility.iter().copied().collect(),
+        _ => Default::default(),
+    };
     let features: Vec<FeatureRowKey> = all
         .iter()
         // A sketch with conflicting constraints shows as an error too (`screens/15`).
@@ -3681,7 +3766,7 @@ fn rebuild_feature_rows(
                 failed,
                 // A Plane's eye only (#66); a sketch's also follows the features using it.
                 if kind == RowKind::Plane {
-                    el.sketch_visibility(f.id) != Some(false)
+                    visibility.get(&f.id) != Some(&false)
                 } else {
                     !cache.hidden_sketches.contains(&f.id)
                 },
@@ -3736,7 +3821,7 @@ fn rebuild_feature_rows(
                                 !cache.hidden_sketches.contains(&s)
                             }
                             crate::derived_ui::DerivedChild::Plane(s) => {
-                                el.sketch_visibility(s) != Some(false)
+                                visibility.get(&s) != Some(&false)
                             }
                             _ => true,
                         };
@@ -3768,7 +3853,8 @@ fn rebuild_feature_rows(
         state,
         derived_rows,
     );
-    if !added && last.as_ref() == Some(&key) {
+    // Rebuilt when what the rows show changes, or a long list scrolled to rows not built.
+    if !added && !window.is_changed() && last.as_ref() == Some(&key) {
         return;
     }
     let any_invalid = key.0.iter().any(|(_, _, valid, ..)| !valid);
@@ -3794,8 +3880,17 @@ fn rebuild_feature_rows(
     let t = theme.clone();
     let folders = key.2.clone();
     let state = key.3.clone();
+    // A long list builds the rows near what it shows (its window), spacers standing in for the
+    // rest; its length is taken from the last build, or from the features before the first.
+    let windowed = window.window_for(window.total.max(key.0.len()));
+    let mut slots = cadrs_ui::virtual_rows::Slots::new(windowed.clone());
+    row_slots.0.clear();
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
+        let above = windowed.is_some().then(|| {
+            c.spawn(cadrs_ui::virtual_rows::spacer("feature-rows-above", 0.0))
+                .id()
+        });
         let mut bar_placed = false;
         for (index, (id, name, valid, under_defined, kind, failed, shown, warning)) in
             key.0.iter().enumerate()
@@ -3806,7 +3901,9 @@ fn rebuild_feature_rows(
             }
             // P3.9: the rollback bar, before the first row below it.
             if !bar_placed && index >= state.bar {
-                c.spawn(crate::feature_list::rollback_bar(&t, false));
+                if slots.take(ROLLBACK_BAR_PITCH) {
+                    c.spawn(crate::feature_list::rollback_bar(&t, false));
+                }
                 bar_placed = true;
             }
             let inactive = state.inactive(index, *id);
@@ -3815,7 +3912,7 @@ fn rebuild_feature_rows(
             let folder = folders.iter().find(|f| f.features.contains(id));
             if let Some(f) = folder {
                 let first_shown = f.features.iter().find(|x| state.shows(**x));
-                if first_shown == Some(id) {
+                if first_shown == Some(id) && slots.take(FEATURE_ROW_PITCH) {
                     let open = f.open || state.filtering();
                     // Filtered: how many of its features match (P3.11).
                     let count = if state.filtering() {
@@ -3967,197 +4064,203 @@ fn rebuild_feature_rows(
                     )
                     .toggle_tooltip(tip);
             }
-            let mut row = c.spawn((
-                item.icon(kind.icon(), 16.0)
-                    // A failed rebuild tints the icon too (NOTES.md "Errors"); not while its
-                    // dialog waits for input (`screens/22`: only the name is red).
-                    .icon_color(if inactive {
-                        // P3D.1 judge: a full-colour icon (a fillet's) fades as the grey glyphs do.
-                        crate::feature_list::rolled_back_icon(atlas.is_full_colour(kind.icon()))
-                    } else if failed.is_some() && !edited {
-                        t.feature_error
-                    } else if warning.is_some() && !edited {
-                        FEATURE_WARNING
-                    } else if consumed {
-                        Color::srgb_u8(0xc4, 0xc4, 0xc4)
-                    } else {
-                        t.muted_foreground
-                    })
-                    // Under-defined: a blue "−" badge (`screens/14`; gone when fully
-                    // defined, `screens/17`).
-                    .icon_badge(
-                        (*under_defined && *valid && !consumed)
-                            .then_some(Color::srgb_u8(0x2b, 0x64, 0xc0)),
-                    )
-                    // Bold in the references; ExtraBold draws with the same ink here (Bevy
-                    // blends glyph coverage in linear space, so text draws lighter).
-                    .weight(if edited {
-                        FontWeight::EXTRA_BOLD
-                    } else {
-                        FontWeight::MEDIUM
-                    })
-                    .left(if folder.is_some() { 20.0 } else { 4.0 })
-                    .editable()
-                    .strikethrough(suppressed)
-                    // P3D.1 (IR5.4): below the rollback bar (or the feature being edited): grey
-                    // and italic, as `ex1-step3.png` draws them.
-                    .italic(index >= state.bar && !suppressed)
-                    .trailing(state.time(*id), t.muted_foreground)
-                    .build(&t),
-                FeatureRow(*id),
-                PickRow(Pick::Feature(*id)),
-                cadrs_ui::DoubleClickable,
-                ContextMenuTarget,
-            ));
-            row.insert(visuals).insert_if(
-                cadrs_ui::Tooltip::error(failed.clone().unwrap_or_default()),
-                || failed.is_some(),
-            );
-            // A sketch's status beside its row while it is hovered, as Onshape shows it ("Sketch 4
-            // (Hidden) is not fully defined"); the viewport draws its curves in the hover orange.
-            if kind.is_sketch() && failed.is_none() && warning.is_none() {
-                let hidden = if *shown { "" } else { " (Hidden)" };
-                let status = if *under_defined {
-                    "is not fully defined"
-                } else {
-                    "is fully defined"
-                };
-                row.insert(cadrs_ui::Tooltip::beside(format!(
-                    "{name}{hidden} {status}"
-                )));
-            }
-
-            if let Some(f) = folder {
-                row.insert(crate::feature_folders::InFolder(f.id));
-            }
-            // Show dependencies (P3.11): a stripe in the legend's swatch colour at the row's left
-            // edge, so the rows read as what the legend names.
-            let stripe = if state.parents.contains(id) {
-                Some(crate::feature_list::PARENT_SWATCH)
-            } else if state.children.contains(id) {
-                Some(crate::feature_list::CHILD_SWATCH)
-            } else {
-                None
-            };
-            if let Some(c) = stripe {
-                row.with_children(|r| {
-                    r.spawn((
-                        Name::new(format!("{row_name}-dependency")),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(0.0),
-                            top: Val::Px(0.0),
-                            bottom: Val::Px(0.0),
-                            width: Val::Px(3.0),
-                            ..default()
-                        },
-                        BackgroundColor(c),
-                        Pickable::IGNORE,
-                    ));
-                });
-            }
-            // P3.10 (PS11.1): a warning's reason on the row and on a warning glyph after its name.
-            if let Some(reason) = warning.clone().filter(|_| failed.is_none() && !edited) {
-                row.insert(cadrs_ui::Tooltip::new(reason.clone()));
-                // Right after the name on every row (P3D.1: a sketch's eye comes after it).
-                let glyph = row
-                    .commands()
-                    .spawn((
-                        Name::new(format!("{row_name}-warning")),
-                        cadrs_ui::icon::icon_in(
-                            "warning-filled",
-                            14.0,
-                            t.warning_icon,
-                            Node {
-                                margin: UiRect::left(Val::Px(-2.0)),
-                                ..default()
-                            },
-                        ),
-                        cadrs_ui::Tooltip::new(reason),
-                    ))
-                    .id();
-                row.insert_children(2, &[glyph]);
-            }
-            // A failed feature: a red ⓘ after its name, which shows the reason too (NOTES.md
-            // "Errors"): a filled red info glyph, as `screens/15` and `05c` draw it.
-            if let Some(reason) = failed.clone().filter(|_| !edited) {
-                // Right after the name on every row (P3D.1: a sketch's eye comes after it).
-                let glyph = row
-                    .commands()
-                    .spawn((
-                        Name::new(format!("{row_name}-info")),
-                        cadrs_ui::icon::icon_in(
-                            "info-filled",
-                            14.0,
-                            t.feature_error,
-                            Node {
-                                margin: UiRect::left(Val::Px(-2.0)),
-                                ..default()
-                            },
-                        ),
-                        cadrs_ui::Tooltip::error(reason),
-                    ))
-                    .id();
-                row.insert_children(2, &[glyph]);
-            }
-            // IR5.5: a feature with a suppression variable shows it in a tag after its name
-            // ("#withHole"), grey with the row while it suppresses.
-            if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
-                let (when, colour) = if suppressed {
-                    ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
-                } else {
-                    ("currently active", t.muted_foreground)
-                };
-                let rule = label.strip_prefix("not ").map_or_else(
-                    || format!("{label} is 0 (false)"),
-                    |l| format!("{l} is not 0 (true)"),
-                );
-                let tag = row
-                    .commands()
-                    .spawn((
-                        cadrs_ui::Tag::new(
-                            format!("{row_name}-suppression-variable"),
-                            label.clone(),
-                        )
-                        .color(colour)
-                        .outline()
-                        .build(&t),
-                        cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
-                    ))
-                    // Hoverable for its tooltip; clicks go to the row.
-                    .insert(Pickable {
-                        should_block_lower: false,
-                        is_hoverable: true,
-                    })
-                    .id();
-                row.insert_children(2, &[tag]);
-            }
             let in_folder = folder.is_some();
-            // P3G.4 (DV1.3, ER X2): a Derived feature's linked icon, as an instance's.
-            if let Some((_, _, _, Some((icon, tip)))) = derived {
-                let (icon, tip, fid) = (*icon, tip.clone(), *id);
-                let n = format!("{row_name}-linked");
-                row.with_children(|r| {
-                    crate::linked::spawn_link_icon(
-                        r,
-                        n,
-                        icon,
-                        &tip,
-                        crate::linked::LinkTarget::Derived(fid),
-                    )
+            row_slots.0.insert(*id, slots.next_index());
+            if slots.take(FEATURE_ROW_PITCH) {
+                let mut row = c.spawn((
+                    item.icon(kind.icon(), 16.0)
+                        // A failed rebuild tints the icon too (NOTES.md "Errors"); not while its
+                        // dialog waits for input (`screens/22`: only the name is red).
+                        .icon_color(if inactive {
+                            // P3D.1 judge: a full-colour icon (a fillet's) fades as the grey glyphs do.
+                            crate::feature_list::rolled_back_icon(atlas.is_full_colour(kind.icon()))
+                        } else if failed.is_some() && !edited {
+                            t.feature_error
+                        } else if warning.is_some() && !edited {
+                            FEATURE_WARNING
+                        } else if consumed {
+                            Color::srgb_u8(0xc4, 0xc4, 0xc4)
+                        } else {
+                            t.muted_foreground
+                        })
+                        // Under-defined: a blue "−" badge (`screens/14`; gone when fully
+                        // defined, `screens/17`).
+                        .icon_badge(
+                            (*under_defined && *valid && !consumed)
+                                .then_some(Color::srgb_u8(0x2b, 0x64, 0xc0)),
+                        )
+                        // Bold in the references; ExtraBold draws with the same ink here (Bevy
+                        // blends glyph coverage in linear space, so text draws lighter).
+                        .weight(if edited {
+                            FontWeight::EXTRA_BOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        })
+                        .left(if folder.is_some() { 20.0 } else { 4.0 })
+                        .editable()
+                        .strikethrough(suppressed)
+                        // P3D.1 (IR5.4): below the rollback bar (or the feature being edited): grey
+                        // and italic, as `ex1-step3.png` draws them.
+                        .italic(index >= state.bar && !suppressed)
+                        .trailing(state.time(*id), t.muted_foreground)
+                        .build(&t),
+                    FeatureRow(*id),
+                    PickRow(Pick::Feature(*id)),
+                    cadrs_ui::DoubleClickable,
+                    ContextMenuTarget,
+                ));
+                row.insert(visuals).insert_if(
+                    cadrs_ui::Tooltip::error(failed.clone().unwrap_or_default()),
+                    || failed.is_some(),
+                );
+                // A sketch's status beside its row while it is hovered, as Onshape shows it ("Sketch 4
+                // (Hidden) is not fully defined"); the viewport draws its curves in the hover orange.
+                if kind.is_sketch() && failed.is_none() && warning.is_none() {
+                    let hidden = if *shown { "" } else { " (Hidden)" };
+                    let status = if *under_defined {
+                        "is not fully defined"
+                    } else {
+                        "is fully defined"
+                    };
+                    row.insert(cadrs_ui::Tooltip::beside(format!(
+                        "{name}{hidden} {status}"
+                    )));
+                }
+
+                if let Some(f) = folder {
+                    row.insert(crate::feature_folders::InFolder(f.id));
+                }
+                // Show dependencies (P3.11): a stripe in the legend's swatch colour at the row's left
+                // edge, so the rows read as what the legend names.
+                let stripe = if state.parents.contains(id) {
+                    Some(crate::feature_list::PARENT_SWATCH)
+                } else if state.children.contains(id) {
+                    Some(crate::feature_list::CHILD_SWATCH)
+                } else {
+                    None
+                };
+                if let Some(c) = stripe {
+                    row.with_children(|r| {
+                        r.spawn((
+                            Name::new(format!("{row_name}-dependency")),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(0.0),
+                                top: Val::Px(0.0),
+                                bottom: Val::Px(0.0),
+                                width: Val::Px(3.0),
+                                ..default()
+                            },
+                            BackgroundColor(c),
+                            Pickable::IGNORE,
+                        ));
+                    });
+                }
+                // P3.10 (PS11.1): a warning's reason on the row and on a warning glyph after its name.
+                if let Some(reason) = warning.clone().filter(|_| failed.is_none() && !edited) {
+                    row.insert(cadrs_ui::Tooltip::new(reason.clone()));
+                    // Right after the name on every row (P3D.1: a sketch's eye comes after it).
+                    let glyph = row
+                        .commands()
+                        .spawn((
+                            Name::new(format!("{row_name}-warning")),
+                            cadrs_ui::icon::icon_in(
+                                "warning-filled",
+                                14.0,
+                                t.warning_icon,
+                                Node {
+                                    margin: UiRect::left(Val::Px(-2.0)),
+                                    ..default()
+                                },
+                            ),
+                            cadrs_ui::Tooltip::new(reason),
+                        ))
+                        .id();
+                    row.insert_children(2, &[glyph]);
+                }
+                // A failed feature: a red ⓘ after its name, which shows the reason too (NOTES.md
+                // "Errors"): a filled red info glyph, as `screens/15` and `05c` draw it.
+                if let Some(reason) = failed.clone().filter(|_| !edited) {
+                    // Right after the name on every row (P3D.1: a sketch's eye comes after it).
+                    let glyph = row
+                        .commands()
+                        .spawn((
+                            Name::new(format!("{row_name}-info")),
+                            cadrs_ui::icon::icon_in(
+                                "info-filled",
+                                14.0,
+                                t.feature_error,
+                                Node {
+                                    margin: UiRect::left(Val::Px(-2.0)),
+                                    ..default()
+                                },
+                            ),
+                            cadrs_ui::Tooltip::error(reason),
+                        ))
+                        .id();
+                    row.insert_children(2, &[glyph]);
+                }
+                // IR5.5: a feature with a suppression variable shows it in a tag after its name
+                // ("#withHole"), grey with the row while it suppresses.
+                if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
+                    let (when, colour) = if suppressed {
+                        ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
+                    } else {
+                        ("currently active", t.muted_foreground)
+                    };
+                    let rule = label.strip_prefix("not ").map_or_else(
+                        || format!("{label} is 0 (false)"),
+                        |l| format!("{l} is not 0 (true)"),
+                    );
+                    let tag = row
+                        .commands()
+                        .spawn((
+                            cadrs_ui::Tag::new(
+                                format!("{row_name}-suppression-variable"),
+                                label.clone(),
+                            )
+                            .color(colour)
+                            .outline()
+                            .build(&t),
+                            cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
+                        ))
+                        // Hoverable for its tooltip; clicks go to the row.
+                        .insert(Pickable {
+                            should_block_lower: false,
+                            is_hoverable: true,
+                        })
+                        .id();
+                    row.insert_children(2, &[tag]);
+                }
+                // P3G.4 (DV1.3, ER X2): a Derived feature's linked icon, as an instance's.
+                if let Some((_, _, _, Some((icon, tip)))) = derived {
+                    let (icon, tip, fid) = (*icon, tip.clone(), *id);
+                    let n = format!("{row_name}-linked");
+                    row.with_children(|r| {
+                        crate::linked::spawn_link_icon(
+                            r,
+                            n,
+                            icon,
+                            &tip,
+                            crate::linked::LinkTarget::Derived(fid),
+                        )
+                    });
+                }
+                row.entry::<Node>().and_modify(move |mut n| {
+                    // Onshape's feature rows: a 22 px band inset from the panel edges; a folder's
+                    // features indented under it (P3.9).
+                    n.height = Val::Px(22.0);
+                    n.margin = UiRect::new(Val::Px(2.0), Val::Px(7.0), Val::Px(1.0), Val::Px(1.0));
+                    n.padding = UiRect::left(Val::Px(if in_folder { 18.0 } else { 2.0 }));
                 });
             }
-            row.entry::<Node>().and_modify(move |mut n| {
-                // Onshape's feature rows: a 22 px band inset from the panel edges; a folder's
-                // features indented under it (P3.9).
-                n.height = Val::Px(22.0);
-                n.margin = UiRect::new(Val::Px(2.0), Val::Px(7.0), Val::Px(1.0), Val::Px(1.0));
-                n.padding = UiRect::left(Val::Px(if in_folder { 18.0 } else { 2.0 }));
-            });
             // P3G.4 (DV3.5): an open Derived row's children, with their eyes.
             if let Some((_, true, kids, _)) = derived {
                 use crate::derived_ui::DerivedChild as D;
                 for (child, label, icon, shown) in kids {
+                    if !slots.take(FEATURE_ROW_PITCH) {
+                        continue;
+                    }
                     let kind = match child {
                         D::Part(_) => "part",
                         D::Sketch(_) => "sketch",
@@ -4253,17 +4356,29 @@ fn rebuild_feature_rows(
                 }
             }
         }
-        if !bar_placed {
+        if !bar_placed && slots.take(ROLLBACK_BAR_END_PITCH) {
             c.spawn(crate::feature_list::rollback_bar(&t, true));
         }
+        if let Some(above) = above {
+            let (h_above, h_below) = slots.spacers();
+            c.commands()
+                .entity(above)
+                .entry::<Node>()
+                .and_modify(move |mut n| n.height = Val::Px(h_above));
+            c.spawn(cadrs_ui::virtual_rows::spacer(
+                "feature-rows-below",
+                h_below,
+            ));
+        }
     });
+    window.bypass_change_detection().total = slots.count();
     *last = Some(key);
 }
 
 /// P3D.1 (IR4.6, IR5.1): clicking the Features header's red "!" selects the first failing
 /// feature in list order (fix errors top to bottom, the course's advice), opening its folder.
 fn on_error_icon_click(
-    ev: On<Pointer<Click>>,
+    ev: On<PointerClick>,
     q: Query<(), With<FeatureErrorIcon>>,
     mut commands: Commands,
 ) {
@@ -4357,6 +4472,8 @@ fn scroll_to_revealed(
     mut commands: Commands,
     reveal: Option<ResMut<RevealFeature>>,
     q_rows: Query<(&FeatureRow, &ComputedNode, &bevy::ui::UiGlobalTransform)>,
+    q_container: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<FeatureRows>>,
+    slots: Res<FeatureRowSlots>,
     mut q_scroll: Query<(
         &Name,
         &ComputedNode,
@@ -4374,12 +4491,9 @@ fn scroll_to_revealed(
     if reveal.frames < 3 {
         return;
     }
-    let Some((_, row, row_at)) = q_rows
+    let row = q_rows
         .iter()
-        .find(|(r, n, _)| r.0 == reveal.id && n.size().y > 0.0)
-    else {
-        return;
-    };
+        .find(|(r, n, _)| r.0 == reveal.id && n.size().y > 0.0);
     let Some((_, list, list_at, mut pos)) = q_scroll
         .iter_mut()
         .find(|(n, ..)| n.as_str() == "feature-scroll")
@@ -4391,14 +4505,31 @@ fn scroll_to_revealed(
         let half = n.size().y * s / 2.0;
         (at.translation.y * s - half, at.translation.y * s + half)
     };
-    let ((top, bottom), (view_top, view_bottom)) = (span(row, row_at), span(list, list_at));
+    // A long list builds only the rows near what it shows: a row out of its window is placed by
+    // its index and scrolled to, and the frames after, built, placed exactly.
+    let (top, bottom) = match row {
+        Some((_, row, row_at)) => span(row, row_at),
+        None => {
+            let Some(top) = q_container
+                .single()
+                .ok()
+                .and_then(|(n, at)| feature_row_screen_top(reveal.id, &slots, n, at))
+            else {
+                return;
+            };
+            (top, top + FEATURE_ROW_PITCH)
+        }
+    };
+    let (view_top, view_bottom) = span(list, list_at);
     let max = ((list.content_size().y - list.size().y) * s).max(0.0);
     if top < view_top {
         pos.y = (pos.y - (view_top - top)).clamp(0.0, max);
     } else if bottom > view_bottom {
         pos.y = (pos.y + (bottom - view_bottom)).clamp(0.0, max);
     }
-    commands.remove_resource::<RevealFeature>();
+    if row.is_some() {
+        commands.remove_resource::<RevealFeature>();
+    }
 }
 
 /// Opens a feature's dialog: a sketch, an extrude or a Boolean.

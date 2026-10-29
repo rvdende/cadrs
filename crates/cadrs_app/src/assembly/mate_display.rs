@@ -418,7 +418,7 @@ fn place_badges(
 }
 
 fn on_badge_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     q: Query<&MateBadge>,
     mut sel: ResMut<MateSelection>,
     mut commands: Commands,
@@ -429,7 +429,7 @@ fn on_badge_click(
         PointerButton::Primary => sel.0 = Some(id),
         PointerButton::Secondary => {
             sel.0 = Some(id);
-            let at = click.pointer_location.position;
+            let at = click.pointer.position;
             commands
                 .queue(move |world: &mut World| super::mates_list::open_mate_menu(world, at, id));
         }
@@ -437,13 +437,13 @@ fn on_badge_click(
     }
 }
 
-fn on_badge_over(ev: On<Pointer<Over>>, q: Query<&MateBadge>, mut hover: ResMut<MateHover>) {
+fn on_badge_over(ev: On<PointerOver>, q: Query<&MateBadge>, mut hover: ResMut<MateHover>) {
     if let Ok(b) = q.get(ev.entity) {
         hover.0 = Some(b.0);
     }
 }
 
-fn on_badge_out(ev: On<Pointer<Out>>, q: Query<&MateBadge>, mut hover: ResMut<MateHover>) {
+fn on_badge_out(ev: On<PointerOut>, q: Query<&MateBadge>, mut hover: ResMut<MateHover>) {
     if let Ok(b) = q.get(ev.entity)
         && hover.0 == Some(b.0)
     {

@@ -227,7 +227,7 @@ pub fn open(world: &mut World, instance: InstanceId) {
                         },
                     ));
                     row.observe(
-                        |click: On<Pointer<Click>>, q: Query<&UseRow>, mut commands: Commands| {
+                        |click: On<PointerClick>, q: Query<&UseRow>, mut commands: Commands| {
                             if let Ok(r) = q.get(click.entity).copied() {
                                 commands.queue(move |world: &mut World| {
                                     close(world);

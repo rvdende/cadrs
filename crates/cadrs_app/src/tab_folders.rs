@@ -236,7 +236,7 @@ pub fn spawn_nav(n: &mut ChildSpawnerCommands, t: &Theme, path: &[(ElementId, St
 
 /// A primary click opens the folder (a right-click only opens its menu).
 fn on_folder_tab_activate(
-    a: On<Pointer<Click>>,
+    a: On<PointerClick>,
     q: Query<&FolderTab>,
     drag: Res<TabDrag>,
     mut view: ResMut<TabFolderView>,
@@ -676,7 +676,7 @@ fn on_overflow(
         GlobalZIndex(cadrs_ui::z::MENU - 1),
         Pickable::default(),
         DespawnOnExit(AppState::Document),
-        observe(|_: On<Pointer<Click>>, mut commands: Commands| commands.queue(close_overflow)),
+        observe(|_: On<PointerClick>, mut commands: Commands| commands.queue(close_overflow)),
     ));
     let panel = commands
         .spawn((
@@ -975,7 +975,7 @@ fn item_of(e: Entity, q_tab: &Query<&TabButton>, q_folder: &Query<&FolderTab>) -
 }
 
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q_tab: Query<&TabButton>,
     q_folder: Query<&FolderTab>,
     mut drag: ResMut<TabDrag>,
@@ -989,15 +989,15 @@ fn on_drag_start(
     *drag = TabDrag {
         items: vec![item],
         source: Some(ev.entity),
-        start: ev.pointer_location.position,
-        pointer: ev.pointer_location.position,
+        start: ev.pointer.position,
+        pointer: ev.pointer.position,
         moved: false,
         target: None,
     };
 }
 
 fn on_drag(
-    ev: On<Pointer<Drag>>,
+    ev: On<PointerDrag>,
     q_tab: Query<&TabButton>,
     q_folder: Query<&FolderTab>,
     mut drag: ResMut<TabDrag>,
@@ -1005,14 +1005,14 @@ fn on_drag(
     if item_of(ev.entity, &q_tab, &q_folder).is_none() || drag.items.is_empty() {
         return;
     }
-    drag.pointer = ev.pointer_location.position;
+    drag.pointer = ev.pointer.position;
     if drag.pointer.distance(drag.start) > 6.0 {
         drag.moved = true;
     }
 }
 
 fn on_drag_end(
-    ev: On<Pointer<DragEnd>>,
+    ev: On<PointerDragEnd>,
     q_tab: Query<&TabButton>,
     q_folder: Query<&FolderTab>,
     mut commands: Commands,

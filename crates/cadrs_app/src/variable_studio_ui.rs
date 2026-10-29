@@ -432,9 +432,12 @@ fn mark_dirty(
 
 /// Spawns the overlay on the first Variable Studio tab, shows or hides it, and rebuilds the
 /// table when what it shows changes (the cell being edited is edited again afterwards).
-fn sync_view(world: &mut World, mut last: Local<Option<View>>) {
+fn sync_view(
+    world: &mut World,
+    q: &mut QueryState<(Entity, &mut Node), With<VsView>>,
+    mut last: Local<Option<View>>,
+) {
     let show = *world.resource::<ActiveKind>() == ActiveKind::VariableStudio;
-    let mut q = world.query_filtered::<(Entity, &mut Node), With<VsView>>();
     let overlay = q.iter(world).next().map(|(e, _)| e);
     if let Some(e) = overlay {
         let d = if show { Display::Flex } else { Display::None };
@@ -1859,7 +1862,7 @@ fn on_available(ev: On<CheckboxChange>, q: Query<(), With<AvailableBox>>, mut co
 // Dragging rows
 
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q: Query<&DragHandle>,
     doc: Option<Res<ActiveDocument>>,
     mut ui: ResMut<VsUi>,
@@ -1884,7 +1887,7 @@ fn on_drag_start(
 
 /// The pointer over the rows: where the dragged row would go (the rows' midpoints above it).
 fn on_drag(
-    ev: On<Pointer<Drag>>,
+    ev: On<PointerDrag>,
     q: Query<(), With<DragHandle>>,
     q_rows: Query<(&RowLine, &UiGlobalTransform, &ComputedNode)>,
     mut ui: ResMut<VsUi>,
@@ -1893,7 +1896,7 @@ fn on_drag(
         return;
     }
     let Some(d) = ui.drag.as_mut() else { return };
-    let y = ev.pointer_location.position.y;
+    let y = ev.pointer.position.y;
     let mut to = 0;
     for (line, tf, node) in &q_rows {
         if line.row == d.row {
@@ -1910,7 +1913,7 @@ fn on_drag(
     d.to = to;
 }
 
-fn on_drag_end(ev: On<Pointer<DragEnd>>, q: Query<(), With<DragHandle>>, mut commands: Commands) {
+fn on_drag_end(ev: On<PointerDragEnd>, q: Query<(), With<DragHandle>>, mut commands: Commands) {
     if !q.contains(ev.entity) {
         return;
     }
@@ -1962,7 +1965,7 @@ fn sync_drop_marker(
 }
 
 /// A click on a row's handle picks the row (again: unpicks it); Delete then deletes it.
-fn on_handle_click(ev: On<Pointer<Click>>, q: Query<&DragHandle>, mut ui: ResMut<VsUi>) {
+fn on_handle_click(ev: On<PointerClick>, q: Query<&DragHandle>, mut ui: ResMut<VsUi>) {
     let Ok(DragHandle(row)) = q.get(ev.entity).copied() else {
         return;
     };
@@ -2358,8 +2361,11 @@ struct InsertView {
     only: Vec<String>,
 }
 
-fn sync_insert_dialog(world: &mut World, mut last: Local<Option<InsertView>>) {
-    let mut q = world.query_filtered::<Entity, With<InsertDialog>>();
+fn sync_insert_dialog(
+    world: &mut World,
+    q: &mut QueryState<Entity, With<InsertDialog>>,
+    mut last: Local<Option<InsertView>>,
+) {
     let dialog = q.iter(world).next();
     let Some(s) = world.get_resource::<InsertSession>().cloned() else {
         if let Some(e) = dialog {

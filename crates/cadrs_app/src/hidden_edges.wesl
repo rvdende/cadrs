@@ -2,7 +2,7 @@
 // edges visible), drawn only where something is in front of them (the depth test is reversed,
 // `crate::hidden_edges`), dashed along their length (UV x is the distance along the edge, mm).
 
-#import bevy_pbr::forward_io::VertexOutput
+import bevy_pbr::render::forward_io::VertexOutput;
 
 struct HiddenLineParams {
     color: vec4<f32>,
@@ -10,7 +10,7 @@ struct HiddenLineParams {
     dash: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: HiddenLineParams;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> params: HiddenLineParams;
 
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
@@ -34,11 +34,10 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     if (planes > 0 && removed) {
         discard;
     }
-#ifdef VERTEX_UVS_A
+    @if(VERTEX_UVS_A)
     if (params.dash.x > 0.0 && fract(in.uv.x / params.dash.x) > 0.55) {
         discard;
     }
-#endif
     // Pulled toward the eye (reversed depth: larger is nearer) by about the part edges' bias,
     // so an edge on a face it bounds counts as visible, not hidden behind it.
     var out: FragmentOutput;

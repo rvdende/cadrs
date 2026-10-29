@@ -745,7 +745,7 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
 // Dragging
 
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q: Query<&PickRow>,
     details_state: Res<LandingDetails>,
     state: Res<LandingState>,
@@ -770,15 +770,15 @@ fn on_drag_start(
     };
     *drag = LandingDrag {
         items,
-        start: ev.pointer_location.position,
-        pointer: ev.pointer_location.position,
+        start: ev.pointer.position,
+        pointer: ev.pointer.position,
         moved: false,
     };
 }
 
-fn on_drag(ev: On<Pointer<Drag>>, q: Query<(), With<PickRow>>, mut drag: ResMut<LandingDrag>) {
+fn on_drag(ev: On<PointerDrag>, q: Query<(), With<PickRow>>, mut drag: ResMut<LandingDrag>) {
     if q.contains(ev.entity) && !drag.items.is_empty() {
-        drag.pointer = ev.pointer_location.position;
+        drag.pointer = ev.pointer.position;
         if drag.pointer.distance(drag.start) > 5.0 {
             drag.moved = true;
         }
@@ -786,7 +786,7 @@ fn on_drag(ev: On<Pointer<Drag>>, q: Query<(), With<PickRow>>, mut drag: ResMut<
 }
 
 fn on_drag_end(
-    ev: On<Pointer<DragEnd>>,
+    ev: On<PointerDragEnd>,
     q: Query<(), With<PickRow>>,
     q_hover: Query<Entity, With<DropHover>>,
     mut commands: Commands,
@@ -811,7 +811,7 @@ fn takes(drag: &LandingDrag, target: Option<FolderId>) -> bool {
 }
 
 fn on_drag_enter(
-    mut ev: On<Pointer<DragEnter>>,
+    mut ev: On<PointerDragEnter>,
     q: Query<&DropFolder>,
     q_hover: Query<(Entity, &ChildOf), With<DropHover>>,
     drag: Res<LandingDrag>,
@@ -845,7 +845,7 @@ fn on_drag_enter(
 }
 
 fn on_drag_leave(
-    mut ev: On<Pointer<DragLeave>>,
+    mut ev: On<PointerDragLeave>,
     q: Query<(), With<DropFolder>>,
     q_hover: Query<(Entity, &ChildOf), With<DropHover>>,
     mut commands: Commands,
@@ -862,7 +862,7 @@ fn on_drag_leave(
 }
 
 fn on_drop(
-    mut ev: On<Pointer<DragDrop>>,
+    mut ev: On<PointerDragDrop>,
     q: Query<&DropFolder>,
     drag: Res<LandingDrag>,
     mut commands: Commands,

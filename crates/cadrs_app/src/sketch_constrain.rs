@@ -162,7 +162,7 @@ pub(crate) fn update_analysis(
     mut analysis: ResMut<SketchAnalysis>,
     mut errors: ResMut<SketchErrors>,
     (mut under, mut faces_lost): (ResMut<SketchUnderDefined>, ResMut<SketchFacesLost>),
-    (mut badges, mut lost): (Local<BadgeAnalyses>, Local<LostFaces>),
+    (mut badges, mut lost, mut again): (Local<BadgeAnalyses>, Local<LostFaces>, Local<bool>),
 ) {
     // The colours stay as they were while dragging (the solve keeps the structure).
     if draw.drag.is_some() {
@@ -171,6 +171,19 @@ pub(crate) fn update_analysis(
     let Some(doc) = doc else {
         return;
     };
+    // Nothing to work out while what it reads is as it was and nothing it waits for runs: it
+    // compared every sketch with its last analysis every frame (a large studio's hundreds).
+    // After a batch, once more: a sketch changed meanwhile is in the next one.
+    let quiet = !doc.is_changed()
+        && !parts.is_changed()
+        && !draw.is_changed()
+        && session.as_ref().is_none_or(|s| !s.is_changed())
+        && badges.running.is_none()
+        && lost.running.is_none()
+        && !std::mem::take(&mut *again);
+    if quiet {
+        return;
+    }
     // Scripted runs wait for every rebuild (RebuildBudget(None)): they work these out at once
     // too, so screenshots never show a badge from before an edit.
     let wait = budget.0.is_none();
@@ -202,6 +215,7 @@ pub(crate) fn update_analysis(
     }
     if let Some(results) = badges.running.as_ref().and_then(|r| r.lock().ok()?.take()) {
         badges.running = None;
+        *again = true;
         for r in results {
             match badges.done.iter_mut().find(|d| d.0 == r.0) {
                 Some(d) => *d = r,
@@ -250,6 +264,7 @@ pub(crate) fn update_analysis(
     {
         lost.running = None;
         lost.done = Some(found);
+        *again = true;
     }
     let lost = lost
         .done

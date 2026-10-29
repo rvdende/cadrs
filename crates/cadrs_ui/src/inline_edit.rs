@@ -42,7 +42,7 @@ pub struct DoubleClick {
 }
 
 fn detect_double_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     q: Query<(), With<DoubleClickable>>,
     time: Res<Time>,
     mut last: Local<Option<(Entity, f32)>>,

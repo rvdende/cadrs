@@ -13,6 +13,8 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, Pressed};
 
+use crate::color_scheme::{Mapped, authored};
+
 pub struct StylePlugin;
 
 impl Plugin for StylePlugin {
@@ -177,6 +179,8 @@ pub(crate) fn apply_visuals(
             Option<&mut TextColor>,
             Option<&mut ImageNode>,
             Has<crate::icon::FullColour>,
+            Option<&Mapped<TextColor>>,
+            Option<&Mapped<ImageNode>>,
         ),
         With<InheritFg>,
     >,
@@ -216,18 +220,23 @@ pub(crate) fn apply_visuals(
             if q_nested.contains(child) {
                 continue;
             }
-            if let Ok((text, image, full_colour)) = q_fg.get_mut(child) {
-                if let Some(mut t) = text {
-                    t.set_if_neq(TextColor(fg));
+            if let Ok((text, image, full_colour, mapped_text, mapped_image)) = q_fg.get_mut(child) {
+                // Compared with the light colour behind the dark scheme's: writing the light one
+                // again would have the scheme map it again, every frame.
+                if let Some(mut t) = text
+                    && authored(&*t, mapped_text) != fg
+                {
+                    t.0 = fg;
                 }
-                // Full-colour icons keep their colours; the state only fades them.
-                let tint = if full_colour {
-                    Color::WHITE.with_alpha(fg.alpha())
-                } else {
-                    fg
+                // Full-colour icons keep their colours; the state only fades them, and a disabled
+                // one is faded by `icon::sync_icon_layers` (two fades rewrote it every frame).
+                let tint = match (full_colour, state) {
+                    (true, VisualState::Disabled) => None,
+                    (true, _) => Some(Color::WHITE.with_alpha(fg.alpha())),
+                    (false, _) => Some(fg),
                 };
-                if let Some(mut i) = image
-                    && i.color != tint
+                if let (Some(mut i), Some(tint)) = (image, tint)
+                    && authored(&*i, mapped_image) != tint
                 {
                     i.color = tint;
                 }

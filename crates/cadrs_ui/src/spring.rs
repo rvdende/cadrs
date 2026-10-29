@@ -187,7 +187,7 @@ impl Appear {
 
 /// Every widget button squashes (a little less when it is small).
 fn add_squash(
-    add: On<Add, bevy::ui_widgets::Button>,
+    add: On<Add<bevy::ui_widgets::Button>>,
     q: Query<(), (Without<NoSquash>, Without<Squash>)>,
     mut commands: Commands,
 ) {
@@ -196,7 +196,7 @@ fn add_squash(
     }
 }
 
-fn on_press(press: On<Pointer<Press>>, mut q: Query<&mut Squash>, motion: Res<MotionSettings>) {
+fn on_press(press: On<PointerPress>, mut q: Query<&mut Squash>, motion: Res<MotionSettings>) {
     if !motion.enabled || press.button != PointerButton::Primary {
         return;
     }

@@ -174,7 +174,10 @@ impl Gpu {
         let slice = read.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.wait();
-        let bytes = slice.get_mapped_range().to_vec();
+        let bytes = slice
+            .get_mapped_range()
+            .expect("the readback buffer is mapped")
+            .to_vec();
         read.unmap();
         let total = t0.elapsed().as_secs_f64() * 1e3;
         // The kernel alone: best of three dispatches on the resident buffers.

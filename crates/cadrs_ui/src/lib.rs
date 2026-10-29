@@ -81,6 +81,7 @@ pub mod toolbar;
 pub mod tooltip;
 pub mod tree;
 pub mod version_graph;
+pub mod virtual_rows;
 
 use bevy::prelude::*;
 
@@ -319,6 +320,7 @@ impl Plugin for CadrsUiPlugin {
                 grid_cell::GridCellPlugin,
                 glass::GlassPlugin,
                 spring::SpringPlugin,
+                virtual_rows::VirtualRowsPlugin,
             ))
             .add_message::<ScriptCommand>();
     }

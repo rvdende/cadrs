@@ -171,7 +171,10 @@ impl Gpu {
         let slice = read.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         let _ = d.poll(wgpu::PollType::wait_indefinitely());
-        let bytes = slice.get_mapped_range().to_vec();
+        let bytes = slice
+            .get_mapped_range()
+            .expect("the readback buffer is mapped")
+            .to_vec();
         read.unmap();
         bytes
     }

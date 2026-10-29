@@ -248,7 +248,7 @@ fn ring_color(t: &Theme, on: bool, disabled: bool) -> Color {
 }
 
 fn on_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<(&RadioOption, Has<InteractionDisabled>)>,
     mut q_group: Query<&mut RadioGroupState>,
     mut commands: Commands,

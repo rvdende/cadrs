@@ -1584,7 +1584,7 @@ fn on_dialog_button(world: &mut World, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::picking::{backend::HitData, events::Scroll, pointer::Location};
+    use bevy::picking::{backend::HitData, pointer::Location};
 
     fn dialog_app() -> App {
         let mut doc = cadrs_core::Document::empty("Insert test");
@@ -1705,21 +1705,21 @@ mod tests {
             .normalize(None)
             .unwrap();
         let wheel = |app: &mut App, unit, y| {
-            app.world_mut().trigger(Pointer::new(
-                PointerId::Mouse,
-                Location {
-                    target: target.clone(),
-                    position: Vec2::ZERO,
-                },
-                Scroll {
-                    unit,
-                    x: 0.0,
-                    y,
-                    hit: HitData::new(tree, 0.0, None, None),
-                    phase: bevy::input::touch::TouchPhase::Moved,
-                },
-                row,
-            ));
+            app.world_mut().trigger(PointerScroll {
+                entity: row,
+                pointer: Pointer::new(
+                    PointerId::Mouse,
+                    Location {
+                        target: target.clone(),
+                        position: Vec2::ZERO,
+                    },
+                ),
+                unit,
+                x: 0.0,
+                y,
+                hit: HitData::new(tree, 0.0, None, None),
+                phase: bevy::input::touch::TouchPhase::Moved,
+            });
         };
         wheel(&mut app, bevy::input::mouse::MouseScrollUnit::Line, -1.0);
         assert_eq!(

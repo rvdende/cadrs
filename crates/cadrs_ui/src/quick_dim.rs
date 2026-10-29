@@ -167,6 +167,7 @@ impl QuickDim {
                     selection_color: Color::NONE,
                     unfocused_selection_color: Color::NONE,
                     selected_text_color: None,
+                    selection_radius: 0.0,
                 },
                 TabIndex(0),
                 Node {
@@ -315,6 +316,7 @@ fn style_boxes(
                 selection_color: c.selection,
                 unfocused_selection_color: Color::NONE,
                 selected_text_color: Some(Color::WHITE),
+                selection_radius: 0.0,
             }
         } else {
             TextCursorStyle {
@@ -322,6 +324,7 @@ fn style_boxes(
                 selection_color: Color::NONE,
                 unfocused_selection_color: Color::NONE,
                 selected_text_color: None,
+                selection_radius: 0.0,
             }
         };
         if cursor.color != want_cursor.color

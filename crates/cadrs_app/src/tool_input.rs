@@ -7,7 +7,7 @@
 //! it from M4 on.
 
 use bevy::ecs::system::SystemParam;
-use bevy::picking::pointer::{PointerButton, PointerId, PointerLocation, PointerPress};
+use bevy::picking::pointer::{PointerButton, PointerId, PointerLocation, PointerPressState};
 use bevy::prelude::*;
 
 pub struct ToolInputPlugin;
@@ -44,14 +44,14 @@ pub struct ToolInput<'w, 's> {
         (
             &'static PointerId,
             &'static PointerLocation,
-            &'static PointerPress,
+            &'static PointerPressState,
         ),
     >,
     keys: Res<'w, ButtonInput<KeyCode>>,
 }
 
 impl ToolInput<'_, '_> {
-    fn active(&self) -> Option<(&PointerLocation, &PointerPress)> {
+    fn active(&self) -> Option<(&PointerLocation, &PointerPressState)> {
         let id = self.active.0?;
         self.pointers
             .iter()

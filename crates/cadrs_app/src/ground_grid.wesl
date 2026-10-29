@@ -2,8 +2,8 @@
 // step and a small cross on every fifth line, with the X and Y axes in their colours. It fades
 // with distance from the eye, at grazing angles, and where its lines would crowd.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_view_bindings::view
+import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_pbr::render::mesh_view_bindings::view;
 
 struct GroundGrid {
     line: vec4<f32>,
@@ -17,7 +17,7 @@ struct GroundGrid {
     fade: vec4<f32>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> grid: GroundGrid;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> grid: GroundGrid;
 
 // How much of a pixel `d` px from a line `w` px wide is covered.
 fn cover(d: f32, w: f32) -> f32 {

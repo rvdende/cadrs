@@ -51,7 +51,7 @@ fn sync_gutters(mut q: Query<(&ScrollGutter, &ComputedNode, &mut Node)>) {
 pub struct WheelScroll;
 
 fn on_wheel(
-    mut ev: On<Pointer<Scroll>>,
+    mut ev: On<PointerScroll>,
     mut q: Query<(&ComputedNode, &mut ScrollPosition), With<WheelScroll>>,
 ) {
     let Ok((node, mut pos)) = q.get_mut(ev.entity) else {

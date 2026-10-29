@@ -248,7 +248,7 @@ fn field_style(
 }
 
 fn on_field_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<&SelectionFieldState>,
     mut commands: Commands,
 ) {

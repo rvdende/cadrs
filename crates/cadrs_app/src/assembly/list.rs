@@ -1386,7 +1386,7 @@ fn sync_root_state(
 #[derive(Component)]
 struct RootState;
 
-fn on_eye_click(mut click: On<Pointer<Click>>, q: Query<&RowEye>, mut commands: Commands) {
+fn on_eye_click(mut click: On<PointerClick>, q: Query<&RowEye>, mut commands: Commands) {
     let Ok(eye) = q.get(click.entity) else { return };
     click.propagate(false);
     let (instances, hidden) = (eye.instances.clone(), !eye.hidden);
@@ -1411,7 +1411,7 @@ fn on_eye_click(mut click: On<Pointer<Click>>, q: Query<&RowEye>, mut commands: 
     });
 }
 
-fn on_lock_click(mut click: On<Pointer<Click>>, q: Query<&RowLock>, mut commands: Commands) {
+fn on_lock_click(mut click: On<PointerClick>, q: Query<&RowLock>, mut commands: Commands) {
     let Ok(lock) = q.get(click.entity).copied() else {
         return;
     };

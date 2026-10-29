@@ -74,6 +74,7 @@ use cadrs_ui::ShortcutKey;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input_focus::InputFocus;
@@ -95,8 +96,8 @@ impl Plugin for AssemblyPlugin {
             .init_resource::<ViewportGrab>()
             .init_resource::<PendingSelection>()
             .init_resource::<InstanceClipboard>()
-            .init_gizmo_group::<connectors::ConnectorHaloGizmos>()
-            .init_gizmo_group::<connectors::ConnectorGizmos>()
+            .gizmo_group::<connectors::ConnectorHaloGizmos>()
+            .gizmo_group::<connectors::ConnectorGizmos>()
             .add_systems(Startup, |mut store: ResMut<GizmoConfigStore>| {
                 connectors::configure(&mut store)
             })

@@ -475,9 +475,14 @@ fn on_timer(a: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut times: ResMu
 
 fn sync_timer_button(
     times: Res<RegenTimes>,
-    q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>)>,
+    q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>), With<cadrs_ui::style::Visuals>>,
+    q_new: Query<(), Added<cadrs_ui::style::Visuals>>,
     mut commands: Commands,
 ) {
+    // (Only when the setting changes or buttons are built: thousands of entities have names.)
+    if !times.is_changed() && q_new.is_empty() {
+        return;
+    }
     for (e, name, selected) in &q {
         if name.as_str() == "feature-timer" && selected != times.0 {
             if times.0 {
@@ -612,27 +617,27 @@ pub fn roll_to(world: &mut World, id: Option<FeatureId>) {
 }
 
 fn on_bar_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q: Query<(), With<RollbackBar>>,
     mut drag: ResMut<BarDrag>,
 ) {
     if ev.button == PointerButton::Primary && q.contains(ev.entity) {
         *drag = BarDrag {
             active: true,
-            pointer: ev.pointer_location.position,
+            pointer: ev.pointer.position,
             target: None,
         };
     }
 }
 
-fn on_bar_drag(ev: On<Pointer<Drag>>, q: Query<(), With<RollbackBar>>, mut drag: ResMut<BarDrag>) {
+fn on_bar_drag(ev: On<PointerDrag>, q: Query<(), With<RollbackBar>>, mut drag: ResMut<BarDrag>) {
     if drag.active && q.contains(ev.entity) {
-        drag.pointer = ev.pointer_location.position;
+        drag.pointer = ev.pointer.position;
     }
 }
 
 fn on_bar_drag_end(
-    ev: On<Pointer<DragEnd>>,
+    ev: On<PointerDragEnd>,
     q: Query<(), With<RollbackBar>>,
     mut commands: Commands,
 ) {

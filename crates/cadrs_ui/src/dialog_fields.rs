@@ -551,6 +551,7 @@ impl NumberField {
                             selection_color: t.selection,
                             unfocused_selection_color: Color::NONE,
                             selected_text_color: Some(t.selection_foreground),
+                            selection_radius: 0.0,
                         },
                         TabIndex(0),
                         Node {
@@ -623,7 +624,7 @@ fn on_number_key(
 /// Pressing on a number field (its value or the line under it) focuses it; focusing selects
 /// the whole value.
 fn on_number_press(
-    mut press: On<Pointer<Press>>,
+    mut press: On<PointerPress>,
     q_line: Query<&NumberFieldLine>,
     q_edit: Query<(Entity, &NumberFieldEdit), Without<InteractionDisabled>>,
     mut focus: ResMut<InputFocus>,
@@ -971,7 +972,7 @@ impl Slider {
 }
 
 fn on_slider_drag(
-    ev: On<Pointer<Drag>>,
+    ev: On<PointerDrag>,
     mut q: Query<(
         &mut SliderState,
         &ComputedNode,
@@ -980,17 +981,12 @@ fn on_slider_drag(
     )>,
     mut commands: Commands,
 ) {
-    slide_to(
-        ev.entity,
-        ev.pointer_location.position.x,
-        &mut q,
-        &mut commands,
-    );
+    slide_to(ev.entity, ev.pointer.position.x, &mut q, &mut commands);
 }
 
 /// Pressing on the track moves the knob there (P3.5: the opacity slider).
 fn on_slider_press(
-    ev: On<Pointer<Press>>,
+    ev: On<PointerPress>,
     mut q: Query<(
         &mut SliderState,
         &ComputedNode,
@@ -1000,12 +996,7 @@ fn on_slider_press(
     mut commands: Commands,
 ) {
     if ev.button == PointerButton::Primary {
-        slide_to(
-            ev.entity,
-            ev.pointer_location.position.x,
-            &mut q,
-            &mut commands,
-        );
+        slide_to(ev.entity, ev.pointer.position.x, &mut q, &mut commands);
     }
 }
 

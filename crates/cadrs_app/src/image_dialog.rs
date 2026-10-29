@@ -16,6 +16,7 @@
 //! Names: `image-dialog`, `image-plane-field`, `image-x`, `image-y`, `image-width`, `image-height`, `image-rotation`
 //! (their text fields `…-field`), `image-keep-aspect`.
 
+use crate::GizmoGroups;
 use bevy::prelude::*;
 use cadrs_core::commands::{ReplaceFeature, SetFeature};
 use cadrs_core::picture::ImageFeature;
@@ -37,7 +38,7 @@ pub struct ImageDialogPlugin;
 impl Plugin for ImageDialogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ImageGizmo>()
-            .init_gizmo_group::<ImageGizmos>()
+            .gizmo_group::<ImageGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

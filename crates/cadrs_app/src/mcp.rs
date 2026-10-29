@@ -275,16 +275,16 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::CreateDocument(p) => create_document(world, &p.name),
         Call::OpenDocument(p) => open_document(world, &p.name),
         Call::GetDocument => describe(world),
-        Call::GetFrameStats => {
+        Call::GetFrameStats(p) => {
             let mut stats = world
                 .resource::<crate::frame_stats::FrameStats>()
                 .describe();
-            if let (Some(o), Some(p)) = (
+            if let (Some(o), Some(prof)) = (
                 stats.as_object_mut(),
                 world.get_resource::<crate::frame_profile::FrameProfile>(),
             ) {
                 let cpu = *world.resource::<crate::frame_profile::CpuProfiling>();
-                o.insert("profile".into(), p.describe(25, cpu));
+                o.insert("profile".into(), prof.describe(p.top.unwrap_or(25), cpu));
             }
             Ok(stats)
         }
@@ -303,6 +303,16 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::RenameFeature(p) => rename_feature(world, p),
         Call::SetPart(p) => set_part(world, p),
         Call::SetFeatureVisible(p) => set_feature_visible(world, p),
+        Call::SetRollback(p) => set_rollback(world, p),
+        Call::ShowFeature(p) => {
+            let d = doc(world)?;
+            let element = part_studio(d, p.part_studio.as_deref())?;
+            let id = feature_named(d, element, &p.name)?.id;
+            crate::document::reveal_feature(world, id);
+            Ok(json!({ "feature": p.name }))
+        }
+        Call::GetUiLayout(p) => get_ui_layout(world, p),
+        Call::SetPreferences(p) => set_preferences(world, p),
         Call::ListFaces(p) => list_faces(world, p.part_studio.as_deref()),
         Call::ListEdges(p) => list_edges(world, p.part_studio.as_deref()),
         Call::Undo => {
@@ -1689,6 +1699,99 @@ fn set_feature_visible(world: &mut World, p: &tools::SetFeatureVisible) -> Resul
     })
     .map_err(|e| e.to_string())?;
     Ok(json!({ "feature": p.name, "visible": p.visible }))
+}
+
+/// Moves the rollback bar: below `index` features, or just below the feature `after`.
+fn set_rollback(world: &mut World, p: &tools::SetRollback) -> Result<Value, String> {
+    let mut d = doc_mut(world)?;
+    let element = part_studio(&d, p.part_studio.as_deref())?;
+    let names: Vec<String> = {
+        let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+        e.features().iter().map(|f| f.name.clone()).collect()
+    };
+    let index = match (&p.after, p.index) {
+        (Some(name), _) => Some(
+            names
+                .iter()
+                .position(|n| n == name)
+                .ok_or_else(|| format!("no feature named {name:?}"))?
+                + 1,
+        ),
+        (None, i) => i,
+    }
+    .filter(|&i| i < names.len());
+    d.execute(&cadrs_core::commands::SetRollback { element, index })
+        .map_err(|e| e.to_string())?;
+    let at = index.unwrap_or(names.len());
+    Ok(json!({
+        "rollback": at,
+        "features": names.len(),
+        "last_built": at.checked_sub(1).and_then(|i| names.get(i)),
+        "next": names.get(at),
+    }))
+}
+
+/// The named UI nodes' rectangles (logical pixels), top to bottom.
+fn get_ui_layout(world: &mut World, p: &tools::GetUiLayout) -> Result<Value, String> {
+    let want = p.name.as_deref().map(str::to_lowercase);
+    let mut q = world.query::<(
+        &Name,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &InheritedVisibility,
+        Option<&ChildOf>,
+    )>();
+    let mut nodes: Vec<(f32, f32, Value)> = q
+        .iter(world)
+        .filter(|(n, ..)| {
+            want.as_ref()
+                .is_none_or(|w| n.as_str().to_lowercase().contains(w))
+        })
+        .map(|(n, node, t, vis, parent)| {
+            let k = node.inverse_scale_factor();
+            let size = node.size() * k;
+            let top_left = t.translation * k - size / 2.0;
+            let parent = parent
+                .and_then(|c| world.get::<Name>(c.parent()))
+                .map(|n| n.as_str().to_string());
+            let round = |v: f32| (v * 10.0).round() / 10.0;
+            (
+                top_left.y,
+                top_left.x,
+                json!({
+                    "name": n.as_str(),
+                    "x": round(top_left.x),
+                    "y": round(top_left.y),
+                    "w": round(size.x),
+                    "h": round(size.y),
+                    "shown": vis.get(),
+                    "parent": parent,
+                }),
+            )
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let total = nodes.len();
+    let limit = p.limit.unwrap_or(200);
+    Ok(json!({
+        "nodes": nodes.into_iter().take(limit).map(|(.., v)| v).collect::<Vec<_>>(),
+        "matched": total,
+    }))
+}
+
+/// Sets and saves the preferences given; answers with all of them.
+fn set_preferences(world: &mut World, p: &tools::SetPreferences) -> Result<Value, String> {
+    if let Some(on) = p.vsync {
+        crate::preferences_ui::set_vsync(world, on);
+    }
+    let prefs = world.resource::<LocalPreferences>().0;
+    let mut v = serde_json::to_value(prefs).map_err(|e| e.to_string())?;
+    if let Some(o) = v.as_object_mut() {
+        // What the window does now: `CADRS_NO_VSYNC=1` turns vsync off for the run.
+        let vsync_now = prefs.vsync && std::env::var_os("CADRS_NO_VSYNC").is_none();
+        o.insert("vsync_in_force".into(), json!(vsync_now));
+    }
+    Ok(v)
 }
 
 /// Renames a part and/or sets its colour.

@@ -830,6 +830,66 @@ impl Plugin for CadrsAppPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         app.add_plugins(mcp::McpPlugin);
     }
+
+    fn finish(&self, app: &mut App) {
+        no_fixed_timestep(app);
+    }
+}
+
+/// Gizmo groups without the fixed timestep, which is off ([`no_fixed_timestep`]).
+pub(crate) trait GizmoGroups {
+    /// Like `init_gizmo_group`, without the systems that carry the group's gizmos over from the
+    /// fixed timestep's schedules (one a frame for each of 70 groups, carrying nothing).
+    fn gizmo_group<C: bevy::gizmos::config::GizmoConfigGroup>(&mut self) -> &mut Self;
+}
+
+impl GizmoGroups for App {
+    fn gizmo_group<C: bevy::gizmos::config::GizmoConfigGroup>(&mut self) -> &mut Self {
+        use bevy::ecs::schedule::ScheduleCleanupPolicy::RemoveSystemsOnly;
+        use bevy::gizmos::{clear_gizmo_context, collect_requested_gizmos, propagate_gizmos};
+        use bevy::time::Fixed;
+        self.init_gizmo_group::<C>();
+        let _ = self.remove_systems_in_set(Last, propagate_gizmos::<C, Fixed>, RemoveSystemsOnly);
+        let _ = self.remove_systems_in_set(
+            FixedFirst,
+            clear_gizmo_context::<C, Fixed>,
+            RemoveSystemsOnly,
+        );
+        let _ = self.remove_systems_in_set(
+            FixedLast,
+            collect_requested_gizmos::<C, Fixed>,
+            RemoveSystemsOnly,
+        );
+        self
+    }
+}
+
+/// Turns Bevy's fixed timestep off: nothing of ours runs on it, yet every frame ran two systems
+/// per gizmo group (over 140) to set their buffers aside around it, and it ran its schedules
+/// whenever its step came round.
+fn no_fixed_timestep(app: &mut App) {
+    use bevy::app::RunFixedMainLoopSystems as Fixed;
+    use bevy::ecs::schedule::ScheduleCleanupPolicy;
+    for set in [
+        Fixed::BeforeFixedMainLoop,
+        Fixed::FixedMainLoop,
+        Fixed::AfterFixedMainLoop,
+    ] {
+        // (Not there in tests without Bevy's time plugin.)
+        let _ = app.remove_systems_in_set(
+            RunFixedMainLoop,
+            set,
+            ScheduleCleanupPolicy::RemoveSystemsOnly,
+        );
+    }
+    // Messages are kept until a fixed step has run, for its systems to see them; with none,
+    // they go after two frames.
+    if let Some(mut r) = app
+        .world_mut()
+        .get_resource_mut::<bevy::ecs::message::MessageRegistry>()
+    {
+        r.should_update = bevy::ecs::message::ShouldUpdateMessages::Always;
+    }
 }
 
 /// Permanently deleted documents are kept aside during a session so undo works; they are

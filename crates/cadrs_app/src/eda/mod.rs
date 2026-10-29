@@ -30,6 +30,7 @@ use cadrs_ui::ShortcutKey;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use crate::GizmoGroups;
 use bevy::camera::ScalingMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -237,8 +238,8 @@ impl Plugin for EdaPlugin {
             .add_message::<EdaClick>()
             .add_message::<ui::StripAction>()
             .add_observer(ui::on_strip_button)
-            .init_gizmo_group::<EdaDots>()
-            .init_gizmo_group::<EdaCross>()
+            .gizmo_group::<EdaDots>()
+            .gizmo_group::<EdaCross>()
             .init_resource::<Crosshair>()
             .add_systems(Startup, (spawn_camera, configure_gizmos))
             .add_systems(

@@ -278,7 +278,7 @@ pub fn spawn_link_icon(
     };
     e.insert((Tooltip::new(tip.to_string()), target, Pickable::default()));
     e.observe(
-        |mut click: On<Pointer<Click>>, q: Query<&LinkTarget>, mut commands: Commands| {
+        |mut click: On<PointerClick>, q: Query<&LinkTarget>, mut commands: Commands| {
             if click.button != PointerButton::Primary {
                 return;
             }

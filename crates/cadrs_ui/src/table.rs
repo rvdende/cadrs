@@ -31,7 +31,7 @@
 use std::borrow::Cow;
 
 use bevy::ecs::spawn::SpawnWith;
-use bevy::input::mouse::MouseScrollUnit;
+use bevy::input::mouse::{MouseScrollPixelsPerLine, MouseScrollUnit};
 use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
@@ -631,7 +631,7 @@ fn px_width(n: &Node) -> f32 {
 }
 
 fn on_resize_start(
-    mut ev: On<Pointer<DragStart>>,
+    mut ev: On<PointerDragStart>,
     mut q: Query<(&mut TableResizeHandle, &ChildOf)>,
     q_node: Query<&Node>,
 ) {
@@ -665,7 +665,7 @@ fn table_root(
 
 #[allow(clippy::type_complexity)]
 fn on_resize_drag(
-    mut ev: On<Pointer<Drag>>,
+    mut ev: On<PointerDrag>,
     q: Query<(&TableResizeHandle, &ChildOf)>,
     q_parent: Query<&ChildOf>,
     q_root: Query<(), With<TableRoot>>,
@@ -714,7 +714,7 @@ fn on_resize_drag(
 }
 
 fn on_resize_end(
-    mut ev: On<Pointer<DragEnd>>,
+    mut ev: On<PointerDragEnd>,
     mut q: Query<(&mut TableResizeHandle, &ChildOf)>,
     q_node: Query<&Node>,
     mut commands: Commands,
@@ -737,7 +737,7 @@ fn on_resize_end(
 }
 
 /// A click on a divider is not a click on its header (no sort, no menu).
-fn on_resize_click(mut ev: On<Pointer<Click>>, q: Query<(), With<TableResizeHandle>>) {
+fn on_resize_click(mut ev: On<PointerClick>, q: Query<(), With<TableResizeHandle>>) {
     if q.contains(ev.entity) {
         ev.propagate(false);
     }
@@ -781,16 +781,17 @@ fn resize_handle_look(
 
 /// The wheel over a table body: vertical, and sideways with Shift (or a trackpad's x).
 fn on_body_scroll(
-    mut ev: On<Pointer<Scroll>>,
+    mut ev: On<PointerScroll>,
     mut q: Query<(&ComputedNode, &mut ScrollPosition), With<TableBody>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    pixels_per_line: Option<Res<MouseScrollPixelsPerLine>>,
 ) {
     let Ok((node, mut pos)) = q.get_mut(ev.entity) else {
         return;
     };
     ev.propagate(false);
     let k = match ev.unit {
-        MouseScrollUnit::Line => MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+        MouseScrollUnit::Line => *pixels_per_line.as_deref().copied().unwrap_or_default(),
         MouseScrollUnit::Pixel => 1.0,
     };
     let mut d = Vec2::new(ev.x, ev.y) * k;
@@ -857,7 +858,7 @@ fn on_header_double_click(
 }
 
 fn on_row_click(
-    mut click: On<Pointer<Click>>,
+    mut click: On<PointerClick>,
     q: Query<Has<InteractionDisabled>, With<TableRowMarker>>,
     mut commands: Commands,
 ) {

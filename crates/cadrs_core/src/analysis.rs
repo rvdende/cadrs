@@ -50,7 +50,7 @@ pub enum DraftBand {
 
 /// The tolerance of the draft bands' edges (degrees): a face drafted exactly by the required
 /// angle passes, and a vertical wall (|draft| below it, either sign) is in the 0…a band whatever
-/// its tessellation's noise. `part_shading.wgsl` gets it as a uniform.
+/// its tessellation's noise. `part_shading.wesl` gets it as a uniform.
 pub const DRAFT_EPS: f64 = 1e-4;
 
 impl DraftBand {
@@ -145,7 +145,7 @@ pub fn reflect(d: Vec3, n: Vec3) -> Vec3 {
 
 /// Where the reflected view ray `reflected` (in the view's frame: x right, y up, z back) falls
 /// in the zebra pattern: 0…1 across one band pair, the white band where
-/// [`zebra_white`]. `part_shading.wgsl` does the same per pixel.
+/// [`zebra_white`]. `part_shading.wesl` does the same per pixel.
 pub fn zebra_phase(reflected: Vec3, bands: f64) -> f64 {
     let phi = dot(normalize(reflected), normalize(ZEBRA_AXIS))
         .clamp(-1.0, 1.0)
@@ -156,7 +156,7 @@ pub fn zebra_phase(reflected: Vec3, bands: f64) -> f64 {
 /// [`zebra_phase`] at a point: the view's frame `view` (its right, up and back axes, world),
 /// the eye's position `eye`, the point `point` and the surface's unit normal `n` there. An
 /// orthographic view looks along −back everywhere; a perspective one along the ray from the
-/// eye. `part_shading.wgsl` does exactly this per pixel.
+/// eye. `part_shading.wesl` does exactly this per pixel.
 pub fn zebra_phase_at(view: [Vec3; 3], eye: Vec3, point: Vec3, n: Vec3, ortho: bool) -> f64 {
     let [right, up, back] = view;
     let e = if ortho {
@@ -273,7 +273,7 @@ pub const CURVATURE_BANDS: usize = 6;
 pub const CURVATURE_FLAT: f64 = 1e-4;
 
 /// The band (0 the most curved … 5 flat) of a mean curvature `k` when the most curved shown is
-/// `max`: flat on its own, the rest in five equal steps up to `max`. `part_shading.wgsl` does
+/// `max`: flat on its own, the rest in five equal steps up to `max`. `part_shading.wesl` does
 /// the same per pixel.
 pub fn curvature_band(k: f64, max: f64) -> usize {
     let k = k.abs();

@@ -14,7 +14,7 @@
 //! run.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use web_time::Instant;
 
@@ -90,7 +90,11 @@ impl CpuProfiling {
         let on = match std::env::var("CADRS_FRAME_PROFILE").ok().as_deref() {
             Some("0") => false,
             Some(_) => true,
-            None => wanted || std::env::var_os("CADRS_SLOW_FRAMES").is_some(),
+            None => {
+                wanted
+                    || std::env::var_os("CADRS_SLOW_FRAMES").is_some()
+                    || std::env::var_os("CADRS_TRACE").is_some()
+            }
         };
         if on { Self::On } else { Self::Off }
     }
@@ -136,19 +140,99 @@ pub fn profiler_layer(app: &mut App) -> Option<BoxedLayer> {
     let tally = ProfilerTally::default();
     app.insert_resource(tally.clone());
     let on = app.world().get_resource::<CpuProfiling>() == Some(&CpuProfiling::On);
-    Some(Box::new(ProfilerLayer { slots: tally.0, on }))
+    let trace = std::env::var_os("CADRS_TRACE").map(|path| {
+        let at = std::env::var("CADRS_TRACE_AT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(10.0);
+        Arc::new(Trace {
+            path: path.into(),
+            from_ns: (at * 1e9) as u64,
+            to_ns: ((at + TRACE_SECS) * 1e9) as u64,
+            events: Mutex::default(),
+            written: AtomicBool::new(false),
+        })
+    });
+    Some(Box::new(ProfilerLayer {
+        slots: tally.0,
+        on,
+        trace,
+    }))
 }
 
 struct ProfilerLayer {
     slots: Arc<Mutex<Slots>>,
     /// Off, no span is made at all (the layer's `enabled` turns them away for every layer).
     on: bool,
+    trace: Option<Arc<Trace>>,
+}
+
+/// How long `CADRS_TRACE` records.
+const TRACE_SECS: f64 = 0.25;
+
+/// `CADRS_TRACE=<file.json>`: every span of a quarter second from `CADRS_TRACE_AT` seconds after
+/// the start (10 by default), written as a Chrome trace (ui.perfetto.dev, chrome://tracing):
+/// which thread ran each system when, so where a frame waits shows.
+struct Trace {
+    path: std::path::PathBuf,
+    from_ns: u64,
+    to_ns: u64,
+    /// Kind, name, thread (its name), start and length (ns).
+    events: Mutex<Vec<(Kind, Arc<str>, Arc<str>, u64, u64)>>,
+    written: AtomicBool,
+}
+
+impl Trace {
+    fn write(&self) {
+        let Ok(events) = self.events.lock() else {
+            return;
+        };
+        let mut threads: Vec<Arc<str>> = events.iter().map(|e| e.2.clone()).collect();
+        threads.sort();
+        threads.dedup();
+        let tid = |t: &Arc<str>| threads.binary_search(t).unwrap_or(0);
+        let mut out: Vec<Value> = threads
+            .iter()
+            .enumerate()
+            .map(|(i, t)| json!({ "name": "thread_name", "ph": "M", "pid": 1, "tid": i, "args": { "name": t } }))
+            .collect();
+        out.extend(events.iter().map(|(kind, name, thread, start, len)| {
+            json!({
+                "name": name,
+                "cat": format!("{kind:?}"),
+                "ph": "X",
+                "pid": 1,
+                "tid": tid(thread),
+                "ts": *start as f64 / 1e3,
+                "dur": *len as f64 / 1e3,
+            })
+        }));
+        let text = json!({ "traceEvents": out }).to_string();
+        match std::fs::write(&self.path, text) {
+            Ok(()) => info!(
+                "trace of {} spans written to {}",
+                events.len(),
+                self.path.display()
+            ),
+            Err(e) => warn!("cannot write the trace to {}: {e}", self.path.display()),
+        }
+    }
+}
+
+thread_local! {
+    /// This thread's name for `CADRS_TRACE` (its name and id: the pools' threads share names).
+    static THREAD: Arc<str> = {
+        let t = std::thread::current();
+        format!("{} {:?}", t.name().unwrap_or("?"), t.id()).into()
+    };
 }
 
 /// A timed span's slot, kept on the span, and when it was last entered ([`now_ns`]).
 struct Timed {
     slot: Arc<Slot>,
     entered: AtomicU64,
+    kind: Kind,
+    name: Arc<str>,
 }
 
 /// Nanoseconds since the first call.
@@ -197,11 +281,14 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ProfilerLayer {
         let Ok(mut slots) = self.slots.lock() else {
             return;
         };
-        let slot = slots.entry((kind, name.into())).or_default().clone();
+        let name: Arc<str> = name.into();
+        let slot = slots.entry((kind, name.clone())).or_default().clone();
         drop(slots);
         span.extensions_mut().insert(Timed {
             slot,
             entered: AtomicU64::new(0),
+            kind,
+            name,
         });
     }
 
@@ -217,9 +304,20 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for ProfilerLayer {
         if let Some(span) = ctx.span(id)
             && let Some(t) = span.extensions().get::<Timed>()
         {
-            let ns = now_ns().saturating_sub(t.entered.load(Ordering::Relaxed));
+            let (now, entered) = (now_ns(), t.entered.load(Ordering::Relaxed));
+            let ns = now.saturating_sub(entered);
             t.slot.ns.fetch_add(ns, Ordering::Relaxed);
             t.slot.runs.fetch_add(1, Ordering::Relaxed);
+            if let Some(trace) = &self.trace {
+                if entered >= trace.from_ns && now <= trace.to_ns {
+                    if let Ok(mut events) = trace.events.lock() {
+                        let thread = THREAD.with(|t| t.clone());
+                        events.push((t.kind, t.name.clone(), thread, entered, ns));
+                    }
+                } else if now > trace.to_ns && !trace.written.swap(true, Ordering::Relaxed) {
+                    trace.write();
+                }
+            }
         }
     }
 }
@@ -450,10 +548,6 @@ pub(crate) fn take_frame(
     if let (Some(handles), Some(configs), Some(assets)) =
         (gizmo_handles, gizmo_configs, gizmo_assets)
     {
-        let names: HashMap<_, _> = configs
-            .iter()
-            .map(|(id, _, group)| (*id, group.reflect_type_path().to_string()))
-            .collect();
         for (id, handle) in handles.handles() {
             let Some(asset) = handle.as_ref().and_then(|h| assets.get(h)) else {
                 continue;
@@ -461,7 +555,14 @@ pub(crate) fn take_frame(
             let b = asset.buffer();
             let n = (b.list_positions.len() + b.strip_positions.len()) as u32;
             if n > 0 {
-                gizmos.push((names.get(id).cloned().unwrap_or_else(|| "?".into()), n));
+                // (Named only when drawing: naming all 70 groups each frame cost a string each.)
+                let name = configs
+                    .iter()
+                    .find(|(c, ..)| *c == id)
+                    .map_or("?".into(), |(.., group)| {
+                        group.reflect_type_path().to_string()
+                    });
+                gizmos.push((name, n));
             }
         }
     }
@@ -498,6 +599,7 @@ mod tests {
         let subscriber = bevy::log::tracing_subscriber::registry().with(ProfilerLayer {
             slots: tally.0.clone(),
             on: true,
+            trace: None,
         });
         bevy::log::tracing::subscriber::with_default(subscriber, || {
             // A system's span is made once and entered every run.
@@ -534,6 +636,7 @@ mod tests {
         let subscriber = bevy::log::tracing_subscriber::registry().with(ProfilerLayer {
             slots: tally.0.clone(),
             on: false,
+            trace: None,
         });
         bevy::log::tracing::subscriber::with_default(subscriber, || {
             let span = bevy::log::info_span!("system", name = "a");

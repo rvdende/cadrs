@@ -1,6 +1,6 @@
 # cadrs
 
-Onshape-style CAD in Rust + Bevy 0.19.1. Local notes in `docs/` (git-ignored: `PLAN.md`,
+Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `PLAN.md`,
 `PROGRESS.md`, `ORCHESTRATOR.md` for background workers). Kernel design: `crates/cadrs_kernel/README.md`.
 
 ## Commands
@@ -43,15 +43,22 @@ Onshape-style CAD in Rust + Bevy 0.19.1. Local notes in `docs/` (git-ignored: `P
   failing shells/fillets, replayed by `crates/cadrs_kernel/tests/native_debug.rs`); see the
   kernel README. The kernel is pure Rust (`cadrs_kernel::native`); there is no OCCT any more.
 - App debugging: `CADRS_SLOW_FRAMES=<ms>` logs every frame slower than that with its slowest
-  systems (`cadrs_app::debug_tools`; add further env-switched aids there). System times (the
+  systems (`cadrs_app::debug_tools`; add further env-switched aids there). `CADRS_NO_VSYNC=1`
+  shows a frame's real cost; `CADRS_UI_CHANGES=1` names the UI nodes that change every frame
+  (each one costs a full UI layout), and with Bevy's `track_location` feature the code that
+  changed them. System times (the
   F12 panel, `get_frame_stats`) are off unless asked for, as they cost about a fifth of a frame:
-  start with `CADRS_FRAME_PROFILE=1`, or the *Time systems* preference.
+  start with `CADRS_FRAME_PROFILE=1`, or the *Time systems* preference. `CADRS_TRACE=<file.json>`
+  (with `CADRS_TRACE_AT=<s>`) writes a quarter second of every system's span, by thread, as a
+  Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
 - Project site: `site/` is a Proa app of its own (stable toolchain, built with `RUSTFLAGS=`),
   exported to GitHub Pages by `.github/workflows/pages.yml`; see `site/README.md`.
 
 ## Layout
 - Crates in `crates/*`; shared versions in root `[workspace.dependencies]`.
+- `vendor/`: patched copies of dependencies (`[patch.crates-io]`), each with a `CADRS.md` saying
+  what changed and why: gpu-allocator stages wgpu's uploads in system memory.
 - `cadrs_core` and `cadrs_sketch` don't depend on bevy.
 - Library parts are data, never code: `libraries/<Library>/<name>.symbol.ron|.footprint.ron`,
   read at runtime. `cargo run -r -p cadrs_libgen -- libraries` rewrites the built-in ones from

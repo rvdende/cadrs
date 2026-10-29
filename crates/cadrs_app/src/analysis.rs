@@ -7,19 +7,19 @@
 //!   (3° by default). The parts are coloured by how much draft each point of their faces has
 //!   against the pull direction, in six bands ([`cadrs_core::analysis::DraftBand`]: greens with
 //!   enough positive draft, yellows with too little, reds with negative draft), on the GPU
-//!   (`part_shading.wgsl`), with a legend at the right of the view (marked "(flipped)" when
+//!   (`part_shading.wesl`), with a legend at the right of the view (marked "(flipped)" when
 //!   the pull is) and the pull direction's blue arrow at its reference. ✓ keeps the analysis while
 //!   you work; ✕ (or the menu's Exit draft analysis) ends it.
 //! - **Curvature** colours the faces by their mean curvature
 //!   ([`cadrs_core::analysis::vertex_mean_curvature`], per vertex in the mesh's UV y, banded per
-//!   pixel in `part_shading.wgsl`): six bands from flat (blue) to the most curved shown (red),
+//!   pixel in `part_shading.wesl`): six bands from flat (blue) to the most curved shown (red),
 //!   with a legend in 1/mm.
 //! - **Curvature combs** draws curvature combs on the selected edges, or on every curved edge
 //!   of the parts when none is selected: a tooth at each point of the edge, away from its centre of curvature, as long as
 //!   the curvature, joined at their tips ([`cadrs_core::analysis::curvature_comb`]). The longest
 //!   tooth is a fixed length on screen, so the combs stay readable as you zoom.
 //! - **Zebra stripes** paints the parts with black and white bands of the view ray reflected
-//!   off them ([`cadrs_core::analysis::zebra_phase`], per pixel in `part_shading.wgsl`): a flat
+//!   off them ([`cadrs_core::analysis::zebra_phase`], per pixel in `part_shading.wesl`): a flat
 //!   face is one shade (straight bands in perspective), curved faces show the bands, and the
 //!   bands kink where faces meet without curvature continuity.
 //! - Draft analysis, Curvature and zebra stripes all colour the faces, so turning one on turns
@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 
+use crate::GizmoGroups;
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::{Activate, observe};
@@ -56,7 +57,7 @@ impl Plugin for AnalysisPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AnalysisViews>()
             .init_resource::<ShadingAnalysis>()
-            .init_gizmo_group::<CurvatureGizmos>()
+            .gizmo_group::<CurvatureGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

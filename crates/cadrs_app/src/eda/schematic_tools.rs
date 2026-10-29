@@ -221,8 +221,8 @@ pub fn register(app: &mut App) {
     super::sch_dialogs::register(app);
 }
 
-fn strip(world: &mut World) {
-    ui::sync_strip(world, Mode::Schematic, STRIP);
+fn strip(world: &mut World, q: &mut QueryState<(Entity, &'static ui::ToolStrip)>) {
+    ui::sync_strip(world, q, Mode::Schematic, STRIP);
     let a = world.resource::<SchState>().tool.action();
     ui::mark_active(world, Mode::Schematic, a);
 }

@@ -30,6 +30,7 @@
 
 use std::hash::{Hash, Hasher};
 
+use crate::GizmoGroups;
 use bevy::prelude::*;
 use cadrs_core::pcb::fit::{self, Entity as FitEntity};
 use cadrs_core::{PartId, Solid};
@@ -46,7 +47,7 @@ pub struct BoardFitPlugin;
 impl Plugin for BoardFitPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FitState>()
-            .init_gizmo_group::<FitGizmos>()
+            .gizmo_group::<FitGizmos>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,
@@ -677,7 +678,7 @@ fn draw_fit(eda: Res<crate::eda::Eda2d>, state: Res<FitState>, mut g: Gizmos<Fit
 struct FitLabel(usize);
 
 /// Keeps a label at the middle of each room line ("4.20 mm") and "In the way" at the part.
-fn sync_labels(world: &mut World) {
+fn sync_labels(world: &mut World, q: &mut QueryState<(Entity, &FitLabel)>) {
     let state = world.resource::<FitState>().clone();
     let view = world.resource::<crate::viewport::ViewportView>().view;
     let rect = *world.resource::<crate::viewport::ViewportRect>();
@@ -729,7 +730,6 @@ fn sync_labels(world: &mut World) {
         "board-fit-collision",
         "board-gap-z",
     ];
-    let mut q = world.query::<(Entity, &FitLabel)>();
     let have: Vec<(Entity, usize)> = q.iter(world).map(|(e, l)| (e, l.0)).collect();
     for (e, i) in &have {
         if !want.iter().any(|w| w.0 == *i) {

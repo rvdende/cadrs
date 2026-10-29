@@ -334,7 +334,6 @@ fn sync_panel(
                         b.spawn((
                             Name::new(format!("interference-row-{}", k + 1)),
                             ClashRow(*a, *bb),
-                            Button,
                             Node {
                                 height: Val::Px(24.0),
                                 padding: UiRect::horizontal(Val::Px(6.0)),
@@ -358,7 +357,7 @@ fn sync_panel(
                             Tooltip::new("Select these instances"),
                         ))
                         .observe(
-                            |click: On<Pointer<Click>>,
+                            |click: On<PointerClick>,
                              q: Query<&ClashRow>,
                              mut sel: ResMut<Selection>| {
                                 if let Ok(r) = q.get(click.entity) {

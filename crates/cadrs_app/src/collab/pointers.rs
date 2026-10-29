@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::GizmoGroups;
 use bevy::ecs::system::SystemState;
 use bevy::picking::hover::HoverMap;
 use bevy::prelude::*;
@@ -63,10 +64,10 @@ pub(super) fn plugin(app: &mut App) {
         .add_message::<PeerLeft>()
         .init_resource::<Pointers>()
         .init_resource::<Pings>()
-        .init_gizmo_group::<CollabGizmos>()
-        .init_gizmo_group::<CollabHiddenGizmos>()
-        .init_gizmo_group::<CollabPickGizmos>()
-        .init_gizmo_group::<CollabGazeGizmos>()
+        .gizmo_group::<CollabGizmos>()
+        .gizmo_group::<CollabHiddenGizmos>()
+        .gizmo_group::<CollabPickGizmos>()
+        .gizmo_group::<CollabGazeGizmos>()
         .add_observer(on_edge_chip_click)
         .add_systems(Startup, configure_gizmos)
         .add_systems(
@@ -1101,7 +1102,7 @@ fn sync_edge_chips(
 
 /// A click on an edge chip takes this user's view to that pointer.
 fn on_edge_chip_click(
-    ev: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
+    ev: On<bevy::picking::events::PointerClick>,
     parents: Query<&ChildOf>,
     chips: Query<&EdgeChip>,
     mut commands: Commands,

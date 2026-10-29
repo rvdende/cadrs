@@ -7,6 +7,7 @@
 //! The cube is a tiny 3D scene on render layer 1, drawn by its own camera into an image that a
 //! UI node shows, so it composes with the UI like any other widget.
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{RenderTarget, ScalingMode};
@@ -27,14 +28,20 @@ pub struct ViewCubePlugin;
 
 impl Plugin for ViewCubePlugin {
     fn build(&self, app: &mut App) {
-        app.init_gizmo_group::<CubeGizmos>()
-            .init_gizmo_group::<CubeArcGizmos>()
+        app.gizmo_group::<CubeGizmos>()
+            .gizmo_group::<CubeArcGizmos>()
             .init_resource::<CubeHover>()
             .init_resource::<CornerHover>()
             .add_systems(Startup, setup_cube)
             .add_systems(
                 Update,
-                (sync_cube_camera, cube_hover, draw_cube, fade_face_labels)
+                (
+                    sync_cube_camera,
+                    cube_hover,
+                    draw_cube,
+                    fade_face_labels,
+                    render_cube_when_changed,
+                )
                     .chain()
                     .after(crate::viewport::apply_view_to_camera)
                     .run_if(in_state(AppState::Document)),
@@ -483,6 +490,58 @@ fn setup_cube(
 /// "p" or "m" for a corner's name ("view-cube-corner-pmp": x+, y−, z+).
 fn sign(v: i32) -> &'static str {
     if v > 0 { "p" } else { "m" }
+}
+
+/// How many frames the view cube's cameras render after something they show changed: one for
+/// the change, one for its gizmos and layout to catch up, one to spare.
+const CUBE_RENDER_FRAMES: u16 = 3;
+/// The labels' atlas renders this long when a document opens, so its text is laid out and drawn
+/// before the atlas keeps it.
+const ATLAS_FIRST_FRAMES: u16 = 120;
+
+/// The view cube's image and its labels' atlas keep their last render: their cameras render only
+/// while what they show changes (each cost every frame a camera pass of its own).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn render_cube_when_changed(
+    view: Res<ViewportView>,
+    (hover, corner_hover): (Res<CubeHover>, Res<CornerHover>),
+    (theme, active): (Res<Theme>, Res<cadrs_ui::ActiveTheme>),
+    faces: Query<(), (With<CubeFace>, Changed<MeshMaterial3d<StandardMaterial>>)>,
+    corners: Query<(), (With<CornerPatch>, Changed<Visibility>)>,
+    mut material_events: MessageReader<AssetEvent<StandardMaterial>>,
+    mut cameras: Query<
+        (&mut Camera, Has<LabelAtlasCamera>),
+        Or<(With<CubeCamera>, With<LabelAtlasCamera>)>,
+    >,
+    mut left: Local<Option<(u16, u16)>>,
+) {
+    // (A face label's fade, here or for the Repair view, changes its material.)
+    let faded = material_events
+        .read()
+        .any(|e| matches!(e, AssetEvent::Modified { .. }));
+    let (cube, atlas) = left.get_or_insert((CUBE_RENDER_FRAMES, ATLAS_FIRST_FRAMES));
+    let restyled = theme.is_changed() || active.is_changed();
+    if restyled
+        || view.is_changed()
+        || hover.is_changed()
+        || corner_hover.is_changed()
+        || !faces.is_empty()
+        || !corners.is_empty()
+        || faded
+    {
+        *cube = (*cube).max(CUBE_RENDER_FRAMES);
+    }
+    if restyled {
+        *atlas = (*atlas).max(CUBE_RENDER_FRAMES);
+    }
+    for (mut c, is_atlas) in &mut cameras {
+        let on = if is_atlas { *atlas > 0 } else { *cube > 0 };
+        if c.is_active != on {
+            c.is_active = on;
+        }
+    }
+    *cube = cube.saturating_sub(1);
+    *atlas = atlas.saturating_sub(1);
 }
 
 #[allow(clippy::type_complexity)]
@@ -1145,7 +1204,7 @@ pub(crate) fn axis_label_spot(view: &ViewState, axis: Vec3, size: Vec2) -> (Vec2
 }
 
 fn on_cube_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     q: Query<(), With<CubeImageNode>>,
     q_node: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<CubeImageNode>>,
     mut view: ResMut<ViewportView>,
@@ -1156,7 +1215,7 @@ fn on_cube_click(
     let Some(origin) = widget_origin(&q_node) else {
         return;
     };
-    match spot_at(&view.view, click.pointer_location.position - origin) {
+    match spot_at(&view.view, click.pointer.position - origin) {
         Some(CubeSpot::Face(face)) => {
             let to = view.target().oriented(face.view());
             view.animate_to(to);

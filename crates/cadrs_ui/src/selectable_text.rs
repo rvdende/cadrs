@@ -149,6 +149,7 @@ impl SelectableText {
             selection_color: theme.selection,
             unfocused_selection_color: Color::NONE,
             selected_text_color: Some(theme.selection_foreground),
+            selection_radius: 0.0,
         };
         let icon_size = (font_size - 1.0).round().max(10.0);
         let colors = CopyColors {
@@ -289,7 +290,7 @@ fn leave_on_press_elsewhere(
 
 /// A click on a copy icon copies its text's whole value.
 fn on_copy_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     mut q_button: Query<(&mut CopyButton, &ChildOf)>,
     q_value: Query<&SelectableValue>,
     time: Res<Time<Real>>,

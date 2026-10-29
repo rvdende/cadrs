@@ -521,7 +521,7 @@ struct DropBadge;
 
 #[allow(clippy::too_many_arguments)]
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     q_inst: Query<&InstanceRow>,
     q_child: Query<&ChildRow>,
     q_mate: Query<&MateRow>,
@@ -539,7 +539,7 @@ fn on_drag_start(
     else {
         return;
     };
-    let pointer = ev.pointer_location.position;
+    let pointer = ev.pointer.position;
     let (list, items, child) = if let Ok(r) = q_inst.get(ev.entity) {
         // The selection when the row is in it (in list order), else the row.
         let sel = super::selected_instances(&selection);
@@ -591,13 +591,13 @@ type AnyRow = Or<(
     With<AsmFolderRow>,
 )>;
 
-fn on_drag(ev: On<Pointer<Drag>>, q: Query<(), AnyRow>, mut drag: ResMut<AsmDrag>) {
+fn on_drag(ev: On<PointerDrag>, q: Query<(), AnyRow>, mut drag: ResMut<AsmDrag>) {
     if q.contains(ev.entity) && drag.list.is_some() {
-        drag.pointer = ev.pointer_location.position;
+        drag.pointer = ev.pointer.position;
     }
 }
 
-fn on_drag_end(ev: On<Pointer<DragEnd>>, q: Query<(), AnyRow>, mut commands: Commands) {
+fn on_drag_end(ev: On<PointerDragEnd>, q: Query<(), AnyRow>, mut commands: Commands) {
     if !q.contains(ev.entity) {
         return;
     }

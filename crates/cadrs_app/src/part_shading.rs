@@ -1,5 +1,5 @@
 //! The viewport's part material: the head light of [`crate::parts::shade`] computed on the GPU
-//! (`part_shading.wgsl`) from each fragment's normal and the camera's frame. The part meshes
+//! (`part_shading.wesl`) from each fragment's normal and the camera's frame. The part meshes
 //! carry only their faces' base colours ([`crate::parts::part_base_mesh`]), so turning the view
 //! doesn't touch them; they change only when the parts, their colours or the selection do.
 
@@ -16,7 +16,7 @@ pub struct PartShadingPlugin;
 
 impl Plugin for PartShadingPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "part_shading.wgsl");
+        embedded_asset!(app, "part_shading.wesl");
         app.add_plugins(MaterialPlugin::<PartShading>::default());
     }
 }
@@ -105,7 +105,7 @@ impl From<&PartShading> for PartShadingKey {
 
 impl Material for PartShading {
     fn fragment_shader() -> ShaderRef {
-        "embedded://cadrs_app/part_shading.wgsl".into()
+        "embedded://cadrs_app/part_shading.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {

@@ -86,7 +86,7 @@ pub(super) fn plugin(app: &mut App) {
 /// A press anywhere (on any picked entity: the graphics area, a panel, a button) stops
 /// following, once the double-click that started it is over.
 fn stop_on_press(
-    _press: On<Pointer<Press>>,
+    _press: On<PointerPress>,
     following: Option<Res<Following>>,
     time: Res<Time<Real>>,
     mut commands: Commands,
@@ -1216,7 +1216,7 @@ fn sync_people_bar(
 
 /// A click on an avatar opens its card: who, where they are and what they are doing, then
 /// **Follow** (or **Stop following**) and **Go to**.
-fn on_avatar_click(ev: On<Pointer<Click>>, q: Query<&PersonAvatar>, mut commands: Commands) {
+fn on_avatar_click(ev: On<PointerClick>, q: Query<&PersonAvatar>, mut commands: Commands) {
     let Ok(a) = q.get(ev.entity) else {
         return;
     };

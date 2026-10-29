@@ -24,6 +24,7 @@
 use cadrs_ui::ShortcutKey;
 use std::sync::Arc;
 
+use crate::GizmoGroups;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::input::keyboard::KeyboardInput;
@@ -65,7 +66,7 @@ impl Plugin for AnnotationsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AnnotationUi>()
             .init_resource::<AnnotationScene>()
-            .init_gizmo_group::<AnnotationLines>()
+            .gizmo_group::<AnnotationLines>()
             .add_systems(Startup, configure_gizmos)
             .add_systems(
                 Update,

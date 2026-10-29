@@ -389,7 +389,7 @@ fn on_entry_button(
 
 /// A click in a group (bubbled up from its rows) makes it take the next pick.
 fn on_group_click(
-    click: On<Pointer<Click>>,
+    click: On<PointerClick>,
     q: Query<(), With<EntryGroupState>>,
     mut commands: Commands,
 ) {
