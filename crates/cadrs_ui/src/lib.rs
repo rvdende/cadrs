@@ -205,6 +205,28 @@ pub use version_graph::{
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCommand(pub String);
 
+/// A command of the app's command registry (an MCP tool, `cadrs_mcp::Call`) sent by a scripted
+/// run: a scenario's `Command("extrude", "{…}")` step, or a step of `cadrs --run script.json`.
+/// `params` is the command's parameters as JSON. The app runs the commands one after another,
+/// as it runs an assistant's calls, and tells the scenario runner how they go in
+/// [`ScriptCommands`].
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub struct RunCommand {
+    pub name: String,
+    pub params: String,
+}
+
+/// How a scripted run's commands ([`RunCommand`]) go, set by the app each frame.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScriptCommands {
+    /// A command is waiting or running (its rebuild, its screenshot): the scenario's next
+    /// step, and its end, wait for it. Apart from [`PendingWork`], which a screenshot command
+    /// itself waits on.
+    pub busy: bool,
+    /// Why a command failed: the scenario fails with it.
+    pub failed: Option<String>,
+}
+
 /// Background work the screen is still waiting for (drawing views being projected, P3C.7, a
 /// rebuild, a view animation, a section's caps): scripted steps wait until it is done, so they
 /// never act on, or catch, a half-finished screen. Cleared in `PreUpdate` every frame; the app's
@@ -322,6 +344,8 @@ impl Plugin for CadrsUiPlugin {
                 spring::SpringPlugin,
                 virtual_rows::VirtualRowsPlugin,
             ))
-            .add_message::<ScriptCommand>();
+            .add_message::<ScriptCommand>()
+            .add_message::<RunCommand>()
+            .init_resource::<ScriptCommands>();
     }
 }

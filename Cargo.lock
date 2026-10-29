@@ -2386,9 +2386,11 @@ dependencies = [
  "cadrs_core",
  "cadrs_fs",
  "cadrs_harness",
+ "cadrs_mcp",
  "cadrs_net",
  "cadrs_ui",
  "image",
+ "serde_json",
 ]
 
 [[package]]
@@ -2576,6 +2578,7 @@ dependencies = [
  "image",
  "ron",
  "serde",
+ "serde_json",
  "web-time",
 ]
 

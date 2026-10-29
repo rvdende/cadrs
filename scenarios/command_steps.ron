@@ -1,0 +1,13 @@
+// A scenario's `Command` steps: commands of the app's registry (the MCP tools) by name, with
+// their parameters as JSON, run through the same dispatcher as an assistant's calls. `cadrs
+// --run script.json` runs a script of them headless (scenarios/scripts/plate.json).
+(
+    steps: [
+        Command("create_document", "{\"name\": \"Commands\"}"),
+        Command("add_sketch", "{\"plane\": \"Top\", \"entities\": [{\"type\": \"rectangle\", \"x0\": 0, \"y0\": 0, \"x1\": 40, \"y1\": 20}]}"),
+        Command("extrude", "{\"sketch\": \"Sketch 1\", \"depth\": 10}"),
+        Screenshot("01-extruded-by-commands"),
+        Command("undo", ""),
+        Screenshot("02-undone"),
+    ],
+)

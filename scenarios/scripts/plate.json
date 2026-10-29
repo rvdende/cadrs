@@ -1,0 +1,17 @@
+[
+  { "command": "create_document", "params": { "name": "Plate" } },
+  {
+    "command": "add_sketch",
+    "params": {
+      "plane": "Top",
+      "entities": [
+        { "type": "rectangle", "x0": -40, "y0": -25, "x1": 40, "y1": 25 },
+        { "type": "circle", "cx": -30, "cy": -15, "r": 3 },
+        { "type": "circle", "cx": 30, "cy": 15, "r": 3 }
+      ]
+    }
+  },
+  { "command": "extrude", "params": { "sketch": "Sketch 1", "depth": 6, "regions": [[0, 0]] } },
+  { "command": "get_document" },
+  { "command": "screenshot", "params": { "view": "iso", "max_size": 800 } }
+]

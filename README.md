@@ -40,6 +40,10 @@ build parts from features, put them together in assemblies, and make drawings fr
 it with `/mcp` the first time; `claude mcp list` shows whether it is connected). Elsewhere,
 `claude mcp add --transport http cadrs http://127.0.0.1:7680/mcp` does the same, and other
 clients take the URL in their MCP settings.
+- **Scripts**: the MCP tools are the app's command registry (`cadrs --commands` lists them with
+  their parameters' JSON schemas). `cadrs --run script.json` runs a list of them headless, a
+  line of JSON out per answer ([scenarios/scripts/plate.json](scenarios/scripts/plate.json)),
+  and a scenario's `Command("extrude", "{…}")` step runs one.
 
 ### Codebase
 

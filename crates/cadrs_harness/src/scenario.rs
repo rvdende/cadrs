@@ -189,6 +189,12 @@ pub enum Step {
     /// Send a named set-up command to the app (see `cadrs_ui::ScriptCommand`), e.g.
     /// `Custom("populate-sketch 500")`.
     Custom(String),
+    /// Run a command of the app's command registry (an MCP tool) by name, with its parameters
+    /// as JSON: `Command("add_sketch", "{\"plane\": \"Top\"}")`. The steps after it that wait
+    /// for the app to settle (all but `Wait`, `WaitFor`, `ScreenshotNow` and `Now`) wait for
+    /// its answer, and so does the scenario's end; a command that fails fails the scenario.
+    /// `cadrs --run` scripts are these steps.
+    Command(String, String),
     /// Run the step at once, without waiting for the app to settle: what a user does while
     /// it is busy (`Now(RightClick(ui("feature-extrude-1")))` during a long rebuild). Its UI
     /// target is still waited for.
@@ -202,6 +208,27 @@ pub enum Step {
 impl Scenario {
     pub fn parse(text: &str) -> Result<Self, String> {
         ron::from_str(text).map_err(|e| e.to_string())
+    }
+
+    /// A script of commands (`cadrs --run script.json`) as a scenario of [`Step::Command`]s: a
+    /// JSON array of `{"command": "<name>", "params": {…}}` (`params` may be left out), the
+    /// commands being the app's MCP tools.
+    pub fn from_script(text: &str) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Line {
+            command: String,
+            #[serde(default)]
+            params: serde_json::Value,
+        }
+        let lines: Vec<Line> = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let mut scenario = Self::parse("(steps: [])")?;
+        scenario.cursor = false;
+        scenario.steps = lines
+            .into_iter()
+            .map(|l| Step::Command(l.command, l.params.to_string()))
+            .collect();
+        Ok(scenario)
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -261,6 +288,29 @@ mod tests {
         assert_eq!(s.steps[16], Step::Scroll(Target::At(3.0, 3.0), -2.5));
         assert_eq!(s.steps[0], Step::Click(Target::Ui("create".into())));
         assert_eq!(s.steps[4], Step::MoveTo(10.0, 20.5));
+    }
+
+    #[test]
+    fn scripts_are_scenarios_of_command_steps() {
+        let s = Scenario::from_script(
+            r#"[{"command": "add_sketch", "params": {"plane": "Top"}}, {"command": "undo"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.steps,
+            [
+                Step::Command("add_sketch".into(), r#"{"plane":"Top"}"#.into()),
+                Step::Command("undo".into(), "null".into()),
+            ]
+        );
+        // A typo in a line's keys is an error, not a command without its parameters.
+        assert!(Scenario::from_script(r#"[{"command": "undo", "parms": {}}]"#).is_err());
+        assert!(Scenario::from_script(r#"{"command": "undo"}"#).is_err());
+        for entry in cadrs_fs::read_dir(scenarios_dir().join("scripts")).unwrap() {
+            let path = entry.unwrap().path();
+            let text = cadrs_fs::read_to_string(&path).unwrap();
+            Scenario::from_script(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        }
     }
 
     #[test]
