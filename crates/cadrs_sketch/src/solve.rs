@@ -1291,6 +1291,8 @@ impl System {
 
     fn add_dimension(&mut self, s: &Sketch, id: DimensionId, kind: DimensionKind, v: f64) {
         let src = Source::Dimension(id);
+        // (A negative distance's side, an outside angle's: the geometry already has them.)
+        let v = kind.solved_value(v);
         match kind {
             DimensionKind::Horizontal { a, b } | DimensionKind::Vertical { a, b } => {
                 let i = usize::from(matches!(kind, DimensionKind::Vertical { .. }));

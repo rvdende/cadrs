@@ -330,3 +330,110 @@ fn variable_types_and_uses() {
         "the plain value stays"
     );
 }
+
+/// #96: a variable driving an angle past 180° measures it round the outside, and one driving
+/// it to a value no angle takes (360°) is reported, not dropped without a word, while the
+/// sketch's other dimensions still follow their variables.
+#[test]
+fn a_variable_angle_past_180_and_one_out_of_range() {
+    use cadrs_core::document::SketchFeature;
+    use cadrs_sketch::constraint::{ConstraintOf, CurveRef, PointRef};
+    use cadrs_sketch::{Dimension, DimensionKind, Sketch, Vec2};
+    let var = |name: &str, var_type: VariableType, expr: &str| {
+        let mut v = VariableFeature {
+            name: name.into(),
+            var_type,
+            expr: expr.into(),
+            ..VariableFeature::default()
+        };
+        let _ = v.evaluate(&Default::default(), &Vec::new());
+        FeatureKind::Variable(v)
+    };
+    // Two lines from a fixed corner, the first held horizontal, at 45°; the second 20 long.
+    let mut g = Sketch::new();
+    let o = g.ensure_point(Vec2::new(0.0, 0.0));
+    let a = g.add_line(Vec2::new(0.0, 0.0), Vec2::new(30.0, 0.0));
+    let b = g.add_line(Vec2::new(0.0, 0.0), Vec2::new(10.0, 10.0));
+    let (_, b_end) = g.curve_ends(b).unwrap();
+    for c in [
+        ConstraintOf::FixPoint(PointRef::Point(o)),
+        ConstraintOf::Horizontal(cadrs_sketch::constraint::Orient::Line(CurveRef::Curve(a))),
+    ] {
+        SketchOp::AddConstraint {
+            constraints: vec![c],
+            label: "test",
+        }
+        .apply(&mut g)
+        .unwrap();
+    }
+    let angle = DimensionKind::Angle {
+        a: CurveRef::Curve(a),
+        b: CurveRef::Curve(b),
+        flip_a: false,
+        flip_b: false,
+    };
+    let length = DimensionKind::Aligned { a: o, b: b_end };
+    for (kind, value) in [(angle, 45.0), (length, 20.0)] {
+        SketchOp::SetDimension {
+            dimension: Dimension::new(kind, value, 5.0),
+            moves: vec![],
+            radii: vec![],
+        }
+        .apply(&mut g)
+        .unwrap();
+    }
+    let dim =
+        |g: &Sketch, k: DimensionKind| g.dimensions.iter().find(|(_, d)| d.kind == k).unwrap().0;
+    let (ang_id, len_id) = (dim(&g, angle), dim(&g, length));
+    g.expressions.push((ang_id, "#ang".into()));
+    g.expressions.push((len_id, "#len".into()));
+    let sketch = FeatureId::new();
+    let mut features = vec![
+        Feature::new(
+            FeatureId::new(),
+            "#ang",
+            var("ang", VariableType::Angle, "270 deg"),
+        ),
+        Feature::new(
+            FeatureId::new(),
+            "#len",
+            var("len", VariableType::Length, "-25 mm"),
+        ),
+        Feature::new(
+            sketch,
+            "Sketch 1",
+            FeatureKind::Sketch(SketchFeature {
+                geometry: g,
+                ..Default::default()
+            }),
+        ),
+    ];
+    assert!(variables::refresh(
+        &[],
+        &mut features,
+        &[],
+        &Default::default()
+    ));
+    let g = &features[2].sketch().unwrap().geometry;
+    assert_eq!(g.dimensions[ang_id].value, 270.0);
+    let m = cadrs_sketch::dimension::measure(g, angle).unwrap();
+    rel(m, 90.0, 1e-9);
+    // The negative length put the second line's end on the other side of the corner.
+    assert_eq!(g.dimensions[len_id].value, -25.0);
+    rel(g.pos(b_end).distance(Vec2::new(0.0, 0.0)), 25.0, 1e-9);
+    assert!(variables::check(&features, &Default::default()).is_empty());
+    // 360°: reported on the sketch; the length still follows its variable.
+    features[0].kind = var("ang", VariableType::Angle, "360 deg");
+    features[1].kind = var("len", VariableType::Length, "-30 mm");
+    variables::refresh(&[], &mut features, &[], &Default::default());
+    let g = &features[2].sketch().unwrap().geometry;
+    assert_eq!(g.dimensions[ang_id].value, 270.0);
+    assert_eq!(g.dimensions[len_id].value, -30.0);
+    let errors = variables::check(&features, &Default::default());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].0, sketch);
+    assert!(
+        errors[0].1.contains("an angle must be between 0° and 360°"),
+        "{errors:?}"
+    );
+}

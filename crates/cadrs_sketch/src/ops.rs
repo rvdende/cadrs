@@ -121,6 +121,10 @@ pub enum SketchOp {
         offset: f64,
         along: f64,
     },
+    /// Measures an angle dimension round the outside of its angle (`outside`: its value 360°
+    /// less the angle between its rays) or between them, as its label was dragged (#96). The
+    /// geometry stays as it is.
+    SetAngleOutside { id: DimensionId, outside: bool },
     /// Adds constraints described by positions (see [`ConstraintSpec`]). Specs that do not
     /// resolve (the geometry is not there) and duplicates are skipped.
     AddConstraints(Vec<ConstraintSpec>),
@@ -286,7 +290,9 @@ impl SketchOp {
             SketchOp::AddConstraint { label, .. } => (*label).into(),
             SketchOp::SetDimension { .. } => "Dimension".into(),
             SketchOp::SetDimensionValue { .. } => "Edit dimension".into(),
-            SketchOp::MoveDimensionLabel { .. } => "Move dimension".into(),
+            SketchOp::MoveDimensionLabel { .. } | SketchOp::SetAngleOutside { .. } => {
+                "Move dimension".into()
+            }
             SketchOp::SetDimensionDriven { driven: false, .. } => {
                 "Change to driving dimension".into()
             }
@@ -381,7 +387,8 @@ impl SketchOp {
             for k in 1..=n {
                 let t = k as f64 / n as f64;
                 for (id, old, new) in changed {
-                    s.dimensions[*id].value = old + (new - old) * t;
+                    let kind = s.dimensions[*id].kind;
+                    s.dimensions[*id].value = step_value(kind, *old, *new, t);
                 }
                 let r = self.solve(&mut s);
                 if misses(&r, changed) {
@@ -833,7 +840,12 @@ impl SketchOp {
                     // A polygon's side count rebuilds it (S7.4).
                     return crate::entity::set_polygon_sides(s, circle, value.round() as u32);
                 }
+                let (kind, before) = (d.kind, d.value);
                 d.value = *value;
+                // A distance turning negative (or back) puts its point on the other side.
+                if kind.signed() && (before < 0.0) != (*value < 0.0) {
+                    flip_side(s, kind);
+                }
                 Ok(())
             }
             SketchOp::SetDimensionExpr { id, expr } => {
@@ -849,9 +861,25 @@ impl SketchOp {
                 let measured = crate::dimension::measure(s, kind);
                 let d = &mut s.dimensions[*id];
                 if !*driven && let Some(v) = measured {
-                    d.value = v;
+                    // (On the side it was: a negative distance stays negative, an angle
+                    // measured outside stays outside.)
+                    d.value = match kind {
+                        crate::DimensionKind::Angle { .. } if d.value > 180.0 => 360.0 - v,
+                        k if k.signed() && d.value < 0.0 => -v,
+                        _ => v,
+                    };
                 }
                 d.driven = *driven;
+                Ok(())
+            }
+            SketchOp::SetAngleOutside { id, outside } => {
+                let d = s.dimensions.get_mut(*id).ok_or("the dimension is gone")?;
+                if !matches!(d.kind, crate::DimensionKind::Angle { .. }) {
+                    return Err("only an angle is measured outside".into());
+                }
+                if (d.value > 180.0) != *outside {
+                    d.value = 360.0 - d.value;
+                }
                 Ok(())
             }
             SketchOp::MoveDimensionLabel { id, offset, along } => {
@@ -1192,13 +1220,23 @@ fn solve_moving_first(s: &mut Sketch, order: &[(PointId, f64)]) {
     solve::solve_weighted(s, order, 25.0);
 }
 
-/// A dimension's value must be positive (and an angle less than 180°).
-fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
-    if !v.is_finite() || v <= 0.0 {
-        return Err("a dimension must be positive".into());
+/// Whether `v` is a value dimension `d` can take: an angle between 0° and 360° (not 180°,
+/// whose inside and outside are one), a distance between points or from a point to a line
+/// anything but 0 (negative: the other side, #96), any other dimension positive.
+pub fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
+    if !v.is_finite() {
+        return Err("a dimension must be a number".into());
     }
-    if matches!(d.kind, crate::DimensionKind::Angle { .. }) && v >= 180.0 {
-        return Err("an angle must be less than 180°".into());
+    if matches!(d.kind, crate::DimensionKind::Angle { .. }) {
+        if !(v > 0.0 && v < 360.0) || v == 180.0 {
+            return Err("an angle must be between 0° and 360°, and not 180°".into());
+        }
+    } else if d.kind.signed() {
+        if v == 0.0 {
+            return Err("a distance cannot be 0".into());
+        }
+    } else if v <= 0.0 {
+        return Err("a dimension must be positive".into());
     }
     if matches!(d.kind, crate::DimensionKind::Sides { .. }) {
         let n = v.round();
@@ -1210,6 +1248,73 @@ fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The value a fraction `t` of the way from `old` to `new`, stepped as the solver holds the
+/// geometry ([`crate::DimensionKind::solved_value`]): from a distance's size to the other
+/// side's, or an angle inside to one outside, without passing through 0.
+fn step_value(kind: crate::DimensionKind, old: f64, new: f64, t: f64) -> f64 {
+    let (a, b) = (kind.solved_value(old), kind.solved_value(new));
+    let x = a + (b - a) * t;
+    match kind {
+        crate::DimensionKind::Angle { .. } if new > 180.0 => 360.0 - x,
+        k if k.signed() && new < 0.0 => -x,
+        _ => x,
+    }
+}
+
+/// Puts the point a signed distance measures on the other side (#96): mirrored through the
+/// first point (horizontally, vertically, or straight), through the origin, or across the
+/// line (the line moved across a point that can't move). The solve then sets the size.
+fn flip_side(s: &mut Sketch, kind: crate::DimensionKind) {
+    use crate::DimensionKind as K;
+    let pos = |s: &Sketch, p: PointId| s.points.get(p).map(|q| q.pos);
+    match kind {
+        K::Horizontal { a, b } | K::Vertical { a, b } | K::Aligned { a, b } => {
+            let (Some(pa), Some(pb)) = (pos(s, a), pos(s, b)) else {
+                return;
+            };
+            let to = match kind {
+                K::Horizontal { .. } => Vec2::new(2.0 * pa.x - pb.x, pb.y),
+                K::Vertical { .. } => Vec2::new(pb.x, 2.0 * pa.y - pb.y),
+                _ => pa * 2.0 - pb,
+            };
+            move_points(s, &[(b, to)]);
+        }
+        K::OriginAligned { p } => {
+            if let Some(q) = pos(s, p) {
+                move_points(s, &[(p, -q)]);
+            }
+        }
+        K::PointLine { p, line } => {
+            let CurveRef::Curve(l) = line else { return };
+            let Some((la, lb)) = s.curve_ends(l) else {
+                return;
+            };
+            let (Some(a), Some(b)) = (pos(s, la), pos(s, lb)) else {
+                return;
+            };
+            let d = b - a;
+            if d.length() < 1e-12 {
+                return;
+            }
+            let here = match p {
+                PointRef::Point(k) => pos(s, k),
+                PointRef::Origin => Some(Vec2::ZERO),
+            };
+            let Some(q) = here else { return };
+            let foot = a + d * ((q - a).dot(d) / d.dot(d));
+            match p {
+                PointRef::Point(k) => move_points(s, &[(k, foot * 2.0 - q)]),
+                // The origin stays: the line goes across it.
+                PointRef::Origin => {
+                    let shift = (q - foot) * 2.0;
+                    move_points(s, &[(la, a + shift), (lb, b + shift)]);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn set_radii(s: &mut Sketch, radii: &[(CurveId, f64)]) {

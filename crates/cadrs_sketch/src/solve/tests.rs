@@ -983,9 +983,9 @@ fn editing_a_dimension_moves_the_geometry() {
         .apply(&mut s)
         .unwrap();
     assert!((s.pos(p[1]).x - 40.0).abs() < 1e-6);
-    // Invalid values are refused.
+    // Invalid values are refused (a negative distance is the other side, #96, but 0 is none).
     assert!(
-        SketchOp::SetDimensionValue { id, value: -1.0 }
+        SketchOp::SetDimensionValue { id, value: 0.0 }
             .apply(&mut s)
             .is_err()
     );
@@ -1348,4 +1348,170 @@ fn lines_from_the_origin_with_h_or_v_are_black() {
         (a.curve(c), a.curve(b), a.curve(side)),
         (Status::Full, Status::Full, Status::Under)
     );
+}
+
+/// #96: a negative distance puts its point on the other side, and a positive one back; the
+/// value keeps its sign while the solver holds the size.
+#[test]
+fn a_negative_distance_flips_its_point() {
+    for kind in ["horizontal", "vertical", "aligned"] {
+        let mut s = Sketch::new();
+        let (_, a, b) = line(&mut s, v(5.0, 5.0), v(25.0, 15.0));
+        add(&mut s, ConstraintOf::FixPoint(pref(a)));
+        let k = match kind {
+            "horizontal" => DimensionKind::Horizontal { a, b },
+            "vertical" => DimensionKind::Vertical { a, b },
+            _ => DimensionKind::Aligned { a, b },
+        };
+        dim(&mut s, k, 20.0);
+        let id = s.dimensions.keys().next().unwrap();
+        let side = |s: &Sketch| {
+            let d = s.pos(b) - s.pos(a);
+            match kind {
+                "horizontal" => d.x,
+                "vertical" => d.y,
+                _ => d.x.signum() * d.length(),
+            }
+        };
+        assert!(side(&s) > 0.0, "{kind}");
+        SketchOp::SetDimensionValue { id, value: -12.0 }
+            .apply(&mut s)
+            .unwrap();
+        assert_eq!(s.dimensions[id].value, -12.0);
+        assert!((side(&s) + 12.0).abs() < 1e-6, "{kind}: {}", side(&s));
+        assert!((measured(&s, k) - 12.0).abs() < 1e-6, "{kind}");
+        assert!(!analyze(&s).has_conflicts(), "{kind}");
+        // Larger, still on that side (no flip back), then positive again: back across.
+        SketchOp::SetDimensionValue { id, value: -18.0 }
+            .apply(&mut s)
+            .unwrap();
+        assert!((side(&s) + 18.0).abs() < 1e-6, "{kind}: {}", side(&s));
+        SketchOp::SetDimensionValue { id, value: 7.0 }
+            .apply(&mut s)
+            .unwrap();
+        assert!((side(&s) - 7.0).abs() < 1e-6, "{kind}: {}", side(&s));
+    }
+}
+
+/// #96: a point-to-line distance turning negative puts the point across the line.
+#[test]
+fn a_negative_point_line_distance_crosses_the_line() {
+    let mut s = Sketch::new();
+    let (l, a, b) = line(&mut s, v(0.0, 0.0), v(40.0, 0.0));
+    add(&mut s, ConstraintOf::FixPoint(pref(a)));
+    add(&mut s, ConstraintOf::FixPoint(pref(b)));
+    let p = s.add_point(v(10.0, 8.0));
+    let k = DimensionKind::PointLine {
+        p: pref(p),
+        line: cref(l),
+    };
+    dim(&mut s, k, 8.0);
+    let id = s.dimensions.keys().next().unwrap();
+    SketchOp::SetDimensionValue { id, value: -5.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert!((s.pos(p).y + 5.0).abs() < 1e-6, "{:?}", s.pos(p));
+}
+
+/// #96: an angle over 180° is measured round the outside: the rays keep 360° less between
+/// them, the label and arc go outside, and 0°, 180° and 360° are refused.
+#[test]
+fn an_angle_over_180_is_measured_outside() {
+    let mut s = Sketch::new();
+    let (la, a0, _) = line(&mut s, v(0.0, 0.0), v(30.0, 0.0));
+    let (lb, b0, _) = line(&mut s, v(0.0, 0.0), v(20.0, 20.0));
+    assert_eq!(a0, b0, "the lines share their corner");
+    add(&mut s, ConstraintOf::FixPoint(pref(a0)));
+    add(&mut s, ConstraintOf::Horizontal(Orient::Line(cref(la))));
+    let k = DimensionKind::Angle {
+        a: cref(la),
+        b: cref(lb),
+        flip_a: false,
+        flip_b: false,
+    };
+    dim(&mut s, k, 45.0);
+    let id = s.dimensions.keys().next().unwrap();
+    SketchOp::SetDimensionValue { id, value: 270.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert_eq!(s.dimensions[id].value, 270.0);
+    assert!((measured(&s, k) - 90.0).abs() < 1e-6, "{}", measured(&s, k));
+    assert!(!analyze(&s).has_conflicts());
+    SketchOp::SetDimensionValue { id, value: 200.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert!(
+        (measured(&s, k) - 160.0).abs() < 1e-6,
+        "{}",
+        measured(&s, k)
+    );
+    for bad in [0.0, 180.0, 360.0, 400.0, -30.0] {
+        assert!(
+            SketchOp::SetDimensionValue { id, value: bad }
+                .apply(&mut s)
+                .is_err(),
+            "{bad}"
+        );
+    }
+    // The arc and its value go round the outside.
+    let st = crate::dimension::LayoutStyle::new(10.0, (12.0, 6.0));
+    let lay = crate::dimension::layout(&s, &s.dimensions[id], st).unwrap();
+    assert!(!lay.arcs.is_empty());
+    for g in &lay.arcs {
+        let mid = g.point_at(g.start_angle + g.sweep / 2.0);
+        assert_eq!(
+            crate::dimension::angle_outside(&s, k, mid),
+            Some(true),
+            "{g:?}"
+        );
+    }
+    assert_eq!(
+        crate::dimension::angle_outside(&s, k, lay.label),
+        Some(true)
+    );
+    // Measured inside again: the geometry stays, the value is the angle between the rays.
+    let before = s.clone();
+    SketchOp::SetAngleOutside { id, outside: false }
+        .apply(&mut s)
+        .unwrap();
+    assert!((s.dimensions[id].value - 160.0).abs() < 1e-9);
+    assert!(
+        s.pos(lb_end(&s, lb))
+            .distance(before.pos(lb_end(&before, lb)))
+            < 1e-6
+    );
+    // A label outside the rays asks for the outside, one between them for the inside.
+    let x = v(0.0, 0.0);
+    let inside = x + (v(1.0, 0.0) + (s.pos(lb_end(&s, lb)) - x).normalize()) * 5.0;
+    assert_eq!(crate::dimension::angle_outside(&s, k, inside), Some(false));
+    assert_eq!(
+        crate::dimension::angle_outside(&s, k, x - (inside - x)),
+        Some(true)
+    );
+}
+
+fn lb_end(s: &Sketch, l: CurveId) -> PointId {
+    s.curve_ends(l).unwrap().1
+}
+
+/// #96: making a dimension driving again keeps the side it measured: a negative distance
+/// stays negative, an angle outside stays outside.
+#[test]
+fn driving_again_keeps_the_side() {
+    let mut s = Sketch::new();
+    let (_, a, b) = line(&mut s, v(0.0, 0.0), v(10.0, 0.0));
+    add(&mut s, ConstraintOf::FixPoint(pref(a)));
+    let k = DimensionKind::Horizontal { a, b };
+    dim(&mut s, k, 10.0);
+    let id = s.dimensions.keys().next().unwrap();
+    SketchOp::SetDimensionValue { id, value: -10.0 }
+        .apply(&mut s)
+        .unwrap();
+    for driven in [true, false] {
+        SketchOp::SetDimensionDriven { id, driven }
+            .apply(&mut s)
+            .unwrap();
+    }
+    assert!((s.dimensions[id].value + 10.0).abs() < 1e-6);
+    assert!((s.pos(b).x + 10.0).abs() < 1e-6);
 }

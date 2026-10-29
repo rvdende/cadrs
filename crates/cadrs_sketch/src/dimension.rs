@@ -300,6 +300,30 @@ pub enum Orientation {
     Aligned,
 }
 
+/// Whether `cursor` lies outside angle dimension `kind`'s angle (not between its rays): a label
+/// dragged there measures the angle round the outside, 360° less the one between them (#96).
+/// `None` for another dimension, or rays that don't meet.
+pub fn angle_outside(s: &Sketch, kind: DimensionKind, cursor: Vec2) -> Option<bool> {
+    let DimensionKind::Angle {
+        a,
+        b,
+        flip_a,
+        flip_b,
+    } = kind
+    else {
+        return None;
+    };
+    let (x, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
+    let c = cursor - x;
+    let den = ra.cross(rb);
+    if den.abs() < 1e-12 {
+        return None;
+    }
+    // cursor − x = α·ra + β·rb: between the rays (the angle under 180°) when both are ≥ 0.
+    let (alpha, beta) = (c.cross(rb) / den, ra.cross(c) / den);
+    Some(alpha < 0.0 || beta < 0.0)
+}
+
 /// Which way each line's ray points so that the cursor lies between them: the quadrant (of
 /// the four the two lines make) the cursor is in.
 pub fn angle_quadrant(x: Vec2, da: Vec2, db: Vec2, cursor: Vec2) -> (bool, bool) {
@@ -1016,6 +1040,12 @@ pub fn layout(s: &Sketch, d: &Dimension, st: LayoutStyle) -> Option<Layout> {
             let (x, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
             let r = d.offset.max(px(10.0));
             let sweep = ra.cross(rb).atan2(ra.dot(rb));
+            // Over 180°: round the outside, the other way from ray to ray (#96).
+            let sweep = if d.value > 180.0 {
+                sweep - std::f64::consts::TAU.copysign(sweep)
+            } else {
+                sweep
+            };
             let arc = ArcGeom {
                 center: x,
                 radius: r,

@@ -700,12 +700,13 @@ fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> 
             units::ParseError::UnknownVariable(n) => format!("There is no variable #{n}"),
             e => e.to_string(),
         })?;
-    if v <= 0.0 {
-        return Err("Enter a positive value".into());
-    }
-    if q == units::Quantity::Angle && v >= 180.0 {
-        return Err("Enter an angle less than 180°".into());
-    }
+    // The sketch's own rule (#96: a distance may be negative, the other side; an angle up to
+    // 360°, round the outside past 180°), its first letter up.
+    cadrs_sketch::ops::check_value(&d, v).map_err(|e| {
+        let mut c = e.chars();
+        c.next()
+            .map_or(e.clone(), |f| f.to_uppercase().chain(c).collect())
+    })?;
     Ok(v)
 }
 

@@ -755,7 +755,9 @@ pub enum DimensionKind {
     /// The angle (degrees, 0–180) between two lines, measured between the rays that leave
     /// their intersection along each line's direction (from its first point to its second),
     /// reversed where `flip_*` is set. The quadrant the label was placed in picks the flips
-    /// (`reference/onshape/dimension/dimension-anglequadrants.png`).
+    /// (`reference/onshape/dimension/dimension-anglequadrants.png`). A value over 180° (to
+    /// 360°) is the same rays' angle measured round the outside, 360° less the one between
+    /// them (#96): its label goes outside.
     Angle {
         a: CurveRef,
         b: CurveRef,
@@ -982,6 +984,30 @@ impl DimensionKind {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Whether its value may be negative: a distance between two points, or from a point to a
+    /// line, whose negative value puts the point on the other side (as Onshape, #96). The solver
+    /// takes its size ([`DimensionKind::solved_value`]).
+    pub fn signed(&self) -> bool {
+        matches!(
+            self,
+            DimensionKind::Horizontal { .. }
+                | DimensionKind::Vertical { .. }
+                | DimensionKind::Aligned { .. }
+                | DimensionKind::OriginAligned { .. }
+                | DimensionKind::PointLine { .. }
+        )
+    }
+
+    /// The value the solver holds the geometry to for value `v`: a signed distance's size, and
+    /// an angle over 180° (measured round the outside, #96) as the angle inside, 360° − v.
+    pub fn solved_value(&self, v: f64) -> f64 {
+        match self {
+            DimensionKind::Angle { .. } if v > 180.0 => 360.0 - v,
+            k if k.signed() => v.abs(),
+            _ => v,
         }
     }
 
