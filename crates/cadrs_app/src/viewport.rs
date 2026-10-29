@@ -273,8 +273,8 @@ pub struct ViewportView {
     /// components' centre, [`crate::pcb::view`]; the selection Zoom to selection framed,
     /// [`crate::view_options::zoom_to_selection`]).
     pub pivot: Option<Vec3>,
-    /// The pivot is the framed selection's (issue #97): it stays until the view is framed or
-    /// turned to a standard view otherwise ([`Self::drop_framed_pivot`]).
+    /// The pivot is the framed selection's (issue #97): it stays through zooms, until the view
+    /// turns or moves otherwise ([`Self::animate_to`], [`Self::turn_by`]) or the tab changes.
     pub framed_pivot: bool,
     /// Keep the camera up (issue #97, the preference or walk mode): turns go about world Z
     /// without roll ([`ViewState::rotate_upright`]), and the rotate drag is the turntable one.
@@ -310,6 +310,8 @@ impl ViewportView {
 
     /// [`Self::turn_by`], the view getting there in `duration` seconds.
     pub fn turn_by_in(&mut self, yaw: f32, pitch: f32, duration: f32) {
+        // (A turn about the focus: no framed selection's pivot after it.)
+        self.drop_framed_pivot();
         let from = self.target();
         let mut to = from;
         if self.keep_up {
@@ -1860,11 +1862,7 @@ fn view_shortcuts(
             }
             Some(NumpadKey::Opposite) => {
                 if view.keep_up {
-                    // Upright: half a turn about Z and the other side's elevation (from the top,
-                    // the bottom).
-                    let mut to = view.target();
-                    to.rotate_upright(180.0, 0.0);
-                    to.elevation = -to.elevation;
+                    let to = view.target().upright_opposite();
                     view.animate_to(to);
                 } else {
                     view.turn_by(180.0, 0.0);

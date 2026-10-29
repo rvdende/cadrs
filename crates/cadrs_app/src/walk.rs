@@ -316,9 +316,7 @@ mod mode_tests {
 
     #[test]
     fn the_upright_opposite_of_the_top_is_the_bottom() {
-        let mut to = ViewState::standard(StandardView::Top);
-        to.rotate_upright(180.0, 0.0);
-        to.elevation = -to.elevation;
+        let to = ViewState::standard(StandardView::Top).upright_opposite();
         let bottom = ViewState::standard(StandardView::Bottom);
         assert!(
             (to.back() - bottom.back()).length() < 1e-4,

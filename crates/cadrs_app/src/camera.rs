@@ -365,6 +365,14 @@ impl ViewState {
         self.roll = 0.0;
     }
 
+    /// The opposite view kept upright (Numpad 9 keeping the camera up, issue #97): half a turn
+    /// about Z and the other side's elevation (the top's opposite is the bottom).
+    pub fn upright_opposite(mut self) -> Self {
+        self.rotate_upright(180.0, 0.0);
+        self.elevation = -self.elevation;
+        self
+    }
+
     /// Turns the view with `turn` (one of the orbits above) about the world point `pivot`
     /// instead of the focus: the pivot stays where it is on screen and the view swings
     /// around it.
