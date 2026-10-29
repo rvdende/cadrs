@@ -669,7 +669,8 @@ fn one_solve_converges_random_fastened_assemblies() {
 
 /// The same with every connector mate type but Pin slot. Some of these never converge (a
 /// mix of Planar, Parallel and Ball in a loop can sit in a local minimum); this counts the ones a
-/// second Solve would still finish: 202 of 4000 before issue #135's fix, 25 after.
+/// second Solve would still finish (202 of 4000 before issue #135's fix, 21 after), and bounds
+/// the ones that don't converge in four (77).
 #[test]
 #[ignore = "slow: about 8 s"]
 fn one_solve_converges_random_mixed_assemblies() {
@@ -684,5 +685,6 @@ fn one_solve_converges_random_mixed_assemblies() {
     ];
     let (more, never) = one_solve_converges_random_assemblies(&types);
     eprintln!("{more} needed more solves, {never} never converged");
-    assert!(more <= 25, "{more} needed more than one solve");
+    assert!(more <= 21, "{more} needed more than one solve");
+    assert!(never <= 77, "{never} never converged");
 }

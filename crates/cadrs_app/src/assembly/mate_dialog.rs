@@ -542,6 +542,9 @@ fn run_solve(
         }
     };
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);
+    if !snap_only {
+        close_solve_toast(world);
+    }
     if !sol.converged {
         warn!("mate solve: residual {:e}", sol.residual);
         // Solve and ✓ say so (issue #135: a solve that stopped short looked like a result).
@@ -552,8 +555,12 @@ fn run_solve(
                 &mut commands,
                 &theme,
                 cadrs_ui::Notification::warning(format!(
-                    "The mates can't all be solved ({} mm off): one may conflict with the others",
-                    (sol.residual * 1000.0).round() / 1000.0
+                    "The mates can't all be solved ({} mm off): check for mates that conflict",
+                    if sol.residual < 1e-3 {
+                        "under 0.001".to_string()
+                    } else {
+                        format!("{:.3}", sol.residual)
+                    }
                 ))
                 .name("mate-solve-toast"),
             );
@@ -629,7 +636,21 @@ pub fn accept(world: &mut World) {
     }
 }
 
+/// Removes the warning of a solve that didn't converge (a later Solve's, or the dialog closing).
+fn close_solve_toast(world: &mut World) {
+    let mut q = world.query::<(Entity, &Name)>();
+    let old: Vec<Entity> = q
+        .iter(world)
+        .filter(|(_, n)| n.as_str() == "mate-solve-toast")
+        .map(|(e, _)| e)
+        .collect();
+    for e in old {
+        world.entity_mut(e).despawn();
+    }
+}
+
 pub fn cancel(world: &mut World) {
+    close_solve_toast(world);
     super::animate::stop(world);
     world.remove_resource::<MateSession>();
     let mut parts = world.resource_mut::<super::AssemblyParts>();
