@@ -91,6 +91,7 @@ enum Op {
     FinishAnimations,
     Shot(String),
     Custom(String),
+    Command(String, String),
     MeasureStart(String),
     MeasureEnd,
 }
@@ -223,6 +224,10 @@ pub fn start_live(
     if world.contains_resource::<Runner>() {
         return Err("a scenario is already running".into());
     }
+    // A command that failed after an earlier run ended is not this run's.
+    if let Some(mut commands) = world.get_resource_mut::<cadrs_ui::ScriptCommands>() {
+        commands.failed = None;
+    }
     let _ = cadrs_fs::remove_dir_all(&out_dir);
     cadrs_fs::create_dir_all(&out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
@@ -332,9 +337,22 @@ fn fail(world: &mut World, msg: String) {
 
 /// Runs the scenario's steps, a frame at a time (while there is a [`Runner`]).
 pub fn drive(world: &mut World) {
-    let Some(mut runner) = world.get_resource_mut::<Runner>() else {
+    if !world.contains_resource::<Runner>() {
         return;
-    };
+    }
+    // A scripted command that failed (a `Command` step) fails the scenario.
+    let failed = world
+        .get_resource_mut::<cadrs_ui::ScriptCommands>()
+        .and_then(|mut s| s.failed.take());
+    if let Some(why) = failed
+        && !world.resource::<Runner>().done
+    {
+        return fail(world, why);
+    }
+    let commands_busy = world
+        .get_resource::<cadrs_ui::ScriptCommands>()
+        .is_some_and(|s| s.busy);
+    let mut runner = world.resource_mut::<Runner>();
     runner.heartbeat.beat();
     if runner.done {
         if runner.live.is_some() {
@@ -368,6 +386,15 @@ pub fn drive(world: &mut World) {
         return;
     }
     let Some(step) = runner.steps.pop_front() else {
+        // The last command is waited for: its answer, and whether it failed, are the run's.
+        if commands_busy {
+            let since = *runner.waiting.get_or_insert_with(web_time::Instant::now);
+            if since.elapsed() > runner.timeout {
+                let secs = runner.timeout.as_secs_f32();
+                return fail(world, format!("the last command still ran after {secs} s"));
+            }
+            return;
+        }
         let (name, dir, n) = (
             runner.name.clone(),
             runner.out_dir.clone(),
@@ -412,9 +439,10 @@ pub fn drive(world: &mut World) {
             | Step::MeasureEnd
             | Step::Now(_)
     ) {
-        let busy = world
-            .get_resource::<cadrs_ui::PendingWork>()
-            .is_some_and(|w| w.0);
+        let busy = commands_busy
+            || world
+                .get_resource::<cadrs_ui::PendingWork>()
+                .is_some_and(|w| w.0);
         let mut runner = world.resource_mut::<Runner>();
         let since = *runner.waiting.get_or_insert_with(web_time::Instant::now);
         runner.quiet = if busy {
@@ -429,10 +457,10 @@ pub fn drive(world: &mut World) {
                     .get_resource::<cadrs_ui::PendingWhy>()
                     .map(|w| w.0.join(", "))
                     .unwrap_or_default();
-                let why = if why.is_empty() {
-                    "unnamed pending work".to_string()
-                } else {
-                    why
+                let why = match (why.is_empty(), commands_busy) {
+                    (true, true) => "a command".to_string(),
+                    (true, false) => "unnamed pending work".to_string(),
+                    (false, _) => why,
                 };
                 return fail(
                     world,
@@ -719,6 +747,9 @@ fn expand(world: &mut World, step: &Step) -> Result<Vec<Vec<Op>>, String> {
             vec![vec![]]
         }
         Step::Custom(cmd) => vec![vec![Op::Custom(cmd.clone())], vec![]],
+        Step::Command(name, params) => {
+            vec![vec![Op::Command(name.clone(), params.clone())], vec![]]
+        }
         Step::MeasureStart(label) => vec![vec![Op::MeasureStart(label.clone())]],
         Step::MeasureEnd => vec![vec![Op::MeasureEnd], vec![]],
         Step::Screenshot(label) => vec![
@@ -1022,6 +1053,9 @@ fn execute(world: &mut World, op: Op) {
                 return;
             }
             world.write_message(ScriptCommand(cmd));
+        }
+        Op::Command(name, params) => {
+            world.write_message(cadrs_ui::RunCommand { name, params });
         }
         Op::MeasureStart(label) => {
             world.resource_mut::<Runner>().measure = Some(Measure {

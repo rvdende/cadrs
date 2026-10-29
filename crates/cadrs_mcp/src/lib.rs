@@ -26,6 +26,7 @@ use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use tokio_util::sync::CancellationToken;
 
+pub mod fuzz;
 pub mod tools;
 
 use tools::*;
@@ -36,58 +37,90 @@ pub const DEFAULT_PORT: u16 = 7680;
 /// How long a call may wait for the app (a rebuild included) before the assistant is told so.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// What the assistant asked for.
-#[derive(Debug, Clone)]
-pub enum Call {
-    CreateDocument(CreateDocument),
-    OpenDocument(OpenDocument),
-    GetDocument,
-    GetFrameStats(GetFrameStats),
-    AddPartStudio(AddPartStudio),
-    AddAssembly(AddPartStudio),
-    AddSketch(AddSketch),
-    Extrude(Extrude),
-    Screenshot(Screenshot),
-    AddFeature(AddFeature),
-    EditFeature(EditFeature),
-    EditSketch(EditSketch),
-    GetFeature(FeatureName),
-    DeleteFeature(FeatureName),
-    RenameFeature(RenameFeature),
-    SetPart(SetPart),
-    SetFeatureVisible(SetFeatureVisible),
-    SetRollback(SetRollback),
-    ShowFeature(FeatureName),
-    GetUiLayout(GetUiLayout),
-    SetPreferences(SetPreferences),
-    ListFaces(PartStudio),
-    ListEdges(PartStudio),
-    Undo,
-    CreateVersion(CreateVersion),
-    ListVersions,
-    RestoreVersion(VersionName),
-    ImportStep(ImportStep),
-    ExportStep(ExportStep),
-    RunScenario(RunScenario),
-    CreateDrawing(CreateDrawing),
-    AddAnnotation(AddAnnotation),
-    RenameTab(RenameTab),
-    DeleteTab(TabName),
-    GetAssembly(AssemblyName),
-    InsertInstance(InsertInstance),
-    GetBoard(BoardName),
-    GetBoardFit(BoardFit),
-    DeriveBoard(DeriveBoard),
-    CreateBoardFromSketch(CreateBoardFromSketch),
-    MoveFootprint(MoveFootprint),
-    AddFootprint(AddFootprint),
-    RemoveFootprint(RemoveFootprint),
-    LinkOutline(LinkOutline),
+/// The command table: each entry is one command, its description, name and parameters (a struct
+/// in [`tools`], whose doc comments are its JSON schema). From it come [`Call`] (a variant a
+/// command), the MCP tools (a tool a command), [`Call::parse`] (a command by name, as scripts
+/// and `cadrs --run` give it) and [`commands`], so a command added here is all of them.
+macro_rules! commands {
+    ($($description:tt $name:ident => $variant:ident $(($params:ident))?;)*) => {
+        /// What the assistant or a script asked for: a command and its parameters.
+        #[derive(Debug, Clone)]
+        pub enum Call {
+            $(#[doc = $description] $variant $(($params))?,)*
+        }
+
+        impl Call {
+            /// The command's name (its MCP tool's).
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $(Call::$variant { .. } => stringify!($name),)*
+                }
+            }
+
+            /// A command by name, with its parameters as JSON: an object of the tool's arguments,
+            /// `null` or `{}` for none.
+            pub fn parse(name: &str, params: serde_json::Value) -> Result<Call, String> {
+                match name {
+                    $(stringify!($name) => commands!(@parse params $variant $($params)?),)*
+                    _ => Err(format!("unknown command {name:?}")),
+                }
+            }
+        }
+
+        #[tool_router]
+        impl Cadrs {
+            $(
+                #[tool(description = $description)]
+                async fn $name(
+                    &self
+                    $(, Parameters(p): Parameters<$params>)?
+                ) -> Result<CallToolResult, ErrorData> {
+                    self.call(Call::$variant $(({ let p: $params = p; p }))?).await
+                }
+            )*
+        }
+    };
+    (@parse $json:ident $variant:ident $params:ident) => {
+        serde_json::from_value::<$params>(match $json {
+            serde_json::Value::Null => serde_json::json!({}),
+            v => v,
+        })
+        .map(Call::$variant)
+        .map_err(|e| format!("bad parameters: {e}"))
+    };
+    (@parse $json:ident $variant:ident) => {
+        match $json {
+            serde_json::Value::Null => Ok(Call::$variant),
+            serde_json::Value::Object(o) if o.is_empty() => Ok(Call::$variant),
+            _ => Err("it takes no parameters".into()),
+        }
+    };
+}
+
+/// A command as a client sees it: its name, description and parameters' JSON schema.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommandInfo {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// Every command, by name (what MCP's `tools/list` lists, and `cadrs --commands`).
+pub fn commands() -> Vec<CommandInfo> {
+    Cadrs::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|t| CommandInfo {
+            name: t.name.to_string(),
+            description: t.description.map(|d| d.to_string()).unwrap_or_default(),
+            parameters: serde_json::Value::Object((*t.input_schema).clone()),
+        })
+        .collect()
 }
 
 /// What the app answers.
 #[derive(Debug, Clone)]
-enum Answer {
+pub enum Answer {
     Json(serde_json::Value),
     /// A PNG, with a line about it.
     Image {
@@ -111,6 +144,28 @@ impl Request {
     /// Answers with a PNG image (and a caption).
     pub fn reply_image(self, png: Vec<u8>, caption: String) {
         let _ = self.reply.send(Ok(Answer::Image { png, caption }));
+    }
+
+    /// A call from inside the app (a script's command, `cadrs --run`), and where its answer
+    /// arrives: the app runs it as it runs an assistant's.
+    pub fn local(call: Call) -> (Request, Answered) {
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        (Request { call, reply }, Answered(answer))
+    }
+}
+
+/// Where the answer to a [`Request::local`] call arrives.
+pub struct Answered(tokio::sync::oneshot::Receiver<Result<Answer, String>>);
+
+impl Answered {
+    /// The answer once the app has given it (an error if it dropped the call).
+    pub fn try_take(&mut self) -> Option<Result<Answer, String>> {
+        use tokio::sync::oneshot::error::TryRecvError;
+        match self.0.try_recv() {
+            Ok(answer) => Some(answer),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed) => Some(Err("cadrs dropped the call".into())),
+        }
     }
 }
 
@@ -230,470 +285,185 @@ impl Cadrs {
     }
 }
 
-#[tool_router]
-impl Cadrs {
-    #[tool(
-        description = "Create a new cadrs document and open it in the app. It starts with a Part Studio \
+commands! {
+    "Create a new cadrs document and open it in the app. It starts with a Part Studio \
         (\"Part Studio 1\", the active tab) and an Assembly. Any open document is saved first."
-    )]
-    async fn create_document(
-        &self,
-        Parameters(p): Parameters<CreateDocument>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::CreateDocument(p)).await
-    }
+    create_document => CreateDocument(CreateDocument);
 
-    #[tool(
-        description = "Open a stored document by its name or id (any open document is saved first)."
-    )]
-    async fn open_document(
-        &self,
-        Parameters(p): Parameters<OpenDocument>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::OpenDocument(p)).await
-    }
+    "Open a stored document by its name or id (any open document is saved first)."
+    open_document => OpenDocument(OpenDocument);
 
-    #[tool(
-        description = "Describe the open document: its tabs, and for the active Part Studio its features \
+    "Describe the open document: its tabs, and for the active Part Studio its features \
         (with any rebuild errors) and parts (volume in mm³, bounding box in mm)."
-    )]
-    async fn get_document(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetDocument).await
-    }
+    get_document => GetDocument;
 
-    #[tool(
-        description = "The app's frame rate over the last two seconds: fps, the number of frames, and \
+    "The app's frame rate over the last two seconds: fps, the number of frames, and \
         frame times in ms (mean, median, 95th percentile, max); and where the last second's frames went \
         (profile): CPU ms a frame of the main loop's schedules, the slowest schedules and systems (with \
         their most in one frame and runs a frame), and the GPU ms of the slowest render passes. The CPU \
         times are only there when cadrs started with them on (profile.cpu.timed; they slow it down): \
         the Time systems preference, or CADRS_FRAME_PROFILE=1. The panel at the bottom left of the 3D \
         view shows the same (F12 steps through it, the fps line, nothing)."
-    )]
-    async fn get_frame_stats(
-        &self,
-        Parameters(p): Parameters<GetFrameStats>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetFrameStats(p)).await
-    }
+    get_frame_stats => GetFrameStats(GetFrameStats);
 
-    #[tool(
-        description = "Create a drawing of a Part Studio and open it as a tab: its front, top, side and \
+    "Create a drawing of a Part Studio and open it as a tab: its front, top, side and \
         isometric views (four_views) on a sheet, at the largest scale that fits or at the given scale. Returns \
         the drawing's name and its views (names, ids, anchors and frames) for add_annotation."
-    )]
-    async fn create_drawing(
-        &self,
-        Parameters(p): Parameters<CreateDrawing>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::CreateDrawing(p)).await
-    }
+    create_drawing => CreateDrawing(CreateDrawing);
 
-    #[tool(
-        description = "Add an annotation to a drawing view: a dimension (Diameter, Radius, Distance or Angle, \
+    "Add an annotation to a drawing view: a dimension (Diameter, Radius, Distance or Angle, \
         between edges or points of the part), in the view's 2D coordinates (mm). Returns the annotation's id."
-    )]
-    async fn add_annotation(
-        &self,
-        Parameters(p): Parameters<AddAnnotation>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddAnnotation(p)).await
-    }
+    add_annotation => AddAnnotation(AddAnnotation);
 
-    #[tool(
-        description = "Rename a tab: a Part Studio (the title block of its drawings shows the name) or a drawing."
-    )]
-    async fn rename_tab(
-        &self,
-        Parameters(p): Parameters<RenameTab>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::RenameTab(p)).await
-    }
+    "Rename a tab: a Part Studio (the title block of its drawings shows the name) or a drawing."
+    rename_tab => RenameTab(RenameTab);
 
-    #[tool(
-        description = "Delete a tab. A Part Studio or Assembly that an assembly still has instances of \
+    "Delete a tab. A Part Studio or Assembly that an assembly still has instances of \
         is refused (delete those instances first)."
-    )]
-    async fn delete_tab(
-        &self,
-        Parameters(p): Parameters<TabName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::DeleteTab(p)).await
-    }
+    delete_tab => DeleteTab(TabName);
 
-    #[tool(
-        description = "Describe an Assembly tab: its instances (name, id, source tab and part, position \
+    "Describe an Assembly tab: its instances (name, id, source tab and part, position \
         in mm, fixed, hidden, suppressed) and its mate features."
-    )]
-    async fn get_assembly(
-        &self,
-        Parameters(p): Parameters<AssemblyName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetAssembly(p)).await
-    }
+    get_assembly => GetAssembly(AssemblyName);
 
-    #[tool(
-        description = "Insert into an assembly a whole Part Studio (one rigid instance of all its parts) \
+    "Insert into an assembly a whole Part Studio (one rigid instance of all its parts) \
         or one of its parts, at a position (mm; omitted: the origin, so the parts sit where they are in their \
         Part Studio), optionally fixed. One undo step. Returns the assembly as get_assembly does."
-    )]
-    async fn insert_instance(
-        &self,
-        Parameters(p): Parameters<InsertInstance>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::InsertInstance(p)).await
-    }
+    insert_instance => InsertInstance(InsertInstance);
 
-    #[tool(description = "Add a Part Studio tab to the open document and make it the active tab.")]
-    async fn add_part_studio(
-        &self,
-        Parameters(p): Parameters<AddPartStudio>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddPartStudio(p)).await
-    }
+    "Add a Part Studio tab to the open document and make it the active tab."
+    add_part_studio => AddPartStudio(AddPartStudio);
 
-    #[tool(
-        description = "Add an empty Assembly tab to the open document (name omitted: the next default, \
+    "Add an empty Assembly tab to the open document (name omitted: the next default, \
         \"Assembly 2\"). insert_instance puts Part Studios or parts into it. Returns the assembly as \
         get_assembly does."
-    )]
-    async fn add_assembly(
-        &self,
-        Parameters(p): Parameters<AddPartStudio>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddAssembly(p)).await
-    }
+    add_assembly => AddAssembly(AddPartStudio);
 
-    #[tool(
-        description = "Add a sketch on a default plane (Top, Front or Right) of a Part Studio, with rectangles, \
+    "Add a sketch on a default plane (Top, Front or Right) of a Part Studio, with rectangles, \
         circles, polygons, lines and arcs in the plane's 2D coordinates (mm). Top: x = world X, y = world Y \
         (normal +Z). Front: x = world X, y = world Z (normal -Y). Right: x = world Y, y = world Z (normal +X). \
         Outlines are closed loops of lines and arcs (rounded corners, fillets); circles inside a loop are \
         holes. Returns the sketch's name and its closed regions, each with a point inside it to pass to extrude."
-    )]
-    async fn add_sketch(
-        &self,
-        Parameters(p): Parameters<AddSketch>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddSketch(p)).await
-    }
+    add_sketch => AddSketch(AddSketch);
 
-    #[tool(
-        description = "Extrude regions of a sketch into a solid: a new part, or added to, removed from or \
+    "Extrude regions of a sketch into a solid: a new part, or added to, removed from or \
         intersected with the parts it meets. Returns the feature's name, any rebuild error, and the Part \
         Studio's parts after it."
-    )]
-    async fn extrude(
-        &self,
-        Parameters(p): Parameters<Extrude>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::Extrude(p)).await
-    }
+    extrude => Extrude(Extrude);
 
-    #[tool(
-        description = "Add any feature to a Part Studio from JSON: its type and the fields that differ from \
+    "Add any feature to a Part Studio from JSON: its type and the fields that differ from \
         the type's defaults (lengths in mm, angles in degrees). Returns its name, any rebuild error and the parts."
-    )]
-    async fn add_feature(
-        &self,
-        Parameters(p): Parameters<AddFeature>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddFeature(p)).await
-    }
+    add_feature => AddFeature(AddFeature);
 
-    #[tool(
-        description = "Change a feature: the given JSON fields are merged over its current ones."
-    )]
-    async fn edit_feature(
-        &self,
-        Parameters(p): Parameters<EditFeature>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::EditFeature(p)).await
-    }
+    "Change a feature: the given JSON fields are merged over its current ones."
+    edit_feature => EditFeature(EditFeature);
 
-    #[tool(
-        description = "Make any edit the sketch engine makes, on a sketch: geometry, trims and fillets, \
+    "Make any edit the sketch engine makes, on a sketch: geometry, trims and fillets, \
         mirrors and offsets, constraints, dimensions and text (the op's reference is in its doc). Returns the \
         ids of what the edit created and removed, the sketch's regions, and whether it is fully constrained or \
         has conflicting constraints or dimensions. Read a sketch's ids and state with get_feature."
-    )]
-    async fn edit_sketch(
-        &self,
-        Parameters(p): Parameters<EditSketch>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::EditSketch(p)).await
-    }
+    edit_sketch => EditSketch(EditSketch);
 
-    #[tool(
-        description = "A feature's full JSON (its type and every field), to learn the format or edit it."
-    )]
-    async fn get_feature(
-        &self,
-        Parameters(p): Parameters<FeatureName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetFeature(p)).await
-    }
+    "A feature's full JSON (its type and every field), to learn the format or edit it."
+    get_feature => GetFeature(FeatureName);
 
-    #[tool(description = "Rename a feature of a Part Studio (one undo step).")]
-    async fn rename_feature(
-        &self,
-        Parameters(p): Parameters<RenameFeature>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::RenameFeature(p)).await
-    }
+    "Rename a feature of a Part Studio (one undo step)."
+    rename_feature => RenameFeature(RenameFeature);
 
-    #[tool(description = "Show or hide a sketch or a Plane feature (its eye in the feature list).")]
-    async fn set_feature_visible(
-        &self,
-        Parameters(p): Parameters<SetFeatureVisible>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetFeatureVisible(p)).await
-    }
+    "Show or hide a sketch or a Plane feature (its eye in the feature list)."
+    set_feature_visible => SetFeatureVisible(SetFeatureVisible);
 
-    #[tool(
-        description = "Move a Part Studio's rollback bar (one undo step): only the features above it are built, so the Part Studio shows what it was at that point. Give `index` (how many features stay above it) or `after` (a feature's name); neither: roll to the end. Returns where the bar is, the last feature built and the next one."
-    )]
-    async fn set_rollback(
-        &self,
-        Parameters(p): Parameters<SetRollback>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetRollback(p)).await
-    }
+    "Move a Part Studio's rollback bar (one undo step): only the features above it are built, so the Part Studio shows what it was at that point. Give `index` (how many features stay above it) or `after` (a feature's name); neither: roll to the end. Returns where the bar is, the last feature built and the next one."
+    set_rollback => SetRollback(SetRollback);
 
-    #[tool(
-        description = "Scroll the Part Studio's feature list to a feature's row (opening its folder), as double-clicking its part in the view does. Returns once asked; the list scrolls over the next frames."
-    )]
-    async fn show_feature(
-        &self,
-        Parameters(p): Parameters<FeatureName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ShowFeature(p)).await
-    }
+    "Scroll the Part Studio's feature list to a feature's row (opening its folder), as double-clicking its part in the view does. Returns once asked; the list scrolls over the next frames."
+    show_feature => ShowFeature(FeatureName);
 
-    #[tool(
-        description = "List the app's named UI nodes (panels, lists, buttons, the viewport area) with their on-screen rectangle in logical pixels (x, y of the top-left corner, w, h), whether they are shown, and their parent's name. Filter by part of the name. Use it to find what is laid out wrong: a panel taller than the window, a list that does not scroll."
-    )]
-    async fn get_ui_layout(
-        &self,
-        Parameters(p): Parameters<GetUiLayout>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetUiLayout(p)).await
-    }
+    "List the app's named UI nodes (panels, lists, buttons, the viewport area) with their on-screen rectangle in logical pixels (x, y of the top-left corner, w, h), whether they are shown, and their parent's name. Filter by part of the name. Use it to find what is laid out wrong: a panel taller than the window, a list that does not scroll."
+    get_ui_layout => GetUiLayout(GetUiLayout);
 
-    #[tool(
-        description = "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs). Give only what changes; it answers with all the preferences in force."
-    )]
-    async fn set_preferences(
-        &self,
-        Parameters(p): Parameters<SetPreferences>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetPreferences(p)).await
-    }
+    "Change this machine's preferences, as the Preferences dialog's OK does (they are saved): vsync (true: frames wait for the display's refresh; false: drawn as fast as they are made, so get_frame_stats shows what a frame costs). Give only what changes; it answers with all the preferences in force."
+    set_preferences => SetPreferences(SetPreferences);
 
-    #[tool(
-        description = "Rename a part and/or set its colour ([r, g, b], with an optional alpha for \
+    "Rename a part and/or set its colour ([r, g, b], with an optional alpha for \
         see-through parts such as glass). Returns the part's name and id."
-    )]
-    async fn set_part(
-        &self,
-        Parameters(p): Parameters<SetPart>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::SetPart(p)).await
-    }
+    set_part => SetPart(SetPart);
 
-    #[tool(description = "Delete a feature.")]
-    async fn delete_feature(
-        &self,
-        Parameters(p): Parameters<FeatureName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::DeleteFeature(p)).await
-    }
+    "Delete a feature."
+    delete_feature => DeleteFeature(FeatureName);
 
-    #[tool(
-        description = "Every face of the Part Studio's parts: its reference (\"ref\", for features and \
+    "Every face of the Part Studio's parts: its reference (\"ref\", for features and \
         sketches), part, surface type, area, centre, plane normal, axis and radius."
-    )]
-    async fn list_faces(
-        &self,
-        Parameters(p): Parameters<PartStudio>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ListFaces(p)).await
-    }
+    list_faces => ListFaces(PartStudio);
 
-    #[tool(
-        description = "Every edge of the Part Studio's parts: its reference (\"ref\", for fillets, chamfers \
+    "Every edge of the Part Studio's parts: its reference (\"ref\", for fillets, chamfers \
         and directions), part, ends, length, and circle (centre, normal, radius) if it is one."
-    )]
-    async fn list_edges(
-        &self,
-        Parameters(p): Parameters<PartStudio>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ListEdges(p)).await
-    }
+    list_edges => ListEdges(PartStudio);
 
-    #[tool(description = "Undo the open document's last change.")]
-    async fn undo(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::Undo).await
-    }
+    "Undo the open document's last change."
+    undo => Undo;
 
-    #[tool(
-        description = "Make a named version of the open document as it is now, to go back to later with restore_version."
-    )]
-    async fn create_version(
-        &self,
-        Parameters(p): Parameters<CreateVersion>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::CreateVersion(p)).await
-    }
+    "Make a named version of the open document as it is now, to go back to later with restore_version."
+    create_version => CreateVersion(CreateVersion);
 
-    #[tool(
-        description = "List the open document's versions (name, description, history entry, time)."
-    )]
-    async fn list_versions(&self) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ListVersions).await
-    }
+    "List the open document's versions (name, description, history entry, time)."
+    list_versions => ListVersions;
 
-    #[tool(
-        description = "Put the whole open document back as it was at a version (one undoable step; the history and later versions are kept). Answers like get_document once the Part Studio has rebuilt."
-    )]
-    async fn restore_version(
-        &self,
-        Parameters(p): Parameters<VersionName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::RestoreVersion(p)).await
-    }
+    "Put the whole open document back as it was at a version (one undoable step; the history and later versions are kept). Answers like get_document once the Part Studio has rebuilt."
+    restore_version => RestoreVersion(VersionName);
 
-    #[tool(
-        description = "Import a STEP file as a new document (its parts in a Part Studio) and open it."
-    )]
-    async fn import_step(
-        &self,
-        Parameters(p): Parameters<ImportStep>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ImportStep(p)).await
-    }
+    "Import a STEP file as a new document (its parts in a Part Studio) and open it."
+    import_step => ImportStep(ImportStep);
 
-    #[tool(description = "Write the Part Studio's parts to a STEP file.")]
-    async fn export_step(
-        &self,
-        Parameters(p): Parameters<ExportStep>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::ExportStep(p)).await
-    }
+    "Write the Part Studio's parts to a STEP file."
+    export_step => ExportStep(ExportStep);
 
-    #[tool(
-        description = "Run a script of UI steps in the app, as its scenario files do: Click(ui(\"name\")) on a \
+    "Run a script of UI steps in the app, as its scenario files do: Click(ui(\"name\")) on a \
         named element, Click(xyz(x, y, z)) on a 3D point, ClickAt(x, y), DoubleClick, RightClick, Drag(from, to), \
         MoveTo(x, y), Hover, Key(\"Ctrl+Z\"), Type(\"text\"), Wait(frames), WaitFor(\"name\"), \
-        ExpectText(\"name\", \"text\"), Custom(\"command\") and Screenshot(\"label\"). Each step waits for the app \
+        ExpectText(\"name\", \"text\"), Custom(\"command\"), Command(\"tool\", \"{json params}\") (one of these \
+        tools) and Screenshot(\"label\"). Each step waits for the app \
         to settle. Returns the screenshots' paths (the last one as an image), or the step that failed."
-    )]
-    async fn run_scenario(
-        &self,
-        Parameters(p): Parameters<RunScenario>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::RunScenario(p)).await
-    }
+    run_scenario => RunScenario(RunScenario);
 
-    #[tool(
-        description = "A PCB Studio board: its outline's box, thickness, nets, every footprint (reference, \
+    "A PCB Studio board: its outline's box, thickness, nets, every footprint (reference, \
         value, place in mm, angle, side, on the board or not, its pads with their place, net and drill), \
         counts of tracks, vias and zones, and the Part Studios it is derived into with their warnings \
         (components running into parts)."
-    )]
-    async fn get_board(
-        &self,
-        Parameters(p): Parameters<BoardName>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetBoard(p)).await
-    }
+    get_board => GetBoard(BoardName);
 
-    #[tool(
-        description = "Fitting a board derived into a Part Studio: for each part, the pins and holes \
+    "Fitting a board derived into a Part Studio: for each part, the pins and holes \
         standing square to the board (where their axes meet it, in the layout's mm, and radius), and the \
         collisions of its components with the parts."
-    )]
-    async fn get_board_fit(
-        &self,
-        Parameters(p): Parameters<BoardFit>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::GetBoardFit(p)).await
-    }
+    get_board_fit => GetBoardFit(BoardFit);
 
-    #[tool(
-        description = "Derive a PCB Studio board into a Part Studio: the board's solid and its \
+    "Derive a PCB Studio board into a Part Studio: the board's solid and its \
         components' 3D models as parts, at a mate connector or on a sketch's plane. It follows the layout."
-    )]
-    async fn derive_board(
-        &self,
-        Parameters(p): Parameters<DeriveBoard>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::DeriveBoard(p)).await
-    }
+    derive_board => DeriveBoard(DeriveBoard);
 
-    #[tool(
-        description = "Create a PCB board from a Part Studio sketch: its outline is the sketch's largest \
+    "Create a PCB board from a Part Studio sketch: its outline is the sketch's largest \
         region (holes included) and follows the sketch; the board is derived onto the sketch's plane."
-    )]
-    async fn create_board_from_sketch(
-        &self,
-        Parameters(p): Parameters<CreateBoardFromSketch>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::CreateBoardFromSketch(p)).await
-    }
+    create_board_from_sketch => CreateBoardFromSketch(CreateBoardFromSketch);
 
-    #[tool(
-        description = "Move a footprint on a board (one undo step): to x, y (mm), angle, side; or with pad \
+    "Move a footprint on a board (one undo step): to x, y (mm), angle, side; or with pad \
         and onto_part, so the pad is centred on a pin or hole of that part (in a Part Studio the board is \
         derived into). Its tracks' ends follow. Returns the board."
-    )]
-    async fn move_footprint(
-        &self,
-        Parameters(p): Parameters<MoveFootprint>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::MoveFootprint(p)).await
-    }
+    move_footprint => MoveFootprint(MoveFootprint);
 
-    #[tool(
-        description = "Add a footprint to a board: a copy of one on it, with a new reference, value, place \
+    "Add a footprint to a board: a copy of one on it, with a new reference, value, place \
         and pad nets."
-    )]
-    async fn add_footprint(
-        &self,
-        Parameters(p): Parameters<AddFootprint>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::AddFootprint(p)).await
-    }
+    add_footprint => AddFootprint(AddFootprint);
 
-    #[tool(description = "Remove a footprint from a board, and its symbol from the schematic.")]
-    async fn remove_footprint(
-        &self,
-        Parameters(p): Parameters<RemoveFootprint>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::RemoveFootprint(p)).await
-    }
+    "Remove a footprint from a board, and its symbol from the schematic."
+    remove_footprint => RemoveFootprint(RemoveFootprint);
 
-    #[tool(
-        description = "Make a board's outline follow a Part Studio sketch (its largest region), moving the \
+    "Make a board's outline follow a Part Studio sketch (its largest region), moving the \
         layout's parts with the outline's centre; or, without a sketch, break the link."
-    )]
-    async fn link_outline(
-        &self,
-        Parameters(p): Parameters<LinkOutline>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::LinkOutline(p)).await
-    }
+    link_outline => LinkOutline(LinkOutline);
 
-    #[tool(
-        description = "Take a screenshot of the whole cadrs window (toolbar, feature list, 3D view, dialogs) \
+    "Take a screenshot of the whole cadrs window (toolbar, feature list, 3D view, dialogs) \
         as it is now, scaled to fit max_size pixels. Use it to check what a change looks like."
-    )]
-    async fn screenshot(
-        &self,
-        Parameters(p): Parameters<Screenshot>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.call(Call::Screenshot(p)).await
-    }
+    screenshot => Screenshot(Screenshot);
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -713,6 +483,48 @@ impl ServerHandler for Cadrs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_command_is_a_tool_and_parses_by_name() {
+        let listed = commands();
+        assert!(listed.len() > 40, "{} commands", listed.len());
+        for c in &listed {
+            assert!(!c.description.is_empty(), "{} has no description", c.name);
+            assert_eq!(c.parameters["type"], "object", "{}", c.name);
+            // Known by name: without its parameters it is a parameter error at worst.
+            match Call::parse(&c.name, serde_json::Value::Null) {
+                Ok(call) => assert_eq!(call.name(), c.name),
+                Err(e) => assert!(e.starts_with("bad parameters"), "{}: {e}", c.name),
+            }
+        }
+        let e = Call::parse("no_such_command", serde_json::Value::Null).unwrap_err();
+        assert!(e.contains("unknown command"), "{e}");
+        assert!(Call::parse("get_document", serde_json::json!({})).is_ok());
+        assert!(Call::parse("get_document", serde_json::json!({ "x": 1 })).is_err());
+        let call = Call::parse(
+            "add_sketch",
+            serde_json::json!({ "plane": "Top", "entities": [] }),
+        )
+        .unwrap();
+        assert!(matches!(&call, Call::AddSketch(p) if p.plane == Some(Plane::Top)));
+    }
+
+    #[test]
+    fn hostile_parameters_never_panic_the_parser() {
+        let mut rng = fuzz::Rng::new(102);
+        let mut parsed = 0;
+        for c in commands() {
+            for _ in 0..300 {
+                let params = fuzz::params(&c.parameters, &mut rng);
+                if let Ok(call) = Call::parse(&c.name, params) {
+                    assert_eq!(call.name(), c.name);
+                    parsed += 1;
+                }
+            }
+        }
+        // Most are refused, but enough get through to reach the app's fuzz test.
+        assert!(parsed > 1000, "only {parsed} parsed");
+    }
 
     #[test]
     fn the_server_binds_a_loopback_port() {

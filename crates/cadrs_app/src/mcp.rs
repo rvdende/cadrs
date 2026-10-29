@@ -9,6 +9,9 @@
 //! - A screenshot waits until the app has settled (no [`cadrs_ui::PendingWork`]: a document
 //!   loading, a rebuild, a view animation) for two frames, at most 10 s, then [`capture`]
 //!   answers when the capture is ready: a PNG of the whole window, scaled to fit.
+//! - Calls come from the server and from inside the app ([`LocalCalls`]): [`run_commands`] runs
+//!   a scripted run's commands (`cadrs_ui::RunCommand`: a scenario's `Command` step, a step of
+//!   `cadrs --run script.json`) through the same dispatcher, one after another.
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -35,7 +38,9 @@ impl Plugin for McpPlugin {
         app.init_resource::<McpServer>()
             .init_resource::<WaitingShots>()
             .init_resource::<WaitingBuilds>()
-            .add_systems(Update, (sync_server, run_calls).chain())
+            .init_resource::<LocalCalls>()
+            .init_resource::<ScriptCalls>()
+            .add_systems(Update, (sync_server, run_commands, run_calls).chain())
             .add_systems(Last, take_screenshots);
     }
 }
@@ -52,6 +57,93 @@ impl McpServer {
     /// The endpoint while serving.
     pub fn url(&self) -> Option<String> {
         self.server.as_ref().map(Server::url)
+    }
+}
+
+/// Calls from inside the app ([`cadrs_mcp::Request::local`]), run with the server's.
+#[derive(Resource, Default)]
+pub struct LocalCalls(pub Vec<cadrs_mcp::Request>);
+
+/// A scripted run's commands, run one after another: those waiting, and the one running (its
+/// name, and where its answer arrives).
+#[derive(Resource, Default)]
+struct ScriptCalls {
+    waiting: std::collections::VecDeque<cadrs_ui::RunCommand>,
+    running: Option<(String, cadrs_mcp::Answered)>,
+    /// Screenshots saved so far, numbering their files.
+    shots: u32,
+}
+
+/// Runs a scripted run's commands (`cadrs_ui::RunCommand`) as calls of the command registry, in
+/// order: each answer goes to stdout as a line of JSON (`{"command": …, "answer": …}`; a
+/// screenshot's PNG to the export folder), and `cadrs_ui::ScriptCommands` tells the scenario
+/// runner whether one is still running and why one failed.
+fn run_commands(world: &mut World) {
+    let Some(mut messages) = world.get_resource_mut::<Messages<cadrs_ui::RunCommand>>() else {
+        return;
+    };
+    let sent: Vec<_> = messages.drain().collect();
+    let mut script = world.resource_mut::<ScriptCalls>();
+    script.waiting.extend(sent);
+    let answer = match script.running.as_mut() {
+        Some((_, answered)) => answered.try_take(),
+        None => None,
+    };
+    if let Some(answer) = answer {
+        let (name, _) = script.running.take().expect("running");
+        match answer {
+            Ok(cadrs_mcp::Answer::Json(v)) => {
+                println!("{}", json!({ "command": name, "answer": v }));
+            }
+            Ok(cadrs_mcp::Answer::Image { png, caption }) => {
+                script.shots += 1;
+                let n = script.shots;
+                let dir = crate::export_dir(world).unwrap_or_else(std::env::temp_dir);
+                let path = dir.join(format!("command-{n:02}-{name}.png"));
+                let _ = cadrs_fs::create_dir_all(&dir);
+                match cadrs_fs::write(&path, &png) {
+                    Ok(()) => println!(
+                        "{}",
+                        json!({ "command": name, "answer": { "image": path, "caption": caption } })
+                    ),
+                    Err(e) => fail_script(world, format!("{name}: cannot write {path:?}: {e}")),
+                }
+            }
+            Err(e) => fail_script(world, format!("{name}: {e}")),
+        }
+    }
+    let mut script = world.resource_mut::<ScriptCalls>();
+    if script.running.is_none()
+        && let Some(cmd) = script.waiting.pop_front()
+    {
+        let params = match cmd.params.trim() {
+            "" => Ok(Value::Null),
+            text => serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}")),
+        };
+        match params.and_then(|p| Call::parse(&cmd.name, p)) {
+            Ok(call) => {
+                let (req, answered) = cadrs_mcp::Request::local(call);
+                script.running = Some((cmd.name, answered));
+                world.resource_mut::<LocalCalls>().0.push(req);
+            }
+            Err(e) => fail_script(world, format!("{}: {e}", cmd.name)),
+        }
+    }
+    // The scenario's next step waits for the answer. Not through `PendingWork`: a screenshot
+    // command waits for that to clear itself.
+    let script = world.resource::<ScriptCalls>();
+    let busy = !script.waiting.is_empty() || script.running.is_some();
+    if let Some(mut state) = world.get_resource_mut::<cadrs_ui::ScriptCommands>()
+        && state.busy != busy
+    {
+        state.busy = busy;
+    }
+}
+
+fn fail_script(world: &mut World, why: String) {
+    eprintln!("command failed: {why}");
+    if let Some(mut state) = world.get_resource_mut::<cadrs_ui::ScriptCommands>() {
+        state.failed.get_or_insert(why);
     }
 }
 
@@ -180,10 +272,10 @@ fn answer_built(world: &mut World) {
 
 fn run_calls(world: &mut World) {
     answer_built(world);
-    let Some(server) = world.resource::<McpServer>().server.as_ref() else {
-        return;
-    };
-    let requests: Vec<_> = std::iter::from_fn(|| server.try_next()).collect();
+    let mut requests = std::mem::take(&mut world.resource_mut::<LocalCalls>().0);
+    if let Some(server) = world.resource::<McpServer>().server.as_ref() {
+        requests.extend(std::iter::from_fn(|| server.try_next()));
+    }
     for req in requests {
         if let Call::RunScenario(p) = &req.call {
             let ron = p.scenario.clone();
@@ -191,6 +283,8 @@ fn run_calls(world: &mut World) {
                 req.reply(Err("this build of cadrs can't run scenarios".into()));
                 continue;
             };
+            // Its Command steps start a queue of their own: none of an earlier run's are left.
+            *world.resource_mut::<ScriptCalls>() = ScriptCalls::default();
             // The request is answered when the scenario ends (or now, if it can't start).
             let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(req)));
             let answer = slot.clone();
@@ -244,8 +338,8 @@ fn run_calls(world: &mut World) {
         let took = started.elapsed();
         if took > std::time::Duration::from_millis(100) {
             warn!(
-                "MCP call {:?} held the main thread {:.0} ms",
-                std::mem::discriminant(&req.call),
+                "MCP call {} held the main thread {:.0} ms",
+                req.call.name(),
                 took.as_secs_f64() * 1e3
             );
         }
@@ -1217,6 +1311,7 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     };
     let frame = plane.frame();
     let feature = FeatureId::new();
+    let mark = d.history.undo_len();
     d.execute(&AddSketch {
         element,
         feature,
@@ -1231,12 +1326,18 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
         .map(|s| s.geometry.curves.keys().collect())
         .unwrap_or_default();
     if !ops.is_empty() {
-        d.execute(&cadrs_core::commands::EditSketch {
+        let edit = d.execute(&cadrs_core::commands::EditSketch {
             element,
             feature,
             op: SketchOp::Batch(ops),
-        })
-        .map_err(|e| e.to_string())?;
+        });
+        if let Err(e) = edit {
+            // A call that fails leaves the document as it was, and nothing to redo.
+            d.discard_element_since(mark, element);
+            return Err(e.to_string());
+        }
+        // One undo step takes back the sketch with its entities.
+        d.squash_since(mark, "Insert sketch");
     }
     let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
     let f = e.feature(feature).ok_or("the sketch is gone")?;
@@ -2331,6 +2432,200 @@ mod tests {
         // Base 2232 × 6 + 1872 × 4, upright 1836.9 × 8, boss 690.3 × 5, gusset 418 × 10.
         let volume = part.mass.as_ref().expect("mass").volume;
         assert!((volume - 43206.8).abs() < 5.0, "volume {volume}");
+    }
+
+    /// Every command of the registry, called with hostile parameters (`cadrs_mcp::fuzz`) on a
+    /// document with a sketch and an extrude: none panics, one that fails leaves the document
+    /// and its history as they were, and one undo takes back one that changed it. add_feature
+    /// and edit_feature get real feature types with their templates' values mutated, so each
+    /// feature's own code sees extreme values. `CADRS_FUZZ_SEED` and `CADRS_FUZZ_ROUNDS` replay
+    /// or lengthen it.
+    #[test]
+    fn every_command_survives_hostile_parameters() {
+        // These need the whole app (the document store, the window, the frame stats, the
+        // preferences) or touch files: run_calls reaches them in the app, not on a bare world.
+        const NEEDS_THE_APP: &[&str] = &[
+            "create_document",
+            "open_document",
+            "screenshot",
+            "run_scenario",
+            "get_frame_stats",
+            "get_ui_layout",
+            "set_preferences",
+            "import_step",
+            "export_step",
+            "create_version",
+            "list_versions",
+            "restore_version",
+            "show_feature",
+        ];
+        // Each of these must also have done what it was asked at least once.
+        const MUST_SUCCEED: &[&str] = &[
+            "add_sketch",
+            "extrude",
+            "add_feature",
+            "edit_feature",
+            "get_feature",
+            "rename_feature",
+            "delete_feature",
+            "get_document",
+        ];
+        const FEATURE_TYPES: &[&str] = &[
+            "extrude",
+            "revolve",
+            "fillet",
+            "chamfer",
+            "hole",
+            "shell",
+            "plane",
+            "sweep",
+            "loft",
+            "split",
+            "linear_pattern",
+            "circular_pattern",
+            "mirror",
+            "draft",
+            "boolean",
+            "delete_part",
+            "transform",
+            "thicken",
+            "helix",
+            "thread",
+            "delete_face",
+            "simplify",
+            "move_face",
+        ];
+        let names: Vec<String> = cadrs_mcp::commands().into_iter().map(|c| c.name).collect();
+        for n in NEEDS_THE_APP.iter().chain(MUST_SUCCEED) {
+            assert!(names.iter().any(|c| c == n), "{n} is not a command");
+        }
+        let rounds: usize = std::env::var("CADRS_FUZZ_ROUNDS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(200);
+        let seed: u64 = std::env::var("CADRS_FUZZ_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(102);
+        let mut base = World::new();
+        base.insert_resource(ActiveDocument::new(Document::new("Doc")));
+        let sketch = add_sketch(
+            &mut base,
+            &serde_json::from_value(json!({ "plane": "Top", "entities": [
+                { "type": "rectangle", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+            ] }))
+            .unwrap(),
+        )
+        .unwrap();
+        super::extrude(
+            &mut base,
+            &serde_json::from_value(json!({ "sketch": sketch["sketch"], "depth": 5 })).unwrap(),
+        )
+        .unwrap();
+        let start = base.resource::<ActiveDocument>().doc.clone();
+
+        let mut failures = Vec::new();
+        let (mut ran, mut done) = (0, 0);
+        let mut succeeded = std::collections::BTreeMap::<String, usize>::new();
+        for c in cadrs_mcp::commands() {
+            if NEEDS_THE_APP.contains(&c.name.as_str()) {
+                continue;
+            }
+            // A generator a command, so adding a command doesn't change another's cases.
+            let mut rng = cadrs_mcp::fuzz::Rng::new(seed ^ cadrs_mcp::fuzz::hash(&c.name));
+            for _ in 0..rounds {
+                let mut params = cadrs_mcp::fuzz::params(&c.parameters, &mut rng);
+                if matches!(c.name.as_str(), "add_feature" | "edit_feature")
+                    && rng.below(3) != 0
+                    && let Some(o) = params.as_object_mut()
+                {
+                    // edit_feature edits the document's extrude, add_feature adds any type.
+                    let kind = match c.name.as_str() {
+                        "edit_feature" => "extrude",
+                        _ => FEATURE_TYPES[rng.below(FEATURE_TYPES.len())],
+                    };
+                    let template = template(kind)
+                        .and_then(|k| serde_json::to_value(k).ok())
+                        .and_then(|v| v.as_object().and_then(|o| o.values().next().cloned()))
+                        .unwrap_or_default();
+                    if c.name == "add_feature" {
+                        o.insert("type".into(), json!(kind));
+                    } else {
+                        o.insert("name".into(), json!("Extrude 1"));
+                    }
+                    o.insert(
+                        "params".into(),
+                        cadrs_mcp::fuzz::mutate(&template, &mut rng),
+                    );
+                }
+                let Ok(call) = Call::parse(&c.name, params.clone()) else {
+                    continue;
+                };
+                ran += 1;
+                let mut world = World::new();
+                world.insert_resource(ActiveDocument::new(start.clone()));
+                let steps = |w: &World| {
+                    let d = w.resource::<ActiveDocument>();
+                    (d.history.undo_len(), d.history.redo_len())
+                };
+                world.insert_resource(AppClock::fixed(1_790_263_800));
+                world.insert_resource(UserProfile {
+                    id: "fuzz".into(),
+                    display_name: "Fuzz".into(),
+                });
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(&mut world, &call)
+                }));
+                let case = format!("{} {params}", c.name);
+                let after = world.resource::<ActiveDocument>().doc.clone();
+                if matches!(result, Ok(Ok(_))) {
+                    done += 1;
+                    *succeeded.entry(c.name.clone()).or_default() += 1;
+                }
+                match result {
+                    Err(panic) => {
+                        let why = panic
+                            .downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                            .unwrap_or_default();
+                        failures.push(format!("{case}: panicked: {why}"));
+                    }
+                    Ok(Err(_)) if after != start || steps(&world) != (0, 0) => {
+                        failures.push(format!(
+                            "{case}: failed, but changed the document or its history"
+                        ));
+                    }
+                    Ok(_) if after != start => {
+                        if steps(&world) != (1, 0) {
+                            failures.push(format!(
+                                "{case}: made {:?} undo and redo steps, not one",
+                                steps(&world)
+                            ));
+                        }
+                        world.resource_mut::<ActiveDocument>().undo();
+                        if world.resource::<ActiveDocument>().doc != start {
+                            failures.push(format!("{case}: one undo did not restore the document"));
+                        }
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
+        eprintln!("{ran} calls ran, {done} of them did what they were asked: {succeeded:?}");
+        assert!(ran > 100, "only {ran} calls ran");
+        for n in MUST_SUCCEED {
+            assert!(
+                succeeded.contains_key(*n),
+                "{n} never succeeded: {succeeded:?}"
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {ran} calls went wrong (seed {seed}):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     /// insert_instance puts a whole Part Studio (rigid) or one part into the assembly, get_assembly

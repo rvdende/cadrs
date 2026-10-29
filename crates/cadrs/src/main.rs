@@ -5,6 +5,9 @@
 //!
 //! `cadrs --list-documents [--data-dir <dir>] [--trash]` lists the stored documents with their ids.
 //!
+//! `cadrs --run <script.json> [--out <dir>] [--data-dir <dir>]` runs a script of commands (the
+//! MCP tools, `cadrs --commands` lists them) headless, as a scenario of `Command` steps.
+//!
 //! `cadrs --headless --jobs N (--scenarios a,b,... | --all)` renders many scenarios, N at a
 //! time, each in its own process (see [`batch`]).
 //!
@@ -68,6 +71,13 @@ Usage:
       Rebuilds a stored document without a window and reports its features in error or warning.
   cadrs --headless --jobs N (--scenarios a,b,... | --all)
       Renders many scenarios, N at a time, each in its own process.
+  cadrs --run <script.json> [--out <dir>] [--data-dir <dir>]
+      Runs a script of commands headless: a JSON array of {\"command\": <name>, \"params\": {..}},
+      one line of JSON on stdout per answer; the first that fails stops the run (exit code 1).
+      Like a scenario's, its output folder (default target/scenarios/<script name>) is emptied
+      first; documents go to <out>/data and screenshots to <out>/exports, unless --data-dir.
+  cadrs --commands
+      Lists the commands (the MCP tools) as JSON: name, description, parameters' JSON schema.
   cadrs --install
       Installs this build for the current user, with a launcher entry (Linux, macOS, Windows;
       `cargo install-local`).
@@ -136,6 +146,17 @@ fn main() -> AppExit {
                 AppExit::from_code(1)
             }
         };
+    }
+    // `--commands`: the command registry, the MCP tools and what `--run` scripts call.
+    if args.iter().any(|a| a == "--commands") {
+        match serde_json::to_string_pretty(&cadrs_mcp::commands()) {
+            Ok(text) => println!("{text}"),
+            Err(e) => {
+                eprintln!("{e}");
+                return AppExit::from_code(1);
+            }
+        }
+        return AppExit::Success;
     }
     // `--list-documents`: the store's documents with their ids, no window.
     if let Some(code) = check::list_documents(&args) {

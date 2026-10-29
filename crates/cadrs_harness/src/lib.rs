@@ -57,6 +57,9 @@ pub struct HarnessOptions {
     /// A native document to open at start (`--open <path>`, or the path alone, as an editor
     /// takes one).
     pub open: Option<PathBuf>,
+    /// A script of commands to run headless (`--run <script.json>`), as a scenario of
+    /// `Command` steps (see [`Scenario::from_script`]).
+    pub run: Option<PathBuf>,
 }
 
 impl Default for HarnessOptions {
@@ -70,12 +73,14 @@ impl Default for HarnessOptions {
             data_dir: None,
             no_cursor: false,
             open: None,
+            run: None,
         }
     }
 }
 
-pub const USAGE: &str = "usage: cadrs [--headless] [--scenario <name>] [--window-size WxH] \
-                         [--out <dir>] [--data-dir <dir>] [--no-cursor] [[--open] <file.cadrs>]";
+pub const USAGE: &str = "usage: cadrs [--headless] [--scenario <name> | --run <script.json>] \
+                         [--window-size WxH] [--out <dir>] [--data-dir <dir>] [--no-cursor] \
+                         [[--open] <file.cadrs>]";
 
 impl HarnessOptions {
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -100,13 +105,20 @@ impl HarnessOptions {
                     o.data_dir = Some(args.next().ok_or("--data-dir needs a directory")?.into())
                 }
                 "--no-cursor" => o.no_cursor = true,
+                "--run" => {
+                    o.run = Some(args.next().ok_or("--run needs a script (.json)")?.into());
+                    o.headless = true;
+                }
                 "--open" => o.open = Some(args.next().ok_or("--open needs a file")?.into()),
                 "-h" | "--help" => return Err(USAGE.into()),
                 path if !path.starts_with('-') && o.open.is_none() => o.open = Some(path.into()),
                 other => return Err(format!("unknown argument {other:?}\n{USAGE}")),
             }
         }
-        if o.headless && o.scenario.is_none() {
+        if o.run.is_some() && o.scenario.is_some() {
+            return Err("--run and --scenario don't go together".into());
+        }
+        if o.headless && o.scenario.is_none() && o.run.is_none() {
             return Err("--headless needs --scenario <name>".into());
         }
         Ok(o)
@@ -115,6 +127,13 @@ impl HarnessOptions {
     /// Loads `scenarios/<name>.ron` (the name may also be a path to a `.ron` file). The run
     /// takes the scenario's `window_size`, unless `--window-size` gave one.
     pub fn load_scenario(&mut self) -> Result<Option<Scenario>, String> {
+        if let Some(path) = &self.run {
+            let text =
+                cadrs_fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            return Scenario::from_script(&text)
+                .map(Some)
+                .map_err(|e| format!("{}: {e}", path.display()));
+        }
         let Some(name) = &self.scenario else {
             return Ok(None);
         };
@@ -133,7 +152,10 @@ impl HarnessOptions {
     }
 
     fn scenario_name(&self) -> String {
-        let name = self.scenario.clone().unwrap_or_default();
+        let name = match &self.run {
+            Some(path) => path.display().to_string(),
+            None => self.scenario.clone().unwrap_or_default(),
+        };
         PathBuf::from(&name)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -163,8 +185,7 @@ impl HarnessOptions {
             .clone()
             .or_else(|| std::env::var_os("CADRS_DATA_DIR").map(PathBuf::from))
             .or_else(|| {
-                self.scenario
-                    .is_some()
+                (self.scenario.is_some() || self.run.is_some())
                     .then(|| self.resolved_out_dir().join("data"))
             })
     }
