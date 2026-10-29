@@ -283,6 +283,12 @@ pub fn set_autoconnect_p2p(world: &mut World, on: bool) {
     save(world);
 }
 
+/// Keeps the camera up (the view menu's "Keep camera up", issue #97), and saves it.
+pub fn set_keep_camera_up(world: &mut World, on: bool) {
+    world.resource_mut::<LocalPreferences>().0.keep_camera_up = on;
+    save(world);
+}
+
 /// Remembers that the user has seen "What's new" up to `edition`
 /// ([`crate::notifications::WHATS_NEW`]).
 pub(crate) fn mark_whats_new_seen(world: &mut World, edition: u32) {

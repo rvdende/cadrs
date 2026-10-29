@@ -322,6 +322,12 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// Keep the camera up (issue #97): the rotate drag turns about the vertical (world Z) and
+    /// tilts, without rolling the view, and so do the arrow keys and the view cube's arrows.
+    /// Off, the drag turns freely about the screen (Onshape's), and the no-roll turn is on the
+    /// other gesture.
+    #[serde(default)]
+    pub keep_camera_up: bool,
 }
 
 fn default_vsync() -> bool {
@@ -348,6 +354,7 @@ impl Default for Preferences {
             autoconnect_p2p: false,
             profile_cpu: false,
             vsync: true,
+            keep_camera_up: false,
         }
     }
 }

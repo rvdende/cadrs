@@ -784,6 +784,10 @@ pub struct ViewMenuState {
     pub section: bool,
     /// A Part Studio or an Assembly (not a PCB Studio): named views and section views.
     pub modeling: bool,
+    /// The camera is kept up (issue #97, the preference).
+    pub keep_up: bool,
+    /// Walk mode is on (issue #97, [`crate::walk`]).
+    pub walking: bool,
 }
 
 impl ViewMenuState {
@@ -803,6 +807,12 @@ impl ViewMenuState {
                 kind,
                 crate::viewport::ActiveKind::PartStudio | crate::viewport::ActiveKind::Assembly
             ),
+            keep_up: world
+                .get_resource::<crate::preferences_ui::LocalPreferences>()
+                .is_some_and(|p| p.0.keep_camera_up),
+            walking: world
+                .get_resource::<crate::walk::Walking>()
+                .is_some_and(|w| w.0),
         }
     }
 }
@@ -842,6 +852,11 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
             st.perspective,
             I::new("view-perspective", "Perspective view"),
         ))
+        .item(check(st.keep_up, I::new("view-keep-up", "Keep camera up")))
+        .item(
+            check(st.walking, I::new("view-walk", "Walk mode (W A S D, Q E)"))
+                .disabled(!st.modeling),
+        )
         .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
         .separator()
         .item(
@@ -932,6 +947,23 @@ fn on_view_menu(ev: On<cadrs_ui::MenuAction>, view: Res<ViewportView>, mut comma
             let on = !view.view.perspective;
             commands
                 .queue(move |world: &mut World| crate::view_options::set_perspective(world, on));
+            return;
+        }
+        "view-keep-up" => {
+            commands.queue(|world: &mut World| {
+                let on = !world
+                    .resource::<crate::preferences_ui::LocalPreferences>()
+                    .0
+                    .keep_camera_up;
+                crate::preferences_ui::set_keep_camera_up(world, on);
+            });
+            return;
+        }
+        "view-walk" => {
+            commands.queue(|world: &mut World| {
+                let on = !world.resource::<crate::walk::Walking>().0;
+                crate::walk::set_walking(world, on);
+            });
             return;
         }
         "view-section-item" => {

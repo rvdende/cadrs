@@ -270,8 +270,15 @@ pub struct ViewportView {
     /// view moved meanwhile.
     pub fit_pending: Option<(ElementId, ViewState)>,
     /// The point a drag orbits about, when not the focus (the PCB Studio's selected
-    /// components' centre, [`crate::pcb::view`]).
+    /// components' centre, [`crate::pcb::view`]; the selection Zoom to selection framed,
+    /// [`crate::view_options::zoom_to_selection`]).
     pub pivot: Option<Vec3>,
+    /// The pivot is the framed selection's (issue #97): it stays until the view is framed or
+    /// turned to a standard view otherwise ([`Self::drop_framed_pivot`]).
+    pub framed_pivot: bool,
+    /// Keep the camera up (issue #97, the preference or walk mode): turns go about world Z
+    /// without roll ([`ViewState::rotate_upright`]), and the rotate drag is the turntable one.
+    pub keep_up: bool,
 }
 
 impl ViewportView {
@@ -297,10 +304,23 @@ impl ViewportView {
     pub fn turn_by_in(&mut self, yaw: f32, pitch: f32, duration: f32) {
         let from = self.target();
         let mut to = from;
-        to.rotate_by(yaw, pitch);
+        if self.keep_up {
+            to.rotate_upright(yaw, pitch);
+        } else {
+            to.rotate_by(yaw, pitch);
+        }
         let step = Turn::between(from.rotation(), to.rotation());
         let turn = self.turn_left().then(step);
         self.start(self.keeping_mode(to), turn, duration);
+    }
+
+    /// Lets go of the pivot Zoom to selection set ([`Self::framed_pivot`]): the view framed
+    /// otherwise, or turned to a standard view, orbits about its focus again.
+    pub fn drop_framed_pivot(&mut self) {
+        if self.framed_pivot {
+            self.pivot = None;
+            self.framed_pivot = false;
+        }
     }
 
     /// What's left of the turn in progress ([`Turn::NONE`] when the view isn't moving).
@@ -1285,7 +1305,10 @@ fn viewport_pointer(
         Res<Time>,
     ),
     prefs: Res<crate::preferences_ui::LocalPreferences>,
-    space_mouse_wheel: Res<crate::spacemouse::LegacyWheelGuard>,
+    (space_mouse_wheel, walking): (
+        Res<crate::spacemouse::LegacyWheelGuard>,
+        Option<Res<crate::walk::Walking>>,
+    ),
     mut commands: Commands,
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1328,7 +1351,27 @@ fn viewport_pointer(
                         .find_map(|(_, b)| {
                             mouse.action(crate::preferences_ui::mouse_button(b), mods)
                         });
-                    match action {
+                    // Walk mode looks round from the eye; keeping the camera up swaps the free
+                    // turn and the turntable one (issue #97).
+                    let action = match action {
+                        Some(ViewAction::Rotate) if view.keep_up => {
+                            Some(ViewAction::RotateTurntable)
+                        }
+                        Some(ViewAction::RotateTurntable) if view.keep_up => {
+                            Some(ViewAction::Rotate)
+                        }
+                        a => a,
+                    };
+                    let look = walking.as_deref().is_some_and(|w| w.0)
+                        && matches!(
+                            action,
+                            Some(ViewAction::Rotate | ViewAction::RotateTurntable)
+                        );
+                    if look {
+                        let eye = view.view.camera_position();
+                        view.view.orbit_about(eye, |v| v.orbit_turntable(-delta));
+                    }
+                    match action.filter(|_| !look) {
                         Some(ViewAction::Rotate) => match view.pivot {
                             Some(p) => view.view.orbit_about(p, |v| v.orbit(delta)),
                             None => view.view.orbit(delta),
@@ -1768,7 +1811,19 @@ fn view_shortcuts(
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     for k in keys_in.read() {
-        if k.state != bevy::input::ButtonState::Pressed || typing || !q_dialogs.is_empty() || alt {
+        if k.state != bevy::input::ButtonState::Pressed || typing || !q_dialogs.is_empty() {
+            continue;
+        }
+        // Zoom to selection (issue #97): Alt+F, or the numpad's point (Blender's), framing what
+        // is selected and orbiting about it (Shift+F stays Fillet, as Onshape's).
+        let code = k.shortcut_code();
+        if (alt && !ctrl && !shift && code == KeyCode::KeyF)
+            || (!alt && !ctrl && code == KeyCode::NumpadDecimal)
+        {
+            commands.queue(crate::view_options::zoom_to_selection);
+            continue;
+        }
+        if alt {
             continue;
         }
         // Arrows: with Ctrl+Shift, pan; otherwise they turn the view while held
@@ -1792,6 +1847,7 @@ fn view_shortcuts(
         match numpad_key(k.shortcut_code(), ctrl) {
             Some(NumpadKey::View(s)) => {
                 let to = view.target().oriented(s);
+                view.drop_framed_pivot();
                 view.animate_to(to);
                 continue;
             }
@@ -1830,6 +1886,7 @@ fn view_shortcuts(
                 commands.queue(isometric_and_fit);
             } else {
                 let to = view.target().oriented(s);
+                view.drop_framed_pivot();
                 view.animate_to(to);
             }
             continue;
@@ -1876,6 +1933,7 @@ fn view_shortcuts(
                 };
                 if let Some(n) = normal {
                     let to = view.target().normal_to(n);
+                    view.drop_framed_pivot();
                     view.animate_to(to);
                 }
             }
@@ -1918,6 +1976,7 @@ fn view_shortcuts(
                 let to = view
                     .target()
                     .fitted_beside(&pts, rect.0.size(), fit_fill(*kind), inset.0);
+                view.drop_framed_pivot();
                 view.animate_to(to);
             }
             KeyCode::KeyZ => {
@@ -1987,6 +2046,7 @@ pub fn orient_and_fit(world: &mut World, orient: impl FnOnce(ViewState) -> ViewS
     let inset = world.resource::<DialogInset>().0;
     let mut view = world.resource_mut::<ViewportView>();
     let to = orient(view.target()).fitted_beside(&pts, size, fit_fill(kind), inset);
+    view.drop_framed_pivot();
     view.animate_to(to);
 }
 

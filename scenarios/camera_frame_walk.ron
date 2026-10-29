@@ -1,0 +1,54 @@
+// Issue #97: framing the selection and orbiting about it, keeping the camera up, and walking.
+// The DC motor mount stand-in's hole is clicked and Alt+F frames it (01 → 02: its top and
+// bottom circles about the view's centre, the bottom one hidden in the plate); a right-drag then
+// turns the view about the hole's centre (03: the opening swings about the middle). The view menu's "Keep camera
+// up" (04) makes the right-drag turn about the vertical without roll (05: the part's vertical
+// edges stay upright). "Walk mode" goes to perspective (06); W held walks forward (07), E up
+// (08), and Esc leaves walk mode, back to the orthographic view (09).
+Scenario(
+    start: Some("document"),
+    steps: [
+        Custom("fixture motor_mount_standin"),
+        Wait(20),
+        Key("F"),
+        Wait(20),
+        Click(at(1006, 467)),
+        Wait(2),
+        Screenshot("01-hole-selected"),
+        Key("Alt+F"),
+        Wait(60),
+        Screenshot("02-alt-f-frames-the-hole"),
+        RightDrag(at(937, 560), at(997, 545)),
+        Wait(5),
+        Screenshot("03-orbits-about-the-hole"),
+        Key("Space"),
+        Key("F"),
+        Wait(20),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Screenshot("04-view-menu-keep-up-walk"),
+        Click(ui("view-keep-up")),
+        Wait(2),
+        RightDrag(at(700, 400), at(1150, 460)),
+        Wait(5),
+        Screenshot("05-turned-without-roll"),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Click(ui("view-walk")),
+        Wait(20),
+        Screenshot("06-walk-mode-perspective"),
+        KeyDown("W"),
+        Wait(40),
+        KeyUp("W"),
+        Wait(2),
+        Screenshot("07-walked-forward"),
+        KeyDown("E"),
+        Wait(30),
+        KeyUp("E"),
+        Wait(2),
+        Screenshot("08-walked-up"),
+        Key("Escape"),
+        Wait(20),
+        Screenshot("09-escape-leaves-walk-mode"),
+    ],
+)

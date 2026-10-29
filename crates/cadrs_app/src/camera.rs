@@ -357,6 +357,14 @@ impl ViewState {
         self.roll = 0.0;
     }
 
+    /// [`Self::rotate_by`] keeping the camera up (issue #97): `yaw` about world Z, `pitch` a tilt
+    /// (to straight above or below at most), no roll, as [`Self::orbit_turntable`] turns.
+    pub fn rotate_upright(&mut self, yaw: f32, pitch: f32) {
+        self.azimuth = wrap_degrees(self.azimuth - yaw);
+        self.elevation = (self.elevation + pitch).clamp(-90.0, 90.0);
+        self.roll = 0.0;
+    }
+
     /// Turns the view with `turn` (one of the orbits above) about the world point `pivot`
     /// instead of the focus: the pivot stays where it is on screen and the view swings
     /// around it.
@@ -794,6 +802,21 @@ mod tests {
                 v.focus
             );
         }
+    }
+
+    #[test]
+    fn turning_upright_leaves_no_roll() {
+        // Issue #97: from a rolled view, an upright turn levels it: no roll, Z up on screen.
+        let mut v = ViewState::standard(StandardView::Default);
+        v.rotate_screen(25.0, 40.0);
+        v.roll = 33.0;
+        v.rotate_upright(30.0, 15.0);
+        assert_eq!(v.roll, 0.0);
+        assert!(v.right().z.abs() < 1e-5, "{}", v.right());
+        assert!(v.up().z >= 0.0);
+        // Tilting stops at straight above.
+        v.rotate_upright(0.0, 200.0);
+        assert_eq!(v.elevation, 90.0);
     }
 
     #[test]
