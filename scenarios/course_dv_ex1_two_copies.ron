@@ -4,7 +4,7 @@
 // the Part Studio "Block" with "Mate connector 1" on its top face, V1, in the folder "Linked
 // parts") and `fixtures/linked_block_host_standin.cadrs` (B "Block derived": "Part Studio 1"
 // with "Mate connector 1" at (0, 0, 100)).
-// 01 B's Part Studio 1: its Mate connector 1 at (0, 0, 100); the icon rail's Insert hovered.
+// 01 B's Part Studio 1: its Mate connector 1 at (0, 0, 100); the top bar's Insert hovered.
 // 02 Derived 1's dialog: Other documents › Linked parts › Block source (V1): "Block" hovered.
 // 03 Block picked: the source card "Block · Block source · V1"; Derive: Part Studio; Locations
 //    empty (the origin): one copy where it is in A.

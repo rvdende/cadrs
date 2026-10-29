@@ -4,7 +4,7 @@
 //!   gentle line under the feature list's header (`features-scale-notice`) says how big it is
 //!   and suggests splitting it; it doesn't block anything.
 //! - **Tab overflow**: the document's tab strip scrolls sideways (the mouse wheel over it), the
-//!   selected tab is kept in view, and the **Tab manager** button (left of the tabs) opens the
+//!   selected tab is kept in view, and the **Tab manager** button (in the top bar) opens the
 //!   Tab manager panel (P3G.3, `crate::move_document`), whose list of every tab scrolls
 //!   (`tab-manager-rows`, rows `tab-manager-row-<n>`), to switch to one that is scrolled out of
 //!   sight.
@@ -311,12 +311,23 @@ fn sync_tab_overflow(
         &mut BackgroundGradient,
     )>,
     q_tabs: StripTabs,
+    q_bar: Query<(&Name, &BackgroundGradient), Without<TabStripFade>>,
     theme: Res<Theme>,
 ) {
     let Some((_, node, strip_at, pos)) = q_strip.iter().find(|(n, ..)| n.as_str() == "tab-strip")
     else {
         return;
     };
+    // The fades are the bar's own fill (its glass tint, set per color scheme), so a veiled tab
+    // looks like bare bar.
+    let fill = q_bar
+        .iter()
+        .find(|(n, _)| n.as_str() == "tab-bar")
+        .and_then(|(_, g)| match g.0.first() {
+            Some(Gradient::Linear(l)) => l.stops.first().map(|s| s.color),
+            _ => None,
+        })
+        .unwrap_or(theme.tab_bar);
     let s = node.inverse_scale_factor();
     let max = ((node.content_size().x - node.size().x) * s).max(0.0);
     // The room the tabs have without the chevrons (they and P3E.2's ▾ take 62 px when shown),
@@ -373,9 +384,13 @@ fn sync_tab_overflow(
         });
         let cut = if f.left { cut_left } else { cut_right };
         let width = if cut > 0.5 { cut + 24.0 } else { 36.0 };
-        if n.width != Val::Px(width) {
+        let (from, to) = (fill, fill.with_alpha(0.0));
+        let first = g.0.first().and_then(|g| match g {
+            Gradient::Linear(l) => l.stops.iter().map(|s| s.color).find(|c| c.alpha() > 0.0),
+            _ => None,
+        });
+        if n.width != Val::Px(width) || first != Some(from) {
             n.width = Val::Px(width);
-            let (from, to) = (theme.tab_bar, theme.tab_bar.with_alpha(0.0));
             let solid = (width - 24.0).max(0.0);
             let stops = if f.left {
                 vec![

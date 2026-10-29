@@ -3,8 +3,8 @@
 //! It grew out of P3G.3's minimal manager (in `move_document.rs`, made scrollable by P3F.3) and
 //! keeps its multi-select and Move to document.
 //!
-//! The tab bar's leftmost icon opens it: a **docked left panel** (300 px, full height between
-//! the icon rail and the toolbar and feature list, which it pushes right) with
+//! The top bar's Tab manager button opens it: a **docked left panel** (300 px, full height
+//! beside the toolbar and feature list, which it pushes right) with
 //! - the header "Tabs" with **Sort ▾** (Document order, Name A–Z, Name Z–A, Type) and ✕;
 //! - a **Search tabs** field, the **type filters** (Part Studios, Assemblies, Drawings: toggles)
 //!   and **Clear**;
@@ -76,6 +76,7 @@ impl Plugin for TabManagerPlugin {
             (
                 read_search,
                 sync_panel,
+                sync_button,
                 fill_thumbs,
                 sync_filters,
                 sync_rows,
@@ -187,7 +188,7 @@ pub fn tab_type(el: &cadrs_core::Element) -> &'static str {
     }
 }
 
-/// The dock between the icon rail and the rest of the window (`document.rs` spawns it).
+/// The dock at the window's left, before the rest of it (`document.rs` spawns it).
 #[derive(Component)]
 pub struct TabManagerDock;
 
@@ -325,6 +326,27 @@ fn rows_of(doc: &cadrs_core::Document, tm: &TabManager) -> Vec<RowSpec> {
         }
     }
     out
+}
+
+/// The top bar's Tab manager button shows whether the panel is open, as Comments and History
+/// beside it do.
+fn sync_button(
+    tm: Res<TabManager>,
+    q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>)>,
+    mut commands: Commands,
+) {
+    let Some((button, _, selected)) = q.iter().find(|(_, n, _)| n.as_str() == "tab-manager") else {
+        return;
+    };
+    if tm.open && !selected {
+        commands
+            .entity(button)
+            .try_insert(cadrs_ui::style::Selected);
+    } else if !tm.open && selected {
+        commands
+            .entity(button)
+            .try_remove::<cadrs_ui::style::Selected>();
+    }
 }
 
 fn on_button(

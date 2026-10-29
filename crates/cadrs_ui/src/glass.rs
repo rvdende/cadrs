@@ -1,16 +1,17 @@
 //! Glass surfaces: see-through slabs over a soft wallpaper, after the glass themes of Raven
 //! (`src/widgets/common.c`, `rvn_glass_style`).
 //!
-//! - A [`Glass`] node gets a tint (its fill), a rim and a shadow, each flat: no gradients (issue
-//!   #137: they looked dated). They are still set as one-colour gradients, which the scheme
-//!   doesn't remap, so this module sets them again for each scheme.
+//! - A [`Glass`] node gets a tint (its fill), a rim and a shadow, each one flat colour: no
+//!   gradients (issue #137: they looked dated). The rim is a faint light line in dark (brighter
+//!   on clearer glass) and a soft dark outline in light.
 //! - The material ([`GlassMaterial`], one for the app in [`GlassStyle`] or one per node) says
-//!   how much shows through: **clear** glass is barely tinted with a bright rim, **frosted**
+//!   how much shows through: **clear** glass is barely tinted, **frosted**
 //!   glass is milkier, **tinted** glass is frosted with the accent mixed into it (more on what
 //!   floats higher). Bevy has no backdrop blur, so frost is a milkier tint: over the soft
 //!   wallpaper the two look alike.
-//! - Gradients aren't mapped by [`crate::color_scheme`], so the tint and rim are set again
-//!   whenever the scheme or the material changes; the shadow is an ordinary [`BoxShadow`],
+//! - The tint and rim are set as one-colour gradients, which [`crate::color_scheme`] doesn't
+//!   map, so they are set again whenever the scheme or the material changes; the shadow is an
+//!   ordinary [`BoxShadow`],
 //!   which the scheme deepens in dark.
 //! - [`wallpaper`] goes on a page's root: a flat pale cyan in light, a warm dark ground in dark.
 //! - [`glow`] is the halo of a page's main action.
@@ -40,7 +41,7 @@ impl Plugin for GlassPlugin {
 /// What glass surfaces are made of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GlassMaterial {
-    /// Barely tinted, a bright rim: the most of what is behind.
+    /// Barely tinted: the most of what is behind.
     Clear,
     /// Milky: what is behind shows as color, not shape.
     #[default]
@@ -131,7 +132,7 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
     ))
 }
 
-/// The tint, rim light and how bright the top is, for `kind` in `material`.
+/// The tint and the rim's light (in dark), for `kind` in `material`.
 fn glass_look(t: &Theme, dark: bool, kind: GlassKind, material: GlassMaterial) -> (Color, f32) {
     // Raven: panels and inputs take the panel color, controls their own; the rim catches
     // more light on a pale surface.
@@ -454,8 +455,7 @@ fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
     Color::srgba_u8(r, g, b, (a * 255.0).round() as u8)
 }
 
-/// A wash from top left to bottom right with a cyan glow in one corner and a violet one in the
-/// other.
+/// The page's ground: one flat colour per scheme.
 fn wallpaper_layers(dark: bool) -> Vec<Gradient> {
     // One flat colour (issue #137: no gradients): the schematic's warm ground in dark, a pale
     // cyan in light. A one-colour gradient, as the scheme doesn't remap gradients.

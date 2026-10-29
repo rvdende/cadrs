@@ -3,7 +3,7 @@
 // "Sketch 2" a 20 × 10 rectangle, "Mate connector 1" at the top-face centre; V1, in the folder
 // "Linked parts") and B "Block derived" ("Part Studio 1" with "Mate connector 1" at
 // (0, 0, 100); "Plate") (`derived setup`).
-// 01 the icon rail's Insert hovered (a Part Studio's Insert makes a Derived feature).
+// 01 the top bar's Insert hovered (a Part Studio's Insert makes a Derived feature).
 // 02 Derived 1's dialog on the source picker: Current document | Other documents; this document
 //    ("Main") with its version graph button; its other Part Studio "Plate" (follows the tab).
 // 03 Other documents: the search field and the locations.
@@ -27,7 +27,7 @@
 //    and on the tab.
 // 16 the badge clicked: the Reference manager: Block source "V1 ⇒ V2" with Update all.
 // 17 Update all: 50·30·40 = 60 000 mm³, the icon plain again.
-// 18 the rail's Insert again, Block source › Block picked: refused (DV3.7) with the red toast
+// 18 the top bar's Insert again, Block source › Block picked: refused (DV3.7) with the red toast
 //    "Block is derived already in Part Studio 1 by Derived 1: a Part Studio can be derived only
 //    once in a Part Studio"; the new feature waits for a source.
 // 19 ✕: nothing added (Features: Derived 1 only).

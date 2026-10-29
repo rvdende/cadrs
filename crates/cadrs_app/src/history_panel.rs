@@ -11,7 +11,7 @@
 //! - **Last healthy regeneration** (IR3.3): when a rebuild of the current state settles, every
 //!   feature that built without error (and every sketch that solves) is noted as healthy at the
 //!   current entry.
-//! - **The panel** (left rail **History**): newest first, **Main** (the workspace, an open
+//! - **The panel** (the top bar's **History**): newest first, **Main** (the workspace, an open
 //!   circle), the changes grouped by who made them in a row "n changes" that opens and closes
 //!   (IR6.11), and **Start** at the bottom. Right-click an entry for **Restore** (a new entry,
 //!   undoable) and **View in repair**. The header's Repair icon (a wrench) asks for an entry to
@@ -869,6 +869,7 @@ fn sync_rail_button(
 fn on_button(
     a: On<Activate>,
     q: Query<&Name>,
+    q_at: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut panel: ResMut<HistoryPanel>,
     mut commands: Commands,
 ) {
@@ -886,7 +887,11 @@ fn on_button(
         }
         "history-repair" => panel.repair_pick = !panel.repair_pick,
         "history-create-version" => {
-            let at = Vec2::new(40.0, 104.0);
+            // Under the button, at its left.
+            let at = q_at.get(a.entity).map_or(Vec2::new(8.0, 104.0), |(n, t)| {
+                let s = n.inverse_scale_factor();
+                t.translation * s + Vec2::new(-n.size().x * s / 2.0, n.size().y * s / 2.0 + 4.0)
+            });
             commands.queue(move |world: &mut World| open_create_version(world, at));
         }
         _ => {}

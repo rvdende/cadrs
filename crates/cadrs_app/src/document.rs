@@ -4,11 +4,10 @@
 //!
 //! - **Top bar**: the cadrs mark (the app menu, [`crate::app_menu`]: back to the documents,
 //!   rename, export, a version, the workspaces, units, a full rebuild, Preferences), the
-//!   document name (click to rename in place), the workspace's name when it isn't Main; on the
-//!   right the version, the color scheme, Share, notifications and the account
-//!   ([`crate::identity`]).
-//! - **Icon rail** on the left, as tall as its icons; the feature list's icon is on it while
-//!   the panel is hidden.
+//!   document name (click to rename in place), the workspace's name when it isn't Main, the
+//!   document's tools (Tab manager, Insert, Comments, History, and the feature list's button
+//!   while that panel is hidden: [`document_tools`]); on the right the version, the color
+//!   scheme, Share, notifications and the account ([`crate::identity`]).
 //! - **Toolbar**: undo, redo, **Sketch** (the only text button) and the feature tools, then
 //!   "Search tools… alt c". Assemblies get their own toolbar (Insert and the mate tools).
 //! - **Feature list** panel: filter (with the panel's ‹ that hides it), "Features (4)", the
@@ -16,7 +15,7 @@
 //!   "Parts (0)"; assemblies show the instance list instead. The grip in the gap on its right
 //!   resizes it.
 //! - **Viewport** area: see [`crate::viewport`] and [`crate::view_cube`].
-//! - **Tab bar**: tab manager, **+** (Create Part Studio / Create Assembly), and the tabs.
+//! - **Tab bar**: the tabs, then **+** (Create Part Studio / Create Assembly) after them.
 //!   Double-click a tab to rename it; right-click for Delete (with confirmation), Rename… and
 //!   Duplicate.
 //!
@@ -635,50 +634,36 @@ fn document_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
         ] {
             g.spawn(ToolButton::new(name, icon_name).tooltip(tip).build(t));
         }
-        // At the end, shown while the feature panel is hidden ([`sync_rail_toggle`]), so the
-        // other buttons never move: it brings the panel back.
+        // At the end, a little apart, shown while the feature panel is hidden
+        // ([`sync_rail_toggle`]), so the other buttons never move: it brings the panel back. A
+        // child of the frame itself, which sizes it like the others.
         g.spawn((
+            ToolButton::new("rail-feature-list", "list-details")
+                .tooltip("Show the feature list")
+                .build(t),
             RailPanelToggle,
-            Node {
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(2.0),
-                display: Display::None,
-                ..default()
-            },
-        ))
-        .with_children(|g| {
-            g.spawn((
-                Node {
-                    width: Val::Px(1.0),
-                    height: Val::Px(20.0),
-                    margin: UiRect::horizontal(Val::Px(2.0)),
-                    ..default()
+            observe(
+                |_: On<Activate>, q: Query<(Entity, &Name)>, mut commands: Commands| {
+                    if let Some((e, _)) = q.iter().find(|(_, n)| n.as_str() == "feature-panel") {
+                        commands.trigger(ToggleDockPanel { entity: e });
+                    }
                 },
-                BackgroundColor(t.separator),
-            ));
-            g.spawn((
-                ToolButton::new("rail-feature-list", "list-details")
-                    .tooltip("Show the feature list")
-                    .build(t),
-                observe(
-                    |_: On<Activate>, q: Query<(Entity, &Name)>, mut commands: Commands| {
-                        if let Some((e, _)) = q.iter().find(|(_, n)| n.as_str() == "feature-panel")
-                        {
-                            commands.trigger(ToggleDockPanel { entity: e });
-                        }
-                    },
-                ),
-            ));
+            ),
+        ))
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.display = Display::None;
+            n.margin = UiRect::left(Val::Px(6.0));
         });
     });
 }
 
-/// The rail's feature list button: there while the panel is hidden.
+/// The feature list's button in the top bar: there while the panel is hidden.
 #[derive(Component)]
 struct RailPanelToggle;
 
-/// The rail shows the feature list's button only while the panel is hidden (the panel's own ‹
-/// hides it).
+/// The top bar's tools show the feature list's button only while the panel is hidden (the
+/// panel's own ‹ hides it).
 fn sync_rail_toggle(
     q_panel: Query<(&Name, &cadrs_ui::dock::DockPanelState, &Node), Without<RailPanelToggle>>,
     mut q_button: Query<&mut Node, With<RailPanelToggle>>,
@@ -864,8 +849,9 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
             });
         bar.spawn((
             Name::new("tab-strip-frame"),
+            // As wide as its tabs (narrower when they overflow), so + follows the last tab.
             Node {
-                flex_grow: 1.0,
+                flex_shrink: 1.0,
                 min_width: Val::Px(0.0),
                 align_items: AlignItems::Stretch,
                 overflow: Overflow::clip(),
@@ -3291,8 +3277,11 @@ fn on_inline_commit(
 fn name_button_node(t: &Theme) -> Node {
     Node {
         height: Val::Px(30.0),
-        // A long name leaves room for the document's tools beside it.
+        // A long name leaves room for the document's tools beside it, and gives way in a
+        // narrow window (it clips).
         max_width: Val::Px(420.0),
+        min_width: Val::Px(0.0),
+        flex_shrink: 1.0,
         overflow: Overflow::clip(),
         padding: UiRect::horizontal(Val::Px(4.0)),
         margin: UiRect::left(Val::Px(4.0)),

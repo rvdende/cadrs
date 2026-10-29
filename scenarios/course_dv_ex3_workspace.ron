@@ -3,7 +3,7 @@
 // (`fixtures/linked_block_standin.cadrs`: Sketch 1 fully defined with the 50 length and 30
 // width dimensions).
 // 01 A's Block: the 50 × 30 × 25 block.
-// 02 + → Create Part Studio: "Part Studio 1"; the icon rail's Insert: Derived 1's dialog on
+// 02 + → Create Part Studio: "Part Studio 1"; the top bar's Insert: Derived 1's dialog on
 //    Current document: this document ("Main") and its Part Studio "Block" (follows the tab).
 // 03 Block picked: the source card "Block · Block source · Main"; the block copied in place.
 // 04 ✓: Derived 1 with no link icon (a workspace reference has no version to update); mass

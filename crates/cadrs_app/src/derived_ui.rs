@@ -1,7 +1,7 @@
 //! P3G.4: the **Derived** feature's dialog and its place in the Feature list
 //! (`derived-and-linking.md` DV3, DV1.5, ER1.1; the model is [`cadrs_core::derived`]).
 //!
-//! - **Opening.** The icon rail's **Insert** (a Part Studio's, as Onshape's "Insert" panel of a
+//! - **Opening.** The top bar's **Insert** (a Part Studio's, as Onshape's "Insert" panel of a
 //!   Part Studio) inserts "Derived N" and opens its dialog; double-click or Edit… reopens it
 //!   (DV3.6). Every change is one command ([`cadrs_core::derived::SetDerived`]); ✓ squashes them
 //!   into one undo step, ✕ takes them all back.
@@ -163,7 +163,7 @@ struct AnchorPick(uuid::Uuid);
 // ---------------------------------------------------------------------------------------------
 // Session
 
-/// The icon rail's Insert: a Derived feature in a Part Studio (the Insert dialog in an assembly).
+/// The top bar's Insert: a Derived feature in a Part Studio (the Insert dialog in an assembly).
 fn on_rail_insert(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
     if !q.get(a.entity).is_ok_and(|n| n.as_str() == "rail-insert") {
         return;

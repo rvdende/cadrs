@@ -1,4 +1,4 @@
-//! The Comments panel, as Onshape's (`comments_on_workspaces.htm`): the left rail's
+//! The Comments panel, as Onshape's (`comments_on_workspaces.htm`): the top bar's
 //! **Comments** button opens it beside the feature list.
 //!
 //! - **Add comment**: a message, optionally tagged to a feature (right-click a feature ▸
@@ -6,7 +6,7 @@
 //!   for the first person mentioned, who resolves it with its checkbox.
 //! - Threads, newest first, with their replies; **Reply**, and ✕ for one's own (the owner
 //!   may remove any). The filter: All comments, All open tasks, Open tasks assigned to me,
-//!   Completed tasks. A dot on the rail button says there is something new.
+//!   Completed tasks. A dot on its button says there is something new.
 //! - On a shared document the owner's cadrs keeps the comments in order: everyone else sends
 //!   theirs to it (if they may comment) and applies what it passes on. Someone mentioned or
 //!   given a task gets a toast. Comments are kept beside the document (`comments.ron`), not in
@@ -839,7 +839,7 @@ fn on_filter(ev: On<SelectChange>, q: Query<&Name>, mut panel: ResMut<CommentsPa
     }
 }
 
-/// The rail button: on while the panel is open, a dot while something is unread, and the
+/// The Comments button: on while the panel is open, a dot while something is unread, and the
 /// number of open tasks for this user.
 #[derive(Component)]
 struct RailDot;
