@@ -421,7 +421,8 @@ commands! {
     "Run a script of UI steps in the app, as its scenario files do: Click(ui(\"name\")) on a \
         named element, Click(xyz(x, y, z)) on a 3D point, ClickAt(x, y), DoubleClick, RightClick, Drag(from, to), \
         MoveTo(x, y), Hover, Key(\"Ctrl+Z\"), Type(\"text\"), Wait(frames), WaitFor(\"name\"), \
-        ExpectText(\"name\", \"text\"), Custom(\"command\") and Screenshot(\"label\"). Each step waits for the app \
+        ExpectText(\"name\", \"text\"), Custom(\"command\"), Command(\"tool\", \"{json params}\") (one of these \
+        tools) and Screenshot(\"label\"). Each step waits for the app \
         to settle. Returns the screenshots' paths (the last one as an image), or the step that failed."
     run_scenario => RunScenario(RunScenario);
 

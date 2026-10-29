@@ -283,6 +283,8 @@ fn run_calls(world: &mut World) {
                 req.reply(Err("this build of cadrs can't run scenarios".into()));
                 continue;
             };
+            // Its Command steps start a queue of their own: none of an earlier run's are left.
+            *world.resource_mut::<ScriptCalls>() = ScriptCalls::default();
             // The request is answered when the scenario ends (or now, if it can't start).
             let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(req)));
             let answer = slot.clone();
