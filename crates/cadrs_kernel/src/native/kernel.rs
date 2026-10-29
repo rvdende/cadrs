@@ -56,6 +56,9 @@ pub struct NativeKernel {
     /// (Shared with [`Self::fork`]s: a body never changes.)
     bodies: HashMap<u64, Arc<Entry>>,
     next: u64,
+    /// The first id this session numbered a body with: a fork's range ([`Self::fork`]); 0 for
+    /// a session of its own.
+    first: u64,
     tol: super::tol::Tolerances,
     /// Face colours (sRGB and alpha) by body, in face order: an imported file's, or what the
     /// application set. Operations pass them on through their history ([`Self::carry_colors`]).
@@ -75,6 +78,10 @@ const JOINED_KEPT: usize = 4;
 
 /// How many body ids each [`NativeKernel::fork`] of a session has to itself.
 const FORK_IDS: u64 = 1 << 32;
+
+/// The next range of body ids a fork takes: every fork its own, a fork of a fork too (a fork's
+/// range past its parent's lane would be another fork's), and past every id handed out before.
+static FORK_RANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl NativeKernel {
     /// An empty session at the default tolerances.
@@ -117,12 +124,13 @@ impl NativeKernel {
 
     /// A session to run an operation in on another thread, its bodies, colours and
     /// tolerances this one's; [`Self::absorb`] takes back what it made. Its new bodies are
-    /// numbered from a range of its own (`lane`), so their ids don't depend on which of several
-    /// forks runs first.
-    pub fn fork(&self, lane: u64) -> NativeKernel {
+    /// numbered from a range of ids of its own ([`FORK_RANGES`]).
+    pub fn fork(&self) -> NativeKernel {
+        let first = FORK_RANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) * FORK_IDS;
         NativeKernel {
             bodies: self.bodies.clone(),
-            next: self.next + (lane + 1) * FORK_IDS,
+            next: first,
+            first,
             tol: self.tol,
             colors: self.colors.clone(),
             draw_history: None,
@@ -137,7 +145,8 @@ impl NativeKernel {
     /// the oldest past [`JOINED_KEPT`] released).
     pub fn absorb(&mut self, fork: NativeKernel) {
         for (id, e) in fork.bodies {
-            if self.bodies.contains_key(&id) {
+            // (Not those it had from here: one released here since stays released.)
+            if id < fork.first || self.bodies.contains_key(&id) {
                 continue;
             }
             if let Some(c) = fork.colors.get(&id) {
