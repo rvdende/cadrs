@@ -1096,9 +1096,11 @@ pub(crate) fn sketch_pointer(
                     && let Some((offset, along)) =
                         cadrs_sketch::dimension::label_params(sketch, d.kind, c)
                 {
-                    // An angle's label outside its angle measures it round the outside.
+                    // An angle's label outside its angle measures it round the outside (not one
+                    // a variable sets: its expression would set it back).
+                    let by_expr = sketch.expressions.iter().any(|(k, _)| *k == id);
                     let value = match cadrs_sketch::dimension::angle_outside(sketch, d.kind, c) {
-                        Some(outside) if !d.driven && outside != (d.value > 180.0) => {
+                        Some(outside) if !by_expr && outside != (d.value > 180.0) => {
                             360.0 - d.value
                         }
                         _ => d.value,

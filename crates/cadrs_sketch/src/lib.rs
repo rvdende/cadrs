@@ -752,7 +752,7 @@ pub enum DimensionKind {
     /// labelled "Ø", as Onshape does when the label is placed across the centreline (the
     /// diameter a revolve about the line will have there).
     Diametral { p: PointRef, line: CurveRef },
-    /// The angle (degrees, 0–180) between two lines, measured between the rays that leave
+    /// The angle (degrees) between two lines, measured between the rays that leave
     /// their intersection along each line's direction (from its first point to its second),
     /// reversed where `flip_*` is set. The quadrant the label was placed in picks the flips
     /// (`reference/onshape/dimension/dimension-anglequadrants.png`). A value over 180° (to
@@ -812,7 +812,9 @@ pub enum DimensionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Dimension {
     pub kind: DimensionKind,
-    /// The value in millimetres.
+    /// The value in millimetres (degrees for an angle). A distance between points or from a
+    /// point to a line may be negative: its point on the other side (#96); an angle over 180° is
+    /// measured round the outside ([`DimensionKind::solved_value`]).
     pub value: f64,
     /// Where the dimension line sits: for distances, the signed offset (mm) from the first
     /// measured point, perpendicular to the measured direction (for a horizontal dimension,

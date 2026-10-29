@@ -822,11 +822,17 @@ impl SketchOp {
                     .iter()
                     .find(|(_, d)| d.kind == dimension.kind)
                     .map(|(k, _)| k);
+                // (A new one measures the side the geometry is on: positive.)
+                let before = existing.map_or(1.0, |k| s.dimensions[k].value);
                 match existing {
                     Some(k) => s.dimensions[k] = *dimension,
                     None => {
                         s.dimensions.insert(*dimension);
                     }
+                }
+                // A negative distance (or one positive again) puts its point on the other side.
+                if dimension.kind.signed() && (before < 0.0) != (dimension.value < 0.0) {
+                    flip_side(s, dimension.kind);
                 }
                 Ok(())
             }
@@ -857,22 +863,22 @@ impl SketchOp {
                 Ok(())
             }
             SketchOp::SetDimensionDriven { id, driven } => {
-                let kind = s.dimensions.get(*id).ok_or("the dimension is gone")?.kind;
-                let measured = crate::dimension::measure(s, kind);
+                let d = *s.dimensions.get(*id).ok_or("the dimension is gone")?;
+                // (On the side it was: a negative distance stays negative, an angle measured
+                // outside stays outside.)
+                let measured = crate::dimension::measured_value(s, &d);
                 let d = &mut s.dimensions[*id];
                 if !*driven && let Some(v) = measured {
-                    // (On the side it was: a negative distance stays negative, an angle
-                    // measured outside stays outside.)
-                    d.value = match kind {
-                        crate::DimensionKind::Angle { .. } if d.value > 180.0 => 360.0 - v,
-                        k if k.signed() && d.value < 0.0 => -v,
-                        _ => v,
-                    };
+                    d.value = v;
                 }
                 d.driven = *driven;
                 Ok(())
             }
             SketchOp::SetAngleOutside { id, outside } => {
+                // (Its expression would set it back to the variable's value.)
+                if s.expressions.iter().any(|(d, _)| d == id) {
+                    return Err("an angle set by an expression keeps its value".into());
+                }
                 let d = s.dimensions.get_mut(*id).ok_or("the dimension is gone")?;
                 if !matches!(d.kind, crate::DimensionKind::Angle { .. }) {
                     return Err("only an angle is measured outside".into());
@@ -1284,6 +1290,20 @@ fn flip_side(s: &mut Sketch, kind: crate::DimensionKind) {
         K::OriginAligned { p } => {
             if let Some(q) = pos(s, p) {
                 move_points(s, &[(p, -q)]);
+            }
+        }
+        // Across a plane axis: the point mirrored (the origin, the axes' own point, stays).
+        K::PointLine {
+            p: PointRef::Point(k),
+            line: line @ (CurveRef::XAxis | CurveRef::YAxis),
+        } => {
+            if let Some(q) = pos(s, k) {
+                let to = if line == CurveRef::XAxis {
+                    Vec2::new(q.x, -q.y)
+                } else {
+                    Vec2::new(-q.x, q.y)
+                };
+                move_points(s, &[(k, to)]);
             }
         }
         K::PointLine { p, line } => {

@@ -300,6 +300,17 @@ pub enum Orientation {
     Aligned,
 }
 
+/// Dimension `d`'s value measured on the geometry, on the side it is on (#96): a negative
+/// distance negative, an angle measured outside 360° less the one between its rays.
+pub fn measured_value(s: &Sketch, d: &crate::Dimension) -> Option<f64> {
+    let v = measure(s, d.kind)?;
+    Some(match d.kind {
+        DimensionKind::Angle { .. } if d.value > 180.0 => 360.0 - v,
+        k if k.signed() && d.value < 0.0 => -v,
+        _ => v,
+    })
+}
+
 /// Whether `cursor` lies outside angle dimension `kind`'s angle (not between its rays): a label
 /// dragged there measures the angle round the outside, 360° less the one between them (#96).
 /// `None` for another dimension, or rays that don't meet.

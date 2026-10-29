@@ -2644,8 +2644,9 @@ fn shown_dimension(
         d.along = along;
         d.value = value;
     }
+    // (On its side: a negative distance stays negative, an angle outside outside, #96.)
     if d.driven
-        && let Some(v) = cadrs_sketch::dimension::measure(s, d.kind)
+        && let Some(v) = cadrs_sketch::dimension::measured_value(s, &d)
     {
         d.value = v;
     }

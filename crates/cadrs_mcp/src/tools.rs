@@ -340,7 +340,9 @@ pub struct EditSketch {
     /// {"Diameter": {"curve"}}, {"Radius": {"curve"}}, {"Angle": {"a", "b", "flip_a", "flip_b"}},
     /// {"PointLine": {"p", "line"}}, {"Offset": {"source", "target"}}, {"Sides": {"circle", "inscribed"}};
     /// set_dimension_value {id, value}; set_dimension_driven {id, driven}; set_dimension_expr {id,
-    /// expr (a string, or null)}; move_dimension_label {id, offset, along}.
+    /// expr (a string, or null)}; move_dimension_label {id, offset, along}; set_angle_outside {id,
+    /// outside}. A Horizontal, Vertical, Aligned or PointLine value may be negative (the point on the
+    /// other side); an Angle is 0–360° (not 180°), measured round the outside past 180°.
     ///
     /// Links and projections (for references to other features): normal_to_plane {line, trace: [pos,
     /// pos], link}; use {items: [[projected, link]]}; use_construction {items}; offset_loop {items,

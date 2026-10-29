@@ -1495,7 +1495,7 @@ fn lb_end(s: &Sketch, l: CurveId) -> PointId {
 }
 
 /// #96: making a dimension driving again keeps the side it measured: a negative distance
-/// stays negative, an angle outside stays outside.
+/// stays negative (an angle outside: `driven_and_expression_angles_keep_their_side`).
 #[test]
 fn driving_again_keeps_the_side() {
     let mut s = Sketch::new();
@@ -1514,4 +1514,75 @@ fn driving_again_keeps_the_side() {
     }
     assert!((s.dimensions[id].value + 10.0).abs() < 1e-6);
     assert!((s.pos(b).x + 10.0).abs() < 1e-6);
+}
+
+/// #96: a negative distance to a plane axis puts the point across the axis; a negative first
+/// dimension (which scales the sketch) flips and scales by its size.
+#[test]
+fn negative_to_an_axis_and_a_negative_first_dimension() {
+    let mut s = Sketch::new();
+    let p = s.add_point(v(10.0, 8.0));
+    let k = DimensionKind::PointLine {
+        p: pref(p),
+        line: CurveRef::XAxis,
+    };
+    dim(&mut s, k, 8.0);
+    let id = s.dimensions.keys().next().unwrap();
+    SketchOp::SetDimensionValue { id, value: -5.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert!((s.pos(p).y + 5.0).abs() < 1e-6, "{:?}", s.pos(p));
+    // A free line's first dimension typed -40: scaled to 40 long, its end on the other side.
+    let mut s = Sketch::new();
+    let (_, a, b) = line(&mut s, v(5.0, 0.0), v(25.0, 0.0));
+    let k = DimensionKind::Horizontal { a, b };
+    dim(&mut s, k, 20.0);
+    let id = s.dimensions.keys().next().unwrap();
+    crate::edit::set_value_op(&s, id, -40.0, true)
+        .apply(&mut s)
+        .unwrap();
+    assert_eq!(s.dimensions[id].value, -40.0);
+    assert!(
+        ((s.pos(b) - s.pos(a)).x + 40.0).abs() < 1e-6,
+        "{:?}",
+        s.pos(b)
+    );
+    // A dimension made with a negative value puts its point on the other side at once.
+    let mut s = Sketch::new();
+    let (_, a, b) = line(&mut s, v(0.0, 0.0), v(30.0, 0.0));
+    add(&mut s, ConstraintOf::FixPoint(pref(a)));
+    dim(&mut s, DimensionKind::Aligned { a, b }, -30.0);
+    assert!((s.pos(b).x + 30.0).abs() < 1e-6, "{:?}", s.pos(b));
+}
+
+/// #96: a driven dimension shows its value on its side, and an angle a variable sets keeps its
+/// side (its expression would set it back).
+#[test]
+fn driven_and_expression_angles_keep_their_side() {
+    let mut s = Sketch::new();
+    let (la, _, _) = line(&mut s, v(0.0, 0.0), v(30.0, 0.0));
+    let (lb, _, _) = line(&mut s, v(0.0, 0.0), v(0.0, 20.0));
+    let k = DimensionKind::Angle {
+        a: cref(la),
+        b: cref(lb),
+        flip_a: false,
+        flip_b: false,
+    };
+    dim(&mut s, k, 270.0);
+    let id = s.dimensions.keys().next().unwrap();
+    SketchOp::SetDimensionDriven { id, driven: true }
+        .apply(&mut s)
+        .unwrap();
+    let d = s.dimensions[id];
+    assert!((crate::dimension::measured_value(&s, &d).unwrap() - 270.0).abs() < 1e-6);
+    SketchOp::SetDimensionDriven { id, driven: false }
+        .apply(&mut s)
+        .unwrap();
+    assert!((s.dimensions[id].value - 270.0).abs() < 1e-6);
+    s.expressions.push((id, "#a".into()));
+    assert!(
+        SketchOp::SetAngleOutside { id, outside: false }
+            .apply(&mut s)
+            .is_err()
+    );
 }

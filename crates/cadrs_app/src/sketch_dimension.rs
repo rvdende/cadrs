@@ -704,8 +704,10 @@ fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> 
     // 360°, round the outside past 180°), its first letter up.
     cadrs_sketch::ops::check_value(&d, v).map_err(|e| {
         let mut c = e.chars();
-        c.next()
-            .map_or(e.clone(), |f| f.to_uppercase().chain(c).collect())
+        match c.next() {
+            Some(f) => f.to_uppercase().chain(c).collect(),
+            None => e,
+        }
     })?;
     Ok(v)
 }

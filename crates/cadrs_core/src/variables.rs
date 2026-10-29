@@ -694,8 +694,9 @@ fn why(
 }
 
 /// The features whose expressions can't be evaluated where they are (P3F.4): a variable used
-/// above its definition ("used before it is defined"), one defined nowhere, or an expression
-/// that no longer evaluates (a Length variable in an angle field). `features` are the ones
+/// above its definition ("used before it is defined"), one defined nowhere, an expression
+/// that no longer evaluates (a Length variable in an angle field), or a sketch dimension's
+/// value it can't take (#96: a 360° angle, a 0 length). `features` are the ones
 /// that build (suppressed and rolled-back ones left out), in order.
 pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
     // Fast path: nothing names a variable and nothing defines one.
