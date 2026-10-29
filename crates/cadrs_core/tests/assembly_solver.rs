@@ -407,3 +407,282 @@ fn a_fifty_instance_chain_solves_fast() {
         );
     }
 }
+
+/// Issue #135: one Solve places a chain of Fastened instances that start far from their
+/// places (half turns, metres away): no second Solve needed.
+#[test]
+fn one_solve_converges_a_scattered_fastened_chain() {
+    let n = 6u128;
+    let start = |k: u128| {
+        let a = 0.9 + k as f64 * 0.7;
+        Pose::rotation_about([0.0; 3], [a.sin(), a.cos(), 0.4], 2.0 + k as f64).then(
+            &Pose::translation([k as f64 * 400.0, -(k as f64) * 250.0, 90.0]),
+        )
+    };
+    let instances =
+        (1..=n).map(|k| inst(k, if k == 1 { Pose::IDENTITY } else { start(k) }, k == 1));
+    let mut mates = Vec::new();
+    let mut ends = Vec::new();
+    for k in 2..=n {
+        let a = MateConnector::at(InstanceId::from_u128(k), tilted([k as f64, 3.0, -2.0]));
+        let b = MateConnector::at(
+            InstanceId::from_u128(k - 1),
+            ConnectorFrame::new([20.0, k as f64, 5.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        );
+        ends.push((a, b));
+        mates.push(feature(
+            k,
+            MateKind::Mate(Mate::new(MateType::Fastened, a, b)),
+        ));
+    }
+    let mut asm = Assembly {
+        instances: instances.collect(),
+        mates,
+        ..Default::default()
+    };
+    // The mate dialog's Solve: the mate's instance is the mover, the others weigh 10⁻³.
+    let opts = SolveOptions {
+        movers: vec![InstanceId::from_u128(n)],
+        ..Default::default()
+    };
+    let s = solver::solve(&asm, &frame_of, &opts);
+    apply(&mut asm, &s);
+    assert!(
+        s.converged,
+        "residual {} after {} iterations",
+        s.residual, s.iterations
+    );
+    for (a, b) in &ends {
+        let (fa, fb) = (world(&asm, a), world(&asm, b));
+        assert!(
+            dist(fa.origin, fb.origin) < 1e-6,
+            "{:?} vs {:?}",
+            fa.origin,
+            fb.origin
+        );
+        assert!(dist(fa.z, fb.z) < 1e-6 && dist(fa.x, fb.x) < 1e-6);
+    }
+}
+
+/// Issue #135: Fastened mates that close loops (a part fastened to two parts fastened
+/// together) are redundant but consistent; one Solve still places every part.
+#[test]
+fn one_solve_converges_redundant_fastened_loops() {
+    let n = 6u128;
+    // Where every part belongs, and where it starts: turned and moved far from there.
+    let truth = |k: u128| {
+        let a = k as f64 * 1.3;
+        Pose::rotation_about([0.0; 3], [a.cos(), a.sin(), 0.5], 0.3 * k as f64).then(
+            &Pose::translation([k as f64 * 60.0, 20.0, -(k as f64) * 15.0]),
+        )
+    };
+    let start = |k: u128| {
+        let a = 0.9 + k as f64 * 0.7;
+        Pose::rotation_about([0.0; 3], [a.sin(), a.cos(), 0.4], 2.0 + k as f64).then(
+            &Pose::translation([k as f64 * 400.0, -(k as f64) * 250.0, 90.0]),
+        )
+    };
+    let pairs = [
+        (2, 1),
+        (3, 2),
+        (4, 3),
+        (5, 4),
+        (6, 5),
+        (3, 1),
+        (5, 2),
+        (4, 1),
+        (6, 3),
+    ];
+    let mut mates = Vec::new();
+    let mut ends = Vec::new();
+    for (j, (a, b)) in pairs.iter().enumerate() {
+        // A frame in the world where the two parts meet, in each part's own coordinates.
+        let t = j as f64;
+        let w = ConnectorFrame::new(
+            [10.0 * t, 5.0 - t, 3.0 * t],
+            [0.3, -0.4 + 0.05 * t, 0.866],
+            [0.9, 0.1, 0.2],
+        );
+        let local = |k: u128| w.moved(&truth(k).inverse());
+        let ca = MateConnector::at(InstanceId::from_u128(*a), local(*a));
+        let cb = MateConnector::at(InstanceId::from_u128(*b), local(*b));
+        ends.push((ca, cb));
+        mates.push(feature(
+            j as u128 + 1,
+            MateKind::Mate(Mate::new(MateType::Fastened, ca, cb)),
+        ));
+    }
+    let mut asm = Assembly {
+        instances: (1..=n)
+            .map(|k| inst(k, if k == 1 { truth(1) } else { start(k) }, k == 1))
+            .collect(),
+        mates,
+        ..Default::default()
+    };
+    let opts = SolveOptions {
+        movers: vec![InstanceId::from_u128(n)],
+        ..Default::default()
+    };
+    let s = solver::solve(&asm, &frame_of, &opts);
+    apply(&mut asm, &s);
+    assert!(
+        s.converged,
+        "residual {} after {} iterations",
+        s.residual, s.iterations
+    );
+    for (a, b) in &ends {
+        let (fa, fb) = (world(&asm, a), world(&asm, b));
+        assert!(
+            dist(fa.origin, fb.origin) < 1e-6,
+            "{:?} vs {:?}",
+            fa.origin,
+            fb.origin
+        );
+    }
+}
+
+/// Issue #135: one Solve places random assemblies (2–7 parts, a tree of mates and sometimes
+/// loops, starting far off or half a turn away) whose mates all hold at known placements: how
+/// many needed a second Solve (or more, up to four), and how many never converged.
+fn one_solve_converges_random_assemblies(types: &[MateType]) -> (usize, usize) {
+    let mut x: u64 = 0x2545F4914F6CDD1D;
+    let mut rnd = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x % 1_000_000) as f64 / 1_000_000.0
+    };
+    let (mut more, mut never) = (0, 0);
+    for trial in 0..4000 {
+        let n = 2 + (rnd() * 6.0) as u128;
+        let truth: Vec<Pose> = (0..=n)
+            .map(|_| {
+                Pose::rotation_about(
+                    [0.0; 3],
+                    [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5],
+                    rnd() * 6.3,
+                )
+                .then(&Pose::translation([
+                    rnd() * 500.0,
+                    rnd() * 500.0,
+                    rnd() * 500.0,
+                ]))
+            })
+            .collect();
+        let mut pairs: Vec<(u128, u128)> = (2..=n)
+            .map(|k| (k, 1 + (rnd() * (k - 1) as f64) as u128))
+            .collect();
+        if rnd() < 0.5 {
+            for _ in 0..(rnd() * 3.0) as usize {
+                let a = 2 + (rnd() * (n - 1) as f64) as u128;
+                let b = 1 + (rnd() * (a - 1) as f64) as u128;
+                pairs.push((a.min(n), b));
+            }
+        }
+        let mut mates = Vec::new();
+        for (j, (a, b)) in pairs.iter().enumerate() {
+            let w = ConnectorFrame::new(
+                [rnd() * 100.0, rnd() * 100.0, rnd() * 100.0],
+                [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5 + 0.01],
+                [rnd() - 0.5 + 0.01, rnd() - 0.5, rnd() - 0.5],
+            );
+            let local = |k: u128| w.moved(&truth[k as usize].inverse());
+            let ca = MateConnector::at(InstanceId::from_u128(*a), local(*a));
+            let cb = MateConnector::at(InstanceId::from_u128(*b), local(*b));
+            let t = types[(rnd() * types.len() as f64) as usize % types.len()];
+            mates.push(feature(j as u128 + 1, MateKind::Mate(Mate::new(t, ca, cb))));
+        }
+        let mode = rnd();
+        let asm = Assembly {
+            instances: (1..=n)
+                .map(|k| {
+                    let p = if k == 1 {
+                        truth[1]
+                    } else if mode < 0.3 {
+                        // A half turn away.
+                        Pose::rotation_about(
+                            [0.0; 3],
+                            [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5],
+                            std::f64::consts::PI,
+                        )
+                        .then(&truth[k as usize])
+                    } else {
+                        Pose::rotation_about(
+                            [0.0; 3],
+                            [rnd() - 0.5, rnd() - 0.5, rnd() - 0.5],
+                            rnd() * 6.3,
+                        )
+                        .then(&Pose::translation([
+                            rnd() * 2000.0,
+                            rnd() * 2000.0,
+                            rnd() * 2000.0,
+                        ]))
+                    };
+                    inst(k, p, k == 1)
+                })
+                .collect(),
+            mates,
+            ..Default::default()
+        };
+        let opts = SolveOptions {
+            movers: vec![InstanceId::from_u128(n)],
+            ..Default::default()
+        };
+        let s = solver::solve(&asm, &frame_of, &opts);
+        if !s.converged {
+            let mut a2 = asm.clone();
+            apply(&mut a2, &s);
+            let mut presses = 1;
+            let first = s.clone();
+            let mut last = s;
+            while !last.converged && presses < 4 {
+                last = solver::solve(&a2, &frame_of, &opts);
+                apply(&mut a2, &last);
+                presses += 1;
+            }
+            eprintln!(
+                "trial {trial}: {n} parts, {} mates: residual {} after one solve ({} iterations); \
+                 converged after {presses} solves: {}",
+                pairs.len(),
+                first.residual,
+                first.iterations,
+                last.converged
+            );
+            if last.converged {
+                more += 1;
+            } else {
+                never += 1;
+            }
+        }
+    }
+    (more, never)
+}
+
+/// Issue #135's case, Fastened mates only: 16 of 4000 needed a second Solve before the fix.
+#[test]
+fn one_solve_converges_random_fastened_assemblies() {
+    assert_eq!(
+        one_solve_converges_random_assemblies(&[MateType::Fastened]),
+        (0, 0)
+    );
+}
+
+/// The same with every connector mate type but Pin slot. Some of these never converge (a
+/// mix of Planar, Parallel and Ball in a loop can sit in a local minimum); this counts the ones a
+/// second Solve would still finish: 202 of 4000 before issue #135's fix, 25 after.
+#[test]
+#[ignore = "slow: about 8 s"]
+fn one_solve_converges_random_mixed_assemblies() {
+    let types = [
+        MateType::Fastened,
+        MateType::Revolute,
+        MateType::Slider,
+        MateType::Cylindrical,
+        MateType::Planar,
+        MateType::Ball,
+        MateType::Parallel,
+    ];
+    let (more, never) = one_solve_converges_random_assemblies(&types);
+    eprintln!("{more} needed more solves, {never} never converged");
+    assert!(more <= 25, "{more} needed more than one solve");
+}

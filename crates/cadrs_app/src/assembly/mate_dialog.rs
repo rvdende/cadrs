@@ -544,6 +544,21 @@ fn run_solve(
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);
     if !sol.converged {
         warn!("mate solve: residual {:e}", sol.residual);
+        // Solve and ✓ say so (issue #135: a solve that stopped short looked like a result).
+        if !snap_only {
+            let theme = world.resource::<cadrs_ui::Theme>().clone();
+            let mut commands = world.commands();
+            cadrs_ui::show_notification(
+                &mut commands,
+                &theme,
+                cadrs_ui::Notification::warning(format!(
+                    "The mates can't all be solved ({} mm off): one may conflict with the others",
+                    (sol.residual * 1000.0).round() / 1000.0
+                ))
+                .name("mate-solve-toast"),
+            );
+            world.flush();
+        }
     }
     // A Tangent's first placement: the moving entity is also drawn toward the picked face, so
     // the contact lands on the face that was picked, not somewhere on its unbounded surface.

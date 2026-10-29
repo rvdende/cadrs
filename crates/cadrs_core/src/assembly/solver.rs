@@ -56,13 +56,15 @@
 //!   the mate's other free DOF held where they are ([`SolveOptions::hold_free`]).
 //! - After converging, each mate is checked for a false solution (axes opposite: the rotation
 //!   rows also vanish for half turns). If one is found, its body is snapped and the solve runs
-//!   once more.
+//!   again; this repeats a few rounds, also when an iteration stalled (it goes on from where it
+//!   got, with fresh damping), so one solve does what pressing Solve again would.
 //! - **Limits** are inequalities handled by an active set: solve the equalities, then for each
 //!   limit that is violated, add a row holding the position at the nearest bound, and solve
 //!   again (a few rounds). So a drag past a slider's end stops at the end.
 //! - Mates between instances of one body (all ground, or one group) have no unknowns and are
 //!   skipped, as are **suppressed** mates.
-//! - It stops after [`MAX_ITERATIONS`] steps and reports whether it converged (|r|∞ < 10⁻⁸ mm).
+//! - It stops after [`MAX_ITERATIONS`] steps a round (at most 15 rounds, fewer once a round gets
+//!   nowhere) and reports whether it converged (|r|∞ < 10⁻⁸ mm).
 //!
 //! **Drag** ([`drag`], A16.4): points of instances are pulled toward targets (the pointer, or a
 //! triad handle's placement) within what the mates allow. Each step moves along the null space
@@ -94,6 +96,10 @@ pub const L: f64 = 10.0;
 /// Converged when every residual is below this (mm).
 pub const TOLERANCE: f64 = 1e-8;
 pub const MAX_ITERATIONS: usize = 60;
+
+/// Rounds of snapping false solutions and iterating again after the first iteration (see
+/// [`solve`]).
+const SOLVE_ROUNDS: usize = 15;
 
 /// A mate's position to hold: a DOF at a value (mm or radians).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1098,15 +1104,31 @@ pub fn solve(
             iterations: 0,
         };
     }
-    let (_, _, mut its) = p.iterate(MAX_ITERATIONS);
-    // A false solution (axes opposite): snap that mate and try again, once.
-    let wrong = p.false_solutions();
-    if !wrong.is_empty() {
+    // Iterate; at a standstill (converged, or stalled) snap the mates left half a turn out (a
+    // false solution: axes opposite) and iterate again. An iteration that ran out of steps while
+    // still getting closer goes on instead: snapping mates whose axes haven't come round yet
+    // undid its progress, and pressing Solve again finished it (issue #135). Stops when a
+    // round gets nowhere (conflicting mates).
+    let mut res = p.iterate(0).1;
+    let mut its = 0;
+    for _ in 0..SOLVE_ROUNDS {
+        let (converged, now, more) = p.iterate(MAX_ITERATIONS);
+        let progressing = !converged && now < 0.99 * res;
+        res = now;
+        its += more;
+        if progressing {
+            continue;
+        }
+        let wrong = p.false_solutions();
+        if wrong.is_empty() {
+            break;
+        }
         for k in wrong {
             let at = p.snap_values(k, &opts.drives, true);
             p.snap(k, at);
         }
-        its += p.iterate(MAX_ITERATIONS).2;
+        // The next round's progress is measured from where the snaps left it.
+        res = p.iterate(0).1;
     }
     // Limits: an active set, a few rounds (it first finishes the equalities).
     let (ok, res, c) = p.solve_with_limits();
