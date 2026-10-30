@@ -983,6 +983,8 @@ fn sync_variable_dialog(
                                     .text(v.description.clone())
                                     .label_width(74.0)
                                     .build(&t),
+                                // Text: the wheel doesn't step it ("3 holes").
+                                cadrs_ui::dialog_fields::NoWheelStep,
                             ));
                         });
                     })

@@ -413,18 +413,18 @@ fn on_wheel(
     mut q_field: Query<(Entity, &mut EditableText), With<DimEditField>>,
     focus: Res<InputFocus>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut rest: Local<(Option<Entity>, f32)>,
 ) {
     if !(q_box.contains(ev.entity) || q_field.contains(ev.entity)) {
         return;
     }
-    let Some((_, mut text)) = q_field.iter_mut().find(|(e, _)| focus.get() == Some(*e)) else {
+    let Some((field, mut text)) = q_field.iter_mut().find(|(e, _)| focus.get() == Some(*e)) else {
         return;
     };
     ev.propagate(false);
-    let delta = crate::dialog_fields::wheel_delta(&ev, &keys);
-    if delta == 0.0 {
+    let Some(delta) = crate::dialog_fields::wheel_step(&ev, &keys, field, &mut rest) else {
         return;
-    }
+    };
     if let Some(next) = crate::dialog_fields::step_number_text(&text.value().to_string(), delta) {
         text.editor_mut().set_text(&next);
         text.queue_edit(TextEdit::SelectAll);

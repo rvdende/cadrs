@@ -8,7 +8,8 @@
 //!   the value right-aligned over a thin line (blue while focused), and an optional icon after
 //!   it. Enter (or leaving the field) triggers [`NumberFieldCommit`] with the text; Esc triggers
 //!   [`NumberFieldCancel`] and leaves the field. The mouse wheel over the field while it is
-//!   being edited steps its number by 1 a notch, 0.1 with Ctrl (issue #162), and commits it. The owner evaluates the text and sets [`NumberFieldState`]: its
+//!   being edited steps its number by 1 a notch, 0.1 with Ctrl (issue #162), committed when the
+//!   wheel rests. The owner evaluates the text and sets [`NumberFieldState`]: its
 //!   `text` is shown whenever the field is not being edited, and `error` turns it red.
 //! - [`OptionRow`]: an option with an optional collapsed ▸ in front and a checkbox ("▸ ☐
 //!   Direction"), disabled when the option is not available.
@@ -45,6 +46,7 @@ impl Plugin for DialogFieldsPlugin {
             .add_observer(on_number_key)
             .add_observer(on_number_press)
             .add_observer(on_number_wheel)
+            .init_resource::<WheelSteps>()
             .add_observer(on_slider_drag)
             .add_observer(on_slider_press)
             .add_systems(
@@ -54,7 +56,7 @@ impl Plugin for DialogFieldsPlugin {
                     // The blur commit must see what was typed before the sync puts the state's
                     // text back into the field it left (unordered, a Tab out of a field lost the
                     // typed value on some frames: the reflector's tapped depth 10.02, P3.10).
-                    (commit_on_blur, sync_number_fields).chain(),
+                    (commit_wheel_steps, commit_on_blur, sync_number_fields).chain(),
                     sync_sliders,
                 )
                     .before(bevy::ui::UiSystems::Prepare),
@@ -624,16 +626,22 @@ fn on_number_key(
 }
 
 /// The mouse wheel over a number field that is being edited steps its value (issue #162): 1 a
-/// notch (in the value's own unit), 0.1 with Ctrl, up to increase; the new text is committed as
-/// if typed. Over a field that isn't being edited the wheel scrolls the dialog as before, so
-/// scrolling past a field never changes it. An expression ("#width * 2") isn't stepped.
+/// notch (in the value's own unit), 0.1 with Ctrl (or Cmd), up to increase. The text changes at
+/// once; a run of notches is committed as one when the wheel rests ([`WHEEL_SETTLE`],
+/// [`commit_wheel_steps`]), so the preview follows without a rebuild and an undo step a notch.
+/// Over a field that isn't being edited the wheel scrolls the dialog as before, so scrolling
+/// past a field never changes it. An expression ("#width * 2") isn't stepped, nor a field
+/// marked [`NoWheelStep`].
+#[allow(clippy::too_many_arguments)]
 fn on_number_wheel(
     mut ev: On<PointerScroll>,
     mut q_edit: Query<(Entity, &mut EditableText, &NumberFieldEdit), Without<InteractionDisabled>>,
-    q_root: Query<(), With<NumberFieldState>>,
+    q_root: Query<Has<NoWheelStep>, With<NumberFieldState>>,
     focus: Res<InputFocus>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut commands: Commands,
+    time: Res<Time>,
+    mut pending: ResMut<WheelSteps>,
+    mut rest: Local<(Option<Entity>, f32)>,
 ) {
     let edit = if q_edit.contains(ev.entity) {
         ev.entity
@@ -647,34 +655,91 @@ fn on_number_wheel(
     if focus.get() != Some(edit) {
         return;
     }
-    ev.propagate(false);
-    let delta = wheel_delta(&ev, &keys);
-    if delta == 0.0 {
+    let Ok((_, mut text, field)) = q_edit.get_mut(edit) else {
+        return;
+    };
+    if q_root.get(field.0).unwrap_or(true) {
         return;
     }
-    let Ok((_, mut text, field)) = q_edit.get_mut(edit) else {
+    ev.propagate(false);
+    let Some(delta) = wheel_step(&ev, &keys, edit, &mut rest) else {
         return;
     };
     let Some(next) = step_number_text(&text.value().to_string(), delta) else {
         return;
     };
     text.editor_mut().set_text(&next);
-    commands.trigger(NumberFieldCommit {
-        entity: field.0,
-        text: next,
-        enter: false,
-    });
+    text.queue_edit(TextEdit::SelectAll);
+    pending.0 = Some((edit, time.elapsed_secs_f64()));
 }
 
-/// How far the wheel steps a value: 1 a notch (a line, or 60 px of a touchpad's scroll), 0.1
-/// with Ctrl, up (away from the user) to increase.
-pub(crate) fn wheel_delta(ev: &PointerScroll, keys: &ButtonInput<KeyCode>) -> f64 {
-    let notches = match ev.unit {
-        bevy::input::mouse::MouseScrollUnit::Line => ev.y.round(),
-        bevy::input::mouse::MouseScrollUnit::Pixel => (ev.y / 60.0).round(),
-    } as f64;
-    let fine = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-    notches * if fine { 0.1 } else { 1.0 }
+/// A number field that holds text rather than a number (a description, a hex colour): the
+/// wheel doesn't step it. On the field's root, next to [`NumberField`]'s bundle.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct NoWheelStep;
+
+/// The field the wheel last stepped, and when (s, [`Time`]'s): committed once the wheel rests.
+#[derive(Resource, Debug, Default)]
+pub struct WheelSteps(Option<(Entity, f64)>);
+
+/// How long the wheel rests before its steps are committed (s).
+pub const WHEEL_SETTLE: f64 = 0.25;
+
+/// Commits a field's wheel steps once the wheel has rested ([`on_number_wheel`]). A field left in
+/// the meantime was committed by [`commit_on_blur`] already (its text changed).
+fn commit_wheel_steps(
+    time: Res<Time>,
+    focus: Res<InputFocus>,
+    mut pending: ResMut<WheelSteps>,
+    q_edit: Query<(&EditableText, &NumberFieldEdit)>,
+    mut commands: Commands,
+) {
+    let Some((edit, at)) = pending.0 else {
+        return;
+    };
+    if time.elapsed_secs_f64() - at < WHEEL_SETTLE && focus.get() == Some(edit) {
+        return;
+    }
+    pending.0 = None;
+    if focus.get() == Some(edit)
+        && let Ok((text, field)) = q_edit.get(edit)
+    {
+        commands.trigger(NumberFieldCommit {
+            entity: field.0,
+            text: text.value().to_string(),
+            enter: false,
+        });
+    }
+}
+
+/// How far the wheel steps a value, if at all yet: 1 a notch (a line, or 60 px of a touchpad's
+/// scroll), 0.1 with Ctrl or Cmd, up (away from the user) to increase. What is short of a notch
+/// is kept for the next event on the same `target` (a high-resolution wheel, a touchpad).
+pub(crate) fn wheel_step(
+    ev: &PointerScroll,
+    keys: &ButtonInput<KeyCode>,
+    target: Entity,
+    rest: &mut (Option<Entity>, f32),
+) -> Option<f64> {
+    if rest.0 != Some(target) {
+        *rest = (Some(target), 0.0);
+    }
+    rest.1 += match ev.unit {
+        bevy::input::mouse::MouseScrollUnit::Line => ev.y,
+        bevy::input::mouse::MouseScrollUnit::Pixel => ev.y / 60.0,
+    };
+    let notches = rest.1.trunc();
+    rest.1 -= notches;
+    if notches == 0.0 {
+        return None;
+    }
+    let fine = keys.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ]);
+    Some(notches as f64 * if fine { 0.1 } else { 1.0 })
 }
 
 /// `text` ("25 mm", "1.5 in", "45°") with its number moved by `delta`, the unit kept; `None`
@@ -694,7 +759,10 @@ pub fn step_number_text(text: &str, delta: f64) -> Option<String> {
         return None;
     }
     let decimals = |s: &str| s.split_once('.').map_or(0, |(_, d)| d.len());
-    let places = decimals(number).max(if delta.fract() == 0.0 { 0 } else { 1 });
+    // At most 6 places: no float noise from a long typed value.
+    let places = decimals(number)
+        .max(if delta.fract() == 0.0 { 0 } else { 1 })
+        .min(6);
     let mut out = format!("{:.*}", places, value + delta);
     if out.contains('.') {
         out = out.trim_end_matches('0').trim_end_matches('.').to_string();
@@ -1140,6 +1208,54 @@ fn sync_sliders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wheel steps are committed once, when the wheel rests; a field left before that is
+    /// committed by the blur alone (once).
+    #[test]
+    fn wheel_steps_commit_once_when_the_wheel_rests() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<InputFocus>()
+            .init_resource::<Theme>()
+            .init_resource::<Committed>()
+            .add_plugins(DialogFieldsPlugin)
+            .add_observer(|ev: On<NumberFieldCommit>, mut c: ResMut<Committed>| {
+                c.0.push(ev.text.clone())
+            });
+        let root = app
+            .world_mut()
+            .spawn(NumberFieldState {
+                text: "25 mm".into(),
+                error: false,
+            })
+            .id();
+        let edit = app
+            .world_mut()
+            .spawn((
+                NumberFieldEdit(root),
+                EditableText::new("25 mm"),
+                TextColor::WHITE,
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(edit, FocusCause::Pressed);
+        app.update();
+        // Three notches, as `on_number_wheel` leaves them: the text, and when.
+        app.world_mut()
+            .get_mut::<EditableText>(edit)
+            .unwrap()
+            .editor_mut()
+            .set_text("28 mm");
+        let now = app.world().resource::<Time>().elapsed_secs_f64();
+        app.world_mut().resource_mut::<WheelSteps>().0 = Some((edit, now));
+        app.update();
+        assert!(app.world().resource::<Committed>().0.is_empty());
+        std::thread::sleep(std::time::Duration::from_secs_f64(WHEEL_SETTLE + 0.05));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Committed>().0, ["28 mm"]);
+    }
 
     #[test]
     fn the_wheel_steps_a_number_and_keeps_its_unit() {
