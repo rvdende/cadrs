@@ -3830,12 +3830,14 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     out.fit_tolerances_searched(run_tol * 10.0);
     let wide = 1e-5 * out.bbox().diagonal();
     for fi in 0..out.faces.len() {
+        // (As `fit_tolerances_searched` just measured most of them: kept by what they are of.)
+        let mut surface_key = None;
         for c in out.faces[fi].loops.iter().flatten() {
             let e = &out.edges[c.edge];
             if e.degenerate {
                 continue;
             }
-            let g = super::topo::pcurve_gap(e, &c.pc, &out.faces[fi].surf);
+            let g = super::topo::pcurve_gap_kept(e, &c.pc, &out.faces[fi].surf, &mut surface_key);
             if g <= wide && g * 1.01 > e.tol {
                 out.edges[c.edge].tol = g * 1.01;
             }

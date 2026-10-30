@@ -843,6 +843,8 @@ impl Body {
         // The faces' polygons, as the crossings' test makes them: the orientation's again.
         let mut polys: Vec<Option<Vec<Vec<P2>>>> = vec![None; self.faces.len()];
         for (fi, f) in self.faces.iter().enumerate() {
+            // (The p-curves' gaps as the boolean that made the body measured most of them.)
+            let mut surface_key = None;
             for (li, l) in f.loops.iter().enumerate() {
                 for k in 0..l.len() {
                     let (a, b) = (&l[k], &l[(k + 1) % l.len()]);
@@ -879,7 +881,7 @@ impl Body {
                     if !ea.degenerate {
                         let allowed = ea.tol.max(super::tol::POINT);
                         let gap = if fully(fi) {
-                            pcurve_gap(ea, &a.pc, &f.surf)
+                            pcurve_gap_kept(ea, &a.pc, &f.surf, &mut surface_key)
                         } else {
                             [0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9]
                                 .into_iter()
@@ -1699,7 +1701,12 @@ impl Body {
 /// [`pcurve_gap`], kept by what it is made from (the edge's curve and range, the p-curve, the
 /// surface: `surface_key`, the surface's own hash, made once per face): a boolean's result fits
 /// every edge's tolerance again, most of them its inputs' edges as they were.
-fn pcurve_gap_kept(e: &Edge, pc: &Curve, surf: &Surface, surface_key: &mut Option<u128>) -> f64 {
+pub(super) fn pcurve_gap_kept(
+    e: &Edge,
+    pc: &Curve,
+    surf: &Surface,
+    surface_key: &mut Option<u128>,
+) -> f64 {
     use std::hash::Hasher;
     /// Two generations of at most this many gaps each.
     const KEPT: usize = 1 << 18;
