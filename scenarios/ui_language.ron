@@ -1,0 +1,37 @@
+// Issue #178: the interface's language (Preferences › Language), for the texts that come from
+// the catalogs (crates/cadrs_ui/locales). Offered: the languages the interface's font draws.
+// 01 Preferences in English, with the Language row: each language by its own name.
+// 02 Français chosen and OK: the feature list's count changes at once ("Fonctions (4)").
+// 03 Preferences again: in French where translated.
+// 04 Русский: "Элементы (4)", Preferences in Russian.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("app-menu")),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        Click(ui("pref-language")),
+        WaitFor("pref-language-option-2"),
+        Screenshot("01-languages"),
+        Click(ui("pref-language-option-2")),
+        Click(ui("pref-ok")),
+        Wait(5),
+        ExpectText("features-count", "Fonctions (4)"),
+        Screenshot("02-french"),
+        Click(ui("app-menu")),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        Screenshot("03-preferences-in-french"),
+        Click(ui("pref-language")),
+        WaitFor("pref-language-option-7"),
+        Click(ui("pref-language-option-7")),
+        Click(ui("pref-ok")),
+        Wait(5),
+        ExpectText("features-count", "Элементы (4)"),
+        Click(ui("app-menu")),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        Screenshot("04-preferences-in-russian"),
+    ],
+)

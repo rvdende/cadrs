@@ -35,6 +35,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
     ColorScheme, Modifiers, MouseButton, MousePreset, Preferences, UI_SCALES, ViewAction,
 };
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, DialogClose, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState, Select,
@@ -58,11 +59,21 @@ impl Plugin for PreferencesPlugin {
                     ui_scale_keys,
                     apply_ui_scale,
                     apply_vsync,
+                    apply_language,
                     save_color_scheme,
                 ),
             )
             .add_observer(on_preset_change)
             .add_observer(on_rotation_snap_commit);
+    }
+}
+
+/// The interface shows the language of the preferences (at start, and when it changes in the
+/// Preferences dialog: texts already shown that come from the catalogs change with it).
+fn apply_language(prefs: Res<LocalPreferences>) {
+    let code = prefs.0.language.code();
+    if prefs.is_changed() && cadrs_ui::i18n::language() != code {
+        cadrs_ui::i18n::set_language(code);
     }
 }
 
@@ -347,6 +358,7 @@ pub fn open_preferences(world: &mut World) {
         .0
         .rotation_snap_tolerance_degrees();
     let ui_scale = world.resource::<LocalPreferences>().0.ui_scale;
+    let language = world.resource::<LocalPreferences>().0.language;
     #[cfg(not(target_arch = "wasm32"))]
     let vsync = world.resource::<LocalPreferences>().0.vsync;
     #[cfg(not(target_arch = "wasm32"))]
@@ -360,13 +372,13 @@ pub fn open_preferences(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.commands().spawn((
         Dialog::new("preferences-dialog")
-            .title("Preferences")
+            .title(tr("preferences"))
             .width(440.0)
             .body(move |b| {
                 let t = &tb;
                 b.spawn((
                     Name::new("pref-mouse-heading"),
-                    t.text("3D view mouse controls", t.font_base, FontWeight::BOLD, t.foreground),
+                    t.text(tr("preferences-mouse-heading"), t.font_base, FontWeight::BOLD, t.foreground),
                     Node { margin: UiRect::bottom(Val::Px(4.0)), ..default() },
                 ));
                 let mut select = Select::new("pref-mouse-preset").width(Val::Px(200.0));
@@ -374,7 +386,7 @@ pub fn open_preferences(world: &mut World) {
                     select = select.option(p.label(), true);
                 }
                 let selected = MousePreset::ALL.iter().position(|p| *p == preset).unwrap_or(0);
-                b.spawn(form_row(t, "pref-mouse-row", "Mouse controls", 150.0)).with_child(select.selected(selected).build(t));
+                b.spawn(form_row(t, "pref-mouse-row", tr("preferences-mouse-controls"), 150.0)).with_child(select.selected(selected).build(t));
                 for (action, name) in ACTIONS {
                     b.spawn(form_row(t, format!("{name}-row"), action.label(), 150.0)).with_child((
                         Name::new(name),
@@ -384,7 +396,7 @@ pub fn open_preferences(world: &mut World) {
                 }
                 b.spawn((
                     Name::new("pref-interface-heading"),
-                    t.text("Interface", t.font_base, FontWeight::BOLD, t.foreground),
+                    t.text(tr("preferences-interface"), t.font_base, FontWeight::BOLD, t.foreground),
                     Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
                 ));
                 let mut sizes = Select::new("pref-ui-scale").width(Val::Px(200.0));
@@ -392,11 +404,18 @@ pub fn open_preferences(world: &mut World) {
                     sizes = sizes.option(if p == 100 { "100% (display default)".to_string() } else { format!("{p}%") }, true);
                 }
                 let at = UI_SCALES.iter().position(|p| *p == ui_scale).unwrap_or(2);
-                b.spawn(form_row(t, "pref-ui-scale-row", "UI scale", 150.0)).with_child(sizes.selected(at).build(t));
+                b.spawn(form_row(t, "pref-ui-scale-row", tr("preferences-ui-scale"), 150.0)).with_child(sizes.selected(at).build(t));
+                // Issue #178: each language by its own name.
+                let mut languages = Select::new("pref-language").width(Val::Px(200.0));
+                for (_, name) in cadrs_ui::i18n::offered() {
+                    languages = languages.option(name, true);
+                }
+                let at = cadrs_ui::i18n::offered().position(|(code, _)| code == language.code()).unwrap_or(0);
+                b.spawn(form_row(t, "pref-language-row", tr("preferences-language"), 150.0)).with_child(languages.selected(at).build(t));
                 // A page presents as the browser does.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                b.spawn(form_row(t, "pref-vsync-row", "Display", 150.0))
+                b.spawn(form_row(t, "pref-vsync-row", tr("preferences-display"), 150.0))
                     .with_child(Switch::new("pref-vsync").label("Vertical sync (VSync)").on(vsync).build(t));
                 b.spawn((
                     Name::new("pref-vsync-note"),
@@ -584,6 +603,14 @@ fn save_preferences(world: &mut World) {
     if let Some(p) = preset {
         world.resource_mut::<LocalPreferences>().0.mouse = p;
     }
+    let language = qs
+        .iter(world)
+        .find(|(n, _)| n.as_str() == "pref-language")
+        .and_then(|(_, s)| cadrs_ui::i18n::offered().nth(s.selected))
+        .and_then(|(code, _)| cadrs_core::preferences::Language::from_code(code));
+    if let Some(l) = language {
+        world.resource_mut::<LocalPreferences>().0.language = l;
+    }
     let size = qs
         .iter(world)
         .find(|(n, _)| n.as_str() == "pref-ui-scale")
@@ -657,6 +684,21 @@ fn on_rotation_snap_commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each language of the preferences has a catalog (`cadrs_ui::i18n`) and the other way
+    /// round, in the same order.
+    #[test]
+    fn every_language_has_a_catalog() {
+        let ours: Vec<&str> = cadrs_core::preferences::Language::ALL
+            .iter()
+            .map(|l| l.code())
+            .collect();
+        let catalogs: Vec<&str> = cadrs_ui::i18n::LANGUAGES.iter().map(|(c, ..)| *c).collect();
+        assert_eq!(ours, catalogs);
+        for (code, _) in cadrs_ui::i18n::offered() {
+            assert!(cadrs_core::preferences::Language::from_code(code).is_some());
+        }
+    }
 
     /// Ctrl+= and Ctrl+- step through the UI scale's sizes, staying at the ends; from a size
     /// between them, to the next one that way.

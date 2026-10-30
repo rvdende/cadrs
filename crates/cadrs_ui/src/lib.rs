@@ -44,6 +44,7 @@ pub mod gallery;
 pub mod glass;
 pub mod glyphs;
 pub mod grid_cell;
+pub mod i18n;
 pub mod icon;
 mod icon_raster;
 pub mod inline_edit;
@@ -322,6 +323,7 @@ impl Plugin for CadrsUiPlugin {
                 spring::SpringPlugin,
                 virtual_rows::VirtualRowsPlugin,
             ))
-            .add_message::<ScriptCommand>();
+            .add_message::<ScriptCommand>()
+            .add_systems(Update, i18n::retranslate);
     }
 }

@@ -322,6 +322,76 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// The interface's language (issue #178; `cadrs_ui::i18n`).
+    #[serde(default)]
+    pub language: Language,
+}
+
+/// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
+/// order), saved by its code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "it")]
+    Italian,
+    #[serde(rename = "nl")]
+    Dutch,
+    #[serde(rename = "pt-BR")]
+    PortugueseBrazil,
+    #[serde(rename = "ru")]
+    Russian,
+    #[serde(rename = "zh-CN")]
+    ChineseSimplified,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "ko")]
+    Korean,
+}
+
+impl Language {
+    pub const ALL: [Language; 11] = [
+        Language::English,
+        Language::German,
+        Language::French,
+        Language::Spanish,
+        Language::Italian,
+        Language::Dutch,
+        Language::PortugueseBrazil,
+        Language::Russian,
+        Language::ChineseSimplified,
+        Language::Japanese,
+        Language::Korean,
+    ];
+
+    /// The language with this code (BCP 47), if cadrs has it.
+    pub fn from_code(code: &str) -> Option<Language> {
+        Language::ALL.into_iter().find(|l| l.code() == code)
+    }
+
+    /// Its code (BCP 47), the catalog's file name.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::German => "de",
+            Language::French => "fr",
+            Language::Spanish => "es",
+            Language::Italian => "it",
+            Language::Dutch => "nl",
+            Language::PortugueseBrazil => "pt-BR",
+            Language::Russian => "ru",
+            Language::ChineseSimplified => "zh-CN",
+            Language::Japanese => "ja",
+            Language::Korean => "ko",
+        }
+    }
 }
 
 fn default_vsync() -> bool {
@@ -348,6 +418,7 @@ impl Default for Preferences {
             autoconnect_p2p: false,
             profile_cpu: false,
             vsync: true,
+            language: Language::English,
         }
     }
 }
@@ -534,6 +605,7 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
+            language: Language::German,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

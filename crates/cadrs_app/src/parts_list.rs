@@ -229,8 +229,8 @@ fn rebuild_part_list(
                 continue;
             }
             let (title, name) = match kind {
-                PartKind::Solid => ("Parts", "parts-section-header"),
-                PartKind::Surface => ("Surfaces", "surfaces-section-header"),
+                PartKind::Solid => (cadrs_ui::i18n::tr("parts"), "parts-section-header"),
+                PartKind::Surface => (cadrs_ui::i18n::tr("surfaces"), "surfaces-section-header"),
             };
             let is_open = open.get(kind);
             if slots.take(PART_ROW_PITCH) {

@@ -488,7 +488,7 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             DocumentName,
             InlineEdit::default(),
             Button::new("document-name").ghost().build(t),
-            Tooltip::new("Rename document"),
+            Tooltip::new(cadrs_ui::i18n::tr("rename-document")),
             observe(
                 |a: On<Activate>,
                  doc: Option<Res<ActiveDocument>>,
@@ -577,10 +577,10 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             // Share (`crate::collab`).
             r.spawn((
                 Button::new("document-share")
-                    .label("Share")
+                    .label(cadrs_ui::i18n::tr("share"))
                     .primary()
                     .small()
-                    .tooltip("Share this document")
+                    .tooltip(cadrs_ui::i18n::tr("share-tooltip"))
                     .build(t),
                 observe(|_: On<Activate>, mut commands: Commands| {
                     commands.queue(crate::collab::open_share);
@@ -2232,7 +2232,12 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
             },
         ))
         .with_children(|pane| {
-            filter_row(pane, t, "feature-filter", "Filter by name or type");
+            filter_row(
+                pane,
+                t,
+                "feature-filter",
+                &cadrs_ui::i18n::tr("filter-placeholder"),
+            );
             pane.spawn((
                 Name::new("features-header"),
                 FeaturesHeader,
@@ -3585,6 +3590,7 @@ fn rebuild_feature_rows(
     mut q_error: Query<&mut Node, With<FeatureErrorIcon>>,
     theme: Res<Theme>,
     mut last: Local<Option<FeatureRowsKey>>,
+    mut language: Local<&'static str>,
     (errors, under, faces_lost, atlas): (
         Res<crate::sketch_constrain::SketchErrors>,
         Res<crate::sketch_constrain::SketchUnderDefined>,
@@ -3652,7 +3658,9 @@ fn rebuild_feature_rows(
         || link_status.is_changed()
         || derived_session.as_ref().is_some_and(|r| r.is_changed())
         || components_open.is_changed()
-        || *was_present != present;
+        || *was_present != present
+        // The interface's language (the count's label).
+        || *language != cadrs_ui::i18n::language();
     *was_present = present;
     if !added && !window.is_changed() && !inputs_changed && last.is_some() {
         return;
@@ -3853,15 +3861,21 @@ fn rebuild_feature_rows(
         state,
         derived_rows,
     );
-    // Rebuilt when what the rows show changes, or a long list scrolled to rows not built.
-    if !added && !window.is_changed() && last.as_ref() == Some(&key) {
+    // Rebuilt when what the rows show changes, a long list scrolled to rows not built, or the
+    // interface's language changed (the count's label).
+    let now = cadrs_ui::i18n::language();
+    if !added && !window.is_changed() && last.as_ref() == Some(&key) && *language == now {
         return;
     }
+    *language = now;
     let any_invalid = key.0.iter().any(|(_, _, valid, ..)| !valid);
     let _ = &key.2;
     // The count stays with the error icon too ("Features (8)", `screens/05c`; Onshape's own
     // header runs out of room there, `screens/15`, but the count is what the list is for).
-    let count = format!("Features ({})", 4 + key.0.len());
+    let count = cadrs_ui::i18n::tr_with(
+        "features-count",
+        &[("count", &(4 + key.0.len()).to_string())],
+    );
     for mut t in &mut q_count {
         if t.0 != count {
             t.0 = count.clone();
