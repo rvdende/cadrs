@@ -112,10 +112,12 @@ pub use cursor::{CursorKind, CursorRequest, CursorState};
 pub use dialog::{Dialog, DialogClose, DialogRoot};
 pub use dialog_fields::{
     FieldVariables, NumberField, NumberFieldCancel, NumberFieldCommit, NumberFieldEdit,
-    NumberFieldState, OptionRow, Select, SelectChange, SelectState, Slider, SliderChange,
-    SliderState, form_row,
+    NumberFieldPreview, NumberFieldState, OptionRow, Select, SelectChange, SelectState, Slider,
+    SliderChange, SliderState, form_row,
 };
-pub use dim_edit::{DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField};
+pub use dim_edit::{
+    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField, DimEditPreview,
+};
 pub use doc_details::{
     LabelChip, details_caption, details_divider, details_header, details_value, side_tab,
 };

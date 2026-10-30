@@ -8,8 +8,8 @@
 //!   the value right-aligned over a thin line (blue while focused), and an optional icon after
 //!   it. Enter (or leaving the field) triggers [`NumberFieldCommit`] with the text; Esc triggers
 //!   [`NumberFieldCancel`] and leaves the field. The mouse wheel over the field while it is
-//!   being edited steps its number by 1 a notch, 0.1 with Ctrl (issue #162), committed when the
-//!   wheel rests. The owner evaluates the text and sets [`NumberFieldState`]: its
+//!   being edited steps its number by 1 a notch, 0.1 with Ctrl (issue #162), each step shown at
+//!   once ([`NumberFieldPreview`]) and committed when the wheel rests. The owner evaluates the text and sets [`NumberFieldState`]: its
 //!   `text` is shown whenever the field is not being edited, and `error` turns it red. A field
 //!   that takes variables ([`NumberField::variables`]) lists [`FieldVariables`] when `#` is typed,
 //!   as the dimension editor does ([`crate::variable_list`]).
@@ -370,6 +370,16 @@ pub struct NumberFieldCommit {
     pub enter: bool,
 }
 
+/// The wheel stepped a number field's value (issue #162): `text` is what it shows now. The owner
+/// may show it at once without an undo step, as a drag shows a value; the commit
+/// ([`NumberFieldCommit`]) follows when the wheel rests, or [`NumberFieldCancel`] if Esc takes it
+/// back. Targets the field's root.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct NumberFieldPreview {
+    pub entity: Entity,
+    pub text: String,
+}
+
 /// Esc was pressed in a number field: the shown text goes back to the state's.
 #[derive(EntityEvent, Debug, Clone, Copy)]
 pub struct NumberFieldCancel {
@@ -667,8 +677,9 @@ fn on_number_key(
 
 /// The mouse wheel over a number field that is being edited steps its value (issue #162): 1 a
 /// notch (in the value's own unit), 0.1 with Ctrl (or Cmd), up to increase. The text changes at
-/// once; a run of notches is committed as one when the wheel rests ([`WHEEL_SETTLE`],
-/// [`commit_wheel_steps`]), so the preview follows without a rebuild and an undo step a notch.
+/// once, each step is offered to the owner as a [`NumberFieldPreview`] (shown live, as a drag
+/// is), and a run of notches is committed as one when the wheel rests ([`WHEEL_SETTLE`],
+/// [`commit_wheel_steps`]): one undo step, not one a notch.
 /// Over a field that isn't being edited the wheel scrolls the dialog as before, so scrolling
 /// past a field never changes it. An expression ("#width * 2") isn't stepped, nor a field
 /// marked [`NoWheelStep`].
@@ -682,6 +693,7 @@ fn on_number_wheel(
     time: Res<Time>,
     mut pending: ResMut<WheelSteps>,
     mut rest: Local<(Option<Entity>, f32)>,
+    mut commands: Commands,
 ) {
     let edit = if q_edit.contains(ev.entity) {
         ev.entity
@@ -711,6 +723,10 @@ fn on_number_wheel(
     text.editor_mut().set_text(&next);
     text.queue_edit(TextEdit::SelectAll);
     pending.0 = Some((edit, time.elapsed_secs_f64()));
+    commands.trigger(NumberFieldPreview {
+        entity: field.0,
+        text: next,
+    });
 }
 
 /// A number field that holds text rather than a number (a description, a hex colour): the

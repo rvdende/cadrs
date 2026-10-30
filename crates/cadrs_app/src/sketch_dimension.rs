@@ -34,8 +34,8 @@ use cadrs_sketch::units;
 use cadrs_sketch::{Dimension, DimensionId, DimensionKind, SketchEntity, SketchOp};
 use cadrs_ui::inline_edit::DOUBLE_CLICK_TIME;
 use cadrs_ui::{
-    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, ListedVariable, NewVariable, Theme,
-    VariableList,
+    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditPreview, ListedVariable, NewVariable,
+    Theme, VariableList,
 };
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
@@ -65,6 +65,7 @@ impl Plugin for SketchDimensionPlugin {
             )
             .add_systems(OnExit(PartStudioMode::Sketching), reset_dimension_tool)
             .add_observer(on_commit)
+            .add_observer(on_preview)
             .add_observer(on_dimension_menu)
             .add_observer(on_cancel)
             .add_observer(on_new_variable);
@@ -90,6 +91,10 @@ pub struct DimensionEditor {
     /// Dimensions whose editor opens next, one after the other as each is committed (a
     /// chamfer's two distances, S9.2). Esc drops them.
     pub next: std::collections::VecDeque<DimensionId>,
+    /// The wheel is stepping the open editor's value (issue #162): the undo stack's length before
+    /// its first step. The sketch follows each step at once, as one undo step however many
+    /// there are ([`on_preview`]); Enter keeps it, Esc takes it back ([`finish_preview`]).
+    pub preview: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -644,8 +649,11 @@ fn close_editor(world: &mut World, commit: bool) {
             && let Ok(v) = value_for(world, open.id, &text)
         {
             set_value(world, open.id, v, &text);
+            finish_preview(world, true);
         }
     }
+    // Esc, or a value that can't be kept: the wheel's steps go back.
+    finish_preview(world, false);
     if let Ok(e) = world.get_entity_mut(open.entity) {
         e.despawn();
     }
@@ -858,6 +866,7 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
         match value_for(world, open.id, &typed) {
             Ok(v) => {
                 set_value(world, open.id, v, &typed);
+                finish_preview(world, true);
                 close_editor(world, false);
                 open_next_editor(world);
             }
@@ -870,6 +879,50 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
             }
         }
     });
+}
+
+/// The wheel stepped the open editor's value (issue #162): the sketch follows at once. The steps
+/// make one undo step ([`DimensionEditor::preview`]); a value it can't take is left for Enter
+/// to explain.
+fn on_preview(ev: On<DimEditPreview>, mut commands: Commands) {
+    let field = ev.entity;
+    let text = ev.value.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(open) = world.resource::<DimensionEditor>().open else {
+            return;
+        };
+        if editor_box(world, field) != Some(open.entity) {
+            return;
+        }
+        let typed = value_text(&text);
+        let Ok(v) = value_for(world, open.id, &typed) else {
+            return;
+        };
+        let undo_len = world.resource::<ActiveDocument>().history.undo_len();
+        let mark = *world
+            .resource_mut::<DimensionEditor>()
+            .preview
+            .get_or_insert(undo_len);
+        set_value(world, open.id, v, &typed);
+        world
+            .resource_mut::<ActiveDocument>()
+            .squash_since(mark, "Edit dimension");
+    });
+}
+
+/// Ends the wheel's live steps of the open editor's value ([`on_preview`]): kept as their one
+/// undo step (with what Enter set after them), or taken back.
+fn finish_preview(world: &mut World, keep: bool) {
+    let Some(mark) = world.resource_mut::<DimensionEditor>().preview.take() else {
+        return;
+    };
+    let mut doc = world.resource_mut::<ActiveDocument>();
+    if keep {
+        doc.squash_since(mark, "Edit dimension");
+    } else {
+        while doc.history.undo_len() > mark && doc.undo().is_some() {}
+        doc.discard_since(mark);
+    }
 }
 
 fn on_cancel(ev: On<DimEditCancel>, mut commands: Commands) {
@@ -905,6 +958,8 @@ fn sync_dim_edit(
         .is_none_or(|s| !s.dimensions.contains_key(open.id));
     if gone {
         editor.open = None;
+        // (The wheel's steps stay, as the edit they are.)
+        editor.preview = None;
         commands.entity(open.entity).try_despawn();
         return;
     }
@@ -1103,5 +1158,58 @@ mod tests {
         assert_eq!(doc.history.undo_len(), steps + 1);
         doc.undo();
         assert_eq!(names(w), ["#above", "Sketch 1", "#below"]);
+    }
+
+    /// The wheel's steps in the value box move the sketch at once, as one undo step: Esc puts
+    /// the value (and the undo stack) back, Enter keeps one step (issue #162).
+    #[test]
+    fn wheel_steps_show_live_as_one_step() {
+        let (mut app, dim) = variables_app();
+        app.init_resource::<QuickDimFlow>()
+            .init_resource::<bevy::diagnostic::FrameCount>()
+            .init_resource::<InputFocus>()
+            .add_observer(on_preview)
+            .add_observer(on_commit)
+            .add_observer(on_cancel);
+        let w = app.world_mut();
+        let steps = w.resource::<ActiveDocument>().history.undo_len();
+        let value = |w: &World| world_sketch(w).unwrap().dimensions[dim].value;
+        // An open editor: its box, value row and field.
+        let open = |w: &mut World| {
+            let b = w.spawn_empty().id();
+            let row = w.spawn(ChildOf(b)).id();
+            let field = w.spawn(ChildOf(row)).id();
+            w.resource_mut::<DimensionEditor>().open = Some(OpenEdit { entity: b, id: dim });
+            field
+        };
+        let step = |w: &mut World, field: Entity, v: &str| {
+            w.trigger(DimEditPreview {
+                entity: field,
+                value: v.into(),
+            });
+            w.flush();
+        };
+        let field = open(w);
+        step(w, field, "17 mm");
+        assert_eq!(value(w), 17.0);
+        step(w, field, "18 mm");
+        assert_eq!(value(w), 18.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        w.trigger(DimEditCancel { entity: field });
+        w.flush();
+        assert_eq!(value(w), 16.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps);
+        // Enter keeps the stepped value, one step.
+        let field = open(w);
+        step(w, field, "17 mm");
+        step(w, field, "18 mm");
+        w.trigger(DimEditCommit {
+            entity: field,
+            value: "18 mm".into(),
+        });
+        w.flush();
+        assert_eq!(value(w), 18.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        assert!(w.resource::<DimensionEditor>().preview.is_none());
     }
 }
