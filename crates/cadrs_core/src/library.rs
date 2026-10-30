@@ -5,8 +5,7 @@
 //! P3E.1 (TD3.1, TD3.3, TD3.7, TD3.8): **labels**, a list of [`LabelEntry`]s (name and colour)
 //! in the library and a document's [`DocumentMeta::labels`], created, renamed, assigned and
 //! deleted by [`CreateLabel`], [`RenameLabel`], [`SetLabels`] and [`DeleteLabel`]; the sidebar's
-//! [`Filter::Label`]; a document's [`DocumentMeta::description`] ([`SetDescription`]); and the
-//! list's [`ItemType`] filter (All / Documents / Folders).
+//! [`Filter::Label`]; and a document's [`DocumentMeta::description`] ([`SetDescription`]).
 //!
 //! Library commands follow the same pattern as document commands: a [`LibraryCommand`] runs
 //! through a [`LibraryHistory`], which snapshots the library before and after so undo and redo
@@ -402,35 +401,6 @@ impl Filter {
             Filter::Trash => !live,
             Filter::Label(l) => live && m.labels.contains(&l),
         }
-    }
-}
-
-/// The list's **Type** filter (P3E.1, TD3.7): which kinds of item the documents list shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum ItemType {
-    #[default]
-    All,
-    Documents,
-    Folders,
-}
-
-impl ItemType {
-    pub const ALL: [ItemType; 3] = [ItemType::All, ItemType::Documents, ItemType::Folders];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ItemType::All => "All",
-            ItemType::Documents => "Documents",
-            ItemType::Folders => "Folders",
-        }
-    }
-
-    pub fn shows_documents(self) -> bool {
-        self != ItemType::Folders
-    }
-
-    pub fn shows_folders(self) -> bool {
-        self != ItemType::Documents
     }
 }
 
@@ -1560,13 +1530,6 @@ mod tests {
         assert_eq!(l.get(id).unwrap().meta.description, "Extended hubcap");
         h.undo(&mut l);
         assert_eq!(l.get(id).unwrap().meta.description, "");
-    }
-
-    #[test]
-    fn item_type_filter() {
-        assert!(ItemType::All.shows_documents() && ItemType::All.shows_folders());
-        assert!(ItemType::Documents.shows_documents() && !ItemType::Documents.shows_folders());
-        assert!(!ItemType::Folders.shows_documents() && ItemType::Folders.shows_folders());
     }
 
     fn folder(n: u128, name: &str, parent: Option<u128>) -> FolderEntry {

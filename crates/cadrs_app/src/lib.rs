@@ -69,6 +69,7 @@ pub mod move_document;
 pub mod native_document;
 pub mod network;
 pub mod notifications;
+pub mod part_folders;
 pub mod part_shading;
 pub mod parts;
 pub mod parts_list;
@@ -100,6 +101,7 @@ pub mod sheetmetal_table;
 pub mod sheetmetal_tools_ui;
 pub mod sheetmetal_ui;
 pub mod shortcuts;
+pub mod side_panel;
 pub mod simulation_ui;
 pub mod sketch;
 pub mod sketch_constrain;
@@ -118,11 +120,12 @@ pub mod spacemouse;
 pub mod suppress_variable;
 pub mod surfacing_ui;
 pub mod tab_folders;
-pub mod tab_manager;
+pub mod tab_preview;
 pub mod thread_ui;
 pub mod threads_ui;
 pub mod thumbnail;
 pub mod tool_input;
+pub mod top_bar;
 pub mod transform_ui;
 pub mod units_dialog;
 pub mod update;
@@ -879,6 +882,8 @@ impl Plugin for CadrsAppPlugin {
                 script::ScriptPlugin,
             ))
             .add_plugins(spacemouse::SpaceMousePlugin)
+            .add_plugins(top_bar::TopBarPlugin)
+            .add_plugins(part_folders::PartFoldersPlugin)
             .add_plugins((
                 rebuild_indicator::RebuildIndicatorPlugin,
                 rebuild_rows::RebuildRowsPlugin,
@@ -928,6 +933,7 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((
                 appearance::AppearancePlugin,
+                side_panel::SidePanelPlugin,
                 material_dialog::MaterialDialogPlugin,
                 applied::AppliedPlugin,
                 sheetmetal_features_ui::SheetMetalFeaturesPlugin,
@@ -968,7 +974,7 @@ impl Plugin for CadrsAppPlugin {
             .add_plugins(sheetmetal_tools_ui::SheetMetalToolsPlugin)
             .add_plugins((
                 tab_folders::TabFoldersPlugin,
-                tab_manager::TabManagerPlugin,
+                tab_preview::TabPreviewPlugin,
                 analysis::AnalysisPlugin,
                 preferences_ui::PreferencesPlugin,
                 manipulator::ManipulatorPlugin,

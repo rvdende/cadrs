@@ -204,6 +204,11 @@ pub struct TooltipBubble;
 #[derive(Component, Clone, Copy)]
 struct TooltipOwnerLeft(f32);
 
+/// The top edge (logical px) of the element a bubble belongs to: a bubble that would run off the
+/// window's bottom goes above the element instead (the tab bar's tooltips, at the window's foot).
+#[derive(Component, Clone, Copy)]
+struct TooltipOwnerTop(f32);
+
 #[derive(Resource, Default)]
 struct TooltipState {
     owner: Option<Entity>,
@@ -280,6 +285,7 @@ fn update_tooltips(
             .spawn((
                 Name::new("tooltip"),
                 TooltipBubble,
+                TooltipOwnerTop(center.y - size.y / 2.0),
                 CardOwnerLeft(center.x - size.x / 2.0),
                 Node {
                     position_type: PositionType::Absolute,
@@ -332,6 +338,7 @@ fn update_tooltips(
             .spawn((
                 Name::new("tooltip"),
                 TooltipBubble,
+                TooltipOwnerTop(center.y - size.y / 2.0),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(left),
@@ -430,6 +437,7 @@ fn update_tooltips(
             .spawn((
                 Name::new("tooltip"),
                 TooltipBubble,
+                TooltipOwnerTop(center.y - size.y / 2.0),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(left),
@@ -492,6 +500,7 @@ fn update_tooltips(
             Name::new("tooltip"),
             TooltipBubble,
             TooltipOwnerLeft(center.x - size.x / 2.0),
+            TooltipOwnerTop(center.y - size.y / 2.0),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(left),
@@ -529,7 +538,7 @@ fn update_tooltips(
 struct CardOwnerLeft(f32);
 
 /// A bubble that runs off the window's right edge moves left onto it (P3.6: the right-hand
-/// panel strip's tooltips).
+/// panel strip's tooltips), and one that runs off its bottom goes above its element.
 #[allow(clippy::type_complexity)]
 fn keep_on_screen(
     windows: Query<&Window>,
@@ -540,6 +549,7 @@ fn keep_on_screen(
             &UiGlobalTransform,
             Option<&TooltipOwnerLeft>,
             Option<&CardOwnerLeft>,
+            Option<&TooltipOwnerTop>,
         ),
         With<TooltipBubble>,
     >,
@@ -547,9 +557,28 @@ fn keep_on_screen(
     let Some(w) = windows.iter().next() else {
         return;
     };
-    let width = w.width();
-    for (mut node, computed, t, owner_left, card) in &mut q {
+    let (width, height) = (w.width(), w.height());
+    for (mut node, computed, t, owner_left, card, owner_top) in &mut q {
         let scale = computed.inverse_scale_factor();
+        // Off the bottom: above the element when there's room there, else as low as fits; off
+        // the top (a bubble beside an element at the top): down onto the window.
+        let h = computed.size().y * scale;
+        let top_now = t.translation.y * scale - h / 2.0;
+        let want_top = if h <= 0.0 {
+            top_now
+        } else if top_now + h > height - 4.0 {
+            match owner_top {
+                Some(o) if o.0 - 6.0 - h >= 4.0 => o.0 - 6.0 - h,
+                _ => (height - 4.0 - h).max(4.0),
+            }
+        } else {
+            top_now.max(4.0)
+        };
+        if (want_top - top_now).abs() > 0.5
+            && let Val::Px(top) = node.top
+        {
+            node.top = Val::Px(top + want_top - top_now);
+        }
         let right = (t.translation.x + computed.size().x / 2.0) * scale;
         let over = right - (width - 4.0);
         // A card beside its element that runs off the right goes to the element's left, so it

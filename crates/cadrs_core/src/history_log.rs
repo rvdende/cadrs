@@ -177,6 +177,7 @@ fn shell_of(e: &Element) -> Element {
         ElementKind::PartStudio {
             features: _,
             parts,
+            part_folders,
             sketch_visibility,
             appearances,
             curve_appearances,
@@ -186,6 +187,7 @@ fn shell_of(e: &Element) -> Element {
         } => ElementKind::PartStudio {
             features: Vec::new(),
             parts: parts.clone(),
+            part_folders: part_folders.clone(),
             sketch_visibility: sketch_visibility.clone(),
             appearances: appearances.clone(),
             curve_appearances: curve_appearances.clone(),

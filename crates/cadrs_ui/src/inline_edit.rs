@@ -13,7 +13,7 @@ use bevy::input_focus::InputFocus;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
-use crate::input::{TextCancel, TextInput, TextInputField, TextSubmit};
+use crate::input::{GrowWithText, TextCancel, TextInput, TextInputField, TextSubmit};
 use crate::theme::Theme;
 
 /// The longest gap between the two clicks of a double click, in seconds.
@@ -116,6 +116,8 @@ pub struct InlineEditOptions {
     pub padding: Option<f32>,
     /// Focused border (width, color); default the input's 2 px focus border.
     pub focus_border: Option<(f32, Color)>,
+    /// Widens the input with its text, from `width` (in px) up to this many px ([`GrowWithText`]).
+    pub grow_to: Option<f32>,
 }
 
 impl InlineEditOptions {
@@ -128,6 +130,7 @@ impl InlineEditOptions {
             weight: bevy::text::FontWeight::NORMAL,
             padding: None,
             focus_border: None,
+            grow_to: None,
         }
     }
 }
@@ -157,6 +160,13 @@ pub fn begin_inline_edit(
         input = input.focus_border(w, c);
     }
     let bundle = input.build(theme);
+    let grow = opts.grow_to.map(|max| GrowWithText {
+        min: match opts.width {
+            Val::Px(w) => w,
+            _ => 0.0,
+        },
+        max,
+    });
     commands.queue(move |world: &mut World| {
         let Ok(mut e) = world.get_entity_mut(owner) else {
             return;
@@ -182,15 +192,17 @@ pub fn begin_inline_edit(
                 n.display = Display::None;
             }
         }
-        let input = world
-            .spawn((
-                bundle,
-                InlineEditInput {
-                    owner,
-                    had_focus: false,
-                },
-            ))
-            .id();
+        let mut input = world.spawn((
+            bundle,
+            InlineEditInput {
+                owner,
+                had_focus: false,
+            },
+        ));
+        if let Some(grow) = grow {
+            input.insert(grow);
+        }
+        let input = input.id();
         world.entity_mut(owner).insert_children(index, &[input]);
     });
 }

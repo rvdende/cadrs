@@ -75,6 +75,7 @@ impl Plugin for DocumentPlugin {
                     crate::units_dialog::sync_units,
                     document_shortcuts,
                     sync_rail_toggle,
+                    sync_viewport_readouts,
                     auto_save,
                     scroll_to_revealed.after(rebuild_feature_rows),
                 )
@@ -84,6 +85,7 @@ impl Plugin for DocumentPlugin {
             .add_observer(on_tab_double_click)
             .add_observer(on_tab_context_menu)
             .add_observer(on_tab_menu_action)
+            .add_observer(on_rename_tab_popup)
             .add_observer(on_insert_menu_action)
             .add_observer(on_inline_commit)
             .add_observer(on_pick_row_activate)
@@ -174,11 +176,8 @@ const AUTO_SAVE_DELAY: f32 = 1.0;
 /// What the tab bar and the element-dependent UI were last built from.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
 struct ShellSnapshot {
-    /// The tab bar's level (P3E.2: the top level or an open folder): its tabs, and its folders
-    /// as `Folder` tabs.
+    /// The tab bar's top level: its tabs, and its folders as `Folder` tabs (P3E.2).
     tabs: Vec<StripEntry>,
-    /// The open folder's path (P3E.2), for the Home button and the breadcrumb.
-    nav: Vec<(ElementId, String)>,
     active: Option<ElementId>,
     element: Option<(ElementId, String, TabKind)>,
     /// The toolbar also depends on whether a sketch is being edited.
@@ -384,20 +383,6 @@ fn spawn_shell(
             ))
             .with_children(|body| {
                 icon_rail(body, &t);
-                // P3E.2 (judge r1, `tab_manager_open-01.png`): the Tab manager docks here, full
-                // height, pushing the feature list right (`tab_manager`).
-                body.spawn((
-                    Name::new("tab-manager-dock"),
-                    crate::tab_manager::TabManagerDock,
-                    Node {
-                        width: Val::Px(300.0),
-                        flex_shrink: 0.0,
-                        display: Display::None,
-                        flex_direction: FlexDirection::Column,
-                        ..cadrs_ui::glass::panel_node(&t)
-                    },
-                    cadrs_ui::glass::panel(&t),
-                ));
                 body.spawn((
                     Node {
                         flex_grow: 1.0,
@@ -455,7 +440,7 @@ fn spawn_shell(
                             crate::frame_stats::spawn_frame_stats(vp, &t);
                             crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
                             right_strip(vp, &t);
-                            bottom_right_tools(vp, &t);
+                            viewport_readouts(vp, &t);
                         });
                     });
                 });
@@ -501,9 +486,11 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
                         .map(|n| n.size().x * n.inverse_scale_factor())
                         .unwrap_or(200.0);
                     // The field replaces the label in place: same text position, a 1 px blue
-                    // border around the text plus 4 px each side, and no layout shift.
+                    // border around the text plus 4 px each side, and no layout shift. It
+                    // widens as a longer name is typed.
                     let mut opts = InlineEditOptions::new("document-name-input");
                     opts.width = Val::Px((w + 2.0).max(60.0));
+                    opts.grow_to = Some(480.0);
                     opts.height = 28.0;
                     opts.font_size = Some(20.0);
                     opts.weight = FontWeight::BOLD;
@@ -564,42 +551,52 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             ..default()
         })
         .with_children(|r| {
+            // On a narrow window these fold into the account menu (`crate::top_bar`).
+            use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
             // Online or not (`crate::network`).
-            crate::network::spawn_button(r, t);
+            spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
             // Light, dark or the system's scheme.
-            r.spawn((
-                cadrs_ui::scheme_toggle(t),
-                cadrs_ui::glass::GlassFrame::bar(),
-            ))
-            .entry::<Node>()
-            .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            spawn_folding(r, Fold::Scheme, |r| {
+                r.spawn((
+                    cadrs_ui::scheme_toggle(t),
+                    cadrs_ui::glass::GlassFrame::bar(),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            });
             // Share (`crate::collab`).
-            r.spawn((
-                Button::new("document-share")
-                    .label("Share")
-                    .primary()
-                    .small()
-                    .tooltip("Share this document")
-                    .build(t),
-                observe(|_: On<Activate>, mut commands: Commands| {
-                    commands.queue(crate::collab::open_share);
-                }),
-            ))
-            .entry::<Node>()
-            .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
-            crate::notifications::spawn_bell(r, t);
+            spawn_folding(r, Fold::Phone, |r| {
+                r.spawn((
+                    Button::new("document-share")
+                        .label("Share")
+                        .primary()
+                        .small()
+                        .tooltip("Share this document")
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(crate::collab::open_share);
+                    }),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
+            });
+            spawn_folding(r, Fold::Notifications, |r| {
+                crate::notifications::spawn_bell(r, t)
+            });
             // The collaborators' avatars (`crate::collab::presence`), beside this user's own.
-            r.spawn((
-                Name::new("collab-people"),
-                crate::collab::presence::PeopleBar,
-                Node {
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(2.0),
-                    margin: UiRect::left(Val::Px(4.0)),
-                    ..default()
-                },
-            ));
+            spawn_folding(r, Fold::Phone, |r| {
+                r.spawn((
+                    Name::new("collab-people"),
+                    crate::collab::presence::PeopleBar,
+                    Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(2.0),
+                        margin: UiRect::left(Val::Px(4.0)),
+                        ..default()
+                    },
+                ));
+            });
             crate::identity::spawn_identity_button(r, t, profile);
         });
     });
@@ -701,7 +698,8 @@ fn sync_rail_toggle(
     }
 }
 
-/// The small strip of panel toggles on the viewport's right edge.
+/// An assembly's panel toggles on the viewport's right edge (the strip shows in assemblies only,
+/// [`crate::assembly::bom_panel`]).
 fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     vp.spawn((
         Name::new("right-panel-strip"),
@@ -720,44 +718,21 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
         cadrs_ui::glass::panel(t),
     ))
     .with_children(|s| {
-        // Appearances (P3.5), Custom tables (P3.11) and Variables (a placeholder table until
-        // P3F.4) open panels; Configurations are out of scope (niche; user decision 2026-09-29).
-        for (name, icon_name, tip, enabled) in [
-            // P3B.6: the Bill of Materials (shown in assemblies only).
-            ("panel-bom", "bill-of-materials", "Bill of materials", true),
-            // P3B.8: Exploded views and Named positions (assemblies only).
-            ("panel-exploded-views", "explode", "Exploded views", true),
+        for (name, icon_name, tip) in [
+            // P3B.6: the Bill of Materials.
+            ("panel-bom", "bill-of-materials", "Bill of materials"),
+            // P3B.8: Exploded views and Named positions.
+            ("panel-exploded-views", "explode", "Exploded views"),
             (
                 "panel-named-positions",
                 "named-positions",
                 "Named positions",
-                true,
             ),
-            ("panel-appearance", "appearance", "Appearances", true),
-            ("panel-custom-tables", "custom-table", "Custom tables", true),
-            (
-                "panel-configurations",
-                "configurations",
-                "Configurations (not available)",
-                false,
-            ),
-            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
-            (
-                "panel-sheet-metal",
-                "sheet-metal-table",
-                "Sheet metal table and flat view",
-                true,
-            ),
-            ("panel-variables", "variables", "Variables", true),
-            // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
-            // icon: Thicken's deformed sheet stands in).
-            ("panel-simulation", "thicken", "Simulation", true),
         ] {
             s.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
                     .tooltip(tip)
-                    .disabled(!enabled)
                     .build(t),
             )
             .entry::<Node>()
@@ -769,24 +744,28 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     });
 }
 
-/// The bottom-right tools over the 3D view.
+/// The readouts at the bottom right of the 3D view, left of the view ball: a selected region's
+/// area, a measurement.
 #[derive(Component)]
-struct ViewportTools;
+pub struct ViewportReadouts;
 
-fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
-    // A glass pill, so the icons read over a part of any colour.
+fn viewport_readouts(vp: &mut ChildSpawnerCommands, t: &Theme) {
+    // A glass pill, so the text reads over a part of any colour; shown while it has something
+    // to say ([`sync_viewport_readouts`]).
     vp.spawn((
-        Name::new("viewport-tools"),
-        ViewportTools,
+        Name::new("viewport-readouts"),
+        ViewportReadouts,
         Node {
             position_type: PositionType::Absolute,
-            right: Val::Px(0.0),
+            // Left of the view ball.
+            right: Val::Px(crate::view_cube::CUBE_WIDGET.x),
             bottom: Val::Px(0.0),
-            column_gap: Val::Px(2.0),
-            padding: UiRect::all(Val::Px(3.0)),
+            min_height: Val::Px(32.0),
+            padding: UiRect::new(Val::Px(10.0), Val::Px(2.0), Val::Px(3.0), Val::Px(3.0)),
             align_items: AlignItems::Center,
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
+            display: Display::None,
             ..default()
         },
         cadrs_ui::glass::panel(t),
@@ -794,6 +773,62 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
     .with_children(|s| {
         // "Area: … mm²" while a region is selected (`intro-to-sketching/ex1-step8.png`).
         s.spawn(crate::region_select::area_readout(t));
+    });
+}
+
+/// The readouts' pill shows while one of them does, in a 3D view (a drawing, a flat board view
+/// or a PCB Studio has none).
+fn sync_viewport_readouts(
+    kind: Res<crate::viewport::ActiveKind>,
+    mut q: Query<(&Children, &mut Node), With<ViewportReadouts>>,
+    q_child: Query<&Node, Without<ViewportReadouts>>,
+) {
+    let shown = !kind.is_flat() && *kind != crate::viewport::ActiveKind::PcbStudio;
+    for (children, mut node) in &mut q {
+        let any = children
+            .iter()
+            .any(|c| q_child.get(c).is_ok_and(|n| n.display != Display::None));
+        let want = if shown && any {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != want {
+            node.display = want;
+        }
+    }
+}
+
+/// The view tools at the tab bar's right end, after a divider: Section view, Measure, Analysis
+/// tools, Mass properties, the Simulation panel and, with a sheet metal model, the Sheet metal
+/// table ([`crate::sheetmetal_table`]); then View options ([`crate::view_cube`]). Hidden where
+/// there is no 3D view, and but for View options in a PCB Studio (`crate::drawing`).
+fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
+    bar.spawn((
+        Name::new("view-tools-divider"),
+        Node {
+            width: Val::Px(1.0),
+            height: Val::Px(18.0),
+            align_self: AlignSelf::Center,
+            flex_shrink: 0.0,
+            margin: UiRect::horizontal(Val::Px(4.0)),
+            ..default()
+        },
+        BackgroundColor(t.separator),
+        Pickable::IGNORE,
+    ));
+    bar.spawn((
+        Name::new("view-tools"),
+        Node {
+            flex_shrink: 0.0,
+            align_self: AlignSelf::Stretch,
+            align_items: AlignItems::Stretch,
+            column_gap: Val::Px(2.0),
+            ..default()
+        },
+        Pickable::IGNORE,
+    ))
+    .with_children(|g| {
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
@@ -801,15 +836,39 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
             // stands in).
             ("view-analysis", "constraint-curvature", "Analysis tools"),
             ("view-mass", "mass-properties", "Mass properties"),
+            // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
+            // icon: Thicken's deformed sheet stands in).
+            ("panel-simulation", "thicken", "Simulation"),
+            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
+            (
+                "panel-sheet-metal",
+                "sheet-metal-table",
+                "Sheet metal table and flat view",
+            ),
         ] {
-            s.spawn(
+            g.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
                     .tooltip(tip)
                     .build(t),
-            );
+            )
+            .insert(view_tool_node(t));
         }
     });
+    crate::view_cube::spawn_view_options(bar, t);
+}
+
+/// The node of a button among the tab bar's view tools (a [`ToolButton`] as tall as the bar).
+pub(crate) fn view_tool_node(t: &Theme) -> Node {
+    Node {
+        width: Val::Px(30.0),
+        min_width: Val::Px(30.0),
+        border_radius: BorderRadius::all(Val::Px(t.radius)),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        flex_shrink: 0.0,
+        ..default()
+    }
 }
 
 fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
@@ -828,23 +887,16 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
     ))
     .with_children(|bar| {
         let mut dark = cadrs_ui::button::visuals_for(t, cadrs_ui::ButtonVariant::Ghost);
-        dark.foreground = StateColors::all(t.tool_foreground);
+        // Disabled in the disabled grey: ‹ and › dim at the strip's ends.
+        dark.foreground = StateColors::new(
+            t.tool_foreground,
+            t.tool_foreground,
+            t.tool_foreground,
+            t.disabled_foreground,
+        );
         dark.background =
             StateColors::new(Color::NONE, t.control_hover, t.list_active, Color::NONE)
                 .with_selected(t.control_hover);
-        bar.spawn(
-            IconButton::new("tab-manager", "tab-manager")
-                .icon_size(18.0)
-                .tooltip("Tab manager")
-                .build(t),
-        )
-        .insert(dark.clone())
-        .entry::<Node>()
-        .and_modify(|mut n| {
-            n.width = Val::Px(32.0);
-            n.height = Val::Auto;
-            n.border = UiRect::ZERO;
-        });
         bar.spawn((
             IconButton::new("insert-tab", "plus")
                 .icon_size(20.0)
@@ -868,28 +920,17 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
             n.height = Val::Auto;
             n.border = UiRect::ZERO;
         });
-        // P3F.3 (T1.2): 40 tabs scroll sideways (`scale_ui`): by whole tabs, with a chevron and
-        // a fade at each end that has more tabs (P3F.3–P3F.4 judge).
+        // P3F.3 (T1.2): 40 tabs scroll sideways (`scale_ui`): by whole tabs, with a chevron at
+        // each end while they overflow.
         let chevron = |name: &'static str, icon_name: &'static str, tip: &'static str| {
             (
                 IconButton::new(name, icon_name)
-                    .icon_size(14.0)
+                    .icon_size(18.0)
                     .tooltip(tip)
                     .build(t),
                 crate::scale_ui::TabStripChevron,
             )
         };
-        // P3E.2 (TD5.3): inside a folder, Home and the folder's path (`tab_folders`).
-        bar.spawn((
-            Name::new("tab-folder-nav"),
-            crate::tab_folders::TabFolderNav,
-            Node {
-                flex_shrink: 0.0,
-                align_items: AlignItems::Stretch,
-                ..default()
-            },
-            Pickable::IGNORE,
-        ));
         bar.spawn(chevron("tab-strip-prev", "chevron-left", "Earlier tabs"))
             .insert(dark.clone())
             .entry::<Node>()
@@ -925,33 +966,6 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                 ScrollPosition::default(),
                 Pickable::IGNORE,
             ));
-            for (name, left) in [
-                ("tab-strip-fade-left", true),
-                ("tab-strip-fade-right", false),
-            ] {
-                let (from, to) = (t.tab_bar, t.tab_bar.with_alpha(0.0));
-                let stops = if left {
-                    vec![ColorStop::auto(from), ColorStop::auto(to)]
-                } else {
-                    vec![ColorStop::auto(to), ColorStop::auto(from)]
-                };
-                f.spawn((
-                    Name::new(name),
-                    crate::scale_ui::TabStripFade { left },
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(0.0),
-                        bottom: Val::Px(0.0),
-                        left: if left { Val::Px(0.0) } else { Val::Auto },
-                        right: if left { Val::Auto } else { Val::Px(0.0) },
-                        width: Val::Px(36.0),
-                        ..default()
-                    },
-                    BackgroundGradient(vec![LinearGradient::to_right(stops).into()]),
-                    Visibility::Hidden,
-                    Pickable::IGNORE,
-                ));
-            }
         });
         bar.spawn(chevron("tab-strip-next", "chevron-right", "Later tabs"))
             .insert(dark.clone())
@@ -972,6 +986,7 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                 n.border_radius = BorderRadius::ZERO;
                 n.display = Display::None;
             });
+        view_tools(bar, t);
     });
 }
 
@@ -1031,8 +1046,10 @@ pub(crate) fn full_rebuild(world: &mut World) {
 
 /// `paste`: the name of a tab copied with "Copy to clipboard", offered as "Paste …".
 fn insert_menu(paste: Option<String>) -> Menu {
+    // (Its anchor, "+", is inset 4 px in the bar: clear of the bar as the folder lists are.)
     let menu = Menu::new("insert-tab-menu")
         .side(PopoverSide::Top)
+        .gap(crate::tab_folders::ABOVE_BAR + 4.0)
         .min_width(232.0)
         .item_height(25.0)
         .item(
@@ -1188,12 +1205,10 @@ impl TabKind {
     }
 }
 
-fn snapshot_of(doc: &ActiveDocument, view: Option<ElementId>) -> ShellSnapshot {
-    // P3E.2: the tab bar shows one level of the tab tree (the top level, or an open folder).
+fn snapshot_of(doc: &ActiveDocument) -> ShellSnapshot {
+    // P3E.2: the tab bar shows the tab tree's top level; a folder's tab lists the rest.
     let layout = cadrs_core::tab_tree::layout(&doc.doc);
-    let view = view.filter(|f| cadrs_core::tab_tree::level_of(&layout, Some(*f)).is_some());
-    let level = cadrs_core::tab_tree::level_of(&layout, view).unwrap_or(&[]);
-    let tabs = level
+    let tabs = layout
         .iter()
         .filter_map(|n| match n {
             cadrs_core::tab_tree::TabNode::Tab(id) => doc
@@ -1207,9 +1222,6 @@ fn snapshot_of(doc: &ActiveDocument, view: Option<ElementId>) -> ShellSnapshot {
         .collect();
     ShellSnapshot {
         tabs,
-        nav: view
-            .map(|f| cadrs_core::tab_tree::folder_path(&layout, f))
-            .unwrap_or_default(),
         active: doc.active_element().map(|e| e.id),
         element: doc
             .active_element()
@@ -1222,8 +1234,6 @@ fn rebuild_tabs(
     doc: Option<Res<ActiveDocument>>,
     mut snapshot: ResMut<ShellSnapshot>,
     q_strip: Query<Entity, With<TabStrip>>,
-    q_nav: Query<Entity, With<crate::tab_folders::TabFolderNav>>,
-    view: Res<crate::tab_folders::TabFolderView>,
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
@@ -1233,12 +1243,11 @@ fn rebuild_tabs(
     let Ok(strip) = q_strip.single() else {
         return;
     };
-    let new = snapshot_of(&doc, view.folder);
-    if new.tabs == snapshot.tabs && new.active == snapshot.active && new.nav == snapshot.nav {
+    let new = snapshot_of(&doc);
+    if new.tabs == snapshot.tabs && new.active == snapshot.active {
         return;
     }
     snapshot.tabs = new.tabs.clone();
-    snapshot.nav = new.nav.clone();
     snapshot.active = new.active;
     commands.entity(strip).despawn_children();
     let names = unique_tab_names(
@@ -1268,12 +1277,14 @@ fn rebuild_tabs(
                         TabButton(*id),
                     ));
                 }
-                // P3E.2 (TD5.3): a folder is a tab with a folder icon; a click opens it.
+                // P3E.2 (TD5.3): a folder is a tab with a folder icon and a chevron; a click
+                // lists its tabs above it (`tab_folders`).
                 StripEntry::Folder(id, name, count) => {
                     s.spawn((
                         Tab::new(node.replacen("tab-", "tab-folder-", 1), name.clone())
                             .icon("folder")
-                            .width(150.0)
+                            .trailing_icon("chevron-up")
+                            .width(170.0)
                             .marked(holds_active(*id))
                             .build(&theme),
                         crate::tab_folders::FolderTab(*id),
@@ -1283,14 +1294,6 @@ fn rebuild_tabs(
             }
         }
     });
-    if let Ok(nav) = q_nav.single() {
-        commands.entity(nav).despawn_children();
-        let path = new.nav.clone();
-        let t = theme.clone();
-        commands
-            .entity(nav)
-            .with_children(|n| crate::tab_folders::spawn_nav(n, &t, &path));
-    }
 }
 
 /// Each tab's `Name`, unique (P3F.5 judge): [`tab_node_name`], and for a later tab whose name
@@ -1341,7 +1344,7 @@ fn rebuild_element_ui(
     let (Ok(toolbar), Ok(panel)) = (q_toolbar.single(), q_panel.single()) else {
         return;
     };
-    let new = snapshot_of(&doc, None).element;
+    let new = snapshot_of(&doc).element;
     let sketching = mode.is_some_and(|m| *m.get() == PartStudioMode::Sketching);
     let t = theme.clone();
     let new_toolbar = new
@@ -2290,8 +2293,6 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                     4.0,
                 );
             });
-            // P3F.3 (T4.2): the gentle notice past 250 features or 10 parts.
-            crate::scale_ui::notice_row(pane, t);
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
             pane.spawn((
@@ -2755,7 +2756,16 @@ fn auto_save(
     }
 }
 
-fn on_tab_activate(a: On<Activate>, q: Query<&TabButton>, doc: Option<ResMut<ActiveDocument>>) {
+/// A click opens a tab; a right-click only opens its menu (`on_tab_context_menu`).
+fn on_tab_activate(
+    a: On<Activate>,
+    q: Query<&TabButton>,
+    button: Res<cadrs_ui::menu::LastPointerButton>,
+    doc: Option<ResMut<ActiveDocument>>,
+) {
+    if button.0 == bevy::picking::pointer::PointerButton::Secondary {
+        return;
+    }
     if let (Ok(tab), Some(mut doc)) = (q.get(a.entity), doc)
         && doc.active != Some(tab.0)
     {
@@ -2789,6 +2799,7 @@ fn on_tab_double_click(
 fn on_tab_context_menu(
     ev: On<ContextMenuRequested>,
     q: Query<&TabButton>,
+    q_listed: Query<&crate::tab_folders::ListedTab>,
     locks: Option<Res<crate::collab::locks::TabLocks>>,
     live: Option<Res<crate::collab::live::Live>>,
     iroh: Option<Res<cadrs_net::bevy_iroh::Iroh>>,
@@ -2797,7 +2808,12 @@ fn on_tab_context_menu(
     theme: Res<Theme>,
     mut commands: Commands,
 ) {
-    let (Ok(tab), Some(doc)) = (q.get(ev.entity), doc) else {
+    // A tab in the bar, or one in an open folder's list (`tab_folders`).
+    let tab = q
+        .get(ev.entity)
+        .copied()
+        .or_else(|_| q_listed.get(ev.entity).map(|l| TabButton(l.0)));
+    let (Ok(tab), Some(doc)) = (tab, doc) else {
         return;
     };
     let live = live.is_some();
@@ -2831,23 +2847,14 @@ fn on_tab_context_menu(
                     .icon("lock-filled"),
             }
         });
+    // The tab bar's menus share one row height and an icon column; Delete, destructive, last.
     let mut menu = Menu::new("tab-context-menu")
         .side(PopoverSide::Top)
-        .min_width(176.0)
-        .item_height(20.0);
-    if !is_assembly {
-        menu = menu.text_only();
-    }
-    let mut menu = menu
-        .item(
-            MenuItem::new("tab-delete", "Delete")
-                .icon("remove-circle")
-                .disabled(only_tab),
-        )
-        .separator()
+        .min_width(196.0)
+        .item_height(25.0)
         .item(MenuItem::new("tab-open-new", "Open in new window").planned())
-        .item(MenuItem::new("tab-rename", "Rename…"))
-        .item(MenuItem::new("tab-properties", "Properties…"));
+        .item(MenuItem::new("tab-rename", "Rename…").icon("edit"))
+        .item(MenuItem::new("tab-properties", "Properties…").icon("info"));
     // Editing together (`crate::collab::locks`): a tab that can't be edited together can be
     // opened for oneself.
     if let Some(lock) = lock_item {
@@ -2858,8 +2865,8 @@ fn on_tab_context_menu(
     }
     let menu = menu
         .separator()
-        .item(MenuItem::new("tab-duplicate", "Duplicate"))
-        .item(MenuItem::new("tab-copy", "Copy to clipboard"))
+        .item(MenuItem::new("tab-duplicate", "Duplicate").icon("plus"))
+        .item(MenuItem::new("tab-copy", "Copy to clipboard").icon("copy"))
         .item(
             MenuItem::new("tab-create-drawing", format!("Create Drawing of {name}…"))
                 .icon("file-new")
@@ -2868,7 +2875,7 @@ fn on_tab_context_menu(
         .separator()
         .item(MenuItem::new("tab-thumbnail", "Select as document thumbnail").planned())
         .separator()
-        .item(MenuItem::new("tab-move", "Move to document…"))
+        .item(MenuItem::new("tab-move", "Move to document…").icon("file-export"))
         // P3E.2 (TD5.3): into a tab folder, out to the top level, or a new folder.
         .item(
             MenuItem::new("tab-move-folder", "Move to folder")
@@ -2943,7 +2950,14 @@ fn on_tab_context_menu(
             MenuItem::new("tab-create-task", "Create task…").planned()
         } else {
             MenuItem::new("tab-release", "Release…").planned()
-        });
+        })
+        .separator()
+        .item(
+            MenuItem::new("tab-delete", "Delete")
+                .icon("remove-circle")
+                .danger()
+                .disabled(only_tab),
+        );
     // Opens above the tab bar, at the cursor's x.
     let bar_top = q_bar
         .iter()
@@ -2953,11 +2967,30 @@ fn on_tab_context_menu(
             t.translation.y * s - n.size().y * s / 2.0
         })
         .unwrap_or(ev.position.y);
-    let pos = Vec2::new(ev.position.x, bar_top - 1.0);
+    let pos = Vec2::new(ev.position.x, bar_top - crate::tab_folders::ABOVE_BAR);
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
     commands
         .entity(anchor)
         .insert((TabMenuFor(tab.0), DespawnOnExit(AppState::Document)));
+}
+
+/// The name popup renaming a tab that isn't in the bar.
+#[derive(Component)]
+struct RenameTabPopup(ElementId);
+
+fn on_rename_tab_popup(
+    ev: On<cadrs_ui::NamePopupCommit>,
+    q: Query<&RenameTabPopup>,
+    doc: Option<ResMut<ActiveDocument>>,
+) {
+    let (Ok(r), Some(mut doc)) = (q.get(ev.entity), doc) else {
+        return;
+    };
+    let name = ev.value.trim().to_string();
+    if name.is_empty() || doc.doc.element(r.0).is_some_and(|e| e.name == name) {
+        return;
+    }
+    let _ = doc.execute(&RenameElement { id: r.0, name });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2980,11 +3013,33 @@ fn on_tab_menu_action(
         return;
     };
     match ev.item.as_str() {
-        "tab-rename" => {
-            if let Some((e, _)) = q_tabs.iter().find(|(_, t)| t.0 == id) {
-                start_tab_rename(&mut commands, &theme, e, el.name);
+        "tab-rename" => match q_tabs.iter().find(|(_, t)| t.0 == id) {
+            Some((e, _)) => start_tab_rename(&mut commands, &theme, e, el.name),
+            // A tab in a folder (not in the bar): its name in a popup over its folder's tab.
+            None => {
+                let name = el.name;
+                commands.queue(move |world: &mut World| {
+                    let top = world.get_resource::<ActiveDocument>().and_then(|d| {
+                        crate::tab_folders::top_folder_of(
+                            &d.doc,
+                            cadrs_core::tab_tree::TabItem::Tab(id),
+                        )
+                    });
+                    let at = match top {
+                        Some(f) => crate::tab_folders::popup_spot(world, f),
+                        None => Vec2::new(120.0, 400.0),
+                    };
+                    let theme = world.resource::<Theme>().clone();
+                    let mut commands = world.commands();
+                    let popup = cadrs_ui::NamePopup::new("tab-rename-popup", "Tab name", at)
+                        .value(name)
+                        .above()
+                        .spawn(&mut commands, &theme);
+                    commands.entity(popup).insert(RenameTabPopup(id));
+                    world.flush();
+                });
             }
-        }
+        },
         "tab-lock" | "tab-take-lock" | "tab-unlock" => {
             let (lock, take) = match ev.item.as_str() {
                 "tab-lock" => (true, false),
@@ -3311,6 +3366,10 @@ fn name_button_node(t: &Theme) -> Node {
         border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(t.radius)),
         align_items: AlignItems::Center,
+        // A long name gives way on a narrow window (a phone), cut off, so the account button
+        // stays on screen.
+        min_width: Val::ZERO,
+        overflow: Overflow::clip_x(),
         ..default()
     }
 }
@@ -3344,6 +3403,8 @@ fn on_pick_row_activate(
     button: Res<cadrs_ui::menu::LastPointerButton>,
     keys: Res<ButtonInput<KeyCode>>,
     doc: Option<Res<ActiveDocument>>,
+    shown_parts: Res<crate::parts_list::ShownParts>,
+    part_rows: Query<(), With<crate::parts_list::PartRow>>,
     mut row_click: ResMut<crate::viewport::FeatureRowClick>,
     mut selection: ResMut<crate::viewport::Selection>,
     mut picks: MessageWriter<PickRequest>,
@@ -3423,6 +3484,35 @@ fn on_pick_row_activate(
                         _ => crate::viewport::RowSelect::Only,
                     }
                 }
+                _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
+                _ => crate::viewport::RowSelect::Only,
+            };
+            row_click.pending = Some((row.0, how));
+        }
+        // A Parts list row selects as a feature row does, Shift over the parts the list shows
+        // (an assembly's instance rows, parts too, have their own ranges above).
+        if let (Pick::Part(id), false, true) = (row.0, secondary, part_rows.contains(a.entity)) {
+            let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+            let ctrl = keys.any_pressed([
+                KeyCode::ControlLeft,
+                KeyCode::ControlRight,
+                KeyCode::SuperLeft,
+                KeyCode::SuperRight,
+            ]);
+            let order = &shown_parts.0;
+            let how = match (shift, row_click.anchor) {
+                (true, Some(Pick::Part(from))) => match (
+                    order.iter().position(|p| *p == from),
+                    order.iter().position(|p| *p == id),
+                ) {
+                    (Some(a), Some(b)) => crate::viewport::RowSelect::Range(
+                        order[a.min(b)..=a.max(b)]
+                            .iter()
+                            .map(|p| Pick::Part(*p))
+                            .collect(),
+                    ),
+                    _ => crate::viewport::RowSelect::Only,
+                },
                 _ if ctrl || shift => crate::viewport::RowSelect::Toggle,
                 _ => crate::viewport::RowSelect::Only,
             };
@@ -5316,6 +5406,7 @@ mod assembly_range_tests {
             .init_resource::<FeatureRowClick>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<cadrs_ui::menu::LastPointerButton>()
+            .init_resource::<crate::parts_list::ShownParts>()
             .add_message::<PickRequest>()
             .add_observer(on_pick_row_activate);
         let picks: Vec<Pick> = (0..4)

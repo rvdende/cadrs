@@ -1419,8 +1419,8 @@ fn act(world: &mut World, menu: MateMenu, item: &str) {
         // The Named positions panel, this mate's values marked (A6.13).
         "mate-named-position" => {
             world.insert_resource(super::named_positions::DriverFocus(Some(mate)));
-            *world.resource_mut::<crate::appearance::SidePanel>() =
-                crate::appearance::SidePanel::NamedPositions;
+            *world.resource_mut::<crate::side_panel::SidePanel>() =
+                crate::side_panel::SidePanel::NamedPositions;
         }
         "mate-isolate" => {
             if let Some((m, f)) = model.as_ref().and_then(|m| Some((m, m.mate(mate)?))) {

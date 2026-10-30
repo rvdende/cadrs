@@ -2,7 +2,7 @@
 //! SM1.4, SM13.1–SM13.5; `help/feature-tools/sheetmetalflatpatterntable-02.png`, lesson
 //! `13-bend-and-joint-table`):
 //!
-//! - **The toggle**: the right strip's *Sheet metal table and flat view* button
+//! - **The toggle**: the tab bar's *Sheet metal table and flat view* button
 //!   (`panel-sheet-metal`, icon `sheet-metal-table`), shown once a Part Studio has a sheet
 //!   metal model; it opens and closes the panel, docked on the viewport's right.
 //! - **Sheet metal context** (`smt-context`): one entry per Sheet metal model feature, by its
@@ -13,8 +13,8 @@
 //! - **The flat view** (`smt-flat`): the flat pattern as a thin solid, drawn by a camera of its
 //!   own into an image (as the Repair panel's), with the outline, dashed bend centrelines, every
 //!   joint's label (a bend's beside the middle of its centre line, a rip's off the sheet) and a
-//!   view cube of its own; right-drag orbits, middle-drag pans, the wheel zooms. Zoom to fit
-//!   keeps the flat clear of the cube's box.
+//!   view ball of its own; right-drag orbits, middle-drag pans, the wheel zooms. Zoom to fit
+//!   keeps the flat clear of the ball's box.
 //! - **Its right-click menu** (lesson 15 t0026.5; SM14.1, SM15.1, SM16.1) is for the part
 //!   under the pointer (hit-tested on the flat's pieces; orange while the menu is open), named
 //!   in its items: New sketch on, Copy, Create drawing of and Export DXF/DWG of "Flat pattern of
@@ -39,7 +39,7 @@
 //! Names: `smt-panel`, `smt-context`, `smt-bends-caret`, `smt-joints-caret`, rows
 //! `smt-bend-row-<i>` / `smt-joint-row-<i>` (from 0), cells `smt-bend-<i>-radius`,
 //! `smt-bend-<i>-value`, selects `smt-joint-<i>-type`, `smt-joint-<i>-style`, the flat view
-//! `smt-flat`, its cube `smt-flat-cube`, labels `smt-flat-label-<name>` and, by the model,
+//! `smt-flat`, its ball `smt-flat-cube`, labels `smt-flat-label-<name>` and, by the model,
 //! `smt-label-<name>`; menu items `smt-move-up`, `smt-move-down`, `smt-convert`, `smt-flat-sketch`,
 //! `smt-flat-copy`, `smt-flat-drawing`, `smt-flat-export`, `smt-flat-select-other`,
 //! `smt-zoom-fit`, `smt-normal-to`.
@@ -83,16 +83,16 @@ use cadrs_ui::{
     Column, Select, SelectChange, TableBody, TableHeader, TableRoot, TableRow, open_context_menu,
 };
 
-use crate::appearance::SidePanel;
 use crate::camera::{StandardView, ViewState};
 use crate::parts::PartCache;
+use crate::side_panel::SidePanel;
 use crate::viewport::{
     ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportArea, ViewportRect,
     ViewportView,
 };
 use crate::{ActiveDocument, AppState};
 
-/// The render layer of the flat view, and of its cube's rotate arrows.
+/// The render layer of the flat view, and of its ball's ring.
 pub const FLAT_LAYER: usize = 9;
 pub const FLAT_CUBE_ARC_LAYER: usize = 10;
 /// The panel's width (px): about Onshape's share of the window.
@@ -248,7 +248,7 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     c.render_layers = RenderLayers::layer(FLAT_LAYER);
     let (c, _) = store.config_mut::<FlatCubeArcGizmos>();
     c.render_layers = RenderLayers::layer(FLAT_CUBE_ARC_LAYER);
-    c.line.width = 12.0;
+    c.line.width = crate::view_cube::RING_WIDTH;
 }
 
 /// The panel's state (view state: not saved, not undone).
@@ -353,7 +353,7 @@ struct FlatCubeImage;
 #[derive(Component)]
 struct FlatMesh;
 
-/// An axis letter of the flat view cube's triad.
+/// An axis letter on the flat view ball's knobs.
 #[derive(Component)]
 struct FlatAxisLabel(Vec3);
 
@@ -842,9 +842,9 @@ fn modify_joint(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The strip button and the panel
+// The tab bar's button and the panel
 
-/// The strip's button shows in a Part Studio with a sheet metal model; the panel closes when
+/// The tab bar's button shows in a Part Studio with a sheet metal model; the panel closes when
 /// there is none. While a Sheet metal model dialog is open the panel stays (P3I.8, SM17.2: the
 /// table and flat follow the picks, even through a pick that leaves the model failing for a
 /// moment).
@@ -1026,7 +1026,7 @@ fn sync_panel(
             Name::new("smt-panel"),
             PanelRoot,
             DespawnOnExit(AppState::Document),
-            crate::appearance::side_panel_node(&theme),
+            crate::side_panel::side_panel_node(&theme),
         ))
         .id();
     commands
@@ -1154,7 +1154,7 @@ fn sync_panel(
             b.spawn((
                 Name::new("smt-flat-cube"),
                 FlatCubeImage,
-                ImageNode::new(cube),
+                crate::view_cube::BallImage(cube),
                 Node {
                     position_type: PositionType::Absolute,
                     right: Val::Px(0.0),
@@ -1166,21 +1166,12 @@ fn sync_panel(
             ))
             .observe(on_cube_click)
             .with_children(|c| {
-                // The triad's letters (the flat is seen from the top: X and Y).
-                for (axis, letter, color) in [
-                    (Vec3::X, "X", Color::srgb_u8(0xd0, 0x30, 0x30)),
-                    (Vec3::Y, "Y", Color::srgb_u8(0x3a, 0x9a, 0x3a)),
-                    (Vec3::Z, "Z", th.axis_z),
-                ] {
+                // The axes' letters on their knobs (the flat is seen from the top: X and Y).
+                for (axis, letter) in [(Vec3::X, "X"), (Vec3::Y, "Y"), (Vec3::Z, "Z")] {
                     c.spawn((
                         Name::new(format!("smt-flat-axis-{}", letter.to_lowercase())),
                         FlatAxisLabel(axis),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            ..default()
-                        },
-                        th.text(letter, 12.0, FontWeight::BOLD, color),
-                        Pickable::IGNORE,
+                        crate::view_cube::axis_letter(&th, letter),
                     ));
                 }
             });
@@ -2881,7 +2872,7 @@ pub fn zoom_to_fit(world: &mut World) {
         Vec3::new(hi.x as f32, hi.y as f32, z),
     ];
     if let Some(size) = size {
-        // The cube's box sits in the top-right corner: the flat goes left of it or under it,
+        // The ball's box sits in the top-right corner: the flat goes left of it or under it,
         // whichever shows it larger, centred in what is left.
         let cube = crate::view_cube::CUBE_WIDGET;
         let beside = Vec2::new((size.x - cube.x).max(1.0), size.y);
@@ -3459,7 +3450,7 @@ fn draw_cube_arcs(
 ) {
     use crate::view_cube::CubeColors;
     if is_open(&open, &kind) && t.key.is_some() {
-        crate::view_cube::draw_cube_arcs(&mut arcs, &t.view, theme.view_cube_arc());
+        crate::view_cube::draw_ball_ring(&mut arcs, &t.view, theme.view_cube_arc(), &[]);
     }
 }
 
@@ -3691,7 +3682,7 @@ fn place_folded_labels(
     }
 }
 
-/// The flat view cube's axis letters follow its view, as the main cube's do.
+/// The flat view ball's axis letters follow its view, as the main ball's do.
 fn place_flat_axes(
     t: Res<SmTable>,
     mut q: Query<(&FlatAxisLabel, &ComputedNode, &mut Node, &mut TextColor)>,

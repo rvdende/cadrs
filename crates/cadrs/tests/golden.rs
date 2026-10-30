@@ -1573,12 +1573,6 @@ fn golden_course_td_tab_folders() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_td_tab_manager() {
-    run_scenario("course_td_tab_manager");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_td_many_tabs() {
     run_scenario("course_td_many_tabs");
 }

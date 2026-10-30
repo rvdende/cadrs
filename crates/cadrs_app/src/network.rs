@@ -266,10 +266,15 @@ fn rate(bytes_per_second: f64) -> String {
 }
 
 fn on_button(a: On<Activate>, q: Query<(), With<NetButton>>, mut commands: Commands) {
-    if !q.contains(a.entity) {
-        return;
+    if q.contains(a.entity) {
+        open_network_menu(&mut commands, a.entity);
     }
-    let anchor = a.entity;
+}
+
+/// Opens the network menu under `anchor`: the network button, or the account button while the
+/// network button is folded into its menu (`crate::top_bar`). The menu's picks come to
+/// `anchor`, for [`network_menu_action`].
+pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
     commands.queue(move |world: &mut World| {
         let state = NetState::of(world);
         // Who else is in the shared document open now: their name, and where they are and
@@ -395,10 +400,14 @@ fn on_button(a: On<Activate>, q: Query<(), With<NetButton>>, mut commands: Comma
 }
 
 fn on_menu_action(ev: On<MenuAction>, q: Query<(), With<NetButton>>, mut commands: Commands) {
-    if !q.contains(ev.entity) {
-        return;
+    if q.contains(ev.entity) {
+        network_menu_action(&mut commands, &ev.item);
     }
-    match ev.item.as_str() {
+}
+
+/// Carries out a pick from the network menu (`network-…`).
+pub(crate) fn network_menu_action(commands: &mut Commands, item: &str) {
+    match item {
         "network-connect" => commands.queue(|w: &mut World| {
             connect(w);
         }),

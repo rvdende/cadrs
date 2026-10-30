@@ -47,7 +47,7 @@ impl Plugin for InputPlugin {
             )
             .add_systems(
                 PostUpdate,
-                fix_selection_end
+                (fix_selection_end, grow_with_text)
                     .in_set(bevy::ui::UiSystems::PostLayout)
                     .after(bevy::ui::widget::update_editable_text_layout),
             );
@@ -117,6 +117,15 @@ pub struct TextInputPlaceholder;
 /// empties the field (gpui-component's `Input::cleanable`).
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TextInputClear;
+
+/// Put on a [`TextInput`]'s frame, widens it with its text from `min` up to `max` px (a name
+/// typed longer than the field held, as the document name's: the field kept the old name's width
+/// and scrolled the start of the new one out of view).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct GrowWithText {
+    pub min: f32,
+    pub max: f32,
+}
 
 /// Overrides the caret blink period of every text input (the harness sets a very long period so
 /// screenshots always show the caret).
@@ -788,6 +797,39 @@ fn fix_selection_end(
         if same_line && (caret.min.x - last.max.x).abs() < 1.0 {
             let n = info.selection_rects.len();
             info.bypass_change_detection().selection_rects[n - 1].max.x = caret.max.x + 1.0;
+        }
+    }
+}
+
+/// Sizes each [`GrowWithText`] frame to its text once the text is laid out. Bevy applies typed
+/// text after the UI layout, so the new width takes effect a frame later; until then a line's
+/// height of room past the text (wider than any one character) keeps the caret in view, where
+/// it would otherwise scroll the text.
+#[allow(clippy::type_complexity)]
+fn grow_with_text(
+    mut q_frame: Query<(&GrowWithText, &ComputedNode, &Children, &mut Node), With<TextInputFrame>>,
+    q_field: Query<(&ComputedNode, &bevy::text::TextLayoutInfo), With<TextInputField>>,
+) {
+    for (grow, frame, children, mut node) in &mut q_frame {
+        let Some((field, info)) = children.iter().find_map(|c| q_field.get(c).ok()) else {
+            continue;
+        };
+        if frame.size().x <= 0.0 {
+            continue;
+        }
+        // Physical pixels: the frame's border, padding and any icons, and the text.
+        let chrome = frame.size().x - field.size().x;
+        let caret_end = info.cursor.map_or(0.0, |(_, caret)| caret.max.x);
+        let text = info.size.x.max(caret_end) + info.size.y;
+        let width = ((chrome + text) * frame.inverse_scale_factor())
+            .ceil()
+            .min(grow.max)
+            .max(grow.min);
+        // A pixel's play, so rounding can't change the width every frame (each change costs a
+        // full UI layout).
+        let close = matches!(node.width, Val::Px(now) if (now - width).abs() < 1.0);
+        if !close {
+            node.width = Val::Px(width);
         }
     }
 }

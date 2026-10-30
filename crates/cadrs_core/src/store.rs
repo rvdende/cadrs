@@ -880,6 +880,7 @@ mod migrate {
                         folders: Vec::new(),
                         suppressed: Vec::new(),
                         rollback: None,
+                        part_folders: Vec::new(),
                     },
                     ElementKindV1::Assembly => cur::ElementKind::Assembly,
                 },

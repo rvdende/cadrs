@@ -37,6 +37,7 @@ impl Plugin for PartsListPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GroupsOpen>()
             .init_resource::<BoardsOpen>()
+            .init_resource::<ShownParts>()
             .add_systems(
                 Update,
                 (
@@ -64,7 +65,11 @@ pub struct PartRow(pub PartId);
 
 /// A group header ("Parts (n)", "Surfaces (n)").
 #[derive(Component, Debug, Clone, Copy)]
-struct GroupHeader(PartKind);
+pub(crate) struct GroupHeader(PartKind);
+
+/// The parts the list shows, top to bottom (a Shift+click selects the run between two).
+#[derive(Resource, Debug, Clone, Default)]
+pub struct ShownParts(pub Vec<PartId>);
 
 /// Which groups are open.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -107,13 +112,18 @@ struct PartMenuFor(PartId);
 /// long list builds only the rows it shows by it.
 pub const PART_ROW_PITCH: f32 = 24.0;
 
-/// What the rows were built from (and the boards with their components, and the open ones).
+/// A part's row: (id, name, kind, bold, hidden, composite).
+type PartRowKey = (PartId, String, PartKind, bool, bool, bool);
+
+/// What the rows were built from (and the boards with their components, the open ones, and the
+/// folders).
 type RowKey = (
-    Vec<(PartId, String, PartKind, bool, bool, bool)>,
+    Vec<PartRowKey>,
     bool,
     bool,
     Vec<(PartId, Vec<PartId>)>,
     Vec<PartId>,
+    Vec<cadrs_core::document::PartFolder>,
 );
 
 /// Rebuilds the groups and rows when the parts, their names or visibility change.
@@ -124,6 +134,7 @@ fn rebuild_part_list(
     over: Res<PartOverride>,
     open: Res<GroupsOpen>,
     boards_open: Res<BoardsOpen>,
+    mut shown_parts: ResMut<ShownParts>,
     mut q_rows: Query<(
         Entity,
         Ref<PartRows>,
@@ -172,7 +183,7 @@ fn rebuild_part_list(
     } else {
         &cache.parts
     };
-    let rows: Vec<(PartId, String, PartKind, bool, bool, bool)> = listed
+    let rows: Vec<PartRowKey> = listed
         .iter()
         // P3B.9: an assembly context's parts are not the studio's.
         .filter(|p| !cadrs_core::assembly::context::is_context(p.feature))
@@ -200,12 +211,18 @@ fn rebuild_part_list(
         })
         .filter(|(_, c)| !c.is_empty())
         .collect();
+    let folders = doc
+        .as_deref()
+        .and_then(|d| d.active_element())
+        .map(|e| e.part_folders().to_vec())
+        .unwrap_or_default();
     let key = (
         rows,
         open.parts,
         open.surfaces,
         boards,
         boards_open.0.clone(),
+        folders,
     );
     if !added && !moved && last.as_ref() == Some(&key) {
         return;
@@ -214,6 +231,7 @@ fn rebuild_part_list(
     // A long list builds the rows near what it shows, spacers standing in for the rest.
     let windowed = window.window_for(window.total.max(key.0.len()));
     let mut slots = cadrs_ui::virtual_rows::Slots::new(windowed.clone());
+    let mut shown = Vec::new();
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
         let above = windowed.is_some().then(|| {
@@ -221,8 +239,7 @@ fn rebuild_part_list(
                 .id()
         });
         for kind in [PartKind::Solid, PartKind::Surface] {
-            let members: Vec<&(PartId, String, PartKind, bool, bool, bool)> =
-                key.0.iter().filter(|r| r.2 == kind).collect();
+            let members: Vec<&PartRowKey> = key.0.iter().filter(|r| r.2 == kind).collect();
             // Onshape shows "Parts (0)" in an empty studio, and the other groups once they have
             // something.
             if kind == PartKind::Surface && members.is_empty() {
@@ -246,22 +263,51 @@ fn rebuild_part_list(
                 continue;
             }
             let component = |id: &PartId| key.3.iter().any(|(_, c)| c.contains(id));
-            for m in members.iter().filter(|m| !component(&m.0)) {
-                let folder = key.3.iter().find(|(b, _)| *b == m.0);
-                let open = folder.is_some_and(|(b, _)| key.4.contains(b));
-                if slots.take(PART_ROW_PITCH) {
-                    spawn_row(c, &t, m, kind, 22.0, folder.map(|_| open));
+            let rows = Rows {
+                members: &members,
+                boards: &key.3,
+                boards_open: &key.4,
+                kind,
+            };
+            // The folders first, each with this group's parts in it (an empty one, or one whose
+            // parts aren't built, under Parts).
+            for folder in &key.5 {
+                let inside: Vec<&PartRowKey> = members
+                    .iter()
+                    .filter(|m| folder.parts.contains(&m.0) && !component(&m.0))
+                    .copied()
+                    .collect();
+                let listed_elsewhere = key.0.iter().any(|r| folder.parts.contains(&r.0));
+                if inside.is_empty() && (kind != PartKind::Solid || listed_elsewhere) {
+                    continue;
                 }
-                if let Some((_, comps)) = folder.filter(|_| open) {
-                    for cm in comps
-                        .iter()
-                        .filter_map(|id| members.iter().find(|r| r.0 == *id))
-                    {
-                        if slots.take(PART_ROW_PITCH) {
-                            spawn_row(c, &t, cm, kind, 40.0, None);
-                        }
+                if slots.take(PART_ROW_PITCH) {
+                    c.spawn(crate::part_folders::folder_row(
+                        &t,
+                        folder.id,
+                        &folder.name,
+                        inside.len(),
+                        folder.open,
+                    ))
+                    .entry::<Node>()
+                    .and_modify(|mut n| {
+                        n.height = Val::Px(22.0);
+                        n.margin =
+                            UiRect::new(Val::Px(2.0), Val::Px(7.0), Val::Px(1.0), Val::Px(1.0));
+                    });
+                }
+                if folder.open {
+                    for m in inside {
+                        rows.spawn(c, &t, &mut slots, &mut shown, m, 40.0, Some(folder.id));
                     }
                 }
+            }
+            let in_folder = |id: &PartId| key.5.iter().any(|f| f.parts.contains(id));
+            for m in members
+                .iter()
+                .filter(|m| !component(&m.0) && !in_folder(&m.0))
+            {
+                rows.spawn(c, &t, &mut slots, &mut shown, m, 22.0, None);
             }
         }
         if let Some(above) = above {
@@ -274,17 +320,62 @@ fn rebuild_part_list(
         }
     });
     window.bypass_change_detection().total = slots.count();
+    shown_parts.0 = shown;
     *last = Some(key);
 }
 
-/// A part's row: `left` its indent; `folder` a board's chevron (open or not).
+/// A group's parts, for spawning their rows.
+struct Rows<'a> {
+    members: &'a [&'a PartRowKey],
+    boards: &'a [(PartId, Vec<PartId>)],
+    boards_open: &'a [PartId],
+    kind: PartKind,
+}
+
+impl Rows<'_> {
+    /// A part's row at `left`, in `folder`, and a derived board's components under it when it
+    /// is open; each one shown is noted in `shown`.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn(
+        &self,
+        c: &mut ChildSpawnerCommands,
+        t: &Theme,
+        slots: &mut cadrs_ui::virtual_rows::Slots,
+        shown: &mut Vec<PartId>,
+        m: &PartRowKey,
+        left: f32,
+        folder: Option<cadrs_core::FeatureId>,
+    ) {
+        let board = self.boards.iter().find(|(b, _)| *b == m.0);
+        let open = board.is_some_and(|(b, _)| self.boards_open.contains(b));
+        shown.push(m.0);
+        if slots.take(PART_ROW_PITCH) {
+            spawn_row(c, t, m, self.kind, left, board.map(|_| open), folder);
+        }
+        if let Some((_, comps)) = board.filter(|_| open) {
+            for cm in comps
+                .iter()
+                .filter_map(|id| self.members.iter().find(|r| r.0 == *id))
+            {
+                shown.push(cm.0);
+                if slots.take(PART_ROW_PITCH) {
+                    spawn_row(c, t, cm, self.kind, left + 18.0, None, folder);
+                }
+            }
+        }
+    }
+}
+
+/// A part's row: `left` its indent; `folder` a board's chevron (open or not); `in_folder` the
+/// Parts list folder it is in.
 fn spawn_row(
     c: &mut ChildSpawnerCommands,
     t: &Theme,
-    m: &(PartId, String, PartKind, bool, bool, bool),
+    m: &PartRowKey,
     kind: PartKind,
     left: f32,
     folder: Option<bool>,
+    in_folder: Option<cadrs_core::FeatureId>,
 ) {
     let (id, label, _, bold, hidden, is_composite) = m;
     let visuals = Visuals {
@@ -345,6 +436,9 @@ fn spawn_row(
     ));
     if folder.is_some() {
         row.insert(BoardFolder(*id));
+    }
+    if let Some(f) = in_folder {
+        row.insert(crate::part_folders::InPartFolder(f));
     }
     row.insert(visuals).entry::<Node>().and_modify(|mut n| {
         n.height = Val::Px(22.0);
@@ -428,6 +522,24 @@ fn on_part_context_menu(
     };
     let name = cache.part_name(row.0).unwrap_or("part").to_string();
     let hidden = cache.is_hidden_part(row.0);
+    // Add to folder ▸ a new folder or one there is (`crate::part_folders`).
+    let el = doc.as_deref().and_then(|d| d.active_element());
+    let mut into: Vec<MenuEntry> = vec![
+        MenuItem::new("part-folder-new", "New folder")
+            .icon("folder-new")
+            .into(),
+    ];
+    for (i, f) in el.map_or(&[][..], |e| e.part_folders()).iter().enumerate() {
+        if i == 0 {
+            into.push(MenuEntry::Separator);
+        }
+        into.push(
+            MenuItem::new(format!("part-folder-{i}"), f.name.clone())
+                .icon("folder")
+                .into(),
+        );
+    }
+    let in_folder = el.is_some_and(|e| e.part_folder_of(row.0).is_some());
     let menu = Menu::new("part-context-menu")
         .min_width(180.0)
         .item_height(22.0)
@@ -435,6 +547,18 @@ fn on_part_context_menu(
         .item(MenuItem::new("part-properties", "Properties…"))
         .item(MenuItem::new("part-material", "Assign material…"))
         .item(MenuItem::new("part-appearance", "Edit appearance…"))
+        .separator()
+        .item(
+            MenuItem::new("part-folder", "Add to folder")
+                .icon("folder")
+                .submenu(into),
+        );
+    let menu = if in_folder {
+        menu.item(MenuItem::new("part-folder-remove", "Remove from folder"))
+    } else {
+        menu
+    };
+    let menu = menu
         .separator()
         .item(MenuItem::new("part-copy-here", "Copy here…").planned())
         .item(
@@ -506,6 +630,33 @@ fn on_part_menu_action(
     let part = target.0;
     match ev.item.as_str() {
         "part-rename" => commands.queue(move |world: &mut World| rename_part(world, part)),
+        "part-folder-new" => commands.queue(move |world: &mut World| {
+            let parts = targets(world, part);
+            crate::part_folders::new_folder(world, parts);
+        }),
+        "part-folder-remove" => commands.queue(move |world: &mut World| {
+            let parts = targets(world, part);
+            crate::part_folders::move_to_folder(world, parts, None);
+        }),
+        item if item.starts_with("part-folder-") => {
+            let Some(i) = item
+                .strip_prefix("part-folder-")
+                .and_then(|i| i.parse::<usize>().ok())
+            else {
+                return;
+            };
+            commands.queue(move |world: &mut World| {
+                let folder = world
+                    .get_resource::<ActiveDocument>()
+                    .and_then(|d| d.active_element())
+                    .and_then(|e| e.part_folders().get(i))
+                    .map(|f| f.id);
+                if let Some(folder) = folder {
+                    let parts = targets(world, part);
+                    crate::part_folders::move_to_folder(world, parts, Some(folder));
+                }
+            });
+        }
         // P3E.3a: the part (or the selected parts it is among).
         "part-zoom" => commands.queue(move |world: &mut World| {
             let parts = targets(world, part);
