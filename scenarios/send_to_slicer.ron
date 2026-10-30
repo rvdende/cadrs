@@ -1,8 +1,10 @@
 // Issue #176: a part's context menu › Send to slicer lists the slicers installed here (with
 // CADRS_SLICER=<program>, one's own first); choosing one makes a binary STL of the part in a
 // folder of cadrs's own and starts the slicer with it.
+// Run it with CADRS_SLICER=<a program named fake-slicer> (one's own slicer has id 255): e.g. a
+// script that logs its arguments, which then name `<cache>/cadrs/slicer/<time>/Part 1.stl`.
 // 01 Send to slicer ▸ the slicers.
-// 02 sent: "Sent Part 1 to …".
+// 02 sent: "Sent Part 1 to fake-slicer".
 Scenario(
     start: Some("document"),
     steps: [
@@ -27,7 +29,7 @@ Scenario(
         Hover(ui("part-send-slicer")),
         Wait(10),
         Screenshot("01-send-to-slicer-menu"),
-        Click(ui("part-send-slicer:fake-slicer")),
+        Click(ui("part-send-slicer:255:fake-slicer")),
         Wait(30),
         Screenshot("02-sent"),
     ],

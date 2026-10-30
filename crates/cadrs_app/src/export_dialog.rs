@@ -956,15 +956,19 @@ struct RunningSend {
     name: String,
 }
 
-/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: one binary STL in
-/// millimetres, made as an export is ([`finish_sends`] opens it in the slicer). The slicer is
-/// remembered as the last one used.
+/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: a binary STL in
+/// millimetres each, made as an export is ([`finish_sends`] opens them in the slicer, which
+/// is then remembered as the last one used). Like an export, it needs the Export right on a
+/// shared document.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn send_to_slicer(
     world: &mut World,
     parts: Vec<PartId>,
     slicer: cadrs_core::slicer::Slicer,
 ) {
+    if crate::collab::lacks(world, |r| r.export, "export") {
+        return;
+    }
     let items = match items(world, &ExportSource::Parts(parts)) {
         Ok(i) if !i.is_empty() => i,
         Ok(_) => {
@@ -987,8 +991,9 @@ pub(crate) fn send_to_slicer(
             .map(|d| d.doc.name.clone())
             .unwrap_or_else(|| "Parts".into()),
     };
-    crate::preferences_ui::set_last_slicer(world, slicer.id);
-    let req = ExportRequest::new(ModelFormat::Stl { binary: true }, name.clone(), items);
+    let mut req = ExportRequest::new(ModelFormat::Stl { binary: true }, name.clone(), items);
+    // A file a part: the slicer gets them as separate objects.
+    req.individual = true;
     let pending = cadrs_core::rebuild::exchange::export_files(req);
     world.spawn((
         Name::new("running-send"),
@@ -1001,7 +1006,8 @@ pub(crate) fn send_to_slicer(
     ));
 }
 
-/// Writes a finished send's mesh to a new file of cadrs's own and opens it in its slicer.
+/// Writes a finished send's meshes into a new folder of cadrs's own and opens them in its
+/// slicer.
 #[cfg(not(target_arch = "wasm32"))]
 fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut commands: Commands) {
     for (e, run) in &q {
@@ -1015,19 +1021,34 @@ fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut command
         let sent = result
             .unwrap_or_else(|| Err("The kernel thread stopped".into()))
             .and_then(|files| {
-                let mesh = files.first().ok_or("no mesh was made")?;
-                let path = cadrs_core::slicer::send_path(&run.name, now)
-                    .map_err(|e| format!("cannot make the file: {e}"))?;
-                std::fs::write(&path, &mesh.bytes)
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                if files.is_empty() {
+                    return Err("no mesh was made".to_string());
+                }
+                let base = cadrs_core::slicer::cache_dir();
+                let dir = cadrs_core::slicer::send_dir(&base, now)
+                    .map_err(|e| format!("{}: {e}", base.display()))?;
+                let paths = files
+                    .iter()
+                    .map(|f| {
+                        let name = f.part.as_deref().unwrap_or(&run.name);
+                        cadrs_core::slicer::write_mesh(&dir, name, &f.bytes)
+                            .map_err(|e| format!("{}: {e}", dir.display()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 run.slicer
-                    .open(&path)
+                    .open(&paths)
                     .map_err(|e| format!("cannot start {}: {e}", run.slicer.name))?;
-                info!("sent {} to {}", path.display(), run.slicer.name);
+                info!("sent {} to {}", dir.display(), run.slicer.name);
                 Ok(())
             });
         let note = match sent {
-            Ok(()) => Notification::info(format!("Sent {} to {}", run.name, run.slicer.name)),
+            Ok(()) => {
+                let id = run.slicer.id;
+                commands.queue(move |world: &mut World| {
+                    crate::preferences_ui::set_last_slicer(world, id)
+                });
+                Notification::info(format!("Sent {} to {}", run.name, run.slicer.name))
+            }
             Err(why) => Notification::warning(format!("Send to slicer failed: {why}")),
         };
         show_notification(&mut commands, &theme, note.name("slicer-toast"));
