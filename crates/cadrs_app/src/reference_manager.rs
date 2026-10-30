@@ -285,8 +285,8 @@ fn sync_tab_badges(
 #[derive(Component)]
 struct UpdateAllButton;
 
-/// "Update all references to latest versions" (ER4.3), right of undo and redo; shown in
-/// documents that reference versions or other documents.
+/// "Update all references to latest versions" (ER4.3), at the toolbar's left end, and the
+/// separator after it: shown in documents that reference versions or other documents.
 pub fn update_all_button(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn((
         ToolButton::new("update-all-references", "arrow-up")
@@ -299,6 +299,9 @@ pub fn update_all_button(tb: &mut ChildSpawnerCommands, t: &Theme) {
     ))
     .entry::<Node>()
     .and_modify(|mut n| n.display = Display::None);
+    tb.spawn((UpdateAllButton, cadrs_ui::toolbar_separator(t)))
+        .entry::<Node>()
+        .and_modify(|mut n| n.display = Display::None);
 }
 
 fn sync_update_all_button(status: Res<LinkStatus>, mut q: Query<&mut Node, With<UpdateAllButton>>) {

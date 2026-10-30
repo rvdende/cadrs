@@ -52,7 +52,7 @@ use cadrs_core::variable_studio::{self as vs, InsertedTable, SetVariableStudio, 
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, Column, ContextMenuRequested, GridCell, GridCellCommit, MenuAction, TabStrip,
-    TabStripSelect, TableHeader, TableRoot, TableRow, VersionGraphSelect, toolbar_separator,
+    TabStripSelect, TableHeader, TableRoot, TableRow, VersionGraphSelect,
 };
 use cadrs_vars::studio::{self, StudioVariable};
 use cadrs_vars::{VariableFeature, VariableType};
@@ -234,10 +234,8 @@ struct AvailableBox;
 // ---------------------------------------------------------------------------------------------
 // The toolbar
 
-/// The Variable Studio's toolbar: undo, redo and Insert Variable Studio.
+/// The Variable Studio's toolbar: Insert Variable Studio.
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    crate::document::undo_redo(tb, t);
-    tb.spawn(toolbar_separator(t));
     tb.spawn(
         ToolButton::new("variable-studio-insert", "file-import")
             .label("Insert Variable Studio")

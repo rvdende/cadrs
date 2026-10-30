@@ -9,8 +9,9 @@
 //!   ([`crate::identity`]).
 //! - **Icon rail** on the left, as tall as its icons; the feature list's icon is on it while
 //!   the panel is hidden.
-//! - **Toolbar**: undo, redo, **Sketch** (the only text button) and the feature tools, then
-//!   "Search tools… alt c". Assemblies get their own toolbar (Insert and the mate tools).
+//! - **Toolbar**: **Sketch** (the only text button) and the feature tools, then "Search tools…
+//!   alt c" (which also has Undo and Redo). Assemblies get their own toolbar (Insert and the mate
+//!   tools).
 //! - **Feature list** panel: filter (with the panel's ‹ that hides it), "Features (4)", the
 //!   Default geometry tree (Origin, Top, Front, Right), the rollback bar and a collapsible
 //!   "Parts (0)"; assemblies show the instance list instead. The grip in the gap on its right
@@ -62,7 +63,6 @@ impl Plugin for DocumentPlugin {
             .add_systems(
                 Update,
                 (
-                    update_undo_buttons,
                     sync_search_tools,
                     finish_loading,
                     rebuild_tabs,
@@ -107,12 +107,6 @@ impl Plugin for DocumentPlugin {
 
 // ---------------------------------------------------------------------------------------------
 // Components
-
-#[derive(Component)]
-struct UndoButton;
-
-#[derive(Component)]
-struct RedoButton;
 
 /// A tab in the bottom tab bar.
 #[derive(Component, Debug, Clone, Copy)]
@@ -1447,8 +1441,21 @@ pub fn undo_floor(
         .unwrap_or(0)
 }
 
+/// Whether there is a step to undo (not the insertion of the sketch whose dialog is open) and
+/// one to redo: Search tools' Undo and Redo ([`crate::search_tools`]).
+pub(crate) fn can_undo_redo(world: &World) -> (bool, bool) {
+    let floor = undo_floor(
+        world.get_resource::<SketchSession>(),
+        world.get_resource::<crate::extrude::ExtrudeSession>(),
+    );
+    world
+        .get_resource::<ActiveDocument>()
+        .map(|d| (d.history.undo_len() > floor, d.history.can_redo()))
+        .unwrap_or((false, false))
+}
+
 /// Undo, unless it would undo the insertion of the sketch whose dialog is open.
-fn undo_step(world: &mut World) {
+pub(crate) fn undo_step(world: &mut World) {
     let floor = undo_floor(
         world.get_resource::<SketchSession>(),
         world.get_resource::<crate::extrude::ExtrudeSession>(),
@@ -1461,33 +1468,12 @@ fn undo_step(world: &mut World) {
     }
 }
 
-fn redo_step(world: &mut World) {
+pub(crate) fn redo_step(world: &mut World) {
     if let Some(mut d) = world.get_resource_mut::<ActiveDocument>()
         && d.redo().is_some()
     {
         cadrs_ui::close_transient_toasts(world);
     }
-}
-
-pub(crate) fn undo_redo(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    tb.spawn((
-        ToolButton::new("undo", "undo")
-            .tooltip("Undo (Ctrl+Z)")
-            .build(t),
-        UndoButton,
-        observe(|_: On<Activate>, mut commands: Commands| {
-            commands.queue(undo_step);
-        }),
-    ));
-    tb.spawn((
-        ToolButton::new("redo", "redo")
-            .tooltip("Redo (Ctrl+Y)")
-            .build(t),
-        RedoButton,
-        observe(|_: On<Activate>, mut commands: Commands| {
-            commands.queue(redo_step);
-        }),
-    ));
 }
 
 /// The toolbar's "Search tools…" box.
@@ -1592,10 +1578,8 @@ pub(crate) fn search_tools(tb: &mut ChildSpawnerCommands, t: &Theme) {
 }
 
 fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    undo_redo(tb, t);
     // P3G.2 (ER4.3): shown when the document references versions.
     crate::reference_manager::update_all_button(tb, t);
-    tb.spawn(toolbar_separator(t));
     tb.spawn((
         ToolButton::new("sketch", "sketch")
             .label("Sketch")
@@ -2018,10 +2002,8 @@ fn pattern_menu() -> Menu {
 }
 
 fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    undo_redo(tb, t);
     // P3G.2 (ER4.3): shown when the document references versions.
     crate::reference_manager::update_all_button(tb, t);
-    tb.spawn(toolbar_separator(t));
     tb.spawn((
         ToolButton::new("insert", "file-import")
             .label("Insert")
@@ -5324,49 +5306,6 @@ fn document_shortcuts(
         };
         if changed {
             commands.queue(cadrs_ui::close_transient_toasts);
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn update_undo_buttons(
-    doc: Option<Res<ActiveDocument>>,
-    session: Option<Res<SketchSession>>,
-    extrude: Option<Res<crate::extrude::ExtrudeSession>>,
-    mut commands: Commands,
-    q_undo: Query<(Entity, Has<bevy::ui::InteractionDisabled>), With<UndoButton>>,
-    q_redo: Query<(Entity, Has<bevy::ui::InteractionDisabled>), With<RedoButton>>,
-    mut q_visuals: Query<&mut Visuals, Or<(With<UndoButton>, With<RedoButton>)>>,
-    theme: Res<Theme>,
-) {
-    // While the sketch dialog waits for a plane, the greyed-out undo and redo are as pale as
-    // the sketch tools (`screens/07`: about #dfdfdf).
-    let pale = session.as_ref().is_some_and(|s| s.waiting_for_plane);
-    let disabled_fg = if pale {
-        Color::srgb_u8(0xd7, 0xd7, 0xd7)
-    } else {
-        theme.tool_disabled_foreground
-    };
-    for mut v in &mut q_visuals {
-        if v.foreground.disabled != disabled_fg {
-            v.foreground.disabled = disabled_fg;
-        }
-    }
-    let floor = undo_floor(session.as_deref(), extrude.as_deref());
-    let (can_undo, can_redo) = doc
-        .map(|d| (d.history.undo_len() > floor, d.history.can_redo()))
-        .unwrap_or((false, false));
-    let states = q_undo
-        .iter()
-        .map(|(e, d)| (e, d, can_undo))
-        .chain(q_redo.iter().map(|(e, d)| (e, d, can_redo)));
-    for (e, disabled, enabled) in states {
-        if enabled && disabled {
-            commands
-                .entity(e)
-                .try_remove::<bevy::ui::InteractionDisabled>();
-        } else if !enabled && !disabled {
-            commands.entity(e).try_insert(bevy::ui::InteractionDisabled);
         }
     }
 }

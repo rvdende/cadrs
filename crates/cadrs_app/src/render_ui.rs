@@ -763,10 +763,8 @@ pub struct RenderPanelHost;
 #[derive(Component, PartialEq, Eq, Clone, Copy)]
 struct PanelKey(u64);
 
-/// The toolbar of a Render tab: Undo, Redo, Render….
+/// The toolbar of a Render tab: Render….
 pub fn render_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    crate::document::undo_redo(tb, t);
-    tb.spawn(cadrs_ui::toolbar_separator(t));
     tb.spawn(
         Button::new("render-toolbar-render")
             .label("Render…")
