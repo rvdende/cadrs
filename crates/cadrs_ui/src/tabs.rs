@@ -136,8 +136,6 @@ impl Tab {
                 max_width: Val::Px(self.width),
                 flex_shrink: 0.0,
                 padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::ZERO, Val::ZERO),
-                // A short name sits in the middle of the narrowest tab, not to one side.
-                justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border: UiRect::bottom(Val::Px(if self.marked { 2.0 } else { 0.0 })),
                 column_gap: Val::Px(6.0),
@@ -183,7 +181,8 @@ impl Tab {
                             chevron_fg,
                             Node {
                                 flex_shrink: 0.0,
-                                margin: UiRect::left(Val::Px(-2.0)),
+                                // At the right end, as a drop-down's arrow.
+                                margin: UiRect::left(Val::Auto),
                                 ..default()
                             },
                         ),

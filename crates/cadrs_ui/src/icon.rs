@@ -49,9 +49,10 @@ pub fn has_icon(name: &str) -> bool {
     data::ICON_DATA.iter().any(|(n, ..)| *n == name)
 }
 
-/// The accent colour of icons' details: the theme's cyan (icon-rs draws them blue).
+/// The accent colour of icon-rs icons' details (their blue, the app icon's).
 pub fn accent_color() -> Color {
-    Color::srgb_u8(0x12, 0x9e, 0xa8)
+    let [r, g, b] = data::ACCENT;
+    Color::srgb_u8(r, g, b)
 }
 
 /// Handles to every rasterized icon, by name and pixel size.
