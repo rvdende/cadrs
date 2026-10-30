@@ -374,10 +374,12 @@ mod linux_backend {
             };
             bevy::log::info!("Connected to the spacenav daemon");
             loop {
-                let event = runtime.block_on(tokio::time::timeout(
-                    Duration::from_millis(100),
-                    client.wait_event(),
-                ));
+                // `timeout` registers its timer as soon as it is called. Building it as an
+                // argument of `block_on` runs that call before the runtime is entered, and the
+                // thread panics with "there is no reactor running".
+                let event = runtime.block_on(async {
+                    tokio::time::timeout(Duration::from_millis(100), client.wait_event()).await
+                });
                 match event {
                     Ok(Ok(SpnavEvent::Motion(motion))) => {
                         let sample = MotionSample {
