@@ -62,7 +62,7 @@ pub fn intersect(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> Option<Vec2> {
 }
 
 /// The two rays of an angle dimension: its vertex and unit directions.
-fn angle_rays(
+pub(crate) fn angle_rays(
     s: &Sketch,
     a: CurveRef,
     b: CurveRef,
@@ -71,7 +71,13 @@ fn angle_rays(
 ) -> Option<(Vec2, Vec2, Vec2)> {
     let (a1, a2) = line_ends(s, a)?;
     let (b1, b2) = line_ends(s, b)?;
-    let x = intersect(a1, a2, b1, b2)?;
+    // In line (turned 0° or 180°, #96): where their nearest ends are.
+    let x = intersect(a1, a2, b1, b2).or_else(|| {
+        [(a1, b1), (a1, b2), (a2, b1), (a2, b2)]
+            .into_iter()
+            .min_by(|p, q| p.0.distance(p.1).total_cmp(&q.0.distance(q.1)))
+            .map(|(p, q)| p.midpoint(q))
+    })?;
     let sign = |f: bool| if f { -1.0 } else { 1.0 };
     Some((
         x,
@@ -116,6 +122,7 @@ pub fn measure(s: &Sketch, kind: DimensionKind) -> Option<f64> {
             b,
             flip_a,
             flip_b,
+            ..
         } => {
             let (_, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
             angle_between(ra, rb)
@@ -301,13 +308,76 @@ pub enum Orientation {
 }
 
 /// Dimension `d`'s value measured on the geometry, on the side it is on (#96): a negative
-/// distance negative, an angle measured outside 360° less the one between its rays.
+/// distance negative, an angle turned its way round (the turn nearest its value: 400° stays
+/// 400°, not 40°).
 pub fn measured_value(s: &Sketch, d: &crate::Dimension) -> Option<f64> {
+    if let DimensionKind::Angle { .. } = d.kind {
+        let t = angle_turn(s, d.kind)?;
+        return Some(t + 360.0 * ((d.value - t) / 360.0).round());
+    }
     let v = measure(s, d.kind)?;
-    Some(match d.kind {
-        DimensionKind::Angle { .. } if d.value > 180.0 => 360.0 - v,
-        k if k.signed() && d.value < 0.0 => -v,
-        _ => v,
+    Some(if d.kind.signed() && d.value < 0.0 {
+        -v
+    } else {
+        v
+    })
+}
+
+/// Which way angle dimension `kind` turns (#96): anticlockwise, or not. One that doesn't say
+/// yet turns the way its rays turn the short way (anticlockwise when they are in line). `None`
+/// for another dimension, or lines that aren't there.
+pub fn angle_ccw(s: &Sketch, kind: DimensionKind) -> Option<bool> {
+    let DimensionKind::Angle {
+        a,
+        b,
+        flip_a,
+        flip_b,
+        ccw,
+    } = kind
+    else {
+        return None;
+    };
+    if ccw.is_some() {
+        return ccw;
+    }
+    let (_, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
+    Some(ra.cross(rb) >= 0.0)
+}
+
+/// How far angle dimension `kind`'s second ray is turned from its first on the geometry, its
+/// way round ([`angle_ccw`]), in degrees from 0 up to 360.
+pub fn angle_turn(s: &Sketch, kind: DimensionKind) -> Option<f64> {
+    let DimensionKind::Angle {
+        a,
+        b,
+        flip_a,
+        flip_b,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let way = if angle_ccw(s, kind)? { 1.0 } else { -1.0 };
+    let (_, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
+    Some(
+        (way * ra.cross(rb))
+            .atan2(ra.dot(rb))
+            .to_degrees()
+            .rem_euclid(360.0),
+    )
+}
+
+/// The arc angle dimension `d` is drawn with, in degrees its way round ([`angle_ccw`]): from
+/// ray to ray that way (0 up to 360), or the other way (negative) where its value's size is that
+/// way's: -30° the short way back, 330° the long way on, a label dragged outside its angle
+/// the other way round (#96).
+pub fn angle_sweep(s: &Sketch, d: &crate::Dimension) -> Option<f64> {
+    let t = angle_turn(s, d.kind)?;
+    let m = d.value.abs() % 360.0;
+    Some(if (m - t).abs() <= (m - (360.0 - t)).abs() {
+        t
+    } else {
+        t - 360.0
     })
 }
 
@@ -320,6 +390,7 @@ pub fn angle_outside(s: &Sketch, kind: DimensionKind, cursor: Vec2) -> Option<bo
         b,
         flip_a,
         flip_b,
+        ..
     } = kind
     else {
         return None;
@@ -569,6 +640,7 @@ pub fn propose_at(
                             b,
                             flip_a,
                             flip_b,
+                            ccw: None,
                         }
                     }
                     // Parallel lines: the distance between them (doubled across a centreline).
@@ -732,6 +804,7 @@ pub fn label_params(s: &Sketch, kind: DimensionKind, cursor: Vec2) -> Option<(f6
             b,
             flip_a,
             flip_b,
+            ..
         } => {
             let (x, ..) = angle_rays(s, a, b, flip_a, flip_b)?;
             Some((cursor.distance(x).max(1e-6), 0.0))
@@ -1047,16 +1120,12 @@ pub fn layout(s: &Sketch, d: &Dimension, st: LayoutStyle) -> Option<Layout> {
             b,
             flip_a,
             flip_b,
+            ..
         } => {
             let (x, ra, rb) = angle_rays(s, a, b, flip_a, flip_b)?;
             let r = d.offset.max(px(10.0));
-            let sweep = ra.cross(rb).atan2(ra.dot(rb));
-            // Over 180°: round the outside, the other way from ray to ray (#96).
-            let sweep = if d.value > 180.0 {
-                sweep - std::f64::consts::TAU.copysign(sweep)
-            } else {
-                sweep
-            };
+            let way = if angle_ccw(s, d.kind)? { 1.0 } else { -1.0 };
+            let sweep = (way * angle_sweep(s, d)?).to_radians();
             let arc = ArcGeom {
                 center: x,
                 radius: r,

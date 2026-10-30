@@ -435,7 +435,7 @@ fn place(world: &mut World, mut d: Dimension) {
     let id = world_sketch(world).and_then(|s| {
         s.dimensions
             .iter()
-            .find(|(_, x)| x.kind == d.kind)
+            .find(|(_, x)| x.kind.same(&d.kind))
             .map(|(k, _)| k)
     });
     if let Some(id) = id
@@ -956,7 +956,8 @@ mod tests {
                         a: cr,
                         b: cr,
                         flip_a: false,
-                        flip_b: false
+                        flip_b: false,
+                        ccw: None,
                     },
                     47.7291
                 ),

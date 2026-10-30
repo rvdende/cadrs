@@ -696,7 +696,7 @@ fn why(
 /// The features whose expressions can't be evaluated where they are (P3F.4): a variable used
 /// above its definition ("used before it is defined"), one defined nowhere, an expression
 /// that no longer evaluates (a Length variable in an angle field), or a sketch dimension's
-/// value it can't take (#96: a 360° angle, a 0 length). `features` are the ones
+/// value it can't take (#96: a 0 length). `features` are the ones
 /// that build (suppressed and rolled-back ones left out), in order.
 pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
     // Fast path: nothing names a variable and nothing defines one.
@@ -747,8 +747,8 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
             }
             FeatureKind::Sketch(sk) => {
                 for (id, e, q) in sketch_expressions(&sk.geometry) {
-                    // (Evaluated, and a value its dimension can take: #96, a 360° angle or a
-                    // 0 length would leave the sketch as it was without a word.)
+                    // (Evaluated, and a value its dimension can take: #96, a 0 length would
+                    // leave the sketch as it was without a word.)
                     let w = why("Dimension", &e, q, units, &env, &later).or_else(|| {
                         let d = sk.geometry.dimensions.get(id)?;
                         let v = units.eval_vars(&e, q, &env).ok()?;

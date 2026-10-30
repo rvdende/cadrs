@@ -1,9 +1,10 @@
-// #96: an angle dimension past 180° is measured round the outside, as Onshape. Two lines from
-// the origin, 45° apart, get an angle dimension placed between them; typing 270 measures the
-// angle round the outside (the lines end up 90° apart, the arc and value outside them). Dragging
-// the value back between the lines measures the angle between them again (90), and dragging it
-// outside once more measures it round the outside (270). Typing 360 is refused with a message.
-// A length typed as -40 flips the line to the other side of its start.
+// #96: an angle dimension turns its line like a hinge, to any value. Two lines from the origin,
+// 45° apart, get an angle dimension placed between them; typing 270 turns the second line on
+// round, past the first, to point down (the arc and value round the outside). Dragging the
+// value between the lines measures the same lines the other way round (90), and dragging it
+// outside again gives 270. Typing 180 puts the line in line with the first, and -30 turns it back
+// past it (the arc the short way back). A length typed as -40 flips the first line to the other
+// side of its start; the second, hinged on it, turns round with it.
 Scenario(
     start: Some("document"),
     steps: [
@@ -39,41 +40,49 @@ Scenario(
         Key("Enter"),
         MoveWorld(90, -45),
         Wait(2),
-        Screenshot("02-angle-270-round-the-outside"),
-        Drag(ui("dim-label-270°"), world(20, 9)),
+        Screenshot("02-angle-270-turned-past-the-first-line"),
+        Drag(ui("dim-label-270°"), world(14, -14)),
         MoveWorld(90, -45),
         Wait(2),
         Screenshot("03-dragged-between-the-lines-90"),
-        Drag(ui("dim-label-90°"), world(-12, -14)),
+        Drag(ui("dim-label-90°"), world(-12, 14)),
         MoveWorld(90, -45),
         Wait(2),
         Screenshot("04-dragged-outside-270"),
         DoubleClick(ui("dim-label-270°")),
         Key("Ctrl+A"),
-        Type("360"),
+        Type("180"),
         Key("Enter"),
+        MoveWorld(90, -45),
         Wait(2),
-        Screenshot("05-360-refused"),
-        Key("Escape"),
-        // A length typed negative puts the line's end on the other side of its start.
+        Screenshot("05-angle-180-in-line"),
+        DoubleClick(ui("dim-label-180°")),
+        Key("Ctrl+A"),
+        Type("-30"),
+        Key("Enter"),
+        MoveWorld(90, -45),
+        Wait(2),
+        Screenshot("06-angle-minus-30"),
+        // A length typed negative puts the line's end on the other side of its start; the line
+        // hinged on it turns round with it.
         Key("D"),
-        ClickWorld(20, 0),
-        MoveWorld(20, -8),
+        ClickWorld(32, 0),
+        MoveWorld(32, 10),
         Wait(2),
-        ClickWorld(20, -8),
+        ClickWorld(32, 10),
         Wait(2),
         Type("40"),
         Key("Enter"),
         Key("Escape"),
         MoveWorld(90, -45),
         Wait(2),
-        Screenshot("06-length-40"),
+        Screenshot("07-length-40"),
         DoubleClick(ui("dim-label-40")),
         Key("Ctrl+A"),
         Type("-40"),
         Key("Enter"),
         MoveWorld(90, -45),
         Wait(2),
-        Screenshot("07-length-minus-40-flipped"),
+        Screenshot("08-length-minus-40-flipped"),
     ],
 )

@@ -181,18 +181,21 @@ fn jacobians_match_finite_differences() {
             b: cref(l2),
             flip_a: false,
             flip_b: false,
+            ccw: None,
         },
         DimensionKind::Angle {
             a: cref(l1),
             b: cref(l2),
             flip_a: true,
             flip_b: false,
+            ccw: None,
         },
         DimensionKind::Angle {
             a: cref(l2),
             b: CurveRef::YAxis,
             flip_a: false,
             flip_b: true,
+            ccw: None,
         },
         DimensionKind::PointCircle {
             p: pref(lone),
@@ -872,6 +875,7 @@ fn new_dimension_residuals_hold_on_solved_geometry() {
         b: cref(l2),
         flip_a: fa,
         flip_b: fb,
+        ccw: None,
     };
     assert!((measured(&s, ang(false, false)) - 45.0).abs() < 1e-9);
     assert!((measured(&s, ang(true, false)) - 135.0).abs() < 1e-9);
@@ -894,6 +898,7 @@ fn angle_and_point_line_dimensions_drive_geometry() {
         b: cref(l2),
         flip_a: false,
         flip_b: false,
+        ccw: None,
     };
     dim(&mut s, ang, 30.0);
     assert!((measured(&s, ang) - 30.0).abs() < 1e-6);
@@ -1413,10 +1418,12 @@ fn a_negative_point_line_distance_crosses_the_line() {
     assert!((s.pos(p).y + 5.0).abs() < 1e-6, "{:?}", s.pos(p));
 }
 
-/// #96: an angle over 180° is measured round the outside: the rays keep 360° less between
-/// them, the label and arc go outside, and 0°, 180° and 360° are refused.
+/// #96: an angle dimension turns its line like a hinge: on round the way it turns, smoothly
+/// through 180° and 360° and back below 0° (any value goes), past 180° with its arc and value
+/// round the outside; its label dragged back between the rays measures the same rays the other
+/// way round.
 #[test]
-fn an_angle_over_180_is_measured_outside() {
+fn an_angle_turns_its_line_like_a_hinge() {
     let mut s = Sketch::new();
     let (la, a0, _) = line(&mut s, v(0.0, 0.0), v(30.0, 0.0));
     let (lb, b0, _) = line(&mut s, v(0.0, 0.0), v(20.0, 20.0));
@@ -1428,32 +1435,37 @@ fn an_angle_over_180_is_measured_outside() {
         b: cref(lb),
         flip_a: false,
         flip_b: false,
+        ccw: None,
     };
     dim(&mut s, k, 45.0);
     let id = s.dimensions.keys().next().unwrap();
-    SketchOp::SetDimensionValue { id, value: 270.0 }
-        .apply(&mut s)
-        .unwrap();
-    assert_eq!(s.dimensions[id].value, 270.0);
-    assert!((measured(&s, k) - 90.0).abs() < 1e-6, "{}", measured(&s, k));
-    assert!(!analyze(&s).has_conflicts());
-    SketchOp::SetDimensionValue { id, value: 200.0 }
-        .apply(&mut s)
-        .unwrap();
-    assert!(
-        (measured(&s, k) - 160.0).abs() < 1e-6,
-        "{}",
-        measured(&s, k)
-    );
-    for bad in [0.0, 180.0, 360.0, 400.0, -30.0] {
+    // Which way the second line points, and where `deg` (anticlockwise from +X) points.
+    let dir = |s: &Sketch| (s.pos(lb_end(s, lb)) - v(0.0, 0.0)).normalize();
+    let at = |deg: f64| v(deg.to_radians().cos(), deg.to_radians().sin());
+    let set = |s: &mut Sketch, value: f64| {
+        SketchOp::SetDimensionValue { id, value }.apply(s).unwrap();
         assert!(
-            SketchOp::SetDimensionValue { id, value: bad }
-                .apply(&mut s)
-                .is_err(),
-            "{bad}"
+            (dir(s) - at(value)).length() < 1e-6,
+            "{value}: {:?}",
+            dir(s)
         );
+        assert!(!analyze(s).has_conflicts(), "{value}");
+        let m = crate::dimension::measured_value(s, &s.dimensions[id]).unwrap();
+        assert!((m - value).abs() < 1e-6, "{value}: measured {m}");
+        // Swung round, not stretched.
+        let l = s.line_length(lb).unwrap();
+        assert!((l - 20.0 * 2f64.sqrt()).abs() < 1e-6, "{value}: length {l}");
+    };
+    // Two turns round in 10° steps, as a variable driving it would, then back past 0°.
+    for i in 0..=72 {
+        set(&mut s, 45.0 + i as f64 * 10.0);
     }
-    // The arc and its value go round the outside.
+    for value in [180.0, 0.0, -30.0, -200.0, 270.0, 90.0, 400.0] {
+        set(&mut s, value);
+    }
+    // 270°: a quarter turn the other side of the first line, the arc and value outside.
+    set(&mut s, 270.0);
+    assert!((dir(&s) - v(0.0, -1.0)).length() < 1e-6);
     let st = crate::dimension::LayoutStyle::new(10.0, (12.0, 6.0));
     let lay = crate::dimension::layout(&s, &s.dimensions[id], st).unwrap();
     assert!(!lay.arcs.is_empty());
@@ -1469,20 +1481,32 @@ fn an_angle_over_180_is_measured_outside() {
         crate::dimension::angle_outside(&s, k, lay.label),
         Some(true)
     );
-    // Measured inside again: the geometry stays, the value is the angle between the rays.
+    // Measured between the rays again: the geometry stays, 90° the other way round (clockwise),
+    // which it now turns.
     let before = s.clone();
     SketchOp::SetAngleOutside { id, outside: false }
         .apply(&mut s)
         .unwrap();
-    assert!((s.dimensions[id].value - 160.0).abs() < 1e-9);
+    assert!((s.dimensions[id].value - 90.0).abs() < 1e-9);
     assert!(
         s.pos(lb_end(&s, lb))
             .distance(before.pos(lb_end(&before, lb)))
             < 1e-6
     );
+    assert_eq!(
+        crate::dimension::angle_ccw(&s, s.dimensions[id].kind),
+        Some(false)
+    );
+    SketchOp::SetDimensionValue { id, value: 180.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert!((dir(&s) - v(-1.0, 0.0)).length() < 1e-6, "{:?}", dir(&s));
     // A label outside the rays asks for the outside, one between them for the inside.
+    SketchOp::SetDimensionValue { id, value: 60.0 }
+        .apply(&mut s)
+        .unwrap();
     let x = v(0.0, 0.0);
-    let inside = x + (v(1.0, 0.0) + (s.pos(lb_end(&s, lb)) - x).normalize()) * 5.0;
+    let inside = x + (v(1.0, 0.0) + dir(&s)) * 5.0;
     assert_eq!(crate::dimension::angle_outside(&s, k, inside), Some(false));
     assert_eq!(
         crate::dimension::angle_outside(&s, k, x - (inside - x)),
@@ -1567,6 +1591,7 @@ fn driven_and_expression_angles_keep_their_side() {
         b: cref(lb),
         flip_a: false,
         flip_b: false,
+        ccw: None,
     };
     dim(&mut s, k, 270.0);
     let id = s.dimensions.keys().next().unwrap();
@@ -1585,4 +1610,112 @@ fn driven_and_expression_angles_keep_their_side() {
             .apply(&mut s)
             .is_err()
     );
+}
+
+/// #96: a negative angle turns its line back past the first, its arc the short way back, and
+/// its label dragged outside measures the same lines the long way on; a negative length that
+/// turns the first line round takes the line hinged on it round too, and one that turns the
+/// second line round keeps the angle (taken along the line's other way).
+#[test]
+fn a_negative_angle_and_hinges_on_a_line_turned_round() {
+    let mut s = Sketch::new();
+    let (la, a0, a1) = line(&mut s, v(0.0, 0.0), v(30.0, 0.0));
+    let (lb, b0, b1) = line(&mut s, v(0.0, 0.0), v(20.0, 20.0));
+    assert_eq!(a0, b0, "the lines share their corner");
+    add(&mut s, ConstraintOf::FixPoint(pref(a0)));
+    add(&mut s, ConstraintOf::Horizontal(Orient::Line(cref(la))));
+    let k = DimensionKind::Angle {
+        a: cref(la),
+        b: cref(lb),
+        flip_a: false,
+        flip_b: false,
+        ccw: None,
+    };
+    dim(&mut s, k, 45.0);
+    dim(&mut s, DimensionKind::Aligned { a: a0, b: a1 }, 30.0);
+    let find = |s: &Sketch, k: DimensionKind| {
+        s.dimensions
+            .iter()
+            .find(|(_, d)| d.kind.same(&k))
+            .unwrap()
+            .0
+    };
+    let (id, len) = (
+        find(&s, k),
+        find(&s, DimensionKind::Aligned { a: a0, b: a1 }),
+    );
+    let dir = |s: &Sketch, l: CurveId| {
+        let (p, q) = s.curve_ends(l).unwrap();
+        (s.pos(q) - s.pos(p)).normalize()
+    };
+    let at = |deg: f64| v(deg.to_radians().cos(), deg.to_radians().sin());
+    let sweep = |s: &Sketch| crate::dimension::angle_sweep(s, &s.dimensions[id]).unwrap();
+    SketchOp::SetDimensionValue { id, value: -30.0 }
+        .apply(&mut s)
+        .unwrap();
+    assert!(
+        (dir(&s, lb) - at(-30.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, lb)
+    );
+    assert!((sweep(&s) + 30.0).abs() < 1e-6, "{}", sweep(&s));
+    // Outside: 330° the long way on, still anticlockwise, the lines as they were.
+    SketchOp::SetAngleOutside { id, outside: true }
+        .apply(&mut s)
+        .unwrap();
+    assert!((s.dimensions[id].value - 330.0).abs() < 1e-9);
+    assert_eq!(
+        crate::dimension::angle_ccw(&s, s.dimensions[id].kind),
+        Some(true)
+    );
+    assert!((sweep(&s) - 330.0).abs() < 1e-6, "{}", sweep(&s));
+    assert!(
+        (dir(&s, lb) - at(-30.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, lb)
+    );
+    // The first line turned round: the second swings round with it, 330° on from it still.
+    let long = s.line_length(lb).unwrap();
+    SketchOp::SetDimensionValue {
+        id: len,
+        value: -30.0,
+    }
+    .apply(&mut s)
+    .unwrap();
+    assert!(
+        (dir(&s, la) - v(-1.0, 0.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, la)
+    );
+    assert!(
+        (dir(&s, lb) - at(150.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, lb)
+    );
+    assert!((s.line_length(lb).unwrap() - long).abs() < 1e-6);
+    let m = crate::dimension::measured_value(&s, &s.dimensions[id]).unwrap();
+    assert!((m - 330.0).abs() < 1e-6, "{m}");
+    // The second line turned round by its own length: it stays turned, the angle holding.
+    let kb = DimensionKind::Aligned { a: b0, b: b1 };
+    dim(&mut s, kb, long);
+    let lid = find(&s, kb);
+    SketchOp::SetDimensionValue {
+        id: lid,
+        value: -long,
+    }
+    .apply(&mut s)
+    .unwrap();
+    assert!(
+        (dir(&s, lb) - at(-30.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, lb)
+    );
+    assert!(
+        (dir(&s, la) - v(-1.0, 0.0)).length() < 1e-6,
+        "{:?}",
+        dir(&s, la)
+    );
+    let m = crate::dimension::measured_value(&s, &s.dimensions[id]).unwrap();
+    assert!((m - 330.0).abs() < 1e-6, "{m}");
+    assert!(!analyze(&s).has_conflicts());
 }

@@ -342,7 +342,8 @@ pub struct EditSketch {
     /// set_dimension_value {id, value}; set_dimension_driven {id, driven}; set_dimension_expr {id,
     /// expr (a string, or null)}; move_dimension_label {id, offset, along}; set_angle_outside {id,
     /// outside}. A Horizontal, Vertical, Aligned or PointLine value may be negative (the point on the
-    /// other side); an Angle is 0–360° (not 180°), measured round the outside past 180°.
+    /// other side); an Angle any value: how far b's ray is turned from a's, on round past 180° and
+    /// 360° or back below 0°, like a hinge (set_angle_outside measures it the other way round).
     ///
     /// Links and projections (for references to other features): normal_to_plane {line, trace: [pos,
     /// pos], link}; use {items: [[projected, link]]}; use_construction {items}; offset_loop {items,

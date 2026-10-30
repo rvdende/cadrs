@@ -143,7 +143,7 @@ fn rect_with(
             let id = g
                 .dimensions
                 .iter()
-                .find(|(_, d)| d.kind == kind)
+                .find(|(_, d)| d.kind.same(&kind))
                 .map(|(id, _)| id)
                 .ok_or_else(|| CommandError::Invalid("a dimension is missing".into()))?;
             edit(
