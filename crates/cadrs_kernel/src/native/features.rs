@@ -798,11 +798,24 @@ fn unite_solids(t: Tagged) -> Result<Tagged> {
             take_solids(&t, |x| x == fs.as_slice())
         })
         .collect();
-    let mut acc = parts[0].clone();
-    for p in &parts[1..] {
-        acc = tagged_bool(&acc, p, BoolOp::Union)?;
+    // Pairwise, a level at a time, the pairs of a level side by side (one by one onto the
+    // first, each union grew with the body so far: pi7zoll-gehäuse 4.5% slower). The order
+    // decides which region's name a merged face keeps: changing it renames those faces.
+    use rayon::prelude::*;
+    let mut level = parts;
+    while level.len() > 1 {
+        level = level
+            .par_chunks(2)
+            .map(|c| match c {
+                [a, b] => tagged_bool(a, b, BoolOp::Union),
+                [a] => Ok(a.clone()),
+                _ => unreachable!("chunks of one or two"),
+            })
+            .collect::<Result<Vec<Tagged>>>()?;
     }
-    Ok(acc)
+    level
+        .pop()
+        .ok_or_else(|| KernelError::InvalidParameter("No solid to unite".into()))
 }
 
 /// The revolve frame: z along the axis, x from the axis towards the profile (which must lie on
