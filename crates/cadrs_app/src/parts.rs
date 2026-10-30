@@ -4281,7 +4281,9 @@ pub fn outer_loop(loops: &[Vec<[f64; 3]>]) -> Option<&Vec<[f64; 3]>> {
 /// The sketch plane on a part's face (for sketching on it), if the face is planar. The face is
 /// looked for after the feature that made it (its name's operation), which is not the part's
 /// first feature when a later feature added to the part (P3.4: the Reducer Coupling's revolve end
-/// face on Part 1, made by Extrude 1).
+/// face on Part 1, made by Extrude 1). The features are built as the Part Studio's rebuild builds
+/// them, after the Variable Studios' variables ([`cadrs_core::Element::part_features`]): a face
+/// of an extrude whose depth is one of them was not found.
 pub fn face_plane_of(
     el: &cadrs_core::Element,
     feature: FeatureId,
@@ -4297,7 +4299,7 @@ pub fn face_plane_of(
     } else {
         feature
     };
-    cadrs_core::parts::face_plane(el.features(), feature, face)
+    cadrs_core::parts::face_plane(&el.part_features(), feature, face)
 }
 
 /// How a selection field names a picked entity, as Onshape does: "Face of Extrude 1" (the

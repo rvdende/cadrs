@@ -633,16 +633,28 @@ pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, u32, Arc
 
 /// [`regenerate_with`] from a command: with [`defer_regeneration`] on, the sketches from the
 /// first one whose regeneration rebuilds features on are left as they are, and `element` noted
-/// for [`take_deferred`].
+/// for [`take_deferred`]. `studio` is the Variable Studios' variables the list names
+/// ([`crate::document::Element::studio_features`]): the rebuilds see them above the list, as
+/// every rebuild of it does (a sketch on a face of an extrude sized by one stayed where it was).
 pub(crate) fn regenerate_studio(
+    studio: &[Feature],
     features: &mut [Feature],
     context: &[(FeatureId, u32, Arc<Solid>)],
     element: crate::ids::ElementId,
 ) {
     let defer = DEFER.load(std::sync::atomic::Ordering::Relaxed) && IN_COMMAND.with(|c| c.get());
-    if !regenerate_or_leave(features, context, defer)
-        && let Ok(mut d) = DEFERRED.lock()
-    {
+    let done = if studio.is_empty() || !features.iter().any(needs_parts) {
+        regenerate_or_leave(features, context, defer)
+    } else {
+        let mut all: Vec<Feature> = studio.to_vec();
+        all.extend(features.iter().cloned());
+        let done = regenerate_or_leave(&mut all, context, defer);
+        for (f, now) in features.iter_mut().zip(all.drain(studio.len()..)) {
+            *f = now;
+        }
+        done
+    };
+    if !done && let Ok(mut d) = DEFERRED.lock() {
         d.retain(|(e, _)| *e != element);
         d.push((element, context.to_vec()));
     }
@@ -745,7 +757,12 @@ pub fn note_regenerated(doc: &crate::document::Document) {
         let Some(last) = features.iter().rposition(needs_parts) else {
             continue;
         };
-        let mut above = rebuild::CHAIN_SEED;
+        // (The keys of the list the regeneration rebuilds: after the Variable Studios'
+        // variables, [`regenerate_studio`].)
+        let mut above = el
+            .studio_features()
+            .iter()
+            .fold(rebuild::CHAIN_SEED, rebuild::chain_key);
         for f in &features[..=last] {
             above = rebuild::chain_key(above, f);
             if needs_parts(f) {

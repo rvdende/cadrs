@@ -11,6 +11,10 @@
 //!   typed as an expression naming a variable keeps the expression (the feature's `*_expr`, a
 //!   sketch's dimension expressions); a variable used above its definition fails that feature
 //!   in the rebuild, with why ([`cadrs_core::variables::check`]).
+//! - Typing `#` in a dialog's value field lists the variables the feature being edited can use,
+//!   then New variable… ([`cadrs_ui::FieldVariables`]; the sketch's dimension editor lists them
+//!   too, `crate::sketch_dimension`). New variable… inserts a Variable holding the field's value
+//!   above the feature and puts its name in the field.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -25,8 +29,9 @@ use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, FeatureKind};
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 use cadrs_ui::ShortcutKey;
 use cadrs_ui::{
-    FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
-    NumberFieldCommit, NumberFieldState, TabStrip, TabStripSelect, Theme,
+    FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, FieldVariables,
+    ListedVariable, NewVariable, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState,
+    TabStrip, TabStripSelect, Theme,
 };
 
 use crate::parts::PartCache;
@@ -40,7 +45,12 @@ impl Plugin for VariablesPlugin {
         app.init_resource::<ActiveVariables>()
             .add_systems(
                 Update,
-                (sync_active_variables, variable_keys, sync_variable_dialog)
+                (
+                    sync_active_variables,
+                    sync_field_variables,
+                    variable_keys,
+                    sync_variable_dialog,
+                )
                     .chain()
                     .run_if(in_state(AppState::Document)),
             )
@@ -53,6 +63,7 @@ impl Plugin for VariablesPlugin {
             .add_observer(on_cancel)
             .add_observer(on_type)
             .add_observer(on_field)
+            .add_observer(on_field_new_variable)
             .add_observer(on_asm_variable_button);
     }
 }
@@ -148,6 +159,120 @@ pub fn defined_before(
         }
     }
     out
+}
+
+/// The Part Studio feature whose dialog (or sketch) is open: it can use the variables above it,
+/// and a new one for its fields goes there.
+pub fn edited_feature(world: &World) -> Option<(ElementId, FeatureId)> {
+    if let Some(s) = world.get_resource::<crate::sketch::SketchSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::extrude::ExtrudeSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::applied::AppliedSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::boolean::BooleanSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::sheetmetal_joint_ui::ModifyJointSession>() {
+        return Some((s.element, s.feature));
+    }
+    // An assembly's Variable is a mate feature: not above anything in a feature list.
+    if let Some(s) = world.get_resource::<VariableSession>()
+        && s.mate.is_none()
+    {
+        return Some((s.element, s.feature));
+    }
+    None
+}
+
+/// What `#` lists in the dialogs' value fields ([`FieldVariables`]): the variables the feature
+/// being edited can use, then New variable…; or, without one (an assembly's mates), the active
+/// tab's. Worked out again when the document, the units or the feature edited change.
+#[allow(clippy::type_complexity)]
+fn sync_field_variables(
+    world: &mut World,
+    mut seen: Local<
+        Option<(
+            Option<(ElementId, FeatureId)>,
+            Option<bevy::ecs::change_detection::Tick>,
+            Option<bevy::ecs::change_detection::Tick>,
+        )>,
+    >,
+) {
+    let edited = edited_feature(world);
+    let doc = world
+        .get_resource_ref::<ActiveDocument>()
+        .map(|d| d.last_changed());
+    let units = world
+        .get_resource_ref::<crate::WorkspaceUnits>()
+        .map(|u| u.last_changed());
+    let now = (edited, doc, units);
+    if seen.as_ref() == Some(&now) {
+        return;
+    }
+    *seen = Some(now);
+    let vars = match edited {
+        Some((element, feature)) => defined_before(world, element, feature),
+        None => world.resource::<ActiveVariables>().0.clone(),
+    };
+    let u = world.resource::<crate::WorkspaceUnits>().0;
+    let want = FieldVariables {
+        variables: vars
+            .into_iter()
+            .map(|(name, v)| ListedVariable {
+                name,
+                value: u.with_unit(v.value, v.quantity),
+            })
+            .collect(),
+        new_variable: edited.is_some(),
+    };
+    let mut have = world.resource_mut::<FieldVariables>();
+    if *have != want {
+        *have = want;
+    }
+}
+
+/// New variable… in a dialog's value field: a Variable holding the field's value, inserted above
+/// the feature being edited (so it can use it), and its name put in the field.
+fn on_field_new_variable(
+    ev: On<NewVariable>,
+    q_edit: Query<&NumberFieldEdit>,
+    mut commands: Commands,
+) {
+    let field = ev.entity;
+    let Ok(&NumberFieldEdit(root)) = q_edit.get(field) else {
+        return;
+    };
+    let wanted = ev.name.clone();
+    commands.queue(move |world: &mut World| {
+        let Some((element, feature)) = edited_feature(world) else {
+            return;
+        };
+        let text = world
+            .get::<NumberFieldState>(root)
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        let u = world.resource::<crate::WorkspaceUnits>().0;
+        let vars = defined_before(world, element, feature);
+        // The value the field holds, as a value of its own kind: "25 mm", "30 deg", "4".
+        let v = cadrs_sketch::units::eval_any(&text, u.length.mm(), &vars).unwrap_or(VarValue {
+            value: 0.0,
+            quantity: Quantity::Length,
+        });
+        let var_type = match v.quantity {
+            Quantity::Length => VariableType::Length,
+            Quantity::Angle => VariableType::Angle,
+            Quantity::Count => VariableType::Number,
+        };
+        let name = free_name(world, element, &wanted);
+        let var = VariableFeature::typed(var_type, &name, &u.with_unit(v.value, v.quantity));
+        if insert_variable_above(world, element, feature, var) {
+            cadrs_ui::complete_variable(world, field, &name);
+        }
+    });
 }
 
 /// Whether a Variable of a Part Studio below `feature` defines `name` (so a feature above it
@@ -949,6 +1074,7 @@ fn sync_variable_dialog(
                                 NumberField::new("variable-value", "Value")
                                     .text(v.expr.clone())
                                     .label_width(74.0)
+                                    .variables()
                                     .build(&t),
                             ));
                             b.spawn((
@@ -1039,5 +1165,145 @@ fn sync_variable_dialog(
         if color.0 != c {
             color.0 = c;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadrs_core::Document;
+    use cadrs_core::document::SketchFeature;
+
+    /// A Part Studio of `#above`, a feature with its dialog open (a Boolean's) and `#below`.
+    fn dialog_app() -> (App, ElementId, FeatureId) {
+        let var = |name: &str, expr: &str| {
+            Feature::new(
+                FeatureId::new(),
+                format!("#{name}"),
+                FeatureKind::Variable(VariableFeature::length(name, expr)),
+            )
+        };
+        let mut doc = Document::new("Variables");
+        let element = doc.elements[0].id;
+        let feature = FeatureId::new();
+        let features = doc.elements[0].features_mut().unwrap();
+        features.push(var("above", "10 mm"));
+        features.push(Feature::new(
+            feature,
+            "Sketch 1",
+            FeatureKind::Sketch(SketchFeature {
+                plane: Some(cadrs_sketch::PlaneRef::Top),
+                disable_imprinting: true,
+                geometry: cadrs_sketch::Sketch::new(),
+            }),
+        ));
+        features.push(var("below", "4 mm"));
+        let mut app = App::new();
+        app.insert_resource(ActiveDocument::new(doc))
+            .init_resource::<crate::WorkspaceUnits>()
+            .init_resource::<ActiveVariables>()
+            .init_resource::<FieldVariables>()
+            .insert_resource(crate::boolean::BooleanSession {
+                element,
+                feature,
+                is_new: false,
+                mark: 0,
+                before: None,
+                targets_active: false,
+                show_final: false,
+                offset_faces_active: false,
+            })
+            .add_observer(on_field_new_variable)
+            .add_systems(Update, sync_field_variables);
+        (app, element, feature)
+    }
+
+    fn names(w: &World, element: ElementId) -> Vec<String> {
+        let doc = w.resource::<ActiveDocument>();
+        let el = doc.doc.element(element).unwrap();
+        el.features().iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// A value field of an open dialog, showing `text`.
+    fn field(w: &mut World, text: &str) -> Entity {
+        let root = w
+            .spawn(NumberFieldState {
+                text: text.into(),
+                error: false,
+            })
+            .id();
+        w.spawn((
+            NumberFieldEdit(root),
+            bevy::text::EditableText::new("#"),
+            cadrs_ui::VariableList::new(Vec::new()),
+        ))
+        .id()
+    }
+
+    #[test]
+    fn a_dialog_field_lists_the_variables_above_its_feature() {
+        let (mut app, ..) = dialog_app();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<FieldVariables>(),
+            FieldVariables {
+                variables: vec![ListedVariable {
+                    name: "above".into(),
+                    value: "10 mm".into(),
+                }],
+                new_variable: true,
+            }
+        );
+        // No feature being edited: no New variable… (nowhere to put it).
+        app.world_mut()
+            .remove_resource::<crate::boolean::BooleanSession>();
+        app.update();
+        assert!(!app.world().resource::<FieldVariables>().new_variable);
+    }
+
+    #[test]
+    fn a_new_variable_from_a_dialog_field_holds_its_value_above_the_feature() {
+        let (mut app, element, _) = dialog_app();
+        let w = app.world_mut();
+        let steps = w.resource::<ActiveDocument>().history.undo_len();
+        let depth = field(w, "25 mm");
+        w.trigger(NewVariable {
+            entity: depth,
+            name: "depth".into(),
+        });
+        w.flush();
+        assert_eq!(
+            names(w, element),
+            ["#above", "#depth", "Sketch 1", "#below"]
+        );
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        // A count makes a Number; a taken name falls back to var_N.
+        let count = field(w, "4");
+        w.trigger(NewVariable {
+            entity: count,
+            name: "below".into(),
+        });
+        w.flush();
+        let doc = w.resource::<ActiveDocument>();
+        let vars: Vec<(String, VariableType, String)> = doc
+            .doc
+            .element(element)
+            .unwrap()
+            .features()
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FeatureKind::Variable(v) => Some((v.name.clone(), v.var_type, v.expr.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            vars,
+            [
+                ("above".into(), VariableType::Length, "10 mm".into()),
+                ("depth".into(), VariableType::Length, "25 mm".into()),
+                ("var_1".into(), VariableType::Number, "4".into()),
+                ("below".into(), VariableType::Length, "4 mm".into()),
+            ]
+        );
     }
 }

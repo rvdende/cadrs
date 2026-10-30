@@ -1191,11 +1191,12 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     let ops = sketch_ops(&p.entities)?;
     let mut d = doc_mut(world)?;
     let element = part_studio(&d, p.part_studio.as_deref())?;
+    // As the rebuild sees them: after the Variable Studios' variables.
     let features = d
         .doc
         .element(element)
         .ok_or("the Part Studio is gone")?
-        .features()
+        .part_features()
         .to_vec();
     let plane = match (&p.plane, &p.face, &p.plane_feature) {
         (Some(pl), None, None) => plane_ref(*pl),

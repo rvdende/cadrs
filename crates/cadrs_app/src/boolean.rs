@@ -858,6 +858,7 @@ fn sync_boolean_dialog(
                                                     )
                                                     .text(o.expr.clone())
                                                     .label_width(82.0)
+                                                    .variables()
                                                     .build(&t),
                                                 ))
                                                 .entry::<Node>()

@@ -448,7 +448,9 @@ fn image_picks(
                 .and_then(|d| d.active_element())
                 .and_then(|el| match pick {
                     Pick::Plane(k) => Some(k.plane_ref()),
-                    Pick::Feature(f) => cadrs_core::parts::plane_feature_ref(el.features(), f),
+                    Pick::Feature(f) => {
+                        cadrs_core::parts::plane_feature_ref(&el.part_features(), f)
+                    }
                     Pick::Face(f, tag) if f.feature != own => {
                         crate::parts::face_plane_of(el, f.feature, tag)
                     }

@@ -509,7 +509,8 @@ impl ActiveDocument {
             let Some(el) = self.doc.element(element) else {
                 continue;
             };
-            let before: std::sync::Arc<[cadrs_core::Feature]> = el.features().into();
+            // (After the Variable Studios' variables, as every rebuild of the list sees them.)
+            let before: std::sync::Arc<[cadrs_core::Feature]> = el.features_to_build().into();
             let after: std::sync::Arc<(
                 std::sync::Mutex<Option<Vec<cadrs_core::Feature>>>,
                 std::sync::Condvar,

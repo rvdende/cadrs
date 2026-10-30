@@ -1252,7 +1252,7 @@ mod tests {
         );
         let file = store.load(doc.id).unwrap();
         assert_eq!(file.document, doc);
-        let parts = crate::parts::parts(file.document.elements[0].features());
+        let parts = crate::parts::parts(&file.document.elements[0].part_features());
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].name, "Part 1");
         cadrs_fs::remove_dir_all(store.root()).unwrap();

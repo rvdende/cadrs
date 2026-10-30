@@ -1323,7 +1323,8 @@ fn field(
 ) {
     let mut f = NumberField::new(name.to_string(), label.to_string())
         .text(text.to_string())
-        .label_width(if label.len() > 2 { 84.0 } else { 28.0 });
+        .label_width(if label.len() > 2 { 84.0 } else { 28.0 })
+        .variables();
     if let Some((i, c)) = icon {
         f = f.label_icon(i, c);
     }

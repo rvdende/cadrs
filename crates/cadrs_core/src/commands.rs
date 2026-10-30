@@ -572,14 +572,21 @@ pub fn refresh_studio(doc: &mut Document, element: ElementId) {
     crate::assembly::context::refresh_targets(doc, element);
     let units = doc.units;
     // P3F.4: variables first, so the sketches regenerate with the dimensions they drive.
-    let (suppressed, base) = doc
+    let (suppressed, base, studio) = doc
         .element(element)
-        .map(|e| (e.suppressed().to_vec(), e.variable_base()))
+        .map(|e| {
+            (
+                e.suppressed().to_vec(),
+                e.variable_base(),
+                e.studio_features(),
+            )
+        })
         .unwrap_or_default();
     if let Ok(features) = part_studio_features(doc, element) {
-        // The Variable Studios' variables are defined above the whole list.
+        // The Variable Studios' variables are defined above the whole list (for the rebuilds
+        // of the features above each sketch too).
         crate::variables::refresh(&base, features, &suppressed, &units);
-        crate::parts::regenerate_studio(features, &context, element);
+        crate::parts::regenerate_studio(&studio, features, &context, element);
     }
 }
 

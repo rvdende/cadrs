@@ -34,8 +34,8 @@ use cadrs_sketch::units;
 use cadrs_sketch::{Dimension, DimensionId, DimensionKind, SketchEntity, SketchOp};
 use cadrs_ui::inline_edit::DOUBLE_CLICK_TIME;
 use cadrs_ui::{
-    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditNewVariable, DimEditVariable,
-    DimEditVariables, Theme,
+    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, ListedVariable, NewVariable, Theme,
+    VariableList,
 };
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
@@ -734,11 +734,11 @@ fn below_sketch(world: &World, name: &str) -> bool {
 }
 
 /// The variables the value editor lists when `#` is typed, with their values.
-fn listed_variables(world: &World) -> Vec<DimEditVariable> {
+fn listed_variables(world: &World) -> Vec<ListedVariable> {
     let u = world.resource::<crate::WorkspaceUnits>().0;
     sketch_variables(world)
         .into_iter()
-        .map(|(name, v)| DimEditVariable {
+        .map(|(name, v)| ListedVariable {
             name,
             value: u.with_unit(v.value, v.quantity),
         })
@@ -747,7 +747,7 @@ fn listed_variables(world: &World) -> Vec<DimEditVariable> {
 
 /// New variable… in the value editor: a Variable holding the dimension's value, inserted above
 /// the sketch (so the sketch can use it), and its name put in the editor.
-fn on_new_variable(ev: On<DimEditNewVariable>, mut commands: Commands) {
+fn on_new_variable(ev: On<NewVariable>, mut commands: Commands) {
     let field = ev.entity;
     let wanted = ev.name.clone();
     commands.queue(move |world: &mut World| {
@@ -781,8 +781,8 @@ fn on_new_variable(ev: On<DimEditNewVariable>, mut commands: Commands) {
             return;
         }
         let listed = listed_variables(world);
-        if let Some(mut vars) = world.get_mut::<DimEditVariables>(open.entity) {
-            vars.0 = listed;
+        if let Some(mut list) = world.get_mut::<VariableList>(field) {
+            list.variables = listed;
         }
         cadrs_ui::complete_variable(world, field, &name);
     });
@@ -1049,7 +1049,7 @@ mod tests {
         let (app, _) = variables_app();
         assert_eq!(
             listed_variables(app.world()),
-            vec![DimEditVariable {
+            vec![ListedVariable {
                 name: "above".into(),
                 value: "10 mm".into(),
             }]

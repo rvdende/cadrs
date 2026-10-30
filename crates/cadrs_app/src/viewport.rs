@@ -2236,7 +2236,7 @@ pub fn scene_points(
     match cache.filter(|c| !c.rebuilding && c.settled().map(|(id, ..)| id) == Some(el.id)) {
         Some(c) => pts.extend(c.parts.iter().flat_map(to_vec3)),
         None => {
-            for part in cadrs_core::parts::parts(el.features()) {
+            for part in cadrs_core::parts::parts(&el.part_features()) {
                 pts.extend(to_vec3(&part));
             }
         }

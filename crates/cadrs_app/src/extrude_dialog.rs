@@ -476,6 +476,7 @@ fn offset_row(
             NumberField::new(name.to_string(), label.to_string())
                 .text(o.expr.clone())
                 .label_width(82.0)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()
@@ -536,6 +537,7 @@ fn end_fields(
                     .text(end.depth_expr.clone())
                     .chevron()
                     .trailing_icon("ruler", "Measure a distance")
+                    .variables()
                     .build(t),
             ));
         }
@@ -601,6 +603,7 @@ pub(crate) fn inline_option<R: Component>(
                 NumberField::new(value_name.to_string(), "")
                     .text(text.to_string())
                     .label_width(0.0)
+                    .variables()
                     .build(t),
             ))
             .entry::<Node>()
@@ -723,6 +726,7 @@ fn extrude_dialog(
                                 NumberField::new("extrude-thickness1", "Thickness 1")
                                     .text(e.thin.thickness1_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ))
                             .entry::<Node>()
@@ -747,6 +751,7 @@ fn extrude_dialog(
                                 NumberField::new("extrude-thickness2", "Thickness 2")
                                     .text(e.thin.thickness2_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ));
                         }

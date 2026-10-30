@@ -400,7 +400,7 @@ pub fn begin_sketch(world: &mut World) {
     // Or a selected Plane feature (P3.7).
     let feature_plane = selection.feature().and_then(|f| {
         let el = world.get_resource::<ActiveDocument>()?.active_element()?;
-        cadrs_core::parts::plane_feature_ref(el.features(), f)
+        cadrs_core::parts::plane_feature_ref(&el.part_features(), f)
     });
     let plane = selection
         .plane()
@@ -973,7 +973,9 @@ fn sketch_picks(
                     let plane = world
                         .get_resource::<ActiveDocument>()
                         .and_then(|d| d.active_element())
-                        .and_then(|el| cadrs_core::parts::plane_feature_ref(el.features(), f));
+                        .and_then(|el| {
+                            cadrs_core::parts::plane_feature_ref(&el.part_features(), f)
+                        });
                     if plane.is_some() {
                         set_plane(world, plane);
                     }
