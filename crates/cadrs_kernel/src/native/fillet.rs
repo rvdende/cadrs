@@ -172,6 +172,27 @@ fn beyond(b: &Body, e: usize, fi: usize) -> Option<usize> {
     Some(if a == fi { o } else { a })
 }
 
+/// [`beyond`], with the edges' sides as kept for `b` ([`BodyKept`]).
+fn beyond_kept(b: &Body, kept: Option<&BodyKept>, e: usize, fi: usize) -> Option<usize> {
+    let Some(k) = kept else {
+        return beyond(b, e, fi);
+    };
+    let all = k.sides.get_or_init(|| {
+        // As [`super::blend::edge_sides`] finds them: in face, loop and coedge order.
+        let mut uses: Vec<Vec<(usize, bool)>> = vec![Vec::new(); b.edges.len()];
+        for (fi, f) in b.faces.iter().enumerate() {
+            for c in f.loops.iter().flatten() {
+                uses[c.edge].push((fi, c.fwd));
+            }
+        }
+        uses.into_iter()
+            .map(|u| (u.len() == 2 && u[0].0 != u[1].0).then(|| [u[0], u[1]]))
+            .collect()
+    });
+    let [(a, _), (o, _)] = (*all.get(e)?)?;
+    Some(if a == fi { o } else { a })
+}
+
 /// The coedge of edge `e` in face `fi` (the first, for a seam).
 fn coedge_of(b: &Body, fi: usize, e: usize) -> Option<&Coedge> {
     b.faces[fi].loops.iter().flatten().find(|c| c.edge == e)
@@ -4573,7 +4594,7 @@ fn first_roll(
             if c.edge == ef.e || x.degenerate || is_seam(b, fi, c.edge) {
                 continue;
             }
-            let Some(into) = beyond(b, c.edge, fi) else {
+            let Some(into) = beyond_kept(b, kept.as_deref(), c.edge, fi) else {
                 continue;
             };
             // Two planes meeting at an angle, or faces meeting sharply all along their edge: no
@@ -9376,7 +9397,13 @@ struct BodyKept {
     charts: Vec<std::sync::OnceLock<Chart>>,
     smooth: Vec<std::sync::OnceLock<bool>>,
     sharp: std::sync::Mutex<HashMap<(usize, usize, usize, bool), bool>>,
+    /// Each edge's two faces ([`sides`]; `None` where it hasn't two distinct ones), found in
+    /// one pass over the coedges rather than one per edge asked about.
+    sides: std::sync::OnceLock<Vec<Option<Sides>>>,
 }
+
+/// An edge's two faces, with its coedges' directions in them ([`super::blend::edge_sides`]).
+type Sides = [(usize, bool); 2];
 type KeptPolys = std::sync::Arc<BodyKept>;
 static FACE_POLYS: std::sync::Mutex<Vec<(usize, KeptPolys)>> = std::sync::Mutex::new(Vec::new());
 
@@ -9395,6 +9422,7 @@ impl<'a> PolysScope<'a> {
             charts: (0..b.faces.len()).map(|_| Default::default()).collect(),
             smooth: (0..b.edges.len()).map(|_| Default::default()).collect(),
             sharp: Default::default(),
+            sides: Default::default(),
         };
         kept_polys().push((at, std::sync::Arc::new(kept)));
         Self {

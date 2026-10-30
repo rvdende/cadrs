@@ -1841,14 +1841,27 @@ pub fn mesh(body: &Body, p: &TessParams) -> Result<(Vec<FaceMesh>, EdgeSamples)>
     Ok(mesh_all(body, p))
 }
 
+/// The boundary points (edge samples) up to which a plane is meshed without [`MeshCache`].
+const PLANE_UNKEPT: usize = 16;
+
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
     let faces: Vec<FaceMesh> = body
         .faces
         .par_iter()
         .map(|f| {
-            // (A plane's mesh, its boundary's triangulation, takes about as long as its key.)
-            if matches!(f.surf, Surface::Plane { .. }) {
+            // (A plane with few boundary points meshes in about the time its key takes: a box's
+            // side, mostly new. One with many is kept too: a box's face round a few hundred
+            // holes' rounded edges took 9 ms each time a feature elsewhere changed the body.)
+            let few = || {
+                f.loops
+                    .iter()
+                    .flatten()
+                    .map(|c| es[c.edge].1.len())
+                    .sum::<usize>()
+                    <= PLANE_UNKEPT
+            };
+            if matches!(f.surf, Surface::Plane { .. }) && few() {
                 return mesh_face_with(body, f, &es, p);
             }
             let key = face_mesh_key(body, f, &es, p);

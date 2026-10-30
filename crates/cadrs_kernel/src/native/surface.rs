@@ -671,6 +671,12 @@ impl Surface {
                     })
                     .collect();
             }
+            // A B-spline surface's along u once per row and control column.
+            if let Surface::Nurbs(ns) = self {
+                let us: Vec<f64> = (0..=n).map(|i| at(i, 0).0).collect();
+                let vs: Vec<f64> = (0..=n).map(|j| at(0, j).1).collect();
+                return ns.grid(&us, &vs).into();
+            }
             (0..=n)
                 .flat_map(|i| (0..=n).map(move |j| (i, j)))
                 .map(|(i, j)| {
