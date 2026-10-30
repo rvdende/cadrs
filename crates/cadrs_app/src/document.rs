@@ -1601,8 +1601,8 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     ));
     tb.spawn(toolbar_separator(t));
     // (name, icon, whether it has a ▾ menu, tooltip). Only tools with a menu show a ▾ (issue
-    // #140: Fillet, Draft, Split, Transform, Plane and Mate connector had one that opened
-    // nothing, so clicking it seemed to need a precise aim).
+    // #140: Fillet, Draft, Split, Transform, Plane, Mate connector and Boolean had one that
+    // opened nothing, so clicking it seemed to need a precise aim).
     let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
             ("extrude", "extrude", false, "Extrude (Shift+E)"),
@@ -1632,7 +1632,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             (
                 "boolean",
                 "boolean",
-                true,
+                false,
                 "Boolean (Union, Subtract, Intersect)",
             ),
             ("split", "split", false, "Split"),

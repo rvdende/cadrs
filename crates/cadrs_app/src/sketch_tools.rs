@@ -927,15 +927,16 @@ pub fn tool_context(state: DrawState, draw: &SketchDraw, suppress: bool) -> Tool
 }
 
 /// The grid step points snap to: the 3D view's grid's at its zoom
-/// ([`crate::ground_grid::step_for`]), while the preference is on (issue #140).
+/// ([`crate::ground_grid::step_for`]), while the preference is on and the grid shows (issue
+/// #140). The grid is in the sketch's own coordinates: on the Top plane it is the one drawn.
 fn sync_grid_snap(
     prefs: Res<crate::preferences_ui::LocalPreferences>,
+    shown: Res<crate::viewport::GridVisible>,
     view: Res<crate::viewport::ViewportView>,
     mut draw: ResMut<SketchDraw>,
 ) {
-    let grid = prefs
-        .0
-        .snap_to_grid
+    // Only while the grid shows: no snapping to a grid one can't see.
+    let grid = (prefs.0.snap_to_grid && shown.0)
         .then(|| crate::ground_grid::step_for(view.view.scale) as f64);
     if draw.grid != grid {
         draw.grid = grid;
@@ -953,12 +954,38 @@ fn snap_at(
     let best = infer::infer(raw, map.px_per_mm() as f64, sketch, ctx)
         .into_iter()
         .next();
-    // Snap to grid (issue #140): where nothing else snaps, the 3D view's grid step.
-    let free = match ctx.grid {
-        Some(step) if !ctx.suppress => infer::round_to_grid(raw, step),
-        _ => raw,
+    // Snap to grid (issue #140): where nothing else snaps, the 3D view's grid step; on a
+    // horizontal or vertical guide or an axis, the coordinate it leaves free.
+    let (free, best) = match ctx.grid {
+        Some(step) if !ctx.suppress => (
+            infer::round_to_grid(raw, step),
+            best.map(|c| candidate_on_grid(c, step)),
+        ),
+        _ => (raw, best),
     };
     Some((best.as_ref().map_or(free, |c| c.pos), best))
+}
+
+/// A candidate's free coordinate on a grid of `step` (Snap to grid): a point on a horizontal
+/// guide or the X axis keeps its y and takes the grid's x, one on a vertical guide or the Y axis
+/// the other way round. Points, midpoints, intersections, curves and points on two guides stay
+/// where they are.
+fn candidate_on_grid(mut c: Candidate, step: f64) -> Candidate {
+    let (level, plumb) = match c.kind {
+        Kind::OnCurve(cadrs_sketch::CurveRef::XAxis) => (true, false),
+        Kind::OnCurve(cadrs_sketch::CurveRef::YAxis) => (false, true),
+        Kind::Guide => c.guides().fold((false, false), |(l, p), (horizontal, _)| {
+            (l || horizontal, p || !horizontal)
+        }),
+        _ => return c,
+    };
+    let on = infer::round_to_grid(c.pos, step);
+    match (level, plumb) {
+        (true, false) => c.pos.x = on.x,
+        (false, true) => c.pos.y = on.y,
+        _ => {}
+    }
+    c
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1501,13 +1528,24 @@ pub(crate) fn sketch_pointer(
                 woken,
                 exclude,
                 exclude_curves: own,
+                grid: draw.grid,
                 ..ToolContext::default()
             };
-            if let Some(cand) = infer::infer(want, map.px_per_mm() as f64, sketch, &ctx)
+            let found = infer::infer(want, map.px_per_mm() as f64, sketch, &ctx)
                 .into_iter()
-                .next()
+                .next();
+            if found.is_none()
+                && let Some(step) = ctx.grid
             {
+                // Snap to grid: a point dragged where nothing snaps lands on the grid.
+                t = cadrs_sketch::solve::Drag::Points(vec![(p, infer::round_to_grid(want, step))]);
+            }
+            if let Some(cand) = found {
                 let cand = infer::drag_candidate(cand);
+                let cand = match ctx.grid {
+                    Some(step) => candidate_on_grid(cand, step),
+                    None => cand,
+                };
                 t = cadrs_sketch::solve::Drag::Points(vec![(p, cand.pos)]);
                 snap = Some(DragSnap {
                     point: p,
@@ -2177,12 +2215,15 @@ fn complete(
             let mut specs = cadrs_sketch::entity::aligned_constraints(corners);
             specs.append(&mut draw.pending_specs);
             specs.extend(take_pending(draw, sketch));
-            // The width snapped to a point: the far side stays on it.
-            specs.extend(rim_spec(
-                sketch,
-                &placed,
-                CurveSpec::Between(corners[2], corners[3]),
-            ));
+            // The width snapped to a point: the far side stays on it (unless a corner landed on
+            // the point, which then merges with it: on its own side already).
+            if corners[2].distance(p) > tiny && corners[3].distance(p) > tiny {
+                specs.extend(rim_spec(
+                    sketch,
+                    &placed,
+                    CurveSpec::Between(corners[2], corners[3]),
+                ));
+            }
             execute_with(
                 commands,
                 target,
@@ -3715,6 +3756,43 @@ pub fn quick_dim_op(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_to_grid_rounds_only_the_free_coordinate() {
+        let cand = |x: f64, y: f64, kind: Kind, constraints: Vec<Placed>| Candidate {
+            pos: SVec2::new(x, y),
+            kind,
+            constraints,
+            distance_px: 0.0,
+        };
+        let at = |c: Candidate| (c.pos.x, c.pos.y);
+        // A horizontal guide (level with the anchor): x on the grid, y kept.
+        let level = cand(
+            12.3,
+            7.7,
+            Kind::Guide,
+            vec![Placed::Horizontal(infer::Guide::Anchor)],
+        );
+        assert_eq!(at(candidate_on_grid(level, 5.0)), (10.0, 7.7));
+        let plumb = cand(
+            12.3,
+            7.7,
+            Kind::Guide,
+            vec![Placed::Vertical(infer::Guide::Anchor)],
+        );
+        assert_eq!(at(candidate_on_grid(plumb, 5.0)), (12.3, 10.0));
+        // On the X axis: its x on the grid.
+        let axis = cand(
+            12.3,
+            0.0,
+            Kind::OnCurve(cadrs_sketch::CurveRef::XAxis),
+            vec![],
+        );
+        assert_eq!(at(candidate_on_grid(axis, 5.0)), (10.0, 0.0));
+        // A point stays where it is.
+        let origin = cand(0.4, 0.3, Kind::Origin, vec![]);
+        assert_eq!(at(candidate_on_grid(origin, 5.0)), (0.4, 0.3));
+    }
 
     fn rect_sketch(first: SVec2, second: SVec2, centered: bool) -> (Sketch, RectRef) {
         let mut s = Sketch::new();
