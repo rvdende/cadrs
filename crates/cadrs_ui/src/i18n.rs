@@ -6,10 +6,16 @@
 //!   built into the app (a browser page has no files to read), so a translation needs no Rust:
 //!   only its file (and a line in [`LANGUAGES`] for a new language). See `locales/README.md`.
 //! - [`tr`] gives a key's text in the current language ([`set_language`]), else in English, else
-//!   the key itself; [`tr_with`] fills in its `{ $name }`s.
-//! - [`check`] lists what is wrong in the catalogs: unparsable lines, keys English doesn't have,
-//!   placeholders that differ from English's, keys a language doesn't translate yet (warnings).
-//!   A test runs it, so CI catches a broken catalog.
+//!   the key itself; [`tr_with`] fills in its `{ $name }`s. A text takes the language it is made
+//!   in: what is rebuilt (the feature list, a dialog opened again) follows a change at once,
+//!   what is built once (the top bar) at the next window; a text marked [`Translated`] follows
+//!   at once too.
+//! - Plural forms and Fluent's other selectors aren't supported yet: [`check`] says so for a
+//!   catalog that uses one (write the number as a placeholder instead).
+//! - [`check`] lists what is wrong in the catalogs: unparsable lines, selectors, duplicate keys,
+//!   keys English doesn't have, placeholders that differ from English's (errors), and keys a
+//!   language doesn't translate yet (warnings: they show in English). A test fails on errors,
+//!   so CI catches a broken catalog.
 //! - User content (document, part and feature names) is never translated: only the app's own
 //!   texts, where it calls [`tr`].
 
@@ -66,10 +72,10 @@ static CURRENT: RwLock<&'static str> = RwLock::new("en");
 
 /// Shows the interface in the language with this code from now on (an unknown one: English).
 /// Texts made from now on follow; [`Translated`] texts already shown change too.
+/// A language that isn't [`offered`] (its script needs a font cadrs doesn't have) is English.
 pub fn set_language(code: &str) {
-    let code = LANGUAGES
-        .iter()
-        .map(|(c, ..)| *c)
+    let code = offered()
+        .map(|(c, _)| c)
         .find(|c| *c == code)
         .unwrap_or("en");
     if let Ok(mut current) = CURRENT.write() {
@@ -93,11 +99,30 @@ pub fn tr(key: &str) -> String {
 
 /// [`tr`] with its `{ $name }`s filled in from `args`.
 pub fn tr_with(key: &str, args: &[(&str, &str)]) -> String {
-    let mut text = tr(key);
-    for (name, value) in args {
-        text = text.replace(&format!("{{ ${name} }}"), value);
+    let text = tr(key);
+    // One pass: a value that itself reads `{ $x }` stays as it is.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("{ $") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 3..];
+        match after.find(" }") {
+            Some(end) => {
+                let name = &after[..end];
+                match args.iter().find(|(n, _)| *n == name) {
+                    Some((_, value)) => out.push_str(value),
+                    None => out.push_str(&rest[at..at + 3 + end + 2]),
+                }
+                rest = &after[end + 2..];
+            }
+            None => {
+                out.push_str(&rest[at..]);
+                rest = "";
+            }
+        }
     }
-    text
+    out.push_str(rest);
+    out
 }
 
 /// A UI text shown from a catalog key: it changes when the language does
@@ -123,7 +148,8 @@ pub fn retranslate(
     }
 }
 
-/// A catalog's `key = text` entries, and the lines that aren't one (line number, line).
+/// A catalog's `key = text` entries (the first of a key that comes twice), and its problems
+/// (line number, what): lines that aren't `key = text`, selectors (plurals), duplicate keys.
 fn parse(text: &str) -> (Catalog, Vec<(usize, String)>) {
     let mut out = Catalog::new();
     let mut bad = Vec::new();
@@ -132,19 +158,38 @@ fn parse(text: &str) -> (Catalog, Vec<(usize, String)>) {
         if t.is_empty() || t.starts_with('#') {
             continue;
         }
+        if t.contains("->") || t.starts_with('[') || t.starts_with("*[") {
+            bad.push((
+                n + 1,
+                format!("selectors (plurals) aren't supported yet, use a placeholder: {line:?}"),
+            ));
+            continue;
+        }
         let ok = t.split_once(" = ").filter(|(k, v)| {
             !v.trim().is_empty()
+                && !k.starts_with('-')
                 && k.chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         });
         match ok {
+            Some((k, _)) if out.contains_key(k) => {
+                bad.push((n + 1, format!("{k} comes twice")));
+            }
             Some((k, v)) => {
                 out.insert(k.to_string(), v.trim().to_string());
             }
-            None => bad.push((n + 1, line.to_string())),
+            None => bad.push((n + 1, format!("not `key = text`: {line:?}"))),
         }
     }
     (out, bad)
+}
+
+/// A catalog's keys in the file's order.
+fn keys_in_order(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter_map(|l| l.trim().split_once(" = ").map(|(k, _)| k))
+        .filter(|k| !k.starts_with('#'))
+        .collect()
 }
 
 /// The `{ $name }`s of a text, sorted.
@@ -168,8 +213,8 @@ pub fn check() -> (Vec<String>, Vec<String>) {
     let english = &catalogs()["en"];
     for (code, _, text) in LANGUAGES {
         let (catalog, bad) = parse(text);
-        for (n, line) in bad {
-            errors.push(format!("{code}.ftl:{n}: not `key = text`: {line:?}"));
+        for (n, what) in bad {
+            errors.push(format!("{code}.ftl:{n}: {what}"));
         }
         for (key, value) in &catalog {
             match english.get(key) {
@@ -182,10 +227,9 @@ pub fn check() -> (Vec<String>, Vec<String>) {
                 Some(_) => {}
             }
         }
-        let missing: Vec<&str> = english
-            .keys()
+        let missing: Vec<&str> = keys_in_order(LANGUAGES[0].2)
+            .into_iter()
             .filter(|k| !catalog.contains_key(*k))
-            .map(String::as_str)
             .collect();
         if !missing.is_empty() {
             warnings.push(format!(
@@ -201,12 +245,15 @@ pub fn check() -> (Vec<String>, Vec<String>) {
 mod tests {
     use super::*;
 
-    /// The shipped catalogs: no errors, and (as shipped) every language translates every key.
+    /// The shipped catalogs have no errors; keys not translated yet are listed (they show in
+    /// English, so a catalog can grow a few keys at a time).
     #[test]
-    fn the_catalogs_are_sound_and_complete() {
+    fn the_catalogs_are_sound() {
         let (errors, warnings) = check();
         assert!(errors.is_empty(), "{errors:#?}");
-        assert!(warnings.is_empty(), "{warnings:#?}");
+        for w in warnings {
+            println!("{w}");
+        }
     }
 
     #[test]
@@ -216,11 +263,14 @@ mod tests {
         set_language("de");
         assert_eq!(tr("share"), "Teilen");
         assert_eq!(tr_with("features-count", &[("count", "4")]), "Features (4)");
-        set_language("ja");
+        // A value is never read as a placeholder; an unknown one stays.
         assert_eq!(
-            tr_with("features-count", &[("count", "7")]),
-            "フィーチャー (7)"
+            tr_with("features-count", &[("count", "{ $count }")]),
+            "Features ({ $count })"
         );
+        // Not offered (no font for its script): English.
+        set_language("ja");
+        assert_eq!(language(), "en");
         assert_eq!(tr("no-such-key"), "no-such-key");
         set_language("xx");
         assert_eq!(language(), "en");
@@ -229,9 +279,14 @@ mod tests {
 
     #[test]
     fn broken_lines_and_placeholders_are_found() {
-        let (catalog, bad) = parse("ok = fine\nBad Key = no\nempty =\n# note\n");
+        let (catalog, bad) = parse(
+            "ok = fine\nBad Key = no\nempty =\n# note\nok = again\nn = { $c ->\n *[other] many\n",
+        );
         assert_eq!(catalog.len(), 1);
-        assert_eq!(bad.len(), 2);
+        assert_eq!(catalog["ok"], "fine");
+        assert_eq!(bad.len(), 5, "{bad:?}");
+        assert!(bad.iter().any(|(_, w)| w.contains("comes twice")));
+        assert!(bad.iter().any(|(_, w)| w.contains("selectors")));
         assert_eq!(
             placeholders("Features ({ $count }) of { $all }"),
             ["all", "count"]

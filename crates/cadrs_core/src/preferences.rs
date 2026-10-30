@@ -322,38 +322,42 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
-    /// The interface's language (issue #178; `cadrs_ui::i18n`).
+    /// The interface's language (issue #178; `cadrs_ui::i18n`). One this cadrs doesn't know (a
+    /// newer one's) reads as English, the other preferences kept.
     #[serde(default)]
     pub language: Language,
 }
 
 /// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
-/// order), saved by its code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// order), saved as its code (`"pt-BR"`); a code this cadrs doesn't know (a newer one's) reads as
+/// English, the other preferences kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     #[default]
-    #[serde(rename = "en")]
     English,
-    #[serde(rename = "de")]
     German,
-    #[serde(rename = "fr")]
     French,
-    #[serde(rename = "es")]
     Spanish,
-    #[serde(rename = "it")]
     Italian,
-    #[serde(rename = "nl")]
     Dutch,
-    #[serde(rename = "pt-BR")]
     PortugueseBrazil,
-    #[serde(rename = "ru")]
     Russian,
-    #[serde(rename = "zh-CN")]
     ChineseSimplified,
-    #[serde(rename = "ja")]
     Japanese,
-    #[serde(rename = "ko")]
     Korean,
+}
+
+impl Serialize for Language {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for Language {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let code = String::deserialize(d)?;
+        Ok(Language::from_code(&code).unwrap_or_default())
+    }
 }
 
 impl Language {
@@ -605,10 +609,25 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
-            language: Language::German,
+            language: Language::PortugueseBrazil,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
+        // A language this cadrs doesn't know reads as English, the rest kept.
+        let saved = cadrs_fs::read_to_string(Preferences::path(&dir)).unwrap();
+        assert!(saved.contains("\"pt-BR\""), "{saved}");
+        cadrs_fs::write(
+            Preferences::path(&dir),
+            saved.replace("\"pt-BR\"", "\"tlh\""),
+        )
+        .unwrap();
+        assert_eq!(
+            Preferences::load(&dir),
+            Preferences {
+                language: Language::English,
+                ..p
+            }
+        );
         // A file from before the MCP server (and P2P's switch) reads with both off.
         cadrs_fs::write(Preferences::path(&dir), "(mouse: Creo)").unwrap();
         assert_eq!(

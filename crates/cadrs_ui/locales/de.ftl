@@ -2,7 +2,7 @@
 preferences = Einstellungen
 preferences-mouse-heading = Maussteuerung der 3D-Ansicht
 preferences-mouse-controls = Maussteuerung
-preferences-interface = Oberfläche
+preferences-interface = Benutzeroberfläche
 preferences-ui-scale = Skalierung der Oberfläche
 preferences-language = Sprache
 preferences-display = Anzeige

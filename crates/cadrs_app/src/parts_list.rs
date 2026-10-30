@@ -114,6 +114,8 @@ type RowKey = (
     bool,
     Vec<(PartId, Vec<PartId>)>,
     Vec<PartId>,
+    // The interface's language (the headers' words).
+    &'static str,
 );
 
 /// Rebuilds the groups and rows when the parts, their names or visibility change.
@@ -148,7 +150,11 @@ fn rebuild_part_list(
         || open.is_changed()
         || boards_open.is_changed()
         || theme.is_changed()
-        || doc.as_ref().is_some_and(|d| d.is_changed());
+        || doc.as_ref().is_some_and(|d| d.is_changed())
+        // The headers' words.
+        || last
+            .as_ref()
+            .is_some_and(|k| k.5 != cadrs_ui::i18n::language());
     if !added && !moved && !inputs_changed && last.is_some() {
         return;
     }
@@ -206,6 +212,8 @@ fn rebuild_part_list(
         open.surfaces,
         boards,
         boards_open.0.clone(),
+        // The headers' words.
+        cadrs_ui::i18n::language(),
     );
     if !added && !moved && last.as_ref() == Some(&key) {
         return;

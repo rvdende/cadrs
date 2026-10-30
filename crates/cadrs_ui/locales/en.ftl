@@ -7,9 +7,11 @@ preferences = Preferences
 preferences-mouse-heading = 3D view mouse controls
 preferences-mouse-controls = Mouse controls
 preferences-interface = Interface
+# How large the interface is drawn (a percentage).
 preferences-ui-scale = UI scale
 # The row that chooses the interface's language.
 preferences-language = Language
+# The row of display options (vertical sync): the monitor, not showing something.
 preferences-display = Display
 
 ## The document window.

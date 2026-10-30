@@ -1,7 +1,8 @@
 // Issue #178: the interface's language (Preferences › Language), for the texts that come from
 // the catalogs (crates/cadrs_ui/locales). Offered: the languages the interface's font draws.
 // 01 Preferences in English, with the Language row: each language by its own name.
-// 02 Français chosen and OK: the feature list's count changes at once ("Fonctions (4)").
+// 02 Français chosen and OK: the feature list's count and the Parts header change at once
+//    ("Fonctions (4)", "Pièces (0)"); the top bar follows the next time the window is made.
 // 03 Preferences again: in French where translated.
 // 04 Русский: "Элементы (4)", Preferences in Russian.
 Scenario(
@@ -18,6 +19,7 @@ Scenario(
         Click(ui("pref-ok")),
         Wait(5),
         ExpectText("features-count", "Fonctions (4)"),
+        ExpectText("parts-section-header", "Pièces (0)"),
         Screenshot("02-french"),
         Click(ui("app-menu")),
         Click(ui("app-preferences")),

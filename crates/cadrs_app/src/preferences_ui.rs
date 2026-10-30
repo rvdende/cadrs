@@ -95,6 +95,8 @@ fn load_preferences(
     if let Some(store) = store {
         prefs.0 = Preferences::load(store.0.root());
     }
+    // Before the first window is made (a document opened at start builds it in Startup).
+    cadrs_ui::i18n::set_language(prefs.0.language.code());
     appearance.preference = to_ui(scheme_override().unwrap_or(prefs.0.color_scheme));
 }
 
