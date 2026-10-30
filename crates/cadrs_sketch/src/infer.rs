@@ -291,6 +291,17 @@ pub struct ToolContext {
     pub exclude: Vec<PointId>,
     /// Curves that are not targets (the ones a dragged point belongs to).
     pub exclude_curves: Vec<CurveId>,
+    /// Where nothing is inferred, the point snaps to a grid of this step (mm) instead; the
+    /// caller rounds it, as the step is the view's ([`round_to_grid`]).
+    pub grid: Option<f64>,
+}
+
+/// `p` on a grid of `step` (mm): each coordinate rounded to a multiple of it.
+pub fn round_to_grid(p: Vec2, step: f64) -> Vec2 {
+    if !(step > 0.0 && step.is_finite()) {
+        return p;
+    }
+    Vec2::new((p.x / step).round() * step, (p.y / step).round() * step)
 }
 
 /// The reference a horizontal or vertical guide runs through.
@@ -840,6 +851,17 @@ mod tests {
     use super::*;
     use crate::SketchOp;
     use proptest::prelude::*;
+
+    #[test]
+    fn a_free_point_rounds_to_the_grid() {
+        let p = round_to_grid(Vec2::new(12.4, -7.6), 5.0);
+        assert_eq!((p.x, p.y), (10.0, -10.0));
+        let p = round_to_grid(Vec2::new(0.26, 0.74), 0.5);
+        assert_eq!((p.x, p.y), (0.5, 0.5));
+        // No step, no rounding.
+        let p = round_to_grid(Vec2::new(1.3, 2.7), 0.0);
+        assert_eq!((p.x, p.y), (1.3, 2.7));
+    }
 
     fn line(s: &mut Sketch, a: Vec2, b: Vec2) -> CurveId {
         SketchOp::AddPolyline {

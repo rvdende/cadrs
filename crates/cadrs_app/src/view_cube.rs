@@ -784,6 +784,9 @@ pub struct ViewMenuState {
     pub section: bool,
     /// A Part Studio or an Assembly (not a PCB Studio): named views and section views.
     pub modeling: bool,
+    /// The ground grid is shown, and sketch points snap to it (issue #140).
+    pub grid: bool,
+    pub snap_to_grid: bool,
 }
 
 impl ViewMenuState {
@@ -803,6 +806,11 @@ impl ViewMenuState {
                 kind,
                 crate::viewport::ActiveKind::PartStudio | crate::viewport::ActiveKind::Assembly
             ),
+            grid: world.resource::<crate::viewport::GridVisible>().0,
+            snap_to_grid: world
+                .resource::<crate::preferences_ui::LocalPreferences>()
+                .0
+                .snap_to_grid,
         }
     }
 }
@@ -843,6 +851,12 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
             I::new("view-perspective", "Perspective view"),
         ))
         .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
+        .separator()
+        .item(check(st.grid, I::new("view-grid-visible", "Grid")))
+        .item(check(
+            st.snap_to_grid,
+            I::new("view-snap-to-grid", "Snap sketches to grid"),
+        ))
         .separator()
         .item(
             check(!line, I::new("view-shaded", shaded_label))
@@ -926,6 +940,23 @@ fn on_view_menu(ev: On<cadrs_ui::MenuAction>, view: Res<ViewportView>, mut comma
         }
         "view-named" => {
             commands.queue(crate::view_options::open_named_views);
+            return;
+        }
+        "view-grid-visible" => {
+            commands.queue(|world: &mut World| {
+                let mut grid = world.resource_mut::<crate::viewport::GridVisible>();
+                grid.0 = !grid.0;
+            });
+            return;
+        }
+        "view-snap-to-grid" => {
+            commands.queue(|world: &mut World| {
+                let on = !world
+                    .resource::<crate::preferences_ui::LocalPreferences>()
+                    .0
+                    .snap_to_grid;
+                crate::preferences_ui::set_snap_to_grid(world, on);
+            });
             return;
         }
         "view-perspective" => {

@@ -1421,8 +1421,10 @@ pub(crate) fn choose_variant(world: &mut World, button: Entity, tool: SketchTool
     }
 }
 
-/// Width (px) of the ▾ part at the right of a dropdown tool button.
-const CARET_WIDTH: f32 = 16.0;
+/// Width (px) of the ▾ part at the right of a dropdown tool button: the caret's 14 px box, the
+/// button's 4 px padding after it and the 3 px gap before it (issue #140: a click just left of
+/// the arrow started the tool).
+const CARET_WIDTH: f32 = 22.0;
 
 #[allow(clippy::too_many_arguments)]
 fn on_tool_button(

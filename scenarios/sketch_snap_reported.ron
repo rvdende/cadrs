@@ -1,0 +1,53 @@
+// Issue #140's reports.
+// 01 an aligned rectangle's third click (its width) snaps: hovering the end of a line drawn
+//    first shows the snap square there.
+// 02 placed: the rectangle's far side goes through that point and stays on it (a point-on-line
+//    constraint).
+// 03 the view menu's Grid and Snap sketches to grid (on).
+// 04 with Snap to grid on, a line's ends land on the grid's crossings though the clicks were off
+//    them.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("N"),
+        // A line to snap to, from (-30, 40) to (-10, 40).
+        Key("L"),
+        ClickWorld(-30, 40),
+        ClickWorld(-10, 40),
+        Key("Escape"),
+        Click(ui("sketch-rectangle-caret")),
+        WaitFor("sketch-variant-aligned-rectangle"),
+        Click(ui("sketch-variant-aligned-rectangle")),
+        ClickWorld(0, 0),
+        ClickWorld(30, 10),
+        MoveWorld(-12, 39),
+        MoveWorld(-10, 40),
+        Wait(3),
+        Screenshot("01-width-snaps-to-the-line-end"),
+        ClickWorld(-10, 40),
+        Key("Escape"),
+        Key("Escape"),
+        Key("Escape"),
+        MoveTo(1350, 850),
+        Wait(3),
+        Screenshot("02-far-side-through-the-point"),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Click(ui("view-snap-to-grid")),
+        Click(ui("render-mode")),
+        WaitFor("view-menu"),
+        Screenshot("03-view-menu-snap-to-grid"),
+        Key("Escape"),
+        Key("L"),
+        ClickWorld(41.3, -18.6),
+        ClickWorld(67.8, -31.2),
+        Key("Escape"),
+        MoveTo(1350, 850),
+        Wait(3),
+        Screenshot("04-line-on-the-grid"),
+    ],
+)
