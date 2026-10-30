@@ -523,12 +523,15 @@ impl Cadrs {
 
     #[tool(
         description = "What the user has selected in the 3D view, in the order selected (read only: the \
-        selection doesn't change): the document and tab, and each selected entity with its \"kind\" (face, \
-        edge, vertex, part, plane, origin, feature, sketch_region, sketch_curve, sketch_point, assembly). \
-        Faces and edges come with the same \"ref\" as list_faces and list_edges give (pass it to \
-        add_feature, edit_feature, …) and their geometry (centre and normal, axis and radius; ends and \
-        length); a vertex with its position; a part with its id and name. An entity a rebuild has since \
-        removed is \"stale\": true. An empty selection is an empty list."
+        selection doesn't change): the document and tab, \"mode\" (\"view\", or \"sketch\" while a sketch is \
+        edited, whose own selection isn't reported), and each selected entity with its \"kind\" (face, edge, \
+        vertex, part, plane, origin, feature, sketch_region, sketch_curve, sketch_point, pattern_instance, \
+        assembly). Faces and edges come with the same \"ref\" as list_faces and list_edges give (the \
+        feature tools take it, e.g. a fillet's or chamfer's entities; add_sketch's face takes a face's ref \
+        to sketch a hole's points on it) and their geometry (centre and normal, axis and radius; ends and \
+        length); a vertex with its position; a part with its id and name; a sketch's picks with its \
+        sketch_id. Something a rebuild has since removed is \"stale\": true with \"why\". An empty \
+        selection is an empty list."
     )]
     async fn get_selection(&self) -> Result<CallToolResult, ErrorData> {
         self.call(Call::GetSelection).await
