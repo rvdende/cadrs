@@ -2544,6 +2544,7 @@ impl Ctx<'_> {
                     b,
                     flip_a: false,
                     flip_b: false,
+                    ccw: None,
                 }
             }
             _ => {

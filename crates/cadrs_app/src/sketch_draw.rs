@@ -2634,17 +2634,19 @@ fn shown_dimension(
     s: &Sketch,
     k: cadrs_sketch::DimensionId,
     d: &cadrs_sketch::Dimension,
-    label_drag: Option<(cadrs_sketch::DimensionId, f64, f64)>,
+    label_drag: Option<(cadrs_sketch::DimensionId, f64, f64, f64)>,
 ) -> cadrs_sketch::Dimension {
     let mut d = *d;
-    if let Some((id, offset, along)) = label_drag
+    if let Some((id, offset, along, value)) = label_drag
         && id == k
     {
         d.offset = offset;
         d.along = along;
+        d.value = value;
     }
+    // (On its side: a negative distance stays negative, an angle outside outside, #96.)
     if d.driven
-        && let Some(v) = cadrs_sketch::dimension::measure(s, d.kind)
+        && let Some(v) = cadrs_sketch::dimension::measured_value(s, &d)
     {
         d.value = v;
     }

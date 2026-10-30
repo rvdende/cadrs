@@ -694,8 +694,9 @@ fn why(
 }
 
 /// The features whose expressions can't be evaluated where they are (P3F.4): a variable used
-/// above its definition ("used before it is defined"), one defined nowhere, or an expression
-/// that no longer evaluates (a Length variable in an angle field). `features` are the ones
+/// above its definition ("used before it is defined"), one defined nowhere, an expression
+/// that no longer evaluates (a Length variable in an angle field), or a sketch dimension's
+/// value it can't take (#96: a 0 length). `features` are the ones
 /// that build (suppressed and rolled-back ones left out), in order.
 pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
     // Fast path: nothing names a variable and nothing defines one.
@@ -745,8 +746,16 @@ pub fn check(features: &[Feature], units: &Units) -> Vec<(FeatureId, String)> {
                 env.push((v.name.clone(), value));
             }
             FeatureKind::Sketch(sk) => {
-                for (_, e, q) in sketch_expressions(&sk.geometry) {
-                    if let Some(w) = why("Dimension", &e, q, units, &env, &later) {
+                for (id, e, q) in sketch_expressions(&sk.geometry) {
+                    // (Evaluated, and a value its dimension can take: #96, a 0 length would
+                    // leave the sketch as it was without a word.)
+                    let w = why("Dimension", &e, q, units, &env, &later).or_else(|| {
+                        let d = sk.geometry.dimensions.get(id)?;
+                        let v = units.eval_vars(&e, q, &env).ok()?;
+                        let bad = cadrs_sketch::ops::check_value(d, v).err()?;
+                        Some(format!("Dimension {e} = {}: {bad}", units.with_unit(v, q)))
+                    });
+                    if let Some(w) = w {
                         out.push((f.id, w));
                         break;
                     }
@@ -839,10 +848,20 @@ pub fn refresh(
                 }
                 if !ops.is_empty() {
                     let before = g.clone();
-                    if SketchOp::Batch(ops).apply(g).is_ok() {
+                    if SketchOp::Batch(ops.clone()).apply(g).is_ok() {
                         changed = true;
                     } else {
+                        // One value the sketch can't take (#96: [`check`] reports it): the
+                        // others still apply, each on its own.
                         *g = before;
+                        for op in ops {
+                            let before = g.clone();
+                            if op.apply(g).is_ok() {
+                                changed = true;
+                            } else {
+                                *g = before;
+                            }
+                        }
                     }
                 }
             }
