@@ -1,20 +1,22 @@
-//! Writes history logs on a thread of their own ([`HistoryLog::save_in_background`]), one at
-//! a time and in the order they were asked for. A write that a later one of the same file
-//! replaces before it starts is skipped. [`flush`] waits until every write is done: saving or
-//! reading a log in the foreground does it first, so the files are always the latest.
+//! Writes history logs and documents on a thread of their own
+//! ([`HistoryLog::save_in_background`], [`Store::save_in_background`]), one at a time and in
+//! the order they were asked for. A write that a later one of the same file replaces before it
+//! starts is skipped. [`flush`] waits until every write is done: saving or reading a log or a
+//! document in the foreground does it first, so the files are always the latest.
 //!
 //! [`HistoryLog::save_in_background`]: super::HistoryLog::save_in_background
+//! [`Store::save_in_background`]: crate::store::Store::save_in_background
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 
 use crate::store::StoreError;
 
-/// Makes a log's RON (on the writer's thread).
-type MakeText = Box<dyn FnOnce() -> Result<String, ron::Error> + Send>;
+/// Writes a file (on the writer's thread).
+type Job = Box<dyn FnOnce() -> Result<(), StoreError> + Send>;
 
 struct Writer {
-    jobs: Mutex<mpsc::Sender<(PathBuf, MakeText)>>,
+    jobs: Mutex<mpsc::Sender<(PathBuf, Job)>>,
     /// The writes asked for and not done yet.
     queued: Arc<(Mutex<usize>, Condvar)>,
 }
@@ -23,7 +25,7 @@ static WRITER: OnceLock<Writer> = OnceLock::new();
 
 fn writer() -> &'static Writer {
     WRITER.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<(PathBuf, MakeText)>();
+        let (tx, rx) = mpsc::channel::<(PathBuf, Job)>();
         let queued = Arc::new((Mutex::new(0usize), Condvar::new()));
         let counts = queued.clone();
         // Without the thread (a page has none), [`queue`] writes each log itself.
@@ -36,14 +38,11 @@ fn writer() -> &'static Writer {
                     let last: Vec<bool> = (0..n)
                         .map(|i| !jobs[i + 1..].iter().any(|(p, _)| *p == jobs[i].0))
                         .collect();
-                    for ((path, make), last) in jobs.into_iter().zip(last) {
+                    for ((path, job), last) in jobs.into_iter().zip(last) {
                         if !last {
                             continue;
                         }
-                        let done = make()
-                            .map_err(|e| StoreError::Parse(e.to_string()))
-                            .and_then(|text| write(&path, &text));
-                        if let Err(e) = done {
+                        if let Err(e) = job() {
                             eprintln!("cannot save {}: {e}", path.display());
                         }
                     }
@@ -67,20 +66,29 @@ pub(super) fn queue(
     path: PathBuf,
     make: impl FnOnce() -> Result<String, ron::Error> + Send + 'static,
 ) {
+    let to = path.clone();
+    queue_job(
+        path,
+        Box::new(move || {
+            let text = make().map_err(|e| StoreError::Parse(e.to_string()))?;
+            write(&to, &text)
+        }),
+    );
+}
+
+/// Runs `job`, which writes `path` (and what goes with it), on the writer's thread.
+pub(crate) fn queue_job(path: PathBuf, job: Job) {
     let w = writer();
     *w.queued.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
     let sent = w
         .jobs
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .send((path, Box::new(make)));
-    if let Err(mpsc::SendError((path, make))) = sent {
+        .send((path, job));
+    if let Err(mpsc::SendError((path, job))) = sent {
         // (The thread is gone: write it here.)
         *w.queued.0.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
-        if let Err(e) = make()
-            .map_err(|e| StoreError::Parse(e.to_string()))
-            .and_then(|text| write(&path, &text))
-        {
+        if let Err(e) = job() {
             eprintln!("cannot save {}: {e}", path.display());
         }
     }

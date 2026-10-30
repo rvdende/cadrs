@@ -283,7 +283,8 @@ fn track_history(world: &mut World, mut seen: Local<Option<bevy::ecs::change_det
         panel.expanded.clear();
         return;
     }
-    if editing(world) {
+    // (A command whose sketches on parts are still regenerating is recorded with them.)
+    if editing(world) || world.resource::<ActiveDocument>().is_regenerating() {
         return;
     }
     *seen = tick;

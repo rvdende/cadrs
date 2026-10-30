@@ -683,7 +683,8 @@ impl Remote {
                     }
                     super::start_progress(ticket);
                     self.stop = Some(cancelled);
-                    let build = self.rebuild(features, persist);
+                    // (A list of its own to send: on this thread, not the caller's.)
+                    let build = self.rebuild(features.to_vec(), persist);
                     self.stop = None;
                     super::clear_partial();
                     let _ = reply.send(Arc::new(build));
@@ -1038,7 +1039,7 @@ pub fn main(args: &[String]) -> i32 {
                     *r = Some(cancelled.clone());
                 }
                 let _ = tx.send(Job::Rebuild {
-                    features: features.into_list(),
+                    features: features.into_list().into(),
                     ticket: 0,
                     reply,
                     cancelled,

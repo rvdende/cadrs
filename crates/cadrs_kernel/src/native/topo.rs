@@ -1315,10 +1315,12 @@ impl Body {
         let mut etol = vec![0.0f64; self.edges.len()];
         let mut vtol = vec![0.0f64; self.verts.len()];
         for f in &self.faces {
+            let mut surface_key = None;
             for c in f.loops.iter().flatten() {
                 let e = &self.edges[c.edge];
                 if !e.degenerate {
-                    etol[c.edge] = etol[c.edge].max(pcurve_gap(e, &c.pc, &f.surf));
+                    let gap = pcurve_gap_kept(e, &c.pc, &f.surf, &mut surface_key);
+                    etol[c.edge] = etol[c.edge].max(gap);
                 }
                 for k in 0..2 {
                     let uv = c.pc.point(e.t[k]);
@@ -1692,6 +1694,62 @@ impl Body {
         }
         errs
     }
+}
+
+/// [`pcurve_gap`], kept by what it is made from (the edge's curve and range, the p-curve, the
+/// surface: `surface_key`, the surface's own hash, made once per face): a boolean's result fits
+/// every edge's tolerance again, most of them its inputs' edges as they were.
+fn pcurve_gap_kept(e: &Edge, pc: &Curve, surf: &Surface, surface_key: &mut Option<u128>) -> f64 {
+    use std::hash::Hasher;
+    /// Two generations of at most this many gaps each.
+    const KEPT: usize = 1 << 18;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, f64>,
+        old: rustc_hash::FxHashMap<u128, f64>,
+    }
+    static KEPT_GAPS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    // (A line on a plane takes two points: no key.)
+    if matches!(
+        (&e.curve, pc, surf),
+        (
+            Curve::Line { .. },
+            Curve::Line { .. },
+            Surface::Plane { .. }
+        )
+    ) {
+        return pcurve_gap(e, pc, surf);
+    }
+    let sk = *surface_key.get_or_insert_with(|| {
+        let mut h = super::fingerprint::Key128::new();
+        h.surface(surf);
+        h.key()
+    });
+    let mut h = super::fingerprint::Key128::new();
+    h.write_u128(sk);
+    h.curve(&e.curve);
+    h.f64s(&e.t);
+    h.curve(pc);
+    let key = h.key();
+    let known = {
+        let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
+        match k.new.get(&key).copied() {
+            Some(g) => Some(g),
+            None => k.old.remove(&key).inspect(|g| {
+                k.new.insert(key, *g);
+            }),
+        }
+    };
+    known.unwrap_or_else(|| {
+        let gap = pcurve_gap(e, pc, surf);
+        let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
+        if k.new.len() >= KEPT {
+            k.old = std::mem::take(&mut k.new);
+        }
+        k.new.insert(key, gap);
+        gap
+    })
 }
 
 /// The largest distance between edge `e`'s curve and its p-curve `pc` on `surf` (infinite if

@@ -41,6 +41,61 @@ pub fn face_polygons(body: &Body, f: &Face) -> Vec<Vec<P2>> {
         .collect()
 }
 
+/// A face's [`face_polygons`] and their [`poly_boxes`].
+pub type KeptPolygons = std::sync::Arc<(Vec<Vec<P2>>, PolyBoxes)>;
+
+/// [`face_polygons`] and their [`poly_boxes`], kept by what they are made from (the face's
+/// surface and each p-curve over its range): a boolean takes every face of both its bodies (in
+/// its import and again to classify), most of them as the bodies before it had them.
+pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
+    use std::hash::Hasher;
+    /// Two generations of at most this many points each (16 bytes a point, and the boxes).
+    const KEPT: usize = 1 << 21;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, KeptPolygons>,
+        new_points: usize,
+        old: rustc_hash::FxHashMap<u128, KeptPolygons>,
+    }
+    static KEPT_POLYS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(&f.surf);
+    for l in &f.loops {
+        h.write_usize(l.len());
+        for c in l {
+            let (a, b) = co_range(&body.edges[c.edge], c.fwd);
+            h.f64s(&[a, b]);
+            h.curve(&c.pc);
+        }
+    }
+    let key = h.key();
+    let points = |p: &KeptPolygons| p.0.iter().map(Vec::len).sum::<usize>() + 1;
+    let kept = {
+        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+        match k.new.get(&key).cloned() {
+            Some(p) => Some(p),
+            None => k.old.remove(&key).inspect(|p| {
+                k.new_points += points(p);
+                k.new.insert(key, p.clone());
+            }),
+        }
+    };
+    kept.unwrap_or_else(|| {
+        let polys = face_polygons(body, f);
+        let boxes = poly_boxes(&polys, &f.surf);
+        let p: KeptPolygons = std::sync::Arc::new((polys, boxes));
+        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+        if k.new_points + points(&p) > KEPT {
+            k.old = std::mem::take(&mut k.new);
+            k.new_points = 0;
+        }
+        k.new_points += points(&p);
+        k.new.insert(key, p.clone());
+        p
+    })
+}
+
 /// Point in a face's domain given its sampled loops; `tol` in model units (scaled by the
 /// surface metric).
 pub fn in_face(polys: &[Vec<P2>], surf: &Surface, uv: P2, tol: f64) -> InFace {
@@ -257,9 +312,14 @@ pub fn in_face_boxed(
 
 impl<'a> FacePolys<'a> {
     pub fn new(polys: &'a [Vec<P2>], surf: &Surface) -> Self {
+        Self::with_boxes(polys, poly_boxes(polys, surf))
+    }
+
+    /// [`Self::new`] with the polygons' boxes made already ([`poly_boxes`]).
+    pub fn with_boxes(polys: &'a [Vec<P2>], boxes: PolyBoxes) -> Self {
         FacePolys {
             polys,
-            boxes: poly_boxes(polys, surf),
+            boxes,
             range: uv_range(polys),
         }
     }
@@ -689,6 +749,28 @@ pub struct Classifier<'a> {
 impl<'a> Classifier<'a> {
     /// The body with its faces' sampled loops ([`face_polygons`], one per face).
     pub fn new(body: &'a Body, polys: &'a [Vec<Vec<P2>>]) -> Self {
+        let faces = polys
+            .iter()
+            .zip(&body.faces)
+            .map(|(p, f)| FacePolys::new(p, &f.surf))
+            .collect();
+        Self::with(body, polys.iter().map(Vec::as_slice), faces)
+    }
+
+    /// [`Self::new`] with the polygons and their boxes made already ([`face_polygons_kept`]).
+    pub fn with_kept(body: &'a Body, kept: &'a [KeptPolygons]) -> Self {
+        let faces = kept
+            .iter()
+            .map(|k| FacePolys::with_boxes(&k.0, k.1.clone()))
+            .collect();
+        Self::with(body, kept.iter().map(|k| k.0.as_slice()), faces)
+    }
+
+    fn with(
+        body: &'a Body,
+        polys: impl Iterator<Item = &'a [Vec<P2>]>,
+        faces: Vec<FacePolys<'a>>,
+    ) -> Self {
         let boxes: Vec<Bbox> = (0..body.faces.len()).map(|fi| body.face_bbox(fi)).collect();
         let mut bbox = Bbox::empty();
         for b in &boxes {
@@ -698,7 +780,6 @@ impl<'a> Classifier<'a> {
             bbox.add(&v.p);
         }
         let starts = polys
-            .iter()
             .map(|ps| {
                 let mut uv = Bbox::empty();
                 ps.iter()
@@ -707,14 +788,9 @@ impl<'a> Classifier<'a> {
                 (!uv.is_empty()).then(|| (uv.center().x, uv.center().y))
             })
             .collect();
-        let polys = polys
-            .iter()
-            .zip(&body.faces)
-            .map(|(p, f)| FacePolys::new(p, &f.surf))
-            .collect();
         Classifier {
             body,
-            polys,
+            polys: faces,
             boxes,
             bbox,
             starts,

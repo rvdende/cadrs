@@ -234,9 +234,8 @@ struct WFace {
     loops: Vec<Vec<(usize, bool, Curve)>>,
     owner: usize,
     orig: usize,
-    polys: Vec<Vec<P2>>,
-    /// The polygons' boxes and rows, to cull them by ([`classify::poly_boxes`]).
-    boxes: classify::PolyBoxes,
+    /// Its polygons and their boxes and rows, to cull them by ([`classify::poly_boxes`]).
+    polys: classify::KeptPolygons,
     bbox: Bbox,
     uv_center: P2,
     /// The face's own tolerance (0: exact, the run's applies).
@@ -461,10 +460,10 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             })
             .collect();
         loops.iter_mut().for_each(drop_slits);
-        let polys = classify::face_polygons(b, f);
+        let polys = classify::face_polygons_kept(b, f);
         let mut bb = Bbox::empty();
         let mut uvb = Bbox::empty();
-        for p in &polys {
+        for p in &polys.0 {
             for q in p {
                 uvb.add(&P3::new(q.x, q.y, 0.0));
             }
@@ -504,7 +503,6 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             loops,
             owner,
             orig: fi,
-            boxes: classify::poly_boxes(&polys, &f.surf),
             polys,
             bbox: bb.grow(pool.tol * 10.0 + ftol),
             uv_center: P2::new(center.x, center.y),
@@ -794,8 +792,9 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
     let mut res = InFace::Outside;
     // (The polygons' range and boxes kept from the start: a face of hundreds of holes holds a
     // million polygon points, which every test went over.)
-    for uv in classify::periodic_candidates_boxed(&f.surf, u, v, &f.boxes) {
-        match classify::in_face_boxed(&f.polys, &f.boxes, &f.surf, uv, tol) {
+    let (polys, boxes) = &*f.polys;
+    for uv in classify::periodic_candidates_boxed(&f.surf, u, v, boxes) {
+        match classify::in_face_boxed(polys, boxes, &f.surf, uv, tol) {
             InFace::Inside => return InFace::Inside,
             InFace::Boundary => res = InFace::Boundary,
             InFace::Outside => {}
@@ -2603,7 +2602,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let uvbox = |f: &WFace| {
         let mut ub = (f64::INFINITY, f64::NEG_INFINITY);
         let mut vb = (f64::INFINITY, f64::NEG_INFINITY);
-        for p in &f.polys {
+        for p in &f.polys.0 {
             for q in p {
                 ub = (ub.0.min(q.x), ub.1.max(q.x));
                 vb = (vb.0.min(q.y), vb.1.max(q.y));
@@ -3501,20 +3500,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     prof.mark("split");
     // 5. Classify.
-    let polys_a: Vec<Vec<Vec<P2>>> = a
-        .faces
-        .iter()
-        .map(|f| classify::face_polygons(a, f))
-        .collect();
-    let polys_b: Vec<Vec<Vec<P2>>> = b
-        .faces
-        .iter()
-        .map(|f| classify::face_polygons(b, f))
-        .collect();
+    let kept = |x: &Body| -> Vec<classify::KeptPolygons> {
+        x.faces
+            .iter()
+            .map(|f| classify::face_polygons_kept(x, f))
+            .collect()
+    };
+    let (polys_a, polys_b) = (kept(a), kept(b));
     // (Each body prepared once for the many points classified against it.)
     let (cls_a, cls_b) = (
-        classify::Classifier::new(a, &polys_a),
-        classify::Classifier::new(b, &polys_b),
+        classify::Classifier::with_kept(a, &polys_a),
+        classify::Classifier::with_kept(b, &polys_b),
     );
     let mut keep: Vec<(usize, Vec<Vec<Arc>>, bool)> = Vec::new(); // (face, loops, flip)
     // Sub-faces of one body joined across an edge piece no cut runs along lie on one side of

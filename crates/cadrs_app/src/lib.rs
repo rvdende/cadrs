@@ -309,8 +309,8 @@ pub struct ActiveDocument {
     pub active: Option<ElementId>,
     /// Metadata when the document lives in the [`DocumentStore`]; `None` for scratch documents.
     pub meta: Option<DocumentMeta>,
-    /// The document as last saved, to detect changes.
-    saved: Document,
+    /// The document as last saved, to detect changes (shared with its save in the background).
+    saved: std::sync::Arc<Document>,
     /// The document as it was opened (a new thumbnail is rendered only if it changed).
     opened: Document,
     /// Render a thumbnail when closing even if nothing changed (a document just created).
@@ -335,6 +335,52 @@ pub struct ActiveDocument {
     pub locked_tabs: Vec<(ElementId, String)>,
     /// Set when a command was refused for that, to say so.
     pub lock_refused: Option<String>,
+    /// The sketches on parts the last command left, regenerating in the background
+    /// ([`Self::settle_regeneration`]).
+    regenerating: Vec<Regenerating>,
+}
+
+/// A Part Studio's sketches on parts a command left as they were
+/// ([`cadrs_core::parts::defer_regeneration`]: their regeneration rebuilds features, which the
+/// command doesn't wait for), regenerating in the background: put in the document, in that
+/// command's undo step, when done. Every edit, undo, redo and save waits for them first, so the
+/// steps hold sketches as regenerated.
+#[derive(Debug, Clone)]
+struct Regenerating {
+    element: ElementId,
+    /// The history's revision after the command (`None`: it made no undo step).
+    revision: Option<u64>,
+    /// The features as the command left them.
+    before: std::sync::Arc<[cadrs_core::Feature]>,
+    /// The features regenerated, when done.
+    after: std::sync::Arc<(
+        std::sync::Mutex<Option<Vec<cadrs_core::Feature>>>,
+        std::sync::Condvar,
+    )>,
+}
+
+/// The background half of [`Regenerating`]: `features` regenerated against `context`, into
+/// `after`.
+fn regenerate_into(
+    features: &[cadrs_core::Feature],
+    context: &cadrs_core::parts::ContextSolids,
+    after: &(
+        std::sync::Mutex<Option<Vec<cadrs_core::Feature>>>,
+        std::sync::Condvar,
+    ),
+) {
+    // (One that panics leaves the sketches as they were.)
+    let features = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut features = features.to_vec();
+        cadrs_core::parts::regenerate_with(&mut features, context);
+        features
+    }))
+    .unwrap_or_else(|_| features.to_vec());
+    let (done, ready) = after;
+    if let Ok(mut d) = done.lock() {
+        *d = Some(features);
+    }
+    ready.notify_all();
 }
 
 /// P3E.4: a workspace's undo and redo stacks, kept while another workspace is open.
@@ -360,7 +406,7 @@ impl ActiveDocument {
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
         Self {
-            saved: doc.clone(),
+            saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),
             fresh: false,
             active: doc.elements.first().map(|e| e.id),
@@ -375,6 +421,7 @@ impl ActiveDocument {
             remote_author: None,
             locked_tabs: Vec::new(),
             lock_refused: None,
+            regenerating: Vec::new(),
         }
     }
 
@@ -403,6 +450,7 @@ impl ActiveDocument {
                 "{name} has this tab open"
             )));
         }
+        self.settle_regeneration();
         self.remember_active_index();
         let before = self.active;
         let (undo0, redo0) = (self.history.undo_len(), self.history.redo_len());
@@ -445,8 +493,115 @@ impl ActiveDocument {
                 self.undo_active.truncate(keep);
             }
         }
+        self.regenerate_left(recorded);
         self.fix_active();
         r
+    }
+
+    /// Regenerates in the background the sketches the command just applied left
+    /// ([`Regenerating`]), unless that takes no time at all.
+    fn regenerate_left(&mut self, recorded: bool) {
+        for (element, context) in cadrs_core::parts::take_deferred() {
+            let Some(el) = self.doc.element(element) else {
+                continue;
+            };
+            let before: std::sync::Arc<[cadrs_core::Feature]> = el.features().into();
+            let after: std::sync::Arc<(
+                std::sync::Mutex<Option<Vec<cadrs_core::Feature>>>,
+                std::sync::Condvar,
+            )> = Default::default();
+            // (No thread to be had: regenerated here and now, as before.)
+            let job = (before.clone(), context.clone(), after.clone());
+            if cadrs_core::background::spawn("regenerate-sketches", move || {
+                regenerate_into(&job.0, &job.1, &job.2);
+            })
+            .is_err()
+            {
+                regenerate_into(&before, &context, &after);
+            }
+            self.regenerating.retain(|r| r.element != element);
+            self.regenerating.push(Regenerating {
+                element,
+                revision: recorded.then(|| self.history.revision()),
+                before,
+                after,
+            });
+        }
+        // A quick regeneration (sketches on faces near the end of a list built already) goes
+        // in at once, as if the command had waited for it.
+        self.settle_within(std::time::Duration::from_millis(4));
+    }
+
+    /// Whether `element`'s sketches are regenerating in the background ([`Regenerating`]): its
+    /// parts are rebuilt once they are in.
+    pub fn regenerating(&self, element: ElementId) -> bool {
+        self.regenerating.iter().any(|r| r.element == element)
+    }
+
+    /// Whether any sketches are regenerating in the background ([`Regenerating`]).
+    pub fn is_regenerating(&self) -> bool {
+        !self.regenerating.is_empty()
+    }
+
+    /// Puts in the document the sketches regenerated in the background that are done
+    /// ([`Regenerating`]). Whether any regeneration finished (the document may have changed).
+    pub fn take_regenerated(&mut self) -> bool {
+        self.settle_within(std::time::Duration::ZERO)
+    }
+
+    /// Waits for the sketches regenerating in the background and puts them in the document
+    /// ([`Regenerating`]): before anything else changes it.
+    pub fn settle_regeneration(&mut self) {
+        self.settle_within(std::time::Duration::MAX);
+    }
+
+    /// Puts in the regenerations done within `wait` (each). Whether any was.
+    fn settle_within(&mut self, wait: std::time::Duration) -> bool {
+        let mut any = false;
+        let mut i = 0;
+        while i < self.regenerating.len() {
+            let cell = self.regenerating[i].after.clone();
+            let (done, ready) = &*cell;
+            // (Waited for only when not done: in a page it ran on this thread, and waiting
+            // with a timeout reads the clock, which a page hasn't.)
+            let after = done.lock().map_err(drop).and_then(|d| {
+                let mut d = if d.is_some() || wait.is_zero() {
+                    d
+                } else if wait == std::time::Duration::MAX {
+                    ready.wait_while(d, |d| d.is_none()).map_err(drop)?
+                } else {
+                    ready
+                        .wait_timeout_while(d, wait, |d| d.is_none())
+                        .map_err(drop)?
+                        .0
+                };
+                Ok(d.take())
+            });
+            // (A poisoned lock: the sketches stay as the command left them.)
+            let Ok(after) = after else {
+                self.regenerating.remove(i);
+                continue;
+            };
+            let Some(after) = after else {
+                i += 1;
+                continue;
+            };
+            let r = self.regenerating.remove(i);
+            any = true;
+            if cadrs_core::parts::take_regenerated(&mut self.doc, r.element, &r.before, &after)
+                && let Some(revision) = r.revision
+                && self.history.amend_last(&self.doc, revision)
+            {
+                // (The others the command left go in the same step.)
+                let now = self.history.revision();
+                for o in &mut self.regenerating {
+                    if o.revision == Some(revision) {
+                        o.revision = Some(now);
+                    }
+                }
+            }
+        }
+        any
     }
 
     /// A change someone else made, editing together ([`collab`]): `doc` is the document with
@@ -454,6 +609,7 @@ impl ActiveDocument {
     /// theirs; the History panel records it as `author`'s. Not refused while read-only (a
     /// view-only copy follows the owner's).
     pub fn apply_remote(&mut self, doc: Document, author: &str) {
+        self.settle_regeneration();
         if doc == self.doc {
             return;
         }
@@ -470,6 +626,7 @@ impl ActiveDocument {
             self.refused += 1;
             return None;
         }
+        self.settle_regeneration();
         self.remember_active_index();
         let current = self.active;
         let r = self.history.undo(&mut self.doc);
@@ -491,6 +648,7 @@ impl ActiveDocument {
             self.refused += 1;
             return None;
         }
+        self.settle_regeneration();
         self.remember_active_index();
         let current = self.active;
         let r = self.history.redo(&mut self.doc);
@@ -604,6 +762,7 @@ impl ActiveDocument {
     /// the first time), and returns this workspace's. The active tab stays if it's there. The
     /// document file follows on the next save.
     pub fn switch_workspace(&mut self, doc: Document, undo: WorkspaceUndo) -> WorkspaceUndo {
+        self.settle_regeneration();
         self.remember_active_index();
         let old = WorkspaceUndo {
             history: std::mem::replace(&mut self.history, undo.history),
@@ -618,11 +777,12 @@ impl ActiveDocument {
     /// Saves the document and its metadata now (a workspace switch: the file holds the open
     /// workspace and the metadata its name), without touching the modified time.
     pub fn save_now(&mut self, store: &Store) -> Result<(), cadrs_core::StoreError> {
+        self.settle_regeneration();
         let Some(meta) = &self.meta else {
             return Ok(());
         };
         store.save(&self.doc, meta)?;
-        self.saved = self.doc.clone();
+        self.saved = std::sync::Arc::new(self.doc.clone());
         Ok(())
     }
 
@@ -634,12 +794,12 @@ impl ActiveDocument {
     /// True if `doc` (read from the store) is the document as this session last loaded or saved
     /// it; false when it was changed elsewhere since (a re-import while it was open).
     pub fn is_last_saved(&self, doc: &Document) -> bool {
-        self.saved == *doc
+        *self.saved == *doc
     }
 
     /// True if the document changed since it was last saved.
     pub fn is_dirty(&self) -> bool {
-        self.meta.is_some() && self.doc != self.saved
+        self.meta.is_some() && self.doc != *self.saved
     }
 
     /// Saves the document if it changed since the last save.
@@ -649,17 +809,35 @@ impl ActiveDocument {
         now: Timestamp,
         user: &str,
     ) -> Result<(), cadrs_core::StoreError> {
+        self.settle_regeneration();
         let Some(meta) = &mut self.meta else {
             return Ok(());
         };
-        if self.doc == self.saved {
+        if self.doc == *self.saved {
             return Ok(());
         }
         meta.modified = now;
         meta.modified_by = user.to_string();
         store.save(&self.doc, meta)?;
-        self.saved = self.doc.clone();
+        self.saved = std::sync::Arc::new(self.doc.clone());
         Ok(())
+    }
+
+    /// [`Self::save_if_changed`] written in the background ([`Store::save_in_background`]):
+    /// only a copy of the document made here (a big document's text took a frame a tenth of a
+    /// second). Errors are printed.
+    pub fn save_if_changed_in_background(&mut self, store: &Store, now: Timestamp, user: &str) {
+        self.settle_regeneration();
+        let Some(meta) = &mut self.meta else {
+            return;
+        };
+        if self.doc == *self.saved {
+            return;
+        }
+        meta.modified = now;
+        meta.modified_by = user.to_string();
+        self.saved = std::sync::Arc::new(self.doc.clone());
+        store.save_in_background(self.saved.clone(), meta.clone());
     }
 }
 

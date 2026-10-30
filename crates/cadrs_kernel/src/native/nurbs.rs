@@ -230,31 +230,59 @@ fn basis_ders_n<const N: usize, const W: usize>(
     ders
 }
 
-/// Values and first derivatives of the non-zero basis functions, for `p <= MAXP`: the hot
+/// Values and first derivatives of the non-zero basis functions, for `p < W` (`W` is
+/// `MAXP + 1`, or `WIDEP + 1` for the high degrees of lofts and blends' fits): the hot
 /// evaluators' case (points and first derivatives) in two short arrays.
 #[derive(Clone, Copy)]
-struct B1 {
-    v: [f64; MAXP + 1],
-    d: [f64; MAXP + 1],
+struct B1<const W: usize = { MAXP + 1 }> {
+    v: [f64; W],
+    d: [f64; W],
+}
+
+/// [`basis1`] for `p <= WIDEP`.
+fn basis1_wide(span: usize, u: f64, p: usize, deriv: bool, knots: &[f64]) -> B1<{ WIDEP + 1 }> {
+    match p {
+        0 => basis1_n::<1, { WIDEP + 1 }>(span, u, deriv, knots),
+        1 => basis1_n::<2, { WIDEP + 1 }>(span, u, deriv, knots),
+        2 => basis1_n::<3, { WIDEP + 1 }>(span, u, deriv, knots),
+        3 => basis1_n::<4, { WIDEP + 1 }>(span, u, deriv, knots),
+        4 => basis1_n::<5, { WIDEP + 1 }>(span, u, deriv, knots),
+        5 => basis1_n::<6, { WIDEP + 1 }>(span, u, deriv, knots),
+        6 => basis1_n::<7, { WIDEP + 1 }>(span, u, deriv, knots),
+        7 => basis1_n::<8, { WIDEP + 1 }>(span, u, deriv, knots),
+        8 => basis1_n::<9, { WIDEP + 1 }>(span, u, deriv, knots),
+        9 => basis1_n::<10, { WIDEP + 1 }>(span, u, deriv, knots),
+        10 => basis1_n::<11, { WIDEP + 1 }>(span, u, deriv, knots),
+        11 => basis1_n::<12, { WIDEP + 1 }>(span, u, deriv, knots),
+        12 => basis1_n::<13, { WIDEP + 1 }>(span, u, deriv, knots),
+        13 => basis1_n::<14, { WIDEP + 1 }>(span, u, deriv, knots),
+        14 => basis1_n::<15, { WIDEP + 1 }>(span, u, deriv, knots),
+        _ => basis1_n::<16, { WIDEP + 1 }>(span, u, deriv, knots),
+    }
 }
 
 /// [`basis_ders`] with `d` = 0 or 1 (`deriv`) as a [`B1`]: A2.3's arithmetic for those rows,
 /// so the same values to the bit.
 fn basis1(span: usize, u: f64, p: usize, deriv: bool, knots: &[f64]) -> B1 {
     match p {
-        0 => basis1_n::<1>(span, u, deriv, knots),
-        1 => basis1_n::<2>(span, u, deriv, knots),
-        2 => basis1_n::<3>(span, u, deriv, knots),
-        3 => basis1_n::<4>(span, u, deriv, knots),
-        4 => basis1_n::<5>(span, u, deriv, knots),
-        5 => basis1_n::<6>(span, u, deriv, knots),
-        6 => basis1_n::<7>(span, u, deriv, knots),
-        _ => basis1_n::<8>(span, u, deriv, knots),
+        0 => basis1_n::<1, { MAXP + 1 }>(span, u, deriv, knots),
+        1 => basis1_n::<2, { MAXP + 1 }>(span, u, deriv, knots),
+        2 => basis1_n::<3, { MAXP + 1 }>(span, u, deriv, knots),
+        3 => basis1_n::<4, { MAXP + 1 }>(span, u, deriv, knots),
+        4 => basis1_n::<5, { MAXP + 1 }>(span, u, deriv, knots),
+        5 => basis1_n::<6, { MAXP + 1 }>(span, u, deriv, knots),
+        6 => basis1_n::<7, { MAXP + 1 }>(span, u, deriv, knots),
+        _ => basis1_n::<8, { MAXP + 1 }>(span, u, deriv, knots),
     }
 }
 
 #[inline]
-fn basis1_n<const N: usize>(span: usize, u: f64, deriv: bool, knots: &[f64]) -> B1 {
+fn basis1_n<const N: usize, const W: usize>(
+    span: usize,
+    u: f64,
+    deriv: bool,
+    knots: &[f64],
+) -> B1<W> {
     let p = N - 1;
     let mut ndu = [[0.0; N]; N];
     let mut left = [0.0; N];
@@ -277,8 +305,8 @@ fn basis1_n<const N: usize>(span: usize, u: f64, deriv: bool, knots: &[f64]) -> 
         ndu[j][j] = saved;
     }
     let mut out = B1 {
-        v: [0.0; MAXP + 1],
-        d: [0.0; MAXP + 1],
+        v: [0.0; W],
+        d: [0.0; W],
     };
     for j in 0..=p {
         out.v[j] = ndu[j][p];
@@ -306,7 +334,7 @@ trait BasisAt {
     fn at(&self, k: usize, j: usize) -> f64;
 }
 
-impl BasisAt for B1 {
+impl<const W: usize> BasisAt for B1<W> {
     #[inline]
     fn at(&self, k: usize, j: usize) -> f64 {
         if k == 0 { self.v[j] } else { self.d[j] }
@@ -499,6 +527,9 @@ impl NurbsCurve {
         let span = find_span(n, p, u, &self.knots);
         if d <= 1 && p <= MAXP {
             return self.hders_with(span, d, &basis1(span, u, p, d == 1, &self.knots));
+        }
+        if d <= 1 && p <= WIDEP {
+            return self.hders_with(span, d, &basis1_wide(span, u, p, d == 1, &self.knots));
         }
         self.hders_with(span, d, &Basis::new(span, u, p, d, &self.knots))
     }
@@ -1248,6 +1279,11 @@ impl NurbsSurface {
             let bv = basis1(sv, v, self.dv, N == 1, &self.kv);
             return self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv));
         }
+        if N <= 1 && self.du <= WIDEP && self.dv <= WIDEP {
+            let bu = basis1_wide(su, u, self.du, N == 1, &self.ku);
+            let bv = basis1_wide(sv, v, self.dv, N == 1, &self.kv);
+            return self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv));
+        }
         let bu = Basis::new(su, u, self.du, N, &self.ku);
         let bv = Basis::new(sv, v, self.dv, N, &self.kv);
         self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv))
@@ -1569,6 +1605,8 @@ impl IsoV<'_> {
         }
         if s.du <= MAXP {
             self.d1_with(su, &basis1(su, u, s.du, true, &s.ku))
+        } else if s.du <= WIDEP {
+            self.d1_with(su, &basis1_wide(su, u, s.du, true, &s.ku))
         } else {
             self.d1_with(su, &Basis::new(su, u, s.du, 1, &s.ku))
         }

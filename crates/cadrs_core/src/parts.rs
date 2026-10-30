@@ -544,18 +544,128 @@ pub fn regenerate(features: &mut [Feature]) {
     regenerate_with(features, &[]);
 }
 
+/// The solids of a Part Studio's assembly contexts its sketches may name, by feature id and the
+/// context they are in ([`regenerate_with`]).
+pub type ContextSolids = Vec<(FeatureId, u32, Arc<Solid>)>;
+
+/// The app's switch ([`defer_regeneration`]).
+static DEFER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+std::thread_local! {
+    /// Set while a command applies ([`Deferring`]).
+    static IN_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The Part Studios whose sketches a command left ([`take_deferred`]), with their context
+/// solids.
+static DEFERRED: std::sync::Mutex<Vec<(crate::ids::ElementId, ContextSolids)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Has a command leave the sketches on parts whose regeneration would rebuild features (a face
+/// moved by an edit above it) as they are, for the caller to regenerate later off its thread
+/// ([`take_deferred`], [`regenerate_with`]), instead of waiting for those rebuilds: an edit near
+/// the top of pi7zoll-gehäuse froze the app 2.7 s, its 21 sketches on faces following.
+pub fn defer_regeneration(on: bool) {
+    DEFER.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// While it lives, the commands applied on this thread leave their sketches if
+/// [`defer_regeneration`] is on ([`crate::History::execute`] holds one; an undo restores
+/// sketches as they were made).
+pub struct Deferring(bool);
+
+impl Deferring {
+    pub fn enter() -> Self {
+        Self(IN_COMMAND.with(|c| c.replace(true)))
+    }
+}
+
+impl Drop for Deferring {
+    fn drop(&mut self) {
+        IN_COMMAND.with(|c| c.set(self.0));
+    }
+}
+
+/// The Part Studios whose sketches commands left since the last call, each with the context
+/// solids to regenerate them against: [`regenerate_with`] their features, then put the sketches
+/// that changed in the document ([`take_regenerated`]).
+pub fn take_deferred() -> Vec<(crate::ids::ElementId, ContextSolids)> {
+    DEFERRED
+        .lock()
+        .map(|mut d| std::mem::take(&mut *d))
+        .unwrap_or_default()
+}
+
+/// The sketches of `element` a regeneration changed ([`take_deferred`]): those of `before`
+/// (its features as they were regenerated) that `after` (as regenerated) has otherwise, put in
+/// `doc` where the feature is still as it was. Whether any was.
+pub fn take_regenerated(
+    doc: &mut crate::document::Document,
+    element: crate::ids::ElementId,
+    before: &[Feature],
+    after: &[Feature],
+) -> bool {
+    let Some(features) = doc.element_mut(element).and_then(|e| e.features_mut()) else {
+        return false;
+    };
+    let mut any = false;
+    for (was, now) in before.iter().zip(after) {
+        if was == now {
+            continue;
+        }
+        if let Some(f) = features.iter_mut().find(|f| f.id == now.id)
+            && *f == *was
+        {
+            *f = now.clone();
+            any = true;
+        }
+    }
+    any
+}
+
 /// [`regenerate`] with extra reference solids by feature id and the assembly context they are in
 /// (P3B.9: a Part Studio's assembly contexts, [`crate::assembly::context`]), which sketch faces
 /// and links may name. A sketch whose features above and itself are as when it was last
 /// regenerated is left as it is ([`REGENERATED`]).
-pub fn regenerate_with(
+pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, u32, Arc<Solid>)]) {
+    regenerate_or_leave(features, context, false);
+}
+
+/// [`regenerate_with`] from a command: with [`defer_regeneration`] on, the sketches from the
+/// first one whose regeneration rebuilds features on are left as they are, and `element` noted
+/// for [`take_deferred`].
+pub(crate) fn regenerate_studio(
     features: &mut [Feature],
-    context: &[(FeatureId, u32, std::sync::Arc<Solid>)],
+    context: &[(FeatureId, u32, Arc<Solid>)],
+    element: crate::ids::ElementId,
 ) {
+    let defer = DEFER.load(std::sync::atomic::Ordering::Relaxed) && IN_COMMAND.with(|c| c.get());
+    if !regenerate_or_leave(features, context, defer)
+        && let Ok(mut d) = DEFERRED.lock()
+    {
+        d.retain(|(e, _)| *e != element);
+        d.push((element, context.to_vec()));
+    }
+}
+
+/// [`regenerate_with`], leaving the sketches from the first one that needs a rebuild on if
+/// `leave`. Whether none was left.
+fn regenerate_or_leave(
+    features: &mut [Feature],
+    context: &[(FeatureId, u32, Arc<Solid>)],
+    leave: bool,
+) -> bool {
     let Some(last) = features.iter().rposition(needs_parts) else {
-        return;
+        return true;
     };
-    let mut done = REGENERATED.lock().ok();
+    // (Locked only to look and to note: not while a sketch's rebuilds run, which a
+    // regeneration in the background takes.)
+    let noted = |id: FeatureId| {
+        REGENERATED
+            .lock()
+            .ok()
+            .and_then(|d| d.as_ref().and_then(|d| d.get(&id).copied()))
+    };
     let mut frames = std::collections::HashMap::new();
     // The chain key of the features above the one at hand (the rebuild's: every parameter).
     let mut above = rebuild::CHAIN_SEED;
@@ -593,22 +703,22 @@ pub fn regenerate_with(
         }
         let id = features[i].id;
         let key = rebuild::chain_key(above, &features[i]);
-        let unchanged = context.is_empty()
-            && done
-                .as_ref()
-                .and_then(|d| d.as_ref())
-                .is_some_and(|d| d.get(&id) == Some(&key));
+        let unchanged = context.is_empty() && noted(id) == Some(key);
         if unchanged {
             above = key;
             continue;
         }
+        if leave {
+            return false;
+        }
         let built = regenerate_sketch(features, i, context);
         let key = rebuild::chain_key(above, &features[i]);
-        if built && let Some(d) = done.as_mut() {
+        if built && let Ok(mut d) = REGENERATED.lock() {
             d.get_or_insert_with(Default::default).insert(id, key);
         }
         above = key;
     }
+    true
 }
 
 /// Whether a feature is a sketch regenerated against the parts: on a face or a Plane feature, or

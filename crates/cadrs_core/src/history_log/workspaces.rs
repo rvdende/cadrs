@@ -188,7 +188,7 @@ impl HistoryLog {
             feature: None,
             feature_name: String::new(),
             label: format!("Branch from {version}"),
-            hash: document_hash(&doc),
+            hash: super::EntryHash::of(document_hash(&doc)),
             delta: Arc::default(),
         };
         self.workspaces.push(Workspace {
@@ -216,7 +216,10 @@ impl HistoryLog {
             let i = self.parked.iter().position(|t| t.workspace == id)?;
             let next = self.parked.swap_remove(i);
             let last = self.head_index();
-            let head = self.head.take().or_else(|| self.state_at(last));
+            let head = self
+                .head
+                .take()
+                .or_else(|| self.state_at(last).map(Arc::new));
             let old = Track {
                 workspace: self.current,
                 entries: std::mem::replace(&mut self.entries, next.entries),
@@ -229,7 +232,7 @@ impl HistoryLog {
             if let Some(h) = head {
                 let n = old.entries.len() - 1;
                 if !old.snapshots.iter().any(|(i, _)| *i == n) {
-                    old.snapshots.push((n, Arc::new(h)));
+                    old.snapshots.push((n, h));
                 }
             }
             self.parked.push(old);

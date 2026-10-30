@@ -15,7 +15,6 @@
 //! (outward from the material of a solid cylinder etc.).
 
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use super::curve::Curve;
@@ -56,12 +55,61 @@ pub type D2 = [V3; 6];
 
 /// The surface a kept grid ([`Surface::grid_points`]) is of: a B-spline surface, or an extrusion
 /// of a B-spline curve along a direction.
+#[derive(Clone)]
 enum GridOf {
     Nurbs(Weak<NurbsSurface>),
     Extrusion(Weak<NurbsCurve>, V3),
 }
 
+/// [`GridOf`] as a hash key: the kind, the address (the `Weak` held keeps it), the direction.
+type GridAddress = (u8, usize, [u64; 3]);
+
+/// The grids kept for every thread, behind each thread's few ([`Surface::grid_points`]): a
+/// fillet's welds project onto a hundred walls in turn, more than a thread keeps. Two
+/// generations of at most [`SharedGrids::KEPT`] points each.
+#[derive(Default)]
+struct SharedGrids {
+    new: GridMap,
+    new_points: usize,
+    old: GridMap,
+}
+
+/// Grids by surface and size, each with its surface (its `Weak` keeping the address).
+type GridMap = rustc_hash::FxHashMap<(GridAddress, usize), (GridOf, Arc<[P3]>)>;
+
+impl SharedGrids {
+    const KEPT: usize = 1 << 20;
+
+    fn get(&mut self, k: &(GridAddress, usize)) -> Option<Arc<[P3]>> {
+        if let Some((_, g)) = self.new.get(k) {
+            return Some(g.clone());
+        }
+        let (of, g) = self.old.remove(k)?;
+        self.insert(*k, of, g.clone());
+        Some(g)
+    }
+
+    fn insert(&mut self, k: (GridAddress, usize), of: GridOf, g: Arc<[P3]>) {
+        if self.new_points + g.len() > Self::KEPT {
+            self.old = std::mem::take(&mut self.new);
+            self.new_points = 0;
+        }
+        self.new_points += g.len();
+        self.new.insert(k, (of, g));
+    }
+}
+
+static SHARED_GRIDS: std::sync::LazyLock<std::sync::Mutex<SharedGrids>> =
+    std::sync::LazyLock::new(Default::default);
+
 impl GridOf {
+    fn address(&self) -> GridAddress {
+        match self {
+            GridOf::Nurbs(w) => (0, w.as_ptr() as usize, [0; 3]),
+            GridOf::Extrusion(w, d) => (1, w.as_ptr() as usize, d.map(f64::to_bits).into()),
+        }
+    }
+
     fn is(&self, other: &GridOf) -> bool {
         match (self, other) {
             (GridOf::Nurbs(a), GridOf::Nurbs(b)) => Weak::ptr_eq(a, b),
@@ -608,10 +656,11 @@ impl Surface {
     /// parameters). They don't depend on the point projected, and a B-spline surface (or an
     /// extruded B-spline) is projected unhinted many times over (fitting p-curves, seeding
     /// intersections, a fillet's balls against a wall): its grids are kept, per thread, for the
-    /// last few surfaces (known by their `Arc`; the `Weak` held keeps the allocation, so no
-    /// other surface can come to share its address).
-    fn grid_points(&self, n: usize, at: &dyn Fn(usize, usize) -> (f64, f64)) -> Rc<[P3]> {
-        let compute = || -> Rc<[P3]> {
+    /// last few surfaces, and behind those for all threads ([`SharedGrids`]) (known by their
+    /// `Arc`; the `Weak` held keeps the allocation, so no other surface can come to share its
+    /// address).
+    fn grid_points(&self, n: usize, at: &dyn Fn(usize, usize) -> (f64, f64)) -> Arc<[P3]> {
+        let compute = || -> Arc<[P3]> {
             // An extrusion's points of a row differ by v·d alone: its curve once per row, not
             // per point (each point as `eval` makes it).
             if let Surface::Extrusion { c, d } = self {
@@ -640,7 +689,7 @@ impl Surface {
         };
         /// The grids kept per thread.
         const KEPT: usize = 8;
-        type Kept = Vec<(GridOf, usize, Rc<[P3]>)>;
+        type Kept = Vec<(GridOf, usize, Arc<[P3]>)>;
         thread_local! {
             static GRIDS: RefCell<(Kept, usize)> = const { RefCell::new((Vec::new(), 0)) };
         }
@@ -651,7 +700,20 @@ impl Surface {
         }) {
             return g;
         }
-        let g = compute();
+        // Behind a thread's few, those of all threads ([`SharedGrids`]).
+        let shared_key = (key.address(), n);
+        let shared = SHARED_GRIDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&shared_key);
+        let g = shared.unwrap_or_else(|| {
+            let g = compute();
+            SHARED_GRIDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(shared_key, key.clone(), g.clone());
+            g
+        });
         GRIDS.with_borrow_mut(|(kept, next)| {
             let entry = (key, n, g.clone());
             if kept.len() < KEPT {

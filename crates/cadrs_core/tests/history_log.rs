@@ -117,7 +117,11 @@ fn every_entry_rebuilds_exactly() {
     assert_eq!(snaps.len(), (s.log.len() - 1) / SNAPSHOT_EVERY + 1);
     for (k, want) in s.states.iter().enumerate() {
         let got = s.log.state_at(k).unwrap();
-        assert_eq!(document_hash(&got), s.log.entries[k].hash, "entry {k}");
+        assert_eq!(
+            document_hash(&got),
+            s.log.entries[k].hash.get(),
+            "entry {k}"
+        );
         assert_eq!(document_hash(&got), document_hash(want), "entry {k}");
         assert_eq!(&got, want, "entry {k}");
     }
@@ -159,17 +163,21 @@ fn restoring_an_entry_reproduces_it_and_is_undoable() {
         assert_eq!(s.log.entries[n].action, "Restore");
         assert_eq!(s.log.entries[n].label, format!("Restore : {entry}"));
         assert_eq!(
-            s.log.entries[n].hash, s.log.entries[k].hash,
+            s.log.entries[n].hash.get(),
+            s.log.entries[k].hash.get(),
             "restore {k} reproduces entry {k}"
         );
         assert_eq!(
             document_hash(&s.log.state_at(n).unwrap()),
-            s.log.entries[k].hash
+            s.log.entries[k].hash.get()
         );
         // Undo takes it back (one step), as a new entry of its own.
         s.undo();
         assert_eq!(s.doc, before);
-        assert_eq!(s.log.entries.last().unwrap().hash, document_hash(&before));
+        assert_eq!(
+            s.log.entries.last().unwrap().hash.get(),
+            document_hash(&before)
+        );
     }
 }
 
@@ -301,7 +309,7 @@ fn compacting_keeps_the_versions_and_the_last_state() {
     for k in 0..log.len() {
         assert_eq!(
             document_hash(&log.state_at(k).unwrap()),
-            log.entries[k].hash,
+            log.entries[k].hash.get(),
             "entry {k}"
         );
     }

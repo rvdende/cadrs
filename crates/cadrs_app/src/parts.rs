@@ -78,7 +78,7 @@ impl Plugin for PartsPlugin {
             .gizmo_group::<VertexGizmos>()
             .gizmo_group::<FreeEdgeGizmos>()
             .add_plugins(crate::part_shading::PartShadingPlugin)
-            .add_systems(Startup, configure_gizmos)
+            .add_systems(Startup, (configure_gizmos, defer_regeneration))
             .add_systems(
                 Update,
                 set_snapshot_store.run_if(resource_changed::<crate::DocumentStore>),
@@ -86,6 +86,7 @@ impl Plugin for PartsPlugin {
             .add_systems(
                 Update,
                 (
+                    take_regenerated_sketches,
                     update_part_cache,
                     crate::assembly::in_context::sync_context_parts,
                     sync_part_meshes,
@@ -475,9 +476,11 @@ struct PendingRebuild {
 
 /// [`PendingRebuild::keys`] of `features`, worked out on a thread of their own (in a page, at
 /// once).
-fn rebuild_keys(features: &[Feature]) -> std::sync::Arc<std::sync::OnceLock<Vec<u64>>> {
+fn rebuild_keys(
+    features: std::sync::Arc<[Feature]>,
+) -> std::sync::Arc<std::sync::OnceLock<Vec<u64>>> {
     let keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>> = Default::default();
-    let (to, features) = (keys.clone(), features.to_vec());
+    let to = keys.clone();
     // (No thread to be had: none, the rows queued until the rebuild starts.)
     let _ = cadrs_core::background::spawn("rebuild-keys", move || {
         let _ = to.set(cadrs_core::rebuild::chain_keys(&features));
@@ -1392,6 +1395,26 @@ fn set_snapshot_store(store: Res<crate::DocumentStore>) {
     });
 }
 
+/// Commands leave the sketches on parts whose regeneration rebuilds features for the
+/// background ([`cadrs_core::parts::defer_regeneration`], [`take_regenerated_sketches`]): an
+/// edit near the top of a long list doesn't freeze the app while the features above each
+/// sketch on a face rebuild.
+fn defer_regeneration() {
+    cadrs_core::parts::defer_regeneration(true);
+}
+
+/// Puts in the sketches regenerated in the background after a command
+/// ([`ActiveDocument::take_regenerated`]); the parts' rebuild waits for them
+/// ([`update_part_cache`]).
+fn take_regenerated_sketches(doc: Option<ResMut<ActiveDocument>>) {
+    let Some(mut doc) = doc else {
+        return;
+    };
+    if doc.is_regenerating() && doc.bypass_change_detection().take_regenerated() {
+        doc.set_changed();
+    }
+}
+
 fn update_part_cache(
     doc: Option<Res<ActiveDocument>>,
     over: Res<PartOverride>,
@@ -1435,6 +1458,17 @@ fn update_part_cache(
     // Only an assembly's drag draws parts moved.
     if !cache.moved.is_empty() {
         cache.moved.clear();
+    }
+    // Its sketches on parts regenerating in the background after a command: rebuilt once they
+    // are in (the features as the command left them would be rebuilt for nothing).
+    // (A rebuild still running is of the features before the command: stopped, so the
+    // regeneration's rebuilds don't wait for it.)
+    if doc.regenerating(el.id) {
+        cache.stop_rebuild();
+        if !cache.rebuilding {
+            cache.rebuilding = true;
+        }
+        return;
     }
     // Nothing to look at while the document and the overrides are as they were and no rebuild
     // is running (comparing every feature each frame cost a big Part Studio milliseconds, and
@@ -1554,7 +1588,9 @@ fn update_part_cache(
         old.rebuild.stop();
         cache.superseded = Some(old);
     }
-    let mut rebuild = cadrs_core::rebuild::request_persisted(effective.clone());
+    // (One copy of the list, for the rebuild and the keys of its rows.)
+    let shared: std::sync::Arc<[Feature]> = effective.as_slice().into();
+    let mut rebuild = cadrs_core::rebuild::request_persisted_shared(shared.clone());
     // A live drag doesn't hold the frame for its rebuild: the preview follows when it's done.
     let dragging = over.extrude.is_some() || over.revolve.is_some() || over.applied.is_some();
     let wait = if dragging {
@@ -1594,7 +1630,7 @@ fn update_part_cache(
                     .iter()
                     .map(|f| (f.id, f.is_part_feature()))
                     .collect(),
-                keys: rebuild_keys(&effective),
+                keys: rebuild_keys(shared),
             });
         }
     }
