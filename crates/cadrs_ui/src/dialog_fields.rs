@@ -7,7 +7,8 @@
 //! - [`NumberField`]: a value with units and expressions ("Depth  25 mm"): a small grey label,
 //!   the value right-aligned over a thin line (blue while focused), and an optional icon after
 //!   it. Enter (or leaving the field) triggers [`NumberFieldCommit`] with the text; Esc triggers
-//!   [`NumberFieldCancel`] and leaves the field. The owner evaluates the text and sets [`NumberFieldState`]: its
+//!   [`NumberFieldCancel`] and leaves the field. The mouse wheel over the field while it is
+//!   being edited steps its number by 1 a notch, 0.1 with Ctrl (issue #162), and commits it. The owner evaluates the text and sets [`NumberFieldState`]: its
 //!   `text` is shown whenever the field is not being edited, and `error` turns it red.
 //! - [`OptionRow`]: an option with an optional collapsed ▸ in front and a checkbox ("▸ ☐
 //!   Direction"), disabled when the option is not available.
@@ -43,6 +44,7 @@ impl Plugin for DialogFieldsPlugin {
             .add_observer(on_select_menu_action)
             .add_observer(on_number_key)
             .add_observer(on_number_press)
+            .add_observer(on_number_wheel)
             .add_observer(on_slider_drag)
             .add_observer(on_slider_press)
             .add_systems(
@@ -621,6 +623,88 @@ fn on_number_key(
     }
 }
 
+/// The mouse wheel over a number field that is being edited steps its value (issue #162): 1 a
+/// notch (in the value's own unit), 0.1 with Ctrl, up to increase; the new text is committed as
+/// if typed. Over a field that isn't being edited the wheel scrolls the dialog as before, so
+/// scrolling past a field never changes it. An expression ("#width * 2") isn't stepped.
+fn on_number_wheel(
+    mut ev: On<PointerScroll>,
+    mut q_edit: Query<(Entity, &mut EditableText, &NumberFieldEdit), Without<InteractionDisabled>>,
+    q_root: Query<(), With<NumberFieldState>>,
+    focus: Res<InputFocus>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
+) {
+    let edit = if q_edit.contains(ev.entity) {
+        ev.entity
+    } else if q_root.contains(ev.entity)
+        && let Some((e, ..)) = q_edit.iter().find(|(_, _, n)| n.0 == ev.entity)
+    {
+        e
+    } else {
+        return;
+    };
+    if focus.get() != Some(edit) {
+        return;
+    }
+    ev.propagate(false);
+    let delta = wheel_delta(&ev, &keys);
+    if delta == 0.0 {
+        return;
+    }
+    let Ok((_, mut text, field)) = q_edit.get_mut(edit) else {
+        return;
+    };
+    let Some(next) = step_number_text(&text.value().to_string(), delta) else {
+        return;
+    };
+    text.editor_mut().set_text(&next);
+    commands.trigger(NumberFieldCommit {
+        entity: field.0,
+        text: next,
+        enter: false,
+    });
+}
+
+/// How far the wheel steps a value: 1 a notch (a line, or 60 px of a touchpad's scroll), 0.1
+/// with Ctrl, up (away from the user) to increase.
+pub(crate) fn wheel_delta(ev: &PointerScroll, keys: &ButtonInput<KeyCode>) -> f64 {
+    let notches = match ev.unit {
+        bevy::input::mouse::MouseScrollUnit::Line => ev.y.round(),
+        bevy::input::mouse::MouseScrollUnit::Pixel => (ev.y / 60.0).round(),
+    } as f64;
+    let fine = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    notches * if fine { 0.1 } else { 1.0 }
+}
+
+/// `text` ("25 mm", "1.5 in", "45°") with its number moved by `delta`, the unit kept; `None`
+/// for text that isn't one number and a unit (an expression, a variable, empty).
+pub fn step_number_text(text: &str, delta: f64) -> Option<String> {
+    let t = text.trim();
+    let end = t
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+'))))
+        .map_or(t.len(), |(i, _)| i);
+    let (number, unit) = t.split_at(end);
+    let value: f64 = number.parse().ok()?;
+    if !unit
+        .chars()
+        .all(|c| c.is_alphabetic() || c.is_whitespace() || matches!(c, '°' | '"' | '\''))
+    {
+        return None;
+    }
+    let decimals = |s: &str| s.split_once('.').map_or(0, |(_, d)| d.len());
+    let places = decimals(number).max(if delta.fract() == 0.0 { 0 } else { 1 });
+    let mut out = format!("{:.*}", places, value + delta);
+    if out.contains('.') {
+        out = out.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    if out == "-0" {
+        out = "0".into();
+    }
+    Some(format!("{out}{unit}"))
+}
+
 /// Pressing on a number field (its value or the line under it) focuses it; focusing selects
 /// the whole value.
 fn on_number_press(
@@ -1056,6 +1140,23 @@ fn sync_sliders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wheel_steps_a_number_and_keeps_its_unit() {
+        assert_eq!(step_number_text("25 mm", 1.0).as_deref(), Some("26 mm"));
+        assert_eq!(step_number_text("25 mm", -3.0).as_deref(), Some("22 mm"));
+        assert_eq!(step_number_text("25 mm", 0.1).as_deref(), Some("25.1 mm"));
+        assert_eq!(step_number_text("25.1 mm", -0.1).as_deref(), Some("25 mm"));
+        assert_eq!(step_number_text("1.25 in", 1.0).as_deref(), Some("2.25 in"));
+        assert_eq!(step_number_text("45°", 1.0).as_deref(), Some("46°"));
+        assert_eq!(step_number_text("-0.5 mm", 0.5).as_deref(), Some("0 mm"));
+        assert_eq!(step_number_text("10", 1.0).as_deref(), Some("11"));
+        // Not one number and a unit: left alone.
+        assert_eq!(step_number_text("#width * 2", 1.0), None);
+        assert_eq!(step_number_text("10 + 5 mm", 1.0), None);
+        assert_eq!(step_number_text("1e3 mm", 1.0), None);
+        assert_eq!(step_number_text("", 1.0), None);
+    }
 
     #[derive(Resource, Default)]
     struct Committed(Vec<String>);

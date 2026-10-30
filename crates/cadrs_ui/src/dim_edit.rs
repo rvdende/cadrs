@@ -7,6 +7,8 @@
 //!   top (three small squares), a separator, then the value row: a grey `›` and the value,
 //!   right-aligned, **fully selected** (blue highlight) with keyboard focus.
 //! - **Enter** triggers [`DimEditCommit`] with the text; **Esc** [`DimEditCancel`]. Both bubble.
+//!   The mouse wheel over it steps the value by 1 a notch, 0.1 with Ctrl (issue #162), for
+//!   Enter to apply.
 //!   The owner validates the text: for a value it cannot use it sets [`DimEditBox::error`], which
 //!   turns the border and text red and shows the message under the box. Typing clears it.
 //!
@@ -39,6 +41,7 @@ pub struct DimEditPlugin;
 impl Plugin for DimEditPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_key)
+            .add_observer(on_wheel)
             .add_observer(on_button_click)
             .add_observer(on_row_click)
             .add_observer(on_row_over)
@@ -400,6 +403,32 @@ impl DimEdit {
 pub enum DimEditButton {
     Accept,
     Cancel,
+}
+
+/// The mouse wheel over the box (its value focused) steps the value (issue #162,
+/// [`crate::dialog_fields::step_number_text`]); an expression isn't stepped.
+fn on_wheel(
+    mut ev: On<PointerScroll>,
+    q_box: Query<(), With<DimEditBox>>,
+    mut q_field: Query<(Entity, &mut EditableText), With<DimEditField>>,
+    focus: Res<InputFocus>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    if !(q_box.contains(ev.entity) || q_field.contains(ev.entity)) {
+        return;
+    }
+    let Some((_, mut text)) = q_field.iter_mut().find(|(e, _)| focus.get() == Some(*e)) else {
+        return;
+    };
+    ev.propagate(false);
+    let delta = crate::dialog_fields::wheel_delta(&ev, &keys);
+    if delta == 0.0 {
+        return;
+    }
+    if let Some(next) = crate::dialog_fields::step_number_text(&text.value().to_string(), delta) {
+        text.editor_mut().set_text(&next);
+        text.queue_edit(TextEdit::SelectAll);
+    }
 }
 
 fn on_button_click(

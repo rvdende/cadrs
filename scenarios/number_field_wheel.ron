@@ -1,0 +1,40 @@
+// Issue #162: the mouse wheel over a value being edited steps it.
+// 01 the wheel over Extrude's Depth while it isn't being edited leaves it alone (25 mm): a
+//    dialog scrolled past its fields never changes them.
+// 02 clicked into, then the wheel 3 notches up: 28 mm, and the preview follows.
+// 03 Ctrl and 2 notches down: 27.8 mm.
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("N"),
+        Key("G"),
+        ClickWorld(-20, -10),
+        ClickWorld(20, 10),
+        Key("Escape"),
+        Click(ui("sketch-dialog-accept")),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        ClickWorld(0, 0),
+        Key("Shift+7"),
+        Key("F"),
+        Scroll(ui("extrude-depth-field"), 3),
+        Wait(3),
+        ExpectText("extrude-depth-field", "25 mm"),
+        Screenshot("01-not-editing-no-change"),
+        Click(ui("extrude-depth-field")),
+        Scroll(ui("extrude-depth-field"), 3),
+        Wait(3),
+        ExpectText("extrude-depth-field", "28 mm"),
+        Screenshot("02-depth-28-by-the-wheel"),
+        KeyDown("Ctrl"),
+        Scroll(ui("extrude-depth-field"), -2),
+        KeyUp("Ctrl"),
+        Wait(3),
+        ExpectText("extrude-depth-field", "27.8 mm"),
+        Screenshot("03-ctrl-steps-a-tenth"),
+    ],
+)
