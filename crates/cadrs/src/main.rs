@@ -73,9 +73,10 @@ Usage:
   cadrs --headless --jobs N (--scenarios a,b,... | --all)
       Renders many scenarios, N at a time, each in its own process.
   cadrs --kernel-server [--listen <host:port>] [--token <token>]
-      Runs the geometry kernel for cadrs on other machines (default 0.0.0.0:7681; a token is
-      made and printed if none is given). There, CADRS_KERNEL=server:<this host>:7681 and
-      CADRS_KERNEL_TOKEN=<token> make cadrs rebuild here. Plain TCP: a network you trust.
+      Runs the geometry kernel for cadrs on other machines (default 0.0.0.0:7681). The token is
+      --token, else $CADRS_KERNEL_TOKEN (not shown by ps), else made and printed. There,
+      CADRS_KERNEL=server:<this host>:7681 and CADRS_KERNEL_TOKEN=<token> make cadrs (the same
+      release) rebuild here. Plain TCP: a network you trust.
   cadrs --install
       Installs this build for the current user, with a launcher entry (Linux, macOS, Windows;
       `cargo install-local`).
@@ -428,18 +429,37 @@ fn share_view_mapping(
 /// `cadrs --kernel-server [--listen <host:port>] [--token <token>]` (see [`HELP`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn kernel_server(args: &[String]) -> AppExit {
-    let value = |flag: &str| {
-        args.iter()
-            .position(|a| a == flag)
-            .and_then(|i| args.get(i + 1))
-            .cloned()
-    };
-    let listen = value("--listen").unwrap_or_else(|| "0.0.0.0:7681".into());
-    let token = value("--token").unwrap_or_else(|| {
-        let t = uuid::Uuid::new_v4().simple().to_string();
-        println!("token: {t}");
-        t
-    });
+    let mut listen = "0.0.0.0:7681".to_string();
+    // From the environment rather than the command line, where `ps` shows it.
+    let mut token = std::env::var("CADRS_KERNEL_TOKEN").unwrap_or_default();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--listen" | "--token" => {
+                let Some(v) = it.next() else {
+                    eprintln!("{a} needs a value\ncadrs --help lists every option.");
+                    return AppExit::from_code(2);
+                };
+                if a == "--listen" {
+                    listen = v.clone();
+                } else {
+                    token = v.clone();
+                }
+            }
+            "-h" | "--help" => {
+                println!("{HELP}");
+                return AppExit::Success;
+            }
+            other => {
+                eprintln!("unknown argument {other:?}\ncadrs --help lists every option.");
+                return AppExit::from_code(2);
+            }
+        }
+    }
+    if token.is_empty() {
+        token = uuid::Uuid::new_v4().simple().to_string();
+        println!("token: {token}");
+    }
     let Ok(exe) = std::env::current_exe() else {
         eprintln!("cannot find this executable");
         return AppExit::from_code(1);
