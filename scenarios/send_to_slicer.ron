@@ -1,0 +1,34 @@
+// Issue #176: a part's context menu › Send to slicer lists the slicers installed here (with
+// CADRS_SLICER=<program>, one's own first); choosing one makes a binary STL of the part in a
+// folder of cadrs's own and starts the slicer with it.
+// 01 Send to slicer ▸ the slicers.
+// 02 sent: "Sent Part 1 to …".
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("N"),
+        Key("G"),
+        ClickWorld(-20, -10),
+        ClickWorld(20, 10),
+        Key("Escape"),
+        Click(ui("sketch-dialog-accept")),
+        Key("Shift+E"),
+        WaitFor("extrude-dialog"),
+        ClickWorld(0, 0),
+        Click(ui("extrude-dialog-accept")),
+        Key("Shift+7"),
+        Key("F"),
+        RightClick(ui("part-row-part-1")),
+        WaitFor("part-context-menu"),
+        Hover(ui("part-send-slicer")),
+        Wait(10),
+        Screenshot("01-send-to-slicer-menu"),
+        Click(ui("part-send-slicer:fake-slicer")),
+        Wait(30),
+        Screenshot("02-sent"),
+    ],
+)

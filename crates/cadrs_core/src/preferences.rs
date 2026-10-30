@@ -322,6 +322,9 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// The slicer parts were last sent to ([`crate::slicer::Slicer::id`]): listed first.
+    #[serde(default)]
+    pub last_slicer: Option<u8>,
 }
 
 fn default_vsync() -> bool {
@@ -348,6 +351,7 @@ impl Default for Preferences {
             autoconnect_p2p: false,
             profile_cpu: false,
             vsync: true,
+            last_slicer: None,
         }
     }
 }
@@ -534,6 +538,7 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
+            last_slicer: Some(0),
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

@@ -415,12 +415,15 @@ fn targets(world: &World, part: PartId) -> Vec<PartId> {
     }
 }
 
+// The preferences give Send to slicer the order of its list, which a browser doesn't have.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn on_part_context_menu(
     ev: On<ContextMenuRequested>,
     q: Query<&PartRow>,
     cache: Res<PartCache>,
     theme: Res<Theme>,
     doc: Option<Res<ActiveDocument>>,
+    prefs: Res<crate::preferences_ui::LocalPreferences>,
     mut commands: Commands,
 ) {
     let Ok(row) = q.get(ev.entity) else {
@@ -428,6 +431,8 @@ fn on_part_context_menu(
     };
     let name = cache.part_name(row.0).unwrap_or("part").to_string();
     let hidden = cache.is_hidden_part(row.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    let last_slicer = prefs.0.last_slicer;
     let menu = Menu::new("part-context-menu")
         .min_width(180.0)
         .item_height(22.0)
@@ -460,8 +465,11 @@ fn on_part_context_menu(
     } else {
         menu
     };
+    let menu = menu.item(MenuItem::new("part-export", "Export…").icon("file-export"));
+    // Issue #176: Send to slicer ▸ the slicers installed here (not in a browser).
+    #[cfg(not(target_arch = "wasm32"))]
+    let menu = menu.item(slicer_item(last_slicer));
     let menu = menu
-        .item(MenuItem::new("part-export", "Export…").icon("file-export"))
         .item(
             MenuItem::new("part-where-used", "Where used…")
                 .icon("tab-manager")
@@ -493,6 +501,27 @@ fn on_part_context_menu(
     commands
         .entity(anchor)
         .insert((PartMenuFor(row.0), DespawnOnExit(AppState::Document)));
+}
+
+/// Send to slicer ▸ each slicer installed here (`cadrs_core::slicer::find`), the last one used
+/// first; when none is found, says so (`CADRS_SLICER=<program>` adds one's own).
+#[cfg(not(target_arch = "wasm32"))]
+fn slicer_item(last: Option<u8>) -> MenuItem {
+    let mut found = cadrs_core::slicer::find();
+    found.sort_by_key(|s| Some(s.id) != last);
+    let entries: Vec<cadrs_ui::MenuEntry> = if found.is_empty() {
+        vec![
+            MenuItem::new("part-send-slicer-none", "No slicer found")
+                .disabled(true)
+                .into(),
+        ]
+    } else {
+        found
+            .iter()
+            .map(|s| MenuItem::new(format!("part-send-slicer:{}", s.name), s.name.clone()).into())
+            .collect()
+    };
+    MenuItem::new("part-send-slicer", "Send to slicer").submenu(entries)
 }
 
 fn on_part_menu_action(
@@ -585,6 +614,21 @@ fn on_part_menu_action(
             let parts = targets(world, part);
             crate::export_dialog::open_export_dialog(world, parts);
         }),
+        // Issue #176: the part (or the selected parts it is among) to a slicer.
+        #[cfg(not(target_arch = "wasm32"))]
+        item if item.starts_with("part-send-slicer:") => {
+            let name = item["part-send-slicer:".len()..].to_string();
+            commands.queue(move |world: &mut World| {
+                let Some(slicer) = cadrs_core::slicer::find()
+                    .into_iter()
+                    .find(|s| s.name == name)
+                else {
+                    return;
+                };
+                let parts = targets(world, part);
+                crate::export_dialog::send_to_slicer(world, parts, slicer);
+            });
+        }
         "part-transparent" | "part-opaque" => {
             let on = ev.item == "part-transparent";
             commands.queue(move |world: &mut World| {

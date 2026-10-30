@@ -54,6 +54,8 @@ impl Plugin for ExportDialogPlugin {
                 validate_tolerances,
                 on_folder_picked,
                 finish_exports,
+                #[cfg(not(target_arch = "wasm32"))]
+                finish_sends,
             )
                 .run_if(in_state(AppState::Document)),
         )
@@ -942,6 +944,93 @@ fn start_export(world: &mut World) {
                 DespawnOnExit(AppState::Document),
             ));
         }
+    }
+}
+
+/// Parts on their way to a slicer (issue #176): their mesh being made, and where it goes.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Component)]
+struct RunningSend {
+    pending: PendingJob<Result<Vec<ExportFile>, String>>,
+    slicer: cadrs_core::slicer::Slicer,
+    name: String,
+}
+
+/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: one binary STL in
+/// millimetres, made as an export is ([`finish_sends`] opens it in the slicer). The slicer is
+/// remembered as the last one used.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn send_to_slicer(
+    world: &mut World,
+    parts: Vec<PartId>,
+    slicer: cadrs_core::slicer::Slicer,
+) {
+    let items = match items(world, &ExportSource::Parts(parts)) {
+        Ok(i) if !i.is_empty() => i,
+        Ok(_) => {
+            return toast(
+                world,
+                Notification::warning("Nothing to send to the slicer"),
+            );
+        }
+        Err(why) => {
+            return toast(
+                world,
+                Notification::warning(format!("Can't send to the slicer: {why}")),
+            );
+        }
+    };
+    let name = match items.as_slice() {
+        [one] => one.name.clone(),
+        _ => world
+            .get_resource::<ActiveDocument>()
+            .map(|d| d.doc.name.clone())
+            .unwrap_or_else(|| "Parts".into()),
+    };
+    crate::preferences_ui::set_last_slicer(world, slicer.id);
+    let req = ExportRequest::new(ModelFormat::Stl { binary: true }, name.clone(), items);
+    let pending = cadrs_core::rebuild::exchange::export_files(req);
+    world.spawn((
+        Name::new("running-send"),
+        RunningSend {
+            pending,
+            slicer,
+            name,
+        },
+        DespawnOnExit(AppState::Document),
+    ));
+}
+
+/// Writes a finished send's mesh to a new file of cadrs's own and opens it in its slicer.
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut commands: Commands) {
+    for (e, run) in &q {
+        let Some(result) = run.pending.poll() else {
+            continue;
+        };
+        commands.entity(e).despawn();
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let sent = result
+            .unwrap_or_else(|| Err("The kernel thread stopped".into()))
+            .and_then(|files| {
+                let mesh = files.first().ok_or("no mesh was made")?;
+                let path = cadrs_core::slicer::send_path(&run.name, now)
+                    .map_err(|e| format!("cannot make the file: {e}"))?;
+                std::fs::write(&path, &mesh.bytes)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                run.slicer
+                    .open(&path)
+                    .map_err(|e| format!("cannot start {}: {e}", run.slicer.name))?;
+                info!("sent {} to {}", path.display(), run.slicer.name);
+                Ok(())
+            });
+        let note = match sent {
+            Ok(()) => Notification::info(format!("Sent {} to {}", run.name, run.slicer.name)),
+            Err(why) => Notification::warning(format!("Send to slicer failed: {why}")),
+        };
+        show_notification(&mut commands, &theme, note.name("slicer-toast"));
     }
 }
 
