@@ -121,6 +121,24 @@ pub fn form_row(
 pub struct SelectState {
     pub options: Vec<(String, bool)>,
     pub selected: usize,
+    /// The options' keys ([`Select::keyed_option`]), where they have one.
+    pub keys: Vec<Option<String>>,
+}
+
+impl SelectState {
+    /// The chosen option's key, if it has one.
+    pub fn selected_key(&self) -> Option<&str> {
+        self.keys.get(self.selected)?.as_deref()
+    }
+
+    /// The name of option `i`'s menu item: `<select>-option-<key>`, or its index for an option
+    /// with no key.
+    fn option_name(&self, select: &str, i: usize) -> String {
+        match self.keys.get(i).and_then(Option::as_deref) {
+            Some(key) => format!("{select}-option-{key}"),
+            None => format!("{select}-option-{i}"),
+        }
+    }
 }
 
 /// An option of a select was chosen. Targets the select.
@@ -141,6 +159,7 @@ struct SelectSide(bevy::ui_widgets::popover::PopoverSide);
 pub struct Select {
     name: Cow<'static, str>,
     options: Vec<(String, bool)>,
+    keys: Vec<Option<String>>,
     selected: usize,
     width: Val,
     side: bevy::ui_widgets::popover::PopoverSide,
@@ -152,6 +171,7 @@ impl Select {
         Self {
             name: name.into(),
             options: Vec::new(),
+            keys: Vec::new(),
             selected: 0,
             width: Val::Auto,
             side: bevy::ui_widgets::popover::PopoverSide::Bottom,
@@ -182,11 +202,34 @@ impl Select {
     /// Adds an option (`enabled: false` shows it greyed in the menu).
     pub fn option(mut self, label: impl Into<String>, enabled: bool) -> Self {
         self.options.push((label.into(), enabled));
+        self.keys.push(None);
+        self
+    }
+
+    /// Adds an option known by `key` rather than by its place in the list: its menu item is
+    /// `<select>-option-<key>`, and [`SelectState::selected_key`] gives it back when chosen.
+    pub fn keyed_option(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        enabled: bool,
+    ) -> Self {
+        self.options.push((label.into(), enabled));
+        self.keys.push(Some(key.into()));
         self
     }
 
     pub fn selected(mut self, i: usize) -> Self {
         self.selected = i;
+        self
+    }
+
+    /// Chooses the option with this key ([`Self::keyed_option`], added before); none with it
+    /// leaves the choice as it was.
+    pub fn selected_key(mut self, key: &str) -> Self {
+        if let Some(i) = self.keys.iter().position(|k| k.as_deref() == Some(key)) {
+            self.selected = i;
+        }
         self
     }
 
@@ -223,6 +266,7 @@ impl Select {
             SelectState {
                 options: self.options,
                 selected: self.selected,
+                keys: self.keys,
             },
             Node {
                 width: self.width,
@@ -294,7 +338,7 @@ fn on_select_activate(
         // The current choice is marked (P3I.2 judge: nothing showed which was chosen; P3I.6's
         // export dialogs' lists, `Select::mark_selected`, mark it too).
         menu = menu.item(
-            MenuItem::new(format!("{name}-option-{i}"), label.clone())
+            MenuItem::new(state.option_name(name.as_str(), i), label.clone())
                 .disabled(!enabled)
                 .checked(i == state.selected),
         );
@@ -310,11 +354,8 @@ fn on_select_menu_action(
     let Ok((mut state, name)) = q.get_mut(ev.entity) else {
         return;
     };
-    let prefix = format!("{name}-option-");
-    let Some(i) = ev
-        .item
-        .strip_prefix(&prefix)
-        .and_then(|n| n.parse::<usize>().ok())
+    let Some(i) =
+        (0..state.options.len()).find(|i| state.option_name(name.as_str(), *i) == ev.item)
     else {
         return;
     };
@@ -1114,6 +1155,31 @@ fn sync_sliders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A keyed option's menu item is named by its key, one without by its place; the chosen
+    /// one's key reads back, and a select can start on a key.
+    #[test]
+    fn keyed_options_go_by_their_keys() {
+        let select = Select::new("lang")
+            .option("Plain", true)
+            .keyed_option("fr", "Français", true)
+            .keyed_option("ru", "Русский", true)
+            .selected_key("ru")
+            .selected_key("xx");
+        let state = SelectState {
+            options: select.options,
+            selected: select.selected,
+            keys: select.keys,
+        };
+        assert_eq!(state.selected_key(), Some("ru"));
+        assert_eq!(state.option_name("lang", 0), "lang-option-0");
+        assert_eq!(state.option_name("lang", 1), "lang-option-fr");
+        let plain = SelectState {
+            selected: 0,
+            ..state
+        };
+        assert_eq!(plain.selected_key(), None);
+    }
 
     #[derive(Resource, Default)]
     struct Committed(Vec<String>);

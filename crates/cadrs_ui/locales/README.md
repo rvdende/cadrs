@@ -37,9 +37,9 @@ A new language: add `<code>.ftl`, a line in `LANGUAGES` (`src/i18n.rs`) and a va
 
 ## The languages
 
-German, French, Spanish, Italian, Dutch, Portuguese (Brazil) and Russian are offered in
-Preferences › Language. They were chosen from where the people who have opened issues, commented
-on, starred or forked the repository say they are (Brazil, Germany, China, France, Spain,
-Italy, the Netherlands and Belgium, Japan, Korea…) and the languages most CAD users read.
+German, French, Spanish, Italian, Dutch, Portuguese (Brazil), Russian and Afrikaans are offered
+in Preferences › Language. They were chosen from where the people who have opened issues,
+commented on, starred or forked the repository say they are (Brazil, Germany, China, France,
+Spain, Italy, the Netherlands and Belgium, Japan, Korea…) and the languages most CAD users read.
 Chinese (Simplified), Japanese and Korean have drafts too, but aren't offered yet: the interface
 font (Inter) has no CJK glyphs, so they need a font of their own first.

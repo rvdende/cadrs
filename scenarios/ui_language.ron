@@ -5,6 +5,7 @@
 //    ("Fonctions (4)", "Pièces (0)"); the top bar follows the next time the window is made.
 // 03 Preferences again: in French where translated.
 // 04 Русский: "Элементы (4)", Preferences in Russian.
+// 05 Afrikaans: "Kenmerke (4)" and "Onderdele (0)", Preferences in Afrikaans.
 Scenario(
     start: Some("document"),
     steps: [
@@ -13,9 +14,9 @@ Scenario(
         Click(ui("app-preferences")),
         WaitFor("preferences-dialog"),
         Click(ui("pref-language")),
-        WaitFor("pref-language-option-2"),
+        WaitFor("pref-language-option-fr"),
         Screenshot("01-languages"),
-        Click(ui("pref-language-option-2")),
+        Click(ui("pref-language-option-fr")),
         Click(ui("pref-ok")),
         Wait(5),
         ExpectText("features-count", "Fonctions (4)"),
@@ -26,8 +27,8 @@ Scenario(
         WaitFor("preferences-dialog"),
         Screenshot("03-preferences-in-french"),
         Click(ui("pref-language")),
-        WaitFor("pref-language-option-7"),
-        Click(ui("pref-language-option-7")),
+        WaitFor("pref-language-option-ru"),
+        Click(ui("pref-language-option-ru")),
         Click(ui("pref-ok")),
         Wait(5),
         ExpectText("features-count", "Элементы (4)"),
@@ -35,5 +36,16 @@ Scenario(
         Click(ui("app-preferences")),
         WaitFor("preferences-dialog"),
         Screenshot("04-preferences-in-russian"),
+        Click(ui("pref-language")),
+        WaitFor("pref-language-option-af"),
+        Click(ui("pref-language-option-af")),
+        Click(ui("pref-ok")),
+        Wait(5),
+        ExpectText("features-count", "Kenmerke (4)"),
+        ExpectText("parts-section-header", "Onderdele (0)"),
+        Click(ui("app-menu")),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        Screenshot("05-afrikaans"),
     ],
 )

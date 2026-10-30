@@ -424,13 +424,14 @@ pub fn open_preferences(world: &mut World) {
                 }
                 let at = UI_SCALES.iter().position(|p| *p == ui_scale).unwrap_or(2);
                 b.spawn(form_row(t, "pref-ui-scale-row", tr("preferences-ui-scale"), 150.0)).with_child(sizes.selected(at).build(t));
-                // Issue #178: each language by its own name.
+                // Issue #178: each language by its own name, known by its code (`pref-language-option-fr`).
+                // One not offered (its script has no font yet) shows as English, as it reads.
                 let mut languages = Select::new("pref-language").width(Val::Px(200.0));
-                for (_, name) in cadrs_ui::i18n::offered() {
-                    languages = languages.option(name, true);
+                for (code, name) in cadrs_ui::i18n::offered() {
+                    languages = languages.keyed_option(code, name, true);
                 }
-                let at = cadrs_ui::i18n::offered().position(|(code, _)| code == language.code()).unwrap_or(0);
-                b.spawn(form_row(t, "pref-language-row", tr("preferences-language"), 150.0)).with_child(languages.selected(at).build(t));
+                let languages = languages.selected_key("en").selected_key(language.code());
+                b.spawn(form_row(t, "pref-language-row", tr("preferences-language"), 150.0)).with_child(languages.build(t));
                 // A page presents as the browser does.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -625,8 +626,8 @@ fn save_preferences(world: &mut World) {
     let language = qs
         .iter(world)
         .find(|(n, _)| n.as_str() == "pref-language")
-        .and_then(|(_, s)| cadrs_ui::i18n::offered().nth(s.selected))
-        .and_then(|(code, _)| cadrs_core::preferences::Language::from_code(code));
+        .and_then(|(_, s)| s.selected_key())
+        .and_then(cadrs_core::preferences::Language::from_code);
     if let Some(l) = language {
         world.resource_mut::<LocalPreferences>().0.language = l;
     }

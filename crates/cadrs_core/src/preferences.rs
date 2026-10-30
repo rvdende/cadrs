@@ -339,17 +339,18 @@ pub struct Preferences {
 /// English, the other preferences kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
+    Afrikaans,
+    German,
     #[default]
     English,
-    German,
-    French,
     Spanish,
+    French,
     Italian,
     Dutch,
     PortugueseBrazil,
     Russian,
-    ChineseSimplified,
     Japanese,
+    ChineseSimplified,
     Korean,
 }
 
@@ -367,17 +368,18 @@ impl<'de> Deserialize<'de> for Language {
 }
 
 impl Language {
-    pub const ALL: [Language; 11] = [
-        Language::English,
+    pub const ALL: [Language; 12] = [
+        Language::Afrikaans,
         Language::German,
-        Language::French,
+        Language::English,
         Language::Spanish,
+        Language::French,
         Language::Italian,
         Language::Dutch,
         Language::PortugueseBrazil,
         Language::Russian,
-        Language::ChineseSimplified,
         Language::Japanese,
+        Language::ChineseSimplified,
         Language::Korean,
     ];
 
@@ -397,6 +399,7 @@ impl Language {
             Language::Dutch => "nl",
             Language::PortugueseBrazil => "pt-BR",
             Language::Russian => "ru",
+            Language::Afrikaans => "af",
             Language::ChineseSimplified => "zh-CN",
             Language::Japanese => "ja",
             Language::Korean => "ko",
