@@ -35,7 +35,7 @@ use cadrs_ui::ShortcutKey;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FloatingPanel, FloatingPanelBody, FloatingPanelClose, TextInputField, TextSubmit};
 
-use crate::camera::{FOCAL_PX, RenderMode, ViewState};
+use crate::camera::{RenderMode, ViewState};
 use crate::viewport::{
     ActiveKind, Pick, Selection, ViewportArea, ViewportDrag, ViewportRect, ViewportView,
 };
@@ -150,7 +150,7 @@ impl ViewportPerspective {
     pub fn of(view: &ViewState, center: Vec2, size: Vec2) -> Self {
         let eye = view.eye_distance();
         Self {
-            focal: FOCAL_PX,
+            focal: view.focal,
             center,
             size: size.max(Vec2::ONE),
             near: (eye * 0.01).max(1e-3),

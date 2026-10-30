@@ -341,12 +341,13 @@ impl ViewportView {
         })
     }
 
-    /// `to` with the tab's render mode and projection (P3E.3a): a change of view keeps them
-    /// (`crate::view_options` sets them).
+    /// `to` with the tab's render mode, projection and lens (P3E.3a, #97): a change of view
+    /// keeps them (`crate::view_options` and walk mode set them).
     fn keeping_mode(&self, to: ViewState) -> ViewState {
         ViewState {
             render: self.view.render,
             perspective: self.view.perspective,
+            focal: self.view.focal,
             ..to
         }
     }
@@ -1363,8 +1364,9 @@ fn viewport_pointer(
                         .find_map(|(_, b)| {
                             mouse.action(crate::preferences_ui::mouse_button(b), mods)
                         });
-                    // Walk mode looks round from the eye; keeping the camera up, every rotate
-                    // gesture turns without roll (issue #97).
+                    // Keeping the camera up, every rotate gesture turns without roll; walking,
+                    // the mouse looks round with no button held (`crate::walk`), so a rotate
+                    // drag does nothing more (issue #97).
                     let action = match action {
                         Some(ViewAction::Rotate) if view.keep_up => {
                             Some(ViewAction::RotateTurntable)
@@ -1376,10 +1378,6 @@ fn viewport_pointer(
                             action,
                             Some(ViewAction::Rotate | ViewAction::RotateTurntable)
                         );
-                    if look {
-                        let eye = view.view.camera_position();
-                        view.view.orbit_about(eye, |v| v.orbit_turntable(-delta));
-                    }
                     match action.filter(|_| !look) {
                         Some(ViewAction::Rotate) => match view.pivot {
                             Some(p) => view.view.orbit_about(p, |v| v.orbit(delta)),
@@ -1555,6 +1553,11 @@ fn viewport_pointer(
                         MouseScrollUnit::Pixel => y / 40.0,
                     };
                     view.animation = None;
+                    // Walking, the wheel changes the lens (issue #97).
+                    if walking.as_deref().is_some_and(|w| w.on) {
+                        view.view = crate::walk::lens_wheel(&view.view, lines, rect.0.size());
+                        continue;
+                    }
                     let cursor = rect.offset(pos);
                     // P3E.3a: in perspective, zoom about the part under the cursor.
                     if view.view.perspective

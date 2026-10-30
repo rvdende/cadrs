@@ -6,8 +6,8 @@
 //! logical pixel).
 //!
 //! P3E.3a (TD6.5): **Perspective view** keeps the same description. The eye sits
-//! [`FOCAL_PX`]` × scale` mm in front of the focus, so the focus plane still shows `scale` mm per
-//! pixel: unprojecting onto it, panning and zooming about the cursor work as in orthographic,
+//! `focal × scale` mm in front of the focus (the lens's focal length, [`FOCAL_PX`] but in walk
+//! mode), so the focus plane still shows `scale` mm per pixel: unprojecting onto it, panning and zooming about the cursor work as in orthographic,
 //! and nearer points are drawn larger ([`ViewState::project`]). Pick rays start at the eye and
 //! spread ([`ViewState::ray`]). A view also carries its tab's [`RenderMode`]. Standard views have no roll (Z up); a right-drag rotates freely about the screen
 //! axes, as Onshape does by default, and Alt+right-drag turns without roll.
@@ -182,6 +182,9 @@ pub struct ViewState {
     pub scale: f32,
     /// Perspective view (P3E.3a); orthographic when false (the default).
     pub perspective: bool,
+    /// In perspective, the lens's focal length (logical px): [`FOCAL_PX`], but as walk mode's
+    /// wheel sets it (issue #97, [`Self::with_focal`]).
+    pub focal: f32,
     /// How the parts are drawn (P3E.3a).
     pub render: RenderMode,
 }
@@ -202,6 +205,7 @@ impl ViewState {
             focus: Vec3::ZERO,
             scale: DEFAULT_SCALE,
             perspective: false,
+            focal: FOCAL_PX,
             render: RenderMode::Shaded,
         }
     }
@@ -290,7 +294,17 @@ impl ViewState {
 
     /// In perspective, how far the eye is in front of the focus (mm).
     pub fn eye_distance(&self) -> f32 {
-        FOCAL_PX * self.scale
+        self.focal * self.scale
+    }
+
+    /// The same eye and focus seen through a lens of `focal` logical px (walk mode's wheel,
+    /// issue #97): the focus plane's scale follows, a longer lens showing it larger.
+    pub fn with_focal(self, focal: f32) -> Self {
+        Self {
+            scale: (self.scale * self.focal / focal).clamp(MIN_SCALE, MAX_SCALE),
+            focal,
+            ..self
+        }
     }
 
     pub fn camera_position(&self) -> Vec3 {
@@ -537,6 +551,7 @@ impl ViewState {
             focus: self.focus.lerp(to.focus, t),
             scale,
             perspective: to.perspective,
+            focal: self.focal * (to.focal / self.focal).powf(t),
             render: to.render,
             ..self.with_rotation(turn.part(t) * self.rotation())
         }
@@ -550,6 +565,7 @@ impl ViewState {
             && self.focus.distance(other.focus) < 1e-3
             && (self.scale / other.scale - 1.0).abs() < 1e-4
             && self.perspective == other.perspective
+            && (self.focal / other.focal - 1.0).abs() < 1e-4
             && self.render == other.render
     }
 
@@ -567,7 +583,7 @@ impl ViewState {
         }
         Self {
             focus: eye - self.back() * d,
-            scale: (d / FOCAL_PX).clamp(MIN_SCALE, MAX_SCALE),
+            scale: (d / self.focal).clamp(MIN_SCALE, MAX_SCALE),
             ..self
         }
     }
