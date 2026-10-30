@@ -15,6 +15,10 @@
 //! `cadrs --kernel-process <port> <token>` is the geometry kernel the app starts for itself
 //! (`cadrs_core::rebuild::process`); `CADRS_KERNEL=thread` keeps the kernel in the app instead.
 //!
+//! `cadrs --kernel-server [--listen <host:port>] [--token <token>]` runs kernels for apps on
+//! other machines (a compute workstation, issue #146); an app uses it with
+//! `CADRS_KERNEL=server:<host:port>` and `CADRS_KERNEL_TOKEN=<token>`.
+//!
 //! Documents live in `--data-dir`, else `CADRS_DATA_DIR`, else the platform data dir
 //! (`~/.local/share/cadrs/documents`, `%APPDATA%\cadrs\documents`). Scenarios use a fresh
 //! `<out dir>/data` instead, a fixed clock and a fixed user, so their screenshots are
@@ -68,6 +72,10 @@ Usage:
       Rebuilds a stored document without a window and reports its features in error or warning.
   cadrs --headless --jobs N (--scenarios a,b,... | --all)
       Renders many scenarios, N at a time, each in its own process.
+  cadrs --kernel-server [--listen <host:port>] [--token <token>]
+      Runs the geometry kernel for cadrs on other machines (default 0.0.0.0:7681; a token is
+      made and printed if none is given). There, CADRS_KERNEL=server:<this host>:7681 and
+      CADRS_KERNEL_TOKEN=<token> make cadrs rebuild here. Plain TCP: a network you trust.
   cadrs --install
       Installs this build for the current user, with a launcher entry (Linux, macOS, Windows;
       `cargo install-local`).
@@ -87,9 +95,18 @@ fn main() -> AppExit {
     if args.first().map(String::as_str) == Some(cadrs_core::rebuild::process::ARG) {
         return AppExit::from_code(cadrs_core::rebuild::process::main(&args[1..]) as u8);
     }
+    // `--kernel-server`: kernels for cadrs on other machines (issue #146).
+    if args.first().map(String::as_str) == Some("--kernel-server") {
+        return kernel_server(&args[1..]);
+    }
     // The kernel runs in a process of its own, so a crash in it costs a rebuild, not the app
-    // (`CADRS_KERNEL=thread` keeps it on a thread of this process, for debugging).
-    if std::env::var("CADRS_KERNEL").as_deref() != Ok("thread")
+    // (`CADRS_KERNEL=thread` keeps it on a thread of this process, for debugging;
+    // `CADRS_KERNEL=server:<host:port>` uses a kernel server's, with `CADRS_KERNEL_TOKEN`).
+    let kernel = std::env::var("CADRS_KERNEL").unwrap_or_default();
+    if let Some(addr) = kernel.strip_prefix("server:") {
+        let token = std::env::var("CADRS_KERNEL_TOKEN").unwrap_or_default();
+        cadrs_core::rebuild::process::use_server(addr, token);
+    } else if kernel != "thread"
         && let Ok(exe) = std::env::current_exe()
     {
         cadrs_core::rebuild::process::use_process(exe, Vec::new());
@@ -405,6 +422,34 @@ fn share_view_mapping(
     });
     if out.0 != want {
         out.0 = want;
+    }
+}
+
+/// `cadrs --kernel-server [--listen <host:port>] [--token <token>]` (see [`HELP`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn kernel_server(args: &[String]) -> AppExit {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let listen = value("--listen").unwrap_or_else(|| "0.0.0.0:7681".into());
+    let token = value("--token").unwrap_or_else(|| {
+        let t = uuid::Uuid::new_v4().simple().to_string();
+        println!("token: {t}");
+        t
+    });
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("cannot find this executable");
+        return AppExit::from_code(1);
+    };
+    match cadrs_core::rebuild::process::serve(&listen, &token, exe, Vec::new()) {
+        Ok(()) => AppExit::Success,
+        Err(e) => {
+            eprintln!("cannot listen on {listen}: {e}");
+            AppExit::from_code(1)
+        }
     }
 }
 

@@ -17,6 +17,8 @@ cadrs_ui.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cadrs_app = { workspace = true, features = ["easyeda"] }
+# The kernel server's token (`--kernel-server`).
+uuid.workspace = true
 
 # The browser build (`tools/web`) draws with WebGPU (Bevy then leaves WebGL2 out).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
