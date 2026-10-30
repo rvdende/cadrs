@@ -599,8 +599,6 @@ pub struct PartCache {
     pub connectors_shown: bool,
     /// Each pattern's instances and where their Skip dots go (P3.8).
     pub dots: HashMap<FeatureId, Vec<cadrs_core::pattern::InstanceDot>>,
-    /// How long each part feature took to regenerate (P3.9, PS2.6).
-    pub times: HashMap<FeatureId, std::time::Duration>,
     /// What each feature depends on beyond its references (P3.11, PS11.2; see
     /// [`cadrs_core::rebuild::Build::uses`]).
     pub uses: HashMap<FeatureId, Vec<FeatureId>>,
@@ -1244,12 +1242,6 @@ impl PartCache {
         self.connectors = build.connectors.clone();
         self.curves = build.curves.clone();
         self.dots = build.dots.clone();
-        self.times = build
-            .times
-            .iter()
-            .chain(&build.sketch_times)
-            .copied()
-            .collect();
         self.uses = build.uses.clone();
         self.names = build.names.clone();
         self.builds += 1;

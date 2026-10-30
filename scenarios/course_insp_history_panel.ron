@@ -1,7 +1,7 @@
 // P3D.3 (IR5.6, X7, basic; T9, TD12): the document history on the Conrod stand-in
 // (`fixtures/conrod_standin.cadrs`, shipped broken with its history,
 // `fixtures/conrod_standin.history.ron`).
-// 01 the left rail's History (pressed) opens "Versions and history" beside the feature list:
+// 01 the top bar's History (pressed) opens "Versions and history" beside the feature list:
 //    Main (the workspace, open circle; its last change's author and time), the stand-in
 //    author's changes grouped as "13 changes" (closed), Start (filled dot) at the bottom; the header's Repair
 //    icon (wrench) and ×; "Right-click a row for actions" at the bottom.
@@ -24,7 +24,7 @@
 // 09 right-click V1: Open read-only, Restore.
 // 10 Open read-only: the view-only panel shows the document at V1 ("Viewing V1": the broken
 //    rod with the slot) beside the restored Part Studio; nothing in it can be edited.
-// 11 the read-only view and the panel closed; the rail button no longer pressed.
+// 11 the read-only view and the panel closed; the History button no longer pressed.
 Scenario(
     start: Some("document"),
     steps: [
@@ -33,7 +33,7 @@ Scenario(
         Key("P"),
         Key("Shift+7"),
         Key("F"),
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         MoveTo(1420, 900),
         Wait(3),

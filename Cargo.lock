@@ -2738,7 +2738,6 @@ dependencies = [
  "slotmap",
  "ttf-parser",
  "uuid",
- "web-time",
 ]
 
 [[package]]

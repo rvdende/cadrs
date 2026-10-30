@@ -30,7 +30,7 @@ Scenario(
         Screenshot("01-space-envelope-master"),
         // Derived 1.
         Click(ui("tab-part-studio-1")),
-        Click(ui("rail-insert")),
+        Click(ui("derived")),
         WaitFor("derived-dialog"),
         Click(ui("derived-studio-space-envelope")),
         Custom("view 35 30 100 0 60 0.3"),

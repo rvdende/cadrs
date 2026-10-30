@@ -763,8 +763,9 @@ pub struct RenderPanelHost;
 #[derive(Component, PartialEq, Eq, Clone, Copy)]
 struct PanelKey(u64);
 
-/// The toolbar of a Render tab: Render….
+/// The toolbar of a Render tab: the feature list's toggle, Render….
 pub fn render_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    crate::document::feature_list_toggle(tb, t);
     tb.spawn(
         Button::new("render-toolbar-render")
             .label("Render…")

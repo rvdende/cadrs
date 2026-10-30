@@ -60,8 +60,8 @@ pub enum Fold {
     Network,
     /// The notifications bell.
     Notifications,
-    /// Share, the others' avatars and the account's name: a phone, where the account button is
-    /// the avatar alone.
+    /// Comments, History and Share, the others' avatars and the account's name: a phone, where
+    /// the account button is the avatar alone.
     Phone,
 }
 
@@ -123,11 +123,13 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     let mut entries: Vec<MenuEntry> = Vec::new();
     let in_document = world.get_resource::<crate::ActiveDocument>().is_some();
     if Fold::Phone.folded(width) && in_document {
-        entries.push(
-            MenuItem::new("account-share", "Share…")
-                .icon("share")
-                .into(),
-        );
+        for (name, label, icon) in [
+            ("account-comments", "Comments", "comments"),
+            ("account-history", "History", "history"),
+            ("account-share", "Share…", "share"),
+        ] {
+            entries.push(MenuItem::new(name, label).icon(icon).into());
+        }
     }
     if Fold::Notifications.folded(width) {
         let mut item =
@@ -184,6 +186,12 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
 /// menu opened from them under the account button (`anchor`). Whether it was one.
 pub fn fold_action(commands: &mut Commands, anchor: Entity, item: &str) -> bool {
     match item {
+        "account-comments" => commands.queue(crate::collab::comments::toggle_panel),
+        "account-history" => commands.queue(|world: &mut World| {
+            world
+                .resource_mut::<crate::history_panel::HistoryPanel>()
+                .toggle();
+        }),
         "account-share" => commands.queue(crate::collab::open_share),
         "account-notifications" => {
             commands.entity(anchor).insert(OpenNext::Notifications);

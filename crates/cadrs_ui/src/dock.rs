@@ -1,7 +1,8 @@
 //! A collapsible side panel, modeled on gpui-component's `Dock` (left placement): a floating
 //! glass panel ([`crate::glass`]) with a ‹ in its top right corner that collapses it (as
-//! triggering [`ToggleDockPanel`] on the panel does); the panel then triggers
-//! [`DockPanelToggled`], and whoever shows a way to open it again (an icon on a rail) listens.
+//! triggering [`ToggleDockPanel`] on the panel does; [`DockPanel::collapsible`] leaves the ‹ out
+//! for a panel toggled from elsewhere); the panel then triggers [`DockPanelToggled`], and
+//! whoever shows a way to open it again (an icon on a rail) listens.
 //!
 //! A grip in the gap on its right, a short line, is the one line drawn between panels: hovering
 //! it shows the column-resize cursor and lights it, and dragging it sets the panel's width
@@ -110,6 +111,7 @@ pub struct DockPanel {
     width: f32,
     open: bool,
     gap: f32,
+    collapsible: bool,
     content: Option<SpawnFn>,
 }
 
@@ -120,6 +122,7 @@ impl DockPanel {
             width: 190.0,
             open: true,
             gap: 0.0,
+            collapsible: true,
             content: None,
         }
     }
@@ -140,6 +143,13 @@ impl DockPanel {
         self
     }
 
+    /// Whether the panel has its ‹ (it does by default); without, only [`ToggleDockPanel`]
+    /// opens and closes it.
+    pub fn collapsible(mut self, c: bool) -> Self {
+        self.collapsible = c;
+        self
+    }
+
     /// Spawns the panel's content (laid out in a column).
     pub fn content(mut self, f: impl FnOnce(&mut ChildSpawner) + Send + Sync + 'static) -> Self {
         self.content = Some(Box::new(f));
@@ -153,6 +163,7 @@ impl DockPanel {
             width,
             open,
             gap,
+            collapsible,
             content,
         } = self;
         let body_name = format!("{name}-body");
@@ -188,6 +199,9 @@ impl DockPanel {
                 body.with_children(|b| {
                     if let Some(f) = content {
                         f(b);
+                    }
+                    if !collapsible {
+                        return;
                     }
                     // The ‹ in the top right corner, over the content's first row (a panel's
                     // filter leaves it room).

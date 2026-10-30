@@ -99,9 +99,6 @@ pub struct Build {
     /// P3.11 (PS11.2): per feature, the features it depended on that its references don't name
     /// (a fillet's tangent chain running over another fillet's faces), for Show dependencies.
     pub uses: HashMap<FeatureId, Vec<FeatureId>>,
-    /// P3.11 (P3.9 judge): each sketch's regeneration time, in list order: finding its profile
-    /// regions (what the features use), measured when the sketch last changed.
-    pub sketch_times: Vec<(FeatureId, Duration)>,
     /// P3H.6: the composite parts (their parts are in `parts` too), in list order.
     pub composites: Vec<crate::transform::Composite>,
     /// P3D.1 (IR5.2): for each feature that failed or warned, the inputs that no longer resolve,
@@ -1060,9 +1057,6 @@ pub struct Rebuilder {
     trail: Vec<(FeatureId, Arc<State>)>,
     /// The parts after the last rebuild (with their kernel bodies, for exports).
     last: Arc<State>,
-    /// P3.11: each sketch's regeneration time (its profile regions), with the key of the
-    /// sketch it was measured for.
-    sketch_times: HashMap<FeatureId, (u64, Duration)>,
     /// P3G.4: how deep the Derived features' source rebuilds nest.
     depth: usize,
     /// The generation of the last top-level rebuild: the outputs it used (its Derived sources'
@@ -1316,7 +1310,6 @@ impl Rebuilder {
             stage_for: None,
             trail: Vec::new(),
             last: Arc::default(),
-            sketch_times: HashMap::new(),
             depth: 0,
             top_generation: 0,
             largest: 0,
@@ -1356,7 +1349,6 @@ impl Rebuilder {
         let trail = std::mem::take(&mut self.trail);
         let stage_for = self.stage_for;
         let last = self.last.clone();
-        let times = self.sketch_times.clone();
         // A source built in another session (another document imported earlier, a document
         // opened before) comes back from its snapshot instead of being rebuilt.
         #[cfg(feature = "brep")]
@@ -1367,7 +1359,6 @@ impl Rebuilder {
         let state = std::mem::replace(&mut self.last, last);
         self.trail = trail;
         self.stage_for = stage_for;
-        self.sketch_times = times;
         Ok((build, state))
     }
 
@@ -1437,18 +1428,12 @@ impl Rebuilder {
         // Each part feature's cache key, and why it fails uncomputed: first, for the features
         // computed ahead too.
         let mut keys: Vec<Option<(u64, Option<String>)>> = Vec::new();
-        // A sketch's own key (`chain_key(0, f)`), for its region search's time below: from the
-        // same text as its chain key.
-        let mut own_keys: HashMap<FeatureId, u64> = HashMap::new();
         // (Each feature's text kept for the extrudes' content keys, [`content_key_texts`].)
         #[cfg(feature = "brep")]
         let (mut texts, mut first): (Vec<String>, HashMap<FeatureId, usize>) = Default::default();
         for (i, f) in features[..last.map_or(0, |l| l + 1)].iter().enumerate() {
             let mut text = String::new();
             let _ = write!(text, "{:?}", f.kind);
-            if f.sketch().is_some() {
-                own_keys.insert(f.id, chain_key_of(0, f, &text));
-            }
             key = chain_key_of(key, f, &text);
             #[cfg(feature = "brep")]
             {
@@ -1760,31 +1745,6 @@ impl Rebuilder {
         #[cfg(feature = "brep")]
         for (_, p) in std::mem::take(&mut self.tools) {
             cadrs_kernel::Kernel::release(&mut self.kernel, p.tool.0);
-        }
-        // Like the part features, only the sketches up to the last part feature regenerate (a
-        // sketch being drawn at the end of the list costs nothing).
-        for f in &features[..last.map_or(0, |l| l + 1)] {
-            let Some(sk) = f.sketch() else { continue };
-            let k = own_keys
-                .get(&f.id)
-                .copied()
-                .unwrap_or_else(|| chain_key(0, f));
-            let t = match self.sketch_times.get(&f.id) {
-                Some((key, t)) if *key == k => *t,
-                _ => {
-                    let t = cadrs_sketch::region::regions_timed(&sk.geometry).1;
-                    self.sketch_times.insert(f.id, (k, t));
-                    t
-                }
-            };
-            out.sketch_times.push((f.id, t));
-        }
-        // (Kept for sketches a rebuild leaves out, as the features up to a sketch on a face are
-        // rebuilt for it alone: the next whole list timed theirs again, a region search of each
-        // big sketch, tens of milliseconds a rebuild. Trimmed once there are many more.)
-        if self.sketch_times.len() > 4 * features.len() + 256 {
-            let ids: HashSet<FeatureId> = features.iter().map(|f| f.id).collect();
-            self.sketch_times.retain(|id, _| ids.contains(id));
         }
         out.composites = state
             .composites

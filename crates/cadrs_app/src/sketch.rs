@@ -1984,6 +1984,7 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             B::Tool(T::Dimension),
         )],
     ];
+    crate::document::feature_list_toggle(tb, t);
     for (i, group) in groups.into_iter().enumerate() {
         if i > 0 {
             tb.spawn(toolbar_separator(t));

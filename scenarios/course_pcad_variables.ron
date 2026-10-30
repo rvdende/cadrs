@@ -12,7 +12,6 @@
 // 08 a third Variable #wall = 3 mm, dragged above Extrude 1, the Extrude's depth set to #wall, then
 //    #wall dragged back below it: the Extrude is red ("Depth: #wall is used before it is defined;
 //    move its Variable above this feature"), shown on hover.
-// 09 the filter ":variable width": #width, #depth (it uses #width) and Sketch 1 (its dimension).
 Scenario(
     start: Some("document"),
     steps: [
@@ -119,10 +118,5 @@ Scenario(
         Hover(ui("feature-extrude-1")),
         Wait(40),
         Screenshot("08-forward-use-error"),
-        Click(ui("feature-filter")),
-        Type(":variable width"),
-        MoveTo(1420, 900),
-        Wait(3),
-        Screenshot("09-filter-variable-width"),
     ],
 )

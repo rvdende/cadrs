@@ -16,6 +16,7 @@ pub(super) enum Needs {
 
 /// The toolbar of a CAM Studio tab.
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    crate::document::feature_list_toggle(tb, t);
     let tool = |name: &'static str, icon: &'static str, tip: &'static str| {
         ToolButton::new(name, icon)
             .icon_size(20.0)

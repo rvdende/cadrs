@@ -1,9 +1,5 @@
-//! Feature-list management (P3.9; intro-to-part-studios.md PS2.4–PS2.6, PS3, PS11.2, PS13):
+//! Feature-list management (P3.9; intro-to-part-studios.md PS2.4–PS2.5, PS11.2, PS13):
 //!
-//! - **Filter** (PS3.4–PS3.6): the "Filter by name or type" field filters the rows as you type
-//!   ([`cadrs_core::feature_list::Filter`]: name or type, `"quoted"` exact names, `:part`,
-//!   `:type`, `:name`, `:errors`, `:folder` and `:variable`); hovering it shows a help card with
-//!   the prefixes. While filtering, Default geometry is hidden and folders with a match open.
 //! - **Rollback bar** (PS13.1): the grey bar under the last built feature. Dragging it (a grey
 //!   ghost shows where it goes) or the menu's *Roll to here* / *Roll to end* moves
 //!   it ([`SetRollback`], one undo step); the features below it are not built and are greyed.
@@ -11,18 +7,12 @@
 //!   greyed and struck through, and not built.
 //! - **Show dependencies** (PS11.2, menu): the feature's parents (above, amber) and children
 //!   (below, green) are highlighted, with a legend under the header; Esc or its ✕ ends it.
-//! - **Regeneration times** (PS2.6): the header's stopwatch shows each part feature's time on
-//!   its row.
 //! - **Dialog preview slider** (PS13.2): the slider in every feature dialog's footer switches
 //!   the view between the Part Studio *before* the feature (left half) and *after* it (right
 //!   half). **Final** (PS13.3) shows only when the edited feature isn't the last one built.
 
-use std::time::Duration;
-
 use bevy::prelude::*;
-use bevy::text::EditableText;
 use cadrs_core::commands::{SetRollback, SetSuppressed};
-use cadrs_core::feature_list::{FILTER_HELP, FeatureFacts, Filter, type_label};
 use cadrs_core::{ElementId, FeatureId};
 use cadrs_ui::prelude::*;
 
@@ -36,17 +26,12 @@ pub struct FeatureListPlugin;
 
 impl Plugin for FeatureListPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FeatureFilter>()
-            .init_resource::<ShowDependencies>()
-            .init_resource::<RegenTimes>()
+        app.init_resource::<ShowDependencies>()
             .init_resource::<DialogPreview>()
             .init_resource::<BarDrag>()
             .add_systems(
                 Update,
                 (
-                    read_filter,
-                    hide_default_geometry,
-                    sync_timer_button,
                     sync_dependency_legend,
                     end_dependencies,
                     apply_dialog_preview.before(crate::parts::PartsSet),
@@ -57,8 +42,6 @@ impl Plugin for FeatureListPlugin {
                     .run_if(in_state(AppState::Document)),
             )
             .add_systems(OnExit(AppState::Document), reset)
-            .add_observer(on_timer)
-            .add_observer(on_filter_escape)
             .add_observer(on_preview_slider)
             .add_observer(on_legend_close)
             .add_observer(on_bar_drag_start)
@@ -67,20 +50,9 @@ impl Plugin for FeatureListPlugin {
     }
 }
 
-/// The filter field's text and what it parses to.
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
-pub struct FeatureFilter {
-    pub text: String,
-    pub filter: Option<Filter>,
-}
-
 /// The feature whose dependencies are shown (PS11.2).
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
 pub struct ShowDependencies(pub Option<FeatureId>);
-
-/// The header's stopwatch is on: rows show their regeneration times (PS2.6).
-#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
-pub struct RegenTimes(pub bool);
 
 /// The dialog's preview slider is on "before" (PS13.2).
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
@@ -146,25 +118,13 @@ pub struct ListState {
     /// IR5.5: the features with a suppression variable, and how the row's tag reads it
     /// ("#withHole").
     pub suppress_vars: Vec<(FeatureId, String)>,
-    /// The filter's matches (`None`: no filter).
-    pub shown: Option<Vec<FeatureId>>,
     /// Show dependencies: the feature, its parents and its children.
     pub dependency_of: Option<FeatureId>,
     pub parents: Vec<FeatureId>,
     pub children: Vec<FeatureId>,
-    /// The regeneration times as shown (`None`: the stopwatch is off).
-    pub times: Option<Vec<(FeatureId, String)>>,
 }
 
 impl ListState {
-    pub fn shows(&self, id: FeatureId) -> bool {
-        self.shown.as_ref().is_none_or(|s| s.contains(&id))
-    }
-
-    pub fn filtering(&self) -> bool {
-        self.shown.is_some()
-    }
-
     /// True if the feature at `index` isn't built (below the bar, or suppressed).
     pub fn inactive(&self, index: usize, id: FeatureId) -> bool {
         index >= self.bar || self.suppressed.contains(&id)
@@ -180,27 +140,6 @@ impl ListState {
             None
         }
     }
-
-    /// The time shown on a row (P3.11: sketches have one too).
-    pub fn time(&self, id: FeatureId) -> Option<String> {
-        self.times
-            .as_ref()?
-            .iter()
-            .find(|(f, _)| *f == id)
-            .map(|(_, t)| t.clone())
-    }
-}
-
-/// A regeneration time as the rows show it: "12 ms", "<1 ms", "1.24 s".
-pub fn format_time(d: Duration) -> String {
-    let ms = d.as_secs_f64() * 1000.0;
-    if ms < 1.0 {
-        "<1 ms".into()
-    } else if ms < 1000.0 {
-        format!("{ms:.0} ms")
-    } else {
-        format!("{:.2} s", ms / 1000.0)
-    }
 }
 
 /// The list state of a Part Studio.
@@ -208,10 +147,7 @@ pub fn list_state(
     el: &cadrs_core::Element,
     cache: &PartCache,
     over: &PartOverride,
-    filter: &FeatureFilter,
     deps: &ShowDependencies,
-    times: &RegenTimes,
-    fixed: bool,
 ) -> ListState {
     let features = el.features();
     // While a feature before the end is edited, the bar sits under it (PS13.1), or above it
@@ -224,28 +160,6 @@ pub fn list_state(
     if let Some(i) = over.before.and_then(index_of) {
         bar = bar.min(i);
     }
-    let shown = filter.filter.as_ref().map(|q| {
-        features
-            .iter()
-            .filter(|f| {
-                let parts: Vec<&str> = cache
-                    .parts
-                    .iter()
-                    .filter(|p| p.feature == f.id || p.features.contains(&f.id))
-                    .filter_map(|p| cache.part_name(p.id))
-                    .collect();
-                q.matches(&FeatureFacts {
-                    name: &f.name,
-                    type_label: type_label(&f.kind),
-                    folder: el.folder_of(f.id).map(|x| x.name.as_str()),
-                    error: cache.errors.contains_key(&f.id) || !f.is_valid(),
-                    parts,
-                    variables: cadrs_core::feature_list::variable_facts(f),
-                })
-            })
-            .map(|f| f.id)
-            .collect()
-    });
     let dependency_of = deps.0.filter(|id| el.feature(*id).is_some());
     let (parents, children) = match dependency_of {
         Some(id) => (
@@ -254,23 +168,6 @@ pub fn list_state(
         ),
         None => (Vec::new(), Vec::new()),
     };
-    let times = times.0.then(|| {
-        features
-            .iter()
-            .filter_map(|f| {
-                cache.times.get(&f.id).map(|t| {
-                    // A scripted scenario shows fixed times, so its frames don't change from run
-                    // to run (P3.11, P3.9 judge): a sketch "<1 ms", a part feature "10 ms".
-                    let t = match (fixed, f.sketch().is_some()) {
-                        (false, _) => format_time(*t),
-                        (true, true) => format_time(Duration::from_micros(400)),
-                        (true, false) => format_time(Duration::from_millis(10)),
-                    };
-                    (f.id, t)
-                })
-            })
-            .collect()
-    });
     ListState {
         bar,
         suppressed: el.all_suppressed(),
@@ -279,11 +176,9 @@ pub fn list_state(
             .iter()
             .filter_map(|f| Some((f.id, f.suppress_by.as_ref()?.label())))
             .collect(),
-        shown,
         dependency_of,
         parents,
         children,
-        times,
     }
 }
 
@@ -376,18 +271,6 @@ pub fn dependency_legend(p: &mut ChildSpawnerCommands, t: &Theme) {
     });
 }
 
-/// The filter field's hover help (PS3.6).
-pub fn filter_help() -> Tooltip {
-    let mut text = String::from("Filter by name or type");
-    for (term, what) in FILTER_HELP {
-        text.push('\n');
-        text.push_str(term);
-        text.push('\t');
-        text.push_str(what);
-    }
-    Tooltip::help(text)
-}
-
 /// A footer's before/after slider (PS13.2), on "after" (as Onshape draws it, `ex1-step4.png`).
 pub fn preview_slider(t: &Theme, name: &str) -> impl Bundle {
     (
@@ -397,101 +280,6 @@ pub fn preview_slider(t: &Theme, name: &str) -> impl Bundle {
             .tooltip("Drag left to see the Part Studio before this feature, right for after")
             .build(t),
     )
-}
-
-// ---------------------------------------------------------------------------------------------
-// Filter
-
-fn read_filter(q: Query<(&Name, &EditableText)>, mut filter: ResMut<FeatureFilter>) {
-    let Some(text) = q
-        .iter()
-        .find(|(n, _)| n.as_str() == "feature-filter-field")
-        .map(|(_, t)| t.value().to_string())
-    else {
-        return;
-    };
-    if filter.text != text {
-        filter.filter = Filter::parse(&text);
-        filter.text = text;
-    }
-}
-
-/// Esc in the filter field clears it (and leaves the field).
-fn on_filter_escape(
-    ev: On<cadrs_ui::TextCancel>,
-    mut q: Query<(&Name, &mut EditableText)>,
-    mut focus: ResMut<bevy::input_focus::InputFocus>,
-) {
-    if ev.entity != ev.original_event_target() {
-        return;
-    }
-    if let Ok((name, mut text)) = q.get_mut(ev.entity)
-        && name.as_str() == "feature-filter-field"
-    {
-        text.clear();
-        focus.clear();
-    }
-}
-
-/// While filtering, the Default geometry tree is hidden (its open state is kept).
-fn hide_default_geometry(
-    filter: Res<FeatureFilter>,
-    mut q: Query<(&Name, &mut Node)>,
-    mut saved: Local<Option<Display>>,
-) {
-    let on = filter.filter.is_some();
-    if on == saved.is_some() {
-        return;
-    }
-    for (name, mut node) in &mut q {
-        match name.as_str() {
-            "feature-default-geometry" => {
-                node.display = if on { Display::None } else { Display::Flex }
-            }
-            "default-geometry-children" => {
-                if on {
-                    *saved = Some(node.display);
-                    node.display = Display::None;
-                } else {
-                    node.display = saved.unwrap_or(Display::Flex);
-                }
-            }
-            _ => {}
-        }
-    }
-    if !on {
-        *saved = None;
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Regeneration times
-
-fn on_timer(a: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut times: ResMut<RegenTimes>) {
-    if q.get(a.entity).is_ok_and(|n| n.as_str() == "feature-timer") {
-        times.0 = !times.0;
-    }
-}
-
-fn sync_timer_button(
-    times: Res<RegenTimes>,
-    q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>), With<cadrs_ui::style::Visuals>>,
-    q_new: Query<(), Added<cadrs_ui::style::Visuals>>,
-    mut commands: Commands,
-) {
-    // (Only when the setting changes or buttons are built: thousands of entities have names.)
-    if !times.is_changed() && q_new.is_empty() {
-        return;
-    }
-    for (e, name, selected) in &q {
-        if name.as_str() == "feature-timer" && selected != times.0 {
-            if times.0 {
-                commands.entity(e).insert(cadrs_ui::style::Selected);
-            } else {
-                commands.entity(e).remove::<cadrs_ui::style::Selected>();
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------------------------

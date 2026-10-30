@@ -7,11 +7,11 @@
 //!   document name (click to rename in place), the workspace's name when it isn't Main; on the
 //!   right the version, the color scheme, Share, notifications and the account
 //!   ([`crate::identity`]).
-//! - **Icon rail** on the left, as tall as its icons; the feature list's icon is on it while
-//!   the panel is hidden.
-//! - **Toolbar**: **Sketch** (the only text button) and the feature tools, then "Search tools…
-//!   alt c" (which also has Undo and Redo). Assemblies get their own toolbar (Insert and the mate
-//!   tools).
+//! - **Top bar**: the app menu, the document's name, then Comments, History and Share, a
+//!   divider, and the version, network, scheme, notifications and account.
+//! - **Toolbar**: the feature list's toggle (▲ while it is shown, ▼ while hidden), **Sketch**
+//!   (the only text button) and the feature tools, then "Search tools… alt c" (which also has
+//!   Undo and Redo). Assemblies get their own toolbar (Insert and the mate tools).
 //! - **Feature list** panel: filter (with the panel's ‹ that hides it), "Features (4)", the
 //!   Default geometry tree (Origin, Top, Front, Right), the rollback bar and a collapsible
 //!   "Parts (0)"; assemblies show the instance list instead. The grip in the gap on its right
@@ -74,7 +74,7 @@ impl Plugin for DocumentPlugin {
                     sync_document_name,
                     crate::units_dialog::sync_units,
                     document_shortcuts,
-                    sync_rail_toggle,
+                    sync_feature_list_toggle,
                     sync_viewport_readouts,
                     auto_save,
                     scroll_to_revealed.after(rebuild_feature_rows),
@@ -376,7 +376,6 @@ fn spawn_shell(
                 Pickable::IGNORE,
             ))
             .with_children(|body| {
-                icon_rail(body, &t);
                 body.spawn((
                     Node {
                         flex_grow: 1.0,
@@ -397,9 +396,12 @@ fn spawn_shell(
                     ))
                     .with_children(|mid| {
                         mid.spawn((
+                            // Shown and hidden by the toolbar's toggle
+                            // ([`feature_list_toggle`]).
                             DockPanel::new("feature-panel")
                                 .width(crate::assembly::list::PART_STUDIO_LIST_W)
                                 .gap(PANEL_GAP)
+                                .collapsible(false)
                                 .content(|c| {
                                     c.spawn((
                                         Name::new("feature-panel-content"),
@@ -547,6 +549,37 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
         .with_children(|r| {
             // On a narrow window these fold into the account menu (`crate::top_bar`).
             use crate::top_bar::{Fold, spawn_folding};
+            // Comments (`crate::collab::comments`), History (`crate::history_panel`) and Share
+            // (`crate::collab`), then a divider.
+            spawn_folding(r, Fold::Phone, |r| {
+                for (name, icon_name, tip) in [
+                    ("document-comments", "comments", "Comments"),
+                    ("document-history", "history", "History"),
+                    ("document-share", "share", "Share this document"),
+                ] {
+                    let mut b = r.spawn(
+                        ToolButton::new(name, icon_name)
+                            .icon_size(18.0)
+                            .tooltip(tip)
+                            .build(t),
+                    );
+                    if name == "document-share" {
+                        b.insert(observe(|_: On<Activate>, mut commands: Commands| {
+                            commands.queue(crate::collab::open_share);
+                        }));
+                    }
+                }
+                r.spawn((
+                    Node {
+                        width: Val::Px(1.0),
+                        height: Val::Px(20.0),
+                        margin: UiRect::horizontal(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(t.separator),
+                    Pickable::IGNORE,
+                ));
+            });
             crate::update::spawn_version(r, t);
             // Online or not (`crate::network`).
             spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
@@ -555,22 +588,6 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
                 r.spawn((
                     cadrs_ui::scheme_toggle(t),
                     cadrs_ui::glass::GlassFrame::bar(),
-                ))
-                .entry::<Node>()
-                .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
-            });
-            // Share (`crate::collab`).
-            spawn_folding(r, Fold::Phone, |r| {
-                r.spawn((
-                    Button::new("document-share")
-                        .label("Share")
-                        .primary()
-                        .small()
-                        .tooltip("Share this document")
-                        .build(t),
-                    observe(|_: On<Activate>, mut commands: Commands| {
-                        commands.queue(crate::collab::open_share);
-                    }),
                 ))
                 .entry::<Node>()
                 .and_modify(|mut n| n.margin = UiRect::right(Val::Px(6.0)));
@@ -596,98 +613,60 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
     });
 }
 
-fn icon_rail(body: &mut ChildSpawnerCommands, t: &Theme) {
-    // A floating column as tall as its icons.
-    body.spawn((
-        Name::new("icon-rail"),
-        Node {
-            width: Val::Px(RAIL_WIDTH),
-            flex_shrink: 0.0,
-            align_self: AlignSelf::FlexStart,
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            padding: UiRect::vertical(Val::Px(4.0)),
-            row_gap: Val::Px(4.0),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
-            ..default()
-        },
-        cadrs_ui::glass::panel(t),
-    ))
-    .with_children(|rail| {
-        for (name, icon_name, tip) in [
-            ("rail-insert", "file-import", "Insert"),
-            ("rail-comments", "comments", "Comments"),
-            ("rail-details", "details", "Details"),
-            ("rail-properties", "properties", "Properties"),
-            ("rail-history", "history", "History"),
-            ("rail-search", "find", "Search"),
-        ] {
-            rail.spawn(ToolButton::new(name, icon_name).tooltip(tip).build(t));
-        }
-        // At the end, shown while the feature panel is hidden ([`sync_rail_toggle`]), so the
-        // other icons never move: it brings the panel back.
-        rail.spawn((
-            RailPanelToggle,
-            Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(4.0),
-                display: Display::None,
-                ..default()
+/// The feature list's toggle at a toolbar's left end, and a separator after it: the list
+/// icon with a chevron, ▲ while the panel is shown (a click hides it), ▼ while it is hidden
+/// ([`sync_feature_list_toggle`]).
+pub(crate) fn feature_list_toggle(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    tb.spawn((
+        ToolButton::new("feature-list-toggle", "list-details")
+            .icon_size(18.0)
+            .tooltip("Show or hide the feature list")
+            .build(t),
+        observe(
+            |_: On<Activate>, q: Query<(Entity, &Name)>, mut commands: Commands| {
+                if let Some((e, _)) = q.iter().find(|(_, n)| n.as_str() == "feature-panel") {
+                    commands.trigger(ToggleDockPanel { entity: e });
+                }
             },
-        ))
-        .with_children(|g| {
-            g.spawn((
-                Node {
-                    width: Val::Px(20.0),
-                    height: Val::Px(1.0),
-                    ..default()
-                },
-                BackgroundColor(t.separator),
-            ));
-            g.spawn((
-                ToolButton::new("rail-feature-list", "list-details")
-                    .tooltip("Show the feature list")
-                    .build(t),
-                observe(
-                    |_: On<Activate>, q: Query<(Entity, &Name)>, mut commands: Commands| {
-                        if let Some((e, _)) = q.iter().find(|(_, n)| n.as_str() == "feature-panel")
-                        {
-                            commands.trigger(ToggleDockPanel { entity: e });
-                        }
-                    },
-                ),
-            ));
-        });
+        ),
+    ))
+    // As tall as the toolbar's other buttons, wide enough for the chevron too.
+    .entry::<Node>()
+    .and_modify(|mut n| {
+        n.padding = UiRect::horizontal(Val::Px(5.0));
+        n.column_gap = Val::Px(2.0);
+    })
+    .entity()
+    .with_children(|b| {
+        b.spawn((
+            cadrs_ui::icon("chevron-up", 18.0, t.foreground),
+            FeatureListChevron,
+            Pickable::IGNORE,
+        ));
     });
+    tb.spawn(toolbar_separator(t));
 }
 
-const RAIL_WIDTH: f32 = 40.0;
-
-/// The rail's feature list button: there while the panel is hidden.
+/// The feature list toggle's chevron.
 #[derive(Component)]
-struct RailPanelToggle;
+struct FeatureListChevron;
 
-/// The rail shows the feature list's button only while the panel is hidden (the panel's own ‹
-/// hides it).
-fn sync_rail_toggle(
-    q_panel: Query<(&Name, &cadrs_ui::dock::DockPanelState, &Node), Without<RailPanelToggle>>,
-    mut q_button: Query<&mut Node, With<RailPanelToggle>>,
+/// The toggle's chevron follows the panel: ▲ while it is shown, ▼ while hidden.
+fn sync_feature_list_toggle(
+    q_panel: Query<(&Name, &cadrs_ui::dock::DockPanelState)>,
+    mut q_icon: Query<&mut cadrs_ui::Icon, With<FeatureListChevron>>,
 ) {
-    let Some((_, state, node)) = q_panel.iter().find(|(n, ..)| n.as_str() == "feature-panel")
-    else {
+    let Some((_, state)) = q_panel.iter().find(|(n, _)| n.as_str() == "feature-panel") else {
         return;
     };
-    // A drawing or a Variable Studio hides the panel itself: nothing to bring back.
-    let want = if state.open || node.display == Display::None {
-        Display::None
+    let want = if state.open {
+        "chevron-up"
     } else {
-        Display::Flex
+        "chevron-down"
     };
-    for mut n in &mut q_button {
-        if n.display != want {
-            n.display = want;
+    for mut icon in &mut q_icon {
+        if icon.name != want {
+            icon.name = want.into();
         }
     }
 }
@@ -1578,6 +1557,7 @@ pub(crate) fn search_tools(tb: &mut ChildSpawnerCommands, t: &Theme) {
 }
 
 fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    feature_list_toggle(tb, t);
     // P3G.2 (ER4.3): shown when the document references versions.
     crate::reference_manager::update_all_button(tb, t);
     tb.spawn((
@@ -2002,6 +1982,7 @@ fn pattern_menu() -> Menu {
 }
 
 fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    feature_list_toggle(tb, t);
     // P3G.2 (ER4.3): shown when the document references versions.
     crate::reference_manager::update_all_button(tb, t);
     tb.spawn((
@@ -2129,37 +2110,6 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     search_tools(tb, t);
 }
 
-/// The filter row at the top of the panel.
-fn filter_row(p: &mut ChildSpawnerCommands, t: &Theme, name: &'static str, placeholder: &str) {
-    p.spawn(Node {
-        height: Val::Px(34.0),
-        flex_shrink: 0.0,
-        // Room on the right for the panel's ‹ (`cadrs_ui::dock`).
-        padding: UiRect::new(
-            Val::Px(9.0),
-            Val::Px(cadrs_ui::dock::COLLAPSE_ROOM),
-            Val::Px(4.0),
-            Val::ZERO,
-        ),
-        align_items: AlignItems::Center,
-        column_gap: Val::Px(8.0),
-        ..default()
-    })
-    .with_children(|r| {
-        r.spawn((icon("filter", 18.0, t.tool_foreground), Pickable::IGNORE));
-        let mut builder = TextInput::new(name).placeholder(placeholder).height(28.0);
-        // P3.11 (P3.9 judge): the feature filter has a ✕ that clears it.
-        if name == "feature-filter" {
-            builder = builder.cleanable();
-        }
-        let mut input = r.spawn(builder.build(t));
-        // P3.9: hovering the feature filter shows its prefixes (PS3.6).
-        if name == "feature-filter" {
-            input.insert(crate::feature_list::filter_help());
-        }
-    });
-}
-
 /// A small icon button in a panel header (slightly smaller than toolbar buttons).
 fn header_button(
     p: &mut ChildSpawnerCommands,
@@ -2207,7 +2157,7 @@ fn remember_feature_split(
 }
 
 fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, height: Option<f32>) {
-    // Upper pane: features. Its list scrolls on its own below the filter and the header, as
+    // Upper pane: features. Its list scrolls on its own below the header, as
     // Onshape's does; the divider under it resizes it (kept per tab).
     let features = p
         .spawn((
@@ -2221,7 +2171,6 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
             },
         ))
         .with_children(|pane| {
-            filter_row(pane, t, "feature-filter", "Filter by name or type");
             pane.spawn((
                 Name::new("features-header"),
                 FeaturesHeader,
@@ -2269,15 +2218,6 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                     },
                 ));
                 header_button(h, "feature-new-folder", "folder-new", "New folder", t, 0.0);
-                header_button(h, "feature-rollback-pause", "pause", "Pause", t, 4.0);
-                header_button(
-                    h,
-                    "feature-timer",
-                    "stopwatch",
-                    "Show regeneration times",
-                    t,
-                    4.0,
-                );
             });
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
@@ -2462,13 +2402,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
             .spawn(Node {
                 height: Val::Px(34.0),
                 flex_shrink: 0.0,
-                // Room on the right for the panel's ‹ (`cadrs_ui::dock`).
-                padding: UiRect::new(
-                    Val::Px(7.0),
-                    Val::Px(cadrs_ui::dock::COLLAPSE_ROOM),
-                    Val::Px(4.0),
-                    Val::ZERO,
-                ),
+                padding: UiRect::new(Val::Px(7.0), Val::Px(7.0), Val::Px(4.0), Val::ZERO),
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(6.0),
                 ..default()
@@ -3674,12 +3608,9 @@ fn rebuild_feature_rows(
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
     ),
-    (filter, deps, times, over, strategy): (
-        Res<crate::feature_list::FeatureFilter>,
+    (deps, over): (
         Res<crate::feature_list::ShowDependencies>,
-        Res<crate::feature_list::RegenTimes>,
         Res<crate::parts::PartOverride>,
-        Option<Res<bevy::time::TimeUpdateStrategy>>,
     ),
     (derived_open, link_status, derived_session, components_open): (
         Res<crate::derived_ui::DerivedOpen>,
@@ -3688,7 +3619,7 @@ fn rebuild_feature_rows(
         Res<crate::derived_ui::ComponentsOpen>,
     ),
     mut row_slots: ResMut<FeatureRowSlots>,
-    mut was_present: Local<[bool; 5]>,
+    mut was_present: Local<[bool; 4]>,
     mut commands: Commands,
 ) {
     let Some(doc) = doc else {
@@ -3708,7 +3639,6 @@ fn rebuild_feature_rows(
         session.is_some(),
         extrude.is_some(),
         applied.is_some(),
-        strategy.is_some(),
         derived_session.is_some(),
     ];
     let inputs_changed = doc.is_changed()
@@ -3721,11 +3651,8 @@ fn rebuild_feature_rows(
         || cache.is_changed()
         || extrude.as_ref().is_some_and(|r| r.is_changed())
         || applied.as_ref().is_some_and(|r| r.is_changed())
-        || filter.is_changed()
         || deps.is_changed()
-        || times.is_changed()
         || over.is_changed()
-        || strategy.as_ref().is_some_and(|r| r.is_changed())
         || derived_open.is_changed()
         || link_status.is_changed()
         || derived_session.as_ref().is_some_and(|r| r.is_changed())
@@ -3857,10 +3784,7 @@ fn rebuild_feature_rows(
         .map(|s| s.feature)
         .or(extrude.as_ref().map(|s| s.feature))
         .or(applied.as_ref().map(|s| s.feature));
-    // A scripted scenario steps time by hand: its regeneration times are shown fixed.
-    let fixed =
-        strategy.is_some_and(|s| matches!(*s, bevy::time::TimeUpdateStrategy::ManualDuration(_)));
-    let state = crate::feature_list::list_state(el, &cache, &over, &filter, &deps, &times, fixed);
+    let state = crate::feature_list::list_state(el, &cache, &over, &deps);
     // P3G.4: Derived rows' chevrons, children and linked icons.
     let derived_rows: Vec<DerivedRowKey> = all
         .iter()
@@ -3973,10 +3897,6 @@ fn rebuild_feature_rows(
         for (index, (id, name, valid, under_defined, kind, failed, shown, warning)) in
             key.0.iter().enumerate()
         {
-            // P3.9: the filter hides what doesn't match (a folder with a match shows, open).
-            if !state.shows(*id) {
-                continue;
-            }
             // P3.9: the rollback bar, before the first row below it.
             if !bar_placed && index >= state.bar {
                 if slots.take(ROLLBACK_BAR_PITCH) {
@@ -3989,20 +3909,14 @@ fn rebuild_feature_rows(
             // P3.6: a folder shows at its first feature; closed, its features are hidden.
             let folder = folders.iter().find(|f| f.features.contains(id));
             if let Some(f) = folder {
-                let first_shown = f.features.iter().find(|x| state.shows(**x));
-                if first_shown == Some(id) {
+                let first = f.features.first() == Some(id);
+                if first {
                     // (Placed by its index too: a rebuild's list follows a closed folder.)
                     row_slots.0.insert(f.id, slots.next_index());
                 }
-                if first_shown == Some(id) && slots.take(FEATURE_ROW_PITCH) {
-                    let open = f.open || state.filtering();
-                    // Filtered: how many of its features match (P3.11).
-                    let count = if state.filtering() {
-                        let matches = f.features.iter().filter(|x| state.shows(**x)).count();
-                        format!("{matches} of {}", f.features.len())
-                    } else {
-                        f.features.len().to_string()
-                    };
+                if first && slots.take(FEATURE_ROW_PITCH) {
+                    let open = f.open;
+                    let count = f.features.len().to_string();
                     let mut row = c.spawn(crate::feature_folders::folder_row_counted(
                         &t,
                         f.id,
@@ -4063,7 +3977,7 @@ fn rebuild_feature_rows(
                         n.padding = UiRect::left(Val::Px(2.0));
                     });
                 }
-                if !f.open && !state.filtering() {
+                if !f.open {
                     continue;
                 }
             }
@@ -4184,7 +4098,6 @@ fn rebuild_feature_rows(
                         // P3D.1 (IR5.4): below the rollback bar (or the feature being edited): grey
                         // and italic, as `ex1-step3.png` draws them.
                         .italic(index >= state.bar && !suppressed)
-                        .trailing(state.time(*id), t.muted_foreground)
                         .build(&t),
                     FeatureRow(*id),
                     PickRow(Pick::Feature(*id)),

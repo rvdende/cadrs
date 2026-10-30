@@ -86,7 +86,7 @@ Scenario(
         Screenshot("11-plates-moved"),
         Custom("move-doc open Plates library"),
         WaitFor("document-shell"),
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         Hover(ui("history-version-2")),
         Wait(40),

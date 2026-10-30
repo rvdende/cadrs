@@ -131,6 +131,17 @@ pub struct HistoryPanel {
     pub selected_version: Option<usize>,
 }
 
+impl HistoryPanel {
+    /// Opens or closes it (the top bar's History button, or the account menu's on a narrow
+    /// window).
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        if !self.open {
+            self.repair_pick = false;
+        }
+    }
+}
+
 /// Opening the panel narrows the viewport by its width: the model is fitted again into what is
 /// left, once the viewport has its new size (Final regression judge: conrod 12, the rod ran
 /// under the view cube; `ex1-step12.png` shows it fitted).
@@ -846,7 +857,7 @@ fn other_rows(log: &DocLog, clock: &AppClock, user: &UserProfile) -> Vec<(Row, T
         .collect()
 }
 
-/// The rail's History button shows pressed while the panel is open.
+/// The top bar's History button shows pressed while the panel is open.
 fn sync_rail_button(
     panel: Res<HistoryPanel>,
     q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>)>,
@@ -856,7 +867,7 @@ fn sync_rail_button(
         return;
     }
     for (e, n, selected) in &q {
-        if n.as_str() != "rail-history" {
+        if n.as_str() != "document-history" {
             continue;
         }
         if panel.open && !selected {
@@ -875,12 +886,7 @@ fn on_button(
 ) {
     let Ok(n) = q.get(a.entity) else { return };
     match n.as_str() {
-        "rail-history" => {
-            panel.open = !panel.open;
-            if !panel.open {
-                panel.repair_pick = false;
-            }
-        }
+        "document-history" => panel.toggle(),
         "history-close" => {
             panel.open = false;
             panel.repair_pick = false;

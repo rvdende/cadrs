@@ -134,7 +134,7 @@ Scenario(
         Wait(3),
         Screenshot("11-extrude-5-fillet-red"),
         // IR6.11
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         Click(ui("history-repair")),
         Click(ui("history-group-14")),
