@@ -550,9 +550,12 @@ enum Detail {
 
 /// [`edge_infos`] with what `detail` asks for.
 fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
+    use rayon::prelude::*;
     let ef = b.edge_faces();
+    // (Side by side: each edge's smoothness projects onto its faces, a part's display a
+    // tenth of a second of a rebuild's own thread.)
     b.edges
-        .iter()
+        .par_iter()
         .enumerate()
         .map(|(ei, e)| {
             let faces = match ef[ei].as_slice() {
@@ -1605,9 +1608,17 @@ impl Kernel for NativeKernel {
         let e = self.entry(body)?;
         Ok(*e.aabb.get_or_init(|| {
             let o = P3::origin();
-            let (x0, x1) = extent_along(&e.body, &o, &V3::x());
-            let (y0, y1) = extent_along(&e.body, &o, &V3::y());
-            let (z0, z1) = extent_along(&e.body, &o, &V3::z());
+            // (A big body's three side by side: a rebuild asks each new body's box on its own
+            // thread. A box's few edges aren't worth the threads.)
+            let along = |d: V3| extent_along(&e.body, &o, &d);
+            let ((x0, x1), ((y0, y1), (z0, z1))) = if e.body.edges.len() > 64 {
+                rayon::join(
+                    || along(V3::x()),
+                    || rayon::join(|| along(V3::y()), || along(V3::z())),
+                )
+            } else {
+                (along(V3::x()), (along(V3::y()), along(V3::z())))
+            };
             Aabb {
                 min: P3::new(x0, y0, z0),
                 max: P3::new(x1, y1, z1),

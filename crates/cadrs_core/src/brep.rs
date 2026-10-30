@@ -1149,9 +1149,12 @@ fn rulings(
     if dn.abs() < 1e-9 || verts.is_empty() {
         return;
     }
-    // Each point: its foot on the sketch plane (back along the sweep), height, normal.
+    // Each point: its foot on the sketch plane (back along the sweep), height, normal. (Side by
+    // side: a spline piece's place is a nearest-point search per point.)
+    use rayon::prelude::*;
     let mut pts: Vec<(f64, Vec3, f64, Vec3)> = verts
-        .iter()
+        .par_iter()
+        .with_min_len(64)
         .map(|&v| {
             let h = dot(sub(pos[v], g.frame.origin), g.n) / dn;
             let foot = sub(pos[v], scale(dir, h));
@@ -1181,7 +1184,12 @@ fn rulings(
             .iter()
             .all(|(p, b)| !in_box(b, q) || piece_distance(p, q) > 100.0 * tol)
     };
-    if on_piece && pts.iter().any(|(_, foot, ..)| off_sketch(*foot)) {
+    if on_piece
+        && pts
+            .par_iter()
+            .with_min_len(64)
+            .any(|(_, foot, ..)| off_sketch(*foot))
+    {
         return;
     }
     // Where the face reaches along the ruling at `param`: its triangles laid out flat by
