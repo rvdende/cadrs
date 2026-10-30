@@ -3469,6 +3469,8 @@ type FeatureRowKey = (
     Option<String>,
     bool,
     Option<String>,
+    // A Variable's value with its unit, at the row's right.
+    Option<String>,
 );
 
 /// A feature that built with a warning (P3.10, PS11.1): Onshape's yellow state, its name and
@@ -3603,10 +3605,11 @@ fn rebuild_feature_rows(
         Res<crate::sketch_constrain::SketchFacesLost>,
         Res<cadrs_ui::IconAtlas>,
     ),
-    (cache, extrude, applied): (
+    (cache, extrude, applied, units): (
         Res<crate::parts::PartCache>,
         Option<Res<crate::extrude::ExtrudeSession>>,
         Option<Res<crate::applied::AppliedSession>>,
+        Res<crate::WorkspaceUnits>,
     ),
     (deps, over): (
         Res<crate::feature_list::ShowDependencies>,
@@ -3651,6 +3654,7 @@ fn rebuild_feature_rows(
         || cache.is_changed()
         || extrude.as_ref().is_some_and(|r| r.is_changed())
         || applied.as_ref().is_some_and(|r| r.is_changed())
+        || units.is_changed()
         || deps.is_changed()
         || over.is_changed()
         || derived_open.is_changed()
@@ -3776,6 +3780,10 @@ fn rebuild_feature_rows(
                     !cache.hidden_sketches.contains(&f.id)
                 },
                 cache.warnings.get(&f.id).cloned(),
+                match &f.kind {
+                    cadrs_core::FeatureKind::Variable(v) => Some(v.display(&units.0)),
+                    _ => None,
+                },
             )
         })
         .collect();
@@ -3894,7 +3902,7 @@ fn rebuild_feature_rows(
                 .id()
         });
         let mut bar_placed = false;
-        for (index, (id, name, valid, under_defined, kind, failed, shown, warning)) in
+        for (index, (id, name, valid, under_defined, kind, failed, shown, warning, value)) in
             key.0.iter().enumerate()
         {
             // P3.9: the rollback bar, before the first row below it.
@@ -4098,6 +4106,8 @@ fn rebuild_feature_rows(
                         // P3D.1 (IR5.4): below the rollback bar (or the feature being edited): grey
                         // and italic, as `ex1-step3.png` draws them.
                         .italic(index >= state.bar && !suppressed)
+                        // A Variable's value with its unit, at the row's right.
+                        .trailing(value.clone(), t.muted_foreground)
                         .build(&t),
                     FeatureRow(*id),
                     PickRow(Pick::Feature(*id)),

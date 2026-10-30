@@ -639,7 +639,7 @@ fn close_editor(world: &mut World, commit: bool) {
             .and_then(|c| c.get(1).copied())
             .and_then(|row| world.get::<Children>(row).and_then(|c| c.get(1).copied()))
             .and_then(|f| world.get::<bevy::text::EditableText>(f))
-            .map(|t| t.value().to_string());
+            .map(|t| value_text(&t.value().to_string()));
         if let Some(text) = text
             && let Ok(v) = value_for(world, open.id, &text)
         {
@@ -675,6 +675,12 @@ pub fn edit_in_turn(world: &mut World, ids: &[DimensionId]) {
     };
     open_editor(world, *first);
     world.resource_mut::<DimensionEditor>().next = rest.iter().copied().collect();
+}
+
+/// The editor's text as the value to use: "#var_2 mm" (a variable typed or picked in place of
+/// the number of "25 mm") without the unit left after it, which it couldn't take.
+fn value_text(text: &str) -> String {
+    units::without_unit_after_variable(text).unwrap_or_else(|| text.to_string())
 }
 
 /// The value typed for a dimension, or why it cannot be used.
@@ -848,9 +854,10 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
         if editor_box(world, field) != Some(open.entity) {
             return;
         }
-        match value_for(world, open.id, &text) {
+        let typed = value_text(&text);
+        match value_for(world, open.id, &typed) {
             Ok(v) => {
-                set_value(world, open.id, v, &text);
+                set_value(world, open.id, v, &typed);
                 close_editor(world, false);
                 open_next_editor(world);
             }
@@ -1054,6 +1061,9 @@ mod tests {
         let (app, dim) = variables_app();
         let w = app.world();
         assert_eq!(value_for(w, dim, "#above + 2 mm"), Ok(12.0));
+        // "25 mm" with the number replaced by a variable: the unit left after it goes.
+        assert_eq!(value_text("#above mm"), "#above");
+        assert_eq!(value_for(w, dim, &value_text("#above mm")), Ok(10.0));
         let below = value_for(w, dim, "#below").unwrap_err();
         assert!(below.contains("below this sketch"), "{below}");
         assert_eq!(
