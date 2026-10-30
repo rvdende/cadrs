@@ -407,12 +407,7 @@ pub fn sync_strip(
                 return;
             };
             let t = world.resource::<Theme>().clone();
-            // On a board in a Part Studio: under the view cube.
-            let top = if world.resource::<Eda2d>().plane().is_some() {
-                232.0
-            } else {
-                48.0
-            };
+            let top = 48.0;
             let name: Cow<'static, str> = match mode {
                 Mode::Schematic => "eda-schematic-tools".into(),
                 _ => "eda-layout-tools".into(),

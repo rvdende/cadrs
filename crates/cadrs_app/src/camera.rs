@@ -53,7 +53,7 @@ pub const MAX_SCALE: f32 = 1e3;
 /// viewport, a mild perspective like Onshape's).
 pub const FOCAL_PX: f32 = 1700.0;
 
-/// How the parts are drawn (P3E.3a, TD6.5, PS2.9, X14): the view cube menu's render modes, per
+/// How the parts are drawn (P3E.3a, TD6.5, PS2.9, X14): the View options menu's render modes, per
 /// tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum RenderMode {
@@ -136,7 +136,7 @@ impl RenderMode {
     }
 }
 
-/// The standard orientations (view cube faces, Shift+1…7).
+/// The standard orientations (view ball knobs, Shift+1…7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandardView {
     Front,
@@ -367,7 +367,7 @@ impl ViewState {
         self.focus = pivot + q * (self.focus - pivot);
     }
 
-    /// Rotates by fixed angles about the screen axes (view cube arrows, arrow keys): positive
+    /// Rotates by fixed angles about the screen axes (view ball arrows, arrow keys): positive
     /// `yaw` turns the model to the right, positive `pitch` tips its top toward the viewer.
     pub fn rotate_by(&mut self, yaw: f32, pitch: f32) {
         self.rotate_screen(yaw, pitch);
@@ -674,7 +674,7 @@ mod tests {
         a.distance(b) < 1e-4
     }
 
-    /// A3.5: the view cube's named views are the drawings' named views, so an assembly's (or a
+    /// A3.5: the View options menu's named views are the drawings' named views, so an assembly's (or a
     /// Part Studio's) orientation on the cube is the orientation its drawing views get.
     #[test]
     fn view_cube_views_are_the_drawing_views() {

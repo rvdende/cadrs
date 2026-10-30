@@ -353,7 +353,7 @@ fn deactivate_outside_documents(mut q: Query<&mut Camera, With<DrawingCamera>>) 
 
 /// Turns the sheet camera on for Drawing tabs (and the occluded-scene camera off, as they
 /// share an order: `crate::viewport::occluded_camera_when_drawn`) and hides the Part Studio
-/// chrome: the feature panel, view cube, the right-edge panel strip and the viewport tools.
+/// chrome: the feature panel, view ball, the right-edge panel strip and the viewport tools.
 #[allow(clippy::type_complexity)]
 fn sync_drawing_chrome(
     kind: Res<ActiveKind>,
@@ -384,7 +384,7 @@ fn sync_drawing_chrome(
             }
         }
         "view-cube" | "right-panel-strip" | "origin" => {
-            // P3H.3: a PCB Studio keeps the view cube and has its own right-edge toggles.
+            // P3H.3: a PCB Studio keeps the view ball and has its own right-edge toggles.
             let pcb = *kind == ActiveKind::PcbStudio && (name.as_str() != "view-cube" || flat2d);
             let v = if kind.is_flat() || pcb {
                 Visibility::Hidden
@@ -393,9 +393,11 @@ fn sync_drawing_chrome(
             };
             vis.set_if_neq(v);
         }
-        // The tab bar's view tools (`crate::document`): the bar's room goes to the tabs.
-        "view-tools" => {
-            let d = if kind.is_flat() || *kind == ActiveKind::PcbStudio {
+        // The tab bar's view tools (`crate::document`): the bar's room goes to the tabs. A PCB
+        // Studio's 3D view keeps View options.
+        "view-tools" | "view-tools-divider" | "render-mode" => {
+            let pcb = *kind == ActiveKind::PcbStudio && (name.as_str() == "view-tools" || flat2d);
+            let d = if kind.is_flat() || pcb {
                 Display::None
             } else {
                 Display::Flex

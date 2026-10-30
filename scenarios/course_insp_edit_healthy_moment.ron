@@ -17,7 +17,7 @@
 // 06 right-click in the Repair panel: Zoom to fit, Isometric (IR3.7).
 // 07 Isometric.
 // 08 Zoom to fit.
-// 09 the Repair panel's own view cube, its Top face clicked: the Repair view from above.
+// 09 the Repair panel's own view ball, its Z knob clicked: the Repair view from above.
 // 10 the tab bar's Repair icon closes the panel; the main view has the whole width again.
 Scenario(
     start: Some("document"),
@@ -67,7 +67,7 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("08-zoom-to-fit"),
-        Click(ui_at("repair-view-cube", 0.5, 0.35)),
+        Click(ui_at("repair-view-cube", 0.5, 0.28)),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("09-repair-cube-top"),

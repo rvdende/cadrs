@@ -3,7 +3,7 @@
 // download │ sync, create assembly │ Search, magnifier, ✕, gear, ?; Export and Create assembly
 // greyed with no board) and `ex2-step4-import-ecad-dialog.png` (the empty studio's hint).
 // 01 the + menu with Create PCB Studio enabled (its icon); 02 the new "PCB Studio 1" tab: the
-//    toolbar, the Boards and Components sections (empty), the centred hint, the view cube and the
+//    toolbar, the Boards and Components sections (empty), the centred hint, the view ball and the
 //    two right-edge toggles; 03 the greyed Export tooltip; 04 the tab's context menu (Delete,
 //    Rename…, Properties…; Open in new window and Move to document… disabled as for other tabs);
 // 05 Properties… (type PCB Studio); 06 undo (Ctrl+Z) removes the tab, 07 redo brings it back.

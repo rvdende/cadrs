@@ -1,4 +1,4 @@
-//! The view cube menu's camera and render options (P3E.3a, TD6.5, PS2.9, X14), beyond the
+//! The View options menu's camera and render options (P3E.3a, TD6.5, PS2.9, X14), beyond the
 //! standard views:
 //!
 //! - **Render modes** (per tab, kept with the tab's view, [`RenderMode`]): Shaded with edges

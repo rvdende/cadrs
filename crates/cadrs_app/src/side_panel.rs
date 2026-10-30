@@ -59,7 +59,7 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
 }
 
 /// The side panels' frame: a floating glass panel, full height on the viewport's right,
-/// beside it rather than over it, so the graphics area (and the view cube in its corner)
+/// beside it rather than over it, so the graphics area (and the view ball in its corner)
 /// shrinks to make room (P3.6).
 pub(crate) fn side_panel_node(t: &Theme) -> impl Bundle {
     (

@@ -14,7 +14,7 @@
 //!   to show another, right-click → Delete this board) and **Components** (one node per board;
 //!   clicking it shows that board and lists its packages; clicking a package opens the
 //!   **component view**, PCB4.5).
-//! - **Viewport** ([`view`]): the shown board in 3D with the view cube and camera, each
+//! - **Viewport** ([`view`]): the shown board in 3D with the view ball and camera, each
 //!   component as its library representation; or, in the component view, one package on a grid
 //!   floor. Clicking a component selects it (PCB4.6). An empty studio shows a centred hint.
 //! - **Right edge**: two toggles, Component properties and Bill of materials, dock their panes

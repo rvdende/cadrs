@@ -8,7 +8,7 @@
 //!   <entry>", with an open-in-new icon (disabled: cadrs has one window) and a "?".
 //! - **Its own camera.** The parts are drawn by a camera of their own on
 //!   [`REPAIR_LAYER`] into an image the panel shows (at the panel's size), with their edges and
-//!   a view cube of its own (the cube's scene seen from the Repair view). Right-drag orbits,
+//!   a view ball of its own (the ball's scene seen from the Repair view). Right-drag orbits,
 //!   middle-drag pans, the wheel zooms; right-click for **Zoom to fit** and **Isometric**
 //!   (IR3.7).
 //! - **Synchronize view** (IR3.5, on by default): the two views turn, pan and zoom together.
@@ -101,7 +101,7 @@ pub struct RepairEdgeGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct RepairHighlightGizmos;
 
-/// The Repair view cube's rotate arrows, drawn for the Repair view (Final regression judge: the
+/// The Repair view ball's ring, drawn for the Repair view (Final regression judge: the
 /// main cube's arrows, seen from the Repair view, lost their shape after an orbit).
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct RepairCubeArcGizmos;
@@ -120,7 +120,7 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     config.render_layers = RenderLayers::layer(REPAIR_LAYER);
     let (config, _) = store.config_mut::<RepairCubeArcGizmos>();
     config.render_layers = RenderLayers::layer(crate::view_cube::REPAIR_CUBE_ARC_LAYER);
-    config.line.width = 12.0;
+    config.line.width = crate::view_cube::RING_WIDTH;
 }
 
 fn draw_repair_cube_arcs(
@@ -130,7 +130,7 @@ fn draw_repair_cube_arcs(
 ) {
     use crate::view_cube::CubeColors;
     if repair.open {
-        crate::view_cube::draw_cube_arcs(&mut arcs, &repair.view, theme.view_cube_arc());
+        crate::view_cube::draw_ball_ring(&mut arcs, &repair.view, theme.view_cube_arc(), &[]);
     }
 }
 
@@ -600,7 +600,7 @@ fn sync_panel(
                 b.spawn((
                     Name::new("repair-view-cube"),
                     RepairCubeImage,
-                    ImageNode::new(cube),
+                    crate::view_cube::BallImage(cube),
                     Node {
                         position_type: PositionType::Absolute,
                         right: Val::Px(0.0),

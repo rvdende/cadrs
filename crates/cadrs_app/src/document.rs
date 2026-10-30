@@ -744,7 +744,8 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     });
 }
 
-/// The readouts at the bottom right of the 3D view: a selected region's area, a measurement.
+/// The readouts at the bottom right of the 3D view, left of the view ball: a selected region's
+/// area, a measurement.
 #[derive(Component)]
 pub struct ViewportReadouts;
 
@@ -756,7 +757,8 @@ fn viewport_readouts(vp: &mut ChildSpawnerCommands, t: &Theme) {
         ViewportReadouts,
         Node {
             position_type: PositionType::Absolute,
-            right: Val::Px(0.0),
+            // Left of the view ball.
+            right: Val::Px(crate::view_cube::CUBE_WIDGET.x),
             bottom: Val::Px(0.0),
             min_height: Val::Px(32.0),
             padding: UiRect::new(Val::Px(10.0), Val::Px(2.0), Val::Px(3.0), Val::Px(3.0)),
@@ -799,12 +801,27 @@ fn sync_viewport_readouts(
 
 /// The view tools at the tab bar's right end, after a divider: Section view, Measure, Analysis
 /// tools, Mass properties, the Simulation panel and, with a sheet metal model, the Sheet metal
-/// table ([`crate::sheetmetal_table`]). Hidden where there is no 3D view (`crate::drawing`).
+/// table ([`crate::sheetmetal_table`]); then View options ([`crate::view_cube`]). Hidden where
+/// there is no 3D view, and but for View options in a PCB Studio (`crate::drawing`).
 fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
+    bar.spawn((
+        Name::new("view-tools-divider"),
+        Node {
+            width: Val::Px(1.0),
+            height: Val::Px(18.0),
+            align_self: AlignSelf::Center,
+            flex_shrink: 0.0,
+            margin: UiRect::horizontal(Val::Px(4.0)),
+            ..default()
+        },
+        BackgroundColor(t.separator),
+        Pickable::IGNORE,
+    ));
     bar.spawn((
         Name::new("view-tools"),
         Node {
             flex_shrink: 0.0,
+            align_self: AlignSelf::Stretch,
             align_items: AlignItems::Stretch,
             column_gap: Val::Px(2.0),
             ..default()
@@ -812,17 +829,6 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
         Pickable::IGNORE,
     ))
     .with_children(|g| {
-        g.spawn((
-            Node {
-                width: Val::Px(1.0),
-                height: Val::Px(18.0),
-                align_self: AlignSelf::Center,
-                margin: UiRect::horizontal(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(t.separator),
-            Pickable::IGNORE,
-        ));
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
@@ -849,6 +855,7 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
             .insert(view_tool_node(t));
         }
     });
+    crate::view_cube::spawn_view_options(bar, t);
 }
 
 /// The node of a button among the tab bar's view tools (a [`ToolButton`] as tall as the bar).

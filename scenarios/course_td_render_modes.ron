@@ -1,4 +1,4 @@
-// P3E.3a (TD6.5, PS2.9, X14): the view cube menu's camera and render options, on the drawing
+// P3E.3a (TD6.5, PS2.9, X14): the View options menu's camera and render options, on the drawing
 // bracket (`samples::drawing_bracket`: a plate with four holes and rounded corners, an upright
 // with a hole and a chamfer), every step through the UI:
 // 01 the default, Shaded with edges.

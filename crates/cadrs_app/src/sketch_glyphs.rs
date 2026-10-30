@@ -1107,7 +1107,7 @@ pub(crate) struct GlyphBox(usize);
 #[derive(Component)]
 pub(crate) struct SnapSquare;
 
-/// A glyph shows while its box is inside the viewport and clear of the view cube.
+/// A glyph shows while its box is inside the viewport and clear of the view ball.
 fn glyph_visibility(rect: &ViewportRect, center: Vec2) -> Visibility {
     let b = Rect::from_center_size(center, Vec2::splat(BOX));
     let cube = crate::view_cube::cube_rect(rect.0);
