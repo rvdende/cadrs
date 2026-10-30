@@ -382,8 +382,11 @@ pub fn drive(world: &mut World) {
             "scenario {name} finished: {n} screenshot(s) in {}",
             dir.display()
         );
-        // Everything the app saved is on disk (saves are synchronous): a relaunch scenario
-        // (`data_from`) may now take its documents.
+        // Everything the app saved is on disk (its saves in the background waited for): a
+        // relaunch scenario (`data_from`) may now take its documents.
+        if let Some(flush) = world.get_resource::<crate::BeforeComplete>() {
+            (flush.0)();
+        }
         if let Err(e) = cadrs_fs::write(dir.join(crate::COMPLETE_MARKER), b"") {
             warn!("cannot mark {} complete: {e}", dir.display());
         }

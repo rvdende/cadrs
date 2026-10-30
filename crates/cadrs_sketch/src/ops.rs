@@ -121,6 +121,10 @@ pub enum SketchOp {
         offset: f64,
         along: f64,
     },
+    /// Measures an angle dimension round the outside of its angle (`outside`: more than half a
+    /// turn) or between its rays, as its label was dragged (#96): the other way round, 360°
+    /// less. The geometry stays as it is.
+    SetAngleOutside { id: DimensionId, outside: bool },
     /// Adds constraints described by positions (see [`ConstraintSpec`]). Specs that do not
     /// resolve (the geometry is not there) and duplicates are skipped.
     AddConstraints(Vec<ConstraintSpec>),
@@ -286,7 +290,9 @@ impl SketchOp {
             SketchOp::AddConstraint { label, .. } => (*label).into(),
             SketchOp::SetDimension { .. } => "Dimension".into(),
             SketchOp::SetDimensionValue { .. } => "Edit dimension".into(),
-            SketchOp::MoveDimensionLabel { .. } => "Move dimension".into(),
+            SketchOp::MoveDimensionLabel { .. } | SketchOp::SetAngleOutside { .. } => {
+                "Move dimension".into()
+            }
             SketchOp::SetDimensionDriven { driven: false, .. } => {
                 "Change to driving dimension".into()
             }
@@ -327,20 +333,32 @@ impl SketchOp {
     /// layer restores it.
     pub fn apply(&self, s: &mut Sketch) -> Result<(), String> {
         self.pre_move(s);
-        let old: Vec<(DimensionId, f64)> = s.dimensions.iter().map(|(k, d)| (k, d.value)).collect();
+        // Which way each angle turns, as the geometry is before the edit (and a new one's, as it
+        // is before the solve).
+        s.fix_angle_turns();
+        let old: Vec<(DimensionId, Dimension)> =
+            s.dimensions.iter().map(|(k, d)| (k, *d)).collect();
         self.apply_raw(s)?;
+        s.fix_angle_turns();
         let changed: Vec<(DimensionId, f64, f64)> = old
             .into_iter()
-            .filter_map(|(k, v)| {
+            .filter_map(|(k, was)| {
                 let d = s.dimensions.get(k)?;
+                let v = value_as_now(&was, d);
                 (d.value != v && d.kind.quantity() != crate::units::Quantity::Count)
                     .then_some((k, v, d.value))
             })
             .collect();
         let edited = (!changed.is_empty()).then(|| s.clone());
+        swing_angles(s, &changed);
+        // An angle turned far goes round in steps, as a hinge would, what hangs on it following.
+        let far = changed.iter().any(|(k, old, new)| {
+            matches!(s.dimensions[*k].kind, crate::DimensionKind::Angle { .. })
+                && (new - old).abs() > FAR_TURN
+        });
         let mut report = self.solve(s);
         if let Some(edited) = edited
-            && misses(&report, &changed)
+            && (far || misses(&report, &changed))
             && let Some((t, r)) = self.solve_in_steps(&edited, &changed)
         {
             *s = t;
@@ -379,10 +397,15 @@ impl SketchOp {
             let mut s = edited.clone();
             let mut report = None;
             for k in 1..=n {
-                let t = k as f64 / n as f64;
+                let (t0, t) = ((k - 1) as f64 / n as f64, k as f64 / n as f64);
+                let mut swung = Vec::new();
                 for (id, old, new) in changed {
-                    s.dimensions[*id].value = old + (new - old) * t;
+                    let kind = s.dimensions[*id].kind;
+                    let v = step_value(kind, *old, *new, t);
+                    s.dimensions[*id].value = v;
+                    swung.push((*id, step_value(kind, *old, *new, t0), v));
                 }
+                swing_angles(&mut s, &swung);
                 let r = self.solve(&mut s);
                 if misses(&r, changed) {
                     report = None;
@@ -813,13 +836,19 @@ impl SketchOp {
                 let existing = s
                     .dimensions
                     .iter()
-                    .find(|(_, d)| d.kind == dimension.kind)
+                    .find(|(_, d)| d.kind.same(&dimension.kind))
                     .map(|(k, _)| k);
+                // (A new one measures the side the geometry is on: positive.)
+                let before = existing.map_or(1.0, |k| s.dimensions[k].value);
                 match existing {
                     Some(k) => s.dimensions[k] = *dimension,
                     None => {
                         s.dimensions.insert(*dimension);
                     }
+                }
+                // A negative distance (or one positive again) puts its point on the other side.
+                if dimension.kind.signed() && (before < 0.0) != (dimension.value < 0.0) {
+                    flip_side(s, dimension.kind);
                 }
                 Ok(())
             }
@@ -833,7 +862,12 @@ impl SketchOp {
                     // A polygon's side count rebuilds it (S7.4).
                     return crate::entity::set_polygon_sides(s, circle, value.round() as u32);
                 }
+                let (kind, before) = (d.kind, d.value);
                 d.value = *value;
+                // A distance turning negative (or back) puts its point on the other side.
+                if kind.signed() && (before < 0.0) != (*value < 0.0) {
+                    flip_side(s, kind);
+                }
                 Ok(())
             }
             SketchOp::SetDimensionExpr { id, expr } => {
@@ -845,13 +879,39 @@ impl SketchOp {
                 Ok(())
             }
             SketchOp::SetDimensionDriven { id, driven } => {
-                let kind = s.dimensions.get(*id).ok_or("the dimension is gone")?.kind;
-                let measured = crate::dimension::measure(s, kind);
+                let d = *s.dimensions.get(*id).ok_or("the dimension is gone")?;
+                // (On the side it was: a negative distance stays negative, an angle measured
+                // outside stays outside.)
+                let measured = crate::dimension::measured_value(s, &d);
                 let d = &mut s.dimensions[*id];
                 if !*driven && let Some(v) = measured {
                     d.value = v;
                 }
                 d.driven = *driven;
+                Ok(())
+            }
+            SketchOp::SetAngleOutside { id, outside } => {
+                // (Its expression would set it back to the variable's value.)
+                if s.expressions.iter().any(|(d, _)| d == id) {
+                    return Err("an angle set by an expression keeps its value".into());
+                }
+                let d = *s.dimensions.get(*id).ok_or("the dimension is gone")?;
+                if !matches!(d.kind, crate::DimensionKind::Angle { .. }) {
+                    return Err("only an angle is measured outside".into());
+                }
+                if outside_angle(d.value) == *outside {
+                    return Ok(());
+                }
+                // The same rays measured round the other way, 360° less: 90° one way is 270°
+                // the other (turning the other way when it was drawn its own way).
+                let sweep = crate::dimension::angle_sweep(s, &d).ok_or("the lines are gone")?;
+                let d = &mut s.dimensions[*id];
+                if let crate::DimensionKind::Angle { ccw, .. } = &mut d.kind
+                    && sweep >= 0.0
+                {
+                    *ccw = ccw.map(|c| !c);
+                }
+                d.value = 360.0 - sweep.abs();
                 Ok(())
             }
             SketchOp::MoveDimensionLabel { id, offset, along } => {
@@ -1129,6 +1189,10 @@ impl SketchOp {
 /// The most steps [`SketchOp::solve_in_steps`] splits a dimension change into.
 const MAX_DIMENSION_STEPS: usize = 8;
 
+/// An angle changed by more than this (degrees) is solved in steps, whether or not one solve
+/// gets there: going round as a hinge does, not jumping across (#96).
+const FAR_TURN: f64 = 90.0;
+
 /// Whether the solve left any of the `changed` dimensions unsolved.
 fn misses(report: &solve::SolveReport, changed: &[(DimensionId, f64, f64)]) -> bool {
     changed
@@ -1192,13 +1256,19 @@ fn solve_moving_first(s: &mut Sketch, order: &[(PointId, f64)]) {
     solve::solve_weighted(s, order, 25.0);
 }
 
-/// A dimension's value must be positive (and an angle less than 180°).
-fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
-    if !v.is_finite() || v <= 0.0 {
-        return Err("a dimension must be positive".into());
+/// Whether `v` is a value dimension `d` can take: an angle any (a hinge's turn, #96), a
+/// distance between points or from a point to a line anything but 0 (negative: the other
+/// side), any other dimension positive.
+pub fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
+    if !v.is_finite() {
+        return Err("a dimension must be a number".into());
     }
-    if matches!(d.kind, crate::DimensionKind::Angle { .. }) && v >= 180.0 {
-        return Err("an angle must be less than 180°".into());
+    if d.kind.signed() {
+        if v == 0.0 {
+            return Err("a distance cannot be 0".into());
+        }
+    } else if v <= 0.0 && !matches!(d.kind, crate::DimensionKind::Angle { .. }) {
+        return Err("a dimension must be positive".into());
     }
     if matches!(d.kind, crate::DimensionKind::Sides { .. }) {
         let n = v.round();
@@ -1210,6 +1280,224 @@ fn check_value(d: &Dimension, v: f64) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The value a fraction `t` of the way from `old` to `new`, stepped as the solver holds the
+/// geometry ([`crate::DimensionKind::solved_value`]): from a distance's size to the other
+/// side's without passing through 0; an angle turning on round.
+fn step_value(kind: crate::DimensionKind, old: f64, new: f64, t: f64) -> f64 {
+    let (a, b) = (kind.solved_value(old), kind.solved_value(new));
+    let x = a + (b - a) * t;
+    if kind.signed() && new < 0.0 { -x } else { x }
+}
+
+/// Swings each angle in `changed` (its value before and now) round as a hinge before the solve
+/// (#96): from where the geometry has it to its value now ([`swing`]), keeping its line's
+/// length (the solve alone stretches a line it swings far).
+fn swing_angles(s: &mut Sketch, changed: &[(DimensionId, f64, f64)]) {
+    for (id, before, now) in changed {
+        let Some(d) = s.dimensions.get(*id).copied() else {
+            continue;
+        };
+        if !matches!(d.kind, crate::DimensionKind::Angle { .. }) {
+            continue;
+        }
+        // Where the geometry has it: the turn nearest its value before.
+        let before = Dimension {
+            value: *before,
+            ..d
+        };
+        if let Some(at) = crate::dimension::measured_value(s, &before) {
+            swing(s, d.kind, now - at, true);
+        }
+    }
+}
+
+/// Turns angle dimension `kind`'s second line `by` degrees its way round about where the lines
+/// meet, or (`first_too`) its first line back as far when the second is a plane axis. Only a
+/// free arm turns: a line with nothing else on its ends but at the corner (a mirror axis the
+/// arcs end on is left to the solve, which swings them along, #93). Whether it turned.
+fn swing(s: &mut Sketch, kind: crate::DimensionKind, by: f64, first_too: bool) -> bool {
+    let crate::DimensionKind::Angle {
+        a,
+        b,
+        flip_a,
+        flip_b,
+        ..
+    } = kind
+    else {
+        return false;
+    };
+    let ccw = crate::dimension::angle_ccw(s, kind);
+    let rays = crate::dimension::angle_rays(s, a, b, flip_a, flip_b);
+    let (Some(ccw), Some((x, _, _))) = (ccw, rays) else {
+        return false;
+    };
+    let (line, by) = match (b, a) {
+        (CurveRef::Curve(l), _) => (l, by),
+        (_, CurveRef::Curve(l)) if first_too => (l, -by),
+        _ => return false,
+    };
+    let Some((p, q)) = s.curve_ends(line) else {
+        return false;
+    };
+    let free = |k: PointId| s.pos(k).distance(x) < 1e-6 || s.curves_at(k).all(|c| c == line);
+    if !(free(p) && free(q)) {
+        return false;
+    }
+    let (sin, cos) = (if ccw { by } else { -by }).to_radians().sin_cos();
+    let turn = |v: Vec2| x + (v - x) * cos + (v - x).perp() * sin;
+    let moves = [(p, turn(s.pos(p))), (q, turn(s.pos(q)))];
+    move_points(s, &moves);
+    true
+}
+
+/// The angle dimensions on `line` (#96: hinges), with whether it is their first line and how far
+/// they turn now, for [`keep_hinges`] once the line is turned round.
+fn hinges_on(s: &Sketch, line: CurveId) -> Vec<(DimensionId, bool, f64)> {
+    s.dimensions
+        .iter()
+        .filter_map(|(k, d)| {
+            let crate::DimensionKind::Angle { a, b, .. } = d.kind else {
+                return None;
+            };
+            let first = a == CurveRef::Curve(line);
+            (first || b == CurveRef::Curve(line))
+                .then(|| Some((k, first, crate::dimension::angle_turn(s, d.kind)?)))
+                .flatten()
+        })
+        .collect()
+}
+
+/// Keeps each of `hinges` ([`hinges_on`]) as it turned once their line is turned round (a
+/// negative length): on its first line, the second swings round with it; otherwise (or where it
+/// can't swing) the turned line's ray is taken the line's other way, so the angle still holds and
+/// the solve doesn't turn the line back.
+fn keep_hinges(s: &mut Sketch, hinges: &[(DimensionId, bool, f64)]) {
+    for &(k, first, was) in hinges {
+        let Some(d) = s.dimensions.get(k).copied() else {
+            continue;
+        };
+        let Some(now) = crate::dimension::angle_turn(s, d.kind) else {
+            continue;
+        };
+        let by = was - now;
+        if first && swing(s, d.kind, by, false) {
+            continue;
+        }
+        if (by.rem_euclid(360.0) - 180.0).abs() < 1e-6
+            && let crate::DimensionKind::Angle { flip_a, flip_b, .. } = &mut s.dimensions[k].kind
+        {
+            let flip = if first { flip_a } else { flip_b };
+            *flip = !*flip;
+        }
+    }
+}
+
+/// Dimension `was`'s value measured as `now` measures it: an angle measured the other way
+/// round since (its label dragged outside, #96) the same turn the other way, the one nearest
+/// its value now (270° anticlockwise is 90° clockwise: nothing turned).
+fn value_as_now(was: &Dimension, now: &Dimension) -> f64 {
+    match (was.kind, now.kind) {
+        (
+            crate::DimensionKind::Angle { ccw: Some(a), .. },
+            crate::DimensionKind::Angle { ccw: Some(b), .. },
+        ) if a != b => {
+            let t = -was.value;
+            t + 360.0 * ((now.value - t) / 360.0).round()
+        }
+        _ => was.value,
+    }
+}
+
+/// Whether an angle of `v` degrees is measured round the outside of its rays: more than half
+/// a turn either way, whole turns left out (#96).
+pub fn outside_angle(v: f64) -> bool {
+    v.abs() % 360.0 > 180.0
+}
+
+/// An angle of `v` degrees measured round the other way, as its label dragged across shows it:
+/// 360° less, whole turns left out.
+pub fn other_way(v: f64) -> f64 {
+    360.0 - v.abs() % 360.0
+}
+
+/// Puts the point a signed distance measures on the other side (#96): mirrored through the
+/// first point (horizontally, vertically, or straight), through the origin, or across the
+/// line (the line moved across a point that can't move). The solve then sets the size.
+fn flip_side(s: &mut Sketch, kind: crate::DimensionKind) {
+    use crate::DimensionKind as K;
+    let pos = |s: &Sketch, p: PointId| s.points.get(p).map(|q| q.pos);
+    match kind {
+        K::Horizontal { a, b } | K::Vertical { a, b } | K::Aligned { a, b } => {
+            let (Some(pa), Some(pb)) = (pos(s, a), pos(s, b)) else {
+                return;
+            };
+            let to = match kind {
+                K::Horizontal { .. } => Vec2::new(2.0 * pa.x - pb.x, pb.y),
+                K::Vertical { .. } => Vec2::new(pb.x, 2.0 * pa.y - pb.y),
+                _ => pa * 2.0 - pb,
+            };
+            // A line's own length turns the line round: the angles hinged on it follow.
+            let line = s
+                .curves
+                .iter()
+                .find(|(_, c)| {
+                    matches!(c.kind, CurveKind::Line { a: p, b: q } if (p, q) == (a, b) || (p, q) == (b, a))
+                })
+                .map(|(k, _)| k);
+            let hinges = line.map_or_else(Vec::new, |l| hinges_on(s, l));
+            move_points(s, &[(b, to)]);
+            keep_hinges(s, &hinges);
+        }
+        K::OriginAligned { p } => {
+            if let Some(q) = pos(s, p) {
+                move_points(s, &[(p, -q)]);
+            }
+        }
+        // Across a plane axis: the point mirrored (the origin, the axes' own point, stays).
+        K::PointLine {
+            p: PointRef::Point(k),
+            line: line @ (CurveRef::XAxis | CurveRef::YAxis),
+        } => {
+            if let Some(q) = pos(s, k) {
+                let to = if line == CurveRef::XAxis {
+                    Vec2::new(q.x, -q.y)
+                } else {
+                    Vec2::new(-q.x, q.y)
+                };
+                move_points(s, &[(k, to)]);
+            }
+        }
+        K::PointLine { p, line } => {
+            let CurveRef::Curve(l) = line else { return };
+            let Some((la, lb)) = s.curve_ends(l) else {
+                return;
+            };
+            let (Some(a), Some(b)) = (pos(s, la), pos(s, lb)) else {
+                return;
+            };
+            let d = b - a;
+            if d.length() < 1e-12 {
+                return;
+            }
+            let here = match p {
+                PointRef::Point(k) => pos(s, k),
+                PointRef::Origin => Some(Vec2::ZERO),
+            };
+            let Some(q) = here else { return };
+            let foot = a + d * ((q - a).dot(d) / d.dot(d));
+            match p {
+                PointRef::Point(k) => move_points(s, &[(k, foot * 2.0 - q)]),
+                // The origin stays: the line goes across it.
+                PointRef::Origin => {
+                    let shift = (q - foot) * 2.0;
+                    move_points(s, &[(la, a + shift), (lb, b + shift)]);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn set_radii(s: &mut Sketch, radii: &[(CurveId, f64)]) {
@@ -1355,6 +1643,7 @@ mod tests {
                 b: c(axis),
                 flip_a: true,
                 flip_b: false,
+                ccw: None,
             },
             45.0,
             53.0,

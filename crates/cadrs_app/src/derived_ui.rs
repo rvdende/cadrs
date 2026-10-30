@@ -1,8 +1,8 @@
 //! P3G.4: the **Derived** feature's dialog and its place in the Feature list
 //! (`derived-and-linking.md` DV3, DV1.5, ER1.1; the model is [`cadrs_core::derived`]).
 //!
-//! - **Opening.** The icon rail's **Insert** (a Part Studio's, as Onshape's "Insert" panel of a
-//!   Part Studio) inserts "Derived N" and opens its dialog; double-click or Edit… reopens it
+//! - **Opening.** The toolbar's **Derived** inserts "Derived N" and opens its dialog;
+//!   double-click or Edit… reopens it
 //!   (DV3.6). Every change is one command ([`cadrs_core::derived::SetDerived`]); ✓ squashes them
 //!   into one undo step, ✕ takes them all back.
 //! - **Source** (DV3.3 step 1, ER1.1): tabs **Current document | Other documents**. The Current
@@ -88,7 +88,6 @@ impl Plugin for DerivedPlugin {
             .add_observer(on_graph_pick)
             .add_observer(on_list_activate)
             .add_observer(on_list_remove)
-            .add_observer(on_rail_insert)
             .add_observer(on_child_eye)
             .add_observer(on_components_disclosure);
     }
@@ -162,28 +161,6 @@ struct AnchorPick(uuid::Uuid);
 
 // ---------------------------------------------------------------------------------------------
 // Session
-
-/// The icon rail's Insert: a Derived feature in a Part Studio (the Insert dialog in an assembly).
-fn on_rail_insert(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
-    if !q.get(a.entity).is_ok_and(|n| n.as_str() == "rail-insert") {
-        return;
-    }
-    commands.queue(|world: &mut World| {
-        let kind = world.get_resource::<ActiveDocument>().and_then(|d| {
-            d.active_element().map(|e| {
-                (
-                    e.assembly_model().is_some(),
-                    matches!(e.kind, ElementKind::PartStudio { .. }),
-                )
-            })
-        });
-        match kind {
-            Some((true, _)) => crate::assembly::insert::open_insert_dialog(world),
-            Some((_, true)) => begin_derived(world),
-            _ => {}
-        }
-    });
-}
 
 fn close_other_sessions(world: &mut World) {
     if world.contains_resource::<crate::extrude::ExtrudeSession>() {

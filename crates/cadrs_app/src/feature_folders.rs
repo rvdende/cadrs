@@ -77,8 +77,7 @@ pub fn folder_row(t: &Theme, id: FeatureId, name: &str, count: usize, open: bool
     folder_row_counted(t, id, name, count.to_string(), open, false)
 }
 
-/// [`folder_row`] with the count as shown: "3 of 11" while the list is filtered (P3.11, P3.9
-/// judge: a filtered folder showed its full count).
+/// [`folder_row`] with the count as shown.
 /// Rolled back (P3D.1: its features are below the rollback bar): grey and italic, as they are.
 pub fn folder_row_counted(
     t: &Theme,

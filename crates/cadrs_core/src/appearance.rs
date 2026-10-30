@@ -200,7 +200,7 @@ pub fn default_appearance(part: &Part, props: &[PartProps]) -> Appearance {
     }
 }
 
-/// Where a face's appearance comes from (the Appearances panel shows it).
+/// Where a face's appearance comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Part,

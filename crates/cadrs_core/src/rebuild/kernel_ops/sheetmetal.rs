@@ -1430,7 +1430,7 @@ impl Rebuilder {
             .map(|p| p.part.solid.clone());
         if let Some(tool) = folded.next() {
             o.stage = Some(Stage {
-                before: state.parts.iter().map(|p| p.part.clone()).collect(),
+                before: state.parts.iter().map(|p| (*p.part).clone()).collect(),
                 tool,
                 more: folded.collect(),
                 remove: false,

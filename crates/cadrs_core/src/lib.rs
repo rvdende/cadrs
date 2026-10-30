@@ -93,8 +93,8 @@ pub use document::{
 };
 pub use ids::{DocumentId, ElementId, FeatureId, FolderId, LabelId, PartId};
 pub use library::{
-    DocumentEntry, DocumentMeta, Filter, FolderEntry, ItemType, LabelEntry, Library,
-    LibraryCommand, LibraryHistory, SortDir, SortKey, Timestamp,
+    DocumentEntry, DocumentMeta, Filter, FolderEntry, LabelEntry, Library, LibraryCommand,
+    LibraryHistory, SortDir, SortKey, Timestamp,
 };
 pub use material::Material;
 pub use parts::{Part, PartKind};

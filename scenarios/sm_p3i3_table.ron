@@ -1,7 +1,7 @@
 // Sheet metal table and flat view (P3I.3; SM1.2–SM1.4, SM13.1, SM13.2, SM13.5; compare
 // `help/feature-tools/sheetmetalflatpatterntable-02.png` and lesson `13-bend-and-joint-table`
 // frames t0016–t0052): a 100 × 60 × 40 block converted (T 2, R 3) with its four top edges bent.
-// The right strip's Sheet metal table and flat view button opens the panel: the context
+// The tab bar's Sheet metal table and flat view button opens the panel: the context
 // dropdown, the Bends and Other joints tables, the flat view with its cube, dashed centrelines
 // and bend labels. A row click selects the bend in the model and the flat (orange), a second
 // row adds to it, a click on a bend in the model selects its row, a click in the flat view on a

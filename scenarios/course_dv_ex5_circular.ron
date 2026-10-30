@@ -3,7 +3,7 @@
 // (`linked-ex dv1`) and is versioned; then A's Block tries to derive B's Part Studio 1.
 // 01 B: Derived 1 (A's Block at V1) in Part Studio 1.
 // 02 B's top-bar Create version: "Create version from Main", V1.
-// 03 A "Block source" opened; the icon rail's Insert: Derived 1's dialog, Other documents › My
+// 03 A "Block source" opened; the toolbar's Derived: Derived 1's dialog, Other documents › My
 //    documents › Block derived at V1: its "Part Studio 1" hovered.
 // 04 Part Studio 1 picked: refused with the red toast "Circular reference: Block source ›
 //    Block → Block derived › Part Studio 1 → Block source" (B's V1 holds a copy of A's Block);
@@ -29,7 +29,7 @@ Scenario(
         Custom("move-doc open Block source"),
         WaitFor("document-shell"),
         Key("F"),
-        Click(ui("rail-insert")),
+        Click(ui("derived")),
         WaitFor("derived-dialog"),
         Click(ui("derived-source-tabs-1")),
         Click(ui("derived-other-loc-mine")),

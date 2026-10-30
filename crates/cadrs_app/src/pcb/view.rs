@@ -1,5 +1,5 @@
 //! The PCB Studio viewport (PCB3.7, PCB4.5, PCB11.8): the active board in 3D through the main
-//! camera, so the view cube, the Camera menu and orbit, pan and zoom work as in a Part Studio.
+//! camera, so the view ball, the Camera menu and orbit, pan and zoom work as in a Part Studio.
 //!
 //! - **Board view.** Each board's meshes ([`cadrs_pcb::mesh::board_mesh`]: green board with its
 //!   holes, coloured components, dark translucent keep areas) are built once and cached per

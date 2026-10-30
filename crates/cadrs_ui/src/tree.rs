@@ -147,8 +147,8 @@ impl TreeItem {
         self
     }
 
-    /// A short right-aligned text after the label, in `color` (a feature's regeneration time,
-    /// P3.9), named `<row>-trailing`.
+    /// A short right-aligned text after the label, in `color` (a component's count, a load's
+    /// summary), named `<row>-trailing`.
     pub fn trailing(mut self, text: Option<String>, color: Color) -> Self {
         self.trailing = text.map(|t| (t, color));
         self

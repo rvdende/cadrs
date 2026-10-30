@@ -8,6 +8,8 @@ pub use applied::{
 pub use drawing::{EditDrawing, InsertElement};
 mod list;
 pub use list::{DeleteFolder, SetRollback, SetSuppressByVariable, SetSuppressed};
+mod part_folders;
+pub use part_folders::{CreatePartFolder, MovePartsToFolder, SetPartFolder, UnpackPartFolder};
 
 use cadrs_sketch::{CurveId, FaceName, PlaneRef, SketchOp, Vec2};
 
@@ -577,7 +579,7 @@ pub fn refresh_studio(doc: &mut Document, element: ElementId) {
     if let Ok(features) = part_studio_features(doc, element) {
         // The Variable Studios' variables are defined above the whole list.
         crate::variables::refresh(&base, features, &suppressed, &units);
-        crate::parts::regenerate_with(features, &context);
+        crate::parts::regenerate_studio(features, &context, element);
     }
 }
 

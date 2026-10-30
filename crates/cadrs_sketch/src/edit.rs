@@ -718,7 +718,8 @@ pub fn set_value_op(
     if !first || fixed || d.kind.quantity() != crate::units::Quantity::Length || measured <= 1e-9 {
         return set;
     }
-    let factor = value / measured;
+    // (A negative first value: its size scales, the value itself flips the side, #96.)
+    let factor = value.abs() / measured;
     if (factor - 1.0).abs() < 1e-12 {
         return set;
     }

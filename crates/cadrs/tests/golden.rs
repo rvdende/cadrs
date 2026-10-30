@@ -979,12 +979,6 @@ fn golden_course_ps3_folders() {
 
 #[test]
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_ps3_filter() {
-    run_scenario("course_ps3_filter");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_ps11_dependencies() {
     run_scenario("course_ps11_dependencies");
 }
@@ -1005,12 +999,6 @@ fn golden_course_ps2_search_tools() {
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_p6_cube_corner() {
     run_scenario("course_p6_cube_corner");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_ps2_regeneration_times() {
-    run_scenario("course_ps2_regeneration_times");
 }
 
 // P3.10: the Part Studios remainder, features.
@@ -1569,12 +1557,6 @@ fn golden_course_td_documents_import() {
 #[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
 fn golden_course_td_tab_folders() {
     run_scenario("course_td_tab_folders");
-}
-
-#[test]
-#[ignore = "headless screenshots; run with: cargo test -r -p cadrs -F app-tests --test golden -- --ignored"]
-fn golden_course_td_tab_manager() {
-    run_scenario("course_td_tab_manager");
 }
 
 #[test]

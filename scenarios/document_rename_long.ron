@@ -1,0 +1,22 @@
+// Renaming the document to a longer name: the field widens as the name is typed, so its start
+// stays in view (it kept the short name's width and scrolled the start out of sight), up to
+// 480 px, past which it scrolls. Typed one character a frame, the fastest the field can be fed.
+// 01 "Box" renamed; 02 typing on at its end, shot at once; 03 settled; 04 past 480 px.
+Scenario(
+    start: Some("document"),
+    steps: [
+        Wait(10),
+        Click(ui("document-name")),
+        Type("Box"),
+        Key("Enter"),
+        MoveTo(1300, 700),
+        Screenshot("01-short-name"),
+        Click(ui("document-name")),
+        Key("End"),
+        Type(" bracket for the left hinge"),
+        ScreenshotNow("02-typed-longer-at-once"),
+        Screenshot("03-typed-longer"),
+        Type(", revision C, with the slotted holes for M4 screws"),
+        Screenshot("04-past-the-widest"),
+    ],
+)

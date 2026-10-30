@@ -57,11 +57,16 @@ fn store() -> Option<Arc<dyn BlobStore>> {
 
 /// The key a snapshot of `features`' rebuild is kept under.
 pub fn snapshot_key(features: &[Feature]) -> BlobKey {
+    snapshot_key_of(final_key(features))
+}
+
+/// [`snapshot_key`] from the features' [`final_key`].
+fn snapshot_key_of(final_key: u64) -> BlobKey {
     BlobKey::of(&[
         b"cadrs session snapshot",
         GEOMETRY_FINGERPRINT.as_bytes(),
         &persist::FORMAT.to_le_bytes(),
-        &final_key(features).to_le_bytes(),
+        &final_key.to_le_bytes(),
     ])
 }
 
@@ -75,13 +80,21 @@ impl Rebuilder {
     /// Before rebuilding `features` for the app: their outputs from the store, unless this
     /// session has them. Returns how many outputs were restored.
     pub fn restore_snapshot(&mut self, features: &[Feature]) -> usize {
-        if !features.iter().any(Feature::is_part_feature)
-            || self.entries.contains_key(&final_key(features))
-        {
+        if !features.iter().any(Feature::is_part_feature) {
             return 0;
         }
+        let key = final_key(features);
+        if self.entries.contains_key(&key) {
+            return 0;
+        }
+        self.restore_snapshot_key(key)
+    }
+
+    /// [`Self::restore_snapshot`] of features whose [`final_key`] is `final_key` (not cached in
+    /// this session).
+    pub(super) fn restore_snapshot_key(&mut self, final_key: u64) -> usize {
         let Some(store) = store() else { return 0 };
-        let key = snapshot_key(features);
+        let key = snapshot_key_of(final_key);
         if !restorable(&key) {
             return 0;
         }
@@ -99,7 +112,10 @@ impl Rebuilder {
             .iter()
             .any(Feature::is_part_feature)
             .then(|| PendingSave {
-                key: snapshot_key(features),
+                // (The final key the rebuild just found, not another pass over the features.)
+                key: self
+                    .last_final
+                    .map_or_else(|| snapshot_key(features), snapshot_key_of),
                 outputs: self.snapshot_keys(features),
             })
     }

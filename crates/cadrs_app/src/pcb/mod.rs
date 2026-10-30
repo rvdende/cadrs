@@ -14,7 +14,7 @@
 //!   to show another, right-click → Delete this board) and **Components** (one node per board;
 //!   clicking it shows that board and lists its packages; clicking a package opens the
 //!   **component view**, PCB4.5).
-//! - **Viewport** ([`view`]): the shown board in 3D with the view cube and camera, each
+//! - **Viewport** ([`view`]): the shown board in 3D with the view ball and camera, each
 //!   component as its library representation; or, in the component view, one package on a grid
 //!   floor. Clicking a component selects it (PCB4.6). An empty studio shows a centred hint.
 //! - **Right edge**: two toggles, Component properties and Bill of materials, dock their panes
@@ -344,6 +344,7 @@ struct SearchStep;
 
 /// The toolbar of a PCB Studio tab (built by `crate::document` for the active tab).
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
+    crate::document::feature_list_toggle(tb, t);
     let tool = |name: &'static str, icon: &'static str, tip: &'static str| {
         ToolButton::new(name, icon)
             .icon_size(20.0)
@@ -943,13 +944,11 @@ fn header_add(h: &mut ChildSpawnerCommands, t: &Theme, name: &'static str, tip: 
         flex_grow: 1.0,
         ..default()
     });
-    // Left of the panel's ‹, which sits at the end of the first header (`cadrs_ui::dock`).
     h.spawn(IconButton::new(name, "plus").tooltip(tip).build(t))
         .entry::<Node>()
         .and_modify(|mut n| {
             n.width = Val::Px(18.0);
             n.height = Val::Px(18.0);
-            n.margin.right = Val::Px(cadrs_ui::dock::COLLAPSE_ROOM - 4.0);
         });
 }
 

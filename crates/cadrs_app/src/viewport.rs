@@ -254,7 +254,7 @@ impl ViewAnimation {
     }
 }
 
-/// Seconds a view change (N, Shift+7, view cube) takes.
+/// Seconds a view change (N, Shift+7, view ball) takes.
 pub const VIEW_ANIMATION_TIME: f32 = 0.35;
 
 /// The current view, one per tab.
@@ -301,7 +301,7 @@ impl ViewportView {
     }
 
     /// Turns the view by `yaw` and `pitch` degrees about the screen axes (as
-    /// [`ViewState::rotate_by`]: the arrow keys, the view cube's arrows), on from the turn in
+    /// [`ViewState::rotate_by`]: the arrow keys, the view ball's arrows), on from the turn in
     /// progress: presses quicker than their turns add up (four of 90° turn it all the way
     /// round), and the view goes on turning without stopping in between (#91).
     pub fn turn_by(&mut self, yaw: f32, pitch: f32) {
@@ -956,11 +956,11 @@ pub fn isometric_transform() -> Transform {
     Transform::from_translation(v.camera_position()).with_rotation(v.rotation())
 }
 
-/// The plane fill: a pale cyan at low opacity; in dark, the schematic's warm grid colour,
+/// The plane fill: a pale blue at low opacity; in dark, the schematic's warm grid colour,
 /// fainter, so the three planes don't tint the whole view.
 pub fn plane_fill() -> Color {
     cadrs_ui::by_scheme(
-        Color::LinearRgba(LinearRgba::new(0.05, 0.42, 0.47, 0.09)),
+        Color::LinearRgba(LinearRgba::new(0.047, 0.387, 0.647, 0.10)),
         Color::LinearRgba(LinearRgba::new(0.254, 0.216, 0.133, 0.07)),
     )
 }
@@ -2221,7 +2221,7 @@ fn arrow_keys_held(
     hold_arrows(&mut view, &mut hold, held, shift, ctrl, time.delta_secs());
 }
 
-/// Degrees an arrow key rotates the view: 15°, Shift 90°, Ctrl 5° (as the view cube arrows).
+/// Degrees an arrow key rotates the view: 15°, Shift 90°, Ctrl 5° (as the view ball arrows).
 pub fn arrow_step(shift: bool, ctrl: bool) -> f32 {
     if shift {
         90.0
@@ -2633,7 +2633,7 @@ trait PlaneEdge {
 }
 
 impl PlaneEdge for Theme {
-    /// The outline color: a cyan grey in light, the schematic's warm grid colour in dark.
+    /// The outline color: a blue grey in light, the schematic's warm grid colour in dark.
     fn plane_edge_line(&self) -> Color {
         self.plane_edge
     }
@@ -2674,8 +2674,8 @@ fn fit_grid(
         )
     } else {
         (
-            rgba(0x8f, 0xb3, 0xb8, 0.28),
-            rgba(0x4f, 0x80, 0x87, 0.6),
+            rgba(0x9c, 0xad, 0xc5, 0.28),
+            rgba(0x63, 0x78, 0x97, 0.6),
             rgba(0xe8, 0x85, 0x7f, 1.0),
             rgba(0x7f, 0xc2, 0x7a, 1.0),
         )
@@ -3176,7 +3176,7 @@ mod tests {
         panic!("the view never stopped");
     }
 
-    /// #91: a turn by the arrows (a tap, the view cube's) is animated about the screen axis it
+    /// #91: a turn by the arrows (a tap, the view ball's) is animated about the screen axis it
     /// turns about, whatever the orientation (over the top too, where the azimuth and roll swing
     /// round).
     #[test]

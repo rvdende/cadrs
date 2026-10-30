@@ -4,7 +4,7 @@
 // flipped (it widens as it rises: −5° against +Z) and its top edge filleted R10 (a face whose
 // draft runs from −5° to 90°). Values in `cadrs_core/tests/measure_analysis.rs` and
 // `cadrs_core::analysis`.
-// 01 the bottom-right Analysis tool's menu: Draft analysis…, Curvature, Curvature combs, Zebra
+// 01 the tab bar's Analysis tool's menu: Draft analysis…, Curvature, Curvature combs, Zebra
 //    stripes (text only; the tools on show ticked).
 // 02 Draft analysis…: the dialog (Pull direction Top plane, Draft angle 3°), the pull's blue
 //    arrow at the origin, and the legend at the right: the tops +90° (dark green, 6° to 90°),

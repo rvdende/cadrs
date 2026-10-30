@@ -55,6 +55,7 @@ pub mod path_field;
 pub mod progress;
 pub mod quick_dim;
 pub mod radio;
+pub mod responsive;
 pub mod scrollbar;
 pub mod segmented;
 pub mod selectable_text;
@@ -142,7 +143,8 @@ pub use inline_edit::{
     InlineEditOptions, begin_inline_edit,
 };
 pub use input::{
-    CaretBlinkOverride, KeyboardField, TextCancel, TextInput, TextInputField, TextSubmit,
+    CaretBlinkOverride, GrowWithText, KeyboardField, TextCancel, TextInput, TextInputField,
+    TextSubmit,
 };
 pub use list::{GridItem, ListItem};
 pub use menu::{
@@ -159,6 +161,7 @@ pub use quick_dim::{
     start_typing as quick_dim_start_typing,
 };
 pub use radio::{RadioChange, RadioGroup, RadioGroupState, RadioOption};
+pub use responsive::HideBelow;
 pub use scrollbar::{WheelScroll, horizontal_scrollbar, vertical_scrollbar};
 pub use segmented::{Segmented, SegmentedSelect, SegmentedState};
 pub use selectable_text::{
@@ -304,6 +307,7 @@ impl Plugin for CadrsUiPlugin {
             ))
             .add_plugins(file_picker::FilePickerPlugin)
             .add_plugins(radio::RadioPlugin)
+            .add_plugins(responsive::ResponsivePlugin)
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)
             .add_plugins(name_popup::NamePopupPlugin)

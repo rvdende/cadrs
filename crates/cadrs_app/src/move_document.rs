@@ -1,10 +1,9 @@
-//! P3G.3: **Move to document** and a minimal **Tab manager** (`derived-and-linking-gaps.md`
+//! P3G.3: **Move to document** (`derived-and-linking-gaps.md`
 //! DV4.1, ER7, ER8.2–ER8.6; essential tips T1.3, X1; drawings D2.10, X1; assemblies A21.13;
 //! the model is [`cadrs_core::move_doc`]; `external-references/lesson-move-to-document.png`,
 //! `ex2-step2.png`–`ex2-step6.png`).
 //!
-//! - **The dialog** ("Move to document", from a tab's menu, or the Tab manager for several
-//!   tabs): the tabs **New document** | **Other documents**. New document has **Document name**
+//! - **The dialog** ("Move to document", from a tab's menu): the tabs **New document** | **Other documents**. New document has **Document name**
 //!   (the first tab's name by default). Other documents is the linked documents' browser
 //!   ([`crate::linked`]: search, My documents, Recently opened, Created by me, folders); picking a
 //!   document shows it with **Version name**: a version of it is made with the moved tabs
@@ -15,16 +14,10 @@
 //! - **Move** writes the target document (and its version) and then re-points this document's
 //!   uses of the moved tabs at that version, removing the tabs: one undo step here; the other
 //!   document and the versions stay (the toast says so). The toast offers **Open <document>**.
-//! - **The Tab manager** (the tab bar's leftmost icon, ER7.7): a panel listing every tab with its
-//!   icon; click selects (and opens) a tab, Ctrl+click adds or removes one, Shift+click selects a
-//!   range; **Move to document…** (its button, or a row's right-click) moves the selection.
-//!   P3E.2 moved it to [`crate::tab_manager`] and extended it (search, filters, folders,
-//!   reordering).
 //!
 //! Names: `move-to-document-dialog`, `move-tabs`, `move-name`, `move-other-*` (the browser),
 //! `move-target`, `move-target-change`, `move-version`, `move-summary`, `move-details`,
-//! `move-tab-<k>`, `move-status`, `move-confirm`, `move-cancel` (the Tab manager's names are in
-//! [`crate::tab_manager`]).
+//! `move-tab-<k>`, `move-status`, `move-confirm`, `move-cancel`.
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -262,19 +255,9 @@ pub fn open_move_dialog_named(world: &mut World, tabs: Vec<ElementId>, name: Opt
     world.flush();
 }
 
-/// A tab's menu → Move to document…: the Tab manager's selection when it holds this tab and
-/// others, else this tab.
+/// A tab's menu → Move to document…: this tab.
 pub fn open_for_tab(world: &mut World, tab: ElementId) {
-    let sel = world
-        .resource::<crate::tab_manager::TabManager>()
-        .selected
-        .clone();
-    let tabs = if sel.len() > 1 && sel.contains(&tab) {
-        sel
-    } else {
-        vec![tab]
-    };
-    open_move_dialog(world, tabs);
+    open_move_dialog(world, vec![tab]);
 }
 
 fn close_dialog(world: &mut World) {
@@ -711,10 +694,6 @@ fn commit(world: &mut World) {
             world.resource_mut::<ActiveDocument>().set_active(t);
         }
     }
-    world
-        .resource_mut::<crate::tab_manager::TabManager>()
-        .selected
-        .clear();
     world
         .resource_mut::<crate::linked::LinkStatus>()
         .invalidate();

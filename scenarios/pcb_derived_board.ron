@@ -3,7 +3,7 @@
 // plate with a plug whose Live, Earth and Neutral pins stand up into it, "Board location" at
 // z 12, and PCB Studio 1's board "AC sensor".
 // 01 the enclosure, its tube and end plate see-through (Make transparent).
-// 02 the rail's Insert: the Derived dialog's source picker lists the Part Studios and the
+// 02 the toolbar's Derived: the Derived dialog's source picker lists the Part Studios and the
 //    board "AC sensor" (PCB Studio 1 · Main · follows the tab).
 // 03 the board picked: its source card, Show 3D model | Layout, Components All with each footprint
 //    ticked, Locations, Board point (Outline centre), Board face (Bottom face), skins on. The
@@ -33,7 +33,7 @@ Scenario(
         MoveTo(1420, 780),
         Wait(5),
         Screenshot("01-enclosure"),
-        Click(ui("rail-insert")),
+        Click(ui("derived")),
         WaitFor("derived-dialog"),
         MoveTo(1420, 780),
         Wait(3),

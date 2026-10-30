@@ -1,4 +1,4 @@
-// M2: the bottom tab bar. + opens the Insert new tab menu; Create Assembly adds "Assembly 2"
+// M2: the bottom tab bar. + opens the Insert new tab menu; Create Assembly adds "Assembly 1"
 // right of the active tab and opens its empty assembly shell. Double-click renames a tab in
 // place; right-click opens the tab menu above the tab bar; Delete removes the tab at once (as
 // Onshape does) and the toast's Undo brings it back.
@@ -19,8 +19,8 @@ Scenario(
         Click(ui("create-assembly")),
         MoveTo(1420, 780),
         Wait(2),
-        Screenshot("02-assembly-2-created"),
-        DoubleClick(ui("tab-assembly-2")),
+        Screenshot("02-assembly-1-created"),
+        DoubleClick(ui("tab-assembly-1")),
         Screenshot("03-tab-rename-inline"),
         Type("Gearbox"),
         Key("Enter"),

@@ -335,7 +335,7 @@ impl Rebuilder {
             {
                 let mut s = (*p.part.solid).clone();
                 s.mark_facet_seams(FACET_SEAM_ANGLE);
-                p.part.solid = Arc::new(s);
+                p.part_mut().solid = Arc::new(s);
             }
             o.state = Arc::new(st);
         }

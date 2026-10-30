@@ -568,7 +568,9 @@ impl Remote {
                             let _ = write_msg(&mut w, &Request::Stop);
                             return;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        // (Woken when the reply is in: a sleep made every reply wait up to its
+                        // end.)
+                        std::thread::park_timeout(std::time::Duration::from_millis(10));
                     }
                 });
                 watch = Some((done, thread));
@@ -601,6 +603,7 @@ impl Remote {
         })();
         if let Some((done, thread)) = watch {
             done.store(true, Ordering::Relaxed);
+            thread.thread().unpark();
             let _ = thread.join();
         }
         result.map_err(|e| {
@@ -680,7 +683,8 @@ impl Remote {
                     }
                     super::start_progress(ticket);
                     self.stop = Some(cancelled);
-                    let build = self.rebuild(features, persist);
+                    // (A list of its own to send: on this thread, not the caller's.)
+                    let build = self.rebuild(features.to_vec(), persist);
                     self.stop = None;
                     super::clear_partial();
                     let _ = reply.send(Arc::new(build));
@@ -819,6 +823,31 @@ pub(super) fn emit(e: &Event) {
     }
 }
 
+/// What a kernel process reports computing while it computes several features side by side
+/// (`Rebuilder::compute_ahead`, `plan_ahead`): one of them crashing it can't be told from the
+/// others, so the next kernel process, told this key is poisoned, computes them one at a time
+/// ([`ahead_allowed`]) and the one that crashes is poisoned then.
+const AHEAD: u64 = u64::MAX;
+
+/// Whether features may be computed side by side: not in a kernel process that took over from
+/// one crashed while it did ([`AHEAD`]), nor with `CADRS_AHEAD=0` (one at a time, to compare).
+pub(super) fn ahead_allowed() -> bool {
+    static OFF: OnceLock<bool> = OnceLock::new();
+    !is_poisoned(AHEAD)
+        && !*OFF.get_or_init(|| std::env::var("CADRS_AHEAD").is_ok_and(|v| v == "0"))
+}
+
+/// [`computing`] for features computed side by side, or planned to be (their bodies made for
+/// their boxes, `Rebuilder::plan_ahead`).
+pub(super) fn computing_ahead() -> Computing {
+    if SINK.get().is_none() {
+        return Computing(false);
+    }
+    COMPUTING.with(|c| c.borrow_mut().push(AHEAD));
+    emit(&Event::Computing(Some(AHEAD)));
+    Computing(true)
+}
+
 /// Whether the feature with this cache key crashed a kernel process before (in the kernel
 /// process; never elsewhere).
 pub(super) fn is_poisoned(key: u64) -> bool {
@@ -840,16 +869,22 @@ pub(super) fn computing(key: u64, f: &Feature) -> Computing {
     }
     COMPUTING.with(|c| c.borrow_mut().push(key));
     emit(&Event::Computing(Some(key)));
-    // For tests of the crash handling: crash on the feature with this name.
+    crash_if_asked(f);
+    Computing(true)
+}
+
+/// For tests of the crash handling: a kernel process crashes computing the feature named
+/// `CADRS_KERNEL_CRASH_ON` (in order, or ahead of those before it).
+pub(super) fn crash_if_asked(f: &Feature) {
     static CRASH_ON: OnceLock<Option<String>> = OnceLock::new();
-    if CRASH_ON
-        .get_or_init(|| std::env::var("CADRS_KERNEL_CRASH_ON").ok())
-        .as_deref()
-        == Some(f.name.as_str())
+    if SINK.get().is_some()
+        && CRASH_ON
+            .get_or_init(|| std::env::var("CADRS_KERNEL_CRASH_ON").ok())
+            .as_deref()
+            == Some(f.name.as_str())
     {
         std::process::abort();
     }
-    Computing(true)
 }
 
 /// See [`computing`].
@@ -1004,7 +1039,7 @@ pub fn main(args: &[String]) -> i32 {
                     *r = Some(cancelled.clone());
                 }
                 let _ = tx.send(Job::Rebuild {
-                    features: features.into_list(),
+                    features: features.into_list().into(),
                     ticket: 0,
                     reply,
                     cancelled,

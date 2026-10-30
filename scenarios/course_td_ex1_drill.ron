@@ -376,7 +376,7 @@ Scenario(
         Screenshot("31-drawing-finished"),
         // Step 9: Create version "FUEL AND POWER TRAIN COMPLETE".
         Click(ui("tab-carburetor")),
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         Click(ui("history-create-version")),
         WaitFor("version-popup"),

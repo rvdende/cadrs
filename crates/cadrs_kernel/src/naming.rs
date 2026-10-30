@@ -25,7 +25,7 @@
 //! been re-indexed), nearest to where the reference last was, else, as a geometric fallback, an
 //! entity at that position. Anything else is a [`Lost`] reference: an error, never a guess.
 
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::native::tol;
 use nalgebra::Point3;
@@ -366,6 +366,52 @@ fn position_key(p: &Point3<f64>) -> [i64; 3] {
     [p.x, p.y, p.z].map(|c| (c * 1e3).round() as i64)
 }
 
+/// The faces a body's naming orders split pieces by: how many, and where each one's centre is.
+pub trait FaceCenters {
+    /// How many faces the body has.
+    fn count(&self) -> usize;
+    /// Face `face`'s area centroid (None past the last face).
+    fn center(&self, face: usize) -> Option<Point3<f64>>;
+}
+
+impl FaceCenters for [FaceInfo] {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn center(&self, face: usize) -> Option<Point3<f64>> {
+        self.get(face).map(|f| f.center)
+    }
+}
+
+impl FaceCenters for Vec<FaceInfo> {
+    fn count(&self) -> usize {
+        self.len()
+    }
+    fn center(&self, face: usize) -> Option<Point3<f64>> {
+        self.get(face).map(|f| f.center)
+    }
+}
+
+/// A body's faces whose infos ([`Kernel::faces`]) are asked for when a centre first is.
+struct LazyFaces<'a> {
+    k: &'a dyn Kernel,
+    body: BodyId,
+    count: usize,
+    infos: std::sync::OnceLock<Vec<FaceInfo>>,
+}
+
+impl FaceCenters for LazyFaces<'_> {
+    fn count(&self) -> usize {
+        self.count
+    }
+    fn center(&self, face: usize) -> Option<Point3<f64>> {
+        self.infos
+            .get_or_init(|| self.k.faces(self.body).unwrap_or_default())
+            .get(face)
+            .map(|f| f.center)
+    }
+}
+
 /// Names the faces of a body an operation `op` made, from its `history` and the names of its
 /// input bodies. `faces` are the body's faces (for the order of split pieces).
 pub fn name_faces(
@@ -384,9 +430,9 @@ pub fn name_faces_aliased(
     op: OpId,
     history: &History,
     inputs: &[(BodyId, &BodyNames)],
-    faces: &[FaceInfo],
+    faces: &(impl FaceCenters + ?Sized),
 ) -> (Vec<FaceName>, Vec<(FaceName, FaceName)>) {
-    let n = faces.len();
+    let n = faces.count();
     // Every name each face could have.
     let mut names: Vec<Vec<FaceName>> = vec![Vec::new(); n];
     let set = |names: &mut Vec<Vec<FaceName>>, f: FaceId, name: FaceName| {
@@ -399,7 +445,7 @@ pub fn name_faces_aliased(
     let input = |body: BodyId| inputs.iter().find(|(b, _)| *b == body).map(|(_, n)| *n);
     // The path piece each side face of a sweep along several was swept along (the first, for a
     // face merged across pieces): its sides are numbered by it, as a split face's pieces are.
-    let mut segment: HashMap<FaceId, u32> = HashMap::new();
+    let mut segment: HashMap<FaceId, u32> = HashMap::default();
     for (f, origin) in &history.generated {
         if let Origin::PathSegment { segment: k } = *origin {
             let s = segment.entry(*f).or_insert(k);
@@ -436,7 +482,7 @@ pub fn name_faces_aliased(
         }
     }
     // Modified faces keep their input's name; the pieces of a split face are numbered.
-    let mut pieces: HashMap<(BodyId, FaceId), Vec<FaceId>> = HashMap::new();
+    let mut pieces: HashMap<(BodyId, FaceId), Vec<FaceId>> = HashMap::default();
     let mut order: Vec<(BodyId, FaceId)> = Vec::new();
     for (f, from) in &history.modified {
         let key = (from.body, from.face);
@@ -459,8 +505,8 @@ pub fn name_faces_aliased(
         }
         outs.sort_by_key(|f| {
             faces
-                .get(f.0 as usize)
-                .map(|i| position_key(&i.center))
+                .center(f.0 as usize)
+                .map(|c| position_key(&c))
                 .unwrap_or([i64::MAX; 3])
         });
         for (k, f) in outs.into_iter().enumerate() {
@@ -493,8 +539,8 @@ pub fn name_faces_aliased(
             first
         })
         .collect();
-    let primary: std::collections::HashSet<FaceName> = out.iter().copied().collect();
-    let bases: std::collections::HashSet<FaceName> = out.iter().map(FaceName::base).collect();
+    let primary: HashSet<FaceName> = out.iter().copied().collect();
+    let bases: HashSet<FaceName> = out.iter().map(FaceName::base).collect();
     let mut aliases: Vec<(FaceName, FaceName)> = Vec::new();
     let mut push = |a: FaceName, p: FaceName| {
         if a != p && !primary.contains(&a) && !aliases.iter().any(|(x, _)| *x == a) {
@@ -520,20 +566,34 @@ pub fn name_faces_aliased(
 /// Names a body's edges from its face names (see the module docs). `tol`: how close two edge
 /// ends must be to count as joined (mm).
 pub fn name_edges(faces: &[FaceName], edges: &[EdgeInfo], tol: f64) -> Vec<Option<EdgeName>> {
-    let face = |f: Option<FaceId>| f.and_then(|f| faces.get(f.0 as usize)).copied();
-    let mut groups: HashMap<EdgeName, Vec<usize>> = HashMap::new();
+    let ids = name_ids(faces);
+    let face = |f: Option<FaceId>| {
+        let i = f?.0 as usize;
+        Some((*faces.get(i)?, ids[i]))
+    };
+    // By the pair of faces (their ids, smaller first: as the names sort).
+    let mut groups: HashMap<(u32, u32), (EdgeName, Vec<usize>)> = HashMap::default();
     for (i, e) in edges.iter().enumerate() {
-        let (a, b) = match (face(e.faces[0]), face(e.faces[1])) {
-            (Some(a), Some(b)) if a != b => (a, b),
+        let ((a, ia), (b, ib)) = match (face(e.faces[0]), face(e.faces[1])) {
+            (Some(a), Some(b)) if a.1 != b.1 => (a, b),
             // A free edge (the boundary of a surface): named by its one face, twice.
             (Some(a), None) | (None, Some(a)) => (a, a),
             // A seam, or an edge inside one named face.
             _ => continue,
         };
-        groups.entry(EdgeName::new(a, b, 0)).or_default().push(i);
+        groups
+            .entry((ia.min(ib), ia.max(ib)))
+            .or_insert_with(|| (EdgeName::new(a, b, 0), Vec::new()))
+            .1
+            .push(i);
     }
     let mut out = vec![None; edges.len()];
-    for (pair, members) in groups {
+    for (pair, members) in groups.into_values() {
+        // (The one edge between its faces: the first.)
+        if let [m] = members[..] {
+            out[m] = Some(pair);
+            continue;
+        }
         // Chains: edges joined end to end.
         let mut chain: Vec<usize> = (0..members.len()).collect();
         fn root(c: &mut [usize], i: usize) -> usize {
@@ -556,7 +616,7 @@ pub fn name_edges(faces: &[FaceName], edges: &[EdgeInfo], tol: f64) -> Vec<Optio
                 }
             }
         }
-        let mut chains: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut chains: HashMap<usize, Vec<usize>> = HashMap::default();
         for (k, &m) in members.iter().enumerate() {
             let r = root(&mut chain, k);
             chains.entry(r).or_default().push(m);
@@ -576,25 +636,42 @@ pub fn name_edges(faces: &[FaceName], edges: &[EdgeInfo], tol: f64) -> Vec<Optio
     out
 }
 
+/// Each face's name as a number, in the names' order (equal names the same number): what the
+/// edges and vertices are grouped by, cheaper to hash than the names.
+fn name_ids(faces: &[FaceName]) -> Vec<u32> {
+    let mut distinct = faces.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    faces
+        .iter()
+        .map(|f| distinct.partition_point(|d| d < f) as u32)
+        .collect()
+}
+
 /// Names a body's vertices from its face names (see the module docs).
 pub fn name_vertices(
     faces: &[FaceName],
     edges: &[EdgeInfo],
     vertices: &[VertexInfo],
 ) -> Vec<Option<VertexName>> {
-    let mut keyed: Vec<(usize, [FaceName; 3])> = Vec::new();
+    // Each vertex's faces round it, by their ids (in the names' order), sorted and deduplicated:
+    // its three first (a sheet's corner its one or two, the last repeated).
+    let ids = name_ids(faces);
+    let mut groups: HashMap<[u32; 3], Vec<usize>> = HashMap::default();
+    let mut around: Vec<u32> = Vec::new();
     for (i, v) in vertices.iter().enumerate() {
-        let mut around: Vec<FaceName> = v
-            .edges
-            .iter()
-            .filter_map(|e| edges.get(e.0 as usize))
-            .flat_map(|e| e.faces.into_iter().flatten())
-            .filter_map(|f| faces.get(f.0 as usize).copied())
-            .collect();
-        around.sort();
+        around.clear();
+        around.extend(
+            v.edges
+                .iter()
+                .filter_map(|e| edges.get(e.0 as usize))
+                .flat_map(|e| e.faces.into_iter().flatten())
+                .filter_map(|f| ids.get(f.0 as usize).copied()),
+        );
+        around.sort_unstable();
         around.dedup();
-        if around.len() >= 3 {
-            keyed.push((i, [around[0], around[1], around[2]]));
+        let key = if around.len() >= 3 {
+            [around[0], around[1], around[2]]
         } else if !around.is_empty()
             && v.edges
                 .iter()
@@ -604,15 +681,22 @@ pub fn name_vertices(
             // A sheet's corner (on an edge with one face): its one or two faces, the last
             // repeated; told apart from the others there by `index`.
             let last = around[around.len() - 1];
-            keyed.push((i, [around[0], *around.get(1).unwrap_or(&last), last]));
-        }
+            [around[0], *around.get(1).unwrap_or(&last), last]
+        } else {
+            continue;
+        };
+        groups.entry(key).or_default().push(i);
     }
-    let mut groups: HashMap<[FaceName; 3], Vec<usize>> = HashMap::new();
-    for (i, k) in &keyed {
-        groups.entry(*k).or_default().push(*i);
+    // (The names by id.)
+    let mut named: Vec<Option<FaceName>> =
+        vec![None; ids.iter().max().map_or(0, |&m| m as usize + 1)];
+    for (f, &id) in faces.iter().zip(&ids) {
+        named[id as usize] = Some(*f);
     }
+    let name = |id: u32| named[id as usize].expect("an id of a face name");
     let mut out = vec![None; vertices.len()];
-    for (k, mut members) in groups {
+    for (ks, mut members) in groups {
+        let k = ks.map(name);
         members.sort_by_key(|&i| position_key(&vertices[i].point));
         for (index, i) in members.into_iter().enumerate() {
             out[i] = Some(VertexName {
@@ -633,8 +717,16 @@ pub fn name_body(
     history: &History,
     inputs: &[(BodyId, &BodyNames)],
 ) -> Result<BodyNames> {
-    let faces = k.faces(body)?;
-    let edges = k.edges(body)?;
+    // (The faces' centres only to order a face's pieces: their areas and centres are integrals
+    // over every face, and a tool or a piece made in passing is named, not shown.)
+    let faces = LazyFaces {
+        k,
+        body,
+        count: k.face_count(body)?,
+        infos: std::sync::OnceLock::new(),
+    };
+    // (Where the edges lie and between which faces: not their lengths or smoothness.)
+    let edges = k.edges_light(body)?;
     let vertices = k.vertices(body)?;
     let (mut face_names, mut aliases) = name_faces_aliased(op, history, inputs, &faces);
     split_apart_pieces(op, &mut face_names, &mut aliases, &faces, &edges);
@@ -656,10 +748,10 @@ fn split_apart_pieces(
     op: OpId,
     names: &mut [FaceName],
     aliases: &mut [(FaceName, FaceName)],
-    faces: &[FaceInfo],
+    faces: &(impl FaceCenters + ?Sized),
     edges: &[EdgeInfo],
 ) {
-    let mut by_name: HashMap<FaceName, Vec<usize>> = HashMap::new();
+    let mut by_name: HashMap<FaceName, Vec<usize>> = HashMap::default();
     for (i, n) in names.iter().enumerate() {
         if n.op == op
             && n.split == 0
@@ -690,7 +782,7 @@ fn split_apart_pieces(
             }
         }
         let mut groups: Vec<Vec<usize>> = Vec::new();
-        let mut at: HashMap<usize, usize> = HashMap::new();
+        let mut at: HashMap<usize, usize> = HashMap::default();
         for &m in &members {
             let r = find(&mut root, m);
             let g = *at.entry(r).or_insert_with(|| {
@@ -704,7 +796,7 @@ fn split_apart_pieces(
         }
         let key = |g: &Vec<usize>| {
             g.iter()
-                .filter_map(|&f| faces.get(f).map(|i| position_key(&i.center)))
+                .filter_map(|&f| faces.center(f).map(|c| position_key(&c)))
                 .min()
                 .unwrap_or([i64::MAX; 3])
         };

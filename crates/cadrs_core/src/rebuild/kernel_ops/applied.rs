@@ -163,16 +163,16 @@ impl Rebuilder {
             }
         };
         // The parts side by side, each in a session of its own (a part's operation doesn't
-        // depend on another's: a fillet of two feet took the sum of both), their bodies taken
-        // back in the parts' order, so the ids and what follows don't depend on which is done
-        // first. (One part runs here, as before.)
+        // depend on another's: a fillet of two feet took the sum of both), their results taken
+        // in the parts' order, so what follows doesn't depend on which is done first. (One part
+        // runs here, as before.)
         let mut done: Vec<Option<cadrs_kernel::Result<OpResult>>> = if groups.len() > 1 {
             let kernel = &self.kernel;
             let forks: Vec<(DefaultKernel, cadrs_kernel::Result<OpResult>)> = groups
                 .par_iter()
                 .enumerate()
                 .map(|(i, &(_, body))| {
-                    let mut k = kernel.fork(i as u64);
+                    let mut k = kernel.fork();
                     let r = op(&mut k, i, body);
                     (k, r)
                 })
@@ -686,7 +686,7 @@ impl Rebuilder {
         }
         let tool = change.remove(0);
         Some(Stage {
-            before: before.parts.iter().map(|p| p.part.clone()).collect(),
+            before: before.parts.iter().map(|p| (*p.part).clone()).collect(),
             tool,
             more: change,
             remove: !outward,

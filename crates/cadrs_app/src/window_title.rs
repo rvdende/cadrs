@@ -41,7 +41,7 @@ fn sync_window_title(
     let doc = doc.as_deref();
     let tab = doc
         .and_then(|d| d.active_element())
-        .map(|el| (el.name.as_str(), crate::tab_manager::tab_type(el)));
+        .map(|el| (el.name.as_str(), crate::tab_preview::tab_type(el)));
     let want = title(*state.get(), doc.map(|d| (d.doc.name.as_str(), tab)));
     if window.title != want {
         window.title = want;

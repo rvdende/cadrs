@@ -220,7 +220,7 @@ fn a_merge_is_one_entry_and_restore_undoes_it() {
         (e.action.as_str(), e.label.as_str()),
         ("Merge", "Merge from Alternate Gasket Thickness")
     );
-    assert_eq!(e.hash, document_hash(&merged));
+    assert_eq!(e.hash.get(), document_hash(&merged));
     // Undo is one step too.
     assert_eq!(s.undo.undo_len(), 1);
     // TD12.7: Restore to the entry before the merge.
@@ -235,7 +235,7 @@ fn a_merge_is_one_entry_and_restore_undoes_it() {
         before,
         "Main is back at its pre-merge state"
     );
-    assert_eq!(s.log.entries.last().unwrap().hash, before);
+    assert_eq!(s.log.entries.last().unwrap().hash.get(), before);
     // The branch is unchanged by all this.
     assert_eq!(s.log.workspace_head(b).unwrap(), source);
 }

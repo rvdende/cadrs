@@ -102,8 +102,11 @@ pub fn split(
     let a = (**k.get(body)?).clone();
     let bb = a.bbox();
     let hs = half_space_box(o, n, &bb)?;
-    let inn = boolean_bodies(&a, &hs, BoolOp::Intersect);
-    let out = boolean_bodies(&a, &hs, BoolOp::Subtract);
+    // The two sides side by side (each a boolean of the part with the half space).
+    let (inn, out) = rayon::join(
+        || boolean_bodies(&a, &hs, BoolOp::Intersect),
+        || boolean_bodies(&a, &hs, BoolOp::Subtract),
+    );
     let (Ok(inn), Ok(out)) = (inn, out) else {
         return Err(KernelError::InvalidParameter(
             "The split tool doesn't cross the part".into(),

@@ -21,7 +21,9 @@
 use rayon::prelude::*;
 
 use super::bvh::Bvh;
-use super::classify::{InFace, face_polygons, in_face, periodic_candidates};
+use super::classify::{
+    InFace, PolyBoxes, face_polygons, in_face_boxed, periodic_candidates_boxed, poly_boxes,
+};
 use super::math::*;
 use super::surface::Surface;
 use super::tol;
@@ -129,6 +131,14 @@ pub(crate) fn face_crossings_in(
         }
     }
     let polys: &[Option<Vec<Vec<P2>>>] = polys;
+    // Their boxes, for the many points tested against each ([`in_face_boxed`]).
+    let pboxes: Vec<PolyBoxes> = (0..n)
+        .into_par_iter()
+        .map(|fi| match polys.get(fi).and_then(|p| p.as_deref()) {
+            Some(p) if paired[fi] => poly_boxes(p, &b.faces[fi].surf),
+            _ => Vec::new(),
+        })
+        .collect();
     // Edge `e` against face `y`'s surface over [t0, t1] comes up from each of e's faces paired
     // with y: its roots once.
     let roots: Roots = std::sync::Mutex::new(std::collections::HashMap::new());
@@ -141,7 +151,7 @@ pub(crate) fn face_crossings_in(
             };
             // Clear of the boundaries by the faces' tolerances, and by a part in 10⁶ of the body.
             let margin = 2.0 * tol[i].max(tol[j]) + tol::REL_POINT * size;
-            let p = crossing(b, polys, (i, j), &ov, margin, &roots)?;
+            let p = crossing(b, (polys, &pboxes), (i, j), &ov, margin, &roots)?;
             Some(format!(
                 "faces {i} and {j} cross away from their edges near ({:.6}, {:.6}, {:.6})",
                 p.x, p.y, p.z
@@ -253,20 +263,28 @@ fn sided_roots(e: &super::topo::Edge, t0: f64, t1: f64, s: &Surface) -> Vec<f64>
     out
 }
 
-/// A point where faces `i` and `j` cross (see the module docs), if any.
 /// Roots of an edge on a face's surface over a range of the edge's parameter, by (edge, face, the
 /// range's bits).
 type Roots = std::sync::Mutex<std::collections::HashMap<(usize, usize, u64, u64), Vec<f64>>>;
 
+/// The faces' polygons (where made) and their boxes, by face.
+type Polygons<'a> = (&'a [Option<Vec<Vec<P2>>>], &'a [PolyBoxes]);
+
+/// A point where faces `i` and `j` cross (see the module docs), if any.
 fn crossing(
     b: &Body,
-    polys: &[Option<Vec<Vec<P2>>>],
+    (polys, pboxes): Polygons,
     (i, j): (usize, usize),
     ov: &Bbox,
     margin: f64,
     cache: &Roots,
 ) -> Option<P3> {
-    let polys = |f: usize| polys.get(f).and_then(|p| p.as_deref()).unwrap_or(&[]);
+    let polys = |f: usize| {
+        (
+            polys.get(f).and_then(|p| p.as_deref()).unwrap_or(&[]),
+            pboxes.get(f).map_or(&[][..], |x| x.as_slice()),
+        )
+    };
     let region = ov.grow(margin);
     // Edges of one face piercing the other.
     for (x, y) in [(i, j), (j, i)] {
@@ -328,7 +346,7 @@ fn crossing(
     if !(elementary(&fa.surf) && elementary(&fb.surf)) {
         return None;
     }
-    let (ua, ub) = (uv_box(polys(i))?, uv_box(polys(j))?);
+    let (ua, ub) = (uv_box(polys(i).0)?, uv_box(polys(j).0)?);
     let ssi = super::ssi::surface_surface_full(&fa.surf, ua, &fb.surf, ub, ov);
     for c in &ssi.curves {
         if !(c.t1 > c.t0) {
@@ -350,16 +368,22 @@ fn crossing(
 
 /// Whether `p` lies on face `fi`'s surface (within `margin`) and inside the face, farther than
 /// `margin` from each of its edges.
-fn inside(b: &Body, polys: &[Vec<P2>], fi: usize, p: &P3, margin: f64) -> bool {
+fn inside(
+    b: &Body,
+    (polys, boxes): (&[Vec<P2>], &[super::classify::PolyBox]),
+    fi: usize,
+    p: &P3,
+    margin: f64,
+) -> bool {
     let f = &b.faces[fi];
     let (u, v) = f.surf.project(p, None);
     if !((f.surf.eval(u, v) - p).norm() <= margin) {
         return false;
     }
     // (`in_face` compares squared distances in the surface's scaled (u, v).)
-    if !periodic_candidates(&f.surf, u, v, polys)
+    if !periodic_candidates_boxed(&f.surf, u, v, boxes)
         .into_iter()
-        .any(|q| in_face(polys, &f.surf, q, margin * margin) == InFace::Inside)
+        .any(|q| in_face_boxed(polys, boxes, &f.surf, q, margin * margin) == InFace::Inside)
     {
         return false;
     }

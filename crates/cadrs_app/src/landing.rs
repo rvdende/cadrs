@@ -6,7 +6,7 @@
 //!   ([`crate::identity`]).
 //! - A command strip along the top, one height and small capitals: **New document** (with ▾
 //!   for Join shared document…, From a sample…, …), Folder, the search box; at the right
-//!   Import, Label, the list and grid toggles and the Type filter.
+//!   Import, Label and the list and grid toggles.
 //! - The list in a glass card: a caption (DOCUMENTS and the count, or the Trash, a label or the
 //!   samples with ‹ back), and the sortable columns NAME | MODIFIED | MODIFIED BY | OWNED BY.
 //!
@@ -19,7 +19,7 @@
 //! P3E.1 (TD3, TD4.1, X5) adds, in [`details`]: labels (Create ▸ Label…, the Label button, a
 //! label's list with Rename… and Delete… by its caption, a Labels column, the Properties
 //! modal's searchable checkboxes and "Create new label"), folders that open (a breadcrumb and
-//! Back), the Type filter and a grid view, the bundled samples ("Open a copy"), and Import
+//! Back), a grid view, the bundled samples ("Open a copy"), and Import
 //! files… (a STEP or STL file becomes a new document whose Part Studio holds its Import). Every
 //! library change is an undoable library command.
 
@@ -37,8 +37,8 @@ use cadrs_core::library::{
     AddEntry, CreateFolder, PurgeEntry, RenameEntry, RestoreEntry, TrashEntry,
 };
 use cadrs_core::{
-    Document, DocumentEntry, DocumentId, DocumentMeta, Filter, FolderId, ItemType, LabelId,
-    Library, LibraryCommand, LibraryHistory, SortDir, SortKey,
+    Document, DocumentEntry, DocumentId, DocumentMeta, Filter, FolderId, LabelId, Library,
+    LibraryCommand, LibraryHistory, SortDir, SortKey,
 };
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::ContextMenuAnchor;
@@ -114,8 +114,6 @@ pub struct LandingState {
     pub sort_touched: bool,
     /// The folder opened (P3E.1, TD3.6): the list shows its documents under a breadcrumb.
     pub folder: Option<FolderId>,
-    /// The list's Type filter (P3E.1, TD3.7).
-    pub item_type: ItemType,
     /// The grid view instead of the list (P3E.1, TD3.7).
     pub grid: bool,
 }
@@ -129,7 +127,6 @@ impl Default for LandingState {
             search: String::new(),
             sort_touched: false,
             folder: None,
-            item_type: ItemType::All,
             grid: false,
         }
     }
@@ -194,8 +191,7 @@ struct MainPanel;
 #[derive(Component)]
 struct PageTitle;
 
-/// The slot right of the search box for the list's view toggles and Type filter, rebuilt with
-/// the list.
+/// The slot right of the search box for the list's view toggles, rebuilt with the list.
 #[derive(Component)]
 struct ListTools;
 
@@ -422,14 +418,20 @@ fn top_bar(p: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
             ..default()
         })
         .with_children(|r| {
+            // On a narrow window these fold into the account menu (`crate::top_bar`).
+            use crate::top_bar::{Fold, spawn_folding};
             crate::update::spawn_version(r, t);
-            crate::network::spawn_button(r, t);
-            crate::notifications::spawn_bell(r, t);
+            spawn_folding(r, Fold::Network, |r| crate::network::spawn_button(r, t));
+            spawn_folding(r, Fold::Notifications, |r| {
+                crate::notifications::spawn_bell(r, t)
+            });
             // Light, dark or the system's scheme.
-            r.spawn((
-                cadrs_ui::scheme_toggle(t),
-                cadrs_ui::glass::GlassFrame::bar(),
-            ));
+            spawn_folding(r, Fold::Scheme, |r| {
+                r.spawn((
+                    cadrs_ui::scheme_toggle(t),
+                    cadrs_ui::glass::GlassFrame::bar(),
+                ));
+            });
             crate::identity::spawn_identity_button(r, t, profile);
         });
     });
@@ -784,8 +786,7 @@ fn rebuild_main(
     }
     let t = theme.clone();
     commands.entity(panel).despawn_related::<Children>();
-    // The list's view toggles and Type filter (P3E.1), right of the search box; the samples
-    // have neither.
+    // The list's view toggles (P3E.1), right of the search box; the samples have none.
     for tools in &q_tools {
         commands.entity(tools).despawn_related::<Children>();
         if state.filter != Filter::Explore {
@@ -815,50 +816,47 @@ fn rebuild_main(
         // (and found by a search, which looks everywhere).
         entries.retain(|e| e.meta.folder.is_none());
     }
-    if !state.item_type.shows_documents() {
-        entries.clear();
-    }
     let has_labels = !lib.lib.labels.is_empty();
     let cols = columns(&state, has_labels);
     // Folders are listed above the documents: at the top level or
     // in the folder open (#112: folders nest; a search finds them anywhere), and in the Trash
     // the folders moved there.
-    let folder_rows: Vec<FolderListing> = if state.item_type.shows_folders()
-        && (matches!(state.filter, Filter::OwnedByMe | Filter::CreatedByMe)
-            || (state.filter == Filter::Trash && folder.is_none()))
-    {
-        let needle = state.search.trim().to_lowercase();
-        let trash = state.filter == Filter::Trash;
-        let mut v: Vec<&cadrs_core::FolderEntry> = lib
-            .lib
-            .folders
-            .iter()
-            .filter(|f| {
-                let placed = if trash {
-                    // Only the folders moved to the trash themselves (their contents go with
-                    // them).
-                    f.trashed.is_some() && f.parent.is_none_or(|p| !lib.lib.folder_hidden(p))
-                } else if !needle.is_empty() && folder.is_none() {
-                    !lib.lib.folder_hidden(f.id)
-                } else {
-                    f.trashed.is_none() && f.parent == folder.as_ref().map(|x| x.id)
-                };
-                placed
-                    && f.owned_by == user.id
-                    && (needle.is_empty() || f.name.to_lowercase().contains(&needle))
-            })
-            .collect();
-        v.sort_by(|a, b| cadrs_core::library::natural_cmp(&a.name, &b.name));
-        v.into_iter()
-            .map(|f| FolderListing {
-                id: f.id,
-                name: f.name.clone(),
-                date: clock.format(f.created),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let folder_rows: Vec<FolderListing> =
+        if matches!(state.filter, Filter::OwnedByMe | Filter::CreatedByMe)
+            || (state.filter == Filter::Trash && folder.is_none())
+        {
+            let needle = state.search.trim().to_lowercase();
+            let trash = state.filter == Filter::Trash;
+            let mut v: Vec<&cadrs_core::FolderEntry> = lib
+                .lib
+                .folders
+                .iter()
+                .filter(|f| {
+                    let placed = if trash {
+                        // Only the folders moved to the trash themselves (their contents go with
+                        // them).
+                        f.trashed.is_some() && f.parent.is_none_or(|p| !lib.lib.folder_hidden(p))
+                    } else if !needle.is_empty() && folder.is_none() {
+                        !lib.lib.folder_hidden(f.id)
+                    } else {
+                        f.trashed.is_none() && f.parent == folder.as_ref().map(|x| x.id)
+                    };
+                    placed
+                        && f.owned_by == user.id
+                        && (needle.is_empty() || f.name.to_lowercase().contains(&needle))
+                })
+                .collect();
+            v.sort_by(|a, b| cadrs_core::library::natural_cmp(&a.name, &b.name));
+            v.into_iter()
+                .map(|f| FolderListing {
+                    id: f.id,
+                    name: f.name.clone(),
+                    date: clock.format(f.created),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
     let rows: Vec<(DocumentEntry, Option<Handle<Image>>, String)> = entries
         .into_iter()
         .map(|e| {
@@ -968,12 +966,6 @@ fn rebuild_main(
                     "This folder is empty".into(),
                     "Drag documents or folders here, or right-click one and choose Move to…."
                         .into(),
-                    false,
-                ),
-                _ if state.item_type != ItemType::All => (
-                    "filter",
-                    format!("No {}", state.item_type.label().to_lowercase()),
-                    "Choose Type ▸ All to see everything.".into(),
                     false,
                 ),
                 Filter::Label(_) => (
@@ -1666,7 +1658,7 @@ fn log_opened(doc: &Document, meta: &DocumentMeta, dir: &std::path::Path) {
     let tabs = doc
         .elements
         .iter()
-        .map(|el| format!("{} ({})", el.name, crate::tab_manager::tab_type(el)))
+        .map(|el| format!("{} ({})", el.name, crate::tab_preview::tab_type(el)))
         .collect::<Vec<_>>()
         .join(", ");
     let shared = meta
@@ -1711,7 +1703,7 @@ pub(crate) fn open_failed(world: &mut World, id: DocumentId, e: &cadrs_core::Sto
     world.flush();
 }
 
-/// Creates a document with Part Studio 1 and Assembly 1 and opens it.
+/// Creates a document with Part Studio 1 (no Assembly: a tab's + adds one) and opens it.
 fn create_document(world: &mut World, name: &str) {
     let name = match name.trim() {
         "" => "Untitled document",
@@ -1720,7 +1712,7 @@ fn create_document(world: &mut World, name: &str) {
     let store = world.resource::<DocumentStore>().0.clone();
     let now = world.resource::<AppClock>().now();
     let user = world.resource::<UserProfile>().id.clone();
-    let doc = Document::new(name);
+    let doc = Document::with_part_studio(name);
     let mut meta = DocumentMeta::new(&user, now);
     meta.last_opened = Some(now);
     if let Err(e) = store.create(&doc, &meta) {

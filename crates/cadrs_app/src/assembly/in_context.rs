@@ -684,7 +684,7 @@ fn sync_context_bar(
     // the light theme's text and controls on it in either theme.
     let t = Theme::light();
     let (studio, id, external) = (w.studio, w.id, w.external);
-    // Centred in the viewport by a full-width row, kept clear of the view cube on both sides.
+    // Centred in the viewport by a full-width row, kept clear of the viewport's edges.
     let row = commands
         .spawn((
             Name::new("context-bar"),

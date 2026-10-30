@@ -1,4 +1,4 @@
-//! The Comments panel, as Onshape's (`comments_on_workspaces.htm`): the left rail's
+//! The Comments panel, as Onshape's (`comments_on_workspaces.htm`): the top bar's
 //! **Comments** button opens it beside the feature list.
 //!
 //! - **Add comment**: a message, optionally tagged to a feature (right-click a feature ▸
@@ -6,7 +6,7 @@
 //!   for the first person mentioned, who resolves it with its checkbox.
 //! - Threads, newest first, with their replies; **Reply**, and ✕ for one's own (the owner
 //!   may remove any). The filter: All comments, All open tasks, Open tasks assigned to me,
-//!   Completed tasks. A dot on the rail button says there is something new.
+//!   Completed tasks. A dot on the Comments button says there is something new.
 //! - On a shared document the owner's cadrs keeps the comments in order: everyone else sends
 //!   theirs to it (if they may comment) and applies what it passes on. Someone mentioned or
 //!   given a task gets a toast. Comments are kept beside the document (`comments.ron`), not in
@@ -43,7 +43,7 @@ pub(super) fn plugin(app: &mut App) {
                 hear.run_if(resource_exists::<Iroh>),
                 poll.run_if(resource_exists::<Iroh>),
                 sync_panel,
-                sync_rail,
+                sync_button,
             )
                 .chain(),
         )
@@ -295,7 +295,7 @@ fn hear(
     }
 }
 
-/// A new comment by someone else: the rail's dot, and a toast for whoever it mentions or
+/// A new comment by someone else: the Comments button's dot, and a toast for whoever it mentions or
 /// gives a task to.
 fn notify(world: &mut World, op: &CommentOp, by: &str) {
     let CommentOp::Add(c) = op else { return };
@@ -774,20 +774,24 @@ fn add(world: &mut World) {
     }
 }
 
+/// Opens or closes the panel (the top bar's Comments button, or the account menu's on a
+/// narrow window).
+pub fn toggle_panel(w: &mut World) {
+    let mut p = w.resource_mut::<CommentsPanel>();
+    p.open = !p.open;
+    let open = p.open;
+    if open {
+        w.resource_mut::<crate::history_panel::HistoryPanel>().open = false;
+        w.resource_mut::<DocComments>().unread = false;
+    }
+}
+
 fn on_activate(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
     let Ok(name) = q.get(a.entity).map(|n| n.as_str().to_string()) else {
         return;
     };
     match name.as_str() {
-        "rail-comments" => commands.queue(|w: &mut World| {
-            let mut p = w.resource_mut::<CommentsPanel>();
-            p.open = !p.open;
-            let open = p.open;
-            if open {
-                w.resource_mut::<crate::history_panel::HistoryPanel>().open = false;
-                w.resource_mut::<DocComments>().unread = false;
-            }
-        }),
+        "document-comments" => commands.queue(toggle_panel),
         "comments-close" => commands.queue(|w: &mut World| {
             w.resource_mut::<CommentsPanel>().open = false;
         }),
@@ -839,19 +843,18 @@ fn on_filter(ev: On<SelectChange>, q: Query<&Name>, mut panel: ResMut<CommentsPa
     }
 }
 
-/// The rail button: on while the panel is open, a dot while something is unread, and the
-/// number of open tasks for this user.
+/// The Comments button's dot: something unread, or the number of open tasks for this user.
 #[derive(Component)]
-struct RailDot;
+struct ButtonDot;
 
 #[allow(clippy::too_many_arguments)]
-fn sync_rail(
+fn sync_button(
     panel: Res<CommentsPanel>,
     dc: Res<DocComments>,
     iroh: Option<Res<Iroh>>,
     user: Res<UserProfile>,
     q: Query<(Entity, &Name, Has<cadrs_ui::style::Selected>)>,
-    dots: Query<Entity, With<RailDot>>,
+    dots: Query<Entity, With<ButtonDot>>,
     theme: Res<Theme>,
     mut last: Local<Option<(bool, bool, usize)>>,
     mut commands: Commands,
@@ -859,7 +862,7 @@ fn sync_rail(
     let me = iroh.map_or(user.id.clone(), |i| i.id().to_string());
     let tasks = dc.comments.tasks_for(&me);
     let want = (panel.open, dc.unread || tasks > 0, tasks);
-    let Some((button, _, selected)) = q.iter().find(|(_, n, _)| n.as_str() == "rail-comments")
+    let Some((button, _, selected)) = q.iter().find(|(_, n, _)| n.as_str() == "document-comments")
     else {
         *last = None;
         return;
@@ -883,7 +886,7 @@ fn sync_rail(
     if want.1 {
         let t = &*theme;
         commands.entity(button).with_child((
-            RailDot,
+            ButtonDot,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(2.0),

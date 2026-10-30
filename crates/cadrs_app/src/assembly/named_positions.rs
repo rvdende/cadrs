@@ -31,7 +31,7 @@ use cadrs_ui::{
     DoubleClick, DoubleClickable, InlineEditOptions, begin_inline_edit, open_context_menu,
 };
 
-use crate::appearance::{SidePanel, dock_beside_viewport, side_panel_header, side_panel_node};
+use crate::side_panel::{SidePanel, dock_beside_viewport, side_panel_header, side_panel_node};
 use crate::viewport::{ActiveKind, ViewportArea};
 use crate::{ActiveDocument, AppState};
 
