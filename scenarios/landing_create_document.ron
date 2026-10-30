@@ -1,5 +1,5 @@
-// M1: Create ▾ › Document… › name it › Create opens the document with Part Studio 1 and
-// Assembly 1; back to documents shows it in the list. Then Create ▾ › Folder….
+// M1: Create ▾ › Document… › name it › Create opens the document with Part Studio 1 (and
+// no Assembly); back to documents shows it in the list. Then Create ▾ › Folder….
 Scenario(
     start: Some("landing"),
     steps: [

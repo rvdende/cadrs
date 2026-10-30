@@ -1,6 +1,6 @@
 // IR5.5: the feature menu's Dynamic suppression ▸ Suppress by variable…, on a 60 × 40 × 10 plate
 // with a Ø16 hole (Extrude 2, Remove) and a Number Variable #withHole = 1 (`with-hole`).
-// 01 the plate with its hole; the Variable table (right) shows #withHole = 1.
+// 01 the plate with its hole; #withHole = 1 in the feature list.
 // 02 right-click Extrude 2 ▸ Dynamic suppression: Suppress by variable… enabled (Suppress by
 //    configuration stays disabled: configurations are out of scope).
 // 03 Suppress by variable…: the dialog lists the variables above Extrude 2 (#withHole (1)), with
@@ -8,7 +8,7 @@
 // 03b the box ticked: the hint reads the inverted rule ("… while the variable is not 0 (true).");
 //    unticked again before OK.
 // 04 OK: Extrude 2's row carries a "#withHole" tag; #withHole is 1, so the hole is still cut.
-// 05 #withHole typed as 0 in the Variable table: Extrude 2 greys and is struck through like a
+// 05 #withHole edited to 0 in its Variable dialog: Extrude 2 greys and is struck through like a
 //    suppressed feature, and the hole is gone.
 // 06 the tag's tooltip: "Suppressed while #withHole is 0 (false) · currently suppressed".
 // 07 #withHole back to 1: Extrude 2 builds again, the hole is back.
@@ -24,8 +24,6 @@ Scenario(
     steps: [
         WaitFor("document-shell"),
         Custom("with-hole"),
-        Click(ui("panel-variables")),
-        WaitFor("variables-panel"),
         Key("Shift+7"),
         Key("F"),
         MoveTo(1420, 900),
@@ -52,20 +50,26 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("04-bound"),
-        Click(ui("variable-row-withHole-field")),
+        DoubleClick(ui("feature-withhole")),
+        WaitFor("variable-dialog"),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("0"),
-        Key("Enter"),
+        Click(ui("variable-dialog-title")),
+        Click(ui("variable-dialog-accept")),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("05-with-hole-0"),
         Hover(ui("feature-extrude-2-suppression-variable")),
         Wait(40),
         Screenshot("06-tag-tooltip"),
-        Click(ui("variable-row-withHole-field")),
+        DoubleClick(ui("feature-withhole")),
+        WaitFor("variable-dialog"),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("1"),
-        Key("Enter"),
+        Click(ui("variable-dialog-title")),
+        Click(ui("variable-dialog-accept")),
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("07-with-hole-1"),
@@ -77,10 +81,13 @@ Scenario(
         Wait(3),
         Screenshot("07b-remove-item"),
         Key("Escape"),
-        Click(ui("variable-row-withHole-field")),
+        DoubleClick(ui("feature-withhole")),
+        WaitFor("variable-dialog"),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("0"),
-        Key("Enter"),
+        Click(ui("variable-dialog-title")),
+        Click(ui("variable-dialog-accept")),
         RightClick(ui("feature-extrude-2")),
         WaitFor("feature-context-menu"),
         Hover(ui("feature-dynamic-suppression")),

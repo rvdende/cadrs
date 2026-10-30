@@ -2,7 +2,7 @@
 //! A1.7 Loads, A1.8 Simulation, A6.3 Simulation connection, X16): a linear static analysis of the
 //! active Part Studio or Assembly ([`cadrs_core::simulation`], solved by [`cadrs_fea`]).
 //!
-//! - The right strip's **Simulation** button docks the panel (`simulation-panel`):
+//! - The tab bar's **Simulation** button docks the panel (`simulation-panel`):
 //!   - **Materials**: each analysed part with its material, Young's modulus and Poisson's ratio
 //!     (red if it has none).
 //!   - **Loads (n)** with **+ Fixed**, **+ Force**, **+ Pressure** (`sim-add-fixed`, …): one row
@@ -53,8 +53,8 @@ use cadrs_ui::{
     SelectChange, SelectionList, SelectionListRemove, SelectionListState, color_map,
 };
 
-use crate::appearance::{SidePanel, dock_beside_viewport, side_panel_header, side_panel_node};
 use crate::parts::{PartCache, PartMesh, PickFilter};
+use crate::side_panel::{SidePanel, dock_beside_viewport, side_panel_header, side_panel_node};
 use crate::viewport::{
     ActiveKind, Pick, PickFilterOverride, PickRequest, Selection, ViewportArea, ViewportDrag,
     ViewportRect, ViewportView,

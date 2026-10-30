@@ -38,6 +38,8 @@ pub enum ButtonVariant {
     Link,
     /// White with a grey border ("Plans and pricing"-style secondary actions).
     Outline,
+    /// Red, for a destructive choice ("Delete folder and tabs").
+    Danger,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -128,6 +130,10 @@ impl Button {
 
     pub fn outline(self) -> Self {
         self.variant(ButtonVariant::Outline)
+    }
+
+    pub fn danger(self) -> Self {
+        self.variant(ButtonVariant::Danger)
     }
 
     pub fn size(mut self, s: ButtonSize) -> Self {
@@ -323,6 +329,20 @@ impl IconButton {
 /// The colors of each button variant.
 pub fn visuals_for(theme: &Theme, variant: ButtonVariant) -> Visuals {
     match variant {
+        ButtonVariant::Danger => {
+            let (hover, active) = (theme.danger.darker(0.06), theme.danger.darker(0.12));
+            Visuals {
+                background: StateColors::new(theme.danger, hover, active, theme.secondary_disabled),
+                border: StateColors::new(theme.danger, hover, active, theme.secondary_disabled),
+                foreground: StateColors::new(
+                    Color::WHITE,
+                    Color::WHITE,
+                    Color::WHITE,
+                    theme.disabled_foreground,
+                ),
+                focus_ring: theme.focus_ring,
+            }
+        }
         ButtonVariant::Primary => Visuals {
             background: StateColors::new(
                 theme.primary,

@@ -540,7 +540,7 @@ impl Rebuilder {
                     continue;
                 }
                 if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == *pid) {
-                    let solid = Arc::make_mut(&mut p.part.solid);
+                    let solid = Arc::make_mut(&mut p.part_mut().solid);
                     solid.looks = old.looks.clone();
                     solid.images = old
                         .images
@@ -552,7 +552,7 @@ impl Rebuilder {
             if let Map::Rigid(m) = map {
                 for pid in &meshes {
                     if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == *pid) {
-                        p.part.solid = Arc::new(crate::pcb::board3d::moved(&p.part.solid, m));
+                        p.part_mut().solid = Arc::new(crate::pcb::board3d::moved(&p.part.solid, m));
                     }
                 }
                 // A derived board moved: its frame (where its layout is drawn and edited) too. A
@@ -752,15 +752,15 @@ impl Rebuilder {
         if let Some(st) = Arc::get_mut(&mut out.state) {
             for (pid, seed, palette, kind, look) in sources {
                 if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == pid) {
-                    p.part.source = seed;
-                    p.part.palette = palette;
-                    p.part.kind = kind;
+                    p.part_mut().source = seed;
+                    p.part_mut().palette = palette;
+                    p.part_mut().kind = kind;
                     if let Some(a) = look {
-                        let solid = Arc::make_mut(&mut p.part.solid);
+                        let solid = Arc::make_mut(&mut p.part_mut().solid);
                         solid.looks = solid.faces.iter().map(|f| (f.name, a)).collect();
                     }
                     if let Some((_, images)) = pictures.iter().find(|(q, _)| *q == pid) {
-                        Arc::make_mut(&mut p.part.solid).images = images.clone();
+                        Arc::make_mut(&mut p.part_mut().solid).images = images.clone();
                     }
                 }
             }
@@ -846,10 +846,10 @@ impl Rebuilder {
             // A composite part isn't counted among "Part N".
             st.next_part = before;
             if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == pid) {
-                p.part.name = format!("Composite part {n}");
-                p.part.palette = palette;
+                p.part_mut().name = format!("Composite part {n}");
+                p.part_mut().palette = palette;
                 if !member_looks.is_empty() {
-                    let solid = Arc::make_mut(&mut p.part.solid);
+                    let solid = Arc::make_mut(&mut p.part_mut().solid);
                     solid.looks = solid
                         .faces
                         .iter()

@@ -71,7 +71,7 @@ pub mod triad;
 pub mod where_used;
 
 use cadrs_ui::ShortcutKey;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::GizmoGroups;
@@ -292,6 +292,9 @@ pub struct AssemblyParts {
     /// Rebuilds still running on the kernel thread (a big studio takes seconds; the view
     /// carries on meanwhile, [`Self::build_within`]).
     pending: HashMap<ElementId, (Vec<Feature>, cadrs_core::rebuild::Pending)>,
+    /// Builds to make again though their features are as they were (the Document menu's Full
+    /// rebuild, [`Self::rebuild_again`]): shown until their new ones are done.
+    stale: HashSet<ElementId>,
     key: Option<AssemblyKey>,
     /// Each assembly's view parts with the key they were placed for: going back to its tab
     /// reuses them (the same meshes, [`crate::parts`] keeps theirs) instead of placing every
@@ -434,6 +437,15 @@ pub fn first_part_of(doc: &ActiveDocument, instance: InstanceId) -> Option<(Inst
 }
 
 impl AssemblyParts {
+    /// Rebuilds every source Part Studio though nothing changed (the Document menu's Full
+    /// rebuild, after [`cadrs_core::rebuild::clear_cache`]); the instances keep their parts on
+    /// screen meanwhile.
+    pub fn rebuild_again(&mut self) {
+        self.stale = self.builds.keys().copied().collect();
+        self.pending.clear();
+        self.key = None;
+    }
+
     /// The current rebuild of the Part Studio `element` (rebuilt if its features changed).
     pub fn build(&mut self, doc: &cadrs_core::Document, element: ElementId) -> Option<Arc<Build>> {
         self.build_within(doc, element, None).0
@@ -467,6 +479,7 @@ impl AssemblyParts {
         let features = el.part_features();
         if let Some((f, b)) = self.builds.get(&element)
             && f.as_slice() == features
+            && !self.stale.contains(&element)
         {
             return (Some(b.clone()), true);
         }
@@ -486,6 +499,7 @@ impl AssemblyParts {
         match done {
             Some(b) => {
                 self.pending.remove(&element);
+                self.stale.remove(&element);
                 self.builds.insert(element, (features.to_vec(), b.clone()));
                 (Some(b), true)
             }
@@ -1084,6 +1098,26 @@ pub fn view_parts(cache: &PartCache, instances: &[InstanceId]) -> Vec<PartId> {
 /// The part id an instance has in the view.
 pub fn part_of(i: InstanceId) -> PartId {
     i.part_id()
+}
+
+#[cfg(test)]
+mod rebuild_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_rebuild_builds_the_source_studios_again() {
+        let doc = cadrs_core::Document::new("Full rebuild");
+        let studio = doc.elements[0].id;
+        let mut asm = AssemblyParts::default();
+        let first = asm.build(&doc, studio).expect("the studio's build");
+        // Unchanged features: the same build.
+        assert!(Arc::ptr_eq(&first, &asm.build(&doc, studio).unwrap()));
+        // Full rebuild: a new one, kept from then on.
+        asm.rebuild_again();
+        let again = asm.build(&doc, studio).unwrap();
+        assert!(!Arc::ptr_eq(&first, &again));
+        assert!(Arc::ptr_eq(&again, &asm.build(&doc, studio).unwrap()));
+    }
 }
 
 #[cfg(test)]

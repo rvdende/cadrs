@@ -1,7 +1,8 @@
 //! The toolbar's **Search tools** box (P3.9, PS2.3): clicking it or pressing Alt+C opens a
 //! field over it with a list of the tools whose names match what is typed (a
-//! [`cadrs_ui::CommandPalette`]). The tools are the toolbar's own buttons, whatever the toolbar
-//! shows (the Part Studio's features, or the sketch tools while sketching), plus the pattern
+//! [`cadrs_ui::CommandPalette`]). The tools are Undo and Redo (the toolbars have no buttons for
+//! them), the toolbar's own buttons, whatever the toolbar shows (the Part Studio's features, or
+//! the sketch tools while sketching), plus the pattern
 //! menu's three patterns and (P3.11) every variant in a sketch tool's ▾ menu (Midpoint line,
 //! Tangent arc, the constraints, …), each launched directly; tools cadrs doesn't have yet are
 //! listed greyed. ↑/↓ move the
@@ -74,6 +75,8 @@ pub enum Launch {
     SketchVariant(Entity, crate::sketch::SketchTool),
     /// P3I.9: a sheet metal tool of `crate::sheetmetal_p3i9_ui`.
     Sm9(&'static str),
+    Undo,
+    Redo,
 }
 
 /// The open search: the palette entity, the tools, the query the rows were built for, the
@@ -111,17 +114,35 @@ pub fn matching(tools: &[ToolEntry], query: &str) -> Vec<usize> {
     hits
 }
 
-/// The toolbar's buttons as tools.
+/// Undo, Redo and the toolbar's buttons as tools.
 fn gather(world: &mut World) -> Vec<ToolEntry> {
+    let (can_undo, can_redo) = crate::document::can_undo_redo(world);
+    let mut out = vec![
+        ToolEntry {
+            id: "undo".into(),
+            label: "Undo".into(),
+            icon: "undo".into(),
+            shortcut: Some("Ctrl+Z".into()),
+            enabled: can_undo,
+            launch: Launch::Undo,
+        },
+        ToolEntry {
+            id: "redo".into(),
+            label: "Redo".into(),
+            icon: "redo".into(),
+            shortcut: Some("Ctrl+Y".into()),
+            enabled: can_redo,
+            launch: Launch::Redo,
+        },
+    ];
     let mut q_names = world.query::<(Entity, &Name)>();
     let Some(toolbar) = q_names
         .iter(world)
         .find(|(_, n)| n.as_str() == "toolbar")
         .map(|(e, _)| e)
     else {
-        return Vec::new();
+        return out;
     };
-    let mut out = Vec::new();
     let mut stack = vec![toolbar];
     let mut order = Vec::new();
     while let Some(e) = stack.pop() {
@@ -308,6 +329,8 @@ fn launch(world: &mut World, i: usize) {
                 crate::sketch::choose_variant(world, e, t);
             }
         }
+        Launch::Undo => crate::document::undo_step(world),
+        Launch::Redo => crate::document::redo_step(world),
     }
 }
 

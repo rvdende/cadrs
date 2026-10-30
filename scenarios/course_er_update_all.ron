@@ -79,7 +79,7 @@ Scenario(
         Screenshot("09-auto-version-in-graph"),
         Click(ui("insert-dialog-cancel")),
         Custom("linked-block open-sub"),
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         MoveTo(1420, 780),
         Wait(3),

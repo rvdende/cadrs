@@ -39,19 +39,27 @@ const ANGLE_POINTS: usize = 8;
 
 pub type Q = [f64; NQ];
 
+/// Number of quantities integrated here: [`Q`]'s, then the flux moments [`shifted`] needs to
+/// move them to another origin (`∫N`, `∫x·nx, ∫y·ny, ∫z·nz`, `∫xy·nx, ∫yz·ny, ∫zx·nz`,
+/// `∫y·nx, ∫z·ny, ∫x·nz`).
+const NE: usize = NQ + 12;
+
+/// [`Q`] with the moments of [`NE`].
+type QE = [f64; NE];
+
 /// The integrand at (u, v) relative to `shift`: area terms (scaled by |N|) and volume terms
 /// (by the vector N = Su × Sv; the divergence theorem turns them into volume integrals). With
 /// `ALL` false only the volume's (`out[4]`): this and the integrators below take `ALL` so
 /// [`body_volume`] runs only the one quantity, on the fewer points its integrand needs.
 #[inline]
-fn integrand<const ALL: bool>(s: &Surface, u: f64, v: f64, shift: &V3, out: &mut Q, w: f64) {
+fn integrand<const ALL: bool>(s: &Surface, u: f64, v: f64, shift: &V3, out: &mut QE, w: f64) {
     let (p, su, sv) = s.d1(u, v);
     accumulate::<ALL>(&p, &su, &sv, shift, out, w);
 }
 
 /// [`integrand`] from the point and first derivatives.
 #[inline]
-fn accumulate<const ALL: bool>(p: &P3, su: &V3, sv: &V3, shift: &V3, out: &mut Q, w: f64) {
+fn accumulate<const ALL: bool>(p: &P3, su: &V3, sv: &V3, shift: &V3, out: &mut QE, w: f64) {
     let n = su.cross(sv);
     let (x, y, z) = (p.x - shift.x, p.y - shift.y, p.z - shift.z);
     let (nx, ny, nz) = (n.x * w, n.y * w, n.z * w);
@@ -74,6 +82,44 @@ fn accumulate<const ALL: bool>(p: &P3, su: &V3, sv: &V3, shift: &V3, out: &mut Q
     out[11] += x * x * y * 0.5 * nx;
     out[12] += y * y * z * 0.5 * ny;
     out[13] += z * z * x * 0.5 * nz;
+    out[14] += nx;
+    out[15] += ny;
+    out[16] += nz;
+    out[17] += x * nx;
+    out[18] += y * ny;
+    out[19] += z * nz;
+    out[20] += x * y * nx;
+    out[21] += y * z * ny;
+    out[22] += z * x * nz;
+    out[23] += y * nx;
+    out[24] += z * ny;
+    out[25] += x * nz;
+}
+
+/// Face integrals `q` (with [`NE`]'s moments) about `from` moved to `to`: x − d for x, d = to −
+/// from, expanded in the moments.
+fn shifted(q: &QE, from: &V3, to: &V3) -> Q {
+    let d = to - from;
+    let (dx, dy, dz) = (d.x, d.y, d.z);
+    let mut r = [0.0; NQ];
+    r[0] = q[0];
+    r[1] = q[1] - dx * q[0];
+    r[2] = q[2] - dy * q[0];
+    r[3] = q[3] - dz * q[0];
+    r[4] = q[4] - (dx * q[14] + dy * q[15] + dz * q[16]) / 3.0;
+    r[5] = q[5] - dx * q[17] + dx * dx * 0.5 * q[14];
+    r[6] = q[6] - dy * q[18] + dy * dy * 0.5 * q[15];
+    r[7] = q[7] - dz * q[19] + dz * dz * 0.5 * q[16];
+    r[8] = q[8] - 2.0 * dx * q[5] + dx * dx * q[17] - dx * dx * dx / 3.0 * q[14];
+    r[9] = q[9] - 2.0 * dy * q[6] + dy * dy * q[18] - dy * dy * dy / 3.0 * q[15];
+    r[10] = q[10] - 2.0 * dz * q[7] + dz * dz * q[19] - dz * dz * dz / 3.0 * q[16];
+    r[11] = q[11] - dy * q[5] - dx * q[20] + dx * dy * q[17] + dx * dx * 0.5 * q[23]
+        - dx * dx * dy * 0.5 * q[14];
+    r[12] = q[12] - dz * q[6] - dy * q[21] + dy * dz * q[18] + dy * dy * 0.5 * q[24]
+        - dy * dy * dz * 0.5 * q[15];
+    r[13] = q[13] - dx * q[7] - dz * q[22] + dz * dx * q[19] + dz * dz * 0.5 * q[25]
+        - dz * dz * dx * 0.5 * q[16];
+    r
 }
 
 /// The most points a rule here has.
@@ -276,7 +322,7 @@ fn inner<const ALL: bool>(
     v: f64,
     shift: &V3,
     w: f64,
-    acc: &mut Q,
+    acc: &mut QE,
     scratch: &mut Vec<f64>,
 ) {
     if (u - u0).abs() < tol::TINY {
@@ -321,7 +367,15 @@ fn ruled_in_v(s: &Surface) -> bool {
 /// linear in v and N constant (a cylinder's, an extrusion's) or linear (a cone's): the inertia
 /// integrands are cubics or quartics, the volume's linear or quadratic (exact with 2 or 3, 1 or 2
 /// points). A cone's |N| has a kink at the apex: the pieces either side of it apart.
-fn inner_v<const ALL: bool>(s: &Surface, u: f64, v0: f64, v: f64, shift: &V3, w: f64, acc: &mut Q) {
+fn inner_v<const ALL: bool>(
+    s: &Surface,
+    u: f64,
+    v0: f64,
+    v: f64,
+    shift: &V3,
+    w: f64,
+    acc: &mut QE,
+) {
     if (v - v0).abs() < tol::TINY {
         return;
     }
@@ -476,8 +530,8 @@ fn smooth_rule<const ALL: bool>(pc: &Curve, pieces: usize) -> usize {
 }
 
 /// Face integrals with the inner integral along v: ∫∫ h = −∮ G du.
-fn face_integrals_v<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> Q {
-    let mut acc = [0.0; NQ];
+fn face_integrals_v<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
+    let mut acc = [0.0; NE];
     let mut v_ref = f64::INFINITY;
     for l in &f.loops {
         for c in l {
@@ -594,8 +648,8 @@ fn iso_rectangle(body: &Body, f: &Face) -> Option<([f64; 4], f64)> {
 /// The face integrals over an iso-rectangle of a B-spline surface: a tensor Gauss rule on each
 /// knot span (the integrand is polynomial along polynomial directions, smooth along rational
 /// ones).
-fn rect_integrals<const ALL: bool>(s: &Surface, ns: &NurbsSurface, r: [f64; 4], shift: &V3) -> Q {
-    let mut acc = [0.0; NQ];
+fn rect_integrals<const ALL: bool>(s: &Surface, ns: &NurbsSurface, r: [f64; 4], shift: &V3) -> QE {
+    let mut acc = [0.0; NE];
     let (_, bv) = ns.breaks();
     let mut vs = vec![r[2]];
     vs.extend(
@@ -648,11 +702,13 @@ fn rect_integrals<const ALL: bool>(s: &Surface, ns: &NurbsSurface, r: [f64; 4], 
 
 /// The 14 face integrals of a face, relative to `shift`, oriented by its sense.
 pub fn face_integrals(body: &Body, f: &Face, shift: &V3) -> Q {
-    face_integrals_of::<true>(body, f, shift)
+    let q = face_integrals_of::<true>(body, f, shift);
+    std::array::from_fn(|k| q[k])
 }
 
-/// [`face_integrals`], or with `ALL` false only the volume's (`[4]`; the others zero).
-fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> Q {
+/// [`face_integrals`] with [`NE`]'s moments, or with `ALL` false only the volume's (`[4]`; the
+/// others zero).
+fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
     if ruled_in_v(&f.surf) && !matches!(f.surf, Surface::Plane { .. }) {
         return face_integrals_v::<ALL>(body, f, shift);
     }
@@ -672,7 +728,7 @@ fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> Q {
         }
         return acc;
     }
-    let mut acc = [0.0; NQ];
+    let mut acc = [0.0; NE];
     let mut scratch = Vec::with_capacity(64);
     // The reference u: the smallest u on the boundary keeps H small.
     let mut u_ref = f64::INFINITY;
@@ -852,41 +908,42 @@ fn run_jobs<const ALL: bool>(
     plan: &Inner,
     jobs: &[[f64; 4]],
     shift: &V3,
-    acc: &mut Q,
+    acc: &mut QE,
     scratch: &mut Vec<f64>,
 ) {
     #[cfg(feature = "gpu")]
-    if jobs.len() >= GPU_MIN_JOBS && GPU_ON.load(std::sync::atomic::Ordering::Relaxed) {
-        if let (Surface::Nurbs(ns), Some(gpu)) = (s, cadrs_gpu::get()) {
-            if ns.du <= 3 && ns.dv <= 3 {
-                let (nu, nv) = (ns.cps.len(), ns.cps[0].len());
-                let ctrl: Vec<f64> = ns
-                    .cps
-                    .iter()
-                    .flatten()
-                    .flat_map(|h| [h.x, h.y, h.z, h.w])
-                    .collect();
-                let mut consts = vec![shift.x, shift.y, shift.z];
-                consts.extend_from_slice(&GAUSS16.x);
-                consts.extend_from_slice(&GAUSS16.w);
-                let q = cadrs_gpu::QuadParams {
-                    nu: nu as u32,
-                    nv: nv as u32,
-                    du: ns.du as u32,
-                    dv: ns.dv as u32,
-                    nku: ns.ku.len() as u32,
-                    nkv: ns.kv.len() as u32,
-                    jobs: 0,
-                    _pad: 0,
-                };
-                for r in gpu.quad_inner(q, &ctrl, &ns.ku, &ns.kv, &consts, jobs) {
-                    for (a, x) in acc.iter_mut().zip(r) {
-                        *a += x;
-                    }
-                }
-                return;
+    if jobs.len() >= GPU_MIN_JOBS
+        && GPU_ON.load(std::sync::atomic::Ordering::Relaxed)
+        && let (Surface::Nurbs(ns), Some(gpu)) = (s, cadrs_gpu::get())
+        && ns.du <= 3
+        && ns.dv <= 3
+    {
+        let (nu, nv) = (ns.cps.len(), ns.cps[0].len());
+        let ctrl: Vec<f64> = ns
+            .cps
+            .iter()
+            .flatten()
+            .flat_map(|h| [h.x, h.y, h.z, h.w])
+            .collect();
+        let mut consts = vec![shift.x, shift.y, shift.z];
+        consts.extend_from_slice(GAUSS16.x);
+        consts.extend_from_slice(GAUSS16.w);
+        let q = cadrs_gpu::QuadParams {
+            nu: nu as u32,
+            nv: nv as u32,
+            du: ns.du as u32,
+            dv: ns.dv as u32,
+            nku: ns.ku.len() as u32,
+            nkv: ns.kv.len() as u32,
+            jobs: 0,
+            _pad: 0,
+        };
+        for r in gpu.quad_inner(q, &ctrl, &ns.ku, &ns.kv, &consts, jobs) {
+            for (a, x) in acc.iter_mut().zip(r) {
+                *a += x;
             }
         }
+        return;
     }
     for j in jobs {
         inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], acc, scratch);
@@ -929,7 +986,14 @@ pub fn body_mass(body: &Body) -> crate::MassProperties {
     let faces: Vec<usize> = (0..body.faces.len()).collect();
     let qs: Vec<Q> = faces
         .par_iter()
-        .map(|&i| face_integrals(body, &body.faces[i], &shift))
+        .map(|&i| {
+            let f = &body.faces[i];
+            if gpu_active() || !costly(f) {
+                return face_integrals(body, f, &shift);
+            }
+            let (center, q) = face_integrals_about_center(body, i);
+            shifted(&q, &center, &shift)
+        })
         .collect();
     let mut q = [0.0; NQ];
     for f in &qs {
@@ -1007,7 +1071,19 @@ pub fn wire_length(body: &Body) -> (f64, V3) {
 
 /// A face's area and area centroid.
 pub fn face_area(body: &Body, fi: usize) -> (f64, P3) {
-    let f = &body.faces[fi];
+    let (shift, q) = face_integrals_about_center(body, fi);
+    let a = q[0];
+    let c = if a.abs() > tol::TINY {
+        V3::new(q[1], q[2], q[3]) / a + shift
+    } else {
+        shift
+    };
+    (a, P3::from(c))
+}
+
+/// The middle of a face's box (its vertices and edge midpoints), which its integrals are taken
+/// about so they move to any origin to rounding ([`shifted`]).
+fn face_center(body: &Body, f: &Face) -> V3 {
     let mut bb = Bbox::empty();
     for l in &f.loops {
         for c in l {
@@ -1018,20 +1094,106 @@ pub fn face_area(body: &Body, fi: usize) -> (f64, P3) {
             }
         }
     }
-    let shift = if bb.is_empty() {
+    if bb.is_empty() {
         V3::zeros()
     } else {
         bb.center().coords
-    };
-    let q = face_integrals(body, f, &shift);
-    let a = q[0];
-    let c = if a.abs() > tol::TINY {
-        V3::new(q[1], q[2], q[3]) / a + shift
-    } else {
-        shift
-    };
-    (a, P3::from(c))
+    }
 }
+
+/// Face `fi`'s integrals (with [`NE`]'s moments) and the point they are about: its
+/// [`face_center`], or the centre a face of the same surface and boundary had when they were
+/// taken ([`FaceCache`]): a feature leaves most of a body's faces as they were, and each body
+/// it makes is weighed and its faces measured.
+fn face_integrals_about_center(body: &Body, fi: usize) -> (V3, QE) {
+    let f = &body.faces[fi];
+    // (Not the GPU's integrals: its kernel takes [`Q`]'s quantities only.)
+    let key = (costly(f) && !gpu_active()).then(|| face_key(body, f));
+    if let Some(k) = key
+        && let Some(hit) = FACE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(k)
+    {
+        return hit;
+    }
+    let center = face_center(body, f);
+    let q = face_integrals_of::<true>(body, f, &center);
+    if let Some(k) = key {
+        FACE_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(k, (center, q));
+    }
+    (center, q)
+}
+
+/// Whether a face's integrals are worth keeping ([`FACE_CACHE`]): a B-spline, swept or
+/// revolved surface's or a boundary of B-spline p-curves' (many points each); an analytic face
+/// bounded by lines and circles takes fewer points than its key's hash.
+fn costly(f: &Face) -> bool {
+    !matches!(
+        f.surf,
+        Surface::Plane { .. }
+            | Surface::Cylinder { .. }
+            | Surface::Cone { .. }
+            | Surface::Sphere { .. }
+            | Surface::Torus { .. }
+    ) || f
+        .loops
+        .iter()
+        .flatten()
+        .any(|c| matches!(c.pc, Curve::Nurbs(_)))
+}
+
+/// What a face's integrals depend on, hashed to 128 bits ([`super::fingerprint`]): its
+/// surface, its sense and its boundary (each p-curve and its range).
+fn face_key(body: &Body, f: &Face) -> u128 {
+    use std::hash::Hasher;
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(&f.surf);
+    h.write_u8(f.sense as u8);
+    for l in &f.loops {
+        h.write_usize(l.len());
+        for c in l {
+            let e = &body.edges[c.edge];
+            h.write_u8(c.fwd as u8);
+            h.f64s(&e.t);
+            h.curve(&c.pc);
+        }
+    }
+    h.key()
+}
+
+/// The faces' integrals last taken, by [`face_key`]: two generations of at most [`Self::KEPT`]
+/// each, a hit in the older moved to the newer, so the faces of the bodies a rebuild keeps
+/// working on stay.
+#[derive(Default)]
+struct FaceCache {
+    new: rustc_hash::FxHashMap<u128, (V3, QE)>,
+    old: rustc_hash::FxHashMap<u128, (V3, QE)>,
+}
+
+impl FaceCache {
+    /// Faces a generation holds (about 230 bytes each).
+    const KEPT: usize = 16_384;
+
+    fn get(&mut self, k: u128) -> Option<(V3, QE)> {
+        if let Some(v) = self.new.get(&k) {
+            return Some(*v);
+        }
+        let v = self.old.remove(&k)?;
+        self.insert(k, v);
+        Some(v)
+    }
+
+    fn insert(&mut self, k: u128, v: (V3, QE)) {
+        if self.new.len() >= Self::KEPT {
+            self.old = std::mem::take(&mut self.new);
+        }
+        self.new.insert(k, v);
+    }
+}
+
+static FACE_CACHE: std::sync::LazyLock<std::sync::Mutex<FaceCache>> =
+    std::sync::LazyLock::new(Default::default);
 
 #[cfg(test)]
 mod tests {
@@ -1075,7 +1237,7 @@ mod tests {
             r: 0.0,
             a: PI / 4.0,
         };
-        let mut q = [0.0; NQ];
+        let mut q = [0.0; NE];
         // ∫ over u ∈ [0, π/2] of G(u, 2) − G(u, −2), each G from v = −2.
         let g = gauss(8);
         for (x, w) in g.x.iter().zip(g.w) {
@@ -1087,6 +1249,56 @@ mod tests {
             (q[0] - exact).abs() < 1e-12 * exact,
             "area {} vs {exact}",
             q[0]
+        );
+    }
+
+    /// Integrals taken about one point and moved to another ([`shifted`]) are those taken about
+    /// the other, on a box with every edge rounded (B-spline corners, tori, cylinders); and its
+    /// mass properties come out the same weighed again ([`FACE_CACHE`]) and as summed about its
+    /// own centre.
+    #[test]
+    fn integrals_moved_to_another_origin() {
+        use crate::Kernel;
+        use crate::native::kernel::NativeKernel;
+        let mut k = NativeKernel::new();
+        let crate::native::draw::Shape::Body(cube) = k.box_(10.0, 20.0, 30.0).unwrap() else {
+            unreachable!()
+        };
+        let edges: Vec<crate::EdgeId> = (0..k.edges(cube).unwrap().len() as u64)
+            .map(crate::EdgeId)
+            .collect();
+        let round = k.fillet(cube, &edges, 2.0).unwrap().bodies[0];
+        let b = &**k.get(round).unwrap();
+        assert!(b.faces.iter().any(costly));
+        let (from, to) = (V3::new(1.0, -2.0, 3.0), V3::new(-7.0, 25.0, 40.0));
+        // Each quantity's degree in x: its scale is the face's area times a length that often.
+        let degree = [0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3];
+        for f in &b.faces {
+            let moved = shifted(&face_integrals_of::<true>(b, f, &from), &from, &to);
+            let direct = face_integrals(b, f, &to);
+            for (q, d) in degree.iter().enumerate() {
+                let tol = 1e-11 * direct[0].abs() * 60f64.powi(*d);
+                assert!(
+                    (moved[q] - direct[q]).abs() <= tol,
+                    "quantity {q}: {} vs {}",
+                    moved[q],
+                    direct[q]
+                );
+            }
+        }
+        let (first, again) = (body_mass(b), body_mass(b));
+        assert_eq!(first.volume, again.volume);
+        assert_eq!(first.inertia, again.inertia);
+        let center = b.bbox().center().coords;
+        let summed: f64 = b
+            .faces
+            .iter()
+            .map(|f| face_integrals(b, f, &center)[4])
+            .sum();
+        assert!(
+            (first.volume - summed).abs() < 1e-12 * summed,
+            "{} vs {summed}",
+            first.volume
         );
     }
 }

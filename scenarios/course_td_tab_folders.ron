@@ -1,35 +1,72 @@
-// P3E.2 (test-drive.md TD5.3, X6; essential-tips.md X1): tab folders. "Exercise: Move to
-// Document" (`move-doc setup`: Hexapod, Pneumatic Piston, Piston Assembly, Topplate, Baseplate)
-// with "Drawing 1" (`move-doc drawing`).
-// 01 "+" → the menu's Create folder (enabled) hovered.
+// P3E.2 (test-drive.md TD5.3, X6; essential-tips.md X1): tab folders in the tab bar, end to
+// end. The bar always shows the top level; a folder tab (folder icon, chevron ▲, ▼ while open)
+// lists its tabs and folders above it, each folder's list opening to the side as deep as they
+// go, with New ▸ (any studio made in that folder).
+// 01 "+": Create Part Studio twice (Part Studio 2, 3), then the menu's Create folder hovered.
 // 02 "Folder 1" made right of the active tab, its name being edited in place.
-// 03 renamed "Plates"; the folder tab hovered (its tooltip counts its tabs).
-// 04 Topplate dragged onto the Plates folder: a blue box round the folder, the tab's ghost, the
-//    dragged tab dimmed.
-// 05 dropped: Topplate is in the folder (gone from the top level).
-// 06 Baseplate dragged between Hexapod and Plates: the blue drop line (a reorder).
-// 07 Baseplate dropped there; then dragged onto Plates too: the folder holds both.
-// 08 Plates opened (a click): Home and the breadcrumb "Plates", its two tabs.
-// 09 inside the folder: Baseplate's menu → Move to folder ▸ (Top level, New folder).
-// 10 Topplate dragged onto Home: the blue box round Home.
-// 11 dropped: Topplate left the folder (the bar stays in Plates, where the active Baseplate is).
-// 12 Ctrl+Z: one undo step puts Topplate back in Plates.
-// 13 Home; the folder's menu: Open, Rename…, Delete folder… hovered.
-// 14 Delete folder…: the dialog asks about its 2 tabs.
-// 15 Delete folder only: the tabs are back at the top level where the folder was.
-// 16 Ctrl+Z: the folder is back with its tabs (one step); the bar opens it, where the active
-//    Baseplate is.
-// 17 reloaded (back to the documents page, the document opened again): the folder and the
-//    order are as they were.
-// 18 the folder opened after the reload: Topplate and Baseplate.
+// 03 renamed "Brackets"; a second folder renamed "Hardware".
+// 04 Part Studio 2 dragged onto Brackets: the blue box round the folder, the tab's ghost and
+//    the dragged tab dimmed.
+// 05 dropped; Part Studio 3 dropped into Hardware, then Hardware dragged onto Brackets (nested):
+//    the bar holds Part Studio 1 and Brackets.
+// 06 Brackets clicked: its list above it (Part Studio 2, Hardware ▸, New ▸), its chevron ▼.
+// 07 Hardware hovered: its list to the side (Part Studio 3, New ▸, Rename…, Delete folder…).
+// 08 Hardware's New hovered: the six studios, a third level, all on screen.
+// 09 New ▸ Assembly picked: "Assembly 1" made in Hardware and opened; Brackets marked as
+//    holding the active tab.
+// 10 Brackets ▸ Hardware again: Assembly 1 ticked in it.
+// 11 Hardware's Rename…: the name popup over the bar; typed "Fasteners".
+// 12 committed: Brackets ▸ Fasteners, the nested folder renamed.
+// 13 Brackets' own New ▸ Variable Studio: "Variable Studio 1" made in Brackets and opened.
+// 14 a tab in the list right-clicked (Part Studio 2): the tab's menu (it stays the active tab
+//    it isn't), Move to folder ▸ hovered: Top level, "Brackets › Fasteners", New folder (not
+//    Brackets, which it is in).
+// 15 Top level picked: Part Studio 2 back in the bar, right of Brackets.
+// 16 Part Studio 2 dragged to the bar's start: the blue line before Part Studio 1.
+// 17 dropped: Part Studio 2 first.
+// 18 a listed tab's Rename… (Variable Studio 1 in Brackets): the name popup; "Loads".
+// 19 the pointer on Part Studio 1: its card at once (its icon, the name, Part Studio, "4
+//    features" as its feature list counts them).
+// 20 Brackets' right-click menu: Show tabs, Rename…, Delete folder… (in red).
+// 20b Rename…: "Plates" typed in place on the folder's tab.
+// 21 Plates' Delete folder…: the dialog says it holds 1 tab and 1 folder (3 tabs in all);
+//    Delete folder and tabs in red.
+// 22 Delete folder only: its tabs and Fasteners at the top level where it was.
+// 23 Ctrl+Z: Plates back with everything in it (one step).
+// 24 reloaded (the documents page, the document opened again): the folders as they were;
+//    Plates ▸ Fasteners listed.
+// 25 fourteen more Part Studios: the bar overflows (‹ › ▾); a tab cut by an end of the view is
+//    hidden, not shown as a stub.
+// 26 ▾: the tabs scrolled out of sight listed above its right end, clear of the bar.
+// 26b the strip scrolled to its start with the wheel, then ‹ clicked: dimmed, nothing moves
+//    (Part Studio 2 still first).
+// 27 dark scheme; Assembly 1 opened from Plates ▸ Fasteners; the strip scrolled to its end
+//    (› dimmed): Plates' list at the window's right edge, pressed, Fasteners' list opening to
+//    its left; Plates' tab (underlined) and the Fasteners row hold the active tab, in the
+//    accent.
+// 28 the pointer on Part Studio 17: its card, dark.
 Scenario(
-    start: Some("document"),
+    start: Some("landing"),
     steps: [
+        // A new document (stored, so it can be opened again at 24): Part Studio 1 alone.
+        Click(ui("create")),
+        WaitFor("new-document"),
+        Click(ui("new-document")),
+        WaitFor("new-document-create"),
+        Type("Tab folders"),
+        Click(ui("new-document-create")),
         WaitFor("document-shell"),
-        Custom("move-doc setup"),
-        Custom("move-doc drawing"),
-        Click(ui("tab-hexapod")),
-        Key("F"),
+        Wait(10),
+        MoveTo(1420, 600),
+        // Part Studio 2 and 3.
+        Click(ui("insert-tab")),
+        WaitFor("insert-tab-menu"),
+        Click(ui("create-part-studio")),
+        WaitFor("tab-part-studio-2"),
+        Click(ui("insert-tab")),
+        WaitFor("insert-tab-menu"),
+        Click(ui("create-part-studio")),
+        WaitFor("tab-part-studio-3"),
         Click(ui("insert-tab")),
         WaitFor("insert-tab-menu"),
         Hover(ui("create-folder")),
@@ -37,116 +74,257 @@ Scenario(
         Screenshot("01-create-folder"),
         Click(ui("create-folder")),
         WaitFor("tab-folder-folder-1"),
-        MoveTo(1420, 780),
+        MoveTo(1420, 600),
         Wait(3),
         Screenshot("02-folder-renaming"),
         Key("Ctrl+A"),
-        Type("Plates"),
+        Type("Brackets"),
         Key("Enter"),
-        WaitFor("tab-folder-plates"),
-        Hover(ui("tab-folder-plates")),
-        Wait(50),
-        Screenshot("03-folder-plates"),
-        Press(ui("tab-topplate")),
+        WaitFor("tab-folder-brackets"),
+        Click(ui("insert-tab")),
+        WaitFor("insert-tab-menu"),
+        Click(ui("create-folder")),
+        WaitFor("tab-folder-folder-1"),
+        Key("Ctrl+A"),
+        Type("Hardware"),
+        Key("Enter"),
+        WaitFor("tab-folder-hardware"),
+        MoveTo(1420, 600),
+        Wait(3),
+        Screenshot("03-two-folders"),
+        // Part Studio 2 onto Brackets, shot mid-drag.
+        Press(ui("tab-part-studio-2")),
         Wait(2),
-        Hover(ui_at("tab-topplate", 0.3, 0.2)),
+        Hover(ui_at("tab-part-studio-2", 0.3, 0.2)),
         Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.45, 0.5)),
+        Hover(ui_at("tab-folder-brackets", 0.45, 0.5)),
         Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.5, 0.5)),
+        Hover(ui_at("tab-folder-brackets", 0.5, 0.5)),
         Wait(5),
         Screenshot("04-drag-onto-folder"),
         Release,
-        Wait(20),
-        MoveTo(1420, 780),
+        Wait(10),
+        Drag(ui("tab-part-studio-3"), ui_at("tab-folder-hardware", 0.5, 0.5)),
+        Wait(10),
+        Drag(ui("tab-folder-hardware"), ui_at("tab-folder-brackets", 0.5, 0.5)),
+        Wait(10),
+        MoveTo(1420, 600),
         Wait(3),
-        Screenshot("05-topplate-in-folder"),
-        Press(ui("tab-baseplate")),
-        Wait(2),
-        Hover(ui_at("tab-baseplate", 0.3, 0.2)),
-        Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.08, 0.5)),
-        Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.06, 0.5)),
+        Screenshot("05-nested"),
+        // The lists: Brackets, Hardware to its side, Hardware's New ▸ a third level.
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-list"),
         Wait(5),
-        Screenshot("06-drag-reorder-line"),
-        Release,
-        Wait(20),
-        Press(ui("tab-baseplate")),
-        Wait(2),
-        Hover(ui_at("tab-baseplate", 0.3, 0.2)),
-        Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.45, 0.5)),
-        Wait(2),
-        Hover(ui_at("tab-folder-plates", 0.5, 0.5)),
+        Screenshot("06-folder-list"),
+        Hover(ui("tab-folder-sub-hardware")),
+        WaitFor("tab-folder-new-hardware"),
+        Wait(5),
+        Screenshot("07-nested-list"),
+        Hover(ui("tab-folder-new-hardware")),
+        WaitFor("tab-folder-new-assembly-hardware"),
+        Wait(5),
+        Screenshot("08-new-studios"),
+        Click(ui("tab-folder-new-assembly-hardware")),
+        WaitFor("assembly-items"),
+        MoveTo(1420, 600),
+        Wait(5),
+        Screenshot("09-assembly-in-hardware"),
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-list"),
+        Hover(ui("tab-folder-sub-hardware")),
+        WaitFor("tab-folder-pick-assembly-1"),
+        Wait(5),
+        Screenshot("10-active-ticked"),
+        // Hardware renamed from its list.
+        Hover(ui("tab-folder-rename-hardware")),
+        Click(ui("tab-folder-rename-hardware")),
+        WaitFor("tab-folder-rename-popup"),
+        Key("Ctrl+A"),
+        Type("Fasteners"),
         Wait(3),
-        Release,
-        Wait(20),
-        MoveTo(1420, 780),
+        Screenshot("11-rename-popup"),
+        Key("Enter"),
+        Wait(5),
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-sub-fasteners"),
+        Hover(ui("tab-folder-sub-fasteners")),
+        WaitFor("tab-folder-new-fasteners"),
+        Wait(5),
+        Screenshot("12-renamed-nested"),
+        Key("Escape"),
         Wait(3),
-        Screenshot("07-both-in-folder"),
-        Click(ui("tab-folder-plates")),
-        WaitFor("tab-folder-home"),
-        Hover(ui("tab-folder-home")),
-        Wait(50),
-        Screenshot("08-folder-open-home"),
-        RightClick(ui("tab-baseplate")),
+        // A studio made in the top-level folder.
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-new-brackets"),
+        Hover(ui("tab-folder-new-brackets")),
+        WaitFor("tab-folder-new-variable-studio-brackets"),
+        Click(ui("tab-folder-new-variable-studio-brackets")),
+        Wait(10),
+        MoveTo(1420, 600),
+        Wait(5),
+        Screenshot("13-studio-in-folder"),
+        // A listed tab's menu: Move to folder ▸ Top level.
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-pick-part-studio-2"),
+        RightClick(ui("tab-folder-pick-part-studio-2")),
         WaitFor("tab-context-menu"),
         Hover(ui("tab-move-folder")),
-        Wait(25),
-        Screenshot("09-move-to-folder-menu"),
-        Key("Escape"),
-        Key("Escape"),
-        Press(ui("tab-topplate")),
-        Wait(2),
-        Hover(ui_at("tab-topplate", 0.3, 0.2)),
-        Wait(2),
-        Hover(ui_at("tab-folder-home", 0.45, 0.5)),
-        Wait(2),
-        Hover(ui_at("tab-folder-home", 0.5, 0.5)),
+        WaitFor("tab-to-top"),
         Wait(5),
-        Screenshot("10-drag-onto-home"),
+        Screenshot("14-listed-tab-menu"),
+        Click(ui("tab-to-top")),
+        WaitFor("tab-part-studio-2"),
+        MoveTo(1420, 600),
+        Wait(5),
+        Screenshot("15-moved-to-top"),
+        // Reordered: Part Studio 2 to the bar's start.
+        Press(ui("tab-part-studio-2")),
+        Wait(2),
+        Hover(ui_at("tab-part-studio-2", 0.3, 0.2)),
+        Wait(2),
+        Hover(ui_at("tab-part-studio-1", 0.1, 0.5)),
+        Wait(2),
+        Hover(ui_at("tab-part-studio-1", 0.05, 0.5)),
+        Wait(5),
+        Screenshot("16-reorder-line"),
         Release,
-        Wait(20),
-        MoveTo(1420, 780),
+        Wait(10),
+        MoveTo(1420, 600),
         Wait(3),
-        Screenshot("11-topplate-at-top-level"),
-        Key("Ctrl+Z"),
-        MoveTo(1420, 780),
+        Screenshot("17-reordered"),
+        // A listed tab renamed from its menu.
+        Click(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-pick-variable-studio-1"),
+        RightClick(ui("tab-folder-pick-variable-studio-1")),
+        WaitFor("tab-context-menu"),
+        Click(ui("tab-rename")),
+        WaitFor("tab-rename-popup"),
+        Key("Ctrl+A"),
+        Type("Loads"),
         Wait(3),
-        Screenshot("12-undo-one-step"),
-        Click(ui("tab-folder-home")),
+        Screenshot("18-tab-rename-popup"),
+        Key("Enter"),
+        Wait(5),
+        // The hover card.
+        Hover(ui("tab-part-studio-1")),
+        Wait(10),
+        Screenshot("19-hover-card"),
+        // The folder renamed in place from its menu.
+        RightClick(ui("tab-folder-brackets")),
+        WaitFor("tab-folder-menu"),
+        Hover(ui("tab-folder-rename")),
+        Wait(5),
+        Screenshot("20-folder-menu"),
+        Click(ui("tab-folder-rename")),
+        WaitFor("tab-folder-rename-field"),
+        Key("Ctrl+A"),
+        Type("Plates"),
+        MoveTo(1420, 600),
+        Wait(3),
+        Screenshot("20b-renaming-in-place"),
+        Key("Enter"),
+        WaitFor("tab-folder-plates"),
+        // Deleted, then undone.
         RightClick(ui("tab-folder-plates")),
         WaitFor("tab-folder-menu"),
-        Hover(ui("tab-folder-delete")),
-        Wait(20),
-        Screenshot("13-folder-menu"),
         Click(ui("tab-folder-delete")),
         WaitFor("delete-tab-folder-dialog"),
-        Hover(ui("delete-tab-folder-keep")),
-        Wait(20),
-        Screenshot("14-delete-dialog"),
+        MoveTo(1420, 600),
+        Wait(5),
+        Screenshot("21-delete-dialog"),
         Click(ui("delete-tab-folder-keep")),
-        MoveTo(1420, 780),
+        Wait(10),
+        MoveTo(1420, 600),
         Wait(3),
-        Screenshot("15-folder-deleted-tabs-kept"),
+        Screenshot("22-folder-deleted"),
         Key("Ctrl+Z"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("16-undo-delete"),
+        WaitFor("tab-folder-plates"),
+        Wait(5),
+        Screenshot("23-undone"),
+        // Reloaded: the folders kept.
         Click(ui("app-menu")),
         Click(ui("app-documents")),
         WaitFor("doc-row-0"),
-        Wait(20),
-        DoubleClick(ui("doc-name-0")),
-        WaitFor("document-shell"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("17-reloaded"),
+        DoubleClick(ui("doc-row-0")),
+        WaitFor("tab-folder-plates"),
         Click(ui("tab-folder-plates")),
-        WaitFor("tab-folder-home"),
-        MoveTo(1420, 780),
+        WaitFor("tab-folder-sub-fasteners"),
+        Hover(ui("tab-folder-sub-fasteners")),
+        WaitFor("tab-folder-new-fasteners"),
+        Wait(5),
+        Screenshot("24-reloaded"),
+        Key("Escape"),
         Wait(3),
-        Screenshot("18-reloaded-folder-open"),
+        // Many tabs: the bar overflows.
+        Click(ui("tab-part-studio-1")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        Click(ui("insert-tab")),
+        Click(ui("create-part-studio")),
+        WaitFor("tab-part-studio-17"),
+        MoveTo(1420, 600),
+        Wait(10),
+        Screenshot("25-overflow"),
+        Click(ui("tab-overflow")),
+        WaitFor("tab-overflow-menu"),
+        Wait(5),
+        Screenshot("26-overflow-list"),
+        Key("Escape"),
+        Wait(3),
+        // The strip's start: ‹ dimmed, and a click on it changes nothing.
+        Scroll(ui("tab-strip"), 80),
+        Wait(10),
+        Click(ui("tab-strip-prev")),
+        MoveTo(1420, 600),
+        Wait(10),
+        Screenshot("26b-strip-start"),
+        // Dark, at the window's right edge.
+        Click(ui("color-scheme-1")),
+        Wait(10),
+        Scroll(ui("tab-strip"), -80),
+        Wait(10),
+        Click(ui("tab-folder-plates")),
+        WaitFor("tab-folder-sub-fasteners"),
+        Hover(ui("tab-folder-sub-fasteners")),
+        WaitFor("tab-folder-pick-assembly-1"),
+        Click(ui("tab-folder-pick-assembly-1")),
+        Wait(10),
+        Scroll(ui("tab-strip"), -80),
+        Wait(10),
+        Click(ui("tab-folder-plates")),
+        WaitFor("tab-folder-sub-fasteners"),
+        Hover(ui("tab-folder-sub-fasteners")),
+        WaitFor("tab-folder-new-fasteners"),
+        Wait(5),
+        Screenshot("27-dark-lists-right-edge"),
+        Key("Escape"),
+        Wait(3),
+        Hover(ui("tab-part-studio-17")),
+        Wait(10),
+        Screenshot("28-dark-card"),
     ],
 )

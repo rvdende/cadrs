@@ -45,6 +45,7 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 web-time.workspace = true
 # The parts of one feature built side by side (`Rebuilder::per_part`).
 rayon.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

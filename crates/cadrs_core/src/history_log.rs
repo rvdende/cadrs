@@ -53,7 +53,7 @@ use crate::store::{Store, StoreError};
 
 mod compact;
 mod workspaces;
-mod writer;
+pub(crate) mod writer;
 use workspaces::Track;
 pub use workspaces::{MAIN_NAME, Workspace, WorkspaceId};
 pub use writer::flush as flush_saves;
@@ -112,10 +112,15 @@ impl StudioPatch {
         let shell = (shell_of(before) != shell_of(after)).then(|| Box::new(shell_of(after)));
         let ids = |e: &Element| e.features().iter().map(|f| f.id).collect::<Vec<_>>();
         let order = (ids(before) != ids(after)).then(|| ids(after));
+        // Each feature before by its id (the first with it).
+        let mut was: std::collections::HashMap<FeatureId, &Feature> = Default::default();
+        for f in before.features() {
+            was.entry(f.id).or_insert(f);
+        }
         let features = after
             .features()
             .iter()
-            .filter(|f| before.features().iter().find(|b| b.id == f.id) != Some(*f))
+            .filter(|f| was.get(&f.id).copied() != Some(*f))
             .cloned()
             .collect();
         Self {
@@ -155,11 +160,54 @@ impl StudioPatch {
 
 /// A Part Studio without its features.
 fn shell_of(e: &Element) -> Element {
-    let mut shell = e.clone();
-    if let Some(fs) = shell.features_mut() {
-        fs.clear();
+    // (Field by field, the features left out rather than copied and dropped: a Part Studio's
+    // features are most of a document. Every field named, so a new one isn't missed.)
+    let Element {
+        id,
+        name,
+        kind,
+        assembly,
+        contexts,
+        open_context,
+        simulation,
+        named_views,
+        studio_variables,
+    } = e;
+    let kind = match kind {
+        ElementKind::PartStudio {
+            features: _,
+            parts,
+            part_folders,
+            sketch_visibility,
+            appearances,
+            curve_appearances,
+            folders,
+            suppressed,
+            rollback,
+        } => ElementKind::PartStudio {
+            features: Vec::new(),
+            parts: parts.clone(),
+            part_folders: part_folders.clone(),
+            sketch_visibility: sketch_visibility.clone(),
+            appearances: appearances.clone(),
+            curve_appearances: curve_appearances.clone(),
+            folders: folders.clone(),
+            suppressed: suppressed.clone(),
+            rollback: *rollback,
+        },
+        other => other.clone(),
+    };
+    Element {
+        id: *id,
+        name: name.clone(),
+        kind,
+        assembly: assembly.clone(),
+        contexts: contexts.clone(),
+        open_context: *open_context,
+        simulation: simulation.clone(),
+        named_views: named_views.clone(),
+        studio_variables: studio_variables.clone(),
     }
-    shell
 }
 
 fn is_studio(e: &Element) -> bool {
@@ -225,9 +273,33 @@ impl Delta {
 
 /// The document without its elements.
 fn head_of(doc: &Document) -> Document {
+    // (Field by field, the elements left out rather than copied and dropped. Every field named,
+    // so a new one isn't missed.)
+    let Document {
+        id,
+        name,
+        elements: _,
+        units,
+        custom_colors,
+        material_libraries,
+        standard_content,
+        properties,
+        linked,
+        moved,
+        tab_tree,
+    } = doc;
     Document {
+        id: *id,
+        name: name.clone(),
         elements: Vec::new(),
-        ..doc.clone()
+        units: *units,
+        custom_colors: custom_colors.clone(),
+        material_libraries: material_libraries.clone(),
+        standard_content: standard_content.clone(),
+        properties: properties.clone(),
+        linked: linked.clone(),
+        moved: moved.clone(),
+        tab_tree: tab_tree.clone(),
     }
 }
 
@@ -235,6 +307,62 @@ fn head_of(doc: &Document) -> Document {
 pub fn document_hash(doc: &Document) -> u64 {
     let text = ron::to_string(doc).unwrap_or_default();
     cadrs_kernel::naming::stable_hash(text.as_bytes())
+}
+
+/// An entry's [`document_hash`], worked out on another thread when the entry is recorded (a big
+/// document's text takes tens of milliseconds to make, too long for the frame of an edit):
+/// [`Self::get`] waits for it. Saved and compared as the number.
+#[derive(Clone)]
+pub struct EntryHash(Arc<std::sync::OnceLock<u64>>);
+
+impl EntryHash {
+    /// A hash known already.
+    pub fn of(hash: u64) -> Self {
+        Self(Arc::new(std::sync::OnceLock::from(hash)))
+    }
+
+    /// `doc`'s, worked out on a thread of its own (in a page, at once).
+    fn later(doc: Arc<Document>) -> Self {
+        let cell: Arc<std::sync::OnceLock<u64>> = Arc::default();
+        let (to, of) = (cell.clone(), doc.clone());
+        if crate::background::spawn("history-hash", move || {
+            let _ = to.set(document_hash(&of));
+        })
+        .is_err()
+        {
+            let _ = cell.set(document_hash(&doc));
+        }
+        Self(cell)
+    }
+
+    /// The hash (waiting for it, if it is still being worked out).
+    pub fn get(&self) -> u64 {
+        *self.0.wait()
+    }
+}
+
+impl PartialEq for EntryHash {
+    fn eq(&self, other: &Self) -> bool {
+        self.get() == other.get()
+    }
+}
+
+impl std::fmt::Debug for EntryHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
+impl Serialize for EntryHash {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u64(self.get())
+    }
+}
+
+impl<'de> Deserialize<'de> for EntryHash {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        u64::deserialize(d).map(Self::of)
+    }
 }
 
 /// One change in the log.
@@ -257,7 +385,7 @@ pub struct LogEntry {
     /// What the history panel shows: "Conrod :: Edit : Sketch 2".
     pub label: String,
     /// [`document_hash`] of the state after it.
-    pub hash: u64,
+    pub hash: EntryHash,
     /// Shared by copies of the log (a copy is made for every save in the background).
     pub delta: Arc<Delta>,
 }
@@ -362,7 +490,7 @@ pub struct HistoryLog {
     parked: Vec<Track>,
     /// The current state (the last entry's), kept so appending doesn't rebuild it.
     #[serde(skip)]
-    head: Option<Document>,
+    head: Option<Arc<Document>>,
     /// Read from an older schema and rewritten in memory: save it to keep the new form.
     #[serde(skip)]
     upgraded: bool,
@@ -390,7 +518,7 @@ struct EntryKey(Timestamp, u64, String);
 
 impl EntryKey {
     fn of(e: &LogEntry) -> Self {
-        Self(e.time, e.hash, e.label.clone())
+        Self(e.time, e.hash.get(), e.label.clone())
     }
 }
 
@@ -464,20 +592,21 @@ impl HistoryLog {
             feature: None,
             feature_name: String::new(),
             label: "Start".into(),
-            hash: document_hash(doc),
+            hash: EntryHash::of(document_hash(doc)),
             delta: Arc::default(),
         };
+        let at = Arc::new(doc.clone());
         Self {
             version: HISTORY_VERSION,
             document: doc.id,
             entries: vec![entry],
-            snapshots: vec![(0, Arc::new(doc.clone()))],
+            snapshots: vec![(0, at.clone())],
             healthy: Vec::new(),
             versions: Vec::new(),
             current: WorkspaceId::MAIN,
             workspaces: Vec::new(),
             parked: Vec::new(),
-            head: Some(doc.clone()),
+            head: Some(at),
             upgraded: false,
             ron: RonCache::default(),
         }
@@ -502,9 +631,10 @@ impl HistoryLog {
     pub fn head(&mut self) -> &Document {
         if self.head.is_none() {
             let last = self.head_index();
-            self.head = Some(self.state_at(last).unwrap_or_else(|| Document::empty("")));
+            let state = self.state_at(last).unwrap_or_else(|| Document::empty(""));
+            self.head = Some(Arc::new(state));
         }
-        self.head.as_ref().expect("set above")
+        self.head.as_deref().expect("set above")
     }
 
     /// Appends the change from the current state to `doc`, if there is one. Returns the new
@@ -516,9 +646,12 @@ impl HistoryLog {
         time: Timestamp,
         user: &str,
     ) -> Option<usize> {
-        let before = self.head().clone();
+        // (The state before taken, not copied: the new one takes its place.)
+        self.head();
+        let before = self.head.take().expect("set above");
         let delta = Delta::between(&before, doc);
         if delta.is_empty() {
+            self.head = Some(before);
             return None;
         }
         let what = describe(&before, doc);
@@ -542,6 +675,7 @@ impl HistoryLog {
             Origin::Restore(l) => ("Restore".to_string(), format!("Restore : {l}")),
             Origin::Merge(l) => ("Merge".to_string(), format!("Merge from {l}")),
         };
+        let now = Arc::new(doc.clone());
         self.entries.push(LogEntry {
             time,
             user: user.to_string(),
@@ -551,14 +685,14 @@ impl HistoryLog {
             feature: what.feature,
             feature_name: what.feature_name.clone(),
             label,
-            hash: document_hash(doc),
+            hash: EntryHash::later(now.clone()),
             delta: Arc::new(delta),
         });
         let i = self.head_index();
         if i.is_multiple_of(SNAPSHOT_EVERY) {
-            self.snapshots.push((i, Arc::new(doc.clone())));
+            self.snapshots.push((i, now.clone()));
         }
-        self.head = Some(doc.clone());
+        self.head = Some(now);
         Some(i)
     }
 
@@ -571,7 +705,7 @@ impl HistoryLog {
         if k == self.head_index()
             && let Some(h) = &self.head
         {
-            return Some(h.clone());
+            return Some((**h).clone());
         }
         track_state_at(&self.entries, &self.snapshots, k)
     }
@@ -815,7 +949,7 @@ impl HistoryLog {
             e.delta = Arc::new(d);
         }
         self.version = HISTORY_VERSION;
-        self.head = Some(before);
+        self.head = Some(Arc::new(before));
         self.upgraded = true;
     }
 

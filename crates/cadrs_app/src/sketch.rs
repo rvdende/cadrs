@@ -1984,9 +1984,11 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             B::Tool(T::Dimension),
         )],
     ];
-    crate::document::undo_redo(tb, t);
-    for group in groups {
-        tb.spawn(toolbar_separator(t));
+    crate::document::feature_list_toggle(tb, t);
+    for (i, group) in groups.into_iter().enumerate() {
+        if i > 0 {
+            tb.spawn(toolbar_separator(t));
+        }
         for (name, icon_name, dropdown, tip, button) in group.iter() {
             spawn_sketch_tool(tb, t, name, icon_name, *dropdown, tip, *button);
         }

@@ -186,6 +186,12 @@ impl HarnessOptions {
 /// successfully (removed with the directory when the scenario starts again).
 pub const COMPLETE_MARKER: &str = ".complete";
 
+/// Run before a finished scenario's [`COMPLETE_MARKER`] is written: the app's saves still being
+/// written in the background, waited for (a relaunch scenario copies the documents as soon as
+/// the marker is there, [`prepare_data_from`]).
+#[derive(Resource)]
+pub struct BeforeComplete(pub fn());
+
 /// Copies the documents of the scenario whose output directory is `from` into `to`, once that
 /// scenario has finished (its [`COMPLETE_MARKER`] is there). A relaunch scenario thus always
 /// starts from the same saved state, even when it is started while the other one is still

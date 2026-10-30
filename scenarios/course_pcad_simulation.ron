@@ -5,7 +5,7 @@
 // Euler–Bernoulli gives a tip deflection PL³/(3EI) = 0.200 mm and a mid-span top-fibre stress
 // M·c/I = 30.0 MPa.
 // 01 the beam.
-// 02 the Simulation panel (right strip): Materials, Loads (0) with + Fixed, + Force, + Pressure,
+// 02 the Simulation panel (the tab bar's button): Materials, Loads (0) with + Fixed, + Force, + Pressure,
 //    Mesh, Solve.
 // 03 + Fixed: the load dialog, the end face x = 0 picked (highlighted; the view turned to see it).
 // 04 + Force: the end face x = 100, Along Z, Flip direction (−Z), 100 N; the arrow in the view.

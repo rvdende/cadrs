@@ -23,8 +23,8 @@
 //    changes" closed; Start.
 // 13 IR6.12: "Conrod :: Edit : Sketch 2" picked, History closed: the Repair panel beside the
 //    viewport shows that state (the slot pocket), "Viewing Main :: Conrod :: Edit : Sketch 2",
-//    its own view cube, Synchronize view on; both halves fitted; the Repair icon (wrench) in
-//    the right strip.
+//    its own view ball, Synchronize view on; both halves fitted; the Repair icon (wrench) in
+//    the tab bar.
 // 14 IR6.13: Extrude 5 edited, the pointer on "Missing Face of Sketch 3" (the whole label):
 //    the slot's outline lights up yellow in the Repair panel; the Replace reference icon shows
 //    over the item's right end.
@@ -134,7 +134,7 @@ Scenario(
         Wait(3),
         Screenshot("11-extrude-5-fillet-red"),
         // IR6.11
-        Click(ui("rail-history")),
+        Click(ui("document-history")),
         WaitFor("history-panel"),
         Click(ui("history-repair")),
         Click(ui("history-group-14")),

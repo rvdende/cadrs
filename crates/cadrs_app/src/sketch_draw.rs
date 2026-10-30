@@ -3373,7 +3373,7 @@ fn sync_labels(
         if transform.rotation != rot {
             transform.rotation = rot;
         }
-        // Hide labels outside the viewport and under the view cube.
+        // Hide labels outside the viewport and under the view ball.
         let cube = crate::view_cube::cube_rect(rect.0);
         let inside = rect.0.contains(center)
             && Rect::from_center_size(center, size)

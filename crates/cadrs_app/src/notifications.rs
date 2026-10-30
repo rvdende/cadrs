@@ -161,9 +161,20 @@ fn on_bell(
     mut notes: ResMut<Notifications>,
     mut commands: Commands,
 ) {
-    if q.get(a.entity).map(|n| n.as_str()) != Ok("notifications") {
-        return;
+    if q.get(a.entity).map(|n| n.as_str()) == Ok("notifications") {
+        open_notifications(&mut commands, a.entity, &theme, &mut notes);
     }
+}
+
+/// Opens the notices under `anchor` (the bell, or the account button while the bell is folded
+/// into its menu, `crate::top_bar`) and marks them read. Picks come to `anchor`, for
+/// [`notice_action`].
+pub(crate) fn open_notifications(
+    commands: &mut Commands,
+    anchor: Entity,
+    theme: &Theme,
+    notes: &mut Notifications,
+) {
     let mut menu = Menu::new("notifications-menu").align_end().min_width(260.0);
     if notes.items.is_empty() {
         menu = menu.item(MenuItem::new("notice-none", "You're all caught up").disabled(true));
@@ -177,7 +188,7 @@ fn on_bell(
         }
         menu = menu.item(item);
     }
-    open_menu(&mut commands, a.entity, menu.build(&theme));
+    open_menu(commands, anchor, menu.build(theme));
     // Seen: the dot goes, and "What's new" won't come back.
     if notes.unread() {
         if notes.items.iter().any(|n| n.id == "whats-new" && n.unread) {
@@ -191,10 +202,14 @@ fn on_bell(
 }
 
 fn on_bell_action(ev: On<MenuAction>, q: Query<&Name>, mut commands: Commands) {
-    if q.get(ev.entity).map(|n| n.as_str()) != Ok("notifications") {
-        return;
+    if q.get(ev.entity).map(|n| n.as_str()) == Ok("notifications") {
+        notice_action(&mut commands, &ev.item);
     }
-    if ev.item == "notice-update" {
+}
+
+/// Carries out a pick from the notices (`notice-…`).
+pub(crate) fn notice_action(commands: &mut Commands, item: &str) {
+    if item == "notice-update" {
         commands.queue(crate::update::show_release_notes);
     }
 }

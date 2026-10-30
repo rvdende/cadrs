@@ -1,105 +1,137 @@
-//! The view cube in the viewport's top right corner: a small cube that turns with the view,
-//! with Top/Front/Right/… labels on its faces, an X/Y/Z axis triad (red, green, blue) and
-//! nudge arrows around it. Clicking a face animates the view to that standard view; clicking a
-//! **corner** (P3.9, P6.4: the square patch where three faces meet, highlighted on hover) turns
-//! it to the trimetric view from that corner; the arrows rotate the view by 15°.
+//! The view ball in the viewport's bottom right corner: a glass ball that turns with the view.
+//! The X, Y and Z axes (red, green, blue) run from its centre to knobs on its surface, the
+//! negative axes' knobs paler; three rings in the axis planes show how it is turned, and what is
+//! on its far side fades behind the glass. Clicking a knob animates the view to that standard
+//! view (X the Right view, Y the Back, Z the Top; the pale knobs Left, Front and Bottom);
+//! clicking one of the small dots between them (P3.9, P6.4: a corner) turns it to the
+//! trimetric view from that corner; dragging the ball turns the view freely. The ring round it
+//! has nudge arrows (15°) and, top left and right, roll arrows (15° about the view direction).
+//! Hovering names what a click does, beside the ball.
 //!
-//! The cube is a tiny 3D scene on render layer 1, drawn by its own camera into an image that a
-//! UI node shows, so it composes with the UI like any other widget.
+//! The ball is a tiny 3D scene on render layer 1, drawn by its own camera into an image that a
+//! UI node shows, so it composes with the UI like any other widget. The Repair panel's view and
+//! the Sheet metal table's flat view have balls of their own, cameras on the same scene.
 
 use crate::GizmoGroups;
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{RenderTarget, ScalingMode};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::picking::hover::Hovered;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
+use bevy::render::render_resource::{
+    AsBindGroup, BlendState, RenderPipelineDescriptor, ShaderType, TextureFormat,
+};
+use bevy::shader::ShaderRef;
 use bevy::text::FontWeight;
+use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialKey, UiMaterialPlugin};
 use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::popover::PopoverSide;
 use cadrs_ui::{Theme, by_scheme};
 
 use crate::AppState;
-use crate::camera::{StandardView, ViewState, ray_square};
+use crate::camera::{StandardView, ViewState};
 use crate::viewport::ViewportView;
 
 pub struct ViewCubePlugin;
 
 impl Plugin for ViewCubePlugin {
     fn build(&self, app: &mut App) {
-        app.gizmo_group::<CubeGizmos>()
-            .gizmo_group::<CubeArcGizmos>()
-            .init_resource::<CubeHover>()
-            .init_resource::<CornerHover>()
-            .add_systems(Startup, setup_cube)
-            .add_systems(
-                Update,
-                (
-                    sync_cube_camera,
-                    cube_hover,
-                    draw_cube,
-                    fade_face_labels,
-                    render_cube_when_changed,
-                )
-                    .chain()
-                    .after(crate::viewport::apply_view_to_camera)
-                    .run_if(in_state(AppState::Document)),
+        embedded_asset!(app, "view_ball.wesl");
+        embedded_asset!(app, "view_ball_image.wesl");
+        app.add_plugins((
+            MaterialPlugin::<BallMaterial>::default(),
+            UiMaterialPlugin::<BallImageMaterial>::default(),
+        ))
+        .gizmo_group::<CubeArcGizmos>()
+        .gizmo_group::<RollGizmos>()
+        .init_resource::<BallHover>()
+        .init_resource::<BallDrag>()
+        .add_systems(Startup, setup_cube)
+        .add_systems(
+            Update,
+            (
+                sync_cube_camera,
+                cube_hover,
+                style_ball,
+                draw_cube,
+                show_caption,
+                render_cube_when_changed,
             )
-            .add_systems(
-                PostUpdate,
-                place_cube_labels
-                    .before(bevy::ui::UiSystems::Layout)
-                    .run_if(in_state(AppState::Document)),
-            )
-            .add_systems(
-                Update,
-                recolor_cube.run_if(resource_changed::<cadrs_ui::ActiveTheme>),
-            )
-            .add_systems(OnEnter(AppState::Document), activate_cube_camera::<true>)
-            .add_systems(OnExit(AppState::Document), activate_cube_camera::<false>)
-            .add_observer(on_cube_click)
-            .add_observer(on_arrow);
+                .chain()
+                .after(crate::viewport::apply_view_to_camera)
+                .run_if(in_state(AppState::Document)),
+        )
+        .add_systems(
+            Update,
+            (attach_ball_images, sync_view_options_chevron).run_if(in_state(AppState::Document)),
+        )
+        .add_systems(
+            PostUpdate,
+            place_cube_labels
+                .before(bevy::ui::UiSystems::Layout)
+                .run_if(in_state(AppState::Document)),
+        )
+        .add_systems(OnEnter(AppState::Document), activate_cube_camera::<true>)
+        .add_systems(OnExit(AppState::Document), activate_cube_camera::<false>)
+        .add_observer(on_cube_click)
+        .add_observer(on_ball_drag_start)
+        .add_observer(on_ball_drag)
+        .add_observer(on_ball_drag_end)
+        .add_observer(on_arrow)
+        .add_observer(on_roll);
     }
 }
 
-/// Size of the view cube widget (logical px), as in the reference capture.
-pub const CUBE_WIDGET: Vec2 = Vec2::new(172.0, 164.0);
+/// Size of the view ball widget (logical px): the ball, its knobs and the ring round them.
+pub const CUBE_WIDGET: Vec2 = Vec2::new(136.0, 136.0);
 
-/// The screen rect the view cube widget covers in a viewport (top right). Sketch glyphs and
+/// The screen rect the view ball widget covers in a viewport (bottom right). Sketch glyphs and
 /// labels are not drawn over it.
 pub fn cube_rect(viewport: Rect) -> Rect {
     Rect::new(
         viewport.max.x - CUBE_WIDGET.x,
-        viewport.min.y,
+        viewport.max.y - CUBE_WIDGET.y,
         viewport.max.x,
-        viewport.min.y + CUBE_WIDGET.y,
+        viewport.max.y,
     )
 }
-/// Where the cube's center sits in the widget.
-const CUBE_CENTER: Vec2 = Vec2::new(86.0, 82.0);
-/// Pixels per cube unit (the cube is 2 units wide).
-const CUBE_PX: f32 = 26.0;
-/// The cube image is rendered at twice the widget size for crisp edges.
+/// Where the ball's centre sits in the widget.
+const CUBE_CENTER: Vec2 = Vec2::new(68.0, 68.0);
+/// Pixels per ball unit (the ball's radius is one unit).
+const CUBE_PX: f32 = 36.0;
+/// A knob's radius, its centre on the ball's surface.
+const KNOB_R: f32 = 0.2;
+/// A corner dot's radius.
+const DOT_R: f32 = 0.075;
+/// The axes' radius, and the origin's.
+const AXIS_R: f32 = 0.035;
+const ORIGIN_R: f32 = 0.07;
+/// The rings' tube radius.
+const RING_TUBE: f32 = 0.014;
+/// The ring round the ball (the nudge and roll arrows sit on it), in ball units.
+const RING_R: f32 = 1.5;
+/// How far from a knob's or dot's outline a pointer still picks it (ball units).
+const HIT_SLOP: f32 = 0.05;
+/// The ring's line width in the image (twice the logical width, [`CUBE_SUPERSAMPLE`]).
+pub(crate) const RING_WIDTH: f32 = 2.6;
+/// The ball image is rendered at twice the widget size for crisp edges.
 pub(crate) const CUBE_SUPERSAMPLE: f32 = 2.0;
 pub(crate) const CUBE_LAYER: usize = 1;
-/// The main cube's rotate arrows: drawn in the main view's screen plane, so only the main cube's
-/// camera sees them (the Repair cube draws its own on [`REPAIR_CUBE_ARC_LAYER`]).
+/// The main ball's ring and roll arrows: drawn in the main view's screen plane, so only the
+/// main ball's camera sees them (the Repair ball draws its own on [`REPAIR_CUBE_ARC_LAYER`]).
 pub(crate) const CUBE_ARC_LAYER: usize = 3;
-/// The Repair view cube's rotate arrows ([`crate::repair`]).
+/// The Repair view ball's ring ([`crate::repair`]).
 pub(crate) const REPAIR_CUBE_ARC_LAYER: usize = 4;
 
-#[derive(Default, Reflect, GizmoConfigGroup)]
-pub struct CubeGizmos;
-
-/// The thick curved rotate arrows around the cube.
+/// The ring round the ball.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct CubeArcGizmos;
 
-/// Where the axis triad starts: the cube's back-bottom-left corner.
-/// Where the axis triad starts: just off the cube's front-bottom-left corner, so Z runs up the
-/// cube's left edge and X along its bottom, as in the reference.
-const TRIAD_ORIGIN: Vec3 = Vec3::new(-1.06, -1.06, -1.06);
+/// The roll arrows on the ring: a little bolder than it, so it reads as a dial to turn.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct RollGizmos;
 
 #[derive(Resource)]
 pub struct ViewCubeImage(pub Handle<Image>);
@@ -107,10 +139,11 @@ pub struct ViewCubeImage(pub Handle<Image>);
 #[derive(Component)]
 struct CubeCamera;
 
-/// The UI image showing the cube.
+/// The node over the ball that hovers and clicks it.
 #[derive(Component)]
 struct CubeImageNode;
 
+/// A standard view, and the knob on the ball that turns to it.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CubeFace {
     Front,
@@ -131,6 +164,7 @@ impl CubeFace {
         CubeFace::Bottom,
     ];
 
+    /// Where its knob is on the ball: the direction the view looks from.
     fn normal(self) -> Vec3 {
         match self {
             CubeFace::Front => -Vec3::Y,
@@ -139,18 +173,6 @@ impl CubeFace {
             CubeFace::Right => Vec3::X,
             CubeFace::Top => Vec3::Z,
             CubeFace::Bottom => -Vec3::Z,
-        }
-    }
-
-    /// The label's reading direction and up direction on the face.
-    fn frame(self) -> (Vec3, Vec3) {
-        match self {
-            CubeFace::Front => (Vec3::X, Vec3::Z),
-            CubeFace::Back => (-Vec3::X, Vec3::Z),
-            CubeFace::Left => (-Vec3::Y, Vec3::Z),
-            CubeFace::Right => (Vec3::Y, Vec3::Z),
-            CubeFace::Top => (Vec3::X, Vec3::Y),
-            CubeFace::Bottom => (Vec3::X, -Vec3::Y),
         }
     }
 
@@ -177,26 +199,32 @@ impl CubeFace {
     }
 }
 
-/// The cube face under the pointer.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
-pub struct CubeHover(pub Option<CubeFace>);
-
-/// The cube corner under the pointer (P6.4): the signs of its x, y and z.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
-pub struct CornerHover(pub Option<IVec3>);
-
-/// A corner's highlight: three small squares, one on each face that meets there.
-#[derive(Component, Debug, Clone, Copy)]
-struct CornerPatch(IVec3);
-
-/// How far a corner's patch reaches along each edge from the corner (the cube is 2 wide).
-const CORNER_SIZE: f32 = 0.5;
-
-/// What the pointer is over on the cube.
+/// What the pointer is over on the ball.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum CubeSpot {
-    Face(CubeFace),
+pub enum BallSpot {
+    /// A knob: its standard view.
+    Knob(CubeFace),
+    /// A corner's dot (P6.4): the signs of its x, y and z; its trimetric view.
     Corner(IVec3),
+    /// The glass between them: a drag turns the view.
+    Glass,
+}
+
+/// The spot on the ball under the pointer (the glass while it is dragged).
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct BallHover(pub Option<BallSpot>);
+
+/// A drag on the ball: whether one is going on, and how far it went (a click that ends one
+/// doesn't also pick what it ends on).
+#[derive(Resource, Default)]
+struct BallDrag {
+    active: bool,
+    moved: f32,
+}
+
+/// The eight corners (P6.4): the signs of their x, y and z.
+fn corners() -> impl Iterator<Item = IVec3> {
+    (0..8).map(|i| IVec3::new(i & 1, (i >> 1) & 1, (i >> 2) & 1) * 2 - IVec3::ONE)
 }
 
 /// The dimetric view's azimuth and elevation (degrees): seen from 45° round, the X and Y axes
@@ -212,69 +240,182 @@ pub fn corner_view(corner: IVec3) -> (f32, f32) {
     (az, if corner.z < 0 { -el0 } else { el0 })
 }
 
-#[derive(Resource)]
-struct CubeMaterials {
-    normal: Handle<StandardMaterial>,
-    hover: Handle<StandardMaterial>,
-    frame: Handle<StandardMaterial>,
+/// A part of the ball's scene, styled by [`style_ball`].
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+enum BallPart {
+    Glass,
+    Origin,
+    /// The X, Y or Z axis, from the origin to its knob.
+    Axis(usize),
+    /// The ring in the plane across this axis.
+    Ring(usize),
+    Knob(CubeFace),
+    Corner(IVec3),
 }
 
-/// A face's label quad.
-#[derive(Component, Clone, Copy)]
-struct FaceLabel(CubeFace);
-
-/// Label opacity: fully shown when the face is within about 67° of the view direction, gone
-/// beyond 75°, where the text would be squashed into noise.
-pub fn face_label_alpha(facing: f32) -> f32 {
-    ((facing - 0.26) / 0.12).clamp(0.0, 1.0)
-}
-
-fn fade_face_labels(
-    view: Res<ViewportView>,
-    repair: Option<Res<crate::repair::Repair>>,
-    (sm, panel): (
-        Option<Res<crate::sheetmetal_table::SmTable>>,
-        Option<Res<crate::appearance::SidePanel>>,
-    ),
-    q: Query<(&FaceLabel, &MeshMaterial3d<StandardMaterial>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let back = view.view.back();
-    // P3D.4: the Repair panel's cube shares the faces; a label it faces shows too (a face
-    // turned away from the main view is hidden there by the cube itself). So does the Sheet
-    // metal table's flat view cube (its Top stays labelled when the main view looks from below).
-    let mut others: Vec<Vec3> = repair
-        .filter(|r| r.open)
-        .map(|r| r.view.back())
-        .into_iter()
-        .collect();
-    if panel.is_some_and(|p| *p == crate::appearance::SidePanel::SheetMetal)
-        && let Some(t) = sm
-    {
-        others.push(t.view.back());
+impl BallPart {
+    fn spot(self) -> Option<BallSpot> {
+        match self {
+            BallPart::Glass => Some(BallSpot::Glass),
+            BallPart::Knob(f) => Some(BallSpot::Knob(f)),
+            BallPart::Corner(c) => Some(BallSpot::Corner(c)),
+            _ => None,
+        }
     }
-    for (label, mat) in &q {
-        let n = label.0.normal();
-        let a = face_label_alpha(others.iter().fold(n.dot(back), |m, o| m.max(n.dot(*o))));
-        // Premultiplied: scale every channel.
-        let c = Color::LinearRgba(LinearRgba::new(a, a, a, a));
-        if let Some(m) = materials.get(&mat.0)
-            && m.base_color != c
-            && let Some(mut m) = materials.get_mut(&mat.0)
-        {
-            m.base_color = c;
+
+    /// Its shader's colours and mode (linear), in the scheme in force.
+    fn params(self, theme: &Theme, hovered: bool) -> BallParams {
+        let lin = |c: Color| c.to_linear().to_vec4();
+        let axis = |i: usize| [theme.axis_x, theme.axis_y, theme.axis_z][i];
+        // What the far side fades toward: the glass seen over the canvas.
+        let far = lin(by_scheme(
+            Color::srgb(0.86, 0.89, 0.93),
+            Color::srgb(0.30, 0.33, 0.38),
+        ));
+        let solid = |c: Color, fade: f32| BallParams {
+            color: lin(c),
+            far,
+            mode: Vec4::new(0.0, fade, 0.0, 0.0),
+        };
+        let lighter = |c: Color, k: f32| c.mix(&Color::WHITE, k);
+        match self {
+            BallPart::Glass => BallParams {
+                color: lin(by_scheme(
+                    Color::srgba(0.80, 0.86, 0.93, 0.18),
+                    Color::srgba(0.55, 0.60, 0.68, 0.16),
+                )),
+                far: lin(by_scheme(
+                    Color::srgb(0.55, 0.63, 0.73),
+                    Color::srgb(0.68, 0.74, 0.83),
+                )),
+                mode: Vec4::new(1.0, 0.0, if hovered { 0.8 } else { 0.62 }, 0.9),
+            },
+            BallPart::Origin => solid(
+                by_scheme(Color::srgb(0.35, 0.38, 0.43), Color::srgb(0.80, 0.83, 0.88)),
+                0.0,
+            ),
+            BallPart::Axis(i) => solid(axis(i), 0.55),
+            BallPart::Ring(_) => solid(
+                by_scheme(Color::srgb(0.58, 0.64, 0.72), Color::srgb(0.56, 0.61, 0.68)),
+                0.8,
+            ),
+            BallPart::Knob(f) => {
+                let n = f.normal();
+                let i = n.abs().max_position();
+                let c = if n[i] > 0.0 {
+                    axis(i)
+                } else {
+                    // The negative axes' knobs: paler.
+                    axis(i).mix(&by_scheme(Color::WHITE, Color::srgb(0.35, 0.37, 0.41)), 0.5)
+                };
+                solid(if hovered { lighter(c, 0.35) } else { c }, 0.7)
+            }
+            BallPart::Corner(_) => solid(
+                if hovered {
+                    theme.primary
+                } else {
+                    by_scheme(Color::srgb(0.50, 0.56, 0.64), Color::srgb(0.70, 0.75, 0.82))
+                },
+                0.7,
+            ),
+        }
+    }
+
+    /// Hovered knobs and dots grow.
+    fn scale(self, hovered: bool) -> f32 {
+        match (self, hovered) {
+            (BallPart::Knob(_), true) => 1.18,
+            (BallPart::Corner(_), true) => 1.8,
+            _ => 1.0,
         }
     }
 }
 
-/// Renders the face labels into the atlas the cube faces are textured with.
-#[derive(Component)]
-struct LabelAtlasCamera;
+/// The ball's parts' material (`view_ball.wesl`): unlit, the far side faded.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Copy, PartialEq, Default)]
+pub struct BallMaterial {
+    #[uniform(0)]
+    pub params: BallParams,
+}
 
-/// Atlas cell size (px) of one face label: about 2.5x the face's size on screen, so the
-/// (foreshortened) labels are sampled down, never up.
-const ATLAS_CELL: u32 = 128;
+/// What `view_ball.wesl` draws with. Colours are linear RGBA.
+#[derive(Debug, Clone, Copy, PartialEq, ShaderType, Default)]
+pub struct BallParams {
+    pub color: Vec4,
+    /// What the far side fades toward; the glass's rim colour.
+    pub far: Vec4,
+    /// x: 1 for the glass; y: how far the far side fades; z: the glass's rim opacity; w: its
+    /// highlight's.
+    pub mode: Vec4,
+}
 
+impl Material for BallMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://cadrs_app/view_ball.wesl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.params.mode.x > 0.5 {
+            AlphaMode::Blend
+        } else {
+            AlphaMode::Opaque
+        }
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+}
+
+/// A ball's image in the UI (`view_ball_image.wesl`): blended as the premultiplied colours its
+/// camera rendered.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct BallImageMaterial {
+    #[texture(0)]
+    #[sampler(1)]
+    image: Handle<Image>,
+}
+
+impl UiMaterial for BallImageMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://cadrs_app/view_ball_image.wesl".into()
+    }
+
+    fn specialize(descriptor: &mut RenderPipelineDescriptor, _key: UiMaterialKey<Self>) {
+        if let Some(target) = descriptor
+            .fragment
+            .as_mut()
+            .and_then(|f| f.targets.first_mut())
+            .and_then(|t| t.as_mut())
+        {
+            target.blend = Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        }
+    }
+}
+
+/// A node showing a ball's image (the main view's, the Repair view's, the flat view's): given
+/// its [`BallImageMaterial`] by [`attach_ball_images`].
+#[derive(Component, Clone)]
+pub(crate) struct BallImage(pub Handle<Image>);
+
+fn attach_ball_images(
+    q: Query<(Entity, &BallImage), Without<MaterialNode<BallImageMaterial>>>,
+    mut materials: ResMut<Assets<BallImageMaterial>>,
+    mut commands: Commands,
+) {
+    for (e, image) in &q {
+        let m = materials.add(BallImageMaterial {
+            image: image.0.clone(),
+        });
+        commands.entity(e).try_insert(MaterialNode(m));
+    }
+}
+
+/// An X, Y or Z letter on its knob.
 #[derive(Component)]
 struct AxisLabel(Vec3);
 
@@ -282,13 +423,25 @@ struct AxisLabel(Vec3);
 #[derive(Component, Clone, Copy)]
 struct CubeArrow(f32, f32);
 
+/// A roll arrow on the ring: rolls the view by this many degrees (counter-clockwise on screen
+/// when positive).
+#[derive(Component, Clone, Copy)]
+struct RollArrow(f32);
+
+/// The roll arrows' arcs on the ring (degrees, counter-clockwise from screen right): from where
+/// each starts to its arrowhead, and the roll it does.
+const ROLL_ARCS: [(f32, f32, f32); 2] = [(115.0, 155.0, 15.0), (65.0, 25.0, -15.0)];
+
+/// The name of what a click on the hovered spot does, beside the ball.
+#[derive(Component)]
+struct BallCaption;
+
 fn setup_cube(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<BallMaterial>>,
     mut store: ResMut<GizmoConfigStore>,
-    theme: Res<Theme>,
 ) {
     let size = (CUBE_WIDGET * CUBE_SUPERSAMPLE).as_uvec2();
     let mut image = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba8UnormSrgb, None);
@@ -296,12 +449,13 @@ fn setup_cube(
     let handle = images.add(image);
     commands.insert_resource(ViewCubeImage(handle.clone()));
 
-    let (config, _) = store.config_mut::<CubeGizmos>();
-    config.render_layers = RenderLayers::layer(CUBE_LAYER);
-    config.line.width = 2.4;
     let (config, _) = store.config_mut::<CubeArcGizmos>();
     config.render_layers = RenderLayers::layer(CUBE_ARC_LAYER);
-    config.line.width = 12.0;
+    config.line.width = RING_WIDTH;
+    let (config, _) = store.config_mut::<RollGizmos>();
+    config.render_layers = RenderLayers::layer(CUBE_ARC_LAYER);
+    config.line.width = 3.4;
+    config.line.joints = bevy::gizmos::config::GizmoLineJoint::Round(4);
 
     commands.spawn((
         Name::new("view-cube-camera"),
@@ -321,307 +475,204 @@ fn setup_cube(
         Transform::default(),
     ));
 
-    // The face labels: white cells with the name, rendered by a UI camera into an atlas
-    // that the faces use as their texture (tinted light blue on hover).
-    let n = CubeFace::ALL.len() as u32;
-    let mut atlas = Image::new_target_texture(
-        ATLAS_CELL * n,
-        ATLAS_CELL,
-        TextureFormat::Rgba8UnormSrgb,
-        None,
-    );
-    atlas.asset_usage = RenderAssetUsages::default();
-    let atlas = images.add(atlas);
-    let atlas_cam = commands
-        .spawn((
-            Name::new("view-cube-label-camera"),
-            LabelAtlasCamera,
-            Camera2d,
-            RenderTarget::Image(atlas.clone().into()),
-            Camera {
-                order: -3,
-                is_active: false,
-                clear_color: ClearColorConfig::Custom(Color::NONE),
+    let mut part = |name: String, part: BallPart, mesh: Handle<Mesh>, at: Transform| {
+        // The glass is see-through from its first frame ([`style_ball`] colours them all).
+        let glass = part == BallPart::Glass;
+        let material = materials.add(BallMaterial {
+            params: BallParams {
+                mode: Vec4::new(if glass { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0),
                 ..default()
             },
-            Tonemapping::None,
-            DebandDither::Disabled,
-            RenderLayers::layer(31),
-        ))
-        .id();
-    commands
-        .spawn((
-            Name::new("view-cube-label-atlas"),
-            bevy::ui::UiTargetCamera(atlas_cam),
-            Node {
-                width: Val::Px((ATLAS_CELL * n) as f32),
-                height: Val::Px(ATLAS_CELL as f32),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ))
-        .with_children(|row| {
-            for face in CubeFace::ALL {
-                row.spawn((
-                    Node {
-                        width: Val::Px(ATLAS_CELL as f32),
-                        height: Val::Px(ATLAS_CELL as f32),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    Pickable::IGNORE,
-                ))
-                .with_child((
-                    theme.text(face.label(), 32.0, FontWeight::SEMIBOLD, theme.foreground),
-                    Pickable::IGNORE,
-                ));
-            }
         });
-    let mat = |c: Color, tex: Option<Handle<Image>>| StandardMaterial {
-        base_color: c,
-        base_color_texture: tex,
-        unlit: true,
-        ..default()
+        commands.spawn((
+            Name::new(name),
+            part,
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            at,
+            RenderLayers::layer(CUBE_LAYER),
+        ));
     };
-    let normal = materials.add(mat(theme.view_cube_face(), None));
-    let hover = materials.add(mat(theme.view_cube_hover(), None));
-    let hover_mat = hover.clone();
-    let frame = materials.add(mat(theme.view_cube_frame(), None));
-    commands.insert_resource(CubeMaterials {
-        normal: normal.clone(),
-        hover,
-        frame: frame.clone(),
-    });
-    // Each side: a light grey-blue frame with a white rounded-looking face inset in it.
-    let body = meshes.add(Rectangle::new(2.0, 2.0));
-    for (i, face) in CubeFace::ALL.into_iter().enumerate() {
-        // This face's cell of the label atlas.
-        let mut mesh = Mesh::from(Rectangle::new(1.56, 1.56));
-        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
-            mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0)
-        {
-            for uv in uvs.iter_mut() {
-                uv[0] = (i as f32 + uv[0]) / n as f32;
-            }
-        }
-        let label_quad = meshes.add(mesh);
-        let quad = meshes.add(Rectangle::new(1.56, 1.56));
-        // The label: text on transparent, premultiplied by the UI pass; faded per face.
-        let label_mat = materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(atlas.clone()),
-            unlit: true,
-            alpha_mode: AlphaMode::Premultiplied,
-            ..default()
-        });
-        let (u, v) = face.frame();
-        let n = face.normal();
-        let rot = Quat::from_mat3(&Mat3::from_cols(u, v, n));
-        commands.spawn((
-            Name::new("view-cube-side"),
-            Mesh3d(body.clone()),
-            MeshMaterial3d(frame.clone()),
-            Transform::from_translation(n).with_rotation(rot),
-            RenderLayers::layer(CUBE_LAYER),
-        ));
-        commands.spawn((
-            Name::new(format!("view-cube-face-{}", face.label().to_lowercase())),
-            face,
-            Mesh3d(quad),
-            MeshMaterial3d(normal.clone()),
-            Transform::from_translation(n * 1.004).with_rotation(rot),
-            RenderLayers::layer(CUBE_LAYER),
-        ));
-        commands.spawn((
-            Name::new("view-cube-face-label"),
-            FaceLabel(face),
-            Mesh3d(label_quad),
-            MeshMaterial3d(label_mat),
-            Transform::from_translation(n * 1.01).with_rotation(rot),
-            RenderLayers::layer(CUBE_LAYER),
-        ));
+    part(
+        "view-ball-glass".into(),
+        BallPart::Glass,
+        meshes.add(Sphere::new(1.0).mesh().uv(64, 32)),
+        Transform::default(),
+    );
+    part(
+        "view-ball-origin".into(),
+        BallPart::Origin,
+        meshes.add(Sphere::new(ORIGIN_R).mesh().uv(16, 10)),
+        Transform::default(),
+    );
+    // The axes, from the origin to their knobs.
+    let len = 1.0 - KNOB_R;
+    let axis = meshes.add(Cylinder::new(AXIS_R, len));
+    for (i, (a, letter)) in [(Vec3::X, "x"), (Vec3::Y, "y"), (Vec3::Z, "z")]
+        .into_iter()
+        .enumerate()
+    {
+        part(
+            format!("view-ball-axis-{letter}"),
+            BallPart::Axis(i),
+            axis.clone(),
+            Transform::from_translation(a * len / 2.0)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Y, a)),
+        );
     }
-    // P6.4: each corner's hover patch, a square on each of its three faces (over the face and
-    // its label, so the whole corner lights up).
-    let patch = meshes.add(Rectangle::new(CORNER_SIZE, CORNER_SIZE));
-    for x in [-1, 1] {
-        for y in [-1, 1] {
-            for z in [-1, 1] {
-                let c = IVec3::new(x, y, z);
-                let cf = c.as_vec3();
-                commands
-                    .spawn((
-                        Name::new(format!(
-                            "view-cube-corner-{}{}{}",
-                            sign(x),
-                            sign(y),
-                            sign(z)
-                        )),
-                        CornerPatch(c),
-                        Transform::default(),
-                        Visibility::Hidden,
-                        RenderLayers::layer(CUBE_LAYER),
-                    ))
-                    .with_children(|p| {
-                        for face in CubeFace::ALL {
-                            let n = face.normal();
-                            if n.dot(cf) < 0.5 {
-                                continue;
-                            }
-                            let (u, v) = face.frame();
-                            let rot = Quat::from_mat3(&Mat3::from_cols(u, v, n));
-                            let at = n * 1.012
-                                + u * (u.dot(cf) * (1.0 - CORNER_SIZE / 2.0))
-                                + v * (v.dot(cf) * (1.0 - CORNER_SIZE / 2.0));
-                            p.spawn((
-                                Mesh3d(patch.clone()),
-                                MeshMaterial3d(hover_mat.clone()),
-                                Transform::from_translation(at).with_rotation(rot),
-                                RenderLayers::layer(CUBE_LAYER),
-                            ));
-                        }
-                    });
-            }
+    // The rings in the YZ, XZ and XY planes (a torus lies across Y).
+    let ring = meshes.add(
+        Torus {
+            minor_radius: RING_TUBE,
+            major_radius: 1.0,
         }
+        .mesh()
+        .minor_resolution(8)
+        .major_resolution(128),
+    );
+    for (i, rot) in [
+        Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+        Quat::IDENTITY,
+        Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        part(
+            format!("view-ball-ring-{}", ["x", "y", "z"][i]),
+            BallPart::Ring(i),
+            ring.clone(),
+            Transform::from_rotation(rot),
+        );
+    }
+    let knob = meshes.add(Sphere::new(KNOB_R).mesh().uv(32, 18));
+    for face in CubeFace::ALL {
+        part(
+            format!("view-ball-knob-{}", face.label().to_lowercase()),
+            BallPart::Knob(face),
+            knob.clone(),
+            Transform::from_translation(face.normal()),
+        );
+    }
+    let dot = meshes.add(Sphere::new(DOT_R).mesh().uv(16, 10));
+    for c in corners() {
+        part(
+            format!("view-ball-corner-{}{}{}", sign(c.x), sign(c.y), sign(c.z)),
+            BallPart::Corner(c),
+            dot.clone(),
+            Transform::from_translation(c.as_vec3().normalize()),
+        );
     }
 }
 
-/// "p" or "m" for a corner's name ("view-cube-corner-pmp": x+, y−, z+).
+/// "p" or "m" for a corner's name ("view-ball-corner-pmp": x+, y−, z+).
 fn sign(v: i32) -> &'static str {
     if v > 0 { "p" } else { "m" }
 }
 
-/// How many frames the view cube's cameras render after something they show changed: one for
+/// How many frames the view ball's camera renders after something it shows changed: one for
 /// the change, one for its gizmos and layout to catch up, one to spare.
 const CUBE_RENDER_FRAMES: u16 = 3;
-/// The labels' atlas renders this long when a document opens, so its text is laid out and drawn
-/// before the atlas keeps it.
-const ATLAS_FIRST_FRAMES: u16 = 120;
+/// It renders this long when the first document opens, so its shaders are ready before it
+/// keeps its image.
+const CUBE_FIRST_FRAMES: u16 = 180;
 
-/// The view cube's image and its labels' atlas keep their last render: their cameras render only
-/// while what they show changes (each cost every frame a camera pass of its own).
+/// The view ball's image keeps its last render: its camera renders only while what it shows
+/// changes (it would cost a camera pass of its own every frame).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn render_cube_when_changed(
     view: Res<ViewportView>,
-    (hover, corner_hover): (Res<CubeHover>, Res<CornerHover>),
+    hover: Res<BallHover>,
     (theme, active): (Res<Theme>, Res<cadrs_ui::ActiveTheme>),
-    faces: Query<(), (With<CubeFace>, Changed<MeshMaterial3d<StandardMaterial>>)>,
-    corners: Query<(), (With<CornerPatch>, Changed<Visibility>)>,
-    mut material_events: MessageReader<AssetEvent<StandardMaterial>>,
-    mut cameras: Query<
-        (&mut Camera, Has<LabelAtlasCamera>),
-        Or<(With<CubeCamera>, With<LabelAtlasCamera>)>,
-    >,
-    mut left: Local<Option<(u16, u16)>>,
+    parts: Query<(), (With<BallPart>, Changed<Transform>)>,
+    rolls: Query<(), (With<RollArrow>, Changed<Hovered>)>,
+    mut material_events: MessageReader<AssetEvent<BallMaterial>>,
+    mut cameras: Query<&mut Camera, With<CubeCamera>>,
+    mut left: Local<Option<u16>>,
 ) {
-    // (A face label's fade, here or for the Repair view, changes its material.)
-    let faded = material_events
+    let restyled = material_events
         .read()
         .any(|e| matches!(e, AssetEvent::Modified { .. }));
-    let (cube, atlas) = left.get_or_insert((CUBE_RENDER_FRAMES, ATLAS_FIRST_FRAMES));
-    let restyled = theme.is_changed() || active.is_changed();
-    if restyled
+    let left = left.get_or_insert(CUBE_FIRST_FRAMES);
+    if theme.is_changed()
+        || active.is_changed()
         || view.is_changed()
         || hover.is_changed()
-        || corner_hover.is_changed()
-        || !faces.is_empty()
-        || !corners.is_empty()
-        || faded
+        || !parts.is_empty()
+        || !rolls.is_empty()
+        || restyled
     {
-        *cube = (*cube).max(CUBE_RENDER_FRAMES);
+        *left = (*left).max(CUBE_RENDER_FRAMES);
     }
-    if restyled {
-        *atlas = (*atlas).max(CUBE_RENDER_FRAMES);
-    }
-    for (mut c, is_atlas) in &mut cameras {
-        let on = if is_atlas { *atlas > 0 } else { *cube > 0 };
-        if c.is_active != on {
-            c.is_active = on;
+    for mut c in &mut cameras {
+        if c.is_active != (*left > 0) {
+            c.is_active = *left > 0;
         }
     }
-    *cube = cube.saturating_sub(1);
-    *atlas = atlas.saturating_sub(1);
+    *left = left.saturating_sub(1);
 }
 
-#[allow(clippy::type_complexity)]
-fn activate_cube_camera<const ON: bool>(
-    mut q: Query<&mut Camera, Or<(With<CubeCamera>, With<LabelAtlasCamera>)>>,
-) {
+fn activate_cube_camera<const ON: bool>(mut q: Query<&mut Camera, With<CubeCamera>>) {
     for mut c in &mut q {
         c.is_active = ON;
     }
 }
 
-/// The cube's colors in the scheme in force, except [`CubeColors::view_cube_arrow`]: the
-/// arrows are UI icons, which the scheme maps itself.
+/// The ball's colours in the scheme in force that aren't its parts' ([`BallPart::params`]).
 pub(crate) trait CubeColors {
-    fn view_cube_frame(&self) -> Color;
-    fn view_cube_face(&self) -> Color;
-    fn view_cube_hover(&self) -> Color;
-    fn view_cube_edge(&self) -> Color;
+    /// The nudge arrows: UI icons, which the scheme maps itself.
     fn view_cube_arrow(&self) -> Color;
-    /// The rotation arcs over the cube (gizmos, so not mapped).
+    /// The ring round the ball (gizmos, so not mapped).
     fn view_cube_arc(&self) -> Color;
 }
 
 impl CubeColors for Theme {
-    fn view_cube_frame(&self) -> Color {
-        by_scheme(
-            Color::srgb_u8(0xe6, 0xeb, 0xef),
-            Color::srgb_u8(0x3a, 0x3e, 0x45),
-        )
-    }
-    fn view_cube_face(&self) -> Color {
-        by_scheme(Color::WHITE, Color::srgb_u8(0x4c, 0x51, 0x59))
-    }
-    fn view_cube_hover(&self) -> Color {
-        by_scheme(
-            Color::srgb_u8(0xcf, 0xe3, 0xf7),
-            Color::srgb_u8(0x3e, 0x62, 0x8a),
-        )
-    }
-    fn view_cube_edge(&self) -> Color {
-        by_scheme(
-            Color::srgb_u8(0xd0, 0xd6, 0xdb),
-            Color::srgb_u8(0x62, 0x68, 0x71),
-        )
-    }
     fn view_cube_arrow(&self) -> Color {
         // Readable over the light canvas as over the dark one.
         Color::srgb_u8(0x9a, 0xab, 0xb3)
     }
     fn view_cube_arc(&self) -> Color {
-        by_scheme(self.view_cube_arrow(), Color::srgb_u8(0x8a, 0x90, 0x98))
+        by_scheme(
+            Color::srgb_u8(0xa8, 0xb4, 0xc0),
+            Color::srgb_u8(0x6a, 0x72, 0x7c),
+        )
     }
 }
 
-/// Gives the cube the scheme's colors.
-fn recolor_cube(
-    theme: Res<Theme>,
-    cube: Option<Res<CubeMaterials>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+/// Colours and sizes the ball's parts for the scheme in force and what is hovered.
+fn style_ball(
+    hover: Res<BallHover>,
+    active: Res<cadrs_ui::ActiveTheme>,
+    mut q: Query<(Ref<BallPart>, &MeshMaterial3d<BallMaterial>, &mut Transform)>,
+    mut materials: ResMut<Assets<BallMaterial>>,
 ) {
-    let Some(cube) = cube else { return };
-    for (h, c) in [
-        (&cube.normal, theme.view_cube_face()),
-        (&cube.hover, theme.view_cube_hover()),
-        (&cube.frame, theme.view_cube_frame()),
-    ] {
-        if let Some(mut m) = materials.get_mut(h) {
-            m.base_color = c;
+    let all = hover.is_changed() || active.is_changed();
+    for (part, mat, mut at) in &mut q {
+        if !all && !part.is_added() {
+            continue;
+        }
+        let hovered = part.spot().is_some() && part.spot() == hover.0;
+        let params = part.params(&active, hovered);
+        if materials.get(&mat.0).is_some_and(|m| m.params != params)
+            && let Some(mut m) = materials.get_mut(&mat.0)
+        {
+            m.params = params;
+        }
+        let scale = Vec3::splat(part.scale(hovered));
+        if at.scale != scale {
+            at.scale = scale;
         }
     }
 }
 
-/// Spawns the view cube widget (inside the viewport area, top right).
+/// Spawns the view ball widget (inside the viewport area, bottom right).
 pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handle<Image>) {
     p.spawn((
         Name::new("view-cube"),
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(0.0),
-            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
             width: Val::Px(CUBE_WIDGET.x),
             height: Val::Px(CUBE_WIDGET.y),
             ..default()
@@ -631,7 +682,7 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
     .with_children(|w| {
         w.spawn((
             Name::new("view-cube-render"),
-            ImageNode::new(image),
+            BallImage(image),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
@@ -642,84 +693,74 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
             },
             Pickable::IGNORE,
         ));
-        // An invisible node over the cube: hovering and clicking it picks a face. Outside it
-        // the pointer still reaches the viewport.
+        // An invisible node over the ball: hovering and clicking it picks a knob or a dot,
+        // dragging it turns the view. Outside it the pointer still reaches the viewport.
+        let reach = 2.0 * (1.0 + KNOB_R) * CUBE_PX;
         w.spawn((
             Name::new("view-cube-image"),
             CubeImageNode,
             Hovered::default(),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(CUBE_CENTER.x - 46.0),
-                top: Val::Px(CUBE_CENTER.y - 46.0),
-                width: Val::Px(92.0),
-                height: Val::Px(92.0),
+                left: Val::Px(CUBE_CENTER.x - reach / 2.0),
+                top: Val::Px(CUBE_CENTER.y - reach / 2.0),
+                width: Val::Px(reach),
+                height: Val::Px(reach),
+                border_radius: BorderRadius::MAX,
                 ..default()
             },
         ));
-        for (axis, letter, color) in [
-            // Label colors measured in `screens/09`: more saturated than the triad lines.
-            (Vec3::X, "X", Color::srgb_u8(0xd0, 0x30, 0x30)),
-            (Vec3::Y, "Y", Color::srgb_u8(0x3a, 0x9a, 0x3a)),
-            (Vec3::Z, "Z", theme.axis_z),
-        ] {
+        for (axis, letter) in [(Vec3::X, "X"), (Vec3::Y, "Y"), (Vec3::Z, "Z")] {
             w.spawn((
                 Name::new(format!("view-cube-axis-{}", letter.to_lowercase())),
+                axis_letter(theme, letter),
                 AxisLabel(axis),
-                Node {
-                    position_type: PositionType::Absolute,
-                    ..default()
-                },
-                theme.text(letter, 12.0, FontWeight::BOLD, color),
-                Pickable::IGNORE,
             ));
         }
         let arrow = theme.view_cube_arrow();
-        for (name, icon_name, left, top, yaw, pitch) in [
+        let ring = RING_R * CUBE_PX;
+        for (name, icon_name, at, yaw, pitch) in [
             (
                 "view-cube-up",
                 "caret-up-filled",
-                CUBE_CENTER.x - 8.0,
-                10.0,
+                Vec2::new(0.0, -ring),
                 0.0,
                 -15.0,
             ),
             (
                 "view-cube-down",
                 "caret-down-filled",
-                CUBE_CENTER.x - 8.0,
-                CUBE_CENTER.y + 56.0,
+                Vec2::new(0.0, ring),
                 0.0,
                 15.0,
             ),
             (
                 "view-cube-left",
                 "caret-left-filled",
-                14.0,
-                CUBE_CENTER.y - 8.0,
+                Vec2::new(-ring, 0.0),
                 -15.0,
                 0.0,
             ),
             (
                 "view-cube-right",
                 "caret-right-filled",
-                CUBE_CENTER.x + 56.0,
-                CUBE_CENTER.y - 8.0,
+                Vec2::new(ring, 0.0),
                 15.0,
                 0.0,
             ),
         ] {
+            let at = CUBE_CENTER + at;
             w.spawn((
                 cadrs_ui::IconButton::new(name, icon_name)
-                    .icon_size(16.0)
+                    .icon_size(14.0)
                     .build(theme),
                 CubeArrow(yaw, pitch),
             ))
             .insert((
                 Node {
                     position_type: PositionType::Absolute,
-                    left: Val::Px(left),
-                    top: Val::Px(top),
+                    left: Val::Px(at.x - 8.0),
+                    top: Val::Px(at.y - 8.0),
                     width: Val::Px(16.0),
                     height: Val::Px(16.0),
                     justify_content: JustifyContent::Center,
@@ -739,38 +780,146 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
                 },
             ));
         }
-        // The view menu (`reference/onshape/view/view-cube-menu4-01.png`).
+        // The roll arrows: invisible nodes over their arcs (drawn by [`draw_cube`]).
+        for (from, to, roll) in ROLL_ARCS {
+            let a = ((from + to) / 2.0).to_radians();
+            let at = CUBE_CENTER + Vec2::new(a.cos(), -a.sin()) * ring;
+            w.spawn((
+                Name::new(if roll > 0.0 {
+                    "view-cube-roll-left"
+                } else {
+                    "view-cube-roll-right"
+                }),
+                RollArrow(roll),
+                Hovered::default(),
+                cadrs_ui::Tooltip::new(if roll > 0.0 {
+                    "Roll counter-clockwise"
+                } else {
+                    "Roll clockwise"
+                }),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(at.x - 13.0),
+                    top: Val::Px(at.y - 13.0),
+                    width: Val::Px(26.0),
+                    height: Val::Px(26.0),
+                    ..default()
+                },
+            ));
+        }
+        // What a click does, beside the ball while it is hovered.
         w.spawn((
-            cadrs_ui::Button::new("render-mode")
-                .icon("part")
-                .ghost()
-                .dropdown_caret()
-                .icon_size(16.0)
-                .tooltip("View options")
-                .build(theme),
-            cadrs_ui::prelude::observe(|a: On<Activate>, mut commands: Commands| {
-                let anchor = a.entity;
-                commands.queue(move |world: &mut World| {
-                    let state = ViewMenuState::of(world);
-                    let theme = world.resource::<Theme>().clone();
-                    let mut commands = world.commands();
-                    cadrs_ui::open_menu(&mut commands, anchor, view_menu(state).build(&theme));
-                    world.flush();
-                });
-            }),
-            cadrs_ui::prelude::observe(on_view_menu),
+            Name::new("view-cube-caption"),
+            BallCaption,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Percent(100.0),
+                top: Val::Px(CUBE_CENTER.y - 12.0),
+                height: Val::Px(24.0),
+                padding: UiRect::horizontal(Val::Px(8.0)),
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(theme.radius_panel)),
+                display: Display::None,
+                ..default()
+            },
+            cadrs_ui::glass::panel(theme),
+            Pickable::IGNORE,
         ))
-        .insert(Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(116.0),
-            top: Val::Px(136.0),
-            height: Val::Px(22.0),
-            padding: UiRect::horizontal(Val::Px(3.0)),
-            column_gap: Val::Px(2.0),
-            align_items: AlignItems::Center,
-            ..default()
-        });
+        .with_child((
+            theme.text("", 12.0, FontWeight::MEDIUM, theme.foreground),
+            Pickable::IGNORE,
+        ));
     });
+}
+
+/// An axis letter on its knob (the main ball's and the flat view's).
+pub(crate) fn axis_letter(theme: &Theme, letter: &str) -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        },
+        theme.text(letter, 10.0, FontWeight::BOLD, Color::WHITE),
+        Pickable::IGNORE,
+    )
+}
+
+/// The View options button at the tab bar's right end, after the view tools: a ▲ chevron like
+/// a folder tab's (▼ while its menu is open), the menu opening upward.
+pub(crate) fn spawn_view_options(bar: &mut ChildSpawnerCommands, t: &Theme) {
+    bar.spawn((
+        cadrs_ui::ToolButton::new("render-mode", "part")
+            .icon_size(18.0)
+            .tooltip("View options")
+            .build(t),
+        ViewOptionsButton,
+        cadrs_ui::prelude::observe(|a: On<Activate>, mut commands: Commands| {
+            let anchor = a.entity;
+            commands.queue(move |world: &mut World| {
+                let state = ViewMenuState::of(world);
+                let theme = world.resource::<Theme>().clone();
+                let mut commands = world.commands();
+                cadrs_ui::open_menu(&mut commands, anchor, view_menu(state).build(&theme));
+                world.flush();
+            });
+        }),
+        cadrs_ui::prelude::observe(on_view_menu),
+    ))
+    .insert(Node {
+        width: Val::Auto,
+        padding: UiRect::horizontal(Val::Px(5.0)),
+        column_gap: Val::Px(2.0),
+        ..crate::document::view_tool_node(t)
+    })
+    .with_children(|b| {
+        b.spawn((
+            cadrs_ui::icon("chevron-up", 18.0, t.foreground),
+            ViewOptionsChevron,
+            Pickable::IGNORE,
+        ));
+    });
+}
+
+#[derive(Component)]
+struct ViewOptionsButton;
+
+#[derive(Component)]
+struct ViewOptionsChevron;
+
+/// The View options chevron: ▲, ▼ while its menu is open; and the button pressed then (as a
+/// folder tab's, `crate::tab_folders`).
+#[allow(clippy::type_complexity)]
+fn sync_view_options_chevron(
+    q: Query<
+        (
+            Entity,
+            &Children,
+            Has<cadrs_ui::menu::MenuOpenAnchor>,
+            Has<cadrs_ui::ForceState>,
+        ),
+        With<ViewOptionsButton>,
+    >,
+    mut q_icon: Query<&mut cadrs_ui::Icon, With<ViewOptionsChevron>>,
+    mut commands: Commands,
+) {
+    for (button, children, open, pressed) in &q {
+        if open && !pressed {
+            commands
+                .entity(button)
+                .try_insert(cadrs_ui::ForceState(cadrs_ui::VisualState::Pressed));
+        } else if !open && pressed {
+            commands.entity(button).try_remove::<cadrs_ui::ForceState>();
+        }
+        let want = if open { "chevron-down" } else { "chevron-up" };
+        for c in children.iter() {
+            if let Ok(mut icon) = q_icon.get_mut(c)
+                && icon.name != want
+            {
+                icon.name = want.into();
+            }
+        }
+    }
 }
 
 /// What the view menu shows checked or enabled.
@@ -807,7 +956,7 @@ impl ViewMenuState {
     }
 }
 
-/// The view cube's ▾ menu, grouped like Onshape's (`reference/onshape/view/view-cube-menu4-01.png`).
+/// The View options menu, grouped like Onshape's (`reference/onshape/view/view-cube-menu4-01.png`).
 /// P3E.3a: the render modes in their two groups (the shaded modes, then the hidden-line ones;
 /// the group in use is checked, and each is named after the mode last picked in it),
 /// Perspective view, Named views…, Previous view, Zoom to window and Section view… work. What
@@ -818,7 +967,9 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
     // Each group's row reads the mode last picked in it.
     let (shaded_label, line_label) = (st.groups.0.label(), st.groups.1.label());
     let check = |on: bool, item: I| if on { item.icon("check") } else { item };
+    // At the tab bar's right end: up from there, its right edges in line.
     cadrs_ui::Menu::new("view-menu")
+        .side(PopoverSide::Top)
         .align_end()
         .min_width(222.0)
         .item_height(23.0)
@@ -941,7 +1092,7 @@ fn on_view_menu(ev: On<cadrs_ui::MenuAction>, view: Res<ViewportView>, mut comma
     }
 }
 
-/// The cube camera's projection (P3D.4: the Repair panel's cube uses it too).
+/// The view ball's camera's projection (P3D.4: the Repair panel's ball uses it too).
 pub(crate) fn cube_projection() -> Projection {
     Projection::Orthographic(OrthographicProjection {
         scaling_mode: ScalingMode::WindowSize,
@@ -956,13 +1107,13 @@ pub(crate) fn cube_projection() -> Projection {
     })
 }
 
-/// The view a click at `widget_pos` (px from the widget's top-left) on a cube seen from `view`
-/// turns to: a face's standard view or a corner's trimetric one (P3D.4: the Repair panel's
-/// cube).
+/// The view a click at `widget_pos` (px from the widget's top-left) on a ball seen from `view`
+/// turns to: a knob's standard view or a corner's trimetric one (P3D.4: the Repair panel's
+/// ball).
 pub(crate) fn view_at_spot(view: &ViewState, widget_pos: Vec2) -> Option<ViewState> {
     match spot_at(view, widget_pos)? {
-        CubeSpot::Face(face) => Some(view.oriented(face.view())),
-        CubeSpot::Corner(c) => {
+        BallSpot::Knob(face) => Some(view.oriented(face.view())),
+        BallSpot::Corner(c) => {
             let (azimuth, elevation) = corner_view(c);
             Some(ViewState {
                 azimuth,
@@ -971,13 +1122,16 @@ pub(crate) fn view_at_spot(view: &ViewState, widget_pos: Vec2) -> Option<ViewSta
                 ..*view
             })
         }
+        BallSpot::Glass => None,
     }
 }
 
+/// `view` turned like the ball: about its centre, a ball unit [`CUBE_PX`] pixels.
 fn cube_view(view: &ViewState) -> ViewState {
     ViewState {
         focus: Vec3::ZERO,
         scale: 1.0 / CUBE_PX,
+        perspective: false,
         ..*view
     }
 }
@@ -992,36 +1146,21 @@ fn sync_cube_camera(view: Res<ViewportView>, mut q: Query<&mut Transform, With<C
     }
 }
 
-/// The face under a point of the widget (px from the widget's top-left).
-#[cfg(test)]
-fn face_at(view: &ViewState, widget_pos: Vec2) -> Option<CubeFace> {
-    match spot_at(view, widget_pos)? {
-        CubeSpot::Face(f) => Some(f),
-        CubeSpot::Corner(_) => None,
-    }
-}
-
-/// The face or corner under a point of the widget: a hit within [`CORNER_SIZE`] of two edges
-/// of a face is on the corner there.
-fn spot_at(view: &ViewState, widget_pos: Vec2) -> Option<CubeSpot> {
+/// The knob, dot or glass under a point of the widget (px from its top-left): of the knobs
+/// and dots within reach, the nearest the viewer.
+fn spot_at(view: &ViewState, widget_pos: Vec2) -> Option<BallSpot> {
     let v = cube_view(view);
-    let (o, d) = v.ray(widget_pos - CUBE_CENTER);
-    let (t, f) = CubeFace::ALL
+    let at = widget_pos - CUBE_CENTER;
+    let back = v.back();
+    let knobs = CubeFace::ALL.map(|f| (BallSpot::Knob(f), f.normal(), KNOB_R));
+    let dots = corners().map(|c| (BallSpot::Corner(c), c.as_vec3().normalize(), DOT_R * 1.8));
+    knobs
         .into_iter()
-        .filter_map(|f| {
-            let (u, w) = f.frame();
-            ray_square(o, d, f.normal(), u, w, 1.0).map(|t| (t, f))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))?;
-    let p = o + d * t;
-    let (u, w) = f.frame();
-    let (a, b) = (p.dot(u), p.dot(w));
-    let edge = 1.0 - CORNER_SIZE;
-    if a.abs() > edge && b.abs() > edge {
-        let c = f.normal() + u * a.signum() + w * b.signum();
-        return Some(CubeSpot::Corner(c.round().as_ivec3()));
-    }
-    Some(CubeSpot::Face(f))
+        .chain(dots)
+        .filter(|(_, p, r)| v.project(*p).distance(at) <= (r + HIT_SLOP) * CUBE_PX)
+        .max_by(|a, b| a.1.dot(back).total_cmp(&b.1.dot(back)))
+        .map(|(spot, ..)| spot)
+        .or_else(|| (at.length() <= CUBE_PX).then_some(BallSpot::Glass))
 }
 
 fn widget_origin(
@@ -1030,128 +1169,163 @@ fn widget_origin(
     let (node, t) = q.iter().next()?;
     let s = node.inverse_scale_factor();
     let center = t.translation * s;
-    // The image node's center is the cube center.
+    // The hover node's center is the ball's.
     Some(center - CUBE_CENTER)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn cube_hover(
     view: Res<ViewportView>,
     drag: Res<crate::viewport::ViewportDrag>,
+    ball_drag: Res<BallDrag>,
     q_node: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<CubeImageNode>>,
     q_hovered: Query<&Hovered, With<CubeImageNode>>,
-    mut hover: ResMut<CubeHover>,
-    mut corner_hover: ResMut<CornerHover>,
-    materials: Option<Res<CubeMaterials>>,
-    mut q_faces: Query<(&CubeFace, &mut MeshMaterial3d<StandardMaterial>)>,
-    mut q_corners: Query<(&CornerPatch, &mut Visibility)>,
+    mut hover: ResMut<BallHover>,
 ) {
-    let hovered = q_hovered.iter().any(|h| h.get());
-    let spot = if hovered {
+    let spot = if ball_drag.active {
+        Some(BallSpot::Glass)
+    } else if q_hovered.iter().any(|h| h.get()) {
         widget_origin(&q_node).and_then(|o| spot_at(&view.view, drag.pointer() - o))
     } else {
         None
     };
-    let (face, corner) = match spot {
-        Some(CubeSpot::Face(f)) => (Some(f), None),
-        Some(CubeSpot::Corner(c)) => (None, Some(c)),
-        None => (None, None),
-    };
-    if hover.0 != face {
-        hover.0 = face;
+    if hover.0 != spot {
+        hover.0 = spot;
     }
-    if corner_hover.0 != corner {
-        corner_hover.0 = corner;
+}
+
+/// What a click on `spot` does, for the caption beside the ball.
+fn caption(spot: BallSpot) -> String {
+    match spot {
+        BallSpot::Knob(f) => f.label().to_string(),
+        BallSpot::Corner(c) => format!(
+            "{} {} {}",
+            if c.z > 0 { "Top" } else { "Bottom" },
+            if c.y < 0 { "front" } else { "back" },
+            if c.x > 0 { "right" } else { "left" }
+        ),
+        BallSpot::Glass => "Drag to turn".to_string(),
     }
-    for (p, mut vis) in &mut q_corners {
-        vis.set_if_neq(if Some(p.0) == corner {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
-    }
-    let Some(m) = materials else {
+}
+
+fn show_caption(
+    hover: Res<BallHover>,
+    mut q: Query<(&mut Node, &Children), With<BallCaption>>,
+    mut q_text: Query<&mut Text>,
+) {
+    if !hover.is_changed() {
         return;
-    };
-    for (f, mut mat) in &mut q_faces {
-        let want = if Some(*f) == hover.0 {
-            &m.hover
+    }
+    for (mut node, children) in &mut q {
+        let display = if hover.0.is_some() {
+            Display::Flex
         } else {
-            &m.normal
+            Display::None
         };
-        if mat.0 != *want {
-            mat.0 = want.clone();
+        if node.display != display {
+            node.display = display;
+        }
+        let Some(spot) = hover.0 else {
+            continue;
+        };
+        for c in children.iter() {
+            if let Ok(mut text) = q_text.get_mut(c) {
+                let want = caption(spot);
+                if text.0 != want {
+                    text.0 = want;
+                }
+            }
         }
     }
 }
 
 fn draw_cube(
-    mut gizmos: Gizmos<CubeGizmos>,
-    mut arcs: Gizmos<CubeArcGizmos>,
+    mut ring: Gizmos<CubeArcGizmos>,
+    mut rolls: Gizmos<RollGizmos>,
     view: Res<ViewportView>,
     theme: Res<Theme>,
     active: Res<cadrs_ui::ActiveTheme>,
+    q_roll: Query<(&RollArrow, &Hovered)>,
 ) {
-    draw_cube_arcs(&mut arcs, &view.view, theme.view_cube_arc());
-    let edge = theme.view_cube_edge();
-    let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) * 0.97;
-    let corners = [
-        c(-1.0, -1.0, -1.0),
-        c(1.0, -1.0, -1.0),
-        c(1.0, 1.0, -1.0),
-        c(-1.0, 1.0, -1.0),
-        c(-1.0, -1.0, 1.0),
-        c(1.0, -1.0, 1.0),
-        c(1.0, 1.0, 1.0),
-        c(-1.0, 1.0, 1.0),
-    ];
-    for i in 0..4 {
-        gizmos.line(corners[i], corners[(i + 1) % 4], edge);
-        gizmos.line(corners[i + 4], corners[(i + 1) % 4 + 4], edge);
-        gizmos.line(corners[i], corners[i + 4], edge);
-    }
-    let o = TRIAD_ORIGIN;
-    for (axis, color) in [
-        (Vec3::X, active.axis_x),
-        (Vec3::Y, active.axis_y),
-        (Vec3::Z, active.axis_z),
-    ] {
-        gizmos.line(o, o + axis * TRIAD_LEN, color);
+    let color = theme.view_cube_arc();
+    // Gaps for the nudge arrows and the roll arrows' arcs.
+    let gap = (9.5 / (RING_R * CUBE_PX)).to_degrees();
+    let mut gaps: Vec<(f32, f32)> = [0.0_f32, 90.0, 180.0, 270.0]
+        .into_iter()
+        .map(|a| (a - gap, a + gap))
+        .collect();
+    gaps.extend(ROLL_ARCS.map(|(from, to, _)| (from.min(to), from.max(to))));
+    draw_ball_ring(&mut ring, &view.view, color, &gaps);
+    for (from, to, roll) in ROLL_ARCS {
+        let hovered = q_roll.iter().any(|(r, h)| r.0 == roll && h.get());
+        let c = if hovered {
+            active.primary
+        } else {
+            by_scheme(
+                Color::srgb_u8(0x8f, 0x9c, 0xaa),
+                Color::srgb_u8(0x8a, 0x92, 0x9c),
+            )
+        };
+        draw_roll_arrow(&mut rolls, &view.view, from, to, c);
     }
 }
 
-/// The two curved rotate arrows (about 50 px radius) at the cube's top left and top right, drawn
-/// in `view`'s screen plane in front of the cube (the main cube's, and the Repair view's own).
-pub(crate) fn draw_cube_arcs<G: GizmoConfigGroup>(
-    arcs: &mut Gizmos<G>,
+/// A point of the ring round the ball, `deg` counter-clockwise from screen right, in `view`'s
+/// screen plane in front of the ball.
+fn ring_point(view: &ViewState, deg: f32) -> Vec3 {
+    let (r, u, b) = (view.right(), view.up(), view.back());
+    let a = deg.to_radians();
+    (r * a.cos() + u * a.sin()) * RING_R + b * 5.0
+}
+
+/// The ring round the ball, drawn in `view`'s screen plane (the main ball's, with `gaps` in
+/// degrees for its arrows; the Repair view's and the flat view's, whole).
+pub(crate) fn draw_ball_ring<G: GizmoConfigGroup>(
+    ring: &mut Gizmos<G>,
     view: &ViewState,
-    arc_color: Color,
+    color: Color,
+    gaps: &[(f32, f32)],
 ) {
-    let v = cube_view(view);
-    let (r, u, b) = (v.right(), v.up(), v.back());
-    let radius = 62.0 / CUBE_PX;
-    let at = |deg: f32| {
-        let a = deg.to_radians();
-        (r * a.cos() + u * a.sin()) * radius + b * 5.0
-    };
-    for (from, to) in [(108.0_f32, 143.0_f32), (72.0, 37.0)] {
-        const N: usize = 12;
-        for i in 0..N {
-            let a0 = from + (to - from) * i as f32 / N as f32;
-            let a1 = from + (to - from) * (i + 1) as f32 / N as f32;
-            arcs.line(at(a0), at(a1), arc_color);
+    const N: usize = 120;
+    let step = 360.0 / N as f32;
+    for i in 0..N {
+        let (a0, a1) = (i as f32 * step, (i + 1) as f32 * step);
+        let mid = (a0 + a1) / 2.0;
+        if gaps.iter().any(|(lo, hi)| {
+            let m = if *lo < 0.0 && mid > 180.0 {
+                mid - 360.0
+            } else {
+                mid
+            };
+            m > *lo && m < *hi
+        }) {
+            continue;
         }
-        // Arrowhead at the outer, lower end.
-        let end = at(to);
-        let tangent = (at(to) - at(to - (to - from) * 0.1)).normalize();
-        let normal = (end - b * 5.0).normalize();
-        let back_pt = end - tangent * 0.28;
-        arcs.line(end + tangent * 0.1, back_pt + normal * 0.26, arc_color);
-        arcs.line(end + tangent * 0.1, back_pt - normal * 0.26, arc_color);
+        ring.line(ring_point(view, a0), ring_point(view, a1), color);
     }
 }
 
-const TRIAD_LEN: f32 = 2.45;
+/// A roll arrow: the ring's arc from `from` to `to` (degrees), its head at `to`.
+fn draw_roll_arrow<G: GizmoConfigGroup>(
+    g: &mut Gizmos<G>,
+    view: &ViewState,
+    from: f32,
+    to: f32,
+    color: Color,
+) {
+    const N: usize = 10;
+    for i in 0..N {
+        let a0 = from + (to - from) * i as f32 / N as f32;
+        let a1 = from + (to - from) * (i + 1) as f32 / N as f32;
+        g.line(ring_point(view, a0), ring_point(view, a1), color);
+    }
+    let b = view.back() * 5.0;
+    let end = ring_point(view, to);
+    let tangent = (end - ring_point(view, to - (to - from) * 0.1)).normalize();
+    let radial = (end - b).normalize();
+    let base = end - tangent * 0.2;
+    g.line(end + tangent * 0.03, base + radial * 0.12, color);
+    g.line(end + tangent * 0.03, base - radial * 0.12, color);
+}
 
 fn place_cube_labels(
     view: Res<ViewportView>,
@@ -1171,56 +1345,40 @@ fn place_cube_labels(
     }
 }
 
-/// Where an axis letter of the cube's triad goes for `view` (its label's top-left in the cube
-/// widget, for a label of `size`) and its opacity: the main cube's and the flat view's.
+/// Where an axis letter goes for `view` (its label's top-left in the ball widget, for a label
+/// of `size`: centred on its knob) and its opacity: shown while the knob is on the near side
+/// (the main ball's and the flat view's).
 pub(crate) fn axis_label_spot(view: &ViewState, axis: Vec3, size: Vec2) -> (Vec2, f32) {
     let v = cube_view(view);
-    let tip = TRIAD_ORIGIN + axis * (TRIAD_LEN + 0.35);
-    // An axis pointing (nearly) at the viewer has no label, as in Onshape's normal views
-    // (`screens/09` shows only X and Y); a tip behind the cube shows faintly, as if seen
-    // through it.
     let along = axis.dot(v.back());
-    let a = if along.abs() > 0.9 {
-        0.0
-    } else if along < -0.3 {
-        0.45
-    } else {
-        1.0
-    };
-    // A tip in front of the cube's face labels moves out along its axis until the label
-    // clears the cube's outline, so "Z" never sits on "Top".
-    let mut offset = v.project(tip);
-    let dir = v.project_vector(axis).normalize_or_zero();
-    let clear = CUBE_PX * 1.62 + size.max_element() / 2.0;
-    if along > -0.3 && dir.dot(offset) > 0.0 {
-        let mut n = 0;
-        while offset.length() < clear && n < 40 {
-            offset += dir * 2.0;
-            n += 1;
-        }
-    }
-    let p = CUBE_CENTER + offset;
-    (Vec2::new(p.x - size.x / 2.0, p.y - size.y / 2.0), a)
+    let a = ((along + 0.1) / 0.2).clamp(0.0, 1.0);
+    let p = CUBE_CENTER + v.project(axis);
+    (p - size / 2.0, a)
 }
 
 fn on_cube_click(
     click: On<PointerClick>,
     q: Query<(), With<CubeImageNode>>,
     q_node: Query<(&ComputedNode, &bevy::ui::UiGlobalTransform), With<CubeImageNode>>,
+    mut drag: ResMut<BallDrag>,
     mut view: ResMut<ViewportView>,
 ) {
     if click.button != PointerButton::Primary || !q.contains(click.entity) {
+        return;
+    }
+    // The end of a drag.
+    if std::mem::take(&mut drag.moved) > 3.0 {
         return;
     }
     let Some(origin) = widget_origin(&q_node) else {
         return;
     };
     match spot_at(&view.view, click.pointer.position - origin) {
-        Some(CubeSpot::Face(face)) => {
+        Some(BallSpot::Knob(face)) => {
             let to = view.target().oriented(face.view());
             view.animate_to(to);
         }
-        Some(CubeSpot::Corner(c)) => {
+        Some(BallSpot::Corner(c)) => {
             let (azimuth, elevation) = corner_view(c);
             let to = ViewState {
                 azimuth,
@@ -1230,11 +1388,50 @@ fn on_cube_click(
             };
             view.animate_to(to);
         }
-        None => {}
+        Some(BallSpot::Glass) | None => {}
     }
 }
 
-/// A view cube arrow rotates 15°; Shift+click 90°, Ctrl+click 5° (`shortcuts.md`).
+fn on_ball_drag_start(
+    ev: On<PointerDragStart>,
+    q: Query<(), With<CubeImageNode>>,
+    mut drag: ResMut<BallDrag>,
+) {
+    if ev.button == PointerButton::Primary && q.contains(ev.entity) {
+        *drag = BallDrag {
+            active: true,
+            moved: 0.0,
+        };
+    }
+}
+
+/// Dragging the ball turns the view as a right-drag in the view does: the ball rolls under
+/// the pointer.
+fn on_ball_drag(
+    ev: On<PointerDrag>,
+    q: Query<(), With<CubeImageNode>>,
+    mut drag: ResMut<BallDrag>,
+    mut view: ResMut<ViewportView>,
+) {
+    if ev.button != PointerButton::Primary || !q.contains(ev.entity) {
+        return;
+    }
+    drag.moved += ev.delta.length();
+    view.animation = None;
+    view.view.orbit(ev.delta);
+}
+
+fn on_ball_drag_end(
+    ev: On<PointerDragEnd>,
+    q: Query<(), With<CubeImageNode>>,
+    mut drag: ResMut<BallDrag>,
+) {
+    if q.contains(ev.entity) {
+        drag.active = false;
+    }
+}
+
+/// A nudge arrow rotates 15°; Shift+click 90°, Ctrl+click 5° (`shortcuts.md`).
 fn on_arrow(
     ev: On<Activate>,
     q: Query<&CubeArrow>,
@@ -1249,38 +1446,81 @@ fn on_arrow(
     }
 }
 
+/// A roll arrow turns the view about its direction by 15° (Shift 90°, Ctrl 5°, as the nudge
+/// arrows).
+fn on_roll(
+    click: On<PointerClick>,
+    q: Query<&RollArrow>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut view: ResMut<ViewportView>,
+) {
+    let Ok(r) = q.get(click.entity) else {
+        return;
+    };
+    if click.button != PointerButton::Primary {
+        return;
+    }
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+    let k = crate::viewport::arrow_step(shift, ctrl) / 15.0;
+    let mut to = view.target();
+    to.rotate_model_about(to.back(), (r.0 * k).to_radians());
+    view.animate_to(to);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn face_labels_fade_when_turned_away() {
-        assert_eq!(face_label_alpha(1.0), 1.0);
-        assert_eq!(face_label_alpha(75f32.to_radians().cos() - 0.01), 0.0);
-        assert!(face_label_alpha(0.32) > 0.0 && face_label_alpha(0.32) < 1.0);
+    /// Where a point of the ball is in the widget, seen from `view`.
+    fn at(view: &ViewState, p: Vec3) -> Vec2 {
+        CUBE_CENTER + cube_view(view).project(p)
     }
 
     #[test]
-    fn clicking_the_cube_center_hits_the_front_face_from_the_front() {
-        let v = ViewState::standard(StandardView::Front);
-        assert_eq!(face_at(&v, CUBE_CENTER), Some(CubeFace::Front));
+    fn clicking_a_knob_picks_its_view() {
+        let front = ViewState::standard(StandardView::Front);
+        assert_eq!(
+            spot_at(&front, CUBE_CENTER),
+            Some(BallSpot::Knob(CubeFace::Front))
+        );
         let top = ViewState::standard(StandardView::Top);
-        assert_eq!(face_at(&top, CUBE_CENTER), Some(CubeFace::Top));
-        // In the default view the top face is above the center and the right face to the right.
+        assert_eq!(
+            spot_at(&top, CUBE_CENTER),
+            Some(BallSpot::Knob(CubeFace::Top))
+        );
+        // In the default view the Top, Right and Front knobs face the viewer.
         let d = ViewState::default();
+        for f in [CubeFace::Top, CubeFace::Right, CubeFace::Front] {
+            assert_eq!(spot_at(&d, at(&d, f.normal())), Some(BallSpot::Knob(f)));
+        }
+        // A knob in front hides the one behind it: in the Front view the Back knob is behind
+        // the Front one.
         assert_eq!(
-            face_at(&d, CUBE_CENTER + Vec2::new(0.0, -30.0)),
-            Some(CubeFace::Top)
+            view_at_spot(&front, CUBE_CENTER).map(|v| (v.azimuth, v.elevation)),
+            Some(StandardView::Front.angles())
         );
+        // Between knobs is the glass; beyond the ball, nothing.
         assert_eq!(
-            face_at(&d, CUBE_CENTER + Vec2::new(24.0, 4.0)),
-            Some(CubeFace::Right)
+            spot_at(&d, CUBE_CENTER + Vec2::new(-0.3, 0.6) * CUBE_PX),
+            Some(BallSpot::Glass)
         );
+        assert_eq!(spot_at(&d, CUBE_CENTER + Vec2::new(66.0, 0.0)), None);
         assert_eq!(
-            face_at(&d, CUBE_CENTER + Vec2::new(-10.0, 12.0)),
-            Some(CubeFace::Front)
+            view_at_spot(&d, CUBE_CENTER + Vec2::new(-0.3, 0.6) * CUBE_PX),
+            None
         );
-        assert_eq!(face_at(&d, CUBE_CENTER + Vec2::new(80.0, 0.0)), None);
+    }
+
+    #[test]
+    fn axis_letters_sit_on_their_knobs() {
+        let d = ViewState::default();
+        let size = Vec2::new(8.0, 12.0);
+        let (p, a) = axis_label_spot(&d, Vec3::Z, size);
+        assert!((p + size / 2.0).distance(at(&d, Vec3::Z)) < 1e-3);
+        assert_eq!(a, 1.0);
+        // The Y knob is on the far side of the default view: no letter.
+        assert_eq!(axis_label_spot(&d, Vec3::Y, size).1, 0.0);
     }
 
     #[test]
@@ -1332,41 +1572,38 @@ mod tests {
         );
         // Every corner's view looks from that corner (its view direction is in its octant) and
         // no two axes are foreshortened alike (trimetric).
-        for x in [-1, 1] {
-            for y in [-1, 1] {
-                for z in [-1, 1] {
-                    let c = IVec3::new(x, y, z);
-                    let (azimuth, elevation) = corner_view(c);
-                    let v = ViewState {
-                        azimuth,
-                        elevation,
-                        ..ViewState::default()
-                    };
-                    let b = v.back();
-                    assert!(
-                        b.x * x as f32 > 0.0 && b.y * y as f32 > 0.0 && b.z * z as f32 > 0.0,
-                        "{c}: {b}"
-                    );
-                    let k = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| v.project_vector(a).length());
-                    assert!(
-                        (k[0] - k[1]).abs() > 0.05
-                            && (k[1] - k[2]).abs() > 0.05
-                            && (k[0] - k[2]).abs() > 0.05,
-                        "{k:?}"
-                    );
-                }
-            }
+        for c in corners() {
+            let (azimuth, elevation) = corner_view(c);
+            let v = ViewState {
+                azimuth,
+                elevation,
+                ..ViewState::default()
+            };
+            let b = v.back();
+            assert!(
+                b.x * c.x as f32 > 0.0 && b.y * c.y as f32 > 0.0 && b.z * c.z as f32 > 0.0,
+                "{c}: {b}"
+            );
+            let k = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| v.project_vector(a).length());
+            assert!(
+                (k[0] - k[1]).abs() > 0.05
+                    && (k[1] - k[2]).abs() > 0.05
+                    && (k[0] - k[2]).abs() > 0.05,
+                "{k:?}"
+            );
         }
-        // A click near a corner of the front face in the Front view hits that corner.
+        assert_eq!(corners().count(), 8);
+        // In the Front view the front-right-top corner's dot is up and to the right, the
+        // front-left-bottom one down and to the left.
         let front = ViewState::standard(StandardView::Front);
-        let near = CUBE_CENTER + Vec2::new(0.9, -0.9) * CUBE_PX;
+        let k = 1.0 / 3f32.sqrt() * CUBE_PX;
         assert_eq!(
-            spot_at(&front, near),
-            Some(CubeSpot::Corner(IVec3::new(1, -1, 1)))
+            spot_at(&front, CUBE_CENTER + Vec2::new(k, -k)),
+            Some(BallSpot::Corner(IVec3::new(1, -1, 1)))
         );
         assert_eq!(
-            spot_at(&front, CUBE_CENTER),
-            Some(CubeSpot::Face(CubeFace::Front))
+            spot_at(&front, CUBE_CENTER + Vec2::new(-k, k)),
+            Some(BallSpot::Corner(IVec3::new(-1, -1, -1)))
         );
     }
 }

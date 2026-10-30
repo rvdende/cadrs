@@ -22,8 +22,8 @@
 //! are left out, as the prism mesh of [`crate::solid`] did. Planar faces get the same
 //! [`PlaneFrame`]s the prism gave them, so sketches on faces keep their coordinates.
 
+use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use cadrs_kernel::naming::{self, BodyNames};
 use cadrs_kernel::{self as kernel, BodyId, Kernel, Tessellation};
@@ -74,6 +74,18 @@ pub fn tessellation() -> Tessellation {
     Tessellation {
         deflection: 0.05,
         angle: ANGLE_STEP,
+    }
+}
+
+/// [`tessellation`] for a body `size` across (its box's diagonal): within a hundred-thousandth
+/// of that when it's coarser than 0.05 mm (a body over 5 m). A site's 56 m terrain loft took
+/// 1.3 million triangles (1.1 s) at 0.05 mm; at 0.7 mm the mesh strays a fiftieth of a pixel
+/// with the whole body on screen.
+pub fn tessellation_for(size: f64) -> Tessellation {
+    let t = tessellation();
+    Tessellation {
+        deflection: t.deflection.max(1e-5 * size),
+        ..t
     }
 }
 
@@ -454,7 +466,7 @@ impl OpGeom {
 }
 
 /// The swept geometry of every operation whose faces a part can have, by operation.
-pub type Geoms = HashMap<OpId, std::sync::Arc<OpGeom>>;
+pub type Geoms = std::collections::HashMap<OpId, std::sync::Arc<OpGeom>>;
 
 /// What a kernel face is.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -682,10 +694,12 @@ pub fn solid_of(
     geoms: &Geoms,
     op: Option<OpId>,
 ) -> Result<Solid, String> {
+    let across = k.size_hint(body).unwrap_or(0.0);
     let mesh = k
-        .tessellate(body, tessellation())
+        .tessellate(body, tessellation_for(across))
         .map_err(|e| e.to_string())?;
-    let edge_info = k.edges(body).map_err(|e| e.to_string())?;
+    // (A length only to tell a sliver: exact below `SLIVER`.)
+    let edge_info = k.edges_shown(body, SLIVER).map_err(|e| e.to_string())?;
     let face_info = k.faces(body).map_err(|e| e.to_string())?;
     let vertex_info = k.vertices(body).map_err(|e| e.to_string())?;
     let face_count = face_info.len();
@@ -712,7 +726,7 @@ pub fn solid_of(
     // the history gives several faces, its inputs' unnamed faces each the first of its own, is
     // each face's own index instead: they are different faces.)
     let own = op.and_then(|o| Some((o, geoms.get(&o)?)));
-    let mut repeats: HashMap<FaceName, u32> = HashMap::new();
+    let mut repeats: HashMap<FaceName, u32> = HashMap::default();
     for n in names.faces.iter().filter(|n| !n.is_stable()) {
         *repeats.entry(*n).or_default() += 1;
     }
@@ -742,7 +756,7 @@ pub fn solid_of(
     let mut shown: Vec<FaceName> = Vec::new();
     let mut members: Vec<Vec<usize>> = Vec::new();
     // By a map, not a scan of `shown`: an imported mesh's every facet is a face (issue #11).
-    let mut shown_at: HashMap<FaceName, usize> = HashMap::new();
+    let mut shown_at: HashMap<FaceName, usize> = HashMap::default();
     for (fi, name) in face_names.iter().enumerate() {
         if face_tris[fi].is_empty() {
             continue;
@@ -761,7 +775,7 @@ pub fn solid_of(
     // geometry).
     let edge_names =
         naming::name_edges(&face_names, &edge_info, naming::joint_tolerance(&edge_info));
-    let mut polylines = HashMap::new();
+    let mut polylines = HashMap::default();
     for (e, pts) in &mesh.edges {
         polylines.entry(*e).or_insert(pts);
     }
@@ -805,10 +819,10 @@ pub fn solid_of(
         },
         _ => false,
     };
-    let mut outline: HashMap<FaceName, Vec<Vec<Vec3>>> = HashMap::new();
+    let mut outline: HashMap<FaceName, Vec<Vec<Vec3>>> = HashMap::default();
     // Each kernel edge's name, points, circle, tangent group and whether it is a facet seam.
     type Named = (EdgeName, Vec<Vec3>, Option<EdgeCircle>, u32, bool);
-    let mut named_edges: Vec<Named> = Vec::new();
+    let mut named_edges: Vec<Named> = Vec::with_capacity(edge_info.len());
     for (ei, (info, name)) in edge_info.iter().zip(&edge_names).enumerate() {
         let Some(name) = name else { continue };
         // A sliver (see `SLIVER`) isn't an edge anyone can see or pick: its neighbours meet.
@@ -879,8 +893,12 @@ pub fn solid_of(
 
     // Assemble the solid, face by face.
     let mut out = Solid::default();
+    // (Each mesh vertex at most once, as it's first reached.)
+    out.positions.reserve(pos.len());
+    out.normals.reserve(pos.len());
+    out.indices.reserve(3 * mesh.indices.len());
     let colors = k.face_colors(body);
-    let mut kernel_planes: Vec<Option<kernel::Plane>> = Vec::new();
+    let mut kernel_planes: Vec<Option<kernel::Plane>> = Vec::with_capacity(shown.len());
     let mut remap: Vec<u32> = vec![u32::MAX; pos.len()];
     for (name, fis) in shown.iter().zip(&members) {
         if let Some([r, g, b, alpha]) = fis.iter().find_map(|&fi| colors.get(fi).copied().flatten())
@@ -1050,7 +1068,7 @@ pub fn solid_of(
             && (a.radius - b.radius).abs() < tol_piece
             && dot(a.normal, b.normal).abs() > 1.0 - 1e-9
     };
-    let mut edge_at: HashMap<EdgeName, usize> = HashMap::new();
+    let mut edge_at: HashMap<EdgeName, usize> = HashMap::default();
     for (name, pts, circle, group, smooth) in named_edges {
         match edge_at.get(&name).copied() {
             Some(i) => {
@@ -1131,9 +1149,12 @@ fn rulings(
     if dn.abs() < 1e-9 || verts.is_empty() {
         return;
     }
-    // Each point: its foot on the sketch plane (back along the sweep), height, normal.
+    // Each point: its foot on the sketch plane (back along the sweep), height, normal. (Side by
+    // side: a spline piece's place is a nearest-point search per point.)
+    use rayon::prelude::*;
     let mut pts: Vec<(f64, Vec3, f64, Vec3)> = verts
-        .iter()
+        .par_iter()
+        .with_min_len(64)
         .map(|&v| {
             let h = dot(sub(pos[v], g.frame.origin), g.n) / dn;
             let foot = sub(pos[v], scale(dir, h));
@@ -1152,13 +1173,23 @@ fn rulings(
         .flat_map(|(_, ps)| ps)
         .map(|(p, _)| (p, piece_box(p, 100.0 * tol)))
         .collect();
+    // (Its own piece, one of them, first: most points lie on it, and then no other is tried.)
+    let own = piece_box(piece, 100.0 * tol);
     let off_sketch = |foot: Vec3| {
         let q = g.frame.to_sketch(foot);
+        if in_box(&own, q) && piece_distance(piece, q) <= 100.0 * tol {
+            return false;
+        }
         boxes
             .iter()
             .all(|(p, b)| !in_box(b, q) || piece_distance(p, q) > 100.0 * tol)
     };
-    if on_piece && pts.iter().any(|(_, foot, ..)| off_sketch(*foot)) {
+    if on_piece
+        && pts
+            .par_iter()
+            .with_min_len(64)
+            .any(|(_, foot, ..)| off_sketch(*foot))
+    {
         return;
     }
     // Where the face reaches along the ruling at `param`: its triangles laid out flat by
@@ -1231,11 +1262,12 @@ fn rulings(
         }
     };
     let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); nb];
-    // (Segments without a range, from a coordinate that isn't a number, are tested always.)
+    // (Segments without a range, from a coordinate that isn't a number, are tested always; so
+    // are those over many buckets: put in each, a long triangle's cost more than the lookups.)
     let mut always: Vec<usize> = Vec::new();
     for (i, sg) in segs.iter().enumerate() {
         let (a, b) = span(sg);
-        if !(a <= b) {
+        if !(a <= b) || bucket(b) - bucket(a) >= 64 {
             always.push(i);
             continue;
         }
@@ -1302,15 +1334,20 @@ fn rulings(
             None => groups.push((param, foot, h, h, n)),
         }
     }
+    // (Each parameter's reach once: a face merged from several pieces has its points on the
+    // others all at one end of this one.)
+    let mut reached: HashMap<u64, Option<(f64, f64)>> = HashMap::default();
     let mut along: Vec<(Vec3, Vec3, Vec3)> = groups
         .into_iter()
         .map(|(param, foot, lo, hi, n)| {
             // A lone point (an end the mesh didn't pair): as far as the face's triangles reach
             // there, else the face's whole height.
             let (lo, hi) = if hi - lo < tol {
-                reach(param)
-                    .filter(|(l, h)| h - l >= tol)
-                    .unwrap_or((hmin, hmax))
+                (*reached
+                    .entry(param.to_bits())
+                    .or_insert_with(|| reach(param)))
+                .filter(|(l, h)| h - l >= tol)
+                .unwrap_or((hmin, hmax))
             } else {
                 (lo, hi)
             };
@@ -1598,7 +1635,7 @@ fn tangent_groups(edges: &[kernel::EdgeInfo], vertices: &[kernel::VertexInfo]) -
     let sliver = |i: usize| edges[i].length < SLIVER;
     let mut vparent: Vec<usize> = (0..vertices.len()).collect();
     let vindex: HashMap<u64, Vec<usize>> = {
-        let mut m: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut m: HashMap<u64, Vec<usize>> = HashMap::default();
         for (vi, v) in vertices.iter().enumerate() {
             for id in &v.edges {
                 m.entry(id.0).or_default().push(vi);
@@ -1616,7 +1653,7 @@ fn tangent_groups(edges: &[kernel::EdgeInfo], vertices: &[kernel::VertexInfo]) -
             }
         }
     }
-    let mut joints: HashMap<usize, (Vec<nalgebra::Point3<f64>>, Vec<u64>)> = HashMap::new();
+    let mut joints: HashMap<usize, (Vec<nalgebra::Point3<f64>>, Vec<u64>)> = HashMap::default();
     for (vi, v) in vertices.iter().enumerate() {
         let r = find(&mut vparent, vi);
         let j = joints.entry(r).or_default();
@@ -1759,10 +1796,19 @@ fn classify(
             .collect();
         let mut best: Option<(usize, usize, usize)> = None;
         let mut best_count = 0;
+        // (A piece whose box misses the points' has none on it: the face's own piece is a few
+        // of a spline sketch's hundreds.)
+        let near = pts.iter().fold(
+            (Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN)),
+            |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+        );
         for (ri, (_, ring)) in gr.rings.iter().enumerate() {
             for (pi, (piece, _)) in ring.iter().enumerate() {
                 // (Only the points in the piece's box can be on it.)
                 let b = piece_box(piece, tol_piece);
+                if b.0.x > near.1.x || b.0.y > near.1.y || b.1.x < near.0.x || b.1.y < near.0.y {
+                    continue;
+                }
                 let count = pts
                     .iter()
                     .filter(|p| in_box(&b, **p) && piece_distance(piece, **p) < tol_piece)

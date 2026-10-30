@@ -938,7 +938,7 @@ mod tests {
         assert_eq!(map.dark(light.popover, ColorRole::Raised), dark.popover);
         assert_eq!(map.dark(light.foreground, ColorRole::Ink), dark.foreground);
         assert_eq!(map.dark(light.border, ColorRole::Line), dark.border);
-        // A primary button's label takes its own dark color (dark text on the bright cyan).
+        // A primary button's label takes its own dark color.
         assert_eq!(
             map.dark(light.primary_foreground, ColorRole::Ink),
             dark.primary_foreground
