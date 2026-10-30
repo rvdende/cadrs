@@ -322,6 +322,10 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// Sketch points snap to the 3D view's grid (its step follows the zoom) where nothing else
+    /// snaps (issue #140). Off by default.
+    #[serde(default)]
+    pub snap_to_grid: bool,
 }
 
 fn default_vsync() -> bool {
@@ -348,6 +352,7 @@ impl Default for Preferences {
             autoconnect_p2p: false,
             profile_cpu: false,
             vsync: true,
+            snap_to_grid: false,
         }
     }
 }
@@ -534,6 +539,7 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
+            snap_to_grid: true,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

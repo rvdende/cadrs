@@ -84,6 +84,7 @@ impl Plugin for SketchToolsPlugin {
                     update_sketch_screen,
                     reset_on_tool_change,
                     sync_external_snap,
+                    sync_grid_snap,
                     (sketch_pointer, sketch_edit_keys).run_if(in_state(PartStudioMode::Sketching)),
                     prune_selection,
                     sync_quick_dim,
@@ -526,6 +527,9 @@ struct Press {
 #[derive(Resource, Debug, Default)]
 pub struct SketchDraw {
     pub state: DrawState,
+    /// The grid step (mm) points snap to where nothing else snaps, while Snap to grid is on
+    /// ([`sync_grid_snap`]).
+    pub grid: Option<f64>,
     press: Option<Press>,
     /// The cursor on the sketch plane, snapped by inference.
     pub cursor: Option<SVec2>,
@@ -903,13 +907,12 @@ pub fn tool_context(state: DrawState, draw: &SketchDraw, suppress: bool) -> Tool
         } => (Some(center), false),
         _ => (None, false),
     };
-    // A click that only sets a size (an aligned rectangle's width, an ellipse's minor radius,
-    // a polygon's side count) places no point: nothing to snap to or infer.
+    // A click that only sets a size (an ellipse's minor radius, a polygon's side count) places
+    // no point: nothing to snap to or infer. An aligned rectangle's width does snap (issue
+    // #140): its far side goes through the point snapped to.
     let sizing = matches!(
         state,
-        DrawState::AlignedRect { p1: Some(_), .. }
-            | DrawState::Ellipse { major: Some(_), .. }
-            | DrawState::Polygon { size: Some(_), .. }
+        DrawState::Ellipse { major: Some(_), .. } | DrawState::Polygon { size: Some(_), .. }
     );
     ToolContext {
         anchor,
@@ -918,7 +921,24 @@ pub fn tool_context(state: DrawState, draw: &SketchDraw, suppress: bool) -> Tool
         woken_curves: draw.woken_curves.clone(),
         woken_mids: draw.woken_mids.clone(),
         suppress: suppress || sizing,
+        grid: draw.grid,
         ..ToolContext::default()
+    }
+}
+
+/// The grid step points snap to: the 3D view's grid's at its zoom
+/// ([`crate::ground_grid::step_for`]), while the preference is on (issue #140).
+fn sync_grid_snap(
+    prefs: Res<crate::preferences_ui::LocalPreferences>,
+    view: Res<crate::viewport::ViewportView>,
+    mut draw: ResMut<SketchDraw>,
+) {
+    let grid = prefs
+        .0
+        .snap_to_grid
+        .then(|| crate::ground_grid::step_for(view.view.scale) as f64);
+    if draw.grid != grid {
+        draw.grid = grid;
     }
 }
 
@@ -933,7 +953,12 @@ fn snap_at(
     let best = infer::infer(raw, map.px_per_mm() as f64, sketch, ctx)
         .into_iter()
         .next();
-    Some((best.as_ref().map_or(raw, |c| c.pos), best))
+    // Snap to grid (issue #140): where nothing else snaps, the 3D view's grid step.
+    let free = match ctx.grid {
+        Some(step) if !ctx.suppress => infer::round_to_grid(raw, step),
+        _ => raw,
+    };
+    Some((best.as_ref().map_or(free, |c| c.pos), best))
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -2152,6 +2177,12 @@ fn complete(
             let mut specs = cadrs_sketch::entity::aligned_constraints(corners);
             specs.append(&mut draw.pending_specs);
             specs.extend(take_pending(draw, sketch));
+            // The width snapped to a point: the far side stays on it.
+            specs.extend(rim_spec(
+                sketch,
+                &placed,
+                CurveSpec::Between(corners[2], corners[3]),
+            ));
             execute_with(
                 commands,
                 target,

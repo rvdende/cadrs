@@ -277,6 +277,12 @@ pub fn set_mcp_enabled(world: &mut World, on: bool) {
     save(world);
 }
 
+/// Whether sketch points snap to the grid, saved (the view menu's Snap to grid).
+pub fn set_snap_to_grid(world: &mut World, on: bool) {
+    world.resource_mut::<LocalPreferences>().0.snap_to_grid = on;
+    save(world);
+}
+
 /// Whether cadrs goes online as soon as it starts, saved (the network button's menu).
 pub fn set_autoconnect_p2p(world: &mut World, on: bool) {
     world.resource_mut::<LocalPreferences>().0.autoconnect_p2p = on;

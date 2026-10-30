@@ -1600,6 +1600,9 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }),
     ));
     tb.spawn(toolbar_separator(t));
+    // (name, icon, whether it has a ▾ menu, tooltip). Only tools with a menu show a ▾ (issue
+    // #140: Fillet, Draft, Split, Transform, Plane and Mate connector had one that opened
+    // nothing, so clicking it seemed to need a precise aim).
     let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
             ("extrude", "extrude", false, "Extrude (Shift+E)"),
@@ -1609,9 +1612,9 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             ("thicken", "thicken", true, "Thicken"),
         ],
         &[
-            ("fillet", "fillet", true, "Fillet (Shift+F)"),
+            ("fillet", "fillet", false, "Fillet (Shift+F)"),
             ("chamfer", "chamfer", false, "Chamfer"),
-            ("draft", "draft", true, "Draft"),
+            ("draft", "draft", false, "Draft"),
             ("rib", "rib", false, "Rib"),
             ("shell", "shell", false, "Shell"),
             ("hole", "hole", false, "Hole"),
@@ -1632,11 +1635,11 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 true,
                 "Boolean (Union, Subtract, Intersect)",
             ),
-            ("split", "split", true, "Split"),
-            ("transform", "transform", true, "Transform"),
+            ("split", "split", false, "Split"),
+            ("transform", "transform", false, "Transform"),
             ("composite-part", "composite-part", false, "Composite part"),
-            ("plane", "plane", true, "Plane"),
-            ("mate-connector", "mate-connector", true, "Mate connector"),
+            ("plane", "plane", false, "Plane"),
+            ("mate-connector", "mate-connector", false, "Mate connector"),
             ("variable", "variables", false, "Variable"),
         ],
         // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
