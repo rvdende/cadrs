@@ -265,6 +265,8 @@ impl ColorEditor {
                             .text(hex(rgb))
                             .build(&t),
                         piece(Kind::Hex),
+                        // A colour, not a number: the wheel doesn't step it.
+                        crate::dialog_fields::NoWheelStep,
                     ))
                     .entry::<Node>()
                     .and_modify(|mut n| n.width = Val::Px(110.0));
