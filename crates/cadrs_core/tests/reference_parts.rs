@@ -2364,6 +2364,7 @@ fn dimension_kind(
                 b: CurveRef::Curve(cb),
                 flip_a: fa,
                 flip_b: fb,
+                ccw: None,
             }
         }
         t => return unsupported(format!("dimension `{t}`")),

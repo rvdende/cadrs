@@ -517,7 +517,7 @@ impl Rebuilder {
                 }
             }
             PatternType::Face => {
-                let parts: Vec<Part> = state.parts.iter().map(|p| p.part.clone()).collect();
+                let parts: Vec<Part> = state.parts.iter().map(|p| (*p.part).clone()).collect();
                 for f in faces {
                     if let Some((p, i)) = crate::mate::find_face(&parts, f)
                         && let Some(c) = p.solid.faces[i].center.or_else(|| p.solid.face_point(i))
@@ -817,8 +817,8 @@ impl Rebuilder {
             if let Some(st) = Arc::get_mut(&mut out.state) {
                 for (pid, seed, palette) in sources {
                     if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == pid) {
-                        p.part.source = Some(seed);
-                        p.part.palette = palette;
+                        p.part_mut().source = Some(seed);
+                        p.part_mut().palette = palette;
                     }
                 }
             }
@@ -1056,14 +1056,14 @@ impl Rebuilder {
                         for piece in pieces? {
                             let pid = Self::new_id(id, &next, &[]);
                             next.next_part += 1;
-                            let mut part = after.part.clone();
+                            let mut part = (*after.part).clone();
                             part.id = pid;
                             part.feature = id;
                             part.name = format!("Part {}", next.next_part);
                             part.features = vec![id];
                             part.source = Some(after.part.id);
                             next.parts.push(PartState {
-                                part,
+                                part: Arc::new(part),
                                 body: Some(piece.body),
                                 names: Arc::new(piece.names),
                             });
@@ -1191,7 +1191,7 @@ impl Rebuilder {
                     p.names = Arc::new(piece.names);
                 }
                 None => {
-                    let Some(template) = next.parts.first().map(|p| p.part.clone()) else {
+                    let Some(template) = next.parts.first().map(|p| (*p.part).clone()) else {
                         spare.push(piece.body);
                         continue;
                     };
@@ -1203,7 +1203,7 @@ impl Rebuilder {
                     part.features = vec![pid.feature];
                     part.source = None;
                     next.parts.push(PartState {
-                        part,
+                        part: Arc::new(part),
                         body: Some(piece.body),
                         names: Arc::new(piece.names),
                     });
@@ -1321,10 +1321,12 @@ impl Rebuilder {
             let names = self.names_from_faces(body, faces)?;
             let solid = crate::brep::solid_of(&self.kernel, body, &names, &cur.geoms, Some(op))?;
             p.names = Arc::new(names);
-            p.part.solid = Arc::new(solid);
-            p.part.features.retain(|f| !synthetic.contains_key(&f.0));
+            p.part_mut().solid = Arc::new(solid);
+            p.part_mut()
+                .features
+                .retain(|f| !synthetic.contains_key(&f.0));
             if !p.part.features.contains(&id) {
-                p.part.features.push(id);
+                p.part_mut().features.push(id);
             }
         }
         let now: HashSet<BodyId> = next.parts.iter().filter_map(|p| p.body).collect();

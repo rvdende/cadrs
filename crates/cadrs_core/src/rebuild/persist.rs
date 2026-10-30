@@ -357,7 +357,7 @@ impl Persist for PartState {
     }
     fn load(s: Self::Saved, r: &mut Reader) -> Result<Self, String> {
         Ok(PartState {
-            part: Persist::load(s.0, r)?,
+            part: Arc::new(Persist::load(s.0, r)?),
             body: Persist::load(s.1, r)?,
             names: Persist::load(s.2, r)?,
         })

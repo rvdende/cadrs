@@ -26,6 +26,29 @@ fn in_box(s: &Surface, bx: UvBox, (u, v): (f64, f64), e: f64) -> bool {
     ok(u, bx.0, s.u_periodic()) && ok(v, bx.1, s.v_periodic())
 }
 
+/// A box sure to hold `s` over every (u, v) [`in_box`] takes for `bx` with `e`: the box grown by
+/// its margin (a closed direction's whole turn when the box spans one).
+fn in_box_bbox(s: &Surface, bx: UvBox, e: f64) -> Bbox {
+    let grown = |(lo, hi): (f64, f64), periodic: bool| {
+        if periodic && hi - lo >= TAU - tol::ANGULAR {
+            return (lo, lo + TAU);
+        }
+        let m = (hi - lo) * e + tol::REL_FINE * (1.0 + lo.abs().max(hi.abs()));
+        (lo - m, hi + m)
+    };
+    s.patch_bbox(grown(bx.0, s.u_periodic()), grown(bx.1, s.v_periodic()))
+}
+
+/// Whether `p` lies farther than `tol` outside box `b` (to rounding): no point in the box is
+/// within `tol` of it.
+fn farther_than(b: &Bbox, p: &P3, tol: f64) -> bool {
+    if b.is_empty() {
+        return false;
+    }
+    let out = (b.min - p).sup(&(p - b.max)).sup(&V3::zeros());
+    out.norm() > tol * (1.0 + tol::REL) + tol::ROUNDOFF * (1.0 + p.coords.abs().max())
+}
+
 /// Whether all of `s` over `bx` lies on `o` (within `tol`): a 9 × 9 grid of its points, each
 /// projected from a coarse start.
 pub fn lies_on(s: &Surface, bx: UvBox, o: &Surface, tol: f64) -> bool {
@@ -269,6 +292,9 @@ pub fn crossing_sides(
     let all_b = ((pu0.max(-1e4), pu1.min(1e4)), (pv0.max(-1e4), pv1.min(1e4)));
     for (on_a, s, bx, o, obx) in [(true, a, ua, b, all_b), (false, b, ub, a, ua)] {
         let ((u0, u1), (v0, v1)) = bx;
+        // (A side's point farther than `tol` from all of `o` over its box has no foot there
+        // within `tol`: no projection asked. The box once, when a side is sampled.)
+        let mut near: Option<Bbox> = None;
         let whole =
             |periodic: bool, (lo, hi): (f64, f64)| periodic && hi - lo >= TAU - tol::ANGULAR;
         for (fix_u, val, range) in [
@@ -292,6 +318,10 @@ pub fn crossing_sides(
             work += 5;
             let any = (0..5).any(|i| {
                 let p = at(range.0 + (range.1 - range.0) * (0.1 + 0.2 * i as f64));
+                let near = near.get_or_insert_with(|| in_box_bbox(o, obx, tol::ROUNDOFF));
+                if farther_than(near, &p, tol) {
+                    return false;
+                }
                 let (d, uv) = foot(o, &p, None);
                 d <= tol && in_box(o, obx, uv, tol::ROUNDOFF)
             });

@@ -1,24 +1,21 @@
 // P3E.2 (essential-tips.md T1.2, X1; test-drive.md TD5.3, TD5.4): a document of 60 tabs
 // (`tab-fixture 60`: small Part Studios "Studio 2" …, every fifth an Assembly, every twelfth a
 // Drawing). The strip scrolls (wheel, chevrons), ▾ lists the tabs out of sight, the selected
-// tab is kept in view, the Tab manager lists and filters all 60, and folders shorten the strip.
-// 01 the 60 tabs: the strip starts at Studio 2; the right chevron, a fade and ▾ show there are
+// tab is kept in view, and folders shorten the strip.
+// 01 the 60 tabs: the strip starts at Studio 2; the chevrons and ▾ show there are
 //    more.
-// 02 the wheel over the strip: scrolled a few whole tabs (fades at both ends).
+// 02 the wheel over the strip: scrolled a few whole tabs.
 // 03 ▾: the tabs out of sight listed (a scrollbar; a separator between those before and after
 //    the view; the active tab checked), the 12th hovered.
 // 04 it is picked: selected and scrolled into view.
 // 05 "+" → Create Part Studio: the new tab ("Part Studio 1", right of it) selected and in view.
-// 06 the Tab manager: 61 tabs, its list scrolled to the end.
-// 07 the Drawings filter: the 5 drawings ("5 of 61 tabs").
-// 08 Clear; rows 1–12 selected (click row 1, Shift+click row 12, which is scrolled into view
-//    first: P3E.3a) and put in a new folder, "First twelve" typed into its row; the folder row
-//    reads "Folder · 12 tabs" (checked).
-// 09 the strip after it: the folder tab first, then Studio 14 …; the manager shows the folder
-//    row.
-// 10 the folder opened in the tab bar: Home, "First twelve", its 12 tabs.
-// 11 the last tab (Drawing 5) chosen in the Tab manager: the bar leaves the folder for the top
-//    level and scrolls the tab into view; the tab cut at the left end is veiled by the fade.
+// 06 back at the strip's start, Studio 2's menu → Move to folder ▸ New folder, named "First
+//    three" in place; Studio 3 and Studio 4 dragged onto it: the folder tab first, then Assembly 1
+//    (the fifth tab) ….
+// 07 the folder clicked: its list above it (Studio 2, 3, 4, New ▸).
+// 08 Studio 3 picked there: opened; the folder tab marked as holding it.
+// 09 the strip scrolled to its end with the wheel, the last tab (Drawing 5) clicked: selected
+//    and in view.
 Scenario(
     start: Some("document"),
     steps: [
@@ -48,45 +45,46 @@ Scenario(
         MoveTo(1420, 780),
         Wait(3),
         Screenshot("05-new-tab-in-view"),
-        Click(ui("tab-manager")),
-        WaitFor("tab-manager-panel"),
-        Scroll(ui("tab-manager-rows"), -60),
+        Scroll(ui("tab-strip"), 80),
         Wait(10),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("06-tab-manager-61"),
-        Click(ui("tab-manager-filter-drawings")),
-        ExpectText("tab-manager-count", "5 of 61 tabs"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("07-drawings-filter"),
-        Click(ui("tab-manager-clear")),
-        Scroll(ui("tab-manager-rows"), 80),
-        Wait(10),
-        Click(ui("tab-manager-row-1")),
-        KeyDown("Shift"),
-        Click(ui("tab-manager-row-12")),
-        KeyUp("Shift"),
-        Click(ui("tab-manager-new-folder")),
-        WaitFor("tab-manager-folder-rename-field"),
+        RightClick(ui("tab-studio-2")),
+        WaitFor("tab-context-menu"),
+        Hover(ui("tab-move-folder")),
+        WaitFor("tab-to-new-folder"),
+        Click(ui("tab-to-new-folder")),
+        WaitFor("tab-folder-rename-field"),
         Key("Ctrl+A"),
-        Type("First twelve"),
-        Screenshot("08-new-folder-of-twelve"),
+        Type("First three"),
         Key("Enter"),
-        ExpectText("tab-manager-folder-first-twelve", "12 tabs"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("09-strip-with-folder"),
-        Click(ui("tab-folder-first-twelve")),
-        WaitFor("tab-folder-home"),
-        MoveTo(1420, 780),
-        Wait(3),
-        Screenshot("10-folder-open"),
-        Scroll(ui("tab-manager-rows"), -80),
+        WaitFor("tab-folder-first-three"),
+        // (The strip keeps the active Part Studio 1 in view when its tabs change: back to its
+        // start before each drag.)
+        Scroll(ui("tab-strip"), 80),
         Wait(10),
-        Click(ui("tab-manager-row-61")),
+        Drag(ui("tab-studio-3"), ui_at("tab-folder-first-three", 0.5, 0.5)),
+        Wait(10),
+        Scroll(ui("tab-strip"), 80),
+        Wait(10),
+        Drag(ui("tab-studio-4"), ui_at("tab-folder-first-three", 0.5, 0.5)),
+        Wait(10),
+        Scroll(ui("tab-strip"), 80),
+        Wait(10),
         MoveTo(1420, 780),
         Wait(3),
-        Screenshot("11-last-tab-in-view"),
+        Screenshot("06-strip-with-folder"),
+        Click(ui("tab-folder-first-three")),
+        WaitFor("tab-folder-list"),
+        Wait(5),
+        Screenshot("07-folder-list"),
+        Click(ui("tab-folder-pick-studio-3")),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("08-picked-from-folder"),
+        Scroll(ui("tab-strip"), -80),
+        Wait(10),
+        Click(ui("tab-drawing-5")),
+        MoveTo(1420, 780),
+        Wait(3),
+        Screenshot("09-last-tab-in-view"),
     ],
 )

@@ -8,7 +8,9 @@
 //!   the value right-aligned over a thin line (blue while focused), and an optional icon after
 //!   it. Enter (or leaving the field) triggers [`NumberFieldCommit`] with the text; Esc triggers
 //!   [`NumberFieldCancel`] and leaves the field. The owner evaluates the text and sets [`NumberFieldState`]: its
-//!   `text` is shown whenever the field is not being edited, and `error` turns it red.
+//!   `text` is shown whenever the field is not being edited, and `error` turns it red. A field
+//!   that takes variables ([`NumberField::variables`]) lists [`FieldVariables`] when `#` is typed,
+//!   as the dimension editor does ([`crate::variable_list`]).
 //! - [`OptionRow`]: an option with an optional collapsed ▸ in front and a checkbox ("▸ ☐
 //!   Direction"), disabled when the option is not available.
 //! - [`Slider`]: a thin track with a round knob (Onshape's detail slider). Dragging it, or
@@ -34,17 +36,20 @@ use crate::input::TextInputField;
 use crate::menu::{Menu, MenuAction, MenuItem, open_menu};
 use crate::style::{InheritFg, StateColors, Visuals};
 use crate::theme::Theme;
+use crate::variable_list::{ListedVariable, VariableList, list_key};
 
 pub struct DialogFieldsPlugin;
 
 impl Plugin for DialogFieldsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_select_activate)
+        app.init_resource::<FieldVariables>()
+            .add_observer(on_select_activate)
             .add_observer(on_select_menu_action)
             .add_observer(on_number_key)
             .add_observer(on_number_press)
             .add_observer(on_slider_drag)
             .add_observer(on_slider_press)
+            .add_systems(Update, sync_field_variables)
             .add_systems(
                 PostUpdate,
                 (
@@ -375,6 +380,15 @@ pub struct NumberFieldEdit(pub Entity);
 #[derive(Component, Debug, Clone, Copy)]
 struct NumberFieldLine(Entity);
 
+/// The variables the number fields that take them ([`NumberField::variables`]) list when `#` is
+/// typed: the owner's, for what is being edited (the variables a feature can use).
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct FieldVariables {
+    pub variables: Vec<ListedVariable>,
+    /// New variable… follows them: the owner makes one on [`crate::NewVariable`].
+    pub new_variable: bool,
+}
+
 /// Builder for a number field.
 pub struct NumberField {
     name: Cow<'static, str>,
@@ -386,6 +400,7 @@ pub struct NumberField {
     label_size: f32,
     disabled: bool,
     label_icon: Option<(Cow<'static, str>, Color)>,
+    variables: bool,
 }
 
 impl NumberField {
@@ -400,7 +415,14 @@ impl NumberField {
             label_size: 11.0,
             disabled: false,
             label_icon: None,
+            variables: false,
         }
+    }
+
+    /// The field takes variables (`#name`): typing `#` lists [`FieldVariables`] under it.
+    pub fn variables(mut self) -> Self {
+        self.variables = true;
+        self
     }
 
     /// Greyed out and not editable (a parameter the owner can't use; give the root a tooltip
@@ -455,6 +477,7 @@ impl NumberField {
         let t = theme.clone();
         let name = self.name.into_owned();
         let edit_name = format!("{name}-field");
+        let root_name = name.clone();
         let icon_name = format!("{name}-icon");
         let text = self.text;
         let label = self.label;
@@ -464,6 +487,7 @@ impl NumberField {
         let label_size = self.label_size;
         let disabled = self.disabled;
         let label_icon = self.label_icon;
+        let variables = self.variables;
         (
             Name::new(name),
             NumberFieldState {
@@ -563,6 +587,9 @@ impl NumberField {
                     if disabled {
                         edit.insert((InteractionDisabled, Pickable::IGNORE))
                             .remove::<TabIndex>();
+                    } else if variables {
+                        // Under the line (the field's parent).
+                        edit.insert(VariableList::new(Vec::new()).under(1).named(root_name));
                     }
                 });
                 if let Some((i, tip)) = trailing {
@@ -587,18 +614,31 @@ impl NumberField {
 
 fn on_number_key(
     mut ev: On<FocusedInput<KeyboardInput>>,
-    mut q_edit: Query<(&mut EditableText, &NumberFieldEdit)>,
+    mut q_edit: Query<(
+        &mut EditableText,
+        &NumberFieldEdit,
+        Option<&mut VariableList>,
+    )>,
     q_state: Query<&NumberFieldState>,
     mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
-    let Ok((mut text, edit)) = q_edit.get_mut(ev.focused_entity) else {
+    let field = ev.focused_entity;
+    let Ok((mut text, edit, list)) = q_edit.get_mut(field) else {
         return;
     };
     if ev.input.state != ButtonState::Pressed || text.is_composing() {
         return;
     }
-    match ev.input.shortcut_code() {
+    let code = ev.input.shortcut_code();
+    // The `#` list takes the keys that move in it, pick from it or close it.
+    if let Some(mut list) = list
+        && list_key(code, field, &mut list, &mut text, &mut commands)
+    {
+        ev.propagate(false);
+        return;
+    }
+    match code {
         KeyCode::Enter | KeyCode::NumpadEnter => {
             ev.propagate(false);
             commands.trigger(NumberFieldCommit {
@@ -732,6 +772,24 @@ fn sync_number_fields(
         }
     }
     *focused_before = focused;
+}
+
+/// Gives the fields that take variables the ones to list.
+fn sync_field_variables(
+    vars: Res<FieldVariables>,
+    mut q_list: Query<&mut VariableList, With<NumberFieldEdit>>,
+) {
+    for mut list in &mut q_list {
+        if !vars.is_changed() && !list.is_added() {
+            continue;
+        }
+        if list.variables != vars.variables {
+            list.variables = vars.variables.clone();
+        }
+        if list.new_variable != vars.new_variable {
+            list.new_variable = vars.new_variable;
+        }
+    }
 }
 
 /// Focuses a number field's text and selects it (for scripted scenarios and shortcuts).

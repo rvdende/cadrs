@@ -568,6 +568,7 @@ fn count_row(
             NumberField::new(name.to_string(), "Instance count")
                 .text(count)
                 .label_width(96.0)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()

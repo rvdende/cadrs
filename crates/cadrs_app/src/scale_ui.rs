@@ -1,13 +1,8 @@
 //! Working at scale (P3F.3; `essential-tips.md` T1.2, T4.2, X7).
 //!
-//! - **The size notice**: past Onshape's budget for a Part Studio (250 features or 10 parts), a
-//!   gentle line under the feature list's header (`features-scale-notice`) says how big it is
-//!   and suggests splitting it; it doesn't block anything.
 //! - **Tab overflow**: the document's tab strip scrolls sideways (the mouse wheel over it), the
-//!   selected tab is kept in view, and the **Tab manager** button (left of the tabs) opens the
-//!   Tab manager panel (P3G.3, `crate::move_document`), whose list of every tab scrolls
-//!   (`tab-manager-rows`, rows `tab-manager-row-<n>`), to switch to one that is scrolled out of
-//!   sight.
+//!   selected tab is kept in view, and ▾ at its right end lists the tabs, to switch to one that
+//!   is scrolled out of sight (`crate::tab_folders`).
 //! - **Measuring**: every finished rebuild of the active studio is logged ([`RebuildLog`]); the
 //!   scenario command `scale-report <label>` writes the log to `perf-<label>-rebuilds.txt` in
 //!   the scenario's output folder, and `rebuild-budget <ms>` sets how long a frame waits for a
@@ -16,25 +11,15 @@
 
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use bevy::text::FontWeight;
-use cadrs_core::ElementKind;
-use cadrs_ui::{Theme, Tooltip};
+use bevy::ui::InteractionDisabled;
 
-use crate::{ActiveDocument, AppState};
-
-/// Onshape's budget for one Part Studio.
-pub const FEATURE_BUDGET: usize = 250;
-pub const PART_BUDGET: usize = 10;
+use crate::ActiveDocument;
 
 pub struct ScalePlugin;
 
 impl Plugin for ScalePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RebuildLog>()
-            .add_systems(
-                Update,
-                sync_scale_notice.run_if(in_state(AppState::Document)),
-            )
             .add_systems(
                 PostUpdate,
                 (pad_strip_end, keep_active_tab_in_view, sync_tab_overflow)
@@ -43,126 +28,6 @@ impl Plugin for ScalePlugin {
             )
             .add_observer(on_strip_wheel)
             .add_observer(on_chevron);
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The size notice
-
-/// The notice row under the feature list's header.
-#[derive(Component)]
-pub struct ScaleNotice;
-
-/// Its text.
-#[derive(Component)]
-struct ScaleNoticeText;
-
-/// Spawns the (hidden) notice row; `document.rs` puts it under the header.
-pub fn notice_row(p: &mut ChildSpawnerCommands, t: &Theme) {
-    p.spawn((
-        Name::new("features-scale-notice"),
-        ScaleNotice,
-        Node {
-            display: Display::None,
-            flex_shrink: 0.0,
-            margin: UiRect::new(Val::Px(6.0), Val::Px(8.0), Val::ZERO, Val::Px(4.0)),
-            padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(3.0), Val::Px(3.0)),
-            column_gap: Val::Px(5.0),
-            align_items: AlignItems::Center,
-            overflow: Overflow::clip(),
-            border_radius: BorderRadius::all(Val::Px(3.0)),
-            ..default()
-        },
-        BackgroundColor(t.info_background),
-        Tooltip::new(
-            "Onshape's guidance: a Part Studio stays responsive up to about 250 features and 10 parts. Past that, consider splitting the parts into more Part Studios and bringing them together in an Assembly.",
-        ),
-        Pickable::default(),
-    ))
-    .with_children(|r| {
-        r.spawn(cadrs_ui::icon("info-filled", 13.0, t.link));
-        r.spawn((
-            ScaleNoticeText,
-            t.text(String::new(), 10.5, FontWeight::NORMAL, t.foreground),
-        ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::NoWrap));
-    });
-}
-
-/// What the notice says for a studio of `features` features and `parts` parts, if anything.
-/// The count is the studio's own features; the list's "Features (N)" also counts the default
-/// geometry (the origin and three planes), so the notice says so (P3F.3–P3F.4 judge).
-pub fn notice(features: usize, parts: usize) -> Option<String> {
-    (features > FEATURE_BUDGET || parts > PART_BUDGET).then(|| {
-        let plural =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-        format!(
-            "Large studio: {}\n(excluding default geometry),\n{}. Consider splitting it.",
-            plural(features, "feature", "features"),
-            plural(parts, "part", "parts")
-        )
-    })
-}
-
-/// The studio's own parts, as its Parts list shows them (P3H.6 judge): an assembly context's
-/// parts are not the studio's, and a closed composite's members are not in the build's parts
-/// (the composite is one part).
-pub fn listed_parts(parts: &[cadrs_core::Part]) -> usize {
-    parts
-        .iter()
-        .filter(|p| !cadrs_core::assembly::context::is_context(p.feature))
-        .count()
-}
-
-fn sync_scale_notice(
-    doc: Option<Res<ActiveDocument>>,
-    cache: Res<crate::parts::PartCache>,
-    mut q_row: Query<&mut Node, With<ScaleNotice>>,
-    mut q_text: Query<&mut Text, With<ScaleNoticeText>>,
-    q_new: Query<(), Added<ScaleNotice>>,
-    mut had_doc: Local<bool>,
-) {
-    // (Counting the parts and wording the notice each frame cost a large studio.)
-    let doc_changed = doc.as_ref().is_some_and(|d| d.is_changed())
-        || std::mem::replace(&mut *had_doc, doc.is_some()) != doc.is_some();
-    if !doc_changed && !cache.is_changed() && q_new.is_empty() {
-        return;
-    }
-    let want = doc
-        .as_ref()
-        .and_then(|d| d.active_element())
-        .and_then(|e| match e.kind {
-            // A derived board's components (mesh parts) cost little
-            // and aren't modelled: they don't count.
-            ElementKind::PartStudio { .. } => {
-                let components = cache
-                    .derived
-                    .values()
-                    .map(|o| o.footprints.len())
-                    .sum::<usize>();
-                notice(
-                    e.features().len(),
-                    listed_parts(&cache.parts).saturating_sub(components),
-                )
-            }
-            _ => None,
-        });
-    for mut n in &mut q_row {
-        let d = if want.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if n.display != d {
-            n.display = d;
-        }
-    }
-    if let Some(w) = want {
-        for mut t in &mut q_text {
-            if t.0 != w {
-                t.0 = w.clone();
-            }
-        }
     }
 }
 
@@ -185,12 +50,6 @@ fn strip_of(e: Entity, q_names: &Query<(&Name, Option<&ChildOf>)>) -> Option<Ent
 /// The chevrons at the ends of the tab strip (shown while tabs overflow).
 #[derive(Component)]
 pub struct TabStripChevron;
-
-/// A fade over one end of the tab strip, shown while more tabs lie beyond it.
-#[derive(Component)]
-pub struct TabStripFade {
-    pub left: bool,
-}
 
 /// The strip's tabs: document tabs and (P3E.2) folder tabs, each with the document tab it is.
 type StripTabs<'w, 's> = Query<
@@ -299,32 +158,62 @@ fn on_chevron(
     pos.x = step_to_edge(&edges, max, pos.x, forward);
 }
 
-/// Shows the chevrons while the tabs overflow, and each fade while more tabs lie beyond it.
+/// Shows the chevrons while the tabs overflow, keeps the strip's scroll within what it can
+/// scroll (a window made wider again would leave it scrolled past its end), and hides a tab cut
+/// by either end of the view (no stub of a tab, its name cut through, shows at an end).
 #[allow(clippy::type_complexity)]
 fn sync_tab_overflow(
-    q_strip: Query<(&Name, &ComputedNode, &UiGlobalTransform, &ScrollPosition)>,
-    mut q_chevrons: Query<&mut Node, (With<TabStripChevron>, Without<TabStripFade>)>,
-    mut q_fades: Query<(
-        &TabStripFade,
-        &mut Visibility,
-        &mut Node,
-        &mut BackgroundGradient,
+    mut q_strip: Query<(
+        &Name,
+        &ComputedNode,
+        &UiGlobalTransform,
+        &mut ScrollPosition,
     )>,
-    q_tabs: StripTabs,
-    theme: Res<Theme>,
+    mut q_chevrons: Query<
+        (Entity, &Name, Has<InteractionDisabled>, &mut Node),
+        With<TabStripChevron>,
+    >,
+    mut commands: Commands,
+    mut q_tabs: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut Visibility),
+        Or<(
+            With<crate::document::TabButton>,
+            With<crate::tab_folders::FolderTab>,
+        )>,
+    >,
 ) {
-    let Some((_, node, strip_at, pos)) = q_strip.iter().find(|(n, ..)| n.as_str() == "tab-strip")
+    let Some((_, node, strip_at, mut pos)) =
+        q_strip.iter_mut().find(|(n, ..)| n.as_str() == "tab-strip")
     else {
         return;
     };
     let s = node.inverse_scale_factor();
+    let (view_l, view_r) = (
+        strip_at.translation.x * s - node.size().x * s / 2.0,
+        strip_at.translation.x * s + node.size().x * s / 2.0,
+    );
+    for (n, t, mut v) in &mut q_tabs {
+        let (l, r) = (
+            t.translation.x * s - n.size().x * s / 2.0,
+            t.translation.x * s + n.size().x * s / 2.0,
+        );
+        let cut = l < view_l - 1.0 || r > view_r + 1.0;
+        v.set_if_neq(if cut {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
     let max = ((node.content_size().x - node.size().x) * s).max(0.0);
+    if pos.x > max + 0.5 {
+        pos.x = max;
+    }
     // The room the tabs have without the chevrons (they and P3E.2's ▾ take 62 px when shown),
     // so showing them doesn't make the tabs fit and hide them again.
-    let chevrons_shown = q_chevrons.iter().any(|n| n.display != Display::None);
+    let chevrons_shown = q_chevrons.iter().any(|(.., n)| n.display != Display::None);
     let room = node.size().x * s + if chevrons_shown { 62.0 } else { 0.0 };
     let overflow = node.content_size().x * s > room + 0.5;
-    for mut n in &mut q_chevrons {
+    for (e, name, disabled, mut n) in &mut q_chevrons {
         let d = if overflow {
             Display::Flex
         } else {
@@ -333,64 +222,16 @@ fn sync_tab_overflow(
         if n.display != d {
             n.display = d;
         }
-    }
-    // P3E.2 (judge r1, keeping P3F.6's rule that no clipped stub tab shows bare): a tab cut by
-    // an end of the view is veiled by that end's fade, solid over the cut tab and fading out
-    // past it.
-    let (view_l, view_r) = (
-        strip_at.translation.x * s - node.size().x * s / 2.0,
-        strip_at.translation.x * s + node.size().x * s / 2.0,
-    );
-    let spans: Vec<(f32, f32)> = q_tabs
-        .iter()
-        .map(|(_, n, t)| {
-            (
-                t.translation.x * s - n.size().x * s / 2.0,
-                t.translation.x * s + n.size().x * s / 2.0,
-            )
-        })
-        .collect();
-    let cut_left = spans
-        .iter()
-        .filter(|(l, r)| *l < view_l - 0.5 && *r > view_l + 0.5)
-        .map(|(_, r)| r - view_l)
-        .fold(0.0f32, f32::max);
-    let cut_right = spans
-        .iter()
-        .filter(|(l, r)| *l < view_r - 0.5 && *r > view_r + 0.5)
-        .map(|(l, _)| view_r - l)
-        .fold(0.0f32, f32::max);
-    for (f, mut v, mut n, mut g) in &mut q_fades {
-        let show = if f.left {
-            pos.x > 0.5
-        } else {
-            pos.x < max - 0.5
+        // ‹ dims at the strip's start and › at its end: nothing more that way.
+        let at_end = match name.as_str() {
+            "tab-strip-prev" => pos.x <= 0.5,
+            "tab-strip-next" => pos.x >= max - 0.5,
+            _ => false,
         };
-        v.set_if_neq(if show {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
-        let cut = if f.left { cut_left } else { cut_right };
-        let width = if cut > 0.5 { cut + 24.0 } else { 36.0 };
-        if n.width != Val::Px(width) {
-            n.width = Val::Px(width);
-            let (from, to) = (theme.tab_bar, theme.tab_bar.with_alpha(0.0));
-            let solid = (width - 24.0).max(0.0);
-            let stops = if f.left {
-                vec![
-                    ColorStop::px(from, 0.0),
-                    ColorStop::px(from, solid),
-                    ColorStop::px(to, width),
-                ]
-            } else {
-                vec![
-                    ColorStop::px(to, 0.0),
-                    ColorStop::px(from, 24.0),
-                    ColorStop::px(from, width),
-                ]
-            };
-            *g = BackgroundGradient(vec![LinearGradient::to_right(stops).into()]);
+        if at_end && !disabled {
+            commands.entity(e).try_insert(InteractionDisabled);
+        } else if !at_end && disabled {
+            commands.entity(e).try_remove::<InteractionDisabled>();
         }
     }
 }
@@ -398,7 +239,7 @@ fn sync_tab_overflow(
 /// P3E.3a (P3E.2 carried delta: a ~150 px blank band after the left chevron): the strip gets
 /// just enough room after its last tab that its scroll range ends on a tab's edge, so scrolled
 /// to the end it shows whole tabs from the left (the room is left over after the last tab, as
-/// on a bar that isn't full) instead of a cut tab veiled by the fade.
+/// on a bar that isn't full) instead of a cut tab.
 #[allow(clippy::type_complexity)]
 fn pad_strip_end(
     mut q_strip: Query<
@@ -436,7 +277,7 @@ fn pad_strip_end(
     }
 }
 
-/// The selected tab scrolls into view when it changes (a tab chosen from the Tab manager, a new
+/// The selected tab scrolls into view when it changes (a tab chosen from ▾ or a folder's list, a new
 /// tab at the end).
 #[allow(clippy::type_complexity)]
 fn keep_active_tab_in_view(
@@ -466,7 +307,7 @@ fn keep_active_tab_in_view(
         return;
     };
     // P3E.2: also when the bar opens another folder (the tab's place changes) and when the
-    // strip's width changes (the chevrons appear, the Tab manager docks).
+    // strip's width changes (the chevrons appear).
     let key = (
         active,
         doc.doc.elements.len() + q_tabs.iter().count() * 1000,

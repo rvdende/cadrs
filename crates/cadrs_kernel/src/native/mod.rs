@@ -16,6 +16,16 @@
 pub mod bodyio;
 pub mod tol;
 
+/// Whether environment variable `$name` (a debugging switch, read in hot paths) is set: read
+/// once per process.
+macro_rules! env_flag {
+    ($name:literal) => {{
+        static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *SET.get_or_init(|| std::env::var_os($name).is_some())
+    }};
+}
+pub(crate) use env_flag;
+
 // The kernel's internal modules: `pub(crate)`, or `pub` with the `testkit` feature.
 // Without it, what only the test kit reaches (the DRAW harness's commands: the OCCT BRep and
 // SMLib readers, 2D offsets, tails, faces from edges, ...) is unused; with it (the crate's
@@ -136,6 +146,11 @@ pub mod fillet_geom;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fillet_geom;
+#[cfg(feature = "testkit")]
+pub mod fingerprint;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod fingerprint;
 #[cfg(feature = "testkit")]
 pub mod heal;
 #[cfg(not(feature = "testkit"))]

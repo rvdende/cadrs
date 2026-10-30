@@ -1,4 +1,4 @@
-//! The view cube menu's camera and render options (P3E.3a, TD6.5, PS2.9, X14), beyond the
+//! The View options menu's camera and render options (P3E.3a, TD6.5, PS2.9, X14), beyond the
 //! standard views:
 //!
 //! - **Render modes** (per tab, kept with the tab's view, [`RenderMode`]): Shaded with edges
@@ -35,7 +35,7 @@ use cadrs_ui::ShortcutKey;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FloatingPanel, FloatingPanelBody, FloatingPanelClose, TextInputField, TextSubmit};
 
-use crate::camera::{FOCAL_PX, RenderMode, ViewState};
+use crate::camera::{RenderMode, ViewState};
 use crate::viewport::{
     ActiveKind, Pick, Selection, ViewportArea, ViewportDrag, ViewportRect, ViewportView,
 };
@@ -150,7 +150,7 @@ impl ViewportPerspective {
     pub fn of(view: &ViewState, center: Vec2, size: Vec2) -> Self {
         let eye = view.eye_distance();
         Self {
-            focal: FOCAL_PX,
+            focal: view.focal,
             center,
             size: size.max(Vec2::ONE),
             near: (eye * 0.01).max(1e-3),
@@ -586,8 +586,8 @@ fn pick_points(world: &World, pick: Pick) -> Vec<Vec3> {
     }
 }
 
-/// Zoom to selection: the view fitted to everything selected (Zoom to fit with nothing
-/// selected).
+/// Zoom to selection (Alt+F, the numpad's point, the right-click menu): the view fitted to
+/// everything selected, orbiting about it (Zoom to fit with nothing selected).
 pub fn zoom_to_selection(world: &mut World) {
     let picks = world.resource::<Selection>().0.clone();
     let pts: Vec<Vec3> = picks.iter().flat_map(|p| pick_points(world, *p)).collect();
@@ -603,6 +603,15 @@ pub fn zoom_to_selection(world: &mut World) {
         .target()
         .fitted_beside(&pts, size, crate::viewport::fit_fill(kind), inset);
     view.animate_to(to);
+    // Then the view orbits about what was framed (issue #97), until it is framed or turned to a
+    // standard view otherwise (a PCB Studio's pivot is its selected components', its own).
+    if kind != ActiveKind::PcbStudio {
+        let (lo, hi) = pts
+            .iter()
+            .fold((pts[0], pts[0]), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        view.pivot = Some((lo + hi) * 0.5);
+        view.framed_pivot = true;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -918,6 +927,41 @@ pub fn render_items(current: RenderMode, line_drawing: bool) -> Vec<cadrs_ui::Me
 mod tests {
     use super::*;
     use crate::camera::RenderMode;
+
+    /// Issue #97: Zoom to selection makes the selection the orbit pivot: a drag turns about
+    /// it (it stays put on screen), a zoom keeps it, and a turn to another view lets go of it.
+    #[test]
+    fn zoom_to_selection_orbits_about_the_selection() {
+        let mut world = World::new();
+        world.insert_resource(ActiveKind::PartStudio);
+        world.insert_resource(Selection(vec![Pick::Plane(
+            crate::viewport::PlaneKind::Front,
+        )]));
+        world.insert_resource(crate::parts::PartCache::default());
+        world.insert_resource(ViewportRect(Rect::new(0.0, 0.0, 1000.0, 800.0)));
+        world.insert_resource(crate::viewport::DialogInset(0.0));
+        world.init_resource::<ViewportView>();
+        zoom_to_selection(&mut world);
+        let mut view = world.resource_mut::<ViewportView>();
+        let pivot = view.pivot.expect("a pivot");
+        assert!(pivot.length() < 1e-4, "the Front plane's centre: {pivot}");
+        assert!(view.framed_pivot);
+        let mut v = view.target();
+        let on_screen = v.project(pivot);
+        v.orbit_about(pivot, |v| v.orbit(Vec2::new(60.0, -35.0)));
+        assert!((v.project(pivot) - on_screen).length() < 1e-2);
+        // A zoom (Z) keeps it; a turn to a standard view lets go of it.
+        let zoomed = view.target().zoomed(0.8);
+        view.animate_to(zoomed);
+        assert_eq!(view.pivot, Some(pivot));
+        let top = view.target().oriented(crate::camera::StandardView::Top);
+        view.animate_to(top);
+        assert_eq!(view.pivot, None);
+        // A pivot that isn't the framed selection's (the PCB Studio's) stays.
+        view.pivot = Some(Vec3::X);
+        view.drop_framed_pivot();
+        assert_eq!(view.pivot, Some(Vec3::X));
+    }
 
     /// Zoom to selection: the selection's points fill the fit fraction of the view beside a
     /// dialog's inset, centred in what is left.

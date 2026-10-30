@@ -778,14 +778,14 @@ fn on_button(a: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut commands: C
         "replicate" => commands.queue(super::replicate_dialog::open),
         "named-positions" | "explode" => {
             let panel = if name.as_str() == "explode" {
-                crate::appearance::SidePanel::ExplodedViews
+                crate::side_panel::SidePanel::ExplodedViews
             } else {
-                crate::appearance::SidePanel::NamedPositions
+                crate::side_panel::SidePanel::NamedPositions
             };
             commands.queue(move |world: &mut World| {
-                let mut open = world.resource_mut::<crate::appearance::SidePanel>();
+                let mut open = world.resource_mut::<crate::side_panel::SidePanel>();
                 *open = if *open == panel {
-                    crate::appearance::SidePanel::None
+                    crate::side_panel::SidePanel::None
                 } else {
                     panel
                 };
@@ -1323,7 +1323,8 @@ fn field(
 ) {
     let mut f = NumberField::new(name.to_string(), label.to_string())
         .text(text.to_string())
-        .label_width(if label.len() > 2 { 84.0 } else { 28.0 });
+        .label_width(if label.len() > 2 { 84.0 } else { 28.0 })
+        .variables();
     if let Some((i, c)) = icon {
         f = f.label_icon(i, c);
     }

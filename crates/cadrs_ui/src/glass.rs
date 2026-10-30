@@ -12,7 +12,7 @@
 //! - Gradients aren't mapped by [`crate::color_scheme`], so the tint and rim are set again
 //!   whenever the scheme or the material changes; the shadow is an ordinary [`BoxShadow`],
 //!   which the scheme deepens in dark.
-//! - [`wallpaper`] goes on a page's root: a cyan wash in light, deep teal in dark.
+//! - [`wallpaper`] goes on a page's root: a blue wash in light, the warm ground in dark.
 //! - [`glow`] is the halo of a page's main action.
 //!
 //! ```ignore
@@ -216,7 +216,7 @@ fn sync_glass(
         } else {
             // A white rim vanishes on a pale page: light at the top edge over a soft dark
             // outline that deepens toward the bottom.
-            let ink = |a: f32| Color::srgba(0.0, 0.2, 0.24, a);
+            let ink = |a: f32| Color::srgba(0.11, 0.18, 0.28, a);
             BorderGradient::from(LinearGradient::to_bottom(vec![
                 ColorStop::new(white(0.95), Val::Percent(0.0)),
                 ColorStop::new(ink(0.12), Val::Percent(35.0)),
@@ -463,22 +463,22 @@ fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
     Color::srgba_u8(r, g, b, (a * 255.0).round() as u8)
 }
 
-/// A wash from top left to bottom right with a cyan glow in one corner and a violet one in the
+/// A wash from top left to bottom right with a blue glow in one corner and a violet one in the
 /// other.
 fn wallpaper_layers(dark: bool) -> Vec<Gradient> {
-    let (from, to, cyan, violet) = if dark {
-        // The schematic's warm ground, a breath of cyan and of gold in the corners.
+    let (from, to, blue, violet) = if dark {
+        // The schematic's warm ground, a breath of blue and of gold in the corners.
         (
             rgba(0x1d, 0x1c, 0x1a, 1.0),
             rgba(0x23, 0x22, 0x1e, 1.0),
-            rgba(0x1c, 0x6e, 0x70, 0.07),
+            rgba(0x46, 0x62, 0x8c, 0.07),
             rgba(0xc9, 0x9c, 0x49, 0.07),
         )
     } else {
         (
-            rgba(0xe3, 0xf2, 0xf4, 1.0),
+            rgba(0xe8, 0xef, 0xfa, 1.0),
             rgba(0xec, 0xee, 0xf7, 1.0),
-            rgba(0x6c, 0xd4, 0xdd, 0.5),
+            rgba(0x9c, 0xc3, 0xfe, 0.5),
             rgba(0xb4, 0xaa, 0xf0, 0.36),
         )
     };
@@ -499,7 +499,7 @@ fn wallpaper_layers(dark: bool) -> Vec<Gradient> {
             ColorStop::new(to, Val::Percent(100.0)),
         ])
         .into(),
-        glow(UiPosition::TOP_LEFT, cyan),
+        glow(UiPosition::TOP_LEFT, blue),
         glow(UiPosition::BOTTOM_RIGHT, violet),
     ]
 }

@@ -17,9 +17,7 @@
 // 12 double-click: the folder opens, a breadcrumb "‹ Documents › Linked parts" and its
 //    documents (Block copy, Block source).
 // 13 the breadcrumb's root: back at the top.
-// 14 the Type menu (All, Documents, Folders).
-// 15 Type: Folders: only the folder row.
-// 16 Type: All and the grid view: folder and document cards.
+// 16 the grid view: folder and document cards.
 // 17 a card selected in the grid.
 // 18 Enter opens the selected document.
 Scenario(
@@ -93,16 +91,6 @@ Scenario(
         Click(ui("crumb-root")),
         WaitFor("folder-row-0"),
         Screenshot("13-back-at-top"),
-        Click(ui("type-filter")),
-        WaitFor("type-menu"),
-        Hover(ui("type-folders")),
-        Wait(3),
-        Screenshot("14-type-menu"),
-        Click(ui("type-folders")),
-        Screenshot("15-type-folders"),
-        Click(ui("type-filter")),
-        WaitFor("type-all"),
-        Click(ui("type-all")),
         Click(ui("view-grid")),
         WaitFor("doc-grid"),
         Screenshot("16-grid-view"),

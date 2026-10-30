@@ -366,7 +366,7 @@ pub struct ToolStrip(pub Mode);
 pub type StripSpec = &'static [Option<(&'static str, &'static str, &'static str, &'static str)>];
 
 /// While a tool strip is on the view's right edge, the panel strip (`crate::document`) sits at
-/// the bottom of that edge, above the view tools, so the two make one column.
+/// the bottom of that edge, above the readouts, so the two make one column.
 fn lower_panel_strip(world: &mut World) {
     let mut q = world.query::<&ToolStrip>();
     let low = q.iter(world).next().is_some();
@@ -407,12 +407,7 @@ pub fn sync_strip(
                 return;
             };
             let t = world.resource::<Theme>().clone();
-            // On a board in a Part Studio: under the view cube.
-            let top = if world.resource::<Eda2d>().plane().is_some() {
-                232.0
-            } else {
-                48.0
-            };
+            let top = 48.0;
             let name: Cow<'static, str> = match mode {
                 Mode::Schematic => "eda-schematic-tools".into(),
                 _ => "eda-layout-tools".into(),

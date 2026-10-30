@@ -230,31 +230,59 @@ fn basis_ders_n<const N: usize, const W: usize>(
     ders
 }
 
-/// Values and first derivatives of the non-zero basis functions, for `p <= MAXP`: the hot
+/// Values and first derivatives of the non-zero basis functions, for `p < W` (`W` is
+/// `MAXP + 1`, or `WIDEP + 1` for the high degrees of lofts and blends' fits): the hot
 /// evaluators' case (points and first derivatives) in two short arrays.
 #[derive(Clone, Copy)]
-struct B1 {
-    v: [f64; MAXP + 1],
-    d: [f64; MAXP + 1],
+struct B1<const W: usize = { MAXP + 1 }> {
+    v: [f64; W],
+    d: [f64; W],
+}
+
+/// [`basis1`] for `p <= WIDEP`.
+fn basis1_wide(span: usize, u: f64, p: usize, deriv: bool, knots: &[f64]) -> B1<{ WIDEP + 1 }> {
+    match p {
+        0 => basis1_n::<1, { WIDEP + 1 }>(span, u, deriv, knots),
+        1 => basis1_n::<2, { WIDEP + 1 }>(span, u, deriv, knots),
+        2 => basis1_n::<3, { WIDEP + 1 }>(span, u, deriv, knots),
+        3 => basis1_n::<4, { WIDEP + 1 }>(span, u, deriv, knots),
+        4 => basis1_n::<5, { WIDEP + 1 }>(span, u, deriv, knots),
+        5 => basis1_n::<6, { WIDEP + 1 }>(span, u, deriv, knots),
+        6 => basis1_n::<7, { WIDEP + 1 }>(span, u, deriv, knots),
+        7 => basis1_n::<8, { WIDEP + 1 }>(span, u, deriv, knots),
+        8 => basis1_n::<9, { WIDEP + 1 }>(span, u, deriv, knots),
+        9 => basis1_n::<10, { WIDEP + 1 }>(span, u, deriv, knots),
+        10 => basis1_n::<11, { WIDEP + 1 }>(span, u, deriv, knots),
+        11 => basis1_n::<12, { WIDEP + 1 }>(span, u, deriv, knots),
+        12 => basis1_n::<13, { WIDEP + 1 }>(span, u, deriv, knots),
+        13 => basis1_n::<14, { WIDEP + 1 }>(span, u, deriv, knots),
+        14 => basis1_n::<15, { WIDEP + 1 }>(span, u, deriv, knots),
+        _ => basis1_n::<16, { WIDEP + 1 }>(span, u, deriv, knots),
+    }
 }
 
 /// [`basis_ders`] with `d` = 0 or 1 (`deriv`) as a [`B1`]: A2.3's arithmetic for those rows,
 /// so the same values to the bit.
 fn basis1(span: usize, u: f64, p: usize, deriv: bool, knots: &[f64]) -> B1 {
     match p {
-        0 => basis1_n::<1>(span, u, deriv, knots),
-        1 => basis1_n::<2>(span, u, deriv, knots),
-        2 => basis1_n::<3>(span, u, deriv, knots),
-        3 => basis1_n::<4>(span, u, deriv, knots),
-        4 => basis1_n::<5>(span, u, deriv, knots),
-        5 => basis1_n::<6>(span, u, deriv, knots),
-        6 => basis1_n::<7>(span, u, deriv, knots),
-        _ => basis1_n::<8>(span, u, deriv, knots),
+        0 => basis1_n::<1, { MAXP + 1 }>(span, u, deriv, knots),
+        1 => basis1_n::<2, { MAXP + 1 }>(span, u, deriv, knots),
+        2 => basis1_n::<3, { MAXP + 1 }>(span, u, deriv, knots),
+        3 => basis1_n::<4, { MAXP + 1 }>(span, u, deriv, knots),
+        4 => basis1_n::<5, { MAXP + 1 }>(span, u, deriv, knots),
+        5 => basis1_n::<6, { MAXP + 1 }>(span, u, deriv, knots),
+        6 => basis1_n::<7, { MAXP + 1 }>(span, u, deriv, knots),
+        _ => basis1_n::<8, { MAXP + 1 }>(span, u, deriv, knots),
     }
 }
 
 #[inline]
-fn basis1_n<const N: usize>(span: usize, u: f64, deriv: bool, knots: &[f64]) -> B1 {
+fn basis1_n<const N: usize, const W: usize>(
+    span: usize,
+    u: f64,
+    deriv: bool,
+    knots: &[f64],
+) -> B1<W> {
     let p = N - 1;
     let mut ndu = [[0.0; N]; N];
     let mut left = [0.0; N];
@@ -277,8 +305,8 @@ fn basis1_n<const N: usize>(span: usize, u: f64, deriv: bool, knots: &[f64]) -> 
         ndu[j][j] = saved;
     }
     let mut out = B1 {
-        v: [0.0; MAXP + 1],
-        d: [0.0; MAXP + 1],
+        v: [0.0; W],
+        d: [0.0; W],
     };
     for j in 0..=p {
         out.v[j] = ndu[j][p];
@@ -306,7 +334,7 @@ trait BasisAt {
     fn at(&self, k: usize, j: usize) -> f64;
 }
 
-impl BasisAt for B1 {
+impl<const W: usize> BasisAt for B1<W> {
     #[inline]
     fn at(&self, k: usize, j: usize) -> f64 {
         if k == 0 { self.v[j] } else { self.d[j] }
@@ -499,6 +527,9 @@ impl NurbsCurve {
         let span = find_span(n, p, u, &self.knots);
         if d <= 1 && p <= MAXP {
             return self.hders_with(span, d, &basis1(span, u, p, d == 1, &self.knots));
+        }
+        if d <= 1 && p <= WIDEP {
+            return self.hders_with(span, d, &basis1_wide(span, u, p, d == 1, &self.knots));
         }
         self.hders_with(span, d, &Basis::new(span, u, p, d, &self.knots))
     }
@@ -1248,6 +1279,11 @@ impl NurbsSurface {
             let bv = basis1(sv, v, self.dv, N == 1, &self.kv);
             return self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv));
         }
+        if N <= 1 && self.du <= WIDEP && self.dv <= WIDEP {
+            let bu = basis1_wide(su, u, self.du, N == 1, &self.ku);
+            let bv = basis1_wide(sv, v, self.dv, N == 1, &self.kv);
+            return self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv));
+        }
         let bu = Basis::new(su, u, self.du, N, &self.ku);
         let bv = Basis::new(sv, v, self.dv, N, &self.kv);
         self.rational::<N>(&self.homogeneous::<N>(su, sv, &bu, &bv))
@@ -1317,6 +1353,79 @@ impl NurbsSurface {
     /// The point at (u, v).
     pub fn point(&self, u: f64, v: f64) -> P3 {
         P3::from(self.ders_upto::<0>(u, v)[0][0])
+    }
+
+    /// The points at each (u, v) of `us` × `vs`, row by row (every v for each u), each as
+    /// [`Self::point`] makes it, to the bit: a row's sums along u are taken once per control
+    /// column it uses rather than once per point (a projection's search grid, up to 97 × 97).
+    pub fn grid(&self, us: &[f64], vs: &[f64]) -> Vec<P3> {
+        // (The bases [`Self::ders_upto`] takes for a point.)
+        if self.du <= MAXP && self.dv <= MAXP {
+            self.grid_with(
+                us,
+                vs,
+                |s, u| basis1(s, u, self.du, false, &self.ku),
+                |s, v| basis1(s, v, self.dv, false, &self.kv),
+            )
+        } else if self.du <= WIDEP && self.dv <= WIDEP {
+            self.grid_with(
+                us,
+                vs,
+                |s, u| basis1_wide(s, u, self.du, false, &self.ku),
+                |s, v| basis1_wide(s, v, self.dv, false, &self.kv),
+            )
+        } else {
+            self.grid_with(
+                us,
+                vs,
+                |s, u| Basis::new(s, u, self.du, 0, &self.ku),
+                |s, v| Basis::new(s, v, self.dv, 0, &self.kv),
+            )
+        }
+    }
+
+    /// [`Self::grid`] with the bases `basis_u` and `basis_v` make (by span and parameter): the
+    /// sums of [`Self::homogeneous`] for no derivative, in its order.
+    fn grid_with<A: BasisAt, B: BasisAt>(
+        &self,
+        us: &[f64],
+        vs: &[f64],
+        basis_u: impl Fn(usize, f64) -> A,
+        basis_v: impl Fn(usize, f64) -> B,
+    ) -> Vec<P3> {
+        let nu = self.cps.len() - 1;
+        let nv = self.cps[0].len() - 1;
+        let at_v: Vec<(usize, B)> = vs
+            .iter()
+            .map(|&v| {
+                let sv = find_span(nv, self.dv, v, &self.kv);
+                (sv, basis_v(sv, v))
+            })
+            .collect();
+        let mut out = Vec::with_capacity(us.len() * vs.len());
+        // A row's control columns contracted along u, as its points need them.
+        let mut column: Vec<Option<H>> = vec![None; nv + 1];
+        for &u in us {
+            let su = find_span(nu, self.du, u, &self.ku);
+            let bu = basis_u(su, u);
+            column.fill(None);
+            for (sv, bv) in &at_v {
+                let mut a = H::zeros();
+                for s in 0..=self.dv {
+                    let c = sv - self.dv + s;
+                    let t = *column[c].get_or_insert_with(|| {
+                        let mut t = H::zeros();
+                        for r in 0..=self.du {
+                            t += self.cps[su - self.du + r][c] * bu.at(0, r);
+                        }
+                        t
+                    });
+                    a += t * bv.at(0, s);
+                }
+                out.push(P3::from(a.xyz() / a.w));
+            }
+        }
+        out
     }
 
     /// The iso-curve at `v` for evaluating many points along u in [u0, u1] (mass properties'
@@ -1569,6 +1678,8 @@ impl IsoV<'_> {
         }
         if s.du <= MAXP {
             self.d1_with(su, &basis1(su, u, s.du, true, &s.ku))
+        } else if s.du <= WIDEP {
+            self.d1_with(su, &basis1_wide(su, u, s.du, true, &s.ku))
         } else {
             self.d1_with(su, &Basis::new(su, u, s.du, 1, &s.ku))
         }
@@ -1593,6 +1704,53 @@ impl IsoV<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`NurbsSurface::grid`] gives each point [`NurbsSurface::point`] does, to the bit: a
+    /// rational surface of low degree, one past `MAXP` and one past `WIDEP`.
+    #[test]
+    fn grid_points_as_one_by_one() {
+        for (du, dv, nu, nv) in [(3, 2, 7, 5), (MAXP + 2, 3, 12, 6), (WIDEP + 1, 2, 30, 4)] {
+            let cps: Vec<Vec<H>> = (0..nu)
+                .map(|i| {
+                    (0..nv)
+                        .map(|j| {
+                            let w = 1.0 + 0.3 * ((i * 7 + j * 3) % 5) as f64;
+                            let (x, y) = (i as f64 * 1.3, j as f64 * 0.7);
+                            let z = (x * 0.9).sin() + (y * 1.7).cos();
+                            H::new(x * w, y * w, z * w, w)
+                        })
+                        .collect()
+                })
+                .collect();
+            let knots = |n: usize, p: usize| -> Vec<f64> {
+                let inner = n - p - 1;
+                let mut k = vec![0.0; p + 1];
+                k.extend(
+                    (1..=inner).map(|i| i as f64 / (inner + 1) as f64 + 0.01 * (i % 3) as f64),
+                );
+                k.extend(vec![1.0; p + 1]);
+                k
+            };
+            let s = NurbsSurface {
+                du,
+                dv,
+                ku: knots(nu, du),
+                kv: knots(nv, dv),
+                cps,
+            };
+            let us: Vec<f64> = (0..=13).map(|i| i as f64 / 13.0).collect();
+            let vs: Vec<f64> = (0..=9).map(|j| (j as f64 / 9.0).powi(2)).collect();
+            let g = s.grid(&us, &vs);
+            let mut k = 0;
+            for &u in &us {
+                for &v in &vs {
+                    let p = s.point(u, v);
+                    assert_eq!(g[k].coords.map(f64::to_bits), p.coords.map(f64::to_bits));
+                    k += 1;
+                }
+            }
+        }
+    }
 
     /// The allocation-free evaluators (`Basis`, `ders_upto`, `hders_fixed`) give the values of
     /// A2.3/A4.4 computed with [`basis_ders`]'s vectors, to the bit, for rational surfaces and a

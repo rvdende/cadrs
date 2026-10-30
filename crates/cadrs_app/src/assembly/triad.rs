@@ -1794,7 +1794,10 @@ fn sync_readout(
         }
         return;
     }
-    let Some((tools, _)) = q_tools.iter().find(|(_, n)| n.as_str() == "viewport-tools") else {
+    let Some((tools, _)) = q_tools
+        .iter()
+        .find(|(_, n)| n.as_str() == "viewport-readouts")
+    else {
         return;
     };
     let e = commands

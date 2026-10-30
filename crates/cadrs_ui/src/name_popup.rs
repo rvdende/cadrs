@@ -63,6 +63,7 @@ pub struct NamePopup {
     value: String,
     at: Vec2,
     description: Option<String>,
+    above: bool,
 }
 
 impl NamePopup {
@@ -74,6 +75,7 @@ impl NamePopup {
             value: String::new(),
             at,
             description: None,
+            above: false,
         }
     }
 
@@ -85,6 +87,12 @@ impl NamePopup {
 
     pub fn value(mut self, v: impl Into<String>) -> Self {
         self.value = v.into();
+        self
+    }
+
+    /// `at` is the popup's bottom-left corner, not its top-left (one over the tab bar).
+    pub fn above(mut self) -> Self {
+        self.above = true;
         self
     }
 
@@ -108,8 +116,17 @@ impl NamePopup {
                     row_gap: Val::Px(5.0),
                     padding: UiRect::all(Val::Px(6.0)),
                     border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(t.radius)),
                     ..default()
                 },
+                UiTransform::from_translation(Val2::new(
+                    Val::ZERO,
+                    if self.above {
+                        Val::Percent(-100.0)
+                    } else {
+                        Val::ZERO
+                    },
+                )),
                 BackgroundColor(t.popover),
                 BorderColor::all(t.border),
                 BoxShadow::new(
@@ -142,14 +159,9 @@ impl NamePopup {
                         ..default()
                     },
                 ));
-                // A white check on green, a red cross (as Onshape's).
+                // A check on the primary colour (as the app's other primary buttons), a red cross.
                 for (accept, icon, bg, fg) in [
-                    (
-                        true,
-                        "check",
-                        Color::srgb_u8(0x2e, 0x9e, 0x44),
-                        Color::WHITE,
-                    ),
+                    (true, "check", t.primary, t.primary_foreground),
                     (
                         false,
                         "close",
@@ -167,6 +179,7 @@ impl NamePopup {
                             height: Val::Px(20.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
+                            border_radius: BorderRadius::all(Val::Px(t.radius)),
                             ..default()
                         },
                         BackgroundColor(bg),

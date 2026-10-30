@@ -551,8 +551,10 @@ pub struct SketchDraw {
     pub drag: Option<crate::sketch_constrain::DragInfo>,
     /// Where the secondary button went down (a right-click opens a glyph's menu).
     right_press: Option<Vec2>,
-    /// A dimension label being dragged: the dimension and its new `offset` and `along`.
-    pub label_drag: Option<(cadrs_sketch::DimensionId, f64, f64)>,
+    /// A dimension label being dragged: the dimension, its new `offset` and `along`, and its
+    /// value there (an angle's label dragged outside its angle measures it round the outside,
+    /// 360° less, #96).
+    pub label_drag: Option<(cadrs_sketch::DimensionId, f64, f64, f64)>,
     /// A glyph group being dragged: its host and where it was from its anchor.
     glyph_drag: Option<(crate::sketch_glyphs::Host, Vec2)>,
     /// The line tool's switch to a tangent arc by moving back over the chain's last point and
@@ -1094,15 +1096,27 @@ pub(crate) fn sketch_pointer(
                     && let Some((offset, along)) =
                         cadrs_sketch::dimension::label_params(sketch, d.kind, c)
                 {
+                    // An angle's label outside its angle measures it round the outside (not one
+                    // a variable sets: its expression would set it back).
+                    let by_expr = sketch.expressions.iter().any(|(k, _)| *k == id);
+                    let value = match cadrs_sketch::dimension::angle_outside(sketch, d.kind, c) {
+                        Some(outside)
+                            if !by_expr && outside != cadrs_sketch::ops::outside_angle(d.value) =>
+                        {
+                            cadrs_sketch::ops::other_way(d.value)
+                        }
+                        _ => d.value,
+                    };
                     // Centered on the cursor, but never over an arrowhead (`screens/16a`).
                     let moved = cadrs_sketch::Dimension {
                         offset,
                         along,
+                        value,
                         ..*d
                     };
                     let text = crate::sketch_dimension::dimension_text(&moved, false, &units.0);
                     let moved = crate::sketch_draw::clear_of_arrows(sketch, &map, moved, &text);
-                    draw.label_drag = Some((id, moved.offset, moved.along));
+                    draw.label_drag = Some((id, moved.offset, moved.along, value));
                     continue;
                 }
                 // Dragging a point or curve with no tool.
@@ -1192,13 +1206,21 @@ pub(crate) fn sketch_pointer(
                     // The end of a glyph drag (only the view changes).
                     continue;
                 }
-                if let Some((id, offset, along)) = draw.label_drag.take() {
-                    // The end of a label drag: one undo step.
-                    execute(
-                        &mut commands,
-                        target,
-                        SketchOp::MoveDimensionLabel { id, offset, along },
-                    );
+                if let Some((id, offset, along, value)) = draw.label_drag.take() {
+                    // The end of a label drag: one undo step (an angle's label taken outside
+                    // or back in measures it that way).
+                    let moved = SketchOp::MoveDimensionLabel { id, offset, along };
+                    let op = match sketch.dimensions.get(id) {
+                        Some(d) if d.value != value => SketchOp::Batch(vec![
+                            SketchOp::SetAngleOutside {
+                                id,
+                                outside: cadrs_sketch::ops::outside_angle(value),
+                            },
+                            moved,
+                        ]),
+                        _ => moved,
+                    };
+                    execute(&mut commands, target, op);
                     continue;
                 }
                 if dimension_tool {

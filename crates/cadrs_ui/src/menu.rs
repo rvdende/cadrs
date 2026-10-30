@@ -113,10 +113,12 @@ fn fit_menus_to_window(
         let room = if fit.vertical {
             (h - WINDOW_MARGIN - bottom - 2.0).max(top - insets.top - WINDOW_MARGIN - 2.0)
         } else {
-            // Beside the anchor, its top level with the anchor's: only the room below counts
-            // (Final part 4: with the room above too, the capped menu didn't fit on the right
-            // and opened left, over the triad, `course_asm_ex1_start` 07/09).
-            h - WINDOW_MARGIN - top
+            // Beside the anchor: down from its top, or up from its bottom (a submenu near the
+            // window's foot, as a tab folder's list is, opens upward; `Menu::build`'s
+            // placements). (Final part 4: when submenus only opened downward, counting the
+            // room above capped a menu that then fit on neither side and opened left, over the
+            // triad, `course_asm_ex1_start` 07/09.)
+            (h - WINDOW_MARGIN - top).max(bottom - insets.top - WINDOW_MARGIN)
         };
         let is = computed.inverse_scale_factor();
         let natural = (computed.content_size().y * is).max(computed.size().y * is);
@@ -264,6 +266,10 @@ pub struct MenuItem {
     avatar: Option<(String, Color)>,
     /// Not built yet: left out of the menu (issue #13).
     planned: bool,
+    /// A destructive action (Delete…): its label and icon in the danger colour.
+    danger: bool,
+    /// The icon in this colour (a folder on the active tab's path).
+    icon_color: Option<Color>,
 }
 
 impl MenuItem {
@@ -281,11 +287,31 @@ impl MenuItem {
             dot: None,
             avatar: None,
             planned: false,
+            danger: false,
+            icon_color: None,
         }
+    }
+
+    /// A destructive action: its label and icon in the danger colour.
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+
+    /// The icon in this colour.
+    pub fn icon_color(mut self, c: Color) -> Self {
+        self.icon_color = Some(c);
+        self
     }
 
     /// A feature not built yet: the menu leaves it out (issue #13: what does nothing isn't
     /// shown), but the code keeps its place for when it is.
+    /// Replaces the label given to [`MenuItem::new`].
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+
     pub fn planned(mut self) -> Self {
         self.planned = true;
         self
@@ -356,8 +382,12 @@ pub struct Menu {
     item_height: Option<f32>,
     icon_column: bool,
     look: ItemLook,
-    /// The tallest the menu gets; longer lists scroll (the Tab manager's 40 tabs).
+    /// The tallest the menu gets; longer lists scroll (a long instance list).
     max_height: Option<f32>,
+    /// The space between the menu and its anchor.
+    gap: f32,
+    /// A submenu that opens upward from its item first (its menu opened upward).
+    upward: bool,
 }
 
 /// How a menu's rows look.
@@ -395,7 +425,23 @@ impl Menu {
             icon_column: true,
             look: ItemLook::default(),
             max_height: None,
+            gap: 2.0,
+            upward: false,
         }
+    }
+
+    /// The space between the menu and its anchor (default 2 px): a menu over the tab bar keeps
+    /// clear of the bar.
+    pub fn gap(mut self, px: f32) -> Self {
+        self.gap = px;
+        self
+    }
+
+    /// A submenu opening upward from its item rather than down, unless there is no room (the
+    /// submenus of a menu that opened upward, so they don't cover what it opened over).
+    pub fn upward(mut self, up: bool) -> Self {
+        self.upward = up;
+        self
     }
 
     /// Caps the menu's height; a longer list scrolls.
@@ -457,6 +503,12 @@ impl Menu {
         self
     }
 
+    /// Adds an item, separator or header made elsewhere.
+    pub fn entry(mut self, entry: MenuEntry) -> Self {
+        self.entries.push(entry);
+        self
+    }
+
     pub fn entries(mut self, entries: Vec<MenuEntry>) -> Self {
         self.entries = entries;
         self
@@ -487,10 +539,24 @@ impl Menu {
             PopoverAlign::Start
         };
         let placements = match self.side {
-            PopoverSide::Right => vec![
-                placement(PopoverSide::Right, PopoverAlign::Start, -2.0),
-                placement(PopoverSide::Left, PopoverAlign::Start, -2.0),
-            ],
+            // A submenu: down from its item, else up from it when there's no room below (one
+            // near the window's foot, as a tab folder's list is); up first in a menu that
+            // opened upward.
+            PopoverSide::Right => {
+                let down = [
+                    placement(PopoverSide::Right, PopoverAlign::Start, -2.0),
+                    placement(PopoverSide::Left, PopoverAlign::Start, -2.0),
+                ];
+                let up = [
+                    placement(PopoverSide::Right, PopoverAlign::End, -2.0),
+                    placement(PopoverSide::Left, PopoverAlign::End, -2.0),
+                ];
+                if self.upward {
+                    up.into_iter().chain(down).collect()
+                } else {
+                    down.into_iter().chain(up).collect()
+                }
+            }
             // Flipped to the other side, then to the other end, when it doesn't fit in the window
             // (a context menu opened at the viewport's right edge opens toward the left, P3B.1
             // judge).
@@ -500,11 +566,12 @@ impl Menu {
                 } else {
                     PopoverAlign::End
                 };
+                let gap = self.gap;
                 vec![
-                    placement(side, align, 2.0),
-                    placement(side.mirror(), align, 2.0),
-                    placement(side, other, 2.0),
-                    placement(side.mirror(), other, 2.0),
+                    placement(side, align, gap),
+                    placement(side.mirror(), align, gap),
+                    placement(side, other, gap),
+                    placement(side.mirror(), other, gap),
                 ]
             }
         };
@@ -514,6 +581,8 @@ impl Menu {
         let look = self.look;
         let max_height = self.max_height;
         let vertical = matches!(self.side, PopoverSide::Top | PopoverSide::Bottom);
+        // Its submenus open upward too.
+        let up = self.upward || matches!(self.side, PopoverSide::Top);
         (
             Name::new(self.name.into_owned()),
             MenuPopup,
@@ -580,8 +649,14 @@ impl Menu {
                         }
                         MenuEntry::Item(mut item) => {
                             let tip = item.tooltip.take();
-                            let mut e =
-                                p.spawn(item_bundle(&theme, item, item_height, icon_column, look));
+                            let mut e = p.spawn(item_bundle(
+                                &theme,
+                                item,
+                                item_height,
+                                icon_column,
+                                look,
+                                up,
+                            ));
                             if let Some(t) = tip {
                                 e.insert(crate::tooltip::Tooltip::card(t));
                             }
@@ -684,6 +759,10 @@ pub struct MenuItemState {
     pub item: String,
     submenu: Option<Vec<MenuEntry>>,
     theme: Box<Theme>,
+    /// Its menu opened upward: so does its submenu.
+    up: bool,
+    /// Its menu's row height, its submenu's too.
+    height: f32,
 }
 
 /// The click-outside layer behind open menus.
@@ -696,10 +775,21 @@ fn item_bundle(
     height: f32,
     icon_column: bool,
     look: ItemLook,
+    up: bool,
 ) -> impl Bundle {
-    let fg = theme.foreground;
+    let danger = item.danger && !item.disabled;
+    let fg = if danger {
+        theme.danger
+    } else {
+        theme.foreground
+    };
     let muted = theme.subtle_foreground;
-    let icon_color = if look.strong_icons && !item.disabled {
+    let arrow = theme.muted_foreground;
+    let icon_color = if danger {
+        theme.danger
+    } else if let Some(c) = item.icon_color.filter(|_| !item.disabled) {
+        c
+    } else if look.strong_icons && !item.disabled {
         // `#333`, as measured in `constraints/constraints-01.png`.
         Color::srgb_u8(0x33, 0x33, 0x33)
     } else {
@@ -729,6 +819,8 @@ fn item_bundle(
         dot,
         avatar,
         planned: _,
+        danger: _,
+        icon_color: _,
     } = item;
     let check_color = theme.primary;
     let check_name = format!("{name}-check");
@@ -741,6 +833,8 @@ fn item_bundle(
             item: name.into_owned(),
             submenu,
             theme: Box::new(theme.clone()),
+            up,
+            height,
         },
         Node {
             height: Val::Px(height),
@@ -765,9 +859,10 @@ fn item_bundle(
             foreground: StateColors::new(fg, fg, fg, theme.disabled_foreground),
             focus_ring: theme.focus_ring,
         },
+        // A checked row shows its tick, not the hover tint (it read as a second hovered row).
         InitState {
             disabled,
-            selected: checked,
+            selected: false,
             force,
         },
         Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
@@ -815,7 +910,11 @@ fn item_bundle(
                     ));
                 }
                 Some(n) => {
-                    p.spawn((icon(n, look.icon_size, icon_color), Pickable::IGNORE));
+                    let mut e = p.spawn((icon(n, look.icon_size, icon_color), Pickable::IGNORE));
+                    // A destructive item's icon wholly in its colour (its accent too).
+                    if danger {
+                        e.insert(crate::icon::SolidTint);
+                    }
                 }
                 None => {
                     p.spawn((
@@ -863,7 +962,7 @@ fn item_bundle(
                 ));
             }
             if has_submenu {
-                p.spawn((icon("caret-right", 12.0, muted), Pickable::IGNORE));
+                p.spawn((icon("chevron-right", 18.0, arrow), Pickable::IGNORE));
             }
             if checked {
                 p.spawn((
@@ -1053,6 +1152,8 @@ fn update_submenus(
             let menu = Menu::new(format!("{}-submenu", item.item))
                 .entries(entries.clone())
                 .side(PopoverSide::Right)
+                .upward(item.up)
+                .item_height(item.height)
                 .build(&item.theme);
             commands.spawn(menu).insert(ChildOf(entity));
         } else if !want {

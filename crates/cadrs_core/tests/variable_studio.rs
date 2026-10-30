@@ -578,8 +578,8 @@ fn change_version_keeps_the_table_in_place() {
 
 /// Every rebuild of a Part Studio's list must start with the studio variables it names
 /// (`active_features`, `part_features`, `features_to_build`): `features()` is the list as the
-/// user sees it. Catches a new `rebuild::build(x.features())` in the core or the app (the
-/// samples use no Variable Studio).
+/// user sees it. Catches a new `rebuild::build(x.features())` in the core or the app, or a face
+/// or plane looked up in it (the samples use no Variable Studio).
 #[test]
 fn no_rebuild_takes_the_bare_feature_list() {
     fn scan(dir: &std::path::Path, out: &mut Vec<String>) {
@@ -592,7 +592,15 @@ fn no_rebuild_takes_the_bare_feature_list() {
             } else if p.extension().is_some_and(|x| x == "rs") {
                 let text = std::fs::read_to_string(&p).unwrap();
                 for (i, line) in text.lines().enumerate() {
-                    if line.contains("rebuild::build(") && line.contains(".features())") {
+                    // (And the lookups that rebuild what is above a feature: a face to sketch on,
+                    // a Plane feature, the parts.)
+                    let rebuilds = [
+                        "rebuild::build(",
+                        "parts::face_plane(",
+                        "parts::plane_feature_ref(",
+                        "parts::parts(",
+                    ];
+                    if rebuilds.iter().any(|r| line.contains(r)) && line.contains(".features()") {
                         out.push(format!("{}:{}", p.display(), i + 1));
                     }
                 }
@@ -607,4 +615,99 @@ fn no_rebuild_takes_the_bare_feature_list() {
         found.is_empty(),
         "rebuilds of the bare feature list: {found:?}"
     );
+}
+
+/// A face of a feature sized by a studio variable is a face to sketch on, and the sketch follows
+/// it when the variable changes (presso df64's foot: Extrude 4, `#foot_height` deep, had no
+/// sketch plane on its cap, as its rebuild didn't see `#foot_height`).
+#[test]
+fn a_sketch_on_a_face_sized_by_a_studio_variable() {
+    use cadrs_core::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+    use cadrs_core::document::{ExtrudeFeature, RegionRef};
+    use cadrs_core::parts::{cap_name, face_plane};
+    use cadrs_sketch::{PlaneRef, SketchOp, Vec2};
+    let mut d = Doc::new();
+    let s = d.add_studio("Dimensions");
+    let h = d.add_row(s, "h", "10 mm");
+    let el = d.part;
+    // A 50 × 30 box on Top, #h high, at the end of the list.
+    let sk = FeatureId::new();
+    let add = AddSketch {
+        element: el,
+        feature: sk,
+        plane: Some(PlaneRef::Top),
+    };
+    d.h.execute(&mut d.d, &add).unwrap();
+    let points = vec![
+        Vec2::new(200.0, 0.0),
+        Vec2::new(250.0, 0.0),
+        Vec2::new(250.0, 30.0),
+        Vec2::new(200.0, 30.0),
+    ];
+    let edit = EditSketch {
+        element: el,
+        feature: sk,
+        op: SketchOp::AddPolyline {
+            points,
+            closed: true,
+            construction: false,
+            label: "Add rectangle",
+        },
+    };
+    d.h.execute(&mut d.d, &edit).unwrap();
+    let g =
+        &d.d.element(el)
+            .unwrap()
+            .feature(sk)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry;
+    let regions: Vec<RegionRef> = cadrs_sketch::region::regions(g)
+        .iter()
+        .map(|r| RegionRef::new(sk, r))
+        .collect();
+    let ex = FeatureId::new();
+    let add = AddExtrude {
+        element: el,
+        feature: ex,
+        extrude: ExtrudeFeature::default(),
+    };
+    d.h.execute(&mut d.d, &add).unwrap();
+    let set = SetExtrude {
+        element: el,
+        feature: ex,
+        extrude: ExtrudeFeature {
+            regions,
+            depth: 10.0,
+            depth_expr: "#h".into(),
+            ..ExtrudeFeature::default()
+        },
+        label: "Depth".into(),
+    };
+    d.h.execute(&mut d.d, &set).unwrap();
+    let part = d.d.element(el).unwrap();
+    let built = part.part_features().into_owned();
+    let top = cap_name(&built, ex, 0, true).unwrap();
+    // The list as the user sees it doesn't build the extrude (#h is defined above it); as the
+    // rebuild sees it, the top face is 10 mm up.
+    assert!(face_plane(part.features(), ex, top).is_none());
+    let plane = face_plane(&built, ex, top).unwrap();
+    assert!((plane.frame().origin[2] - 10.0).abs() < 1e-9);
+    let on = FeatureId::new();
+    let add = AddSketch {
+        element: el,
+        feature: on,
+        plane: Some(plane),
+    };
+    d.h.execute(&mut d.d, &add).unwrap();
+    // #h at 25 mm: the sketch moves up with its face.
+    d.set_row(s, h, "25 mm");
+    let z = |d: &Doc| {
+        let f = d.d.element(el).unwrap().feature(on).unwrap();
+        f.sketch().unwrap().plane.unwrap().frame().origin[2]
+    };
+    assert!((z(&d) - 25.0).abs() < 1e-9, "{}", z(&d));
+    d.h.undo(&mut d.d).unwrap();
+    assert!((z(&d) - 10.0).abs() < 1e-9, "{}", z(&d));
 }

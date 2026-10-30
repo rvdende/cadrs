@@ -5,8 +5,7 @@
 // (2 deep, 2 wide) patterned ×3; the Piston Ø #piston_d; the Clamp whose bore uses the piston's
 // edge.
 // 01 the model and its feature list: the two variables (#piston_d, #clearance) first.
-// 02 the Variables panel (right strip): #piston_d 40 mm and #clearance 0.5 mm with their
-//    descriptions.
+// 02 #piston_d's Variable dialog: 40 mm with its description.
 // 03 the Body selected, Mass properties: Volume 69869.021 mm³ (π/4·(OD² − ID²)·100 − the three
 //    grooves).
 // 04 (P3F.3–P3F.4 judge) the Body made see-through (Edit appearance, 30 % opacity): the bore,
@@ -14,7 +13,7 @@
 // 05 the master sketch opened with Show expressions on: the bore's dimension reads
 //    "Ø#piston_d + #clearance" (the wall 5, the length 100 stay values); the later sketches
 //    (rolled back while it is edited) aren't drawn.
-// 06 #piston_d typed as 50 mm in the Variable table: one edit; the body, the grooves, the piston
+// 06 #piston_d edited to 50 mm in its Variable dialog: one edit; the body, the grooves, the piston
 //    and the clamp's bore (Use) all follow, no feature errors: seen through the Body, as 04.
 // 07 Mass properties of the Body again: 85199.993 mm³.
 Scenario(
@@ -27,11 +26,12 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("01-model-and-variables"),
-        Click(ui("panel-variables")),
-        WaitFor("variables-panel"),
+        DoubleClick(ui("feature-piston-d")),
+        WaitFor("variable-dialog"),
         MoveTo(1420, 900),
         Wait(3),
-        Screenshot("02-variable-table"),
+        Screenshot("02-piston-d-variable"),
+        Click(ui("variable-dialog-cancel")),
         Click(ui("part-row-body")),
         Click(ui("view-mass")),
         WaitFor("mass-dialog"),
@@ -53,10 +53,13 @@ Scenario(
         Screenshot("05-master-sketch-expression"),
         Click(ui("sketch-dialog-accept")),
         Key("Shift+7"),
-        Click(ui("variable-row-piston_d-field")),
+        DoubleClick(ui("feature-piston-d")),
+        WaitFor("variable-dialog"),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("50 mm"),
-        Key("Enter"),
+        Click(ui("variable-dialog-title")),
+        Click(ui("variable-dialog-accept")),
         Key("F"),
         MoveTo(1420, 900),
         Wait(3),

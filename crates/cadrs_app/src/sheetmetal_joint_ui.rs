@@ -664,6 +664,7 @@ fn sync_dialog(
                                         NumberField::new("smj-radius", "Bend radius")
                                             .text(radius.clone())
                                             .label_width(100.0)
+                                            .variables()
                                             .build(&t),
                                     ));
                                 }
@@ -691,6 +692,7 @@ fn sync_dialog(
                                         NumberField::new("smj-value", x.calc.label())
                                             .text(value.clone())
                                             .label_width(100.0)
+                                            .variables()
                                             .build(&t),
                                     ));
                                     if x.calc == BendCalc::KFactor {

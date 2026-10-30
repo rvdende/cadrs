@@ -270,6 +270,9 @@ fn main() -> AppExit {
     // The harness plugin clears the scenario's output directory (and with it the scenario's
     // data dir), so seed documents after adding it.
     app.add_plugins(HarnessPlugin { opts, scenario });
+    app.insert_resource(cadrs_harness::BeforeComplete(
+        cadrs_core::history_log::flush_saves,
+    ));
     app.insert_resource(cadrs_app::mcp::McpScenarioHook(run_live_scenario));
     if let (Some(from), Some(dir)) = (&data_from, &data_dir)
         && let Err(e) = cadrs_harness::prepare_data_from(from, dir)

@@ -342,9 +342,10 @@ pub enum Kind {
     Radius(Rad, f64, f64),
     /// `[p, a, b]`: the distance from `p` to the line `a`–`b`, minus `value`.
     PointLineDistance(f64),
-    /// `[a1, b1, a2, b2]`: the unsigned angle (radians) between `b1 − a1` and `b2 − a2`, minus
-    /// `value`.
-    Angle(f64),
+    /// `[a1, b1, a2, b2]`: how far (radians) `b2 − a2` is turned from `b1 − a1` anticlockwise
+    /// (or clockwise, `false`), less `value`, taken round to between −π and π: smooth however
+    /// far it turns (#96: through 180°, past 360°).
+    Angle(f64, bool),
     /// `[p, q, a, b]`: the signed distance of the midpoint of `p`–`q` from the line `a`–`b`
     /// (symmetry: the midpoint is on the axis).
     SymMid,
@@ -459,10 +460,14 @@ impl Kind {
                 }
                 (d.cross(p.sub(a)) / l).abs() - D::c(v)
             }
-            Kind::Angle(v) => {
+            Kind::Angle(v, ccw) => {
                 let d1 = pt(x, 2).sub(pt(x, 0));
                 let d2 = pt(x, 6).sub(pt(x, 4));
-                D::atan2(d1.cross(d2).abs(), d1.dot(d2)) - D::c(v)
+                // The turn's sine and cosine (times the lengths), then turned back by `v`.
+                let way = if ccw { 1.0 } else { -1.0 };
+                let (sin, cos) = (d1.cross(d2) * way, d1.dot(d2));
+                let (vs, vc) = v.sin_cos();
+                D::atan2(sin * vc - cos * vs, cos * vc + sin * vs)
             }
             Kind::SymMid | Kind::SymPerp => {
                 let (p, q, a, b) = (pt(x, 0), pt(x, 2), pt(x, 4), pt(x, 6));
@@ -1291,6 +1296,8 @@ impl System {
 
     fn add_dimension(&mut self, s: &Sketch, id: DimensionId, kind: DimensionKind, v: f64) {
         let src = Source::Dimension(id);
+        // (A negative distance's side, an outside angle's: the geometry already has them.)
+        let v = kind.solved_value(v);
         match kind {
             DimensionKind::Horizontal { a, b } | DimensionKind::Vertical { a, b } => {
                 let i = usize::from(matches!(kind, DimensionKind::Vertical { .. }));
@@ -1401,6 +1408,7 @@ impl System {
                 b,
                 flip_a,
                 flip_b,
+                ..
             } => {
                 if let (Some(la), Some(lb)) = (self.line(s, a), self.line(s, b)) {
                     // A flipped ray runs from the line's second point to its first.
@@ -1411,8 +1419,9 @@ impl System {
                             l
                         }
                     };
+                    let ccw = crate::dimension::angle_ccw(s, kind).unwrap_or(true);
                     self.push(
-                        Kind::Angle(v.to_radians()),
+                        Kind::Angle(v.to_radians(), ccw),
                         [ray(la, flip_a), ray(lb, flip_b)].concat(),
                         src,
                     );

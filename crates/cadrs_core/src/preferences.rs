@@ -326,6 +326,12 @@ pub struct Preferences {
     /// newer one's) reads as English, the other preferences kept.
     #[serde(default)]
     pub language: Language,
+    /// Keep the camera up (issue #97): the rotate drag turns about the vertical (world Z) and
+    /// tilts, without rolling the view, and so do the arrow keys and the view cube's arrows.
+    /// Off, the drag turns freely about the screen (Onshape's), and the no-roll turn is on the
+    /// other gesture.
+    #[serde(default)]
+    pub keep_camera_up: bool,
 }
 
 /// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
@@ -423,6 +429,7 @@ impl Default for Preferences {
             profile_cpu: false,
             vsync: true,
             language: Language::English,
+            keep_camera_up: false,
         }
     }
 }
@@ -610,6 +617,7 @@ mod tests {
             profile_cpu: true,
             vsync: false,
             language: Language::PortugueseBrazil,
+            keep_camera_up: true,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

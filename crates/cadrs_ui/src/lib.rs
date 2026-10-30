@@ -56,6 +56,7 @@ pub mod path_field;
 pub mod progress;
 pub mod quick_dim;
 pub mod radio;
+pub mod responsive;
 pub mod scrollbar;
 pub mod segmented;
 pub mod selectable_text;
@@ -81,6 +82,7 @@ pub mod toast;
 pub mod toolbar;
 pub mod tooltip;
 pub mod tree;
+pub mod variable_list;
 pub mod version_graph;
 pub mod virtual_rows;
 
@@ -110,13 +112,11 @@ pub use command_palette::{
 pub use cursor::{CursorKind, CursorRequest, CursorState};
 pub use dialog::{Dialog, DialogClose, DialogRoot};
 pub use dialog_fields::{
-    NumberField, NumberFieldCancel, NumberFieldCommit, NumberFieldEdit, NumberFieldState,
-    OptionRow, Select, SelectChange, SelectState, Slider, SliderChange, SliderState, form_row,
+    FieldVariables, NumberField, NumberFieldCancel, NumberFieldCommit, NumberFieldEdit,
+    NumberFieldState, OptionRow, Select, SelectChange, SelectState, Slider, SliderChange,
+    SliderState, form_row,
 };
-pub use dim_edit::{
-    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField, DimEditNewVariable,
-    DimEditVariable, DimEditVariables, complete_variable,
-};
+pub use dim_edit::{DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditField};
 pub use doc_details::{
     LabelChip, details_caption, details_divider, details_header, details_value, side_tab,
 };
@@ -143,7 +143,8 @@ pub use inline_edit::{
     InlineEditOptions, begin_inline_edit,
 };
 pub use input::{
-    CaretBlinkOverride, KeyboardField, TextCancel, TextInput, TextInputField, TextSubmit,
+    CaretBlinkOverride, GrowWithText, KeyboardField, TextCancel, TextInput, TextInputField,
+    TextSubmit,
 };
 pub use list::{GridItem, ListItem};
 pub use menu::{
@@ -160,6 +161,7 @@ pub use quick_dim::{
     start_typing as quick_dim_start_typing,
 };
 pub use radio::{RadioChange, RadioGroup, RadioGroupState, RadioOption};
+pub use responsive::HideBelow;
 pub use scrollbar::{WheelScroll, horizontal_scrollbar, vertical_scrollbar};
 pub use segmented::{Segmented, SegmentedSelect, SegmentedState};
 pub use selectable_text::{
@@ -196,6 +198,9 @@ pub use toast::{
 pub use toolbar::{Kbd, ToolButton, toolbar_separator};
 pub use tooltip::{Tooltip, TooltipStyle};
 pub use tree::{TreeItem, TreeRowToggle, TreeRowToggled, TreeToggle, tree_guide};
+pub use variable_list::{
+    ListedVariable, NewVariable, VariableList, VariableListNode, complete_variable, list_key,
+};
 pub use version_graph::{
     VersionGraph, VersionGraphNode, VersionGraphSelect, VersionNode, VersionNodeKind,
 };
@@ -303,8 +308,10 @@ impl Plugin for CadrsUiPlugin {
                 ellipsis::EllipsisPlugin,
                 command_palette::CommandPalettePlugin,
             ))
+            .add_plugins(variable_list::VariableListPlugin)
             .add_plugins(file_picker::FilePickerPlugin)
             .add_plugins(radio::RadioPlugin)
+            .add_plugins(responsive::ResponsivePlugin)
             .add_plugins(progress::ProgressPlugin)
             .add_plugins(entry_list::EntryListPlugin)
             .add_plugins(name_popup::NamePopupPlugin)

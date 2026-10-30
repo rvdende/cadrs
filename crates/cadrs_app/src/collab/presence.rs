@@ -434,6 +434,7 @@ pub(super) fn view_state(v: &View) -> ViewState {
         focus: Vec3::from_array(v.focus),
         scale: v.scale,
         perspective: v.perspective,
+        focal: crate::camera::FOCAL_PX,
         render: RenderMode::ALL
             .get(v.render as usize)
             .copied()
@@ -1259,7 +1260,7 @@ fn on_avatar_click(ev: On<PointerClick>, q: Query<&PersonAvatar>, mut commands: 
                 .icon("visible")
                 .tooltip("See their tab and their view as they move")
         };
-        // Beside the avatar, not under it: the view cube sits below the top bar's right end.
+        // Beside the avatar, not under it.
         let menu = cadrs_ui::Menu::new("collab-person-menu")
             .side(bevy::ui_widgets::popover::PopoverSide::Left)
             .min_width(240.0)

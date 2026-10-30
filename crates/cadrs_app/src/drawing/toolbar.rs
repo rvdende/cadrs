@@ -373,11 +373,12 @@ fn not_yet(name: &str) -> &'static str {
 }
 
 pub fn drawing_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
-    crate::document::undo_redo(tb, t);
     // P3G.2 (ER4.3): shown when the document references versions.
     crate::reference_manager::update_all_button(tb, t);
-    for group in GROUPS.iter() {
-        tb.spawn(toolbar_separator(t));
+    for (i, group) in GROUPS.iter().enumerate() {
+        if i > 0 {
+            tb.spawn(toolbar_separator(t));
+        }
         for (name, icon, dropdown, tip) in group.iter() {
             if ENABLED.contains(name) {
                 let n: &'static str = name;

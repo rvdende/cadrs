@@ -59,8 +59,8 @@ impl Rebuilder {
         // The new surface is named after the file and shows the picture.
         let st = Arc::make_mut(&mut out.state);
         for p in st.parts.iter_mut().filter(|p| p.part.feature == id) {
-            p.part.name = x.stem();
-            Arc::make_mut(&mut p.part.solid).images = vec![x.placement()];
+            p.part_mut().name = x.stem();
+            Arc::make_mut(&mut p.part_mut().solid).images = vec![x.placement()];
         }
         Ok(out)
     }

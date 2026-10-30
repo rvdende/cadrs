@@ -315,6 +315,7 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::SetPreferences(p) => set_preferences(world, p),
         Call::ListFaces(p) => list_faces(world, p.part_studio.as_deref()),
         Call::ListEdges(p) => list_edges(world, p.part_studio.as_deref()),
+        Call::GetSelection => get_selection(world),
         Call::Undo => {
             let mut d = doc_mut(world)?;
             let what = d.undo().ok_or("nothing to undo")?;
@@ -1191,11 +1192,12 @@ fn add_sketch(world: &mut World, p: &tools::AddSketch) -> Result<Value, String> 
     let ops = sketch_ops(&p.entities)?;
     let mut d = doc_mut(world)?;
     let element = part_studio(&d, p.part_studio.as_deref())?;
+    // As the rebuild sees them: after the Variable Studios' variables.
     let features = d
         .doc
         .element(element)
         .ok_or("the Part Studio is gone")?
-        .features()
+        .part_features()
         .to_vec();
     let plane = match (&p.plane, &p.face, &p.plane_feature) {
         (Some(pl), None, None) => plane_ref(*pl),
@@ -1844,46 +1846,188 @@ fn studio_features(
     Ok(e.features_to_build())
 }
 
+/// What the user has selected in the 3D view (issue #177): the document and tab, and each pick
+/// in the order selected. In a Part Studio its faces, edges and vertices are found on the
+/// rebuilt parts (the refs list_faces and list_edges give, with their geometry); a pick a
+/// rebuild has since removed is stale. Reading it changes nothing.
+fn get_selection(world: &mut World) -> Result<Value, String> {
+    use crate::viewport::Pick;
+    let picks: Vec<Pick> = world
+        .get_resource::<crate::viewport::Selection>()
+        .map(|s| s.0.clone())
+        .unwrap_or_default();
+    // Editing a sketch, the view's selection is set aside (the sketch has its own).
+    let sketching = world
+        .get_resource::<State<crate::sketch::PartStudioMode>>()
+        .is_some_and(|m| *m.get() == crate::sketch::PartStudioMode::Sketching);
+    let d = doc(world)?;
+    let tab = d.active_element().ok_or("no tab is open")?;
+    let mut head = json!({
+        "document": d.doc.name,
+        "tab": tab.name,
+        "tab_kind": kind_label(&tab.kind),
+        "mode": if sketching { "sketch" } else { "view" },
+    });
+    if sketching {
+        head["note"] = json!("a sketch is being edited: what is selected in it isn't reported");
+    }
+    let feature_name = |f: FeatureId| tab.feature(f).map(|f| f.name.clone());
+    // What doesn't need the parts: planes, features, sketch picks.
+    let plain: Vec<Option<Value>> = picks
+        .iter()
+        .map(|p| match *p {
+            Pick::Plane(k) => Some(json!({ "kind": "plane", "name": k.name() })),
+            Pick::Origin => Some(json!({ "kind": "origin" })),
+            Pick::Feature(f) => Some(json!({
+                "kind": "feature", "name": feature_name(f), "id": f,
+                "stale": feature_name(f).is_none(),
+            })),
+            // A sketch's picks carry its id (a hole's points and a revolve's axis name it).
+            Pick::Region(f, i) => Some(json!({
+                "kind": "sketch_region", "sketch": feature_name(f), "sketch_id": f, "index": i,
+                "stale": feature_name(f).is_none(),
+            })),
+            Pick::SketchCurve(f, c) => Some(json!({
+                "kind": "sketch_curve", "sketch": feature_name(f), "sketch_id": f, "curve": c,
+                "stale": feature_name(f).is_none(),
+            })),
+            Pick::SketchPoint(f, q) => Some(json!({
+                "kind": "sketch_point", "sketch": feature_name(f), "sketch_id": f, "point": q,
+                "stale": feature_name(f).is_none(),
+            })),
+            Pick::Assembly => Some(json!({ "kind": "assembly" })),
+            Pick::Instance(f, i, j) => Some(json!({
+                "kind": "pattern_instance", "feature": feature_name(f), "feature_id": f,
+                "index": [i, j], "stale": feature_name(f).is_none(),
+            })),
+            Pick::Face(..) | Pick::Edge(..) | Pick::Vertex(..) | Pick::Part(_) => None,
+        })
+        .collect();
+    let studio = matches!(tab.kind, ElementKind::PartStudio { .. });
+    if !studio || plain.iter().all(Option::is_some) {
+        // Outside a Part Studio the parts are instances' (no refs to give): their ids.
+        let items: Vec<Value> = picks
+            .iter()
+            .zip(plain)
+            .map(|(p, v)| v.unwrap_or_else(|| json!({ "kind": pick_kind(p), "part": p.part() })))
+            .collect();
+        let mut out = head;
+        out["selection"] = json!(items);
+        return Ok(out);
+    }
+    // The parts the view shows: above the rollback bar, without suppressed features.
+    let features = if tab.cam().is_some() {
+        tab.active_part_features()
+    } else {
+        tab.active_features()
+    };
+    let props = tab.part_props().to_vec();
+    after_build(world, features, move |b| {
+        let items: Vec<Value> = picks
+            .iter()
+            .zip(plain)
+            .map(|(p, v)| v.unwrap_or_else(|| part_pick(&b.parts, &props, p)))
+            .collect();
+        let mut out = head;
+        out["selection"] = json!(items);
+        Ok(out)
+    })
+}
+
+/// A face, edge, vertex or part pick's kind.
+fn pick_kind(p: &crate::viewport::Pick) -> &'static str {
+    use crate::viewport::Pick;
+    match p {
+        Pick::Face(..) => "face",
+        Pick::Edge(..) => "edge",
+        Pick::Vertex(..) => "vertex",
+        _ => "part",
+    }
+}
+
+/// A face, edge, vertex or part pick on the rebuilt `parts`: as list_faces and list_edges give
+/// it (the part by the name it shows, `props`), or stale, saying why.
+fn part_pick(
+    parts: &[cadrs_core::parts::Part],
+    props: &[cadrs_core::PartProps],
+    p: &crate::viewport::Pick,
+) -> Value {
+    use crate::viewport::Pick;
+    let kind = pick_kind(p);
+    let stale = |why: &str| json!({ "kind": kind, "part": p.part(), "stale": true, "why": why });
+    let Some(part) = p.part().and_then(|id| parts.iter().find(|q| q.id == id)) else {
+        return stale("the part is gone");
+    };
+    let shown = cadrs_core::parts::display_name(part, props);
+    let mut v = match *p {
+        Pick::Face(_, name) => {
+            let Some(i) = part.solid.faces.iter().position(|f| f.name == name) else {
+                return stale("the face is gone");
+            };
+            // A face with nothing to seed a ref (no surface point): named, without a ref.
+            face_json(part, i).unwrap_or_else(|| json!({ "face": name, "ref": null }))
+        }
+        Pick::Edge(_, name) => {
+            let Some(e) = part.solid.edges.iter().find(|e| e.name == name) else {
+                return stale("the edge is gone");
+            };
+            edge_json(part, e).unwrap_or_else(|| json!({ "edge": name, "ref": null }))
+        }
+        Pick::Vertex(_, name) => {
+            let Some(v) = part.solid.vertices.iter().find(|v| v.name == name) else {
+                return stale("the vertex is gone");
+            };
+            json!({ "vertex": name, "position": v.point.map(round) })
+        }
+        _ => json!({ "id": part.id, "name": shown }),
+    };
+    v["kind"] = json!(kind);
+    v["part"] = json!(shown);
+    v
+}
+
 fn list_faces(world: &mut World, studio: Option<&str>) -> Result<Value, String> {
     let features = studio_features(world, studio)?;
     after_build(world, features, |b| Ok(faces_of(&b.parts)))
 }
 
 fn faces_of(parts: &[cadrs_core::parts::Part]) -> Value {
-    let mut out = Vec::new();
-    for p in parts {
-        for (i, f) in p.solid.faces.iter().enumerate() {
-            let Some(seed) = p.solid.face_point(i) else {
-                continue;
-            };
-            let r = cadrs_core::FaceRef {
-                part: p.id,
-                face: f.name,
-                seed,
-            };
-            let mut v = json!({ "ref": r, "part": p.name });
-            if let Some(k) = &f.kind {
-                v["surface"] = json!(format!("{k:?}"));
-            }
-            if let Some(a) = f.area {
-                v["area"] = json!(round(a));
-            }
-            if let Some(c) = f.center {
-                v["center"] = json!(c.map(round));
-            }
-            if let Some(pl) = &f.plane {
-                v["normal"] = json!(cross(pl.u, pl.v).map(round));
-            }
-            if let Some((o, d)) = f.axis {
-                v["axis"] = json!({ "point": o.map(round), "direction": d.map(round) });
-            }
-            if let Some(r) = f.radius {
-                v["radius"] = json!(round(r));
-            }
-            out.push(v);
-        }
-    }
+    let out: Vec<Value> = parts
+        .iter()
+        .flat_map(|p| (0..p.solid.faces.len()).filter_map(move |i| face_json(p, i)))
+        .collect();
     json!({ "faces": out })
+}
+
+/// A face of a part as list_faces gives it: its ref, part and geometry.
+fn face_json(p: &cadrs_core::parts::Part, i: usize) -> Option<Value> {
+    let f = p.solid.faces.get(i)?;
+    let seed = p.solid.face_point(i)?;
+    let r = cadrs_core::FaceRef {
+        part: p.id,
+        face: f.name,
+        seed,
+    };
+    let mut v = json!({ "ref": r, "part": p.name });
+    if let Some(k) = &f.kind {
+        v["surface"] = json!(format!("{k:?}"));
+    }
+    if let Some(a) = f.area {
+        v["area"] = json!(round(a));
+    }
+    if let Some(c) = f.center {
+        v["center"] = json!(c.map(round));
+    }
+    if let Some(pl) = &f.plane {
+        v["normal"] = json!(cross(pl.u, pl.v).map(round));
+    }
+    if let Some((o, d)) = f.axis {
+        v["axis"] = json!({ "point": o.map(round), "direction": d.map(round) });
+    }
+    if let Some(r) = f.radius {
+        v["radius"] = json!(round(r));
+    }
+    Some(v)
 }
 
 fn list_edges(world: &mut World, studio: Option<&str>) -> Result<Value, String> {
@@ -1892,37 +2036,38 @@ fn list_edges(world: &mut World, studio: Option<&str>) -> Result<Value, String> 
 }
 
 fn edges_of(parts: &[cadrs_core::parts::Part]) -> Value {
-    let mut out = Vec::new();
-    for p in parts {
-        for e in &p.solid.edges {
-            let (Some(a), Some(b)) = (e.points.first(), e.points.last()) else {
-                continue;
-            };
-            let r = cadrs_core::EdgeRef {
-                part: p.id,
-                edge: e.name,
-                seed: e.midpoint(),
-            };
-            let len: f64 = e
-                .points
-                .windows(2)
-                .map(|w| {
-                    ((w[1][0] - w[0][0]).powi(2)
-                        + (w[1][1] - w[0][1]).powi(2)
-                        + (w[1][2] - w[0][2]).powi(2))
-                    .sqrt()
-                })
-                .sum();
-            let mut v = json!({ "ref": r, "part": p.name, "start": a.map(round), "end": b.map(round), "length": round(len) });
-            if let Some(c) = &e.circle {
-                v["circle"] = json!({ "center": c.center.map(round), "normal": c.normal.map(round), "radius": round(c.radius) });
-            } else if e.points.len() == 2 {
-                v["line"] = json!(true);
-            }
-            out.push(v);
-        }
-    }
+    let out: Vec<Value> = parts
+        .iter()
+        .flat_map(|p| p.solid.edges.iter().filter_map(move |e| edge_json(p, e)))
+        .collect();
     json!({ "edges": out })
+}
+
+/// An edge of a part as list_edges gives it: its ref, part, ends, length and circle or line.
+fn edge_json(p: &cadrs_core::parts::Part, e: &cadrs_core::solid::SolidEdge) -> Option<Value> {
+    let (a, b) = (e.points.first()?, e.points.last()?);
+    let r = cadrs_core::EdgeRef {
+        part: p.id,
+        edge: e.name,
+        seed: e.midpoint(),
+    };
+    let len: f64 = e
+        .points
+        .windows(2)
+        .map(|w| {
+            ((w[1][0] - w[0][0]).powi(2)
+                + (w[1][1] - w[0][1]).powi(2)
+                + (w[1][2] - w[0][2]).powi(2))
+            .sqrt()
+        })
+        .sum();
+    let mut v = json!({ "ref": r, "part": p.name, "start": a.map(round), "end": b.map(round), "length": round(len) });
+    if let Some(c) = &e.circle {
+        v["circle"] = json!({ "center": c.center.map(round), "normal": c.normal.map(round), "radius": round(c.radius) });
+    } else if e.points.len() == 2 {
+        v["line"] = json!(true);
+    }
+    Some(v)
 }
 
 /// Imports a STEP file as a new stored document (its parts flattened into a Part Studio) and
@@ -2331,6 +2476,91 @@ mod tests {
         // Base 2232 × 6 + 1872 × 4, upright 1836.9 × 8, boss 690.3 × 5, gusset 418 × 10.
         let volume = part.mass.as_ref().expect("mass").volume;
         assert!((volume - 43206.8).abs() < 5.0, "volume {volume}");
+    }
+
+    /// get_selection (issue #177): the picks in order, faces and edges with the refs list_faces
+    /// and list_edges give (which a fillet then takes), a removed face stale, and nothing
+    /// selected an empty list.
+    #[test]
+    fn the_selection_comes_back_with_refs_features_take() {
+        use crate::viewport::{Pick, PlaneKind, Selection};
+        let mut world = World::new();
+        world.insert_resource(ActiveDocument::new(Document::new("Doc")));
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> T {
+            serde_json::from_value(v).unwrap()
+        }
+        let sketch = add_sketch(
+            &mut world,
+            &p(json!({ "plane": "Top", "entities": [
+                { "type": "rectangle", "x0": 0, "y0": 0, "x1": 10, "y1": 10 },
+            ] })),
+        )
+        .unwrap();
+        super::extrude(
+            &mut world,
+            &p(json!({ "sketch": sketch["sketch"], "depth": 5 })),
+        )
+        .unwrap();
+        let v = get_selection(&mut world).unwrap();
+        assert_eq!(v["selection"], json!([]));
+        assert_eq!(v["tab"], "Part Studio 1");
+
+        let b = cadrs_core::rebuild::build(&studio_features(&world, None).unwrap());
+        let part = &b.parts[0];
+        let (face, edge) = (part.solid.faces[0].name, part.solid.edges[0].name);
+        // A part no rebuild makes any more (its feature deleted, say).
+        let gone = cadrs_core::PartId::new(FeatureId::new(), 0);
+        world.insert_resource(Selection(vec![
+            Pick::Face(part.id, face),
+            Pick::Edge(part.id, edge),
+            Pick::Plane(PlaneKind::Top),
+            Pick::Part(part.id),
+            Pick::Face(gone, face),
+        ]));
+        let v = get_selection(&mut world).unwrap();
+        let sel = v["selection"].as_array().unwrap();
+        assert_eq!(sel.len(), 5);
+        assert_eq!(sel[0]["kind"], "face");
+        let faces = list_faces(&mut world, None).unwrap();
+        assert!(
+            faces["faces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["ref"] == sel[0]["ref"])
+        );
+        assert!(sel[0]["normal"].is_array() || sel[0]["axis"].is_object());
+        assert_eq!(sel[1]["kind"], "edge");
+        let edges = list_edges(&mut world, None).unwrap();
+        assert!(
+            edges["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["ref"] == sel[1]["ref"])
+        );
+        assert_eq!(sel[2], json!({ "kind": "plane", "name": "Top" }));
+        assert_eq!(
+            (&sel[3]["kind"], &sel[3]["name"]),
+            (&json!("part"), &json!(part.name))
+        );
+        assert_eq!(sel[4]["stale"], true);
+        assert_eq!(sel[4]["why"], "the part is gone");
+        assert_eq!(v["mode"], "view");
+        // Reading it changed nothing.
+        assert_eq!(world.resource::<Selection>().0.len(), 5);
+
+        // The selected edge's ref is what a fillet takes.
+        add_feature(
+            &mut world,
+            &p(json!({ "type": "fillet", "params": {
+                "entities": [{ "Edge": sel[1]["ref"] }], "size": 1.0, "size_expr": "1 mm",
+            } })),
+        )
+        .unwrap();
+        let b = cadrs_core::rebuild::build(&studio_features(&world, None).unwrap());
+        assert!(b.errors.is_empty(), "{:?}", b.errors);
+        assert_eq!(b.parts.len(), 1);
     }
 
     /// insert_instance puts a whole Part Studio (rigid) or one part into the assembly, get_assembly

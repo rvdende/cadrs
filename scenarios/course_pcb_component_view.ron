@@ -1,6 +1,6 @@
 // P3H.4 (PCB4.5, PCB11.7b, PCB11.8): the component view. Compare
 // `v8-component-properties-poster.png`: the component alone on an isometric grid floor with a
-// blue Z axis, the view cube top right, the generic box dark red on top with bright red sides,
+// blue Z axis, the view ball bottom right, the generic box dark red on top with bright red sides,
 // and the Component pane.
 // 01 click the board under Components: its packages are listed; 02 click QFP100_600MIL: the
 //    component view with the Component pane; 03 another package (the 20-pin header); 04 click
