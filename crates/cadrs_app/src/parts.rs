@@ -450,13 +450,15 @@ pub struct SketchRegions {
 }
 
 /// How long a frame waits for a rebuild before showing the old parts and carrying on
-/// (`None`: wait until it is done, for scripted runs).
+/// (`None`: wait until it is done, for scripted runs). Short enough that the frame stays within
+/// a 60 Hz frame's 16.7 ms: at 30 ms every edit whose rebuild took longer (one near the top of
+/// pi7zoll-gehäuse) dropped a frame waiting for it; a cached rebuild still shows in the frame.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct RebuildBudget(pub Option<std::time::Duration>);
 
 impl Default for RebuildBudget {
     fn default() -> Self {
-        Self(Some(std::time::Duration::from_millis(30)))
+        Self(Some(std::time::Duration::from_millis(8)))
     }
 }
 
