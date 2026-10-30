@@ -192,13 +192,31 @@ pub fn move_windows(
         if view_h <= 0.0 {
             continue;
         }
-        let shown = shown_rows(top, view_top, view_h, rows.pitch, rows.total);
-        let page = (view_h / rows.pitch).ceil() as usize;
-        let window = place_window(rows.window.as_ref(), shown, page, rows.total);
-        if rows.window.as_ref() != Some(&window) {
-            rows.window = Some(window);
+        let window = window_at(&rows, top, (view_top, view_h));
+        if rows.window != window {
+            rows.window = window;
         }
     }
+}
+
+/// The window [`move_windows`] places for `rows` whose container's top is at `top` on screen, in
+/// a scroll area showing `view` (its top and height; logical px). For an owner that scrolls its
+/// list itself and builds the rows in the same frame: [`move_windows`] places the window only
+/// after the layout, and a list scrolled far shows a frame of spacers until they're built.
+pub fn window_at(
+    rows: &VirtualRows,
+    top: f32,
+    (view_top, view_h): (f32, f32),
+) -> Option<Range<usize>> {
+    if rows.total < MIN_ROWS {
+        return None;
+    }
+    if view_h <= 0.0 {
+        return rows.window.clone();
+    }
+    let shown = shown_rows(top, view_top, view_h, rows.pitch, rows.total);
+    let page = (view_h / rows.pitch).ceil() as usize;
+    Some(place_window(rows.window.as_ref(), shown, page, rows.total))
 }
 
 #[cfg(test)]

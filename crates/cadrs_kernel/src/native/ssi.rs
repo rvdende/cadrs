@@ -2028,8 +2028,92 @@ pub fn curve_curve(
         if !r.is_empty() {
             return r;
         }
+        // Two segments nowhere within the tolerance of each other: nothing for the general
+        // search to find either (it ran for every pair of a boolean's edges that missed).
+        if let (Curve::Line { o: oa, d: da }, Curve::Line { o: ob, d: db }) = (a, b) {
+            if segment_gap((oa, da, a0, a1), (ob, db, b0, b1)) > 2.0 * tol {
+                return Vec::new();
+            }
+            // Else they come closest at an end of one (parallel, or crossing past an end): the
+            // ends within the tolerance of the other, as the general search ends with (after
+            // halving the pieces about them down to a millionth: milliseconds a pair, for lines
+            // meeting at a shallow angle).
+            if da.norm_squared() > 0.0 && db.norm_squared() > 0.0 {
+                return overlap_ends(a, (a0, a1), b, (b0, b1), tol);
+            }
+        }
     }
     super::ssi_cci::curve_curve(a, a0, a1, b, b0, b1, tol)
+}
+
+/// Where two segments come within `tol` at an end: each one's ends lying on the other, one point to
+/// each place, along `a`.
+fn overlap_ends(a: &Curve, ra: (f64, f64), b: &Curve, rb: (f64, f64), tol: f64) -> Vec<(f64, f64)> {
+    let (ra, rb) = (
+        (ra.0.min(ra.1), ra.0.max(ra.1)),
+        (rb.0.min(rb.1), rb.0.max(rb.1)),
+    );
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for ta in [ra.0, ra.1] {
+        let p = a.point(ta);
+        let tb = b.closest(&p, rb.0, rb.1);
+        if (b.point(tb) - p).norm() <= tol {
+            out.push((ta, tb));
+        }
+    }
+    for tb in [rb.0, rb.1] {
+        let q = b.point(tb);
+        let ta = a.closest(&q, ra.0, ra.1);
+        if (a.point(ta) - q).norm() <= tol {
+            out.push((ta, tb));
+        }
+    }
+    let mut uniq: Vec<(f64, f64, P3)> = Vec::new();
+    for (s, t) in out {
+        let p = a.point(s);
+        if !uniq.iter().any(|(_, _, q)| (q - p).norm() <= tol) {
+            uniq.push((s, t, p));
+        }
+    }
+    uniq.sort_by(|x, y| x.0.total_cmp(&y.0));
+    uniq.into_iter().map(|(s, t, _)| (s, t)).collect()
+}
+
+/// The least distance between two segments, each a line's `o + d·t` over `t0..t1`: their
+/// lines' closest points if within both, else the least from an end of one to the other.
+fn segment_gap(a: (&P3, &V3, f64, f64), b: (&P3, &V3, f64, f64)) -> f64 {
+    let (a, b) = (
+        (a.0, a.1, a.2.min(a.3), a.2.max(a.3)),
+        (b.0, b.1, b.2.min(b.3), b.2.max(b.3)),
+    );
+    let at = |(o, d, _, _): (&P3, &V3, f64, f64), t: f64| o + d * t;
+    // From a point to a segment.
+    let to = |p: P3, (o, d, t0, t1): (&P3, &V3, f64, f64)| {
+        let dd = d.dot(d);
+        let t = if dd > 0.0 {
+            ((p - o).dot(d) / dd).clamp(t0, t1)
+        } else {
+            t0
+        };
+        (p - (o + d * t)).norm()
+    };
+    let mut gap = to(at(a, a.2), b)
+        .min(to(at(a, a.3), b))
+        .min(to(at(b, b.2), a))
+        .min(to(at(b, b.3), a));
+    let (da, db) = (a.1, b.1);
+    let w = a.0 - b.0;
+    let (aa, bb, cc) = (da.dot(da), da.dot(db), db.dot(db));
+    let den = aa * cc - bb * bb;
+    if den > 1e-14 * aa * cc {
+        let (dd, ee) = (da.dot(&w), db.dot(&w));
+        let s = (bb * ee - cc * dd) / den;
+        let t = (aa * ee - bb * dd) / den;
+        if (a.2..=a.3).contains(&s) && (b.2..=b.3).contains(&t) {
+            gap = gap.min((at(a, s) - at(b, t)).norm());
+        }
+    }
+    gap
 }
 
 /// [`curve_curve`] for lines and circles in closed form.
@@ -2210,6 +2294,84 @@ fn curve_curve_closed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lines the closed form misses (parallel, or crossing past an end) give what the general
+    /// search gives: the same places, within the tolerance, and nothing where they're apart;
+    /// besides, the end two segments on one line share (which the search, halving them about
+    /// it, misses: a boolean's split there is no split).
+    #[test]
+    fn lines_missed_in_closed_form_as_the_general_search() {
+        let line = |o: [f64; 3], d: [f64; 3]| Curve::Line {
+            o: P3::new(o[0], o[1], o[2]),
+            d: V3::new(d[0], d[1], d[2]).normalize(),
+        };
+        let tol = 5e-7;
+        let cases = [
+            // One on the other, overlapping over half their lengths.
+            (
+                line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+                line([5.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+            ),
+            // End to end on one line.
+            (
+                line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+                line([10.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 4.0),
+            ),
+            // One starting a hair past the other's end, at a shallow angle.
+            (
+                line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+                line([10.0 + 1e-8, 0.0, 0.0], [1.0, 3.4e-4, 0.0]),
+                (0.0, 5.0),
+            ),
+            // Parallel, apart.
+            (
+                line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+                line([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+            ),
+            // Crossing past an end, apart.
+            (
+                line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                (0.0, 10.0),
+                line([12.0, -1.0, 0.0], [0.0, 1.0, 0.0]),
+                (0.0, 2.0),
+            ),
+        ];
+        for (i, (a, (a0, a1), b, (b0, b1))) in cases.iter().enumerate() {
+            let fast = curve_curve(a, *a0, *a1, b, *b0, *b1, tol);
+            let slow = super::super::ssi_cci::curve_curve(a, *a0, *a1, b, *b0, *b1, tol);
+            let at = |r: &[(f64, f64)]| -> Vec<P3> { r.iter().map(|&(s, _)| a.point(s)).collect() };
+            let (pf, ps) = (at(&fast), at(&slow));
+            // Each place of either near one of the other's (the general search may give a
+            // place twice, a few micrometres apart within an overlap).
+            let shared_end =
+                |&(s, t): &(f64, f64)| [*a0, *a1].contains(&s) && [*b0, *b1].contains(&t);
+            for (p, r) in pf.iter().zip(&fast) {
+                assert!(
+                    ps.iter().any(|q| (p - q).norm() < 1e-2) || shared_end(r),
+                    "case {i}: {fast:?} vs {slow:?}"
+                );
+            }
+            for q in &ps {
+                assert!(
+                    pf.iter().any(|p| (p - q).norm() < 1e-2),
+                    "case {i}: {fast:?} vs {slow:?}"
+                );
+            }
+            for &(s, t) in &fast {
+                assert!(
+                    (a.point(s) - b.point(t)).norm() <= tol,
+                    "case {i}: {fast:?}"
+                );
+            }
+        }
+    }
 
     /// Planes through a cone's apex: tangent along a ruling (one line), through two rulings, and
     /// meeting it at the apex alone, for a cone opening up (45°) and one past 90° (−135°, as an

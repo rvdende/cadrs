@@ -11,6 +11,7 @@ nalgebra = { workspace = true, features = ["serde-serialize"] }
 serde.workspace = true
 uuid.workspace = true
 rayon.workspace = true
+rustc-hash.workspace = true
 spade = "2.15"
 cadrs_gpu = { path = "../cadrs_gpu", optional = true }
 web-time.workspace = true

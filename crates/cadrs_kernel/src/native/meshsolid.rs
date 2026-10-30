@@ -397,7 +397,11 @@ fn split_touching(mut tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[u
     }
     // across[i][k]: the triangle across triangle i's edge k (from corner k).
     let mut across: Vec<[usize; 3]> = vec![[usize::MAX; 3]; tris.len()];
-    for (&(a, b), fwd) in &half {
+    // (The edges in their order, so a mesh wrong at several says the same of it each time.)
+    let mut edges: Vec<(usize, usize)> = half.keys().copied().collect();
+    edges.sort_unstable();
+    for (a, b) in edges {
+        let fwd = &half[&(a, b)];
         let Some(back) = half.get(&(b, a)) else {
             continue;
         };

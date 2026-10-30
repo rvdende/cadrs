@@ -16,7 +16,9 @@
 //! re-upload only the faces an operation changed; the result is deterministic (the same body and
 //! controls give bit-identical meshes on any number of threads).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap as HashMap;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use rayon::prelude::*;
@@ -65,7 +67,7 @@ impl std::hash::Hasher for FxHasher {
     }
 }
 
-type FastSet<T> = HashSet<T, std::hash::BuildHasherDefault<FxHasher>>;
+type FastSet<T> = std::collections::HashSet<T, std::hash::BuildHasherDefault<FxHasher>>;
 
 /// A triangle the refinement still has to check: its corners' ids sorted, its index in the
 /// triangulation, its corners, and which of its sides are on the boundary.
@@ -688,7 +690,7 @@ fn boundary(
 /// degenerate edges (each edge twice in the face) that enclose no area in (u, v) (a sphere read
 /// with its seam's two sides on the same meridian), around which the rest are holes.
 fn surface_loops(body: &Body, f: &Face, loops: &[Vec<BPt>], dom: &Domain) -> Vec<bool> {
-    let mut uses: HashMap<usize, usize> = HashMap::new();
+    let mut uses: HashMap<usize, usize> = HashMap::default();
     for c in f.loops.iter().flatten() {
         *uses.entry(c.edge).or_insert(0) += 1;
     }
@@ -942,7 +944,7 @@ fn seed_grid(
             ((y - oy) / chh).floor() as i64,
         )
     };
-    let mut buckets: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut buckets: HashMap<(i64, i64), Vec<usize>> = HashMap::default();
     let mut always: Vec<usize> = Vec::new();
     for (k, (a, b)) in segs.iter().enumerate() {
         let (c0, c1) = (
@@ -1367,7 +1369,8 @@ pub fn mesh_face_with(
     // Constrained Delaunay in scaled uv, bulk loaded (boundary points at the same (u, v) merged
     // first, so the triangulation's vertices are ours in order).
     let mut verts: Vec<Vx> = Vec::with_capacity(nb + grid.len());
-    let mut seen: HashMap<(u64, u64), usize> = HashMap::with_capacity(nb);
+    let mut seen: HashMap<(u64, u64), usize> =
+        HashMap::with_capacity_and_hasher(nb, Default::default());
     let mut handle: Vec<usize> = Vec::with_capacity(nb);
     for b in &pts {
         let v = vx(&dom, b.uv, Some(b.p), scale);
@@ -1390,7 +1393,7 @@ pub fn mesh_face_with(
             .filter(|v| v.at.x.is_finite() && v.at.y.is_finite()),
     );
     let mut cons: Vec<[usize; 2]> = Vec::new();
-    let mut count: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut count: HashMap<(usize, usize), usize> = HashMap::default();
     for &(a, b) in &loops {
         for i in a..b {
             let j = if i + 1 == b { a } else { i + 1 };
@@ -1683,7 +1686,7 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
     let sign = if f.sense { 1.0 } else { -1.0 };
     let mut out = FaceMesh::default();
     let mut map: Vec<u32> = vec![u32::MAX; cdt.num_vertices()];
-    let mut weld: HashMap<[u64; 3], u32> = HashMap::new();
+    let mut weld: HashMap<[u64; 3], u32> = HashMap::default();
     let mut index = |hi: usize| {
         if map[hi] == u32::MAX {
             let d = *cdt.vertex(FixedVertexHandle::from_index(hi)).data();
@@ -1783,7 +1786,7 @@ fn chain(cdt: &Cdt, a: usize, b: usize) -> Option<Vec<usize>> {
 /// interior point by a pole is joined to two of the pole's (u, v) copies with a point between,
 /// the welded pole leaves such a pair (a fold of no area pinching the mesh there).
 fn drop_pillows(tris: &mut Vec<[u32; 3]>) {
-    let mut by: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
+    let mut by: HashMap<[u32; 3], Vec<usize>> = HashMap::default();
     for (k, t) in tris.iter().enumerate() {
         let mut key = *t;
         key.sort_unstable();
@@ -1791,7 +1794,7 @@ fn drop_pillows(tris: &mut Vec<[u32; 3]>) {
     }
     // A triangle's orientation: whether its corners in order are an even rotation of sorted.
     let even = |t: &[u32; 3]| (t[0] < t[1]) as u8 + (t[1] < t[2]) as u8 + (t[2] < t[0]) as u8 == 2;
-    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::default();
     for t in tris.iter() {
         for i in 0..3 {
             *uses
@@ -1838,14 +1841,115 @@ pub fn mesh(body: &Body, p: &TessParams) -> Result<(Vec<FaceMesh>, EdgeSamples)>
     Ok(mesh_all(body, p))
 }
 
+/// The boundary points (edge samples) up to which a plane is meshed without [`MeshCache`].
+const PLANE_UNKEPT: usize = 16;
+
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
     let faces: Vec<FaceMesh> = body
         .faces
         .par_iter()
-        .map(|f| mesh_face_with(body, f, &es, p))
+        .map(|f| {
+            // (A plane with few boundary points meshes in about the time its key takes: a box's
+            // side, mostly new. One with many is kept too: a box's face round a few hundred
+            // holes' rounded edges took 9 ms each time a feature elsewhere changed the body.)
+            let few = || {
+                f.loops
+                    .iter()
+                    .flatten()
+                    .map(|c| es[c.edge].1.len())
+                    .sum::<usize>()
+                    <= PLANE_UNKEPT
+            };
+            if matches!(f.surf, Surface::Plane { .. }) && few() {
+                return mesh_face_with(body, f, &es, p);
+            }
+            let key = face_mesh_key(body, f, &es, p);
+            let kept = mesh_cache().get(key);
+            if let Some(m) = kept {
+                return (*m).clone();
+            }
+            let m = mesh_face_with(body, f, &es, p);
+            mesh_cache().insert(key, std::sync::Arc::new(m.clone()));
+            m
+        })
         .collect();
     (faces, es)
+}
+
+/// What a face's mesh ([`mesh_face_with`]) is made from, hashed to 128 bits
+/// ([`super::fingerprint`]): the controls, the face's surface and sense, and each coedge's
+/// p-curve with its edge's range, tolerance, samples and whether it is a point (and which
+/// coedges share an edge: a seam's two sides).
+fn face_mesh_key(body: &Body, f: &Face, es: &[(Vec<f64>, Vec<P3>)], p: &TessParams) -> u128 {
+    use std::hash::Hasher;
+    let mut h = super::fingerprint::Key128::new();
+    h.f64s(&[p.chord, p.angle, p.max_edge, p.max_aspect]);
+    h.surface(&f.surf);
+    h.write_u8(f.sense as u8);
+    let mut first: HashMap<usize, usize> = HashMap::default();
+    for l in &f.loops {
+        h.write_usize(l.len());
+        for c in l {
+            let e = &body.edges[c.edge];
+            let n = first.len();
+            h.write_usize(*first.entry(c.edge).or_insert(n));
+            h.write_u8(c.fwd as u8 | (e.degenerate as u8) << 1);
+            h.f64s(&e.t);
+            h.f64s(&[e.tol]);
+            h.curve(&c.pc);
+            let (ts, ps) = &es[c.edge];
+            h.write_usize(ts.len());
+            h.f64s(ts);
+            for q in ps {
+                h.f64s(q.coords.as_slice());
+            }
+        }
+    }
+    h.key()
+}
+
+/// The faces' meshes last made, by [`face_mesh_key`]: a body a feature changes keeps most of
+/// its faces as they were, and each body a rebuild makes is meshed whole for display. Two
+/// generations of at most [`Self::KEPT`] bytes each, a hit in the older moved to the newer.
+#[derive(Default)]
+struct MeshCache {
+    new: HashMap<u128, std::sync::Arc<FaceMesh>>,
+    new_bytes: usize,
+    old: HashMap<u128, std::sync::Arc<FaceMesh>>,
+}
+
+impl MeshCache {
+    const KEPT: usize = 32 << 20;
+
+    fn get(&mut self, k: u128) -> Option<std::sync::Arc<FaceMesh>> {
+        if let Some(m) = self.new.get(&k) {
+            return Some(m.clone());
+        }
+        let m = self.old.remove(&k)?;
+        self.insert(k, m.clone());
+        Some(m)
+    }
+
+    fn insert(&mut self, k: u128, m: std::sync::Arc<FaceMesh>) {
+        let bytes = 64
+            + m.positions.len() * size_of::<P3>()
+            + m.normals.len() * size_of::<V3>()
+            + m.uvs.len() * size_of::<P2>()
+            + m.indices.len() * size_of::<[u32; 3]>();
+        if self.new_bytes + bytes > Self::KEPT {
+            self.old = std::mem::take(&mut self.new);
+            self.new_bytes = 0;
+        }
+        self.new_bytes += bytes;
+        self.new.insert(k, m);
+    }
+}
+
+fn mesh_cache() -> std::sync::MutexGuard<'static, MeshCache> {
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<MeshCache>> =
+        std::sync::LazyLock::new(Default::default);
+    CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl NativeKernel {
@@ -1923,9 +2027,9 @@ pub fn check_tri_mesh(m: &TriMesh) -> MeshCheck {
 
 /// [`MeshCheck`] of triangles given by their corners.
 pub fn check_triangles(tris: impl IntoIterator<Item = [P3; 3]>) -> MeshCheck {
-    let mut ids: HashMap<[u64; 3], usize> = HashMap::new();
+    let mut ids: HashMap<[u64; 3], usize> = HashMap::default();
     // Per side (lower id, higher id): uses along it and against it.
-    let mut sides: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
+    let mut sides: HashMap<(usize, usize), (u32, u32)> = HashMap::default();
     for t in tris {
         let v = t.map(|p| {
             let n = ids.len();

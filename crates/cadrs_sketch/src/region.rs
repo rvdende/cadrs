@@ -736,24 +736,33 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
 /// and the dimension knockouts all ask for the same sketch's regions in a frame, and finding
 /// them in a 500-entity sketch takes a few milliseconds.
 pub fn regions_shared(s: &Sketch) -> std::sync::Arc<Vec<Region>> {
+    regions_timed(s).0
+}
+
+/// [`regions_shared`], with how long finding them took (when they were found: a sketch's time
+/// in the feature list, found again for it before). Remembered for as many sketches as a big
+/// Part Studio's rebuild asks for in turn (its extrudes', then their times).
+pub fn regions_timed(s: &Sketch) -> (std::sync::Arc<Vec<Region>>, std::time::Duration) {
     use std::sync::{Arc, Mutex};
-    type Memo = Vec<(Sketch, Arc<Vec<Region>>)>;
+    type Memo = Vec<(Sketch, Arc<Vec<Region>>, std::time::Duration)>;
     static MEMO: Mutex<Memo> = Mutex::new(Vec::new());
-    const KEEP: usize = 6;
+    const KEEP: usize = 64;
     if let Ok(mut m) = MEMO.lock()
-        && let Some(i) = m.iter().position(|(k, _)| k == s)
+        && let Some(i) = m.iter().position(|(k, ..)| k == s)
     {
         let hit = m.remove(i);
-        let r = hit.1.clone();
+        let r = (hit.1.clone(), hit.2);
         m.insert(0, hit);
         return r;
     }
+    let t0 = web_time::Instant::now();
     let r = Arc::new(regions(s));
+    let took = t0.elapsed();
     if let Ok(mut m) = MEMO.lock() {
-        m.insert(0, (s.clone(), r.clone()));
+        m.insert(0, (s.clone(), r.clone(), took));
         m.truncate(KEEP);
     }
-    r
+    (r, took)
 }
 
 pub fn regions(s: &Sketch) -> Vec<Region> {

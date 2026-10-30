@@ -172,6 +172,27 @@ fn beyond(b: &Body, e: usize, fi: usize) -> Option<usize> {
     Some(if a == fi { o } else { a })
 }
 
+/// [`beyond`], with the edges' sides as kept for `b` ([`BodyKept`]).
+fn beyond_kept(b: &Body, kept: Option<&BodyKept>, e: usize, fi: usize) -> Option<usize> {
+    let Some(k) = kept else {
+        return beyond(b, e, fi);
+    };
+    let all = k.sides.get_or_init(|| {
+        // As [`super::blend::edge_sides`] finds them: in face, loop and coedge order.
+        let mut uses: Vec<Vec<(usize, bool)>> = vec![Vec::new(); b.edges.len()];
+        for (fi, f) in b.faces.iter().enumerate() {
+            for c in f.loops.iter().flatten() {
+                uses[c.edge].push((fi, c.fwd));
+            }
+        }
+        uses.into_iter()
+            .map(|u| (u.len() == 2 && u[0].0 != u[1].0).then(|| [u[0], u[1]]))
+            .collect()
+    });
+    let [(a, _), (o, _)] = (*all.get(e)?)?;
+    Some(if a == fi { o } else { a })
+}
+
 /// The coedge of edge `e` in face `fi` (the first, for a seam).
 fn coedge_of(b: &Body, fi: usize, e: usize) -> Option<&Coedge> {
     b.faces[fi].loops.iter().flatten().find(|c| c.edge == e)
@@ -1428,8 +1449,11 @@ fn welds(b: &Body, efs: &mut [EdgeFillet]) -> Result<Vec<Weld>> {
                     None
                 })
             };
-            let (la, lc) = (law(a, wa), law(c, wc));
-            let (Some((law_a, end_a, tm_a)), Some((law_c, end_c, tm_c))) = (la, lc) else {
+            // (The second only when the first welds: both must.)
+            let Some((law_a, end_a, tm_a)) = law(a, wa) else {
+                continue;
+            };
+            let Some((law_c, end_c, tm_c)) = law(c, wc) else {
                 continue;
             };
             // Welded only where the welded stretch's contacts (where the strips meet) are on the
@@ -4561,6 +4585,7 @@ fn first_roll(
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     let span = hi - lo;
     let whole = (b.edges[ef.e].t[1] - b.edges[ef.e].t[0]).abs();
+    let kept = kept_for(b);
     let mut best: Option<(f64, (usize, usize, Ball, f64))> = None;
     for k in 0..2 {
         let fi = ef.faces[k];
@@ -4569,7 +4594,7 @@ fn first_roll(
             if c.edge == ef.e || x.degenerate || is_seam(b, fi, c.edge) {
                 continue;
             }
-            let Some(into) = beyond(b, c.edge, fi) else {
+            let Some(into) = beyond_kept(b, kept.as_deref(), c.edge, fi) else {
                 continue;
             };
             // Two planes meeting at an angle, or faces meeting sharply all along their edge: no
@@ -4581,7 +4606,7 @@ fn first_roll(
                 if normal(into).dot(&normal(fi)) <= 1.0 - tol::ANGULAR_POINT {
                     continue;
                 }
-            } else if sharp_all_along(b, fi, into, c) {
+            } else if sharp_kept(b, kept.as_deref(), fi, into, c) {
                 continue;
             }
             let bd = Boundary {
@@ -4650,7 +4675,7 @@ fn first_roll(
                 c.edge != ef.e
                     && !b.edges[c.edge].degenerate
                     && !is_seam(b, fi, c.edge)
-                    && super::blend::smooth_within(b, c.edge, crate::TANGENT_ANGLE)
+                    && smooth_kept(b, kept.as_deref(), c.edge)
             })
         })
     };
@@ -4658,6 +4683,28 @@ fn first_roll(
         return Ok(traced_roll(b, ef, from, t0, t1));
     }
     Ok(best.map(|x| x.1))
+}
+
+/// [`sharp_all_along`], as kept for `b` ([`BodyKept`]).
+fn sharp_kept(b: &Body, kept: Option<&BodyKept>, fi: usize, into: usize, c: &Coedge) -> bool {
+    let Some(k) = kept else {
+        return sharp_all_along(b, fi, into, c);
+    };
+    let key = (fi, into, c.edge, c.fwd);
+    let known = k
+        .sharp
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .copied();
+    known.unwrap_or_else(|| {
+        let r = sharp_all_along(b, fi, into, c);
+        k.sharp
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, r);
+        r
+    })
 }
 
 /// Whether faces `fi` and `into` meet at their edge (coedge `c` of `fi`) at more than 10°
@@ -4697,11 +4744,19 @@ fn traced_roll(
     let tests = ef.faces.map(|fi| FaceTest::of(b, fi));
     let on = |ball: &Ball, k: usize| tests[k].holds(b, &ball.q[k].p);
     let (mut ta, mut ba) = (t0, *from);
+    // Each ball's tests as made (the ball a step ends at starts the next).
+    let mut on_a: [Option<bool>; 2] = [None; 2];
     for i in 1..=n {
         let tb = t0 + (t1 - t0) * i as f64 / n as f64;
         let bb = ef.ball(b, tb, Some([ba.q[0].uv, ba.q[1].uv]))?;
-        let Some(k) = (0..2).find(|&k| on(&ba, k) && !on(&bb, k)) else {
+        let mut on_b: [Option<bool>; 2] = [None; 2];
+        let left = (0..2).find(|&k| {
+            *on_a[k].get_or_insert_with(|| on(&ba, k))
+                && !*on_b[k].get_or_insert_with(|| on(&bb, k))
+        });
+        let Some(k) = left else {
             (ta, ba) = (tb, bb);
+            on_a = on_b;
             continue;
         };
         // Bisected to where the contact leaves.
@@ -9294,34 +9349,119 @@ fn point_in_face(b: &Body, fi: usize, p: &P3) -> bool {
 /// a face bounded by a spline's hundred spans).
 struct FaceTest {
     fi: usize,
-    polys: std::sync::Arc<Vec<Vec<P2>>>,
+    polys: FacePolys,
+    chart: Chart,
     slack: f64,
 }
 
-thread_local! {
-    /// The faces' polygons of the bodies the [`local_blend`]s on this thread are blending, the
-    /// innermost last (a thread waiting in one may take up another part's): made once per face
-    /// rather than per point tested (a fifth of a fillet's time).
-    static FACE_POLYS: std::cell::RefCell<Vec<(*const Body, HashMap<usize, FacePolys>)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+/// A face's [`near_chart`] samples: 9 a coedge, each edge point with its p-curve's (u, v).
+type Chart = std::sync::Arc<Vec<(P3, P2)>>;
+
+fn chart_of(b: &Body, f: &Face) -> Chart {
+    let mut out = Vec::new();
+    for c in f.loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        for i in 0..=8 {
+            let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0;
+            let q = c.pc.point(t);
+            out.push((e.point(t), P2::new(q.x, q.y)));
+        }
+    }
+    std::sync::Arc::new(out)
 }
 
-type FacePolys = std::sync::Arc<Vec<Vec<P2>>>;
+/// [`near_chart`] from its samples ([`chart_of`]): the same (u, v).
+fn near_in(chart: &[(P3, P2)], p: &P3) -> Option<P2> {
+    let mut best: Option<(f64, P2)> = None;
+    for (x, uv) in chart {
+        let d = (x - p).norm();
+        if best.is_none_or(|b| d < b.0) {
+            best = Some((d, *uv));
+        }
+    }
+    best.map(|x| x.1)
+}
 
-/// [`FACE_POLYS`] kept for a body while it lives.
-struct PolysScope;
+/// A face's polygons and their boxes ([`super::classify::poly_boxes`]), which a point well
+/// outside them is told by at once (and a long polygon's sides by rows).
+type FacePolys = std::sync::Arc<(Vec<Vec<P2>>, super::classify::PolyBoxes)>;
 
-impl PolysScope {
-    /// (`b` is borrowed for as long as it lives: nothing else is made at its address.)
-    fn enter(b: &Body) -> Self {
-        FACE_POLYS.with_borrow_mut(|s| s.push((b as *const Body, HashMap::new())));
-        Self
+/// What the bodies [`local_blend`]s are blending are asked over and over (by address, while
+/// each is borrowed: [`PolysScope`]), on any thread (a blend plans its edges side by side): each
+/// face's polygons, made once rather than per point tested (a fifth of a fillet's time); whether
+/// each edge is smooth ([`super::blend::smooth_within`] at [`crate::TANGENT_ANGLE`]); whether two
+/// faces meet sharply all along an edge ([`sharp_all_along`]), by (face, face beyond, edge,
+/// coedge direction). Every strip of a blend asks them of its faces' edges.
+struct BodyKept {
+    polys: Vec<std::sync::OnceLock<FacePolys>>,
+    charts: Vec<std::sync::OnceLock<Chart>>,
+    smooth: Vec<std::sync::OnceLock<bool>>,
+    sharp: std::sync::Mutex<HashMap<(usize, usize, usize, bool), bool>>,
+    /// Each edge's two faces ([`sides`]; `None` where it hasn't two distinct ones), found in
+    /// one pass over the coedges rather than one per edge asked about.
+    sides: std::sync::OnceLock<Vec<Option<Sides>>>,
+}
+
+/// An edge's two faces, with its coedges' directions in them ([`super::blend::edge_sides`]).
+type Sides = [(usize, bool); 2];
+type KeptPolys = std::sync::Arc<BodyKept>;
+static FACE_POLYS: std::sync::Mutex<Vec<(usize, KeptPolys)>> = std::sync::Mutex::new(Vec::new());
+
+/// [`FACE_POLYS`] kept for a body while it is borrowed (so nothing else is made at its
+/// address).
+struct PolysScope<'a> {
+    at: usize,
+    _body: std::marker::PhantomData<&'a Body>,
+}
+
+impl<'a> PolysScope<'a> {
+    fn enter(b: &'a Body) -> Self {
+        let at = std::ptr::from_ref(b) as usize;
+        let kept = BodyKept {
+            polys: (0..b.faces.len()).map(|_| Default::default()).collect(),
+            charts: (0..b.faces.len()).map(|_| Default::default()).collect(),
+            smooth: (0..b.edges.len()).map(|_| Default::default()).collect(),
+            sharp: Default::default(),
+            sides: Default::default(),
+        };
+        kept_polys().push((at, std::sync::Arc::new(kept)));
+        Self {
+            at,
+            _body: std::marker::PhantomData,
+        }
     }
 }
 
-impl Drop for PolysScope {
+impl Drop for PolysScope<'_> {
     fn drop(&mut self) {
-        FACE_POLYS.with_borrow_mut(|s| s.pop());
+        // (Two scopes of the same body, on two threads, keep the same polygons: either goes.)
+        let mut s = kept_polys();
+        if let Some(i) = s.iter().rposition(|(at, _)| *at == self.at) {
+            s.remove(i);
+        }
+    }
+}
+
+fn kept_polys() -> std::sync::MutexGuard<'static, Vec<(usize, KeptPolys)>> {
+    FACE_POLYS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What is kept for body `b` while a blend borrows it ([`BodyKept`]), if one does.
+fn kept_for(b: &Body) -> Option<KeptPolys> {
+    let at = std::ptr::from_ref(b) as usize;
+    kept_polys()
+        .iter()
+        .rev()
+        .find(|(x, _)| *x == at)
+        .map(|(_, k)| k.clone())
+}
+
+/// [`super::blend::smooth_within`] at [`crate::TANGENT_ANGLE`], as kept for `b` ([`BodyKept`]).
+fn smooth_kept(b: &Body, kept: Option<&BodyKept>, e: usize) -> bool {
+    let find = || super::blend::smooth_within(b, e, crate::TANGENT_ANGLE);
+    match kept.and_then(|k| k.smooth.get(e)) {
+        Some(cell) => *cell.get_or_init(find),
+        None => find(),
     }
 }
 
@@ -9334,30 +9474,41 @@ impl FaceTest {
             .flatten()
             .map(|c| b.edges[c.edge].tol)
             .fold(1e3 * tol::POINT, f64::max);
-        let make = || std::sync::Arc::new(super::classify::face_polygons(b, f));
-        let polys = FACE_POLYS
-            .with_borrow_mut(|s| match s.last_mut() {
-                Some((at, kept)) if std::ptr::eq(*at, b) => {
-                    Some(kept.entry(fi).or_insert_with(make).clone())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(make);
-        Self { fi, polys, slack }
+        let make = || {
+            let polys = super::classify::face_polygons(b, f);
+            let boxes = super::classify::poly_boxes(&polys, &f.surf);
+            std::sync::Arc::new((polys, boxes))
+        };
+        let kept = kept_for(b);
+        let polys = match kept.as_ref().and_then(|k| k.polys.get(fi)) {
+            Some(cell) => cell.get_or_init(make).clone(),
+            None => make(),
+        };
+        let chart = match kept.as_ref().and_then(|k| k.charts.get(fi)) {
+            Some(cell) => cell.get_or_init(|| chart_of(b, f)).clone(),
+            None => chart_of(b, f),
+        };
+        Self {
+            fi,
+            polys,
+            chart,
+            slack,
+        }
     }
 
     /// [`point_in_face`].
     fn holds(&self, b: &Body, p: &P3) -> bool {
         let f = &b.faces[self.fi];
-        let near = near_chart(b, f, p);
+        let near = near_in(&self.chart, p);
         let (u, v) = f.surf.project(p, near.map(|q| (q.x, q.y)));
         if (f.surf.eval(u, v) - p).norm() > self.slack {
             return false;
         }
-        super::classify::periodic_candidates(&f.surf, u, v, &self.polys)
+        let (polys, boxes) = &*self.polys;
+        super::classify::periodic_candidates_boxed(&f.surf, u, v, boxes)
             .into_iter()
             .any(|uv| {
-                super::classify::in_face(&self.polys, &f.surf, uv, tol::ROUNDOFF)
+                super::classify::in_face_boxed(polys, boxes, &f.surf, uv, tol::ROUNDOFF)
                     != super::classify::InFace::Outside
             })
     }
