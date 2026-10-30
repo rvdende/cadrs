@@ -993,7 +993,8 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
 /// App menu › Full rebuild: reloads the document from the store (a re-import made while it
 /// was open comes in; edits not yet saved are saved first, unless the stored file changed
 /// elsewhere, which then wins), empties the rebuild cache and stops restoring saved rebuild
-/// snapshots, so the open tab is rebuilt from scratch (other tabs when next shown).
+/// snapshots, so the open tab is rebuilt from scratch (an Assembly's source Part Studios too;
+/// other tabs when next shown).
 pub(crate) fn full_rebuild(world: &mut World) {
     cadrs_core::rebuild::clear_cache();
     let stored = world
@@ -1042,6 +1043,9 @@ pub(crate) fn full_rebuild(world: &mut World) {
     world
         .resource_mut::<crate::parts::PartCache>()
         .rebuild_again();
+    if let Some(mut asm) = world.get_resource_mut::<crate::assembly::AssemblyParts>() {
+        asm.rebuild_again();
+    }
 }
 
 /// `paste`: the name of a tab copied with "Copy to clipboard", offered as "Paste …".
