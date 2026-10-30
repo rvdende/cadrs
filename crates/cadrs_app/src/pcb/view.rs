@@ -1193,6 +1193,11 @@ pub fn orbit_about_selection(
     ui: Res<PcbUi>,
     mut view: ResMut<ViewportView>,
 ) {
+    // (Zoom to selection's pivot, framed in this Part Studio or Assembly, stays: issue #97; a
+    // tab switch drops it.)
+    if view.framed_pivot {
+        return;
+    }
     let mut pivot = None;
     if *kind == ActiveKind::PcbStudio && !scene.is_component_view() && !ui.selected.is_empty() {
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));

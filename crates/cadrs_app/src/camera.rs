@@ -6,8 +6,8 @@
 //! logical pixel).
 //!
 //! P3E.3a (TD6.5): **Perspective view** keeps the same description. The eye sits
-//! [`FOCAL_PX`]` × scale` mm in front of the focus, so the focus plane still shows `scale` mm per
-//! pixel: unprojecting onto it, panning and zooming about the cursor work as in orthographic,
+//! `focal × scale` mm in front of the focus (the lens's focal length, [`FOCAL_PX`] but in walk
+//! mode), so the focus plane still shows `scale` mm per pixel: unprojecting onto it, panning and zooming about the cursor work as in orthographic,
 //! and nearer points are drawn larger ([`ViewState::project`]). Pick rays start at the eye and
 //! spread ([`ViewState::ray`]). A view also carries its tab's [`RenderMode`]. Standard views have no roll (Z up); a right-drag rotates freely about the screen
 //! axes, as Onshape does by default, and Alt+right-drag turns without roll.
@@ -182,6 +182,9 @@ pub struct ViewState {
     pub scale: f32,
     /// Perspective view (P3E.3a); orthographic when false (the default).
     pub perspective: bool,
+    /// In perspective, the lens's focal length (logical px): [`FOCAL_PX`], but as walk mode's
+    /// wheel sets it (issue #97, [`Self::with_focal`]).
+    pub focal: f32,
     /// How the parts are drawn (P3E.3a).
     pub render: RenderMode,
 }
@@ -202,6 +205,7 @@ impl ViewState {
             focus: Vec3::ZERO,
             scale: DEFAULT_SCALE,
             perspective: false,
+            focal: FOCAL_PX,
             render: RenderMode::Shaded,
         }
     }
@@ -290,7 +294,17 @@ impl ViewState {
 
     /// In perspective, how far the eye is in front of the focus (mm).
     pub fn eye_distance(&self) -> f32 {
-        FOCAL_PX * self.scale
+        self.focal * self.scale
+    }
+
+    /// The same eye and focus seen through a lens of `focal` logical px (walk mode's wheel,
+    /// issue #97): the focus plane's scale follows, a longer lens showing it larger.
+    pub fn with_focal(self, focal: f32) -> Self {
+        Self {
+            scale: (self.scale * self.focal / focal).clamp(MIN_SCALE, MAX_SCALE),
+            focal,
+            ..self
+        }
     }
 
     pub fn camera_position(&self) -> Vec3 {
@@ -355,6 +369,22 @@ impl ViewState {
         self.azimuth = wrap_degrees(self.azimuth - delta_px.x * ORBIT_DEG_PER_PX);
         self.elevation = (self.elevation + delta_px.y * ORBIT_DEG_PER_PX).clamp(-90.0, 90.0);
         self.roll = 0.0;
+    }
+
+    /// [`Self::rotate_by`] keeping the camera up (issue #97): `yaw` about world Z, `pitch` a tilt
+    /// (to straight above or below at most), no roll, as [`Self::orbit_turntable`] turns.
+    pub fn rotate_upright(&mut self, yaw: f32, pitch: f32) {
+        self.azimuth = wrap_degrees(self.azimuth - yaw);
+        self.elevation = (self.elevation + pitch).clamp(-90.0, 90.0);
+        self.roll = 0.0;
+    }
+
+    /// The opposite view kept upright (Numpad 9 keeping the camera up, issue #97): half a turn
+    /// about Z and the other side's elevation (the top's opposite is the bottom).
+    pub fn upright_opposite(mut self) -> Self {
+        self.rotate_upright(180.0, 0.0);
+        self.elevation = -self.elevation;
+        self
     }
 
     /// Turns the view with `turn` (one of the orbits above) about the world point `pivot`
@@ -521,6 +551,7 @@ impl ViewState {
             focus: self.focus.lerp(to.focus, t),
             scale,
             perspective: to.perspective,
+            focal: self.focal * (to.focal / self.focal).powf(t),
             render: to.render,
             ..self.with_rotation(turn.part(t) * self.rotation())
         }
@@ -534,6 +565,7 @@ impl ViewState {
             && self.focus.distance(other.focus) < 1e-3
             && (self.scale / other.scale - 1.0).abs() < 1e-4
             && self.perspective == other.perspective
+            && (self.focal / other.focal - 1.0).abs() < 1e-4
             && self.render == other.render
     }
 
@@ -551,7 +583,7 @@ impl ViewState {
         }
         Self {
             focus: eye - self.back() * d,
-            scale: (d / FOCAL_PX).clamp(MIN_SCALE, MAX_SCALE),
+            scale: (d / self.focal).clamp(MIN_SCALE, MAX_SCALE),
             ..self
         }
     }
@@ -794,6 +826,21 @@ mod tests {
                 v.focus
             );
         }
+    }
+
+    #[test]
+    fn turning_upright_leaves_no_roll() {
+        // Issue #97: from a rolled view, an upright turn levels it: no roll, Z up on screen.
+        let mut v = ViewState::standard(StandardView::Default);
+        v.rotate_screen(25.0, 40.0);
+        v.roll = 33.0;
+        v.rotate_upright(30.0, 15.0);
+        assert_eq!(v.roll, 0.0);
+        assert!(v.right().z.abs() < 1e-5, "{}", v.right());
+        assert!(v.up().z >= 0.0);
+        // Tilting stops at straight above.
+        v.rotate_upright(0.0, 200.0);
+        assert_eq!(v.elevation, 90.0);
     }
 
     #[test]

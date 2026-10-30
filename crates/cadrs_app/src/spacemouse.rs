@@ -192,10 +192,18 @@ fn apply_sample(view: &mut ViewportView, sample: MotionSample) {
     let screen_up = view.view.up();
     let screen_depth = view.view.back();
     let pivot = view.pivot;
+    // Keeping the camera up (issue #97): no roll, and the turn about the vertical, not the
+    // screen's up.
+    let keep_up = view.keep_up;
     let turn = |state: &mut ViewState| {
         state.rotate_model_about(screen_right, rx * rotation);
-        state.rotate_model_about(screen_depth, ry * rotation);
-        state.rotate_model_about(screen_up, -rz * rotation);
+        if keep_up {
+            state.rotate_model_about(Vec3::Z, -rz * rotation);
+            state.roll = 0.0;
+        } else {
+            state.rotate_model_about(screen_depth, ry * rotation);
+            state.rotate_model_about(screen_up, -rz * rotation);
+        }
     };
     if let Some(pivot) = pivot {
         view.view.orbit_about(pivot, turn);

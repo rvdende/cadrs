@@ -135,6 +135,7 @@ pub mod view_cube;
 pub mod view_options;
 pub mod viewport;
 pub mod viewport_menu;
+pub mod walk;
 pub mod window_title;
 pub mod workspaces;
 
@@ -882,7 +883,7 @@ impl Plugin for CadrsAppPlugin {
                 shortcuts::ShortcutsPlugin,
                 script::ScriptPlugin,
             ))
-            .add_plugins(spacemouse::SpaceMousePlugin)
+            .add_plugins((spacemouse::SpaceMousePlugin, walk::WalkPlugin))
             .add_plugins(top_bar::TopBarPlugin)
             .add_plugins(part_folders::PartFoldersPlugin)
             .add_plugins((

@@ -434,6 +434,7 @@ pub(super) fn view_state(v: &View) -> ViewState {
         focus: Vec3::from_array(v.focus),
         scale: v.scale,
         perspective: v.perspective,
+        focal: crate::camera::FOCAL_PX,
         render: RenderMode::ALL
             .get(v.render as usize)
             .copied()
