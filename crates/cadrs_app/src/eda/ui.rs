@@ -366,7 +366,7 @@ pub struct ToolStrip(pub Mode);
 pub type StripSpec = &'static [Option<(&'static str, &'static str, &'static str, &'static str)>];
 
 /// While a tool strip is on the view's right edge, the panel strip (`crate::document`) sits at
-/// the bottom of that edge, above the view tools, so the two make one column.
+/// the bottom of that edge, above the readouts, so the two make one column.
 fn lower_panel_strip(world: &mut World) {
     let mut q = world.query::<&ToolStrip>();
     let low = q.iter(world).next().is_some();

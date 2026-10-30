@@ -14,7 +14,7 @@
 //! - **Propagation.** [`refresh`] evaluates the variables top to bottom and writes the value of
 //!   every expression that names one, re-solving the sketches whose dimensions changed. The
 //!   command layer runs it after each edit of a Part Studio ([`crate::commands::refresh_studio`]),
-//!   so changing `#piston_d` in the Variable table is one undo step that updates every use.
+//!   so changing `#piston_d` in its Variable dialog is one undo step that updates every use.
 //! - **Uses.** [`uses`] lists the variables a feature's expressions name (the feature list's
 //!   `:variable` filter, Show dependencies).
 //! - **Suppress by variable** (IR5.5). A feature can carry a [`SuppressByVariable`]: an

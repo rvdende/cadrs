@@ -6,7 +6,7 @@
 // 02 chosen: the Repair panel shows the Part Studio at that regeneration ("Viewing Main ::
 //    Conrod :: Insert : Fillet 1": the three notches and the slot), beside the main view,
 //    which is split in two; Extrude 4's dialog is open with "Missing Face of Sketch 2"; the
-//    right strip has the Repair icon (IR3.4, IR3.8).
+//    tab bar's view tools have the Repair icon (IR3.4, IR3.8).
 // 03 the pointer on "Missing Face of Sketch 2": the notch it was, outlined in yellow in the
 //    Repair panel (IR3.6); the item's Replace reference icon shows.
 // 03b right-click the missing item: "Edit healthy moment of Extrude 4…" there too (IR3.3);
@@ -18,7 +18,7 @@
 // 07 Isometric.
 // 08 Zoom to fit.
 // 09 the Repair panel's own view cube, its Top face clicked: the Repair view from above.
-// 10 the right strip's Repair icon closes the panel; the main view has the whole width again.
+// 10 the tab bar's Repair icon closes the panel; the main view has the whole width again.
 Scenario(
     start: Some("document"),
     steps: [

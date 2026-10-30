@@ -446,7 +446,7 @@ impl Plugin for FlatUiPlugin {
 struct FlatSession {
     sketch: FeatureId,
     show_constraints: bool,
-    panel: crate::appearance::SidePanel,
+    panel: crate::side_panel::SidePanel,
     /// When the user last tried to close the panel (the note shows a few seconds).
     note_since: Option<f32>,
 }
@@ -469,7 +469,7 @@ fn keep_flat_view(
     doc: Option<Res<ActiveDocument>>,
     kind: Res<crate::viewport::ActiveKind>,
     time: Res<Time>,
-    mut open: ResMut<crate::appearance::SidePanel>,
+    mut open: ResMut<crate::side_panel::SidePanel>,
     mut table: ResMut<crate::sheetmetal_table::SmTable>,
     mut settings: ResMut<crate::sketch::SketchViewSettings>,
     theme: Res<Theme>,
@@ -477,7 +477,7 @@ fn keep_flat_view(
     q_note: Query<(Entity, &ChildOf), With<FlatSketchNote>>,
     mut commands: Commands,
 ) {
-    use crate::appearance::SidePanel;
+    use crate::side_panel::SidePanel;
     let target = session.as_ref().and_then(|s| {
         let features = doc.as_ref()?.active_element()?.features();
         sketch_target(features, s.feature).map(|t| (s.feature, t))

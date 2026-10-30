@@ -101,6 +101,7 @@ pub mod sheetmetal_table;
 pub mod sheetmetal_tools_ui;
 pub mod sheetmetal_ui;
 pub mod shortcuts;
+pub mod side_panel;
 pub mod simulation_ui;
 pub mod sketch;
 pub mod sketch_constrain;
@@ -751,6 +752,7 @@ impl Plugin for CadrsAppPlugin {
             ))
             .add_plugins((
                 appearance::AppearancePlugin,
+                side_panel::SidePanelPlugin,
                 material_dialog::MaterialDialogPlugin,
                 applied::AppliedPlugin,
                 sheetmetal_features_ui::SheetMetalFeaturesPlugin,

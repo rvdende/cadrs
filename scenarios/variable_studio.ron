@@ -5,8 +5,7 @@
 // 02 the help page's table top: #length = 1200 mm, #width = #length / 2 (= 600 mm), #legs = 4
 //    (Number), a description; #overhang = #thickness * 2 is red: #thickness is below it.
 // 03 #thickness moved up (right-click ▸ Move up): #overhang = 50 mm, no errors.
-// 04 Part Studio 1: a 60 × 30 rectangle extruded by "#thickness" (25 mm); the Variables panel
-//    lists Variable Studio 1's variables, #thickness used.
+// 04 Part Studio 1: a 60 × 30 rectangle extruded by "#thickness" (25 mm).
 // 05 #thickness = 40 mm in the studio: the Part Studio's extrude follows (one undo step).
 // 06 Variable Studio 1 unchecked (a draft): Part Studio 1's extrude fails, #thickness isn't
 //    defined (checked again afterwards).
@@ -75,8 +74,6 @@ Scenario(
         Type("#thickness"),
         Click(ui("extrude-dialog-title")),
         Click(ui("extrude-dialog-accept")),
-        Click(ui("panel-variables")),
-        WaitFor("variables-panel"),
         Key("Shift+7"),
         Key("F"),
         MoveTo(1420, 900),

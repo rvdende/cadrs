@@ -42,8 +42,8 @@ use cadrs_ui::name_popup::{NamePopup, NamePopupCommit};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{CheckboxChange, SelectionList, open_context_menu};
 
-use crate::appearance::{SidePanel, side_panel_header, side_panel_node};
 use crate::parts::PartCache;
+use crate::side_panel::{SidePanel, side_panel_header, side_panel_node};
 use crate::viewport::{
     ActiveKind, Selection, ViewportArea, ViewportRect, ViewportView, pointer_over_viewport,
 };

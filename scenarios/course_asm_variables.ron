@@ -5,9 +5,9 @@
 // 02 (P3F.3–P3F.4 judge) the mate dialog open: Fastened 1 (the pin's top edge on the socket's
 //    rim, flipped), Offset checked and "#depth" typed into Offset Z: the pin previewed 5 mm in.
 // 03 accepted: the pin's top 5 mm into the hole.
-// 04 the Variable table (right strip) of the assembly: #depth 5 mm.
-// 05 #depth = 15 mm typed in the table: the mate's offset follows and the pin is re-solved 15 mm
-//    in, one undo step.
+// 04 #depth's Variable dialog (double-click its row in the Mate Features): 5 mm.
+// 05 #depth = 15 mm accepted: the mate's offset follows and the pin is re-solved 15 mm in, one
+//    undo step.
 Scenario(
     start: Some("document"),
     steps: [
@@ -72,15 +72,16 @@ Scenario(
         MoveTo(1500, 880),
         Key("F"),
         Screenshot("03-offset-z-depth"),
-        Click(ui("panel-variables")),
-        WaitFor("variables-panel"),
+        DoubleClick(ui("mate-row-1")),
+        WaitFor("variable-dialog"),
         MoveTo(1500, 880),
         Wait(3),
-        Screenshot("04-assembly-variable-table"),
-        Click(ui("variable-row-depth-field")),
+        Screenshot("04-assembly-variable-dialog"),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("15 mm"),
-        Key("Enter"),
+        Click(ui("variable-dialog-title")),
+        Click(ui("variable-dialog-accept")),
         MoveTo(1500, 880),
         Wait(3),
         Screenshot("05-depth-15-re-solved"),

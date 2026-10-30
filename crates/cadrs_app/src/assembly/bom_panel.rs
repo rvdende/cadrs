@@ -60,8 +60,8 @@ use cadrs_ui::{
     TableRoot, TableRow, TableSortChange, open_context_menu, open_menu,
 };
 
-use crate::appearance::SidePanel;
 use crate::parts::HoverParts;
+use crate::side_panel::SidePanel;
 use crate::viewport::{ActiveKind, Pick, Selection, ViewportArea};
 use crate::{ActiveDocument, AppState};
 
@@ -72,7 +72,7 @@ impl Plugin for BomPanelPlugin {
         app.init_resource::<BomUi>()
             .add_systems(
                 Update,
-                (bom_trigger, bom_hover, strip_button, sync_row_selection)
+                (bom_trigger, bom_hover, show_strip, sync_row_selection)
                     .after(crate::parts::PartsSet)
                     .run_if(in_state(AppState::Document)),
             )
@@ -477,7 +477,7 @@ fn spawn_panel(
             Name::new("bom-panel"),
             BomPanelRoot,
             DespawnOnExit(AppState::Document),
-            crate::appearance::side_panel_node(t),
+            crate::side_panel::side_panel_node(t),
         ))
         .id();
     commands
@@ -500,7 +500,7 @@ fn spawn_panel(
             },
             ZIndex(10),
         ));
-        crate::appearance::side_panel_header(p, t, "Bill of materials", "bom-panel-close");
+        crate::side_panel::side_panel_header(p, t, "Bill of materials", "bom-panel-close");
         // The toolbar: the view, Apply template, Add column, ⋯.
         p.spawn((
             Name::new("bom-toolbar"),
@@ -796,18 +796,16 @@ fn sync_row_selection(
     }
 }
 
-/// The strip's BOM button only shows in an assembly. A strip spawned with a reopened document
-/// is set from the active tab's kind too, not only a kind change (reload_roundtrip 03).
-fn strip_button(kind: Res<ActiveKind>, mut q: Query<(Ref<Name>, &mut Node)>) {
+/// The right strip (BOM, Exploded views, Named positions) only shows in an assembly. A strip
+/// spawned with a reopened document is set from the active tab's kind too, not only a kind
+/// change (reload_roundtrip 03).
+fn show_strip(kind: Res<ActiveKind>, mut q: Query<(Ref<Name>, &mut Node)>) {
     let all = kind.is_changed();
     for (n, mut node) in &mut q {
         if !all && !n.is_added() {
             continue;
         }
-        if matches!(
-            n.as_str(),
-            "panel-bom" | "panel-exploded-views" | "panel-named-positions"
-        ) {
+        if n.as_str() == "right-panel-strip" {
             node.display = if *kind == ActiveKind::Assembly {
                 Display::Flex
             } else {

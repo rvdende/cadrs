@@ -2,7 +2,7 @@
 //! SM1.4, SM13.1–SM13.5; `help/feature-tools/sheetmetalflatpatterntable-02.png`, lesson
 //! `13-bend-and-joint-table`):
 //!
-//! - **The toggle**: the right strip's *Sheet metal table and flat view* button
+//! - **The toggle**: the tab bar's *Sheet metal table and flat view* button
 //!   (`panel-sheet-metal`, icon `sheet-metal-table`), shown once a Part Studio has a sheet
 //!   metal model; it opens and closes the panel, docked on the viewport's right.
 //! - **Sheet metal context** (`smt-context`): one entry per Sheet metal model feature, by its
@@ -83,9 +83,9 @@ use cadrs_ui::{
     Column, Select, SelectChange, TableBody, TableHeader, TableRoot, TableRow, open_context_menu,
 };
 
-use crate::appearance::SidePanel;
 use crate::camera::{StandardView, ViewState};
 use crate::parts::PartCache;
+use crate::side_panel::SidePanel;
 use crate::viewport::{
     ActiveKind, ExtraHighlight, Pick, PlaneHighlight, Selection, ViewportArea, ViewportRect,
     ViewportView,
@@ -842,9 +842,9 @@ fn modify_joint(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The strip button and the panel
+// The tab bar's button and the panel
 
-/// The strip's button shows in a Part Studio with a sheet metal model; the panel closes when
+/// The tab bar's button shows in a Part Studio with a sheet metal model; the panel closes when
 /// there is none. While a Sheet metal model dialog is open the panel stays (P3I.8, SM17.2: the
 /// table and flat follow the picks, even through a pick that leaves the model failing for a
 /// moment).
@@ -1026,7 +1026,7 @@ fn sync_panel(
             Name::new("smt-panel"),
             PanelRoot,
             DespawnOnExit(AppState::Document),
-            crate::appearance::side_panel_node(&theme),
+            crate::side_panel::side_panel_node(&theme),
         ))
         .id();
     commands

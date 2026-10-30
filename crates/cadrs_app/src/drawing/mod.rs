@@ -383,7 +383,7 @@ fn sync_drawing_chrome(
                 node.display = d;
             }
         }
-        "view-cube" | "right-panel-strip" | "viewport-tools" | "origin" => {
+        "view-cube" | "right-panel-strip" | "origin" => {
             // P3H.3: a PCB Studio keeps the view cube and has its own right-edge toggles.
             let pcb = *kind == ActiveKind::PcbStudio && (name.as_str() != "view-cube" || flat2d);
             let v = if kind.is_flat() || pcb {
@@ -392,6 +392,17 @@ fn sync_drawing_chrome(
                 Visibility::Inherited
             };
             vis.set_if_neq(v);
+        }
+        // The tab bar's view tools (`crate::document`): the bar's room goes to the tabs.
+        "view-tools" => {
+            let d = if kind.is_flat() || *kind == ActiveKind::PcbStudio {
+                Display::None
+            } else {
+                Display::Flex
+            };
+            if node.display != d {
+                node.display = d;
+            }
         }
         _ => {}
     };

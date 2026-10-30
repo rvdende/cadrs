@@ -234,7 +234,7 @@ fn fade_face_labels(
     repair: Option<Res<crate::repair::Repair>>,
     (sm, panel): (
         Option<Res<crate::sheetmetal_table::SmTable>>,
-        Option<Res<crate::appearance::SidePanel>>,
+        Option<Res<crate::side_panel::SidePanel>>,
     ),
     q: Query<(&FaceLabel, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -248,7 +248,7 @@ fn fade_face_labels(
         .map(|r| r.view.back())
         .into_iter()
         .collect();
-    if panel.is_some_and(|p| *p == crate::appearance::SidePanel::SheetMetal)
+    if panel.is_some_and(|p| *p == crate::side_panel::SidePanel::SheetMetal)
         && let Some(t) = sm
     {
         others.push(t.view.back());

@@ -75,6 +75,7 @@ impl Plugin for DocumentPlugin {
                     crate::units_dialog::sync_units,
                     document_shortcuts,
                     sync_rail_toggle,
+                    sync_viewport_readouts,
                     auto_save,
                     scroll_to_revealed.after(rebuild_feature_rows),
                 )
@@ -439,7 +440,7 @@ fn spawn_shell(
                             crate::frame_stats::spawn_frame_stats(vp, &t);
                             crate::view_cube::spawn_view_cube(vp, &t, cube.0.clone());
                             right_strip(vp, &t);
-                            bottom_right_tools(vp, &t);
+                            viewport_readouts(vp, &t);
                         });
                     });
                 });
@@ -697,7 +698,8 @@ fn sync_rail_toggle(
     }
 }
 
-/// The small strip of panel toggles on the viewport's right edge.
+/// An assembly's panel toggles on the viewport's right edge (the strip shows in assemblies only,
+/// [`crate::assembly::bom_panel`]).
 fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     vp.spawn((
         Name::new("right-panel-strip"),
@@ -716,44 +718,21 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
         cadrs_ui::glass::panel(t),
     ))
     .with_children(|s| {
-        // Appearances (P3.5), Custom tables (P3.11) and Variables (a placeholder table until
-        // P3F.4) open panels; Configurations are out of scope (niche; user decision 2026-09-29).
-        for (name, icon_name, tip, enabled) in [
-            // P3B.6: the Bill of Materials (shown in assemblies only).
-            ("panel-bom", "bill-of-materials", "Bill of materials", true),
-            // P3B.8: Exploded views and Named positions (assemblies only).
-            ("panel-exploded-views", "explode", "Exploded views", true),
+        for (name, icon_name, tip) in [
+            // P3B.6: the Bill of Materials.
+            ("panel-bom", "bill-of-materials", "Bill of materials"),
+            // P3B.8: Exploded views and Named positions.
+            ("panel-exploded-views", "explode", "Exploded views"),
             (
                 "panel-named-positions",
                 "named-positions",
                 "Named positions",
-                true,
             ),
-            ("panel-appearance", "appearance", "Appearances", true),
-            ("panel-custom-tables", "custom-table", "Custom tables", true),
-            (
-                "panel-configurations",
-                "configurations",
-                "Configurations (not available)",
-                false,
-            ),
-            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
-            (
-                "panel-sheet-metal",
-                "sheet-metal-table",
-                "Sheet metal table and flat view",
-                true,
-            ),
-            ("panel-variables", "variables", "Variables", true),
-            // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
-            // icon: Thicken's deformed sheet stands in).
-            ("panel-simulation", "thicken", "Simulation", true),
         ] {
             s.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
                     .tooltip(tip)
-                    .disabled(!enabled)
                     .build(t),
             )
             .entry::<Node>()
@@ -765,24 +744,26 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     });
 }
 
-/// The bottom-right tools over the 3D view.
+/// The readouts at the bottom right of the 3D view: a selected region's area, a measurement.
 #[derive(Component)]
-pub struct ViewportTools;
+pub struct ViewportReadouts;
 
-fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
-    // A glass pill, so the icons read over a part of any colour.
+fn viewport_readouts(vp: &mut ChildSpawnerCommands, t: &Theme) {
+    // A glass pill, so the text reads over a part of any colour; shown while it has something
+    // to say ([`sync_viewport_readouts`]).
     vp.spawn((
-        Name::new("viewport-tools"),
-        ViewportTools,
+        Name::new("viewport-readouts"),
+        ViewportReadouts,
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(0.0),
             bottom: Val::Px(0.0),
-            column_gap: Val::Px(2.0),
-            padding: UiRect::all(Val::Px(3.0)),
+            min_height: Val::Px(32.0),
+            padding: UiRect::new(Val::Px(10.0), Val::Px(2.0), Val::Px(3.0), Val::Px(3.0)),
             align_items: AlignItems::Center,
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(t.radius_panel)),
+            display: Display::None,
             ..default()
         },
         cadrs_ui::glass::panel(t),
@@ -790,6 +771,58 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
     .with_children(|s| {
         // "Area: … mm²" while a region is selected (`intro-to-sketching/ex1-step8.png`).
         s.spawn(crate::region_select::area_readout(t));
+    });
+}
+
+/// The readouts' pill shows while one of them does, in a 3D view (a drawing, a flat board view
+/// or a PCB Studio has none).
+fn sync_viewport_readouts(
+    kind: Res<crate::viewport::ActiveKind>,
+    mut q: Query<(&Children, &mut Node), With<ViewportReadouts>>,
+    q_child: Query<&Node, Without<ViewportReadouts>>,
+) {
+    let shown = !kind.is_flat() && *kind != crate::viewport::ActiveKind::PcbStudio;
+    for (children, mut node) in &mut q {
+        let any = children
+            .iter()
+            .any(|c| q_child.get(c).is_ok_and(|n| n.display != Display::None));
+        let want = if shown && any {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != want {
+            node.display = want;
+        }
+    }
+}
+
+/// The view tools at the tab bar's right end, after a divider: Section view, Measure, Analysis
+/// tools, Mass properties, the Simulation panel and, with a sheet metal model, the Sheet metal
+/// table ([`crate::sheetmetal_table`]). Hidden where there is no 3D view (`crate::drawing`).
+fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
+    bar.spawn((
+        Name::new("view-tools"),
+        Node {
+            flex_shrink: 0.0,
+            align_items: AlignItems::Stretch,
+            column_gap: Val::Px(2.0),
+            ..default()
+        },
+        Pickable::IGNORE,
+    ))
+    .with_children(|g| {
+        g.spawn((
+            Node {
+                width: Val::Px(1.0),
+                height: Val::Px(18.0),
+                align_self: AlignSelf::Center,
+                margin: UiRect::horizontal(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(t.separator),
+            Pickable::IGNORE,
+        ));
         for (name, icon_name, tip) in [
             ("view-section", "section-view", "Section view"),
             ("view-measure", "measure", "Measure"),
@@ -797,15 +830,38 @@ fn bottom_right_tools(vp: &mut ChildSpawnerCommands, t: &Theme) {
             // stands in).
             ("view-analysis", "constraint-curvature", "Analysis tools"),
             ("view-mass", "mass-properties", "Mass properties"),
+            // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
+            // icon: Thicken's deformed sheet stands in).
+            ("panel-simulation", "thicken", "Simulation"),
+            // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
+            (
+                "panel-sheet-metal",
+                "sheet-metal-table",
+                "Sheet metal table and flat view",
+            ),
         ] {
-            s.spawn(
+            g.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
                     .tooltip(tip)
                     .build(t),
-            );
+            )
+            .insert(view_tool_node(t));
         }
     });
+}
+
+/// The node of a button among the tab bar's view tools (a [`ToolButton`] as tall as the bar).
+pub(crate) fn view_tool_node(t: &Theme) -> Node {
+    Node {
+        width: Val::Px(30.0),
+        min_width: Val::Px(30.0),
+        border_radius: BorderRadius::all(Val::Px(t.radius)),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        flex_shrink: 0.0,
+        ..default()
+    }
 }
 
 fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
@@ -923,6 +979,7 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                 n.border_radius = BorderRadius::ZERO;
                 n.display = Display::None;
             });
+        view_tools(bar, t);
     });
 }
 

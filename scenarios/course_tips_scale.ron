@@ -12,7 +12,7 @@
 // 03 a Variable added: 251 features.
 // 04 the last feature (Hole 10.11) edited, 6 mm deep: only it rebuilds; the last plate seen
 //    from below, where its pockets are.
-// 05 #t_1 = 12 mm in the Variable table: the first plate thicker; everything after it rebuilt in
+// 05 #t_1 = 12 mm in its Variable dialog: the first plate thicker; everything after it rebuilt in
 //    the background.
 // 06 the 40 tabs: the strip scrolls by whole tabs, chevrons while it overflows; ▾ (right of
 //    the tabs) hovered.
@@ -70,14 +70,17 @@ Scenario(
         Screenshot("04-last-feature-edited"),
         Key("Shift+7"),
         Key("F"),
-        Click(ui("panel-variables")),
-        WaitFor("variables-panel"),
+        Scroll(ui("feature-scroll"), 400),
+        Wait(10),
+        DoubleClick(ui("feature-t-1")),
+        WaitFor("variable-dialog"),
         Custom("rebuild-budget 30"),
-        Click(ui("variable-row-t_1-field")),
+        Click(ui("variable-value-field")),
         Key("Ctrl+A"),
         Type("12 mm"),
+        Click(ui("variable-dialog-title")),
         MeasureStart("background"),
-        Key("Enter"),
+        Click(ui("variable-dialog-accept")),
         Wait(240),
         MeasureEnd,
         Custom("rebuild-budget off"),
@@ -85,7 +88,6 @@ Scenario(
         MoveTo(1420, 900),
         Wait(3),
         Screenshot("05-first-plate-rebuilt"),
-        Click(ui("variables-panel-close")),
         Hover(ui("tab-overflow")),
         Wait(40),
         Screenshot("06-40-tabs"),

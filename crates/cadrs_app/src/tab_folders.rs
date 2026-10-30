@@ -59,7 +59,7 @@ impl Plugin for TabFoldersPlugin {
                     sync_folder_chevrons,
                     mark_listed_tabs,
                     quiet_hover_while_dragging,
-                    hide_covered_viewport_tools,
+                    hide_covered_readouts,
                     (follow_tab_drag, place_tab_drop).chain(),
                     close_overflow_on_escape,
                 )
@@ -1368,14 +1368,14 @@ pub fn dim_with(commands: &mut Commands, e: Entity, veil: Color) {
 #[derive(Component)]
 struct DragGhost;
 
-/// The view's bottom-right tools step aside while something the tab bar opened covers part of
-/// them (a folder's list or the tab's card at the window's right edge left half-cut icons
+/// The view's bottom-right readouts step aside while something the tab bar opened covers part
+/// of them (a folder's list or the tab's card at the window's right edge left half-cut text
 /// showing beside it).
 #[allow(clippy::type_complexity)]
-fn hide_covered_viewport_tools(
+fn hide_covered_readouts(
     mut q_tools: Query<
         (&ComputedNode, &bevy::ui::UiGlobalTransform, &mut Visibility),
-        With<crate::document::ViewportTools>,
+        With<crate::document::ViewportReadouts>,
     >,
     q_over: Query<
         (&ComputedNode, &bevy::ui::UiGlobalTransform),
