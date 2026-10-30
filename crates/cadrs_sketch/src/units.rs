@@ -318,6 +318,19 @@ pub fn variable_names(text: &str) -> Vec<String> {
     out
 }
 
+/// `text` without a unit after a variable at its end ("#width mm" → "#width"): what stays of
+/// "25 mm" when a variable is typed or picked in place of the number. A unit can't follow a
+/// variable, so nothing that evaluates is changed. `None` when there is no such unit.
+pub fn without_unit_after_variable(text: &str) -> Option<String> {
+    let toks = tokenize(text).ok()?;
+    let [.., Tok::Var(_), Tok::Unit(u)] = toks.as_slice() else {
+        return None;
+    };
+    unit_of(u)?;
+    let rest = text.trim_end().strip_suffix(u.as_str())?;
+    Some(rest.trim_end().to_string())
+}
+
 /// Whether `name` is a valid variable name: a letter or `_`, then letters, digits or `_`.
 pub fn is_variable_name(name: &str) -> bool {
     let mut c = name.chars();
@@ -1294,6 +1307,35 @@ mod tests {
         assert!(matches!(len("5 $"), Err(ParseError::Unexpected(_))));
         assert!(matches!(len("mm"), Err(ParseError::Unexpected(_))));
         assert_eq!(len("5 mm mm"), Err(ParseError::Unexpected("mm".into())));
+    }
+
+    #[test]
+    fn unit_after_a_variable_dropped() {
+        let strip = without_unit_after_variable;
+        assert_eq!(strip("#var_2 mm").as_deref(), Some("#var_2"));
+        assert_eq!(strip("#w mm  ").as_deref(), Some("#w"));
+        assert_eq!(strip("2 * #w in").as_deref(), Some("2 * #w"));
+        assert_eq!(strip("#a deg").as_deref(), Some("#a"));
+        assert_eq!(strip("#a°").as_deref(), Some("#a"));
+        // Nothing to drop: no unit, a unit after a number, or a word that isn't a unit.
+        assert_eq!(strip("#w"), None);
+        assert_eq!(strip("#w + 2 mm"), None);
+        assert_eq!(strip("#w foo"), None);
+        let vars = vec![(
+            "w".to_string(),
+            VarValue {
+                value: 25.0,
+                quantity: Quantity::Length,
+            },
+        )];
+        assert_eq!(
+            eval_vars("#w mm", Quantity::Length, &vars),
+            Err(ParseError::Unexpected("mm".into()))
+        );
+        assert_eq!(
+            eval_vars(&strip("#w mm").unwrap(), Quantity::Length, &vars),
+            Ok(25.0)
+        );
     }
 
     #[test]
