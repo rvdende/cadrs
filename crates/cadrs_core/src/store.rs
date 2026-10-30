@@ -210,8 +210,10 @@ impl Store {
             || !cadrs_fs::exists(self.doc_dir(id).join(THUMBNAIL_LARGE_FILE))
     }
 
-    /// Writes `document.ron` for `doc`.
+    /// Writes `document.ron` for `doc` (after the saves still being written in the background,
+    /// [`Self::save_in_background`]).
     pub fn save(&self, doc: &Document, meta: &DocumentMeta) -> Result<(), StoreError> {
+        crate::history_log::flush_saves();
         let file = DocumentFile {
             version: SCHEMA_VERSION,
             meta: meta.clone(),
@@ -225,6 +227,36 @@ impl Store {
         write_entry(&path, &file.entry())?;
         crate::blobs::save_dir(&self.blobs_dir(doc.id), doc)?;
         Ok(())
+    }
+
+    /// [`Self::save`] on another thread, in order with every other save in the background (a
+    /// big document's text takes tens of milliseconds to make: the app autosaves this way, not
+    /// on a frame). [`Self::save`], the reads and [`crate::history_log::flush_saves`] (before
+    /// the process ends) wait for it. Errors are printed.
+    pub fn save_in_background(&self, doc: std::sync::Arc<Document>, meta: DocumentMeta) {
+        let (dir, path, blobs) = (
+            self.doc_dir(doc.id),
+            self.document_path(doc.id),
+            self.blobs_dir(doc.id),
+        );
+        let to = path.clone();
+        crate::history_log::writer::queue_job(
+            path,
+            Box::new(move || {
+                let file = DocumentFile {
+                    version: SCHEMA_VERSION,
+                    meta,
+                    document: (*doc).clone(),
+                };
+                let text = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default())
+                    .map_err(|e| StoreError::Parse(e.to_string()))?;
+                cadrs_fs::create_dir_all(&dir)?;
+                write_atomic(&to, text.as_bytes())?;
+                write_entry(&to, &file.entry())?;
+                crate::blobs::save_dir(&blobs, &file.document)?;
+                Ok(())
+            }),
+        );
     }
 
     /// The folder of a document's imported files ([`crate::blobs`]).
@@ -253,6 +285,7 @@ impl Store {
 
     /// Reads a `document.ron` and the imported files next to it (into [`crate::blobs`]).
     pub fn load_path(path: &Path) -> Result<DocumentFile, StoreError> {
+        crate::history_log::flush_saves();
         if let Some(dir) = path.parent() {
             crate::blobs::load_dir(&dir.join(crate::blobs::BLOBS_DIR))?;
         }
@@ -266,6 +299,7 @@ impl Store {
 
     /// Reads a `document.ron` only (listing the documents doesn't need their files).
     fn read_path(path: &Path) -> Result<DocumentFile, StoreError> {
+        crate::history_log::flush_saves();
         let text = cadrs_fs::read_to_string(path)?;
         Self::parse_document(&text)
     }
@@ -418,6 +452,8 @@ impl Store {
         before: &Library,
         after: &Library,
     ) -> Result<(), StoreError> {
+        // (No save still on its way into a folder moved aside.)
+        crate::history_log::flush_saves();
         // Permanently deleted: move aside (undo moves it back).
         for e in &before.entries {
             if after.get(e.id).is_none() && cadrs_fs::is_dir(self.doc_dir(e.id)) {

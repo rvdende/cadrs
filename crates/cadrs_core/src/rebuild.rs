@@ -211,12 +211,21 @@ impl Build {
     }
 }
 
-/// A part as the rebuild carries it: the part, its kernel body and its names.
+/// A part as the rebuild carries it: the part, its kernel body and its names. (The part shared:
+/// every feature copies the parts it starts from, 629 of them in a house, and a part held here
+/// whole made each copy a few hundred kilobytes of fresh pages.)
 #[derive(Clone, Serialize, Deserialize)]
 struct PartState {
-    part: Part,
+    part: Arc<Part>,
     body: Option<BodyId>,
     names: Arc<cadrs_kernel::BodyNames>,
+}
+
+impl PartState {
+    /// The part to change (copied first if another state shares it).
+    fn part_mut(&mut self) -> &mut Part {
+        Arc::make_mut(&mut self.part)
+    }
 }
 
 /// The parts after a feature.
@@ -255,6 +264,19 @@ fn no_body(p: &PartState) -> String {
         p.part.name
     )
 }
+
+/// A mesh, the mate connectors added to it, the mesh with them, and the rebuild that last used
+/// it ([`Rebuilder`]'s `with_connectors`).
+type WithConnectors = (
+    Arc<crate::solid::Solid>,
+    Vec<crate::solid::SolidConnector>,
+    Arc<crate::solid::Solid>,
+    u64,
+);
+
+/// How many rebuilds a mesh with connectors is kept unused (the rebuilds of the features up to
+/// each sketch on a face come between the whole list's).
+const CONNECTORS_KEPT: u64 = 8;
 
 /// A placed component mesh (`Rebuilder::placed_components`): the unplaced mesh it was made from,
 /// the placed one and its volume properties.
@@ -317,6 +339,646 @@ impl Rebuilder {
     }
 }
 
+/// How many features are computed ahead at once, at most ([`Rebuilder::compute_ahead`]).
+#[cfg(feature = "brep")]
+const AHEAD_MAX: usize = 64;
+
+/// A feature computed ahead of those before it, on the parts as they were then
+/// ([`Rebuilder::compute_ahead`]).
+#[cfg(feature = "brep")]
+struct Ahead {
+    /// The session it was computed in: its bodies are taken back with its result (none for a
+    /// result computed before in this one, [`Rebuilder::reusable_for`]).
+    kernel: Option<cadrs_kernel::DefaultKernel>,
+    output: Output,
+    time: Duration,
+    /// The box of its body ([`Rebuilder::footprint`]).
+    footprint: Option<cadrs_kernel::Aabb>,
+    /// The parts it was computed on.
+    snapshot: Arc<State>,
+}
+
+/// An extrude's body made for planning the features computed ahead ([`Rebuilder::plan_ahead`]),
+/// before its boolean.
+#[cfg(feature = "brep")]
+#[derive(Clone)]
+struct Planned {
+    tool: (BodyId, cadrs_kernel::BodyNames),
+    /// The derived parts' sketches it was made with, besides the features above it (what else
+    /// its regions can come from).
+    sketches: Arc<Vec<Feature>>,
+}
+
+/// A feature's last result ([`ahead_ok`]), computed in order or ahead: the cache key of its
+/// entry, the parts it was computed on and its body's box. An edit above it that leaves what it
+/// reads alone (a window of a house, the parts away from it) gives it another cache key, and
+/// this result is taken over ([`Rebuilder::reusable_for`], [`Rebuilder::take_ahead`]) instead
+/// of computed again.
+#[cfg(feature = "brep")]
+struct Reusable {
+    entry: u64,
+    snapshot: Arc<State>,
+    footprint: Option<cadrs_kernel::Aabb>,
+}
+
+/// What `features[i]` makes its result from besides the parts it reads ([`Reusable`]): its id
+/// and every parameter, and the sketches above it an extrude extrudes or a Transform turns about
+/// (an edit of one changes the result, not the parts it reads). From the features' Debug texts as the rebuild's key loop wrote them (`texts[j]` of
+/// `features[j]`; `first` each id's first index).
+#[cfg(feature = "brep")]
+fn content_key_texts(
+    features: &[Feature],
+    i: usize,
+    texts: &[String],
+    first: &HashMap<FeatureId, usize>,
+) -> u64 {
+    let f = &features[i];
+    let mut k = chain_key_of(0x9e_37_79_b9_7f_4a_7c_15, f, &texts[i]);
+    let mut ids: Vec<FeatureId> = match &f.kind {
+        FeatureKind::Extrude(e) => e
+            .regions
+            .iter()
+            .map(|r| r.sketch)
+            .chain(e.sketches.iter().copied())
+            .collect(),
+        FeatureKind::Transform(x) => match x.axis {
+            Some(crate::document::AxisRef::SketchCurve { sketch, .. }) => vec![sketch],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    ids.sort_unstable();
+    ids.dedup();
+    for id in ids {
+        if let Some(&j) = first.get(&id).filter(|&&j| j < i) {
+            k = chain_key_of(k, &features[j], &texts[j]);
+        }
+    }
+    k
+}
+
+/// Whether `f` may be computed ahead of the features before it, on the parts as they were (its
+/// result taken over if nothing it reads has changed since, [`Rebuilder::take_ahead`]): an
+/// extrude made from its sketches alone (blind ends, no picked faces, direction or context),
+/// which reads only the parts its body reaches and its merge scope (not merged with all).
+#[cfg(feature = "brep")]
+fn ahead_ok(f: &Feature) -> bool {
+    use crate::document::EndType;
+    let FeatureKind::Extrude(e) = &f.kind else {
+        return false;
+    };
+    e.problem().is_none()
+        && e.end == EndType::Blind
+        && e.second.as_ref().is_none_or(|s| s.end == EndType::Blind)
+        && e.faces.is_empty()
+        && e.direction.is_none()
+        && e.context.is_empty()
+        && !e.merge_all
+}
+
+/// Whether `f`'s last result may be taken over after an edit above it that leaves what it reads
+/// alone ([`Reusable`]): an extrude that may be computed ahead ([`ahead_ok`]); a Boolean, which
+/// reads only its tools and targets (not one offsetting picked faces, found on any part); a
+/// Transform that moves its parts (no copies, connectors or context) by XYZ or about a sketch
+/// curve, which reads only them and that sketch. (A recomputed one gives its parts new solids,
+/// so none of the features after it that read them could be taken over either: a house's deck
+/// moved to its floor made every edit above it rebuild the deck's 300 features.)
+#[cfg(feature = "brep")]
+fn reuse_ok(f: &Feature) -> bool {
+    use crate::transform::TransformType;
+    match &f.kind {
+        FeatureKind::Extrude(_) => ahead_ok(f),
+        FeatureKind::Boolean(b) => b.problem().is_none() && b.offset.is_none(),
+        FeatureKind::Transform(x) => {
+            x.problem().is_none()
+                && !x.copies()
+                && x.connectors.is_empty()
+                && x.context.is_empty()
+                && x.sources.is_empty()
+                && match x.transform_type {
+                    TransformType::TranslateXyz => true,
+                    TransformType::Rotate => {
+                        matches!(x.axis, Some(crate::document::AxisRef::SketchCurve { .. }))
+                    }
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "brep")]
+impl Rebuilder {
+    /// The features of `features` from `i` on that may be computed now, side by side, ahead of
+    /// those before them ([`ahead_ok`]), up to the next one uncached that may not and short of
+    /// the last part feature `last` (its dialog's stage is made as it is computed). Cached ones,
+    /// Plane features (which only add a plane, not read by these) and ones failing uncomputed
+    /// are passed: what they change is checked as each result is taken.
+    fn ahead_of(
+        &self,
+        features: &[Feature],
+        keys: &[Option<(u64, Option<String>)>],
+        i: usize,
+        last: usize,
+    ) -> Vec<usize> {
+        let mut out = Vec::new();
+        for (j, f) in features.iter().enumerate().take(last).skip(i) {
+            let Some((k, below)) = &keys[j] else {
+                continue;
+            };
+            if below.is_some()
+                || self.entries.contains_key(k)
+                || matches!(f.kind, FeatureKind::Plane(_))
+            {
+                continue;
+            }
+            if !ahead_ok(f) {
+                break;
+            }
+            out.push(j);
+            if out.len() == AHEAD_MAX {
+                break;
+            }
+        }
+        out
+    }
+
+    /// What each of the features `run` of `features` (from [`Self::ahead_of`]) waits for among
+    /// those before it in the run, on the parts `state`: their bodies made first, side by side,
+    /// for their boxes ([`Self::footprint_only`]), and kept for computing them ([`Self::tools`]).
+    /// An Add, Remove or Intersect waits for one whose
+    /// body's box meets its own (what it makes may touch its body) or reaches a part its own
+    /// does (it may change it), or whose part its merge scope names; and for one changing a
+    /// part whose box, grown by that one's body, meets its own. A New waits for none. (What this
+    /// misses, [`Self::ahead_valid`] catches.)
+    fn plan_ahead(
+        &mut self,
+        features: &[Feature],
+        run: &[usize],
+        state: &Arc<State>,
+    ) -> HashMap<usize, Vec<usize>> {
+        use cadrs_kernel::Kernel;
+        use rayon::prelude::*;
+        let computing = process::computing_ahead();
+        let (kernel, tools) = (&self.kernel, &self.tools);
+        let made: Vec<_> = run
+            .par_iter()
+            .filter(|&&j| !tools.contains_key(&features[j].id))
+            .map(|&j| {
+                process::crash_if_asked(&features[j]);
+                let mut w = Rebuilder {
+                    kernel: kernel.fork(),
+                    footprint_only: true,
+                    ..Rebuilder::new()
+                };
+                w.compute_noting_meshes(&features[..j], &features[j], state);
+                (w.kernel, w.tools)
+            })
+            .collect();
+        drop(computing);
+        for (fork, tools) in made {
+            self.kernel.absorb(fork);
+            self.tools.extend(tools);
+        }
+        let kernel = &self.kernel;
+        let boxes: Vec<Option<cadrs_kernel::Aabb>> = run
+            .iter()
+            .map(|&j| {
+                let p = self.tools.get(&features[j].id)?;
+                kernel.bounding_box(p.tool.0).ok()
+            })
+            .collect();
+        let grow = |b: &cadrs_kernel::Aabb| {
+            let t = 2e-6 * (1.0 + (b.max - b.min).norm());
+            cadrs_kernel::Aabb {
+                min: b.min - nalgebra::Vector3::repeat(t),
+                max: b.max + nalgebra::Vector3::repeat(t),
+            }
+        };
+        let meet = |a: &cadrs_kernel::Aabb, b: &cadrs_kernel::Aabb| {
+            !(0..3).any(|i| a.min[i] > b.max[i] || b.min[i] > a.max[i])
+        };
+        let solids: Vec<(PartId, cadrs_kernel::Aabb)> = state
+            .parts
+            .iter()
+            .filter(|p| p.part.kind == PartKind::Solid)
+            .filter_map(|p| Some((p.part.id, kernel.bounding_box(p.body?).ok()?)))
+            .collect();
+        let extrude = |j: usize| match &features[j].kind {
+            FeatureKind::Extrude(e) => Some(e),
+            _ => None,
+        };
+        // Each one's grown box, and the parts it may read (none for a New).
+        type Reach = (cadrs_kernel::Aabb, Vec<(PartId, cadrs_kernel::Aabb)>);
+        let reach: Vec<Option<Reach>> = run
+            .iter()
+            .zip(&boxes)
+            .map(|(&j, b)| {
+                let b = grow(b.as_ref()?);
+                let e = extrude(j)?;
+                let reads = if e.op == crate::document::BooleanOp::New {
+                    Vec::new()
+                } else {
+                    solids
+                        .iter()
+                        .filter(|(id, pb)| meet(&b, pb) || e.merge_scope.contains(id))
+                        .copied()
+                        .collect()
+                };
+                Some((b, reads))
+            })
+            .collect();
+        let mut deps: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (x, &j) in run.iter().enumerate() {
+            let e = extrude(j);
+            let mut waits = Vec::new();
+            if e.is_none_or(|e| e.op != crate::document::BooleanOp::New) {
+                for (y, &i) in run[..x].iter().enumerate() {
+                    let waits_for = match (&reach[y], &reach[x], e) {
+                        (Some((bi, ri)), Some((bj, rj)), Some(e)) => {
+                            meet(bi, bj)
+                                || ri.iter().any(|(p, _)| rj.iter().any(|(q, _)| p == q))
+                                || e.merge_scope.iter().any(|p| p.feature == features[i].id)
+                                || ri.iter().any(|(_, pb)| {
+                                    let mut u = *pb;
+                                    for k in 0..3 {
+                                        u.min[k] = u.min[k].min(bi.min[k]);
+                                        u.max[k] = u.max[k].max(bi.max[k]);
+                                    }
+                                    meet(&u, bj)
+                                })
+                        }
+                        _ => true,
+                    };
+                    if waits_for {
+                        waits.push(i);
+                    }
+                }
+            }
+            deps.insert(j, waits);
+        }
+        deps
+    }
+
+    /// Computes the features `batch` of `features` side by side, each in a fork of the session,
+    /// on the parts `state` (as they are before the first), for [`Self::take_ahead`] as the
+    /// rebuild reaches them.
+    fn compute_ahead(
+        &self,
+        features: &[Feature],
+        batch: &[usize],
+        state: &Arc<State>,
+    ) -> HashMap<usize, Ahead> {
+        use rayon::prelude::*;
+        let _computing = process::computing_ahead();
+        let (kernel, tools) = (&self.kernel, &self.tools);
+        let (generation, top_generation, largest) =
+            (self.generation, self.top_generation, self.largest);
+        batch
+            .par_iter()
+            .map(|&j| {
+                process::crash_if_asked(&features[j]);
+                let id = features[j].id;
+                let mut w = Rebuilder {
+                    kernel: kernel.fork(),
+                    generation,
+                    top_generation,
+                    largest,
+                    tools: tools
+                        .get(&id)
+                        .map(|t| (id, t.clone()))
+                        .into_iter()
+                        .collect(),
+                    ..Rebuilder::new()
+                };
+                let t0 = Instant::now();
+                let output = w.compute_noting_meshes(&features[..j], &features[j], state);
+                let ahead = Ahead {
+                    kernel: Some(w.kernel),
+                    output,
+                    time: t0.elapsed(),
+                    footprint: w.footprint,
+                    snapshot: state.clone(),
+                };
+                (j, ahead)
+            })
+            .collect()
+    }
+
+    /// Whether feature `f`'s result computed ahead ([`Self::compute_ahead`]) is what computing
+    /// it on the parts `now` would give: nothing it may have read changed since its snapshot (a
+    /// part near its body or in its merge scope among `changed`, the parts that differ, the
+    /// state besides the parts, planes and swept geometry), and it changed only parts it read.
+    fn ahead_valid(&self, a: &Ahead, f: &Feature, now: &State, changed: &[Changed]) -> bool {
+        use cadrs_kernel::Kernel;
+        if !reuse_ok(f) {
+            return false;
+        }
+        let (was, made) = (&*a.snapshot, &*a.output.state);
+        let rest_same = |x: &State, y: &State| {
+            Arc::ptr_eq(&x.derived, &y.derived)
+                && Arc::ptr_eq(&x.derived_sketches, &y.derived_sketches)
+                && Arc::ptr_eq(&x.sheet_metal, &y.sheet_metal)
+                && x.connectors == y.connectors
+                && x.connector_owners == y.connector_owners
+                && x.composites == y.composites
+                && x.curves == y.curves
+        };
+        if !rest_same(was, now) || !rest_same(was, made) || made.planes != was.planes {
+            return false;
+        }
+        // What it may have read: the solids its body's box reaches (as `contacts` finds them),
+        // and its merge scope. (A New reads none.)
+        let reach = a.footprint.map(|b| {
+            let tol = 2e-6 * (1.0 + (b.max - b.min).norm());
+            (b, tol)
+        });
+        let near = |p: &PartState| -> bool {
+            let (Some(body), PartKind::Solid) = (p.body, p.part.kind) else {
+                return false;
+            };
+            let Some((b, tol)) = reach else {
+                return true;
+            };
+            let Ok(pb) = self.kernel.bounding_box(body) else {
+                return true;
+            };
+            !(0..3).any(|i| b.min[i] > pb.max[i] + tol || pb.min[i] > b.max[i] + tol)
+        };
+        let reads = |id: PartId, p: Option<&PartState>| match &f.kind {
+            FeatureKind::Extrude(e) => {
+                e.op != crate::document::BooleanOp::New
+                    && (e.merge_scope.contains(&id) || p.is_some_and(near))
+            }
+            FeatureKind::Boolean(b) => b.tools.contains(&id) || b.targets.contains(&id),
+            FeatureKind::Transform(x) => x.parts.contains(&id),
+            _ => true,
+        };
+        if changed
+            .iter()
+            .any(|(id, then, now)| reads(*id, *then) || reads(*id, *now))
+        {
+            return false;
+        }
+        // A Transform moves the swept geometry of the operations whose faces are all on the
+        // parts it moves (`transform_moves`): which those are, and their geometry, must be as
+        // they were (no part it leaves that changed has faces of theirs).
+        if let FeatureKind::Transform(x) = &f.kind {
+            if !was.derived.is_empty() {
+                return false;
+            }
+            let moved: rustc_hash::FxHashSet<cadrs_kernel::OpId> = x
+                .parts
+                .iter()
+                .filter_map(|p| was.part(*p))
+                .flat_map(|p| p.names.faces.iter().map(|n| n.op))
+                .collect();
+            let shares = |p: &Option<&PartState>| {
+                p.is_some_and(|p| p.names.faces.iter().any(|n| moved.contains(&n.op)))
+            };
+            if changed
+                .iter()
+                .any(|(_, then, now)| shares(then) || shares(now))
+            {
+                return false;
+            }
+            let same = |op: &cadrs_kernel::OpId| match (was.geoms.get(op), now.geoms.get(op)) {
+                (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+                (x, y) => x.is_none() && y.is_none(),
+            };
+            if !moved.iter().all(same) {
+                return false;
+            }
+        }
+        // Its changes: only to parts it read (changed or removed).
+        !parts_changed(was, made)
+            .iter()
+            .any(|(id, then, _)| then.is_some_and(|t| !reads(*id, Some(t))))
+    }
+
+    /// Feature `f`'s result computed ahead as computing it on the parts `now` gives it, if
+    /// [`Self::ahead_valid`]: its changes made to `now` (the parts it changed and removed, its
+    /// new ones numbered on from the parts made since, as `finish` numbers them, its swept
+    /// geometry), its bodies taken into the session.
+    fn take_ahead(&mut self, a: Ahead, f: &Feature, now: &State) -> Option<(Output, Duration)> {
+        let changed = parts_changed(&a.snapshot, now);
+        if !self.ahead_valid(&a, f, now, &changed) {
+            return None;
+        }
+        let (was, made) = (&*a.snapshot, &*a.output.state);
+        let own = parts_changed(was, made);
+        let gone: rustc_hash::FxHashSet<PartId> = own
+            .iter()
+            .filter(|(_, _, m)| m.is_none())
+            .map(|(id, ..)| *id)
+            .collect();
+        let changed_by_it: rustc_hash::FxHashMap<PartId, &PartState> = own
+            .iter()
+            .filter(|(_, t, _)| t.is_some())
+            .filter_map(|(id, _, m)| Some((*id, (*m)?)))
+            .collect();
+        let mut next = now.clone();
+        if !gone.is_empty() {
+            next.parts.retain(|p| !gone.contains(&p.part.id));
+        }
+        if !changed_by_it.is_empty() {
+            for p in &mut next.parts {
+                if let Some(c) = changed_by_it.get(&p.part.id) {
+                    *p = (*c).clone();
+                }
+            }
+        }
+        let (mut solids, mut surfaces) = (was.next_part, was.next_surface);
+        for p in own
+            .iter()
+            .filter(|(_, t, _)| t.is_none())
+            .filter_map(|(_, _, m)| *m)
+        {
+            let (then, name) = match p.part.kind {
+                PartKind::Solid => {
+                    solids += 1;
+                    next.next_part += 1;
+                    (format!("Part {solids}"), format!("Part {}", next.next_part))
+                }
+                PartKind::Surface => {
+                    surfaces += 1;
+                    next.next_surface += 1;
+                    (
+                        format!("Surface {surfaces}"),
+                        format!("Surface {}", next.next_surface),
+                    )
+                }
+            };
+            if p.part.name != then || p.part.palette + 1 != solids + surfaces {
+                return None;
+            }
+            let mut q = p.clone();
+            q.part_mut().name = name;
+            q.part_mut().palette = next.next_part + next.next_surface - 1;
+            next.parts.push(q);
+        }
+        if (solids, surfaces) != (made.next_part, made.next_surface) {
+            return None;
+        }
+        if !Arc::ptr_eq(&made.geoms, &was.geoms) {
+            let mut geoms = (*now.geoms).clone();
+            if let FeatureKind::Transform(_) = &f.kind {
+                // The swept geometry it moved (as it was in `now`, [`Self::ahead_valid`]).
+                if made.geoms.len() != was.geoms.len() {
+                    return None;
+                }
+                for (op, g) in made.geoms.iter() {
+                    if !was.geoms.get(op).is_some_and(|w| Arc::ptr_eq(w, g)) {
+                        geoms.insert(*op, g.clone());
+                    }
+                }
+            } else {
+                let op = f.id.0;
+                let g = made.geoms.get(&op)?;
+                if made.geoms.len() != was.geoms.len() + 1 {
+                    return None;
+                }
+                geoms.insert(op, g.clone());
+            }
+            next.geoms = Arc::new(geoms);
+        }
+        if let Some(k) = a.kernel {
+            self.kernel.absorb(k);
+        }
+        self.footprint = a.footprint;
+        let output = Output {
+            state: Arc::new(next),
+            ..a.output
+        };
+        Some((output, a.time))
+    }
+
+    /// Feature `f`'s last result ([`Reusable`]), as a result computed ahead on the parts it was
+    /// computed on, while its entry is still cached.
+    fn reusable_for(&mut self, k: u64) -> Option<Ahead> {
+        let r = self.reusable.get(&k)?;
+        let Some(e) = self.entries.get(&r.entry) else {
+            self.reusable.remove(&k);
+            return None;
+        };
+        Some(Ahead {
+            kernel: None,
+            output: e.output.clone(),
+            time: e.time,
+            footprint: r.footprint,
+            snapshot: r.snapshot.clone(),
+        })
+    }
+
+    /// Lets go of the body made for planning feature `id` ([`Self::tools`]), once it is computed
+    /// as `o` (unless one of `o`'s parts is that body).
+    fn drop_tool(&mut self, id: FeatureId, o: &Output) {
+        use cadrs_kernel::Kernel;
+        if let Some(p) = self.tools.remove(&id) {
+            let b = p.tool.0;
+            if !o.owned.contains(&b) && !o.state.parts.iter().any(|p| p.body == Some(b)) {
+                self.kernel.release(b);
+            }
+        }
+    }
+
+    /// The features of `ahead` past `i` whose results are no longer valid on the parts `now`
+    /// ([`Self::ahead_valid`]): to compute again, on these.
+    fn ahead_stale(
+        &self,
+        ahead: &HashMap<usize, Ahead>,
+        features: &[Feature],
+        i: usize,
+        now: &State,
+    ) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        let mut changed: Option<(*const State, Vec<Changed>)> = None;
+        let mut keys: Vec<&usize> = ahead.keys().filter(|j| **j > i).collect();
+        keys.sort_unstable();
+        for &j in keys {
+            let a = &ahead[&j];
+            // (The parts that differ from a snapshot, once per snapshot.)
+            if changed
+                .as_ref()
+                .is_none_or(|(s, _)| *s != Arc::as_ptr(&a.snapshot))
+            {
+                changed = Some((Arc::as_ptr(&a.snapshot), parts_changed(&a.snapshot, now)));
+            }
+            let (_, c) = changed.as_ref().expect("just made");
+            if !self.ahead_valid(a, &features[j], now, c) {
+                out.push(j);
+            }
+        }
+        out
+    }
+}
+
+/// A part that differs between two states: its id, as it was in the first, as it is in the
+/// second.
+#[cfg(feature = "brep")]
+type Changed<'a> = (PartId, Option<&'a PartState>, Option<&'a PartState>);
+
+/// Whether two states' entries of a part are the same part, unchanged.
+#[cfg(feature = "brep")]
+fn same_part(x: &PartState, y: &PartState) -> bool {
+    x.body == y.body
+        && Arc::ptr_eq(&x.part.solid, &y.part.solid)
+        && Arc::ptr_eq(&x.names, &y.names)
+        && x.part.name == y.part.name
+}
+
+/// The parts that differ between `was` and `now` ([`Changed`]): those new or changed in `now`'s
+/// order, then those gone in `was`'s. (Parts are added at the end and changed in place, so the
+/// two lists mostly agree place by place from either end: those places are compared in step, the
+/// rest by id. A feature taken over compares two states of some 600 parts, three times; by id
+/// alone that was a third of a big Part Studio's rebuild after an edit high in its list.)
+#[cfg(feature = "brep")]
+fn parts_changed<'a>(was: &'a State, now: &'a State) -> Vec<Changed<'a>> {
+    let (w, n) = (&was.parts[..], &now.parts[..]);
+    let head = w
+        .iter()
+        .zip(n)
+        .take_while(|(a, b)| a.part.id == b.part.id)
+        .count();
+    let tail = w[head..]
+        .iter()
+        .rev()
+        .zip(n[head..].iter().rev())
+        .take_while(|(a, b)| a.part.id == b.part.id)
+        .count();
+    let (wm, nm) = (&w[head..w.len() - tail], &n[head..n.len() - tail]);
+    let in_step = |(a, b): (&'a PartState, &'a PartState)| {
+        (!same_part(a, b)).then_some((b.part.id, Some(a), Some(b)))
+    };
+    let was_by_id: rustc_hash::FxHashMap<PartId, &PartState> =
+        wm.iter().map(|p| (p.part.id, p)).collect();
+    let mut out: Vec<Changed<'a>> = w[..head]
+        .iter()
+        .zip(&n[..head])
+        .filter_map(in_step)
+        .collect();
+    out.extend(nm.iter().filter_map(|p| {
+        let then = was_by_id.get(&p.part.id).copied();
+        then.is_none_or(|t| !same_part(t, p))
+            .then_some((p.part.id, then, Some(p)))
+    }));
+    out.extend(
+        w[w.len() - tail..]
+            .iter()
+            .zip(&n[n.len() - tail..])
+            .filter_map(in_step),
+    );
+    if !wm.is_empty() {
+        let now_ids: rustc_hash::FxHashSet<PartId> = nm.iter().map(|p| p.part.id).collect();
+        out.extend(
+            wm.iter()
+                .filter(|p| !now_ids.contains(&p.part.id))
+                .map(|p| (p.part.id, Some(p), None)),
+        );
+    }
+    out
+}
+
 impl State {
     fn part(&self, id: PartId) -> Option<&PartState> {
         self.parts.iter().find(|p| p.part.id == id)
@@ -324,7 +986,7 @@ impl State {
 }
 
 /// What a feature produced.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Output {
     state: Arc<State>,
     error: Option<String>,
@@ -422,10 +1084,47 @@ pub struct Rebuilder {
     /// Derived boards' placed component meshes, by feature, copy, footprint and place, with
     /// the unplaced mesh they were made from.
     placed_components: HashMap<u64, PlacedComponent>,
+    /// The parts' meshes with the mate connectors they own ([`Build::parts`]), by the mesh they
+    /// were made from (held, so its address stays its): the same mesh with the same connectors
+    /// is the same `Arc` every rebuild (the kernel process sends a mesh it hasn't sent before
+    /// whole: four of pi7zoll-gehäuse's parts, 12 MB a rebuild).
+    with_connectors: HashMap<usize, WithConnectors>,
     /// Footprint models as kernel solids, unplaced (by model), for exports and drawing views of
     /// derived boards (`model_bodies_cached`).
     #[cfg(feature = "brep")]
     model_bodies: Vec<(u64, Vec<BodyId>, f64)>,
+    /// The box of the body the last extrude made: for one computed ahead, where the parts it
+    /// can have read lie ([`Self::take_ahead`]).
+    #[cfg(feature = "brep")]
+    footprint: Option<cadrs_kernel::Aabb>,
+    /// An extrude makes its body for [`Self::footprint`] alone, keeps it in [`Self::tools`] and
+    /// fails, to plan the features computed ahead ([`Self::plan_ahead`]).
+    #[cfg(feature = "brep")]
+    footprint_only: bool,
+    /// Extrudes' bodies made for planning ([`Self::plan_ahead`]), by feature: what the extrude
+    /// starts from when computed (made from its sketches alone, the same on any parts,
+    /// [`ahead_ok`]).
+    #[cfg(feature = "brep")]
+    tools: HashMap<FeatureId, Planned>,
+    /// Whether features may be computed ahead, side by side ([`Self::compute_ahead`]); else one
+    /// at a time, in order (to compare).
+    #[cfg(feature = "brep")]
+    ahead: bool,
+    /// Set by the app's rebuild job: the outputs restored from the session snapshot (unless
+    /// this session has them) once the rebuild's keys give the final one
+    /// ([`Self::restore_snapshot_key`]), not from a pass of their own over the features.
+    #[cfg(feature = "brep")]
+    pub(crate) restore_first: bool,
+    /// The last top-level rebuild's final key ([`final_key`] of its features), for its
+    /// snapshot ([`Self::plan_save`]).
+    #[cfg(feature = "brep")]
+    last_final: Option<u64>,
+    /// Extrudes' last results, by [`content_key_texts`] ([`Reusable`]).
+    #[cfg(feature = "brep")]
+    reusable: HashMap<u64, Reusable>,
+    /// How many results computed ahead were taken.
+    #[cfg(all(test, feature = "brep"))]
+    taken: usize,
 }
 
 impl Default for Rebuilder {
@@ -455,9 +1154,11 @@ static PARTIAL: Mutex<Option<(u64, Arc<Vec<Part>>)>> = Mutex::new(None);
 
 /// How long a rebuild runs before it shows its parts as it goes ([`Pending::partial`]), and how
 /// often it shows them after that: quick ones never do (an edit at the end of a list would show
-/// the parts as they were before it, then after).
+/// the parts as they were before it, then after). As often as the feature list turns its pages
+/// (each costs the app's frame a mesh update: every 150 ms, a rebuild of 1,000 features a
+/// second stuttered).
 const PARTIAL_AFTER: Duration = Duration::from_millis(400);
-const PARTIAL_EVERY: Duration = Duration::from_millis(150);
+const PARTIAL_EVERY: Duration = Duration::from_millis(400);
 
 /// Starts the progress of the rebuild with this ticket: nothing done yet, no parts to show.
 pub(crate) fn start_progress(ticket: u64) {
@@ -495,7 +1196,7 @@ fn listed_parts(state: &State) -> Vec<Part> {
         .parts
         .iter()
         .filter(|p| !absorbed.contains(&p.part.id))
-        .map(|p| p.part.clone())
+        .map(|p| (*p.part).clone())
         .collect()
 }
 
@@ -563,7 +1264,7 @@ fn derived_source_keys(features: &[Feature]) -> Vec<u64> {
 }
 
 /// The chain key before the first feature.
-const CHAIN_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+pub(crate) const CHAIN_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
 /// Feeds formatted text into a hasher.
 struct HashWriter<'a>(&'a mut DefaultHasher);
@@ -578,12 +1279,22 @@ impl std::fmt::Write for HashWriter<'_> {
 /// The cache key of a feature: its parameters chained onto the key of the features before it.
 /// The cache key after feature `f`: its id and every parameter. (The id too: outputs are filed
 /// under it, such as a Plane's frame, and two documents can hold features with equal parameters.)
-fn chain_key(before: u64, f: &Feature) -> u64 {
+pub(crate) fn chain_key(before: u64, f: &Feature) -> u64 {
     let mut h = DefaultHasher::new();
     before.hash(&mut h);
     f.id.0.hash(&mut h);
     // Every parameter is in the derived Debug output (floats in full precision).
     let _ = write!(HashWriter(&mut h), "{:?}", f.kind);
+    h.finish()
+}
+
+/// [`chain_key`] with `f.kind`'s Debug output written already (`text`): the same key (the
+/// hasher takes the text in one piece as in many).
+fn chain_key_of(before: u64, f: &Feature, text: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    before.hash(&mut h);
+    f.id.0.hash(&mut h);
+    h.write(text.as_bytes());
     h.finish()
 }
 
@@ -612,8 +1323,25 @@ impl Rebuilder {
             skipped_meshes: Default::default(),
             board_bodies: Vec::new(),
             placed_components: HashMap::new(),
+            with_connectors: HashMap::new(),
             #[cfg(feature = "brep")]
             model_bodies: Vec::new(),
+            #[cfg(feature = "brep")]
+            footprint: None,
+            #[cfg(feature = "brep")]
+            footprint_only: false,
+            #[cfg(feature = "brep")]
+            tools: HashMap::new(),
+            #[cfg(feature = "brep")]
+            ahead: true,
+            #[cfg(feature = "brep")]
+            restore_first: false,
+            #[cfg(feature = "brep")]
+            last_final: None,
+            #[cfg(feature = "brep")]
+            reusable: HashMap::new(),
+            #[cfg(all(test, feature = "brep"))]
+            taken: 0,
         }
     }
 
@@ -706,13 +1434,31 @@ impl Rebuilder {
         }
         // When the parts were last shown as far as the rebuild had got, and what they were.
         let mut shown: Option<(Instant, Arc<State>)> = None;
-        for i in 0..last.map_or(0, |l| l + 1) {
-            let f = &features[i];
-            key = chain_key(key, f);
+        // Each part feature's cache key, and why it fails uncomputed: first, for the features
+        // computed ahead too.
+        let mut keys: Vec<Option<(u64, Option<String>)>> = Vec::new();
+        // A sketch's own key (`chain_key(0, f)`), for its region search's time below: from the
+        // same text as its chain key.
+        let mut own_keys: HashMap<FeatureId, u64> = HashMap::new();
+        // (Each feature's text kept for the extrudes' content keys, [`content_key_texts`].)
+        #[cfg(feature = "brep")]
+        let (mut texts, mut first): (Vec<String>, HashMap<FeatureId, usize>) = Default::default();
+        for (i, f) in features[..last.map_or(0, |l| l + 1)].iter().enumerate() {
+            let mut text = String::new();
+            let _ = write!(text, "{:?}", f.kind);
+            if f.sketch().is_some() {
+                own_keys.insert(f.id, chain_key_of(0, f, &text));
+            }
+            key = chain_key_of(key, f, &text);
+            #[cfg(feature = "brep")]
+            {
+                first.entry(f.id).or_insert(i);
+                texts.push(text);
+            }
             if !f.is_part_feature() {
+                keys.push(None);
                 continue;
             }
-            let before = state.clone();
             // A parent below it in the list (PS11.3): it fails, and leaves the parts alone. The
             // chain key covers only what is above, so this outcome gets a key of its own (a
             // result cached while the parent was missing altogether must not stand for it).
@@ -729,6 +1475,39 @@ impl Rebuilder {
             if let Some(why) = &below {
                 key = chain_key_str(key, why);
             }
+            keys.push(Some((key, below)));
+        }
+        // (Known again once this rebuild completes: a stopped one's snapshot is keyed afresh.)
+        #[cfg(feature = "brep")]
+        if self.depth == 0 {
+            self.last_final = None;
+        }
+        // (The app's rebuild: its outputs from the session snapshot when this session hasn't
+        // them, under the final key just found. A snapshot that can't be read is passed over.)
+        #[cfg(feature = "brep")]
+        if self.depth == 0
+            && std::mem::take(&mut self.restore_first)
+            && last.is_some()
+            && !self.entries.contains_key(&key)
+        {
+            let _ = catch_unwind(AssertUnwindSafe(|| self.restore_snapshot_key(key)));
+        }
+        // The parts in `out.names` (a set: searching the list for each part after each feature
+        // took a Part Studio of 600 parts and 1000 features most of a second).
+        let mut named: rustc_hash::FxHashSet<PartId> = Default::default();
+        let mut named_in: Option<Arc<State>> = None;
+        // The features computed ahead of the one being reached ([`Self::compute_ahead`]), and
+        // what each of the run under way waits for ([`Self::plan_ahead`]).
+        #[cfg(feature = "brep")]
+        let mut ahead: HashMap<usize, Ahead> = HashMap::new();
+        #[cfg(feature = "brep")]
+        let mut plan: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..last.map_or(0, |l| l + 1) {
+            let f = &features[i];
+            let Some((key, below)) = keys[i].clone() else {
+                continue;
+            };
+            let before = state.clone();
             // A cached output showing a board's skin that has left the blob cache is made again
             // (an older layout's, or another document's with the same feature ids).
             if self.entries.get(&key).is_some_and(|e| {
@@ -759,6 +1538,9 @@ impl Rebuilder {
                 // Only the last feature's stage is kept (the one a dialog edits).
                 self.stage_for = (Some(i) == last).then_some(f.id);
                 let t0 = Instant::now();
+                let mut time = None;
+                // (Computed: not failing uncomputed, as below its parent.)
+                let computable = below.is_none();
                 let output = match below {
                     Some(why) => Output {
                         state: state.clone(),
@@ -773,19 +1555,108 @@ impl Rebuilder {
                         uses: Vec::new(),
                     },
                     None => {
-                        let _computing = process::computing(key, f);
-                        self.compute_noting_meshes(&features[..i], f, &state)
+                        // Computed ahead, if nothing it read has changed since. Else computed now
+                        // with the features after it that may be, side by side: of the run of them
+                        // from here ([`Self::plan_ahead`]), those not waiting for any still to come,
+                        // not computed yet or no longer valid (again, on the parts now).
+                        #[cfg(feature = "brep")]
+                        {
+                            self.footprint = None;
+                        }
+                        #[cfg(feature = "brep")]
+                        let mut taken =
+                            ahead.remove(&i).and_then(|a| self.take_ahead(a, f, &state));
+                        // As computed before an edit above it, if nothing it reads changed.
+                        #[cfg(feature = "brep")]
+                        if taken.is_none()
+                            && self.depth == 0
+                            && Some(i) != last
+                            && state.sheet_metal.is_empty()
+                            && reuse_ok(f)
+                            && let Some(a) =
+                                self.reusable_for(content_key_texts(features, i, &texts, &first))
+                        {
+                            taken = self
+                                .take_ahead(a, f, &state)
+                                .map(|(o, _)| (o, t0.elapsed()));
+                        }
+                        #[cfg(feature = "brep")]
+                        if taken.is_none()
+                            && self.depth == 0
+                            && self.ahead
+                            && cfg!(not(target_arch = "wasm32"))
+                            && process::ahead_allowed()
+                            && state.sheet_metal.is_empty()
+                            && ahead_ok(f)
+                        {
+                            ahead.retain(|j, _| *j > i);
+                            if !plan.contains_key(&i) {
+                                let run = self.ahead_of(features, &keys, i, last.unwrap_or(0));
+                                plan = if run.len() > 1 {
+                                    self.plan_ahead(features, &run, &state)
+                                } else {
+                                    HashMap::new()
+                                };
+                                ahead.clear();
+                            }
+                            let stale = self.ahead_stale(&ahead, features, i, &state);
+                            let mut batch: Vec<usize> = plan
+                                .iter()
+                                .filter(|(k, waits)| {
+                                    **k == i
+                                        || (**k > i
+                                            && (!ahead.contains_key(k) || stale.contains(k))
+                                            && waits.iter().all(|w| *w < i))
+                                })
+                                .map(|(k, _)| *k)
+                                .collect();
+                            batch.sort_unstable();
+                            if batch.len() > 1 {
+                                ahead.extend(self.compute_ahead(features, &batch, &state));
+                                taken =
+                                    ahead.remove(&i).and_then(|a| self.take_ahead(a, f, &state));
+                            }
+                        }
+                        #[cfg(not(feature = "brep"))]
+                        let taken: Option<(Output, Duration)> = None;
+                        let o = match taken {
+                            Some((o, t)) => {
+                                #[cfg(all(test, feature = "brep"))]
+                                {
+                                    self.taken += 1;
+                                }
+                                time = Some(t);
+                                o
+                            }
+                            None => {
+                                let _computing = process::computing(key, f);
+                                self.compute_noting_meshes(&features[..i], f, &state)
+                            }
+                        };
+                        #[cfg(feature = "brep")]
+                        self.drop_tool(f.id, &o);
+                        o
                     }
                 };
                 let sources = match &f.kind {
                     FeatureKind::Derived(_) => derived_source_keys(std::slice::from_ref(f)),
                     _ => Vec::new(),
                 };
+                #[cfg(feature = "brep")]
+                if computable && self.depth == 0 && reuse_ok(f) {
+                    let r = Reusable {
+                        entry: key,
+                        snapshot: state.clone(),
+                        footprint: self.footprint.take(),
+                    };
+                    self.reusable
+                        .insert(content_key_texts(features, i, &texts, &first), r);
+                }
                 self.entries.insert(
                     key,
                     Entry {
                         output,
-                        time: t0.elapsed(),
+                        time: time.unwrap_or_else(|| t0.elapsed()),
                         last_used: generation,
                         sources,
                     },
@@ -826,10 +1697,19 @@ impl Rebuilder {
             }
             out.times.push((f.id, entry.time));
             self.trail.push((f.id, state.clone()));
-            for p in &state.parts {
-                if !out.names.iter().any(|(id, _)| *id == p.part.id) {
-                    out.names.push((p.part.id, p.part.name.clone()));
+            // (A state the feature before left as it is names no part anew, nor does a part
+            // where the state before had the same one: both were named then.)
+            if !named_in.as_ref().is_some_and(|s| Arc::ptr_eq(s, &state)) {
+                let before = named_in.as_ref().map_or(&[][..], |s| &s.parts[..]);
+                for (j, p) in state.parts.iter().enumerate() {
+                    if before.get(j).is_some_and(|q| q.part.id == p.part.id) {
+                        continue;
+                    }
+                    if named.insert(p.part.id) {
+                        out.names.push((p.part.id, p.part.name.clone()));
+                    }
                 }
+                named_in = Some(state.clone());
             }
             if let Some(e) = &entry.output.error {
                 out.errors.push((f.id, e.clone()));
@@ -876,25 +1756,36 @@ impl Rebuilder {
             }
             out.stage = entry.output.stage.clone().map(|s| (f.id, s));
         }
+        // The bodies made for planning features not reached (a stop, a failure before).
+        #[cfg(feature = "brep")]
+        for (_, p) in std::mem::take(&mut self.tools) {
+            cadrs_kernel::Kernel::release(&mut self.kernel, p.tool.0);
+        }
         // Like the part features, only the sketches up to the last part feature regenerate (a
         // sketch being drawn at the end of the list costs nothing).
         for f in &features[..last.map_or(0, |l| l + 1)] {
             let Some(sk) = f.sketch() else { continue };
-            let k = chain_key(0, f);
+            let k = own_keys
+                .get(&f.id)
+                .copied()
+                .unwrap_or_else(|| chain_key(0, f));
             let t = match self.sketch_times.get(&f.id) {
                 Some((key, t)) if *key == k => *t,
                 _ => {
-                    let t0 = Instant::now();
-                    std::hint::black_box(cadrs_sketch::region::regions(&sk.geometry));
-                    let t = t0.elapsed();
+                    let t = cadrs_sketch::region::regions_timed(&sk.geometry).1;
                     self.sketch_times.insert(f.id, (k, t));
                     t
                 }
             };
             out.sketch_times.push((f.id, t));
         }
-        self.sketch_times
-            .retain(|id, _| features.iter().any(|f| f.id == *id));
+        // (Kept for sketches a rebuild leaves out, as the features up to a sketch on a face are
+        // rebuilt for it alone: the next whole list timed theirs again, a region search of each
+        // big sketch, tens of milliseconds a rebuild. Trimmed once there are many more.)
+        if self.sketch_times.len() > 4 * features.len() + 256 {
+            let ids: HashSet<FeatureId> = features.iter().map(|f| f.id).collect();
+            self.sketch_times.retain(|id, _| ids.contains(id));
+        }
         out.composites = state
             .composites
             .iter()
@@ -920,49 +1811,55 @@ impl Rebuilder {
             .parts
             .iter()
             .filter(|p| !absorbed.contains(&p.part.id))
-            .map(|p| p.part.clone())
+            .map(|p| (*p.part).clone())
             .collect();
         out.planes = state.planes.clone();
         out.curves = state.curves.clone();
         out.connectors = state.connectors.clone();
-        // P3B.7 (A22.2): each part carries the explicit connectors it owns, in list order.
-        for f in features {
-            let (Some(owner), Some(frame)) = (
-                state.connector_owners.get(&f.id),
-                state.connectors.get(&f.id),
-            ) else {
-                continue;
-            };
-            if let Some(p) = out.parts.iter_mut().find(|p| p.id == *owner) {
-                std::sync::Arc::make_mut(&mut p.solid).connectors.push(
-                    crate::solid::SolidConnector {
-                        feature: f.id,
+        // P3B.7 (A22.2): each part carries the explicit connectors it owns, in list order; P3G.4:
+        // and the mate connectors Derived features brought in, with their derived parts.
+        let mut owned: HashMap<PartId, Vec<crate::solid::SolidConnector>> = HashMap::new();
+        let mut own = |c: &FeatureId| {
+            if let (Some(owner), Some(frame)) =
+                (state.connector_owners.get(c), state.connectors.get(c))
+            {
+                owned
+                    .entry(*owner)
+                    .or_default()
+                    .push(crate::solid::SolidConnector {
+                        feature: *c,
                         frame: *frame,
-                    },
-                );
+                    });
             }
-        }
-        // P3G.4: the mate connectors Derived features brought in go with their derived parts.
+        };
         for f in features {
-            let Some(d) = state.derived.get(&f.id) else {
-                continue;
-            };
-            for (c, _) in &d.connectors {
-                let (Some(owner), Some(frame)) =
-                    (state.connector_owners.get(c), state.connectors.get(c))
-                else {
-                    continue;
-                };
-                if let Some(p) = out.parts.iter_mut().find(|p| p.id == *owner) {
-                    std::sync::Arc::make_mut(&mut p.solid).connectors.push(
-                        crate::solid::SolidConnector {
-                            feature: *c,
-                            frame: *frame,
-                        },
-                    );
+            own(&f.id);
+        }
+        for f in features {
+            if let Some(d) = state.derived.get(&f.id) {
+                for (c, _) in &d.connectors {
+                    own(c);
                 }
             }
         }
+        for p in &mut out.parts {
+            let Some(connectors) = owned.remove(&p.id) else {
+                continue;
+            };
+            let at = Arc::as_ptr(&p.solid) as usize;
+            let with = match self.with_connectors.remove(&at) {
+                Some((base, c, with, _)) if c == connectors => (base, c, with, generation),
+                _ => {
+                    let mut with = (*p.solid).clone();
+                    with.connectors.extend(connectors.iter().copied());
+                    (p.solid.clone(), connectors, Arc::new(with), generation)
+                }
+            };
+            p.solid = with.2.clone();
+            self.with_connectors.insert(at, with);
+        }
+        self.with_connectors
+            .retain(|_, w| w.3 + CONNECTORS_KEPT > generation);
         out.derived = (*state.derived).clone();
         out.derived_sketches = (*state.derived_sketches).clone();
         out.sheet_metal = (*state.sheet_metal).clone();
@@ -970,6 +1867,10 @@ impl Rebuilder {
             self.depth != 0 || key == final_key(features),
             "final_key must follow the rebuild's keys"
         );
+        #[cfg(feature = "brep")]
+        if self.depth == 0 {
+            self.last_final = Some(key);
+        }
         self.trail.clear();
         self.last = state;
         self.evict();
@@ -1865,7 +2766,7 @@ impl Rebuilder {
         x: &crate::mate::MateConnectorFeature,
         state: &Arc<State>,
     ) -> Result<Output, String> {
-        let parts: Vec<Part> = state.parts.iter().map(|p| p.part.clone()).collect();
+        let parts: Vec<Part> = state.parts.iter().map(|p| (*p.part).clone()).collect();
         #[allow(unused_mut)]
         let mut base = x.base_frame(before, &parts)?;
         // P3.11: the Alignment entity's direction is the primary axis.
@@ -1901,7 +2802,7 @@ fn connector_frame(
     state: &State,
     c: &crate::mate::ConnectorRef,
 ) -> Result<cadrs_sketch::PlaneFrame, String> {
-    let parts: Vec<Part> = state.parts.iter().map(|p| p.part.clone()).collect();
+    let parts: Vec<Part> = state.parts.iter().map(|p| (*p.part).clone()).collect();
     crate::mate::frame(c, before, &parts, &state.connectors)
 }
 
@@ -2227,6 +3128,22 @@ mod kernel_ops {
             for (plane, input) in faces {
                 sweeps.push((cadrs_kernel::Profile::new(plane, vec![]), vec![input]));
             }
+            // Its body made already, for planning the features computed ahead (from the same
+            // sketches).
+            let planned = if self.depth == 0 {
+                self.tools.remove(&id)
+            } else {
+                None
+            };
+            let planned = planned.and_then(|p| {
+                let (was, now) = (&p.sketches, &state.derived_sketches);
+                if Arc::ptr_eq(was, now) || (was.is_empty() && now.is_empty()) {
+                    Some(p.tool)
+                } else {
+                    self.kernel.release(p.tool.0);
+                    None
+                }
+            });
             let mut made: Vec<(BodyId, BodyNames)> = Vec::new();
             let mut dir0 = None;
             for (profile, inputs) in &sweeps {
@@ -2234,6 +3151,9 @@ mod kernel_ops {
                 let dir = explicit_dir.unwrap_or(n);
                 let dir = if e.flip { -dir } else { dir };
                 dir0.get_or_insert(dir);
+                if planned.is_some() {
+                    continue;
+                }
                 let spec = ExtrudeSpec {
                     body: body_kind,
                     direction: dir,
@@ -2285,9 +3205,10 @@ mod kernel_ops {
             geoms.insert(op, Arc::new(crate::brep::OpGeom::new(&groups, n0, e.depth)));
             let geoms = Arc::new(geoms);
             // One tool body.
-            let tool = match made.len() {
-                1 => made.pop().expect("one"),
-                _ => {
+            let tool = match (planned, made.len()) {
+                (Some(t), _) => t,
+                (None, 1) => made.pop().expect("one"),
+                (None, _) => {
                     let (first_b, _) = made[0];
                     let rest: Vec<BodyId> = made[1..].iter().map(|(b, _)| *b).collect();
                     let merged = self
@@ -2308,6 +3229,12 @@ mod kernel_ops {
                     merged.map_err(|err| format!("Extrude failed: {err}"))?
                 }
             };
+            self.footprint = self.kernel.bounding_box(tool.0).ok();
+            if self.footprint_only {
+                let sketches = state.derived_sketches.clone();
+                self.tools.insert(id, Planned { tool, sketches });
+                return Err(String::new());
+            }
             let merge = Merge {
                 op: e.op,
                 merge_all: e.merge_all,
@@ -2361,7 +3288,7 @@ mod kernel_ops {
                 })
                 .flatten()
                 .map(|s| Stage {
-                    before: state.parts.iter().map(|p| p.part.clone()).collect(),
+                    before: state.parts.iter().map(|p| (*p.part).clone()).collect(),
                     tool: Arc::new(s),
                     more: Vec::new(),
                     remove: false,
@@ -2371,7 +3298,7 @@ mod kernel_ops {
                 let cut = removed.and_then(|mut v| {
                     let first = (!v.is_empty()).then(|| v.remove(0))?;
                     Some(Stage {
-                        before: o.state.parts.iter().map(|p| p.part.clone()).collect(),
+                        before: o.state.parts.iter().map(|p| (*p.part).clone()).collect(),
                         tool: first,
                         more: v,
                         remove: true,
@@ -2559,10 +3486,11 @@ mod kernel_ops {
                     Some(p) => {
                         p.body = Some(piece.body);
                         p.names = names;
-                        p.part.solid = Arc::new(solid);
-                        p.part.mass = Some(mass);
-                        if !p.part.features.contains(&id) {
-                            p.part.features.push(id);
+                        let part = p.part_mut();
+                        part.solid = Arc::new(solid);
+                        part.mass = Some(mass);
+                        if !part.features.contains(&id) {
+                            part.features.push(id);
                         }
                     }
                     None => {
@@ -2577,7 +3505,7 @@ mod kernel_ops {
                             }
                         };
                         next.parts.push(PartState {
-                            part: Part {
+                            part: Arc::new(Part {
                                 id: pid,
                                 feature: pid.feature,
                                 name,
@@ -2588,7 +3516,7 @@ mod kernel_ops {
                                 features: vec![id],
                                 source: None,
                                 derived: None,
-                            },
+                            }),
                             body: Some(piece.body),
                             names,
                         });
@@ -2863,14 +3791,34 @@ mod kernel_ops {
             // Overlapping, else touching: their union is one solid. A body that adds is asked
             // whether it touches first (its union is the Add's); where that union fails or
             // falls apart, whether they overlap all the same (a boolean's trouble with them).
+            // For the dialog alone (a New), one boolean run each: no retries of a union a
+            // boolean can't make (a block touching a terrain along an edge, 0.3 s).
+            let joins = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
+                if only_ui {
+                    k.joins_once(b, tool)
+                } else {
+                    k.joins(b, tool)
+                }
+                .unwrap_or(false)
+            };
+            let overlaps = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
+                if only_ui {
+                    k.overlaps_once(b, tool)
+                } else {
+                    k.overlaps(b, tool)
+                }
+                .unwrap_or(false)
+            };
+            // (A body that cuts is asked only whether it overlaps: what it touches beside isn't
+            // read, its scope being the parts it overlaps.)
             let check = |k: &mut cadrs_kernel::DefaultKernel, b: BodyId| {
-                let joined = adds && k.joins(b, tool).unwrap_or(false);
+                let joined = adds && joins(k, b);
                 if joined {
-                    (true, k.overlaps(b, tool).unwrap_or(false))
-                } else if k.overlaps(b, tool).unwrap_or(false) {
+                    (true, overlaps(k, b))
+                } else if overlaps(k, b) {
                     (true, true)
                 } else {
-                    (!adds && k.joins(b, tool).unwrap_or(false), false)
+                    (false, false)
                 }
             };
             // The parts near it side by side, each in a fork of the session (a boolean each),
@@ -2880,9 +3828,8 @@ mod kernel_ops {
                 let kernel = &self.kernel;
                 let forks: Vec<(cadrs_kernel::DefaultKernel, (bool, bool))> = near
                     .par_iter()
-                    .enumerate()
-                    .map(|(i, &(_, b))| {
-                        let mut k = kernel.fork(i as u64);
+                    .map(|&(_, b)| {
+                        let mut k = kernel.fork();
                         let r = check(&mut k, b);
                         (k, r)
                     })
@@ -3924,7 +4871,7 @@ pub fn sketch_chains(sketch: FeatureId, g: &Sketch) -> Vec<ChainGeom> {
 
 enum Job {
     Rebuild {
-        features: Vec<Feature>,
+        features: Arc<[Feature]>,
         /// Which request it is ([`Pending::ticket`]).
         ticket: u64,
         reply: mpsc::Sender<Arc<Build>>,
@@ -4091,9 +5038,10 @@ fn run_job(rebuilder: &mut Rebuilder, job: Job, pending_save: &mut PendingSave) 
                 return;
             }
             start_progress(ticket);
+            // (Restored from the session snapshot once the rebuild has the final key.)
             #[cfg(feature = "brep")]
-            if persist {
-                let _ = catch_unwind(AssertUnwindSafe(|| rebuilder.restore_snapshot(&features)));
+            {
+                rebuilder.restore_first = persist;
             }
             #[cfg(not(feature = "brep"))]
             let _ = persist;
@@ -4544,17 +5492,23 @@ impl Drop for Pending {
 
 /// Starts rebuilding `features` on the worker thread.
 pub fn request(features: Vec<Feature>) -> Pending {
-    request_with(features, false)
+    request_with(features.into(), false)
 }
 
 /// Starts the app's rebuild of a Part Studio's `features` on the worker thread: restored from
 /// a session snapshot when the session doesn't have their outputs, and snapshotted afterwards
 /// ([`session`]).
 pub fn request_persisted(features: Vec<Feature>) -> Pending {
+    request_with(features.into(), true)
+}
+
+/// [`request_persisted`] of features shared with the caller (who reads them too, without a
+/// copy of its own).
+pub fn request_persisted_shared(features: Arc<[Feature]>) -> Pending {
     request_with(features, true)
 }
 
-fn request_with(features: Vec<Feature>, persist: bool) -> Pending {
+fn request_with(features: Arc<[Feature]>, persist: bool) -> Pending {
     let (reply, rx) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let ticket = NEXT_TICKET.fetch_add(1, Ordering::Relaxed);
@@ -4937,4 +5891,349 @@ fn layout_with(features: &[Feature], fp: uuid::Uuid) -> Option<&cadrs_eda::board
             .or_else(|| layout_with(&d.studio, fp)),
         _ => None,
     })
+}
+
+#[cfg(all(test, feature = "brep"))]
+mod ahead_tests {
+    use super::*;
+    use crate::History;
+    use crate::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+    use crate::document::{BooleanOp, Document};
+    use cadrs_sketch::{PlaneRef, SketchOp};
+
+    /// A sketch on Top of the rectangle `x0..x1` × `y0..y1`, extruded `depth` with `op`.
+    fn block(d: &mut Document, h: &mut History, rect: [f64; 4], depth: f64, op: BooleanOp) {
+        let el = d.elements[0].id;
+        let [x0, y0, x1, y1] = rect;
+        let s = FeatureId::new();
+        let add = AddSketch {
+            element: el,
+            feature: s,
+            plane: Some(PlaneRef::Top),
+        };
+        h.execute(d, &add).unwrap();
+        let points = vec![
+            Vec2::new(x0, y0),
+            Vec2::new(x1, y0),
+            Vec2::new(x1, y1),
+            Vec2::new(x0, y1),
+        ];
+        let edit = EditSketch {
+            element: el,
+            feature: s,
+            op: SketchOp::AddPolyline {
+                points,
+                closed: true,
+                construction: false,
+                label: "Add",
+            },
+        };
+        h.execute(d, &edit).unwrap();
+        let g = &d
+            .element(el)
+            .unwrap()
+            .feature(s)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry;
+        let seed = Vec2::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let regions = crate::samples::region_refs(s, g, &[seed]);
+        let e = FeatureId::new();
+        let add = AddExtrude {
+            element: el,
+            feature: e,
+            extrude: ExtrudeFeature::default(),
+        };
+        h.execute(d, &add).unwrap();
+        let set = SetExtrude {
+            element: el,
+            feature: e,
+            extrude: ExtrudeFeature {
+                regions,
+                depth,
+                depth_expr: format!("{depth} mm"),
+                op,
+                ..ExtrudeFeature::default()
+            },
+            label: "Extrude".into(),
+        };
+        h.execute(d, &set).unwrap();
+    }
+
+    /// What a build made, to compare: each part's name, colour, features and shape, and the
+    /// errors.
+    fn made(b: &Build) -> Vec<String> {
+        let mut out: Vec<String> = b
+            .parts
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} {:?} palette {} features {:?} volume {:.9} faces {} edges {}",
+                    p.name,
+                    p.id,
+                    p.palette,
+                    p.features,
+                    p.mass.map_or(0.0, |m| m.volume),
+                    p.solid.faces.len(),
+                    p.solid.edges.len()
+                )
+            })
+            .collect();
+        out.extend(b.errors.iter().map(|(f, e)| format!("error {f:?}: {e}")));
+        out
+    }
+
+    /// An edit in the middle of the list takes over the results of the features after it that
+    /// read nothing it changed, and gives what a rebuild from scratch does.
+    #[test]
+    fn results_taken_over_after_an_edit_as_from_scratch() {
+        let mut d = Document::new("Blocks");
+        let mut h = History::default();
+        for i in 0..8 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x, 0.0, x + 10.0, 10.0],
+                10.0,
+                BooleanOp::New,
+            );
+        }
+        for i in 0..3 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x + 5.0, 2.0, x + 25.0, 8.0],
+                5.0,
+                BooleanOp::Add,
+            );
+        }
+        for i in 4..7 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x + 3.0, 3.0, x + 7.0, 7.0],
+                10.0,
+                BooleanOp::Remove,
+            );
+        }
+        let features = d.elements[0].features().to_vec();
+        let mut r = Rebuilder {
+            ahead: false,
+            ..Rebuilder::new()
+        };
+        r.rebuild(&features);
+        // The second block 3 mm deeper: the bar on it changes, the cuts far off don't.
+        let mut edited = features.clone();
+        let k = edited
+            .iter()
+            .position(|f| matches!(&f.kind, FeatureKind::Extrude(_)))
+            .and_then(|first| {
+                edited[first + 1..]
+                    .iter()
+                    .position(|f| matches!(&f.kind, FeatureKind::Extrude(_)))
+                    .map(|n| first + 1 + n)
+            })
+            .expect("two extrudes");
+        if let FeatureKind::Extrude(e) = &mut edited[k].kind {
+            e.depth += 3.0;
+            e.depth_expr = format!("{} mm", e.depth);
+        }
+        r.taken = 0;
+        let again = r.rebuild(&edited);
+        let fresh = Rebuilder {
+            ahead: false,
+            ..Rebuilder::new()
+        }
+        .rebuild(&edited);
+        assert!(r.taken > 0, "nothing was taken over");
+        assert_eq!(made(&again), made(&fresh));
+    }
+
+    /// Features computed ahead, side by side, give what computing them in order does: blocks
+    /// apart (New), bars joining neighbours (Adds that wait for each other), an Add touching
+    /// nothing (a new part, numbered as the parts before it are), cuts and an overlapping New.
+    #[test]
+    fn computed_ahead_as_in_order() {
+        let mut d = Document::new("Blocks");
+        let mut h = History::default();
+        for i in 0..6 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x, 0.0, x + 10.0, 10.0],
+                10.0,
+                BooleanOp::New,
+            );
+        }
+        for i in 0..5 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x + 5.0, 2.0, x + 25.0, 8.0],
+                5.0,
+                BooleanOp::Add,
+            );
+        }
+        block(&mut d, &mut h, [0.0, 40.0, 10.0, 50.0], 4.0, BooleanOp::Add);
+        for i in 0..3 {
+            let x = 40.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x + 3.0, 3.0, x + 7.0, 7.0],
+                10.0,
+                BooleanOp::Remove,
+            );
+        }
+        block(&mut d, &mut h, [5.0, 5.0, 15.0, 15.0], 3.0, BooleanOp::New);
+        block(
+            &mut d,
+            &mut h,
+            [60.0, 40.0, 70.0, 50.0],
+            4.0,
+            BooleanOp::Add,
+        );
+        let features = d.elements[0].features().to_vec();
+        let mut in_order = Rebuilder {
+            ahead: false,
+            ..Rebuilder::new()
+        };
+        let mut ahead = Rebuilder::new();
+        let (a, b) = (in_order.rebuild(&features), ahead.rebuild(&features));
+        assert!(ahead.taken > 0, "nothing was computed ahead");
+        assert_eq!(made(&b), made(&a));
+        assert!(b.errors.is_empty(), "{:?}", b.errors);
+        // The blocks, bars and cuts one part; the other three numbered on.
+        let parts: Vec<(&str, u32, f64)> = b
+            .parts
+            .iter()
+            .map(|p| (&*p.name, p.palette, p.mass.map_or(0.0, |m| m.volume)))
+            .collect();
+        let want = [
+            ("Part 1", 0, 7020.0),
+            ("Part 7", 6, 400.0),
+            ("Part 8", 7, 300.0),
+            ("Part 9", 8, 400.0),
+        ];
+        assert_eq!(parts.len(), want.len(), "{parts:?}");
+        for ((name, palette, volume), (n, c, v)) in parts.iter().zip(want) {
+            assert_eq!((*name, *palette), (n, c));
+            assert!((volume - v).abs() < 1e-6, "{name}: {volume}");
+        }
+    }
+
+    /// A Boolean and a Transform are taken over after an edit above them that leaves their parts
+    /// alone (and so are the features after them reading the parts they made), and computed
+    /// again after one that changes them: each as a rebuild from scratch gives it.
+    #[test]
+    fn booleans_and_transforms_taken_over_as_from_scratch() {
+        use crate::document::{BooleanFeature, BooleanKind};
+        use crate::transform::{TransformFeature, TransformType};
+        let mut d = Document::new("Blocks");
+        let mut h = History::default();
+        let last = |d: &Document| d.elements[0].features().last().expect("a feature").id;
+        let mut blocks = Vec::new();
+        for i in 0..8 {
+            let x = 20.0 * i as f64;
+            block(
+                &mut d,
+                &mut h,
+                [x, 0.0, x + 10.0, 10.0],
+                10.0,
+                BooleanOp::New,
+            );
+            blocks.push(last(&d));
+        }
+        // A block across the third and fourth, joined to the third.
+        block(&mut d, &mut h, [45.0, 2.0, 65.0, 8.0], 6.0, BooleanOp::New);
+        let across = last(&d);
+        // A cut through the sixth block once it is moved up; and one more block, last.
+        block(
+            &mut d,
+            &mut h,
+            [103.0, 3.0, 107.0, 7.0],
+            50.0,
+            BooleanOp::Remove,
+        );
+        block(&mut d, &mut h, [0.0, 40.0, 10.0, 50.0], 4.0, BooleanOp::New);
+        let mut features = d.elements[0].features().to_vec();
+        let at = features
+            .iter()
+            .position(|f| f.id == across)
+            .expect("the block across")
+            + 1;
+        let part = |f: FeatureId| PartId::new(f, 0);
+        let union = Feature {
+            id: FeatureId::new(),
+            name: "Union".into(),
+            kind: FeatureKind::Boolean(BooleanFeature {
+                op: BooleanKind::Union,
+                tools: vec![part(blocks[2]), part(across)],
+                targets: Vec::new(),
+                keep_tools: false,
+                offset: None,
+            }),
+            suppress_by: None,
+        };
+        let up = Feature {
+            id: FeatureId::new(),
+            name: "Up".into(),
+            kind: FeatureKind::Transform(TransformFeature {
+                transform_type: TransformType::TranslateXyz,
+                parts: vec![part(blocks[5]), part(blocks[6])],
+                dz: 30.0,
+                dz_expr: "30 mm".into(),
+                ..TransformFeature::default()
+            }),
+            suppress_by: None,
+        };
+        features.insert(at, up);
+        features.insert(at, union);
+        let first = Rebuilder::new().rebuild(&features);
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let deeper = |features: &[Feature], id: FeatureId| -> Vec<Feature> {
+            let mut out = features.to_vec();
+            for f in &mut out {
+                if f.id == id
+                    && let FeatureKind::Extrude(e) = &mut f.kind
+                {
+                    e.depth += 3.0;
+                    e.depth_expr = format!("{} mm", e.depth);
+                }
+            }
+            out
+        };
+        // Each edit, and how many of the part features after it are taken over: all of them but
+        // the last (computed for its dialog's stage) after the second block; after the sixth,
+        // not the Transform moving it nor the cut through it; after the block across, not the
+        // Boolean joining it.
+        for (id, computed) in [(blocks[1], 1), (blocks[5], 3), (across, 2)] {
+            let edited = deeper(&features, id);
+            let k = edited.iter().position(|f| f.id == id).expect("edited");
+            let after = edited[k + 1..]
+                .iter()
+                .filter(|f| f.is_part_feature())
+                .count();
+            let mut r = Rebuilder {
+                ahead: false,
+                ..Rebuilder::new()
+            };
+            r.rebuild(&features);
+            r.taken = 0;
+            let again = r.rebuild(&edited);
+            let fresh = Rebuilder {
+                ahead: false,
+                ..Rebuilder::new()
+            }
+            .rebuild(&edited);
+            assert_eq!(made(&again), made(&fresh));
+            assert_eq!(r.taken, after - computed, "after {id:?}");
+        }
+    }
 }

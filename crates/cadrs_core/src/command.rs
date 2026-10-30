@@ -102,6 +102,16 @@ impl Snapshot {
         }
     }
 
+    /// The scope it was taken of.
+    fn scope(&self) -> Scope {
+        match self {
+            Snapshot::Document(_) => Scope::Document,
+            Snapshot::Whole(_) => Scope::Whole,
+            Snapshot::Element { element, .. } => Scope::Element(element.id),
+            Snapshot::ElementName { id, .. } => Scope::ElementName(*id),
+        }
+    }
+
     /// The element whose contents this snapshot holds.
     fn element_id(&self) -> Option<ElementId> {
         match self {
@@ -208,8 +218,12 @@ impl History {
     pub fn execute(&mut self, doc: &mut Document, cmd: &dyn Command) -> Result<(), CommandError> {
         let scope = cmd.scope();
         let before = Snapshot::take(doc, scope)?;
+        // (Sketches on parts left for later, with the app's switch on.)
+        let deferring = crate::parts::Deferring::enter();
         if let Err(e) = cmd.apply(doc) {
             before.restore(doc);
+            drop(deferring);
+            crate::parts::take_deferred();
             return Err(e);
         }
         // The Variable Studios' variables reach every Part Studio and Assembly first, so the
@@ -217,6 +231,7 @@ impl History {
         crate::variable_studio::propagate(doc, Some(scope));
         // P3G.4: Derived features that follow a tab of this document live.
         crate::derived::refresh(doc);
+        drop(deferring);
         let after = Snapshot::take(doc, scope)?;
         if after == before {
             // A no-op (e.g. renaming to the same name) is not worth an undo step.
@@ -235,6 +250,24 @@ impl History {
         Ok(())
     }
 
+    /// Takes what was done to `doc` since the last undo step into it, without a step of its
+    /// own: the sketches its command left, regenerated later ([`crate::parts::defer_regeneration`]).
+    /// Only while the stacks are as they were at `revision` (else false: nothing is taken).
+    pub fn amend_last(&mut self, doc: &Document, revision: u64) -> bool {
+        if self.revision != revision {
+            return false;
+        }
+        let Some(e) = self.undo.last_mut() else {
+            return false;
+        };
+        let Ok(after) = Snapshot::take(doc, e.after.scope()) else {
+            return false;
+        };
+        e.after = after;
+        self.bump();
+        true
+    }
+
     /// Carries an edit someone else made (editing together, [`crate::collab::sync`]) into
     /// every undo and redo step's copies, so that undoing one's own edit afterwards takes back
     /// only that: their features, tabs and changes stay.
@@ -249,6 +282,7 @@ impl History {
     pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
         let entry = self.undo.pop()?;
         entry.before.restore(doc);
+        crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
         let label = entry.label.clone();
@@ -261,6 +295,7 @@ impl History {
     pub fn redo(&mut self, doc: &mut Document) -> Option<String> {
         let entry = self.redo.pop()?;
         entry.after.restore(doc);
+        crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
         let label = entry.label.clone();

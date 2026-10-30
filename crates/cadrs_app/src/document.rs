@@ -2730,7 +2730,8 @@ fn auto_save(
     let Some(mut doc) = doc else {
         return;
     };
-    if doc.is_changed() {
+    // (Not while sketches regenerate in the background: saving waits for them.)
+    if doc.is_changed() || doc.is_regenerating() {
         *quiet_for = 0.0;
         *checked = false;
         return;
@@ -2746,10 +2747,11 @@ fn auto_save(
     }
     *checked = true;
     if doc.is_dirty() {
-        let d = doc.bypass_change_detection();
-        if let Err(e) = d.save_if_changed(&store.0, clock.now(), &user.id) {
-            error!("cannot save document: {e}");
-        }
+        doc.bypass_change_detection().save_if_changed_in_background(
+            &store.0,
+            clock.now(),
+            &user.id,
+        );
     }
 }
 
@@ -3912,6 +3914,10 @@ fn rebuild_feature_rows(
             let folder = folders.iter().find(|f| f.features.contains(id));
             if let Some(f) = folder {
                 let first_shown = f.features.iter().find(|x| state.shows(**x));
+                if first_shown == Some(id) {
+                    // (Placed by its index too: a rebuild's list follows a closed folder.)
+                    row_slots.0.insert(f.id, slots.next_index());
+                }
                 if first_shown == Some(id) && slots.take(FEATURE_ROW_PITCH) {
                     let open = f.open || state.filtering();
                     // Filtered: how many of its features match (P3.11).
