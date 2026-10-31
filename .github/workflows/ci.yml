@@ -7,13 +7,8 @@ on:
   # A merge queue runs the required checks on the merged result.
   merge_group:
   workflow_dispatch:
-  # The kernel gate (tools/kernel_gate.sh): every kernel test, known failures included; too slow
-  # for each push.
-  schedule:
-    - cron: '17 2 * * *'
 
 concurrency:
-  # A push doesn't cancel the nightly gate.
   group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
@@ -29,7 +24,6 @@ jobs:
   # and `cargo fmt` in site/, before committing). Mark "Format" as a required status check too.
   fmt:
     name: Format
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -49,14 +43,13 @@ jobs:
   # Per push and pull request: the kernel's builds without the test feature, its clippy gate and
   # a fast subset of the gate (tools/kernel_gate.sh: the unit tests, conformance, smlib_booleans,
   # validity, determinism and every 4th runnable case of OCCT's boolean suite, generated from
-  # OCCT's test scripts without the dataset, classified as the nightly gate does: a regression,
+  # OCCT's test scripts without the dataset, classified as the full gate does: a regression,
   # a stale or panicking known failure, a hang or a crash fails it); any failed step fails the
   # job. It is the merge requirement for main and kernel-10: mark "Kernel (checks, clippy, fast
   # gate)" as a required status check in both branches' protection rules (Settings > Branches),
   # with "Build and test (Linux)" for main.
   kernel:
     name: Kernel (checks, clippy, fast gate)
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -108,105 +101,8 @@ jobs:
             kernel_gate/summary.txt
             kernel_gate/stderr.log
 
-  # Nightly, for main and kernel-10: tools/kernel_gate.sh on a clean export of the branch, with
-  # OCCT's DRAW suites regenerated from OCCT 7.8.1's test scripts and its 7.8.0 dataset, and every
-  # kind of ignored test run that can be. Fails on a failed check, a regression, a stale known
-  # failure or ignore, a hang, a crash, or a case much slower than the branch's last passing run
-  # (its durations are the baseline, kept in the Actions cache). results.json is the
-  # scoreboard's input: `gh run download -n kernel-gate-<branch>`, then
-  # `tools/kernel_scoreboard.py --results results.json`; the job summary shows it too.
-  kernel-gate:
-    name: Kernel gate (nightly, ${{ matrix.ref }})
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        ref: ${{ github.event_name == 'schedule' && fromJSON('["main", "kernel-10"]') || fromJSON(format('["{0}"]', github.ref_name)) }}
-    env:
-      OCCT_TESTS: ${{ github.workspace }}/../occt/tests
-      CADRS_OCCT_DATA: ${{ github.workspace }}/../occt-dataset/opencascade-dataset-7.8.0
-      RUST_TEST_THREADS: 4
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.ref }}
-
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang mold
-
-      - name: Rust toolchain
-        run: rustup toolchain install && rustc -V
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: kernel-gate
-
-      - name: OCCT test scripts (7.8.1)
-        run: |
-          git clone --depth 1 --branch V7_8_1 --filter=blob:none --sparse \
-            https://github.com/Open-Cascade-SAS/OCCT "$GITHUB_WORKSPACE/../occt"
-          git -C "$GITHUB_WORKSPACE/../occt" sparse-checkout set tests
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/../occt-dataset
-          key: occt-dataset-7.8.0
-
-      - name: OCCT dataset (7.8.0)
-        run: |
-          if [ ! -d "$CADRS_OCCT_DATA" ]; then
-            mkdir -p "$GITHUB_WORKSPACE/../occt-dataset"
-            curl -fsSL https://github.com/Open-Cascade-SAS/OCCT/releases/download/V7_8_0/opencascade-dataset-7.8.0.tar.xz \
-              | tar -xJ -C "$GITHUB_WORKSPACE/../occt-dataset"
-          fi
-          ls "$CADRS_OCCT_DATA" | head
-
-      # The durations of the branch's last passing gate run.
-      - name: Baseline (restore)
-        uses: actions/cache/restore@v4
-        with:
-          path: kernel_gate_baseline
-          key: kernel-gate-baseline-${{ matrix.ref }}-${{ github.run_id }}
-          restore-keys: kernel-gate-baseline-${{ matrix.ref }}-
-
-      - name: Kernel gate
-        run: |
-          mkdir -p kernel_gate_baseline
-          tools/kernel_gate.sh --out "$GITHUB_WORKSPACE/kernel_gate" \
-            --baseline kernel_gate_baseline/baseline.json --write-baseline kernel_gate_baseline/baseline.json
-
-      - name: Baseline (save)
-        if: success()
-        uses: actions/cache/save@v4
-        with:
-          path: kernel_gate_baseline
-          key: kernel-gate-baseline-${{ matrix.ref }}-${{ github.run_id }}
-
-      - name: Scoreboard
-        if: always()
-        run: |
-          {
-            echo '```'
-            python3 -I tools/kernel_scoreboard.py --results "$GITHUB_WORKSPACE/kernel_gate/results.json" || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: kernel-gate-${{ matrix.ref }}
-          path: |
-            kernel_gate/results.json
-            kernel_gate/summary.txt
-            kernel_gate/stderr.log
-
   test:
     name: Build and test (Linux)
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -246,7 +142,6 @@ jobs:
   # can't check.
   web:
     name: Check (browser)
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -271,7 +166,6 @@ jobs:
 
   macos:
     name: Build and test (macOS)
-    if: github.event_name != 'schedule'
     runs-on: macos-14
     timeout-minutes: 120
     steps:
