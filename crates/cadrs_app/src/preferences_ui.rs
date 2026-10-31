@@ -328,6 +328,13 @@ pub fn set_autoconnect_p2p(world: &mut World, on: bool) {
     save(world);
 }
 
+/// Whether to take part in public documents while online (Preferences › Collaboration, the
+/// Public documents panel's Turn on), saved.
+pub fn set_public_documents(world: &mut World, on: bool) {
+    world.resource_mut::<LocalPreferences>().0.public_documents = on;
+    save(world);
+}
+
 /// Keeps the camera up (the view menu's "Keep camera up", issue #97), and saves it.
 pub fn set_keep_camera_up(world: &mut World, on: bool) {
     world.resource_mut::<LocalPreferences>().0.keep_camera_up = on;

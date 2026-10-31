@@ -1,7 +1,9 @@
 //! Public documents: documents anyone using cadrs can find, view and fork, with no server.
 //!
-//! - Every cadrs that is online is in one well-known room ([`TOPIC`]), found through peers it
-//!   already knows ([`PublicPeers`]: seed peers, contacts, peers met there before).
+//! - Every cadrs that is online (and takes part: the user's choice, [`PublicEnabled`]) is in one
+//!   well-known room ([`TOPIC`]), joined through the peers it knows ([`PublicPeers`]: seed
+//!   peers, contacts, peers met there before) and those the rendezvous names. Offline, nothing
+//!   reaches the room or the rendezvous.
 //! - An owner **publishes** a document as it is: its [`Snapshot`], packed, is a *revision*
 //!   kept by its hash, and a [`Listing`] signed with the owner's key names it. Publishing
 //!   again makes a new revision; a signed [`Withdrawal`] makes the document private again.
@@ -11,9 +13,10 @@
 //!   newcomer asks the first peers it meets, and a peer alone in the room asks the peers it
 //!   knows now and then. What a peer signs goes to the room and straight to its seeds
 //!   ([`Ask::Tell`]), which say it in their room in turn: gossip alone may not join them.
+//! - A revision comes from its owner or from anyone who fetched it (they keep it and serve it
+//!   while online), checked against the signed hash.
 //! - The room carries only small statements (gossip drops what is over 4 kB): a listing names
-//!   its picture by hash, and the picture comes with a catalog or is asked for. A revision comes from its owner or from anyone
-//!   who fetched it (they keep it and serve it while online), checked against the signed hash.
+//!   its picture by hash, and the picture comes with a catalog or is asked for.
 //! - A **star** is a signed statement by one cadrs ID; a document's count is the IDs whose
 //!   latest statement stars it, as far as this peer has heard. Nothing stops someone making
 //!   new IDs to star with.
@@ -1269,8 +1272,10 @@ pub struct PublicRoom {
 /// Where this node stands with the public room, for the page to say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomState {
-    /// Not online, or not taking part.
+    /// Not online.
     Offline,
+    /// Online, but not taking part in public documents (the user's choice).
+    Off,
     /// Online, the room not joined yet.
     Joining,
     /// In the room, with this many others heard in it.
@@ -1291,9 +1296,11 @@ impl PublicRoom {
 
 /// Where this node stands with the public room.
 pub fn room_state(world: &World) -> RoomState {
-    let enabled = world.get_resource::<PublicEnabled>().is_some_and(|e| e.0);
-    if !world.contains_resource::<Iroh>() || !enabled {
+    if !world.contains_resource::<Iroh>() {
         return RoomState::Offline;
+    }
+    if !world.get_resource::<PublicEnabled>().is_some_and(|e| e.0) {
+        return RoomState::Off;
     }
     let Some(room) = world.get_resource::<PublicRoom>() else {
         return RoomState::Offline;

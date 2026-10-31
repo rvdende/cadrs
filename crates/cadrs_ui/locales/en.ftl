@@ -584,6 +584,10 @@ shell-public-search = Search public documents…
 # Where cadrs stands with other users, under the search box.
 shell-public-status-offline = Offline: connect to find public documents
 shell-public-status-no-network = The network is off for this run
+# Online, but the user doesn't take part in public documents; the button turns it on.
+shell-public-status-off = Public documents are off
+shell-public-turn-on = Turn on
+shell-public-turn-on-tooltip = Find public documents while online (Preferences › Collaboration)
 shell-public-status-joining = Looking for other cadrs users…
 shell-public-status-alone = Online; nobody else found yet
 # { $count } is how many other cadrs users (or seed peers) this one is connected to.

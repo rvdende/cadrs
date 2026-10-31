@@ -119,7 +119,7 @@ fn report(world: &mut World, mut last: Local<Option<f64>>) {
     let peers = match public::room_state(world) {
         RoomState::Joined(n) => n.to_string(),
         RoomState::Joining => "joining".into(),
-        RoomState::Offline => "offline".into(),
+        RoomState::Offline | RoomState::Off => "offline".into(),
     };
     let listed = world.resource::<Shared>().lock().directory.len();
     info!("public seed: {listed} documents listed; peers in the room: {peers}");

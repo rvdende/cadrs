@@ -1,8 +1,9 @@
 //! The documents page's **Public documents** panel, beside the documents: what anyone using
 //! cadrs published, as this cadrs heard of it ([`crate::collab::public`]).
 //!
-//! - A caption (PUBLIC DOCUMENTS and the count, as the documents'), **Stars** | **Recent** for the order, a search
-//!   box, and a line saying where cadrs stands: offline (with **Connect**), looking for peers,
+//! - A caption (PUBLIC DOCUMENTS and the count, as the documents'), **Stars** | **Recent** for
+//!   the order, a search box, and a line saying where cadrs stands: offline (with **Connect**,
+//!   which also takes part), online but not taking part (with **Turn on**), looking for peers,
 //!   or how many are in the room.
 //! - A row a document: its picture, name, owner and when it was published. Clicking it opens it
 //!   read-only; ★ stars it (or takes the star back) and shows how many star it; Fork saves it as
@@ -10,8 +11,8 @@
 //! - Hidden on a narrow window.
 //!
 //! Names: `public-card`, `public-heading`, `public-count`, `public-sort`, `public-search`,
-//! `public-status`, `public-connect`, `public-list`, and per row (by its place) `public-row-<i>`,
-//! `public-name-<i>`, `public-star-<i>`, `public-fork-<i>`.
+//! `public-status`, `public-connect`, `public-turn-on`, `public-list`, and per row (by its
+//! place) `public-row-<i>`, `public-name-<i>`, `public-star-<i>`, `public-fork-<i>`.
 
 use std::collections::HashMap;
 
@@ -305,6 +306,7 @@ fn rebuild(world: &mut World, mut last: Local<Option<Shown>>) {
         let text = match shown.room {
             RoomState::Offline if can_connect => tr("shell-public-status-offline"),
             RoomState::Offline => tr("shell-public-status-no-network"),
+            RoomState::Off => tr("shell-public-status-off"),
             RoomState::Joining => tr("shell-public-status-joining"),
             RoomState::Joined(0) => tr("shell-public-status-alone"),
             RoomState::Joined(n) => {
@@ -314,7 +316,7 @@ fn rebuild(world: &mut World, mut last: Local<Option<Shown>>) {
         let dot = match shown.room {
             RoomState::Joined(n) if n > 0 => Color::srgb_u8(0x22, 0xa0, 0x55),
             RoomState::Joined(_) | RoomState::Joining => Color::srgb_u8(0xe0, 0xa0, 0x20),
-            RoomState::Offline => t.muted_foreground,
+            RoomState::Offline | RoomState::Off => t.muted_foreground,
         };
         world.entity_mut(s).with_children(|r| {
             r.spawn((
@@ -341,8 +343,27 @@ fn rebuild(world: &mut World, mut last: Local<Option<Shown>>) {
                         .small()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
+                        // To find public documents: online, and taking part.
                         commands.queue(|w: &mut World| {
+                            crate::preferences_ui::set_public_documents(w, true);
                             crate::network::connect(w);
+                        });
+                    }),
+                ));
+            }
+            if shown.room == RoomState::Off {
+                r.spawn((
+                    Button::new("public-turn-on")
+                        .label(tr("shell-public-turn-on"))
+                        .icon("public")
+                        .icon_size(14.0)
+                        .outline()
+                        .small()
+                        .tooltip(tr("shell-public-turn-on-tooltip"))
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(|w: &mut World| {
+                            crate::preferences_ui::set_public_documents(w, true);
                         });
                     }),
                 ));
