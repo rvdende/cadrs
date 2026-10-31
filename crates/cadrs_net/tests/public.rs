@@ -330,3 +330,36 @@ fn a_peer_checks_in_and_starts_from_the_peers_the_rendezvous_names() {
         public::room_state(a[0].world()) == public::RoomState::Joined(0)
     });
 }
+
+/// Public documents follow the network switch (issue #148: offline until the user connects):
+/// nothing reaches the rendezvous or the room before, and the check-in comes once connected.
+#[test]
+fn nothing_is_said_to_the_rendezvous_or_the_room_until_the_user_connects() {
+    let (url, good) = rendezvous(Vec::new());
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        NetPlugin {
+            identity: None,
+            display_name: "Offline".into(),
+            relays: Relays::Disabled,
+            autostart: false,
+        },
+    ));
+    app.insert_resource(PublicPeers(Vec::new()));
+    app.insert_resource(Rendezvous(Some(url)));
+    for _ in 0..60 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    assert_eq!(good.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(public::room_state(app.world()), public::RoomState::Offline);
+    // Connect (the network button, or Connect when cadrs starts).
+    cadrs_net::start(app.world_mut(), None, "Online".into()).unwrap();
+    until(&mut [&mut app], "the check-in once connected", |_| {
+        good.load(std::sync::atomic::Ordering::SeqCst) == 1
+    });
+    until(&mut [&mut app], "the room once connected", |a| {
+        public::room_state(a[0].world()) == public::RoomState::Joined(0)
+    });
+}
