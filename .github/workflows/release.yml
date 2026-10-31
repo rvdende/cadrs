@@ -125,7 +125,7 @@ jobs:
   # Developer ID yet), so macOS asks once before it opens it (the release notes say how).
   macos:
     name: Build (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 180
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
