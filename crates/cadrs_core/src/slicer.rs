@@ -1,8 +1,8 @@
 //! Sending parts to a slicer installed on this machine (issue #176): finding PrusaSlicer,
-//! OrcaSlicer, Bambu Studio, UltiMaker Cura or SuperSlicer, and opening a mesh in one. The mesh
-//! goes to a folder of cadrs's own ([`send_path`]) and the slicer is started with it: nothing is
-//! uploaded, no file association changes, no printer is spoken to. Not in a browser (a page
-//! can't start programs; it downloads the mesh instead).
+//! OrcaSlicer, Bambu Studio, UltiMaker Cura, SuperSlicer or Creality Print, and opening a mesh in
+//! one. The mesh goes to a folder of cadrs's own ([`send_path`]) and the slicer is started with
+//! it: nothing is uploaded, no file association changes, no printer is spoken to. Not in a
+//! browser (a page can't start programs; it downloads the mesh instead).
 
 use std::path::{Path, PathBuf};
 
@@ -71,6 +71,13 @@ const KNOWN: &[Known] = &[
         flatpak: "com.superslicer.SuperSlicer",
         mac_app: "SuperSlicer.app",
         windows: &["SuperSlicer\\superslicer.exe"],
+    },
+    Known {
+        name: "Creality Print",
+        commands: &["CrealityPrint", "crealityprint"],
+        flatpak: "io.github.crealityofficial.CrealityPrint",
+        mac_app: "CrealityPrint.app",
+        windows: &["Creality\\Creality Print *\\CrealityPrint.exe"],
     },
 ];
 
