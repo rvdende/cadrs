@@ -19,6 +19,10 @@
 //!   new IDs to star with.
 //! - A seed peer (`cadrs --public-seed`: [`KeepAll`]) stays in the room and also fetches and
 //!   keeps every revision it hears of, so documents stay reachable while their owners are not.
+//! - The rendezvous ([`RENDEZVOUS`], `tools/peers`): while taking part, a peer checks in every
+//!   few minutes, signed with its key, and hears of up to 20 others online, to join the room
+//!   through. It keeps only cadrs IDs; without it, peers start from the seeds and those they
+//!   know.
 //!
 //! [`Snapshot`]: cadrs_core::collab::Snapshot
 
@@ -77,6 +81,16 @@ const REJOIN_GAP: f64 = 5.0;
 const ANNOUNCE_FOR_NEWCOMERS: f64 = 60.0;
 /// How long after a change the directory is written out.
 const SAVE_AFTER: f64 = 5.0;
+
+/// Where peers check in and hear of others online (`tools/peers`, a Cloudflare Worker).
+/// `CADRS_RENDEZVOUS` names another (a local `wrangler dev`), or `0` none.
+pub const RENDEZVOUS: &str = "https://peers.cadrs.net";
+/// How often a peer in the room checks in (the rendezvous forgets one after 15 minutes).
+const CHECK_IN_EVERY: f64 = 600.0;
+/// How long the first check-in may hold up joining the room.
+const CHECK_IN_WAIT: f64 = 5.0;
+/// Signed with a check-in, before the cadrs ID and the time.
+const CHECK_IN_CONTEXT: &str = "cadrs rendezvous 1\0";
 
 /// The longest name and description a listing may have, in bytes: a listing travels the room
 /// whole, and gossip carries [`ROOM_MESSAGE`] at most.
@@ -1024,6 +1038,70 @@ pub fn start_tell(
     iroh.spawn(async move { ask(endpoint, peer, Ask::Tell(catalog), 16).await })
 }
 
+/// An HTTPS client as iroh's own (its TLS set-up and embedded roots); a page's is the browser's.
+fn http_client() -> Result<reqwest::Client, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use bevy_iroh::iroh::tls::{CaTlsConfig, default_provider};
+        let tls = CaTlsConfig::embedded()
+            .client_config(default_provider())
+            .map_err(|e| e.to_string())?;
+        reqwest::Client::builder()
+            .tls_backend_preconfigured(tls)
+            .build()
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(reqwest::Client::new())
+}
+
+/// What a check-in says: this node's cadrs ID and the time, signed with its key.
+fn check_in_body(key: &SecretKey, now: i64) -> serde_json::Value {
+    let id = key.public().to_string();
+    let signature = key.sign(format!("{CHECK_IN_CONTEXT}{id}\0{now}").as_bytes());
+    serde_json::json!({
+        "id": id,
+        "time": now,
+        "signature": data_encoding::HEXLOWER.encode(&signature.to_bytes()),
+    })
+}
+
+#[derive(Deserialize)]
+struct Online {
+    peers: Vec<String>,
+}
+
+/// Checks in at the rendezvous `base`: the peers online it names (never this one).
+pub fn start_check_in(iroh: &Iroh, base: &str) -> IrohTask<Result<Vec<EndpointId>, String>> {
+    let body = secret_key(iroh).map(|key| check_in_body(&key, unix_now()));
+    let url = format!("{}/v1/here", base.trim_end_matches('/'));
+    let me = iroh.id();
+    iroh.spawn(async move {
+        let body = body?;
+        let ask = async {
+            http_client()?
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .and_then(|r| r.error_for_status())
+                .map_err(|e| e.to_string())?
+                .json::<Online>()
+                .await
+                .map_err(|e| e.to_string())
+        };
+        let online = n0_future::time::timeout(REACH_WITHIN, ask)
+            .await
+            .map_err(|_| "timed out".to_string())??;
+        Ok(online
+            .peers
+            .iter()
+            .filter_map(|p| p.parse::<EndpointId>().ok())
+            .filter(|p| *p != me)
+            .collect())
+    })
+}
+
 /// Asks `peer` for a listing's picture, checked against its hash.
 pub fn start_picture(
     iroh: &Iroh,
@@ -1136,6 +1214,20 @@ impl Default for PublicEnabled {
     }
 }
 
+/// Where to check in ([`RENDEZVOUS`], or `CADRS_RENDEZVOUS`); `None` never does.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct Rendezvous(pub Option<String>);
+
+impl Default for Rendezvous {
+    fn default() -> Self {
+        Self(match std::env::var("CADRS_RENDEZVOUS") {
+            Ok(v) if v == "0" || v.is_empty() => None,
+            Ok(v) => Some(v),
+            Err(_) => Some(RENDEZVOUS.to_string()),
+        })
+    }
+}
+
 /// A seed peer's: fetch and keep every revision heard of.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct KeepAll;
@@ -1152,6 +1244,10 @@ pub struct PublicRoom {
     retry_at: f64,
     /// When it last asked the peers it knows for their catalogs, alone in the room.
     asked_alone_at: f64,
+    /// The check-in on its way, when it was sent, and the peers online the last one named.
+    check_in: Option<IrohTask<Result<Vec<EndpointId>, String>>>,
+    checked_in_at: Option<f64>,
+    found: Vec<EndpointId>,
     /// Statements told to seeds, on their way.
     tells: Vec<Asked>,
     /// When it last announced again for someone new.
@@ -1184,6 +1280,11 @@ impl PublicRoom {
     pub fn entity(&self) -> Option<Entity> {
         self.room
     }
+
+    /// The peers online the rendezvous last named.
+    pub fn found(&self) -> &[EndpointId] {
+        &self.found
+    }
 }
 
 /// Where this node stands with the public room.
@@ -1210,6 +1311,7 @@ pub struct PublicSystems;
 pub(crate) fn register(app: &mut App) {
     app.init_resource::<PublicRoom>()
         .init_resource::<PublicPeers>()
+        .init_resource::<Rendezvous>()
         .init_resource::<PublicEnabled>()
         .init_resource::<Outbox>()
         .add_message::<PeerJoined>()
@@ -1229,13 +1331,15 @@ fn now_secs(time: &Time<Real>) -> f64 {
 }
 
 /// Joins the room while online (and taking part), leaves it when not, and joins again after a
-/// failure. Alone in it, it asks the peers it knows for their catalogs every so often, and
-/// whenever they change.
+/// failure. It checks in at the rendezvous first (waiting a little for the peers it names) and
+/// every so often after. Alone in the room, it asks the peers it knows for their catalogs every
+/// so often, and whenever they change.
 #[allow(clippy::too_many_arguments)]
 fn keep_room(
     mut commands: Commands,
     iroh: Option<Res<Iroh>>,
     enabled: Res<PublicEnabled>,
+    rendezvous: Res<Rendezvous>,
     peers: Res<PublicPeers>,
     shared: Res<Shared>,
     mut room: ResMut<PublicRoom>,
@@ -1254,6 +1358,29 @@ fn keep_room(
         };
         return;
     };
+    // The rendezvous: who else is online.
+    let mut found_now = false;
+    if let Some(task) = room.check_in.as_mut()
+        && let Some(r) = task.try_take()
+    {
+        room.check_in = None;
+        match r {
+            Ok(found) => {
+                debug!("public rendezvous: {} others online", found.len());
+                found_now = !found.is_empty();
+                room.found = found;
+            }
+            Err(why) => debug!("public rendezvous: {why}"),
+        }
+    }
+    if let Some(base) = &rendezvous.0
+        && room.check_in.is_none()
+        && room.checked_in_at.is_none_or(|t| now - t > CHECK_IN_EVERY)
+    {
+        room.checked_in_at = Some(now);
+        room.check_in = Some(start_check_in(&iroh, base));
+    }
+    let found = room.found.clone();
     if let Some(e) = room.room {
         match status.get(e) {
             Ok(RoomStatus::Failed(why)) => {
@@ -1271,15 +1398,18 @@ fn keep_room(
                 room.resynced_at = now;
                 room.asked_alone_at = now;
                 // Everyone it started from is asked what they know.
-                for addr in bootstrap(&iroh, &peers, &shared) {
+                for addr in bootstrap(&iroh, &peers, &found, &shared) {
                     ask_catalog(&iroh, &mut room, addr);
                 }
             }
             Ok(RoomStatus::Joined) => {
                 let alone = members.get(e).is_ok_and(|m| m.is_empty());
-                if peers.is_changed() || (alone && now - room.asked_alone_at > ALONE_ASK_EVERY) {
+                if peers.is_changed()
+                    || (alone && found_now)
+                    || (alone && now - room.asked_alone_at > ALONE_ASK_EVERY)
+                {
                     room.asked_alone_at = now;
-                    for addr in bootstrap(&iroh, &peers, &shared) {
+                    for addr in bootstrap(&iroh, &peers, &found, &shared) {
                         room.asked.remove(&addr.id);
                         ask_catalog(&iroh, &mut room, addr);
                     }
@@ -1290,21 +1420,29 @@ fn keep_room(
         }
         return;
     }
-    if now < room.retry_at {
+    // The first check-in may name peers to join through: worth a moment's wait.
+    let checking_in =
+        room.check_in.is_some() && room.checked_in_at.is_some_and(|t| now - t < CHECK_IN_WAIT);
+    if now < room.retry_at || checking_in {
         return;
     }
     let ticket = RoomTicket::new(
         TopicId::from_bytes(TOPIC),
         ROOM_NAME,
-        bootstrap(&iroh, &peers, &shared),
+        bootstrap(&iroh, &peers, &found, &shared),
     );
     room.room = Some(commands.spawn(Room::join(ticket)).id());
     room.joined = false;
 }
 
-/// Who to start from: the seeds and peers the app knows, then the peers met before; never
-/// this node itself.
-fn bootstrap(iroh: &Iroh, peers: &PublicPeers, shared: &Shared) -> Vec<EndpointAddr> {
+/// Who to start from: the seeds and peers the app knows, those the rendezvous named, then the
+/// peers met before; never this node itself.
+fn bootstrap(
+    iroh: &Iroh,
+    peers: &PublicPeers,
+    found: &[EndpointId],
+    shared: &Shared,
+) -> Vec<EndpointAddr> {
     let me = iroh.id();
     let mut out: Vec<EndpointAddr> = Vec::new();
     let remembered = shared.lock().remembered();
@@ -1312,6 +1450,7 @@ fn bootstrap(iroh: &Iroh, peers: &PublicPeers, shared: &Shared) -> Vec<EndpointA
         .0
         .iter()
         .cloned()
+        .chain(found.iter().copied().map(EndpointAddr::new))
         .chain(remembered.into_iter().map(EndpointAddr::new))
     {
         if addr.id != me && !out.iter().any(|a| a.id == addr.id) {
@@ -1592,6 +1731,8 @@ fn send(
     let alone = members.get(public).is_ok_and(|m| m.is_empty());
     let mut to: Vec<EndpointAddr> = peers.0.clone();
     if alone {
+        let found = room.found.clone();
+        to.extend(found.into_iter().map(EndpointAddr::new));
         to.extend(
             shared
                 .lock()
@@ -2082,6 +2223,28 @@ mod tests {
         );
         // Again: nothing new.
         assert!(!b.merge(&catalog, 1001).changed());
+    }
+
+    /// What the rendezvous (`tools/peers`) checks: the ID's key signed the context, the ID and
+    /// the time.
+    #[test]
+    fn a_check_in_is_signed_as_the_rendezvous_checks_it() {
+        let k = key();
+        let body = check_in_body(&k, 1_790_000_000);
+        let id = body["id"].as_str().unwrap();
+        assert_eq!(id, k.public().to_string());
+        assert_eq!(body["time"], 1_790_000_000);
+        let sig: [u8; 64] = data_encoding::HEXLOWER
+            .decode(body["signature"].as_str().unwrap().as_bytes())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let message = format!("cadrs rendezvous 1\0{id}\01790000000");
+        assert!(
+            k.public()
+                .verify(message.as_bytes(), &Signature::from_bytes(&sig))
+                .is_ok()
+        );
     }
 
     #[test]

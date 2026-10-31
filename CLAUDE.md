@@ -17,6 +17,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`.
 - Public documents seed peer: `cadrs --public-seed [--data-dir <dir>]` (no window; prints its
   cadrs ID, which goes in `cadrs_net::public::DEFAULT_SEEDS` or Preferences › Seed peers).
+  Peers also check in at `peers.cadrs.net` (`tools/peers`, a Cloudflare Worker; see its README),
+  `CADRS_RENDEZVOUS=<url>|0` to use a local `wrangler dev` or none.
 - The app runs the kernel in a process of its own (`cadrs_core::rebuild::process`, so a
   kernel crash costs a rebuild, not the app); `CADRS_KERNEL=thread` keeps it in-process for
   debugging. Kernel work besides rebuilds is a named `rebuild::task::Task`, not a closure.

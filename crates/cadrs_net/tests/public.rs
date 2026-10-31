@@ -8,7 +8,9 @@ use bevy::prelude::*;
 use bevy_iroh::{Iroh, Relays};
 use cadrs_core::DocumentId;
 use cadrs_net::NetPlugin;
-use cadrs_net::public::{self, Draft, KeepAll, PublicPeers, RevisionFetch, Shared};
+use cadrs_net::public::{
+    self, Draft, KeepAll, PublicPeers, PublicRoom, Rendezvous, RevisionFetch, Shared,
+};
 
 const PATIENCE: Duration = Duration::from_secs(60);
 
@@ -28,6 +30,8 @@ fn peer(name: &str, start_from: &[&App]) -> App {
         .map(|a| a.world().resource::<Iroh>().addr().unwrap())
         .collect();
     app.insert_resource(PublicPeers(peers));
+    // Never the real rendezvous.
+    app.insert_resource(Rendezvous(None));
     app
 }
 
@@ -252,4 +256,77 @@ fn peers_the_room_does_not_join_still_reach_each_other_through_a_seed() {
         "the seed's copy of a told one",
         |a| shared(a[0]).lock().has_revision(&theirs.hash),
     );
+}
+
+/// A stand-in for the rendezvous (`tools/peers`): answers each check-in whose signature holds
+/// with `others`, and counts them.
+fn rendezvous(others: Vec<String>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let good = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = good.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let check_in: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let id = check_in["id"].as_str().unwrap().to_string();
+            let time = check_in["time"].as_i64().unwrap();
+            let sig: [u8; 64] = data_encoding::HEXLOWER
+                .decode(check_in["signature"].as_str().unwrap().as_bytes())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let key: bevy_iroh::iroh::PublicKey = id.parse().unwrap();
+            let message = format!("cadrs rendezvous 1\0{id}\0{time}");
+            let holds = key
+                .verify(
+                    message.as_bytes(),
+                    &bevy_iroh::iroh::Signature::from_bytes(&sig),
+                )
+                .is_ok();
+            if holds {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+            let answer = serde_json::json!({ "peers": others }).to_string();
+            let status = if holds { "200 OK" } else { "400 Bad Request" };
+            let mut out = stream;
+            let _ = write!(
+                out,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+        }
+    });
+    (url, good)
+}
+
+#[test]
+fn a_peer_checks_in_and_starts_from_the_peers_the_rendezvous_names() {
+    let other = bevy_iroh::iroh::SecretKey::generate().public();
+    let (url, good) = rendezvous(vec![other.to_string()]);
+    let mut app = peer("Newcomer", &[]);
+    app.insert_resource(Rendezvous(Some(url)));
+    until(&mut [&mut app], "the check-in's answer", |a| {
+        a[0].world().resource::<PublicRoom>().found() == [other]
+    });
+    assert_eq!(good.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // It joins the room after (through the peer named, which isn't there).
+    until(&mut [&mut app], "the room", |a| {
+        public::room_state(a[0].world()) == public::RoomState::Joined(0)
+    });
 }

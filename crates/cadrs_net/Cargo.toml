@@ -17,6 +17,9 @@ cadrs_fs.workspace = true
 cadrs_sketch.workspace = true
 data-encoding.workspace = true
 postcard.workspace = true
+# Checking in at the public documents rendezvous (`public::RENDEZVOUS`), over HTTPS.
+reqwest = { workspace = true, features = ["rustls-no-provider", "json"] }
+serde_json.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 n0-future.workspace = true
