@@ -608,8 +608,8 @@ pub struct PartCache {
     pub planes: HashMap<FeatureId, PlaneFrame>,
     /// Each Mate connector feature's frame where it built (P3.8).
     pub connectors: HashMap<FeatureId, PlaneFrame>,
-    /// Each curve feature's curve (a Helix), where it built.
-    pub curves: HashMap<FeatureId, cadrs_core::surfacing::HelixGeom>,
+    /// Each curve feature's curve (a Helix, a Projected curve), where it built.
+    pub curves: HashMap<FeatureId, cadrs_core::surfacing::CurveGeom>,
     /// Whether the connectors are shown (K), so they can be picked.
     pub connectors_shown: bool,
     /// Each pattern's instances and where their Skip dots go (P3.8).

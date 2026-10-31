@@ -618,9 +618,20 @@ impl<'a> PartStudio<'a> {
             .element(self.el)
             .map(|e| e.features())
             .unwrap_or(&[]);
+        let curves = self
+            .built
+            .as_ref()
+            .map(|(_, b)| {
+                b.curves
+                    .iter()
+                    .map(|(id, c)| (*id, c.polylines()))
+                    .collect()
+            })
+            .unwrap_or_default();
         crate::eval::Model::new(parts, &self.features, &self.sketches)
             .with_derived(&self.derived)
             .with_doc(doc)
+            .with_curves(curves)
     }
 
     /// A JSON file Onshape gave for this Part Studio (`bodydetails.json`, …).
@@ -1110,6 +1121,16 @@ impl<'a> PartStudio<'a> {
         self.model(&parts).face(q)
     }
 
+    /// Every face `q` refers to (an Onshape face cadrs made as several: a loft through curves
+    /// parted at a guide).
+    pub(crate) fn faces_of(
+        &mut self,
+        q: &crate::query::Value,
+    ) -> Vec<cadrs_core::document::FaceRef> {
+        let parts = self.parts();
+        self.model(&parts).faces(q)
+    }
+
     fn run(mut self) {
         let Some(json) = self.raw.features() else {
             self.report.notes.push("features.json missing".into());
@@ -1175,6 +1196,9 @@ impl<'a> PartStudio<'a> {
                 "importDerived" => self.import_derived(f, &fid, &mut fr),
                 "thicken" => self.thicken(f, &fid, &mut fr),
                 "helix" => self.helix(f, &fid, &mut fr),
+                "projectCurves" => self.project_curves(f, &fid, &mut fr),
+                "deleteFace" => self.delete_face(f, &fid, &mut fr),
+                "faceBlend" => self.face_blend(f, &fid, &mut fr),
                 "fill" => self.fill(f, &fid, &mut fr),
                 "sweep" => self.sweep(f, &fid, &mut fr),
                 "assignVariable" => {
@@ -1656,10 +1680,15 @@ impl<'a> PartStudio<'a> {
                     } else if x.body != BodyType::Solid
                         && let Some(sk) = self.edge_sketch(q)
                     {
-                        // A sketch curve (a surface or a thin wall along open curves): the
-                        // sketch's curves.
+                        // A sketch curve (a surface or a thin wall along open curves): that
+                        // curve if it is known, else the sketch's curves.
                         if !x.sketches.contains(&sk) {
                             x.sketches.push(sk);
+                        }
+                        if let Some(c) = self.sketch_curve(q)
+                            && !x.curves.contains(&c)
+                        {
+                            x.curves.push(c);
                         }
                     } else {
                         lost += 1;

@@ -360,6 +360,12 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
                 s("Pitch", &mut x.custom_pitch_expr, &mut x.custom_pitch, L);
             }
         }
+        FeatureKind::FaceBlend(x) => match x.control {
+            crate::surfacing::BlendControl::Radius => {
+                s("Radius", &mut x.radius_expr, &mut x.radius, L)
+            }
+            crate::surfacing::BlendControl::Width => s("Width", &mut x.width_expr, &mut x.width, L),
+        },
         FeatureKind::Helix(x) => {
             s(
                 "Revolutions",
@@ -557,6 +563,7 @@ pub fn slots(kind: &mut FeatureKind, f: &mut dyn FnMut(Slot<'_>)) {
         FeatureKind::TagForm(_)
         | FeatureKind::Variable(_)
         | FeatureKind::Fill(_)
+        | FeatureKind::ProjectCurve(_)
         | FeatureKind::Sketch(_)
         | FeatureKind::DeletePart(_)
         | FeatureKind::Sweep(_)

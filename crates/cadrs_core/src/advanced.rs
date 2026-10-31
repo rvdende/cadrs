@@ -32,13 +32,16 @@ pub enum ProfileControl {
     KeepOrientation,
     /// The profile's plane keeps containing a direction.
     LockDirection,
+    /// The profile keeps its angle to faces along the path (a sweep of curves).
+    LockFaces,
 }
 
 impl ProfileControl {
-    pub const ALL: [ProfileControl; 3] = [
+    pub const ALL: [ProfileControl; 4] = [
         ProfileControl::None,
         ProfileControl::KeepOrientation,
         ProfileControl::LockDirection,
+        ProfileControl::LockFaces,
     ];
 
     pub fn label(self) -> &'static str {
@@ -46,6 +49,7 @@ impl ProfileControl {
             ProfileControl::None => "None",
             ProfileControl::KeepOrientation => "Keep profile orientation",
             ProfileControl::LockDirection => "Lock profile direction",
+            ProfileControl::LockFaces => "Lock profile faces",
         }
     }
 }
@@ -78,21 +82,24 @@ pub struct SweepFeature {
     /// The direction Lock profile direction keeps.
     #[serde(default)]
     pub lock_direction: Option<DirectionRef>,
+    /// A surface's profile of curves (sketch curves, part edges) instead of regions or faces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_curves: Vec<PathRef>,
+    /// The faces Lock profile faces keeps the profile's angle to (none: those along the path).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lock_faces: Vec<FaceRef>,
 }
 
 impl SweepFeature {
     /// The sketches it sweeps regions of (or whole) and takes path curves from.
     pub fn sketches(&self) -> Vec<FeatureId> {
         let mut v: Vec<FeatureId> = self.regions.iter().map(|r| r.sketch).collect();
-        for s in self
-            .sketches
-            .iter()
-            .copied()
-            .chain(self.path.iter().filter_map(|p| match p {
-                PathRef::SketchCurve { sketch, .. } | PathRef::Sketch(sketch) => Some(*sketch),
-                PathRef::Edge(_) | PathRef::Curve(_) => None,
-            }))
-        {
+        for s in self.sketches.iter().copied().chain(
+            self.path
+                .iter()
+                .chain(&self.profile_curves)
+                .filter_map(PathRef::sketch),
+        ) {
             if !v.contains(&s) {
                 v.push(s);
             }
@@ -101,8 +108,18 @@ impl SweepFeature {
     }
 
     pub fn problem(&self) -> Option<&'static str> {
-        if self.regions.is_empty() && self.sketches.is_empty() && self.faces.is_empty() {
+        if self.regions.is_empty()
+            && self.sketches.is_empty()
+            && self.faces.is_empty()
+            && self.profile_curves.is_empty()
+        {
             return Some("Select a profile to sweep");
+        }
+        if !self.profile_curves.is_empty() && self.body != BodyType::Surface {
+            return Some("A profile of curves sweeps a surface");
+        }
+        if self.control == ProfileControl::LockFaces && self.profile_curves.is_empty() {
+            return Some("Lock profile faces sweeps a profile of curves");
         }
         if self.path.is_empty() {
             return Some("Select a sweep path");
@@ -130,6 +147,9 @@ pub enum LoftProfile {
     SketchPoint { sketch: FeatureId, point: PointId },
     /// ...or a vertex.
     Vertex(VertexRef),
+    /// Curves (sketch curves, part edges, a curve feature's curve) joined end to end into one
+    /// open chain: a surface loft through curves (Onshape's wire profile).
+    Wire(Vec<PathRef>),
 }
 
 impl LoftProfile {
@@ -139,7 +159,18 @@ impl LoftProfile {
             LoftProfile::Regions { sketch, .. }
             | LoftProfile::Sketch(sketch)
             | LoftProfile::SketchPoint { sketch, .. } => Some(*sketch),
+            LoftProfile::Wire(w) => w.iter().find_map(PathRef::sketch),
             _ => None,
+        }
+    }
+}
+
+impl PathRef {
+    /// The sketch the curve is in, if any.
+    pub fn sketch(&self) -> Option<FeatureId> {
+        match self {
+            PathRef::SketchCurve { sketch, .. } | PathRef::Sketch(sketch) => Some(*sketch),
+            PathRef::Edge(_) | PathRef::Curve(_) => None,
         }
     }
 }
@@ -232,6 +263,14 @@ pub struct LoftFeature {
     pub start_direction: Option<DirectionRef>,
     #[serde(default)]
     pub end_direction: Option<DirectionRef>,
+    /// Guide curves, each a chain crossing every profile (a loft through curves).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<Vec<PathRef>>,
+    /// The faces Match tangent continues at a curve profile (those along it), first and last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub start_faces: Vec<FaceRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub end_faces: Vec<FaceRef>,
 }
 
 impl Default for LoftFeature {
@@ -251,6 +290,9 @@ impl Default for LoftFeature {
             end_magnitude_expr: "1".into(),
             start_direction: None,
             end_direction: None,
+            guides: Vec::new(),
+            start_faces: Vec::new(),
+            end_faces: Vec::new(),
         }
     }
 }
@@ -258,7 +300,12 @@ impl Default for LoftFeature {
 impl LoftFeature {
     pub fn sketches(&self) -> Vec<FeatureId> {
         let mut v = Vec::new();
-        for s in self.profiles.iter().filter_map(LoftProfile::sketch) {
+        let curves = self.profiles.iter().flat_map(|p| match p {
+            LoftProfile::Wire(w) => w.iter().filter_map(PathRef::sketch).collect(),
+            p => p.sketch().into_iter().collect::<Vec<_>>(),
+        });
+        let guides = self.guides.iter().flatten().filter_map(PathRef::sketch);
+        for s in curves.chain(guides) {
             if !v.contains(&s) {
                 v.push(s);
             }
@@ -266,9 +313,29 @@ impl LoftFeature {
         v
     }
 
+    /// A loft through curves (its profiles are curves, not regions or faces).
+    pub fn through_curves(&self) -> bool {
+        self.profiles
+            .iter()
+            .any(|p| matches!(p, LoftProfile::Wire(_)))
+    }
+
     pub fn problem(&self) -> Option<&'static str> {
         if self.profiles.len() < 2 {
             return Some("Select at least two profiles");
+        }
+        if self.through_curves() {
+            if self.body != BodyType::Surface {
+                return Some("A loft through curves makes a surface");
+            }
+            if self.profiles.iter().any(|p| {
+                !matches!(
+                    p,
+                    LoftProfile::Wire(_) | LoftProfile::SketchPoint { .. } | LoftProfile::Vertex(_)
+                )
+            }) {
+                return Some("Loft either curves or regions and faces, not both");
+            }
         }
         let n = self.profiles.len();
         let point =
@@ -312,6 +379,9 @@ pub enum SplitToolRef {
     Face(FaceRef),
     /// A sketch: its curves extruded both ways through the parts.
     Sketch(FeatureId),
+    /// A curve feature's curve lying on the faces (a Projected curve; the Face type only): the
+    /// faces cut along it.
+    Curve(FeatureId),
 }
 
 /// What a Split cuts (P3.8, as Onshape's Split: "Part" and "Face").

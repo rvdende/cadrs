@@ -18,6 +18,174 @@ use crate::report::FeatureReport;
 use crate::sketch::param;
 
 impl PartStudio<'_> {
+    /// Onshape's Face blend: a rolling ball between faces of surfaces, the walls trimmed to it.
+    pub(crate) fn face_blend(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        let mut lost = 0;
+        let mut sides: [Vec<cadrs_core::document::FaceRef>; 2] = [Vec::new(), Vec::new()];
+        for (k, key) in ["side1", "side2"].into_iter().enumerate() {
+            for p in refs::picks(param(f, key)) {
+                let Pick::Query(q) = p else {
+                    lost += 1;
+                    continue;
+                };
+                let found = self.faces_of(&q);
+                if found.is_empty() {
+                    lost += 1;
+                }
+                for face in found {
+                    if !sides[k].contains(&face) {
+                        sides[k].push(face);
+                    }
+                }
+            }
+        }
+        let [side1, side2] = sides;
+        if side1.is_empty() || side2.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        if Self::text(f, "crossSection") != "ROLLING_BALL" {
+            fr.notes.push(format!(
+                "cross section {} imported as a rolling ball",
+                Self::text(f, "crossSection")
+            ));
+        }
+        if Self::text(f, "crossSectionShape") != "CIRCULAR" {
+            fr.notes
+                .push("cross section shape imported as circular".into());
+        }
+        if Self::text(f, "trim") != "WALLS" {
+            fr.notes.push("trimmed to the walls".into());
+        }
+        let mut x = cadrs_core::surfacing::FaceBlendFeature {
+            side1,
+            side2,
+            ..Default::default()
+        };
+        x.control = if Self::text(f, "blendControlType") == "WIDTH" {
+            cadrs_core::surfacing::BlendControl::Width
+        } else {
+            cadrs_core::surfacing::BlendControl::Radius
+        };
+        (x.radius, x.radius_expr) = self.length_or(f, "radius", 5.0);
+        (x.width, x.width_expr) = self.length_or(f, "width", 10.0);
+        Self::lost_note(fr, lost, "face selections");
+        self.add(f, fid, "Face blend", FeatureKind::FaceBlend(x), fr)
+    }
+
+    /// Onshape's Delete face: the faces taken away, their neighbours healed over the gap (a
+    /// solid) or the hole left open (a surface).
+    pub(crate) fn delete_face(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        let mut lost = 0;
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "deleteFaces")) {
+            match p {
+                Pick::Query(q) => {
+                    let found = self.faces_of(&q);
+                    if found.is_empty() {
+                        if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                            eprintln!("LOST {} | {}", f["name"], self.describe(&q));
+                        }
+                        lost += 1;
+                    }
+                    for face in found {
+                        if !faces.contains(&face) {
+                            faces.push(face);
+                        }
+                    }
+                }
+                _ => lost += 1,
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        match Self::text(f, "healType").as_str() {
+            // Leave open: the heal of a surface (a solid's faces are always healed).
+            "" | "HEAL" | "VOID" => {}
+            other => fr.notes.push(format!("heal type {other} not imported")),
+        }
+        Self::lost_note(fr, lost, "face selections");
+        let x = cadrs_core::direct_edit::DirectEditFeature {
+            kind: cadrs_core::direct_edit::DirectEditKind::DeleteFace,
+            faces,
+            ..Default::default()
+        };
+        self.add(f, fid, "Delete face", FeatureKind::DirectEdit(x), fr)
+    }
+
+    /// Onshape's Projected curve, Curve to face type: curves projected onto faces along a
+    /// direction (a curve feature, as a Helix).
+    pub(crate) fn project_curves(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        if Self::text(f, "curveProjectionType") != "CURVE_TO_FACE" {
+            return Err(CommandError::Invalid(
+                "projected curves of two sketches are not imported yet".into(),
+            ));
+        }
+        let mut lost = 0;
+        let curves = self.curve_refs(refs::picks(param(f, "dropTools")), &mut lost);
+        if curves.is_empty() {
+            return Err(CommandError::Invalid(
+                "its curves could not be translated".into(),
+            ));
+        }
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "targets")) {
+            match p {
+                Pick::Query(q) => {
+                    let found = self.faces_of(&q);
+                    if found.is_empty() {
+                        lost += 1;
+                    }
+                    for face in found {
+                        if !faces.contains(&face) {
+                            faces.push(face);
+                        }
+                    }
+                }
+                _ => lost += 1,
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        let direction = if Self::text(f, "projectionType") == "DIRECTION" {
+            Some(self.direction_param(f, "directionQuery").ok_or_else(|| {
+                CommandError::Invalid("its direction could not be translated".into())
+            })?)
+        } else {
+            None
+        };
+        Self::lost_note(fr, lost, "selections");
+        let x = cadrs_core::surfacing::ProjectCurveFeature {
+            curves,
+            faces,
+            direction,
+            flip: Self::flag(f, "oppositeDirection"),
+        };
+        self.add(f, fid, "Projected curve", FeatureKind::ProjectCurve(x), fr)
+    }
+
     /// A length, or `None` (with a note) when it can't be evaluated.
     fn length_or(&self, f: &Value, id: &str, fallback: f64) -> (f64, String) {
         self.quantity(f, id, Quantity::Length)
@@ -471,7 +639,11 @@ impl PartStudio<'_> {
             ..Default::default()
         };
         x.op = if x.body == BodyType::Surface {
-            BooleanOp::New
+            // A surface's Add joins it to the surfaces it meets edge to edge.
+            match Self::text(f, "surfaceOperationType").as_str() {
+                "ADD" => BooleanOp::Add,
+                _ => BooleanOp::New,
+            }
         } else {
             op_of(&Self::text(f, "operationType"))
         };
@@ -518,6 +690,22 @@ impl PartStudio<'_> {
                         }
                         continue;
                     }
+                    // A surface's profile of part edges.
+                    if x.body == BodyType::Surface
+                        && q.get("entityType").and_then(Q::as_str) == Some("EDGE")
+                    {
+                        let found = self.model(&parts).edges(&q);
+                        if found.is_empty() {
+                            lost += 1;
+                        }
+                        for e in found {
+                            let e = PathRef::Edge(e);
+                            if !x.profile_curves.contains(&e) {
+                                x.profile_curves.push(e);
+                            }
+                        }
+                        continue;
+                    }
                     let rs = self.region_of(&q);
                     if !rs.is_empty() {
                         x.regions.extend(rs);
@@ -531,7 +719,11 @@ impl PartStudio<'_> {
                 Pick::Opaque(_) => lost += 1,
             }
         }
-        if x.regions.is_empty() && x.sketches.is_empty() && x.faces.is_empty() {
+        if x.regions.is_empty()
+            && x.sketches.is_empty()
+            && x.faces.is_empty()
+            && x.profile_curves.is_empty()
+        {
             return Err(CommandError::Invalid(
                 "none of its profiles could be translated".into(),
             ));
@@ -565,6 +757,39 @@ impl PartStudio<'_> {
                 "its path could not be translated".into(),
             ));
         }
+        // A profile of several part edges (a blend's, all round it): those that touch the path.
+        if x.profile_curves.len() > 1 {
+            let ends = |r: &PathRef| -> Vec<[f64; 3]> {
+                let PathRef::Edge(e) = r else {
+                    return Vec::new();
+                };
+                parts
+                    .iter()
+                    .filter(|p| p.id == e.part)
+                    .flat_map(|p| p.solid.edges.iter().filter(|s| s.name == e.edge))
+                    .flat_map(|s| s.points.first().into_iter().chain(s.points.last()).copied())
+                    .collect()
+            };
+            let path_ends: Vec<[f64; 3]> = x.path.iter().flat_map(ends).collect();
+            let touching: Vec<PathRef> = x
+                .profile_curves
+                .iter()
+                .filter(|c| {
+                    ends(c).iter().any(|a| {
+                        // (Within half a millimetre: the path's sketch was drawn to Onshape's
+                        // blend, which cadrs builds a hair apart.)
+                        path_ends.iter().any(|b| {
+                            (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+                                < 0.25
+                        })
+                    })
+                })
+                .cloned()
+                .collect();
+            if !touching.is_empty() {
+                x.profile_curves = touching;
+            }
+        }
         Self::lost_note(fr, lost, "profile selections");
         Self::lost_note(fr, path_lost, "path selections");
         x.control = match Self::text(f, "profileControl").as_str() {
@@ -574,6 +799,17 @@ impl PartStudio<'_> {
                 ProfileControl::LockDirection
             }
             "NONE" | "" => ProfileControl::None,
+            "LOCK_FACES" if !x.profile_curves.is_empty() => {
+                for p in refs::picks(param(f, "lockFaces")) {
+                    let Pick::Query(q) = p else { continue };
+                    for face in self.faces_of(&q) {
+                        if !x.lock_faces.contains(&face) {
+                            x.lock_faces.push(face);
+                        }
+                    }
+                }
+                ProfileControl::LockFaces
+            }
             other => {
                 fr.notes.push(format!(
                     "profile control {} imported as none",
@@ -590,14 +826,27 @@ impl PartStudio<'_> {
         }
         if x.op != BooleanOp::New {
             let mut l = 0;
-            x.merge_scope = self.parts_param(f, "booleanScope", &mut l);
-            x.merge_all = Self::flag(f, "defaultScope");
+            if x.body == BodyType::Surface {
+                x.merge_scope = self.parts_param(f, "booleanSurfaceScope", &mut l);
+                x.merge_all = Self::flag(f, "defaultSurfaceScope") || x.merge_scope.is_empty();
+            } else {
+                x.merge_scope = self.parts_param(f, "booleanScope", &mut l);
+                x.merge_all = Self::flag(f, "defaultScope");
+            }
         }
         if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
             eprintln!(
                 "SWEEP {} path {:?} op {:?} scope {:?}",
                 f["name"], x.path, x.op, x.merge_scope
             );
+            for c in &x.profile_curves {
+                if let PathRef::Edge(e) = c {
+                    eprintln!(
+                        "   profile edge {:?} / {:?} #{} seed {:?}",
+                        e.edge.faces[0].origin, e.edge.faces[1].origin, e.edge.index, e.seed
+                    );
+                }
+            }
         }
         self.add(f, fid, "Sweep", FeatureKind::Sweep(x), fr)?;
         if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {

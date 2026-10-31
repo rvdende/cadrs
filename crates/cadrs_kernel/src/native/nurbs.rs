@@ -588,6 +588,34 @@ impl NurbsCurve {
         }
     }
 
+    /// The curve of a [`crate::Bspline3`] (its poles weighted), checked.
+    ///
+    /// # Errors
+    /// `InvalidInput` when its knots, degree and poles don't make a B-spline.
+    pub fn from_bspline(b: &crate::Bspline3) -> crate::Result<Self> {
+        let cps = b
+            .poles
+            .iter()
+            .enumerate()
+            .map(|(i, p)| hom(p, b.weights.get(i).copied().unwrap_or(1.0)))
+            .collect();
+        Self::new(b.degree, b.knots.clone(), cps)
+    }
+
+    /// As a [`crate::Bspline3`].
+    pub fn to_bspline(&self) -> crate::Bspline3 {
+        crate::Bspline3 {
+            degree: self.degree,
+            knots: self.knots.clone(),
+            poles: self.cps.iter().map(dehom).collect(),
+            weights: if self.is_rational() {
+                self.cps.iter().map(|c| c.w).collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
     /// The same curve run backwards, on the mirrored parameter range.
     pub fn reversed(&self) -> Self {
         let (k0, k1) = (self.knots[0], self.knots[self.knots.len() - 1]);

@@ -770,6 +770,8 @@ impl Feature {
             FeatureKind::Derived(x) => x.problem().is_none(),
             FeatureKind::Thicken(x) => x.problem().is_none(),
             FeatureKind::Helix(x) => x.problem().is_none(),
+            FeatureKind::ProjectCurve(x) => x.problem().is_none(),
+            FeatureKind::FaceBlend(x) => x.problem().is_none(),
             FeatureKind::Fill(x) => x.problem().is_none(),
             FeatureKind::Thread(x) => x.problem().is_none(),
             FeatureKind::Variable(x) => x.problem().is_none(),
@@ -812,6 +814,8 @@ impl Feature {
             FeatureKind::Derived(x) => x.problem(),
             FeatureKind::Thicken(x) => x.problem(),
             FeatureKind::Helix(x) => x.problem(),
+            FeatureKind::ProjectCurve(x) => x.problem(),
+            FeatureKind::FaceBlend(x) => x.problem(),
             FeatureKind::Fill(x) => x.problem(),
             FeatureKind::Thread(x) => x.problem(),
             FeatureKind::Variable(x) => x.problem(),
@@ -925,9 +929,13 @@ impl Feature {
                 .for_each(&mut add),
             FeatureKind::Sweep(x) => {
                 x.sketches().into_iter().for_each(&mut add);
-                x.faces.iter().map(face).for_each(&mut add);
+                x.faces
+                    .iter()
+                    .chain(&x.lock_faces)
+                    .map(face)
+                    .for_each(&mut add);
                 x.merge_scope.iter().for_each(|p| add(p.feature));
-                for p in &x.path {
+                for p in x.path.iter().chain(&x.profile_curves) {
                     match p {
                         crate::advanced::PathRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
                         crate::advanced::PathRef::Curve(f) => add(*f),
@@ -944,13 +952,28 @@ impl Feature {
                 for d in [&x.start_direction, &x.end_direction].into_iter().flatten() {
                     direction_parent(d).into_iter().for_each(&mut add);
                 }
+                let mut curves: Vec<&crate::advanced::PathRef> = Vec::new();
                 for p in &x.profiles {
                     match p {
                         crate::advanced::LoftProfile::Face(f) => add(face(f)),
                         crate::advanced::LoftProfile::Vertex(v) => add(v.part.feature),
+                        crate::advanced::LoftProfile::Wire(w) => curves.extend(w),
                         _ => {}
                     }
                 }
+                curves.extend(x.guides.iter().flatten());
+                for p in curves {
+                    match p {
+                        crate::advanced::PathRef::Edge(e) => edge(e).into_iter().for_each(&mut add),
+                        crate::advanced::PathRef::Curve(f) => add(*f),
+                        _ => {}
+                    }
+                }
+                x.start_faces
+                    .iter()
+                    .chain(&x.end_faces)
+                    .map(face)
+                    .for_each(&mut add);
             }
             FeatureKind::Split(x) => {
                 x.parts.iter().for_each(|p| add(p.feature));
@@ -960,6 +983,7 @@ impl Feature {
                     }
                     Some(crate::advanced::SplitToolRef::Face(f)) => add(face(f)),
                     Some(crate::advanced::SplitToolRef::Sketch(s)) => add(*s),
+                    Some(crate::advanced::SplitToolRef::Curve(c)) => add(*c),
                     _ => {}
                 }
             }
@@ -980,6 +1004,8 @@ impl Feature {
                 .for_each(|p| add(p.feature)),
             FeatureKind::Thicken(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Helix(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::ProjectCurve(x) => x.parents().into_iter().for_each(&mut add),
+            FeatureKind::FaceBlend(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Fill(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::Thread(x) => x.parents().into_iter().for_each(&mut add),
             FeatureKind::SheetMetalModel(x) => x.parents().into_iter().for_each(&mut add),
@@ -1144,6 +1170,10 @@ pub enum FeatureKind {
     Thicken(crate::surfacing::ThickenFeature),
     /// A helical curve (Onshape's Helix), usable as a sweep path.
     Helix(crate::surfacing::HelixFeature),
+    /// A Projected curve: curves projected onto faces, a curve feature like a Helix.
+    ProjectCurve(crate::surfacing::ProjectCurveFeature),
+    /// A Face blend: a rolling ball between faces of surfaces, the walls trimmed to it.
+    FaceBlend(crate::surfacing::FaceBlendFeature),
     /// A surface filling a closed boundary (Onshape's Fill).
     Fill(crate::surfacing::FillFeature),
     /// A modelled screw thread on a cylinder or in a hole ([`crate::thread`]).
@@ -1528,6 +1558,10 @@ pub struct ExtrudeFeature {
     /// ...and planar part faces (PS4.2).
     #[serde(default)]
     pub faces: Vec<FaceRef>,
+    /// A surface's or thin wall's sketch curves picked one by one: a sketch of `sketches`
+    /// with curves here extrudes only those.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<(FeatureId, CurveId)>,
     #[serde(default)]
     pub body: BodyType,
     #[serde(default)]
@@ -1591,6 +1625,7 @@ impl Default for ExtrudeFeature {
             regions: Vec::new(),
             sketches: Vec::new(),
             faces: Vec::new(),
+            curves: Vec::new(),
             body: BodyType::Solid,
             thin: ThinWall::default(),
             op: BooleanOp::New,

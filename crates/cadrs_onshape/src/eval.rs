@@ -320,6 +320,9 @@ pub struct Model<'a> {
     doc: &'a [cadrs_core::document::Feature],
     /// The studio's Derived features' sources.
     derived: Option<&'a DerivedSources>,
+    /// The curve features' curves so far, as polylines (a Projected curve's imprint is found
+    /// along it).
+    curves: HashMap<FeatureId, Vec<Vec<[f64; 3]>>>,
 }
 
 impl<'a> Model<'a> {
@@ -363,7 +366,14 @@ impl<'a> Model<'a> {
             edge_faces,
             doc: &[],
             derived: None,
+            curves: HashMap::new(),
         }
+    }
+
+    /// With the curve features' curves (polylines).
+    pub fn with_curves(mut self, curves: HashMap<FeatureId, Vec<Vec<[f64; 3]>>>) -> Self {
+        self.curves = curves;
+        self
     }
 
     /// With the Part Studio's features, so `COPY` queries find the copy Onshape numbered (a
@@ -395,12 +405,13 @@ impl Model<'_> {
             return Vec::new();
         };
         let s = &self.parts[p].solid;
+        // (A split piece's too: its face's before the split.)
         let name = s.faces[f].name;
         std::iter::once(name)
             .chain(
                 s.face_aliases
                     .iter()
-                    .filter(|a| a.face == name)
+                    .filter(|a| a.face == name || a.face == name.base())
                     .map(|a| a.name),
             )
             .collect()
@@ -442,6 +453,14 @@ impl Model<'_> {
                 .map(|&e| Ent::Edge(p, e))
                 .collect(),
         }
+    }
+
+    /// The faces on either side of edge `e`, each once (a free edge's one face).
+    fn distinct_faces(&self, e: Ent) -> Vec<Ent> {
+        let mut v = self.adjacent(e);
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Faces or edges touching `e` through a shared edge or face (a face's neighbouring faces,
@@ -503,6 +522,85 @@ impl Model<'_> {
     /// extrude of them made), found by geometry: the face in the plane through the line and
     /// its sketch's normal, over the line. For a face a later boolean merged into a coplanar one
     /// of another feature, keeping only that one's name (Onshape keeps both histories).
+    /// The candidate edges that best fit the originals by place: an edge scores two for lying
+    /// along one of their sketch curves and one for each end on one of their sketch points
+    /// (`None` when none scores).
+    fn edges_by_originals(&self, cands: &[Ent], originals: &[Value]) -> Vec<Ent> {
+        let mut lines: Vec<Vec<[f64; 3]>> = Vec::new();
+        let mut points: Vec<[f64; 3]> = Vec::new();
+        for o in originals {
+            if o.get("queryType").and_then(Value::as_str) != Some("SKETCH_ENTITY") {
+                continue;
+            }
+            let (Some(op), Some(id)) = (
+                o.get("operationId").and_then(Value::as_str),
+                o.get("sketchEntityId").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let Some((map, g)) = self.sketches.get(op_feature(op)) else {
+                continue;
+            };
+            let Some(frame) = self
+                .doc
+                .iter()
+                .find(|f| f.id == map.feature)
+                .and_then(|f| f.sketch()?.plane)
+                .map(|p| p.frame())
+            else {
+                continue;
+            };
+            if let Some(c) = map.curves.get(id) {
+                lines.push(
+                    cadrs_sketch::hit::curve_polyline(g, *c)
+                        .into_iter()
+                        .map(|q| frame.to_world(q))
+                        .collect(),
+                );
+            } else if let Some(q) = map.points.get(id).and_then(|p| g.points.get(*p)) {
+                points.push(frame.to_world(q.pos));
+            }
+        }
+        let d = |a: [f64; 3], b: [f64; 3]| {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        };
+        let to_segment = |q: [f64; 3], a: [f64; 3], b: [f64; 3]| {
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            let t = if l2 > 0.0 {
+                (((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1] + (q[2] - a[2]) * ab[2]) / l2)
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            d(q, [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t])
+        };
+        let on_line =
+            |q: [f64; 3], l: &[[f64; 3]]| l.windows(2).any(|w| to_segment(q, w[0], w[1]) < 0.05);
+        let score = |e: Ent| -> usize {
+            let Ent::Edge(p, i) = e else { return 0 };
+            let pts = &self.parts[p].solid.edges[i].points;
+            let (Some(&a), Some(&b)) = (pts.first(), pts.last()) else {
+                return 0;
+            };
+            let along = lines.iter().any(|l| pts.iter().all(|q| on_line(*q, l)));
+            let ends = [a, b]
+                .iter()
+                .filter(|q| points.iter().any(|x| d(**q, *x) < 1e-3))
+                .count();
+            2 * usize::from(along) + ends
+        };
+        let best = cands.iter().map(|e| score(*e)).max().unwrap_or(0);
+        if best == 0 {
+            return Vec::new();
+        }
+        cands
+            .iter()
+            .copied()
+            .filter(|e| score(*e) == best)
+            .collect()
+    }
+
     fn swept_by_geometry(&self, originals: &[Value]) -> Vec<Ent> {
         let unit = |v: [f64; 3]| {
             let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-300);
@@ -944,6 +1042,65 @@ impl Model<'_> {
                     })
                     .collect()
             }
+            // An edge a split of a face (by a curve) cut it along: between pieces of the face
+            // it derives from, else (a piece deleted since) a free edge of one.
+            "IMPRINT_ON_FACE" if entity_type == "EDGE" => {
+                let faces: HashSet<Ent> = derived()
+                    .first()
+                    .map(|d| self.eval_depth(d, depth + 1))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| matches!(e, Ent::Face(..)))
+                    .collect();
+                let edges: Vec<Ent> = faces
+                    .iter()
+                    .flat_map(|f| self.adjacent(*f))
+                    .collect::<HashSet<Ent>>()
+                    .into_iter()
+                    .collect();
+                // Along the curve feature's curve it imprints, when it names one (a Projected
+                // curve's).
+                let along: Vec<Ent> = derived()
+                    .iter()
+                    .filter_map(|d| d.get("operationId").and_then(Value::as_str))
+                    .filter_map(|o| self.features.get(op_feature(o)))
+                    .filter_map(|f| self.curves.get(f))
+                    .flat_map(|lines| {
+                        edges.iter().copied().filter(|e| {
+                            let Ent::Edge(p, i) = *e else { return false };
+                            let pts = &self.parts[p].solid.edges[i].points;
+                            !pts.is_empty()
+                                && pts
+                                    .iter()
+                                    .all(|q| lines.iter().any(|l| near_polyline(*q, l, 0.05)))
+                        })
+                    })
+                    .collect();
+                if !along.is_empty() {
+                    let mut v = along;
+                    v.sort();
+                    v.dedup();
+                    return v;
+                }
+                let between: Vec<Ent> = edges
+                    .iter()
+                    .copied()
+                    .filter(|e| {
+                        let a = self.distinct_faces(*e);
+                        a.len() == 2 && a.iter().all(|f| faces.contains(f))
+                    })
+                    .collect();
+                let mut v = if between.is_empty() {
+                    edges
+                        .into_iter()
+                        .filter(|e| self.distinct_faces(*e).len() == 1)
+                        .collect()
+                } else {
+                    between
+                };
+                v.sort();
+                v
+            }
             _ => {
                 let Some(op) = q.get("operationId").and_then(Value::as_str) else {
                     return Vec::new();
@@ -1036,6 +1193,60 @@ impl Model<'_> {
                         .any(|n| Some(n.op) == op_id && cap_end(n).is_none())
                 })
             }
+            // A sweep of curves' end: its face's edge through its profile (the start), or the
+            // one across from that (the end).
+            "CAP_EDGE"
+                if let Some(cadrs_core::document::FeatureKind::Sweep(x)) = op_id
+                    .and_then(|op| self.doc.iter().find(|f| f.id.0 == op))
+                    .map(|f| &f.kind)
+                    && !x.profile_curves.is_empty() =>
+            {
+                let seeds: Vec<[f64; 3]> = x
+                    .profile_curves
+                    .iter()
+                    .filter_map(|p| match p {
+                        cadrs_core::advanced::PathRef::Edge(e) => Some(e.seed),
+                        _ => None,
+                    })
+                    .collect();
+                let points = |e: Ent| -> &[[f64; 3]] {
+                    match e {
+                        Ent::Edge(p, i) => &self.parts[p].solid.edges[i].points,
+                        Ent::Face(..) => &[],
+                    }
+                };
+                let start: Vec<Ent> = cands
+                    .iter()
+                    .copied()
+                    .filter(|e| seeds.iter().any(|s| near_polyline(*s, points(*e), 0.05)))
+                    .collect();
+                let ends: Vec<[f64; 3]> = start
+                    .iter()
+                    .flat_map(|e| {
+                        let p = points(*e);
+                        p.first()
+                            .into_iter()
+                            .chain(p.last())
+                            .copied()
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                let d = |a: &[f64; 3], b: &[f64; 3]| {
+                    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+                };
+                cands = if is_start == Some(true) {
+                    narrow(cands, &|e| start.contains(&e))
+                } else {
+                    narrow(cands, &|e| {
+                        let p = points(e);
+                        !start.contains(&e)
+                            && !p.is_empty()
+                            && [p[0], p[p.len() - 1]]
+                                .iter()
+                                .all(|q| ends.iter().all(|x| d(q, x) > 1e-3))
+                    })
+                };
+            }
             "CAP_EDGE" => {
                 let end = is_start.map(|s| !s);
                 cands = narrow(cands, &|e| {
@@ -1058,6 +1269,17 @@ impl Model<'_> {
                                 .iter()
                                 .any(|n| Some(n.op) == op_id && cap_end(n).is_none())
                         })
+                });
+            }
+            // A blend's edge across its end (its rails are shared with its walls).
+            "BLEND_EDGE" => {
+                cands = narrow(cands, &|e| {
+                    let faces = self.distinct_faces(e);
+                    faces.len() == 1
+                        && self
+                            .face_names(faces[0])
+                            .iter()
+                            .any(|n| Some(n.op) == op_id)
                 });
             }
             // Where a split's tool cut the face it derives from: the edges along that face.
@@ -1093,6 +1315,34 @@ impl Model<'_> {
             match kind {
                 "ORIGINAL_DEPENDENCY" => {
                     let originals = d.get("originals").map(Value::items).unwrap_or_default();
+                    // A loft through curves' edges share their face's names: told apart by
+                    // where they lie.
+                    let curve_loft = op_id
+                        .and_then(|op| self.doc.iter().find(|f| f.id.0 == op))
+                        .is_some_and(|f| match &f.kind {
+                            cadrs_core::document::FeatureKind::Loft(x) => x.through_curves(),
+                            cadrs_core::document::FeatureKind::Sweep(x) => {
+                                !x.profile_curves.is_empty()
+                            }
+                            _ => false,
+                        });
+                    // A sweep of curves' faces aren't named after the sketch curves its profile
+                    // came from: its faces are its own.
+                    let curve_sweep = op_id
+                        .and_then(|op| self.doc.iter().find(|f| f.id.0 == op))
+                        .is_some_and(|f| {
+                            matches!(&f.kind, cadrs_core::document::FeatureKind::Sweep(x) if !x.profile_curves.is_empty())
+                        });
+                    if curve_sweep && cands.iter().all(|e| matches!(e, Ent::Face(..))) {
+                        break;
+                    }
+                    if curve_loft && cands.iter().all(|e| matches!(e, Ent::Edge(..))) {
+                        let best = self.edges_by_originals(&cands, originals);
+                        if !best.is_empty() {
+                            cands = best;
+                            continue;
+                        }
+                    }
                     let curves = self.original_curves(originals);
                     let region = self.original_region(originals);
                     // A side face's curve id is its sketch's own: a name with one of the curves'
@@ -1258,7 +1508,7 @@ impl Model<'_> {
                         Some(v) => vec![v],
                         None => Vec::new(),
                     };
-                    for r in refs {
+                    for r in refs.iter().copied() {
                         // `[query, n]` pairs or plain queries.
                         let (qr, sign) = match r {
                             Value::Array(pair) if pair.len() == 2 => {
@@ -1298,6 +1548,32 @@ impl Model<'_> {
                     }
                     if let Some(near) = near_all {
                         cands = narrow(cands, &|e| near.contains(&e));
+                    }
+                    // Still several (a face split in pieces along the same edges): the other
+                    // listed entities, those of the other sense, tell its pieces apart.
+                    if cands.len() > 1 {
+                        let mut near_neg: Option<HashSet<Ent>> = None;
+                        for r in &refs {
+                            let Value::Array(pair) = r else { continue };
+                            if pair.len() != 2 || pair[1].as_f64().unwrap_or(1.0) >= 0.0 {
+                                continue;
+                            }
+                            let found = self.eval_depth(&pair[0], depth + 1);
+                            if found.is_empty() {
+                                continue;
+                            }
+                            let near: HashSet<Ent> = found
+                                .iter()
+                                .flat_map(|f| self.adjacent(*f).into_iter().chain([*f]))
+                                .collect();
+                            near_neg = Some(match near_neg {
+                                None => near,
+                                Some(prev) => prev.intersection(&near).copied().collect(),
+                            });
+                        }
+                        if let Some(near) = near_neg {
+                            cands = narrow(cands, &|e| near.contains(&e));
+                        }
                     }
                 }
                 _ => {}
@@ -1482,6 +1758,24 @@ impl Model<'_> {
     }
 
     /// The face `q` refers to, as a reference.
+    /// Every face `q` refers to, as references.
+    pub fn faces(&self, q: &Value) -> Vec<FaceRef> {
+        self.eval(q)
+            .into_iter()
+            .filter_map(|e| match e {
+                Ent::Face(p, f) => {
+                    let part = &self.parts[p];
+                    Some(FaceRef {
+                        part: part.id,
+                        face: part.solid.faces[f].name,
+                        seed: part.solid.face_point(f).unwrap_or([0.0; 3]),
+                    })
+                }
+                Ent::Edge(..) => None,
+            })
+            .collect()
+    }
+
     pub fn face(&self, q: &Value) -> Option<FaceRef> {
         self.eval(q).into_iter().find_map(|e| match e {
             Ent::Face(p, f) => {
@@ -1720,4 +2014,21 @@ impl Model<'_> {
             })
             .collect()
     }
+}
+
+/// Whether `q` lies within `tol` of the polyline `l`.
+fn near_polyline(q: [f64; 3], l: &[[f64; 3]], tol: f64) -> bool {
+    l.windows(2).any(|w| {
+        let (a, b) = (w[0], w[1]);
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+        let t = if l2 > 0.0 {
+            (((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1] + (q[2] - a[2]) * ab[2]) / l2)
+                .clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let c = [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t];
+        ((q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) + (q[2] - c[2]).powi(2)).sqrt() < tol
+    })
 }

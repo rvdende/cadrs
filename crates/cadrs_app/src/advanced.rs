@@ -368,11 +368,12 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
                 toggle(&mut x.path, PathRef::SketchCurve { sketch, curve })
             }
             Pick::Feature(f) if is_sketch(&features, f) => toggle(&mut x.path, PathRef::Sketch(f)),
-            // A curve feature (a Helix) picked in the list or the view.
+            // A curve feature (a Helix, a Projected curve) picked in the list or the view.
             Pick::Feature(f)
-                if features
-                    .iter()
-                    .any(|y| y.id == f && matches!(y.kind, FeatureKind::Helix(_))) =>
+                if features.iter().any(|y| {
+                    y.id == f
+                        && matches!(y.kind, FeatureKind::Helix(_) | FeatureKind::ProjectCurve(_))
+                }) =>
             {
                 toggle(&mut x.path, PathRef::Curve(f))
             }
@@ -477,6 +478,16 @@ fn face_pick(cache: &PartCache, f: &FaceRef) -> Option<Pick> {
         .map(|p| Pick::Face(p.id, f.face))
 }
 
+/// A sweep path's or a loft curve's pick.
+fn path_pick(cache: &PartCache, p: &PathRef) -> Option<Pick> {
+    match p {
+        PathRef::Edge(e) => edge_pick(cache, e),
+        PathRef::SketchCurve { sketch, curve } => Some(Pick::SketchCurve(*sketch, *curve)),
+        PathRef::Sketch(_) => None,
+        PathRef::Curve(f) => Some(Pick::Feature(*f)),
+    }
+}
+
 fn edge_pick(cache: &PartCache, e: &EdgeRef) -> Option<Pick> {
     cache
         .parts
@@ -527,16 +538,10 @@ pub fn references(kind: &FeatureKind, cache: &PartCache, features: &[Feature]) -
                 whole(*s, &mut out);
             }
             out.extend(x.faces.iter().filter_map(|f| face_pick(cache, f)));
-            for p in &x.path {
-                out.extend(match p {
-                    PathRef::Edge(e) => edge_pick(cache, e),
-                    PathRef::SketchCurve { sketch, curve } => {
-                        Some(Pick::SketchCurve(*sketch, *curve))
-                    }
-                    PathRef::Sketch(_) => None,
-                    PathRef::Curve(f) => Some(Pick::Feature(*f)),
-                });
+            for p in x.path.iter().chain(&x.profile_curves) {
+                out.extend(path_pick(cache, p));
             }
+            out.extend(x.lock_faces.iter().filter_map(|f| face_pick(cache, f)));
         }
         FeatureKind::Loft(x) => {
             for p in &x.profiles {
@@ -556,7 +561,16 @@ pub fn references(kind: &FeatureKind, cache: &PartCache, features: &[Feature]) -
                             .map(|q| Pick::Vertex(q.id, v.vertex)),
                     ),
                     LoftProfile::Sketch(s) => whole(*s, &mut out),
+                    LoftProfile::Wire(w) => {
+                        out.extend(w.iter().filter_map(|c| path_pick(cache, c)))
+                    }
                 }
+            }
+            for c in x.guides.iter().flatten() {
+                out.extend(path_pick(cache, c));
+            }
+            for f in x.start_faces.iter().chain(&x.end_faces) {
+                out.extend(face_pick(cache, f));
             }
         }
         FeatureKind::Split(x) => {

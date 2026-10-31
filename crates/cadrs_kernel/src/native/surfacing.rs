@@ -556,6 +556,35 @@ pub fn sew(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult
     Ok(t.into_result(k))
 }
 
+/// Sheets joined along their coincident edges into one (Onshape's Add of surfaces): each face
+/// continues its input face.
+pub fn sew_sheets(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
+    let mut b = Body::default();
+    let mut from = Vec::new();
+    for id in bodies {
+        let src = k.get(*id)?;
+        from.extend((0..src.faces.len()).map(|f| InputFace {
+            body: *id,
+            face: FaceId(f as u64),
+        }));
+        b.append(src);
+    }
+    let b = sew_faces(b, tol)?;
+    let history = History {
+        modified: from
+            .into_iter()
+            .enumerate()
+            .map(|(i, f)| (FaceId(i as u64), f))
+            .collect(),
+        ..History::default()
+    };
+    let id = k.insert(b);
+    Ok(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
 /// Faces sewn into one sheet: coincident vertices and edges merged, the faces oriented
 /// consistently (the sheet may stay open), one shell per edge-connected piece and no solids;
 /// p-curves off their edges refitted and the tolerances fitted to the gaps left.
@@ -840,6 +869,10 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
     if gone.iter().any(|&f| f >= b.faces.len()) {
         return Err(KernelError::InvalidParameter("unknown face".into()));
     }
+    // A sheet's faces are taken away, leaving the hole open (Onshape's Leave open).
+    if b.solids.is_empty() {
+        return delete_sheet_faces(k, body, b, &gone);
+    }
     let ef = b.edge_faces();
     // Edges between a deleted face and a kept one.
     let boundary: Vec<usize> = (0..b.edges.len())
@@ -892,6 +925,52 @@ pub fn delete_faces(k: &mut NativeKernel, body: BodyId, remove: &[FaceId]) -> Re
         ));
     }
     for f in &gone {
+        history.deleted.push(InputFace {
+            body,
+            face: FaceId(*f as u64),
+        });
+    }
+    let id = k.insert(out);
+    Ok(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
+/// [`delete_faces`] of a sheet: the faces gone, the rest as they were (their shells
+/// re-gathered: the sheet may fall apart).
+fn delete_sheet_faces(
+    k: &mut NativeKernel,
+    body: BodyId,
+    mut out: Body,
+    gone: &[usize],
+) -> Result<OpResult> {
+    let keep: Vec<usize> = (0..out.faces.len()).filter(|f| !gone.contains(f)).collect();
+    if keep.is_empty() {
+        return Err(KernelError::EmptyResult(
+            "deleting every face leaves nothing".into(),
+        ));
+    }
+    out.faces = keep.iter().map(|&f| out.faces[f].clone()).collect();
+    super::unify::compact(&mut out);
+    out.shells.clear();
+    out.solids.clear();
+    super::boolean::assemble_shells(&mut out)?;
+    out.solids.clear();
+    for s in &mut out.shells {
+        s.closed = false;
+    }
+    let mut history = History::default();
+    for (i, f) in keep.iter().enumerate() {
+        history.modified.push((
+            FaceId(i as u64),
+            InputFace {
+                body,
+                face: FaceId(*f as u64),
+            },
+        ));
+    }
+    for f in gone {
         history.deleted.push(InputFace {
             body,
             face: FaceId(*f as u64),
