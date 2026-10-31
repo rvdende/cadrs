@@ -254,7 +254,7 @@ impl ViewAnimation {
     }
 }
 
-/// Seconds a view change (N, Shift+7, view cube) takes.
+/// Seconds a view change (N, Shift+7, view ball) takes.
 pub const VIEW_ANIMATION_TIME: f32 = 0.35;
 
 /// The current view, one per tab.
@@ -270,14 +270,29 @@ pub struct ViewportView {
     /// view moved meanwhile.
     pub fit_pending: Option<(ElementId, ViewState)>,
     /// The point a drag orbits about, when not the focus (the PCB Studio's selected
-    /// components' centre, [`crate::pcb::view`]).
+    /// components' centre, [`crate::pcb::view`]; the selection Zoom to selection framed,
+    /// [`crate::view_options::zoom_to_selection`]).
     pub pivot: Option<Vec3>,
+    /// The pivot is the framed selection's (issue #97): it stays through zooms, until the view
+    /// turns or moves otherwise ([`Self::animate_to`], [`Self::turn_by`]) or the tab changes.
+    pub framed_pivot: bool,
+    /// Keep the camera up (issue #97, the preference or walk mode): turns go about world Z
+    /// without roll ([`ViewState::rotate_upright`]), and the rotate drag is the turntable one.
+    pub keep_up: bool,
 }
 
 impl ViewportView {
     /// Animates to `to`, its orientation turned the shortest way.
     pub fn animate_to(&mut self, to: ViewState) {
         let to = self.keeping_mode(to);
+        // A turn or a move lets go of a framed selection's pivot; a zoom keeps it (issue #97:
+        // Zoom to selection sets it after this).
+        let from = self.target();
+        if from.rotation().angle_between(to.rotation()) > 1e-4
+            || from.focus.distance(to.focus) > 1e-3 * from.scale.max(1e-9)
+        {
+            self.drop_framed_pivot();
+        }
         if self.view.approx_eq(&to) {
             return;
         }
@@ -286,7 +301,7 @@ impl ViewportView {
     }
 
     /// Turns the view by `yaw` and `pitch` degrees about the screen axes (as
-    /// [`ViewState::rotate_by`]: the arrow keys, the view cube's arrows), on from the turn in
+    /// [`ViewState::rotate_by`]: the arrow keys, the view ball's arrows), on from the turn in
     /// progress: presses quicker than their turns add up (four of 90° turn it all the way
     /// round), and the view goes on turning without stopping in between (#91).
     pub fn turn_by(&mut self, yaw: f32, pitch: f32) {
@@ -295,12 +310,27 @@ impl ViewportView {
 
     /// [`Self::turn_by`], the view getting there in `duration` seconds.
     pub fn turn_by_in(&mut self, yaw: f32, pitch: f32, duration: f32) {
+        // (A turn about the focus: no framed selection's pivot after it.)
+        self.drop_framed_pivot();
         let from = self.target();
         let mut to = from;
-        to.rotate_by(yaw, pitch);
+        if self.keep_up {
+            to.rotate_upright(yaw, pitch);
+        } else {
+            to.rotate_by(yaw, pitch);
+        }
         let step = Turn::between(from.rotation(), to.rotation());
         let turn = self.turn_left().then(step);
         self.start(self.keeping_mode(to), turn, duration);
+    }
+
+    /// Lets go of the pivot Zoom to selection set ([`Self::framed_pivot`]): the view framed
+    /// otherwise, or turned to a standard view, orbits about its focus again.
+    pub fn drop_framed_pivot(&mut self) {
+        if self.framed_pivot {
+            self.pivot = None;
+            self.framed_pivot = false;
+        }
     }
 
     /// What's left of the turn in progress ([`Turn::NONE`] when the view isn't moving).
@@ -311,12 +341,13 @@ impl ViewportView {
         })
     }
 
-    /// `to` with the tab's render mode and projection (P3E.3a): a change of view keeps them
-    /// (`crate::view_options` sets them).
+    /// `to` with the tab's render mode, projection and lens (P3E.3a, #97): a change of view
+    /// keeps them (`crate::view_options` and walk mode set them).
     fn keeping_mode(&self, to: ViewState) -> ViewState {
         ViewState {
             render: self.view.render,
             perspective: self.view.perspective,
+            focal: self.view.focal,
             ..to
         }
     }
@@ -926,11 +957,11 @@ pub fn isometric_transform() -> Transform {
     Transform::from_translation(v.camera_position()).with_rotation(v.rotation())
 }
 
-/// The plane fill: a pale cyan at low opacity; in dark, the schematic's warm grid colour,
+/// The plane fill: a pale blue at low opacity; in dark, the schematic's warm grid colour,
 /// fainter, so the three planes don't tint the whole view.
 pub fn plane_fill() -> Color {
     cadrs_ui::by_scheme(
-        Color::LinearRgba(LinearRgba::new(0.05, 0.42, 0.47, 0.09)),
+        Color::LinearRgba(LinearRgba::new(0.047, 0.387, 0.647, 0.10)),
         Color::LinearRgba(LinearRgba::new(0.254, 0.216, 0.133, 0.07)),
     )
 }
@@ -1093,6 +1124,8 @@ fn track_active_element(
     kind.set_if_neq(k);
     if view.element != Some(el.id) {
         let v = &mut *view;
+        // (Another tab's framed selection isn't this one's pivot.)
+        v.drop_framed_pivot();
         if let Some(old) = v.element {
             let current = v.target();
             v.per_element.insert(old, current);
@@ -1285,7 +1318,10 @@ fn viewport_pointer(
         Res<Time>,
     ),
     prefs: Res<crate::preferences_ui::LocalPreferences>,
-    space_mouse_wheel: Res<crate::spacemouse::LegacyWheelGuard>,
+    (space_mouse_wheel, walking): (
+        Res<crate::spacemouse::LegacyWheelGuard>,
+        Option<Res<crate::walk::Walking>>,
+    ),
     mut commands: Commands,
 ) {
     if kind.is_flat() || eda2d.flat() {
@@ -1328,7 +1364,21 @@ fn viewport_pointer(
                         .find_map(|(_, b)| {
                             mouse.action(crate::preferences_ui::mouse_button(b), mods)
                         });
-                    match action {
+                    // Keeping the camera up, every rotate gesture turns without roll; walking,
+                    // the mouse looks round with no button held (`crate::walk`), so a rotate
+                    // drag does nothing more (issue #97).
+                    let action = match action {
+                        Some(ViewAction::Rotate) if view.keep_up => {
+                            Some(ViewAction::RotateTurntable)
+                        }
+                        a => a,
+                    };
+                    let look = walking.as_deref().is_some_and(|w| w.on)
+                        && matches!(
+                            action,
+                            Some(ViewAction::Rotate | ViewAction::RotateTurntable)
+                        );
+                    match action.filter(|_| !look) {
                         Some(ViewAction::Rotate) => match view.pivot {
                             Some(p) => view.view.orbit_about(p, |v| v.orbit(delta)),
                             None => view.view.orbit(delta),
@@ -1503,6 +1553,11 @@ fn viewport_pointer(
                         MouseScrollUnit::Pixel => y / 40.0,
                     };
                     view.animation = None;
+                    // Walking, the wheel changes the lens (issue #97).
+                    if walking.as_deref().is_some_and(|w| w.on) {
+                        view.view = crate::walk::lens_wheel(&view.view, lines, rect.0.size());
+                        continue;
+                    }
                     let cursor = rect.offset(pos);
                     // P3E.3a: in perspective, zoom about the part under the cursor.
                     if view.view.perspective
@@ -1768,7 +1823,19 @@ fn view_shortcuts(
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
     let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     for k in keys_in.read() {
-        if k.state != bevy::input::ButtonState::Pressed || typing || !q_dialogs.is_empty() || alt {
+        if k.state != bevy::input::ButtonState::Pressed || typing || !q_dialogs.is_empty() {
+            continue;
+        }
+        // Zoom to selection (issue #97): Alt+F, or the numpad's point (Blender's), framing what
+        // is selected and orbiting about it (Shift+F stays Fillet, as Onshape's).
+        let code = k.shortcut_code();
+        if (alt && !ctrl && !shift && code == KeyCode::KeyF)
+            || (!alt && !ctrl && code == KeyCode::NumpadDecimal)
+        {
+            commands.queue(crate::view_options::zoom_to_selection);
+            continue;
+        }
+        if alt {
             continue;
         }
         // Arrows: with Ctrl+Shift, pan; otherwise they turn the view while held
@@ -1792,11 +1859,17 @@ fn view_shortcuts(
         match numpad_key(k.shortcut_code(), ctrl) {
             Some(NumpadKey::View(s)) => {
                 let to = view.target().oriented(s);
+                view.drop_framed_pivot();
                 view.animate_to(to);
                 continue;
             }
             Some(NumpadKey::Opposite) => {
-                view.turn_by(180.0, 0.0);
+                if view.keep_up {
+                    let to = view.target().upright_opposite();
+                    view.animate_to(to);
+                } else {
+                    view.turn_by(180.0, 0.0);
+                }
                 continue;
             }
             Some(NumpadKey::Perspective) => {
@@ -1830,6 +1903,7 @@ fn view_shortcuts(
                 commands.queue(isometric_and_fit);
             } else {
                 let to = view.target().oriented(s);
+                view.drop_framed_pivot();
                 view.animate_to(to);
             }
             continue;
@@ -1876,6 +1950,7 @@ fn view_shortcuts(
                 };
                 if let Some(n) = normal {
                     let to = view.target().normal_to(n);
+                    view.drop_framed_pivot();
                     view.animate_to(to);
                 }
             }
@@ -1918,6 +1993,7 @@ fn view_shortcuts(
                 let to = view
                     .target()
                     .fitted_beside(&pts, rect.0.size(), fit_fill(*kind), inset.0);
+                view.drop_framed_pivot();
                 view.animate_to(to);
             }
             KeyCode::KeyZ => {
@@ -1987,6 +2063,7 @@ pub fn orient_and_fit(world: &mut World, orient: impl FnOnce(ViewState) -> ViewS
     let inset = world.resource::<DialogInset>().0;
     let mut view = world.resource_mut::<ViewportView>();
     let to = orient(view.target()).fitted_beside(&pts, size, fit_fill(kind), inset);
+    view.drop_framed_pivot();
     view.animate_to(to);
 }
 
@@ -2147,7 +2224,7 @@ fn arrow_keys_held(
     hold_arrows(&mut view, &mut hold, held, shift, ctrl, time.delta_secs());
 }
 
-/// Degrees an arrow key rotates the view: 15°, Shift 90°, Ctrl 5° (as the view cube arrows).
+/// Degrees an arrow key rotates the view: 15°, Shift 90°, Ctrl 5° (as the view ball arrows).
 pub fn arrow_step(shift: bool, ctrl: bool) -> f32 {
     if shift {
         90.0
@@ -2236,7 +2313,7 @@ pub fn scene_points(
     match cache.filter(|c| !c.rebuilding && c.settled().map(|(id, ..)| id) == Some(el.id)) {
         Some(c) => pts.extend(c.parts.iter().flat_map(to_vec3)),
         None => {
-            for part in cadrs_core::parts::parts(el.features()) {
+            for part in cadrs_core::parts::parts(&el.part_features()) {
                 pts.extend(to_vec3(&part));
             }
         }
@@ -2559,7 +2636,7 @@ trait PlaneEdge {
 }
 
 impl PlaneEdge for Theme {
-    /// The outline color: a cyan grey in light, the schematic's warm grid colour in dark.
+    /// The outline color: a blue grey in light, the schematic's warm grid colour in dark.
     fn plane_edge_line(&self) -> Color {
         self.plane_edge
     }
@@ -2600,8 +2677,8 @@ fn fit_grid(
         )
     } else {
         (
-            rgba(0x8f, 0xb3, 0xb8, 0.28),
-            rgba(0x4f, 0x80, 0x87, 0.6),
+            rgba(0x9c, 0xad, 0xc5, 0.28),
+            rgba(0x63, 0x78, 0x97, 0.6),
             rgba(0xe8, 0x85, 0x7f, 1.0),
             rgba(0x7f, 0xc2, 0x7a, 1.0),
         )
@@ -3102,7 +3179,7 @@ mod tests {
         panic!("the view never stopped");
     }
 
-    /// #91: a turn by the arrows (a tap, the view cube's) is animated about the screen axis it
+    /// #91: a turn by the arrows (a tap, the view ball's) is animated about the screen axis it
     /// turns about, whatever the orientation (over the top too, where the azimuth and roll swing
     /// round).
     #[test]

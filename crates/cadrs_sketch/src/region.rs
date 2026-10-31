@@ -734,12 +734,13 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
 /// Every closed region of the sketch.
 /// [`regions`], remembered for the last few sketches: the view, the Part Studio's region list
 /// and the dimension knockouts all ask for the same sketch's regions in a frame, and finding
-/// them in a 500-entity sketch takes a few milliseconds.
+/// them in a 500-entity sketch takes a few milliseconds. Remembered for as many sketches as a
+/// big Part Studio's rebuild asks for in turn (its extrudes').
 pub fn regions_shared(s: &Sketch) -> std::sync::Arc<Vec<Region>> {
     use std::sync::{Arc, Mutex};
     type Memo = Vec<(Sketch, Arc<Vec<Region>>)>;
     static MEMO: Mutex<Memo> = Mutex::new(Vec::new());
-    const KEEP: usize = 6;
+    const KEEP: usize = 64;
     if let Ok(mut m) = MEMO.lock()
         && let Some(i) = m.iter().position(|(k, _)| k == s)
     {

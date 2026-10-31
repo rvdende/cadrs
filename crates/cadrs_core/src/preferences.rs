@@ -325,6 +325,12 @@ pub struct Preferences {
     /// The slicer parts were last sent to ([`crate::slicer::Slicer::id`]): listed first.
     #[serde(default)]
     pub last_slicer: Option<u8>,
+    /// Keep the camera up (issue #97): the rotate drag turns about the vertical (world Z) and
+    /// tilts, without rolling the view, and so do the arrow keys and the view cube's arrows.
+    /// Off, the drag turns freely about the screen (Onshape's), and the no-roll turn is on the
+    /// other gesture.
+    #[serde(default)]
+    pub keep_camera_up: bool,
 }
 
 fn default_vsync() -> bool {
@@ -352,6 +358,7 @@ impl Default for Preferences {
             profile_cpu: false,
             vsync: true,
             last_slicer: None,
+            keep_camera_up: false,
         }
     }
 }
@@ -539,6 +546,7 @@ mod tests {
             profile_cpu: true,
             vsync: false,
             last_slicer: Some(0),
+            keep_camera_up: true,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);

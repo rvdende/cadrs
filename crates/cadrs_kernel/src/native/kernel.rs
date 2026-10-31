@@ -1,6 +1,6 @@
 //! `NativeKernel`: the pure-Rust backend of [`crate::Kernel`].
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
 
 use nalgebra::Point3;
@@ -24,9 +24,15 @@ pub struct Entry {
     /// integrals: a rebuild asks for them over the same bodies many times).
     faces: OnceLock<Vec<FaceInfo>>,
     edges: OnceLock<Vec<EdgeInfo>>,
+    /// [`Kernel::edges_light`]'s (without lengths and smoothness), while `edges` isn't made.
+    edges_light: OnceLock<Vec<EdgeInfo>>,
+    /// [`Kernel::edges_shown`]'s, with the length below which they are exact.
+    edges_shown: OnceLock<(f64, Vec<EdgeInfo>)>,
     /// [`Kernel::bounding_box`]: extremes over its faces (a rebuild asks for every part's box
     /// near each new body).
     aabb: OnceLock<Aabb>,
+    /// Each face's box, grown by the body's largest tolerance ([`NativeKernel::surely_apart`]).
+    face_boxes: OnceLock<Vec<Bbox>>,
 }
 
 impl Entry {
@@ -36,9 +42,29 @@ impl Entry {
             polys: OnceLock::new(),
             faces: OnceLock::new(),
             edges: OnceLock::new(),
+            edges_light: OnceLock::new(),
+            edges_shown: OnceLock::new(),
             aabb: OnceLock::new(),
+            face_boxes: OnceLock::new(),
         }
     }
+    /// Each face's box, grown by the largest of the body's edge and vertex tolerances and
+    /// [`tol::POINT`].
+    pub fn face_boxes(&self) -> &Vec<Bbox> {
+        self.face_boxes.get_or_init(|| {
+            let b = &self.body;
+            let reach = b
+                .edges
+                .iter()
+                .map(|e| e.tol)
+                .chain(b.verts.iter().map(|v| v.tol))
+                .fold(tol::POINT, f64::max);
+            (0..b.faces.len())
+                .map(|f| b.face_bbox(f).grow(2.0 * reach))
+                .collect()
+        })
+    }
+
     pub fn polys(&self) -> &Vec<Vec<Vec<P2>>> {
         self.polys.get_or_init(|| {
             self.body
@@ -56,6 +82,9 @@ pub struct NativeKernel {
     /// (Shared with [`Self::fork`]s: a body never changes.)
     bodies: HashMap<u64, Arc<Entry>>,
     next: u64,
+    /// The first id this session numbered a body with: a fork's range ([`Self::fork`]); 0 for
+    /// a session of its own.
+    first: u64,
     tol: super::tol::Tolerances,
     /// Face colours (sRGB and alpha) by body, in face order: an imported file's, or what the
     /// application set. Operations pass them on through their history ([`Self::carry_colors`]).
@@ -75,6 +104,10 @@ const JOINED_KEPT: usize = 4;
 
 /// How many body ids each [`NativeKernel::fork`] of a session has to itself.
 const FORK_IDS: u64 = 1 << 32;
+
+/// The next range of body ids a fork takes: every fork its own, a fork of a fork too (a fork's
+/// range past its parent's lane would be another fork's), and past every id handed out before.
+static FORK_RANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl NativeKernel {
     /// An empty session at the default tolerances.
@@ -115,14 +148,85 @@ impl NativeKernel {
         BodyId(id)
     }
 
+    /// Whether two solid bodies are sure to be apart, no boolean needed: no face of one comes
+    /// near a face of the other (their [`Entry::face_boxes`]), and no solid of either holds a
+    /// point of the other (as one inside the other would, no faces near). A rebuild asks
+    /// whether a new body touches every part whose box meets its own, and in a house a wall's box
+    /// meets most of its windows'.
+    pub fn surely_apart(&self, a: BodyId, b: BodyId) -> Result<bool> {
+        let (ea, eb) = (self.entry(a)?, self.entry(b)?);
+        // (Solids alone: a sheet has no inside.)
+        let solid = |x: &Body| {
+            !x.solids.is_empty()
+                && (0..x.solids.len())
+                    .map(|s| x.solid_faces(s).len())
+                    .sum::<usize>()
+                    == x.faces.len()
+        };
+        if !solid(&ea.body) || !solid(&eb.body) {
+            return Ok(false);
+        }
+        let (fa, fb) = (ea.face_boxes(), eb.face_boxes());
+        if fa.iter().any(|x| fb.iter().any(|y| x.overlaps(y))) {
+            return Ok(false);
+        }
+        // A point of each solid of one, outside the other.
+        let outside = |x: &Entry, y: &Entry| {
+            (0..x.body.solids.len()).all(|s| {
+                let point = x.body.solid_faces(s).iter().find_map(|&f| {
+                    let c = x.body.faces[f].loops.first()?.first()?;
+                    let e = &x.body.edges[c.edge];
+                    Some(x.body.verts[e.v[0]].p)
+                });
+                point.is_some_and(|p| {
+                    classify::classify_point(&y.body, y.polys(), &p, tol::POINT)
+                        == PointClass::Outside
+                })
+            })
+        };
+        Ok(outside(ea, eb) && outside(eb, ea))
+    }
+
+    /// [`Kernel::joins`] from one boolean run (no retries when it leaves the union broken, and
+    /// the union not kept for an Add): a question only, as a New's dialog asks it.
+    pub fn joins_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
+        if self.surely_apart(a, b)? || super::boolean::union_falls_apart(self.get(a)?, self.get(b)?)
+        {
+            return Ok(false);
+        }
+        let r = super::boolean::boolean_once(self, BoolOp::Union, a, &[b])?;
+        let joined = self.solid_count(r.bodies[0]).unwrap_or(2) == 1;
+        for x in r.bodies {
+            self.release(x);
+        }
+        Ok(joined)
+    }
+
+    /// [`Kernel::overlaps`] from one boolean run, like [`Self::joins_once`].
+    pub fn overlaps_once(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
+        if self.surely_apart(a, b)? {
+            return Ok(false);
+        }
+        let r = super::boolean::boolean_once(self, BoolOp::Intersect, a, &[b])?;
+        let v = self
+            .get(r.bodies[0])
+            .map(|x| super::mass::body_volume(x))
+            .unwrap_or(0.0);
+        for x in r.bodies {
+            self.release(x);
+        }
+        Ok(v > tol::ROUNDOFF)
+    }
+
     /// A session to run an operation in on another thread, its bodies, colours and
     /// tolerances this one's; [`Self::absorb`] takes back what it made. Its new bodies are
-    /// numbered from a range of its own (`lane`), so their ids don't depend on which of several
-    /// forks runs first.
-    pub fn fork(&self, lane: u64) -> NativeKernel {
+    /// numbered from a range of ids of its own ([`FORK_RANGES`]).
+    pub fn fork(&self) -> NativeKernel {
+        let first = FORK_RANGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) * FORK_IDS;
         NativeKernel {
             bodies: self.bodies.clone(),
-            next: self.next + (lane + 1) * FORK_IDS,
+            next: first,
+            first,
             tol: self.tol,
             colors: self.colors.clone(),
             draw_history: None,
@@ -137,7 +241,8 @@ impl NativeKernel {
     /// the oldest past [`JOINED_KEPT`] released).
     pub fn absorb(&mut self, fork: NativeKernel) {
         for (id, e) in fork.bodies {
-            if self.bodies.contains_key(&id) {
+            // (Not those it had from here: one released here since stays released.)
+            if id < fork.first || self.bodies.contains_key(&id) {
                 continue;
             }
             if let Some(c) = fork.colors.get(&id) {
@@ -426,15 +531,31 @@ pub fn face_info(b: &Body, fi: usize) -> FaceInfo {
 }
 
 pub fn edge_infos(b: &Body) -> Vec<EdgeInfo> {
-    edge_infos_with(b, true)
+    edge_infos_with(b, Detail::Full)
 }
 
-/// [`edge_infos`], with each edge's length (an adaptive integral along a B-spline: most of the
-/// work) or 0 when `lengths` is false, for the queries that don't read it.
-fn edge_infos_with(b: &Body, lengths: bool) -> Vec<EdgeInfo> {
+/// What [`edge_infos_with`] works out besides where each edge lies and between which faces:
+/// each edge's length (an adaptive integral along a B-spline: most of the work) and whether it
+/// is smooth (projections along it), for the queries that read them.
+#[derive(Debug, Clone, Copy)]
+enum Detail {
+    /// Exact lengths and smoothness ([`Kernel::edges`]).
+    Full,
+    /// Neither: lengths 0, none smooth (naming, tangent chains).
+    Light,
+    /// Smoothness; the lengths below this exact, the others their chord (no more than the
+    /// length, and no less than this): a display's test for slivers.
+    Shown(f64),
+}
+
+/// [`edge_infos`] with what `detail` asks for.
+fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
+    use rayon::prelude::*;
     let ef = b.edge_faces();
+    // (Side by side: each edge's smoothness projects onto its faces, a part's display a
+    // tenth of a second of a rebuild's own thread.)
     b.edges
-        .iter()
+        .par_iter()
         .enumerate()
         .map(|(ei, e)| {
             let faces = match ef[ei].as_slice() {
@@ -459,10 +580,18 @@ fn edge_infos_with(b: &Body, lengths: bool) -> Vec<EdgeInfo> {
             EdgeInfo {
                 id: EdgeId(ei as u64),
                 faces,
-                length: if e.degenerate || !lengths {
-                    0.0
-                } else {
-                    e.curve.length(t0, t1)
+                length: match detail {
+                    _ if e.degenerate => 0.0,
+                    Detail::Light => 0.0,
+                    Detail::Full => e.curve.length(t0, t1),
+                    Detail::Shown(short) => {
+                        let chord = (b.verts[e.v[1]].p - b.verts[e.v[0]].p).norm();
+                        if chord < short {
+                            e.curve.length(t0, t1)
+                        } else {
+                            chord
+                        }
+                    }
                 },
                 curve: curve_kind(e),
                 start: b.verts[e.v[0]].p,
@@ -477,7 +606,8 @@ fn edge_infos_with(b: &Body, lengths: bool) -> Vec<EdgeInfo> {
                 circle,
                 // (Not without the lengths, for tangent chains: those ask of the edges they
                 // reach only, [`NativeKernel::tangent_chain`].)
-                smooth: lengths && super::blend::smooth_within(b, ei, TANGENT_ANGLE),
+                smooth: !matches!(detail, Detail::Light)
+                    && super::blend::smooth_within(b, ei, TANGENT_ANGLE),
             }
         })
         .collect()
@@ -487,8 +617,8 @@ fn edge_infos_with(b: &Body, lengths: bool) -> Vec<EdgeInfo> {
 /// and the new index of each listed face.
 pub fn subset(b: &Body, faces: &[usize], closed: bool) -> Body {
     let mut out = Body::default();
-    let mut vmap: HashMap<usize, usize> = HashMap::new();
-    let mut emap: HashMap<usize, usize> = HashMap::new();
+    let mut vmap: HashMap<usize, usize> = HashMap::default();
+    let mut emap: HashMap<usize, usize> = HashMap::default();
     for &fi in faces {
         let mut f = b.faces[fi].clone();
         for l in &mut f.loops {
@@ -548,7 +678,7 @@ pub fn loose_part(b: &Body) -> Option<Body> {
         return None;
     }
     let mut out = Body::default();
-    let mut vmap: HashMap<usize, usize> = HashMap::new();
+    let mut vmap: HashMap<usize, usize> = HashMap::default();
     let mut vert = |out: &mut Body, v: usize| {
         *vmap.entry(v).or_insert_with(|| {
             out.verts.push(b.verts[v].clone());
@@ -1322,11 +1452,46 @@ impl Kernel for NativeKernel {
         Ok(e.edges.get_or_init(|| edge_infos(&e.body)).clone())
     }
 
+    fn edges_shown(&self, body: BodyId, short: f64) -> Result<Vec<EdgeInfo>> {
+        let e = self.entry(body)?;
+        if let Some(full) = e.edges.get() {
+            return Ok(full.clone());
+        }
+        let (at, infos) = e
+            .edges_shown
+            .get_or_init(|| (short, edge_infos_with(&e.body, Detail::Shown(short))));
+        if *at == short {
+            return Ok(infos.clone());
+        }
+        Ok(edge_infos_with(&e.body, Detail::Shown(short)))
+    }
+
+    fn face_count(&self, body: BodyId) -> Result<usize> {
+        Ok(self.get(body)?.faces.len())
+    }
+
+    fn edges_light(&self, body: BodyId) -> Result<Vec<EdgeInfo>> {
+        let e = self.entry(body)?;
+        if let Some(full) = e.edges.get() {
+            return Ok(full.clone());
+        }
+        Ok(e.edges_light
+            .get_or_init(|| edge_infos_with(&e.body, Detail::Light))
+            .clone())
+    }
+
     fn joins(&mut self, a: BodyId, b: BodyId) -> Result<bool> {
         // [`Kernel::joins`], its union kept when it is one solid (the union the rebuild asks for
         // next).
         if let Some((_, _, r)) = self.joined.iter().find(|(x, y, _)| *x == a && *y == b) {
             return Ok(self.solid_count(r.bodies[0]).unwrap_or(2) == 1);
+        }
+        // Sure to be several solids by their boxes (a window head of six blocks and the frame
+        // under one of them), or apart: no boolean.
+        if super::boolean::union_falls_apart(self.get(a)?, self.get(b)?)
+            || self.surely_apart(a, b)?
+        {
+            return Ok(false);
         }
         let r = self.boolean(BoolOp::Union, a, &[b])?;
         let joined = self.solid_count(r.bodies[0]).unwrap_or(2) == 1;
@@ -1354,6 +1519,9 @@ impl Kernel for NativeKernel {
             let (va, vb, vu) = (v(a), v(b), v(r.bodies[0]));
             return Ok(va + vb - vu > tol::REL_POINT * (va + vb));
         }
+        if self.surely_apart(a, b)? {
+            return Ok(false);
+        }
         // [`Kernel::overlaps`] with the intersection's volume alone (the same number as its
         // mass properties', for a fraction of the work).
         let r = self.boolean(BoolOp::Intersect, a, &[b])?;
@@ -1375,7 +1543,7 @@ impl Kernel for NativeKernel {
         let b = self.get(body)?;
         let convex = |e: EdgeId| super::blend::edge_convex(b, e.0 as usize);
         crate::tangent_chain_of(
-            &edge_infos_with(b, false),
+            &edge_infos_with(b, Detail::Light),
             &self.vertices(body)?,
             edge,
             &|a, c| {
@@ -1431,13 +1599,26 @@ impl Kernel for NativeKernel {
         Ok(self.get(body)?.solids.len())
     }
 
+    fn size_hint(&self, body: BodyId) -> Result<f64> {
+        // (The box of its vertices, edges and faces' control points: no search for extremes.)
+        Ok(self.get(body)?.bbox().diagonal())
+    }
+
     fn bounding_box(&self, body: BodyId) -> Result<Aabb> {
         let e = self.entry(body)?;
         Ok(*e.aabb.get_or_init(|| {
             let o = P3::origin();
-            let (x0, x1) = extent_along(&e.body, &o, &V3::x());
-            let (y0, y1) = extent_along(&e.body, &o, &V3::y());
-            let (z0, z1) = extent_along(&e.body, &o, &V3::z());
+            // (A big body's three side by side: a rebuild asks each new body's box on its own
+            // thread. A box's few edges aren't worth the threads.)
+            let along = |d: V3| extent_along(&e.body, &o, &d);
+            let ((x0, x1), ((y0, y1), (z0, z1))) = if e.body.edges.len() > 64 {
+                rayon::join(
+                    || along(V3::x()),
+                    || rayon::join(|| along(V3::y()), || along(V3::z())),
+                )
+            } else {
+                (along(V3::x()), (along(V3::y()), along(V3::z())))
+            };
             Aabb {
                 min: P3::new(x0, y0, z0),
                 max: P3::new(x1, y1, z1),

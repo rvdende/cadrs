@@ -78,7 +78,7 @@ impl Plugin for PartsPlugin {
             .gizmo_group::<VertexGizmos>()
             .gizmo_group::<FreeEdgeGizmos>()
             .add_plugins(crate::part_shading::PartShadingPlugin)
-            .add_systems(Startup, configure_gizmos)
+            .add_systems(Startup, (configure_gizmos, defer_regeneration))
             .add_systems(
                 Update,
                 set_snapshot_store.run_if(resource_changed::<crate::DocumentStore>),
@@ -86,6 +86,7 @@ impl Plugin for PartsPlugin {
             .add_systems(
                 Update,
                 (
+                    take_regenerated_sketches,
                     update_part_cache,
                     crate::assembly::in_context::sync_context_parts,
                     sync_part_meshes,
@@ -449,13 +450,15 @@ pub struct SketchRegions {
 }
 
 /// How long a frame waits for a rebuild before showing the old parts and carrying on
-/// (`None`: wait until it is done, for scripted runs).
+/// (`None`: wait until it is done, for scripted runs). Short enough that the frame stays within
+/// a 60 Hz frame's 16.7 ms: at 30 ms every edit whose rebuild took longer (one near the top of
+/// pi7zoll-gehäuse) dropped a frame waiting for it; a cached rebuild still shows in the frame.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct RebuildBudget(pub Option<std::time::Duration>);
 
 impl Default for RebuildBudget {
     fn default() -> Self {
-        Self(Some(std::time::Duration::from_millis(30)))
+        Self(Some(std::time::Duration::from_millis(8)))
     }
 }
 
@@ -467,8 +470,39 @@ struct PendingRebuild {
     /// progress counts).
     order: Vec<(FeatureId, bool)>,
     /// Its part features' cache keys ([`cadrs_core::rebuild::chain_keys`]): those it shares
-    /// with the rebuild before it are cached, done as soon as it starts.
-    keys: Vec<u64>,
+    /// with the rebuild before it are cached, done as soon as it starts. Worked out off the
+    /// frame (every feature's parameters hashed: milliseconds for a long list), so set once
+    /// that is done.
+    keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>>,
+    /// When it was asked for (`CADRS_REBUILD_TIMES`).
+    requested: web_time::Instant,
+}
+
+/// Logs a rebuild's times with `CADRS_REBUILD_TIMES` ([`crate::debug_tools::rebuild_times`]).
+fn log_rebuild(what: &str, requested: web_time::Instant, build: &cadrs_core::rebuild::Build) {
+    if crate::debug_tools::rebuild_times() {
+        info!(
+            "rebuild {what}: {:.1} ms from the request, kernel {:.1} ms, {} computed{}",
+            requested.elapsed().as_secs_f64() * 1000.0,
+            build.elapsed.as_secs_f64() * 1000.0,
+            build.computed,
+            if build.stopped { ", stopped" } else { "" }
+        );
+    }
+}
+
+/// [`PendingRebuild::keys`] of `features`, worked out on a thread of their own (in a page, at
+/// once).
+fn rebuild_keys(
+    features: std::sync::Arc<[Feature]>,
+) -> std::sync::Arc<std::sync::OnceLock<Vec<u64>>> {
+    let keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>> = Default::default();
+    let to = keys.clone();
+    // (No thread to be had: none, the rows queued until the rebuild starts.)
+    let _ = cadrs_core::background::spawn("rebuild-keys", move || {
+        let _ = to.set(cadrs_core::rebuild::chain_keys(&features));
+    });
+    keys
 }
 
 /// Where a feature of the rebuild running stands ([`PartCache::rebuild_steps`]).
@@ -580,8 +614,6 @@ pub struct PartCache {
     pub connectors_shown: bool,
     /// Each pattern's instances and where their Skip dots go (P3.8).
     pub dots: HashMap<FeatureId, Vec<cadrs_core::pattern::InstanceDot>>,
-    /// How long each part feature took to regenerate (P3.9, PS2.6).
-    pub times: HashMap<FeatureId, std::time::Duration>,
     /// What each feature depends on beyond its references (P3.11, PS11.2; see
     /// [`cadrs_core::rebuild::Build::uses`]).
     pub uses: HashMap<FeatureId, Vec<FeatureId>>,
@@ -1052,13 +1084,15 @@ impl PartCache {
         let p = self.pending.as_ref().filter(|_| self.rebuilding)?;
         let done = p.rebuild.progress().map(|(done, _)| done);
         // Not started: as far as its keys are those of the rebuild before it (cached).
-        let shared = self.superseded.as_ref().map_or(0, |old| {
-            p.keys
-                .iter()
-                .zip(&old.keys)
-                .take_while(|(a, b)| a == b)
-                .count()
-        });
+        let shared =
+            self.superseded
+                .as_ref()
+                .map_or(0, |old| match (p.keys.get(), old.keys.get()) {
+                    (Some(new), Some(old)) => {
+                        new.iter().zip(old).take_while(|(a, b)| a == b).count()
+                    }
+                    _ => 0,
+                });
         let mut parts = 0;
         Some(
             p.order
@@ -1223,12 +1257,6 @@ impl PartCache {
         self.connectors = build.connectors.clone();
         self.curves = build.curves.clone();
         self.dots = build.dots.clone();
-        self.times = build
-            .times
-            .iter()
-            .chain(&build.sketch_times)
-            .copied()
-            .collect();
         self.uses = build.uses.clone();
         self.names = build.names.clone();
         self.builds += 1;
@@ -1376,6 +1404,26 @@ fn set_snapshot_store(store: Res<crate::DocumentStore>) {
     });
 }
 
+/// Commands leave the sketches on parts whose regeneration rebuilds features for the
+/// background ([`cadrs_core::parts::defer_regeneration`], [`take_regenerated_sketches`]): an
+/// edit near the top of a long list doesn't freeze the app while the features above each
+/// sketch on a face rebuild.
+fn defer_regeneration() {
+    cadrs_core::parts::defer_regeneration(true);
+}
+
+/// Puts in the sketches regenerated in the background after a command
+/// ([`ActiveDocument::take_regenerated`]); the parts' rebuild waits for them
+/// ([`update_part_cache`]).
+fn take_regenerated_sketches(doc: Option<ResMut<ActiveDocument>>) {
+    let Some(mut doc) = doc else {
+        return;
+    };
+    if doc.is_regenerating() && doc.bypass_change_detection().take_regenerated() {
+        doc.set_changed();
+    }
+}
+
 fn update_part_cache(
     doc: Option<Res<ActiveDocument>>,
     over: Res<PartOverride>,
@@ -1419,6 +1467,17 @@ fn update_part_cache(
     // Only an assembly's drag draws parts moved.
     if !cache.moved.is_empty() {
         cache.moved.clear();
+    }
+    // Its sketches on parts regenerating in the background after a command: rebuilt once they
+    // are in (the features as the command left them would be rebuilt for nothing).
+    // (A rebuild still running is of the features before the command: stopped, so the
+    // regeneration's rebuilds don't wait for it.)
+    if doc.regenerating(el.id) {
+        cache.stop_rebuild();
+        if !cache.rebuilding {
+            cache.rebuilding = true;
+        }
+        return;
     }
     // Nothing to look at while the document and the overrides are as they were and no rebuild
     // is running (comparing every feature each frame cost a big Part Studio milliseconds, and
@@ -1472,6 +1531,7 @@ fn update_part_cache(
             && let Some(p) = &mut cache.pending
             && let Some(build) = p.rebuild.poll()
         {
+            log_rebuild("taken", p.requested, &build);
             let same_element = p.element == el.id;
             cache.pending = None;
             cache.superseded = None;
@@ -1492,6 +1552,7 @@ fn update_part_cache(
             && let Some(p) = &mut cache.superseded
             && let Some(build) = p.rebuild.poll()
         {
+            log_rebuild("superseded, taken", p.requested, &build);
             // An older rebuild finished first: show it while the newer one runs (not one
             // stopped early for it: that has only the parts as far as it got).
             let same_element = p.element == el.id;
@@ -1525,6 +1586,35 @@ fn update_part_cache(
         el.active_features()
     };
     let effective = effective_features(&built, &over);
+    // What the rebuilds asked for before are shown now if they are done (the older first): a
+    // drag asks for one every frame, and they were only taken in a frame that asked for
+    // nothing new, so the preview stood still until the pointer paused.
+    for superseded in [true, false] {
+        let slot = if superseded {
+            &mut cache.superseded
+        } else {
+            &mut cache.pending
+        };
+        let Some(p) = slot.as_mut().filter(|p| p.element == el.id) else {
+            continue;
+        };
+        let requested = p.requested;
+        let Some(build) = p.rebuild.poll() else {
+            continue;
+        };
+        *slot = None;
+        log_rebuild("taken before the next", requested, &build);
+        // (One stopped early has only the parts as far as it got.)
+        if !build.stopped {
+            log.0.push((features.len(), build.computed, build.elapsed));
+            cache.apply(
+                &build,
+                stage_feature(&features, &over),
+                over.staged.is_some(),
+                over.over_result,
+            );
+        }
+    }
     // Rebuild on the kernel thread; wait a little so quick rebuilds show in this frame.
     // Restored from the session snapshot of these features when the session doesn't have them
     // (a document opened again), and snapshotted afterwards.
@@ -1538,7 +1628,10 @@ fn update_part_cache(
         old.rebuild.stop();
         cache.superseded = Some(old);
     }
-    let mut rebuild = cadrs_core::rebuild::request_persisted(effective.clone());
+    // (One copy of the list, for the rebuild and the keys of its rows.)
+    let shared: std::sync::Arc<[Feature]> = effective.as_slice().into();
+    let requested = web_time::Instant::now();
+    let mut rebuild = cadrs_core::rebuild::request_persisted_shared(shared.clone());
     // A live drag doesn't hold the frame for its rebuild: the preview follows when it's done.
     let dragging = over.extrude.is_some() || over.revolve.is_some() || over.applied.is_some();
     let wait = if dragging {
@@ -1548,6 +1641,7 @@ fn update_part_cache(
     };
     match rebuild.wait(wait) {
         Some(build) => {
+            log_rebuild("in the frame", requested, &build);
             log.0.push((features.len(), build.computed, build.elapsed));
             if cache.key.as_ref().is_some_and(|(id, ..)| *id != el.id) {
                 cache.parts.clear();
@@ -1578,7 +1672,8 @@ fn update_part_cache(
                     .iter()
                     .map(|f| (f.id, f.is_part_feature()))
                     .collect(),
-                keys: cadrs_core::rebuild::chain_keys(&effective),
+                keys: rebuild_keys(shared),
+                requested,
             });
         }
     }
@@ -4235,7 +4330,9 @@ pub fn outer_loop(loops: &[Vec<[f64; 3]>]) -> Option<&Vec<[f64; 3]>> {
 /// The sketch plane on a part's face (for sketching on it), if the face is planar. The face is
 /// looked for after the feature that made it (its name's operation), which is not the part's
 /// first feature when a later feature added to the part (P3.4: the Reducer Coupling's revolve end
-/// face on Part 1, made by Extrude 1).
+/// face on Part 1, made by Extrude 1). The features are built as the Part Studio's rebuild builds
+/// them, after the Variable Studios' variables ([`cadrs_core::Element::part_features`]): a face
+/// of an extrude whose depth is one of them was not found.
 pub fn face_plane_of(
     el: &cadrs_core::Element,
     feature: FeatureId,
@@ -4251,7 +4348,7 @@ pub fn face_plane_of(
     } else {
         feature
     };
-    cadrs_core::parts::face_plane(el.features(), feature, face)
+    cadrs_core::parts::face_plane(&el.part_features(), feature, face)
 }
 
 /// How a selection field names a picked entity, as Onshape does: "Face of Extrude 1" (the
@@ -4347,5 +4444,108 @@ mod tests {
         assert!(close(top, [241, 180, 70]), "top {top:?}");
         let side = srgb(face_color_of(&v, -Vec3::Y, false, true));
         assert!(close(side, [190, 142, 59]), "side {side:?}");
+    }
+    /// A drag asks for a rebuild every frame: what the last one made shows before the next is
+    /// asked for, so the preview follows the drag (it stood still until the pointer paused).
+    #[test]
+    fn a_drag_shows_its_rebuilds_while_it_goes_on() {
+        use cadrs_core::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+        use cadrs_core::document::RegionRef;
+        use cadrs_core::{Document, ExtrudeFeature};
+        // A 40 × 20 box on Top, 10 mm high.
+        let mut doc = ActiveDocument::new(Document::new("Drag"));
+        let el = doc.doc.elements[0].id;
+        let (sk, ex) = (FeatureId::new(), FeatureId::new());
+        doc.execute(&AddSketch {
+            element: el,
+            feature: sk,
+            plane: Some(PlaneRef::Top),
+        })
+        .unwrap();
+        doc.execute(&EditSketch {
+            element: el,
+            feature: sk,
+            op: cadrs_sketch::SketchOp::AddPolyline {
+                points: vec![
+                    cadrs_sketch::Vec2::new(0.0, 0.0),
+                    cadrs_sketch::Vec2::new(40.0, 0.0),
+                    cadrs_sketch::Vec2::new(40.0, 20.0),
+                    cadrs_sketch::Vec2::new(0.0, 20.0),
+                ],
+                closed: true,
+                construction: false,
+                label: "Add rectangle",
+            },
+        })
+        .unwrap();
+        let g = &doc
+            .doc
+            .element(el)
+            .unwrap()
+            .feature(sk)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry;
+        let regions: Vec<RegionRef> = cadrs_sketch::region::regions(g)
+            .iter()
+            .map(|r| RegionRef::new(sk, r))
+            .collect();
+        let box_at = |depth: f64| ExtrudeFeature {
+            regions: regions.clone(),
+            depth,
+            depth_expr: format!("{depth} mm"),
+            ..ExtrudeFeature::default()
+        };
+        let ten = box_at(10.0);
+        doc.execute(&AddExtrude {
+            element: el,
+            feature: ex,
+            extrude: ExtrudeFeature::default(),
+        })
+        .unwrap();
+        doc.execute(&SetExtrude {
+            element: el,
+            feature: ex,
+            extrude: ten,
+            label: "Depth".into(),
+        })
+        .unwrap();
+        let mut app = App::new();
+        app.insert_resource(doc)
+            .init_resource::<PartOverride>()
+            .init_resource::<RebuildBudget>()
+            .init_resource::<PartCache>()
+            .init_resource::<crate::assembly::AssemblyParts>()
+            .init_resource::<crate::scale_ui::RebuildLog>()
+            .add_systems(Update, update_part_cache);
+        let height = |app: &App| {
+            app.world()
+                .resource::<PartCache>()
+                .parts
+                .first()
+                .and_then(|p| p.solid.bounds())
+                .map(|(lo, hi)| hi[2] - lo[2])
+        };
+        let wait = || std::thread::sleep(std::time::Duration::from_millis(20));
+        for _ in 0..250 {
+            app.update();
+            if height(&app).is_some() {
+                break;
+            }
+            wait();
+        }
+        assert!((height(&app).unwrap() - 10.0).abs() < 1e-6);
+        // The arrow dragged up a millimetre a frame: every frame asks for a new depth.
+        let mut seen = Vec::new();
+        for i in 1..=30 {
+            app.world_mut().resource_mut::<PartOverride>().extrude =
+                Some((ex, box_at(10.0 + i as f64)));
+            app.update();
+            seen.extend(height(&app));
+            wait();
+        }
+        let tallest = seen.iter().copied().fold(0.0, f64::max);
+        assert!(tallest > 20.0, "the preview stood still: {seen:?}");
     }
 }

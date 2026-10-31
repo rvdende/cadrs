@@ -303,6 +303,7 @@ fn offset_row(
             NumberField::new(name.to_string(), label.to_string())
                 .text(o.expr.clone())
                 .label_width(82.0)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()
@@ -347,6 +348,7 @@ fn end_fields(
                 NumberField::new(format!("{prefix}angle"), "Revolve angle")
                     .text(angle_expr.to_string())
                     .label_width(92.0)
+                    .variables()
                     .build(t),
             ));
         }
@@ -513,6 +515,7 @@ fn revolve_dialog(
                                 NumberField::new("revolve-thickness1", "Thickness 1")
                                     .text(r.thin.thickness1_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ))
                             .entry::<Node>()
@@ -537,6 +540,7 @@ fn revolve_dialog(
                                 NumberField::new("revolve-thickness2", "Thickness 2")
                                     .text(r.thin.thickness2_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ));
                         }

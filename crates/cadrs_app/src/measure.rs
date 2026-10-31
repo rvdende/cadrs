@@ -323,7 +323,10 @@ fn sync_summary(
         }
         return;
     }
-    let Some((tools, _)) = q_names.iter().find(|(_, n)| n.as_str() == "viewport-tools") else {
+    let Some((tools, _)) = q_names
+        .iter()
+        .find(|(_, n)| n.as_str() == "viewport-readouts")
+    else {
         return;
     };
     let e = commands

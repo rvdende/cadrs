@@ -1,7 +1,7 @@
 // The new look, end to end (for review): the documents page; the app menu (the cadrs mark)
 // and the account menu there; a Part Studio's floating glass panels over the crosshair ground
-// grid; the app menu in a document; the feature panel hidden by its ‹ (its button then on the
-// rail) and shown again; a PCB Studio's schematic under the same panels.
+// grid; the app menu in a document; the feature panel hidden by the toolbar's toggle (its
+// chevron then ▼) and shown again; a PCB Studio's schematic under the same panels.
 Scenario(
     start: Some("landing"),
     seed_documents: 6,
@@ -24,10 +24,10 @@ Scenario(
         WaitFor("app-menu-popup"),
         Screenshot("05-app-menu-document"),
         Key("Escape"),
-        Click(ui("feature-panel-collapse")),
+        Click(ui("feature-list-toggle")),
         MoveTo(1100, 900),
         Screenshot("06-panel-hidden"),
-        Click(ui("rail-feature-list")),
+        Click(ui("feature-list-toggle")),
         MoveTo(1100, 900),
         Screenshot("07-panel-shown"),
         Custom("pcb-studio"),

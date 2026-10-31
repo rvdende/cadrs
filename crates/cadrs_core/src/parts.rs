@@ -544,22 +544,146 @@ pub fn regenerate(features: &mut [Feature]) {
     regenerate_with(features, &[]);
 }
 
+/// The solids of a Part Studio's assembly contexts its sketches may name, by feature id and the
+/// context they are in ([`regenerate_with`]).
+pub type ContextSolids = Vec<(FeatureId, u32, Arc<Solid>)>;
+
+/// The app's switch ([`defer_regeneration`]).
+static DEFER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+std::thread_local! {
+    /// Set while a command applies ([`Deferring`]).
+    static IN_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The Part Studios whose sketches a command left ([`take_deferred`]), with their context
+/// solids.
+static DEFERRED: std::sync::Mutex<Vec<(crate::ids::ElementId, ContextSolids)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Has a command leave the sketches on parts whose regeneration would rebuild features (a face
+/// moved by an edit above it) as they are, for the caller to regenerate later off its thread
+/// ([`take_deferred`], [`regenerate_with`]), instead of waiting for those rebuilds: an edit near
+/// the top of pi7zoll-gehäuse froze the app 2.7 s, its 21 sketches on faces following.
+pub fn defer_regeneration(on: bool) {
+    DEFER.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// While it lives, the commands applied on this thread leave their sketches if
+/// [`defer_regeneration`] is on ([`crate::History::execute`] holds one; an undo restores
+/// sketches as they were made).
+pub struct Deferring(bool);
+
+impl Deferring {
+    pub fn enter() -> Self {
+        Self(IN_COMMAND.with(|c| c.replace(true)))
+    }
+}
+
+impl Drop for Deferring {
+    fn drop(&mut self) {
+        IN_COMMAND.with(|c| c.set(self.0));
+    }
+}
+
+/// The Part Studios whose sketches commands left since the last call, each with the context
+/// solids to regenerate them against: [`regenerate_with`] their features, then put the sketches
+/// that changed in the document ([`take_regenerated`]).
+pub fn take_deferred() -> Vec<(crate::ids::ElementId, ContextSolids)> {
+    DEFERRED
+        .lock()
+        .map(|mut d| std::mem::take(&mut *d))
+        .unwrap_or_default()
+}
+
+/// The sketches of `element` a regeneration changed ([`take_deferred`]): those of `before`
+/// (its features as they were regenerated) that `after` (as regenerated) has otherwise, put in
+/// `doc` where the feature is still as it was. Whether any was.
+pub fn take_regenerated(
+    doc: &mut crate::document::Document,
+    element: crate::ids::ElementId,
+    before: &[Feature],
+    after: &[Feature],
+) -> bool {
+    let Some(features) = doc.element_mut(element).and_then(|e| e.features_mut()) else {
+        return false;
+    };
+    let mut any = false;
+    for (was, now) in before.iter().zip(after) {
+        if was == now {
+            continue;
+        }
+        if let Some(f) = features.iter_mut().find(|f| f.id == now.id)
+            && *f == *was
+        {
+            *f = now.clone();
+            any = true;
+        }
+    }
+    any
+}
+
 /// [`regenerate`] with extra reference solids by feature id and the assembly context they are in
 /// (P3B.9: a Part Studio's assembly contexts, [`crate::assembly::context`]), which sketch faces
-/// and links may name.
-pub fn regenerate_with(
+/// and links may name. A sketch whose features above and itself are as when it was last
+/// regenerated is left as it is ([`REGENERATED`]).
+pub fn regenerate_with(features: &mut [Feature], context: &[(FeatureId, u32, Arc<Solid>)]) {
+    regenerate_or_leave(features, context, false);
+}
+
+/// [`regenerate_with`] from a command: with [`defer_regeneration`] on, the sketches from the
+/// first one whose regeneration rebuilds features on are left as they are, and `element` noted
+/// for [`take_deferred`]. `studio` is the Variable Studios' variables the list names
+/// ([`crate::document::Element::studio_features`]): the rebuilds see them above the list, as
+/// every rebuild of it does (a sketch on a face of an extrude sized by one stayed where it was).
+pub(crate) fn regenerate_studio(
+    studio: &[Feature],
     features: &mut [Feature],
-    context: &[(FeatureId, u32, std::sync::Arc<Solid>)],
+    context: &[(FeatureId, u32, Arc<Solid>)],
+    element: crate::ids::ElementId,
 ) {
+    let defer = DEFER.load(std::sync::atomic::Ordering::Relaxed) && IN_COMMAND.with(|c| c.get());
+    let done = if studio.is_empty() || !features.iter().any(needs_parts) {
+        regenerate_or_leave(features, context, defer)
+    } else {
+        let mut all: Vec<Feature> = studio.to_vec();
+        all.extend(features.iter().cloned());
+        let done = regenerate_or_leave(&mut all, context, defer);
+        for (f, now) in features.iter_mut().zip(all.drain(studio.len()..)) {
+            *f = now;
+        }
+        done
+    };
+    if !done && let Ok(mut d) = DEFERRED.lock() {
+        d.retain(|(e, _)| *e != element);
+        d.push((element, context.to_vec()));
+    }
+}
+
+/// [`regenerate_with`], leaving the sketches from the first one that needs a rebuild on if
+/// `leave`. Whether none was left.
+fn regenerate_or_leave(
+    features: &mut [Feature],
+    context: &[(FeatureId, u32, Arc<Solid>)],
+    leave: bool,
+) -> bool {
+    let Some(last) = features.iter().rposition(needs_parts) else {
+        return true;
+    };
+    // (Locked only to look and to note: not while a sketch's rebuilds run, which a
+    // regeneration in the background takes.)
+    let noted = |id: FeatureId| {
+        REGENERATED
+            .lock()
+            .ok()
+            .and_then(|d| d.as_ref().and_then(|d| d.get(&id).copied()))
+    };
     let mut frames = std::collections::HashMap::new();
-    for i in 0..features.len() {
-        let needs_parts = features[i].sketch().is_some_and(|sk| {
-            matches!(sk.plane, Some(PlaneRef::Face(_) | PlaneRef::Feature(_)))
-                || !sk.geometry.links().is_empty()
-                || !sk.geometry.broken.is_empty()
-                || !sk.geometry.imprint.is_empty()
-        });
-        if !needs_parts {
+    // The chain key of the features above the one at hand (the rebuild's: every parameter).
+    let mut above = rebuild::CHAIN_SEED;
+    for i in 0..=last {
+        if !needs_parts(&features[i]) {
+            above = rebuild::chain_key(above, &features[i]);
             continue;
         }
         // A sketch on a Plane feature made from default planes alone (the usual offset plane)
@@ -586,150 +710,232 @@ pub fn regenerate_with(
             {
                 sk.plane = Some(new);
             }
+            above = rebuild::chain_key(above, &features[i]);
             continue;
         }
-        let build = rebuild::build(&features[..i]);
-        let (before, rest) = features.split_at_mut(i);
-        let Some(sk) = rest[0].sketch_mut() else {
+        let id = features[i].id;
+        let key = rebuild::chain_key(above, &features[i]);
+        let unchanged = context.is_empty() && noted(id) == Some(key);
+        if unchanged {
+            above = key;
+            continue;
+        }
+        if leave {
+            return false;
+        }
+        let built = regenerate_sketch(features, i, context);
+        let key = rebuild::chain_key(above, &features[i]);
+        if built && let Ok(mut d) = REGENERATED.lock() {
+            d.get_or_insert_with(Default::default).insert(id, key);
+        }
+        above = key;
+    }
+    true
+}
+
+/// Whether a feature is a sketch regenerated against the parts: on a face or a Plane feature, or
+/// with links, broken links or imprints.
+fn needs_parts(f: &Feature) -> bool {
+    f.sketch().is_some_and(|sk| {
+        matches!(sk.plane, Some(PlaneRef::Face(_) | PlaneRef::Feature(_)))
+            || !sk.geometry.links().is_empty()
+            || !sk.geometry.broken.is_empty()
+            || !sk.geometry.imprint.is_empty()
+    })
+}
+
+/// Notes every Part Studio's sketches of `doc` as regenerated as they are ([`REGENERATED`]): a
+/// stored document's were, when it was last edited, and an undo step's when it was made. (Not
+/// after its Variable Studios' values reach it: a value changed since changes the keys.)
+pub fn note_regenerated(doc: &crate::document::Document) {
+    let Ok(mut done) = REGENERATED.lock() else {
+        return;
+    };
+    let done = done.get_or_insert_with(Default::default);
+    for el in &doc.elements {
+        let features = el.features();
+        let Some(last) = features.iter().rposition(needs_parts) else {
             continue;
         };
-        let refs: Vec<(FeatureId, &Solid)> = build
-            .parts
+        // (The keys of the list the regeneration rebuilds: after the Variable Studios'
+        // variables, [`regenerate_studio`].)
+        let mut above = el
+            .studio_features()
             .iter()
-            .map(|p| (p.feature, &*p.solid))
-            .chain(context.iter().map(|(f, _, s)| (*f, &**s)))
-            .collect();
-        // The face it is on (a lost face leaves the sketch where it was).
-        if let Some(PlaneRef::Face(fp)) = sk.plane
-            && let Some(solid) = solid_for_face(refs.iter().copied(), &fp)
-            && let Some((i, _renamed)) = face_of(solid, &fp)
-            && let Some(frame) = solid.face_plane_as(i, &fp.face)
-        {
-            // A face merged into another keeps being referred to by its own name (an alias of
-            // the merged face's), with the frame it had: the sketch stays where it was.
-            let alias = solid.canonical_face(&fp.face) != fp.face;
-            let fp = FacePlane {
-                face: if alias { fp.face } else { solid.faces[i].name },
-                seed: solid.face_point(i),
-                ..fp
-            };
-            let new = PlaneRef::Face(fp.with_frame(frame));
-            if sk.plane != Some(new) {
-                sk.plane = Some(new);
+            .fold(rebuild::CHAIN_SEED, rebuild::chain_key);
+        for f in &features[..=last] {
+            above = rebuild::chain_key(above, f);
+            if needs_parts(f) {
+                done.insert(f.id, above);
             }
         }
-        // A Plane feature: where it is now (a failed plane leaves the sketch where it was).
-        if let Some(PlaneRef::Feature(fp)) = sk.plane
-            && let Some(frame) = build.planes.get(&FeatureId(fp.feature))
-        {
-            let new = PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(fp.feature, *frame));
-            if sk.plane != Some(new) {
-                sk.plane = Some(new);
-            }
-        }
-        let Some(plane) = sk.plane else { continue };
-        let frame = plane.frame();
-        // Imprints.
-        // MC1.7: on a context face, the geometry of that context only (another context's ghost
-        // may lie in the same plane); else the studio's own parts.
-        let imprint = match plane {
-            PlaneRef::Face(fp) if !sk.disable_imprinting => {
-                let on = context
-                    .iter()
-                    .find(|(f, ..)| f.0 == fp.feature)
-                    .map(|(_, c, _)| *c);
-                let own: Vec<(FeatureId, &Solid)> = refs
-                    .iter()
-                    .copied()
-                    .filter(|(f, _)| {
-                        !crate::assembly::context::is_context(*f)
-                            || on.is_some_and(|n| context.iter().any(|(g, c, _)| g == f && *c == n))
-                    })
-                    .collect();
-                crate::links::imprint(&own, &frame)
-            }
-            _ => Vec::new(),
+    }
+}
+
+/// Each sketch regenerated against the parts ([`regenerate_with`]), by the chain key of the
+/// features above it and itself as it left it: a sketch's regeneration depends on nothing else
+/// (but an assembly context's solids), so one whose key is the same is as it would be made. An
+/// edit regenerated every sketch on a face, a rebuild of the features above each: deleting the
+/// last of pi7zoll-gehäuse's features took a second, 21 rebuilds asked of the kernel process.
+static REGENERATED: std::sync::Mutex<Option<std::collections::HashMap<FeatureId, u64>>> =
+    std::sync::Mutex::new(None);
+
+/// Regenerates the sketch at `i` against the parts the features above it make (and the
+/// `context` solids): its face's frame, its imprints and its links. Whether those parts were
+/// built (else it is left as it was).
+fn regenerate_sketch(
+    features: &mut [Feature],
+    i: usize,
+    context: &[(FeatureId, u32, std::sync::Arc<Solid>)],
+) -> bool {
+    let build = rebuild::build(&features[..i]);
+    // A rebuild that failed whole (the kernel process gone, the rebuild thread stopped) leaves
+    // the sketch as it was, not regenerated.
+    let built = !build.stopped
+        && (!build.times.is_empty() || !features[..i].iter().any(Feature::is_part_feature));
+    let (before, rest) = features.split_at_mut(i);
+    let Some(sk) = rest[0].sketch_mut() else {
+        return built;
+    };
+    let refs: Vec<(FeatureId, &Solid)> = build
+        .parts
+        .iter()
+        .map(|p| (p.feature, &*p.solid))
+        .chain(context.iter().map(|(f, _, s)| (*f, &**s)))
+        .collect();
+    // The face it is on (a lost face leaves the sketch where it was).
+    if let Some(PlaneRef::Face(fp)) = sk.plane
+        && let Some(solid) = solid_for_face(refs.iter().copied(), &fp)
+        && let Some((i, _renamed)) = face_of(solid, &fp)
+        && let Some(frame) = solid.face_plane_as(i, &fp.face)
+    {
+        // A face merged into another keeps being referred to by its own name (an alias of
+        // the merged face's), with the frame it had: the sketch stays where it was.
+        let alias = solid.canonical_face(&fp.face) != fp.face;
+        let fp = FacePlane {
+            face: if alias { fp.face } else { solid.faces[i].name },
+            seed: solid.face_point(i),
+            ..fp
         };
-        if sk.geometry.imprint != imprint {
-            sk.geometry.imprint = imprint;
+        let new = PlaneRef::Face(fp.with_frame(frame));
+        if sk.plane != Some(new) {
+            sk.plane = Some(new);
         }
-        // Links.
-        let links = sk.geometry.links();
-        if links.is_empty() && sk.geometry.broken.is_empty() {
-            continue;
+    }
+    // A Plane feature: where it is now (a failed plane leaves the sketch where it was).
+    if let Some(PlaneRef::Feature(fp)) = sk.plane
+        && let Some(frame) = build.planes.get(&FeatureId(fp.feature))
+    {
+        let new = PlaneRef::Feature(cadrs_sketch::FeaturePlane::new(fp.feature, *frame));
+        if sk.plane != Some(new) {
+            sk.plane = Some(new);
         }
-        let ctx = crate::links::LinkContext {
-            solids: refs,
-            features: before,
+    }
+    let Some(plane) = sk.plane else {
+        return built;
+    };
+    let frame = plane.frame();
+    // Imprints.
+    // MC1.7: on a context face, the geometry of that context only (another context's ghost
+    // may lie in the same plane); else the studio's own parts.
+    let imprint = match plane {
+        PlaneRef::Face(fp) if !sk.disable_imprinting => {
+            let on = context
+                .iter()
+                .find(|(f, ..)| f.0 == fp.feature)
+                .map(|(_, c, _)| *c);
+            let own: Vec<(FeatureId, &Solid)> = refs
+                .iter()
+                .copied()
+                .filter(|(f, _)| {
+                    !crate::assembly::context::is_context(*f)
+                        || on.is_some_and(|n| context.iter().any(|(g, c, _)| g == f && *c == n))
+                })
+                .collect();
+            crate::links::imprint(&own, &frame)
+        }
+        _ => Vec::new(),
+    };
+    if sk.geometry.imprint != imprint {
+        sk.geometry.imprint = imprint;
+    }
+    // Links.
+    let links = sk.geometry.links();
+    if links.is_empty() && sk.geometry.broken.is_empty() {
+        return built;
+    }
+    let ctx = crate::links::LinkContext {
+        solids: refs,
+        features: before,
+    };
+    let mut g = sk.geometry.clone();
+    let mut broken = std::collections::BTreeSet::new();
+    for (k, target, link) in links {
+        // What the link refers to now; a repaired name is written back.
+        let (at, pierce) = match target {
+            LinkTarget::Curve(c) => (crate::links::curve_samples(&g, c), false),
+            LinkTarget::Point(p) => (vec![g.pos(p)], true),
         };
-        let mut g = sk.geometry.clone();
-        let mut broken = std::collections::BTreeSet::new();
-        for (k, target, link) in links {
-            // What the link refers to now; a repaired name is written back.
-            let (at, pierce) = match target {
-                LinkTarget::Curve(c) => (crate::links::curve_samples(&g, c), false),
-                LinkTarget::Point(p) => (vec![g.pos(p)], true),
-            };
-            // A Plane feature's trace follows the plane (S12.10).
-            let stored = link;
-            let link = match link {
-                cadrs_sketch::Link::Plane(PlaneRef::Feature(fp)) => {
-                    match build.planes.get(&FeatureId(fp.feature)) {
-                        Some(f) => cadrs_sketch::Link::Plane(PlaneRef::Feature(
-                            cadrs_sketch::FeaturePlane::new(fp.feature, *f),
-                        )),
-                        None => link,
-                    }
+        // A Plane feature's trace follows the plane (S12.10).
+        let stored = link;
+        let link = match link {
+            cadrs_sketch::Link::Plane(PlaneRef::Feature(fp)) => {
+                match build.planes.get(&FeatureId(fp.feature)) {
+                    Some(f) => cadrs_sketch::Link::Plane(PlaneRef::Feature(
+                        cadrs_sketch::FeaturePlane::new(fp.feature, *f),
+                    )),
+                    None => link,
                 }
-                l => l,
-            };
-            // A flat pattern's line (P3I.6, SM14): where the flat has it now.
-            if let cadrs_sketch::Link::FlatLine { model, part, bend } = link {
-                let shape = crate::sheetmetal_flat::flat_line(
-                    &build.sheet_metal,
-                    FeatureId(model),
-                    part as usize,
-                    bend,
-                    &at,
-                );
-                let ok = match (target, shape) {
-                    (LinkTarget::Curve(c), Some(shape)) => g.set_projected(c, shape),
-                    _ => false,
-                };
-                if !ok {
-                    broken.insert(k);
-                }
-                continue;
             }
-            let Some(current) = ctx.resolve(link, &frame, &at, pierce) else {
-                broken.insert(k);
-                continue;
-            };
-            if current != stored {
-                g.set_link(k, current);
-            }
-            let link = current;
-            let ok = match target {
-                LinkTarget::Curve(c) => ctx
-                    .shape(link, &frame)
-                    .is_some_and(|shape| g.set_projected(c, shape)),
-                LinkTarget::Point(p) => match ctx.pierce(link, &frame, g.pos(p)) {
-                    Some(at) => {
-                        g.set_pierced(p, at);
-                        true
-                    }
-                    None => false,
-                },
+            l => l,
+        };
+        // A flat pattern's line (P3I.6, SM14): where the flat has it now.
+        if let cadrs_sketch::Link::FlatLine { model, part, bend } = link {
+            let shape = crate::sheetmetal_flat::flat_line(
+                &build.sheet_metal,
+                FeatureId(model),
+                part as usize,
+                bend,
+                &at,
+            );
+            let ok = match (target, shape) {
+                (LinkTarget::Curve(c), Some(shape)) => g.set_projected(c, shape),
+                _ => false,
             };
             if !ok {
                 broken.insert(k);
             }
+            continue;
         }
-        g.broken = broken;
-        if g != sk.geometry {
-            sk.geometry = follow_links(&sk.geometry, g);
+        let Some(current) = ctx.resolve(link, &frame, &at, pierce) else {
+            broken.insert(k);
+            continue;
+        };
+        if current != stored {
+            g.set_link(k, current);
+        }
+        let link = current;
+        let ok = match target {
+            LinkTarget::Curve(c) => ctx
+                .shape(link, &frame)
+                .is_some_and(|shape| g.set_projected(c, shape)),
+            LinkTarget::Point(p) => match ctx.pierce(link, &frame, g.pos(p)) {
+                Some(at) => {
+                    g.set_pierced(p, at);
+                    true
+                }
+                None => false,
+            },
+        };
+        if !ok {
+            broken.insert(k);
         }
     }
+    g.broken = broken;
+    if g != sk.geometry {
+        sk.geometry = follow_links(&sk.geometry, g);
+    }
+    built
 }
 
 /// The sketch `old` with its used geometry where `moved` (`old` with its links updated, not

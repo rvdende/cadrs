@@ -13,7 +13,7 @@
 //! 6. The kept faces are assembled into shells and solids; a union merges faces of the two
 //!    inputs that lie on the same surface and meet along an edge.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use rayon::prelude::*;
 
@@ -38,8 +38,7 @@ pub(crate) struct Prof {
 
 /// Whether `CADRS_PROFILE` is set (read once).
 pub(crate) fn profiling() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("CADRS_PROFILE").is_some())
+    super::env_flag!("CADRS_PROFILE")
 }
 
 impl Prof {
@@ -119,6 +118,10 @@ pub struct BoolOptions {
     /// the inputs' edges and vertices carry (a gap closed when they were made), at most
     /// [`FUZZY_MAX`] of their size.
     pub fuzzy: Option<f64>,
+    /// A run that leaves the result broken is tried again (fuzzy, a solid at a time, at
+    /// growing tolerances: the ladder); off, the first run's answer stands (a question that
+    /// needs no more, as whether a New's body touches a part).
+    pub retry: bool,
 }
 
 /// The largest default fuzzy value, as a part of the inputs' size.
@@ -137,6 +140,7 @@ impl Default for BoolOptions {
             merge_coplanar: true,
             work_budget: DEFAULT_WORK_BUDGET,
             fuzzy: None,
+            retry: true,
         }
     }
 }
@@ -230,9 +234,8 @@ struct WFace {
     loops: Vec<Vec<(usize, bool, Curve)>>,
     owner: usize,
     orig: usize,
-    polys: Vec<Vec<P2>>,
-    /// The polygons' boxes and rows, to cull them by ([`classify::poly_boxes`]).
-    boxes: classify::PolyBoxes,
+    /// Its polygons and their boxes and rows, to cull them by ([`classify::poly_boxes`]).
+    polys: classify::KeptPolygons,
     bbox: Bbox,
     uv_center: P2,
     /// The face's own tolerance (0: exact, the run's applies).
@@ -260,7 +263,7 @@ impl Pool {
             vtols: Vec::new(),
             cell: (tol * 16.0).max(max_tol * 2.0),
             tol,
-            grid: HashMap::new(),
+            grid: HashMap::default(),
             edges: Vec::new(),
         }
     }
@@ -306,7 +309,7 @@ impl Pool {
             }
             return i;
         }
-        if std::env::var("CADRS_VERTEX_DEBUG").is_ok() {
+        if super::env_flag!("CADRS_VERTEX_DEBUG") {
             let near_round = |x: f64| {
                 let r = (x * 2.0).round() / 2.0;
                 (x - r).abs() > 1e-11 && (x - r).abs() < 1e-5
@@ -417,7 +420,7 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
     let own = |t: f64| if t > super::topo::TOL_MIN { t } else { 0.0 };
     // (Without `merge`, only the body's own vertices at one point exactly are one: a body
     // touching itself along an edge, two blocks' corners there as two vertices.)
-    let mut same: HashMap<[u64; 3], usize> = HashMap::new();
+    let mut same: HashMap<[u64; 3], usize> = HashMap::default();
     let vmap: Vec<usize> = b
         .verts
         .iter()
@@ -457,10 +460,10 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             })
             .collect();
         loops.iter_mut().for_each(drop_slits);
-        let polys = classify::face_polygons(b, f);
+        let polys = classify::face_polygons_kept(b, f);
         let mut bb = Bbox::empty();
         let mut uvb = Bbox::empty();
-        for p in &polys {
+        for p in &polys.0 {
             for q in p {
                 uvb.add(&P3::new(q.x, q.y, 0.0));
             }
@@ -500,7 +503,6 @@ fn import(pool: &mut Pool, faces: &mut Vec<WFace>, b: &Body, owner: usize, merge
             loops,
             owner,
             orig: fi,
-            boxes: classify::poly_boxes(&polys, &f.surf),
             polys,
             bbox: bb.grow(pool.tol * 10.0 + ftol),
             uv_center: P2::new(center.x, center.y),
@@ -724,7 +726,7 @@ fn tangent_along_shared_edge(
                 };
                 on(e, o) && on(o, e)
             };
-            if std::env::var("CADRS_BOOL_DEBUG").is_ok() && same_ends {
+            if super::env_flag!("CADRS_BOOL_DEBUG") && same_ends {
                 let p = e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * 0.5);
                 let (ua, va) = fa.surf.project(&p, Some((fa.uv_center.x, fa.uv_center.y)));
                 let (ub, vb) = fb.surf.project(&p, Some((fb.uv_center.x, fb.uv_center.y)));
@@ -790,8 +792,9 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
     let mut res = InFace::Outside;
     // (The polygons' range and boxes kept from the start: a face of hundreds of holes holds a
     // million polygon points, which every test went over.)
-    for uv in classify::periodic_candidates_boxed(&f.surf, u, v, &f.boxes) {
-        match classify::in_face_boxed(&f.polys, &f.boxes, &f.surf, uv, tol) {
+    let (polys, boxes) = &*f.polys;
+    for uv in classify::periodic_candidates_boxed(&f.surf, u, v, boxes) {
+        match classify::in_face_boxed(polys, boxes, &f.surf, uv, tol) {
             InFace::Inside => return InFace::Inside,
             InFace::Boundary => res = InFace::Boundary,
             InFace::Outside => {}
@@ -802,10 +805,15 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
 
 /// A point inside a face's domain (uv) given its loops as arcs.
 fn interior_point(loops: &[Vec<Arc>]) -> Option<P2> {
-    interior_points(loops).into_iter().next()
+    interior_of_polys(&arc_polys(loops))
 }
 
 fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
+    interior_points_of_polys(&arc_polys(loops))
+}
+
+/// A face's loops as polygons in (u, v): a straight p-curve by its start, another by 64 points.
+fn arc_polys(loops: &[Vec<Arc>]) -> Vec<Vec<P2>> {
     let mut polys: Vec<Vec<P2>> = Vec::new();
     for l in loops {
         let mut pts = Vec::new();
@@ -820,32 +828,72 @@ fn interior_points(loops: &[Vec<Arc>]) -> Vec<P2> {
         }
         polys.push(pts);
     }
-    interior_points_of_polys(&polys)
+    polys
 }
 
-/// Points inside the polygons (on a few scanlines, each midway across an inside interval),
-/// farthest from the boundary first.
-pub fn interior_points_of_polys(polys: &[Vec<P2>]) -> Vec<P2> {
-    let mut vb = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut ub = (f64::INFINITY, f64::NEG_INFINITY);
-    for p in polys {
-        for q in p {
-            vb = (vb.0.min(q.y), vb.1.max(q.y));
-            ub = (ub.0.min(q.x), ub.1.max(q.x));
+/// Where [`interior_points_of_polys`] looks for points inside polygons: on a few scanlines,
+/// each midway across an inside interval; how far from the boundary each is, scaled to the box.
+struct Scan<'a> {
+    polys: &'a [Vec<P2>],
+    vb: (f64, f64),
+    su: f64,
+    sv: f64,
+}
+
+impl<'a> Scan<'a> {
+    fn new(polys: &'a [Vec<P2>]) -> Option<Self> {
+        let mut vb = (f64::INFINITY, f64::NEG_INFINITY);
+        let mut ub = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in polys {
+            for q in p {
+                vb = (vb.0.min(q.y), vb.1.max(q.y));
+                ub = (ub.0.min(q.x), ub.1.max(q.x));
+            }
         }
+        if !vb.0.is_finite() || vb.1 - vb.0 < 1e-14 {
+            return None;
+        }
+        let (su, sv) = (
+            1.0 / (ub.1 - ub.0).max(tol::TINY),
+            1.0 / (vb.1 - vb.0).max(tol::TINY),
+        );
+        Some(Scan { polys, vb, su, sv })
     }
-    if !vb.0.is_finite() || vb.1 - vb.0 < 1e-14 {
-        return Vec::new();
+
+    /// The candidates, scanline by scanline.
+    fn candidates(&self) -> Vec<P2> {
+        let mut out = Vec::new();
+        for frac in [
+            0.5123, 0.3137, 0.6863, 0.1571, 0.8429, 0.0713, 0.9287, 0.4231, 0.5869, 0.2377, 0.7623,
+        ] {
+            let y = self.vb.0 + (self.vb.1 - self.vb.0) * frac;
+            let mut xs: Vec<f64> = Vec::new();
+            for p in self.polys {
+                let n = p.len();
+                for i in 0..n {
+                    let (a, b) = (p[i], p[(i + 1) % n]);
+                    if (a.y > y) != (b.y > y) {
+                        xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+                    }
+                }
+            }
+            xs.sort_by(f64::total_cmp);
+            let mut k = 0;
+            while k + 1 < xs.len() {
+                out.push(P2::new((xs[k] + xs[k + 1]) * 0.5, y));
+                k += 2;
+            }
+        }
+        out
     }
-    // Distance from a point to the boundary, scaled to the box.
-    let (su, sv) = (
-        1.0 / (ub.1 - ub.0).max(tol::TINY),
-        1.0 / (vb.1 - vb.0).max(tol::TINY),
-    );
-    let clearance = |q: &P2| -> f64 {
+
+    /// The squared distance from `q` to the boundary, scaled to the box; once it is down to
+    /// `floor`, no further (a candidate that can't beat the best so far).
+    fn clearance(&self, q: &P2, floor: f64) -> f64 {
+        let (su, sv) = (self.su, self.sv);
         let qs = P2::new(q.x * su, q.y * sv);
         let mut d = f64::INFINITY;
-        for p in polys {
+        for p in self.polys {
             let n = p.len();
             for i in 0..n {
                 let (a, b) = (p[i], p[(i + 1) % n]);
@@ -854,39 +902,49 @@ pub fn interior_points_of_polys(polys: &[Vec<P2>]) -> Vec<P2> {
                     &P2::new(a.x * su, a.y * sv),
                     &P2::new(b.x * su, b.y * sv),
                 ));
-            }
-        }
-        d
-    };
-    let mut cands: Vec<(f64, P2)> = Vec::new();
-    for frac in [
-        0.5123, 0.3137, 0.6863, 0.1571, 0.8429, 0.0713, 0.9287, 0.4231, 0.5869, 0.2377, 0.7623,
-    ] {
-        let y = vb.0 + (vb.1 - vb.0) * frac;
-        let mut xs: Vec<f64> = Vec::new();
-        for p in polys {
-            let n = p.len();
-            for i in 0..n {
-                let (a, b) = (p[i], p[(i + 1) % n]);
-                if (a.y > y) != (b.y > y) {
-                    xs.push(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x));
+                if d <= floor {
+                    return d;
                 }
             }
         }
-        xs.sort_by(f64::total_cmp);
-        let mut k = 0;
-        while k + 1 < xs.len() {
-            let q = P2::new((xs[k] + xs[k + 1]) * 0.5, y);
-            cands.push((clearance(&q), q));
-            k += 2;
-        }
+        d
     }
+}
+
+/// Points inside the polygons (on a few scanlines, each midway across an inside interval),
+/// farthest from the boundary first.
+pub fn interior_points_of_polys(polys: &[Vec<P2>]) -> Vec<P2> {
+    let Some(scan) = Scan::new(polys) else {
+        return Vec::new();
+    };
+    let mut cands: Vec<(f64, P2)> = scan
+        .candidates()
+        .into_iter()
+        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
+        .collect();
     cands.sort_by(|a, b| b.0.total_cmp(&a.0));
     cands.into_iter().map(|(_, p)| p).collect()
 }
 
+/// Whether a face (its loops as arcs) has an inside: [`interior_point`] finds a point in it.
+fn has_interior(loops: &[Vec<Arc>]) -> bool {
+    let polys = arc_polys(loops);
+    Scan::new(&polys).is_some_and(|s| !s.candidates().is_empty())
+}
+
+/// The first of [`interior_points_of_polys`]: the candidate farthest from the boundary (the
+/// earliest of equals), each measured only as far as it could still be.
 pub fn interior_of_polys(polys: &[Vec<P2>]) -> Option<P2> {
-    interior_points_of_polys(polys).into_iter().next()
+    let scan = Scan::new(polys)?;
+    let mut best: Option<(f64, P2)> = None;
+    for q in scan.candidates() {
+        let floor = best.map_or(f64::NEG_INFINITY, |(d, _)| d);
+        let d = scan.clearance(&q, floor);
+        if best.is_none() || d > floor {
+            best = Some((d, q));
+        }
+    }
+    best.map(|(_, q)| q)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -985,15 +1043,16 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
             .iter()
             .any(|w| m.contains(w))
     };
-    if !matches!(&first, Err(KernelError::OpenResult(_)))
-        && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message()))
+    if !opts.retry
+        || (!matches!(&first, Err(KernelError::OpenResult(_)))
+            && !matches!(&first, Err(e) if e.is_failure() && broken(&e.message())))
     {
         return first;
     }
     // Within the fuzzy value: faces a gap off the other input's surfaces moved onto them, and
     // the slivers that leaves collapsed.
     if let Some((fa, fb, keep_a, keep_b)) = fuzzy_merge(a, b, fuzzy, opts.tol.point, false) {
-        if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
                 "fuzzy merge ({fuzzy:e}): faces {} -> {}, {} -> {}; check {:?} {:?}",
                 a.faces.len(),
@@ -1017,7 +1076,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
                 refused.get_or_insert(r);
             }
             Err(e) => {
-                if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
                     eprintln!("fuzzy run: {e}");
                 }
             }
@@ -1051,7 +1110,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
             .tol
             .retries
             .into_iter()
-            .filter(|_| std::env::var_os("CADRS_DEBUG_NO_RETRY").is_none());
+            .filter(|_| !super::env_flag!("CADRS_DEBUG_NO_RETRY"));
         for t in std::iter::once(opts.tol.point).chain(retries) {
             if let Ok((mut r, clean)) = attempt(run(a2, b2, Mode::Bool(op), at(t))) {
                 if t > opts.tol.point {
@@ -1076,7 +1135,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
         .tol
         .retries
         .into_iter()
-        .filter(|_| std::env::var_os("CADRS_DEBUG_NO_RETRY").is_none())
+        .filter(|_| !super::env_flag!("CADRS_DEBUG_NO_RETRY"))
     {
         if let Ok((mut r, clean)) = attempt(run(a, b, Mode::Bool(op), at(t))) {
             cover_absorbed_faces(&mut r, a, b, t);
@@ -1092,7 +1151,7 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
     // surface of its own kind within the largest, its edges given the distance as tolerance,
     // and run again.
     for wide in [opts.tol.retries[1], 10.0 * opts.tol.retries[1]] {
-        if wide <= fuzzy || std::env::var_os("CADRS_DEBUG_NO_RETRY").is_some() {
+        if wide <= fuzzy || super::env_flag!("CADRS_DEBUG_NO_RETRY") {
             continue;
         }
         let Some((fa, fb, keep_a, keep_b)) = fuzzy_merge(a, b, wide, opts.tol.point, true) else {
@@ -1122,14 +1181,14 @@ fn ladder(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> 
 /// A result refused for crossing faces handed back after all (as before the check), counted
 /// on this thread ([`take_invalid_results`]); under `CADRS_BOOL_STRICT` the boolean fails.
 fn hand_back(r: BoolOut) -> Result<BoolOut> {
-    if std::env::var_os("CADRS_BOOL_STRICT").is_some() {
+    if super::env_flag!("CADRS_BOOL_STRICT") {
         return Err(KernelError::BooleanFailed {
             stage: CROSSING,
             why: "the boolean's result is invalid: its faces cross".into(),
         });
     }
     INVALID_RESULTS.with(|c| c.set(c.get() + 1));
-    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+    if super::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!("boolean: handed back a result with crossing faces");
     }
     Ok(r)
@@ -1338,6 +1397,35 @@ fn per_tool_solid(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<R
 /// run's tolerance): the two bodies with those faces' edges and vertices given the gap (with
 /// margin) as tolerance; None when there are none.
 /// The default fuzzy value of a boolean of `a` and `b` ([`BoolOptions::fuzzy`]).
+/// Whether the union of `a` and `b` is sure to be more than one solid: a solid of either lies
+/// apart from all the others (by their boxes, grown by the bodies' tolerances). Not for sheets
+/// (`false` when either has faces outside its solids).
+pub(crate) fn union_falls_apart(a: &Body, b: &Body) -> bool {
+    let mut boxes: Vec<Bbox> = Vec::new();
+    for x in [a, b] {
+        let in_solids: usize = (0..x.solids.len()).map(|s| x.solid_faces(s).len()).sum();
+        if x.solids.is_empty() || in_solids != x.faces.len() {
+            return false;
+        }
+        let tol = x
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(x.verts.iter().map(|v| v.tol))
+            .fold(tol::POINT, f64::max);
+        for s in 0..x.solids.len() {
+            let mut bb = Bbox::empty();
+            for f in x.solid_faces(s) {
+                bb.union(&x.face_bbox(f));
+            }
+            boxes.push(bb.grow(2.0 * tol));
+        }
+    }
+    boxes.len() > 1
+        && (0..boxes.len())
+            .any(|i| (0..boxes.len()).all(|j| i == j || !boxes[i].overlaps(&boxes[j])))
+}
+
 fn carried_fuzzy(a: &Body, b: &Body) -> f64 {
     let carried = [a, b]
         .iter()
@@ -1400,7 +1488,7 @@ fn near_coincident_tolerances(a: &Body, b: &Body, tol: f64, fuzzy: f64) -> Optio
             }
         }
     }
-    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+    if super::env_flag!("CADRS_BOOL_DEBUG") {
         eprintln!("near-coincident faces (a, b, tolerance): {raise:?}");
     }
     if raise.is_empty() {
@@ -2073,7 +2161,7 @@ fn uv_gap(b: &Body) -> Option<String> {
 /// Gives B-spline faces of `a` that lie (within 2 × [`VTOL`]) on a plane or cylinder face of
 /// `b` that surface, with their p-curves and sense recomputed. True when any changed.
 fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
-    if std::env::var("CADRS_DEBUG_NO_SNAP").is_ok() {
+    if super::env_flag!("CADRS_DEBUG_NO_SNAP") {
         return false;
     }
     let mut changed = false;
@@ -2112,7 +2200,7 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
                 continue;
             }
             let t = &b.faces[ti].surf;
-            if std::env::var("CADRS_SNAP_DEBUG").is_ok() {
+            if super::env_flag!("CADRS_SNAP_DEBUG") {
                 let dev = pts
                     .iter()
                     .filter_map(|p| t.signed_distance(p))
@@ -2160,7 +2248,7 @@ fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
             }
             a.faces[fi].surf = t.clone();
             super::build::fix_senses(a, [fi]);
-            if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+            if super::env_flag!("CADRS_BOOL_DEBUG") {
                 eprintln!(
                     "snapped face {fi} onto the other body's face {ti} ({:?})",
                     t.kind()
@@ -2296,7 +2384,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // 2a. Vertices on edges of the other body (within the larger of the vertex's, the edge's
     // and the run's tolerances).
     let verts_of = |range: std::ops::Range<usize>, pool: &Pool| -> Vec<usize> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         let mut vs = Vec::new();
         for o in range {
             for v in pool.edges[o].v {
@@ -2514,7 +2602,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let uvbox = |f: &WFace| {
         let mut ub = (f64::INFINITY, f64::NEG_INFINITY);
         let mut vb = (f64::INFINITY, f64::NEG_INFINITY);
-        for p in &f.polys {
+        for p in &f.polys.0 {
             for q in p {
                 ub = (ub.0.min(q.x), ub.1.max(q.x));
                 vb = (vb.0.min(q.y), vb.1.max(q.y));
@@ -2562,7 +2650,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             ) {
                 continue;
             }
-            if std::env::var("CADRS_TANGENT_DEBUG").is_ok()
+            if super::env_flag!("CADRS_TANGENT_DEBUG")
                 && (matches!(faces[fa].surf, Surface::Nurbs(_))
                     || matches!(faces[fb].surf, Surface::Nurbs(_)))
             {
@@ -2622,7 +2710,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     // Pairs of faces whose surfaces coincide over part of the faces (from the intersections): their
     // sub-faces on the other face's surface classify as on it, as a coincident pair's do.
-    let mut partial: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut partial: HashSet<(usize, usize)> = HashSet::default();
     for (&(fa, fb), (mut curves, singular, el, shared)) in pairs.iter().zip(ssis) {
         // The shared region's boundary cuts both faces, as a crossing does.
         if !shared.is_empty() {
@@ -2699,7 +2787,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
             kept
         };
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
                 "ssi {fa}×{fb} {:?}×{:?}: {} curves in {el:?}",
                 faces[fa].surf.kind(),
@@ -2940,7 +3028,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 let pm = ic.c.point(tm);
                 let ia = point_in_face(&faces[fa], &pm, tf);
                 let ib = point_in_face(&faces[fb], &pm, tf);
-                if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
                     eprintln!("  interval {ta}..{tb} at {pm:?}: in a {ia:?}, in b {ib:?}");
                 }
                 if ia == InFace::Outside || ib == InFace::Outside {
@@ -3067,7 +3155,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         // The new intersection edges, and edges of one body lying on a face of the other
         // (their parts inside that face).
         let mut out = Body::default();
-        let mut vmap: HashMap<usize, usize> = HashMap::new();
+        let mut vmap: HashMap<usize, usize> = HashMap::default();
         let mut add = |out: &mut Body, curve: &Curve, t: [f64; 2], v: [usize; 2]| {
             let vs = v.map(|x| {
                 *vmap
@@ -3110,7 +3198,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 add(&mut out, &ed.curve, ed.t, ed.v);
             }
         }
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
             for (i, e) in out.edges.iter().enumerate() {
                 eprintln!(
                     "section edge {i}: v {:?} t {:?} {:?} -> {:?} mid {:?}",
@@ -3160,7 +3248,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let np = pool.edges.len();
     let mut canon: Vec<usize> = (0..np).collect();
     {
-        let mut groups: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        let mut groups: HashMap<(usize, usize), Vec<usize>> = HashMap::default();
         for ps in &pieces {
             for &p in ps {
                 let ed = &pool.edges[p];
@@ -3212,7 +3300,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
     }
     // Coincident faces imprint each other's boundary pieces.
-    if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+    if super::env_flag!("CADRS_BOOL_DEBUG") {
         for (i, c) in coincident.iter().enumerate() {
             if !c.is_empty() {
                 eprintln!("coincident {i}: {c:?}");
@@ -3365,7 +3453,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     .and_then(|p| ssi::pcurve_from(p, &f.surf, &ed.curve, ed.t[0], ed.t[1]));
                 let pc =
                     pcurve::pcurve_or(&f.surf, &ed.curve, ed.t[0], ed.t[1], Some(f.uv_center), fit);
-                if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
                     for (k, t) in ed.t.iter().enumerate() {
                         let q = pc.point(*t);
                         let d = (f.surf.eval(q.x, q.y) - pool.verts[ed.v[k]]).norm();
@@ -3396,7 +3484,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         let arcs = (boundary.iter().map(|l| l.len()).sum::<usize>() + cut_arcs.len()) as u64;
         work.spend(arcs * arcs, "face splitting")?;
         let res = split::split_face(&f.surf, !f.sense, &boundary, &cut_arcs);
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
                 "face {fi} (owner {} orig {}): {} cuts -> {} faces {:?}",
                 f.owner,
@@ -3412,20 +3500,17 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     prof.mark("split");
     // 5. Classify.
-    let polys_a: Vec<Vec<Vec<P2>>> = a
-        .faces
-        .iter()
-        .map(|f| classify::face_polygons(a, f))
-        .collect();
-    let polys_b: Vec<Vec<Vec<P2>>> = b
-        .faces
-        .iter()
-        .map(|f| classify::face_polygons(b, f))
-        .collect();
+    let kept = |x: &Body| -> Vec<classify::KeptPolygons> {
+        x.faces
+            .iter()
+            .map(|f| classify::face_polygons_kept(x, f))
+            .collect()
+    };
+    let (polys_a, polys_b) = (kept(a), kept(b));
     // (Each body prepared once for the many points classified against it.)
     let (cls_a, cls_b) = (
-        classify::Classifier::new(a, &polys_a),
-        classify::Classifier::new(b, &polys_b),
+        classify::Classifier::with_kept(a, &polys_a),
+        classify::Classifier::with_kept(b, &polys_b),
     );
     let mut keep: Vec<(usize, Vec<Vec<Arc>>, bool)> = Vec::new(); // (face, loops, flip)
     // Sub-faces of one body joined across an edge piece no cut runs along lie on one side of
@@ -3442,7 +3527,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     {
         // Pieces touching the other body (cuts of any face, edges lying on its faces, edges
         // merged with its edges) can separate sides: they don't join.
-        let mut touching: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut touching: HashSet<usize> = HashSet::default();
         for list in cuts.iter().chain(on_face.iter()) {
             for &e in list {
                 touching.insert(e);
@@ -3463,13 +3548,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
         // Nor pieces ending where a cut ends (the other body meets this one there; within a
         // tolerance a crossing seen on one face can be missed on its neighbour).
-        let cut_ends: std::collections::HashSet<usize> = subs
+        let cut_ends: HashSet<usize> = subs
             .iter()
             .flat_map(|(_, l)| l.iter().flatten())
             .filter(|a| a.cut)
             .flat_map(|a| a.v)
             .collect();
-        let mut by_piece: HashMap<(usize, i64, i64, usize), usize> = HashMap::new();
+        let mut by_piece: HashMap<(usize, i64, i64, usize), usize> = HashMap::default();
         for (k, (fi, loops)) in subs.iter().enumerate() {
             for a in loops.iter().flatten().filter(|a| {
                 !a.cut
@@ -3501,9 +3586,9 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let groups: Vec<usize> = (0..subs.len()).map(|k| root(&mut parent, k)).collect();
     // A group's class: (class, confirmed by a second member). A disagreement makes the group
     // classify every member itself.
-    let mut group_class: HashMap<usize, (Class, bool)> = HashMap::new();
-    let mut unreliable: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let propagate = std::env::var_os("CADRS_DEBUG_NO_PROPAGATE").is_none();
+    let mut group_class: HashMap<usize, (Class, bool)> = HashMap::default();
+    let mut unreliable: HashSet<usize> = HashSet::default();
+    let propagate = !super::env_flag!("CADRS_DEBUG_NO_PROPAGATE");
     work.spend(
         subs.len() as u64 * (a.faces.len() + b.faces.len()) as u64,
         "classification",
@@ -3516,41 +3601,57 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
             continue;
         }
-        let Some(uv) = interior_point(&loops) else {
-            continue;
-        };
-        let p = f.surf.eval(uv.x, uv.y);
-        let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
-        let mut class = None;
-        for &g in &coincident[fi] {
-            let gf = &faces[g];
-            // (A face coinciding with g over part: where this sub-face lies on g's surface.)
-            let on_g = !partial.contains(&(fi, g))
-                || gf.surf.distance(&p) <= (run_tol * 10.0).max(f.tol).max(gf.tol);
-            if on_g && point_in_face(gf, &p, run_tol * 10.0) != InFace::Outside {
-                let (gu, gv) = gf.surf.project(&p, Some((gf.uv_center.x, gf.uv_center.y)));
-                let gn = gf.surf.normal(gu, gv) * if gf.sense { 1.0 } else { -1.0 };
-                // Against a sheet an overlap is an overlap, whichever way the faces face.
-                let other_sheet = if f.owner == 0 {
-                    b.solids.is_empty()
-                } else {
-                    a.solids.is_empty()
-                };
-                class = Some(if gn.dot(&n_out) > 0.0 || other_sheet {
-                    Class::OnSame
-                } else {
-                    Class::OnOpp
-                });
-                break;
-            }
-        }
         let g = groups[sk];
-        let shared = match group_class.get(&g) {
-            Some(&(c, true)) if class.is_none() && propagate && !unreliable.contains(&g) => Some(c),
+        let settled = match group_class.get(&g) {
+            Some(&(c, true)) if propagate && !unreliable.contains(&g) => Some(c),
             _ => None,
         };
+        // A sub-face on no face of the other body, whose group's class is settled, takes it: no
+        // point inside it to find (most of a large part's faces, untouched); but one with no
+        // inside at all is dropped, as ever.
+        let at = if settled.is_some() && coincident[fi].is_empty() {
+            if !has_interior(&loops) {
+                continue;
+            }
+            None
+        } else {
+            let Some(uv) = interior_point(&loops) else {
+                continue;
+            };
+            let n_out = f.surf.normal(uv.x, uv.y) * if f.sense { 1.0 } else { -1.0 };
+            Some((f.surf.eval(uv.x, uv.y), n_out))
+        };
+        let mut class = None;
+        // (On faces of the other body: the sub-face found its point above.)
+        if let Some((p, n_out)) = at {
+            for &g in &coincident[fi] {
+                let gf = &faces[g];
+                // (A face coinciding with g over part: where this sub-face lies on g's surface.)
+                let on_g = !partial.contains(&(fi, g))
+                    || gf.surf.distance(&p) <= (run_tol * 10.0).max(f.tol).max(gf.tol);
+                if on_g && point_in_face(gf, &p, run_tol * 10.0) != InFace::Outside {
+                    let (gu, gv) = gf.surf.project(&p, Some((gf.uv_center.x, gf.uv_center.y)));
+                    let gn = gf.surf.normal(gu, gv) * if gf.sense { 1.0 } else { -1.0 };
+                    // Against a sheet an overlap is an overlap, whichever way the faces face.
+                    let other_sheet = if f.owner == 0 {
+                        b.solids.is_empty()
+                    } else {
+                        a.solids.is_empty()
+                    };
+                    class = Some(if gn.dot(&n_out) > 0.0 || other_sheet {
+                        Class::OnSame
+                    } else {
+                        Class::OnOpp
+                    });
+                    break;
+                }
+            }
+        }
+        let shared = settled.filter(|_| class.is_none());
         let fresh = class.is_none() && shared.is_none();
         let class = class.or(shared).unwrap_or_else(|| {
+            // (Its point found above: only a settled group's sub-faces go without.)
+            let (p, n_out) = at.expect("a sub-face classified itself has its point");
             let other = if f.owner == 0 { &cls_b } else { &cls_a };
             // A point on the other body's boundary (a sub-face whose sample landed on an edge of
             // the other body lying in it) decides nothing: try the face's other inside points.
@@ -3599,12 +3700,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             }
         }
         let a_side = f.owner == 0;
-        if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+        if super::env_flag!("CADRS_BOOL_DEBUG") {
             eprintln!(
-                "sub of face {fi} (owner {} orig {}): {} loops, class {class:?} at {p:?}{}",
+                "sub of face {fi} (owner {} orig {}): {} loops, class {class:?} at {:?}{}",
                 f.owner,
                 f.orig,
                 loops.len(),
+                at.map(|(p, _)| p),
                 if shared.is_some() { " (shared)" } else { "" }
             );
         }
@@ -3628,8 +3730,8 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     // 6. Assemble.
     let mut out = Body::default();
-    let mut vmap: HashMap<usize, usize> = HashMap::new();
-    let mut emap: HashMap<usize, usize> = HashMap::new();
+    let mut vmap: HashMap<usize, usize> = HashMap::default();
+    let mut emap: HashMap<usize, usize> = HashMap::default();
     let mut from = Vec::new();
     for (fi, loops, flip) in keep {
         let f = &faces[fi];
@@ -3701,7 +3803,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         out.faces.push(face);
         from.push((f.owner, f.orig));
     }
-    if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+    if super::env_flag!("CADRS_BOOL_DEBUG") {
         for (i, f) in out.faces.iter().enumerate() {
             eprintln!(
                 "out face {i} {:?} from {:?} loops {:?}",
@@ -3728,12 +3830,14 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     out.fit_tolerances_searched(run_tol * 10.0);
     let wide = 1e-5 * out.bbox().diagonal();
     for fi in 0..out.faces.len() {
+        // (As `fit_tolerances_searched` just measured most of them: kept by what they are of.)
+        let mut surface_key = None;
         for c in out.faces[fi].loops.iter().flatten() {
             let e = &out.edges[c.edge];
             if e.degenerate {
                 continue;
             }
-            let g = super::topo::pcurve_gap(e, &c.pc, &out.faces[fi].surf);
+            let g = super::topo::pcurve_gap_kept(e, &c.pc, &out.faces[fi].surf, &mut surface_key);
             if g <= wide && g * 1.01 > e.tol {
                 out.edges[c.edge].tol = g * 1.01;
             }
@@ -3773,7 +3877,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     }
     prof.mark("unify");
     work.spend((out.faces.len() as u64).pow(2), "shell assembly")?;
-    if std::env::var_os("CADRS_BOOL_WORK").is_some() {
+    if super::env_flag!("CADRS_BOOL_WORK") {
         eprintln!("boolean work: {}", work.done);
     }
     assemble_shells(&mut out)?;
@@ -3782,7 +3886,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     prof.mark("voids");
     // Faces of the two inputs on one surface (by input face): only a solid holding both of a
     // pair can enclose nothing.
-    let pairs: std::collections::HashSet<(usize, usize)> = (0..na_faces)
+    let pairs: HashSet<(usize, usize)> = (0..na_faces)
         .flat_map(|fa| coincident[fa].iter().map(move |&fb| (fa, fb)))
         .map(|(fa, fb)| (faces[fa].orig, faces[fb].orig))
         .collect();
@@ -4016,7 +4120,7 @@ fn overlap_runs(a: &Curve, b: &Curve, mut hits: Vec<(f64, f64)>, tol: f64) -> Ve
 fn drop_empty_solids(
     b: &mut Body,
     from: &mut Vec<Vec<(usize, usize)>>,
-    pairs: &std::collections::HashSet<(usize, usize)>,
+    pairs: &HashSet<(usize, usize)>,
 ) -> (bool, Vec<Option<f64>>) {
     let size = b.bbox().diagonal();
     let suspect = |si: usize| {
@@ -4070,7 +4174,7 @@ fn drop_empty_solids(
     }
     b.faces = faces;
     *from = kept_from;
-    let dead_shells: std::collections::HashSet<usize> = empty
+    let dead_shells: HashSet<usize> = empty
         .iter()
         .flat_map(|&si| b.solids[si].shells.clone())
         .collect();
@@ -4231,7 +4335,7 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
     let mut voids: Vec<(usize, f64)> = Vec::new();
     for fs in shells {
         let mut closed = true;
-        let mut uses: HashMap<usize, i32> = HashMap::new();
+        let mut uses: HashMap<usize, i32> = HashMap::default();
         for &f in &fs {
             for l in &b.faces[f].loops {
                 for c in l {
@@ -4242,7 +4346,7 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
         for (e, u) in &uses {
             if *u != 0 && !b.edges[*e].degenerate {
                 closed = false;
-                if std::env::var("CADRS_BOOL_DEBUG").is_ok() {
+                if super::env_flag!("CADRS_BOOL_DEBUG") {
                     eprintln!("open edge {e}: uses {u}, {:?}", b.edges[*e]);
                 }
             }
@@ -4397,6 +4501,32 @@ pub fn boolean_with(
         merge_coplanar,
         ..BoolOptions::default()
     };
+    boolean_opts(k, op, target, tools, opts)
+}
+
+/// [`boolean`] with one run only ([`BoolOptions::retry`] off): for a question about the result
+/// (whether it is one solid, has volume), not a result to keep.
+pub fn boolean_once(
+    k: &mut NativeKernel,
+    op: BoolOp,
+    target: BodyId,
+    tools: &[BodyId],
+) -> Result<OpResult> {
+    let opts = BoolOptions {
+        tol: k.tolerances(),
+        retry: false,
+        ..BoolOptions::default()
+    };
+    boolean_opts(k, op, target, tools, opts)
+}
+
+fn boolean_opts(
+    k: &mut NativeKernel,
+    op: BoolOp,
+    target: BodyId,
+    tools: &[BodyId],
+    opts: BoolOptions,
+) -> Result<OpResult> {
     // Sheets, wires and points: their own rules (`boolean_kinds`).
     if let Some(r) = super::boolean_kinds::boolean(k, op, target, tools, opts) {
         return r;
@@ -4405,8 +4535,35 @@ pub fn boolean_with(
     // For each face of `cur`: where it came from (body, face).
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
+    // A union's inputs so far, each by a box grown by its tolerance (holding `cur` between
+    // them: a union lies within its inputs). A tool apart from them all joins `cur` as it is,
+    // no boolean: an Add of a rail onto 45 balusters unioned the balusters one by one, each a
+    // boolean over all those before it, before the rail.
+    let reach = |b: &Body| {
+        let tol = b
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(b.verts.iter().map(|v| v.tol))
+            .fold(opts.tol.point, f64::max);
+        b.bbox().grow(2.0 * tol)
+    };
+    let mut boxes: Vec<Bbox> = Vec::new();
+    if op == BoolOp::Union {
+        boxes.push(reach(&cur));
+    }
     for &t in tools {
         let tb = (**k.get(t)?).clone();
+        if op == BoolOp::Union {
+            let b = reach(&tb);
+            let apart = boxes.iter().all(|x| !x.overlaps(&b));
+            boxes.push(b);
+            if apart && !tb.faces.is_empty() {
+                cur.append(&tb);
+                origin.extend((0..tb.faces.len()).map(|f| vec![(t, f)]));
+                continue;
+            }
+        }
         let r = boolean_bodies_with(&cur, &tb, op, opts)?;
         origin = r
             .from
@@ -4460,6 +4617,60 @@ pub fn boolean_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A union of bodies apart puts them side by side without a boolean, as the boolean of
+    /// each pair does (the same faces, solids and volume), and a body touching them all then
+    /// joins them; whether a union is several solids is told from boxes alone where it can be.
+    #[test]
+    fn union_of_bodies_apart() {
+        let mut k = NativeKernel::new();
+        let block = |k: &mut NativeKernel, x: f64, z: f64, dx: f64, dz: f64| {
+            let super::super::draw::Shape::Body(id) = k.box_at(x, 0.0, z, dx, 1.0, dz).unwrap()
+            else {
+                unreachable!()
+            };
+            id
+        };
+        let posts: Vec<BodyId> = (0..5)
+            .map(|i| block(&mut k, 3.0 * i as f64, 0.0, 1.0, 3.0))
+            .collect();
+        let mut pairwise = (**k.get(posts[0]).unwrap()).clone();
+        for p in &posts[1..] {
+            pairwise = boolean_bodies(&pairwise, k.get(*p).unwrap(), BoolOp::Union)
+                .unwrap()
+                .body;
+        }
+        let r = boolean(&mut k, BoolOp::Union, posts[0], &posts[1..]).unwrap();
+        let side = (**k.get(r.bodies[0]).unwrap()).clone();
+        assert_eq!(side.faces.len(), pairwise.faces.len());
+        assert_eq!((side.solids.len(), pairwise.solids.len()), (5, 5));
+        let v = super::super::mass::body_volume;
+        assert!((v(&side) - v(&pairwise)).abs() < 1e-9);
+        assert_eq!(r.history.modified.len(), side.faces.len());
+        // A rail along their tops joins them.
+        let rail = block(&mut k, 0.0, 3.0, 13.0, 0.5);
+        let mut tools = posts[1..].to_vec();
+        tools.push(rail);
+        let r = boolean(&mut k, BoolOp::Union, posts[0], &tools).unwrap();
+        assert_eq!(k.solid_count(r.bodies[0]).unwrap(), 1);
+        assert!((v(k.get(r.bodies[0]).unwrap()) - (15.0 + 6.5)).abs() < 1e-9);
+        // Two posts as one body: a rail over one of them can't join both, by their boxes; one
+        // over both can (and does).
+        let pair = boolean(&mut k, BoolOp::Union, posts[0], &[posts[1]])
+            .unwrap()
+            .bodies[0];
+        let short = block(&mut k, 0.0, 3.0, 1.0, 0.5);
+        let long = block(&mut k, 0.0, 3.0, 4.0, 0.5);
+        let (pb, sb, lb) = (
+            k.get(pair).unwrap(),
+            k.get(short).unwrap(),
+            k.get(long).unwrap(),
+        );
+        assert!(union_falls_apart(pb, sb));
+        assert!(!union_falls_apart(pb, lb));
+        assert!(!crate::Kernel::joins(&mut k, pair, short).unwrap());
+        assert!(crate::Kernel::joins(&mut k, pair, long).unwrap());
+    }
 
     /// A boolean past its work budget fails (deterministically, at the same stage every
     /// time), and the default budget holds a plain one easily.

@@ -112,7 +112,7 @@ impl Rebuilder {
         };
         Ok(Some((
             PartState {
-                part,
+                part: Arc::new(part),
                 body: Some(b),
                 names: Arc::new(names),
             },

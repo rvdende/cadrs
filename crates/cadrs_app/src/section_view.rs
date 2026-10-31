@@ -1,7 +1,7 @@
 //! **Section view** (P3E.3a, PS2.9, X14, A3.3, X15, IR5.5): the 3D view of a Part Studio or an
 //! Assembly cut by a plane, with the cut faces capped, like Onshape's.
 //!
-//! - Opened from the view cube menu's **Section view…**, the bottom-right Section view tool, a
+//! - Opened from the View options menu's **Section view…**, the bottom-right Section view tool, a
 //!   feature's context menu (**Section view…**, IR5.5: on a plane or a sketch, cut by its plane)
 //!   and an assembly instance's or triad's menu (A3.3, X15: cut through the instance's middle by
 //!   the Front plane). The **Section view** dialog takes the cutting plane: a default plane, a

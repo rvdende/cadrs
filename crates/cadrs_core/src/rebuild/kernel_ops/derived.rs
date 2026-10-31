@@ -154,7 +154,7 @@ impl Rebuilder {
                         d.face_of(id, &n, k)
                     });
                     next.parts.push(PartState {
-                        part: Part {
+                        part: Arc::new(Part {
                             id: pid,
                             feature: id,
                             name,
@@ -163,8 +163,8 @@ impl Rebuilder {
                             features: vec![id],
                             source: None,
                             derived: None,
-                            ..sp.part.clone()
-                        },
+                            ..(*sp.part).clone()
+                        }),
                         body: None,
                         names: Arc::default(),
                     });
@@ -218,7 +218,7 @@ impl Rebuilder {
                 }
                 let pid = d.part_of(id, sp.part.id, k);
                 next.parts.push(PartState {
-                    part: Part {
+                    part: Arc::new(Part {
                         id: pid,
                         feature: id,
                         name,
@@ -230,7 +230,7 @@ impl Rebuilder {
                         source: None,
                         // The source part's settings are copied into the host's (`crate::derived::refresh`).
                         derived: None,
-                    },
+                    }),
                     body: Some(b),
                     names: Arc::new(names),
                 });
@@ -529,7 +529,7 @@ impl Rebuilder {
             taken.push(name.clone());
             let pid = derived_part(id, board_src, k);
             next.parts.push(PartState {
-                part: Part {
+                part: Arc::new(Part {
                     id: pid,
                     feature: id,
                     name,
@@ -540,7 +540,7 @@ impl Rebuilder {
                     features: vec![id],
                     source: None,
                     derived: None,
-                },
+                }),
                 body: Some(b2),
                 names: Arc::new(names),
             });
@@ -589,7 +589,7 @@ impl Rebuilder {
                 let pid = derived_part(id, PartId::new(FeatureId(c.footprint), 0), k);
                 placed.push((pid, solid.clone()));
                 next.parts.push(PartState {
-                    part: Part {
+                    part: Arc::new(Part {
                         id: pid,
                         feature: id,
                         name,
@@ -600,7 +600,7 @@ impl Rebuilder {
                         features: vec![id],
                         source: None,
                         derived: None,
-                    },
+                    }),
                     body: None,
                     names: Arc::default(),
                 });

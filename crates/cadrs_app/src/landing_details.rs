@@ -34,7 +34,7 @@ use cadrs_core::documents_page::{SAMPLE_OWNER, SAMPLES};
 use cadrs_core::library::{
     AddEntry, CreateLabel, DeleteLabel, Library, RenameLabel, SetDescription, SetLabels,
 };
-use cadrs_core::{DocumentEntry, DocumentId, Filter, FolderId, ItemType, LabelId};
+use cadrs_core::{DocumentEntry, DocumentId, Filter, FolderId, LabelId};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -332,7 +332,7 @@ pub fn breadcrumb(
 }
 
 /// The list's tools, right of the search box: in the Trash Empty trash…, Import files… and
-/// Label…, the list and grid toggles (framed like the color scheme's), and the Type filter.
+/// Label…, and the list and grid toggles (framed like the color scheme's).
 pub fn list_toolbar(a: &mut ChildSpawnerCommands, t: &Theme, state: &LandingState, lib: &Library) {
     a.spawn(Node {
         align_items: AlignItems::Center,
@@ -422,48 +422,6 @@ pub fn list_toolbar(a: &mut ChildSpawnerCommands, t: &Theme, state: &LandingStat
                 .and_modify(|mut n| n.width = Val::Px(36.0));
             }
         });
-        let label = match state.item_type {
-            ItemType::All => "Type".to_string(),
-            t => format!("Type: {}", t.label()),
-        };
-        b.spawn((
-            Button::new("type-filter")
-                .label(label)
-                .outline()
-                .dropdown_caret()
-                .tooltip("Show only one type of item")
-                .build(t),
-            observe(
-                |a: On<Activate>,
-                 mut commands: Commands,
-                 theme: Res<Theme>,
-                 state: Res<LandingState>| {
-                    let mut menu = Menu::new("type-menu").min_width(150.0);
-                    for it in ItemType::ALL {
-                        menu = menu.item(
-                            MenuItem::new(
-                                format!("type-{}", it.label().to_lowercase()),
-                                it.label(),
-                            )
-                            .checked(state.item_type == it),
-                        );
-                    }
-                    open_menu(&mut commands, a.entity, menu.build(&theme));
-                },
-            ),
-            observe(|ev: On<MenuAction>, mut state: ResMut<LandingState>| {
-                if let Some(it) = ItemType::ALL
-                    .into_iter()
-                    .find(|it| ev.item == format!("type-{}", it.label().to_lowercase()))
-                    && state.item_type != it
-                {
-                    state.item_type = it;
-                }
-            }),
-        ))
-        .insert(cadrs_ui::glass::control(t))
-        .entry::<Node>()
-        .and_modify(|mut n| super::page_control(&mut n));
     });
 }
 
@@ -1868,13 +1826,9 @@ pub fn import_file(world: &mut World, path: &Path) {
     {
         // Show it: the top level of Owned by me, in the list.
         let mut state = world.resource_mut::<LandingState>();
-        if state.filter != Filter::OwnedByMe
-            || state.folder.is_some()
-            || !state.item_type.shows_documents()
-        {
+        if state.filter != Filter::OwnedByMe || state.folder.is_some() {
             state.filter = Filter::OwnedByMe;
             state.folder = None;
-            state.item_type = ItemType::All;
         }
     }
     select(world, Pick::Doc(id), false);

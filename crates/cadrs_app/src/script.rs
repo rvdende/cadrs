@@ -48,7 +48,7 @@
 //! - `bracket`: builds the P3.9 feature-list bracket ([`cadrs_core::samples::bracket`]: a plate,
 //!   ten bosses in a "Bosses" folder and two fillets) in the active Part Studio.
 //! - `view AZ EL [X Y Z SCALE]` (P3.8): turns the 3D view to azimuth `AZ` and elevation `EL`
-//!   (degrees, as the view cube's camera: azimuth from the Front view toward the Right view),
+//!   (degrees, as the view ball's camera: azimuth from the Front view toward the Right view),
 //!   optionally centred on the point `X Y Z` at `SCALE` mm per pixel, as orbiting would; for
 //!   picking edges only visible from one side (a pocket's corners).
 //! - `gasket` (P3E.4): stores and opens the branch-and-merge stand-in "Carburetor (stand-in)"

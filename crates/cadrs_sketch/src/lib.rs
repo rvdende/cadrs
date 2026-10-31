@@ -752,15 +752,22 @@ pub enum DimensionKind {
     /// labelled "Ø", as Onshape does when the label is placed across the centreline (the
     /// diameter a revolve about the line will have there).
     Diametral { p: PointRef, line: CurveRef },
-    /// The angle (degrees, 0–180) between two lines, measured between the rays that leave
-    /// their intersection along each line's direction (from its first point to its second),
-    /// reversed where `flip_*` is set. The quadrant the label was placed in picks the flips
-    /// (`reference/onshape/dimension/dimension-anglequadrants.png`).
+    /// The angle (degrees) between two lines: how far `b`'s ray is turned from `a`'s, the rays
+    /// leaving their intersection along each line's direction (from its first point to its
+    /// second), reversed where `flip_*` is set. The quadrant the label was placed in picks the
+    /// flips (`reference/onshape/dimension/dimension-anglequadrants.png`). Like a hinge, any
+    /// value turns `b`'s ray on round the same way (#96): past 180° to the other side of `a`'s,
+    /// below 0° back past it, a whole turn more to where it was.
     Angle {
         a: CurveRef,
         b: CurveRef,
         flip_a: bool,
         flip_b: bool,
+        /// Which way the value turns: anticlockwise (`Some(true)`) or clockwise. `None` (a
+        /// dimension being made, or one saved before #96): the way the rays turn the short way,
+        /// fixed by the next edit ([`Sketch::fix_angle_turns`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ccw: Option<bool>,
     },
     /// The distance from a point to a circle or arc (its whole circle), measured along the line
     /// through the center: to the circle's near side, or its far side (`far`). Which one comes
@@ -810,7 +817,9 @@ pub enum DimensionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Dimension {
     pub kind: DimensionKind,
-    /// The value in millimetres.
+    /// The value in millimetres (degrees for an angle). A distance between points or from a
+    /// point to a line may be negative: its point on the other side (#96); an angle any value,
+    /// turning on round past 180° and 360° or back below 0° ([`DimensionKind::Angle`]).
     pub value: f64,
     /// Where the dimension line sits: for distances, the signed offset (mm) from the first
     /// measured point, perpendicular to the measured direction (for a horizontal dimension,
@@ -877,11 +886,13 @@ impl DimensionKind {
                 b,
                 flip_a,
                 flip_b,
+                ccw,
             } => cref(a).zip(cref(b)).map(|(a, b)| K::Angle {
                 a,
                 b,
                 flip_a,
                 flip_b,
+                ccw,
             }),
             K::PointCircle { p, circle, far } => pref(p)
                 .zip(cv(circle))
@@ -983,6 +994,47 @@ impl DimensionKind {
             }
             _ => false,
         }
+    }
+
+    /// Whether its value may be negative: a distance between two points, or from a point to a
+    /// line, whose negative value puts the point on the other side (as Onshape, #96). The solver
+    /// takes its size ([`DimensionKind::solved_value`]).
+    pub fn signed(&self) -> bool {
+        matches!(
+            self,
+            DimensionKind::Horizontal { .. }
+                | DimensionKind::Vertical { .. }
+                | DimensionKind::Aligned { .. }
+                | DimensionKind::OriginAligned { .. }
+                | DimensionKind::PointLine { .. }
+        )
+    }
+
+    /// Whether it measures what `other` does: the same but for which way an angle turns (a
+    /// dimension being made doesn't say yet).
+    pub fn same(&self, other: &Self) -> bool {
+        let loose = |k: Self| match k {
+            DimensionKind::Angle {
+                a,
+                b,
+                flip_a,
+                flip_b,
+                ..
+            } => DimensionKind::Angle {
+                a,
+                b,
+                flip_a,
+                flip_b,
+                ccw: None,
+            },
+            k => k,
+        };
+        loose(*self) == loose(*other)
+    }
+
+    /// The value the solver holds the geometry to for value `v`: a signed distance's size.
+    pub fn solved_value(&self, v: f64) -> f64 {
+        if self.signed() { v.abs() } else { v }
     }
 
     /// What its value measures (a length in mm or an angle in degrees).
@@ -1200,6 +1252,22 @@ impl Sketch {
             .iter()
             .find(|(d, _)| *d == id)
             .map(|(_, e)| e.as_str())
+    }
+
+    /// Fixes which way each angle dimension that doesn't say yet turns: the way its rays turn the
+    /// short way now (#96), so a value past 180° or 360° turns on round that way.
+    pub fn fix_angle_turns(&mut self) {
+        let fixed: Vec<(DimensionId, bool)> = self
+            .dimensions
+            .iter()
+            .filter(|(_, d)| matches!(d.kind, DimensionKind::Angle { ccw: None, .. }))
+            .filter_map(|(k, d)| Some((k, dimension::angle_ccw(self, d.kind)?)))
+            .collect();
+        for (k, way) in fixed {
+            if let DimensionKind::Angle { ccw, .. } = &mut self.dimensions[k].kind {
+                *ccw = Some(way);
+            }
+        }
     }
 
     /// True if the sketch has no geometry.

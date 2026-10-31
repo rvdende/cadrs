@@ -611,6 +611,7 @@ fn number(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, num: SmfNum,
                 .text(text.to_string())
                 .label_width(96.0)
                 .label_size(LABEL_PX)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()

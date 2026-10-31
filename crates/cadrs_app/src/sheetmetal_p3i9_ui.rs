@@ -880,6 +880,7 @@ fn number(
             NumberField::new(name.to_string(), label.to_string())
                 .text(text.to_string())
                 .label_width(112.0)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()

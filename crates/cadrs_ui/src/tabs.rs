@@ -22,11 +22,17 @@ use crate::theme::Theme;
 /// The narrowest a tab is (a short name still makes a good target).
 pub const MIN_TAB_WIDTH: f32 = 120.0;
 
+/// A tab's icon after its name (a folder tab's chevron, which its owner turns to show the
+/// folder open or closed).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TabTrailingIcon;
+
 /// Builder for a tab.
 pub struct Tab {
     name: Cow<'static, str>,
     label: String,
     icon: Option<Cow<'static, str>>,
+    trailing: Option<Cow<'static, str>>,
     selected: bool,
     force: Option<VisualState>,
     width: f32,
@@ -39,6 +45,7 @@ impl Tab {
             name: name.into(),
             label: label.into(),
             icon: None,
+            trailing: None,
             selected: false,
             force: None,
             width: 240.0,
@@ -48,6 +55,12 @@ impl Tab {
 
     pub fn icon(mut self, i: impl Into<Cow<'static, str>>) -> Self {
         self.icon = Some(i.into());
+        self
+    }
+
+    /// An icon after the name, at the tab's right end ([`TabTrailingIcon`]).
+    pub fn trailing_icon(mut self, i: impl Into<Cow<'static, str>>) -> Self {
+        self.trailing = Some(i.into());
         self
     }
 
@@ -68,7 +81,7 @@ impl Tab {
     }
 
     /// Marks a tab that isn't selected but holds the selection (a folder tab with the active tab
-    /// inside it): a lighter underline in the selection's colour and a bolder label.
+    /// inside it): an underline and its icon in the accent colour, and a bolder label.
     pub fn marked(mut self, m: bool) -> Self {
         self.marked = m;
         self
@@ -87,7 +100,11 @@ impl Tab {
                 Color::NONE,
             )
             .with_selected(theme.list_selected),
-            border: StateColors::all(Color::NONE),
+            border: StateColors::all(if self.marked {
+                theme.primary
+            } else {
+                Color::NONE
+            }),
             foreground: StateColors::new(
                 theme.tool_foreground,
                 theme.foreground,
@@ -98,6 +115,9 @@ impl Tab {
             focus_ring: theme.focus_ring,
         };
         let fg = visuals.foreground.normal;
+        let icon_fg = if self.marked { theme.primary } else { fg };
+        // The chevron in the text's colour, not the tab's lighter grey: it reads at its size.
+        let chevron_fg = theme.foreground;
         let font = theme.font(
             theme.font_base,
             if self.marked {
@@ -107,6 +127,7 @@ impl Tab {
             },
         );
         let icon_name = self.icon;
+        let trailing = self.trailing;
         let label = self.label;
         (
             Name::new(self.name.into_owned()),
@@ -114,8 +135,9 @@ impl Tab {
                 min_width: Val::Px(MIN_TAB_WIDTH.min(self.width)),
                 max_width: Val::Px(self.width),
                 flex_shrink: 0.0,
-                padding: UiRect::new(Val::Px(10.0), Val::Px(8.0), Val::ZERO, Val::ZERO),
+                padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::ZERO, Val::ZERO),
                 align_items: AlignItems::Center,
+                border: UiRect::bottom(Val::Px(if self.marked { 2.0 } else { 0.0 })),
                 column_gap: Val::Px(6.0),
                 border_radius: BorderRadius::all(Val::Px(theme.radius)),
                 overflow: Overflow::clip(),
@@ -134,7 +156,10 @@ impl Tab {
             ContextMenuTarget,
             Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
                 if let Some(i) = icon_name {
-                    p.spawn((icon(i, 16.0, fg), InheritFg, Pickable::IGNORE));
+                    let mut e = p.spawn((icon(i, 16.0, icon_fg), Pickable::IGNORE));
+                    if icon_fg == fg {
+                        e.insert(InheritFg);
+                    }
                 }
                 // A long name ends in "…" rather than being cut through a letter.
                 p.spawn((
@@ -148,6 +173,23 @@ impl Tab {
                     crate::ellipsis::Ellipsis::node(),
                     crate::ellipsis::Ellipsis::default(),
                 ));
+                if let Some(i) = trailing {
+                    p.spawn((
+                        crate::icon::icon_in(
+                            i,
+                            18.0,
+                            chevron_fg,
+                            Node {
+                                flex_shrink: 0.0,
+                                // At the right end, as a drop-down's arrow.
+                                margin: UiRect::left(Val::Auto),
+                                ..default()
+                            },
+                        ),
+                        Pickable::IGNORE,
+                        TabTrailingIcon,
+                    ));
+                }
             })),
         )
     }

@@ -485,6 +485,7 @@ fn partial_rows(b: &mut ChildSpawner, t: &Theme, x: &FilletFeature) {
                 NumberField::new("fillet-partial-first", "First bound")
                     .text(x.partial_first_expr.clone())
                     .label_width(96.0)
+                    .variables()
                     .build(t),
             ))
             .entry::<Node>()

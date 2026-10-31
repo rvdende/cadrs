@@ -1,7 +1,7 @@
-// P3.9 / P6.4 (intro-to-parametric-cad.md): clicking a corner of the view cube turns the view to
-// the trimetric view from that corner. On the Control Arm (`control-arm add`).
-// 01 the Front view; the pointer on the cube's front-right-top corner: its patch (the corner
-//    squares of the three faces that meet there) lights up.
+// P3.9 / P6.4 (intro-to-parametric-cad.md): clicking a corner's dot on the view ball turns the
+// view to the trimetric view from that corner. On the Control Arm (`control-arm add`).
+// 01 the Front view; the pointer on the ball's front-right-top dot: it grows, blue, and "Top
+//    front right" shows beside the ball.
 // 02 clicked: the trimetric view from that corner (the default view's 30°/30°).
 // 03 back to Front, the front-left-bottom corner clicked: the view from below, front left.
 // 04 the Top view, the back-right-top corner clicked: the view from behind, right, above.

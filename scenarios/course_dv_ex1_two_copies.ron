@@ -4,7 +4,7 @@
 // the Part Studio "Block" with "Mate connector 1" on its top face, V1, in the folder "Linked
 // parts") and `fixtures/linked_block_host_standin.cadrs` (B "Block derived": "Part Studio 1"
 // with "Mate connector 1" at (0, 0, 100)).
-// 01 B's Part Studio 1: its Mate connector 1 at (0, 0, 100); the icon rail's Insert hovered.
+// 01 B's Part Studio 1: its Mate connector 1 at (0, 0, 100); the toolbar's Derived hovered.
 // 02 Derived 1's dialog: Other documents › Linked parts › Block source (V1): "Block" hovered.
 // 03 Block picked: the source card "Block · Block source · V1"; Derive: Part Studio; Locations
 //    empty (the origin): one copy where it is in A.
@@ -24,10 +24,10 @@ Scenario(
         Custom("linked-fixture open linked_block_host_standin"),
         WaitFor("document-shell"),
         Key("F"),
-        Hover(ui("rail-insert")),
+        Hover(ui("derived")),
         Wait(40),
-        Screenshot("01-host-rail-insert"),
-        Click(ui("rail-insert")),
+        Screenshot("01-host-derived"),
+        Click(ui("derived")),
         WaitFor("derived-dialog"),
         Click(ui("derived-source-tabs-1")),
         WaitFor("derived-other-loc-folder-linked-parts"),

@@ -152,7 +152,7 @@ Scenario(
         Screenshot("14-properties-not-included"),
         Key("Escape"),
         Custom("derived plate-derives-host"),
-        Click(ui("rail-insert")),
+        Click(ui("derived")),
         WaitFor("derived-dialog"),
         Click(ui("derived-studio-plate")),
         MoveTo(1420, 780),

@@ -400,7 +400,7 @@ pub fn begin_sketch(world: &mut World) {
     // Or a selected Plane feature (P3.7).
     let feature_plane = selection.feature().and_then(|f| {
         let el = world.get_resource::<ActiveDocument>()?.active_element()?;
-        cadrs_core::parts::plane_feature_ref(el.features(), f)
+        cadrs_core::parts::plane_feature_ref(&el.part_features(), f)
     });
     let plane = selection
         .plane()
@@ -973,7 +973,9 @@ fn sketch_picks(
                     let plane = world
                         .get_resource::<ActiveDocument>()
                         .and_then(|d| d.active_element())
-                        .and_then(|el| cadrs_core::parts::plane_feature_ref(el.features(), f));
+                        .and_then(|el| {
+                            cadrs_core::parts::plane_feature_ref(&el.part_features(), f)
+                        });
                     if plane.is_some() {
                         set_plane(world, plane);
                     }
@@ -1984,9 +1986,11 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             B::Tool(T::Dimension),
         )],
     ];
-    crate::document::undo_redo(tb, t);
-    for group in groups {
-        tb.spawn(toolbar_separator(t));
+    crate::document::feature_list_toggle(tb, t);
+    for (i, group) in groups.into_iter().enumerate() {
+        if i > 0 {
+            tb.spawn(toolbar_separator(t));
+        }
         for (name, icon_name, dropdown, tip, button) in group.iter() {
             spawn_sketch_tool(tb, t, name, icon_name, *dropdown, tip, *button);
         }

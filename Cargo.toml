@@ -47,6 +47,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # The autorouter's GPU search (cadrs_router): the wgpu Bevy uses, taking SPIR-V from rust-gpu.
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "spirv", "vulkan", "metal", "dx12"] }
 futures-lite = "2"
+# A faster hash for the kernel's maps of small keys (indices, ids) than std's SipHash.
+rustc-hash = "2.1"
 bytemuck = "1"
 slotmap = { version = "1", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }

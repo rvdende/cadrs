@@ -41,6 +41,61 @@ pub fn face_polygons(body: &Body, f: &Face) -> Vec<Vec<P2>> {
         .collect()
 }
 
+/// A face's [`face_polygons`] and their [`poly_boxes`].
+pub type KeptPolygons = std::sync::Arc<(Vec<Vec<P2>>, PolyBoxes)>;
+
+/// [`face_polygons`] and their [`poly_boxes`], kept by what they are made from (the face's
+/// surface and each p-curve over its range): a boolean takes every face of both its bodies (in
+/// its import and again to classify), most of them as the bodies before it had them.
+pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
+    use std::hash::Hasher;
+    /// Two generations of at most this many points each (16 bytes a point, and the boxes).
+    const KEPT: usize = 1 << 21;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, KeptPolygons>,
+        new_points: usize,
+        old: rustc_hash::FxHashMap<u128, KeptPolygons>,
+    }
+    static KEPT_POLYS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut h = super::fingerprint::Key128::new();
+    h.surface(&f.surf);
+    for l in &f.loops {
+        h.write_usize(l.len());
+        for c in l {
+            let (a, b) = co_range(&body.edges[c.edge], c.fwd);
+            h.f64s(&[a, b]);
+            h.curve(&c.pc);
+        }
+    }
+    let key = h.key();
+    let points = |p: &KeptPolygons| p.0.iter().map(Vec::len).sum::<usize>() + 1;
+    let kept = {
+        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+        match k.new.get(&key).cloned() {
+            Some(p) => Some(p),
+            None => k.old.remove(&key).inspect(|p| {
+                k.new_points += points(p);
+                k.new.insert(key, p.clone());
+            }),
+        }
+    };
+    kept.unwrap_or_else(|| {
+        let polys = face_polygons(body, f);
+        let boxes = poly_boxes(&polys, &f.surf);
+        let p: KeptPolygons = std::sync::Arc::new((polys, boxes));
+        let mut k = KEPT_POLYS.lock().unwrap_or_else(|e| e.into_inner());
+        if k.new_points + points(&p) > KEPT {
+            k.old = std::mem::take(&mut k.new);
+            k.new_points = 0;
+        }
+        k.new_points += points(&p);
+        k.new.insert(key, p.clone());
+        p
+    })
+}
+
 /// Point in a face's domain given its sampled loops; `tol` in model units (scaled by the
 /// surface metric).
 pub fn in_face(polys: &[Vec<P2>], surf: &Surface, uv: P2, tol: f64) -> InFace {
@@ -88,18 +143,25 @@ pub struct PolyBox {
     rows: Option<Rows>,
 }
 
-/// A polygon's sides (by their first point's index) in rows of equal height over its v range.
+/// A polygon's sides (by their first point's index) in rows of equal height over its v range:
+/// row k's at `sides[start[k]..start[k + 1]]`, in index order.
 #[derive(Debug, Clone)]
 struct Rows {
     y0: f64,
     dy: f64,
-    sides: Vec<Vec<u32>>,
+    start: Vec<u32>,
+    sides: Vec<u32>,
 }
 
 impl Rows {
+    /// Row k's sides.
+    fn row(&self, k: usize) -> &[u32] {
+        &self.sides[self.start[k] as usize..self.start[k + 1] as usize]
+    }
+
     /// The rows [y0, y1] reaches, clamped to the polygon's.
     fn span(&self, y0: f64, y1: f64) -> std::ops::RangeInclusive<usize> {
-        let n = self.sides.len() as f64;
+        let n = (self.start.len() - 1) as f64;
         let at = |y: f64| ((y - self.y0) / self.dy).floor().clamp(0.0, n - 1.0) as usize;
         at(y0)..=at(y1)
     }
@@ -132,12 +194,29 @@ pub fn poly_boxes(polys: &[Vec<P2>], surf: &Surface) -> PolyBoxes {
                 let mut r = Rows {
                     y0: b[2],
                     dy: (b[3] - b[2]) / count as f64,
-                    sides: vec![Vec::new(); count],
+                    start: vec![0; count + 1],
+                    sides: Vec::new(),
                 };
-                for i in 0..n {
-                    let (a, c) = (p[i], p[(i + 1) % n]);
-                    for k in r.span(a.y.min(c.y), a.y.max(c.y)) {
-                        r.sides[k].push(i as u32);
+                let spans: Vec<std::ops::RangeInclusive<usize>> = (0..n)
+                    .map(|i| {
+                        let (a, c) = (p[i], p[(i + 1) % n]);
+                        r.span(a.y.min(c.y), a.y.max(c.y))
+                    })
+                    .collect();
+                for sp in &spans {
+                    for k in sp.clone() {
+                        r.start[k + 1] += 1;
+                    }
+                }
+                for k in 0..count {
+                    r.start[k + 1] += r.start[k];
+                }
+                let mut fill = r.start.clone();
+                r.sides = vec![0; r.start[count] as usize];
+                for (i, sp) in spans.into_iter().enumerate() {
+                    for k in sp {
+                        r.sides[fill[k] as usize] = i as u32;
+                        fill[k] += 1;
                     }
                 }
                 r
@@ -200,7 +279,7 @@ pub fn in_face_boxed(
         // them is farther than `tol` everywhere.)
         let reach = gm / mv.max(tol::TINY) + gb;
         for k in rows.span(uv.y - reach, uv.y + reach) {
-            for &i in &rows.sides[k] {
+            for &i in rows.row(k) {
                 let (a, b) = side(i as usize);
                 if seg_dist2(&q, &a, &b) < tol {
                     return InFace::Boundary;
@@ -210,7 +289,7 @@ pub fn in_face_boxed(
         // Parity: the sides crossing the point's v, all in its row.
         let mut odd = false;
         for k in rows.span(uv.y, uv.y) {
-            for &i in &rows.sides[k] {
+            for &i in rows.row(k) {
                 let (a, c) = (p[i as usize], p[(i as usize + 1) % n]);
                 if (a.y > uv.y) != (c.y > uv.y) {
                     let x = a.x + (uv.y - a.y) / (c.y - a.y) * (c.x - a.x);
@@ -233,9 +312,14 @@ pub fn in_face_boxed(
 
 impl<'a> FacePolys<'a> {
     pub fn new(polys: &'a [Vec<P2>], surf: &Surface) -> Self {
+        Self::with_boxes(polys, poly_boxes(polys, surf))
+    }
+
+    /// [`Self::new`] with the polygons' boxes made already ([`poly_boxes`]).
+    pub fn with_boxes(polys: &'a [Vec<P2>], boxes: PolyBoxes) -> Self {
         FacePolys {
             polys,
-            boxes: poly_boxes(polys, surf),
+            boxes,
             range: uv_range(polys),
         }
     }
@@ -665,6 +749,28 @@ pub struct Classifier<'a> {
 impl<'a> Classifier<'a> {
     /// The body with its faces' sampled loops ([`face_polygons`], one per face).
     pub fn new(body: &'a Body, polys: &'a [Vec<Vec<P2>>]) -> Self {
+        let faces = polys
+            .iter()
+            .zip(&body.faces)
+            .map(|(p, f)| FacePolys::new(p, &f.surf))
+            .collect();
+        Self::with(body, polys.iter().map(Vec::as_slice), faces)
+    }
+
+    /// [`Self::new`] with the polygons and their boxes made already ([`face_polygons_kept`]).
+    pub fn with_kept(body: &'a Body, kept: &'a [KeptPolygons]) -> Self {
+        let faces = kept
+            .iter()
+            .map(|k| FacePolys::with_boxes(&k.0, k.1.clone()))
+            .collect();
+        Self::with(body, kept.iter().map(|k| k.0.as_slice()), faces)
+    }
+
+    fn with(
+        body: &'a Body,
+        polys: impl Iterator<Item = &'a [Vec<P2>]>,
+        faces: Vec<FacePolys<'a>>,
+    ) -> Self {
         let boxes: Vec<Bbox> = (0..body.faces.len()).map(|fi| body.face_bbox(fi)).collect();
         let mut bbox = Bbox::empty();
         for b in &boxes {
@@ -674,7 +780,6 @@ impl<'a> Classifier<'a> {
             bbox.add(&v.p);
         }
         let starts = polys
-            .iter()
             .map(|ps| {
                 let mut uv = Bbox::empty();
                 ps.iter()
@@ -683,14 +788,9 @@ impl<'a> Classifier<'a> {
                 (!uv.is_empty()).then(|| (uv.center().x, uv.center().y))
             })
             .collect();
-        let polys = polys
-            .iter()
-            .zip(&body.faces)
-            .map(|(p, f)| FacePolys::new(p, &f.surf))
-            .collect();
         Classifier {
             body,
-            polys,
+            polys: faces,
             boxes,
             bbox,
             starts,

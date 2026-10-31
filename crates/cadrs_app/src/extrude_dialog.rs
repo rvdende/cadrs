@@ -39,13 +39,13 @@ use cadrs_sketch::units::Quantity;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
-    NumberFieldCommit, NumberFieldState, OptionRow, Select, SelectChange, SelectState,
-    SelectionList, SelectionListActivate, SelectionListClear, SelectionListRemove,
-    SelectionListState, TabStrip, TabStripSelect,
+    NumberFieldCancel, NumberFieldCommit, NumberFieldPreview, NumberFieldState, OptionRow, Select,
+    SelectChange, SelectState, SelectionList, SelectionListActivate, SelectionListClear,
+    SelectionListRemove, SelectionListState, TabStrip, TabStripSelect,
 };
 
 use crate::extrude::{ExtrudeField, ExtrudeSession, auto_scope, edit_scope, params, set_params};
-use crate::parts::PartCache;
+use crate::parts::{PartCache, PartOverride};
 use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
@@ -59,6 +59,8 @@ impl Plugin for ExtrudeDialogPlugin {
             .add_observer(on_select)
             .add_observer(on_checkbox)
             .add_observer(on_number)
+            .add_observer(on_number_preview)
+            .add_observer(on_number_cancel)
             .add_observer(on_button)
             .add_observer(on_list_remove)
             .add_observer(on_list_clear)
@@ -476,6 +478,7 @@ fn offset_row(
             NumberField::new(name.to_string(), label.to_string())
                 .text(o.expr.clone())
                 .label_width(82.0)
+                .variables()
                 .build(t),
         ))
         .entry::<Node>()
@@ -536,6 +539,7 @@ fn end_fields(
                     .text(end.depth_expr.clone())
                     .chevron()
                     .trailing_icon("ruler", "Measure a distance")
+                    .variables()
                     .build(t),
             ));
         }
@@ -601,6 +605,7 @@ pub(crate) fn inline_option<R: Component>(
                 NumberField::new(value_name.to_string(), "")
                     .text(text.to_string())
                     .label_width(0.0)
+                    .variables()
                     .build(t),
             ))
             .entry::<Node>()
@@ -723,6 +728,7 @@ fn extrude_dialog(
                                 NumberField::new("extrude-thickness1", "Thickness 1")
                                     .text(e.thin.thickness1_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ))
                             .entry::<Node>()
@@ -747,6 +753,7 @@ fn extrude_dialog(
                                 NumberField::new("extrude-thickness2", "Thickness 2")
                                     .text(e.thin.thickness2_expr.clone())
                                     .label_width(70.0)
+                                    .variables()
                                     .build(t),
                             ));
                         }
@@ -1260,40 +1267,135 @@ fn on_number(
         return;
     };
     let text = ev.text.trim().to_string();
-    // P3.10: the Draft angle, in degrees between 0 and 90.
-    if role == Role::DraftAngle {
-        let ok = vars
-            .eval(&units.0, &text, Quantity::Angle)
-            .ok()
-            .filter(|v| v.is_finite() && *v > 0.0 && *v < 90.0);
-        if let Ok(mut s) = q_state.get_mut(ev.entity) {
-            s.error = ok.is_none();
-            if ok.is_none() {
-                s.text = text.clone();
+    let Some(change) = number_change(role, &text, &units.0, &vars) else {
+        return;
+    };
+    if let Ok(mut s) = q_state.get_mut(ev.entity) {
+        s.error = change.is_err();
+        // Shown red until a good value is entered.
+        if change.is_err() {
+            s.text = text;
+        }
+    }
+    let Ok((label, f)) = change else {
+        commands.queue(end_preview);
+        return;
+    };
+    let enter = ev.enter;
+    commands.queue(move |world: &mut World| {
+        end_preview(world);
+        if let Some(mut e) = params(world) {
+            let before = e.clone();
+            f(&mut e);
+            if e != before {
+                set_params(world, e, label);
             }
         }
-        let Some(v) = ok else { return };
+        // Enter in a dialog field accepts the feature, as in Onshape.
+        if enter {
+            world.resource_mut::<InputFocus>().clear();
+            crate::extrude::accept_extrude(world);
+        }
+    });
+}
+
+/// The wheel stepping one of the extrude's values (issue #162): shown at once, as the arrow's
+/// drag shows a depth ([`PartOverride`], no undo step); the commit follows when the wheel rests
+/// ([`on_number`]).
+fn on_number_preview(
+    ev: On<NumberFieldPreview>,
+    q: Query<&Role>,
+    units: Res<crate::WorkspaceUnits>,
+    vars: Res<crate::variables_ui::ActiveVariables>,
+    mut commands: Commands,
+) {
+    let Ok(role) = q.get(ev.entity).copied() else {
+        return;
+    };
+    let Some(Ok((_, f))) = number_change(role, ev.text.trim(), &units.0, &vars) else {
+        return;
+    };
+    commands.queue(move |world: &mut World| {
+        if world
+            .resource::<crate::extrude::ArrowState>()
+            .drag
+            .is_some()
+        {
+            return;
+        }
+        let (Some(feature), Some(mut e)) = (
+            world.get_resource::<ExtrudeSession>().map(|s| s.feature),
+            params(world),
+        ) else {
+            return;
+        };
+        f(&mut e);
+        let want = Some((feature, e));
+        let mut o = world.resource_mut::<PartOverride>();
+        if o.extrude != want {
+            o.extrude = want;
+        }
+    });
+}
+
+/// Esc in one of the extrude's values: a wheel's preview of it goes.
+fn on_number_cancel(ev: On<NumberFieldCancel>, q: Query<(), With<Role>>, mut commands: Commands) {
+    if q.contains(ev.entity) {
+        commands.queue(end_preview);
+    }
+}
+
+/// Ends a wheel's preview ([`on_number_preview`]): the extrude shows its parameters again (not
+/// while the arrow is dragged: the preview is the drag's then).
+fn end_preview(world: &mut World) {
+    if world
+        .resource::<crate::extrude::ArrowState>()
+        .drag
+        .is_some()
+    {
+        return;
+    }
+    let mut o = world.resource_mut::<PartOverride>();
+    if o.extrude.is_some() {
+        o.extrude = None;
+    }
+}
+
+/// What `text` typed in the field `role` changes: the undo step's label and the change to the
+/// extrude, or `Err` if it isn't a value the field takes. `None`: not one of the extrude's
+/// values.
+fn number_change(
+    role: Role,
+    text: &str,
+    units: &cadrs_sketch::units::Units,
+    vars: &crate::variables_ui::ActiveVariables,
+) -> Option<Result<(&'static str, Change), ()>> {
+    let text = text.to_string();
+    // P3.10: the Draft angle, in degrees between 0 and 90.
+    if role == Role::DraftAngle {
+        let Some(v) = vars
+            .eval(units, &text, Quantity::Angle)
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0 && *v < 90.0)
+        else {
+            return Some(Err(()));
+        };
         let expr = if text.parse::<f64>().is_ok() {
-            units.0.with_unit(v, Quantity::Angle)
+            units.with_unit(v, Quantity::Angle)
         } else {
             text
         };
-        let enter = ev.enter;
-        change(&mut commands, "Draft angle", move |e| {
-            if let Some(d) = &mut e.draft {
-                d.angle = v;
-                d.expr = expr;
-            }
-        });
-        if enter {
-            commands.queue(|world: &mut World| {
-                world.resource_mut::<InputFocus>().clear();
-                crate::extrude::accept_extrude(world);
-            });
-        }
-        return;
+        return Some(Ok((
+            "Draft angle",
+            Box::new(move |e| {
+                if let Some(d) = &mut e.draft {
+                    d.angle = v;
+                    d.expr = expr;
+                }
+            }),
+        )));
     }
-    let parsed = vars.eval(&units.0, &text, Quantity::Length);
+    let parsed = vars.eval(units, &text, Quantity::Length);
     // Offsets and Thickness 2 may be zero; depths and Thickness 1 must be positive.
     let zero_ok = matches!(
         role,
@@ -1301,26 +1403,15 @@ fn on_number(
     );
     let v = match parsed {
         Ok(v) if v.is_finite() && (v > 0.0 || (zero_ok && v >= 0.0)) => v,
-        _ => {
-            // Shown red until a good value is entered.
-            if let Ok(mut s) = q_state.get_mut(ev.entity) {
-                s.text = text;
-                s.error = true;
-            }
-            return;
-        }
+        _ => return Some(Err(())),
     };
-    if let Ok(mut s) = q_state.get_mut(ev.entity) {
-        s.error = false;
-    }
     // A bare number gets its unit, as Onshape shows it ("30" → "30 mm").
     let expr = if text.parse::<f64>().is_ok() {
-        format!("{text} {}", units.0.length.symbol())
+        format!("{text} {}", units.length.symbol())
     } else {
         text
     };
-    let enter = ev.enter;
-    let (label, f): (&'static str, Change) = match role {
+    Some(Ok(match role {
         Role::Depth => (
             "Depth",
             Box::new(move |e| {
@@ -1378,22 +1469,8 @@ fn on_number(
                 e.thin.thickness2_expr = expr;
             }),
         ),
-        _ => return,
-    };
-    commands.queue(move |world: &mut World| {
-        if let Some(mut e) = params(world) {
-            let before = e.clone();
-            f(&mut e);
-            if e != before {
-                set_params(world, e, label);
-            }
-        }
-        // Enter in a dialog field accepts the feature, as in Onshape.
-        if enter {
-            world.resource_mut::<InputFocus>().clear();
-            crate::extrude::accept_extrude(world);
-        }
-    });
+        _ => return None,
+    }))
 }
 
 /// A change to an extrude's parameters, applied later.

@@ -872,7 +872,10 @@ fn take_pick_inner(world: &mut World, field: ExtrudeField, pick: Pick) -> Option
                 Pick::Feature(f) => world
                     .get_resource::<ActiveDocument>()
                     .and_then(|d| {
-                        cadrs_core::parts::plane_feature_ref(d.active_element()?.features(), f)
+                        cadrs_core::parts::plane_feature_ref(
+                            &d.active_element()?.part_features(),
+                            f,
+                        )
                     })
                     .map(DirectionRef::PlaneNormal),
                 _ => None,

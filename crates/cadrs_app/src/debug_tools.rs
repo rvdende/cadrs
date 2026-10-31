@@ -23,6 +23,9 @@
 //! - `CADRS_WRITE_TEST=1`: about every two seconds, how long a 700 KB `write_buffer` takes on
 //!   average (the UI's vertices are about that, written every frame). Milliseconds, not hundredths,
 //!   mean uploads are staged where the CPU writes slowly (`vendor/gpu-allocator/CADRS.md`).
+//! - `CADRS_REBUILD_TIMES=1`: each Part Studio rebuild the view asks for, as it ends: how long
+//!   from the request to its parts being taken (wall clock), how long the kernel took, how many
+//!   features it computed, and whether it was stopped for a newer one ([`rebuild_times`]).
 //! - `CADRS_SINGLE_THREADED=Update,PostUpdate,…`: runs those schedules (`First`, `PreUpdate`,
 //!   `Update`, `PostUpdate`, `Last`) on the main thread alone, so a profiler's samples of that
 //!   thread (`perf record -t <pid>`) hold all their systems, each under its own name.
@@ -80,6 +83,12 @@ impl Plugin for DebugToolsPlugin {
             }
         }
     }
+}
+
+/// `CADRS_REBUILD_TIMES` is set: the part cache logs every rebuild's times.
+pub fn rebuild_times() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("CADRS_REBUILD_TIMES").is_some())
 }
 
 /// `CADRS_SLOW_FRAMES` in ms, if set.

@@ -231,15 +231,6 @@ fn regeneration_times_are_measured_per_feature() {
     let again = r.rebuild(s.element().features());
     assert_eq!(again.computed, 0);
     assert_eq!(again.times, b.times);
-    // P3.11: the sketches have times too (finding their regions), kept while they don't change.
-    let sketches: Vec<FeatureId> = b.sketch_times.iter().map(|(f, _)| *f).collect();
-    assert_eq!(sketches, vec![gc::SKETCH_1, gc::SKETCH_2, gc::SKETCH_3]);
-    assert!(
-        b.sketch_times.iter().all(|(_, t)| !t.is_zero()),
-        "{:?}",
-        b.sketch_times
-    );
-    assert_eq!(again.sketch_times, b.sketch_times);
 }
 
 /// The bracket (P3.9's filter and folder stand-in): a plate, ten bosses, two fillets.

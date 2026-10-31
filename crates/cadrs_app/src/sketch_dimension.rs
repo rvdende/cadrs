@@ -34,8 +34,8 @@ use cadrs_sketch::units;
 use cadrs_sketch::{Dimension, DimensionId, DimensionKind, SketchEntity, SketchOp};
 use cadrs_ui::inline_edit::DOUBLE_CLICK_TIME;
 use cadrs_ui::{
-    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditNewVariable, DimEditVariable,
-    DimEditVariables, Theme,
+    DimEdit, DimEditBox, DimEditCancel, DimEditCommit, DimEditPreview, ListedVariable, NewVariable,
+    Theme, VariableList,
 };
 
 use crate::sketch::{ActiveSketchTool, PartStudioMode, SketchSession, SketchTool};
@@ -65,6 +65,7 @@ impl Plugin for SketchDimensionPlugin {
             )
             .add_systems(OnExit(PartStudioMode::Sketching), reset_dimension_tool)
             .add_observer(on_commit)
+            .add_observer(on_preview)
             .add_observer(on_dimension_menu)
             .add_observer(on_cancel)
             .add_observer(on_new_variable);
@@ -90,6 +91,10 @@ pub struct DimensionEditor {
     /// Dimensions whose editor opens next, one after the other as each is committed (a
     /// chamfer's two distances, S9.2). Esc drops them.
     pub next: std::collections::VecDeque<DimensionId>,
+    /// The wheel is stepping the open editor's value (issue #162): the undo stack's length before
+    /// its first step. The sketch follows each step at once, as one undo step however many
+    /// there are ([`on_preview`]); Enter keeps it, Esc takes it back ([`finish_preview`]).
+    pub preview: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -435,7 +440,7 @@ fn place(world: &mut World, mut d: Dimension) {
     let id = world_sketch(world).and_then(|s| {
         s.dimensions
             .iter()
-            .find(|(_, x)| x.kind == d.kind)
+            .find(|(_, x)| x.kind.same(&d.kind))
             .map(|(k, _)| k)
     });
     if let Some(id) = id
@@ -639,13 +644,16 @@ fn close_editor(world: &mut World, commit: bool) {
             .and_then(|c| c.get(1).copied())
             .and_then(|row| world.get::<Children>(row).and_then(|c| c.get(1).copied()))
             .and_then(|f| world.get::<bevy::text::EditableText>(f))
-            .map(|t| t.value().to_string());
+            .map(|t| value_text(&t.value().to_string()));
         if let Some(text) = text
             && let Ok(v) = value_for(world, open.id, &text)
         {
             set_value(world, open.id, v, &text);
+            finish_preview(world, true);
         }
     }
+    // Esc, or a value that can't be kept: the wheel's steps go back.
+    finish_preview(world, false);
     if let Ok(e) = world.get_entity_mut(open.entity) {
         e.despawn();
     }
@@ -677,6 +685,12 @@ pub fn edit_in_turn(world: &mut World, ids: &[DimensionId]) {
     world.resource_mut::<DimensionEditor>().next = rest.iter().copied().collect();
 }
 
+/// The editor's text as the value to use: "#var_2 mm" (a variable typed or picked in place of
+/// the number of "25 mm") without the unit left after it, which it couldn't take.
+fn value_text(text: &str) -> String {
+    units::without_unit_after_variable(text).unwrap_or_else(|| text.to_string())
+}
+
 /// The value typed for a dimension, or why it cannot be used.
 fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> {
     let d = world_sketch(world)
@@ -700,12 +714,15 @@ fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> 
             units::ParseError::UnknownVariable(n) => format!("There is no variable #{n}"),
             e => e.to_string(),
         })?;
-    if v <= 0.0 {
-        return Err("Enter a positive value".into());
-    }
-    if q == units::Quantity::Angle && v >= 180.0 {
-        return Err("Enter an angle less than 180°".into());
-    }
+    // The sketch's own rule (#96: a distance may be negative, the other side; an angle up to
+    // 360°, round the outside past 180°), its first letter up.
+    cadrs_sketch::ops::check_value(&d, v).map_err(|e| {
+        let mut c = e.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().chain(c).collect(),
+            None => e,
+        }
+    })?;
     Ok(v)
 }
 
@@ -725,11 +742,11 @@ fn below_sketch(world: &World, name: &str) -> bool {
 }
 
 /// The variables the value editor lists when `#` is typed, with their values.
-fn listed_variables(world: &World) -> Vec<DimEditVariable> {
+fn listed_variables(world: &World) -> Vec<ListedVariable> {
     let u = world.resource::<crate::WorkspaceUnits>().0;
     sketch_variables(world)
         .into_iter()
-        .map(|(name, v)| DimEditVariable {
+        .map(|(name, v)| ListedVariable {
             name,
             value: u.with_unit(v.value, v.quantity),
         })
@@ -738,7 +755,7 @@ fn listed_variables(world: &World) -> Vec<DimEditVariable> {
 
 /// New variable… in the value editor: a Variable holding the dimension's value, inserted above
 /// the sketch (so the sketch can use it), and its name put in the editor.
-fn on_new_variable(ev: On<DimEditNewVariable>, mut commands: Commands) {
+fn on_new_variable(ev: On<NewVariable>, mut commands: Commands) {
     let field = ev.entity;
     let wanted = ev.name.clone();
     commands.queue(move |world: &mut World| {
@@ -772,8 +789,8 @@ fn on_new_variable(ev: On<DimEditNewVariable>, mut commands: Commands) {
             return;
         }
         let listed = listed_variables(world);
-        if let Some(mut vars) = world.get_mut::<DimEditVariables>(open.entity) {
-            vars.0 = listed;
+        if let Some(mut list) = world.get_mut::<VariableList>(field) {
+            list.variables = listed;
         }
         cadrs_ui::complete_variable(world, field, &name);
     });
@@ -845,9 +862,11 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
         if editor_box(world, field) != Some(open.entity) {
             return;
         }
-        match value_for(world, open.id, &text) {
+        let typed = value_text(&text);
+        match value_for(world, open.id, &typed) {
             Ok(v) => {
-                set_value(world, open.id, v, &text);
+                set_value(world, open.id, v, &typed);
+                finish_preview(world, true);
                 close_editor(world, false);
                 open_next_editor(world);
             }
@@ -860,6 +879,50 @@ fn on_commit(ev: On<DimEditCommit>, mut commands: Commands) {
             }
         }
     });
+}
+
+/// The wheel stepped the open editor's value (issue #162): the sketch follows at once. The steps
+/// make one undo step ([`DimensionEditor::preview`]); a value it can't take is left for Enter
+/// to explain.
+fn on_preview(ev: On<DimEditPreview>, mut commands: Commands) {
+    let field = ev.entity;
+    let text = ev.value.clone();
+    commands.queue(move |world: &mut World| {
+        let Some(open) = world.resource::<DimensionEditor>().open else {
+            return;
+        };
+        if editor_box(world, field) != Some(open.entity) {
+            return;
+        }
+        let typed = value_text(&text);
+        let Ok(v) = value_for(world, open.id, &typed) else {
+            return;
+        };
+        let undo_len = world.resource::<ActiveDocument>().history.undo_len();
+        let mark = *world
+            .resource_mut::<DimensionEditor>()
+            .preview
+            .get_or_insert(undo_len);
+        set_value(world, open.id, v, &typed);
+        world
+            .resource_mut::<ActiveDocument>()
+            .squash_since(mark, "Edit dimension");
+    });
+}
+
+/// Ends the wheel's live steps of the open editor's value ([`on_preview`]): kept as their one
+/// undo step (with what Enter set after them), or taken back.
+fn finish_preview(world: &mut World, keep: bool) {
+    let Some(mark) = world.resource_mut::<DimensionEditor>().preview.take() else {
+        return;
+    };
+    let mut doc = world.resource_mut::<ActiveDocument>();
+    if keep {
+        doc.squash_since(mark, "Edit dimension");
+    } else {
+        while doc.history.undo_len() > mark && doc.undo().is_some() {}
+        doc.discard_since(mark);
+    }
 }
 
 fn on_cancel(ev: On<DimEditCancel>, mut commands: Commands) {
@@ -895,6 +958,8 @@ fn sync_dim_edit(
         .is_none_or(|s| !s.dimensions.contains_key(open.id));
     if gone {
         editor.open = None;
+        // (The wheel's steps stay, as the edit they are.)
+        editor.preview = None;
         commands.entity(open.entity).try_despawn();
         return;
     }
@@ -953,7 +1018,8 @@ mod tests {
                         a: cr,
                         b: cr,
                         flip_a: false,
-                        flip_b: false
+                        flip_b: false,
+                        ccw: None,
                     },
                     47.7291
                 ),
@@ -1038,7 +1104,7 @@ mod tests {
         let (app, _) = variables_app();
         assert_eq!(
             listed_variables(app.world()),
-            vec![DimEditVariable {
+            vec![ListedVariable {
                 name: "above".into(),
                 value: "10 mm".into(),
             }]
@@ -1050,6 +1116,9 @@ mod tests {
         let (app, dim) = variables_app();
         let w = app.world();
         assert_eq!(value_for(w, dim, "#above + 2 mm"), Ok(12.0));
+        // "25 mm" with the number replaced by a variable: the unit left after it goes.
+        assert_eq!(value_text("#above mm"), "#above");
+        assert_eq!(value_for(w, dim, &value_text("#above mm")), Ok(10.0));
         let below = value_for(w, dim, "#below").unwrap_err();
         assert!(below.contains("below this sketch"), "{below}");
         assert_eq!(
@@ -1089,5 +1158,58 @@ mod tests {
         assert_eq!(doc.history.undo_len(), steps + 1);
         doc.undo();
         assert_eq!(names(w), ["#above", "Sketch 1", "#below"]);
+    }
+
+    /// The wheel's steps in the value box move the sketch at once, as one undo step: Esc puts
+    /// the value (and the undo stack) back, Enter keeps one step (issue #162).
+    #[test]
+    fn wheel_steps_show_live_as_one_step() {
+        let (mut app, dim) = variables_app();
+        app.init_resource::<QuickDimFlow>()
+            .init_resource::<bevy::diagnostic::FrameCount>()
+            .init_resource::<InputFocus>()
+            .add_observer(on_preview)
+            .add_observer(on_commit)
+            .add_observer(on_cancel);
+        let w = app.world_mut();
+        let steps = w.resource::<ActiveDocument>().history.undo_len();
+        let value = |w: &World| world_sketch(w).unwrap().dimensions[dim].value;
+        // An open editor: its box, value row and field.
+        let open = |w: &mut World| {
+            let b = w.spawn_empty().id();
+            let row = w.spawn(ChildOf(b)).id();
+            let field = w.spawn(ChildOf(row)).id();
+            w.resource_mut::<DimensionEditor>().open = Some(OpenEdit { entity: b, id: dim });
+            field
+        };
+        let step = |w: &mut World, field: Entity, v: &str| {
+            w.trigger(DimEditPreview {
+                entity: field,
+                value: v.into(),
+            });
+            w.flush();
+        };
+        let field = open(w);
+        step(w, field, "17 mm");
+        assert_eq!(value(w), 17.0);
+        step(w, field, "18 mm");
+        assert_eq!(value(w), 18.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        w.trigger(DimEditCancel { entity: field });
+        w.flush();
+        assert_eq!(value(w), 16.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps);
+        // Enter keeps the stepped value, one step.
+        let field = open(w);
+        step(w, field, "17 mm");
+        step(w, field, "18 mm");
+        w.trigger(DimEditCommit {
+            entity: field,
+            value: "18 mm".into(),
+        });
+        w.flush();
+        assert_eq!(value(w), 18.0);
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        assert!(w.resource::<DimensionEditor>().preview.is_none());
     }
 }

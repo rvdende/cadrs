@@ -72,14 +72,14 @@ impl Rebuilder {
             let Some(p) = st.parts.iter_mut().find(|q| q.part.id == m.id) else {
                 continue;
             };
-            p.part.name = m.name;
-            p.part.kind = m.kind;
+            p.part_mut().name = m.name;
+            p.part_mut().kind = m.kind;
             if let Some(pal) = m.palette {
-                p.part.palette = pal;
+                p.part_mut().palette = pal;
             }
-            p.part.derived = m.derived;
+            p.part_mut().derived = m.derived;
             if !m.connectors.is_empty() {
-                Arc::make_mut(&mut p.part.solid).connectors = m.connectors;
+                Arc::make_mut(&mut p.part_mut().solid).connectors = m.connectors;
             }
         }
         Ok(out)

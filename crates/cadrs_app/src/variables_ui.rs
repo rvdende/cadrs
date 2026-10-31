@@ -1,21 +1,20 @@
 //! Variables in the app (P3F.4; `intro-to-parametric-cad.md` P5.2, P5.3, X2): the **Variable**
-//! feature's dialog, the **Variable table** panel on the right strip, and the variables every
-//! numeric field reads (`#name`).
+//! feature's dialog and the variables every numeric field reads (`#name`).
 //!
 //! - **Variable** (the toolbar's Variable button, or Edit on a Variable row): a feature dialog
 //!   with the Type (Length, Angle, Number, Any), Name, Value (an expression with units, which
 //!   may name the variables above it) and Description, and the value it evaluates to. The
 //!   feature is listed as "#name". Names: `variable-dialog`, `variable-type`,
 //!   `variable-name`, `variable-value`, `variable-description`, `variable-evaluated`.
-//! - **Variable table** (`variables-panel`): one row per variable of the Part Studio, in list
-//!   order: the name, the value as an editable expression (`variable-row-<name>`: typing
-//!   `50 mm` there is one undo step that updates every use) with what it evaluates to, and the
-//!   description. A variable in error (used before it is defined) shows red with why.
 //! - [`ActiveVariables`]: the active Part Studio's variables and their values, for the value
 //!   fields of every dialog (sketch dimensions, depths, counts, hole sizes, offsets…). A field
 //!   typed as an expression naming a variable keeps the expression (the feature's `*_expr`, a
 //!   sketch's dimension expressions); a variable used above its definition fails that feature
 //!   in the rebuild, with why ([`cadrs_core::variables::check`]).
+//! - Typing `#` in a dialog's value field lists the variables the feature being edited can use,
+//!   then New variable… ([`cadrs_ui::FieldVariables`]; the sketch's dimension editor lists them
+//!   too, `crate::sketch_dimension`). New variable… inserts a Variable holding the field's value
+//!   above the feature and puts its name in the field.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -30,8 +29,9 @@ use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, FeatureKind};
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 use cadrs_ui::ShortcutKey;
 use cadrs_ui::{
-    FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
-    NumberFieldCommit, NumberFieldState, TabStrip, TabStripSelect, Theme,
+    FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, FieldVariables,
+    ListedVariable, NewVariable, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState,
+    TabStrip, TabStripSelect, Theme,
 };
 
 use crate::parts::PartCache;
@@ -47,9 +47,9 @@ impl Plugin for VariablesPlugin {
                 Update,
                 (
                     sync_active_variables,
+                    sync_field_variables,
                     variable_keys,
                     sync_variable_dialog,
-                    sync_variable_table,
                 )
                     .chain()
                     .run_if(in_state(AppState::Document)),
@@ -63,8 +63,7 @@ impl Plugin for VariablesPlugin {
             .add_observer(on_cancel)
             .add_observer(on_type)
             .add_observer(on_field)
-            .add_observer(on_table_value)
-            .add_observer(on_open_studio)
+            .add_observer(on_field_new_variable)
             .add_observer(on_asm_variable_button);
     }
 }
@@ -160,6 +159,120 @@ pub fn defined_before(
         }
     }
     out
+}
+
+/// The Part Studio feature whose dialog (or sketch) is open: it can use the variables above it,
+/// and a new one for its fields goes there.
+pub fn edited_feature(world: &World) -> Option<(ElementId, FeatureId)> {
+    if let Some(s) = world.get_resource::<crate::sketch::SketchSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::extrude::ExtrudeSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::applied::AppliedSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::boolean::BooleanSession>() {
+        return Some((s.element, s.feature));
+    }
+    if let Some(s) = world.get_resource::<crate::sheetmetal_joint_ui::ModifyJointSession>() {
+        return Some((s.element, s.feature));
+    }
+    // An assembly's Variable is a mate feature: not above anything in a feature list.
+    if let Some(s) = world.get_resource::<VariableSession>()
+        && s.mate.is_none()
+    {
+        return Some((s.element, s.feature));
+    }
+    None
+}
+
+/// What `#` lists in the dialogs' value fields ([`FieldVariables`]): the variables the feature
+/// being edited can use, then New variable…; or, without one (an assembly's mates), the active
+/// tab's. Worked out again when the document, the units or the feature edited change.
+#[allow(clippy::type_complexity)]
+fn sync_field_variables(
+    world: &mut World,
+    mut seen: Local<
+        Option<(
+            Option<(ElementId, FeatureId)>,
+            Option<bevy::ecs::change_detection::Tick>,
+            Option<bevy::ecs::change_detection::Tick>,
+        )>,
+    >,
+) {
+    let edited = edited_feature(world);
+    let doc = world
+        .get_resource_ref::<ActiveDocument>()
+        .map(|d| d.last_changed());
+    let units = world
+        .get_resource_ref::<crate::WorkspaceUnits>()
+        .map(|u| u.last_changed());
+    let now = (edited, doc, units);
+    if seen.as_ref() == Some(&now) {
+        return;
+    }
+    *seen = Some(now);
+    let vars = match edited {
+        Some((element, feature)) => defined_before(world, element, feature),
+        None => world.resource::<ActiveVariables>().0.clone(),
+    };
+    let u = world.resource::<crate::WorkspaceUnits>().0;
+    let want = FieldVariables {
+        variables: vars
+            .into_iter()
+            .map(|(name, v)| ListedVariable {
+                name,
+                value: u.with_unit(v.value, v.quantity),
+            })
+            .collect(),
+        new_variable: edited.is_some(),
+    };
+    let mut have = world.resource_mut::<FieldVariables>();
+    if *have != want {
+        *have = want;
+    }
+}
+
+/// New variable… in a dialog's value field: a Variable holding the field's value, inserted above
+/// the feature being edited (so it can use it), and its name put in the field.
+fn on_field_new_variable(
+    ev: On<NewVariable>,
+    q_edit: Query<&NumberFieldEdit>,
+    mut commands: Commands,
+) {
+    let field = ev.entity;
+    let Ok(&NumberFieldEdit(root)) = q_edit.get(field) else {
+        return;
+    };
+    let wanted = ev.name.clone();
+    commands.queue(move |world: &mut World| {
+        let Some((element, feature)) = edited_feature(world) else {
+            return;
+        };
+        let text = world
+            .get::<NumberFieldState>(root)
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        let u = world.resource::<crate::WorkspaceUnits>().0;
+        let vars = defined_before(world, element, feature);
+        // The value the field holds, as a value of its own kind: "25 mm", "30 deg", "4".
+        let v = cadrs_sketch::units::eval_any(&text, u.length.mm(), &vars).unwrap_or(VarValue {
+            value: 0.0,
+            quantity: Quantity::Length,
+        });
+        let var_type = match v.quantity {
+            Quantity::Length => VariableType::Length,
+            Quantity::Angle => VariableType::Angle,
+            Quantity::Count => VariableType::Number,
+        };
+        let name = free_name(world, element, &wanted);
+        let var = VariableFeature::typed(var_type, &name, &u.with_unit(v.value, v.quantity));
+        if insert_variable_above(world, element, feature, var) {
+            cadrs_ui::complete_variable(world, field, &name);
+        }
+    });
 }
 
 /// Whether a Variable of a Part Studio below `feature` defines `name` (so a feature above it
@@ -961,6 +1074,7 @@ fn sync_variable_dialog(
                                 NumberField::new("variable-value", "Value")
                                     .text(v.expr.clone())
                                     .label_width(74.0)
+                                    .variables()
                                     .build(&t),
                             ));
                             b.spawn((
@@ -983,6 +1097,8 @@ fn sync_variable_dialog(
                                     .text(v.description.clone())
                                     .label_width(74.0)
                                     .build(&t),
+                                // Text: the wheel doesn't step it ("3 holes").
+                                cadrs_ui::dialog_fields::NoWheelStep,
                             ));
                         });
                     })
@@ -1054,352 +1170,142 @@ fn sync_variable_dialog(
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// The Variable table
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadrs_core::Document;
+    use cadrs_core::document::SketchFeature;
 
-/// The rows container of the Variables panel (spawned by the panel,
-/// [`crate::appearance`]); filled here.
-#[derive(Component)]
-pub struct VariableTableRows;
-
-/// What the rows show (they are rebuilt when it changes).
-#[derive(Component, Debug, Clone, PartialEq)]
-struct TableFor(
-    Vec<(FeatureId, String, String, String, String, Option<String>)>,
-    Vec<StudioRows>,
-    /// The tab (its empty message depends on its kind).
-    Option<ElementId>,
-);
-
-/// A Variable Studio's variables as the panel lists them.
-#[derive(Debug, Clone, PartialEq)]
-struct StudioRows {
-    studio: ElementId,
-    name: String,
-    vars: Vec<StudioVar>,
-}
-
-/// A Variable Studio's variable in the panel.
-#[derive(Debug, Clone, PartialEq)]
-struct StudioVar {
-    /// `#name`.
-    name: String,
-    /// Its value with its unit.
-    value: String,
-    description: String,
-    /// This tab's expressions name it.
-    used: bool,
-}
-
-/// A Variable Studio's header in the panel: clicking it opens the studio's tab.
-#[derive(Component, Debug, Clone, Copy)]
-struct OpenStudio(ElementId);
-
-/// A row's value field: the Variable it edits.
-#[derive(Component, Debug, Clone, Copy)]
-struct TableValue(FeatureId);
-
-#[allow(clippy::type_complexity)]
-fn sync_variable_table(
-    doc: Option<Res<ActiveDocument>>,
-    cache: Res<PartCache>,
-    theme: Res<Theme>,
-    units: Res<crate::WorkspaceUnits>,
-    q_rows: Query<(Entity, Option<&TableFor>), With<VariableTableRows>>,
-    mut commands: Commands,
-) {
-    let Some((container, built)) = q_rows.iter().next() else {
-        return;
-    };
-    let Some(doc) = doc else { return };
-    let el = doc.active_element();
-    let studio = el.is_some_and(|e| matches!(e.kind, ElementKind::PartStudio { .. }));
-    let asm_rows: Option<Vec<(FeatureId, String, String, String, String, Option<String>)>> = el
-        .and_then(|e| Some((e, e.assembly_model()?)))
-        .map(|(e, a)| {
-            let errs = cadrs_core::assembly::vars::check(&e.variable_base(), a, &units.0);
-            a.mates
-                .iter()
-                .filter_map(|f| match &f.kind {
-                    MateKind::Variable(v) => Some((
-                        FeatureId(f.id.0),
-                        format!("#{}", v.name),
-                        v.expr.clone(),
-                        v.display(&units.0),
-                        v.description.clone(),
-                        errs.iter()
-                            .find(|(id, _)| *id == f.id)
-                            .map(|(_, w)| w.clone())
-                            .or_else(|| f.suppressed.then(|| "Suppressed".to_string())),
-                    )),
-                    _ => None,
-                })
-                .collect()
-        });
-    let rows: Vec<(FeatureId, String, String, String, String, Option<String>)> = asm_rows
-        .unwrap_or_else(|| {
-            el.map(|e| {
-                let off = e.all_suppressed();
-                e.features()
-                    .iter()
-                    .filter_map(|f| match &f.kind {
-                        FeatureKind::Variable(v) => {
-                            Some((
-                                f.id,
-                                format!("#{}", v.name),
-                                v.expr.clone(),
-                                v.display(&units.0),
-                                v.description.clone(),
-                                cache.errors.get(&f.id).cloned().or_else(|| {
-                                    off.contains(&f.id).then(|| "Suppressed".to_string())
-                                }),
-                            ))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-        });
-    let asm = el.is_some_and(|e| e.assembly_model().is_some());
-    // The document's Variable Studios' variables this tab can name, by studio.
-    let mut studios: Vec<StudioRows> = Vec::new();
-    for v in el
-        .map(|e| e.studio_variables.as_slice())
-        .unwrap_or_default()
-    {
-        let at = match studios.iter().position(|s| s.studio == v.studio) {
-            Some(i) => i,
-            None => {
-                let name = doc
-                    .doc
-                    .element(v.studio)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_default();
-                studios.push(StudioRows {
-                    studio: v.studio,
-                    name,
-                    vars: Vec::new(),
-                });
-                studios.len() - 1
-            }
+    /// A Part Studio of `#above`, a feature with its dialog open (a Boolean's) and `#below`.
+    fn dialog_app() -> (App, ElementId, FeatureId) {
+        let var = |name: &str, expr: &str| {
+            Feature::new(
+                FeatureId::new(),
+                format!("#{name}"),
+                FeatureKind::Variable(VariableFeature::length(name, expr)),
+            )
         };
-        studios[at].vars.push(StudioVar {
-            name: format!("#{}", v.name),
-            value: cadrs_vars::display(v.value, v.kind, &units.0),
-            description: v.description.clone(),
-            used: v.used,
-        });
-    }
-    let want = TableFor(rows.clone(), studios.clone(), el.map(|e| e.id));
-    if built == Some(&want) {
-        return;
-    }
-    let t = theme.clone();
-    commands.entity(container).despawn_children().insert(want);
-    commands.entity(container).with_children(|p| {
-        for StudioRows { studio, name, vars } in &studios {
-            p.spawn((
-                OpenStudio(*studio),
-                cadrs_ui::Button::new(format!("variables-panel-open-{}", crate::linked::slug(name)))
-                    .label(name.clone())
-                    .icon("variables")
-                    .ghost()
-                    .small()
-                    .tooltip("A Variable Studio of this document: its variables can be used here as #name. Click to open it.")
-                    .build(&t),
-            ));
-            for v in vars {
-                let ellipsis = || (cadrs_ui::ellipsis::Ellipsis::default().with_tooltip(), cadrs_ui::ellipsis::Ellipsis::node());
-                p.spawn((
-                    Name::new(format!("variables-panel-studio-row-{}", v.name.trim_start_matches('#'))),
-                    Node {
-                        align_items: AlignItems::FlexStart,
-                        column_gap: Val::Px(6.0),
-                        padding: UiRect::new(Val::Px(8.0), Val::Px(6.0), Val::Px(3.0), Val::Px(3.0)),
-                        border: UiRect::bottom(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BorderColor::all(t.panel_border),
-                ))
-                .with_children(|r| {
-                    // A dot on the ones this tab uses.
-                    r.spawn((
-                        t.text(if v.used { "●" } else { "" }, 8.0, FontWeight::NORMAL, t.primary),
-                        Node { width: Val::Px(8.0), flex_shrink: 0.0, margin: UiRect::top(Val::Px(4.0)), ..default() },
-                    ))
-                    .insert_if(cadrs_ui::Tooltip::new("Used in this tab"), || v.used);
-                    r.spawn(Node { flex_direction: FlexDirection::Column, width: Val::Px(80.0), flex_shrink: 0.0, row_gap: Val::Px(2.0), ..default() }).with_children(|c| {
-                        c.spawn((t.text(v.name.clone(), 11.5, FontWeight::MEDIUM, if v.used { t.foreground } else { t.muted_foreground }), ellipsis()));
-                        if !v.description.is_empty() {
-                            c.spawn((t.text(v.description.clone(), 10.5, FontWeight::NORMAL, t.muted_foreground), ellipsis()));
-                        }
-                    });
-                    r.spawn((t.text(v.value.clone(), 11.5, FontWeight::NORMAL, t.foreground), ellipsis()));
-                });
-            }
-        }
-        if rows.is_empty() && !studios.is_empty() {
-            return;
-        }
-        if rows.is_empty() {
-            let msg = if studio {
-                "No variables in this Part Studio. Add one with the Variable feature (ƒx) in the toolbar."
-            } else if asm {
-                "No variables in this Assembly. Add one with Variable (ƒx) in the toolbar; mate offsets can use them."
-            } else {
-                "Variables are defined in Part Studios and Assemblies (the Variable feature)."
-            };
-            p.spawn((
-                Name::new("variables-panel-empty"),
-                t.text(msg, 11.5, FontWeight::NORMAL, t.muted_foreground),
-                Node { margin: UiRect::all(Val::Px(12.0)), width: Val::Px(214.0), ..default() },
-            ))
-            .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
-            return;
-        }
-        for (id, name, expr, value, description, error) in rows {
-            let row_name = format!("variable-row-{}", name.trim_start_matches('#'));
-            // P3F.5 (P3F.3–P3F.4 judge): the name in the foreground colour with its description
-            // under it; the value field, and what it evaluates to (or why it fails) under it.
-            p.spawn((
-                Name::new(format!("{row_name}-line")),
-                Node {
-                    align_items: AlignItems::FlexStart,
-                    column_gap: Val::Px(4.0),
-                    padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(3.0), Val::Px(3.0)),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..default()
-                },
-                BorderColor::all(t.panel_border),
-            ))
-            .with_children(|r| {
-                r.spawn(Node { flex_direction: FlexDirection::Column, width: Val::Px(76.0), flex_shrink: 0.0, padding: UiRect::top(Val::Px(5.0)), row_gap: Val::Px(2.0), ..default() }).with_children(|c| {
-                    c.spawn((Name::new(format!("{row_name}-name")), t.text(name.clone(), 11.5, FontWeight::MEDIUM, t.foreground)));
-                    if !description.is_empty() {
-                        c.spawn((
-                            Name::new(format!("{row_name}-description")),
-                            t.text(description.clone(), 10.5, FontWeight::NORMAL, t.muted_foreground),
-                            Node { width: Val::Px(76.0), ..default() },
-                        ))
-                        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
-                    }
-                });
-                r.spawn(Node { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..default() }).with_children(|c| {
-                    c.spawn((TableValue(id), NumberField::new(row_name.clone(), "").text(expr.clone()).label_width(0.0).build(&t)));
-                    let (line, color) = match &error {
-                        Some(why) => (why.clone(), t.feature_error),
-                        None if expr.trim() != value => (format!("= {value}"), t.muted_foreground),
-                        None => (String::new(), t.muted_foreground),
-                    };
-                    if !line.is_empty() {
-                        c.spawn((Name::new(format!("{row_name}-note")), t.text(line, 10.5, FontWeight::NORMAL, color), Node { width: Val::Px(136.0), ..default() }))
-                            .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
-                    }
-                });
-            });
-        }
-    });
-}
-
-/// A Variable Studio's header: opens its tab.
-fn on_open_studio(
-    a: On<bevy::ui_widgets::Activate>,
-    q: Query<&OpenStudio>,
-    doc: Option<ResMut<ActiveDocument>>,
-) {
-    if let (Ok(OpenStudio(id)), Some(mut doc)) = (q.get(a.entity), doc) {
-        doc.set_active(*id);
-    }
-}
-
-/// A value typed in the table: the Variable's new expression, one undo step.
-fn on_table_value(ev: On<NumberFieldCommit>, q: Query<&TableValue>, mut commands: Commands) {
-    let Ok(TableValue(id)) = q.get(ev.entity).copied() else {
-        return;
-    };
-    let text = ev.text.trim().to_string();
-    commands.queue(move |world: &mut World| {
-        let units = world.resource::<crate::WorkspaceUnits>().0;
-        let Some(doc) = world.get_resource::<ActiveDocument>() else {
-            return;
-        };
-        let Some(el) = doc.active_element() else {
-            return;
-        };
-        let element = el.id;
-        // An assembly's Variable (the row's id is its mate feature's).
-        if let Some(asm) = el.assembly_model() {
-            let m = MateId(id.0);
-            let Some(at) = asm.mates.iter().position(|f| f.id == m) else {
-                return;
-            };
-            let MateKind::Variable(v) = &asm.mates[at].kind else {
-                return;
-            };
-            let mut upto = asm.clone();
-            upto.mates.truncate(at);
-            let vars = cadrs_core::assembly::vars::defined(&el.variable_base(), &upto, &units);
-            let expr = match (text.parse::<f64>().is_ok(), v.var_type) {
-                (true, VariableType::Length) => format!("{text} {}", units.length.symbol()),
-                (true, VariableType::Angle) => format!("{text} deg"),
-                _ => text.clone(),
-            };
-            let mut next = VariableFeature { expr, ..v.clone() };
-            if next.evaluate(&units, &vars).is_err() {
-                let e = table_field(world, id);
-                if let Some(mut st) = e.and_then(|e| world.get_mut::<NumberFieldState>(e)) {
-                    st.text = text;
-                    st.error = true;
-                }
-                return;
-            }
-            if next != *v {
-                let label = format!("Edit #{}", v.name);
-                set_asm_variable(world, element, m, next, &label);
-            }
-            return;
-        }
-        let features = el.active_features();
-        let Some(at) = features.iter().position(|f| f.id == id) else {
-            return;
-        };
-        let FeatureKind::Variable(v) = &features[at].kind else {
-            return;
-        };
-        let vars = variables::defined_with(&el.variable_base(), &features[..at], &units);
-        let expr = match (text.parse::<f64>().is_ok(), v.var_type) {
-            (true, VariableType::Length) => format!("{text} {}", units.length.symbol()),
-            (true, VariableType::Angle) => format!("{text} deg"),
-            _ => text.clone(),
-        };
-        let mut next = VariableFeature { expr, ..v.clone() };
-        if next.evaluate(&units, &vars).is_err() {
-            // Red until a good value is typed.
-            let e = table_field(world, id);
-            if let Some(mut st) = e.and_then(|e| world.get_mut::<NumberFieldState>(e)) {
-                st.text = text;
-                st.error = true;
-            }
-            return;
-        }
-        if next == *v {
-            return;
-        }
-        let label = format!("Edit #{}", v.name);
-        if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
-            let _ = doc.execute(&SetFeature {
+        let mut doc = Document::new("Variables");
+        let element = doc.elements[0].id;
+        let feature = FeatureId::new();
+        let features = doc.elements[0].features_mut().unwrap();
+        features.push(var("above", "10 mm"));
+        features.push(Feature::new(
+            feature,
+            "Sketch 1",
+            FeatureKind::Sketch(SketchFeature {
+                plane: Some(cadrs_sketch::PlaneRef::Top),
+                disable_imprinting: true,
+                geometry: cadrs_sketch::Sketch::new(),
+            }),
+        ));
+        features.push(var("below", "4 mm"));
+        let mut app = App::new();
+        app.insert_resource(ActiveDocument::new(doc))
+            .init_resource::<crate::WorkspaceUnits>()
+            .init_resource::<ActiveVariables>()
+            .init_resource::<FieldVariables>()
+            .insert_resource(crate::boolean::BooleanSession {
                 element,
-                feature: id,
-                kind: FeatureKind::Variable(next),
-                label,
-            });
-        }
-    });
-}
+                feature,
+                is_new: false,
+                mark: 0,
+                before: None,
+                targets_active: false,
+                show_final: false,
+                offset_faces_active: false,
+            })
+            .add_observer(on_field_new_variable)
+            .add_systems(Update, sync_field_variables);
+        (app, element, feature)
+    }
 
-/// The table row field of a Variable.
-fn table_field(world: &mut World, id: FeatureId) -> Option<Entity> {
-    let mut q = world.query::<(Entity, &TableValue)>();
-    q.iter(world).find(|(_, t)| t.0 == id).map(|(e, _)| e)
+    fn names(w: &World, element: ElementId) -> Vec<String> {
+        let doc = w.resource::<ActiveDocument>();
+        let el = doc.doc.element(element).unwrap();
+        el.features().iter().map(|f| f.name.clone()).collect()
+    }
+
+    /// A value field of an open dialog, showing `text`.
+    fn field(w: &mut World, text: &str) -> Entity {
+        let root = w
+            .spawn(NumberFieldState {
+                text: text.into(),
+                error: false,
+            })
+            .id();
+        w.spawn((
+            NumberFieldEdit(root),
+            bevy::text::EditableText::new("#"),
+            cadrs_ui::VariableList::new(Vec::new()),
+        ))
+        .id()
+    }
+
+    #[test]
+    fn a_dialog_field_lists_the_variables_above_its_feature() {
+        let (mut app, ..) = dialog_app();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<FieldVariables>(),
+            FieldVariables {
+                variables: vec![ListedVariable {
+                    name: "above".into(),
+                    value: "10 mm".into(),
+                }],
+                new_variable: true,
+            }
+        );
+        // No feature being edited: no New variable… (nowhere to put it).
+        app.world_mut()
+            .remove_resource::<crate::boolean::BooleanSession>();
+        app.update();
+        assert!(!app.world().resource::<FieldVariables>().new_variable);
+    }
+
+    #[test]
+    fn a_new_variable_from_a_dialog_field_holds_its_value_above_the_feature() {
+        let (mut app, element, _) = dialog_app();
+        let w = app.world_mut();
+        let steps = w.resource::<ActiveDocument>().history.undo_len();
+        let depth = field(w, "25 mm");
+        w.trigger(NewVariable {
+            entity: depth,
+            name: "depth".into(),
+        });
+        w.flush();
+        assert_eq!(
+            names(w, element),
+            ["#above", "#depth", "Sketch 1", "#below"]
+        );
+        assert_eq!(w.resource::<ActiveDocument>().history.undo_len(), steps + 1);
+        // A count makes a Number; a taken name falls back to var_N.
+        let count = field(w, "4");
+        w.trigger(NewVariable {
+            entity: count,
+            name: "below".into(),
+        });
+        w.flush();
+        let doc = w.resource::<ActiveDocument>();
+        let vars: Vec<(String, VariableType, String)> = doc
+            .doc
+            .element(element)
+            .unwrap()
+            .features()
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FeatureKind::Variable(v) => Some((v.name.clone(), v.var_type, v.expr.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            vars,
+            [
+                ("above".into(), VariableType::Length, "10 mm".into()),
+                ("depth".into(), VariableType::Length, "25 mm".into()),
+                ("var_1".into(), VariableType::Number, "4".into()),
+                ("below".into(), VariableType::Length, "4 mm".into()),
+            ]
+        );
+    }
 }
