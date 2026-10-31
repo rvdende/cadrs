@@ -509,12 +509,17 @@ fn targets(world: &World, part: PartId) -> Vec<PartId> {
     }
 }
 
+// The preferences give Send to slicer the order of its list, which a browser doesn't have.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+#[allow(clippy::too_many_arguments)]
 fn on_part_context_menu(
     ev: On<ContextMenuRequested>,
     q: Query<&PartRow>,
     cache: Res<PartCache>,
     theme: Res<Theme>,
     doc: Option<Res<ActiveDocument>>,
+    prefs: Res<crate::preferences_ui::LocalPreferences>,
+    #[cfg(not(target_arch = "wasm32"))] mut found: Local<FoundSlicers>,
     mut commands: Commands,
 ) {
     let Ok(row) = q.get(ev.entity) else {
@@ -522,6 +527,8 @@ fn on_part_context_menu(
     };
     let name = cache.part_name(row.0).unwrap_or("part").to_string();
     let hidden = cache.is_hidden_part(row.0);
+    #[cfg(not(target_arch = "wasm32"))]
+    let last_slicer = prefs.0.last_slicer;
     // Add to folder ▸ a new folder or one there is (`crate::part_folders`).
     let el = doc.as_deref().and_then(|d| d.active_element());
     let mut into: Vec<MenuEntry> = vec![
@@ -584,8 +591,11 @@ fn on_part_context_menu(
     } else {
         menu
     };
+    let menu = menu.item(MenuItem::new("part-export", "Export…").icon("file-export"));
+    // Issue #176: Send to slicer ▸ the slicers installed here (not in a browser).
+    #[cfg(not(target_arch = "wasm32"))]
+    let menu = menu.item(slicer_item(&mut found, last_slicer));
     let menu = menu
-        .item(MenuItem::new("part-export", "Export…").icon("file-export"))
         .item(
             MenuItem::new("part-where-used", "Where used…")
                 .icon("tab-manager")
@@ -617,6 +627,54 @@ fn on_part_context_menu(
     commands
         .entity(anchor)
         .insert((PartMenuFor(row.0), DespawnOnExit(AppState::Document)));
+}
+
+/// The slicers installed here, looked for at most once a minute (a menu opening often shouldn't
+/// search the disk each time).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub(crate) struct FoundSlicers(Option<(web_time::Instant, Vec<cadrs_core::slicer::Slicer>)>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FoundSlicers {
+    fn get(&mut self) -> Vec<cadrs_core::slicer::Slicer> {
+        match &self.0 {
+            Some((at, list)) if at.elapsed().as_secs() < 60 => list.clone(),
+            _ => {
+                let list = cadrs_core::slicer::find();
+                self.0 = Some((web_time::Instant::now(), list.clone()));
+                list
+            }
+        }
+    }
+}
+
+/// Send to slicer ▸ each slicer installed here (`cadrs_core::slicer::find`), the last one used
+/// first; when none is found, says so (`CADRS_SLICER=<program>` adds one's own). An item's name
+/// carries the slicer's id and name.
+#[cfg(not(target_arch = "wasm32"))]
+fn slicer_item(found: &mut FoundSlicers, last: Option<u8>) -> MenuItem {
+    let mut found = found.get();
+    found.sort_by_key(|s| Some(s.id) != last);
+    let entries: Vec<cadrs_ui::MenuEntry> = if found.is_empty() {
+        vec![
+            MenuItem::new("part-send-slicer-none", "No slicer found")
+                .disabled(true)
+                .into(),
+        ]
+    } else {
+        found
+            .iter()
+            .map(|s| {
+                MenuItem::new(
+                    format!("part-send-slicer:{}:{}", s.id, s.name),
+                    s.name.clone(),
+                )
+                .into()
+            })
+            .collect()
+    };
+    MenuItem::new("part-send-slicer", "Send to slicer").submenu(entries)
 }
 
 fn on_part_menu_action(
@@ -736,6 +794,24 @@ fn on_part_menu_action(
             let parts = targets(world, part);
             crate::export_dialog::open_export_dialog(world, parts);
         }),
+        // Issue #176: the part (or the selected parts it is among) to a slicer.
+        #[cfg(not(target_arch = "wasm32"))]
+        item if item.starts_with("part-send-slicer:") => {
+            // "part-send-slicer:<id>:<name>": the slicer with that id (one's own: that name).
+            let mut rest = item["part-send-slicer:".len()..].splitn(2, ':');
+            let id: Option<u8> = rest.next().and_then(|i| i.parse().ok());
+            let name = rest.next().unwrap_or_default().to_string();
+            commands.queue(move |world: &mut World| {
+                let Some(slicer) = cadrs_core::slicer::find()
+                    .into_iter()
+                    .find(|s| Some(s.id) == id && s.name == name)
+                else {
+                    return;
+                };
+                let parts = targets(world, part);
+                crate::export_dialog::send_to_slicer(world, parts, slicer);
+            });
+        }
         "part-transparent" | "part-opaque" => {
             let on = ev.item == "part-transparent";
             commands.queue(move |world: &mut World| {
