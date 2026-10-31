@@ -405,9 +405,13 @@ pub fn pick(world: &mut World, kind: &mut FeatureKind, field: AppliedField, pick
                 Pick::SketchCurve(sketch, curve) => PathRef::SketchCurve { sketch, curve },
                 Pick::Feature(f) if is_sketch(&features, f) => PathRef::Sketch(f),
                 Pick::Feature(f)
-                    if features
-                        .iter()
-                        .any(|y| y.id == f && matches!(y.kind, FeatureKind::Helix(_))) =>
+                    if features.iter().any(|y| {
+                        y.id == f
+                            && matches!(
+                                y.kind,
+                                FeatureKind::Helix(_) | FeatureKind::ProjectCurve(_)
+                            )
+                    }) =>
                 {
                     PathRef::Curve(f)
                 }

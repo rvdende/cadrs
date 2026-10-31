@@ -15,7 +15,8 @@
 //! - An **edge** is named by the (sorted) names of the two faces it separates, plus an index
 //!   when several separate chains of edges lie between the same two faces (ordered by
 //!   position). Edges that continue each other between the same two faces (a sketch curve cut
-//!   into pieces) share one name.
+//!   into pieces) share one name. A surface's free edges (named by their one face, twice)
+//!   continue each other only where they meet smoothly: its sides are told apart.
 //! - A **vertex** is named by the three smallest names of the faces around it, plus an index.
 //!   Points where fewer than three faces meet (a circle's seam) are not vertices.
 //!
@@ -604,12 +605,18 @@ pub fn name_edges(faces: &[FaceName], edges: &[EdgeInfo], tol: f64) -> Vec<Optio
             c[i] = r;
             r
         }
+        // A surface's free edges continue each other only where they meet smoothly: its sides
+        // that meet at a corner are separate chains.
+        let free = pair.faces[0] == pair.faces[1];
         for a in 0..members.len() {
             for b in a + 1..members.len() {
                 let (ea, eb) = (&edges[members[a]], &edges[members[b]]);
-                let joined = [ea.start, ea.end]
-                    .iter()
-                    .any(|p| [eb.start, eb.end].iter().any(|q| (p - q).norm() < tol));
+                let ends = |e: &EdgeInfo| [(e.start, e.start_tangent), (e.end, e.end_tangent)];
+                let joined = ends(ea).iter().any(|(p, tp)| {
+                    ends(eb).iter().any(|(q, tq)| {
+                        (p - q).norm() < tol && (!free || tp.dot(tq).abs() > 1.0 - 1e-6)
+                    })
+                });
                 if joined {
                     let (ra, rb) = (root(&mut chain, a), root(&mut chain, b));
                     chain[ra.max(rb)] = ra.min(rb);

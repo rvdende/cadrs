@@ -568,6 +568,82 @@ pub enum PathCurve {
         /// One weight per pole, or empty for a polynomial curve.
         weights: Vec<f64>,
     },
+    /// A B-spline curve in space (a projected curve, say).
+    Bspline(Bspline3),
+}
+
+/// A clamped (rational) B-spline curve in space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bspline3 {
+    /// Its degree.
+    pub degree: usize,
+    /// Clamped knots: as many as the poles plus the degree plus one.
+    pub knots: Vec<f64>,
+    /// Control points.
+    pub poles: Vec<Point3<f64>>,
+    /// One weight per pole, or empty for a polynomial curve.
+    pub weights: Vec<f64>,
+}
+
+/// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet. See
+/// [`Kernel::sweep_curves`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveSweepSpec {
+    /// The profile: curves joined end to end into one open chain.
+    pub profile: Vec<PathCurve>,
+    /// The path: curves joined end to end.
+    pub path: Vec<PathCurve>,
+    /// How the profile turns as it goes.
+    pub frame: SweepFrame,
+    /// The caller's id for the sweep's face.
+    pub source: u64,
+}
+
+/// How a [`CurveSweepSpec`]'s profile turns along its path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SweepFrame {
+    /// It keeps its angle to the path (turning as little as it can about it).
+    Follow,
+    /// It keeps its orientation in space.
+    KeepOrientation,
+    /// It keeps its angle to these faces along the path (none: the faces along a path of
+    /// edges).
+    LockFaces(Vec<(BodyId, FaceId)>),
+}
+
+/// A Face blend (Onshape's, rolling ball): a blend between two faces that meet along an edge,
+/// the walls trimmed to it and joined with it into one sheet. See [`Kernel::face_blend`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaceBlendSpec {
+    /// The first wall's face.
+    pub side1: (BodyId, FaceId),
+    /// The second wall's face.
+    pub side2: (BodyId, FaceId),
+    /// The ball's size.
+    pub size: BlendSize,
+    /// The caller's id for the blend face.
+    pub source: u64,
+}
+
+/// How big a face blend's ball is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum BlendSize {
+    /// A constant radius (mm).
+    Radius(f64),
+    /// The radius whose contacts on the two faces lie this far apart (mm): a constant width.
+    Width(f64),
+}
+
+/// A Projected curve (Onshape's, Curve to face): curves projected along a direction onto faces.
+/// See [`Kernel::project_curve`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectCurveSpec {
+    /// The curves to project, joined end to end.
+    pub curves: Vec<PathCurve>,
+    /// The faces they land on.
+    pub faces: Vec<(BodyId, FaceId)>,
+    /// The way they are projected (a unit vector).
+    pub direction: Vector3<f64>,
 }
 
 /// How a sweep's profile turns as it follows the path (Onshape's profile control, PS19.6).
@@ -670,6 +746,53 @@ pub struct LoftSpec {
     pub source: u64,
 }
 
+/// A loft through curves (Onshape's loft of wire profiles, with guides): one sheet face
+/// through the profiles, bent to follow the guides. See [`Kernel::loft_curves`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveLoftSpec {
+    /// The profiles in order, at least two.
+    pub sections: Vec<CurveSection>,
+    /// Guide curves: each a chain of curves crossing every profile.
+    pub guides: Vec<Vec<PathCurve>>,
+    /// The condition at the first profile.
+    pub start: CurveLoftEnd,
+    /// The condition at the last profile.
+    pub end: CurveLoftEnd,
+    /// The caller's id for the loft's face (like a profile region's `source`).
+    pub source: u64,
+}
+
+/// A profile of a [`CurveLoftSpec`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CurveSection {
+    /// Curves joined end to end into one open chain.
+    Wire(Vec<PathCurve>),
+    /// A point: only the first or the last profile.
+    Point(Point3<f64>),
+}
+
+/// How a [`CurveLoftSpec`] leaves its first or arrives at its last profile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveLoftEnd {
+    /// `Default`, `NormalToProfile` (square to the profile's plane), `NormalDirection`, or
+    /// `MatchTangent` (`MatchCurvature` is taken as it) to [`CurveLoftEnd::faces`].
+    pub condition: LoftCondition,
+    /// Its magnitude (1 is the natural speed).
+    pub magnitude: f64,
+    /// The faces Match tangent continues: those along the profile.
+    pub faces: Vec<(BodyId, FaceId)>,
+}
+
+impl Default for CurveLoftEnd {
+    fn default() -> Self {
+        Self {
+            condition: LoftCondition::Default,
+            magnitude: 1.0,
+            faces: Vec::new(),
+        }
+    }
+}
+
 /// What splits a body (P3.7, PS18.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SplitTool {
@@ -684,6 +807,9 @@ pub enum SplitTool {
     },
     /// A surface body (a sheet).
     Body(BodyId),
+    /// Curves lying on the faces (a Split of faces only): each face is cut along the stretch of
+    /// them that runs across it.
+    Curves(Vec<PathCurve>),
 }
 
 /// A circle in space: its center, the unit normal of its plane and its radius.

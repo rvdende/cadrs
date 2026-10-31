@@ -55,6 +55,8 @@ pub fn type_label(kind: &FeatureKind) -> &'static str {
         FeatureKind::Derived(_) => "Derived",
         FeatureKind::Thicken(_) => "Thicken",
         FeatureKind::Helix(_) => "Helix",
+        FeatureKind::ProjectCurve(_) => "Projected curve",
+        FeatureKind::FaceBlend(_) => "Face blend",
         FeatureKind::Fill(_) => "Fill",
         FeatureKind::Thread(_) => "Thread",
         FeatureKind::Variable(_) => "Variable",

@@ -21,3 +21,6 @@ flate2.workspace = true
 base64.workspace = true
 uuid.workspace = true
 directories.workspace = true
+
+[dev-dependencies]
+nalgebra.workspace = true

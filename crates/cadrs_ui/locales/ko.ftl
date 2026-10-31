@@ -1627,6 +1627,7 @@ model-plane-type-fit = 맞춤
 model-plane-type-tangent = 접선
 model-sweep-keep-orientation = 프로파일 방향 유지
 model-sweep-lock-direction = 프로파일 방향 잠금
+model-sweep-lock-faces = 프로파일 면 잠금
 model-loft-normal-to-profile = 프로파일에 수직
 model-loft-tangent-to-profile = 프로파일에 접선
 model-loft-match-tangent = 접선 일치

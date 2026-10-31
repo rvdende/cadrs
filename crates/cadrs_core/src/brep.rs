@@ -1040,19 +1040,25 @@ pub fn solid_of(
         }
     }
 
-    // The other names of merged faces, each with the frame the face has under that name.
+    // The other names of merged faces, each with the frame the face has under that name (a
+    // face split since: each piece has them).
     for (alias, primary) in &names.aliases {
-        let Some(i) = out.faces.iter().position(|f| f.name == *primary) else {
-            continue;
+        let faces: Vec<usize> = match out.faces.iter().position(|f| f.name == *primary) {
+            Some(i) => vec![i],
+            None => (0..out.faces.len())
+                .filter(|&i| out.faces[i].name.split != 0 && out.faces[i].name.base() == *primary)
+                .collect(),
         };
-        let plane = out.faces[i]
-            .plane
-            .and_then(|_| frame_of(alias, kernel_planes[i]));
-        out.face_aliases.push(crate::solid::FaceAlias {
-            name: *alias,
-            face: *primary,
-            plane,
-        });
+        for i in faces {
+            let plane = out.faces[i]
+                .plane
+                .and_then(|_| frame_of(alias, kernel_planes[i]));
+            out.face_aliases.push(crate::solid::FaceAlias {
+                name: *alias,
+                face: out.faces[i].name,
+                plane,
+            });
+        }
     }
 
     // One edge per name where its pieces join up.

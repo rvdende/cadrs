@@ -130,6 +130,16 @@ pub fn path_segments(k: &NativeKernel, path: &[PathCurve]) -> Result<Vec<Seg>> {
                     rev: false,
                 });
             }
+            PathCurve::Bspline(b) => {
+                let n = crate::native::nurbs::NurbsCurve::from_bspline(b)?;
+                let (t0, t1) = n.range();
+                out.push(Seg {
+                    c: Curve::Nurbs(std::sync::Arc::new(n)),
+                    t0,
+                    t1,
+                    rev: false,
+                });
+            }
         }
     }
     Ok(out)

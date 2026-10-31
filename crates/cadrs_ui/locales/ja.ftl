@@ -1627,6 +1627,7 @@ model-plane-type-fit = フィット
 model-plane-type-tangent = 正接
 model-sweep-keep-orientation = プロファイルの向きを維持
 model-sweep-lock-direction = プロファイルの方向をロック
+model-sweep-lock-faces = プロファイルの面をロック
 model-loft-normal-to-profile = プロファイルに垂直
 model-loft-tangent-to-profile = プロファイルに正接
 model-loft-match-tangent = 正接を一致

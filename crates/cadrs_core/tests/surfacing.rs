@@ -293,7 +293,9 @@ fn a_helix_is_a_sweep_path() {
         }),
     );
     let b = st.build();
-    let g = b.curves.get(&helix).expect("the helix's curve");
+    let Some(cadrs_core::surfacing::CurveGeom::Helix(g)) = b.curves.get(&helix) else {
+        panic!("the helix's curve");
+    };
     let want = 3.0 * ((std::f64::consts::TAU * 10.0).powi(2) + 25.0).sqrt();
     assert!(close(g.length(), want, 1e-5), "{} vs {want}", g.length());
     assert!(close(g.at(1.0).0[2], 15.0, 1e-9));

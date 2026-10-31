@@ -498,6 +498,29 @@ pub trait Kernel {
     /// ```
     fn loft_with(&mut self, spec: &LoftSpec) -> Result<OpResult>;
 
+    /// A loft through curves (Onshape's loft of wire profiles, with guides): a sheet of one face,
+    /// `ProfileCurve { region: spec.source, curve }` for the `source` of each sketch curve of its
+    /// profiles and guides (else `unsourced_curve(0, 0)`), through the open
+    /// profiles and along the guides; its edges are the first and last profiles and the free
+    /// sides (none where the profiles meet in a point).
+    fn loft_curves(&mut self, spec: &CurveLoftSpec) -> Result<OpResult>;
+
+    /// Curves projected along a direction onto faces (Onshape's Projected curve, Curve to
+    /// face): one cubic B-spline per stretch that lands on the faces, within a hair of the true
+    /// projection.
+    fn project_curve(&self, spec: &ProjectCurveSpec) -> Result<Vec<Bspline3>>;
+
+    /// A face blend (Onshape's Face blend, rolling ball) between two faces that meet along an
+    /// edge: one sheet of the walls' bodies' faces (those that continue, trimmed to the blend:
+    /// `modified`) and the blend face (`ProfileCurve { region: spec.source, .. }`).
+    fn face_blend(&mut self, spec: &FaceBlendSpec) -> Result<OpResult>;
+
+    /// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet of
+    /// one face, `ProfileCurve { region: spec.source, curve }` (the profile's first sketch curve's
+    /// `source`, else `unsourced_curve(0, 0)`), its first edge the profile and its last the
+    /// profile where the path ends.
+    fn sweep_curves(&mut self, spec: &CurveSweepSpec) -> Result<OpResult>;
+
     /// An evolved solid (OCCT's `BRepOffsetAPI_MakeEvolved` in volume mode): the `profile`'s
     /// regions swept along the planar `spine`, held square to it, with the profile's x measured
     /// outwards from the spine in the spine's plane and its y up from that plane. The spine's
@@ -979,6 +1002,10 @@ pub trait Kernel {
 
     /// Sews surface bodies that meet along their edges into one solid, if they close it.
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
+
+    /// Sheets joined along their edges that coincide (within `tol`) into one sheet (Onshape's
+    /// Add of surfaces). Each face continues (`modified`) the input face it was.
+    fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult>;
 
     /// Forgets a body (for example when a rebuild cache evicts a feature's output). Unknown ids
     /// are ignored. Ids are never reused, so a released id stays unknown.
