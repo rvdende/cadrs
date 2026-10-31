@@ -1785,6 +1785,34 @@ pub(crate) fn open_failed(world: &mut World, id: DocumentId, e: &cadrs_core::Sto
     world.flush();
 }
 
+/// [`crate::QuickStart`]: the document of this user's modified last, or a new "Untitled
+/// document" when there is none, opened at once.
+pub(crate) fn quick_start(world: &mut World) {
+    let store = world.resource::<DocumentStore>().0.clone();
+    let user = world.resource::<UserProfile>().id.clone();
+    let (lib, _) = store.list();
+    let last = lib
+        .view(
+            Filter::OwnedByMe,
+            &user,
+            "",
+            SortKey::Modified,
+            SortDir::Descending,
+        )
+        .into_iter()
+        .next();
+    match last {
+        Some(e) => {
+            info!("quick start: \"{}\", modified last", e.name);
+            open_document(world, e.id);
+        }
+        None => {
+            info!("quick start: a new document");
+            create_document(world, "");
+        }
+    }
+}
+
 /// Creates a document with Part Studio 1 (no Assembly: a tab's + adds one) and opens it.
 fn create_document(world: &mut World, name: &str) {
     let name = match name.trim() {
@@ -2584,4 +2612,44 @@ fn open_purge_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEnt
         LandingDialog::Purge(entry.id),
         DespawnOnExit(AppState::Landing),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn world(dir: &std::path::Path) -> World {
+        let mut world = World::new();
+        world.insert_resource(DocumentStore(cadrs_core::Store::new(dir)));
+        world.insert_resource(AppClock::fixed(1_790_000_000));
+        world.insert_resource(UserProfile {
+            id: "user".into(),
+            display_name: "User".into(),
+        });
+        world.insert_resource(State::new(AppState::Landing));
+        world.insert_resource(NextState::<AppState>::default());
+        world
+    }
+
+    #[test]
+    fn quick_start_opens_the_document_modified_last_or_a_new_one() {
+        let dir = std::env::temp_dir().join(format!("cadrs-quick-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // No documents yet: a new one, stored, to draw in.
+        let mut w = world(&dir);
+        quick_start(&mut w);
+        assert_eq!(w.resource::<ActiveDocument>().doc.name, "Untitled document");
+        assert!(w.resource::<ActiveDocument>().meta.is_some());
+        // The document modified last is the one opened next time.
+        let store = w.resource::<DocumentStore>().0.clone();
+        for (name, t) in [("Older", 1_700_000_000), ("Newer", 1_795_000_000)] {
+            let doc = Document::with_part_studio(name);
+            store.create(&doc, &DocumentMeta::new("user", t)).unwrap();
+        }
+        let mut w = world(&dir);
+        quick_start(&mut w);
+        assert_eq!(w.resource::<ActiveDocument>().doc.name, "Newer");
+        assert_eq!(store.list().0.entries.len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

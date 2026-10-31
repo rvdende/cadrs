@@ -54,9 +54,11 @@ RUSTFLAGS= proa dev --open
 
 `export.sh` builds the release binary and renders it with `proa export`. It puts the browser
 build of cadrs in `app/`: the latest release's `cadrs-web.tar.gz`, or a local
-`tools/web/build.sh` output with `CADRS_WEB_DIR=target/web`; the page links to it when there is
-one. The download links
-point at the latest GitHub release at export time (set `CADRS_RELEASE=v0.1.5` to choose one);
+`tools/web/build.sh` output with `CADRS_WEB_DIR=target/web`. When there is one, the hero runs it
+across the page (`/app/?quick-start`: straight into a document), loaded at once on a wide screen
+and on request on a phone, behind a veil until it is clicked so the wheel scrolls the page.
+The download links point at the latest GitHub release at export time (set
+`CADRS_RELEASE=v0.1.5` to choose one);
 when the page loads, `RELEASE_SCRIPT` (`src/pages/home.rs`) points them at whatever release is
 latest now, so publishing, replacing or deleting a release needs no redeploy. `index.md` keeps
 the links from the export.

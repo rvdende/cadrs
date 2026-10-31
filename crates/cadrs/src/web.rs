@@ -5,6 +5,9 @@
 //! (`cadrs_core::rebuild`), and there is no MCP server and no update check (the page is
 //! deployed with the site, always the latest).
 //!
+//! `?quick-start` in the address opens the document modified last (or a new one) instead of the
+//! documents page, as the site's embed does.
+//!
 //! Its files are `cadrs_fs`'s, kept in the browser: the documents in [`DOCUMENTS`], the user's
 //! libraries in [`LIBRARIES`]. Exports go to [`DOWNLOADS`], and each file written there is
 //! handed to the browser as a download. Files to import come from the browser's file chooser,
@@ -71,5 +74,24 @@ pub fn run() -> AppExit {
         .insert_resource(cadrs_app::eda::libraries::UserLibraries::load(Some(
             PathBuf::from(LIBRARIES),
         )));
+    if quick_start() {
+        app.insert_resource(cadrs_app::QuickStart);
+    }
     app.add_plugins((CadrsUiPlugin, CadrsAppPlugin)).run()
+}
+
+/// `?quick-start` in the page's address (the site's embed): straight into a document
+/// ([`cadrs_app::QuickStart`]).
+fn quick_start() -> bool {
+    let get = |from: &js_sys::wasm_bindgen::JsValue, key: &str| {
+        js_sys::Reflect::get(from, &key.into()).ok()
+    };
+    let search = get(&js_sys::global().into(), "location")
+        .and_then(|l| get(&l, "search"))
+        .and_then(|s| s.as_string())
+        .unwrap_or_default();
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .any(|p| p == "quick-start" || p.starts_with("quick-start="))
 }

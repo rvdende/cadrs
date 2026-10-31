@@ -3,6 +3,9 @@
 //! `cadrs [--headless] [--scenario <name>] [--window-size WxH] [--out <dir>] [--data-dir <dir>]
 //! [[--open] <file.cadrs>]`
 //!
+//! `cadrs --quick-start` opens the document modified last (or a new Untitled document) instead of
+//! the documents page.
+//!
 //! `cadrs --list-documents [--data-dir <dir>] [--trash]` lists the stored documents with their ids.
 //!
 //! `cadrs --headless --jobs N (--scenarios a,b,... | --all)` renders many scenarios, N at a
@@ -63,6 +66,9 @@ cadrs: an Onshape-style CAD app.
 Usage:
   cadrs [--headless] [--scenario <name>] [--window-size WxH] [--out <dir>] [--data-dir <dir>] [--no-cursor]
       Runs the app (with --scenario, a scripted scenario; --headless needs one).
+  cadrs --quick-start [--data-dir <dir>]
+      Runs the app straight into the document modified last, or a new Untitled document when
+      there is none, instead of the documents page.
   cadrs [--data-dir <dir>] [--open] <file.cadrs>
       Runs the app with a native document (an export, or a document.ron) imported into the
       library and open.
@@ -179,6 +185,9 @@ fn main() -> AppExit {
             }
         };
     }
+    // `--quick-start`: into the document modified last (or a new one), not the documents page.
+    let quick_start = args.iter().any(|a| a == "--quick-start");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--quick-start").collect();
     let mut opts = match HarnessOptions::from_args(args) {
         Ok(o) => o,
         Err(e) => {
@@ -227,6 +236,9 @@ fn main() -> AppExit {
             return AppExit::from_code(2);
         }
         app.insert_resource(OpenAtStart(path.clone()));
+    }
+    if quick_start && scenario.is_none() {
+        app.insert_resource(cadrs_app::QuickStart);
     }
     if let Some(start) = scenario.as_ref().and_then(|s| s.start.clone()) {
         app.insert_resource(StartState(start));

@@ -175,6 +175,12 @@ pub struct StartState(pub String);
 #[derive(Resource, Debug, Clone)]
 pub struct OpenAtStart(pub std::path::PathBuf);
 
+/// Start in a document instead of on the documents page (`cadrs --quick-start`, the browser
+/// build's `?quick-start`, which the site's embed uses): the one modified last, or a new
+/// "Untitled document" when there is none, ready to draw in.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct QuickStart;
+
 /// Where documents are stored. `main` sets it from `--data-dir`, `CADRS_DATA_DIR`, the
 /// scenario's private data dir, or the platform default.
 #[derive(Resource, Debug, Clone)]
@@ -1016,6 +1022,7 @@ impl Plugin for CadrsAppPlugin {
                     flush_deleted,
                     set_document_loader,
                     open_at_start.after(apply_start_state),
+                    quick_start.after(open_at_start),
                 ),
             );
         #[cfg(not(target_arch = "wasm32"))]
@@ -1103,6 +1110,17 @@ fn open_at_start(world: &mut World) {
     if let Some(OpenAtStart(path)) = world.remove_resource::<OpenAtStart>() {
         native_document::import(world, &path);
     }
+}
+
+fn quick_start(world: &mut World) {
+    // A scenario's start, or a document opened by name, comes first.
+    if world.remove_resource::<QuickStart>().is_none()
+        || world.contains_resource::<StartState>()
+        || world.contains_resource::<ActiveDocument>()
+    {
+        return;
+    }
+    landing::quick_start(world);
 }
 
 fn apply_start_state(
