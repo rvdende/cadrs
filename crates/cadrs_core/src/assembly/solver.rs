@@ -54,15 +54,18 @@
 //!   frames coincide exactly (F₁ = G, or at the mate's driven position). So a pick never starts
 //!   Newton half a turn away, where the rotation rows have saddle points. Animation snaps with
 //!   the mate's other free DOF held where they are ([`SolveOptions::hold_free`]).
-//! - After converging, each mate is checked for a false solution (axes opposite: the rotation
-//!   rows also vanish for half turns). If one is found, its body is snapped and the solve runs
-//!   once more.
+//! - At a standstill (converged, or stalled), each mate is checked for a false solution (axes
+//!   opposite: the rotation rows also vanish for half turns). If one is found, its body is
+//!   snapped and the solve iterates again (a few times at most). An iteration that ran out of
+//!   steps while still getting closer goes on instead, with fresh damping; one that gets nowhere
+//!   without a false solution stops. So one solve does what pressing Solve again would.
 //! - **Limits** are inequalities handled by an active set: solve the equalities, then for each
 //!   limit that is violated, add a row holding the position at the nearest bound, and solve
 //!   again (a few rounds). So a drag past a slider's end stops at the end.
 //! - Mates between instances of one body (all ground, or one group) have no unknowns and are
 //!   skipped, as are **suppressed** mates.
-//! - It stops after [`MAX_ITERATIONS`] steps and reports whether it converged (|r|∞ < 10⁻⁸ mm).
+//! - It takes [`MAX_ITERATIONS`] steps a round, at most 15 rounds (fewer once a round gets
+//!   nowhere), then the limits' rounds, and reports whether it converged (|r|∞ < 10⁻⁸ mm).
 //!
 //! **Drag** ([`drag`], A16.4): points of instances are pulled toward targets (the pointer, or a
 //! triad handle's placement) within what the mates allow. Each step moves along the null space
@@ -94,6 +97,12 @@ pub const L: f64 = 10.0;
 /// Converged when every residual is below this (mm).
 pub const TOLERANCE: f64 = 1e-8;
 pub const MAX_ITERATIONS: usize = 60;
+
+/// Rounds of iterating (the first included) in [`solve`], and of them the ones that may start
+/// with a snap of false solutions: conflicting mates can leave a different mate half a turn out
+/// after each snap, and a solve runs every frame of an animation.
+const SOLVE_ROUNDS: usize = 15;
+const SNAP_ROUNDS: usize = 4;
 
 /// A mate's position to hold: a DOF at a value (mm or radians).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1098,15 +1107,33 @@ pub fn solve(
             iterations: 0,
         };
     }
-    let (_, _, mut its) = p.iterate(MAX_ITERATIONS);
-    // A false solution (axes opposite): snap that mate and try again, once.
-    let wrong = p.false_solutions();
-    if !wrong.is_empty() {
+    // Iterate; at a standstill (converged, or stalled) snap the mates left half a turn out (a
+    // false solution: axes opposite) and iterate again. An iteration that ran out of steps while
+    // still getting closer goes on instead: snapping mates whose axes haven't come round yet
+    // undid its progress, and pressing Solve again finished it (issue #135). Stops when a
+    // round gets nowhere with no false solution left, or after a few snaps (conflicting mates).
+    // (`iterate(0)` measures the residual without a step.)
+    let mut res = p.iterate(0).1;
+    let (mut its, mut snaps) = (0, 0);
+    for _ in 0..SOLVE_ROUNDS {
+        let (converged, now, more) = p.iterate(MAX_ITERATIONS);
+        let progressing = !converged && now < 0.99 * res;
+        res = now;
+        its += more;
+        if progressing {
+            continue;
+        }
+        let wrong = p.false_solutions();
+        if wrong.is_empty() || snaps == SNAP_ROUNDS {
+            break;
+        }
+        snaps += 1;
         for k in wrong {
             let at = p.snap_values(k, &opts.drives, true);
             p.snap(k, at);
         }
-        its += p.iterate(MAX_ITERATIONS).2;
+        // The next round's progress is measured from where the snaps left it.
+        res = p.iterate(0).1;
     }
     // Limits: an active set, a few rounds (it first finishes the equalities).
     let (ok, res, c) = p.solve_with_limits();

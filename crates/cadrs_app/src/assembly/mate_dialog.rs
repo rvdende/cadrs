@@ -543,8 +543,30 @@ fn run_solve(
         }
     };
     let mut sol = cadrs_core::assembly::solve(&model, &solids, &opts);
+    if !snap_only {
+        close_solve_toast(world);
+    }
     if !sol.converged {
         warn!("mate solve: residual {:e}", sol.residual);
+        // Solve and ✓ say so (issue #135: a solve that stopped short looked like a result).
+        if !snap_only {
+            let theme = world.resource::<cadrs_ui::Theme>().clone();
+            let mut commands = world.commands();
+            cadrs_ui::show_notification(
+                &mut commands,
+                &theme,
+                cadrs_ui::Notification::warning(format!(
+                    "The mates can't all be solved ({} mm off): check for mates that conflict",
+                    if sol.residual < 1e-3 {
+                        "under 0.001".to_string()
+                    } else {
+                        format!("{:.3}", sol.residual)
+                    }
+                ))
+                .name("mate-solve-toast"),
+            );
+            world.flush();
+        }
     }
     // A Tangent's first placement: the moving entity is also drawn toward the picked face, so
     // the contact lands on the face that was picked, not somewhere on its unbounded surface.
@@ -615,7 +637,21 @@ pub fn accept(world: &mut World) {
     }
 }
 
+/// Removes the warning of a solve that didn't converge (a later Solve's, or the dialog closing).
+fn close_solve_toast(world: &mut World) {
+    let mut q = world.query::<(Entity, &Name)>();
+    let old: Vec<Entity> = q
+        .iter(world)
+        .filter(|(_, n)| n.as_str() == "mate-solve-toast")
+        .map(|(e, _)| e)
+        .collect();
+    for e in old {
+        world.entity_mut(e).despawn();
+    }
+}
+
 pub fn cancel(world: &mut World) {
+    close_solve_toast(world);
     super::animate::stop(world);
     world.remove_resource::<MateSession>();
     let mut parts = world.resource_mut::<super::AssemblyParts>();
