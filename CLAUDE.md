@@ -17,7 +17,9 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`.
 - The app runs the kernel in a process of its own (`cadrs_core::rebuild::process`, so a
   kernel crash costs a rebuild, not the app); `CADRS_KERNEL=thread` keeps it in-process for
-  debugging. Kernel work besides rebuilds is a named `rebuild::task::Task`, not a closure.
+  debugging, `CADRS_KERNEL=server:<host:port>` (with `CADRS_KERNEL_TOKEN`) uses another
+  machine's `cadrs --kernel-server`. Kernel work besides rebuilds is a named
+  `rebuild::task::Task`, not a closure.
 - Windowed run from a shell with no display: prefix `WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000`.
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
 - Browser build: `tools/web/build.sh` → `target/web/` (WebAssembly, drawn with WebGPU; serve the

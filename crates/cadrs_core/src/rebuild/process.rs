@@ -1,5 +1,5 @@
-//! The kernel in a process of its own, so that a crash in OpenCASCADE (a segfault, which no
-//! `catch_unwind` stops) costs a rebuild, not the app.
+//! The kernel in a process of its own, so that a crash in it (a stack overflow or an abort,
+//! which no `catch_unwind` stops) costs a rebuild, not the app.
 //!
 //! **Off by default**: the jobs run on the kernel thread of this process ([`super::run`]), as
 //! tests and tools want. The app turns it on at start ([`use_process`]), and its executable
@@ -10,10 +10,11 @@
 //!   Every job of [`super::Job`] is one request and one reply; a closure ([`super::Job::Run`])
 //!   can't be sent, so kernel work other than rebuilds, exports and drawing views is a
 //!   [`super::task::Task`].
-//! - **The connection** is a TCP socket on the loopback interface: the app listens on a port
-//!   of its own, starts the kernel process with the port and a random token, and takes the one
-//!   connection that sends the token. (Not the process's stdout: OpenCASCADE writes messages to
-//!   stdout.) Messages are MessagePack with named fields (they carry document types, whose
+//! - **The connection** is a TCP socket on the loopback interface (or to a kernel server,
+//!   below): the app listens on a port of its own, starts the kernel process with the port and
+//!   a random token, and takes the one connection that sends the token. (Not the process's
+//!   stdout, which stays free for its messages.) Messages are MessagePack with named fields
+//!   (they carry document types, whose
 //!   optional fields are skipped when empty), each after its length.
 //! - **While it works** the kernel process reports progress (the "Rebuilding…" indicator), the
 //!   feature it is computing, and the files it adds to its blob cache (a board's skin), which
@@ -27,6 +28,17 @@
 //!   it, gives it a new key, so it is computed again. Other jobs that crash fail (no result).
 //! - **A page** (the browser build) starts no processes: its jobs run inline
 //!   (`super::inline`), and only the messages' encoding here is used.
+//! - **On another machine** (issue #146: a compute workstation for the others' rebuilds): there
+//!   `cadrs --kernel-server` runs [`serve`], which takes connections that send its token and
+//!   starts a kernel process of its own for each, relaying between the two. The app connects to
+//!   it instead of starting one ([`use_server`]); a crash closes the connection as before, and
+//!   the app connects again for a new kernel process. The connection is plain TCP with a token:
+//!   for a network one trusts (an authenticated client can still send it large messages). Both
+//!   ends must be the same cadrs release (the Hello carries it); the server says why it turns
+//!   a client away. The documents folder and the session snapshots stay the app's (a remote
+//!   kernel gets neither: a Derived feature from another document doesn't build there). A
+//!   machine that vanishes without closing the connection (asleep, off the network) isn't
+//!   noticed: the rebuild waits for it.
 
 // The app's side of the connection is unused in a page.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -125,6 +137,12 @@ impl Features {
 /// The app to the kernel process.
 #[derive(Serialize, Deserialize)]
 enum Request {
+    /// The app to a kernel server ([`serve`]), first: its token and cadrs version (both ends
+    /// must be the same release: the messages carry the document's types).
+    Hello {
+        token: String,
+        version: String,
+    },
     /// Where the documents (a Derived feature's sources in other documents) and the session
     /// snapshots are.
     Configure {
@@ -165,6 +183,9 @@ enum Request {
 pub(super) enum Event {
     /// The token it was started with (its first message).
     Hello(String),
+    /// A kernel server turned the app away, and why (the token, the version, its kernel
+    /// process).
+    Refused(String),
     /// [`super::progress`].
     Progress(usize, usize),
     /// The cache key of the feature it is computing now (`None`: none).
@@ -288,9 +309,14 @@ impl ReceivedSolids {
 
 /// How to start the kernel process.
 #[derive(Debug, Clone)]
-struct Launch {
-    program: PathBuf,
-    args: Vec<OsString>,
+enum Launch {
+    /// `program args… --kernel-process <port> <token>` on this machine.
+    Spawn {
+        program: PathBuf,
+        args: Vec<OsString>,
+    },
+    /// A kernel server ([`serve`]) on another machine: its address (`host:port`) and token.
+    Server { addr: String, token: String },
 }
 
 static LAUNCH: OnceLock<Launch> = OnceLock::new();
@@ -299,9 +325,18 @@ static LAUNCH: OnceLock<Launch> = OnceLock::new();
 /// <token>`, which must call [`main`]. Only before the first job (the worker starts with the
 /// first one); later calls change nothing.
 pub fn use_process(program: impl Into<PathBuf>, args: Vec<OsString>) {
-    let _ = LAUNCH.set(Launch {
+    let _ = LAUNCH.set(Launch::Spawn {
         program: program.into(),
         args,
+    });
+}
+
+/// Runs the kernel on a kernel server ([`serve`], `cadrs --kernel-server`) at `addr`
+/// (`host:port`) from now on, with its token. Only before the first job, as [`use_process`].
+pub fn use_server(addr: impl Into<String>, token: impl Into<String>) {
+    let _ = LAUNCH.set(Launch::Server {
+        addr: addr.into(),
+        token: token.into(),
     });
 }
 
@@ -348,7 +383,8 @@ pub fn set_snapshots(dir: Option<PathBuf>) {
 
 /// A running kernel process and the connection to it.
 struct Conn {
-    child: Child,
+    /// The process, when it runs here (not on a kernel server).
+    child: Option<Child>,
     reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
     /// The blobs it has.
@@ -359,51 +395,155 @@ struct Conn {
     solids: ReceivedSolids,
 }
 
-impl Conn {
-    fn start(launch: &Launch, poisoned: &[u64]) -> io::Result<Conn> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
-        let token = uuid::Uuid::new_v4().to_string();
-        let mut child = Command::new(&launch.program)
-            .args(&launch.args)
-            .arg(ARG)
-            .arg(port.to_string())
-            .arg(&token)
-            .stdin(Stdio::null())
-            .spawn()?;
-        listener.set_nonblocking(true)?;
-        let start = Instant::now();
-        let stream = loop {
-            match listener.accept() {
-                Ok((s, _)) => {
-                    s.set_nonblocking(false)?;
-                    // Only the process it started may connect (and something else that
-                    // connects can't hold it up).
-                    s.set_read_timeout(Some(Duration::from_secs(10)))?;
-                    let mut r = BufReader::new(s.try_clone()?);
-                    match read_msg::<Event>(&mut r) {
-                        Ok(Event::Hello(t)) if t == token => {
-                            s.set_read_timeout(None)?;
-                            break s;
-                        }
-                        _ => continue,
+/// Starts `program args… --kernel-process <port> <token>` here and takes its connection (the
+/// one that sends the token). `served`: for a kernel server, whose clients' folders aren't
+/// this machine's (see [`main`]).
+fn spawn_kernel(
+    program: &PathBuf,
+    args: &[OsString],
+    served: bool,
+) -> io::Result<(Child, TcpStream)> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    let token = uuid::Uuid::new_v4().to_string();
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .arg(ARG)
+        .arg(port.to_string())
+        .arg(&token)
+        .stdin(Stdio::null());
+    if served {
+        command.env(SERVED_ENV, "1");
+    }
+    let mut child = command.spawn()?;
+    listener.set_nonblocking(true)?;
+    let start = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((s, _)) => {
+                s.set_nonblocking(false)?;
+                // Only the process it started may connect (and something else that connects
+                // can't hold it up).
+                s.set_read_timeout(Some(Duration::from_secs(10)))?;
+                let mut r = BufReader::new(s.try_clone()?);
+                match read_msg::<Event>(&mut r) {
+                    Ok(Event::Hello(t)) if t == token => {
+                        s.set_read_timeout(None)?;
+                        return Ok((child, s));
                     }
+                    _ => continue,
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    if let Some(status) = child.try_wait()? {
-                        return Err(io::Error::other(format!(
-                            "the kernel process exited at start ({status})"
-                        )));
-                    }
-                    if start.elapsed() > CONNECT_TIMEOUT {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(io::Error::other("the kernel process didn't connect"));
-                    }
-                    std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if let Some(status) = child.try_wait()? {
+                    return Err(io::Error::other(format!(
+                        "the kernel process exited at start ({status})"
+                    )));
                 }
+                if start.elapsed() > CONNECT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(io::Error::other("the kernel process didn't connect"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Connects to a kernel server ([`serve`]) with its token and waits until its kernel process
+/// runs (the server answers Hello then, or closes the connection).
+fn connect_server(addr: &str, token: &str) -> io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    if token.is_empty() {
+        return Err(io::Error::other(
+            "no token for the kernel server (CADRS_KERNEL_TOKEN)",
+        ));
+    }
+    // Every address the name has ("localhost" is ::1 and 127.0.0.1): the first that answers.
+    let mut last = io::Error::other(format!("no address for {addr}"));
+    let mut stream = None;
+    for to in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&to, Duration::from_secs(10)) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(e) => last = e,
+        }
+    }
+    let s = stream.ok_or(last)?;
+    s.set_nodelay(true)?;
+    let hello = Request::Hello {
+        token: token.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    write_msg(&mut BufWriter::new(s.try_clone()?), &hello)?;
+    // Read unbuffered (nothing else comes before the first request) and capped: something
+    // other than a kernel server on that port (an SSH banner) mustn't make it allocate.
+    let not_server = || io::Error::other(format!("{addr} is not a kernel server"));
+    let body = read_capped(&s, MAX_HELLO, CONNECT_TIMEOUT).map_err(|e| match e.kind() {
+        io::ErrorKind::UnexpectedEof => {
+            io::Error::other(format!("the kernel server at {addr} closed the connection"))
+        }
+        io::ErrorKind::InvalidData => not_server(),
+        _ => e,
+    })?;
+    match decode::<Event>(&body).map_err(|_| not_server())? {
+        Event::Hello(_) => Ok(s),
+        Event::Refused(why) => Err(io::Error::other(format!(
+            "the kernel server at {addr} refused: {why}"
+        ))),
+        _ => Err(not_server()),
+    }
+}
+
+/// One message from `s` of at most `cap` bytes, all of it within `within` (a peer that trickles
+/// bytes can't hold the reader longer).
+fn read_capped(s: &TcpStream, cap: u64, within: Duration) -> io::Result<Vec<u8>> {
+    let deadline = Instant::now() + within;
+    let read_all = |buf: &mut [u8]| -> io::Result<()> {
+        let mut at = 0;
+        while at < buf.len() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "too slow"));
+            }
+            s.set_read_timeout(Some(left))?;
+            match (&*s).read(&mut buf[at..]) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(n) => at += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Err(e),
             }
+        }
+        Ok(())
+    };
+    let mut len = [0u8; 8];
+    read_all(&mut len)?;
+    let len = u64::from_le_bytes(len);
+    if len > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too long",
+        ));
+    }
+    let mut body = vec![0u8; len as usize];
+    read_all(&mut body)?;
+    s.set_read_timeout(None)?;
+    Ok(body)
+}
+
+impl Conn {
+    fn start(launch: &Launch, poisoned: &[u64]) -> io::Result<Conn> {
+        let (child, stream) = match launch {
+            Launch::Spawn { program, args } => {
+                let (child, stream) = spawn_kernel(program, args, false)?;
+                (Some(child), stream)
+            }
+            Launch::Server { addr, token } => (None, connect_server(addr, token)?),
         };
         stream.set_nodelay(true)?;
         let mut conn = Conn {
@@ -424,11 +564,13 @@ impl Conn {
     fn sync(&mut self) -> io::Result<()> {
         let (config, version) = CONFIG.lock().map(|c| c.clone()).unwrap_or_default();
         if version != self.config {
+            // A kernel server's machine has folders of its own: it gets neither.
+            let here = self.child.is_some();
             write_msg(
                 &mut self.writer,
                 &Request::Configure {
-                    documents: config.documents,
-                    snapshots: config.snapshots,
+                    documents: config.documents.filter(|_| here),
+                    snapshots: config.snapshots.filter(|_| here),
                 },
             )?;
             self.config = version;
@@ -449,16 +591,21 @@ impl Conn {
     }
 
     /// Ends the process (if it is still running) and says how it ended.
-    fn stop(mut self) -> String {
+    fn stop(self) -> String {
+        let Some(mut child) = self.child else {
+            // On a kernel server: closing the connection ends its process there.
+            let _ = self.writer.get_ref().shutdown(std::net::Shutdown::Both);
+            return "the kernel server's connection closed".into();
+        };
         // A crashed process has exited, or is about to.
         for _ in 0..50 {
-            if let Ok(Some(status)) = self.child.try_wait() {
+            if let Ok(Some(status)) = child.try_wait() {
                 return status.to_string();
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        let _ = self.child.kill();
-        self.child
+        let _ = child.kill();
+        child
             .wait()
             .map_or_else(|e| e.to_string(), |s| format!("stopped, {s}"))
     }
@@ -789,6 +936,116 @@ pub(super) fn run_remote(rx: mpsc::Receiver<Job>) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// A kernel server
+
+/// Set for a kernel process a kernel server started: it takes no folders from the app.
+const SERVED_ENV: &str = "CADRS_KERNEL_SERVED";
+
+/// The longest Hello read (a token and a version), so a stranger can't make either end allocate.
+const MAX_HELLO: u64 = 4096;
+
+/// Clients a kernel server serves at once (each has a kernel process).
+const MAX_CLIENTS: usize = 32;
+
+/// A kernel server (`cadrs --kernel-server`): on `listen` (`host:port`), each connection that
+/// sends `token` gets a kernel process of its own (`program args… --kernel-process …`), and the
+/// two are relayed until either ends. Returns only if it can't listen.
+pub fn serve(listen: &str, token: &str, program: PathBuf, args: Vec<OsString>) -> io::Result<()> {
+    let listener = TcpListener::bind(listen)?;
+    eprintln!("cadrs kernel server on {}", listener.local_addr()?);
+    serve_on(listener, token.to_string(), program, args);
+    Ok(())
+}
+
+fn serve_on(listener: TcpListener, token: String, program: PathBuf, args: Vec<OsString>) {
+    let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for client in listener.incoming() {
+        let Ok(client) = client else { continue };
+        if clients.load(Ordering::SeqCst) >= MAX_CLIENTS {
+            let _ = write_msg(&mut &client, &Event::Refused("too many clients".into()));
+            continue;
+        }
+        clients.fetch_add(1, Ordering::SeqCst);
+        let (token, program, args, count) = (
+            token.clone(),
+            program.clone(),
+            args.clone(),
+            clients.clone(),
+        );
+        let spawned = std::thread::Builder::new()
+            .name("cadrs-kernel-client".into())
+            .spawn(move || {
+                let peer = client
+                    .peer_addr()
+                    .map(|a| a.to_string())
+                    .unwrap_or_default();
+                match relay(client, &token, &program, &args) {
+                    Ok(()) => eprintln!("kernel server: {peer} done"),
+                    Err(e) => eprintln!("kernel server: {peer}: {e}"),
+                }
+                count.fetch_sub(1, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            clients.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// `a == b` in a time that doesn't depend on where they differ (a token).
+fn same_secret(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// One client: its Hello, a kernel process, then bytes both ways until either side closes.
+fn relay(client: TcpStream, token: &str, program: &PathBuf, args: &[OsString]) -> io::Result<()> {
+    client.set_nodelay(true)?;
+    let refuse = |why: &str| {
+        let _ = write_msg(&mut &client, &Event::Refused(why.to_string()));
+        io::Error::other(why.to_string())
+    };
+    let body = read_capped(&client, MAX_HELLO, Duration::from_secs(10))
+        .map_err(|e| io::Error::other(format!("not a cadrs client ({e})")))?;
+    match decode::<Request>(&body) {
+        Ok(Request::Hello { token: t, version }) if same_secret(&t, token) => {
+            let ours = env!("CARGO_PKG_VERSION");
+            if version != ours {
+                return Err(refuse(&format!(
+                    "it runs cadrs {ours} and this is cadrs {version}: use the same release"
+                )));
+            }
+        }
+        Ok(Request::Hello { .. }) => return Err(refuse("wrong token")),
+        _ => return Err(io::Error::other("not a cadrs client")),
+    }
+    let (mut child, kernel) =
+        spawn_kernel(program, args, true).map_err(|e| refuse(&format!("its kernel: {e}")))?;
+    let streams = (|| -> io::Result<_> {
+        write_msg(&mut &client, &Event::Hello(String::new()))?;
+        Ok((client.try_clone()?, kernel.try_clone()?))
+    })();
+    let (mut from_client, mut to_kernel) = match streams {
+        Ok(s) => s,
+        Err(e) => {
+            // No zombie: the process it started ends with the client it was for.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+    };
+    let up = std::thread::spawn(move || {
+        let _ = io::copy(&mut from_client, &mut to_kernel);
+        let _ = to_kernel.shutdown(std::net::Shutdown::Both);
+    });
+    let (mut from_kernel, mut to_client) = (kernel, client);
+    let _ = io::copy(&mut from_kernel, &mut to_client);
+    let _ = to_client.shutdown(std::net::Shutdown::Both);
+    let _ = up.join();
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // The kernel process's side
 
 /// Sends events to the app (set in the kernel process).
@@ -1006,6 +1263,12 @@ pub fn main(args: &[String]) -> i32 {
                 documents,
                 snapshots,
             } => {
+                // A kernel server's process: the paths are the client's, not this machine's.
+                let (documents, snapshots) = if std::env::var_os(SERVED_ENV).is_some() {
+                    (None, None)
+                } else {
+                    (documents, snapshots)
+                };
                 crate::derived::set_document_loader(
                     documents.map(|d| crate::derived::store_loader(crate::Store::new(d))),
                 );
@@ -1030,8 +1293,8 @@ pub fn main(args: &[String]) -> i32 {
                 }
                 continue;
             }
-            // (Read by the request reader as it comes.)
-            Request::Stop => continue,
+            // (Read by the request reader as it comes; a Hello is a kernel server's.)
+            Request::Stop | Request::Hello { .. } => continue,
             Request::Rebuild { features, persist } => {
                 let (reply, rx) = mpsc::channel();
                 let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1176,5 +1439,50 @@ mod tests {
             let back: Build = decode(&encode(&build).unwrap()).unwrap();
             assert!(back == build, "the build changed on the way");
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod server_tests {
+    use super::*;
+
+    #[test]
+    fn a_kernel_server_wants_its_token() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            serve_on(
+                listener,
+                "secret".into(),
+                PathBuf::from("/nonexistent/cadrs"),
+                Vec::new(),
+            )
+        });
+        let e = connect_server(&addr, "wrong").unwrap_err();
+        assert!(e.to_string().contains("refused: wrong token"), "{e}");
+        // The right token but no kernel to start: refused as well, saying why.
+        let e = connect_server(&addr, "secret").unwrap_err();
+        assert!(e.to_string().contains("refused: its kernel"), "{e}");
+        // No token at all is never sent.
+        assert!(connect_server(&addr, "").is_err());
+        // A stranger announcing a huge message is dropped without allocating it.
+        let mut s = TcpStream::connect(&addr).unwrap();
+        s.write_all(&u64::MAX.to_le_bytes()).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = [0u8; 1];
+        assert_eq!(s.read(&mut buf).unwrap_or(0), 0);
+        // And the app, pointed at something that isn't a kernel server, doesn't allocate what
+        // its first bytes announce either.
+        let other = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let other_addr = other.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = other.accept() {
+                let _ = s.write_all(b"SSH-2.0-OpenSSH_9.6\r\n");
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        });
+        let e = connect_server(&other_addr, "secret").unwrap_err();
+        assert!(e.to_string().contains("is not a kernel server"), "{e}");
+        assert!(same_secret("abc", "abc") && !same_secret("abc", "abd") && !same_secret("a", "ab"));
     }
 }
