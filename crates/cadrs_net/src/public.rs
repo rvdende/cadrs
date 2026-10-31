@@ -54,8 +54,10 @@ pub const TOPIC: [u8; 32] = *b"cadrs public documents, room 1\0\0";
 /// The room's name, before anyone has said anything.
 const ROOM_NAME: &str = "Public documents";
 
-/// Seed peers every cadrs starts from (their cadrs IDs), besides the user's own.
-pub const DEFAULT_SEEDS: &[&str] = &[];
+/// Seed peers every cadrs starts from (their cadrs IDs), besides the user's own: cadrs's own
+/// seed (`tools/seed`).
+pub const DEFAULT_SEEDS: &[&str] =
+    &["a560c0cfdeaac54cde945476f851486bbdf584adc280c4120616b06a6b10ba6f"];
 
 /// How often an owner says again what it publishes, for peers that missed it.
 const ANNOUNCE_EVERY: f64 = 600.0;
