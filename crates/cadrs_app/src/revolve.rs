@@ -26,6 +26,7 @@ use cadrs_core::document::{
 };
 use cadrs_core::{ElementKind, FeatureId, RegionRef, RevolveFeature};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::extrude::auto_scope;
 use crate::extrude::{ExtrudeField, ExtrudeSession};
@@ -555,12 +556,14 @@ pub fn axis_label(features: &[cadrs_core::Feature], a: &AxisRef) -> String {
         features
             .iter()
             .find(|f| f.id.0 == op)
-            .map_or("part".to_string(), |f| f.name.clone())
+            .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
     };
     match a {
-        AxisRef::SketchCurve { sketch, .. } => format!("Edge of {}", name(sketch.0)),
-        AxisRef::Edge(e) => format!("Edge of {}", name(e.edge.op())),
-        AxisRef::Face(f) => format!("Face of {}", name(f.face.op)),
+        AxisRef::SketchCurve { sketch, .. } => {
+            tr_with("common-edge-of", &[("name", &name(sketch.0))])
+        }
+        AxisRef::Edge(e) => tr_with("common-edge-of", &[("name", &name(e.edge.op()))]),
+        AxisRef::Face(f) => tr_with("common-face-of", &[("name", &name(f.face.op))]),
         AxisRef::Connector(c) => c.label(features),
     }
 }

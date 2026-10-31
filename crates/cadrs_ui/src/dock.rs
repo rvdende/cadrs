@@ -208,7 +208,7 @@ impl DockPanel {
                     let mut collapse = b.spawn((
                         crate::button::IconButton::new(collapse_name, "chevron-left")
                             .icon_size(18.0)
-                            .tooltip("Hide panel")
+                            .tooltip(crate::i18n::tr("ui-dock-hide-panel"))
                             .build(&theme),
                         DockCollapse(root),
                         ZIndex(5),

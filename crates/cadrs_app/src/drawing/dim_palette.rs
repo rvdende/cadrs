@@ -16,6 +16,7 @@ use cadrs_drawing::annotation::{
     Annotation, AnnotationId, AnnotationKind, DimFormat, Tolerance, ValueKind,
 };
 use cadrs_drawing::{DrawingOp, ViewId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, CheckboxChange, Select, SelectChange};
 
@@ -176,7 +177,7 @@ fn sync_palette(world: &mut World) {
                     .icon("settings")
                     .icon_size(14.0)
                     .outline()
-                    .tooltip("Dimension palette")
+                    .tooltip(tr("drawing-dim-palette"))
                     .build(&theme),
                 observe(|_: On<Activate>, mut ui: ResMut<AnnotationUi>| {
                     ui.palette_open = !ui.palette_open;
@@ -207,8 +208,13 @@ fn sync_palette(world: &mut World) {
     world.flush();
 }
 
-/// The tolerance types, in the dropdown's order.
-const TOLERANCES: [&str; 4] = ["None", "Symmetric", "Deviation", "Limits"];
+/// The tolerance types' catalog keys, in the dropdown's order.
+const TOLERANCES: [&str; 4] = [
+    "common-none",
+    "drawing-dim-tolerance-symmetric",
+    "drawing-dim-tolerance-deviation",
+    "drawing-dim-tolerance-limits",
+];
 
 /// The precision choices: the drawing's, then 0–4 decimals.
 const PRECISIONS: [&str; 6] = ["Default", "0", "0.1", "0.12", "0.123", "0.1234"];
@@ -292,22 +298,30 @@ fn palette_panel(
         ),
     ))
     .with_children(|p| {
-        p.spawn(t.text("Dimension", t.font_base, FontWeight::BOLD, t.foreground));
-        let e = row(p, "dim-palette-prefix", "Prefix");
+        p.spawn((
+            t.text(
+                tr("drawing-tool-dimension"),
+                t.font_base,
+                FontWeight::BOLD,
+                t.foreground,
+            ),
+            Translated("drawing-tool-dimension"),
+        ));
+        let e = row(p, "dim-palette-prefix", tr("drawing-dim-prefix").as_str());
         p.commands().entity(e).with_child(
             TextInput::new("dim-palette-prefix")
                 .value(f.prefix.clone())
                 .width(Val::Px(150.0))
                 .build(t),
         );
-        let e = row(p, "dim-palette-suffix", "Suffix");
+        let e = row(p, "dim-palette-suffix", tr("drawing-dim-suffix").as_str());
         p.commands().entity(e).with_child(
             TextInput::new("dim-palette-suffix")
                 .value(f.suffix.clone())
                 .width(Val::Px(150.0))
                 .build(t),
         );
-        let e = row(p, "dim-palette-symbols", "Symbols");
+        let e = row(p, "dim-palette-symbols", tr("drawing-dim-symbols").as_str());
         p.commands().entity(e).with_children(|r| {
             for (name, sym, tip) in SYMBOLS {
                 r.spawn((
@@ -323,7 +337,7 @@ fn palette_panel(
                     },
                     BorderColor::all(t.input_border),
                     BackgroundColor(t.background),
-                    cadrs_ui::Tooltip::new(tip),
+                    cadrs_ui::Tooltip::new(tr(tip)),
                     observe(move |_: On<PointerClick>, mut commands: Commands| {
                         commands.queue(move |w: &mut World| insert_symbol(w, sym));
                     }),
@@ -331,23 +345,24 @@ fn palette_panel(
                 .with_children(|b| symbol_glyph(b, t, sym));
             }
         });
-        let e = row(p, "dim-palette-tolerance", "Tolerance");
+        let e = row(
+            p,
+            "dim-palette-tolerance",
+            tr("drawing-gdt-tolerance").as_str(),
+        );
         let mut sel = Select::new("dim-palette-tolerance").width(Val::Px(150.0));
         for o in TOLERANCES {
-            sel = sel.option(o, true);
+            sel = sel.option(tr(o), true);
         }
         p.commands()
             .entity(e)
             .with_child(sel.selected(tolerance_index(&f.tolerance)).build(t));
-        let e = row(
-            p,
-            "dim-palette-upper",
-            if matches!(f.tolerance, Tolerance::Symmetric(_)) {
-                "±"
-            } else {
-                "Upper"
-            },
-        );
+        let upper_label = if matches!(f.tolerance, Tolerance::Symmetric(_)) {
+            "±".to_string()
+        } else {
+            tr("drawing-dim-upper")
+        };
+        let e = row(p, "dim-palette-upper", upper_label.as_str());
         p.commands().entity(e).with_child(
             TextInput::new("dim-palette-upper")
                 .value(
@@ -359,7 +374,7 @@ fn palette_panel(
                 .width(Val::Px(150.0))
                 .build(t),
         );
-        let e = row(p, "dim-palette-lower", "Lower");
+        let e = row(p, "dim-palette-lower", tr("drawing-dim-lower").as_str());
         p.commands().entity(e).with_child(
             TextInput::new("dim-palette-lower")
                 .value(
@@ -371,10 +386,22 @@ fn palette_panel(
                 .width(Val::Px(150.0))
                 .build(t),
         );
-        let e = row(p, "dim-palette-precision", "Precision");
+        let e = row(
+            p,
+            "dim-palette-precision",
+            tr("drawing-dim-precision").as_str(),
+        );
         let mut sel = Select::new("dim-palette-precision").width(Val::Px(150.0));
         for o in PRECISIONS {
-            sel = sel.option(o, true);
+            // (The first, "Default", is a word; the others are numbers.)
+            sel = sel.option(
+                if o == "Default" {
+                    tr("drawing-dim-precision-default")
+                } else {
+                    o.to_string()
+                },
+                true,
+            );
         }
         p.commands().entity(e).with_child(
             sel.selected(f.precision.map_or(0, |d| d as usize + 1))
@@ -384,7 +411,10 @@ fn palette_panel(
             let dual = f.dual.unwrap_or(style.show_dual);
             p.spawn(
                 Checkbox::new("dim-palette-dual")
-                    .label(format!("Dual units ({})", style.dual_units.symbol()))
+                    .label(tr_with(
+                        "drawing-dim-dual-units",
+                        &[("unit", style.dual_units.symbol())],
+                    ))
                     .checked(dual)
                     .build(t),
             );
@@ -392,14 +422,14 @@ fn palette_panel(
     });
 }
 
-/// The palette's symbol buttons: (name, symbol, tooltip).
+/// The palette's symbol buttons: (name, symbol, its tooltip's catalog key).
 const SYMBOLS: [(&str, char, &str); 6] = [
-    ("diameter", 'Ø', "Diameter"),
-    ("plus-minus", '±', "Plus/minus"),
-    ("degree", '°', "Degree"),
-    ("counterbore", '⌴', "Counterbore"),
-    ("countersink", '⌵', "Countersink"),
-    ("depth", '↧', "Depth"),
+    ("diameter", 'Ø', "drawing-symbol-diameter"),
+    ("plus-minus", '±', "drawing-symbol-plus-minus"),
+    ("degree", '°', "drawing-symbol-degree"),
+    ("counterbore", '⌴', "drawing-symbol-counterbore"),
+    ("countersink", '⌵', "drawing-symbol-countersink"),
+    ("depth", '↧', "drawing-symbol-depth"),
 ];
 
 /// A symbol on a button: Inter's glyph, or (for ⌴ ⌵ ↧, which Inter lacks) small UI boxes.
@@ -733,7 +763,13 @@ pub fn open_callout_dialog(world: &mut World, view: ViewId, id: AnnotationId) {
             ))
             .with_children(|h| {
                 h.spawn((
-                    t.text("Hole callout", t.font_base, FontWeight::BOLD, t.foreground),
+                    t.text(
+                        tr("drawing-tool-hole-callout"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("drawing-tool-hole-callout"),
                     Node {
                         flex_grow: 1.0,
                         ..default()
@@ -755,7 +791,7 @@ pub fn open_callout_dialog(world: &mut World, view: ViewId, id: AnnotationId) {
                     cadrs_ui::Button::new("hole-callout-ok")
                         .icon("check-bold")
                         .icon_size(14.0)
-                        .tooltip("Accept (Enter)")
+                        .tooltip(tr("drawing-accept-enter"))
                         .build(&t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_callout_dialog);
@@ -777,7 +813,7 @@ pub fn open_callout_dialog(world: &mut World, view: ViewId, id: AnnotationId) {
                         .icon("x-bold")
                         .icon_size(14.0)
                         .ghost()
-                        .tooltip("Cancel")
+                        .tooltip(tr("common-cancel"))
                         .build(&t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_callout_dialog);
@@ -792,7 +828,15 @@ pub fn open_callout_dialog(world: &mut World, view: ViewId, id: AnnotationId) {
                 ..default()
             })
             .with_children(|r| {
-                r.spawn(t.text("Prefix", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                r.spawn((
+                    t.text(
+                        tr("drawing-dim-prefix"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("drawing-dim-prefix"),
+                ));
                 r.spawn(
                     TextInput::new("hole-callout-prefix")
                         .value(prefix)

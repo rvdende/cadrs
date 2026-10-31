@@ -24,6 +24,7 @@ use cadrs_core::assembly::mate::{MateFeature, MateId, MateKind, next_name};
 use cadrs_core::assembly::replicate::{self, Replicate, SetReplicate};
 use cadrs_core::assembly::{Instance, InstanceId};
 use cadrs_ui::dialog_fields::OptionRow;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, SelectionList, SelectionListActivate,
@@ -488,8 +489,8 @@ fn instance_label(world: &World, i: InstanceId) -> String {
     world
         .resource::<PartCache>()
         .part_name(super::occurrence_part(i))
-        .unwrap_or("instance")
-        .to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| tr("asm-instance"))
 }
 
 /// Whether a part of the view is a previewed copy.
@@ -553,8 +554,8 @@ fn sync_dialog(
         s.seed_mate
             .and_then(|m| model.as_ref()?.mate(m).map(|f| f.name.clone())),
     ) {
-        (Some(_), Some(n)) => format!("Mate: {n}"),
-        (Some(_), None) => "The instance has no mate to copy".to_string(),
+        (Some(_), Some(n)) => tr_with("asm-replicate-seed-mate", &[("name", &n)]),
+        (Some(_), None) => tr("asm-replicate-no-mate"),
         _ => String::new(),
     };
     let target_owner = s
@@ -562,16 +563,22 @@ fn sync_dialog(
         .zip(s.seed_mate)
         .and_then(|(a, m)| other_connector(model.as_ref()?, a, m))
         .map(|c| instance_label(world, c.instance))
-        .unwrap_or_else(|| "part".into());
+        .unwrap_or_else(|| tr("asm-part-fallback"));
     // Each place by its number among all the matching places (stable as picks come and go).
     let target_items: Vec<String> = s
         .targets
         .iter()
         .enumerate()
         .map(|(k, c)| {
-            format!(
-                "Hole {} on {target_owner}",
-                s.places.iter().position(|p| p == c).unwrap_or(k) + 1
+            tr_with(
+                "asm-replicate-hole-on",
+                &[
+                    (
+                        "number",
+                        &(s.places.iter().position(|p| p == c).unwrap_or(k) + 1).to_string(),
+                    ),
+                    ("part", &target_owner),
+                ],
             )
         })
         .collect();
@@ -659,7 +666,7 @@ fn sync_dialog(
                 .body(move |b| {
                     b.spawn(
                         SelectionList::new("replicate-seed")
-                            .placeholder("Instance to replicate")
+                            .placeholder(tr("asm-replicate-instance-placeholder"))
                             .items(seed_items)
                             .active(field == Field::Seed)
                             .build(&tb),
@@ -686,13 +693,13 @@ fn sync_dialog(
                     }
                     b.spawn(
                         SelectionList::new("replicate-targets")
-                            .placeholder("Select matching holes")
+                            .placeholder(tr("asm-replicate-holes-placeholder"))
                             .items(target_items)
                             .active(field == Field::Targets)
                             .build(&tb),
                     );
                     b.spawn(
-                        OptionRow::new("replicate-all-matching", "All matching on the part")
+                        OptionRow::new("replicate-all-matching", tr("asm-replicate-all-matching"))
                             .checked(all)
                             .build(&tb),
                     );
@@ -705,9 +712,12 @@ fn sync_dialog(
 
 /// A Replicate's copied instances for the feature list's tooltip ("6 instances").
 pub fn describe(r: &Replicate) -> String {
-    format!(
-        "{} instance{}",
-        r.instances.len(),
-        if r.instances.len() == 1 { "" } else { "s" }
-    )
+    if r.instances.len() == 1 {
+        tr("asm-instance-count-one")
+    } else {
+        tr_with(
+            "asm-instance-count",
+            &[("count", &r.instances.len().to_string())],
+        )
+    }
 }

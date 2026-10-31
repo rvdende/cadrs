@@ -35,6 +35,7 @@ use bevy::text::FontWeight;
 use cadrs_core::PartId;
 use cadrs_sketch::units::Units;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogCancel, SelectableText, SelectableValue, SelectionList, SelectionListRemove,
@@ -732,7 +733,9 @@ fn axis_row(
     });
 }
 
-fn heading(p: &mut ChildSpawner, t: &Theme, label: &str, override_box: bool) {
+/// A section's heading; `id` names its parts ("center-of-mass" → `mass-center-of-mass-override`,
+/// "inertia" for the inertia grid's).
+fn heading(p: &mut ChildSpawner, t: &Theme, id: &str, label: &str, override_box: bool) {
     p.spawn(Node {
         height: Val::Px(24.0),
         align_items: AlignItems::Center,
@@ -741,18 +744,14 @@ fn heading(p: &mut ChildSpawner, t: &Theme, label: &str, override_box: bool) {
     })
     .with_children(|r| {
         let mut text = r.spawn(t.text(label.to_string(), 11.5, FontWeight::MEDIUM, t.foreground));
-        if label.starts_with("Mass moments") {
+        if id == "inertia" {
             text.insert((InertiaHeading, Name::new("mass-inertia-heading")));
         }
         if override_box {
-            let name = if label.starts_with("Mass moments") {
-                "mass-inertia-override".to_string()
-            } else {
-                format!("mass-{}-override", label.to_lowercase().replace(' ', "-"))
-            };
+            let name = format!("mass-{id}-override");
             r.spawn((
                 Checkbox::new(name)
-                    .label("Override")
+                    .label(tr("model-mass-override"))
                     .disabled(true)
                     .build(t),
                 NeedsMass,
@@ -767,12 +766,11 @@ fn inertia_heading(units: &Units) -> String {
     use cadrs_sketch::units::LengthUnit;
     let l = units.length.symbol();
     let m = units.mass.symbol();
-    match units.length {
-        LengthUnit::Inch | LengthUnit::Foot | LengthUnit::Yard => {
-            format!("Mass moments of inertia ({l}² {m})")
-        }
-        _ => format!("Mass moments of inertia ({m} {l}²)"),
-    }
+    let units = match units.length {
+        LengthUnit::Inch | LengthUnit::Foot | LengthUnit::Yard => format!("{l}² {m}"),
+        _ => format!("{m} {l}²"),
+    };
+    tr_with("model-mass-inertia-heading", &[("units", &units)])
 }
 
 /// The row or column of "Lxy"'s `k`-th letter (1: row, 2: column).
@@ -792,7 +790,7 @@ fn mass_dialog(
     inertia: String,
     layout: MassLayout,
     override_text: String,
-    placeholder: &'static str,
+    placeholder: String,
     mass_unit: cadrs_sketch::units::MassUnit,
 ) -> impl Bundle {
     let tb = t.clone();
@@ -801,7 +799,7 @@ fn mass_dialog(
         layout,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("mass-dialog")
-            .title("Mass and section properties")
+            .title(tr("model-mass-title"))
             .valid(false)
             .plain_title()
             .width(400.0)
@@ -811,8 +809,8 @@ fn mass_dialog(
                 b.spawn(
                     TabStrip::new("mass-tabs")
                         .compact()
-                        .tab("Part")
-                        .tab("Face")
+                        .tab(tr("common-part"))
+                        .tab(tr("common-face"))
                         .selected(usize::from(layout.face_tab))
                         .build(t),
                 );
@@ -833,12 +831,12 @@ fn mass_dialog(
                         c.spawn((
                             FacesField,
                             SelectionList::new("mass-faces-field")
-                                .placeholder("Faces to measure")
+                                .placeholder(tr("model-mass-faces"))
                                 .active(true)
                                 .build(t),
                         ));
-                        face_row(c, t, "Area", t.foreground, FaceValue::Area);
-                        heading(c, t, "Centroid", false);
+                        face_row(c, t, &tr("model-area"), t.foreground, FaceValue::Area);
+                        heading(c, t, "centroid", &tr("model-mass-centroid"), false);
                         face_row(c, t, "X", Color::srgb_u8(0xd0, 0x30, 0x30), FaceValue::X);
                         face_row(c, t, "Y", Color::srgb_u8(0x2e, 0x9e, 0x3e), FaceValue::Y);
                         face_row(c, t, "Z", Color::srgb_u8(0x2b, 0x64, 0xc0), FaceValue::Z);
@@ -864,7 +862,7 @@ fn mass_dialog(
                     c.spawn((
                         ReferenceField,
                         cadrs_ui::SelectionField::new("mass-mate-connector")
-                            .placeholder("Mate connector for reference frame")
+                            .placeholder(tr("model-mass-reference-frame"))
                             .build(t),
                     ))
                     .entry::<Node>()
@@ -874,7 +872,7 @@ fn mass_dialog(
                     });
                     c.spawn(
                         Checkbox::new("mass-variance")
-                            .label("Show calculation variance")
+                            .label(tr("model-mass-show-variance"))
                             .disabled(true)
                             .build(t),
                     );
@@ -885,10 +883,13 @@ fn mass_dialog(
                         ..default()
                     })
                     .with_children(|r| {
-                        r.spawn(t.text("Mass", 11.5, FontWeight::MEDIUM, t.foreground));
+                        r.spawn((
+                            t.text(tr("model-mass"), 11.5, FontWeight::MEDIUM, t.foreground),
+                            cadrs_ui::i18n::Translated("model-mass"),
+                        ));
                         r.spawn(
                             Checkbox::new("mass-override")
-                                .label("Override")
+                                .label(tr("model-mass-override"))
                                 .checked(layout.overridden)
                                 .build(t),
                         );
@@ -927,11 +928,29 @@ fn mass_dialog(
                             .position(|m| *m == mass_unit)
                             .unwrap_or(0);
                         r.spawn(sel.selected(i).build(t))
-                            .insert(Tooltip::new("Mass unit"));
+                            .insert(Tooltip::new(tr("model-mass-unit")));
                     });
-                    value_row(c, t, "Volume", t.foreground, Some(Value::Volume));
-                    value_row(c, t, "Surface area", t.foreground, Some(Value::Area));
-                    heading(c, t, "Center of mass", true);
+                    value_row(
+                        c,
+                        t,
+                        &tr("model-mass-volume"),
+                        t.foreground,
+                        Some(Value::Volume),
+                    );
+                    value_row(
+                        c,
+                        t,
+                        &tr("model-mass-surface-area"),
+                        t.foreground,
+                        Some(Value::Area),
+                    );
+                    heading(
+                        c,
+                        t,
+                        "center-of-mass",
+                        &tr("model-mass-center-of-mass"),
+                        true,
+                    );
                     axis_row(
                         c,
                         t,
@@ -956,7 +975,7 @@ fn mass_dialog(
                         Color::srgb_u8(0x2b, 0x64, 0xc0),
                         Value::Z,
                     );
-                    heading(c, t, &inertia, true);
+                    heading(c, t, "inertia", &inertia, true);
                     for row in [
                         ["Lxx", "Lxy", "Lxz"],
                         ["Lyx", "Lyy", "Lyz"],
@@ -1059,13 +1078,11 @@ fn sync_mass_panel(
         let items: Vec<String> = faces
             .iter()
             .map(|(_, f)| {
-                format!(
-                    "Face of {}",
-                    features
-                        .iter()
-                        .find(|x| x.id.0 == f.op)
-                        .map_or("part", |x| x.name.as_str())
-                )
+                let name = features
+                    .iter()
+                    .find(|x| x.id.0 == f.op)
+                    .map_or_else(|| tr("model-unknown-part"), |x| x.name.clone());
+                tr_with("common-face-of", &[("name", &name)])
             })
             .collect();
         for mut l in &mut q_faces {
@@ -1147,9 +1164,9 @@ fn sync_mass_panel(
             .map(|(_, t)| t.clone())
             .unwrap_or_default();
         let placeholder = if cache.assembly.is_some() {
-            "Instances to measure"
+            tr("model-mass-instances")
         } else {
-            "Parts to measure"
+            tr("model-mass-parts")
         };
         let d = commands
             .spawn(mass_dialog(

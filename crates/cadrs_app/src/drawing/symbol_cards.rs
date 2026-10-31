@@ -12,6 +12,7 @@
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use cadrs_drawing::annotation_more::{FinishKind, Gdt, Modifier, WeldKind};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{CheckboxState, Select, SelectState};
 
@@ -70,11 +71,12 @@ impl Default for SymbolSpecs {
 #[derive(Component, Clone, Copy, PartialEq)]
 struct SymbolCard(AnnTool);
 
+/// The material condition modifiers: (modifier, its label's catalog key).
 const MODIFIERS: [(Option<Modifier>, &str); 4] = [
-    (None, "None"),
-    (Some(Modifier::Mmc), "Maximum material (M)"),
-    (Some(Modifier::Lmc), "Least material (L)"),
-    (Some(Modifier::Rfs), "Regardless of size (S)"),
+    (None, "common-none"),
+    (Some(Modifier::Mmc), "drawing-gdt-modifier-mmc"),
+    (Some(Modifier::Lmc), "drawing-gdt-modifier-lmc"),
+    (Some(Modifier::Rfs), "drawing-gdt-modifier-rfs"),
 ];
 
 fn row(p: &mut ChildSpawnerCommands, t: &Theme, label: &str, child: impl Bundle) {
@@ -130,12 +132,13 @@ pub fn open(world: &mut World, tool: AnnTool) {
     let t = world.resource::<Theme>().clone();
     let at = Vec2::new(area.max.x - 270.0, area.min.y + 14.0);
     let (title, prefix) = match tool {
-        AnnTool::Gdt => ("Feature control frame", "gdt-card"),
-        AnnTool::Datum => ("Datum feature", "datum-card"),
-        AnnTool::SurfaceFinish => ("Surface finish", "finish-card"),
-        AnnTool::Weld => ("Weld symbol", "weld-card"),
+        AnnTool::Gdt => ("drawing-tool-feature-control-frame", "gdt-card"),
+        AnnTool::Datum => ("drawing-tool-datum-feature", "datum-card"),
+        AnnTool::SurfaceFinish => ("drawing-tool-surface-finish", "finish-card"),
+        AnnTool::Weld => ("drawing-tool-weld-symbol", "weld-card"),
         _ => return,
     };
+    let title = tr(title);
     let mut commands = world.commands();
     commands
         .spawn((card_bundle(&t, prefix, at), SymbolCard(tool)))
@@ -150,7 +153,7 @@ pub fn open(world: &mut World, tool: AnnTool) {
             ..default()
         })
         .with_children(|c| {
-            header(c, &t, title, prefix, None, cancel);
+            header(c, &t, &title, prefix, None, cancel);
             c.spawn(Node {
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(8.0)),
@@ -164,11 +167,11 @@ pub fn open(world: &mut World, tool: AnnTool) {
                         s = s.option(g.label(), true);
                     }
                     let i = Gdt::ALL.iter().position(|g| *g == spec.gdt).unwrap_or(0);
-                    row(b, &t, "Symbol", s.selected(i).build(&t));
+                    row(b, &t, &tr("drawing-gdt-symbol"), s.selected(i).build(&t));
                     row(
                         b,
                         &t,
-                        "Tolerance",
+                        &tr("drawing-gdt-tolerance"),
                         TextInput::new("gdt-tolerance")
                             .value(spec.tolerance.clone())
                             .width(Val::Px(90.0))
@@ -177,24 +180,24 @@ pub fn open(world: &mut World, tool: AnnTool) {
                     );
                     b.spawn(
                         Checkbox::new("gdt-diameter")
-                            .label("Diameter (Ø)")
+                            .label(tr("drawing-gdt-diameter"))
                             .checked(spec.diameter)
                             .build(&t),
                     );
                     let mut m = Select::new("gdt-modifier").width(Val::Px(150.0));
                     for (_, l) in MODIFIERS {
-                        m = m.option(l, true);
+                        m = m.option(tr(l), true);
                     }
                     let mi = MODIFIERS
                         .iter()
                         .position(|(x, _)| *x == spec.modifier)
                         .unwrap_or(0);
-                    row(b, &t, "Modifier", m.selected(mi).build(&t));
+                    row(b, &t, &tr("drawing-gdt-modifier"), m.selected(mi).build(&t));
                     for (k, d) in spec.datums.iter().enumerate() {
                         row(
                             b,
                             &t,
-                            &format!("Datum {}", k + 1),
+                            &tr_with("drawing-gdt-datum-n", &[("number", &(k + 1).to_string())]),
                             TextInput::new(format!("gdt-datum-{}", k + 1))
                                 .value(d.clone())
                                 .width(Val::Px(50.0))
@@ -207,7 +210,7 @@ pub fn open(world: &mut World, tool: AnnTool) {
                     row(
                         b,
                         &t,
-                        "Letter",
+                        &tr("drawing-datum-letter"),
                         TextInput::new("datum-letter")
                             .value(spec.datum_letter.clone())
                             .width(Val::Px(50.0))
@@ -224,11 +227,11 @@ pub fn open(world: &mut World, tool: AnnTool) {
                         .iter()
                         .position(|k| *k == spec.finish)
                         .unwrap_or(0);
-                    row(b, &t, "Type", s.selected(i).build(&t));
+                    row(b, &t, &tr("common-type"), s.selected(i).build(&t));
                     row(
                         b,
                         &t,
-                        "Value",
+                        &tr("common-value"),
                         TextInput::new("finish-value")
                             .value(spec.finish_value.clone())
                             .width(Val::Px(90.0))
@@ -238,20 +241,28 @@ pub fn open(world: &mut World, tool: AnnTool) {
                 }
                 AnnTool::Weld => {
                     for (name, label, v) in [
-                        ("weld-arrow-side", "Arrow side", spec.weld_arrow),
-                        ("weld-other-side", "Other side", spec.weld_other),
+                        (
+                            "weld-arrow-side",
+                            "drawing-weld-arrow-side",
+                            spec.weld_arrow,
+                        ),
+                        (
+                            "weld-other-side",
+                            "drawing-weld-other-side",
+                            spec.weld_other,
+                        ),
                     ] {
                         let mut s = Select::new(name).width(Val::Px(150.0));
                         for k in WeldKind::ALL {
                             s = s.option(k.label(), true);
                         }
                         let i = WeldKind::ALL.iter().position(|k| *k == v).unwrap_or(0);
-                        row(b, &t, label, s.selected(i).build(&t));
+                        row(b, &t, &tr(label), s.selected(i).build(&t));
                     }
                     row(
                         b,
                         &t,
-                        "Size",
+                        &tr("common-size"),
                         TextInput::new("weld-size")
                             .value(spec.weld_size.clone())
                             .width(Val::Px(60.0))
@@ -260,7 +271,7 @@ pub fn open(world: &mut World, tool: AnnTool) {
                     );
                     b.spawn(
                         Checkbox::new("weld-all-around")
-                            .label("All around")
+                            .label(tr("drawing-weld-all-around"))
                             .checked(spec.all_around)
                             .build(&t),
                     );
@@ -269,11 +280,12 @@ pub fn open(world: &mut World, tool: AnnTool) {
             });
             c.spawn((
                 t.text(
-                    "Pick an edge, then click to place",
+                    tr("drawing-symbol-card-hint"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("drawing-symbol-card-hint"),
                 Node {
                     margin: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(0.0), Val::Px(8.0)),
                     ..default()

@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use cadrs_core::direct_edit::{DirectEditFeature, DirectEditKind};
 use cadrs_core::document::FaceRef;
 use cadrs_core::{Feature, FeatureKind};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::applied::{AppliedField, AppliedKind};
@@ -109,7 +110,7 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 pub(crate) fn items(features: &[Feature], kind: &FeatureKind, role: Role) -> Option<Vec<String>> {
@@ -117,7 +118,7 @@ pub(crate) fn items(features: &[Feature], kind: &FeatureKind, role: Role) -> Opt
         (FeatureKind::DirectEdit(x), Role::DirectEditFaces) => Some(
             x.faces
                 .iter()
-                .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
                 .collect(),
         ),
         _ => None,
@@ -145,7 +146,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "move-face-faces-field",
-                "Faces to move",
+                &tr("model-direct-edit-faces-to-move"),
                 Role::DirectEditFaces,
                 items_of(Role::DirectEditFaces),
                 active,
@@ -154,7 +155,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "move-face-distance",
-                "Distance",
+                &tr("common-distance"),
                 Role::DirectEditDistance,
                 &x.distance_expr,
                 Some(x.distance < 0.0),
@@ -165,7 +166,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "delete-face-faces-field",
-                "Faces to delete",
+                &tr("model-direct-edit-faces-to-delete"),
                 Role::DirectEditFaces,
                 items_of(Role::DirectEditFaces),
                 active,
@@ -176,7 +177,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "simplify-faces-field",
-                "Faces of the parts to simplify",
+                &tr("model-direct-edit-faces-to-simplify"),
                 Role::DirectEditFaces,
                 items_of(Role::DirectEditFaces),
                 active,

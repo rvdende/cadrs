@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{SelectionField, SelectionFieldClear, Theme};
 
 use crate::parts::{PartCache, pick_label};
@@ -137,15 +138,21 @@ fn sync_readout(
         ))
         .with_children(|c| {
             c.spawn((
-                t.text("Selection", t.font_sm, FontWeight::BOLD, t.foreground),
+                t.text(
+                    tr("model-selection"),
+                    t.font_sm,
+                    FontWeight::BOLD,
+                    t.foreground,
+                ),
                 Pickable::IGNORE,
+                cadrs_ui::i18n::Translated("model-selection"),
             ));
             for (i, (pick, label)) in items.iter().take(MAX_FIELDS).enumerate() {
                 let caption = match pick {
-                    Pick::Face(..) => "Face",
-                    Pick::Edge(..) => "Edge",
-                    Pick::Vertex(..) => "Vertex",
-                    _ => "Part",
+                    Pick::Face(..) => tr("common-face"),
+                    Pick::Edge(..) => tr("common-edge"),
+                    Pick::Vertex(..) => tr("model-vertex"),
+                    _ => tr("common-part"),
                 };
                 c.spawn((
                     SelectionField::new(format!("selection-field-{i}"))
@@ -160,7 +167,10 @@ fn sync_readout(
             if items.len() > MAX_FIELDS {
                 c.spawn((
                     t.text(
-                        format!("+{} more", items.len() - MAX_FIELDS),
+                        tr_with(
+                            "model-readout-more",
+                            &[("count", &(items.len() - MAX_FIELDS).to_string())],
+                        ),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,

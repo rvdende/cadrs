@@ -12,6 +12,7 @@ use cadrs_drawing::{
     DrawingOp, ObjectRef, Orientation, Scale, SheetFormat, SheetId, SheetProps, SheetSize,
 };
 use cadrs_ui::Button;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{CheckboxState, DialogClose, Select, SelectState, form_row};
 
@@ -45,12 +46,30 @@ pub fn open_sheet_menu(world: &mut World, pos: Vec2) {
     let mut commands = world.commands();
     let menu = Menu::new("sheet-space-menu")
         .min_width(190.0)
-        .item(MenuItem::new("sheet-space-properties", "Sheet properties…").icon("info"))
-        .item(MenuItem::new("sheet-space-drawing-properties", "Drawing properties…").icon("tool"))
-        .separator()
-        .item(MenuItem::new("sheet-space-insert-view", "Insert view…").icon("part"))
         .item(
-            MenuItem::new("sheet-space-fit", "Zoom to fit")
+            MenuItem::new(
+                "sheet-space-properties",
+                tr("drawing-sheet-properties-ellipsis"),
+            )
+            .icon("info"),
+        )
+        .item(
+            MenuItem::new(
+                "sheet-space-drawing-properties",
+                tr("drawing-drawing-properties-ellipsis"),
+            )
+            .icon("tool"),
+        )
+        .separator()
+        .item(
+            MenuItem::new(
+                "sheet-space-insert-view",
+                tr("drawing-insert-view-ellipsis"),
+            )
+            .icon("part"),
+        )
+        .item(
+            MenuItem::new("sheet-space-fit", tr("common-zoom-to-fit"))
                 .shortcut("F")
                 .icon("find"),
         );
@@ -116,7 +135,7 @@ pub fn open_sheet_properties(world: &mut World, sheet: SheetId) {
     };
     // Reference choices: none, then every Part Studio and Assembly of the document.
     let mut refs: Vec<Option<ObjectRef>> = vec![None];
-    let mut ref_labels = vec!["None".to_string()];
+    let mut ref_labels = vec![tr("common-none")];
     for el in &doc.doc.elements {
         if matches!(
             el.kind,
@@ -168,79 +187,130 @@ pub fn open_sheet_properties(world: &mut World, sheet: SheetId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("sheet-properties-dialog")
-            .title(format!("Sheet properties: {name}"))
+            .title(tr_with(
+                "drawing-sheet-properties-title",
+                &[("name", &name)],
+            ))
             .width(440.0)
             .body(move |b| {
                 let t = &tb;
                 let lw = 150.0;
-                b.spawn(form_row(t, "sheet-props-name-row", "Name", lw)).with_child(
-                    TextInput::new("sheet-props-name").value(name).width(Val::Px(220.0)).build(t),
-                );
+                b.spawn(form_row(t, "sheet-props-name-row", tr("common-name"), lw))
+                    .with_child(
+                        TextInput::new("sheet-props-name")
+                            .value(name)
+                            .width(Val::Px(220.0))
+                            .build(t),
+                    );
                 let mut sc = Select::new("sheet-props-scale").width(Val::Px(220.0));
                 for x in &scales {
                     sc = sc.option(x.label(), true);
                 }
-                b.spawn(form_row(t, "sheet-props-scale-row", "Scale", lw))
-                    .with_child(sc.selected(scale_selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "sheet-props-scale-row",
+                    tr("drawing-scale"),
+                    lw,
+                ))
+                .with_child(sc.selected(scale_selected).build(t));
                 let mut sz = Select::new("sheet-props-size").width(Val::Px(220.0));
                 for x in SheetSize::ALL {
                     sz = sz.option(x.oriented_label(s.format.orientation), true);
                 }
-                b.spawn(form_row(t, "sheet-props-size-row", "Size", lw))
+                b.spawn(form_row(t, "sheet-props-size-row", tr("common-size"), lw))
                     .with_child(sz.selected(size_selected).build(t));
                 let mut or = Select::new("sheet-props-orientation").width(Val::Px(220.0));
                 for x in Orientation::ALL {
-                    or = or.option(x.label(), true);
+                    or = or.option(super::create_dialog::orientation_name(x), true);
                 }
-                b.spawn(form_row(t, "sheet-props-orientation-row", "Orientation", lw))
-                    .with_child(or.selected(orient_selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "sheet-props-orientation-row",
+                    tr("drawing-orientation"),
+                    lw,
+                ))
+                .with_child(or.selected(orient_selected).build(t));
                 b.spawn((
-                    t.text("Border and zones", t.font_base, FontWeight::SEMIBOLD, t.foreground),
+                    t.text(
+                        tr("drawing-sheet-border-and-zones"),
+                        t.font_base,
+                        FontWeight::SEMIBOLD,
+                        t.foreground,
+                    ),
+                    Translated("drawing-sheet-border-and-zones"),
                     Node {
                         margin: UiRect::top(Val::Px(6.0)),
                         ..default()
                     },
                 ));
-                b.spawn(Checkbox::new("sheet-props-border").label("Show border").checked(s.border).build(t));
-                b.spawn(Checkbox::new("sheet-props-zones").label("Show zones").checked(s.zones).build(t));
+                b.spawn(
+                    Checkbox::new("sheet-props-border")
+                        .label(tr("drawing-sheet-show-border"))
+                        .checked(s.border)
+                        .build(t),
+                );
+                b.spawn(
+                    Checkbox::new("sheet-props-zones")
+                        .label(tr("drawing-sheet-show-zones"))
+                        .checked(s.zones)
+                        .build(t),
+                );
                 b.spawn(
                     Checkbox::new("sheet-props-title-block")
-                        .label("Show title block")
+                        .label(tr("drawing-sheet-show-title-block"))
                         .checked(s.title_block)
                         .build(t),
                 );
-                let mut rf = Select::new("sheet-props-reference").width(Val::Px(220.0)).open_up();
+                let mut rf = Select::new("sheet-props-reference")
+                    .width(Val::Px(220.0))
+                    .open_up();
                 for l in ref_labels {
                     rf = rf.option(l, true);
                 }
-                b.spawn(form_row(t, "sheet-props-reference-row", "Referenced object", lw))
-                    .with_child(rf.selected(ref_selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "sheet-props-reference-row",
+                    tr("drawing-sheet-referenced-object"),
+                    lw,
+                ))
+                .with_child(rf.selected(ref_selected).build(t));
                 b.spawn((
                     t.text(
-                        "The title block and parametric notes read this part's or assembly's properties.",
+                        tr("drawing-sheet-reference-help"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("drawing-sheet-reference-help"),
                     Node {
                         max_width: Val::Px(400.0),
                         ..default()
                     },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("sheet-props-ok").label("OK").primary().build(t),
+                    Button::new("sheet-props-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_sheet_properties);
                     }),
                 ));
                 f.spawn((
-                    Button::new("sheet-props-cancel").label("Cancel").build(t),
+                    Button::new("sheet-props-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(
-                        |_: On<Activate>, q: Query<Entity, With<SheetPropsDialog>>, mut commands: Commands| {
+                        |_: On<Activate>,
+                         q: Query<Entity, With<SheetPropsDialog>>,
+                         mut commands: Commands| {
                             for e in &q {
                                 commands.trigger(DialogClose { entity: e });
                             }

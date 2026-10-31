@@ -19,6 +19,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::ElementId;
 use cadrs_drawing::style::TangentEdges;
 use cadrs_drawing::{DrawingOp, View, ViewId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, CheckboxChange, CheckboxState, DialogClose, MenuEntry, Select, SelectState, form_row,
@@ -113,13 +114,13 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         .doc
         .element(ElementId(v.reference.element))
         .map(|e| e.name.clone())
-        .unwrap_or_else(|| "the referenced tab".into());
+        .unwrap_or_else(|| tr("drawing-view-menu-the-referenced-tab"));
     // Insert BOM is for a view of an assembly (P3C.5, D11.1).
     let is_assembly =
         cadrs_core::drawing_assembly::is_assembly(&doc.doc, ElementId(v.reference.element));
     let theme = world.resource::<Theme>().clone();
     let tangent = |t: TangentEdges, name: &'static str, label: &'static str| {
-        let item = MenuItem::new(name, label);
+        let item = MenuItem::new(name, tr(label));
         MenuEntry::Item(if v.tangent_edges == t {
             item.icon("check")
         } else {
@@ -130,120 +131,151 @@ pub fn open_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         .min_width(230.0)
         .item(MenuItem::new(
             "view-menu-hidden-lines",
-            if v.hidden_lines {
-                "Hide hidden lines"
+            tr(if v.hidden_lines {
+                "drawing-view-menu-hide-hidden-lines"
             } else {
-                "Show hidden lines"
-            },
+                "drawing-view-menu-show-hidden-lines"
+            }),
         ))
         .item(
-            MenuItem::new("view-menu-tangent-edges", "Tangent edges").submenu(vec![
-                tangent(TangentEdges::Hidden, "view-menu-tangent-hidden", "Hidden"),
-                tangent(TangentEdges::Solid, "view-menu-tangent-solid", "Solid"),
+            MenuItem::new(
+                "view-menu-tangent-edges",
+                tr("drawing-view-menu-tangent-edges"),
+            )
+            .submenu(vec![
+                tangent(
+                    TangentEdges::Hidden,
+                    "view-menu-tangent-hidden",
+                    "drawing-view-menu-tangent-hidden",
+                ),
+                tangent(
+                    TangentEdges::Solid,
+                    "view-menu-tangent-solid",
+                    "drawing-view-menu-tangent-solid",
+                ),
                 tangent(
                     TangentEdges::Phantom,
                     "view-menu-tangent-phantom",
-                    "Phantom",
+                    "drawing-view-menu-tangent-phantom",
                 ),
             ]),
         )
         .item(MenuItem::new(
             "view-menu-shaded",
-            if v.shaded {
-                "Hide shaded view"
+            tr(if v.shaded {
+                "drawing-view-menu-hide-shaded"
             } else {
-                "Show shaded view"
-            },
+                "drawing-view-menu-show-shaded"
+            }),
         ))
         .item(MenuItem::new(
             "view-menu-threads",
-            if v.threads {
-                "Hide threads"
+            tr(if v.threads {
+                "drawing-view-menu-hide-threads"
             } else {
-                "Show threads"
-            },
+                "drawing-view-menu-show-threads"
+            }),
         ))
         .item(MenuItem::new(
             "view-menu-part-intersections",
-            if v.part_intersections {
-                "Hide part intersections"
+            tr(if v.part_intersections {
+                "drawing-view-menu-hide-intersections"
             } else {
-                "Show part intersections"
-            },
+                "drawing-view-menu-show-intersections"
+            }),
         ))
         .item(
-            MenuItem::new("view-menu-display-state", "Display state")
-                .disabled(true)
-                .submenu(vec![]),
+            MenuItem::new(
+                "view-menu-display-state",
+                tr("drawing-view-menu-display-state"),
+            )
+            .disabled(true)
+            .submenu(vec![]),
         )
         .separator()
         .item(MenuItem::new(
             "view-menu-projected",
-            "Create projected view",
+            tr("drawing-view-menu-create-projected"),
         ))
-        .item(MenuItem::new("view-menu-properties", "View properties…"))
-        .item(MenuItem::new("view-menu-front", "Bring to front").planned())
-        .item(MenuItem::new("view-menu-back", "Send to back").planned())
+        .item(MenuItem::new(
+            "view-menu-properties",
+            tr("drawing-view-menu-properties"),
+        ))
+        .item(MenuItem::new("view-menu-front", tr("drawing-view-menu-bring-to-front")).planned())
+        .item(MenuItem::new("view-menu-back", tr("drawing-view-menu-send-to-back")).planned())
         .separator()
         .item(
-            MenuItem::new("view-menu-bom", format!("Insert BOM for {reference}…"))
-                .disabled(!is_assembly),
+            MenuItem::new(
+                "view-menu-bom",
+                tr_with("drawing-view-menu-insert-bom-for", &[("name", &reference)]),
+            )
+            .disabled(!is_assembly),
         )
         .separator()
         .item(MenuItem::new(
             "view-menu-switch",
-            format!("Switch to {reference}"),
+            tr_with("asm-switch-to-named", &[("name", &reference)]),
         ))
-        .item(MenuItem::new("view-menu-move-to-sheet", "Move to sheet…"))
+        .item(MenuItem::new(
+            "view-menu-move-to-sheet",
+            tr("drawing-view-menu-move-to-sheet"),
+        ))
         .item(MenuItem::new(
             "view-menu-align-vertical",
-            "Align view vertical",
+            tr("drawing-view-menu-align-vertical"),
         ))
         .item(MenuItem::new(
             "view-menu-align-horizontal",
-            "Align view horizontal",
+            tr("drawing-view-menu-align-horizontal"),
         ))
         .item(
             MenuItem::new(
                 "view-menu-suppress-alignment",
-                if v.align_suppressed {
-                    "Restore alignment with parent"
+                tr(if v.align_suppressed {
+                    "drawing-view-menu-restore-alignment"
                 } else {
-                    "Suppress alignment with parent"
-                },
+                    "drawing-view-menu-suppress-alignment"
+                }),
             )
             .disabled(v.fold.is_none() || v.parent.is_none()),
         )
-        .item(MenuItem::new("view-menu-sketches", "Show/hide sketches…"));
+        .item(MenuItem::new(
+            "view-menu-sketches",
+            tr("drawing-view-menu-show-hide-sketches"),
+        ));
     // Undo a crop, break or broken-out section (P3C.8).
     let mut menu = menu;
     let removals = [
-        (v.crop.is_some(), "view-menu-remove-crop", "Remove crop"),
+        (
+            v.crop.is_some(),
+            "view-menu-remove-crop",
+            "drawing-view-menu-remove-crop",
+        ),
         (
             !v.breaks.is_empty(),
             "view-menu-remove-breaks",
-            "Remove breaks",
+            "drawing-view-menu-remove-breaks",
         ),
         (
             v.broken_out.is_some(),
             "view-menu-remove-broken-out",
-            "Remove broken-out section",
+            "drawing-view-menu-remove-broken-out",
         ),
     ];
     let extra = removals.iter().filter(|r| r.0).count();
     for (on, name, label) in removals {
         if on {
-            menu = menu.item(MenuItem::new(name, label));
+            menu = menu.item(MenuItem::new(name, tr(label)));
         }
     }
     let menu = menu
         .separator()
         .item(MenuItem::new(
             "view-menu-clear-selection",
-            "Clear selection",
+            tr("common-clear-selection"),
         ))
-        .item(MenuItem::new("view-menu-zoom", "Zoom to fit"))
-        .item(MenuItem::new("view-menu-delete", "Delete"));
+        .item(MenuItem::new("view-menu-zoom", tr("common-zoom-to-fit")))
+        .item(MenuItem::new("view-menu-delete", tr("common-delete")));
     // The menu is tall (20 items): open it where it fits below the anchor, so it is never cut
     // off at the window's edge.
     let window_h = world.resource::<cadrs_ui::RenderSurface>().size.y as f32;
@@ -493,67 +525,73 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("view-properties-dialog")
-            .title(format!("View properties: {name}"))
+            .title(tr_with("drawing-view-properties-title", &[("name", &name)]))
             .width(400.0)
             .body(move |b| {
                 let t = &tb;
                 let lw = 110.0;
-                b.spawn(form_row(t, "view-props-reference-row", "Reference", lw))
-                    .with_children(|r| {
-                        r.spawn((
-                            t.text(
-                                reference.clone(),
-                                t.font_base,
-                                FontWeight::MEDIUM,
-                                t.foreground,
-                            ),
-                            Node {
-                                flex_grow: 1.0,
-                                ..default()
+                b.spawn(form_row(
+                    t,
+                    "view-props-reference-row",
+                    tr("drawing-view-props-reference"),
+                    lw,
+                ))
+                .with_children(|r| {
+                    r.spawn((
+                        t.text(
+                            reference.clone(),
+                            t.font_base,
+                            FontWeight::MEDIUM,
+                            t.foreground,
+                        ),
+                        Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        },
+                    ));
+                    r.spawn((
+                        Button::new("view-props-reference-link")
+                            .icon("open-external")
+                            .icon_size(14.0)
+                            .ghost()
+                            .tooltip(tr_with("asm-switch-to-named", &[("name", &studio_name)]))
+                            .build(t),
+                        observe(
+                            |_: On<Activate>,
+                             q: Query<(Entity, &ViewPropsDialog)>,
+                             mut commands: Commands| {
+                                if let Some((e, d)) = q.iter().next() {
+                                    let id = d.view;
+                                    commands.trigger(DialogClose { entity: e });
+                                    commands.queue(move |w: &mut World| {
+                                        if let Some((_, v)) = find_view(w, id)
+                                            && let Some(mut doc) =
+                                                w.get_resource_mut::<ActiveDocument>()
+                                        {
+                                            doc.set_active(ElementId(v.reference.element));
+                                        }
+                                    });
+                                }
                             },
-                        ));
-                        r.spawn((
-                            Button::new("view-props-reference-link")
-                                .icon("open-external")
-                                .icon_size(14.0)
-                                .ghost()
-                                .tooltip(format!("Switch to {studio_name}"))
-                                .build(t),
-                            observe(
-                                |_: On<Activate>,
-                                 q: Query<(Entity, &ViewPropsDialog)>,
-                                 mut commands: Commands| {
-                                    if let Some((e, d)) = q.iter().next() {
-                                        let id = d.view;
-                                        commands.trigger(DialogClose { entity: e });
-                                        commands.queue(move |w: &mut World| {
-                                            if let Some((_, v)) = find_view(w, id)
-                                                && let Some(mut doc) =
-                                                    w.get_resource_mut::<ActiveDocument>()
-                                            {
-                                                doc.set_active(ElementId(v.reference.element));
-                                            }
-                                        });
-                                    }
-                                },
-                            ),
-                        ));
-                    });
+                        ),
+                    ));
+                });
                 let mut sc = Select::new("view-props-scale").width(Val::Px(200.0));
                 for s in &list {
                     sc = sc.option(s.label(), true);
                 }
-                b.spawn(form_row(t, "view-props-scale-row", "Scale", lw))
+                b.spawn(form_row(t, "view-props-scale-row", tr("drawing-scale"), lw))
                     .with_child(sc.selected(scale_selected).build(t));
                 if inherited {
                     b.spawn((
                         Name::new("view-props-inherited-hint"),
                         t.text(
-                            "Inherited from the parent view",
+                            tr("drawing-view-props-inherited"),
                             t.font_sm,
                             FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("drawing-view-props-inherited"),
                         Node {
                             margin: UiRect::left(Val::Px(lw)),
                             ..default()
@@ -564,7 +602,7 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
                 for (_, n) in &sheets {
                     sh = sh.option(n.clone(), true);
                 }
-                b.spawn(form_row(t, "view-props-sheet-row", "Sheet", lw))
+                b.spawn(form_row(t, "view-props-sheet-row", tr("drawing-sheet"), lw))
                     .with_child(sh.selected(sheet_index).build(t));
                 // A flat pattern view's bend line pens (P3I.7).
                 if let Some(f) = &flat {
@@ -574,13 +612,18 @@ pub fn open_view_properties(world: &mut World, id: ViewId) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("view-props-ok").label("OK").primary().build(t),
+                    Button::new("view-props-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_view_properties);
                     }),
                 ));
                 f.spawn((
-                    Button::new("view-props-cancel").label("Cancel").build(t),
+                    Button::new("view-props-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(
                         |_: On<Activate>,
                          q: Query<Entity, With<ViewPropsDialog>>,
@@ -697,7 +740,10 @@ pub fn open_move_to_sheet(world: &mut World, id: ViewId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("move-to-sheet-dialog")
-            .title(format!("Move {name} view to sheet"))
+            .title(tr_with(
+                "drawing-move-view-to-sheet-title",
+                &[("name", &name)],
+            ))
             .width(360.0)
             .body(move |b| {
                 let t = &tb;
@@ -705,36 +751,50 @@ pub fn open_move_to_sheet(world: &mut World, id: ViewId) {
                 for (_, n) in &sheets {
                     sh = sh.option(n.clone(), true);
                 }
-                b.spawn(form_row(t, "move-to-sheet-row", "Sheet", 80.0))
+                b.spawn(form_row(t, "move-to-sheet-row", tr("drawing-sheet"), 80.0))
                     .with_child(sh.selected(selected).build(t));
                 b.spawn((
                     t.text(
-                        "The view's annotations move with it; its projected views stay where they are.",
+                        tr("drawing-move-to-sheet-help"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("drawing-move-to-sheet-help"),
                     Node {
                         max_width: Val::Px(320.0),
                         ..default()
                     },
-                )).insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                ))
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("move-to-sheet-ok").label("OK").primary().build(t),
+                    Button::new("move-to-sheet-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_move_to_sheet);
                     }),
                 ));
                 f.spawn((
-                    Button::new("move-to-sheet-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<MoveToSheetDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("move-to-sheet-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<MoveToSheetDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
@@ -807,13 +867,13 @@ pub fn open_show_sketches(world: &mut World, id: ViewId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("show-sketches-dialog")
-            .title("Show/hide sketches")
+            .title(tr("drawing-show-hide-sketches"))
             .width(320.0)
             .body(move |b| {
                 let t = &tb;
                 b.spawn(
                     TextInput::new("show-sketches-search")
-                        .placeholder("Search sketches")
+                        .placeholder(tr("drawing-search-sketches"))
                         .width(Val::Percent(100.0))
                         .build(t),
                 );
@@ -829,11 +889,14 @@ pub fn open_show_sketches(world: &mut World, id: ViewId) {
                 ))
                 .with_children(|l| {
                     if sketches.is_empty() {
-                        l.spawn(t.text(
-                            "The referenced Part Studio has no sketches",
-                            t.font_sm,
-                            FontWeight::NORMAL,
-                            t.muted_foreground,
+                        l.spawn((
+                            t.text(
+                                tr("drawing-no-sketches"),
+                                t.font_sm,
+                                FontWeight::NORMAL,
+                                t.muted_foreground,
+                            ),
+                            Translated("drawing-no-sketches"),
                         ));
                     }
                     for (i, (sid, name)) in sketches.iter().enumerate() {
@@ -851,7 +914,7 @@ pub fn open_show_sketches(world: &mut World, id: ViewId) {
                 let t = &tf;
                 f.spawn((
                     Button::new("show-sketches-ok")
-                        .label("OK")
+                        .label(tr("common-ok"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -859,7 +922,9 @@ pub fn open_show_sketches(world: &mut World, id: ViewId) {
                     }),
                 ));
                 f.spawn((
-                    Button::new("show-sketches-cancel").label("Cancel").build(t),
+                    Button::new("show-sketches-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(
                         |_: On<Activate>,
                          q: Query<Entity, With<SketchesDialog>>,

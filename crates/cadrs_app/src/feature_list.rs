@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 use cadrs_core::commands::{SetRollback, SetSuppressed};
 use cadrs_core::{ElementId, FeatureId};
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 
 use crate::document::{FeatureRow, tab_node_name};
@@ -199,7 +200,7 @@ pub fn rollback_bar(t: &Theme, at_end: bool) -> impl Bundle {
             ..default()
         },
         BackgroundColor(t.rollback_bar),
-        Tooltip::new("Rollback bar: drag to roll the Part Studio back"),
+        Tooltip::new(tr("view-rollback-bar-tooltip")),
         children![(
             Name::new("rollback-bar-grip"),
             Node {
@@ -249,12 +250,24 @@ pub fn dependency_legend(p: &mut ChildSpawnerCommands, t: &Theme) {
     .with_children(|l| {
         l.spawn(chip(PARENT_SWATCH));
         l.spawn((
-            t.text("Parents", t.font_xs, FontWeight::MEDIUM, t.foreground),
+            t.text(
+                tr("view-dependencies-parents"),
+                t.font_xs,
+                FontWeight::MEDIUM,
+                t.foreground,
+            ),
+            Translated("view-dependencies-parents"),
             Pickable::IGNORE,
         ));
         l.spawn(chip(CHILD_SWATCH));
         l.spawn((
-            t.text("Children", t.font_xs, FontWeight::MEDIUM, t.foreground),
+            t.text(
+                tr("view-dependencies-children"),
+                t.font_xs,
+                FontWeight::MEDIUM,
+                t.foreground,
+            ),
+            Translated("view-dependencies-children"),
             Node {
                 flex_grow: 1.0,
                 ..default()
@@ -265,7 +278,7 @@ pub fn dependency_legend(p: &mut ChildSpawnerCommands, t: &Theme) {
             cadrs_ui::IconButton::new("feature-dependencies-close", "close")
                 .small()
                 .icon_size(14.0)
-                .tooltip("Stop showing dependencies (Esc)")
+                .tooltip(tr("view-dependencies-stop-tooltip"))
                 .build(t),
         );
     });
@@ -277,7 +290,7 @@ pub fn preview_slider(t: &Theme, name: &str) -> impl Bundle {
         RollbackSlider,
         cadrs_ui::Slider::new(format!("{name}-rollback-slider"))
             .value(0.7)
-            .tooltip("Drag left to see the Part Studio before this feature, right for after")
+            .tooltip(tr("view-preview-slider-tooltip"))
             .build(t),
     )
 }

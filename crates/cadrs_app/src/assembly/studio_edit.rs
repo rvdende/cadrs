@@ -13,6 +13,7 @@ use cadrs_core::assembly::InstanceId;
 use cadrs_core::assembly::commands::SetStudioParts;
 use cadrs_core::{ElementId, PartId};
 use cadrs_ui::dialog_fields::OptionRow;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState};
 
@@ -100,7 +101,10 @@ pub fn open(world: &mut World, instance: InstanceId) {
     world.insert_resource(StudioEditSession {
         element,
         instance,
-        title: format!("Edit {name} <{}>", inst.index),
+        title: tr_with(
+            "common-edit-named",
+            &[("name", &format!("{name} <{}>", inst.index))],
+        ),
         parts,
     });
 }
@@ -224,11 +228,12 @@ fn sync_dialog(
                     b.spawn((
                         Name::new("studio-edit-hint"),
                         t.text(
-                            "Parts in this rigid instance",
+                            tr("asm-studio-edit-hint"),
                             t.font_sm,
                             bevy::text::FontWeight::MEDIUM,
                             t.muted_foreground,
                         ),
+                        Translated("asm-studio-edit-hint"),
                         Node {
                             margin: UiRect::new(
                                 Val::Px(4.0),

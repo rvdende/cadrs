@@ -1775,9 +1775,12 @@ fn sync_readout(
         });
     // None while Mass properties is open (it hides the triad; its panel is the readout then,
     // Final part 4: ex1_start 13 kept the selected hole's diameter).
-    let text = circle
-        .filter(|_| in_asm && !triad.hidden)
-        .map(|d| format!("Diameter: {}", units.0.fixed_length(d)));
+    let text = circle.filter(|_| in_asm && !triad.hidden).map(|d| {
+        cadrs_ui::i18n::tr_with(
+            "asm-triad-diameter",
+            &[("diameter", &units.0.fixed_length(d))],
+        )
+    });
     let Some(text) = text else {
         for (e, _) in &q {
             commands.entity(e).try_despawn();

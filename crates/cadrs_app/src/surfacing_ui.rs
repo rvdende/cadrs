@@ -19,6 +19,7 @@ use cadrs_core::surfacing::{
     Continuity, FillEdge, FillFeature, HelixFeature, HelixPath, HelixType, ThickenFeature,
 };
 use cadrs_core::{Feature, FeatureId, FeatureKind};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{OptionRow, TabStrip};
 
@@ -299,14 +300,14 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn name_of(features: &[Feature], id: FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-sketch"), |f| f.name.clone())
 }
 
 pub(crate) fn items(
@@ -320,12 +321,12 @@ pub(crate) fn items(
             let mut v: Vec<String> = x
                 .faces
                 .iter()
-                .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
                 .collect();
             v.extend(
                 x.regions
                     .iter()
-                    .map(|r| format!("Face of {}", name_of(features, r.sketch))),
+                    .map(|r| tr_with("common-face-of", &[("name", &name_of(features, r.sketch))])),
             );
             v.extend(x.sketches.iter().map(|s| name_of(features, *s)));
             v.extend(crate::applied::part_names(cache, &x.parts));
@@ -338,7 +339,7 @@ pub(crate) fn items(
             let mut v: Vec<String> = x
                 .face
                 .iter()
-                .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
                 .collect();
             v.extend(
                 x.axis
@@ -351,12 +352,15 @@ pub(crate) fn items(
             .edges
             .iter()
             .map(|e| match e {
-                FillEdge::Edge(r) => format!(
-                    "Edge of {}",
-                    op_name(features, crate::parts::edge_maker(features, &r.edge))
+                FillEdge::Edge(r) => tr_with(
+                    "common-edge-of",
+                    &[(
+                        "name",
+                        &op_name(features, crate::parts::edge_maker(features, &r.edge)),
+                    )],
                 ),
                 FillEdge::SketchCurve { sketch, .. } => {
-                    format!("Curve of {}", name_of(features, *sketch))
+                    tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
                 }
             })
             .collect(),
@@ -376,12 +380,39 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
     })
 }
 
-fn op_tabs(b: &mut ChildSpawner, t: &Theme, name: &str, labels: &[&str], selected: usize) {
+fn op_tabs(b: &mut ChildSpawner, t: &Theme, name: &str, labels: &[String], selected: usize) {
     let mut strip = TabStrip::new(format!("{name}-operation")).compact();
     for l in labels {
-        strip = strip.tab(*l);
+        strip = strip.tab(l.clone());
     }
     b.spawn((Role::OpTab, strip.selected(selected).build(t)));
+}
+
+/// A helix's type, in the current language (the core's label is English).
+fn helix_type_text(h: HelixType) -> String {
+    tr(match h {
+        HelixType::CylinderCone => "model-helix-cylinder-cone",
+        HelixType::Axis => "model-axis",
+        HelixType::Circle => "model-circle",
+    })
+}
+
+/// How a helix's length is given, in the current language.
+fn helix_path_text(h: HelixPath) -> String {
+    tr(match h {
+        HelixPath::Turns => "model-helix-turns",
+        HelixPath::Pitch => "model-pitch",
+        HelixPath::TurnsAndPitch => "model-helix-turns-and-pitch",
+    })
+}
+
+/// A Fill's continuity, in the current language.
+fn continuity_text(c: Continuity) -> String {
+    tr(match c {
+        Continuity::Position => "model-continuity-position",
+        Continuity::Tangency => "model-continuity-tangency",
+        Continuity::Curvature => "model-continuity-curvature",
+    })
 }
 
 pub(crate) fn body(
@@ -393,20 +424,23 @@ pub(crate) fn body(
 ) {
     match kind {
         FeatureKind::Thicken(x) => {
-            let labels: Vec<&str> = BooleanOp::ALL.iter().map(|o| o.label()).collect();
+            let labels: Vec<String> = BooleanOp::ALL
+                .iter()
+                .map(|o| crate::extrude_dialog::boolean_op_text(*o))
+                .collect();
             op_tabs(b, t, "thicken", &labels, index_of(&BooleanOp::ALL, &x.op));
             body_column(b, |b| {
                 list(
                     b,
                     t,
                     "thicken-entities-field",
-                    "Faces and surfaces to thicken",
+                    &tr("model-thicken-entities"),
                     Role::ThickenEntities,
                     items_of(Role::ThickenEntities),
                     field == AppliedField::ThickenEntities,
                 );
                 b.spawn(
-                    OptionRow::new("thicken-mid-plane", "Mid plane")
+                    OptionRow::new("thicken-mid-plane", tr("model-thin-mid-plane"))
                         .checked(x.mid_plane)
                         .build(t),
                 );
@@ -415,7 +449,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "thicken-thickness",
-                        "Thickness",
+                        &tr("common-thickness"),
                         Role::ThickenThickness1,
                         &x.thickness1_expr,
                         None,
@@ -425,7 +459,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "thicken-thickness1",
-                        "Thickness 1",
+                        &tr("model-thickness-1"),
                         Role::ThickenThickness1,
                         &x.thickness1_expr,
                         Some(x.flip),
@@ -434,20 +468,20 @@ pub(crate) fn body(
                         b,
                         t,
                         "thicken-thickness2",
-                        "Thickness 2",
+                        &tr("model-thickness-2"),
                         Role::ThickenThickness2,
                         &x.thickness2_expr,
                         None,
                     );
                 }
                 b.spawn(
-                    OptionRow::new("thicken-keep-tools", "Keep tools")
+                    OptionRow::new("thicken-keep-tools", tr("model-keep-tools"))
                         .checked(x.keep_tools)
                         .build(t),
                 );
                 if x.op != BooleanOp::New {
                     b.spawn(
-                        OptionRow::new("thicken-merge-all", "Merge with all")
+                        OptionRow::new("thicken-merge-all", tr("common-merge-with-all"))
                             .checked(x.merge_all)
                             .build(t),
                     );
@@ -456,7 +490,7 @@ pub(crate) fn body(
                             b,
                             t,
                             "thicken-merge-scope-field",
-                            "Merge scope",
+                            &tr("common-merge-scope"),
                             Role::MergeScope,
                             items_of(Role::MergeScope),
                             field == AppliedField::MergeScope,
@@ -466,7 +500,7 @@ pub(crate) fn body(
             });
         }
         FeatureKind::Helix(x) => body_column(b, |b| {
-            let types = opts(&HelixType::ALL, |m| m.label(), |_| true);
+            let types = opts(&HelixType::ALL, helix_type_text, |_| true);
             select_row(
                 b,
                 t,
@@ -478,9 +512,9 @@ pub(crate) fn body(
                 None,
             );
             let (placeholder, flip) = match x.helix_type {
-                HelixType::CylinderCone => ("Cylindrical or conical face", x.flip),
-                HelixType::Axis => ("Axis", x.flip),
-                HelixType::Circle => ("Circle", x.flip),
+                HelixType::CylinderCone => (tr("model-helix-face"), x.flip),
+                HelixType::Axis => (tr("model-axis"), x.flip),
+                HelixType::Circle => (tr("model-circle"), x.flip),
             };
             b.spawn(Node {
                 align_items: AlignItems::FlexStart,
@@ -500,7 +534,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "helix-entity-field",
-                        placeholder,
+                        &placeholder,
                         Role::HelixEntity,
                         items_of(Role::HelixEntity),
                         field == AppliedField::HelixEntity,
@@ -517,16 +551,16 @@ pub(crate) fn body(
                         "helix-entity-field-flip",
                         Role::Flip,
                         flip,
-                        "Opposite direction",
+                        &tr("common-opposite-direction"),
                     );
                 });
             });
-            let paths = opts(&HelixPath::ALL, |m| m.label(), |_| true);
+            let paths = opts(&HelixPath::ALL, helix_path_text, |_| true);
             select_row(
                 b,
                 t,
                 "helix-input",
-                "Input type",
+                &tr("model-helix-input-type"),
                 Role::HelixPathType,
                 &paths,
                 index_of(&HelixPath::ALL, &x.path),
@@ -537,7 +571,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "helix-revolutions",
-                    "Revolutions",
+                    &tr("model-helix-revolutions"),
                     Role::HelixRevolutions,
                     &x.revolutions_expr,
                     None,
@@ -548,7 +582,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "helix-pitch",
-                    "Pitch",
+                    &tr("model-pitch"),
                     Role::HelixPitch,
                     &x.pitch_expr,
                     None,
@@ -559,7 +593,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "helix-height",
-                    "Height",
+                    &tr("model-height"),
                     Role::HelixHeight,
                     &x.height_expr,
                     None,
@@ -570,7 +604,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "helix-radius",
-                    "Radius",
+                    &tr("model-radius"),
                     Role::HelixRadius,
                     &x.radius_expr,
                     None,
@@ -580,20 +614,20 @@ pub(crate) fn body(
                 b,
                 t,
                 "helix-start-angle",
-                "Start angle",
+                &tr("model-start-angle"),
                 Role::HelixStartAngle,
                 &x.start_angle_expr,
                 None,
             );
             let hands = [
-                ("Clockwise".to_string(), true),
-                ("Counterclockwise".to_string(), true),
+                (tr("model-clockwise"), true),
+                (tr("model-counterclockwise"), true),
             ];
             select_row(
                 b,
                 t,
                 "helix-direction",
-                "Direction",
+                &tr("common-direction"),
                 Role::HelixHandedness,
                 &hands,
                 usize::from(!x.clockwise),
@@ -601,28 +635,32 @@ pub(crate) fn body(
             );
         }),
         FeatureKind::Fill(x) => {
-            op_tabs(b, t, "fill", &["New", "Add"], usize::from(x.add));
+            op_tabs(
+                b,
+                t,
+                "fill",
+                &[tr("model-op-new"), tr("common-add")],
+                usize::from(x.add),
+            );
             body_column(b, |b| {
                 list(
                     b,
                     t,
                     "fill-edges-field",
-                    "Edges and curves",
+                    &tr("model-fill-edges"),
                     Role::FillEdges,
                     items_of(Role::FillEdges),
                     field == AppliedField::FillEdges,
                 );
-                let c = opts(
-                    &Continuity::ALL,
-                    |m| m.label(),
-                    |m| m == Continuity::Position,
-                );
+                let c = opts(&Continuity::ALL, continuity_text, |m| {
+                    m == Continuity::Position
+                });
                 let now = x.continuity.first().copied().unwrap_or_default();
                 select_row(
                     b,
                     t,
                     "fill-continuity",
-                    "Continuity",
+                    &tr("model-fill-continuity"),
                     Role::FillContinuity,
                     &c,
                     index_of(&Continuity::ALL, &now),
@@ -633,7 +671,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "fill-merge-scope-field",
-                        "Merge scope (surfaces it meets)",
+                        &tr("model-fill-merge-scope"),
                         Role::MergeScope,
                         items_of(Role::MergeScope),
                         field == AppliedField::MergeScope,

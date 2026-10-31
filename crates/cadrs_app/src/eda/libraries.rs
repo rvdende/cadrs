@@ -84,7 +84,7 @@ impl UserLibraries {
     pub fn add_part(&mut self, c: &cadrs_eda::Component) -> Result<String, String> {
         let dir = self
             .library_dir(MY_LIBRARY)
-            .ok_or("There's no folder to keep libraries in")?;
+            .ok_or_else(|| cadrs_ui::i18n::tr("pcb-library-no-folder"))?;
         cadrs_eda::library::ensure_library(&dir, "Parts added from PCB Studios' components")?;
         let mut fp = c.footprint.clone();
         if let Some(f) = &mut fp {
@@ -120,7 +120,12 @@ impl UserLibraries {
                 format!("{MY_LIBRARY}:{}", s.name())
             }
             (None, Some(f)) => format!("{MY_LIBRARY}:{}", f.name()),
-            (None, None) => return Err(format!("{} has no symbol or footprint yet", c.name)),
+            (None, None) => {
+                return Err(cadrs_ui::i18n::tr_with(
+                    "pcb-library-part-empty",
+                    &[("name", &c.name)],
+                ));
+            }
         };
         self.reload();
         Ok(id)

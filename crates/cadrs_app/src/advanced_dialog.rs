@@ -21,6 +21,7 @@ use cadrs_core::advanced::{
 use cadrs_core::document::{BodyType, BooleanOp, DirectionRef, ThinWall};
 use cadrs_core::plane::{PlaneEntity, PlaneType};
 use cadrs_core::{Feature, FeatureId, FeatureKind};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{NumberField, OptionRow, SelectionList, TabStrip};
 
@@ -67,20 +68,23 @@ fn name_of(features: &[Feature], id: FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-sketch"), |f| f.name.clone())
 }
 
 fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn edge_label(features: &[Feature], e: &cadrs_sketch::EdgeName) -> String {
-    format!(
-        "Edge of {}",
-        op_name(features, crate::parts::edge_maker(features, e))
+    tr_with(
+        "common-edge-of",
+        &[(
+            "name",
+            &op_name(features, crate::parts::edge_maker(features, e)),
+        )],
     )
 }
 
@@ -103,39 +107,45 @@ pub(crate) fn items(
             .iter()
             .map(|e| match e {
                 PlaneEntity::Plane(p) => crate::viewport::plane_label(features, *p),
-                PlaneEntity::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+                PlaneEntity::Face(f) => {
+                    tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+                }
                 PlaneEntity::Edge(r) => edge_label(features, &r.edge),
                 PlaneEntity::EdgePoint { edge, t } => {
-                    let at = if (t - 0.5).abs() < 1e-9 {
-                        "Midpoint".to_string()
+                    let edge = edge_label(features, &edge.edge);
+                    if (t - 0.5).abs() < 1e-9 {
+                        tr_with("model-plane-midpoint-of", &[("edge", &edge)])
                     } else {
-                        format!("Point at {:.0}%", t * 100.0)
-                    };
-                    format!("{at} of {}", edge_label(features, &edge.edge))
+                        tr_with(
+                            "model-plane-point-at-of",
+                            &[("percent", &format!("{:.0}", t * 100.0)), ("edge", &edge)],
+                        )
+                    }
                 }
-                PlaneEntity::Vertex(v) => {
-                    format!("Vertex of {}", op_name(features, v.vertex.faces[0].op))
-                }
+                PlaneEntity::Vertex(v) => tr_with(
+                    "common-vertex-of",
+                    &[("name", &op_name(features, v.vertex.faces[0].op))],
+                ),
                 PlaneEntity::SketchPoint { sketch, .. } => {
-                    format!("Vertex of {}", name_of(features, *sketch))
+                    tr_with("common-vertex-of", &[("name", &name_of(features, *sketch))])
                 }
                 PlaneEntity::SketchCurve { sketch, .. } => {
-                    format!("Curve of {}", name_of(features, *sketch))
+                    tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
                 }
-                PlaneEntity::Origin => "Origin".into(),
+                PlaneEntity::Origin => tr("model-origin"),
             })
             .collect(),
         (FeatureKind::Sweep(x), Role::SweepProfile) => {
             let mut v: Vec<String> = x
                 .regions
                 .iter()
-                .map(|r| format!("Face of {}", name_of(features, r.sketch)))
+                .map(|r| tr_with("common-face-of", &[("name", &name_of(features, r.sketch))]))
                 .collect();
             v.extend(x.sketches.iter().map(|s| sketch_label(features, *s)));
             v.extend(
                 x.faces
                     .iter()
-                    .map(|f| format!("Face of {}", op_name(features, f.face.op))),
+                    .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])),
             );
             v
         }
@@ -145,7 +155,7 @@ pub(crate) fn items(
             .map(|p| match p {
                 PathRef::Edge(e) => edge_label(features, &e.edge),
                 PathRef::SketchCurve { sketch, .. } => {
-                    format!("Curve of {}", name_of(features, *sketch))
+                    tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
                 }
                 PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
             })
@@ -171,19 +181,22 @@ pub(crate) fn items(
             .iter()
             .map(|p| match p {
                 LoftProfile::Regions { sketch, regions } if regions.len() > 1 => {
-                    format!("Faces of {}", name_of(features, *sketch))
+                    tr_with("model-faces-of", &[("name", &name_of(features, *sketch))])
                 }
                 LoftProfile::Regions { sketch, .. } => {
-                    format!("Face of {}", name_of(features, *sketch))
+                    tr_with("common-face-of", &[("name", &name_of(features, *sketch))])
                 }
                 LoftProfile::Sketch(s) => sketch_label(features, *s),
-                LoftProfile::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+                LoftProfile::Face(f) => {
+                    tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+                }
                 LoftProfile::SketchPoint { sketch, .. } => {
-                    format!("Vertex of {}", name_of(features, *sketch))
+                    tr_with("common-vertex-of", &[("name", &name_of(features, *sketch))])
                 }
-                LoftProfile::Vertex(v) => {
-                    format!("Vertex of {}", op_name(features, v.vertex.faces[0].op))
-                }
+                LoftProfile::Vertex(v) => tr_with(
+                    "common-vertex-of",
+                    &[("name", &op_name(features, v.vertex.faces[0].op))],
+                ),
             })
             .collect(),
         (FeatureKind::Loft(x), Role::MergeScope) => parts(&x.merge_scope),
@@ -192,7 +205,7 @@ pub(crate) fn items(
             SplitType::Face => x
                 .faces
                 .iter()
-                .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
                 .collect(),
         },
         (FeatureKind::Split(x), Role::SplitTool) => x
@@ -200,7 +213,9 @@ pub(crate) fn items(
             .iter()
             .map(|t| match t {
                 SplitToolRef::Plane(p) => crate::viewport::plane_label(features, *p),
-                SplitToolRef::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+                SplitToolRef::Face(f) => {
+                    tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+                }
                 SplitToolRef::Sketch(s) => name_of(features, *s),
             })
             .collect(),
@@ -213,9 +228,11 @@ fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
     match d {
         DirectionRef::Edge(r) => edge_label(features, &r.edge),
         DirectionRef::SketchLine { sketch, .. } => {
-            format!("Line of {}", name_of(features, *sketch))
+            tr_with("common-line-of", &[("name", &name_of(features, *sketch))])
         }
-        DirectionRef::FaceNormal(f) => format!("Face of {}", op_name(features, f.face.op)),
+        DirectionRef::FaceNormal(f) => {
+            tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+        }
         DirectionRef::PlaneNormal(p) => crate::viewport::plane_label(features, *p),
         DirectionRef::Connector(c) => c.label(features),
     }
@@ -251,16 +268,16 @@ fn body_tabs(b: &mut ChildSpawner, t: &Theme, name: &str, body: BodyType, op: Bo
         Role::BodyTab,
         TabStrip::new(format!("{name}-body-type"))
             .compact()
-            .tab("Solid")
-            .tab("Surface")
-            .tab("Thin")
+            .tab(tr("common-solid"))
+            .tab(tr("model-body-surface"))
+            .tab(tr("model-body-thin"))
             .selected(i)
             .build(t),
     ));
     if body != BodyType::Surface {
         let mut strip = TabStrip::new(format!("{name}-operation")).compact();
         for o in BooleanOp::ALL {
-            strip = strip.tab(o.label());
+            strip = strip.tab(crate::extrude_dialog::boolean_op_text(o));
         }
         b.spawn((
             Role::OpTab,
@@ -279,7 +296,7 @@ fn thin_rows(b: &mut ChildSpawner, t: &Theme, name: &str, thin: &ThinWall) {
     .with_children(|r| {
         r.spawn((
             Role::Thickness1,
-            NumberField::new(format!("{name}-thickness1"), "Thickness 1")
+            NumberField::new(format!("{name}-thickness1"), tr("model-thickness-1"))
                 .text(thin.thickness1_expr.clone())
                 .label_width(70.0)
                 .build(t),
@@ -292,18 +309,18 @@ fn thin_rows(b: &mut ChildSpawner, t: &Theme, name: &str, thin: &ThinWall) {
             &format!("{name}-flip-wall"),
             Role::FlipWall,
             thin.flip_wall,
-            "Flip wall",
+            &tr("model-flip-wall"),
         );
     });
     b.spawn(
-        OptionRow::new(format!("{name}-mid-plane"), "Mid plane")
+        OptionRow::new(format!("{name}-mid-plane"), tr("model-thin-mid-plane"))
             .checked(thin.mid_plane)
             .build(t),
     );
     if !thin.mid_plane {
         b.spawn((
             Role::Thickness2,
-            NumberField::new(format!("{name}-thickness2"), "Thickness 2")
+            NumberField::new(format!("{name}-thickness2"), tr("model-thickness-2"))
                 .text(thin.thickness2_expr.clone())
                 .label_width(70.0)
                 .build(t),
@@ -321,7 +338,7 @@ fn merge_rows(
     active: bool,
 ) {
     b.spawn(
-        OptionRow::new(format!("{name}-merge-all"), "Merge with all")
+        OptionRow::new(format!("{name}-merge-all"), tr("common-merge-with-all"))
             .checked(merge_all)
             .build(t),
     );
@@ -330,7 +347,7 @@ fn merge_rows(
             b,
             t,
             &format!("{name}-merge-scope-field"),
-            "Merge scope",
+            &tr("common-merge-scope"),
             Role::MergeScope,
             items,
             active,
@@ -363,6 +380,43 @@ fn stacked_select(
     select_row(b, t, name, "", role, options, selected, None);
 }
 
+/// A plane type, in the current language (the core's label is English).
+fn plane_type_text(p: PlaneType) -> String {
+    tr(match p {
+        PlaneType::Offset => "common-offset",
+        PlaneType::PlanePoint => "model-plane-type-plane-point",
+        PlaneType::LineAngle => "model-plane-type-line-angle",
+        PlaneType::PointNormal => "model-plane-type-point-normal",
+        PlaneType::ThreePoint => "model-plane-type-three-point",
+        PlaneType::MidPlane => "model-plane-type-mid-plane",
+        PlaneType::CurvePoint => "model-plane-type-curve-point",
+        PlaneType::Fit => "model-plane-type-fit",
+        PlaneType::Tangent => "model-plane-type-tangent",
+    })
+}
+
+/// A sweep's profile control, in the current language.
+fn profile_control_text(c: ProfileControl) -> String {
+    tr(match c {
+        ProfileControl::None => "common-none",
+        ProfileControl::KeepOrientation => "model-sweep-keep-orientation",
+        ProfileControl::LockDirection => "model-sweep-lock-direction",
+    })
+}
+
+/// A loft's end condition, in the current language.
+fn loft_condition_text(c: LoftCondition) -> String {
+    tr(match c {
+        LoftCondition::None => "common-none",
+        LoftCondition::NormalToProfile => "model-loft-normal-to-profile",
+        LoftCondition::TangentToProfile => "model-loft-tangent-to-profile",
+        LoftCondition::MatchTangent => "model-loft-match-tangent",
+        LoftCondition::MatchCurvature => "model-loft-match-curvature",
+        LoftCondition::NormalDirection => "model-loft-normal-direction",
+        LoftCondition::TangentDirection => "model-loft-tangent-direction",
+    })
+}
+
 /// The rows of the dialog's body.
 pub(crate) fn body(
     b: &mut ChildSpawner,
@@ -377,7 +431,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "plane-entities-field",
-                "Entities",
+                &tr("model-entities"),
                 Role::PlaneEntities,
                 items_of(Role::PlaneEntities),
                 field == AppliedField::PlaneEntities,
@@ -388,7 +442,7 @@ pub(crate) fn body(
                 "plane-type",
                 "",
                 Role::PlaneType,
-                &opts(&PlaneType::ALL, |m| m.label(), |_| true),
+                &opts(&PlaneType::ALL, plane_type_text, |_| true),
                 index_of(&PlaneType::ALL, &x.kind),
                 None,
             );
@@ -397,7 +451,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "plane-offset",
-                    "Offset distance",
+                    &tr("model-offset-distance"),
                     Role::PlaneOffset,
                     &x.offset_expr,
                     Some(x.flip),
@@ -409,13 +463,13 @@ pub(crate) fn body(
                         b,
                         t,
                         "plane-angle",
-                        "Angle",
+                        &tr("common-angle"),
                         Role::PlaneAngle,
                         &x.angle_expr,
                         Some(x.flip),
                     );
                     b.spawn(
-                        OptionRow::new("plane-flip-alignment", "Flip alignment")
+                        OptionRow::new("plane-flip-alignment", tr("model-plane-flip-alignment"))
                             .checked(x.flip_alignment)
                             .build(t),
                     );
@@ -423,7 +477,7 @@ pub(crate) fn body(
                 // Mid plane of two planes at an angle: which bisector.
                 PlaneType::MidPlane => {
                     b.spawn(
-                        OptionRow::new("plane-flip-alignment", "Flip alignment")
+                        OptionRow::new("plane-flip-alignment", tr("model-plane-flip-alignment"))
                             .checked(x.flip_alignment)
                             .build(t),
                     );
@@ -431,7 +485,7 @@ pub(crate) fn body(
                 _ => {}
             }
             b.spawn(
-                OptionRow::new("plane-flip-normal", "Flip normal")
+                OptionRow::new("plane-flip-normal", tr("model-plane-flip-normal"))
                     .checked(x.flip_normal)
                     .build(t),
             );
@@ -440,15 +494,15 @@ pub(crate) fn body(
             body_tabs(b, t, "sweep", x.body, x.op);
             body_column(b, |b| {
                 let what = if x.body == BodyType::Surface {
-                    "Edges and sketch curves to sweep"
+                    tr("model-sweep-curves")
                 } else {
-                    "Faces and sketch regions to sweep"
+                    tr("model-sweep-regions")
                 };
                 list(
                     b,
                     t,
                     "sweep-profile-field",
-                    what,
+                    &what,
                     Role::SweepProfile,
                     items_of(Role::SweepProfile),
                     field == AppliedField::Profile,
@@ -457,7 +511,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "sweep-path-field",
-                    "Sweep path",
+                    &tr("model-sweep-path"),
                     Role::SweepPath,
                     items_of(Role::SweepPath),
                     field == AppliedField::Path,
@@ -471,7 +525,7 @@ pub(crate) fn body(
                     "sweep-profile-control",
                     "",
                     Role::ProfileControl,
-                    &opts(&ProfileControl::ALL, |m| m.label(), |_| true),
+                    &opts(&ProfileControl::ALL, profile_control_text, |_| true),
                     index_of(&ProfileControl::ALL, &x.control),
                     None,
                 );
@@ -480,7 +534,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "sweep-direction-field",
-                        "Direction",
+                        &tr("common-direction"),
                         Role::LockDirection,
                         items_of(Role::LockDirection),
                         field == AppliedField::LockDirection,
@@ -504,7 +558,7 @@ pub(crate) fn body(
                 b.spawn((
                     Role::LoftProfiles,
                     SelectionList::new("loft-profiles-field")
-                        .placeholder("Profiles")
+                        .placeholder(tr("model-loft-profiles"))
                         .items(items_of(Role::LoftProfiles))
                         .active(field == AppliedField::Profiles)
                         .reorderable(true)
@@ -527,19 +581,22 @@ pub(crate) fn body(
                 })
                 .with_children(|r| {
                     r.spawn(icon("chevron-down", 12.0, t.foreground));
-                    r.spawn(t.text(
-                        "End conditions",
-                        t.font_base,
-                        bevy::text::FontWeight::NORMAL,
-                        t.foreground,
+                    r.spawn((
+                        t.text(
+                            tr("model-loft-end-conditions"),
+                            t.font_base,
+                            bevy::text::FontWeight::NORMAL,
+                            t.foreground,
+                        ),
+                        cadrs_ui::i18n::Translated("model-loft-end-conditions"),
                     ));
                 });
-                let conditions = opts(&LoftCondition::ALL, |c| c.label(), |c| c.available());
+                let conditions = opts(&LoftCondition::ALL, loft_condition_text, |c| c.available());
                 stacked_select(
                     b,
                     t,
                     "loft-start-condition",
-                    "Start profile condition",
+                    &tr("model-loft-start-condition"),
                     Role::StartCondition,
                     &conditions,
                     index_of(&LoftCondition::ALL, &x.start),
@@ -550,7 +607,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "loft-start-direction-field",
-                        "Start direction",
+                        &tr("model-loft-start-direction"),
                         Role::LoftStartDirection,
                         items_of(Role::LoftStartDirection),
                         field == AppliedField::LoftStartDirection,
@@ -561,7 +618,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "loft-start-magnitude",
-                        "Start magnitude",
+                        &tr("model-loft-start-magnitude"),
                         Role::StartMagnitude,
                         &x.start_magnitude_expr,
                         None,
@@ -571,7 +628,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "loft-end-condition",
-                    "End profile condition",
+                    &tr("model-loft-end-condition"),
                     Role::EndCondition,
                     &conditions,
                     index_of(&LoftCondition::ALL, &x.end),
@@ -581,7 +638,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "loft-end-direction-field",
-                        "End direction",
+                        &tr("model-loft-end-direction"),
                         Role::LoftEndDirection,
                         items_of(Role::LoftEndDirection),
                         field == AppliedField::LoftEndDirection,
@@ -592,7 +649,7 @@ pub(crate) fn body(
                         b,
                         t,
                         "loft-end-magnitude",
-                        "End magnitude",
+                        &tr("model-loft-end-magnitude"),
                         Role::EndMagnitude,
                         &x.end_magnitude_expr,
                         None,
@@ -617,21 +674,21 @@ pub(crate) fn body(
                 Role::SplitTypeTab,
                 TabStrip::new("split-type")
                     .compact()
-                    .tab("Part")
-                    .tab("Face")
+                    .tab(tr("common-part"))
+                    .tab(tr("common-face"))
                     .selected(index_of(&SplitType::ALL, &x.split_type))
                     .build(t),
             ));
             body_column(b, |b| {
                 let what = match x.split_type {
-                    SplitType::Part => "Parts or surfaces to split",
-                    SplitType::Face => "Faces to split",
+                    SplitType::Part => tr("model-split-parts"),
+                    SplitType::Face => tr("model-split-faces"),
                 };
                 list(
                     b,
                     t,
                     "split-parts-field",
-                    what,
+                    &what,
                     Role::SplitParts,
                     items_of(Role::SplitParts),
                     field == AppliedField::SplitParts,
@@ -640,7 +697,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "split-tool-field",
-                    "Entity to split with",
+                    &tr("model-split-tool"),
                     Role::SplitTool,
                     items_of(Role::SplitTool),
                     field == AppliedField::SplitTool,
@@ -648,13 +705,13 @@ pub(crate) fn body(
                 match x.split_type {
                     SplitType::Part => {
                         b.spawn(
-                            OptionRow::new("split-keep-tools", "Keep tools")
+                            OptionRow::new("split-keep-tools", tr("model-keep-tools"))
                                 .checked(x.keep_tools)
                                 .build(t),
                         );
                         if matches!(x.tool, Some(SplitToolRef::Face(_))) {
                             b.spawn(
-                                OptionRow::new("split-trim", "Trim to face boundaries")
+                                OptionRow::new("split-trim", tr("model-split-trim"))
                                     .checked(x.trim)
                                     .build(t),
                             );
@@ -666,7 +723,7 @@ pub(crate) fn body(
                         })
                         .with_children(|r| {
                             r.spawn(
-                                OptionRow::new("split-keep-both", "Keep both sides")
+                                OptionRow::new("split-keep-both", tr("model-split-keep-both"))
                                     .checked(x.keep_both)
                                     .build(t),
                             )
@@ -679,16 +736,19 @@ pub(crate) fn body(
                                     "split-flip",
                                     Role::Flip,
                                     x.flip,
-                                    "Opposite direction",
+                                    &tr("common-opposite-direction"),
                                 );
                             }
                         });
                     }
                     SplitType::Face => {
                         b.spawn(
-                            OptionRow::new("split-keep-tools", "Keep tool surfaces and curves")
-                                .checked(x.keep_tools)
-                                .build(t),
+                            OptionRow::new(
+                                "split-keep-tools",
+                                tr("model-split-keep-tool-surfaces"),
+                            )
+                            .checked(x.keep_tools)
+                            .build(t),
                         );
                     }
                 }

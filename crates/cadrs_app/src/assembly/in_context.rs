@@ -43,6 +43,7 @@ use cadrs_core::assembly::context::{
     StudioContext, UpdateContext,
 };
 use cadrs_core::{Document, DocumentId, ElementId, FeatureId, PartId, Solid};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, MenuAction, NamePopup, NamePopupCancel, NamePopupCommit, SliderChange,
@@ -636,12 +637,12 @@ fn sync_context_bar(
                     .assembly_names
                     .get(&(el.id, ctx.id))
                     .cloned()
-                    .unwrap_or_else(|| "the assembly".into())
+                    .unwrap_or_else(|| tr("asm-context-the-assembly"))
             } else {
                 doc.doc
                     .element(ctx.assembly)
                     .map(|a| a.name.clone())
-                    .unwrap_or_else(|| "the assembly".into())
+                    .unwrap_or_else(|| tr("asm-context-the-assembly"))
             };
             let pending = is_pending(&doc.doc, el.id, ctx.id);
             let status = if pending {
@@ -737,7 +738,10 @@ fn sync_context_bar(
             b.spawn((
                 Name::new("context-title"),
                 t.text(
-                    format!("{} of {}", w.label, w.assembly),
+                    tr_with(
+                        "asm-context-of-assembly",
+                        &[("context", &w.label), ("assembly", &w.assembly)],
+                    ),
                     12.0,
                     FontWeight::SEMIBOLD,
                     t.foreground,
@@ -760,25 +764,25 @@ fn sync_context_bar(
                     b.spawn((
                         Name::new("context-changed"),
                         t.text(
-                            "Assembly changed",
+                            tr("asm-context-assembly-changed"),
                             11.0,
                             FontWeight::MEDIUM,
                             Color::srgb_u8(0xc2, 0x6a, 0x00),
                         ),
-                        Tooltip::new(
-                            "The assembly has changed since this context was taken: Update context",
-                        ),
+                        Translated("asm-context-assembly-changed"),
+                        Tooltip::new(tr("asm-context-assembly-changed-tooltip")),
                     ));
                 }
                 ContextStatus::NoPrimary => {
                     b.spawn((
                         Name::new("context-no-primary"),
                         t.text(
-                            "No primary instance",
+                            tr("asm-context-no-primary"),
                             11.0,
                             FontWeight::MEDIUM,
                             t.feature_error,
                         ),
+                        Translated("asm-context-no-primary"),
                         Tooltip::new(context::NO_PRIMARY),
                     ));
                 }
@@ -787,15 +791,15 @@ fn sync_context_bar(
             let can_update = w.status != ContextStatus::NoPrimary;
             b.spawn(
                 cadrs_ui::Button::new("context-update")
-                    .label("Update context")
+                    .label(tr("asm-context-update"))
                     .icon("restore")
                     .small()
                     .ghost()
                     .disabled(!can_update)
                     .tooltip(if can_update {
-                        "Take the assembly as it is now; the features that reference it follow"
+                        tr("asm-context-update-tooltip")
                     } else {
-                        context::NO_PRIMARY
+                        context::NO_PRIMARY.to_string()
                     })
                     .build(&t),
             )
@@ -805,11 +809,11 @@ fn sync_context_bar(
             b.spawn(
                 IconButton::new("context-eye", if w.hidden { "hidden" } else { "visible" })
                     .icon_size(15.0)
-                    .tooltip(if w.hidden {
-                        "Show context"
+                    .tooltip(tr(if w.hidden {
+                        "asm-context-show"
                     } else {
-                        "Hide context"
-                    })
+                        "asm-context-hide"
+                    }))
                     .build(&t),
             )
             .observe(move |_: On<Activate>, mut commands: Commands| {
@@ -817,7 +821,7 @@ fn sync_context_bar(
             });
             b.spawn(
                 cadrs_ui::Button::new("context-go")
-                    .label("Go to assembly")
+                    .label(tr("asm-context-go-to-assembly"))
                     .small()
                     .ghost()
                     .dropdown_caret()
@@ -830,7 +834,7 @@ fn sync_context_bar(
                       mut commands: Commands| {
                     let at = below(&q, a.entity);
                     let mut menu = Menu::new("context-go-menu").min_width(210.0).item(
-                        MenuItem::new("context-go-menu-assembly", "Go to assembly")
+                        MenuItem::new("context-go-menu-assembly", tr("asm-context-go-to-assembly"))
                             .icon("assembly"),
                     );
                     // MC5.5: the part's document is another than the assembly's; MC5.6: parts
@@ -839,14 +843,17 @@ fn sync_context_bar(
                         menu.item(
                             MenuItem::new(
                                 "context-go-menu-version",
-                                "Create version and go to assembly",
+                                tr("asm-context-version-and-go"),
                             )
                             .icon("versions"),
                         )
                     } else {
                         menu.item(
-                            MenuItem::new("context-go-menu-insert", "Insert and go to assembly")
-                                .icon("file-import"),
+                            MenuItem::new(
+                                "context-go-menu-insert",
+                                tr("asm-context-insert-and-go"),
+                            )
+                            .icon("file-import"),
                         )
                     };
                     let anchor =
@@ -870,10 +877,10 @@ fn sync_context_bar(
             );
             b.spawn(
                 cadrs_ui::Button::new("context-done")
-                    .label("Done")
+                    .label(tr("common-done"))
                     .small()
                     .secondary()
-                    .tooltip("Edit outside of the context")
+                    .tooltip(tr("asm-context-done-tooltip"))
                     .build(&t),
             )
             .observe(move |_: On<Activate>, mut commands: Commands| {
@@ -889,13 +896,19 @@ fn sync_context_bar(
         .with_children(|b| {
             b.spawn(
                 cadrs_ui::Checkbox::new("context-select-transparent")
-                    .label("Select transparent geometry")
+                    .label(tr("asm-context-select-transparent"))
                     .checked(w.view.1)
                     .height(18.0)
                     .build(&t),
             );
             b.spawn((
-                t.text("Transparency", 11.0, FontWeight::NORMAL, t.muted_foreground),
+                t.text(
+                    tr("asm-context-transparency"),
+                    11.0,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("asm-context-transparency"),
                 Pickable::IGNORE,
             ));
             // Left: see-through; right: solid.
@@ -903,7 +916,7 @@ fn sync_context_bar(
                 cadrs_ui::Slider::new("context-opacity")
                     .value((w.view.0 as f32 / 100.0 - 0.05) / 0.9)
                     .width(110.0)
-                    .tooltip("How see-through the context is")
+                    .tooltip(tr("asm-context-transparency-tooltip"))
                     .build(&t),
             );
         });
@@ -1060,7 +1073,7 @@ fn sync_contexts_row(
             let current = act
                 .and_then(|a| all.iter().find(|c| c.id == a))
                 .map(|c| c.label())
-                .unwrap_or_else(|| "Edit outside of context".into());
+                .unwrap_or_else(|| tr("asm-context-edit-outside"));
             let items: Vec<(ContextNo, String, bool)> = all
                 .iter()
                 .map(|c| {
@@ -1119,11 +1132,12 @@ fn sync_contexts_row(
         .with_children(|r| {
             r.spawn((
                 t.text(
-                    "Assembly contexts",
+                    tr("asm-context-assembly-contexts"),
                     t.font_sm,
                     FontWeight::SEMIBOLD,
                     t.foreground,
                 ),
+                Translated("asm-context-assembly-contexts"),
                 Pickable::IGNORE,
             ));
             r.spawn(Node {
@@ -1139,7 +1153,7 @@ fn sync_contexts_row(
                         .outline()
                         .dropdown_caret()
                         .width(Val::Px(140.0))
-                        .tooltip("The context shown, or editing outside of context")
+                        .tooltip(tr("asm-context-select-tooltip"))
                         .build(&t),
                 )
                 .observe(
@@ -1154,13 +1168,16 @@ fn sync_contexts_row(
                                 MenuItem::new(format!("context-select-menu-{i}"), label.clone())
                                     .checked(act == Some(*i));
                             if *stale {
-                                item = item.dot(STALE).tooltip("An update is available");
+                                item = item.dot(STALE).tooltip(tr("asm-context-update-available"));
                             }
                             menu = menu.item(item);
                         }
                         menu = menu.separator().item(
-                            MenuItem::new("context-select-menu-outside", "Edit outside of context")
-                                .checked(act.is_none()),
+                            MenuItem::new(
+                                "context-select-menu-outside",
+                                tr("asm-context-edit-outside"),
+                            )
+                            .checked(act.is_none()),
                         );
                         let anchor = cadrs_ui::menu::open_context_menu(
                             &mut commands,
@@ -1187,7 +1204,7 @@ fn sync_contexts_row(
                 b.spawn(
                     IconButton::new("context-more", "more-horizontal")
                         .icon_size(15.0)
-                        .tooltip("Rename, update or delete the context")
+                        .tooltip(tr("asm-context-more-tooltip"))
                         .build(&t),
                 )
                 .observe(
@@ -1200,17 +1217,20 @@ fn sync_contexts_row(
                         let menu = Menu::new("context-more-menu")
                             .min_width(170.0)
                             .item(
-                                MenuItem::new("context-more-menu-rename", "Rename…")
-                                    .icon("edit")
-                                    .disabled(none),
+                                MenuItem::new(
+                                    "context-more-menu-rename",
+                                    tr("common-rename-ellipsis"),
+                                )
+                                .icon("edit")
+                                .disabled(none),
                             )
                             .item(
-                                MenuItem::new("context-more-menu-update", "Update context")
+                                MenuItem::new("context-more-menu-update", tr("asm-context-update"))
                                     .icon("restore")
                                     .disabled(none),
                             )
                             .item(
-                                MenuItem::new("context-more-menu-delete", "Delete context")
+                                MenuItem::new("context-more-menu-delete", tr("asm-context-delete"))
                                     .icon("delete")
                                     .disabled(none),
                             );
@@ -1261,7 +1281,7 @@ fn open_rename(world: &mut World, studio: ElementId, id: ContextNo, at: Vec2) {
     world.insert_resource(Renaming(studio, id));
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    NamePopup::new("context-rename", "Rename context", at)
+    NamePopup::new("context-rename", tr("asm-context-rename"), at)
         .value(ctx.label())
         .spawn(&mut commands, &theme);
     world.flush();
@@ -1494,9 +1514,10 @@ fn sync_feature_arrows(
                 .filter_map(|c| el.context(*c))
                 .map(|c| c.label())
                 .collect();
-            let mut tip = format!("In context: {}", names.join(", "));
+            let mut tip = tr_with("asm-context-in-context", &[("contexts", &names.join(", "))]);
             if stale {
-                tip.push_str(" · an update is available");
+                tip.push_str(" · ");
+                tip.push_str(&tr("asm-context-an-update-is-available"));
             }
             Some(ArrowState {
                 solid: true,
@@ -1536,12 +1557,13 @@ fn sync_instance_arrows(
         // MC5: a linked instance's Part Studio is in another document.
         if let Some((primary, stale, studio)) = statuses.linked.get(&ir.0) {
             let mut tip = if *primary {
-                format!("Primary instance of an in-context Part Studio ({studio})")
+                tr_with("asm-context-primary-linked", &[("studio", studio)])
             } else {
-                format!("Secondary instance: {studio} has in-context references")
+                tr_with("asm-context-secondary-instance", &[("studio", studio)])
             };
             if *stale {
-                tip.push_str(" · an update is available");
+                tip.push_str(" · ");
+                tip.push_str(&tr("asm-context-an-update-is-available"));
             }
             place_arrow(
                 &mut commands,
@@ -1572,12 +1594,16 @@ fn sync_instance_arrows(
                 .any(|c| statuses.get(studio, c.id) == ContextStatus::OutOfDate);
             let solid = !primary.is_empty();
             let mut tip = if solid {
-                format!("Primary instance of {} ({})", primary.join(", "), el.name)
+                tr_with(
+                    "asm-context-primary-of",
+                    &[("contexts", &primary.join(", ")), ("studio", &el.name)],
+                )
             } else {
-                format!("Secondary instance: {} has in-context references", el.name)
+                tr_with("asm-context-secondary-instance", &[("studio", &el.name)])
             };
             if stale {
-                tip.push_str(" · an update is available");
+                tip.push_str(" · ");
+                tip.push_str(&tr("asm-context-an-update-is-available"));
             }
             Some(ArrowState {
                 solid,

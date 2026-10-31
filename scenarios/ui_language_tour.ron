@@ -1,0 +1,41 @@
+// Issue #178: the whole interface in another language. Deutsch is chosen in Preferences on the
+// documents page, which is made again in German at once (01); so is all that is made after: the
+// Create menu (02), the New document dialog (03), the document window with its toolbar, feature
+// list and Parts (04), the viewport's right-click menu (05), the Extrude dialog (06), and the
+// documents page again, the document modified by "ich" (07).
+Scenario(
+    start: Some("landing"),
+    steps: [
+        Click(ui("app-menu")),
+        Click(ui("app-preferences")),
+        WaitFor("preferences-dialog"),
+        Click(ui("pref-language")),
+        WaitFor("pref-language-option-de"),
+        Click(ui("pref-language-option-de")),
+        Click(ui("pref-ok")),
+        Wait(5),
+        Screenshot("01-german-chosen"),
+        Click(ui("create")),
+        WaitFor("new-document"),
+        Screenshot("02-create-menu"),
+        Click(ui("new-document")),
+        WaitFor("new-document-create"),
+        Screenshot("03-new-document-dialog"),
+        Click(ui("new-document-create")),
+        WaitFor("document-shell"),
+        Wait(20),
+        Screenshot("04-document"),
+        RightClick(at(1100, 700)),
+        Wait(5),
+        Screenshot("05-viewport-menu"),
+        Key("Escape"),
+        Key("Shift+E"),
+        Wait(10),
+        Screenshot("06-extrude-dialog"),
+        Key("Escape"),
+        Click(ui("app-menu")),
+        Click(ui("app-documents")),
+        Wait(20),
+        Screenshot("07-documents-page"),
+    ],
+)

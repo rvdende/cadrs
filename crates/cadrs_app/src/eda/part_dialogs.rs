@@ -27,6 +27,8 @@ use cadrs_ui::dialog_fields::{Select, SelectState};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Checkbox, Dialog};
 
+use cadrs_ui::i18n::{Translated, tr, tr_with};
+
 use super::part_tools::{commit, current};
 use super::ui;
 use crate::AppState;
@@ -55,7 +57,8 @@ fn spawn_dialog(w: &mut World, d: Dialog) {
     ));
 }
 
-fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSpawner)) {
+/// A row: its label (a catalog key; "" for none) and the control `f` spawns.
+fn row(p: &mut ChildSpawner, t: &Theme, label: &'static str, f: impl FnOnce(&mut ChildSpawner)) {
     p.spawn(Node {
         align_items: AlignItems::Center,
         column_gap: Val::Px(10.0),
@@ -64,7 +67,13 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
     })
     .with_children(|r| {
         r.spawn((
-            t.text(label, t.font_base, FontWeight::MEDIUM, t.muted_foreground),
+            t.text(
+                tr(label),
+                t.font_base,
+                FontWeight::MEDIUM,
+                t.muted_foreground,
+            ),
+            Translated(label),
             Node {
                 width: Val::Px(150.0),
                 ..default()
@@ -77,7 +86,7 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
 fn text_row(
     p: &mut ChildSpawner,
     t: &Theme,
-    label: &str,
+    label: &'static str,
     name: &'static str,
     value: String,
     width: f32,
@@ -96,15 +105,16 @@ fn text_row(
 fn select_row(
     p: &mut ChildSpawner,
     t: &Theme,
-    label: &str,
+    label: &'static str,
     name: &'static str,
     options: &[&str],
     selected: usize,
 ) {
     row(p, t, label, |r| {
         let mut s = Select::new(name).bordered().width(Val::Px(200.0));
+        // (The options are catalog keys.)
         for o in options {
-            s = s.option(*o, true);
+            s = s.option(tr(o), true);
         }
         r.spawn(s.selected(selected).build(t));
     });
@@ -112,14 +122,17 @@ fn select_row(
 
 fn ok_cancel(f: &mut ChildSpawner, t: &Theme, ok: &'static str, run: fn(&mut World)) {
     f.spawn((
-        cadrs_ui::Button::new(ok).label("OK").primary().build(t),
+        cadrs_ui::Button::new(ok)
+            .label(tr("common-ok"))
+            .primary()
+            .build(t),
         observe(move |_: On<Activate>, mut commands: Commands| {
             commands.queue(run);
         }),
     ));
     f.spawn((
         cadrs_ui::Button::new(format!("{ok}-cancel"))
-            .label("Cancel")
+            .label(tr("common-cancel"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(close_all);
@@ -157,25 +170,26 @@ fn mm_text(v: Nm) -> String {
 // ---------------------------------------------------------------------------------------------
 // Pins (GS23)
 
+// The choices of the lists below: (label's catalog key, value).
 const PIN_TYPES: [(&str, PinType); 12] = [
-    ("Input", PinType::Input),
-    ("Output", PinType::Output),
-    ("Bidirectional", PinType::Bidirectional),
-    ("Tri-state", PinType::TriState),
-    ("Passive", PinType::Passive),
-    ("Free", PinType::Free),
-    ("Unspecified", PinType::Unspecified),
-    ("Power input", PinType::PowerIn),
-    ("Power output", PinType::PowerOut),
-    ("Open collector", PinType::OpenCollector),
-    ("Open emitter", PinType::OpenEmitter),
-    ("Unconnected", PinType::NoConnect),
+    ("pcb-pin-type-input", PinType::Input),
+    ("pcb-pin-type-output", PinType::Output),
+    ("pcb-pin-type-bidirectional", PinType::Bidirectional),
+    ("pcb-pin-type-tri-state", PinType::TriState),
+    ("pcb-pin-type-passive", PinType::Passive),
+    ("pcb-pin-type-free", PinType::Free),
+    ("pcb-pin-type-unspecified", PinType::Unspecified),
+    ("pcb-pin-type-power-input", PinType::PowerIn),
+    ("pcb-pin-type-power-output", PinType::PowerOut),
+    ("pcb-pin-type-open-collector", PinType::OpenCollector),
+    ("pcb-pin-type-open-emitter", PinType::OpenEmitter),
+    ("pcb-pin-type-unconnected", PinType::NoConnect),
 ];
 const ORIENTATIONS: [(&str, Orientation); 4] = [
-    ("Right", Orientation::Right),
-    ("Left", Orientation::Left),
-    ("Up", Orientation::Up),
-    ("Down", Orientation::Down),
+    ("pcb-pin-dir-right", Orientation::Right),
+    ("pcb-pin-dir-left", Orientation::Left),
+    ("pcb-pin-dir-up", Orientation::Up),
+    ("pcb-pin-dir-down", Orientation::Down),
 ];
 
 /// Pin properties: a new pin (`None`) or pin `i`.
@@ -213,14 +227,21 @@ pub fn open_pin(w: &mut World, i: Option<usize>) {
     spawn_dialog(
         w,
         Dialog::new("eda-pin-dialog")
-            .title("Pin properties")
+            .title(tr("pcb-pin-props"))
             .width(460.0)
             .body(move |p| {
-                text_row(p, &t, "Pin name", "eda-pin-name", props.name.clone(), 160.0);
                 text_row(
                     p,
                     &t,
-                    "Pin number",
+                    "pcb-pin-name",
+                    "eda-pin-name",
+                    props.name.clone(),
+                    160.0,
+                );
+                text_row(
+                    p,
+                    &t,
+                    "pcb-pin-number",
                     "eda-pin-number",
                     props.number.clone(),
                     160.0,
@@ -232,7 +253,7 @@ pub fn open_pin(w: &mut World, i: Option<usize>) {
                 select_row(
                     p,
                     &t,
-                    "Electrical type",
+                    "pcb-pin-electrical-type",
                     "eda-pin-type",
                     &PIN_TYPES.map(|x| x.0),
                     ti,
@@ -244,31 +265,17 @@ pub fn open_pin(w: &mut World, i: Option<usize>) {
                 select_row(
                     p,
                     &t,
-                    "Orientation",
+                    "pcb-pin-orientation",
                     "eda-pin-orientation",
                     &ORIENTATIONS.map(|x| x.0),
                     oi,
                 );
+                text_row(p, &t, "pcb-pin-x", "eda-pin-x", mils(props.at.x), 120.0);
+                text_row(p, &t, "pcb-pin-y", "eda-pin-y", mils(props.at.y), 120.0);
                 text_row(
                     p,
                     &t,
-                    "X position (mils)",
-                    "eda-pin-x",
-                    mils(props.at.x),
-                    120.0,
-                );
-                text_row(
-                    p,
-                    &t,
-                    "Y position (mils)",
-                    "eda-pin-y",
-                    mils(props.at.y),
-                    120.0,
-                );
-                text_row(
-                    p,
-                    &t,
-                    "Pin length (mils)",
+                    "pcb-pin-length",
                     "eda-pin-length",
                     mils(props.length),
                     120.0,
@@ -303,10 +310,7 @@ fn accept_pin(w: &mut World) {
         }
         let off = cadrs_eda::lib_edit::off_grid_pins(s);
         if !off.is_empty() {
-            return Err(format!(
-                "Pin {} is off the 50 mil grid: it couldn't connect to wires",
-                off.join(", ")
-            ));
+            return Err(tr_with("pcb-pins-off-grid", &[("pins", &off.join(", "))]));
         }
         Ok(())
     });
@@ -332,17 +336,53 @@ pub fn open_symbol_props(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-sym-dialog")
-            .title("Symbol properties")
+            .title(tr("pcb-sym-props"))
             .width(560.0)
             .body(move |p| {
-                text_row(p, &t, "Symbol name", "eda-sym-name", name, 320.0);
-                text_row(p, &t, "Reference prefix", "eda-sym-ref", reference, 120.0);
-                text_row(p, &t, "Value", "eda-sym-value", value, 320.0);
-                text_row(p, &t, "Footprint", "eda-sym-footprint", footprint, 320.0);
-                p.spawn(t.text(format!("A footprint of this studio: {lib}:<name>. Empty: the component's own footprint."), t.font_sm, FontWeight::NORMAL, t.muted_foreground));
-                text_row(p, &t, "Keywords", "eda-sym-keywords", keywords, 320.0);
-                p.spawn(Checkbox::new("eda-sym-pin-numbers").label("Show pin numbers").checked(numbers).build(&t));
-                p.spawn(Checkbox::new("eda-sym-pin-names").label("Show pin names").checked(names).build(&t));
+                text_row(p, &t, "pcb-sym-name", "eda-sym-name", name, 320.0);
+                text_row(
+                    p,
+                    &t,
+                    "pcb-sym-reference-prefix",
+                    "eda-sym-ref",
+                    reference,
+                    120.0,
+                );
+                text_row(p, &t, "common-value", "eda-sym-value", value, 320.0);
+                text_row(
+                    p,
+                    &t,
+                    "pcb-sym-footprint",
+                    "eda-sym-footprint",
+                    footprint,
+                    320.0,
+                );
+                p.spawn(t.text(
+                    tr_with("pcb-sym-footprint-hint", &[("library", &lib)]),
+                    t.font_sm,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ));
+                text_row(
+                    p,
+                    &t,
+                    "pcb-sym-keywords",
+                    "eda-sym-keywords",
+                    keywords,
+                    320.0,
+                );
+                p.spawn(
+                    Checkbox::new("eda-sym-pin-numbers")
+                        .label(tr("pcb-sym-show-pin-numbers"))
+                        .checked(numbers)
+                        .build(&t),
+                );
+                p.spawn(
+                    Checkbox::new("eda-sym-pin-names")
+                        .label(tr("pcb-sym-show-pin-names"))
+                        .checked(names)
+                        .build(&t),
+                );
             })
             .footer(move |f| ok_cancel(f, &tf, "eda-sym-ok", accept_symbol_props)),
     );
@@ -383,11 +423,16 @@ fn accept_symbol_props(w: &mut World) {
 // Pads (GS24)
 
 const PAD_KINDS: [(&str, PadKind); 3] = [
-    ("Through-hole", PadKind::ThroughHole),
-    ("SMD", PadKind::Smd),
-    ("NPTH, mechanical", PadKind::NonPlated),
+    ("pcb-pad-kind-through-hole", PadKind::ThroughHole),
+    ("pcb-pad-kind-smd", PadKind::Smd),
+    ("pcb-pad-kind-npth", PadKind::NonPlated),
 ];
-const PAD_SHAPES: [&str; 4] = ["Circular", "Rectangular", "Oval", "Rounded rectangle"];
+const PAD_SHAPES: [&str; 4] = [
+    "pcb-pad-shape-circular",
+    "pcb-pad-shape-rectangular",
+    "pcb-pad-shape-oval",
+    "pcb-pad-shape-rounded-rectangle",
+];
 
 pub fn open_pad(w: &mut World, i: usize) {
     let Some((_, _, c)) = current(w) else { return };
@@ -400,13 +445,13 @@ pub fn open_pad(w: &mut World, i: usize) {
     spawn_dialog(
         w,
         Dialog::new("eda-pad-dialog")
-            .title("Pad properties")
+            .title(tr("pcb-pad-props"))
             .width(460.0)
             .body(move |p| {
                 text_row(
                     p,
                     &t,
-                    "Pad number",
+                    "pcb-pad-number",
                     "eda-pad-number",
                     pad.number.clone(),
                     120.0,
@@ -414,7 +459,7 @@ pub fn open_pad(w: &mut World, i: usize) {
                 select_row(
                     p,
                     &t,
-                    "Pad type",
+                    "pcb-pad-type",
                     "eda-pad-type",
                     &PAD_KINDS.map(|x| x.0),
                     PAD_KINDS
@@ -428,27 +473,13 @@ pub fn open_pad(w: &mut World, i: usize) {
                     PadShape::Oval => 2,
                     _ => 3,
                 };
-                select_row(p, &t, "Pad shape", "eda-pad-shape", &PAD_SHAPES, si);
+                select_row(p, &t, "pcb-pad-shape", "eda-pad-shape", &PAD_SHAPES, si);
+                text_row(p, &t, "pcb-pad-x", "eda-pad-x", mm_text(pad.at.x), 120.0);
+                text_row(p, &t, "pcb-pad-y", "eda-pad-y", mm_text(pad.at.y), 120.0);
                 text_row(
                     p,
                     &t,
-                    "Position X (mm)",
-                    "eda-pad-x",
-                    mm_text(pad.at.x),
-                    120.0,
-                );
-                text_row(
-                    p,
-                    &t,
-                    "Position Y (mm)",
-                    "eda-pad-y",
-                    mm_text(pad.at.y),
-                    120.0,
-                );
-                text_row(
-                    p,
-                    &t,
-                    "Size X (mm)",
+                    "pcb-pad-size-x",
                     "eda-pad-w",
                     mm_text(pad.size.w),
                     120.0,
@@ -456,7 +487,7 @@ pub fn open_pad(w: &mut World, i: usize) {
                 text_row(
                     p,
                     &t,
-                    "Size Y (mm)",
+                    "pcb-pad-size-y",
                     "eda-pad-h",
                     mm_text(pad.size.h),
                     120.0,
@@ -464,7 +495,7 @@ pub fn open_pad(w: &mut World, i: usize) {
                 text_row(
                     p,
                     &t,
-                    "Hole diameter (mm)",
+                    "pcb-pad-hole",
                     "eda-pad-drill",
                     pad.drill.map_or(String::new(), |d| mm_text(d.size.w)),
                     120.0,
@@ -499,7 +530,7 @@ fn accept_pad(w: &mut World) {
     close_all(w);
     commit(w, "Pad properties", |c| {
         let f = c.footprint.as_mut().unwrap();
-        let p = f.pads.get_mut(i).ok_or("The pad is gone")?;
+        let p = f.pads.get_mut(i).ok_or_else(|| tr("pcb-pad-gone"))?;
         let v: Vec<Nm> = vals.into_iter().collect::<Result<_, _>>()?;
         p.number = number;
         p.kind = kind;
@@ -528,9 +559,9 @@ fn accept_pad(w: &mut World) {
 // Footprint properties (GS24)
 
 const MOUNTS: [(&str, MountKind); 3] = [
-    ("Through hole", MountKind::ThroughHole),
-    ("SMD", MountKind::Smd),
-    ("Unspecified", MountKind::Unspecified),
+    ("pcb-mount-through-hole", MountKind::ThroughHole),
+    ("pcb-mount-smd", MountKind::Smd),
+    ("pcb-mount-unspecified", MountKind::Unspecified),
 ];
 
 pub fn open_footprint_props(w: &mut World) {
@@ -547,15 +578,15 @@ pub fn open_footprint_props(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-fp-dialog")
-            .title("Footprint properties")
+            .title(tr("pcb-fp-props"))
             .width(560.0)
             .body(move |p| {
-                text_row(p, &t, "Footprint name", "eda-fp-name", name, 340.0);
-                text_row(p, &t, "Value", "eda-fp-value", value, 340.0);
+                text_row(p, &t, "pcb-fp-name", "eda-fp-name", name, 340.0);
+                text_row(p, &t, "common-value", "eda-fp-value", value, 340.0);
                 select_row(
                     p,
                     &t,
-                    "Component type",
+                    "pcb-fp-component-type",
                     "eda-fp-type",
                     &MOUNTS.map(|x| x.0),
                     MOUNTS.iter().position(|(_, m)| *m == mount).unwrap_or(0),
@@ -601,17 +632,31 @@ pub fn open_rect(w: &mut World, i: usize) {
     spawn_dialog(
         w,
         Dialog::new("eda-rect-dialog")
-            .title("Rectangle properties")
+            .title(tr("pcb-rect-props"))
             .width(420.0)
             .body(move |p| {
-                text_row(p, &t, "Start X (mm)", "eda-rect-x0", mm_text(a.x), 120.0);
-                text_row(p, &t, "Start Y (mm)", "eda-rect-y0", mm_text(a.y), 120.0);
-                text_row(p, &t, "End X (mm)", "eda-rect-x1", mm_text(b.x), 120.0);
-                text_row(p, &t, "End Y (mm)", "eda-rect-y1", mm_text(b.y), 120.0);
                 text_row(
                     p,
                     &t,
-                    "Line width (mm)",
+                    "pcb-rect-start-x",
+                    "eda-rect-x0",
+                    mm_text(a.x),
+                    120.0,
+                );
+                text_row(
+                    p,
+                    &t,
+                    "pcb-rect-start-y",
+                    "eda-rect-y0",
+                    mm_text(a.y),
+                    120.0,
+                );
+                text_row(p, &t, "pcb-rect-end-x", "eda-rect-x1", mm_text(b.x), 120.0);
+                text_row(p, &t, "pcb-rect-end-y", "eda-rect-y1", mm_text(b.y), 120.0);
+                text_row(
+                    p,
+                    &t,
+                    "pcb-rect-line-width",
                     "eda-rect-width",
                     mm_text(width),
                     120.0,
@@ -644,7 +689,7 @@ fn accept_rect(w: &mut World) {
             .unwrap()
             .shapes
             .get_mut(i)
-            .ok_or("The shape is gone")?;
+            .ok_or_else(|| tr("pcb-shape-gone"))?;
         s.shape.geom = Geom::Rect {
             a: Pt::new(v[0], v[1]),
             b: Pt::new(v[2], v[3]),
@@ -670,13 +715,13 @@ pub fn open_model(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-model-dialog")
-            .title("3D model")
+            .title(tr("pcb-fp-model"))
             .width(560.0)
             .body(move |p| {
                 text_row(
                     p,
                     &t,
-                    "Model file",
+                    "pcb-model-file",
                     "eda-model-path",
                     m.source.clone(),
                     340.0,
@@ -685,14 +730,14 @@ pub fn open_model(w: &mut World) {
                 row(p, &t, "", move |r| {
                     r.spawn((
                         cadrs_ui::Button::new("eda-model-browse")
-                            .label("Browse…")
+                            .label(tr("common-browse"))
                             .build(&tb),
                         observe(|_: On<Activate>, mut commands: Commands| {
                             commands.queue(browse_model);
                         }),
                     ));
                 });
-                for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+                for k in 0..3 {
                     let name: &'static str = [
                         "eda-model-offset-x",
                         "eda-model-offset-y",
@@ -701,19 +746,27 @@ pub fn open_model(w: &mut World) {
                     text_row(
                         p,
                         &t,
-                        &format!("Offset {axis} (mm)"),
+                        [
+                            "pcb-model-offset-x",
+                            "pcb-model-offset-y",
+                            "pcb-model-offset-z",
+                        ][k],
                         name,
                         format!("{}", m.offset[k]),
                         100.0,
                     );
                 }
-                for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+                for k in 0..3 {
                     let name: &'static str =
                         ["eda-model-rot-x", "eda-model-rot-y", "eda-model-rot-z"][k];
                     text_row(
                         p,
                         &t,
-                        &format!("Rotation {axis} (°)"),
+                        [
+                            "pcb-model-rotation-x",
+                            "pcb-model-rotation-y",
+                            "pcb-model-rotation-z",
+                        ][k],
                         name,
                         format!("{}", m.rotation[k]),
                         100.0,
@@ -722,7 +775,7 @@ pub fn open_model(w: &mut World) {
                 text_row(
                     p,
                     &t,
-                    "Scale",
+                    "pcb-model-scale",
                     "eda-model-scale",
                     format!("{}", m.scale[0]),
                     100.0,
@@ -730,7 +783,7 @@ pub fn open_model(w: &mut World) {
                 text_row(
                     p,
                     &t,
-                    "Opacity",
+                    "pcb-model-opacity",
                     "eda-model-opacity",
                     format!("{}", m.opacity),
                     100.0,
@@ -746,7 +799,7 @@ fn accept_model(w: &mut World) {
         ui::text_value(w, n)
             .trim()
             .parse::<f64>()
-            .map_err(|_| format!("{n}: not a number"))
+            .map_err(|_| tr_with("pcb-not-a-number", &[("field", n)]))
     };
     let off = [
         num(w, "eda-model-offset-x"),
@@ -785,7 +838,7 @@ fn browse_model(w: &mut World) {
         &mut c,
         &theme,
         "eda-model-picker",
-        "Choose a 3D model",
+        &tr("pcb-model-picker-title"),
         "eda-model-file",
         dir,
         &["step", "stp", "wrl", "obj"],
@@ -808,7 +861,16 @@ fn on_model_picked(
             let bytes = match cadrs_fs::read(&path) {
                 Ok(b) => b,
                 Err(e) => {
-                    ui::toast(w, &format!("Couldn't read {}: {e}", path.display()));
+                    ui::toast(
+                        w,
+                        &tr_with(
+                            "pcb-couldnt-read",
+                            &[
+                                ("name", &path.display().to_string()),
+                                ("error", &e.to_string()),
+                            ],
+                        ),
+                    );
                     return;
                 }
             };
@@ -846,10 +908,10 @@ pub fn register(app: &mut App) {
 
 /// Which side of the body a pin sits on, and the direction it points (into the body).
 const SIDES: [(&str, f64); 4] = [
-    ("Left", 0.0),
-    ("Right", 180.0),
-    ("Top", 270.0),
-    ("Bottom", 90.0),
+    ("pcb-side-left", 0.0),
+    ("pcb-side-right", 180.0),
+    ("pcb-side-top", 270.0),
+    ("pcb-side-bottom", 90.0),
 ];
 
 #[derive(Clone, Debug)]
@@ -904,26 +966,64 @@ pub fn open_pin_table(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-pin-table")
-            .title("Pin table")
+            .title(tr("pcb-sym-pin-table"))
             .width(640.0)
             .body(move |p| {
-                p.spawn(t.text("Number, name, electrical type and side of each pin. Add several at once: \u{201c}1 ANT, 2 GND, 3 3.3V\u{201d}.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
-                p.spawn(Node { column_gap: Val::Px(8.0), align_items: AlignItems::Center, margin: UiRect::vertical(Val::Px(6.0)), ..default() }).with_children(|r| {
-                    r.spawn(TextInput::new("eda-pins-add").placeholder("1 ANT, 2 GND, …").width(Val::Px(330.0)).height(26.0).build(&t));
-                    let mut s = Select::new("eda-pins-add-side").bordered().width(Val::Px(110.0));
+                p.spawn((
+                    t.text(
+                        tr("pcb-pin-table-hint"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-pin-table-hint"),
+                ));
+                p.spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    margin: UiRect::vertical(Val::Px(6.0)),
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn(
+                        TextInput::new("eda-pins-add")
+                            .placeholder("1 ANT, 2 GND, …")
+                            .width(Val::Px(330.0))
+                            .height(26.0)
+                            .build(&t),
+                    );
+                    let mut s = Select::new("eda-pins-add-side")
+                        .bordered()
+                        .width(Val::Px(110.0));
                     for (n, _) in SIDES {
-                        s = s.option(n, true);
+                        s = s.option(tr(n), true);
                     }
                     r.spawn(s.selected(0).build(&t));
                     r.spawn((
-                        cadrs_ui::Button::new("eda-pins-add-ok").label("Add").build(&t),
+                        cadrs_ui::Button::new("eda-pins-add-ok")
+                            .label(tr("common-add"))
+                            .build(&t),
                         observe(|_: On<Activate>, mut commands: Commands| {
                             commands.queue(add_pin_rows);
                         }),
                     ));
                 });
-                p.spawn((Name::new("eda-pins-list"), Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), max_height: Val::Px(360.0), overflow: Overflow::scroll_y(), ..default() }));
-                p.spawn(Checkbox::new("eda-pins-arrange").label("Arrange the pins round a box").checked(true).build(&t));
+                p.spawn((
+                    Name::new("eda-pins-list"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(2.0),
+                        max_height: Val::Px(360.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ));
+                p.spawn(
+                    Checkbox::new("eda-pins-arrange")
+                        .label(tr("pcb-sym-arrange"))
+                        .checked(true)
+                        .build(&t),
+                );
             })
             .footer(move |f| ok_cancel(f, &tf, "eda-pins-ok", accept_pin_table)),
     );
@@ -1030,20 +1130,20 @@ fn refresh_pin_table(world: &mut World) {
                     .bordered()
                     .width(Val::Px(150.0));
                 for (n, _) in PIN_TYPES {
-                    k = k.option(n, true);
+                    k = k.option(tr(n), true);
                 }
                 row.spawn(k.selected(r.kind).build(&th));
                 let mut s = Select::new(format!("eda-pins-{i}-side"))
                     .bordered()
                     .width(Val::Px(100.0));
                 for (n, _) in SIDES {
-                    s = s.option(n, true);
+                    s = s.option(tr(n), true);
                 }
                 row.spawn(s.selected(r.side).build(&th));
                 row.spawn((
                     ToolButton::new(format!("eda-pins-{i}-delete"), "delete")
                         .icon_size(14.0)
-                        .tooltip("Delete this pin")
+                        .tooltip(tr("pcb-pin-delete"))
                         .build(&th),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         commands.queue(move |w: &mut World| delete_pin_row(w, i));
@@ -1106,7 +1206,7 @@ fn array_source(w: &mut World) -> Option<usize> {
 
 pub fn open_pad_array(w: &mut World) {
     let Some(from) = array_source(w) else {
-        ui::toast(w, "Add a pad to make an array from");
+        ui::toast(w, &tr("pcb-array-no-pad"));
         return;
     };
     w.insert_resource(Editing(Some(from)));
@@ -1115,15 +1215,51 @@ pub fn open_pad_array(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-pad-array")
-            .title("Pad array")
+            .title(tr("pcb-fp-pad-array"))
             .width(460.0)
             .body(move |p| {
-                select_row(p, &t, "Arrangement", "eda-array-shape", &["In a line", "Round the origin"], 0);
-                text_row(p, &t, "Pads in all", "eda-array-count", "8".into(), 100.0);
-                text_row(p, &t, "Step X (mm)", "eda-array-dx", "2.54".into(), 100.0);
-                text_row(p, &t, "Step Y (mm)", "eda-array-dy", "0".into(), 100.0);
-                text_row(p, &t, "Angle step (°)", "eda-array-angle", "45".into(), 100.0);
-                p.spawn(t.text("A line steps by X and Y; a circle turns about the footprint's origin by the angle. Pads are numbered on.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                select_row(
+                    p,
+                    &t,
+                    "pcb-array-arrangement",
+                    "eda-array-shape",
+                    &["pcb-array-line", "pcb-array-round"],
+                    0,
+                );
+                text_row(
+                    p,
+                    &t,
+                    "pcb-array-count",
+                    "eda-array-count",
+                    "8".into(),
+                    100.0,
+                );
+                text_row(
+                    p,
+                    &t,
+                    "pcb-array-step-x",
+                    "eda-array-dx",
+                    "2.54".into(),
+                    100.0,
+                );
+                text_row(p, &t, "pcb-array-step-y", "eda-array-dy", "0".into(), 100.0);
+                text_row(
+                    p,
+                    &t,
+                    "pcb-array-angle-step",
+                    "eda-array-angle",
+                    "45".into(),
+                    100.0,
+                );
+                p.spawn((
+                    t.text(
+                        tr("pcb-array-hint"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-array-hint"),
+                ));
             })
             .footer(move |f| ok_cancel(f, &tf, "eda-array-ok", accept_pad_array)),
     );
@@ -1137,7 +1273,7 @@ fn accept_pad_array(w: &mut World) {
     let count = ui::text_value(w, "eda-array-count")
         .trim()
         .parse::<usize>()
-        .map_err(|_| "Pads in all: a whole number".to_string());
+        .map_err(|_| tr("pcb-array-count-whole"));
     let (dx, dy) = (
         length(w, "eda-array-dx", Unit::Mm),
         length(w, "eda-array-dy", Unit::Mm),
@@ -1145,7 +1281,7 @@ fn accept_pad_array(w: &mut World) {
     let angle = ui::text_value(w, "eda-array-angle")
         .trim()
         .parse::<f64>()
-        .map_err(|_| "Angle step: a number".to_string());
+        .map_err(|_| tr("pcb-array-angle-number"));
     close_all(w);
     commit(w, "Pad array", |c| {
         let shape = if circle {
@@ -1174,13 +1310,13 @@ pub fn open_renumber(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-renumber")
-            .title("Renumber pads")
+            .title(tr("pcb-fp-renumber"))
             .width(460.0)
             .body(move |p| {
                 text_row(
                     p,
                     &t,
-                    "First number",
+                    "pcb-renumber-first",
                     "eda-renumber-first",
                     "1".into(),
                     100.0,
@@ -1188,9 +1324,9 @@ pub fn open_renumber(w: &mut World) {
                 select_row(
                     p,
                     &t,
-                    "Order",
+                    "pcb-renumber-order",
                     "eda-renumber-order",
-                    &["Counter-clockwise (ICs)", "Row by row from the top left"],
+                    &["pcb-renumber-ccw", "pcb-renumber-rows"],
                     0,
                 );
             })
@@ -1202,7 +1338,7 @@ fn accept_renumber(w: &mut World) {
     let first = ui::text_value(w, "eda-renumber-first")
         .trim()
         .parse::<u32>()
-        .map_err(|_| "First number: a whole number".to_string());
+        .map_err(|_| tr("pcb-renumber-first-whole"));
     let ccw = select_index(w, "eda-renumber-order") == 0;
     close_all(w);
     commit(w, "Renumber pads", |c| {

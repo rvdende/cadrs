@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use bevy::text::FontWeight;
 use cadrs_core::commands::{CreatePartFolder, MovePartsToFolder, SetPartFolder, UnpackPartFolder};
 use cadrs_core::{FeatureId, PartId};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, ContextMenuRequested, MenuAction, open_context_menu};
 use cadrs_ui::prelude::*;
 
@@ -133,12 +134,18 @@ fn on_folder_menu(
         .min_width(160.0)
         .item_height(22.0)
         .text_only()
-        .item(MenuItem::new("part-folder-menu-rename", "Rename"))
+        .item(MenuItem::new(
+            "part-folder-menu-rename",
+            tr("common-rename"),
+        ))
         .item(MenuItem::new(
             "part-folder-menu-toggle",
-            "Open / close folder",
+            tr("view-folder-toggle"),
         ))
-        .item(MenuItem::new("part-folder-menu-unpack", "Unpack folder"));
+        .item(MenuItem::new(
+            "part-folder-menu-unpack",
+            tr("view-folder-unpack"),
+        ));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
         .entity(anchor)
@@ -446,8 +453,10 @@ fn place_drop_box(
         }
         None => {
             let label = match drag.parts.as_slice() {
-                [one] => cache.part_name(*one).unwrap_or("Part").to_string(),
-                many => format!("{} parts", many.len()),
+                [one] => cache
+                    .part_name(*one)
+                    .map_or_else(|| tr("common-part"), str::to_string),
+                many => tr_with("view-drag-parts", &[("count", &many.len().to_string())]),
             };
             let t = &*theme;
             commands.spawn((

@@ -38,6 +38,7 @@ use cadrs_drawing::note::{
 use cadrs_drawing::rich::{self, Attr, DrawingContext, Editor, FieldContext, RichText};
 use cadrs_drawing::table::{Cell, Table, TableGraphics, TableGrip, TableId, table_graphics};
 use cadrs_drawing::{Drawing, DrawingOp, ReferenceProps, SheetId, View, ViewId};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 
@@ -1978,18 +1979,25 @@ pub fn open_item_menu(world: &mut World, pos: Vec2) -> bool {
     match item {
         Item::Note(_) => {
             menu = menu
-                .item(MenuItem::new("note-menu-edit", "Edit…").icon("edit"))
-                .item(MenuItem::new("note-menu-add-leader", "Add leader"))
+                .item(MenuItem::new("note-menu-edit", tr("common-edit-ellipsis")).icon("edit"))
+                .item(MenuItem::new(
+                    "note-menu-add-leader",
+                    tr("drawing-note-add-leader"),
+                ))
         }
         Item::Table(id) => {
             menu = menu
                 .item(
-                    MenuItem::new("table-menu-edit-cell", "Edit cell…")
+                    MenuItem::new("table-menu-edit-cell", tr("drawing-table-edit-cell"))
                         .icon("edit")
                         .disabled(cell.is_none()),
                 )
                 .item(
-                    MenuItem::new("table-menu-properties", "Table properties…").icon("properties"),
+                    MenuItem::new(
+                        "table-menu-properties",
+                        tr("drawing-table-properties-ellipsis"),
+                    )
+                    .icon("properties"),
                 );
             // A BOM table's own properties (P3C.5, D11.3).
             let is_bom = world
@@ -2002,15 +2010,18 @@ pub fn open_item_menu(world: &mut World, pos: Vec2) -> bool {
                 .unwrap_or(false);
             if is_bom {
                 menu = menu.item(
-                    MenuItem::new("table-menu-bom-properties", "BOM Table properties…")
-                        .icon("bill-of-materials"),
+                    MenuItem::new(
+                        "table-menu-bom-properties",
+                        tr("drawing-bom-table-properties-ellipsis"),
+                    )
+                    .icon("bill-of-materials"),
                 );
             }
         }
     }
     menu = menu
         .separator()
-        .item(MenuItem::new("note-menu-delete", "Delete").icon("delete"));
+        .item(MenuItem::new("note-menu-delete", tr("common-delete")).icon("delete"));
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
     commands

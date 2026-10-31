@@ -238,6 +238,22 @@ pub fn studio<'a>(
     }
 }
 
+/// A named view's name as the interface shows it: [`NamedView::label`] in the current language.
+///
+/// [`NamedView::label`]: cadrs_drawing::NamedView::label
+pub fn named_view_name(n: cadrs_drawing::NamedView) -> String {
+    use cadrs_drawing::NamedView;
+    cadrs_ui::i18n::tr(match n {
+        NamedView::Front => "drawing-named-view-front",
+        NamedView::Back => "drawing-named-view-back",
+        NamedView::Top => "drawing-named-view-top",
+        NamedView::Bottom => "drawing-named-view-bottom",
+        NamedView::Left => "drawing-named-view-left",
+        NamedView::Right => "drawing-named-view-right",
+        NamedView::Isometric => "asm-menu-isometric",
+    })
+}
+
 /// The part a reference names, if it names one.
 pub fn part_of(r: &cadrs_drawing::ObjectRef) -> Option<PartId> {
     r.part.map(|(f, index)| PartId {
@@ -933,8 +949,10 @@ fn rebuild_view_scene(
                     Color::srgb_u8(0x9a, 0x9a, 0x9a),
                 );
                 let label = match err {
-                    Some(e) => format!("View failed: {e}"),
-                    None => "Generating view…".to_string(),
+                    Some(e) => {
+                        cadrs_ui::i18n::tr_with("drawing-view-failed", &[("error", &e.to_string())])
+                    }
+                    None => cadrs_ui::i18n::tr("drawing-view-generating"),
                 };
                 placeholders.push((v.id, lo, hi, label));
             }

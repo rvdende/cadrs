@@ -13,6 +13,7 @@ use cadrs_core::FeatureId;
 use cadrs_core::commands::SetSuppressByVariable;
 use cadrs_core::variables::{self, SuppressByVariable};
 use cadrs_sketch::units::{Quantity, Units, VarValue};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, Checkbox, CheckboxChange, CheckboxState, DialogClose, Select, SelectState, form_row,
@@ -31,9 +32,12 @@ struct SuppressVariableDialog {
 /// variable is 0 (false).").
 fn hint(feature: &str, invert: bool) -> String {
     if invert {
-        format!("{feature} is suppressed while the variable is not 0 (true).")
+        tr_with("model-suppress-variable-hint-true", &[("feature", feature)])
     } else {
-        format!("{feature} is suppressed while the variable is 0 (false).")
+        tr_with(
+            "model-suppress-variable-hint-false",
+            &[("feature", feature)],
+        )
     }
 }
 
@@ -94,7 +98,7 @@ pub fn open(world: &mut World, feature: FeatureId) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.commands().spawn((
         Dialog::new("suppress-variable-dialog")
-            .title("Suppress by variable")
+            .title(tr("model-suppress-variable-title"))
             .width(380.0)
             .body(move |b| {
                 let t = &tb;
@@ -102,7 +106,10 @@ pub fn open(world: &mut World, feature: FeatureId) {
                     b.spawn((
                         Name::new("suppress-variable-none"),
                         t.text(
-                            format!("No variables are defined above {feature_name}."),
+                            tr_with(
+                                "model-suppress-variable-none",
+                                &[("feature", &feature_name)],
+                            ),
                             t.font_base,
                             FontWeight::NORMAL,
                             t.muted_foreground,
@@ -114,13 +121,18 @@ pub fn open(world: &mut World, feature: FeatureId) {
                 for o in &options {
                     select = select.option(o.clone(), true);
                 }
-                b.spawn(form_row(t, "suppress-variable-row", "Variable", 110.0))
-                    .with_child(select.selected(selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "suppress-variable-row",
+                    tr("model-variable"),
+                    110.0,
+                ))
+                .with_child(select.selected(selected).build(t));
                 // The hint follows the box (fix round 1: it read the default rule whatever).
                 let name = feature_name.clone();
                 b.spawn((
                     Checkbox::new("suppress-variable-invert")
-                        .label("Suppress when true (not 0)")
+                        .label(tr("model-suppress-variable-invert"))
                         .checked(invert)
                         .build(t),
                     observe(
@@ -151,7 +163,7 @@ pub fn open(world: &mut World, feature: FeatureId) {
                 let t = &tf;
                 f.spawn((
                     Button::new("suppress-variable-ok")
-                        .label("OK")
+                        .label(tr("common-ok"))
                         .primary()
                         .disabled(empty)
                         .build(t),
@@ -161,7 +173,7 @@ pub fn open(world: &mut World, feature: FeatureId) {
                 ));
                 f.spawn((
                     Button::new("suppress-variable-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                     observe(
                         |_: On<Activate>,

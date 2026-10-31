@@ -34,6 +34,7 @@ use cadrs_core::assembly::mate::{Dof, Mate, MateId, MateKind, MateType};
 use cadrs_core::assembly::solver::{Drive, SolveOptions};
 use cadrs_core::assembly::{Assembly, InstanceId};
 use cadrs_sketch::units::{Quantity, Units};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, Menu, MenuAction, MenuEntry, MenuItem};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -233,8 +234,11 @@ fn update_mate_errors(world: &mut World) {
                         .part_name(super::occurrence_part(c.instance))
                         .map(str::to_string)
                 })
-                .unwrap_or_else(|| "an instance".into());
-            out.insert(id, format!("Missing reference: the entity this mate was on is gone from {part} (its source changed). Edit the mate and pick it again."));
+                .unwrap_or_else(|| tr("asm-mates-an-instance"));
+            out.insert(
+                id,
+                tr_with("asm-mates-missing-reference", &[("part", &part)]),
+            );
         }
     }
     let mut e = world.resource_mut::<MateErrors>();
@@ -254,9 +258,15 @@ fn dof_text(units: &Units, d: Dof, v: f64) -> String {
 /// The row's tooltip (A6.12, A8.2): the name and type, the offset and the limits.
 pub fn mate_tooltip(units: &Units, name: &str, m: Option<&Mate>) -> String {
     let Some(m) = m else {
-        return format!("{name}\nGroup");
+        return format!("{name}\n{}", tr("asm-mates-group"));
     };
-    let mut out = format!("{name}\n{} mate", m.mate_type.label());
+    let mut out = format!(
+        "{name}\n{}",
+        tr_with(
+            "asm-mates-type-mate",
+            &[("type", &super::mate_type_name(m.mate_type))]
+        )
+    );
     if let Some(o) = &m.offset {
         let mut parts = Vec::new();
         for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
@@ -268,33 +278,46 @@ pub fn mate_tooltip(units: &Units, name: &str, m: Option<&Mate>) -> String {
             }
         }
         if o.angle.abs() > 1e-12 {
-            parts.push(format!(
-                "{} about {}",
-                units.with_unit(o.angle.to_degrees(), Quantity::Angle),
-                ["X", "Y", "Z"][o.axis.min(2) as usize]
+            parts.push(tr_with(
+                "asm-mates-angle-about-axis",
+                &[
+                    (
+                        "angle",
+                        &units.with_unit(o.angle.to_degrees(), Quantity::Angle),
+                    ),
+                    ("axis", ["X", "Y", "Z"][o.axis.min(2) as usize]),
+                ],
             ));
         }
         if parts.is_empty() {
             parts.push("0".into());
         }
-        out.push_str(&format!("\nOffset: {}", parts.join(", ")));
+        out.push('\n');
+        out.push_str(&tr_with(
+            "asm-mates-offset-line",
+            &[("offset", &parts.join(", "))],
+        ));
     }
     for d in m.mate_type.limit_dofs() {
         if let Some((lo, hi)) = m.limit(*d) {
-            out.push_str(&format!(
-                "\nLimits {}: {} … {}",
-                d.label(),
-                dof_text(units, *d, lo),
-                dof_text(units, *d, hi)
+            out.push('\n');
+            out.push_str(&tr_with(
+                "asm-mates-limits-line",
+                &[
+                    ("dof", &super::dof_name(*d)),
+                    ("min", &dof_text(units, *d, lo)),
+                    ("max", &dof_text(units, *d, hi)),
+                ],
             ));
         }
     }
     if m.mate_type == MateType::Tangent {
-        out.push_str(if m.propagate {
-            "\nTangent propagation"
+        out.push('\n');
+        out.push_str(&tr(if m.propagate {
+            "asm-mate-tangent-propagation"
         } else {
-            "\nNo tangent propagation"
-        });
+            "asm-mates-no-tangent-propagation"
+        }));
     }
     out
 }
@@ -312,17 +335,33 @@ pub fn relation_tooltip(
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     };
     let value = match r.relation_type {
-        RelationType::Gear => format!("Ratio {} : {}", num(r.ratio.0), num(r.ratio.1)),
-        RelationType::Linear => format!("Ratio {}", num(r.ratio.1 / r.ratio.0)),
-        RelationType::RackPinion => format!(
-            "Distance per revolution {}",
-            units.with_unit(r.distance, Quantity::Length)
+        RelationType::Gear => tr_with(
+            "asm-relation-ratio-pair",
+            &[("first", &num(r.ratio.0)), ("second", &num(r.ratio.1))],
         ),
-        RelationType::Screw => format!("Pitch {}", units.with_unit(r.distance, Quantity::Length)),
+        RelationType::Linear => tr_with(
+            "asm-relation-ratio",
+            &[("ratio", &num(r.ratio.1 / r.ratio.0))],
+        ),
+        RelationType::RackPinion => tr_with(
+            "asm-relation-distance-per-revolution",
+            &[("distance", &units.with_unit(r.distance, Quantity::Length))],
+        ),
+        RelationType::Screw => tr_with(
+            "asm-relation-pitch",
+            &[("pitch", &units.with_unit(r.distance, Quantity::Length))],
+        ),
     };
-    let mut out = format!("{name}\n{} relation\n{value}", r.relation_type.label());
+    let mut out = format!(
+        "{name}\n{}\n{value}",
+        tr_with(
+            "asm-mates-type-relation",
+            &[("type", &super::relation_type_name(r.relation_type))]
+        )
+    );
     if r.reverse {
-        out.push_str("\nReversed");
+        out.push('\n');
+        out.push_str(&tr("asm-relation-reversed"));
     }
     if !mates.is_empty() {
         out.push_str(&format!("\n{}", mates.join(", ")));
@@ -381,6 +420,7 @@ fn rebuild_mate_rows(
     q_header: Query<&Children, With<MateFeaturesHeader>>,
     q_children: Query<&Children>,
     mut q_text: Query<&mut Text>,
+    q_label: Query<(), With<cadrs_ui::ellipsis::Ellipsis>>,
     theme: Res<Theme>,
     ui: Res<super::folders::ListUi>,
     session: Option<Res<super::mate_dialog::MateSession>>,
@@ -439,7 +479,7 @@ fn rebuild_mate_rows(
                         model
                             .mate(*id)
                             .map(|x| x.name.clone())
-                            .unwrap_or_else(|| "Mate".into())
+                            .unwrap_or_else(|| tr("asm-mate"))
                     })
                     .collect();
                 child_icons = r
@@ -472,13 +512,21 @@ fn rebuild_mate_rows(
                 expanded: expanded.0.contains(&f.id),
                 tooltip: match replicate {
                     Some(r) => format!(
-                        "{}\nReplicate: {} on matching geometry, with {}",
+                        "{}\n{}",
                         f.name,
-                        super::replicate_dialog::describe(r),
-                        model
-                            .mate(r.seed_mate)
-                            .map(|x| x.name.clone())
-                            .unwrap_or_default()
+                        tr_with(
+                            "asm-mates-replicate-tooltip",
+                            &[
+                                ("instances", &super::replicate_dialog::describe(r)),
+                                (
+                                    "mate",
+                                    &model
+                                        .mate(r.seed_mate)
+                                        .map(|x| x.name.clone())
+                                        .unwrap_or_default(),
+                                ),
+                            ],
+                        )
                     ),
                     None => match (rel, &f.kind) {
                         (Some(r), _) => relation_tooltip(&units.0, &f.name, r, &connectors),
@@ -519,8 +567,8 @@ fn rebuild_mate_rows(
         }
         let owner = cache
             .part_name(super::occurrence_part(c.connector.instance))
-            .unwrap_or("instance")
-            .to_string();
+            .map(str::to_string)
+            .unwrap_or_else(|| tr("asm-instance"));
         connectors.push((
             c.listed_after.unwrap_or(n_mates).min(n_mates),
             ListRow::Connector {
@@ -595,12 +643,17 @@ fn rebuild_mate_rows(
     }
     let key = rows;
     // The header's count.
-    let count = format!("Mate Features ({})", n_mates + model.connectors.len());
+    let count = tr_with(
+        "asm-mate-features-count",
+        &[("count", &(n_mates + model.connectors.len()).to_string())],
+    );
     for children in &q_header {
         let mut stack: Vec<Entity> = children.iter().collect();
         while let Some(e) = stack.pop() {
+            // (The header row's label: the one text of its row that ellipsizes, whatever the
+            // language it was written in.)
             if let Ok(mut t) = q_text.get_mut(e)
-                && t.0.starts_with("Mate Features")
+                && q_label.contains(e)
                 && t.0 != count
             {
                 t.0 = count.clone();
@@ -657,7 +710,10 @@ fn rebuild_mate_rows(
                         LocalConnectorRow(*id),
                         ContextMenuTarget,
                         DoubleClickable,
-                        Tooltip::new(format!("{name}\nMate connector on {owner}")),
+                        Tooltip::new(format!(
+                            "{name}\n{}",
+                            tr_with("asm-mates-connector-on", &[("owner", owner)])
+                        )),
                     ));
                     row.entry::<Node>()
                         .and_modify(|mut n| n.height = Val::Px(22.0));
@@ -711,10 +767,14 @@ fn rebuild_mate_rows(
                 item = item
                     .disclosure(Some(r.expanded))
                     .toggle(format!("{row_name}-eye"), "visible", "hidden", r.shown)
-                    .toggle_tooltip(if r.shown { "Hide mate" } else { "Show mate" });
+                    .toggle_tooltip(tr(if r.shown {
+                        "asm-mates-hide-mate"
+                    } else {
+                        "asm-mates-show-mate"
+                    }));
             }
             let tip = match (&r.error, r.suppressed) {
-                (_, true) => format!("{}\nSuppressed", r.tooltip),
+                (_, true) => format!("{}\n{}", r.tooltip, tr("asm-mates-suppressed")),
                 (Some(e), _) => format!("{}\n{e}", r.tooltip),
                 _ => r.tooltip.clone(),
             };
@@ -760,7 +820,7 @@ fn rebuild_mate_rows(
                                 ..default()
                             },
                         ),
-                        Tooltip::new("Limits"),
+                        Tooltip::new(tr("asm-mate-limits")),
                     ))
                     .id();
                 row.insert_children(3, &[icon_e]);
@@ -771,9 +831,12 @@ fn rebuild_mate_rows(
                 // P3B.8: the mates the Replicate made, one per copy (read-only).
                 for (j, label) in r.connectors.iter().enumerate() {
                     let tip = if r.child_icons.is_empty() {
-                        format!("{label}\nMade by {}", r.name)
+                        format!(
+                            "{label}\n{}",
+                            tr_with("asm-mates-made-by", &[("name", &r.name)])
+                        )
                     } else {
-                        format!("{label}\nIn {}", r.name)
+                        format!("{label}\n{}", tr_with("asm-mates-in", &[("name", &r.name)]))
                     };
                     let mut row = c.spawn((
                         TreeItem::new(format!("{row_name}-mate-{}", j + 1), label.clone())
@@ -927,7 +990,7 @@ fn on_connector_menu(
             .min_width(150.0)
             .item_height(20.0)
             .item(
-                MenuItem::new("connector-edit", "Edit…")
+                MenuItem::new("connector-edit", tr("common-edit-ellipsis"))
                     .icon("edit")
                     .disabled(!editable),
             );
@@ -993,10 +1056,12 @@ fn on_local_menu(
         let menu = Menu::new("local-connector-menu")
             .min_width(150.0)
             .item_height(20.0)
-            .item(MenuItem::new("local-connector-rename", "Rename"))
-            .item(MenuItem::new("local-connector-edit", "Edit…").icon("edit"))
+            .item(MenuItem::new("local-connector-rename", tr("common-rename")))
+            .item(MenuItem::new("local-connector-edit", tr("common-edit-ellipsis")).icon("edit"))
             .separator()
-            .item(MenuItem::new("local-connector-delete", "Delete").icon("remove-circle"));
+            .item(
+                MenuItem::new("local-connector-delete", tr("common-delete")).icon("remove-circle"),
+            );
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
         let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
@@ -1244,25 +1309,31 @@ pub fn open_mate_menu(world: &mut World, at: Vec2, mate: MateId) {
                 Dof::Z => "z",
                 Dof::Angle => "angle",
             };
-            let label = d.label();
+            let label = super::dof_name(*d);
             limit_items.push(
                 MenuItem::new(
                     format!("mate-limit-{key}-min"),
-                    format!("{label} minimum ({})", dof_text(&units, *d, lo)),
+                    tr_with(
+                        "asm-mates-limit-minimum",
+                        &[("dof", &label), ("value", &dof_text(&units, *d, lo))],
+                    ),
                 )
                 .into(),
             );
             limit_items.push(
                 MenuItem::new(
                     format!("mate-limit-{key}-max"),
-                    format!("{label} maximum ({})", dof_text(&units, *d, hi)),
+                    tr_with(
+                        "asm-mates-limit-maximum",
+                        &[("dof", &label), ("value", &dof_text(&units, *d, hi))],
+                    ),
                 )
                 .into(),
             );
         }
     }
     let off = |id: &'static str, label: &str| MenuItem::new(id, label.to_string()).disabled(true);
-    let mut apply = MenuItem::new("mate-apply-limit", "Apply limit position");
+    let mut apply = MenuItem::new("mate-apply-limit", tr("asm-mates-apply-limit-position"));
     // Always a submenu (▸), disabled when there are no limits.
     apply = if limit_items.is_empty() {
         apply.submenu(Vec::new()).disabled(true)
@@ -1272,25 +1343,31 @@ pub fn open_mate_menu(world: &mut World, at: Vec2, mate: MateId) {
     let is_mate = m.is_some();
     let movable = m.as_ref().is_some_and(|m| !m.mate_type.dof().is_empty());
     let show = if shown {
-        MenuItem::new("mate-hide", "Hide").icon("hidden")
+        MenuItem::new("mate-hide", tr("common-hide")).icon("hidden")
     } else {
-        MenuItem::new("mate-show", "Show")
+        MenuItem::new("mate-show", tr("common-show"))
             .icon("visible")
             .disabled(!is_mate)
     };
     let suppress = if f.suppressed {
-        MenuItem::new("mate-unsuppress", "Unsuppress")
+        MenuItem::new("mate-unsuppress", tr("common-unsuppress"))
     } else {
-        MenuItem::new("mate-suppress", "Suppress")
+        MenuItem::new("mate-suppress", tr("common-suppress"))
     };
     // Expand ▸ / Collapse ▸: what to open or close (the mate's connectors).
     // (P3B.8 judge: a Replicate expands to its mates; P3B.9: a relation to its mates.)
-    let what = if is_mate { "Mate connectors" } else { "Mates" };
+    let what = tr(if is_mate {
+        "asm-mate-connectors"
+    } else {
+        "asm-mates"
+    });
     let expands = is_mate || f.replicate().is_some() || f.relation().is_some();
-    let expand = MenuItem::new("mate-expand", "Expand")
-        .submenu(vec![MenuItem::new("mate-expand-connectors", what).into()])
+    let expand = MenuItem::new("mate-expand", tr("asm-mates-expand"))
+        .submenu(vec![
+            MenuItem::new("mate-expand-connectors", what.clone()).into(),
+        ])
         .disabled(!expands || expanded);
-    let collapse = MenuItem::new("mate-collapse", "Collapse")
+    let collapse = MenuItem::new("mate-collapse", tr("asm-mates-collapse"))
         .submenu(vec![MenuItem::new("mate-collapse-connectors", what).into()])
         .disabled(!expanded);
     // P3B.9 (A6.13): Make transparent… the mate's instances; the named position driver.
@@ -1310,35 +1387,41 @@ pub fn open_mate_menu(world: &mut World, at: Vec2, mate: MateId) {
             .iter()
             .all(|p| world.resource::<PartCache>().transparent.contains(p));
     let transparent_item = if transparent {
-        MenuItem::new("mate-opaque", "Make opaque")
+        MenuItem::new("mate-opaque", tr("asm-make-opaque"))
     } else {
-        MenuItem::new("mate-transparent", "Make transparent…").disabled(parts.is_empty())
+        MenuItem::new("mate-transparent", tr("asm-make-transparent")).disabled(parts.is_empty())
     };
     let menu = Menu::new("mate-context-menu")
         .min_width(190.0)
         .item_height(20.0)
-        .item(MenuItem::new("mate-rename", "Rename"))
-        .item(MenuItem::new("mate-edit", "Edit…"))
+        .item(MenuItem::new("mate-rename", tr("common-rename")))
+        .item(MenuItem::new("mate-edit", tr("common-edit-ellipsis")))
         .item(apply)
-        .item(MenuItem::new("mate-reset", "Reset").disabled(!limited && !movable))
+        .item(MenuItem::new("mate-reset", tr("asm-mates-reset")).disabled(!limited && !movable))
         .item(show)
-        .item(MenuItem::new("mate-show-all", "Show all mates"))
-        .item(MenuItem::new("mate-isolate", "Isolate…"))
+        .item(MenuItem::new("mate-show-all", tr("asm-mates-show-all")))
+        .item(MenuItem::new("mate-isolate", tr("asm-isolate-ellipsis")))
         .item(transparent_item)
         .item(
-            MenuItem::new("mate-named-position", "Edit named position driver mate…")
-                .disabled(!movable),
+            MenuItem::new(
+                "mate-named-position",
+                tr("asm-mates-edit-named-position-driver"),
+            )
+            .disabled(!movable),
         )
         .item(suppress)
         .separator()
-        .item(MenuItem::new("mate-animate", "Animate…").disabled(!movable))
-        .item(off("mate-comment", "Add comment").icon("comments"))
+        .item(MenuItem::new("mate-animate", tr("asm-animate-ellipsis")).disabled(!movable))
+        .item(off("mate-comment", &tr("common-add-comment")).icon("comments"))
         .separator()
-        .item(MenuItem::new("mate-folder", "Add selection to folder…"))
+        .item(MenuItem::new(
+            "mate-folder",
+            tr("asm-add-selection-to-folder"),
+        ))
         .item(expand)
         .item(collapse)
         .separator()
-        .item(MenuItem::new("mate-delete", "Delete").icon("remove-circle"));
+        .item(MenuItem::new("mate-delete", tr("common-delete")).icon("remove-circle"));
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, at, menu.build(&theme));

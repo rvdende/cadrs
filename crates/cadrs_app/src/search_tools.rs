@@ -17,6 +17,7 @@ use bevy::text::EditableText;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::{Activate, Button as WidgetButton};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{CommandPalette, CommandPaletteClose, CommandPaletteResults, palette_row};
 
@@ -120,7 +121,7 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
     let mut out = vec![
         ToolEntry {
             id: "undo".into(),
-            label: "Undo".into(),
+            label: tr("common-undo"),
             icon: "undo".into(),
             shortcut: Some("Ctrl+Z".into()),
             enabled: can_undo,
@@ -128,7 +129,7 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
         },
         ToolEntry {
             id: "redo".into(),
-            label: "Redo".into(),
+            label: tr("common-redo"),
             icon: "redo".into(),
             shortcut: Some("Ctrl+Y".into()),
             enabled: can_redo,
@@ -172,14 +173,29 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
         if id == "pattern" {
             // The pattern button opens a menu: its three patterns are tools of their own.
             use cadrs_core::pattern::PatternKind as K;
-            for (k, label, icon) in [
-                (K::Linear, "Linear pattern", "linear-pattern"),
-                (K::Circular, "Circular pattern", "circular-pattern"),
-                (K::Curve, "Curve pattern", "spline"),
+            for (k, id, label, icon) in [
+                (
+                    K::Linear,
+                    "linear-pattern",
+                    "shell-tool-linear-pattern",
+                    "linear-pattern",
+                ),
+                (
+                    K::Circular,
+                    "circular-pattern",
+                    "shell-tool-circular-pattern",
+                    "circular-pattern",
+                ),
+                (
+                    K::Curve,
+                    "curve-pattern",
+                    "shell-tool-curve-pattern",
+                    "spline",
+                ),
             ] {
                 out.push(ToolEntry {
-                    id: label.to_lowercase().replace(' ', "-"),
-                    label: label.into(),
+                    id: id.into(),
+                    label: tr(label),
                     icon: icon.into(),
                     shortcut: None,
                     enabled,
@@ -226,7 +242,7 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
                 let built = crate::sheetmetal_ui::tool_built(tid);
                 out.push(ToolEntry {
                     id: tid.into(),
-                    label: tlabel.into(),
+                    label: crate::sheetmetal_ui::tool_label(tid, tlabel),
                     icon: ticon.into(),
                     shortcut: None,
                     enabled: enabled && built,
@@ -240,7 +256,7 @@ fn gather(world: &mut World) -> Vec<ToolEntry> {
             // P3I.9: Tag (Form), for a form's Part Studio.
             out.push(ToolEntry {
                 id: "tag-form".into(),
-                label: "Tag (Form)".into(),
+                label: tr("shell-search-tag-form"),
                 icon: "tag".into(),
                 shortcut: None,
                 enabled: true,
@@ -278,7 +294,7 @@ pub fn open(world: &mut World) {
     let palette = world
         .spawn((
             CommandPalette::new(PALETTE)
-                .placeholder("Search tools…")
+                .placeholder(tr("shell-search-placeholder"))
                 .at(left + width - w, top, w)
                 .build(&theme),
             DespawnOnExit(AppState::Document),
@@ -432,11 +448,12 @@ fn update_results(
         if state.matches.is_empty() {
             r.spawn((
                 t.text(
-                    "No tools found",
+                    tr("shell-search-none"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("shell-search-none"),
                 Pickable::IGNORE,
             ));
         }

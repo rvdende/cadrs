@@ -36,6 +36,7 @@ use cadrs_core::document::{
 };
 use cadrs_core::{Feature, FeatureId, PartId};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -162,14 +163,22 @@ fn feature_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn up_to_label(features: &[Feature], cache: &PartCache, u: &UpTo) -> String {
     match u {
-        UpTo::Face(f) => format!("Face of {}", feature_name(features, f.face.op)),
-        UpTo::Part(p) => cache.part_name(*p).unwrap_or("Part").to_string(),
-        UpTo::Vertex(v) => format!("Vertex of {}", feature_name(features, v.vertex.faces[0].op)),
+        UpTo::Face(f) => tr_with(
+            "common-face-of",
+            &[("name", &feature_name(features, f.face.op))],
+        ),
+        UpTo::Part(p) => cache
+            .part_name(*p)
+            .map_or_else(|| tr("common-part"), str::to_string),
+        UpTo::Vertex(v) => tr_with(
+            "common-vertex-of",
+            &[("name", &feature_name(features, v.vertex.faces[0].op))],
+        ),
     }
 }
 
@@ -182,7 +191,7 @@ pub(crate) fn whole_sketch_label(
     body: BodyType,
 ) -> String {
     let Some(f) = features.iter().find(|f| f.id == sketch) else {
-        return "sketch".into();
+        return tr("model-unknown-sketch");
     };
     if body == BodyType::Surface {
         return f.name.clone();
@@ -191,9 +200,9 @@ pub(crate) fn whole_sketch_label(
         cadrs_core::rebuild::whole_sketch_regions(&s.geometry).len()
     });
     if n > 1 {
-        format!("Faces of {}", f.name)
+        tr_with("model-faces-of", &[("name", &f.name)])
     } else {
-        format!("Face of {}", f.name)
+        tr_with("common-face-of", &[("name", &f.name)])
     }
 }
 
@@ -224,30 +233,31 @@ pub(crate) fn labels(
                     .unwrap_or_default();
                 Some(format!("{n} ({owner})"))
             })
-            .unwrap_or_else(|| "sketch".into())
+            .unwrap_or_else(|| tr("model-unknown-sketch"))
     };
     // A surface extrudes the region's boundary curves: "Curves of Sketch 1" (as the revolve's,
     // P3.5).
     let what = if e.body == BodyType::Surface {
-        "Curves"
+        "model-curves-of"
     } else {
-        "Face"
+        "common-face-of"
     };
     let mut input: Vec<String> = e
         .regions
         .iter()
-        .map(|r| format!("{what} of {}", name(r.sketch)))
+        .map(|r| tr_with(what, &[("name", &name(r.sketch))]))
         .collect();
     input.extend(
         e.sketches
             .iter()
             .map(|s| whole_sketch_label(features, *s, e.body)),
     );
-    input.extend(
-        e.faces
-            .iter()
-            .map(|f| format!("Face of {}", feature_name(features, f.face.op))),
-    );
+    input.extend(e.faces.iter().map(|f| {
+        tr_with(
+            "common-face-of",
+            &[("name", &feature_name(features, f.face.op))],
+        )
+    }));
     let input_missing = missing_marks(cache, feature, &mut input);
     let up_to = e
         .up_to
@@ -264,14 +274,26 @@ pub(crate) fn labels(
         .direction
         .iter()
         .map(|d| match d {
-            DirectionRef::Edge(r) => format!("Edge of {}", feature_name(features, r.edge.op())),
-            DirectionRef::SketchLine { sketch, .. } => format!("Line of {}", name(*sketch)),
-            DirectionRef::FaceNormal(f) => format!("Face of {}", feature_name(features, f.face.op)),
+            DirectionRef::Edge(r) => tr_with(
+                "common-edge-of",
+                &[("name", &feature_name(features, r.edge.op()))],
+            ),
+            DirectionRef::SketchLine { sketch, .. } => {
+                tr_with("common-line-of", &[("name", &name(*sketch))])
+            }
+            DirectionRef::FaceNormal(f) => tr_with(
+                "common-face-of",
+                &[("name", &feature_name(features, f.face.op))],
+            ),
             DirectionRef::PlaneNormal(p) => crate::viewport::plane_label(features, *p),
             DirectionRef::Connector(c) => c.label(features),
         })
         .collect();
-    let part_name = |p: &PartId| cache.part_name(*p).unwrap_or("Part").to_string();
+    let part_name = |p: &PartId| {
+        cache
+            .part_name(*p)
+            .map_or_else(|| tr("common-part"), str::to_string)
+    };
     let merge_scope = if e.merge_scope_set || !e.merge_scope.is_empty() {
         e.merge_scope.iter().map(part_name).collect()
     } else {
@@ -307,7 +329,7 @@ pub(crate) fn missing_marks(
     let mut marks = vec![false; items.len()];
     for &i in lost {
         if let Some(item) = items.get_mut(i) {
-            *item = format!("Missing {item}");
+            *item = tr_with("model-missing-item", &[("item", item.as_str())]);
             marks[i] = true;
         }
     }
@@ -321,12 +343,34 @@ pub(crate) fn missing_marks(
 // ---------------------------------------------------------------------------------------------
 // Building
 
-fn end_placeholder(end: EndType) -> &'static str {
-    match end {
-        EndType::UpToFace => "Up to face",
-        EndType::UpToPart => "Up to part",
-        _ => "Up to vertex",
-    }
+fn end_placeholder(end: EndType) -> String {
+    tr(match end {
+        EndType::UpToFace => "model-up-to-face",
+        EndType::UpToPart => "model-up-to-part",
+        _ => "model-up-to-vertex",
+    })
+}
+
+/// An end type, in the current language (the core's label is English).
+pub(crate) fn end_type_text(end: EndType) -> String {
+    tr(match end {
+        EndType::Blind => "model-blind",
+        EndType::UpToNext => "model-up-to-next",
+        EndType::UpToFace => "model-up-to-face",
+        EndType::UpToPart => "model-up-to-part",
+        EndType::UpToVertex => "model-up-to-vertex",
+        EndType::ThroughAll => "model-through-all",
+    })
+}
+
+/// A boolean operation's tab, in the current language (the core's label is English).
+pub(crate) fn boolean_op_text(op: BooleanOp) -> String {
+    tr(match op {
+        BooleanOp::New => "model-op-new",
+        BooleanOp::Add => "common-add",
+        BooleanOp::Remove => "common-remove",
+        BooleanOp::Intersect => "model-op-intersect",
+    })
 }
 
 /// The flip button's icon: the arrow points down (the default, as in `screens/22`) or, flipped,
@@ -341,10 +385,10 @@ pub(crate) fn final_button(f: &mut ChildSpawner, t: &Theme, name: &str) {
         ExtrudeFinal,
         crate::feature_list::FinalButton,
         cadrs_ui::Button::new(format!("{name}-final"))
-            .label("Final")
+            .label(tr("model-dialog-final"))
             .small()
             .outline()
-            .tooltip("Show the final result")
+            .tooltip(tr("model-dialog-final-tooltip"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(|world: &mut World| {
@@ -441,7 +485,7 @@ fn end_row(
     let selected = types.iter().position(|x| *x == end).unwrap_or(0);
     let mut select = Select::new(name.to_string());
     for ty in types {
-        select = select.option(ty.label(), true);
+        select = select.option(end_type_text(*ty), true);
     }
     b.spawn(Node {
         height: Val::Px(30.0),
@@ -452,7 +496,14 @@ fn end_row(
     })
     .with_children(|r| {
         r.spawn((role, select.selected(selected).build(t)));
-        flip_button(r, t, &flip_name, flip_role, flip, "Opposite direction");
+        flip_button(
+            r,
+            t,
+            &flip_name,
+            flip_role,
+            flip,
+            &tr("common-opposite-direction"),
+        );
     });
 }
 
@@ -489,7 +540,7 @@ fn offset_row(
             &format!("{name}-flip"),
             flip_role,
             o.flip,
-            "Opposite direction",
+            &tr("common-opposite-direction"),
         );
     });
 }
@@ -535,10 +586,10 @@ fn end_fields(
         EndType::Blind => {
             b.spawn((
                 depth_role,
-                NumberField::new(format!("{prefix}depth"), "Depth")
+                NumberField::new(format!("{prefix}depth"), tr("common-depth"))
                     .text(end.depth_expr.clone())
                     .chevron()
-                    .trailing_icon("ruler", "Measure a distance")
+                    .trailing_icon("ruler", tr("model-measure-a-distance"))
                     .variables()
                     .build(t),
             ));
@@ -548,7 +599,7 @@ fn end_fields(
             b,
             t,
             &format!("{prefix}up-to-field"),
-            end_placeholder(e),
+            &end_placeholder(e),
             up_to_role,
             up_to_items,
             up_to_active,
@@ -561,7 +612,7 @@ fn end_fields(
             t,
             &format!("{prefix}offset"),
             &format!("{prefix}offset-distance"),
-            "Offset distance",
+            &tr("model-offset-distance"),
             o,
             offset_role,
             offset_flip_role,
@@ -619,7 +670,7 @@ pub(crate) fn inline_option<R: Component>(
                 &format!("{value_name}-flip"),
                 flip_role,
                 flip,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         }
     });
@@ -659,9 +710,9 @@ fn extrude_dialog(
                     Role::Body,
                     TabStrip::new("extrude-body-type")
                         .compact()
-                        .tab("Solid")
-                        .tab("Surface")
-                        .tab("Thin")
+                        .tab(tr("common-solid"))
+                        .tab(tr("model-body-surface"))
+                        .tab(tr("model-body-thin"))
                         .selected(body_index)
                         .build(t),
                 ));
@@ -669,7 +720,7 @@ fn extrude_dialog(
                     let op_index = BooleanOp::ALL.iter().position(|o| *o == e.op).unwrap_or(0);
                     let mut strip = TabStrip::new("extrude-operation").compact();
                     for op in BooleanOp::ALL {
-                        strip = strip.tab(op.label());
+                        strip = strip.tab(boolean_op_text(op));
                     }
                     b.spawn((Role::Op, strip.selected(op_index).build(t)));
                 }
@@ -682,15 +733,15 @@ fn extrude_dialog(
                 })
                 .with_children(|b| {
                     let placeholder = if e.body == BodyType::Surface {
-                        "Sketch curves to extrude"
+                        tr("model-extrude-curves")
                     } else {
-                        "Faces and sketch regions to extrude"
+                        tr("model-extrude-regions")
                     };
                     list(
                         b,
                         t,
                         "extrude-regions-field",
-                        placeholder,
+                        &placeholder,
                         Role::Input,
                         labels.input.clone(),
                         field == ExtrudeField::Input,
@@ -725,7 +776,7 @@ fn extrude_dialog(
                         .with_children(|r| {
                             r.spawn((
                                 Role::Thickness1,
-                                NumberField::new("extrude-thickness1", "Thickness 1")
+                                NumberField::new("extrude-thickness1", tr("model-thickness-1"))
                                     .text(e.thin.thickness1_expr.clone())
                                     .label_width(70.0)
                                     .variables()
@@ -739,18 +790,18 @@ fn extrude_dialog(
                                 "extrude-flip-wall",
                                 Role::FlipWall,
                                 e.thin.flip_wall,
-                                "Flip wall",
+                                &tr("model-flip-wall"),
                             );
                         });
                         b.spawn(
-                            OptionRow::new("extrude-mid-plane", "Mid plane")
+                            OptionRow::new("extrude-mid-plane", tr("model-thin-mid-plane"))
                                 .checked(e.thin.mid_plane)
                                 .build(t),
                         );
                         if !e.thin.mid_plane {
                             b.spawn((
                                 Role::Thickness2,
-                                NumberField::new("extrude-thickness2", "Thickness 2")
+                                NumberField::new("extrude-thickness2", tr("model-thickness-2"))
                                     .text(e.thin.thickness2_expr.clone())
                                     .label_width(70.0)
                                     .variables()
@@ -759,7 +810,7 @@ fn extrude_dialog(
                         }
                     }
                     b.spawn(
-                        OptionRow::new("extrude-direction", "Direction")
+                        OptionRow::new("extrude-direction", tr("common-direction"))
                             .chevron()
                             .checked(layout.direction)
                             .build(t),
@@ -769,14 +820,14 @@ fn extrude_dialog(
                             b,
                             t,
                             "extrude-direction-field",
-                            "Direction",
+                            &tr("common-direction"),
                             Role::DirectionField,
                             labels.direction.clone(),
                             field == ExtrudeField::Direction,
                         );
                     }
                     b.spawn(
-                        OptionRow::new("extrude-starting-offset", "Starting offset")
+                        OptionRow::new("extrude-starting-offset", tr("model-starting-offset"))
                             .chevron()
                             .checked(e.start_offset.is_some())
                             .build(t),
@@ -786,7 +837,7 @@ fn extrude_dialog(
                             b,
                             t,
                             "extrude-start-offset",
-                            "Starting offset",
+                            &tr("model-starting-offset"),
                             Role::StartOffsetValue,
                             Role::StartOffsetFlip,
                             o,
@@ -795,7 +846,7 @@ fn extrude_dialog(
                     // Symmetric only splits a depth: Blind and Through all (P3.8 judge).
                     if matches!(e.end, EndType::Blind | EndType::ThroughAll) {
                         b.spawn(
-                            OptionRow::new("extrude-symmetric", "Symmetric")
+                            OptionRow::new("extrude-symmetric", tr("common-symmetric"))
                                 .checked(e.symmetric)
                                 .build(t),
                         );
@@ -808,7 +859,7 @@ fn extrude_dialog(
                             t,
                             "extrude-draft",
                             "extrude-draft-angle",
-                            "Draft",
+                            &tr("model-extrude-draft"),
                             d,
                             Role::DraftAngle,
                             Role::DraftFlip,
@@ -816,7 +867,7 @@ fn extrude_dialog(
                     }
                     if !e.symmetric {
                         b.spawn(
-                            OptionRow::new("extrude-second-end", "Second end position")
+                            OptionRow::new("extrude-second-end", tr("model-second-end-position"))
                                 .chevron()
                                 .checked(e.second.is_some())
                                 .build(t),
@@ -850,7 +901,7 @@ fn extrude_dialog(
                     }
                     if e.op != BooleanOp::New && e.body != BodyType::Surface {
                         b.spawn(
-                            OptionRow::new("extrude-merge-all", "Merge with all")
+                            OptionRow::new("extrude-merge-all", tr("common-merge-with-all"))
                                 .checked(e.merge_all)
                                 .build(t),
                         );
@@ -859,7 +910,7 @@ fn extrude_dialog(
                                 b,
                                 t,
                                 "extrude-merge-scope-field",
-                                "Merge scope",
+                                &tr("common-merge-scope"),
                                 Role::MergeScope,
                                 labels.merge_scope.clone(),
                                 field == ExtrudeField::MergeScope,
@@ -880,7 +931,7 @@ fn extrude_dialog(
                 f.spawn((
                     Name::new("extrude-help"),
                     icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new("Help"),
+                    Tooltip::new(tr("common-help")),
                 ));
             })
             .build(theme),

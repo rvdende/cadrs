@@ -25,6 +25,7 @@ use cadrs_ui::{
 };
 
 use super::sharing::{self, ContactBook};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 
 pub(super) fn plugin(app: &mut App) {
     app.add_observer(on_select)
@@ -41,13 +42,22 @@ pub struct ShareDialog {
     pub owner: bool,
 }
 
+/// The rights' checkboxes: name, label's catalog key.
 const RIGHTS: [(&str, &str); 5] = [
-    ("share-right-copy", "Copy"),
-    ("share-right-export", "Export"),
-    ("share-right-share", "Share"),
-    ("share-right-comment", "Comment"),
-    ("share-right-link", "Link document"),
+    ("share-right-copy", "common-copy"),
+    ("share-right-export", "common-export"),
+    ("share-right-share", "share"),
+    ("share-right-comment", "shell-share-right-comment"),
+    ("share-right-link", "shell-share-right-link"),
 ];
+
+/// A permission's name, as the selects list it.
+fn permission_label(p: Permission) -> String {
+    tr(match p {
+        Permission::Edit => "shell-share-can-edit",
+        Permission::View => "shell-share-can-view",
+    })
+}
 
 fn rights_list(r: Rights) -> [bool; 5] {
     [r.copy, r.export, r.share, r.comment, r.link]
@@ -76,7 +86,7 @@ pub fn open(world: &mut World, id: DocumentId) {
         .unwrap_or_default();
     let theme = world.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
-    let title = format!("Share \u{201c}{}\u{201d}", doc.name);
+    let title = tr_with("shell-share-title", &[("name", doc.name.as_str())]);
     world.commands().spawn((
         Dialog::new("share-dialog")
             .title(title)
@@ -86,8 +96,16 @@ pub fn open(world: &mut World, id: DocumentId) {
                 if owner {
                     b.spawn(
                         Segmented::new("share-tabs")
-                            .option("Individuals", None, "Share with people by their cadrs ID")
-                            .option("Link sharing", None, "Share with anyone who has the link")
+                            .option(
+                                tr("shell-share-individuals"),
+                                None,
+                                tr("shell-share-individuals-tooltip"),
+                            )
+                            .option(
+                                tr("shell-share-link-sharing"),
+                                None,
+                                tr("shell-share-link-sharing-tooltip"),
+                            )
                             .size(26.0, 12.0)
                             .build(t),
                     )
@@ -117,7 +135,7 @@ pub fn open(world: &mut World, id: DocumentId) {
                 let t = &tf;
                 f.spawn((
                     Button::new("share-confirm")
-                        .label("Share")
+                        .label(tr("share"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -125,7 +143,9 @@ pub fn open(world: &mut World, id: DocumentId) {
                     }),
                 ));
                 f.spawn((
-                    Button::new("share-close").label("Close").build(t),
+                    Button::new("share-close")
+                        .label(tr("common-close"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close);
                     }),
@@ -143,33 +163,43 @@ pub fn open(world: &mut World, id: DocumentId) {
 
 /// The Individuals tab's form.
 fn individuals(p: &mut ChildSpawner, t: &Theme, contacts: &[(String, String)]) {
-    p.spawn(form_row(t, "share-id-row", "cadrs ID", 110.0))
-        .with_children(|r| {
-            r.spawn(
-                TextInput::new("share-id")
-                    .placeholder("Paste someone's cadrs ID")
-                    .autofocus()
-                    .build(t),
-            )
-            .entry::<Node>()
-            .and_modify(|mut n| n.flex_grow = 1.0);
-            if !contacts.is_empty() {
-                let mut select = Select::new("share-contact").width(Val::Px(140.0));
-                select = select.option("Contacts", false);
-                for (_, name) in contacts {
-                    select = select.option(name.clone(), true);
-                }
-                r.spawn(select.build(t))
-                    .entry::<Node>()
-                    .and_modify(|mut n| n.margin = UiRect::left(Val::Px(6.0)));
+    p.spawn(form_row(
+        t,
+        "share-id-row",
+        tr("shell-share-cadrs-id"),
+        110.0,
+    ))
+    .with_children(|r| {
+        r.spawn(
+            TextInput::new("share-id")
+                .placeholder(tr("shell-share-id-placeholder"))
+                .autofocus()
+                .build(t),
+        )
+        .entry::<Node>()
+        .and_modify(|mut n| n.flex_grow = 1.0);
+        if !contacts.is_empty() {
+            let mut select = Select::new("share-contact").width(Val::Px(140.0));
+            select = select.option(tr("shell-share-contacts"), false);
+            for (_, name) in contacts {
+                select = select.option(name.clone(), true);
             }
-        });
+            r.spawn(select.build(t))
+                .entry::<Node>()
+                .and_modify(|mut n| n.margin = UiRect::left(Val::Px(6.0)));
+        }
+    });
     let mut permission = Select::new("share-permission").width(Val::Px(140.0));
     for p in Permission::ALL {
-        permission = permission.option(p.label(), true);
+        permission = permission.option(permission_label(p), true);
     }
-    p.spawn(form_row(t, "share-permission-row", "Permission", 110.0))
-        .with_child(permission.selected(0).build(t));
+    p.spawn(form_row(
+        t,
+        "share-permission-row",
+        tr("shell-share-permission"),
+        110.0,
+    ))
+    .with_child(permission.selected(0).build(t));
     p.spawn((
         Name::new("share-rights"),
         Node {
@@ -182,19 +212,29 @@ fn individuals(p: &mut ChildSpawner, t: &Theme, contacts: &[(String, String)]) {
     .with_children(|r| {
         let on = rights_list(Rights::of(Permission::Edit));
         for ((name, label), checked) in RIGHTS.into_iter().zip(on) {
-            r.spawn(Checkbox::new(name).label(label).checked(checked).build(t));
+            r.spawn(
+                Checkbox::new(name)
+                    .label(tr(label))
+                    .checked(checked)
+                    .build(t),
+            );
         }
     });
-    p.spawn(form_row(t, "share-message-row", "Message", 110.0))
-        .with_children(|r| {
-            r.spawn(
-                TextInput::new("share-message")
-                    .placeholder("Optional, sent with the link")
-                    .build(t),
-            )
-            .entry::<Node>()
-            .and_modify(|mut n| n.flex_grow = 1.0);
-        });
+    p.spawn(form_row(
+        t,
+        "share-message-row",
+        tr("shell-share-message"),
+        110.0,
+    ))
+    .with_children(|r| {
+        r.spawn(
+            TextInput::new("share-message")
+                .placeholder(tr("shell-share-message-placeholder"))
+                .build(t),
+        )
+        .entry::<Node>()
+        .and_modify(|mut n| n.flex_grow = 1.0);
+    });
     p.spawn((
         Name::new("share-members"),
         Node {
@@ -292,8 +332,25 @@ fn refresh(world: &mut World) {
             .collect();
         let owner = d.owner;
         world.entity_mut(list).with_children(|l| {
-            l.spawn(t.text("Shared with", t.font_base, FontWeight::BOLD, t.foreground));
-            person_row(l, t, "share-owner", &owner_name, "", "Owner", None, false);
+            l.spawn((
+                t.text(
+                    tr("shell-share-shared-with"),
+                    t.font_base,
+                    FontWeight::BOLD,
+                    t.foreground,
+                ),
+                Translated("shell-share-shared-with"),
+            ));
+            person_row(
+                l,
+                t,
+                "share-owner",
+                &owner_name,
+                "",
+                &tr("shell-share-owner"),
+                None,
+                false,
+            );
             for (i, id, name, permission) in members {
                 let short: String = id.chars().take(10).collect();
                 person_row(
@@ -302,7 +359,7 @@ fn refresh(world: &mut World) {
                     &format!("share-member-{i}"),
                     &name,
                     &short,
-                    permission.label(),
+                    &permission_label(permission),
                     Some(permission),
                     owner,
                 );
@@ -326,7 +383,7 @@ fn refresh(world: &mut World) {
                 (Some((permission, export)), Some(text)) => {
                     let mut select = Select::new("share-link-permission").width(Val::Px(120.0));
                     for p in Permission::ALL {
-                        select = select.option(p.label(), true);
+                        select = select.option(permission_label(p), true);
                     }
                     let at = Permission::ALL
                         .iter()
@@ -339,11 +396,14 @@ fn refresh(world: &mut World) {
                     })
                     .with_children(|r| {
                         r.spawn(icon("link", 16.0, t.foreground));
-                        r.spawn(t.text(
-                            "Anyone with link",
-                            t.font_base,
-                            FontWeight::MEDIUM,
-                            t.foreground,
+                        r.spawn((
+                            t.text(
+                                tr("shell-share-anyone-with-link"),
+                                t.font_base,
+                                FontWeight::MEDIUM,
+                                t.foreground,
+                            ),
+                            Translated("shell-share-anyone-with-link"),
                         ))
                         .entry::<Node>()
                         .and_modify(|mut n| n.flex_grow = 1.0);
@@ -351,7 +411,7 @@ fn refresh(world: &mut World) {
                         r.spawn((
                             IconButton::new("share-link-off", "close")
                                 .small()
-                                .tooltip("Turn off link sharing: every link to it stops working")
+                                .tooltip(tr("shell-share-link-off"))
                                 .build(t),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 commands.queue(|w: &mut World| link_change(w, None, None));
@@ -393,7 +453,7 @@ fn refresh(world: &mut World) {
                     .with_children(|r| {
                         r.spawn((
                             Button::new("share-link-copy")
-                                .label("Copy to clipboard")
+                                .label(tr("shell-share-copy-link"))
                                 .build(t),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 commands.queue(copy);
@@ -401,7 +461,7 @@ fn refresh(world: &mut World) {
                         ));
                         r.spawn(
                             Checkbox::new("share-link-export")
-                                .label("Allow exporting from the link")
+                                .label(tr("shell-share-link-export"))
                                 .checked(export)
                                 .build(t),
                         );
@@ -410,12 +470,12 @@ fn refresh(world: &mut World) {
                 _ => {
                     p.spawn((
                         t.text(
-                            "Anyone with the link can open this document: it works without adding \
-                         them here, until link sharing is turned off.",
+                            tr("shell-share-link-hint"),
                             t.font_sm,
                             FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("shell-share-link-hint"),
                         Node {
                             width: Val::Px(520.0),
                             ..default()
@@ -424,7 +484,7 @@ fn refresh(world: &mut World) {
                     .insert(TextLayout::default());
                     p.spawn((
                         Button::new("share-link-on")
-                            .label("Turn on link sharing")
+                            .label(tr("shell-share-link-on"))
                             .build(t),
                         observe(|_: On<Activate>, mut commands: Commands| {
                             commands.queue(|w: &mut World| {
@@ -477,14 +537,14 @@ fn person_row(
             Some(p) => {
                 let mut select = Select::new(format!("{name}-permission")).width(Val::Px(110.0));
                 for x in Permission::ALL {
-                    select = select.option(x.label(), true);
+                    select = select.option(permission_label(x), true);
                 }
                 let at = Permission::ALL.iter().position(|x| *x == p).unwrap_or(0);
                 r.spawn(select.selected(at).build(t));
                 r.spawn(
                     IconButton::new(format!("{name}-remove"), "close")
                         .small()
-                        .tooltip("Stop sharing with them")
+                        .tooltip(tr("shell-share-stop-sharing"))
                         .build(t),
                 );
             }
@@ -550,7 +610,7 @@ fn copy(world: &mut World) {
     let Some(d) = dialog(world) else { return };
     if let Some(link) = sharing::link_for(world, d.document) {
         super::copy_link(world, &link);
-        crate::linked::toast(world, "Link copied");
+        crate::linked::toast(world, tr("shell-share-link-copied"));
     }
 }
 
@@ -559,7 +619,7 @@ fn confirm(world: &mut World) {
     let Some(d) = dialog(world) else { return };
     let id = field(world, "share-id").trim().to_string();
     if id.is_empty() {
-        crate::linked::toast(world, "Paste the cadrs ID of whoever to share with");
+        crate::linked::toast(world, tr("shell-share-id-needed"));
         return;
     }
     let permission = Permission::ALL[selected(world, "share-permission").min(1)];
@@ -585,10 +645,10 @@ fn confirm(world: &mut World) {
     let message = field(world, "share-message").trim().to_string();
     let r = if d.owner {
         sharing::share_with(world, d.document, member, message)
-            .map(|()| format!("Shared with {name}: they get it when their cadrs is running"))
+            .map(|()| tr_with("shell-share-shared", &[("name", name.as_str())]))
     } else {
         sharing::ask_owner_to_share(world, d.document, member)
-            .map(|()| format!("Asked the owner to share it with {name}"))
+            .map(|()| tr_with("shell-share-asked-owner", &[("name", name.as_str())]))
     };
     match r {
         Ok(text) => {
@@ -694,19 +754,16 @@ pub fn open_transfer(world: &mut World, id: DocumentId) {
         .map(|m| (m.id.clone(), m.name.clone()))
         .collect();
     if members.is_empty() {
-        crate::linked::toast(
-            world,
-            "Share it with someone first: they can become its owner",
-        );
+        crate::linked::toast(world, tr("shell-share-transfer-share-first"));
         return;
     }
     let theme = world.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
     world.commands().spawn((
         Dialog::new("transfer-dialog")
-            .title(format!(
-                "Transfer ownership of \u{201c}{}\u{201d}",
-                doc.name
+            .title(tr_with(
+                "shell-share-transfer-title",
+                &[("name", doc.name.as_str())],
             ))
             .width(460.0)
             .body(move |b| {
@@ -716,15 +773,21 @@ pub fn open_transfer(world: &mut World, id: DocumentId) {
                     let short: String = id.chars().take(10).collect();
                     select = select.option(format!("{name} · {short}"), true);
                 }
-                b.spawn(form_row(t, "transfer-to-row", "New owner", 110.0))
-                    .with_child(select.selected(0).build(t));
+                b.spawn(form_row(
+                    t,
+                    "transfer-to-row",
+                    tr("shell-share-new-owner"),
+                    110.0,
+                ))
+                .with_child(select.selected(0).build(t));
                 b.spawn((
                     t.text(
-                        "Their cadrs must be running. You keep the document, with Can edit.",
+                        tr("shell-share-transfer-hint"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("shell-share-transfer-hint"),
                     Node {
                         width: Val::Px(420.0),
                         margin: UiRect::top(Val::Px(8.0)),
@@ -737,7 +800,7 @@ pub fn open_transfer(world: &mut World, id: DocumentId) {
                 let t = &tf;
                 f.spawn((
                     Button::new("transfer-confirm")
-                        .label("Transfer ownership")
+                        .label(tr("shell-share-transfer"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -745,7 +808,9 @@ pub fn open_transfer(world: &mut World, id: DocumentId) {
                     }),
                 ));
                 f.spawn((
-                    Button::new("transfer-cancel").label("Cancel").build(t),
+                    Button::new("transfer-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_transfer);
                     }),
@@ -776,7 +841,7 @@ fn confirm_transfer(world: &mut World) {
     close_transfer(world);
     let Some(to) = to else { return };
     match sharing::transfer(world, id, &to) {
-        Ok(()) => crate::linked::toast(world, "Transferring…"),
+        Ok(()) => crate::linked::toast(world, tr("shell-share-transferring")),
         Err(why) => crate::linked::toast(world, why),
     }
 }

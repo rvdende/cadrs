@@ -44,6 +44,7 @@ use cadrs_core::assembly::mate::{
 use cadrs_core::assembly::solver::{Drive, SolveOptions, tangent_supported};
 use cadrs_core::assembly::{Assembly, InstanceId, Pose};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -1371,7 +1372,7 @@ fn connector_list(
 ) -> impl Bundle {
     let mut l = SelectionList::new(name)
         .placeholder(placeholder)
-        .item_icon("mate-connector", "Mate connector")
+        .item_icon("mate-connector", tr("common-mate-connector"))
         // Cut at the end, so the owner stays readable ("Mate connector 1 of Base Frame…"); the
         // whole name in the item's tooltip (P3B.7 judge).
         .tint_filled()
@@ -1411,7 +1412,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                 let t = &tb;
                 let mut select = Select::new("mate-type");
                 for mt in MateType::ALL {
-                    select = select.option(mt.label(), true);
+                    select = select.option(super::mate_type_name(mt), true);
                 }
                 let i = MateType::ALL
                     .iter()
@@ -1433,7 +1434,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                             t,
                             Role::Tabs,
                             "mate-tabs",
-                            "Tab mate connectors",
+                            &tr("asm-mate-tab-connectors"),
                             lists.tabs,
                             active_field == 0,
                             error == Some(0),
@@ -1445,7 +1446,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                             t,
                             Role::Widths,
                             "mate-widths",
-                            "Width mate connectors",
+                            &tr("asm-mate-width-connectors"),
                             lists.connectors,
                             active_field == 1,
                             error == Some(1),
@@ -1459,7 +1460,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                         b.spawn((
                             Role::Connectors,
                             SelectionList::new("mate-entities")
-                                .placeholder("Entities")
+                                .placeholder(tr("asm-mate-entities"))
                                 .tint_filled()
                                 .items(lists.connectors)
                                 .active(active)
@@ -1468,7 +1469,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                         .entry::<Node>()
                         .and_modify(margin);
                         b.spawn(
-                            OptionRow::new("mate-propagation", "Tangent propagation")
+                            OptionRow::new("mate-propagation", tr("asm-mate-tangent-propagation"))
                                 .checked(propagate)
                                 .build(t),
                         );
@@ -1479,7 +1480,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                             t,
                             Role::Connectors,
                             "mate-connectors",
-                            "Mate connectors",
+                            &tr("asm-mate-connectors"),
                             lists.connectors,
                             active,
                             false,
@@ -1491,7 +1492,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                 }
                 if mate_type.has_offset() {
                     b.spawn(
-                        OptionRow::new("mate-offset", "Offset")
+                        OptionRow::new("mate-offset", tr("common-offset"))
                             .checked(offset_on)
                             .build(t),
                     );
@@ -1532,9 +1533,9 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                         .with_child((
                             Role::RotateAbout,
                             Select::new("mate-rotate-about")
-                                .option("Rotate about X", true)
-                                .option("Rotate about Y", true)
-                                .option("Rotate about Z", true)
+                                .option(tr("asm-mate-rotate-about-x"), true)
+                                .option(tr("asm-mate-rotate-about-y"), true)
+                                .option(tr("asm-mate-rotate-about-z"), true)
                                 .selected(axis.min(2) as usize)
                                 .build(t),
                         ));
@@ -1543,7 +1544,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                             t,
                             Role::RotationAngle,
                             "mate-rotation-angle",
-                            "Rotation angle",
+                            &tr("asm-mate-rotation-angle"),
                             None,
                             &tx.offset[3],
                         );
@@ -1551,7 +1552,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                 }
                 if mate_type.has_limits() {
                     b.spawn(
-                        OptionRow::new("mate-limits", "Limits")
+                        OptionRow::new("mate-limits", tr("asm-mate-limits"))
                             .checked(limits_on)
                             .build(t),
                     );
@@ -1587,7 +1588,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                 }
                 // P3F.5: bonds the two parts in a simulation (the Simulation panel).
                 b.spawn(
-                    OptionRow::new("mate-simulation", "Simulation connection")
+                    OptionRow::new("mate-simulation", tr("asm-mate-simulation-connection"))
                         .checked(simulation)
                         .build(t),
                 );
@@ -1604,20 +1605,20 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                     r.spawn(
                         IconButton::new("mate-flip", "flip-direction-up")
                             .icon_size(16.0)
-                            .tooltip("Flip primary axis")
+                            .tooltip(tr("asm-mate-flip-primary-axis"))
                             .build(t),
                     );
                     r.spawn(
                         IconButton::new("mate-reorient", "revolve")
                             .icon_size(16.0)
-                            .tooltip("Reorient secondary axis")
+                            .tooltip(tr("asm-mate-reorient-secondary-axis"))
                             .disabled(mate_type == MateType::Tangent)
                             .build(t),
                     );
                     r.spawn(
                         IconButton::new("mate-animate", "play")
                             .icon_size(16.0)
-                            .tooltip("Animate mate DOF")
+                            .tooltip(tr("asm-mate-animate-dof"))
                             .disabled(!can_animate)
                             .build(t),
                     )
@@ -1628,10 +1629,10 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                     });
                     r.spawn(
                         cadrs_ui::Button::new("mate-solve")
-                            .label("Solve")
+                            .label(tr("asm-mate-solve"))
                             .outline()
                             .small()
-                            .tooltip("Solve all mates")
+                            .tooltip(tr("asm-mate-solve-all"))
                             .build(t),
                     );
                     r.spawn(Node {
@@ -1641,7 +1642,7 @@ fn mate_dialog(theme: &Theme, s: &MateSession, lists: Lists, tx: Texts) -> impl 
                     r.spawn((
                         Name::new("mate-help"),
                         icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new("Help"),
+                        Tooltip::new(tr("common-help")),
                     ));
                 });
             })

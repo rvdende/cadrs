@@ -78,6 +78,8 @@ use cadrs_ui::inline_edit::{
 use cadrs_ui::menu::{
     ContextMenuAnchor, ContextMenuRequested, ContextMenuTarget, Menu, MenuAction, MenuItem,
 };
+// (`tr` is often a table row here: the catalog's is `i18n::tr`.)
+use cadrs_ui::i18n::{self, Translated, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Column, Select, SelectChange, TableBody, TableHeader, TableRoot, TableRow, open_context_menu,
@@ -1045,11 +1047,14 @@ fn sync_panel(
             ..default()
         })
         .with_children(|r| {
-            r.spawn(th.text(
-                "Sheet metal context:",
-                12.0,
-                FontWeight::NORMAL,
-                th.foreground,
+            r.spawn((
+                th.text(
+                    i18n::tr("sheet-context-label"),
+                    12.0,
+                    FontWeight::NORMAL,
+                    th.foreground,
+                ),
+                Translated("sheet-context-label"),
             ));
             let mut s = Select::new("smt-context").bordered().width(Val::Px(230.0));
             for (_, n) in &list {
@@ -1097,11 +1102,14 @@ fn sync_panel(
                     if let (Some(ctx), Some(rows)) = (&ctx, &rows) {
                         spawn_tables(b, &th, ctx, rows, &mjs, &units, bends_open, joints_open);
                     } else {
-                        b.spawn(th.text(
-                            "No sheet metal model",
-                            12.0,
-                            FontWeight::NORMAL,
-                            th.muted_foreground,
+                        b.spawn((
+                            th.text(
+                                i18n::tr("sheet-no-sheet-metal-model"),
+                                12.0,
+                                FontWeight::NORMAL,
+                                th.muted_foreground,
+                            ),
+                            Translated("sheet-no-sheet-metal-model"),
                         ));
                     }
                 })
@@ -1280,9 +1288,9 @@ fn cell_states(
             let k_bad = !b.use_model_k && !(0.0..=1.0).contains(&b.k_factor);
             out.push(CellState {
                 joint: j.id,
-                radius_error: r_bad.then(|| "The bend radius must be greater than 0".to_string()),
+                radius_error: r_bad.then(|| i18n::tr("sheet-bend-radius-greater-than-0")),
                 radius_text: r_bad.then(|| b.radius_expr.trim_end_matches(" mm").to_string()),
-                value_error: k_bad.then(|| "The K Factor must be between 0 and 1".to_string()),
+                value_error: k_bad.then(|| i18n::tr("sheet-k-factor-between-0-and-1")),
                 value_text: k_bad.then(|| b.k_expr.clone()),
                 made_by: Some(f.name.clone()),
             });
@@ -1316,12 +1324,12 @@ fn cell_states(
     out
 }
 
-/// A table title with its caret.
+/// A table title (a catalog key) with its caret.
 fn caret_header(
     b: &mut ChildSpawnerCommands,
     t: &Theme,
     name: &'static str,
-    title: &str,
+    title: &'static str,
     open: bool,
 ) {
     b.spawn(cadrs_ui::Button::new(name).ghost().build(t))
@@ -1349,7 +1357,8 @@ fn caret_header(
                 Pickable::IGNORE,
             ));
             h.spawn((
-                t.text(title, 14.0, FontWeight::MEDIUM, t.foreground),
+                t.text(i18n::tr(title), 14.0, FontWeight::MEDIUM, t.foreground),
+                Translated(title),
                 Pickable::IGNORE,
             ));
         });
@@ -1368,13 +1377,19 @@ fn number(v: f64, decimals: usize) -> String {
 /// The calculation column's title and quantity.
 fn value_title(calc: BendCalc, units: &cadrs_sketch::units::Units) -> (String, Quantity) {
     match calc {
-        BendCalc::KFactor => ("K Factor".into(), Quantity::Count),
+        BendCalc::KFactor => (i18n::tr("sheet-bend-calc-k-factor"), Quantity::Count),
         BendCalc::BendAllowance => (
-            format!("Bend allowance({})", units.length.symbol()),
+            tr_with(
+                "sheet-col-bend-allowance",
+                &[("unit", units.length.symbol())],
+            ),
             Quantity::Length,
         ),
         BendCalc::BendDeduction => (
-            format!("Bend deduction({})", units.length.symbol()),
+            tr_with(
+                "sheet-col-bend-deduction",
+                &[("unit", units.length.symbol())],
+            ),
             Quantity::Length,
         ),
     }
@@ -1387,9 +1402,9 @@ fn rip_angle(ctx: &SheetMetalContext, j: &cadrs_sheetmetal::Joint) -> Option<f64
     Some(na.dot(&nb).clamp(-1.0, 1.0).acos().to_degrees())
 }
 
-/// Why a joint's Type and Style (and Convert) are locked after a Corner break (SM11.4).
-const CORNER_BREAK_LOCK: &str =
-    "Locked by a Corner break on this model.\nMake Corner breaks after the joints are final.";
+/// Why a joint's Type and Style (and Convert) are locked after a Corner break (SM11.4): a
+/// catalog key.
+const CORNER_BREAK_LOCK: &str = "sheet-corner-break-lock";
 
 /// The shaded "#" column's fill.
 const NUMBER_FILL: Color = Color::srgb(0.945, 0.945, 0.945);
@@ -1411,19 +1426,21 @@ fn spawn_tables(
     // The Bends table fills the panel's width (`sheetmetalflatpatterntable-02.png`).
     let bend_cols = vec![
         Column::new("num", "#").grow(0.55).shaded(NUMBER_FILL),
-        Column::new("name", "Name").grow(1.15),
-        Column::new("radius", format!("Radius({len})")).grow(1.15),
-        Column::new("angle", "Angle(deg)").grow(1.1),
-        Column::new("dir", "Bend direction").grow(1.25),
+        Column::new("name", i18n::tr("common-name")).grow(1.15),
+        Column::new("radius", tr_with("sheet-col-radius", &[("unit", len)])).grow(1.15),
+        Column::new("angle", i18n::tr("sheet-col-angle")).grow(1.1),
+        Column::new("dir", i18n::tr("sheet-col-bend-direction")).grow(1.25),
         Column::new("value", value_label).grow(1.45),
     ];
     let joint_cols = vec![
-        Column::new("name", "Name").width(110.0).shaded(NUMBER_FILL),
-        Column::new("type", "Type").width(110.0),
-        Column::new("style", "Style").width(220.0),
+        Column::new("name", i18n::tr("common-name"))
+            .width(110.0)
+            .shaded(NUMBER_FILL),
+        Column::new("type", i18n::tr("common-type")).width(110.0),
+        Column::new("style", i18n::tr("sheet-col-style")).width(220.0),
     ];
     let locked = ctx.corner_broken;
-    caret_header(b, t, "smt-bends-caret", "Bends", bends_open);
+    caret_header(b, t, "smt-bends-caret", "sheet-bends", bends_open);
     if bends_open {
         b.spawn((
             Name::new("smt-bends"),
@@ -1470,7 +1487,14 @@ fn spawn_tables(
                         st.and_then(|c| c.radius_error.clone()),
                     ),
                     (number(r.angle_deg, 2), None, None),
-                    (r.direction.label().to_string(), None, None),
+                    (
+                        i18n::tr(match r.direction {
+                            cadrs_sheetmetal::table::BendDirection::Up => "sheet-bend-up",
+                            cadrs_sheetmetal::table::BendDirection::Down => "sheet-bend-down",
+                        }),
+                        None,
+                        None,
+                    ),
                     (
                         value,
                         editable.then_some(CellKind::Value),
@@ -1510,8 +1534,9 @@ fn spawn_tables(
                                 InlineEdit::default(),
                             ));
                             if !red && let Some(f) = &made_by {
-                                e.insert(Tooltip::new(format!(
-                                    "Set in {f}: a new value edits {f}"
+                                e.insert(Tooltip::new(tr_with(
+                                    "sheet-set-in-feature",
+                                    &[("feature", f)],
                                 )));
                             }
                         }
@@ -1550,7 +1575,7 @@ fn spawn_tables(
             }
         });
     }
-    caret_header(b, t, "smt-joints-caret", "Other joints", joints_open);
+    caret_header(b, t, "smt-joints-caret", "sheet-other-joints", joints_open);
     if joints_open {
         b.spawn((
             Name::new("smt-joints"),
@@ -1599,18 +1624,25 @@ fn spawn_tables(
                     .cell({
                         let th = th.clone();
                         move |c| {
-                            let label = if tangent { "Tangent" } else { "Rip" };
-                            let options = if tangent {
-                                vec![("Tangent".to_string(), true)]
+                            let label = i18n::tr(if tangent {
+                                "sheet-joint-tangent"
                             } else {
-                                vec![("Rip".to_string(), true), ("Bend".to_string(), true)]
+                                "sheet-joint-rip"
+                            });
+                            let options = if tangent {
+                                vec![(i18n::tr("sheet-joint-tangent"), true)]
+                            } else {
+                                vec![
+                                    (i18n::tr("sheet-joint-rip"), true),
+                                    (i18n::tr("sheet-joint-bend"), true),
+                                ]
                             };
-                            let tip = locked.then_some(CORNER_BREAK_LOCK);
+                            let tip = locked.then(|| i18n::tr(CORNER_BREAK_LOCK));
                             dropdown(
                                 c,
                                 &th,
                                 format!("smt-joint-{i}-type"),
-                                label,
+                                &label,
                                 Dropdown {
                                     select: JointSelect::Type(joint),
                                     options,
@@ -1629,22 +1661,29 @@ fn spawn_tables(
                                 ..default()
                             })
                             .with_child((
-                                th.text("n/a", 12.0, FontWeight::NORMAL, th.muted_foreground),
+                                th.text(
+                                    i18n::tr("sheet-not-applicable"),
+                                    12.0,
+                                    FontWeight::NORMAL,
+                                    th.muted_foreground,
+                                ),
+                                Translated("sheet-not-applicable"),
                                 Pickable::IGNORE,
                             ));
                             return;
                         }
+                        use crate::sheetmetal_joint_ui::rip_style_label;
                         let options = vec![
-                            (RipStyle::EdgeJoint.label().to_string(), true),
-                            (RipStyle::ButtDirection1.label().to_string(), ninety),
-                            (RipStyle::ButtDirection2.label().to_string(), ninety),
+                            (rip_style_label(RipStyle::EdgeJoint), true),
+                            (rip_style_label(RipStyle::ButtDirection1), ninety),
+                            (rip_style_label(RipStyle::ButtDirection2), ninety),
                         ];
-                        let tip = locked.then_some(CORNER_BREAK_LOCK);
+                        let tip = locked.then(|| i18n::tr(CORNER_BREAK_LOCK));
                         dropdown(
                             c,
                             &th,
                             format!("smt-joint-{i}-style"),
-                            style.label(),
+                            &rip_style_label(style),
                             Dropdown {
                                 select: JointSelect::Style(joint),
                                 options,
@@ -1685,7 +1724,7 @@ fn dropdown(
     name: String,
     label: &str,
     d: Dropdown,
-    tip: Option<&str>,
+    tip: Option<String>,
 ) {
     let fg = if d.disabled {
         t.muted_foreground
@@ -2011,7 +2050,14 @@ fn move_joint(world: &mut World, joint: JointId, by: isize) {
         .joint(joint)
         .map(|j| j.name.clone())
         .unwrap_or_default();
-    let label = format!("{} {name}", if by < 0 { "Move up" } else { "Move down" });
+    let label = tr_with(
+        if by < 0 {
+            "sheet-move-up-named"
+        } else {
+            "sheet-move-down-named"
+        },
+        &[("name", &name)],
+    );
     run(
         world,
         element,
@@ -2185,9 +2231,9 @@ fn flat_name(world: &World, part: usize) -> Option<String> {
     let ctx = shown(world.resource::<SmTable>(), cache)?;
     let (pid, _) = ctx.parts.get(part)?;
     let p = cache.parts.iter().find(|p| p.id == *pid)?;
-    Some(format!(
-        "Flat pattern of {}",
-        cadrs_core::parts::display_name(p, &cache.props)
+    Some(tr_with(
+        "sheet-flat-pattern-of",
+        &[("name", cadrs_core::parts::display_name(p, &cache.props))],
     ))
 }
 
@@ -2200,22 +2246,25 @@ fn hit_label(world: &World, ctx: &SheetMetalContext, hit: FlatHit) -> String {
         FlatHit::Joint(j) => ctx
             .model
             .joint(j)
-            .map_or_else(|| "Joint".into(), |j| j.name.clone()),
-        FlatHit::Wall(w) => format!(
-            "Face of {}",
-            named(ctx.owner(cadrs_core::sheetmetal::PieceKey::Wall(w)))
+            .map_or_else(|| i18n::tr("sheet-joint"), |j| j.name.clone()),
+        FlatHit::Wall(w) => tr_with(
+            "common-face-of",
+            &[(
+                "name",
+                &named(ctx.owner(cadrs_core::sheetmetal::PieceKey::Wall(w))),
+            )],
         ),
         FlatHit::Pick(p) => {
             let what = if matches!(p, Pick::Vertex(..)) {
-                "Vertex"
+                "common-vertex-of"
             } else {
-                "Edge"
+                "common-edge-of"
             };
             let op = match p {
                 Pick::Edge(_, n) => n.faces[0].op,
                 _ => ctx.feature.0,
             };
-            format!("{what} of {}", named(FeatureId(op)))
+            tr_with(what, &[("name", &named(FeatureId(op)))])
         }
     }
 }
@@ -2288,26 +2337,32 @@ fn on_context_menu(
             .unwrap_or_default();
         // A bend a Bend or Jog made stays a bend (edit or delete that feature instead).
         let made_by = bend_feature_of(&features, &ctx, joint).map(|f| f.name.clone());
-        let convert = if bend {
-            format!("Convert {} to rip", j.name)
-        } else {
-            format!("Convert {} to bend", j.name)
-        };
+        let convert = tr_with(
+            if bend {
+                "sheet-convert-to-rip"
+            } else {
+                "sheet-convert-to-bend"
+            },
+            &[("joint", &j.name)],
+        );
         let mut item = MenuItem::new("smt-convert", convert)
             .disabled(hem || tangent || made_by.is_some() || ctx.corner_broken);
         if ctx.corner_broken {
-            item = item.tooltip(CORNER_BREAK_LOCK);
+            item = item.tooltip(i18n::tr(CORNER_BREAK_LOCK));
         } else if let Some(f) = &made_by {
-            item = item.tooltip(format!("{} is made by {f}: it can't be made a rip", j.name));
+            item = item.tooltip(tr_with(
+                "sheet-joint-made-by",
+                &[("joint", &j.name), ("feature", f)],
+            ));
         } else if hem {
-            item = item.tooltip("A hem's bend can't be made a rip");
+            item = item.tooltip(i18n::tr("sheet-hem-bend-cant-be-rip"));
         }
         let menu = Menu::new("smt-row-menu")
             .min_width(180.0)
             .item_height(24.0)
             .text_only()
-            .item(MenuItem::new("smt-move-up", "Move up").disabled(!up))
-            .item(MenuItem::new("smt-move-down", "Move down").disabled(!down))
+            .item(MenuItem::new("smt-move-up", i18n::tr("common-move-up")).disabled(!up))
+            .item(MenuItem::new("smt-move-down", i18n::tr("common-move-down")).disabled(!down))
             .separator()
             .item(item);
         let theme = world.resource::<Theme>().clone();
@@ -2395,9 +2450,11 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
             .contains(&f)
     });
     let off = name.is_none();
-    let of = name.clone().unwrap_or_else(|| "flat pattern".into());
-    let tip = "Right-click a flat pattern";
-    let with_tip = |i: MenuItem| if off { i.tooltip(tip) } else { i };
+    let of = name
+        .clone()
+        .unwrap_or_else(|| i18n::tr("sheet-flat-pattern-fallback"));
+    let tip = i18n::tr("sheet-right-click-a-flat-pattern");
+    let with_tip = |i: MenuItem| if off { i.tooltip(tip.clone()) } else { i };
     let others_entries: Vec<MenuEntry> = {
         let cache = world.resource::<PartCache>();
         let ctx = shown(world.resource::<SmTable>(), cache);
@@ -2422,27 +2479,33 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
     // The model's (and the flat sketch's) own items.
     let m = model_name
         .clone()
-        .unwrap_or_else(|| "sheet metal model".into());
-    let mut edit_model = MenuItem::new("smt-flat-edit-model", format!("Edit {m}…"))
-        .icon("edit")
-        .disabled(model_name.is_none());
+        .unwrap_or_else(|| i18n::tr("sheet-model-fallback"));
+    let mut edit_model = MenuItem::new(
+        "smt-flat-edit-model",
+        tr_with("sheet-edit-named-ellipsis", &[("name", &m)]),
+    )
+    .icon("edit")
+    .disabled(model_name.is_none());
     if model_name.is_none() {
-        edit_model =
-            edit_model.tooltip("The sheet metal model is derived from another Part Studio");
+        edit_model = edit_model.tooltip(i18n::tr("sheet-model-derived-elsewhere"));
     }
     entries.push(MenuEntry::Item(edit_model));
     if let Some(sn) = &sketch_name {
         entries.push(MenuEntry::Item(
-            MenuItem::new("smt-flat-edit-sketch", format!("Edit {sn}…")).icon("sketch"),
+            MenuItem::new(
+                "smt-flat-edit-sketch",
+                tr_with("sheet-edit-named-ellipsis", &[("name", sn)]),
+            )
+            .icon("sketch"),
         ));
         entries.push(MenuEntry::Item(
             MenuItem::new(
                 "smt-flat-dimensions",
-                if dims_shown {
-                    "Hide dimensions"
+                i18n::tr(if dims_shown {
+                    "sheet-hide-dimensions"
                 } else {
-                    "Show dimensions"
-                },
+                    "sheet-show-dimensions"
+                }),
             )
             .icon("dimension"),
         ));
@@ -2450,63 +2513,78 @@ fn open_flat_menu(world: &mut World, position: Vec2) {
     entries.push(MenuEntry::Item(
         MenuItem::new(
             "smt-flat-dependencies",
-            format!("Show dependencies of {m}…"),
+            tr_with("sheet-show-dependencies-of", &[("name", &m)]),
         )
         .disabled(model_name.is_none()),
     ));
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Item(with_tip(
-        MenuItem::new("smt-flat-sketch", format!("New sketch on {of}…"))
-            .icon("sketch")
-            .disabled(off),
+        MenuItem::new(
+            "smt-flat-sketch",
+            tr_with("sheet-new-sketch-on", &[("name", &of)]),
+        )
+        .icon("sketch")
+        .disabled(off),
     )));
     entries.push(MenuEntry::Item(with_tip(
-        MenuItem::new("smt-flat-copy", format!("Copy {of}"))
-            .icon("copy")
-            .disabled(off),
+        MenuItem::new(
+            "smt-flat-copy",
+            tr_with("sheet-copy-named", &[("name", &of)]),
+        )
+        .icon("copy")
+        .disabled(off),
     )));
     entries.push(MenuEntry::Item(with_tip(
-        MenuItem::new("smt-flat-drawing", format!("Create drawing of {of}…"))
-            .icon("file-new")
-            .disabled(off),
+        MenuItem::new(
+            "smt-flat-drawing",
+            tr_with("sheet-create-drawing-of", &[("name", &of)]),
+        )
+        .icon("file-new")
+        .disabled(off),
     )));
     entries.push(MenuEntry::Item(with_tip(
-        MenuItem::new("smt-flat-export", format!("Export DXF/DWG of {of}…"))
-            .icon("file-export")
-            .disabled(off),
+        MenuItem::new(
+            "smt-flat-export",
+            tr_with("sheet-export-dxf-of", &[("name", &of)]),
+        )
+        .icon("file-export")
+        .disabled(off),
     )));
     entries.push(MenuEntry::Separator);
     let empty = others_entries.is_empty();
     entries.push(MenuEntry::Item(
-        MenuItem::new("smt-flat-select-other", "Select other…")
+        MenuItem::new("smt-flat-select-other", i18n::tr("sheet-select-other"))
             .submenu(others_entries)
             .disabled(empty),
     ));
     // Comments aren't in cadrs yet (the Parts list's Add comment is off too).
     entries.push(MenuEntry::Item(
-        MenuItem::new("smt-flat-comment", "Add comment")
+        MenuItem::new("smt-flat-comment", i18n::tr("common-add-comment"))
             .icon("comments")
             .planned(),
     ));
     entries.push(MenuEntry::Separator);
     entries.push(MenuEntry::Item(MenuItem::new(
         "smt-zoom-fit",
-        "Zoom to fit",
+        i18n::tr("common-zoom-to-fit"),
     )));
     entries.push(MenuEntry::Item(
-        MenuItem::new("smt-zoom-selection", "Zoom to selection")
+        MenuItem::new("smt-zoom-selection", i18n::tr("common-zoom-to-selection"))
             .disabled(off && world.resource::<Selection>().0.is_empty()),
     ));
     entries.push(MenuEntry::Item(MenuItem::new(
         "smt-normal-to",
-        "View normal to",
+        i18n::tr("sheet-view-normal-to"),
     )));
     entries.push(MenuEntry::Separator);
     // As Onshape's: Delete the Sheet metal model feature.
     entries.push(MenuEntry::Item(
-        MenuItem::new("smt-flat-delete", format!("Delete {m}"))
-            .icon("remove-circle")
-            .disabled(model_name.is_none()),
+        MenuItem::new(
+            "smt-flat-delete",
+            tr_with("sheet-delete-named", &[("name", &m)]),
+        )
+        .icon("remove-circle")
+        .disabled(model_name.is_none()),
     ));
     let menu = Menu::new("smt-flat-menu")
         .min_width(280.0)
@@ -2662,7 +2740,10 @@ fn on_menu_action(
                     if crate::linked_session::refuse(world) {
                         return;
                     }
-                    let label = format!("Delete {}", feature_name(world, m).unwrap_or_default());
+                    let label = tr_with(
+                        "sheet-delete-named",
+                        &[("name", &feature_name(world, m).unwrap_or_default())],
+                    );
                     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>()
                         && let Err(e) = doc.execute(&cadrs_core::commands::DeleteFeature {
                             element,
@@ -2785,10 +2866,8 @@ fn copy_flat(world: &mut World) {
     cadrs_ui::show_notification(
         &mut commands,
         &theme,
-        cadrs_ui::Notification::info(format!(
-            "{name} copied. Paste it into a sketch with Ctrl+V."
-        ))
-        .name("smt-flat-copied-toast"),
+        cadrs_ui::Notification::info(tr_with("sheet-flat-copied", &[("name", &name)]))
+            .name("smt-flat-copied-toast"),
     );
     world.flush();
 }

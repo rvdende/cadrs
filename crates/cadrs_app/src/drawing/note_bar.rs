@@ -19,6 +19,7 @@ use cadrs_drawing::style::DateFormat;
 use cadrs_drawing::table::{Corner, Table, TableId};
 use cadrs_drawing::{DrawingOp, DrawingUnits};
 use cadrs_ui::glyphs::{Glyph, glyph};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, CheckboxChange, Select, SelectChange};
 
@@ -123,7 +124,7 @@ pub(crate) fn header(
                 Button::new(format!("{prefix}-ok"))
                     .icon("check-bold")
                     .icon_size(14.0)
-                    .tooltip("Accept")
+                    .tooltip(tr("drawing-accept"))
                     .build(t),
                 observe(move |_: On<Activate>, mut commands: Commands| {
                     commands.queue(f);
@@ -146,7 +147,7 @@ pub(crate) fn header(
                 .icon("x-bold")
                 .icon_size(14.0)
                 .ghost()
-                .tooltip("Cancel")
+                .tooltip(tr("common-cancel"))
                 .build(t),
             observe(move |_: On<Activate>, mut commands: Commands| {
                 commands.queue(cancel);
@@ -214,15 +215,18 @@ fn tool_if(
         tool(r, t, name, icon, tip, f);
         return;
     }
-    let why = if name == "cell-merge" {
-        "select two or more cells"
+    let why = tr(if name == "cell-merge" {
+        "drawing-cell-merge-why"
     } else {
-        "select a merged cell"
-    };
+        "drawing-cell-unmerge-why"
+    });
     let b = Button::new(name.to_string())
         .ghost()
         .disabled(true)
-        .tooltip(format!("{tip}: {why}"));
+        .tooltip(tr_with(
+            "drawing-tool-disabled-tooltip",
+            &[("tool", tip), ("why", &why)],
+        ));
     let mut e = r.spawn(b.build(t));
     if let Ok(i) = icon {
         let fg = t.disabled_foreground;
@@ -417,10 +421,10 @@ fn sync_note_bar(world: &mut World) {
             });
         e.and_then(|e| e.editor.height()).unwrap_or(default_h)
     };
-    let title = match w.target {
-        EditTarget::Note { .. } => "Note",
-        EditTarget::Cell { .. } => "Cell",
-    };
+    let title = tr(match w.target {
+        EditTarget::Note { .. } => "drawing-note",
+        EditTarget::Cell { .. } => "drawing-cell",
+    });
     let mut commands = world.commands();
     commands
         .spawn((card_bundle(&t, "note-bar", w.at), w.clone()))
@@ -428,7 +432,7 @@ fn sync_note_bar(world: &mut World) {
             header(
                 c,
                 &t,
-                title,
+                &title,
                 "note",
                 Some(notes::commit_edit),
                 notes::cancel_edit,
@@ -446,7 +450,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-bold",
                     Ok("bold"),
-                    "Bold (Ctrl+B)",
+                    &tr("drawing-note-bold-shortcut"),
                     toggle(Attr::Bold),
                 );
                 tool(
@@ -454,7 +458,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-italic",
                     Ok("italic"),
-                    "Italic (Ctrl+I)",
+                    &tr("drawing-note-italic-shortcut"),
                     toggle(Attr::Italic),
                 );
                 tool(
@@ -462,7 +466,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-underline",
                     Err(Glyph::Underline),
-                    "Underline (Ctrl+U)",
+                    &tr("drawing-note-underline-shortcut"),
                     toggle(Attr::Underline),
                 );
                 tool(
@@ -470,7 +474,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-strike",
                     Err(Glyph::Strike),
-                    "Strikethrough",
+                    &tr("drawing-note-strikethrough"),
                     toggle(Attr::Strike),
                 );
                 sep(r, &t);
@@ -481,7 +485,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-align-left",
                     Err(Glyph::AlignLeft),
-                    "Align left",
+                    &tr("drawing-align-left"),
                     align(HAlign::Left),
                 );
                 tool(
@@ -489,7 +493,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-align-center",
                     Err(Glyph::AlignCenter),
-                    "Center",
+                    &tr("drawing-align-center"),
                     align(HAlign::Center),
                 );
                 tool(
@@ -497,7 +501,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-align-right",
                     Err(Glyph::AlignRight),
-                    "Align right",
+                    &tr("drawing-align-right"),
                     align(HAlign::Right),
                 );
                 sep(r, &t);
@@ -508,7 +512,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-bullets",
                     Err(Glyph::Bullets),
-                    "Bulleted list",
+                    &tr("drawing-note-bulleted-list"),
                     list(ListKind::Bullet),
                 );
                 tool(
@@ -516,7 +520,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-numbered",
                     Err(Glyph::Numbered),
-                    "Numbered list",
+                    &tr("drawing-note-numbered-list"),
                     list(ListKind::Numbered),
                 );
                 sep(r, &t);
@@ -529,17 +533,17 @@ fn sync_note_bar(world: &mut World) {
                         .select_all_on_focus()
                         .build(&t),
                 )
-                .insert(cadrs_ui::Tooltip::new(match units {
-                    DrawingUnits::Inch => "Text height (in)",
-                    DrawingUnits::Millimeter => "Text height (mm)",
-                }));
+                .insert(cadrs_ui::Tooltip::new(tr(match units {
+                    DrawingUnits::Inch => "drawing-note-text-height-in",
+                    DrawingUnits::Millimeter => "drawing-note-text-height-mm",
+                })));
                 sep(r, &t);
                 r.spawn((
                     Button::new("note-symbol")
                         .label("Ø")
                         .dropdown_caret()
                         .ghost()
-                        .tooltip("Insert symbol")
+                        .tooltip(tr("drawing-note-insert-symbol"))
                         .build(&t),
                     observe(|a: On<Activate>, mut commands: Commands| {
                         let b = a.entity;
@@ -561,7 +565,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-insert-reference",
                     Ok("part"),
-                    "Insert sheet reference property",
+                    &tr("drawing-note-insert-reference-property"),
                     |w| open_property_card(w, false),
                 );
                 tool(
@@ -569,7 +573,7 @@ fn sync_note_bar(world: &mut World) {
                     &t,
                     "note-insert-drawing",
                     Ok("file"),
-                    "Insert drawing property",
+                    &tr("drawing-note-insert-drawing-property"),
                     |w| open_property_card(w, true),
                 );
             });
@@ -619,20 +623,20 @@ fn sync_toggles(
     }
 }
 
-/// The symbol menu's items: (name, symbol, label).
+/// The symbol menu's items: (name, symbol, its label's catalog key).
 pub const SYMBOLS: [(&str, char, &str); 12] = [
-    ("diameter", 'Ø', "Diameter"),
-    ("degree", '°', "Degree"),
-    ("plus-minus", '±', "Plus/minus"),
-    ("counterbore", '⌴', "Counterbore"),
-    ("countersink", '⌵', "Countersink"),
-    ("depth", '↧', "Depth"),
-    ("times", '×', "Times"),
-    ("approx", '≈', "Approximately"),
-    ("le", '≤', "Less than or equal"),
-    ("ge", '≥', "Greater than or equal"),
-    ("delta", 'Δ', "Delta"),
-    ("pi", 'π', "Pi"),
+    ("diameter", 'Ø', "drawing-symbol-diameter"),
+    ("degree", '°', "drawing-symbol-degree"),
+    ("plus-minus", '±', "drawing-symbol-plus-minus"),
+    ("counterbore", '⌴', "drawing-symbol-counterbore"),
+    ("countersink", '⌵', "drawing-symbol-countersink"),
+    ("depth", '↧', "drawing-symbol-depth"),
+    ("times", '×', "drawing-symbol-times"),
+    ("approx", '≈', "drawing-symbol-approximately"),
+    ("le", '≤', "drawing-symbol-less-or-equal"),
+    ("ge", '≥', "drawing-symbol-greater-or-equal"),
+    ("delta", 'Δ', "drawing-symbol-delta"),
+    ("pi", 'π', "drawing-symbol-pi"),
 ];
 
 #[derive(Component)]
@@ -644,7 +648,7 @@ fn open_symbol_menu(world: &mut World, button: Entity) {
     for (name, c, label) in SYMBOLS {
         menu = menu.item(MenuItem::new(
             format!("note-symbol-{name}"),
-            format!("{c}    {label}"),
+            format!("{c}    {}", tr(label)),
         ));
     }
     let mut commands = world.commands();
@@ -755,11 +759,11 @@ fn spawn_property_card(world: &mut World, s: PropertyCard) {
         })
         .unwrap_or_default();
     let t = world.resource::<Theme>().clone();
-    let title = if s.drawing {
-        "Insert drawing property"
+    let title = tr(if s.drawing {
+        "drawing-note-insert-drawing-property"
     } else {
-        "Insert sheet reference property"
-    };
+        "drawing-note-insert-reference-property"
+    });
     let mut commands = world.commands();
     commands
         .spawn((card_bundle(&t, "note-prop-card", at), s))
@@ -779,7 +783,7 @@ fn spawn_property_card(world: &mut World, s: PropertyCard) {
             header(
                 c,
                 &t,
-                title,
+                &title,
                 "note-prop",
                 Some(insert_property),
                 close_property_card,
@@ -818,18 +822,23 @@ fn spawn_property_card(world: &mut World, s: PropertyCard) {
                         props = props.option(p.label(), true);
                     }
                 }
-                row(b, "Property", props.selected(s.prop));
+                row(
+                    b,
+                    tr("drawing-note-property").as_str(),
+                    props.selected(s.prop),
+                );
                 let mut case = Select::new("note-prop-format").width(Val::Px(160.0));
                 for c in TextCase::ALL {
                     case = case.option(c.label(), true);
                 }
-                row(b, "Format", case.selected(s.case));
+                row(b, tr("common-format").as_str(), case.selected(s.case));
                 if s.is_date() {
                     let mut date = Select::new("note-prop-date").width(Val::Px(160.0));
-                    for o in ["Drawing default", "YYYY-MM-DD", "MM/DD/YYYY", "DD.MM.YYYY"] {
+                    date = date.option(tr("drawing-note-date-drawing-default"), true);
+                    for o in ["YYYY-MM-DD", "MM/DD/YYYY", "DD.MM.YYYY"] {
                         date = date.option(o, true);
                     }
-                    row(b, "Date", date.selected(s.date));
+                    row(b, tr("drawing-note-date").as_str(), date.selected(s.date));
                 }
                 // The preview wraps inside the card (P3C.4's delta: a long value ran out of it).
                 b.spawn((
@@ -847,7 +856,13 @@ fn spawn_property_card(world: &mut World, s: PropertyCard) {
                 ))
                 .with_children(|p| {
                     p.spawn((
-                        t.text("Shows", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                        t.text(
+                            tr("drawing-note-shows"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("drawing-note-shows"),
                         Node {
                             flex_shrink: 0.0,
                             ..default()
@@ -1023,7 +1038,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-row-above",
                     Err(Glyph::RowAbove),
-                    "Insert row above",
+                    &tr("drawing-cell-insert-row-above"),
                     |w| table_op(w, "Insert row", |t, (a, _)| t.insert_row(a.0)),
                 );
                 tool(
@@ -1031,7 +1046,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-row-below",
                     Err(Glyph::RowBelow),
-                    "Insert row below",
+                    &tr("drawing-cell-insert-row-below"),
                     |w| {
                         table_op(w, "Insert row", |t, (_, b)| {
                             t.insert_row(b.0 + t.span(b.0, b.1).0)
@@ -1043,7 +1058,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-col-left",
                     Err(Glyph::ColumnLeft),
-                    "Insert column left",
+                    &tr("drawing-cell-insert-column-left"),
                     |w| table_op(w, "Insert column", |t, (a, _)| t.insert_col(a.1)),
                 );
                 tool(
@@ -1051,7 +1066,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-col-right",
                     Err(Glyph::ColumnRight),
-                    "Insert column right",
+                    &tr("drawing-cell-insert-column-right"),
                     |w| {
                         table_op(w, "Insert column", |t, (_, b)| {
                             t.insert_col(b.1 + t.span(b.0, b.1).1)
@@ -1063,7 +1078,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-row-delete",
                     Err(Glyph::DeleteRow),
-                    "Delete row",
+                    &tr("drawing-cell-delete-row"),
                     |w| table_op(w, "Delete row", |t, (a, _)| t.remove_row(a.0)),
                 );
                 tool(
@@ -1071,7 +1086,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-col-delete",
                     Err(Glyph::DeleteColumn),
-                    "Delete column",
+                    &tr("drawing-cell-delete-column"),
                     |w| table_op(w, "Delete column", |t, (a, _)| t.remove_col(a.1)),
                 );
                 sep(r, &t);
@@ -1080,7 +1095,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-merge",
                     Err(Glyph::Merge),
-                    "Merge cells",
+                    &tr("drawing-cell-merge"),
                     w.merge,
                     |w| table_op(w, "Merge cells", |t, (a, b)| t.merge(a, b)),
                 );
@@ -1089,23 +1104,28 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-unmerge",
                     Err(Glyph::Unmerge),
-                    "Unmerge cell",
+                    &tr("drawing-cell-unmerge"),
                     w.unmerge,
                     |w| table_op(w, "Unmerge cell", |t, (a, _)| t.unmerge(a)),
                 );
                 sep(r, &t);
-                tool(r, &t, "cell-bold", Ok("bold"), "Bold", |w| {
+                tool(r, &t, "cell-bold", Ok("bold"), &tr("drawing-bold"), |w| {
                     format_cells(w, Some(Attr::Bold), None)
                 });
-                tool(r, &t, "cell-italic", Ok("italic"), "Italic", |w| {
-                    format_cells(w, Some(Attr::Italic), None)
-                });
+                tool(
+                    r,
+                    &t,
+                    "cell-italic",
+                    Ok("italic"),
+                    &tr("drawing-italic"),
+                    |w| format_cells(w, Some(Attr::Italic), None),
+                );
                 tool(
                     r,
                     &t,
                     "cell-underline",
                     Err(Glyph::Underline),
-                    "Underline",
+                    &tr("drawing-underline"),
                     |w| format_cells(w, Some(Attr::Underline), None),
                 );
                 sep(r, &t);
@@ -1114,7 +1134,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-align-left",
                     Err(Glyph::AlignLeft),
-                    "Align left",
+                    &tr("drawing-align-left"),
                     |w| format_cells(w, None, Some(HAlign::Left)),
                 );
                 tool(
@@ -1122,7 +1142,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-align-center",
                     Err(Glyph::AlignCenter),
-                    "Center",
+                    &tr("drawing-align-center"),
                     |w| format_cells(w, None, Some(HAlign::Center)),
                 );
                 tool(
@@ -1130,7 +1150,7 @@ fn sync_cell_bar(world: &mut World) {
                     &t,
                     "cell-align-right",
                     Err(Glyph::AlignRight),
-                    "Align right",
+                    &tr("drawing-align-right"),
                     |w| format_cells(w, None, Some(HAlign::Right)),
                 );
             });
@@ -1245,6 +1265,16 @@ struct TableDialog;
 #[derive(Component, Clone, Copy)]
 struct CornerChoice(Corner);
 
+/// A table corner's name as the interface shows it ([`Corner::label`]).
+fn corner_name(c: Corner) -> String {
+    tr(match c {
+        Corner::TopLeft => "drawing-corner-top-left",
+        Corner::TopRight => "drawing-corner-top-right",
+        Corner::BottomLeft => "drawing-corner-bottom-left",
+        Corner::BottomRight => "drawing-corner-bottom-right",
+    })
+}
+
 /// The fixed-corner buttons: a small grid with the corner marked.
 pub(crate) fn corner_buttons(
     c: &mut ChildSpawnerCommands,
@@ -1253,12 +1283,15 @@ pub(crate) fn corner_buttons(
     selected: Corner,
     on: fn(&mut World, Corner),
 ) {
-    c.spawn((t.text(
-        "Select fixed corner:",
-        t.font_sm,
-        FontWeight::NORMAL,
-        t.muted_foreground,
-    ),));
+    c.spawn((
+        t.text(
+            tr("drawing-select-fixed-corner"),
+            t.font_sm,
+            FontWeight::NORMAL,
+            t.muted_foreground,
+        ),
+        Translated("drawing-select-fixed-corner"),
+    ));
     c.spawn(Node {
         column_gap: Val::Px(8.0),
         margin: UiRect::top(Val::Px(2.0)),
@@ -1276,7 +1309,7 @@ pub(crate) fn corner_buttons(
                 Button::new(name)
                     .ghost()
                     .selected(corner == selected)
-                    .tooltip(corner.label())
+                    .tooltip(corner_name(corner))
                     .build(t),
                 CornerChoice(corner),
                 observe(move |_: On<Activate>, mut commands: Commands| {
@@ -1381,7 +1414,14 @@ pub fn open_table_dialog(world: &mut World) {
             ..default()
         })
         .with_children(|c| {
-            header(c, &t, "Table", "table-dialog", None, cancel_table_tool);
+            header(
+                c,
+                &t,
+                &tr("drawing-tool-table"),
+                "table-dialog",
+                None,
+                cancel_table_tool,
+            );
             c.spawn(Node {
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(8.0)),
@@ -1390,8 +1430,8 @@ pub fn open_table_dialog(world: &mut World) {
             })
             .with_children(|b| {
                 for (name, label, v) in [
-                    ("table-rows", "Rows", spec.rows),
-                    ("table-cols", "Columns", spec.cols),
+                    ("table-rows", tr("drawing-table-rows"), spec.rows),
+                    ("table-cols", tr("drawing-table-columns"), spec.cols),
                 ] {
                     b.spawn(Node {
                         align_items: AlignItems::Center,
@@ -1417,19 +1457,19 @@ pub fn open_table_dialog(world: &mut World) {
                 }
                 b.spawn(
                     Checkbox::new("table-title-row")
-                        .label("Title row")
+                        .label(tr("drawing-table-title-row"))
                         .checked(spec.title)
                         .build(&t),
                 );
                 b.spawn(
                     Checkbox::new("table-header-row")
-                        .label("Header row")
+                        .label(tr("drawing-table-header-row"))
                         .checked(spec.header)
                         .build(&t),
                 );
                 b.spawn(
                     Checkbox::new("table-revision")
-                        .label("Revision table")
+                        .label(tr("drawing-table-revision-table"))
                         .checked(spec.revision)
                         .build(&t),
                 );
@@ -1536,7 +1576,7 @@ pub fn open_table_properties(world: &mut World, id: TableId) {
             header(
                 c,
                 &theme,
-                "Table properties",
+                &tr("drawing-table-properties"),
                 "table-properties",
                 Some(apply_table_properties),
                 close_table_properties,

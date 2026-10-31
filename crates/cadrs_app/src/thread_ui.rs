@@ -16,6 +16,7 @@ use cadrs_core::document::EdgeRef;
 use cadrs_core::hole::{HoleSpec, HoleStandard};
 use cadrs_core::thread::{Cylinder, ThreadEnd, ThreadFeature};
 use cadrs_core::{Feature, FeatureKind};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::ActiveDocument;
@@ -172,7 +173,7 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 pub(crate) fn items(
@@ -186,9 +187,12 @@ pub(crate) fn items(
             x.edge
                 .iter()
                 .map(|e| {
-                    format!(
-                        "Edge of {}",
-                        op_name(features, crate::parts::edge_maker(features, &e.edge))
+                    tr_with(
+                        "common-edge-of",
+                        &[(
+                            "name",
+                            &op_name(features, crate::parts::edge_maker(features, &e.edge)),
+                        )],
                     )
                 })
                 .collect(),
@@ -204,7 +208,8 @@ pub(crate) fn list_field(role: Role) -> Option<AppliedField> {
     }
 }
 
-const HANDS: [&str; 2] = ["Right-hand", "Left-hand"];
+/// The handedness options' catalog keys.
+const HANDS: [&str; 2] = ["model-thread-right-hand", "model-thread-left-hand"];
 
 pub(crate) fn body(
     b: &mut ChildSpawner,
@@ -222,7 +227,7 @@ pub(crate) fn body(
             b,
             t,
             "thread-edge-field",
-            "Cylinder or hole edge",
+            &tr("model-thread-edge"),
             Role::ThreadEdge,
             items_of(Role::ThreadEdge),
             field == AppliedField::ThreadEdge,
@@ -232,7 +237,7 @@ pub(crate) fn body(
             b,
             t,
             "thread-standard",
-            "Standard",
+            &tr("model-standard"),
             Role::ThreadStandard,
             &standards,
             usize::from(x.standard == HoleStandard::Ansi),
@@ -242,12 +247,12 @@ pub(crate) fn body(
             .into_iter()
             .map(|s| (s, true))
             .collect();
-        sizes.push((CUSTOM.to_string(), true));
+        sizes.push((tr(CUSTOM), true));
         select_row(
             b,
             t,
             "thread-size",
-            "Size",
+            &tr("common-size"),
             Role::ThreadSize,
             &sizes,
             size_index(x),
@@ -258,7 +263,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "thread-diameter",
-                "Major diameter",
+                &tr("model-thread-major-diameter"),
                 Role::ThreadDiameter,
                 &x.diameter_expr,
                 None,
@@ -267,7 +272,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "thread-custom-pitch",
-                "Pitch",
+                &tr("model-pitch"),
                 Role::ThreadCustomPitch,
                 &x.custom_pitch_expr,
                 None,
@@ -282,14 +287,23 @@ pub(crate) fn body(
                 b,
                 t,
                 "thread-pitch",
-                "Pitch",
+                &tr("model-pitch"),
                 Role::ThreadPitch,
                 &pitches,
                 pitch_index(x),
                 None,
             );
         }
-        let ends = opts(&ThreadEnd::ALL, |e| e.label(), |_| true);
+        let ends = opts(
+            &ThreadEnd::ALL,
+            |e| {
+                tr(match e {
+                    ThreadEnd::Blind => "model-blind",
+                    ThreadEnd::Full => "model-thread-up-to-end",
+                })
+            },
+            |_| true,
+        );
         select_row(
             b,
             t,
@@ -305,18 +319,18 @@ pub(crate) fn body(
                 b,
                 t,
                 "thread-length",
-                "Length",
+                &tr("model-length"),
                 Role::ThreadLength,
                 &x.length_expr,
                 None,
             );
         }
-        let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (h.to_string(), true)).collect();
+        let hands: Vec<(String, bool)> = HANDS.iter().map(|h| (tr(h), true)).collect();
         select_row(
             b,
             t,
             "thread-hand",
-            "Direction",
+            &tr("common-direction"),
             Role::ThreadHand,
             &hands,
             usize::from(!x.clockwise),
@@ -325,8 +339,8 @@ pub(crate) fn body(
     });
 }
 
-/// The Size dropdown's last entry: a diameter and pitch typed in.
-const CUSTOM: &str = "Custom";
+/// The Size dropdown's last entry: a diameter and pitch typed in (its catalog key).
+const CUSTOM: &str = "model-thread-custom";
 
 fn size_index(x: &ThreadFeature) -> usize {
     let sizes = ThreadFeature::sizes(x.standard);

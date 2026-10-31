@@ -21,6 +21,7 @@ use bevy::text::{EditableText, FontWeight};
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::ElementId;
 use cadrs_drawing::export::{ExportOptions, Format};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, DialogClose, Notification, Select, SelectState, TextInputField, show_notification,
@@ -72,7 +73,7 @@ fn browse_folder(world: &mut World) {
         &mut commands,
         &theme,
         "folder-picker",
-        "Choose a folder",
+        &tr("common-choose-folder"),
         "export-folder",
         dir,
     );
@@ -144,24 +145,25 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("drawing-export-dialog")
-            .title("Export")
+            .title(tr("common-export"))
             .width(WIDTH)
             .body(move |b| {
                 let t = &tb;
                 let full = || Val::Percent(100.0);
                 b.spawn(row("drawing-export-name-row")).with_children(|g| {
-                    label(g, t, "File name");
+                    label(g, t, &tr("common-file-name"));
                     g.spawn(TextInput::new("drawing-export-name").value(name).select_all_on_focus().autofocus().width(full()).height(FIELD_H).build(t));
                 });
                 b.spawn(row("drawing-export-format-row")).with_children(|g| {
                 // The DWG note sits beside the label, where the buttons' tooltips (shown under
                 // them) don't cover it.
                 g.spawn(Node { align_items: AlignItems::Baseline, column_gap: Val::Px(10.0), ..default() }).with_children(|l| {
-                    label(l, t, "Format");
+                    label(l, t, &tr("common-format"));
                     if converter.is_none() {
                         l.spawn((
                             Name::new("drawing-export-dwg-note"),
-                            t.text("DWG and DWT need LibreDWG or the ODA File Converter on PATH.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                            t.text(tr("drawing-export-dwg-note"), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                            cadrs_ui::i18n::Translated("drawing-export-dwg-note"),
                         ));
                     }
                 });
@@ -170,16 +172,16 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
                         for f in Format::ALL {
                             let disabled = f.needs_converter() && converter.is_none();
                             let tip = match (f, &converter) {
-                                (Format::Pdf, _) => "Vector PDF, a page per sheet at its paper size".to_string(),
-                                (Format::Dxf, _) => "AutoCAD R2013 DXF in millimetres, a file per sheet".to_string(),
-                                (Format::Dwg, Some(c)) => format!("DWG through the {} (a file per sheet)", c.name()),
+                                (Format::Pdf, _) => tr("drawing-export-pdf-tooltip"),
+                                (Format::Dxf, _) => tr("drawing-export-dxf-tooltip"),
+                                (Format::Dwg, Some(c)) => tr_with("drawing-export-dwg-tooltip", &[("converter", c.name())]),
                                 // Short, so it stays clear of the Sheets label below (P3C.8's delta); the
                                 // row's hint says what to install.
-                                (Format::Dwg, None) => "DWG: no converter on PATH".to_string(),
-                                (Format::Dwt, Some(c)) => format!("AutoCAD template (DWG format) through the {}", c.name()),
-                                (Format::Dwt, None) => "DWT: no converter on PATH".to_string(),
-                                (Format::Png, _) => "PNG image, a file per sheet".to_string(),
-                                (Format::Jpeg, _) => "JPEG image, a file per sheet".to_string(),
+                                (Format::Dwg, None) => tr("drawing-export-dwg-no-converter"),
+                                (Format::Dwt, Some(c)) => tr_with("drawing-export-dwt-tooltip", &[("converter", c.name())]),
+                                (Format::Dwt, None) => tr("drawing-export-dwt-no-converter"),
+                                (Format::Png, _) => tr("drawing-export-png-tooltip"),
+                                (Format::Jpeg, _) => tr("drawing-export-jpeg-tooltip"),
                             };
                             r.spawn((
                                 Button::new(format!("drawing-export-format-{}", f.extension()))
@@ -211,17 +213,17 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
                     });
                 });
                 b.spawn(row("drawing-export-sheets-row")).with_children(|g| {
-                    label(g, t, "Sheets");
-                    let mut sel = Select::new("drawing-export-sheets").bordered().width(full()).option(format!("All sheets ({})", sheets.len()), true);
-                    sel = sel.option(format!("Current sheet ({})", sheets.get(current).cloned().unwrap_or_default()), true);
+                    label(g, t, &tr("drawing-export-sheets"));
+                    let mut sel = Select::new("drawing-export-sheets").bordered().width(full()).option(tr_with("drawing-export-all-sheets", &[("count", &sheets.len().to_string())]), true);
+                    sel = sel.option(tr_with("drawing-export-current-sheet", &[("name", &sheets.get(current).cloned().unwrap_or_default())]), true);
                     g.spawn(sel.build(t));
                 });
                 b.spawn(row("drawing-export-color-row")).with_children(|r| {
-                    label(r, t, "Colors");
-                    r.spawn(Select::new("drawing-export-color").bordered().width(full()).option("Color", true).option("Black and white", true).build(t));
+                    label(r, t, &tr("drawing-export-colors"));
+                    r.spawn(Select::new("drawing-export-color").bordered().width(full()).option(tr("drawing-export-color"), true).option(tr("drawing-export-black-and-white"), true).build(t));
                 });
                 b.spawn(row("drawing-export-version-row")).with_children(|r| {
-                    label(r, t, "Version");
+                    label(r, t, &tr("common-version"));
                     let mut v = Select::new("drawing-export-version").bordered().width(full());
                     for d in cadrs_drawing::dxf::DxfVersion::ALL {
                         v = v.option(d.label(), true);
@@ -229,7 +231,7 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
                     r.spawn(v.build(t));
                 });
                 b.spawn(row("drawing-export-dpi-row")).with_children(|r| {
-                    label(r, t, "Resolution");
+                    label(r, t, &tr("drawing-export-resolution"));
                     r.spawn(
                         Select::new("drawing-export-dpi")
                             .bordered()
@@ -242,11 +244,11 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
                     );
                 });
                 b.spawn(row("drawing-export-folder-row")).with_children(|g| {
-                    label(g, t, "Folder");
+                    label(g, t, &tr("common-folder"));
                     g.spawn(Node { column_gap: Val::Px(6.0), align_items: AlignItems::Center, width: full(), ..default() }).with_children(|r| {
                         r.spawn(TextInput::new("drawing-export-folder").value(dir).width(full()).height(FIELD_H).build(t));
                         r.spawn((
-                            Button::new("drawing-export-browse").label("Browse…").outline().build(t),
+                            Button::new("drawing-export-browse").label(tr("common-browse")).outline().build(t),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 commands.queue(browse_folder);
                             }),
@@ -257,13 +259,13 @@ pub fn open_drawing_export(world: &mut World, element: ElementId) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("drawing-export-ok").label("Export").primary().build(t),
+                    Button::new("drawing-export-ok").label(tr("common-export")).primary().build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(run_export);
                     }),
                 ));
                 f.spawn((
-                    Button::new("drawing-export-cancel").label("Cancel").build(t),
+                    Button::new("drawing-export-cancel").label(tr("common-cancel")).build(t),
                     observe(|_: On<Activate>, q: Query<Entity, With<DrawingExportDialog>>, mut commands: Commands| {
                         for e in &q {
                             commands.trigger(DialogClose { entity: e });
@@ -372,16 +374,22 @@ fn run_export(world: &mut World) {
                 info!("exported {}", f.display());
             }
             match files.as_slice() {
-                [one] => Notification::info(format!("Exported {}", one.display())).seconds(8.0),
-                many => Notification::info(format!(
-                    "Exported {} files to {}",
-                    many.len(),
-                    folder.trim()
+                [one] => Notification::info(tr_with(
+                    "asm-bom-exported-file",
+                    &[("file", &one.display().to_string())],
+                ))
+                .seconds(8.0),
+                many => Notification::info(tr_with(
+                    "drawing-export-exported-files",
+                    &[
+                        ("count", &many.len().to_string()),
+                        ("folder", folder.trim()),
+                    ],
                 ))
                 .seconds(8.0),
             }
         }
-        Err(why) => Notification::warning(format!("Export failed: {why}")),
+        Err(why) => Notification::warning(tr_with("asm-bom-export-failed", &[("error", &why)])),
     };
     let mut commands = world.commands();
     show_notification(&mut commands, &theme, note.name("export-toast"));
@@ -399,15 +407,18 @@ pub fn export_now(
 ) -> Result<Vec<PathBuf>, String> {
     let folder = folder.trim();
     if folder.is_empty() {
-        return Err("no folder to save to".into());
+        return Err(tr("drawing-export-no-folder"));
     }
     let date = super::notes::today(world.get_resource::<AppClock>());
     let doc = world
         .get_resource::<ActiveDocument>()
-        .ok_or("no document")?;
-    let el = doc.doc.element(spec.element).ok_or("the drawing is gone")?;
+        .ok_or_else(|| tr("drawing-export-no-document"))?;
+    let el = doc
+        .doc
+        .element(spec.element)
+        .ok_or_else(|| tr("drawing-export-drawing-gone"))?;
     let cadrs_core::ElementKind::Drawing(d) = &el.kind else {
-        return Err("not a drawing".into());
+        return Err(tr("drawing-export-not-a-drawing"));
     };
     let sheets: Vec<usize> = if all {
         (0..d.sheets.len()).collect()

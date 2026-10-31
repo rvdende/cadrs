@@ -123,7 +123,7 @@ impl TextDialog {
         let name = self.name.to_string();
         let st = self.state.clone();
         let dialog = FeatureDialog::new(self.name.clone())
-            .title("Text")
+            .title(crate::i18n::tr("common-text"))
             .width(250.0)
             .body(move |p: &mut ChildSpawner| {
                 let root = p.target_entity();
@@ -141,20 +141,26 @@ impl TextDialog {
                     }
                     r.spawn((select.selected(st.font).build(&t), Of(root, Part::Font)));
                     let toggles = [
-                        (Part::Bold, "bold", "bold", "Bold", st.bold),
-                        (Part::Italic, "italic", "italic", "Italic", st.italic),
+                        (Part::Bold, "bold", "bold", "ui-text-dialog-bold", st.bold),
+                        (
+                            Part::Italic,
+                            "italic",
+                            "italic",
+                            "ui-text-dialog-italic",
+                            st.italic,
+                        ),
                         (
                             Part::FlipH,
                             "flip-h",
                             "flip-horizontal",
-                            "Flip left to right",
+                            "ui-text-dialog-flip-h",
                             st.flip_h,
                         ),
                         (
                             Part::FlipV,
                             "flip-v",
                             "mirror",
-                            "Flip upside down",
+                            "ui-text-dialog-flip-v",
                             st.flip_v,
                         ),
                     ];
@@ -163,7 +169,7 @@ impl TextDialog {
                             IconButton::new(format!("{name}-{suffix}"), icon_name)
                                 .icon_size(16.0)
                                 .selected(on)
-                                .tooltip(tip)
+                                .tooltip(crate::i18n::tr(tip))
                                 .build(&t),
                             Of(root, part),
                         ));
@@ -217,7 +223,7 @@ impl TextDialog {
                     Name::new(format!("{name}-count")),
                     Of(root, Part::Count),
                     t.text(
-                        format!("{}/{MAX_TEXT_CHARS} characters", st.text.chars().count()),
+                        characters(&st.text),
                         t.font_sm,
                         FontWeight::NORMAL,
                         Color::srgb_u8(0x6b, 0x6b, 0x6b),
@@ -317,6 +323,17 @@ fn read_text(
 }
 
 /// Toggle buttons, preview and counter follow the state.
+/// "12/100 characters": how long the text is, of the most it may be.
+fn characters(text: &str) -> String {
+    crate::i18n::tr_with(
+        "ui-text-dialog-characters",
+        &[
+            ("count", &text.chars().count().to_string()),
+            ("max", &MAX_TEXT_CHARS.to_string()),
+        ],
+    )
+}
+
 #[allow(clippy::type_complexity)]
 fn sync_parts(
     q: Query<(Entity, &TextDialogState), Changed<TextDialogState>>,
@@ -370,7 +387,7 @@ fn sync_parts(
                     }
                 }
                 Part::Count => {
-                    let want = format!("{}/{MAX_TEXT_CHARS} characters", s.text.chars().count());
+                    let want = characters(&s.text);
                     if text.0 != want {
                         text.0 = want;
                     }

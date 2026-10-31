@@ -24,75 +24,67 @@ use cadrs_eda::layer::Layer;
 use cadrs_eda::lib_edit::{self as le, SymbolPart};
 use cadrs_eda::units::{MIL, Nm, Pt, mm};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::ui::{self, StripAction};
 use super::{EdaClick, EdaPointer, Mode, Preview, SceneInputs};
 use crate::{ActiveDocument, AppState};
 
+// The tooltips are catalog keys ([`ui::sync_strip`] translates them).
 const SYMBOL_STRIP: ui::StripSpec = &[
-    Some(("sym-select", "drag-handle", "Select (Esc)", "select")),
+    Some(("sym-select", "drag-handle", "pcb-tool-select", "select")),
     None,
-    Some(("sym-pin", "pin", "Add a pin", "pin")),
+    Some(("sym-pin", "pin", "pcb-sym-add-pin", "pin")),
+    Some(("sym-repeat", "copy", "pcb-sym-repeat-pin", "repeat")),
+    Some(("sym-line", "line", "pcb-tool-line", "line")),
+    Some(("sym-circle", "center-circle", "pcb-tool-circle", "circle")),
+    Some(("sym-rect", "corner-rectangle", "pcb-tool-rect", "rect")),
     Some((
-        "sym-repeat",
-        "copy",
-        "Repeat the last pin (Insert)",
-        "repeat",
+        "sym-pin-table",
+        "custom-table",
+        "pcb-sym-pin-table",
+        "pintable",
     )),
-    Some(("sym-line", "line", "Draw a line", "line")),
-    Some(("sym-circle", "center-circle", "Draw a circle", "circle")),
-    Some(("sym-rect", "corner-rectangle", "Draw a rectangle", "rect")),
-    Some(("sym-pin-table", "custom-table", "Pin table", "pintable")),
     Some((
         "sym-arrange",
         "aligned-rectangle",
-        "Arrange the pins round a box",
+        "pcb-sym-arrange",
         "arrange",
     )),
     None,
-    Some(("sym-props", "properties", "Symbol properties", "props")),
+    Some(("sym-props", "properties", "pcb-sym-props", "props")),
     Some((
         "sym-from-library",
         "books",
-        "Start from a library symbol",
+        "pcb-sym-from-library",
         "fromlib",
     )),
 ];
 
 const FOOTPRINT_STRIP: ui::StripSpec = &[
-    Some(("fp-select", "drag-handle", "Select (Esc)", "select")),
+    Some(("fp-select", "drag-handle", "pcb-tool-select", "select")),
     None,
-    Some(("fp-pad", "pad", "Add a pad", "pad")),
+    Some(("fp-pad", "pad", "pcb-fp-add-pad", "pad")),
+    Some(("fp-push", "copy", "pcb-fp-push", "push")),
     Some((
-        "fp-push",
-        "copy",
-        "Push the selected pad's properties to the other pads",
-        "push",
+        "fp-pad-array",
+        "linear-pattern",
+        "pcb-fp-pad-array",
+        "padarray",
     )),
-    Some(("fp-pad-array", "linear-pattern", "Pad array", "padarray")),
     Some((
         "fp-renumber",
         "sort-descending",
-        "Renumber pads",
+        "pcb-fp-renumber",
         "renumber",
     )),
-    Some(("fp-line", "line", "Draw a line", "line")),
-    Some(("fp-rect", "corner-rectangle", "Draw a rectangle", "rect")),
-    Some((
-        "fp-layer",
-        "layers",
-        "Drawing layer: Fab, Silkscreen, Courtyard",
-        "layer",
-    )),
+    Some(("fp-line", "line", "pcb-tool-line", "line")),
+    Some(("fp-rect", "corner-rectangle", "pcb-tool-rect", "rect")),
+    Some(("fp-layer", "layers", "pcb-fp-layer", "layer")),
     None,
-    Some(("fp-props", "properties", "Footprint properties", "props")),
-    Some((
-        "fp-from-library",
-        "books",
-        "Start from a library footprint",
-        "fromlib",
-    )),
-    Some(("fp-model", "board-3d", "3D model", "model")),
+    Some(("fp-props", "properties", "pcb-fp-props", "props")),
+    Some(("fp-from-library", "books", "pcb-fp-from-library", "fromlib")),
+    Some(("fp-model", "board-3d", "pcb-fp-model", "model")),
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -261,7 +253,8 @@ pub fn run_action(w: &mut World, m: Mode, action: &str) {
         (_, "pin") => super::part_dialogs::open_pin(w, None),
         (_, "repeat") => {
             commit(w, "Repeat pin", |c| {
-                le::repeat_pin(c.symbol.as_mut().unwrap()).ok_or("Add a first pin to repeat")?;
+                le::repeat_pin(c.symbol.as_mut().unwrap())
+                    .ok_or_else(|| tr("pcb-sym-repeat-no-pin"))?;
                 Ok(())
             });
         }
@@ -275,7 +268,7 @@ pub fn run_action(w: &mut World, m: Mode, action: &str) {
                     .pads
                     .iter()
                     .position(|p| sel.contains(&p.id))
-                    .ok_or("Select the pad to copy from")?;
+                    .ok_or_else(|| tr("pcb-fp-push-no-pad"))?;
                 le::push_pad_properties(f, i);
                 Ok(())
             });
@@ -288,7 +281,7 @@ pub fn run_action(w: &mut World, m: Mode, action: &str) {
                 _ => Layer::TopFab,
             };
             let name = s.layer.name();
-            ui::toast(w, &format!("Drawing on {name}"));
+            ui::toast(w, &tr_with("pcb-fp-drawing-on", &[("layer", &name)]));
         }
         (_, "model") => super::part_dialogs::open_model(w),
         (_, "pintable") => super::part_dialogs::open_pin_table(w),

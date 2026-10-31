@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use cadrs_core::assembly::connector::ConnectorFrame;
 use cadrs_core::assembly::mate::{MateFeature, MateId, MateKind, MateType};
 use cadrs_core::assembly::{Assembly, InstanceId, Pose};
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 
 use super::connectors::{ConnectorGizmos, ConnectorHaloGizmos, draw_glyph};
@@ -491,11 +492,12 @@ fn show_mode_chip(
                         (icon("mate-fastened", 14.0, theme.primary), Pickable::IGNORE),
                         (
                             theme.text(
-                                "Show mates mode (H): hover an instance, click to pin",
+                                tr("asm-show-mates-mode"),
                                 11.5,
                                 bevy::text::FontWeight::MEDIUM,
                                 theme.foreground
                             ),
+                            Translated("asm-show-mates-mode"),
                             Pickable::IGNORE
                         ),
                     ],

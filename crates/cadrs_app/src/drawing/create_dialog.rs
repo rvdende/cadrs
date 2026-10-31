@@ -26,6 +26,7 @@ use cadrs_drawing::{
     Template,
 };
 use cadrs_ui::Button;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Column, DialogClose, DoubleClickable, Select, SelectChange, SelectState, TabStrip,
@@ -45,13 +46,53 @@ impl Plugin for CreateDrawingPlugin {
     }
 }
 
-/// The template sources of the left list.
+/// The template sources of the left list: (name, its label's catalog key, icon).
 pub const SOURCES: [(&str, &str, &str); 4] = [
-    ("template-source-builtin", "Built-in", "books"),
-    ("template-source-document", "This document", "details"),
-    ("template-source-mine", "My templates", "user"),
-    ("template-source-recent", "Recently used", "clock"),
+    (
+        "template-source-builtin",
+        "drawing-template-source-builtin",
+        "books",
+    ),
+    (
+        "template-source-document",
+        "drawing-template-source-document",
+        "details",
+    ),
+    (
+        "template-source-mine",
+        "drawing-template-source-mine",
+        "user",
+    ),
+    (
+        "template-source-recent",
+        "drawing-template-source-recent",
+        "clock",
+    ),
 ];
+
+/// A sheet orientation's name as the interface shows it ([`Orientation::label`]).
+pub(crate) fn orientation_name(o: Orientation) -> String {
+    tr(match o {
+        Orientation::Landscape => "drawing-orientation-landscape",
+        Orientation::Portrait => "drawing-orientation-portrait",
+    })
+}
+
+/// A projection method's name as the interface shows it ([`Projection::label`]).
+pub(crate) fn projection_name(p: Projection) -> String {
+    tr(match p {
+        Projection::First => "drawing-projection-first-angle",
+        Projection::Third => "drawing-projection-third-angle",
+    })
+}
+
+/// A drawing's units' name as the interface shows it ([`DrawingUnits::label`]).
+pub(crate) fn units_name(u: DrawingUnits) -> String {
+    tr(match u {
+        DrawingUnits::Inch => "drawing-units-inches",
+        DrawingUnits::Millimeter => "drawing-units-millimeters",
+    })
+}
 
 /// Locally kept templates: custom ones ("My templates") and the recently used names.
 #[derive(Resource, Debug, Default, Clone, Serialize, Deserialize)]
@@ -207,9 +248,12 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool, named:
         _ => doc.doc.next_element_name("Drawing"),
     };
     let title = match of {
-        Some(_) if flat || named => format!("Create Drawing: {name}"),
-        Some(part) => format!("Create Drawing: {name} of {part}"),
-        None => format!("Create Drawing: {name}"),
+        Some(_) if flat || named => tr_with("drawing-create-title", &[("name", &name)]),
+        Some(part) => tr_with(
+            "drawing-create-title-of",
+            &[("name", &name), ("part", &part)],
+        ),
+        None => tr_with("drawing-create-title", &[("name", &name)]),
     };
     let mut in_document: Vec<String> = Vec::new();
     for el in &doc.doc.elements {
@@ -259,7 +303,7 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool, named:
                 let t = &tf;
                 f.spawn((
                     Button::new("create-drawing-ok")
-                        .label("OK")
+                        .label(tr("common-ok"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -268,7 +312,7 @@ fn open_with(world: &mut World, reference: Option<ObjectRef>, flat: bool, named:
                 ));
                 f.spawn((
                     Button::new("create-drawing-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                     observe(
                         |_: On<Activate>,
@@ -340,8 +384,8 @@ fn sync_body(
     commands.entity(body).with_children(|b| {
         b.spawn(
             TabStrip::new("create-drawing-tabs")
-                .tab("Existing templates")
-                .tab("Custom template")
+                .tab(tr("drawing-create-tab-existing"))
+                .tab(tr("drawing-create-tab-custom"))
                 .selected(state.tab)
                 .build(&t),
         );
@@ -389,7 +433,7 @@ fn existing_tab(
             s.spawn((
                 ListItem::new(*name)
                     .icon(*icon)
-                    .label(*label)
+                    .label(tr(label))
                     .height(28.0)
                     .weight(if i == state.source {
                         FontWeight::SEMIBOLD
@@ -424,7 +468,7 @@ fn existing_tab(
     .with_children(|l| {
         l.spawn(
             TabStrip::new("template-filter")
-                .tab("All")
+                .tab(tr("drawing-template-filter-all"))
                 .tab("ANSI")
                 .tab("ISO")
                 .selected(state.filter)
@@ -433,9 +477,9 @@ fn existing_tab(
         .entry::<Node>()
         .and_modify(|mut n| n.margin = UiRect::bottom(Val::Px(6.0)));
         let columns = vec![
-            Column::new("template", "Template").width(210.0),
-            Column::new("document", "Document"),
-            Column::new("owner", "Owner").width(80.0),
+            Column::new("template", tr("drawing-template")).width(210.0),
+            Column::new("document", tr("drawing-template-document")),
+            Column::new("owner", tr("drawing-template-owner")).width(80.0),
         ];
         l.spawn(TableHeader::new("template-table-header", columns.clone()).build(t));
         // The rows scroll under the header, with a slim scrollbar at the right.
@@ -463,11 +507,12 @@ fn existing_tab(
                         rows.spawn((
                             Name::new("template-table-empty"),
                             t.text(
-                                "No templates here yet",
+                                tr("drawing-no-templates"),
                                 t.font_base,
                                 FontWeight::NORMAL,
                                 t.muted_foreground,
                             ),
+                            Translated("drawing-no-templates"),
                             Node {
                                 margin: UiRect::all(Val::Px(12.0)),
                                 ..default()
@@ -569,21 +614,26 @@ fn custom_tab(m: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingStat
             .iter()
             .position(|s| *s == c.standard)
             .unwrap_or(0);
-        f.spawn(form_row(t, "custom-standard-row", "Standard", lw))
-            .with_child(
-                select(
-                    "custom-standard",
-                    Standard::ALL
-                        .iter()
-                        .map(|s| s.label().to_string())
-                        .collect(),
-                    std_i,
-                )
-                .build(t),
-            );
+        f.spawn(form_row(
+            t,
+            "custom-standard-row",
+            tr("drawing-standard"),
+            lw,
+        ))
+        .with_child(
+            select(
+                "custom-standard",
+                Standard::ALL
+                    .iter()
+                    .map(|s| s.label().to_string())
+                    .collect(),
+                std_i,
+            )
+            .build(t),
+        );
         let sizes = c.standard.sizes();
         let size_i = sizes.iter().position(|s| *s == c.size).unwrap_or(0);
-        f.spawn(form_row(t, "custom-size-row", "Size", lw))
+        f.spawn(form_row(t, "custom-size-row", tr("common-size"), lw))
             .with_child(
                 select(
                     "custom-size",
@@ -596,30 +646,32 @@ fn custom_tab(m: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingStat
             .iter()
             .position(|o| *o == c.orientation)
             .unwrap_or(0);
-        f.spawn(form_row(t, "custom-orientation-row", "Orientation", lw))
-            .with_child(
-                select(
-                    "custom-orientation",
-                    Orientation::ALL
-                        .iter()
-                        .map(|o| o.label().to_string())
-                        .collect(),
-                    o_i,
-                )
-                .build(t),
-            );
+        f.spawn(form_row(
+            t,
+            "custom-orientation-row",
+            tr("drawing-orientation"),
+            lw,
+        ))
+        .with_child(
+            select(
+                "custom-orientation",
+                Orientation::ALL
+                    .iter()
+                    .map(|o| orientation_name(*o))
+                    .collect(),
+                o_i,
+            )
+            .build(t),
+        );
         let u_i = DrawingUnits::ALL
             .iter()
             .position(|u| *u == c.units)
             .unwrap_or(0);
-        f.spawn(form_row(t, "custom-units-row", "Units", lw))
+        f.spawn(form_row(t, "custom-units-row", tr("common-units"), lw))
             .with_child(
                 select(
                     "custom-units",
-                    DrawingUnits::ALL
-                        .iter()
-                        .map(|u| u.label().to_string())
-                        .collect(),
+                    DrawingUnits::ALL.iter().map(|u| units_name(*u)).collect(),
                     u_i,
                 )
                 .build(t),
@@ -628,22 +680,27 @@ fn custom_tab(m: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingStat
             .iter()
             .position(|p| *p == c.projection)
             .unwrap_or(0);
-        f.spawn(form_row(t, "custom-projection-row", "Projection", lw))
-            .with_child(
-                select(
-                    "custom-projection",
-                    Projection::ALL
-                        .iter()
-                        .map(|p| p.label().to_string())
-                        .collect(),
-                    p_i,
-                )
-                .build(t),
-            );
+        f.spawn(form_row(
+            t,
+            "custom-projection-row",
+            tr("drawing-projection"),
+            lw,
+        ))
+        .with_child(
+            select(
+                "custom-projection",
+                Projection::ALL
+                    .iter()
+                    .map(|p| projection_name(*p))
+                    .collect(),
+                p_i,
+            )
+            .build(t),
+        );
         f.spawn((
             Name::new("custom-template-name"),
             t.text(
-                format!("Template: {}", c.template().name),
+                tr_with("drawing-template-named", &[("name", &c.template().name)]),
                 t.font_base,
                 FontWeight::MEDIUM,
                 t.foreground,
@@ -653,11 +710,14 @@ fn custom_tab(m: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingStat
                 ..default()
             },
         ));
-        f.spawn(t.text(
-            "OK creates the drawing and keeps this template in My templates.",
-            t.font_sm,
-            FontWeight::NORMAL,
-            t.muted_foreground,
+        f.spawn((
+            t.text(
+                tr("drawing-custom-template-help"),
+                t.font_sm,
+                FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
+            Translated("drawing-custom-template-help"),
         ));
     });
 }
@@ -677,7 +737,15 @@ fn options_row(b: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingSta
         BorderColor::all(t.separator),
     ))
     .with_children(|o| {
-        o.spawn(t.text("Options", t.font_base, FontWeight::SEMIBOLD, t.foreground));
+        o.spawn((
+            t.text(
+                tr("drawing-options"),
+                t.font_base,
+                FontWeight::SEMIBOLD,
+                t.foreground,
+            ),
+            Translated("drawing-options"),
+        ));
         o.spawn(Node {
             justify_content: JustifyContent::Center,
             column_gap: Val::Px(8.0),
@@ -688,14 +756,14 @@ fn options_row(b: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingSta
             for (name, label, icon_name, selected, enabled) in [
                 (
                     "template-option-four-views",
-                    "Four views",
+                    "drawing-option-four-views",
                     "apps",
                     state.four_views,
                     can_four,
                 ),
                 (
                     "template-option-no-views",
-                    "No views",
+                    "drawing-option-no-views",
                     "file",
                     !state.four_views,
                     true,
@@ -725,15 +793,11 @@ fn options_row(b: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingSta
                         Color::srgb_u8(0xf0, 0xf0, 0xf0)
                     }),
                     BorderColor::all(t.primary),
-                    Tooltip::new(match (four, enabled) {
-                        (false, _) => "Start with an empty sheet and insert views yourself",
-                        (true, true) => {
-                            "Front, top, side and isometric views of the referenced object"
-                        }
-                        (true, false) => {
-                            "Four views needs a referenced part: use Create Drawing of… on its tab"
-                        }
-                    }),
+                    Tooltip::new(tr(match (four, enabled) {
+                        (false, _) => "drawing-option-no-views-tooltip",
+                        (true, true) => "drawing-option-four-views-tooltip",
+                        (true, false) => "drawing-option-four-views-disabled",
+                    })),
                     observe(move |_: On<PointerClick>, mut commands: Commands| {
                         if enabled {
                             commands.queue(move |w: &mut World| {
@@ -745,7 +809,8 @@ fn options_row(b: &mut ChildSpawnerCommands, t: &Theme, state: &CreateDrawingSta
                 .with_children(|tile| {
                     tile.spawn((icon(icon_name, 24.0, fg), Pickable::IGNORE));
                     tile.spawn((
-                        t.text(label, t.font_sm, FontWeight::MEDIUM, fg),
+                        t.text(tr(label), t.font_sm, FontWeight::MEDIUM, fg),
+                        Translated(label),
                         Pickable::IGNORE,
                     ));
                 });
@@ -836,7 +901,7 @@ fn accept(world: &mut World) {
     let Some(template) = template else {
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
-        cadrs_ui::show_toast(&mut commands, &theme, "Select a template first");
+        cadrs_ui::show_toast(&mut commands, &theme, tr("drawing-select-template-first"));
         world.flush();
         return;
     };
@@ -998,7 +1063,7 @@ pub fn open_update_from_template(world: &mut World) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("update-template-dialog")
-            .title("Update properties from a template")
+            .title(tr("drawing-update-from-template-title"))
             .width(420.0)
             .body(move |b| {
                 let t = &tb;
@@ -1006,37 +1071,55 @@ pub fn open_update_from_template(world: &mut World) {
                 for n in &list {
                     s = s.option(n.clone(), true);
                 }
-                b.spawn(form_row(t, "update-template-row", "Template", 90.0))
-                    .with_child(s.selected(selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "update-template-row",
+                    tr("drawing-template"),
+                    90.0,
+                ))
+                .with_child(s.selected(selected).build(t));
                 b.spawn((
                     t.text(
-                        "Replaces the drawing properties, units and projection with the template's.",
+                        tr("drawing-update-from-template-help"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("drawing-update-from-template-help"),
                     Node {
                         max_width: Val::Px(380.0),
                         ..default()
                     },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("update-template-ok").label("OK").primary().build(t),
+                    Button::new("update-template-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_update_from_template);
                     }),
                 ));
                 f.spawn((
-                    Button::new("update-template-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<UpdateTemplateDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("update-template-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<UpdateTemplateDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),

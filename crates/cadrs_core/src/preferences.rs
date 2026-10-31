@@ -322,6 +322,10 @@ pub struct Preferences {
     /// as fast as they are made, which shows what a frame really costs but uses more power.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
+    /// The interface's language (issue #178; `cadrs_ui::i18n`). One this cadrs doesn't know (a
+    /// newer one's) reads as English, the other preferences kept.
+    #[serde(default)]
+    pub language: Language,
     /// The slicer parts were last sent to ([`crate::slicer::Slicer::id`]): listed first.
     #[serde(default)]
     pub last_slicer: Option<u8>,
@@ -331,6 +335,79 @@ pub struct Preferences {
     /// other gesture.
     #[serde(default)]
     pub keep_camera_up: bool,
+}
+
+/// A language cadrs's interface has a catalog for (`cadrs_ui::i18n::LANGUAGES`, in the same
+/// order), saved as its code (`"pt-BR"`); a code this cadrs doesn't know (a newer one's) reads as
+/// English, the other preferences kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Language {
+    Afrikaans,
+    German,
+    #[default]
+    English,
+    Spanish,
+    French,
+    Italian,
+    Dutch,
+    PortugueseBrazil,
+    Russian,
+    Japanese,
+    ChineseSimplified,
+    Korean,
+}
+
+impl Serialize for Language {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for Language {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let code = String::deserialize(d)?;
+        Ok(Language::from_code(&code).unwrap_or_default())
+    }
+}
+
+impl Language {
+    pub const ALL: [Language; 12] = [
+        Language::Afrikaans,
+        Language::German,
+        Language::English,
+        Language::Spanish,
+        Language::French,
+        Language::Italian,
+        Language::Dutch,
+        Language::PortugueseBrazil,
+        Language::Russian,
+        Language::Japanese,
+        Language::ChineseSimplified,
+        Language::Korean,
+    ];
+
+    /// The language with this code (BCP 47), if cadrs has it.
+    pub fn from_code(code: &str) -> Option<Language> {
+        Language::ALL.into_iter().find(|l| l.code() == code)
+    }
+
+    /// Its code (BCP 47), the catalog's file name.
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::English => "en",
+            Language::German => "de",
+            Language::French => "fr",
+            Language::Spanish => "es",
+            Language::Italian => "it",
+            Language::Dutch => "nl",
+            Language::PortugueseBrazil => "pt-BR",
+            Language::Russian => "ru",
+            Language::Afrikaans => "af",
+            Language::ChineseSimplified => "zh-CN",
+            Language::Japanese => "ja",
+            Language::Korean => "ko",
+        }
+    }
 }
 
 fn default_vsync() -> bool {
@@ -357,6 +434,7 @@ impl Default for Preferences {
             autoconnect_p2p: false,
             profile_cpu: false,
             vsync: true,
+            language: Language::English,
             last_slicer: None,
             keep_camera_up: false,
         }
@@ -545,11 +623,27 @@ mod tests {
             autoconnect_p2p: true,
             profile_cpu: true,
             vsync: false,
+            language: Language::PortugueseBrazil,
             last_slicer: Some(0),
             keep_camera_up: true,
         };
         p.save(&dir).unwrap();
         assert_eq!(Preferences::load(&dir), p);
+        // A language this cadrs doesn't know reads as English, the rest kept.
+        let saved = cadrs_fs::read_to_string(Preferences::path(&dir)).unwrap();
+        assert!(saved.contains("\"pt-BR\""), "{saved}");
+        cadrs_fs::write(
+            Preferences::path(&dir),
+            saved.replace("\"pt-BR\"", "\"tlh\""),
+        )
+        .unwrap();
+        assert_eq!(
+            Preferences::load(&dir),
+            Preferences {
+                language: Language::English,
+                ..p
+            }
+        );
         // A file from before the MCP server (and P2P's switch) reads with both off.
         cadrs_fs::write(Preferences::path(&dir), "(mouse: Creo)").unwrap();
         assert_eq!(

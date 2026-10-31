@@ -191,9 +191,12 @@ fn legend(p: &mut ChildSpawner, t: &Theme, name: &str, auto: bool) {
         Pickable::IGNORE,
     ))
     .with_children(|r| {
-        let mut items = vec![("Workspace", true, false), ("Version", false, false)];
+        let mut items = vec![
+            ("ui-version-graph-workspace", true, false),
+            ("common-version", false, false),
+        ];
         if auto {
-            items.push(("Auto version", false, true));
+            items.push(("ui-version-graph-auto-version", false, true));
         }
         for (label, circle, open) in items {
             r.spawn((
@@ -223,7 +226,13 @@ fn legend(p: &mut ChildSpawner, t: &Theme, name: &str, auto: bool) {
                     Pickable::IGNORE,
                 ));
                 c.spawn((
-                    t.text(label, 11.0, FontWeight::NORMAL, t.foreground),
+                    t.text(
+                        crate::i18n::tr(label),
+                        11.0,
+                        FontWeight::NORMAL,
+                        t.foreground,
+                    ),
+                    crate::i18n::Translated(label),
                     Pickable::IGNORE,
                 ));
             });

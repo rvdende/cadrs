@@ -25,6 +25,7 @@ use cadrs_core::library::{
     TrashFolder, TrashItems,
 };
 use cadrs_core::{DocumentEntry, DocumentId, Filter, FolderEntry, FolderId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 
@@ -133,7 +134,7 @@ pub fn move_entries(
     moving: &[FolderId],
 ) -> Vec<MenuEntry> {
     let mut entries: Vec<MenuEntry> = vec![
-        MenuItem::new("ctx-move-top", "Documents (no folder)")
+        MenuItem::new("ctx-move-top", tr("shell-organize-move-top"))
             .checked(current == Some(None))
             .into(),
     ];
@@ -183,14 +184,21 @@ fn items_name(lib: &Library, items: &[Pick]) -> String {
     match items {
         [Pick::Doc(d)] => format!(
             "\u{201c}{}\u{201d}",
-            lib.get(*d).map(|e| e.name.as_str()).unwrap_or("document")
+            lib.get(*d)
+                .map_or_else(|| tr("shell-organize-document"), |e| e.name.clone())
         ),
         [Pick::Folder(f)] => format!(
             "\u{201c}{}\u{201d}",
-            lib.folder(*f).map(|e| e.name.as_str()).unwrap_or("folder")
+            lib.folder(*f)
+                .map_or_else(|| tr("shell-organize-folder"), |e| e.name.clone())
         ),
-        many => format!("{} items", many.len()),
+        many => item_count(many.len()),
     }
+}
+
+/// "3 items" (always several).
+fn item_count(n: usize) -> String {
+    tr_with("shell-organize-items", &[("count", &n.to_string())])
 }
 
 /// Moves `items` into `to` (the top level with `None`) in one undo step. A folder dropped on
@@ -219,18 +227,23 @@ pub fn move_items(world: &mut World, items: &[Pick], to: Option<FolderId>) {
         cadrs_ui::show_toast(
             &mut commands,
             &theme,
-            "A folder can't go into a folder inside it",
+            tr("shell-organize-folder-into-itself"),
         );
         world.flush();
         return;
     }
-    let text = format!(
-        "Moved {} to {}",
-        items_name(&lib, &items),
-        match to {
-            Some(f) => format!("\u{201c}{}\u{201d}", folder_label(&lib, f)),
-            None => "Documents".into(),
-        }
+    let text = tr_with(
+        "shell-organize-moved-to",
+        &[
+            ("items", &items_name(&lib, &items)),
+            (
+                "place",
+                &match to {
+                    Some(f) => format!("\u{201c}{}\u{201d}", folder_label(&lib, f)),
+                    None => tr("shell-landing-documents"),
+                },
+            ),
+        ],
     );
     let store = world.resource::<DocumentStore>().0.clone();
     world
@@ -246,7 +259,10 @@ pub fn trash_items(world: &mut World, items: &[Pick]) {
     if docs.is_empty() && folders.is_empty() {
         return;
     }
-    let text = format!("Moved {} to trash", items_name(&lib, items));
+    let text = tr_with(
+        "shell-organize-moved-to-trash",
+        &[("items", &items_name(&lib, items))],
+    );
     let store = world.resource::<DocumentStore>().0.clone();
     let now = world.resource::<AppClock>().now();
     world
@@ -262,7 +278,10 @@ fn purge_items(world: &mut World, items: &[Pick]) {
     if docs.is_empty() && folders.is_empty() {
         return;
     }
-    let text = format!("Deleted {} permanently", items_name(&lib, items));
+    let text = tr_with(
+        "shell-organize-deleted-permanently",
+        &[("items", &items_name(&lib, items))],
+    );
     let store = world.resource::<DocumentStore>().0.clone();
     world
         .resource_mut::<DocLibrary>()
@@ -282,7 +301,13 @@ fn restore_items(world: &mut World, items: &[Pick]) {
         }
     }
     let lib = world.resource::<DocLibrary>().lib.clone();
-    undo_toast(world, format!("Restored {}", items_name(&lib, items)));
+    undo_toast(
+        world,
+        tr_with(
+            "shell-organize-restored",
+            &[("items", &items_name(&lib, items))],
+        ),
+    );
 }
 
 /// Copies of `docs` (each "Copy of <name>", in `into`, or where it is with `None`) and of
@@ -349,9 +374,12 @@ fn copy_items(
         return;
     }
     let text = match (new_folders.first(), new_docs.as_slice()) {
-        (Some(f), _) => format!("Copied to \u{201c}{}\u{201d}", f.name),
-        (None, [e]) => format!("Copied to \u{201c}{}\u{201d}", e.name),
-        (None, many) => format!("Copied {} documents", many.len()),
+        (Some(f), _) => tr_with("shell-landing-copied-to", &[("name", f.name.as_str())]),
+        (None, [e]) => tr_with("shell-landing-copied-to", &[("name", e.name.as_str())]),
+        (None, many) => tr_with(
+            "shell-organize-copied-documents",
+            &[("count", &many.len().to_string())],
+        ),
     };
     world.resource_mut::<DocLibrary>().execute(
         &store,
@@ -371,18 +399,24 @@ pub fn multi_menu(lib: &Library, items: &[Pick], trash: bool) -> Menu {
     let menu = Menu::new("multi-context-menu").min_width(190.0);
     if trash {
         return menu
-            .item(MenuItem::new("multi-restore", "Restore").icon("restore"))
-            .item(MenuItem::new("multi-delete-forever", "Delete permanently…").icon("delete"));
+            .item(MenuItem::new("multi-restore", tr("common-restore")).icon("restore"))
+            .item(
+                MenuItem::new(
+                    "multi-delete-forever",
+                    tr("shell-landing-delete-forever-ellipsis"),
+                )
+                .icon("delete"),
+            );
     }
     let (_, folders) = split(items);
-    menu.item(MenuItem::new("multi-copy", "Copy").icon("copy"))
+    menu.item(MenuItem::new("multi-copy", tr("common-copy")).icon("copy"))
         .item(
-            MenuItem::new("multi-move", "Move to…")
+            MenuItem::new("multi-move", tr("shell-landing-move-to"))
                 .icon("move-to-folder")
                 .submenu(move_entries(lib, common_place(lib, items), &folders)),
         )
         .separator()
-        .item(MenuItem::new("multi-trash", "Move to trash").icon("delete"))
+        .item(MenuItem::new("multi-trash", tr("shell-landing-move-to-trash")).icon("delete"))
 }
 
 /// Opens a selection's menu at `position` for `items`.
@@ -453,24 +487,30 @@ fn on_folder_context_menu(
     commands.queue(move |world: &mut World| details::select(world, Pick::Folder(id), false));
     let menu = if trash {
         Menu::new("folder-context-menu")
-            .item(MenuItem::new("folder-restore", "Restore").icon("restore"))
-            .item(MenuItem::new("folder-delete-forever", "Delete permanently…").icon("delete"))
+            .item(MenuItem::new("folder-restore", tr("common-restore")).icon("restore"))
+            .item(
+                MenuItem::new(
+                    "folder-delete-forever",
+                    tr("shell-landing-delete-forever-ellipsis"),
+                )
+                .icon("delete"),
+            )
             .min_width(190.0)
     } else {
         let parent = lib.lib.folder(id).map(|f| f.parent);
         Menu::new("folder-context-menu")
-            .item(MenuItem::new("folder-open", "Open").icon("folder"))
-            .item(MenuItem::new("folder-rename", "Rename…").icon("edit"))
+            .item(MenuItem::new("folder-open", tr("common-open")).icon("folder"))
+            .item(MenuItem::new("folder-rename", tr("common-rename-ellipsis")).icon("edit"))
             .separator()
-            .item(MenuItem::new("folder-copy", "Copy…").icon("copy"))
+            .item(MenuItem::new("folder-copy", tr("shell-landing-copy-ellipsis")).icon("copy"))
             .item(
-                MenuItem::new("folder-move", "Move to…")
+                MenuItem::new("folder-move", tr("shell-landing-move-to"))
                     .icon("move-to-folder")
                     .submenu(move_entries(&lib.lib, parent, &[id])),
             )
-            .item(MenuItem::new("folder-properties", "Properties…").icon("info"))
+            .item(MenuItem::new("folder-properties", tr("common-properties")).icon("info"))
             .separator()
-            .item(MenuItem::new("folder-trash", "Move to trash").icon("delete"))
+            .item(MenuItem::new("folder-trash", tr("shell-landing-move-to-trash")).icon("delete"))
             .min_width(190.0)
     };
     let anchor = cadrs_ui::open_context_menu(&mut commands, ev.position, menu.build(&theme));
@@ -520,10 +560,10 @@ fn open_rename_folder_dialog(commands: &mut Commands, theme: &Theme, folder: &Fo
     let name = folder.name.clone();
     commands.spawn((
         Dialog::new("rename-folder-dialog")
-            .title("Rename folder")
+            .title(tr("shell-organize-rename-folder"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "Folder name");
+                field_label(b, &tb, "shell-tab-folders-folder-name");
                 b.spawn(
                     TextInput::new("rename-folder-name")
                         .value(name)
@@ -532,7 +572,7 @@ fn open_rename_folder_dialog(commands: &mut Commands, theme: &Theme, folder: &Fo
                         .build(&tb),
                 );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "rename-folder-dialog", "Rename"))
+            .footer(move |f| dialog_buttons(f, &tf, "rename-folder-dialog", "common-rename"))
             .build(&t),
         LandingDialog::RenameFolder(folder.id),
         DespawnOnExit(AppState::Landing),
@@ -545,10 +585,10 @@ fn open_copy_folder_dialog(commands: &mut Commands, theme: &Theme, folder: &Fold
     let name = format!("Copy of {}", folder.name);
     commands.spawn((
         Dialog::new("copy-folder-dialog")
-            .title("Copy folder")
+            .title(tr("shell-organize-copy-folder"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "New folder name");
+                field_label(b, &tb, "shell-organize-new-folder-name");
                 b.spawn(
                     TextInput::new("copy-folder-name")
                         .value(name)
@@ -556,14 +596,17 @@ fn open_copy_folder_dialog(commands: &mut Commands, theme: &Theme, folder: &Fold
                         .autofocus()
                         .build(&tb),
                 );
-                b.spawn(tb.text(
-                    "Its folders and documents are copied with it.",
-                    tb.font_base,
-                    FontWeight::NORMAL,
-                    tb.muted_foreground,
+                b.spawn((
+                    tb.text(
+                        tr("shell-organize-copy-folder-note"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated("shell-organize-copy-folder-note"),
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "copy-folder-dialog", "Copy"))
+            .footer(move |f| dialog_buttons(f, &tf, "copy-folder-dialog", "common-copy"))
             .build(&t),
         LandingDialog::CopyFolder(folder.id),
         DespawnOnExit(AppState::Landing),
@@ -575,24 +618,35 @@ fn open_purge_folder_dialog(commands: &mut Commands, theme: &Theme, folder: &Fol
     let name = folder.name.clone();
     commands.spawn((
         Dialog::new("purge-folder-dialog")
-            .title("Delete permanently")
+            .title(tr("shell-landing-delete-forever"))
             .width(420.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!(
-                        "Permanently delete \u{201c}{name}\u{201d} and everything in it?"
+                    Text::new(tr_with(
+                        "shell-organize-purge-folder-question",
+                        &[("name", name.as_str())],
                     )),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
                 ));
-                b.spawn(tb.text(
-                    "You cannot restore it from Trash.",
-                    tb.font_base,
-                    FontWeight::NORMAL,
-                    tb.muted_foreground,
+                b.spawn((
+                    tb.text(
+                        tr("shell-landing-cannot-restore"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated("shell-landing-cannot-restore"),
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "purge-folder-dialog", "Delete permanently"))
+            .footer(move |f| {
+                dialog_buttons(
+                    f,
+                    &tf,
+                    "purge-folder-dialog",
+                    "shell-landing-delete-forever",
+                )
+            })
             .build(&t),
         LandingDialog::PurgeFolder(folder.id),
         DespawnOnExit(AppState::Landing),
@@ -624,23 +678,29 @@ pub fn open_purge_items_dialog(
             let n = items.len();
             commands.spawn((
                 Dialog::new("purge-items-dialog")
-                    .title("Delete permanently")
+                    .title(tr("shell-landing-delete-forever"))
                     .width(420.0)
                     .body(move |b| {
                         b.spawn((
-                            Text::new(format!("Permanently delete {n} items?")),
+                            Text::new(tr_with(
+                                "shell-organize-purge-items-question",
+                                &[("count", &n.to_string())],
+                            )),
                             tb.font(tb.font_base, FontWeight::NORMAL),
                             TextColor(tb.foreground),
                         ));
-                        b.spawn(tb.text(
-                            "You cannot restore them from Trash.",
-                            tb.font_base,
-                            FontWeight::NORMAL,
-                            tb.muted_foreground,
+                        b.spawn((
+                            tb.text(
+                                tr("shell-organize-cannot-restore-them"),
+                                tb.font_base,
+                                FontWeight::NORMAL,
+                                tb.muted_foreground,
+                            ),
+                            Translated("shell-organize-cannot-restore-them"),
                         ));
                     })
                     .footer(move |f| {
-                        dialog_buttons(f, &tf, "purge-items-dialog", "Delete permanently")
+                        dialog_buttons(f, &tf, "purge-items-dialog", "shell-landing-delete-forever")
                     })
                     .build(&t),
                 LandingDialog::PurgeItems,
@@ -655,30 +715,38 @@ pub fn open_purge_items_dialog(
 /// empty).
 pub fn open_empty_trash_dialog(commands: &mut Commands, theme: &Theme, lib: &Library) {
     let (docs, folders) = lib.trash();
-    let what = match docs.len() + folders.len() {
+    let question = match docs.len() + folders.len() {
         0 => return,
-        1 => "the item".to_string(),
-        n => format!("all {n} items"),
+        1 => tr("shell-organize-empty-trash-one"),
+        n => tr_with(
+            "shell-organize-empty-trash-many",
+            &[("count", &n.to_string())],
+        ),
     };
     let (t, tb, tf) = (theme.clone(), theme.clone(), theme.clone());
     commands.spawn((
         Dialog::new("empty-trash-dialog")
-            .title("Empty trash")
+            .title(tr("shell-details-empty-trash"))
             .width(420.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!("Permanently delete {what} in the trash?")),
+                    Text::new(question),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
                 ));
-                b.spawn(tb.text(
-                    "You cannot restore them.",
-                    tb.font_base,
-                    FontWeight::NORMAL,
-                    tb.muted_foreground,
+                b.spawn((
+                    tb.text(
+                        tr("shell-organize-cannot-restore-them-short"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated("shell-organize-cannot-restore-them-short"),
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "empty-trash-dialog", "Empty trash"))
+            .footer(move |f| {
+                dialog_buttons(f, &tf, "empty-trash-dialog", "shell-details-empty-trash")
+            })
             .build(&t),
         LandingDialog::EmptyTrash,
         DespawnOnExit(AppState::Landing),
@@ -695,7 +763,7 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
                 return;
             }
             close_dialogs(world);
-            let text = format!("Renamed to \u{201c}{}\u{201d}", name.trim());
+            let text = tr_with("shell-landing-renamed-to", &[("name", name.trim())]);
             world
                 .resource_mut::<DocLibrary>()
                 .execute(&store, &RenameFolder { id, name });
@@ -716,7 +784,13 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
             world
                 .resource_mut::<DocLibrary>()
                 .execute(&store, &PurgeFolder { id });
-            undo_toast(world, format!("Deleted \u{201c}{name}\u{201d} permanently"));
+            undo_toast(
+                world,
+                tr_with(
+                    "shell-landing-deleted-permanently",
+                    &[("name", name.as_str())],
+                ),
+            );
         }
         LandingDialog::PurgeItems => {
             let mut q = world.query::<&PurgePicks>();
@@ -735,7 +809,7 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
             world
                 .resource_mut::<DocLibrary>()
                 .execute(&store, &PurgeItems { docs, folders });
-            undo_toast(world, "Emptied the trash".into());
+            undo_toast(world, tr("shell-organize-emptied-trash"));
         }
         _ => {}
     }
@@ -901,7 +975,7 @@ fn place_ghost(
         [one] => items_name(&lib.lib, &[*one])
             .trim_matches(['\u{201c}', '\u{201d}'])
             .to_string(),
-        many => format!("{} items", many.len()),
+        many => item_count(many.len()),
     };
     commands
         .spawn((

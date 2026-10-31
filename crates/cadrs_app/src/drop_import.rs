@@ -26,6 +26,7 @@ use cadrs_core::import::ImportFormat;
 use cadrs_core::picture::ImageFormat;
 use cadrs_core::vector_import::{AddVectorSketch, InsertVector, VectorFormat, bounds, read_sketch};
 use cadrs_sketch::Vec2 as SVec2;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{Notification, Theme, show_notification};
 
 use crate::import_file::ImportTarget;
@@ -149,16 +150,17 @@ pub fn dropped(world: &mut World, paths: Vec<PathBuf>) {
             .unwrap_or("the file")
             .to_string();
         let Some(kind) = DropKind::of_path(&path) else {
-            notes.push(Notification::warning(format!(
-                "{name}: drop drawings (SVG, EPS, PDF, DXF, DWG), pictures (PNG, JPEG, GIF), models (STEP, IGES, BREP, STL) or native documents (cadrs)"
+            notes.push(Notification::warning(tr_with(
+                "io-drop-unknown-kind",
+                &[("name", &name)],
             )));
             continue;
         };
         match (kind, page) {
             (DropKind::Native, Page::Documents) => crate::native_document::import(world, &path),
-            (DropKind::Native, _) => notes.push(Notification::warning(
-                "Import native documents from the documents page",
-            )),
+            (DropKind::Native, _) => {
+                notes.push(Notification::warning(tr("io-drop-native-on-documents")))
+            }
             (DropKind::Drawing, Page::PartStudio | Page::Sketch) => drawings.push(path),
             (DropKind::Picture, Page::PartStudio) => pictures.push(path),
             (DropKind::Model | DropKind::Mesh, Page::PartStudio) => {
@@ -182,14 +184,16 @@ pub fn dropped(world: &mut World, paths: Vec<PathBuf>) {
                 );
                 world.flush();
             }
-            (_, Page::Sketch) => notes.push(Notification::warning(format!(
-                "Close the sketch to drop {name} into the Part Studio"
+            (_, Page::Sketch) => notes.push(Notification::warning(tr_with(
+                "io-drop-close-sketch",
+                &[("name", &name)],
             ))),
             (DropKind::Drawing | DropKind::Picture, Page::Documents) => notes.push(
-                Notification::warning(format!("Open a Part Studio to drop {name} into it")),
+                Notification::warning(tr_with("io-drop-open-part-studio", &[("name", &name)])),
             ),
-            (_, Page::OtherTab) => notes.push(Notification::warning(format!(
-                "Drop {name} into a Part Studio"
+            (_, Page::OtherTab) => notes.push(Notification::warning(tr_with(
+                "io-drop-into-part-studio",
+                &[("name", &name)],
             ))),
         }
     }
@@ -242,13 +246,17 @@ fn insert_drawings(
         let (geometry, report) = match read_sketch(&path, None, false) {
             Ok(g) => g,
             Err(e) => {
-                notes.push(Notification::warning(format!("Cannot insert {name}: {e}")));
+                notes.push(Notification::warning(tr_with(
+                    "io-cannot-insert",
+                    &[("name", &name), ("error", &e.to_string())],
+                )));
                 continue;
             }
         };
         let Some((lo, hi)) = bounds(&geometry).filter(|_| report.curves() > 0) else {
-            notes.push(Notification::warning(format!(
-                "{name} has no lines or curves to insert"
+            notes.push(Notification::warning(tr_with(
+                "io-drop-no-curves",
+                &[("name", &name)],
             )));
             continue;
         };
@@ -288,13 +296,19 @@ fn insert_drawings(
             Ok(()) => {
                 info!("inserted {name}: {report:?}");
                 notes.push(
-                    Notification::info(format!("Inserted {name}: {} curves", report.curves()))
-                        .seconds(5.0),
+                    Notification::info(tr_with(
+                        "io-drop-inserted-curves",
+                        &[("name", &name), ("count", &report.curves().to_string())],
+                    ))
+                    .seconds(5.0),
                 );
                 at.x += (hi.x - lo.x) / 2.0 + DROP_GAP;
                 first = false;
             }
-            Err(e) => notes.push(Notification::warning(format!("Cannot insert {name}: {e}"))),
+            Err(e) => notes.push(Notification::warning(tr_with(
+                "io-cannot-insert",
+                &[("name", &name), ("error", &e.to_string())],
+            ))),
         }
     }
     if page == Page::Sketch && !first {

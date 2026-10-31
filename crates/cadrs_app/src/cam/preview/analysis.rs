@@ -3,6 +3,7 @@
 //! workholding, and the summary line.
 
 use super::*;
+use cadrs_ui::i18n::{tr, tr_with};
 
 /// What simulating the whole run found (worked out off the main thread).
 pub(super) struct Analysis {
@@ -53,13 +54,23 @@ pub(super) fn analyse(
         cell,
     ) {
         program::SimResult::Sheet(r) => {
+            // (Items joined by " · ".)
             let summary = format!(
-                "Cut {} mm · {} part{} free{}",
-                fmt0(r.cut_length),
-                r.parts_free,
-                if r.parts_free == 1 { "" } else { "s" },
+                "{} · {}{}",
+                tr_with("cam-verify-cut-length", &[("length", &fmt0(r.cut_length))]),
+                tr_with(
+                    if r.parts_free == 1 {
+                        "cam-verify-part-free"
+                    } else {
+                        "cam-verify-parts-free"
+                    },
+                    &[("count", &r.parts_free.to_string())],
+                ),
                 if r.damage > 0.01 {
-                    format!(" · {} mm² cut from the part", fmt1(r.damage))
+                    format!(
+                        " · {}",
+                        tr_with("cam-verify-cut-from-part", &[("area", &fmt1(r.damage))])
+                    )
                 } else {
                     String::new()
                 }
@@ -85,19 +96,28 @@ pub(super) fn analyse(
     for (k, p) in r.rapid_hits.iter() {
         collisions.push((
             time_near(&tl, spans, *k, *p),
-            format!("{}: a rapid runs into the stock", spans[*k].name),
+            tr_with(
+                "cam-collision-rapid-into-stock",
+                &[("operation", &spans[*k].name)],
+            ),
         ));
     }
     for (k, p) in r.fixture_hits.iter() {
         collisions.push((
             time_near(&tl, spans, *k, *p),
-            format!("{}: the tool runs into the workholding", spans[*k].name),
+            tr_with(
+                "cam-collision-tool-into-workholding",
+                &[("operation", &spans[*k].name)],
+            ),
         ));
     }
     for (k, p) in r.holder_hits.iter() {
         collisions.push((
             time_near(&tl, spans, *k, *p),
-            format!("{}: the shank or holder meets the stock", spans[*k].name),
+            tr_with(
+                "cam-collision-holder-meets-stock",
+                &[("operation", &spans[*k].name)],
+            ),
         ));
     }
     // The tilted operations: in their own frames, against the part and the workholding.
@@ -133,39 +153,47 @@ pub(super) fn analyse(
         if !c.gouges.is_empty() {
             gouge_depth = gouge_depth.max(c.gouge_depth);
         }
+        // (`what` is a catalog key.)
         for (hits, what) in [
-            (&c.rapid_hits, "a rapid runs through the part"),
-            (&c.holder_hits, "the shank or holder meets the part"),
-            (&c.fixture_hits, "the tool runs into the workholding"),
+            (&c.rapid_hits, "cam-collision-rapid-through-part"),
+            (&c.holder_hits, "cam-collision-holder-meets-part"),
+            (&c.fixture_hits, "cam-collision-tool-into-workholding"),
         ] {
             for p in hits {
                 collisions.push((
                     time_near(&tl, spans, k, f.to_world(*p)),
-                    format!("{}: {what}", sp.name),
+                    tr_with(what, &[("operation", &sp.name)]),
                 ));
             }
         }
     }
     collisions.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // (Items joined by " · ".)
     let summary = format!(
-        "Removed {} mm³ · {} · {}{}",
-        fmt0(r.removed),
+        "{} · {} · {}{}",
+        tr_with("cam-verify-removed", &[("volume", &fmt0(r.removed))]),
         if gouge_depth <= 0.0 {
-            "no gouges".to_string()
+            tr("cam-verify-no-gouges")
         } else {
-            format!("gouges up to {} mm deep", fmt2(gouge_depth))
+            tr_with("cam-verify-gouges-up-to", &[("depth", &fmt2(gouge_depth))])
         },
         if collisions.is_empty() {
-            "no collisions".to_string()
+            tr("cam-verify-no-collisions")
         } else {
-            format!(
-                "{} collision{}",
-                collisions.len(),
-                if collisions.len() == 1 { "" } else { "s" }
+            tr_with(
+                if collisions.len() == 1 {
+                    "cam-verify-collision"
+                } else {
+                    "cam-verify-collisions"
+                },
+                &[("count", &collisions.len().to_string())],
             )
         },
         if r.excess > 0.0 {
-            format!(" · up to {} mm left", fmt2(r.excess))
+            format!(
+                " · {}",
+                tr_with("cam-verify-left-up-to", &[("depth", &fmt2(r.excess))])
+            )
         } else {
             String::new()
         }

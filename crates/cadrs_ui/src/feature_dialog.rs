@@ -232,7 +232,7 @@ impl FeatureDialog {
                             Button::new(accept_name)
                                 .icon("check-bold")
                                 .icon_size(16.0)
-                                .tooltip("Accept (Enter)")
+                                .tooltip(crate::i18n::tr("ui-feature-dialog-accept"))
                                 .disabled(!valid)
                                 .build(&t),
                             observe(
@@ -263,7 +263,7 @@ impl FeatureDialog {
                         Button::new(cancel_name)
                             .icon("x-bold")
                             .icon_size(16.0)
-                            .tooltip("Cancel (Esc)")
+                            .tooltip(crate::i18n::tr("ui-feature-dialog-cancel"))
                             .build(&t),
                         observe(
                             |a: On<Activate>, q: Query<&CancelButton>, mut commands: Commands| {

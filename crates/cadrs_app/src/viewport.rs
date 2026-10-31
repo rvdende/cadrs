@@ -15,6 +15,7 @@
 //! node, so panels and menus on top of it keep their clicks.
 
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use std::collections::HashMap;
 
 use crate::GizmoGroups;
@@ -450,6 +451,31 @@ impl PlaneKind {
         (name, label_alpha(facing.abs()))
     }
 
+    /// [`PlaneKind::label`] in the current language: the name of the side seen, and how much
+    /// of the label shows.
+    pub fn shown_label(self, view: &ViewState) -> (String, f32) {
+        let facing = self.normal().dot(view.back());
+        let key = match (self, facing >= 0.0) {
+            (PlaneKind::Top, true) => "view-plane-top",
+            (PlaneKind::Front, true) => "view-plane-front",
+            (PlaneKind::Right, true) => "view-plane-right",
+            (PlaneKind::Top, false) => "view-plane-bottom",
+            (PlaneKind::Front, false) => "view-plane-back",
+            (PlaneKind::Right, false) => "view-plane-left",
+        };
+        (tr(key), label_alpha(facing.abs()))
+    }
+
+    /// Its name in the current language ([`PlaneKind::name`] is the English one, for names
+    /// and scripts).
+    pub fn shown_name(self) -> String {
+        tr(match self {
+            PlaneKind::Top => "view-plane-top",
+            PlaneKind::Front => "view-plane-front",
+            PlaneKind::Right => "view-plane-right",
+        })
+    }
+
     /// Its place in [`PlaneKind::ALL`].
     pub fn index(self) -> usize {
         match self {
@@ -532,14 +558,14 @@ pub fn plane_label(features: &[cadrs_core::Feature], p: PlaneRef) -> String {
         let name = features
             .iter()
             .find(|x| x.id == model)
-            .map_or("Sheet metal model", |x| x.name.as_str());
-        return format!("Face of {name}");
+            .map_or_else(|| tr("view-sheet-metal-model"), |x| x.name.clone());
+        return tr_with("common-face-of", &[("name", &name)]);
     }
     match p {
         PlaneRef::Feature(f) => features
             .iter()
             .find(|x| x.id.0 == f.feature)
-            .map_or("Plane".into(), |x| x.name.clone()),
+            .map_or_else(|| tr("common-plane"), |x| x.name.clone()),
         p => p.display_name(),
     }
 }
@@ -1055,7 +1081,12 @@ pub fn spawn_viewport_overlay(p: &mut ChildSpawnerCommands, theme: &Theme) {
         ))
         .with_child((
             AffineInner,
-            theme.text(kind.name(), 17.0, FontWeight::SEMIBOLD, theme.plane_label),
+            theme.text(
+                kind.shown_name(),
+                17.0,
+                FontWeight::SEMIBOLD,
+                theme.plane_label,
+            ),
             Pickable::IGNORE,
         ));
     }
@@ -2921,9 +2952,9 @@ fn place_plane_labels(
         // Hide the label once the plane is more than about 70° from facing the viewer (the
         // squashed text smears), fading in over a few degrees. Seen from behind, it names that
         // side (the text turned to read: `readable_axes`).
-        let (name, alpha) = k.label(&v);
+        let (name, alpha) = k.shown_label(&v);
         if text.0 != name {
-            text.0 = name.to_string();
+            text.0 = name;
         }
         // The plane being sketched on keeps its label (`screens/08`) except when viewed
         // straight on, where the sketch covers it (`screens/09`).

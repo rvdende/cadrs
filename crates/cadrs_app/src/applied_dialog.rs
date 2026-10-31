@@ -42,6 +42,7 @@ use cadrs_core::hole::{
 };
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -351,16 +352,21 @@ fn name_of(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn entity_label(features: &[Feature], e: &EdgeOrFace) -> String {
     match e {
-        EdgeOrFace::Edge(r) => format!(
-            "Edge of {}",
-            name_of(features, crate::parts::edge_maker(features, &r.edge))
+        EdgeOrFace::Edge(r) => tr_with(
+            "common-edge-of",
+            &[(
+                "name",
+                &name_of(features, crate::parts::edge_maker(features, &r.edge)),
+            )],
         ),
-        EdgeOrFace::Face(r) => format!("Face of {}", name_of(features, r.face.op)),
+        EdgeOrFace::Face(r) => {
+            tr_with("common-face-of", &[("name", &name_of(features, r.face.op))])
+        }
     }
 }
 
@@ -394,7 +400,12 @@ fn items(features: &[Feature], cache: &PartCache, kind: &FeatureKind, role: Role
             let mut v: Vec<String> = x
                 .points
                 .iter()
-                .map(|p| format!("Vertex of {}", name_of(features, p.sketch.0)))
+                .map(|p| {
+                    tr_with(
+                        "common-vertex-of",
+                        &[("name", &name_of(features, p.sketch.0))],
+                    )
+                })
                 .collect();
             v.extend(x.sketches.iter().map(|s| name_of(features, s.0)));
             // P3.8 (PS15.2): its mate connectors ("Pattern Axis").
@@ -549,7 +560,7 @@ pub(crate) fn select_row(
                 &format!("{name}-flip"),
                 Role::Flip,
                 f,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         }
     });
@@ -587,20 +598,109 @@ pub(crate) fn number(
                 &format!("{name}-flip"),
                 Role::Flip,
                 f,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         }
     });
 }
 
-pub(crate) fn opts<T: Copy + PartialEq>(
+pub(crate) fn opts<T: Copy + PartialEq, L: Into<String>>(
     all: &[T],
-    label: impl Fn(T) -> &'static str,
+    label: impl Fn(T) -> L,
     enabled: impl Fn(T) -> bool,
 ) -> Vec<(String, bool)> {
     all.iter()
-        .map(|x| (label(*x).to_string(), enabled(*x)))
+        .map(|x| (label(*x).into(), enabled(*x)))
         .collect()
+}
+
+// The core's option names (their `label()`s are English), in the current language.
+
+pub(crate) fn fillet_measurement_text(m: FilletMeasurement) -> String {
+    tr(match m {
+        FilletMeasurement::Radius => "model-radius",
+        FilletMeasurement::Width => "model-width",
+    })
+}
+
+pub(crate) fn fillet_control_text(c: FilletControl) -> String {
+    tr(match c {
+        FilletControl::Distance => "common-distance",
+        FilletControl::Conic => "model-fillet-conic",
+        FilletControl::Curvature => "model-fillet-curvature",
+    })
+}
+
+pub(crate) fn chamfer_measurement_text(m: ChamferMeasurement) -> String {
+    tr(match m {
+        ChamferMeasurement::Offset => "common-offset",
+        ChamferMeasurement::Tangent => "model-chamfer-tangent",
+    })
+}
+
+pub(crate) fn chamfer_type_text(c: ChamferType) -> String {
+    tr(match c {
+        ChamferType::EqualDistance => "model-chamfer-equal-distance",
+        ChamferType::TwoDistances => "model-chamfer-two-distances",
+        ChamferType::DistanceAngle => "model-chamfer-distance-and-angle",
+    })
+}
+
+pub(crate) fn hole_style_text(h: HoleStyle) -> String {
+    tr(match h {
+        HoleStyle::Simple => "model-hole-simple",
+        HoleStyle::Counterbore => "model-hole-counterbore",
+        HoleStyle::Countersink => "model-hole-countersink",
+    })
+}
+
+pub(crate) fn hole_type_text(h: HoleType) -> String {
+    match h {
+        HoleType::Drilled => tr("model-hole-drilled"),
+        HoleType::Clearance => tr("model-hole-clearance"),
+        HoleType::Tapped => tr("model-hole-tapped"),
+        // A brand name.
+        HoleType::Pem => h.label().to_string(),
+    }
+}
+
+pub(crate) fn tap_type_text(x: TapType) -> String {
+    tr(match x {
+        TapType::Straight => "model-hole-straight-tap",
+        TapType::Tapered => "model-hole-tapered-tap",
+    })
+}
+
+pub(crate) fn pem_type_text(x: PemType) -> String {
+    tr(match x {
+        PemType::Nut => "model-hole-pem-nut",
+        PemType::Stud => "model-hole-pem-stud",
+    })
+}
+
+pub(crate) fn fit_text(x: Fit) -> String {
+    tr(match x {
+        Fit::Close => "model-hole-fit-close",
+        Fit::Normal => "model-hole-fit-normal",
+        Fit::Loose => "model-hole-fit-loose",
+    })
+}
+
+pub(crate) fn hole_start_text(x: HoleStart) -> String {
+    tr(match x {
+        HoleStart::Part => "model-hole-start-part",
+        HoleStart::SketchPlane => "model-hole-start-sketch-plane",
+        HoleStart::SelectedPlane => "model-hole-start-selected-plane",
+    })
+}
+
+pub(crate) fn hole_end_text(x: HoleEnd) -> String {
+    tr(match x {
+        HoleEnd::ThroughAll => "model-hole-end-through",
+        HoleEnd::Blind => "model-blind",
+        HoleEnd::UpToNext => "model-up-to-next",
+        HoleEnd::UpToEntity => "model-up-to-entity",
+    })
 }
 
 pub(crate) fn index_of<T: PartialEq>(all: &[T], x: &T) -> usize {
@@ -619,11 +719,11 @@ fn footer(f: &mut ChildSpawner, t: &Theme, name: &str, show_final: bool) {
         Role::Final,
         crate::feature_list::FinalButton,
         cadrs_ui::Button::new(format!("{name}-final"))
-            .label("Final")
+            .label(tr("model-dialog-final"))
             .small()
             .outline()
             .selected(show_final)
-            .tooltip("Show the final result")
+            .tooltip(tr("model-dialog-final-tooltip"))
             .build(t),
     ))
     .entry::<Node>()
@@ -631,7 +731,7 @@ fn footer(f: &mut ChildSpawner, t: &Theme, name: &str, show_final: bool) {
     f.spawn((
         Name::new(format!("{name}-help")),
         icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-        Tooltip::new("Help"),
+        Tooltip::new(tr("common-help")),
     ));
 }
 
@@ -773,8 +873,8 @@ fn dialog(
                             Role::FilletTab,
                             TabStrip::new("fillet-type")
                                 .compact()
-                                .tab("Edge")
-                                .tab("Full round")
+                                .tab(tr("common-edge"))
+                                .tab(tr("model-fillet-full-round"))
                                 .selected(1)
                                 .build(t),
                         ));
@@ -783,7 +883,7 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-side1-field",
-                                "Side face 1",
+                                &tr("model-fillet-side-face-1"),
                                 Role::Side1,
                                 items_of(Role::Side1),
                                 field == AppliedField::Side1,
@@ -792,7 +892,7 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-center-field",
-                                "Center face",
+                                &tr("model-fillet-center-face"),
                                 Role::Center,
                                 items_of(Role::Center),
                                 field == AppliedField::Center,
@@ -801,7 +901,7 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-side2-field",
-                                "Side face 2",
+                                &tr("model-fillet-side-face-2"),
                                 Role::Side2,
                                 items_of(Role::Side2),
                                 field == AppliedField::Side2,
@@ -813,8 +913,8 @@ fn dialog(
                             Role::FilletTab,
                             TabStrip::new("fillet-type")
                                 .compact()
-                                .tab("Edge")
-                                .tab("Full round")
+                                .tab(tr("common-edge"))
+                                .tab(tr("model-fillet-full-round"))
                                 .selected(0)
                                 .build(t),
                         ));
@@ -823,23 +923,26 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-entities-field",
-                                "Entities to fillet",
+                                &tr("model-fillet-entities"),
                                 Role::Entities,
                                 items_of(Role::Entities),
                                 field == AppliedField::Entities,
                             );
                             b.spawn(
-                                OptionRow::new("fillet-tangent-propagation", "Tangent propagation")
-                                    .checked(x.tangent_propagation)
-                                    .build(t),
+                                OptionRow::new(
+                                    "fillet-tangent-propagation",
+                                    tr("model-tangent-propagation"),
+                                )
+                                .checked(x.tangent_propagation)
+                                .build(t),
                             );
                             select_row(
                                 b,
                                 t,
                                 "fillet-measurement",
-                                "Measurement",
+                                &tr("model-measurement"),
                                 Role::Measurement,
-                                &opts(&FilletMeasurement::ALL, |m| m.label(), |_| true),
+                                &opts(&FilletMeasurement::ALL, fillet_measurement_text, |_| true),
                                 index_of(&FilletMeasurement::ALL, &x.measurement),
                                 None,
                             );
@@ -847,9 +950,9 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-control",
-                                "Control",
+                                &tr("model-fillet-control"),
                                 Role::Control,
-                                &opts(&FilletControl::ALL, |m| m.label(), |_| true),
+                                &opts(&FilletControl::ALL, fillet_control_text, |_| true),
                                 index_of(&FilletControl::ALL, &x.control),
                                 None,
                             );
@@ -857,7 +960,7 @@ fn dialog(
                                 b,
                                 t,
                                 "fillet-size",
-                                x.measurement.label(),
+                                &fillet_measurement_text(x.measurement),
                                 Role::Size1,
                                 &x.size_expr,
                                 None,
@@ -867,7 +970,7 @@ fn dialog(
                                     b,
                                     t,
                                     "fillet-rho",
-                                    "Rho",
+                                    &tr("model-fillet-rho"),
                                     Role::Rho,
                                     &plain(x.rho),
                                     None,
@@ -876,7 +979,7 @@ fn dialog(
                                     b,
                                     t,
                                     "fillet-magnitude",
-                                    "Magnitude",
+                                    &tr("model-magnitude"),
                                     Role::Magnitude,
                                     &plain(x.magnitude),
                                     None,
@@ -891,7 +994,7 @@ fn dialog(
                             b,
                             t,
                             "chamfer-entities-field",
-                            "Entities to chamfer",
+                            &tr("model-chamfer-entities"),
                             Role::Entities,
                             items_of(Role::Entities),
                             field == AppliedField::Entities,
@@ -900,9 +1003,9 @@ fn dialog(
                             b,
                             t,
                             "chamfer-measurement",
-                            "Measurement",
+                            &tr("model-measurement"),
                             Role::Measurement,
-                            &opts(&ChamferMeasurement::ALL, |m| m.label(), |_| true),
+                            &opts(&ChamferMeasurement::ALL, chamfer_measurement_text, |_| true),
                             index_of(&ChamferMeasurement::ALL, &x.measurement),
                             None,
                         );
@@ -910,23 +1013,23 @@ fn dialog(
                             b,
                             t,
                             "chamfer-type",
-                            "Chamfer type",
+                            &tr("model-chamfer-type"),
                             Role::ChamferKind,
-                            &opts(&ChamferType::ALL, |m| m.label(), |_| true),
+                            &opts(&ChamferType::ALL, chamfer_type_text, |_| true),
                             index_of(&ChamferType::ALL, &x.kind),
                             None,
                         );
                         let flip = (x.kind != ChamferType::EqualDistance).then_some(x.flip);
                         let first = if x.kind == ChamferType::TwoDistances {
-                            "Distance 1"
+                            tr("model-distance-1")
                         } else {
-                            "Distance"
+                            tr("common-distance")
                         };
                         number(
                             b,
                             t,
                             "chamfer-distance",
-                            first,
+                            &first,
                             Role::Size1,
                             &x.distance_expr,
                             flip,
@@ -936,7 +1039,7 @@ fn dialog(
                                 b,
                                 t,
                                 "chamfer-distance2",
-                                "Distance 2",
+                                &tr("model-distance-2"),
                                 Role::Distance2,
                                 &x.distance2_expr,
                                 None,
@@ -945,7 +1048,7 @@ fn dialog(
                                 b,
                                 t,
                                 "chamfer-angle",
-                                "Angle",
+                                &tr("common-angle"),
                                 Role::Angle,
                                 &x.angle_expr,
                                 None,
@@ -957,34 +1060,37 @@ fn dialog(
                                 b,
                                 t,
                                 "chamfer-overrides-field",
-                                "Direction overrides",
+                                &tr("model-chamfer-direction-overrides"),
                                 Role::Overrides,
                                 items_of(Role::Overrides),
                                 field == AppliedField::Overrides,
                             );
                         }
                         b.spawn(
-                            OptionRow::new("chamfer-tangent-propagation", "Tangent propagation")
-                                .checked(x.tangent_propagation)
-                                .build(t),
+                            OptionRow::new(
+                                "chamfer-tangent-propagation",
+                                tr("model-tangent-propagation"),
+                            )
+                            .checked(x.tangent_propagation)
+                            .build(t),
                         );
                     }),
                     FeatureKind::Shell(x) => body_column(b, |b| {
                         b.spawn(
-                            OptionRow::new("shell-hollow", "Hollow")
+                            OptionRow::new("shell-hollow", tr("model-shell-hollow"))
                                 .checked(x.hollow)
                                 .build(t),
                         );
                         let placeholder = if x.hollow {
-                            "Parts to hollow"
+                            tr("model-shell-parts-to-hollow")
                         } else {
-                            "Faces to remove"
+                            tr("model-shell-faces-to-remove")
                         };
                         list(
                             b,
                             t,
                             "shell-faces-field",
-                            placeholder,
+                            &placeholder,
                             Role::Faces,
                             items_of(Role::Faces),
                             field == AppliedField::Faces,
@@ -993,7 +1099,7 @@ fn dialog(
                             b,
                             t,
                             "shell-thickness",
-                            "Shell thickness",
+                            &tr("model-shell-thickness"),
                             Role::Thickness,
                             &x.thickness_expr,
                             Some(x.outward),
@@ -1005,14 +1111,14 @@ fn dialog(
                             Role::Standard,
                             TabStrip::new("hole-standard")
                                 .compact()
-                                .tab("Inch")
-                                .tab("Metric")
+                                .tab(tr("model-hole-inch"))
+                                .tab(tr("model-hole-metric"))
                                 .selected(index_of(&HoleStandard::ALL, &s.standard))
                                 .build(t),
                         ));
                         let mut strip = TabStrip::new("hole-style").compact();
                         for st in HoleStyle::ALL {
-                            strip = strip.tab(st.label());
+                            strip = strip.tab(hole_style_text(st));
                         }
                         b.spawn((
                             Role::Style,
@@ -1042,7 +1148,7 @@ fn dialog(
                                         c,
                                         t,
                                         "hole-points-field",
-                                        "Sketch points to place holes",
+                                        &tr("model-hole-points"),
                                         Role::Points,
                                         items_of(Role::Points),
                                         active,
@@ -1064,7 +1170,7 @@ fn dialog(
                                         IconButton::new("hole-connector-button", "mate-connector")
                                             .icon_size(15.0)
                                             .selected(field == AppliedField::HoleConnectors)
-                                            .tooltip("Select mate connectors")
+                                            .tooltip(tr("model-select-mate-connectors"))
                                             .build(t),
                                     ))
                                     .insert(v)
@@ -1079,7 +1185,7 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-merge-scope-field",
-                                "Merge scope",
+                                &tr("common-merge-scope"),
                                 Role::MergeScope,
                                 items_of(Role::MergeScope),
                                 field == AppliedField::MergeScope,
@@ -1088,7 +1194,7 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-standard-select",
-                                "Standard",
+                                &tr("model-standard"),
                                 Role::StandardSelect,
                                 &[("ANSI".to_string(), true), ("ISO".to_string(), true)],
                                 index_of(&HoleStandard::ALL, &s.standard),
@@ -1098,9 +1204,9 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-type",
-                                "Hole type",
+                                &tr("model-hole-type"),
                                 Role::HoleType,
-                                &opts(&HoleType::ALL, |m| m.label(), |h| h.available(s.standard)),
+                                &opts(&HoleType::ALL, hole_type_text, |h| h.available(s.standard)),
                                 index_of(&HoleType::ALL, &s.hole_type),
                                 None,
                             );
@@ -1109,9 +1215,9 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-tap-type",
-                                    "Tap type",
+                                    &tr("model-hole-tap-type"),
                                     Role::TapType,
-                                    &opts(&TapType::ALL, |m| m.label(), |m| m == TapType::Straight),
+                                    &opts(&TapType::ALL, tap_type_text, |m| m == TapType::Straight),
                                     index_of(&TapType::ALL, &s.tap_type),
                                     None,
                                 );
@@ -1121,9 +1227,9 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-pem-type",
-                                    "Fastener",
+                                    &tr("model-hole-fastener"),
                                     Role::PemKind,
-                                    &opts(&PemType::ALL, |m| m.label(), |_| true),
+                                    &opts(&PemType::ALL, pem_type_text, |_| true),
                                     index_of(&PemType::ALL, &s.pem),
                                     None,
                                 );
@@ -1134,15 +1240,24 @@ fn dialog(
                                     .map(|x| (x, true))
                                     .collect();
                             let si = sizes.iter().position(|(n, _)| *n == s.size).unwrap_or(0);
-                            select_row(b, t, "hole-size", "Size", Role::Size, &sizes, si, None);
+                            select_row(
+                                b,
+                                t,
+                                "hole-size",
+                                &tr("common-size"),
+                                Role::Size,
+                                &sizes,
+                                si,
+                                None,
+                            );
                             match s.hole_type {
                                 HoleType::Clearance => select_row(
                                     b,
                                     t,
                                     "hole-fit",
-                                    "Fastener fit",
+                                    &tr("model-hole-fastener-fit"),
                                     Role::Fit,
-                                    &opts(&Fit::ALL, |m| m.label(), |_| true),
+                                    &opts(&Fit::ALL, fit_text, |_| true),
                                     index_of(&Fit::ALL, &s.fit),
                                     None,
                                 ),
@@ -1162,25 +1277,21 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-pitch",
-                                        "Pitch",
+                                        &tr("model-pitch"),
                                         Role::Pitch,
                                         &pitches,
                                         pi,
                                         None,
                                     );
                                     let none: Vec<(String, bool)> =
-                                        std::iter::once(("None".to_string(), true))
-                                            .chain(
-                                                Fit::ALL
-                                                    .iter()
-                                                    .map(|f| (f.label().to_string(), false)),
-                                            )
+                                        std::iter::once((tr("common-none"), true))
+                                            .chain(Fit::ALL.iter().map(|f| (fit_text(*f), false)))
                                             .collect();
                                     select_row(
                                         b,
                                         t,
                                         "hole-fit",
-                                        "Fastener fit",
+                                        &tr("model-hole-fastener-fit"),
                                         Role::Fit,
                                         &none,
                                         0,
@@ -1193,15 +1304,15 @@ fn dialog(
                                 crate::draft_ui::thread_class_row(b, t, s);
                             }
                             let dia = if s.hole_type == HoleType::Tapped {
-                                "Tap drill Ø"
+                                tr("model-hole-tap-drill-diameter")
                             } else {
-                                "Hole Ø"
+                                tr("model-hole-diameter")
                             };
                             number(
                                 b,
                                 t,
                                 "hole-diameter",
-                                dia,
+                                &dia,
                                 Role::Diameter,
                                 &s.diameter.expr,
                                 None,
@@ -1210,7 +1321,7 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-diameter-tolerance",
-                                "Diameter tolerance",
+                                &tr("model-hole-diameter-tolerance"),
                                 &s.diameter_tol,
                                 s.standard.unit_name(),
                                 [
@@ -1224,9 +1335,9 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-start",
-                                "Start plane",
+                                &tr("model-hole-start"),
                                 Role::Start,
-                                &opts(&HoleStart::ALL, |m| m.label(), |_| true),
+                                &opts(&HoleStart::ALL, hole_start_text, |_| true),
                                 index_of(&HoleStart::ALL, &s.start),
                                 None,
                             );
@@ -1235,7 +1346,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-start-plane-field",
-                                    "Hole start plane",
+                                    &tr("model-hole-start-plane"),
                                     Role::HoleStartPlane,
                                     items_of(Role::HoleStartPlane),
                                     field == AppliedField::HoleStartPlane,
@@ -1245,9 +1356,9 @@ fn dialog(
                                 b,
                                 t,
                                 "hole-termination",
-                                "Termination",
+                                &tr("model-hole-termination"),
                                 Role::End,
-                                &opts(&HoleEnd::ALL, |m| m.label(), |_| true),
+                                &opts(&HoleEnd::ALL, hole_end_text, |_| true),
                                 index_of(&HoleEnd::ALL, &s.end),
                                 Some(x.flip),
                             );
@@ -1256,7 +1367,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-up-to-field",
-                                    "Up to entity",
+                                    &tr("model-up-to-entity"),
                                     Role::HoleUpTo,
                                     items_of(Role::HoleUpTo),
                                     field == AppliedField::HoleUpTo,
@@ -1270,7 +1381,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-depth",
-                                    "Hole depth",
+                                    &tr("model-hole-depth"),
                                     Role::Depth,
                                     &s.depth.expr,
                                     None,
@@ -1279,7 +1390,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-depth-tolerance",
-                                    "Depth tolerance",
+                                    &tr("model-hole-depth-tolerance"),
                                     &s.depth_tol,
                                     s.standard.unit_name(),
                                     [
@@ -1296,7 +1407,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-tip-angle",
-                                    "Tip angle",
+                                    &tr("model-hole-tip-angle"),
                                     Role::TipAngle,
                                     &angles,
                                     i,
@@ -1310,7 +1421,7 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-cbore-diameter",
-                                        "Counterbore Ø",
+                                        &tr("model-hole-counterbore-diameter"),
                                         Role::CboreDiameter,
                                         &s.cbore_diameter.expr,
                                         None,
@@ -1325,7 +1436,7 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-cbore-depth",
-                                        "Counterbore depth",
+                                        &tr("model-hole-counterbore-depth"),
                                         Role::CboreDepth,
                                         &s.cbore_depth.expr,
                                         None,
@@ -1342,7 +1453,7 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-csink-diameter",
-                                        "Countersink Ø",
+                                        &tr("model-hole-countersink-diameter"),
                                         Role::CsinkDiameter,
                                         &s.csink_diameter.expr,
                                         None,
@@ -1357,7 +1468,7 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-csink-angle",
-                                        "Countersink angle",
+                                        &tr("model-hole-countersink-angle"),
                                         Role::CsinkAngle,
                                         &s.csink_angle.expr,
                                         None,
@@ -1376,7 +1487,7 @@ fn dialog(
                                     b,
                                     t,
                                     "hole-tapped-depth",
-                                    "Tapped depth",
+                                    &tr("model-hole-tapped-depth"),
                                     Role::TappedDepth,
                                     &s.tapped_depth.expr,
                                     None,
@@ -1387,7 +1498,7 @@ fn dialog(
                                         b,
                                         t,
                                         "hole-tap-clearance",
-                                        "Tap clearance",
+                                        &tr("model-hole-tap-clearance"),
                                         Role::TapClearance,
                                         &crate::draft_ui::clearance_text(s),
                                         None,

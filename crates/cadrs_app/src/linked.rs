@@ -32,6 +32,7 @@ use bevy::ui_widgets::Activate;
 use cadrs_core::external::{self, LinkSnapshot, LinkState, LinkedElement, Resolver, SourceRef};
 use cadrs_core::history_log::VersionId;
 use cadrs_core::{Document, DocumentId, ElementId, ElementKind, FolderId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     BrowserSearch, DocumentRow, VersionGraph, VersionNode, VersionNodeKind, location_row,
@@ -318,21 +319,24 @@ pub fn link_badge(
     let copy = doc.linked_element(element);
     let what = copy
         .map(|l| l.describe())
-        .unwrap_or_else(|| "a linked element".into());
+        .unwrap_or_else(|| tr("shell-linked-a-linked-element"));
     let this = r.document_or(doc.id) == doc.id;
     let state = if this {
         LinkState::Ok
     } else {
         status.state(r.document_or(doc.id))
     };
-    let head = if this {
-        format!("Linked document: {what} (this document)")
-    } else {
-        format!("Linked document: {what}")
-    };
+    let head = tr_with(
+        if this {
+            "shell-linked-badge-this"
+        } else {
+            "shell-linked-badge"
+        },
+        &[("what", what.as_str())],
+    );
     if let Some(m) = state.message() {
         return (
-            format!("{head}\n{m}\nThe instance keeps the geometry of its version."),
+            format!("{head}\n{m}\n{}", tr("shell-linked-badge-keeps-geometry")),
             LinkIcon::Unreachable,
         );
     }
@@ -351,11 +355,19 @@ pub fn link_badge(
         .map(|(_, t)| t.clone())
         .unwrap_or_default();
     let tail = match icon {
-        LinkIcon::Update => format!("\n{extra}. Click to update."),
-        LinkIcon::Transitive => format!("\n{extra}. Click to update."),
-        LinkIcon::Pinned => "\nPinned: Update all skips it.".to_string(),
-        LinkIcon::PinnedStale => format!("\nPinned: Update all skips it. {extra}."),
-        LinkIcon::Plain if this => "\nIt does not change when the tab is edited.".to_string(),
+        LinkIcon::Update | LinkIcon::Transitive => format!(
+            "\n{}",
+            tr_with("shell-linked-badge-update", &[("change", extra.as_str())])
+        ),
+        LinkIcon::Pinned => format!("\n{}", tr("shell-linked-badge-pinned")),
+        LinkIcon::PinnedStale => format!(
+            "\n{}",
+            tr_with(
+                "shell-linked-badge-pinned-stale",
+                &[("change", extra.as_str())]
+            )
+        ),
+        LinkIcon::Plain if this => format!("\n{}", tr("shell-linked-badge-this-tab")),
         _ => String::new(),
     };
     (format!("{head}{tail}"), icon)
@@ -425,7 +437,7 @@ impl Opened {
         self.version
             .as_ref()
             .map(|v| v.1.clone())
-            .unwrap_or_else(|| "No versions".into())
+            .unwrap_or_else(|| tr("shell-linked-no-versions"))
     }
 }
 
@@ -481,15 +493,17 @@ pub fn open(
             .resource::<DocLog>()
             .log
             .as_ref()
-            .ok_or("The document has no history")?;
+            .ok_or_else(|| tr("shell-linked-no-history"))?;
         let v = version
             .or_else(|| log.versions().last().map(|v| v.id()))
-            .ok_or("The document has no versions")?;
+            .ok_or_else(|| tr("shell-linked-document-no-versions"))?;
         let name = log
             .version(v)
             .map(|x| x.name().to_string())
             .unwrap_or_default();
-        let doc = log.document_at_version(v).ok_or("The version is missing")?;
+        let doc = log
+            .document_at_version(v)
+            .ok_or_else(|| tr("shell-linked-version-missing"))?;
         let (roots, links) = snapshots(&doc, None, v, &name);
         let title = world.resource::<ActiveDocument>().doc.name.clone();
         return Ok(Opened {
@@ -581,7 +595,7 @@ pub fn versions_with_auto(
                 v.id(),
                 v.name().to_string(),
                 if v.auto() {
-                    format!("Auto version · {sub}")
+                    format!("{} · {sub}", tr("ui-version-graph-auto-version"))
                 } else {
                     sub
                 },
@@ -614,7 +628,7 @@ pub fn version_graph(
         .selectable(this)
         .selected(this && selected.is_none());
     if !this {
-        main = main.reason("Another document is referenced at a version: pick one below");
+        main = main.reason(tr("shell-linked-pick-a-version"));
     }
     g = g.node(main);
     picks.push(GraphPick::Workspace);
@@ -631,7 +645,9 @@ pub fn version_graph(
         );
         picks.push(GraphPick::Version(*id));
     }
-    g = g.node(VersionNode::new("Start", VersionNodeKind::Start).selectable(false));
+    g = g.node(
+        VersionNode::new(tr("shell-linked-graph-start"), VersionNodeKind::Start).selectable(false),
+    );
     picks.push(GraphPick::Workspace);
     (g, picks)
 }
@@ -936,7 +952,9 @@ pub fn browser_list(world: &mut World, b: &Browse) -> BrowserList {
             DocListRow {
                 id: e.id,
                 name: e.name.clone(),
-                subtitle: latest.clone().unwrap_or_else(|| "No versions".into()),
+                subtitle: latest
+                    .clone()
+                    .unwrap_or_else(|| tr("shell-linked-no-versions")),
                 versions: latest.is_some(),
                 count,
             }
@@ -1082,64 +1100,134 @@ pub fn spawn_browser_list(
         padding: UiRect::vertical(Val::Px(2.0)),
         ..default()
     };
-    p.spawn((Name::new(format!("{prefix}-list")), body)).with_children(|l| {
-        if b.search.trim().is_empty() && b.location == Location::Top {
-            let mut locs: Vec<(String, &'static str, String, Location)> = vec![
-                ("mine".into(), "user", "My documents".into(), Location::Mine),
-                ("recent".into(), "clock", "Recently opened".into(), Location::Recent),
-                ("created".into(), "user", "Created by me".into(), Location::Created),
-            ];
-            for (id, n) in &list.folders {
-                locs.push((format!("folder-{}", slug(n)), "folder", n.clone(), Location::Folder(*id)));
+    p.spawn((Name::new(format!("{prefix}-list")), body))
+        .with_children(|l| {
+            if b.search.trim().is_empty() && b.location == Location::Top {
+                let mut locs: Vec<(String, &'static str, String, Location)> = vec![
+                    (
+                        "mine".into(),
+                        "user",
+                        tr("shell-loc-my-documents"),
+                        Location::Mine,
+                    ),
+                    (
+                        "recent".into(),
+                        "clock",
+                        tr("shell-loc-recently-opened"),
+                        Location::Recent,
+                    ),
+                    (
+                        "created".into(),
+                        "user",
+                        tr("shell-loc-created-by-me"),
+                        Location::Created,
+                    ),
+                ];
+                for (id, n) in &list.folders {
+                    locs.push((
+                        format!("folder-{}", slug(n)),
+                        "folder",
+                        n.clone(),
+                        Location::Folder(*id),
+                    ));
+                }
+                for (id, n) in &list.labels {
+                    locs.push((
+                        format!("label-{}", slug(n)),
+                        "tag",
+                        n.clone(),
+                        Location::Label(*id),
+                    ));
+                }
+                for (key, icon, label, loc) in locs {
+                    l.spawn((
+                        location_row(format!("{prefix}-loc-{key}"), icon, label, t),
+                        BrowserLoc {
+                            owner,
+                            location: loc,
+                        },
+                    ));
+                }
+                return;
             }
-            for (id, n) in &list.labels {
-                locs.push((format!("label-{}", slug(n)), "tag", n.clone(), Location::Label(*id)));
+            if b.search.trim().is_empty() {
+                let label = match b.location {
+                    Location::Mine => tr("shell-loc-my-documents"),
+                    Location::Recent => tr("shell-loc-recently-opened"),
+                    Location::Created => tr("shell-loc-created-by-me"),
+                    Location::Folder(f) => list
+                        .folders
+                        .iter()
+                        .find(|(id, _)| *id == f)
+                        .map(|(_, n)| n.clone())
+                        .unwrap_or_else(|| tr("common-folder")),
+                    Location::Label(l) => list
+                        .labels
+                        .iter()
+                        .find(|(id, _)| *id == l)
+                        .map(|(_, n)| n.clone())
+                        .unwrap_or_else(|| tr("shell-loc-label")),
+                    Location::Top => String::new(),
+                };
+                l.spawn((
+                    location_row(format!("{prefix}-loc-back"), "chevron-left", label, t),
+                    BrowserLoc {
+                        owner,
+                        location: Location::Top,
+                    },
+                ));
             }
-            for (key, icon, label, loc) in locs {
-                l.spawn((location_row(format!("{prefix}-loc-{key}"), icon, label, t), BrowserLoc { owner, location: loc }));
+            if list.rows.is_empty() {
+                let empty = if list.loading {
+                    "shell-linked-loading"
+                } else {
+                    "shell-linked-no-documents"
+                };
+                l.spawn((
+                    t.text(tr(empty), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    Translated(empty),
+                    Node {
+                        margin: UiRect::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
             }
-            return;
-        }
-        if b.search.trim().is_empty() {
-            let label = match b.location {
-                Location::Mine => "My documents".to_string(),
-                Location::Recent => "Recently opened".to_string(),
-                Location::Created => "Created by me".to_string(),
-                Location::Folder(f) => list.folders.iter().find(|(id, _)| *id == f).map(|(_, n)| n.clone()).unwrap_or_else(|| "Folder".into()),
-                Location::Label(l) => list.labels.iter().find(|(id, _)| *id == l).map(|(_, n)| n.clone()).unwrap_or_else(|| "Label".into()),
-                Location::Top => String::new(),
-            };
-            l.spawn((location_row(format!("{prefix}-loc-back"), "chevron-left", label, t), BrowserLoc { owner, location: Location::Top }));
-        }
-        if list.rows.is_empty() {
-            l.spawn((
-                t.text(if list.loading { "Loading…" } else { "No documents" }, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                Node { margin: UiRect::all(Val::Px(10.0)), ..default() },
-            ));
-        }
-        for r in &list.rows {
-            let tip = if r.versions {
-                format!("{}\nNewest version: {}", r.name, r.subtitle)
-            } else {
-                format!("{}\nNo versions yet: a linked document needs a version (create one after opening it)", r.name)
-            };
-            // The Move dialog's target: how many versions (its card says so too, P3G.3 carried).
-            let subtitle = match (owner, r.count) {
-                (Owner::Move, 0) => "No versions".to_string(),
-                (Owner::Move, 1) => "1 version".to_string(),
-                (Owner::Move, n) => format!("{n} versions"),
-                _ => r.subtitle.clone(),
-            };
-            l.spawn((
-                DocumentRow::new(format!("{prefix}-doc-{}", slug(&r.name)), r.name.clone(), subtitle)
+            for r in &list.rows {
+                let tip = if r.versions {
+                    format!(
+                        "{}\n{}",
+                        r.name,
+                        tr_with(
+                            "shell-linked-newest-version",
+                            &[("version", r.subtitle.as_str())]
+                        )
+                    )
+                } else {
+                    format!("{}\n{}", r.name, tr("shell-linked-no-versions-yet"))
+                };
+                // The Move dialog's target: how many versions (its card says so too, P3G.3 carried).
+                let subtitle = match (owner, r.count) {
+                    (Owner::Move, 0) => tr("shell-linked-no-versions"),
+                    (Owner::Move, 1) => tr("shell-linked-one-version"),
+                    (Owner::Move, n) => {
+                        tr_with("shell-linked-versions", &[("count", &n.to_string())])
+                    }
+                    _ => r.subtitle.clone(),
+                };
+                l.spawn((
+                    DocumentRow::new(
+                        format!("{prefix}-doc-{}", slug(&r.name)),
+                        r.name.clone(),
+                        subtitle,
+                    )
                     .thumbnail(thumbs.get(&r.id).cloned())
                     .muted(!r.versions)
                     .tooltip(tip)
                     .build(t),
-                BrowserDoc { owner, id: r.id },
-            ));
-        }
-    });
+                    BrowserDoc { owner, id: r.id },
+                ));
+            }
+        });
 }
 
 /// The message and button a document without versions shows (DV1.8, ER1.5).
@@ -1147,15 +1235,39 @@ pub fn spawn_no_version(p: &mut ChildSpawnerCommands, t: &Theme, owner: Owner) {
     let prefix = owner.prefix();
     p.spawn((
         Name::new(format!("{prefix}-no-version")),
-        Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), padding: UiRect::all(Val::Px(10.0)), ..default() },
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            ..default()
+        },
     ))
     .with_children(|c| {
         c.spawn((
-            t.text("This document has no versions. A linked document is referenced at a version, so its later edits never change what you insert. Create a version to use it.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-            Node { max_width: Val::Px(230.0), ..default() },
+            t.text(
+                tr("shell-linked-no-version-hint"),
+                t.font_sm,
+                FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
+            Translated("shell-linked-no-version-hint"),
+            Node {
+                max_width: Val::Px(230.0),
+                ..default()
+            },
         ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
-        c.spawn(cadrs_ui::Button::new(format!("{prefix}-no-version-create")).label("Create version").icon("versions").primary().small().build(t));
+        .insert(TextLayout::new(
+            bevy::text::Justify::Left,
+            bevy::text::LineBreak::WordBoundary,
+        ));
+        c.spawn(
+            cadrs_ui::Button::new(format!("{prefix}-no-version-create"))
+                .label(tr("common-create-version"))
+                .icon("versions")
+                .primary()
+                .small()
+                .build(t),
+        );
     });
 }
 
@@ -1306,7 +1418,10 @@ pub fn open_create_version_dialog(world: &mut World, target: VersionTarget) {
     commands.spawn((
         Dialog::new("create-version-dialog")
             .width(560.0)
-            .title(format!("Create version from {ws_name}"))
+            .title(tr_with(
+                "shell-linked-create-version-title",
+                &[("workspace", ws_name.as_str())],
+            ))
             .title_font(theme.font_lg, FontWeight::NORMAL)
             .body(move |b| {
                 let t = &tb;
@@ -1316,7 +1431,15 @@ pub fn open_create_version_dialog(world: &mut World, target: VersionTarget) {
                     ..default()
                 })
                 .with_children(|r| {
-                    r.spawn(t.text("Name:", t.font_base, FontWeight::BOLD, t.foreground));
+                    r.spawn((
+                        t.text(
+                            tr("shell-workspaces-name"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("shell-workspaces-name"),
+                    ));
                     r.spawn(
                         TextInput::new("create-version-name")
                             .value(next)
@@ -1334,17 +1457,28 @@ pub fn open_create_version_dialog(world: &mut World, target: VersionTarget) {
                     ..default()
                 })
                 .with_children(|r| {
-                    r.spawn(t.text("Description:", t.font_base, FontWeight::BOLD, t.foreground));
-                    r.spawn(t.text(
-                        "(Maximum of 10000 characters)",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
+                    r.spawn((
+                        t.text(
+                            tr("shell-workspaces-description"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("shell-workspaces-description"),
+                    ));
+                    r.spawn((
+                        t.text(
+                            tr("shell-linked-description-max"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("shell-linked-description-max"),
                     ));
                 });
                 b.spawn(
                     TextInput::new("create-version-description")
-                        .placeholder("Description")
+                        .placeholder(tr("common-description"))
                         .max_characters(10_000)
                         .width(Val::Percent(100.0))
                         .height(54.0)
@@ -1355,18 +1489,18 @@ pub fn open_create_version_dialog(world: &mut World, target: VersionTarget) {
                 let t = &tf;
                 f.spawn(
                     cadrs_ui::Button::new("create-version-create")
-                        .label("Create")
+                        .label(tr("common-create"))
                         .primary()
                         .build(t),
                 );
                 f.spawn(
                     cadrs_ui::Button::new("create-version-edit-properties")
-                        .label("Create version and edit properties")
+                        .label(tr("shell-linked-create-and-edit-properties"))
                         .build(t),
                 );
                 f.spawn(
                     cadrs_ui::Button::new("create-version-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                 );
             })

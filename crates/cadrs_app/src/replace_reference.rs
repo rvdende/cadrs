@@ -26,6 +26,7 @@ use bevy::text::FontWeight;
 use cadrs_core::document::{EdgeRef, FaceRef};
 use cadrs_core::repair::{Reference, ReplaceReference, chain_check, entity_edges, references};
 use cadrs_core::{ElementId, FeatureId, RegionRef};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{
     CheckboxChange, FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, OptionRow,
     SelectionList, SelectionListReplace, SelectionListState, Theme,
@@ -274,11 +275,19 @@ fn apply(world: &mut World, with: Option<Reference>) {
             .unwrap_or_default();
         upto.extend_from_slice(&features[..i]);
         let before = cadrs_core::rebuild::build(&upto);
-        s.note = chain_check(
-            s.old_edges,
-            entity_edges(&before.parts, w),
-            matches!(w, Reference::Edge(_)),
-        );
+        let (old_n, new_n) = (s.old_edges, entity_edges(&before.parts, w));
+        let is_edge = matches!(w, Reference::Edge(_));
+        // (The core's English note says whether there is one; its text comes from the catalog.)
+        s.note = chain_check(old_n, new_n, is_edge).map(|_| {
+            tr_with(
+                if is_edge {
+                    "model-replace-chain-note-edge"
+                } else {
+                    "model-replace-chain-note"
+                },
+                &[("new", &new_n.to_string()), ("old", &old_n.to_string())],
+            )
+        });
     }
     s.with = with;
     world.insert_resource(s);
@@ -391,12 +400,12 @@ fn sync_dialog(
             want,
             DespawnOnExit(AppState::Document),
             FeatureDialog::new("replace-reference-dialog")
-                .title("Replace reference")
+                .title(tr("model-replace-reference-title"))
                 .width(200.0)
                 .body(move |b| {
                     b.spawn(
                         SelectionList::new("replace-from-field")
-                            .placeholder("Selection to replace")
+                            .placeholder(tr("model-replace-from"))
                             .items(vec![old])
                             .error(missing)
                             .red(vec![missing])
@@ -409,7 +418,7 @@ fn sync_dialog(
                     });
                     b.spawn(
                         SelectionList::new("replace-with-field")
-                            .placeholder("Selection to replace with")
+                            .placeholder(tr("model-replace-with"))
                             .items(if with.is_empty() { vec![] } else { vec![with] })
                             .active(true)
                             .tint_filled()
@@ -421,7 +430,7 @@ fn sync_dialog(
                         n.margin = UiRect::vertical(Val::Px(2.0));
                     });
                     b.spawn(
-                        OptionRow::new("replace-propagate", "Propagate changes")
+                        OptionRow::new("replace-propagate", tr("model-replace-propagate"))
                             .checked(propagate)
                             .build(&t),
                     );

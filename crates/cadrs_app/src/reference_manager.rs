@@ -37,6 +37,7 @@ use cadrs_core::history_log::VersionId;
 use cadrs_core::link_update::{self as lu, PlanRow, RefSite, RefUse, RowTarget, Target};
 use cadrs_core::move_doc::{self, MovedElement};
 use cadrs_core::{DocumentId, ElementId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Checkbox, CheckboxChange, DocumentRow, FloatingPanel, FloatingPanelClose, TabStrip,
@@ -155,7 +156,13 @@ fn update_ref_states(world: &mut World, doc: &cadrs_core::Document, uses: &[RefU
                 }
                 icons.insert(
                     u.site,
-                    (icon, format!("Its tab moved to {}", m.document_name)),
+                    (
+                        icon,
+                        tr_with(
+                            "view-refman-tab-moved-to",
+                            &[("document", &m.document_name)],
+                        ),
+                    ),
                 );
                 continue;
             }
@@ -168,8 +175,8 @@ fn update_ref_states(world: &mut World, doc: &cadrs_core::Document, uses: &[RefU
                 _ => LinkIcon::Plain,
             };
             let text = match (&st.newer, st.nested) {
-                (Some((_, n)), _) => format!("{n} is available"),
-                (None, true) => "A reference inside it has a newer version".to_string(),
+                (Some((_, n)), _) => tr_with("view-refman-version-available", &[("version", n)]),
+                (None, true) => tr("view-refman-nested-newer"),
                 _ => String::new(),
             };
             if icon.is_update() {
@@ -231,11 +238,11 @@ fn tab_badge(icon: LinkIcon) -> impl Bundle {
         },
         BackgroundColor(fill),
         BorderColor::all(linked::UPDATE_BLUE),
-        Tooltip::new(if icon == LinkIcon::Update {
-            "This tab has references with newer versions: right-click the tab → Update linked document…"
+        Tooltip::new(tr(if icon == LinkIcon::Update {
+            "view-refman-tab-badge-update"
         } else {
-            "A reference in this tab has a newer version further down its chain"
-        }),
+            "view-refman-tab-badge-transitive"
+        })),
         Children::spawn(bevy::ecs::spawn::SpawnWith(move |p: &mut ChildSpawner| {
             if transitive {
                 p.spawn(cadrs_ui::glyphs::down_arrow(8.0, linked::TRANSITIVE_ARROW));
@@ -290,7 +297,7 @@ struct UpdateAllButton;
 pub fn update_all_button(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn((
         ToolButton::new("update-all-references", "arrow-up")
-            .tooltip("Update all references to latest versions")
+            .tooltip(tr("view-refman-update-all-tooltip"))
             .build(t),
         UpdateAllButton,
         observe(|_: On<Activate>, mut commands: Commands| {
@@ -497,7 +504,7 @@ fn compute(world: &mut World, scope: &Scope) -> (Vec<LatestRow>, Vec<SelRow>) {
         latest.push(LatestRow {
             document: doc.id,
             name: doc.name.clone(),
-            arrow: format!("Workspace ⇒ {n}"),
+            arrow: tr_with("view-refman-workspace-to-version", &[("version", &n)]),
             new_version: false,
             plan: None,
             workspace: ws,
@@ -541,7 +548,10 @@ fn compute(world: &mut World, scope: &Scope) -> (Vec<LatestRow>, Vec<SelRow>) {
             document: m.document,
             name: m.document_name.clone(),
             // "moved to <doc> · V1": short enough for the row (P3G.4 judge: it read "V1 ⇒ V1").
-            arrow: format!("moved to {} · {target}", m.document_name),
+            arrow: tr_with(
+                "view-refman-moved-to",
+                &[("document", &m.document_name), ("version", &target)],
+            ),
             new_version: false,
             plan: None,
             workspace: Vec::new(),
@@ -554,7 +564,7 @@ fn compute(world: &mut World, scope: &Scope) -> (Vec<LatestRow>, Vec<SelRow>) {
     for u in &uses {
         let d = u.reference.document_or(doc.id);
         let (from, name) = match u.reference.at {
-            RefAt::Workspace => ("Workspace".to_string(), doc.name.clone()),
+            RefAt::Workspace => (tr("view-refman-workspace"), doc.name.clone()),
             RefAt::Version(_) => {
                 let l = doc.linked_element(u.source);
                 (
@@ -816,7 +826,7 @@ fn sync_panel(
     let (tb, tf) = (theme.clone(), theme.clone());
     let mb = m.clone();
     let mf = m.clone();
-    let panel = FloatingPanel::new("reference-manager", "Reference manager")
+    let panel = FloatingPanel::new("reference-manager", tr("view-refman-title"))
         .width(292.0)
         .at(m.at.x, m.at.y)
         .body(move |b| body(b, &tb, &mb, &thumbs, graph))
@@ -842,8 +852,8 @@ fn body(
 ) {
     b.spawn(
         TabStrip::new("refman-tabs")
-            .tab("Update to latest")
-            .tab("Selective update")
+            .tab(tr("view-refman-update-to-latest"))
+            .tab(tr("view-refman-selective-update"))
             .selected(m.tab)
             .build(t),
     );
@@ -856,18 +866,18 @@ fn body(
             .collect::<std::collections::HashSet<_>>()
             .len();
         // References to the workspace (Change to version…) get a version, not a newer one.
-        let newer = if m.latest.iter().all(|r| r.plan.is_none()) {
-            "Versions"
-        } else {
-            "Newer versions"
-        };
+        let versions = m.latest.iter().all(|r| r.plan.is_none());
         let only_moved = !m.latest.is_empty() && m.latest.iter().all(|r| !r.moved.is_empty());
+        let count = n.to_string();
+        let count = [("count", count.as_str())];
         let text = match n {
-            0 => "All references are up to date".to_string(),
-            1 if only_moved => "A tab moved to another document".to_string(),
-            n if only_moved => format!("Tabs moved to {n} documents"),
-            1 => format!("{newer} for 1 document"),
-            n => format!("{newer} for {n} documents"),
+            0 => tr("view-refman-all-up-to-date"),
+            1 if only_moved => tr("view-refman-tab-moved"),
+            _ if only_moved => tr_with("view-refman-tabs-moved", &count),
+            1 if versions => tr("view-refman-versions-one"),
+            1 => tr("view-refman-newer-one"),
+            _ if versions => tr_with("view-refman-versions-many", &count),
+            _ => tr_with("view-refman-newer-many", &count),
         };
         b.spawn((
             Name::new("refman-group"),
@@ -910,7 +920,11 @@ fn body(
                         },
                     )
                     .icon_size(12.0)
-                    .tooltip(if m.collapsed { "Show" } else { "Hide" })
+                    .tooltip(tr(if m.collapsed {
+                        "common-show"
+                    } else {
+                        "common-hide"
+                    }))
                     .build(t),
                 )
                 .entry::<Node>()
@@ -920,25 +934,25 @@ fn body(
         if !m.collapsed {
             for (k, r) in m.latest.iter().enumerate() {
                 let tip = if !r.moved.is_empty() {
-                    format!(
-                        "{}: {}. The {} reference{} keep{} the old version until you update {} to the new document.",
-                        r.name,
-                        r.arrow,
-                        r.moved.len(),
-                        if r.moved.len() == 1 { "" } else { "s" },
-                        if r.moved.len() == 1 { "s" } else { "" },
-                        if r.moved.len() == 1 { "it" } else { "them" }
+                    tr_with(
+                        if r.moved.len() == 1 {
+                            "view-refman-moved-tip-one"
+                        } else {
+                            "view-refman-moved-tip-many"
+                        },
+                        &[
+                            ("document", &r.name),
+                            ("change", &r.arrow),
+                            ("count", &r.moved.len().to_string()),
+                        ],
                     )
                 } else if r.nested {
-                    format!(
-                        "{}: {} (inside the document above, before its new version is made)",
-                        r.name, r.arrow
+                    tr_with(
+                        "view-refman-nested-tip",
+                        &[("document", &r.name), ("change", &r.arrow)],
                     )
                 } else if r.new_version {
-                    format!(
-                        "{}: its own references are updated first, then a new version of it is made (an auto version) and used here",
-                        r.name
-                    )
+                    tr_with("view-refman-auto-version-tip", &[("document", &r.name)])
                 } else {
                     format!("{}: {}", r.name, r.arrow)
                 };
@@ -970,7 +984,7 @@ fn body(
                     .with_children(|x| {
                         x.spawn(
                             cadrs_ui::Button::new(format!("refman-new-document-{}", k + 1))
-                                .label("Update to the new document")
+                                .label(tr("view-refman-update-to-new-document"))
                                 .primary()
                                 .small()
                                 .build(t),
@@ -986,9 +1000,9 @@ fn body(
             .map(|r| r.name.as_str())
             .collect();
         if !autos.is_empty() {
-            let text = format!(
-                "Updating makes a new version of {} to point at the newer references. Undo does not remove versions.",
-                autos.join(", ")
+            let text = tr_with(
+                "view-refman-auto-warning",
+                &[("documents", &autos.join(", "))],
             );
             b.spawn((
                 Name::new("refman-auto-warning"),
@@ -1021,11 +1035,12 @@ fn body(
     if m.selective.is_empty() {
         b.spawn((
             t.text(
-                "No references",
+                tr("view-refman-no-references"),
                 t.font_sm,
                 FontWeight::NORMAL,
                 t.muted_foreground,
             ),
+            Translated("view-refman-no-references"),
             Node {
                 margin: UiRect::all(Val::Px(8.0)),
                 ..default()
@@ -1087,7 +1102,7 @@ fn body(
                                 height: Val::Px(12.0),
                                 ..default()
                             },
-                            Tooltip::new("Pinned: Update all skips it"),
+                            Tooltip::new(tr("view-refman-pinned-tooltip")),
                         ))
                         .with_child(cadrs_ui::glyphs::thumbtack(
                             12.0,
@@ -1096,7 +1111,7 @@ fn body(
                     }
                 });
                 let arrow = if r.from == r.target_name {
-                    format!("{} · up to date", r.from)
+                    tr_with("view-refman-up-to-date", &[("version", &r.from)])
                 } else {
                     format!("{} ⇒ {}", r.from, r.target_name)
                 };
@@ -1114,16 +1129,16 @@ fn body(
                         .icon_size(14.0)
                         .build(t),
                 )
-                .insert(Tooltip::card(format!(
-                    "Open linked document ({}, read-only)",
-                    r.from
+                .insert(Tooltip::card(tr_with(
+                    "view-refman-open-read-only-tooltip",
+                    &[("version", &r.from)],
                 )));
             }
             row.spawn(
                 ToolButton::new(format!("refman-graph-{}", k + 1), "branches")
                     .icon_size(15.0)
                     .selected(m.graph_row == Some(k))
-                    .tooltip("Version graph: pick the version to update to")
+                    .tooltip(tr("view-refman-graph-tooltip"))
                     .build(t),
             );
         });
@@ -1148,9 +1163,7 @@ fn footer(f: &mut ChildSpawner, t: &Theme, m: &RefManager) {
     f.spawn(
         IconButton::new("refman-help", "help")
             .icon_size(15.0)
-            .tooltip(
-                "Update to latest: every listed reference goes to its source's newest version;\na source whose own references are out of date gets a new version first.\nSelective update: tick references and pick a version in the version graph.\nPinned references are skipped by Update all; update them here.",
-            )
+            .tooltip(tr("view-refman-help"))
             .build(t),
     );
     f.spawn(Node {
@@ -1160,14 +1173,14 @@ fn footer(f: &mut ChildSpawner, t: &Theme, m: &RefManager) {
     // Enabled only when something would change (P3G.2 carried).
     let (label, enabled) = if m.tab == 0 {
         (
-            "Update all",
+            tr("view-refman-update-all"),
             m.latest
                 .iter()
                 .any(|r| r.plan.is_some() || !r.workspace.is_empty()),
         )
     } else {
         (
-            "Update selected",
+            tr("view-refman-update-selected"),
             m.selective.iter().any(|r| {
                 r.checked && (r.from != r.target_name || !matches!(r.target, Target::Latest))
             }),
@@ -1289,7 +1302,7 @@ fn on_graph_pick(ev: On<VersionGraphSelect>, m: Option<Res<RefManager>>, mut com
             Some(GraphPick::Version(v)) => {
                 (Target::Version(*v), version_name(world, row.document, *v))
             }
-            Some(GraphPick::Workspace) => (Target::Workspace, "Workspace".to_string()),
+            Some(GraphPick::Workspace) => (Target::Workspace, tr("view-refman-workspace")),
             None => return,
         };
         let mut m = world.resource_mut::<RefManager>();
@@ -1325,9 +1338,9 @@ fn update(world: &mut World) {
                 lu::execute_update_all(&mut r.0, &doc, log.as_ref(), &plans, now, &user)
                     .map_err(|e| e.to_string())?;
             for a in &autos {
-                details.push(format!(
-                    "Created {} of {} (auto version)",
-                    a.name, a.document_name
+                details.push(tr_with(
+                    "view-refman-created-auto-version",
+                    &[("version", &a.name), ("document", &a.document_name)],
                 ));
             }
             for row in m.latest.iter().filter(|r| r.plan.is_none()) {
@@ -1346,9 +1359,10 @@ fn update(world: &mut World) {
                     .find(|a| a.document == row.document)
                     .map(|a| a.name.clone());
                 let arrow = match (&made, row.new_version) {
-                    (Some(v), true) => {
-                        format!("{} (auto version)", row.arrow.replace("new version", v))
-                    }
+                    (Some(v), true) => tr_with(
+                        "view-refman-change-auto-version",
+                        &[("change", &row.arrow.replace("new version", v))],
+                    ),
                     _ => row.arrow.clone(),
                 };
                 details.push(format!(
@@ -1390,10 +1404,7 @@ fn update(world: &mut World) {
     close(world);
     let n = cmd.changes.len();
     if n == 0 {
-        linked::toast(
-            world,
-            "Nothing to update: the references are at those versions already",
-        );
+        linked::toast(world, tr("view-refman-nothing-to-update"));
         return;
     }
     if let Err(e) = world.resource_mut::<ActiveDocument>().execute(&cmd) {
@@ -1403,9 +1414,9 @@ fn update(world: &mut World) {
     world.insert_resource(UpdateDetails(details));
     let theme = world.resource::<Theme>().clone();
     let text = if n == 1 {
-        "Updated 1 reference".to_string()
+        tr("view-refman-updated-one")
     } else {
-        format!("Updated {n} references")
+        tr_with("view-refman-updated-many", &[("count", &n.to_string())])
     };
     let mut commands = world.commands();
     let toast = cadrs_ui::show_notification(
@@ -1418,7 +1429,7 @@ fn update(world: &mut World) {
         &theme,
         toast,
         "refman-details",
-        "show more details",
+        tr("view-refman-show-details"),
     );
     commands
         .entity(link)
@@ -1477,10 +1488,17 @@ fn update_to_new_document(world: &mut World, k: usize) {
         return;
     }
     world.resource_mut::<LinkStatus>().invalidate();
-    let text = format!(
-        "Updated {n} reference{} to {name} ({})",
-        if n == 1 { "" } else { "s" },
-        version.unwrap_or_default()
+    let text = tr_with(
+        if n == 1 {
+            "view-refman-updated-one-to"
+        } else {
+            "view-refman-updated-many-to"
+        },
+        &[
+            ("count", &n.to_string()),
+            ("document", &name),
+            ("version", &version.unwrap_or_default()),
+        ],
     );
     linked::toast(world, text);
 }
@@ -1503,18 +1521,38 @@ fn show_details(world: &mut World) {
     };
     let theme = world.resource::<Theme>().clone();
     let t = theme.clone();
-    let panel = FloatingPanel::new("update-details", "Updated references")
+    let panel = FloatingPanel::new("update-details", tr("view-refman-updated-title"))
         .width(300.0)
         .at(8.0, 8.0)
         .body(move |b| {
             for (k, l) in lines.into_iter().enumerate() {
-                b.spawn((Name::new(format!("update-details-{}", k + 1)), t.text(l, 11.5, FontWeight::NORMAL, t.foreground), Node { margin: UiRect::vertical(Val::Px(2.0)), ..default() }));
+                b.spawn((
+                    Name::new(format!("update-details-{}", k + 1)),
+                    t.text(l, 11.5, FontWeight::NORMAL, t.foreground),
+                    Node {
+                        margin: UiRect::vertical(Val::Px(2.0)),
+                        ..default()
+                    },
+                ));
             }
             b.spawn((
-                t.text("Undo (Ctrl+Z) points the references back; versions made in other documents stay.", 10.5, FontWeight::NORMAL, t.muted_foreground),
-                Node { margin: UiRect::top(Val::Px(6.0)), max_width: Val::Px(280.0), ..default() },
+                t.text(
+                    tr("view-refman-details-undo"),
+                    10.5,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("view-refman-details-undo"),
+                Node {
+                    margin: UiRect::top(Val::Px(6.0)),
+                    max_width: Val::Px(280.0),
+                    ..default()
+                },
             ))
-            .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+            .insert(TextLayout::new(
+                bevy::text::Justify::Left,
+                bevy::text::LineBreak::WordBoundary,
+            ));
         })
         .build(&theme);
     let e = world
@@ -1594,9 +1632,9 @@ fn on_sheet_ref_menu(
     let version = u.is_some_and(|u| u.is_version());
     let pinned = u.is_some_and(|u| u.reference.pinned);
     let pin = if pinned {
-        MenuItem::new("sheet-ref-unpin", "Unpin reference").icon("location")
+        MenuItem::new("sheet-ref-unpin", tr("view-refman-unpin")).icon("location")
     } else {
-        MenuItem::new("sheet-ref-pin", "Pin reference")
+        MenuItem::new("sheet-ref-pin", tr("view-refman-pin"))
             .icon("location")
             .disabled(!version)
             .tooltip(lu::PIN_WORKSPACE)
@@ -1604,16 +1642,19 @@ fn on_sheet_ref_menu(
     let menu = Menu::new("sheet-ref-menu")
         .min_width(190.0)
         .item(
-            MenuItem::new("sheet-ref-update", "Update linked document…")
+            MenuItem::new("sheet-ref-update", tr("view-refman-update-linked"))
                 .icon("link")
                 .disabled(!version),
         )
         .item(
-            MenuItem::new("sheet-ref-open", "Open linked document")
+            MenuItem::new("sheet-ref-open", tr("view-refman-open-linked"))
                 .icon("open-external")
                 .disabled(!version),
         )
-        .item(MenuItem::new("sheet-ref-version", "Change to version…").icon("versions"))
+        .item(
+            MenuItem::new("sheet-ref-version", tr("view-refman-change-to-version"))
+                .icon("versions"),
+        )
         .item(pin);
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands

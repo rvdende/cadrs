@@ -24,6 +24,7 @@ use cadrs_drawing::view_kinds::{
     Boundary, Break, BrokenOut, detail_view, double, next_letter, section_view,
 };
 use cadrs_drawing::{DrawingOp, View, ViewId};
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, DialogClose, form_row};
 
@@ -39,13 +40,25 @@ pub enum BoundaryUse {
     BrokenOut,
 }
 
-/// The view kinds of the Detail view ▾ (name, label, icon).
+/// The view kinds of the Detail view ▾ (name, its label's catalog key, icon).
 pub const VIEW_KINDS: [(&str, &str, &str); 5] = [
-    ("drawing-view-detail", "Detail view", "find"),
-    ("drawing-view-crop", "Crop view", "corner-rectangle"),
-    ("drawing-view-crop-spline", "Crop view (spline)", "spline"),
-    ("drawing-view-broken-out", "Broken-out section", "trim"),
-    ("drawing-view-break", "Break view", "split"),
+    ("drawing-view-detail", "drawing-kind-detail-view", "find"),
+    (
+        "drawing-view-crop",
+        "drawing-kind-crop-view",
+        "corner-rectangle",
+    ),
+    (
+        "drawing-view-crop-spline",
+        "drawing-kind-crop-view-spline",
+        "spline",
+    ),
+    (
+        "drawing-view-broken-out",
+        "drawing-kind-broken-out-section",
+        "trim",
+    ),
+    ("drawing-view-break", "drawing-kind-break-view", "split"),
 ];
 
 /// Starts a view kind's tool by its menu name.
@@ -542,39 +555,65 @@ fn open_depth_dialog(world: &mut World, view: ViewId, points: Vec<[f64; 2]>) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("broken-out-dialog")
-            .title("Broken-out section")
+            .title(tr("drawing-kind-broken-out-section"))
             .width(340.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(form_row(t, "broken-out-depth-row", "Depth", 90.0)).with_child(
-                    TextInput::new("broken-out-depth").value("0 mm").width(Val::Px(140.0)).select_all_on_focus().build(t),
+                b.spawn(form_row(
+                    t,
+                    "broken-out-depth-row",
+                    tr("common-depth"),
+                    90.0,
+                ))
+                .with_child(
+                    TextInput::new("broken-out-depth")
+                        .value("0 mm")
+                        .width(Val::Px(140.0))
+                        .select_all_on_focus()
+                        .build(t),
                 );
                 b.spawn((
                     t.text(
-                        "From the model origin along the direction of sight: the material in front of this depth inside the boundary is removed.",
+                        tr("drawing-broken-out-depth-help"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
-                    Node { max_width: Val::Px(300.0), ..default() },
+                    Translated("drawing-broken-out-depth-help"),
+                    Node {
+                        max_width: Val::Px(300.0),
+                        ..default()
+                    },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("broken-out-ok").label("OK").primary().build(t),
+                    Button::new("broken-out-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(apply_depth_dialog);
                     }),
                 ));
                 f.spawn((
-                    Button::new("broken-out-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<DepthDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("broken-out-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<DepthDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
@@ -639,36 +678,26 @@ fn apply_depth_dialog(world: &mut World) {
 }
 
 /// The tool's hint.
-pub fn hint(tool: ViewTool) -> Option<&'static str> {
-    Some(match tool {
-        ViewTool::Section { parent: None, .. } => {
-            "Section view: click the cutting line's start on a view"
-        }
-        ViewTool::Section { b: None, .. } => "Section view: click the cutting line's end",
-        ViewTool::Section { .. } => {
-            "Section view: move to either side and click to place · Esc to cancel"
-        }
-        ViewTool::Detail { parent: None, .. } => {
-            "Detail view: click the centre of the detail circle on a view"
-        }
-        ViewTool::Detail { radius: None, .. } => "Detail view: click a point on the circle",
-        ViewTool::Detail { .. } => "Detail view: click to place the detail · Esc to cancel",
-        ViewTool::Crop { view: None, .. } => {
-            "Crop view: click a corner of the crop rectangle on a view"
-        }
-        ViewTool::Crop { .. } => "Crop view: click the opposite corner",
-        ViewTool::Break { view: None, .. } => "Break view: click the first break line on a view",
-        ViewTool::Break { .. } => "Break view: click the second break line",
-        ViewTool::Boundary { view: None, .. } => "Click the boundary's points on a view",
+pub fn hint(tool: ViewTool) -> Option<String> {
+    Some(tr(match tool {
+        ViewTool::Section { parent: None, .. } => "drawing-hint-section-start",
+        ViewTool::Section { b: None, .. } => "drawing-hint-section-end",
+        ViewTool::Section { .. } => "drawing-hint-section-place",
+        ViewTool::Detail { parent: None, .. } => "drawing-hint-detail-centre",
+        ViewTool::Detail { radius: None, .. } => "drawing-hint-detail-radius",
+        ViewTool::Detail { .. } => "drawing-hint-detail-place",
+        ViewTool::Crop { view: None, .. } => "drawing-hint-crop-start",
+        ViewTool::Crop { .. } => "drawing-hint-crop-end",
+        ViewTool::Break { view: None, .. } => "drawing-hint-break-first",
+        ViewTool::Break { .. } => "drawing-hint-break-second",
+        ViewTool::Boundary { view: None, .. } => "drawing-hint-boundary-start",
         ViewTool::Boundary {
             use_: BoundaryUse::CropSpline,
             ..
-        } => "Crop view: click the boundary's points · Enter or the first point closes it",
-        ViewTool::Boundary { .. } => {
-            "Broken-out section: click the boundary's points · Enter or the first point closes it"
-        }
+        } => "drawing-hint-crop-spline-points",
+        ViewTool::Boundary { .. } => "drawing-hint-broken-out-points",
         _ => return None,
-    })
+    }))
 }
 
 /// The centre of a view on the sheet (for scenarios' checks).

@@ -33,6 +33,7 @@ use web_time::Instant;
 use bevy::prelude::*;
 use bevy::text::{FontWeight, Justify, LineBreak};
 use bevy::ui_widgets::ScrollArea;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, Dialog, Progress, ProgressBar};
 
@@ -261,11 +262,7 @@ fn poll_job(
                     Err(e) => {
                         warn!("cannot start {}: {e}", exe.display());
                         *status = UpdateStatus::UpToDate;
-                        cadrs_ui::show_toast(
-                            &mut commands,
-                            &theme,
-                            "Updated. Restart cadrs to use the new version.",
-                        );
+                        cadrs_ui::show_toast(&mut commands, &theme, tr("shell-update-restart"));
                     }
                 }
             }
@@ -277,7 +274,10 @@ fn poll_job(
                 cadrs_ui::show_notification(
                     &mut commands,
                     &theme,
-                    cadrs_ui::Notification::error(format!("Update failed: {e}")),
+                    cadrs_ui::Notification::error(tr_with(
+                        "shell-update-failed",
+                        &[("error", e.as_str())],
+                    )),
                 );
             }
         }
@@ -309,11 +309,11 @@ fn sync_update_slot(
         if want {
             commands.entity(slot).with_child((
                 Button::new("update-button")
-                    .label("Update available")
+                    .label(tr("shell-update-available"))
                     .icon("download")
                     .link()
                     .small()
-                    .tooltip("Click to view release notes")
+                    .tooltip(tr("shell-update-available-tooltip"))
                     .build(t),
                 observe(
                     |_: On<Activate>,
@@ -359,11 +359,14 @@ fn open_dialog(commands: &mut Commands, theme: &Theme, release: &Release) {
     let version = release.version.clone();
     commands.spawn((
         Dialog::new("update-dialog")
-            .title(format!("cadrs v{version} is available"))
+            .title(tr_with(
+                "shell-update-title",
+                &[("version", version.as_str())],
+            ))
             .width(640.0)
             .body(move |b| {
                 b.spawn(tb.text(
-                    format!("You have v{VERSION}."),
+                    tr_with("shell-update-you-have", &[("version", VERSION)]),
                     tb.font_base,
                     FontWeight::NORMAL,
                     tb.muted_foreground,
@@ -428,9 +431,10 @@ fn sync_dialog_footer(
         }
         footer.phase = Some(phase);
         commands.entity(e).despawn_children();
-        let note = |text: &'static str| {
+        let note = |key: &'static str| {
             (
-                t.text(text, t.font_base, FontWeight::NORMAL, t.muted_foreground),
+                t.text(tr(key), t.font_base, FontWeight::NORMAL, t.muted_foreground),
+                Translated(key),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -440,11 +444,11 @@ fn sync_dialog_footer(
         commands.entity(e).with_children(|f| match &*status {
             UpdateStatus::UpToDate => {}
             UpdateStatus::Available(r) if r.archive.is_some() => {
-                f.spawn(note("Downloads and installs the new version."));
+                f.spawn(note("shell-update-upgrade-note"));
                 close_button(f, t);
                 f.spawn((
                     Button::new("update-upgrade")
-                        .label("Upgrade")
+                        .label(tr("shell-update-upgrade"))
                         .primary()
                         .build(t),
                     observe(
@@ -474,15 +478,15 @@ fn sync_dialog_footer(
                 // Why there is no Upgrade: no archive for this platform, or a build run from
                 // a checkout (no `libraries/` beside it), which an upgrade mustn't overwrite.
                 f.spawn(note(if archive_name(&r.version).is_none() {
-                    "There is no download for this platform; build it from source."
+                    "shell-update-no-download"
                 } else {
-                    "Built from source: update with git pull and cargo install-local."
+                    "shell-update-from-source"
                 }));
                 close_button(f, t);
                 let page = r.page.clone();
                 f.spawn((
                     Button::new("update-page")
-                        .label("Open release page")
+                        .label(tr("shell-update-release-page"))
                         .primary()
                         .build(t),
                     observe(move |_: On<Activate>| open_url(&page)),
@@ -502,20 +506,26 @@ fn sync_dialog_footer(
             }
             UpdateStatus::Installing(_) => {
                 f.spawn(Progress::new("update-progress").value(1.0).build(t));
-                f.spawn(t.text(
-                    "Installing\u{2026}",
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.foreground,
+                f.spawn((
+                    t.text(
+                        tr("shell-update-installing"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.foreground,
+                    ),
+                    Translated("shell-update-installing"),
                 ));
             }
             UpdateStatus::Launching(_) => {
                 f.spawn(Progress::new("update-progress").value(1.0).build(t));
-                f.spawn(t.text(
-                    "Launching\u{2026}",
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.foreground,
+                f.spawn((
+                    t.text(
+                        tr("shell-update-launching"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.foreground,
+                    ),
+                    Translated("shell-update-launching"),
                 ));
             }
         });
@@ -524,7 +534,9 @@ fn sync_dialog_footer(
 
 fn close_button(f: &mut ChildSpawnerCommands, t: &Theme) {
     f.spawn((
-        Button::new("update-close").label("Close").build(t),
+        Button::new("update-close")
+            .label(tr("common-close"))
+            .build(t),
         observe(
             |_: On<Activate>,
              dialogs: Query<Entity, With<UpdateDialog>>,
@@ -574,7 +586,13 @@ fn progress_text(done: u64, total: u64, secs: f64) -> String {
     const MB: f64 = 1_000_000.0;
     let rate = if secs > 0.0 { done as f64 / secs } else { 0.0 };
     let mut s = if total > 0 {
-        format!("{:.1} of {:.1} MB", done as f64 / MB, total as f64 / MB)
+        tr_with(
+            "shell-update-progress",
+            &[
+                ("done", &format!("{:.1}", done as f64 / MB)),
+                ("total", &format!("{:.1}", total as f64 / MB)),
+            ],
+        )
     } else {
         format!("{:.1} MB", done as f64 / MB)
     };
@@ -582,8 +600,11 @@ fn progress_text(done: u64, total: u64, secs: f64) -> String {
         s += &format!(" \u{b7} {:.1} MB/s", rate / MB);
         if total > done {
             s += &format!(
-                " \u{b7} {} left",
-                duration_text((total - done) as f64 / rate)
+                " \u{b7} {}",
+                tr_with(
+                    "shell-update-time-left",
+                    &[("time", &duration_text((total - done) as f64 / rate))],
+                )
             );
         }
     }

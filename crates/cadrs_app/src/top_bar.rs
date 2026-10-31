@@ -5,6 +5,7 @@
 //! account menu (`crate::identity`) lists what is folded.
 
 use bevy::prelude::*;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{HideBelow, MenuEntry, MenuItem, SchemePreference, Theme};
 
 use crate::network::NetState;
@@ -110,11 +111,19 @@ pub fn spawn_folding(
     .with_children(piece);
 }
 
-/// The light / dark / system choices, as the toggle has them.
+/// The light / dark / system choices, as the toggle has them (their labels' catalog keys).
 const SCHEMES: [(SchemePreference, &str, &str); 3] = [
-    (SchemePreference::Light, "Light", "theme-light-medium"),
-    (SchemePreference::Dark, "Dark", "theme-dark"),
-    (SchemePreference::System, "Match the system", "theme-system"),
+    (
+        SchemePreference::Light,
+        "ui-color-scheme-light",
+        "theme-light-medium",
+    ),
+    (SchemePreference::Dark, "ui-color-scheme-dark", "theme-dark"),
+    (
+        SchemePreference::System,
+        "ui-color-scheme-system",
+        "theme-system",
+    ),
 ];
 
 /// The account menu's entries for what is folded on a window `width` wide (none on a wide
@@ -124,16 +133,16 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     let in_document = world.get_resource::<crate::ActiveDocument>().is_some();
     if Fold::Phone.folded(width) && in_document {
         for (name, label, icon) in [
-            ("account-comments", "Comments", "comments"),
-            ("account-history", "History", "history"),
-            ("account-share", "Share…", "share"),
+            ("account-comments", "shell-top-bar-comments", "comments"),
+            ("account-history", "shell-top-bar-history", "history"),
+            ("account-share", "shell-top-bar-share", "share"),
         ] {
-            entries.push(MenuItem::new(name, label).icon(icon).into());
+            entries.push(MenuItem::new(name, tr(label)).icon(icon).into());
         }
     }
     if Fold::Notifications.folded(width) {
         let mut item =
-            MenuItem::new("account-notifications", "Notifications").icon("notifications");
+            MenuItem::new("account-notifications", tr("shell-notifications")).icon("notifications");
         if world.resource::<Notifications>().unread() {
             item = item.dot(theme.danger);
         }
@@ -142,12 +151,12 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     let net = NetState::of(world);
     if Fold::Network.folded(width) && net != NetState::Unavailable {
         let label = match net {
-            NetState::Online { .. } => "Network: online",
-            NetState::Failed => "Network: could not go online",
-            _ => "Network: offline",
+            NetState::Online { .. } => "shell-top-bar-network-online",
+            NetState::Failed => "shell-top-bar-network-failed",
+            _ => "shell-top-bar-network-offline",
         };
         entries.push(
-            MenuItem::new("account-network", label)
+            MenuItem::new("account-network", tr(label))
                 .icon(net.icon())
                 .into(),
         );
@@ -157,7 +166,7 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
         let preference = world.resource::<cadrs_ui::Appearance>().preference;
         for (i, (scheme, label, icon)) in SCHEMES.iter().enumerate() {
             entries.push(
-                MenuItem::new(format!("account-scheme-{i}"), *label)
+                MenuItem::new(format!("account-scheme-{i}"), tr(label))
                     .icon(*icon)
                     .checked(*scheme == preference)
                     .into(),
@@ -167,9 +176,12 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     if Fold::Version.folded(width) {
         entries.push(MenuEntry::Separator);
         let item = match world.resource::<UpdateStatus>().release() {
-            Some(r) => MenuItem::new("account-update", format!("Update to v{}…", r.version))
-                .icon("download")
-                .tooltip("Read the release notes and update"),
+            Some(r) => MenuItem::new(
+                "account-update",
+                tr_with("shell-top-bar-update", &[("version", r.version.as_str())]),
+            )
+            .icon("download")
+            .tooltip(tr("shell-top-bar-update-tooltip")),
             None => MenuItem::new(
                 "account-version",
                 concat!("cadrs v", env!("CARGO_PKG_VERSION")),

@@ -24,6 +24,7 @@ use cadrs_core::assembly::InstanceId;
 use cadrs_core::assembly::context::is_context;
 use cadrs_core::assembly::managed_context::{CreateStudioInContext, InsertFromStudio};
 use cadrs_core::{ElementId, PartId};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, SelectionList,
@@ -65,15 +66,15 @@ pub fn display_states_menu() -> Menu {
     Menu::new("display-states-menu")
         .min_width(210.0)
         .item(
-            MenuItem::new("display-states-menu-states", "Display states")
+            MenuItem::new("display-states-menu-states", tr("asm-display-states"))
                 .icon("display-states")
                 .planned()
-                .tooltip("Named display states aren't in cadrs yet"),
+                .tooltip(tr("asm-display-states-planned")),
         )
         .item(
             MenuItem::new(
                 "display-states-menu-in-context",
-                "Create Part Studio in context",
+                tr("asm-create-studio-in-context"),
             )
             .icon("part-studio"),
         )
@@ -113,7 +114,7 @@ pub fn open_origin_dialog(world: &mut World) {
     world.insert_resource(OriginSession {
         assembly,
         origin: cadrs_core::assembly::Pose::IDENTITY,
-        label: "Origin".into(),
+        label: tr("asm-connector-origin"),
     });
     world.resource_mut::<Selection>().0 = vec![Pick::Origin];
 }
@@ -154,7 +155,10 @@ fn origin_picks(
                 frame.pose(),
             ))
         } else if p.0 == Some(Pick::Origin) {
-            Some(("Origin".to_string(), cadrs_core::assembly::Pose::IDENTITY))
+            Some((
+                tr("asm-connector-origin"),
+                cadrs_core::assembly::Pose::IDENTITY,
+            ))
         } else if let Some((instance, entity)) = p.0.as_ref().and_then(super::connectors::entity_of)
             && let Some(pts) = super::connectors::entity_points(&doc, &mut parts, instance, entity)
             && let Some(best) = pts.nearest(&view.view, at)
@@ -180,13 +184,13 @@ fn origin_dialog(t: &Theme, label: String) -> impl Bundle {
         OriginDialog(label.clone()),
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("origin-dialog")
-            .title("Origin of new Part Studio")
+            .title(tr("asm-origin-of-new-studio"))
             .valid(true)
             .width(230.0)
             .body(move |b| {
                 b.spawn(
                     SelectionList::new("origin-dialog-field")
-                        .placeholder("Select origin/mate connector")
+                        .placeholder(tr("asm-select-origin-or-connector"))
                         .items(vec![label])
                         .active(true)
                         .build(&tb),
@@ -314,13 +318,13 @@ fn insert_dialog(t: &Theme, items: Vec<String>) -> impl Bundle {
         InsertDialog,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("insert-go-dialog")
-            .title("Insert and go to Assembly")
+            .title(tr("asm-insert-and-go-title"))
             .valid(valid)
             .width(230.0)
             .body(move |b| {
                 b.spawn(
                     SelectionList::new("insert-go-parts")
-                        .placeholder("Parts to insert")
+                        .placeholder(tr("asm-parts-to-insert"))
                         .items(items)
                         .active(true)
                         .build(&tb),
@@ -354,7 +358,12 @@ fn sync_insert_dialog(
     let items: Vec<String> = s
         .parts
         .iter()
-        .map(|p| cache.part_name(*p).unwrap_or("Part").to_string())
+        .map(|p| {
+            cache
+                .part_name(*p)
+                .map(str::to_string)
+                .unwrap_or_else(|| tr("common-part"))
+        })
         .collect();
     let Some((_, mut st)) = q_dialog.iter_mut().next() else {
         let Some(area) = q_area.iter().next() else {

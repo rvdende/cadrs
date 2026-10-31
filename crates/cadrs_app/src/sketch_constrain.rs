@@ -27,6 +27,7 @@ use cadrs_sketch::solve::{self, Analysis, Drag, Source};
 use cadrs_sketch::{
     ConstraintId, ConstraintKind, CurveId, CurveKind, PointId, Sketch, SketchEntity, SketchOp,
 };
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{Menu, MenuAction, MenuItem};
 use cadrs_ui::{Notification, Theme, show_notification, show_toast};
 
@@ -391,7 +392,10 @@ fn constraint_activation(
             show_toast(
                 &mut commands,
                 &theme,
-                format!("{} does not apply to the selection", kind.label()),
+                tr_with(
+                    "sketch-constraint-not-applicable",
+                    &[("constraint", &crate::sketch::constraint_label(kind))],
+                ),
             );
             selection.0.clear();
         }
@@ -439,11 +443,7 @@ fn normal_to_plane(
             continue;
         };
         let [SketchEntity::Curve(line)] = selection.0[..] else {
-            show_toast(
-                &mut commands,
-                &theme,
-                "Pick a line first, then the plane".to_string(),
-            );
+            show_toast(&mut commands, &theme, tr("sketch-normal-pick-line-first"));
             continue;
         };
         if !matches!(
@@ -467,11 +467,7 @@ fn normal_to_plane(
         let Some(cadrs_core::links::Curve3::Line(a, b)) =
             cadrs_core::links::plane_trace(&plane.frame(), &frame)
         else {
-            show_toast(
-                &mut commands,
-                &theme,
-                "Normal: the plane is parallel to the sketch".to_string(),
-            );
+            show_toast(&mut commands, &theme, tr("sketch-normal-plane-parallel"));
             continue;
         };
         let op = SketchOp::NormalToPlane {
@@ -757,29 +753,35 @@ pub fn open_glyph_menu(world: &mut World, constraint: ConstraintId, at: Vec2) {
             let doc = world.get_resource::<ActiveDocument>()?;
             Some(doc.doc.element(s.element)?.feature(s.feature)?.name.clone())
         })
-        .unwrap_or_else(|| "sketch".into());
+        .unwrap_or_else(|| tr("sketch-fallback-name"));
     world.resource_mut::<SketchSelection>().0 = vec![SketchEntity::Constraint(constraint)];
     // Grouped like Onshape's sketch context menus.
     let menu = Menu::new("sketch-glyph-menu")
         .min_width(200.0)
         .item_height(23.0)
-        .item(MenuItem::new("sketch-glyph-delete", "Delete").icon("delete"))
+        .item(MenuItem::new("sketch-glyph-delete", tr("common-delete")).icon("delete"))
         .item(MenuItem::new(
             "sketch-glyph-select-geometry",
-            "Select geometry",
+            tr("sketch-glyph-select-geometry"),
         ))
-        .item(MenuItem::new("sketch-glyph-hide", "Hide constraints"))
+        .item(MenuItem::new("sketch-glyph-hide", tr("sketch-glyph-hide")))
         .separator()
-        .item(MenuItem::new("sketch-glyph-escape", "Escape constraint"))
+        .item(MenuItem::new(
+            "sketch-glyph-escape",
+            tr("sketch-glyph-escape"),
+        ))
         .item(MenuItem::new(
             "sketch-glyph-confirm",
-            format!("Confirm {sketch_name}"),
+            tr_with("sketch-menu-confirm-named", &[("name", &sketch_name)]),
         ))
         .separator()
-        .item(MenuItem::new("sketch-glyph-zoom-to-fit", "Zoom to fit"))
+        .item(MenuItem::new(
+            "sketch-glyph-zoom-to-fit",
+            tr("common-zoom-to-fit"),
+        ))
         .item(MenuItem::new(
             "sketch-glyph-normal-to",
-            "View normal to sketch plane",
+            tr("sketch-menu-normal-to-plane"),
         ));
     let mut commands = world.commands();
     let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
@@ -920,12 +922,9 @@ fn sync_conflict_banner(
     if grew && q.is_empty() {
         let unsolved = opened_broken.is_some_and(|(_, b)| b);
         let (message, name) = if unsolved {
-            ("Sketch could not be solved.", "sketch-unsolved-toast")
+            (tr("sketch-unsolved"), "sketch-unsolved-toast")
         } else {
-            (
-                "Some constraints are not applicable to the current geometry and have not been solved.",
-                "sketch-conflict-banner",
-            )
+            (tr("sketch-conflict"), "sketch-conflict-banner")
         };
         // Left-aligned at x ≈ 266, y ≈ 78, over the dialog's title (`screens/15`); "could not
         // be solved" right of the dialog's title (`ex1-step3.png`).

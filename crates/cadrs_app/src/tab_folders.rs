@@ -36,6 +36,7 @@ use cadrs_core::commands::{AddElement, NewElementKind};
 use cadrs_core::tab_tree::{
     self, CreateTabFolder, DeleteTabFolder, MoveTabItems, RenameTabFolder, TabItem, TabNode,
 };
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{
     ContextMenuAnchor, ContextMenuRequested, MenuAction, MenuEntry, open_context_menu,
 };
@@ -127,15 +128,19 @@ impl NewKind {
         NewKind::VariableStudio,
     ];
 
-    /// The item's label, icon and name part.
+    /// The item's label's catalog key, icon and name part.
     fn look(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            NewKind::PartStudio => ("Part Studio", "part-studio", "part-studio"),
-            NewKind::Assembly => ("Assembly", "assembly", "assembly"),
-            NewKind::VariableStudio => ("Variable Studio", "variable-studio", "variable-studio"),
-            NewKind::PcbStudio => ("PCB Studio", "pcb-studio", "pcb-studio"),
-            NewKind::CamStudio => ("CAM Studio", "cam-studio", "cam-studio"),
-            NewKind::RenderStudio => ("Render Studio", "render-studio", "render-studio"),
+            NewKind::PartStudio => ("common-part-studio", "part-studio", "part-studio"),
+            NewKind::Assembly => ("common-assembly", "assembly", "assembly"),
+            NewKind::VariableStudio => (
+                "shell-tab-variable-studio",
+                "variable-studio",
+                "variable-studio",
+            ),
+            NewKind::PcbStudio => ("shell-tab-pcb-studio", "pcb-studio", "pcb-studio"),
+            NewKind::CamStudio => ("shell-tab-cam-studio", "cam-studio", "cam-studio"),
+            NewKind::RenderStudio => ("common-render-studio", "render-studio", "render-studio"),
         }
     }
 }
@@ -304,7 +309,11 @@ impl FolderList<'_> {
         if nodes.is_empty() {
             let name = self.name("empty", &folder_name);
             self.picks.push((name.clone(), ListPick::Empty(folder)));
-            out.push(MenuItem::new(name, "Empty folder").disabled(true).into());
+            out.push(
+                MenuItem::new(name, tr("shell-tab-folders-empty"))
+                    .disabled(true)
+                    .into(),
+            );
         }
         out.push(MenuEntry::Separator);
         let mut studios: Vec<MenuEntry> = Vec::new();
@@ -320,14 +329,14 @@ impl FolderList<'_> {
                     &folder_name,
                     ListPick::New(folder, k),
                 )
-                .label(label)
+                .label(tr(label))
                 .icon(icon)
                 .into(),
             );
         }
         let new = self.name("new", &folder_name);
         out.push(
-            MenuItem::new(new, "New")
+            MenuItem::new(new, tr("shell-tab-folders-new"))
                 .icon("plus")
                 .submenu(studios)
                 .into(),
@@ -336,11 +345,11 @@ impl FolderList<'_> {
             out.push(MenuEntry::Separator);
             let rename = self
                 .item("rename", &folder_name, ListPick::Rename(folder))
-                .label("Rename…")
+                .label(tr("common-rename-ellipsis"))
                 .icon("edit");
             let delete = self
                 .item("delete", &folder_name, ListPick::Delete(folder))
-                .label("Delete folder…")
+                .label(tr("shell-tab-folders-delete-ellipsis"))
                 .icon("remove-circle")
                 .danger();
             out.push(rename.into());
@@ -632,11 +641,11 @@ fn on_folder_menu(
         .side(PopoverSide::Top)
         .min_width(170.0)
         .item_height(25.0)
-        .item(MenuItem::new("tab-folder-open", "Show tabs").icon("folder"))
-        .item(MenuItem::new("tab-folder-rename", "Rename…").icon("edit"))
+        .item(MenuItem::new("tab-folder-open", tr("shell-tab-folders-show-tabs")).icon("folder"))
+        .item(MenuItem::new("tab-folder-rename", tr("common-rename-ellipsis")).icon("edit"))
         .separator()
         .item(
-            MenuItem::new("tab-folder-delete", "Delete folder…")
+            MenuItem::new("tab-folder-delete", tr("shell-tab-folders-delete-ellipsis"))
                 .icon("remove-circle")
                 .danger(),
         );
@@ -713,10 +722,14 @@ pub fn rename_folder(world: &mut World, folder: ElementId) {
     let at = popup_spot(world, top);
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let popup = cadrs_ui::NamePopup::new("tab-folder-rename-popup", "Folder name", at)
-        .value(name)
-        .above()
-        .spawn(&mut commands, &theme);
+    let popup = cadrs_ui::NamePopup::new(
+        "tab-folder-rename-popup",
+        tr("shell-tab-folders-folder-name"),
+        at,
+    )
+    .value(name)
+    .above()
+    .spawn(&mut commands, &theme);
     commands.entity(popup).insert(RenamePopupFor(folder));
     world.flush();
 }
@@ -805,33 +818,87 @@ pub fn ask_delete_folder(world: &mut World, folder: ElementId) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("delete-tab-folder-dialog")
-            .title("Delete folder")
+            .title(tr("shell-tab-folders-delete-title"))
             .width(460.0)
             .body(move |b| {
-                b.spawn((Text::new(format!("Delete the folder \u{201c}{name}\u{201d}?")), tb.font(tb.font_base, FontWeight::NORMAL), TextColor(tb.foreground)));
-                let count = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
-                let mut holds = Vec::new();
-                if own_tabs > 0 {
-                    holds.push(count(own_tabs, "tab", "tabs"));
-                }
-                if own_folders > 0 {
-                    holds.push(count(own_folders, "folder", "folders"));
-                }
-                let mut what = holds.join(" and ");
-                if own_folders > 0 {
-                    what.push_str(&format!(" ({} in all)", count(n, "tab", "tabs")));
-                }
-                let them = if own_tabs + own_folders == 1 { "it" } else { "them" };
                 b.spawn((
-                    tb.text(format!("It holds {what}. Delete folder only moves {them} up a level; Delete folder and tabs deletes every tab in it too."), tb.font_base, FontWeight::NORMAL, tb.muted_foreground),
-                    Node { max_width: Val::Px(420.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
+                    Text::new(tr_with(
+                        "shell-tab-folders-delete-question",
+                        &[("name", name.as_str())],
+                    )),
+                    tb.font(tb.font_base, FontWeight::NORMAL),
+                    TextColor(tb.foreground),
+                ));
+                let folders = |k: usize| {
+                    tr_with(
+                        if k == 1 {
+                            "shell-tab-folders-folder-count"
+                        } else {
+                            "shell-tab-folders-folders-count"
+                        },
+                        &[("count", &k.to_string())],
+                    )
+                };
+                let holds = match (own_tabs > 0, own_folders > 0) {
+                    (true, false) => tr_with(
+                        "shell-tab-folders-holds-tabs",
+                        &[("tabs", &tab_count(own_tabs))],
+                    ),
+                    (false, _) => tr_with(
+                        "shell-tab-folders-holds-folders",
+                        &[("folders", &folders(own_folders)), ("all", &tab_count(n))],
+                    ),
+                    (true, true) => tr_with(
+                        "shell-tab-folders-holds-both",
+                        &[
+                            ("tabs", &tab_count(own_tabs)),
+                            ("folders", &folders(own_folders)),
+                            ("all", &tab_count(n)),
+                        ],
+                    ),
+                };
+                let hint = tr(if own_tabs + own_folders == 1 {
+                    "shell-tab-folders-delete-hint-one"
+                } else {
+                    "shell-tab-folders-delete-hint-many"
+                });
+                b.spawn((
+                    tb.text(
+                        format!("{holds} {hint}"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Node {
+                        max_width: Val::Px(420.0),
+                        margin: UiRect::top(Val::Px(6.0)),
+                        ..default()
+                    },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
-                f.spawn(Button::new("delete-tab-folder-keep").label("Delete folder only").primary().build(&tf));
-                f.spawn(Button::new("delete-tab-folder-all").label("Delete folder and tabs").danger().disabled(n >= all).build(&tf));
-                f.spawn(Button::new("delete-tab-folder-cancel").label("Cancel").build(&tf));
+                f.spawn(
+                    Button::new("delete-tab-folder-keep")
+                        .label(tr("shell-tab-folders-delete-only"))
+                        .primary()
+                        .build(&tf),
+                );
+                f.spawn(
+                    Button::new("delete-tab-folder-all")
+                        .label(tr("shell-tab-folders-delete-all"))
+                        .danger()
+                        .disabled(n >= all)
+                        .build(&tf),
+                );
+                f.spawn(
+                    Button::new("delete-tab-folder-cancel")
+                        .label(tr("common-cancel"))
+                        .build(&tf),
+                );
             })
             .build(&theme),
         DeleteFolderDialog(folder),
@@ -887,6 +954,18 @@ fn on_delete_close(
     }
 }
 
+/// "1 tab", "3 tabs".
+fn tab_count(n: usize) -> String {
+    tr_with(
+        if n == 1 {
+            "shell-tab-folders-tab-count"
+        } else {
+            "shell-tab-folders-tabs-count"
+        },
+        &[("count", &n.to_string())],
+    )
+}
+
 // ---------------------------------------------------------------------------------------------
 // The tab menu's Move to folder ▸
 
@@ -897,7 +976,11 @@ pub fn move_to_folder_entries(doc: &cadrs_core::Document, id: ElementId) -> Vec<
     let parent = tab_tree::parent_of(&layout, TabItem::Tab(id));
     let mut out: Vec<MenuEntry> = Vec::new();
     if parent.is_some() {
-        out.push(MenuItem::new("tab-to-top", "Top level").icon("home").into());
+        out.push(
+            MenuItem::new("tab-to-top", tr("shell-tab-folders-top-level"))
+                .icon("home")
+                .into(),
+        );
     }
     for (k, (f, _, _)) in tab_tree::folders(&layout).into_iter().enumerate() {
         if Some(f) == parent {
@@ -917,7 +1000,7 @@ pub fn move_to_folder_entries(doc: &cadrs_core::Document, id: ElementId) -> Vec<
     }
     out.push(MenuEntry::Separator);
     out.push(
-        MenuItem::new("tab-to-new-folder", "New folder")
+        MenuItem::new("tab-to-new-folder", tr("common-new-folder"))
             .icon("folder-new")
             .into(),
     );
@@ -1129,11 +1212,12 @@ fn on_overflow(
                         l.spawn((
                             Name::new("tab-overflow-none"),
                             t.text(
-                                "Every tab is in view",
+                                tr("shell-tab-folders-all-in-view"),
                                 t.font_base,
                                 FontWeight::NORMAL,
                                 t.muted_foreground,
                             ),
+                            Translated("shell-tab-folders-all-in-view"),
                             Node {
                                 margin: UiRect::all(Val::Px(8.0)),
                                 ..default()
@@ -1922,7 +2006,7 @@ fn place_tab_drop(
                         .unwrap_or_default(),
                     "folder",
                 ),
-                many => (format!("{} tabs", many.len()), "tab-manager"),
+                many => (tab_count(many.len()), "tab-manager"),
             };
             let t = &*theme;
             commands.spawn((

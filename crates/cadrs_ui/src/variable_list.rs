@@ -399,7 +399,7 @@ fn show_lists(
                         format!("{label}-new-variable"),
                         VariableRow { field, index: i },
                         i == hi,
-                        "New variable…".into(),
+                        crate::i18n::tr("ui-variable-list-new-variable"),
                         String::new(),
                         "plus",
                     ),

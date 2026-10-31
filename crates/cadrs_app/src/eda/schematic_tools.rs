@@ -49,51 +49,42 @@ use super::{EdaClick, EdaPointer, Mode, Preview, SceneInputs};
 use crate::ActiveDocument;
 use crate::AppState;
 
+// The tooltips are catalog keys ([`ui::sync_strip`] translates them).
 const STRIP: ui::StripSpec = &[
-    Some(("sch-select", "drag-handle", "Select (Esc)", "select")),
+    Some(("sch-select", "drag-handle", "pcb-tool-select", "select")),
     None,
-    Some(("sch-add-symbol", "add-symbol", "Add a symbol (A)", "symbol")),
     Some((
-        "sch-add-power",
-        "add-power",
-        "Add a power symbol (P)",
-        "power",
+        "sch-add-symbol",
+        "add-symbol",
+        "pcb-sch-add-symbol",
+        "symbol",
     )),
-    Some(("sch-wire", "wire", "Add a wire (W)", "wire")),
-    Some(("sch-label", "net-label", "Add a net label (L)", "label")),
+    Some(("sch-add-power", "add-power", "pcb-sch-add-power", "power")),
+    Some(("sch-wire", "wire", "pcb-sch-add-wire", "wire")),
+    Some(("sch-label", "net-label", "pcb-sch-add-label", "label")),
     Some((
         "sch-no-connect",
         "no-connect",
-        "Add a no-connect flag (Q)",
+        "pcb-sch-add-no-connect",
         "noconnect",
     )),
     None,
-    Some((
-        "sch-annotate",
-        "annotate",
-        "Fill in reference designators",
-        "annotate",
-    )),
+    Some(("sch-annotate", "annotate", "pcb-sch-annotate", "annotate")),
     Some((
         "sch-assign",
         "assign-footprints",
-        "Assign footprints",
+        "pcb-sch-assign",
         "assign",
     )),
-    Some(("sch-erc", "erc", "Electrical rules check", "erc")),
+    Some(("sch-erc", "erc", "pcb-sch-erc", "erc")),
+    Some(("sch-fields", "custom-table", "pcb-sch-fields", "fields")),
     Some((
-        "sch-fields",
-        "custom-table",
-        "Symbol fields table",
-        "fields",
+        "sch-bom",
+        "bill-of-materials",
+        "common-bill-of-materials",
+        "bom",
     )),
-    Some(("sch-bom", "bill-of-materials", "Bill of materials", "bom")),
-    Some((
-        "sch-plot",
-        "file-export",
-        "Plot the schematic (SVG, PDF) or export its netlist",
-        "plot",
-    )),
+    Some(("sch-plot", "file-export", "pcb-sch-plot", "plot")),
 ];
 
 #[derive(Clone, Debug, Default)]

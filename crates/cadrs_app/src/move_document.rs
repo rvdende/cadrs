@@ -25,6 +25,7 @@ use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use cadrs_core::move_doc::{self, MoveTarget};
 use cadrs_core::{DocumentId, ElementId, ElementKind};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Checkbox, CheckboxChange, DialogClose, DocumentRow, TabStrip, TabStripSelect};
 
@@ -91,19 +92,21 @@ impl MoveSession {
             .collect()
     }
 
-    /// The target's name as the footer says it.
-    fn target_name(&self) -> String {
+    /// The target's name as the footer says it (`None`: a new document not named yet).
+    fn target_name(&self) -> Option<String> {
         if self.tab == 0 {
             if self.name.trim().is_empty() {
-                "a new document".into()
+                None
             } else {
-                self.name.trim().to_string()
+                Some(self.name.trim().to_string())
             }
         } else {
-            self.target
-                .as_ref()
-                .map(|t| t.1.clone())
-                .unwrap_or_else(|| "…".into())
+            Some(
+                self.target
+                    .as_ref()
+                    .map(|t| t.1.clone())
+                    .unwrap_or_else(|| "…".into()),
+            )
         }
     }
 }
@@ -171,14 +174,14 @@ pub fn open_move_dialog_named(world: &mut World, tabs: Vec<ElementId>, name: Opt
     world.spawn((
         Dialog::new("move-to-document-dialog")
             .width(520.0)
-            .title("Move to document")
+            .title(tr("io-move-title"))
             .title_font(theme.font_lg, FontWeight::MEDIUM)
             .body(move |b| {
                 let t = &tb;
                 b.spawn(
                     TabStrip::new("move-tabs")
-                        .tab("New document")
-                        .tab("Other documents")
+                        .tab(tr("io-move-tab-new"))
+                        .tab(tr("io-move-tab-other"))
                         .selected(0)
                         .equal()
                         .build(t),
@@ -193,7 +196,15 @@ pub fn open_move_dialog_named(world: &mut World, tabs: Vec<ElementId>, name: Opt
                     },
                 ))
                 .with_children(|n| {
-                    n.spawn(t.text("Document name", t.font_base, FontWeight::BOLD, t.foreground));
+                    n.spawn((
+                        t.text(
+                            tr("io-move-document-name"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("io-move-document-name"),
+                    ));
                     n.spawn(
                         TextInput::new("move-name")
                             .value(name)
@@ -238,13 +249,13 @@ pub fn open_move_dialog_named(world: &mut World, tabs: Vec<ElementId>, name: Opt
                 ));
                 f.spawn(
                     cadrs_ui::Button::new("move-confirm")
-                        .label("Move")
+                        .label(tr("io-move-confirm"))
                         .primary()
                         .build(t),
                 );
                 f.spawn(
                     cadrs_ui::Button::new("move-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                 );
             })
@@ -396,24 +407,73 @@ fn sync_other(world: &mut World, mut last: Local<Option<(OtherKey, u64)>>) {
         match &target {
             None => linked::spawn_browser(p, t, Owner::Move, &browse, &list, &thumbs),
             Some((_, name, versions)) => {
-                p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(6.0), ..default() }).with_children(|r| {
+                p.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|r| {
                     r.spawn(
-                        DocumentRow::new("move-target", name.clone(), if *versions == 0 { "No versions".to_string() } else { format!("{versions} version{}", if *versions == 1 { "" } else { "s" }) })
-                            .thumbnail(target_thumb.clone())
-                            .selected(true)
-                            .build(t),
+                        DocumentRow::new(
+                            "move-target",
+                            name.clone(),
+                            match *versions {
+                                0 => tr("io-move-no-versions"),
+                                1 => tr("io-move-one-version"),
+                                n => tr_with("io-move-versions", &[("count", &n.to_string())]),
+                            },
+                        )
+                        .thumbnail(target_thumb.clone())
+                        .selected(true)
+                        .build(t),
                     )
                     .entry::<Node>()
                     .and_modify(|mut n| n.flex_grow = 1.0);
-                    r.spawn(cadrs_ui::Button::new("move-target-change").label("Change").small().build(t));
+                    r.spawn(
+                        cadrs_ui::Button::new("move-target-change")
+                            .label(tr("io-move-change"))
+                            .small()
+                            .build(t),
+                    );
                 });
-                p.spawn((t.text("Version name", t.font_base, FontWeight::BOLD, t.foreground), Node { margin: UiRect::top(Val::Px(8.0)), ..default() }));
-                p.spawn(TextInput::new("move-version").value(format!("V{}", versions + 1)).select_all_on_focus().width(Val::Percent(100.0)).height(30.0).build(t));
                 p.spawn((
-                    t.text(format!("The tabs are added to {name}, and a version of it is made with them: this document then references that version."), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                    Node { margin: UiRect::top(Val::Px(6.0)), max_width: Val::Px(480.0), ..default() },
+                    t.text(
+                        tr("io-move-version-name"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("io-move-version-name"),
+                    Node {
+                        margin: UiRect::top(Val::Px(8.0)),
+                        ..default()
+                    },
+                ));
+                p.spawn(
+                    TextInput::new("move-version")
+                        .value(format!("V{}", versions + 1))
+                        .select_all_on_focus()
+                        .width(Val::Percent(100.0))
+                        .height(30.0)
+                        .build(t),
+                );
+                p.spawn((
+                    t.text(
+                        tr_with("io-move-target-note", &[("name", name)]),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Node {
+                        margin: UiRect::top(Val::Px(6.0)),
+                        max_width: Val::Px(480.0),
+                        ..default()
+                    },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             }
         }
     });
@@ -486,38 +546,114 @@ fn sync_summary(world: &mut World, mut last: Local<Option<SummaryKey>>) {
         let t = &theme;
         let n = s.moving(&doc).len();
         if s.referenced.is_empty() {
-            p.spawn((Name::new("move-summary-text"), t.text(if n == 1 { "1 tab will be moved".to_string() } else { format!("{n} tabs will be moved") }, t.font_base, FontWeight::BOLD, t.foreground)));
+            p.spawn((
+                Name::new("move-summary-text"),
+                t.text(
+                    if n == 1 {
+                        tr("io-move-one-tab")
+                    } else {
+                        tr_with("io-move-tabs", &[("count", &n.to_string())])
+                    },
+                    t.font_base,
+                    FontWeight::BOLD,
+                    t.foreground,
+                ),
+            ));
             return;
         }
-        p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(10.0), ..default() }).with_children(|r| {
-            let text = if n == 1 { "1 tab will be moved".to_string() } else { format!("{n} referenced tabs will be moved") };
-            r.spawn((Name::new("move-summary-text"), t.text(text, t.font_base, FontWeight::BOLD, t.foreground)));
-            r.spawn(cadrs_ui::Button::new("move-details").label(if s.details { "Hide details" } else { "Show details" }).link().small().build(t));
+        p.spawn(Node {
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(10.0),
+            ..default()
+        })
+        .with_children(|r| {
+            let text = if n == 1 {
+                tr("io-move-one-tab")
+            } else {
+                tr_with("io-move-referenced-tabs", &[("count", &n.to_string())])
+            };
+            r.spawn((
+                Name::new("move-summary-text"),
+                t.text(text, t.font_base, FontWeight::BOLD, t.foreground),
+            ));
+            r.spawn(
+                cadrs_ui::Button::new("move-details")
+                    .label(tr(if s.details {
+                        "io-move-hide-details"
+                    } else {
+                        "io-move-show-details"
+                    }))
+                    .link()
+                    .small()
+                    .build(t),
+            );
         });
         if !s.details {
             return;
         }
         // The tabs picked first, then those they reference (`lesson-move-to-document.png`).
         let listed = listed_tabs(&doc, &s);
-        for (k, el) in listed.iter().filter_map(|e| doc.elements.iter().find(|x| x.id == *e)).enumerate() {
+        for (k, el) in listed
+            .iter()
+            .filter_map(|e| doc.elements.iter().find(|x| x.id == *e))
+            .enumerate()
+        {
             let k = k + 1;
             let picked = s.tabs.contains(&el.id);
             let r = s.referenced.iter().find(|(e, _)| *e == el.id);
-            p.spawn((Name::new(format!("move-tab-row-{k}")), Node { align_items: AlignItems::Center, column_gap: Val::Px(6.0), height: Val::Px(24.0), margin: UiRect::left(Val::Px(2.0)), ..default() }))
-                .with_children(|row| {
-                    let tip = if picked { "Picked to move" } else { "Referenced by a tab that moves. Untick it to leave it here: the moved tabs then reference it at a new version of this document." };
-                    row.spawn((Checkbox::new(format!("move-tab-{k}")).checked(picked || r.is_some_and(|x| x.1)).disabled(picked).build(t), Tooltip::new(tip)));
-                    row.spawn((cadrs_ui::icon::icon(tab_icon(el), 15.0, t.tool_foreground), Pickable::IGNORE));
-                    row.spawn((t.text(el.name.clone(), t.font_sm, FontWeight::NORMAL, t.foreground), Pickable::IGNORE));
+            p.spawn((
+                Name::new(format!("move-tab-row-{k}")),
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    height: Val::Px(24.0),
+                    margin: UiRect::left(Val::Px(2.0)),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                let tip = tr(if picked {
+                    "io-move-picked"
+                } else {
+                    "io-move-referenced-tip"
                 });
+                row.spawn((
+                    Checkbox::new(format!("move-tab-{k}"))
+                        .checked(picked || r.is_some_and(|x| x.1))
+                        .disabled(picked)
+                        .build(t),
+                    Tooltip::new(tip),
+                ));
+                row.spawn((
+                    cadrs_ui::icon::icon(tab_icon(el), 15.0, t.tool_foreground),
+                    Pickable::IGNORE,
+                ));
+                row.spawn((
+                    t.text(el.name.clone(), t.font_sm, FontWeight::NORMAL, t.foreground),
+                    Pickable::IGNORE,
+                ));
+            });
         }
         if s.referenced.iter().any(|(_, on)| !on) {
             p.spawn((
                 Name::new("move-left-behind"),
-                t.text("Tabs left here are referenced from the new location at a version of this document, made when you move.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                Node { margin: UiRect::top(Val::Px(4.0)), max_width: Val::Px(480.0), ..default() },
+                t.text(
+                    tr("io-move-left-behind"),
+                    t.font_sm,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("io-move-left-behind"),
+                Node {
+                    margin: UiRect::top(Val::Px(4.0)),
+                    max_width: Val::Px(480.0),
+                    ..default()
+                },
             ))
-            .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+            .insert(TextLayout::new(
+                bevy::text::Justify::Left,
+                bevy::text::LineBreak::WordBoundary,
+            ));
         }
     });
     world.flush();
@@ -536,11 +672,13 @@ fn sync_status(
         return;
     };
     let n = s.moving(&doc.doc).len();
-    let want = format!(
-        "Moving {n} tab{} to {}",
-        if n == 1 { "" } else { "s" },
-        s.target_name()
-    );
+    let count = n.to_string();
+    let want = match (n == 1, s.target_name()) {
+        (true, None) => tr("io-move-status-one-new"),
+        (false, None) => tr_with("io-move-status-new", &[("count", &count)]),
+        (true, Some(to)) => tr_with("io-move-status-one", &[("target", &to)]),
+        (false, Some(to)) => tr_with("io-move-status", &[("count", &count), ("target", &to)]),
+    };
     for mut t in &mut q {
         if t.0 != want {
             t.0 = want.clone();
@@ -669,9 +807,9 @@ fn commit(world: &mut World) {
     if let Err(e) = world.resource_mut::<ActiveDocument>().execute(&out.command) {
         linked::error_toast(
             world,
-            format!(
-                "{} was written, but this document couldn't be changed: {e}",
-                out.target_name
+            tr_with(
+                "io-move-written-not-changed",
+                &[("name", &out.target_name), ("error", &e.to_string())],
             ),
         );
         return;
@@ -701,9 +839,10 @@ fn commit(world: &mut World) {
     // an older version of a moved tab (ER7.6) are counted and left to the Reference manager.
     let mut text = format!("{}.", out.summary());
     if !out.command.changes.is_empty() {
-        text.push_str(&format!(
-            " This document now references its {}.",
-            out.version_name
+        text.push(' ');
+        text.push_str(&tr_with(
+            "io-move-now-references",
+            &[("version", &out.version_name)],
         ));
     }
     {
@@ -722,25 +861,26 @@ fn commit(world: &mut World) {
                 .map(|l| l.version_name.clone())
                 .unwrap_or_default();
             let n = left.len();
-            let s = if n == 1 {
-                "reference still points"
+            text.push(' ');
+            text.push_str(&if n == 1 {
+                tr_with("io-move-one-reference-left", &[("version", &v)])
             } else {
-                "references still point"
-            };
-            text.push_str(&format!(
-                " {n} {s} at {v} here; update them in the Reference manager."
-            ));
+                tr_with(
+                    "io-move-references-left",
+                    &[("count", &n.to_string()), ("version", &v)],
+                )
+            });
         }
     }
     if let Some((_, v)) = &out.source_version {
-        text.push_str(&format!(
-            " {v} of this document was made for the tabs left here."
-        ));
+        text.push(' ');
+        text.push_str(&tr_with("io-move-source-version", &[("version", v)]));
     }
-    text.push_str(" Undo puts the tabs back here; the other document and the versions stay.");
+    text.push(' ');
+    text.push_str(&tr("io-move-undo-note"));
     let theme = world.resource::<Theme>().clone();
     let target = out.target;
-    let label = format!("Open {}", out.target_name);
+    let label = tr_with("io-move-open-target", &[("name", &out.target_name)]);
     let mut commands = world.commands();
     let toast = cadrs_ui::show_notification(
         &mut commands,

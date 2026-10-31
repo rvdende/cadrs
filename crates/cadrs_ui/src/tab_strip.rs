@@ -204,7 +204,9 @@ impl TabStrip {
                         )],
                     ));
                     if disabled.contains(&index) {
-                        tab.insert(crate::Tooltip::new("Not available yet"));
+                        tab.insert(crate::Tooltip::new(crate::i18n::tr(
+                            "ui-tab-strip-not-available",
+                        )));
                     }
                 }
             })),

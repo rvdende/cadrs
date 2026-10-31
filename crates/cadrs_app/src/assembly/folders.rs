@@ -34,6 +34,7 @@ use cadrs_core::assembly::structure::{
     MoveIntoSubassembly, MoveOutOfSubassembly, SetInstancesSuppressed,
 };
 use cadrs_core::feature_list::Filter;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{
     ContextMenuAnchor, ContextMenuRequested, Menu, MenuAction, MenuItem, open_context_menu,
 };
@@ -192,7 +193,7 @@ pub fn add_to_folder(
     }
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let popup = NamePopup::new("folder-name-popup", "Folder name", at)
+    let popup = NamePopup::new("folder-name-popup", tr("asm-folder-name"), at)
         .value(default)
         .spawn(&mut commands, &theme);
     commands.entity(popup).insert((
@@ -311,20 +312,20 @@ fn on_folder_menu(ev: On<ContextMenuRequested>, q: Query<&AsmFolderRow>, mut com
         let menu = Menu::new("asm-folder-menu")
             .min_width(170.0)
             .item_height(22.0)
-            .item(MenuItem::new("asm-folder-rename", "Rename"))
+            .item(MenuItem::new("asm-folder-rename", tr("common-rename")))
             .item(if hidden {
-                MenuItem::new("asm-folder-show", "Show").icon("visible")
+                MenuItem::new("asm-folder-show", tr("common-show")).icon("visible")
             } else {
-                MenuItem::new("asm-folder-hide", "Hide").icon("hidden")
+                MenuItem::new("asm-folder-hide", tr("common-hide")).icon("hidden")
             })
             .item(if suppressed {
-                MenuItem::new("asm-folder-unsuppress", "Unsuppress")
+                MenuItem::new("asm-folder-unsuppress", tr("common-unsuppress"))
             } else {
-                MenuItem::new("asm-folder-suppress", "Suppress")
+                MenuItem::new("asm-folder-suppress", tr("common-suppress"))
             })
             .separator()
-            .item(MenuItem::new("asm-folder-unpack", "Unpack folder"))
-            .item(MenuItem::new("asm-folder-delete", "Delete").icon("remove-circle"));
+            .item(MenuItem::new("asm-folder-unpack", tr("asm-folder-unpack")))
+            .item(MenuItem::new("asm-folder-delete", tr("common-delete")).icon("remove-circle"));
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
         let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
@@ -806,9 +807,9 @@ fn place_drop_line(
     let mut highlight: Option<Rect> = None;
     let count = |n: usize| {
         if n == 1 {
-            "1 item".to_string()
+            tr("asm-folder-one-item")
         } else {
-            format!("{n} items")
+            tr_with("asm-folder-items", &[("count", &n.to_string())])
         }
     };
     let (target, line) = if let Some((sub, r)) = over_sub {

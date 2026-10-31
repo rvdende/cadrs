@@ -37,6 +37,7 @@ use cadrs_core::{PartId, Solid};
 use cadrs_eda::poly::Region;
 use cadrs_eda::units::Pt;
 use cadrs_sketch::PlaneFrame;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::AppState;
 use crate::board_in_studio::{LIFT, component_parts};
@@ -701,7 +702,7 @@ fn sync_labels(world: &mut World, q: &mut QueryState<(Entity, &FitLabel)>) {
             let p = world_at(&state.context, mm((bb.min.x + bb.max.x) / 2), mm(bb.max.y));
             want.push((
                 4,
-                "In the way".into(),
+                tr("pcb-fit-in-the-way"),
                 rect.to_screen(view.project(p)),
                 IN_THE_WAY,
             ));
@@ -783,32 +784,21 @@ fn sync_labels(world: &mut World, q: &mut QueryState<(Entity, &FitLabel)>) {
 // ---------------------------------------------------------------------------------------------
 // The bar's buttons, Align and Keep-outs
 
-/// The edit bar's fit buttons (see the module docs), as (name, label, tooltip).
+/// The edit bar's fit buttons (see the module docs), as (name, label, tooltip); the label and
+/// tooltip are catalog keys.
 pub const BUTTONS: [(&str, &str, &str); 5] = [
-    (
-        "board-fit-solid",
-        "Solid parts",
-        "Show the board's components solid (while the layout is edited they are see-through, so it shows under them)",
-    ),
+    ("board-fit-solid", "pcb-fit-solid", "pcb-fit-solid-tip"),
     (
         "board-fit-context",
-        "Parts around",
-        "Show the parts around the board's components, and the pins and holes square to it",
+        "pcb-fit-context",
+        "pcb-fit-context-tip",
     ),
-    (
-        "board-fit-snap",
-        "Snap",
-        "Snap a moved footprint's pads onto pins and its part's edges onto the parts around",
-    ),
-    (
-        "board-fit-align",
-        "Align",
-        "Move a footprint so an entity of its part meets a target: pick the part's face, edge or pin, then the target",
-    ),
+    ("board-fit-snap", "pcb-fit-snap", "pcb-fit-snap-tip"),
+    ("board-fit-align", "pcb-fit-align", "pcb-fit-align-tip"),
     (
         "board-fit-keepouts",
-        "Keep-outs",
-        "Keep-out areas on the layout where the parts around stand",
+        "pcb-fit-keepouts",
+        "pcb-fit-keepouts-tip",
     ),
 ];
 
@@ -853,13 +843,11 @@ fn on_fit_button(a: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut command
 }
 
 /// What Align says it waits for.
-pub fn align_prompt(state: &FitState) -> Option<&'static str> {
+pub fn align_prompt(state: &FitState) -> Option<String> {
     match state.align {
         AlignStep::Off => None,
-        AlignStep::From => Some("Align: pick a face, edge or pin of a component"),
-        AlignStep::To(..) => {
-            Some("Align: pick where it goes (a face, edge, pin, hole or mate connector)")
-        }
+        AlignStep::From => Some(tr("pcb-fit-align-from")),
+        AlignStep::To(..) => Some(tr("pcb-fit-align-to")),
     }
 }
 
@@ -970,10 +958,7 @@ pub fn align_press(world: &mut World, offset: Vec2) -> bool {
             });
             match fp {
                 Some(fp) => world.resource_mut::<FitState>().align = AlignStep::To(fp, entity),
-                None => crate::eda::ui::toast(
-                    world,
-                    "Pick a face, edge or pin of one of the board's components first",
-                ),
+                None => crate::eda::ui::toast(world, &tr("pcb-fit-align-pick-first")),
             }
         }
         AlignStep::To(fp, from) => finish_align(world, host, fp, from, entity),
@@ -1000,17 +985,14 @@ fn finish_align(
         return;
     };
     let Some(a) = fit::align(from, to, &host.frame, pivot) else {
-        crate::eda::ui::toast(
-            world,
-            "They can't meet by moving the footprint on the board: pick a pin or hole square to the board, or faces square to it",
-        );
+        crate::eda::ui::toast(world, &tr("pcb-fit-align-cant-meet"));
         return;
     };
     let reference = footprint_reference(world, host.target.feature, fp);
     let label = format!("Align {reference}");
     crate::eda::ui::commit(world, &label, |des| {
         let i = cadrs_eda::board_edit::footprint_by_id(&des.board, fp)
-            .ok_or("The footprint is gone")?;
+            .ok_or_else(|| tr("pcb-footprint-gone"))?;
         if a.turn != 0.0 {
             cadrs_eda::board_edit::rotate_footprint(&mut des.board, i, a.turn);
         }
@@ -1021,10 +1003,16 @@ fn finish_align(
     // What is still off.
     let mut notes: Vec<String> = vec![];
     if let Some(z) = a.off_plane.filter(|z| z.abs() > 1e-3) {
-        notes.push(format!(
-            "{reference} is {:.2} mm {} it, square to the board",
-            z.abs(),
-            if z > 0.0 { "under" } else { "over" }
+        notes.push(tr_with(
+            if z > 0.0 {
+                "pcb-fit-align-under"
+            } else {
+                "pcb-fit-align-over"
+            },
+            &[
+                ("reference", &reference),
+                ("distance", &format!("{:.2}", z.abs())),
+            ],
         ));
     }
     if let Some(b) = crate::derived_ui::derived_board_ref(world, host.target.feature) {
@@ -1045,9 +1033,9 @@ fn finish_align(
                 .map(|x| x.rsplit(" of ").next().unwrap_or(x).to_string())
                 .collect();
             match v.rule {
-                Rule::CourtyardOverlap => notes.push(format!(
-                    "{reference}'s courtyard overlaps {}",
-                    others.join(", ")
+                Rule::CourtyardOverlap => notes.push(tr_with(
+                    "pcb-fit-courtyard-overlaps",
+                    &[("reference", &reference), ("others", &others.join(", "))],
                 )),
                 Rule::KeepoutViolation => notes.push(format!("{reference}: {}", v.message)),
                 Rule::Clearance | Rule::HoleClearance | Rule::HoleToHole => copper.extend(others),
@@ -1057,15 +1045,18 @@ fn finish_align(
         copper.sort();
         copper.dedup();
         if !copper.is_empty() {
-            notes.push(format!(
-                "{reference}'s pads are too close to {}",
-                copper.join(", ")
+            notes.push(tr_with(
+                "pcb-fit-pads-too-close",
+                &[("reference", &reference), ("others", &copper.join(", "))],
             ));
         }
     }
     if !notes.is_empty() {
         notes.dedup();
-        crate::eda::ui::toast(world, &format!("Aligned. {}", notes.join("; ")));
+        crate::eda::ui::toast(
+            world,
+            &tr_with("pcb-fit-aligned", &[("notes", &notes.join("; "))]),
+        );
     }
 }
 
@@ -1179,7 +1170,7 @@ pub fn keepouts_from_parts(world: &mut World) {
         .filter(|z| z.keepout.is_some() && z.name.starts_with(KEEPOUT_NAME))
         .count();
     if areas.is_empty() && had == 0 {
-        crate::eda::ui::toast(world, "Nothing around stands over or under the board");
+        crate::eda::ui::toast(world, &tr("pcb-fit-nothing-around"));
         return;
     }
     let (top, bottom) = (
@@ -1220,16 +1211,26 @@ pub fn keepouts_from_parts(world: &mut World) {
             Ok(())
         },
     );
-    let what = match (top, bottom) {
-        (0, 0) => "the keep-outs from the parts around removed: nothing stands over or under the board now".to_string(),
-        (t, 0) => format!("{t} keep-out{} on the top side", if t == 1 { "" } else { "s" }),
-        (0, b) => format!("{b} keep-out{} on the bottom side (seen from below: Shift+N)", if b == 1 { "" } else { "s" }),
-        (t, b) => format!("{t} keep-out{} on the top side, {b} on the bottom", if t == 1 { "" } else { "s" }),
+    let key = match (top, bottom) {
+        (0, 0) => "pcb-fit-keepouts-removed",
+        (1, 0) => "pcb-fit-keepouts-top-one",
+        (_, 0) => "pcb-fit-keepouts-top",
+        (0, 1) => "pcb-fit-keepouts-bottom-one",
+        (0, _) => "pcb-fit-keepouts-bottom",
+        (1, _) => "pcb-fit-keepouts-both-one",
+        (_, _) => "pcb-fit-keepouts-both",
     };
-    let replaced = if had > 0 && n > 0 {
-        format!(" (replacing {had})")
+    let what = tr_with(
+        key,
+        &[("top", &top.to_string()), ("bottom", &bottom.to_string())],
+    );
+    let summary = if had > 0 && n > 0 {
+        tr_with(
+            "pcb-fit-keepouts-summary-replacing",
+            &[("what", &what), ("count", &had.to_string())],
+        )
     } else {
-        String::new()
+        tr_with("pcb-fit-keepouts-summary", &[("what", &what)])
     };
-    crate::eda::ui::toast(world, &format!("Parts around: {what}{replaced}"));
+    crate::eda::ui::toast(world, &summary);
 }

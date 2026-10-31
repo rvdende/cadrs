@@ -407,17 +407,18 @@ fn sync_mode_bar(
         commands.entity(e).despawn();
         bar = None;
     }
+    // (mode, name, label's catalog key)
     let modes: &[(Mode, &str, &str)] = if want == Some(true) {
         &[
-            (Mode::Symbol, "eda-mode-symbol", "Symbol"),
-            (Mode::Footprint, "eda-mode-footprint", "Footprint"),
-            (Mode::ThreeD, "eda-mode-3d", "3D"),
+            (Mode::Symbol, "eda-mode-symbol", "pcb-mode-symbol"),
+            (Mode::Footprint, "eda-mode-footprint", "pcb-mode-footprint"),
+            (Mode::ThreeD, "eda-mode-3d", "pcb-mode-3d"),
         ]
     } else {
         &[
-            (Mode::Schematic, "eda-mode-schematic", "Schematic"),
-            (Mode::Layout, "eda-mode-layout", "Layout"),
-            (Mode::ThreeD, "eda-mode-3d", "3D"),
+            (Mode::Schematic, "eda-mode-schematic", "pcb-mode-schematic"),
+            (Mode::Layout, "eda-mode-layout", "pcb-mode-layout"),
+            (Mode::ThreeD, "eda-mode-3d", "pcb-mode-3d"),
         ]
     };
     match (want, bar) {
@@ -446,7 +447,7 @@ fn sync_mode_bar(
                         // A segmented control's segments: no outlines, the mode shown tinted.
                         b.spawn((
                             cadrs_ui::Button::new(name)
-                                .label(label)
+                                .label(cadrs_ui::i18n::tr(label))
                                 .small()
                                 .ghost()
                                 .build(&t),

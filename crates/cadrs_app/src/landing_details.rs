@@ -35,6 +35,7 @@ use cadrs_core::library::{
     AddEntry, CreateLabel, DeleteLabel, Library, RenameLabel, SetDescription, SetLabels,
 };
 use cadrs_core::{DocumentEntry, DocumentId, Filter, FolderId, LabelId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -290,7 +291,7 @@ pub fn breadcrumb(
     h.spawn((
         IconButton::new("folder-back", "chevron-left")
             .icon_size(16.0)
-            .tooltip("Back")
+            .tooltip(tr("shell-details-back"))
             .build(t),
         observe(move |_: On<Activate>, mut state: ResMut<LandingState>| state.folder = parent),
     ));
@@ -344,11 +345,11 @@ pub fn list_toolbar(a: &mut ChildSpawnerCommands, t: &Theme, state: &LandingStat
             let (docs, folders) = lib.trash();
             b.spawn((
                 Button::new("empty-trash-button")
-                    .label("Empty trash")
+                    .label(tr("shell-details-empty-trash"))
                     .icon("delete")
                     .icon_size(16.0)
                     .ghost()
-                    .tooltip("Delete everything in the trash permanently")
+                    .tooltip(tr("shell-details-empty-trash-tooltip"))
                     .disabled(docs.is_empty() && folders.is_empty())
                     .build(t),
                 observe(
@@ -368,18 +369,23 @@ pub fn list_toolbar(a: &mut ChildSpawnerCommands, t: &Theme, state: &LandingStat
             (
                 "import-button",
                 "file-import",
-                "Import",
-                "Import a STEP, IGES or STL file as a new document",
+                "common-import",
+                "shell-details-import-tooltip",
             ),
-            ("label-button", "tag-new", "New label", "Create a label"),
+            (
+                "label-button",
+                "tag-new",
+                "shell-details-new-label",
+                "shell-details-create-label-tooltip",
+            ),
         ] {
             b.spawn((
                 Button::new(name)
-                    .label(label)
+                    .label(tr(label))
                     .icon(icon_name)
                     .icon_size(16.0)
                     .ghost()
-                    .tooltip(tip)
+                    .tooltip(tr(tip))
                     .build(t),
                 observe(
                     move |_: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
@@ -407,11 +413,11 @@ pub fn list_toolbar(a: &mut ChildSpawnerCommands, t: &Theme, state: &LandingStat
         ))
         .with_children(|f| {
             for (name, icon_name, tip, grid) in [
-                ("view-list", "list", "List view", false),
-                ("view-grid", "apps", "Grid view", true),
+                ("view-list", "list", "shell-doc-list-view", false),
+                ("view-grid", "apps", "shell-details-grid-view", true),
             ] {
                 f.spawn((
-                    side_tab(t, name, icon_name, tip, state.grid == grid),
+                    side_tab(t, name, icon_name, &tr(tip), state.grid == grid),
                     observe(move |_: On<Activate>, mut state: ResMut<LandingState>| {
                         if state.grid != grid {
                             state.grid = grid;
@@ -553,21 +559,38 @@ pub fn samples_table(
 ) {
     m.spawn((
         Name::new("samples-intro"),
-        Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), padding: UiRect::new(Val::Px(8.0), Val::ZERO, Val::Px(2.0), Val::Px(12.0)), flex_shrink: 0.0, ..default() },
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            padding: UiRect::new(Val::Px(8.0), Val::ZERO, Val::Px(2.0), Val::Px(12.0)),
+            flex_shrink: 0.0,
+            ..default()
+        },
     ))
     .with_children(|i| {
-        i.spawn(t.text("Samples", t.font_md, FontWeight::SEMIBOLD, t.foreground));
-        i.spawn(t.text(
-            "Documents from the courses, bundled with cadrs. Select one to see its details; Open a copy makes your own editable document.",
-            t.font_base,
-            FontWeight::NORMAL,
-            t.muted_foreground,
+        i.spawn((
+            t.text(
+                tr("shell-landing-samples"),
+                t.font_md,
+                FontWeight::SEMIBOLD,
+                t.foreground,
+            ),
+            Translated("shell-landing-samples"),
+        ));
+        i.spawn((
+            t.text(
+                tr("shell-details-samples-intro"),
+                t.font_base,
+                FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
+            Translated("shell-details-samples-intro"),
         ));
     });
     let cols = vec![
-        Column::new("name", "Name").width(420.0),
-        Column::new("course", "Course").width(260.0),
-        Column::new("owned-by", "Owned by"),
+        Column::new("name", tr("common-name")).width(420.0),
+        Column::new("course", tr("shell-details-course")).width(260.0),
+        Column::new("owned-by", tr("shell-landing-owned-by")),
     ];
     m.spawn(
         TableHeader::new("sample-col", cols.clone())
@@ -636,7 +659,9 @@ pub fn on_sample_context_menu(
     let i = row.0;
     commands.queue(move |world: &mut World| select(world, Pick::Sample(i), false));
     let menu = Menu::new("sample-context-menu")
-        .item(MenuItem::new("sample-open-copy", "Open a copy…").icon("copy"))
+        .item(
+            MenuItem::new("sample-open-copy", tr("shell-details-open-copy-ellipsis")).icon("copy"),
+        )
         .min_width(170.0);
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
@@ -663,12 +688,17 @@ pub fn on_sample_context_action(
 #[derive(Component)]
 pub struct DetailsDialog;
 
-fn details_title(tab: DetailsTab) -> &'static str {
-    match tab {
-        DetailsTab::Info => "Properties",
-        DetailsTab::Versions => "History",
-        DetailsTab::WhereUsed => "Used in",
-    }
+fn details_title(tab: DetailsTab) -> String {
+    tr(match tab {
+        DetailsTab::Info => "shell-details-properties",
+        DetailsTab::Versions => "shell-top-bar-history",
+        DetailsTab::WhereUsed => "shell-details-used-in",
+    })
+}
+
+/// A field's caption in the details: the catalog key of its text.
+fn caption(t: &Theme, key: &'static str) -> impl Bundle {
+    (details_caption(t, tr(key)), Translated(key))
 }
 
 /// Selects `pick` and opens its Properties, History or Used in (right-click on a row) in a
@@ -809,9 +839,9 @@ pub fn rebuild_details(
         Sample(usize, Option<Handle<Image>>),
     }
     let content = match d.pick {
-        None => Content::None("Select a document to see its details.".into()),
+        None => Content::None(tr("shell-details-select")),
         Some(Pick::Doc(id)) => match lib.lib.get(id).cloned() {
-            None => Content::None("Select a document to see its details.".into()),
+            None => Content::None(tr("shell-details-select")),
             Some(e) => match d.tab {
                 DetailsTab::Info => {
                     let th = large_thumbnail(&mut thumbs, &mut images, &store.0, id);
@@ -828,27 +858,21 @@ pub fn rebuild_details(
             },
         },
         Some(Pick::Folder(f)) => match lib.lib.folders.iter().find(|x| x.id == f) {
-            None => Content::None("Select a document to see its details.".into()),
+            None => Content::None(tr("shell-details-select")),
             Some(x) => match d.tab {
                 DetailsTab::Info => Content::Folder(
                     x.name.clone(),
                     clock.format(x.created),
                     lib.lib.in_folder(f).len(),
                 ),
-                DetailsTab::Versions => Content::None("Folders have no versions.".into()),
-                DetailsTab::WhereUsed => {
-                    Content::None("Folders are not referenced by documents.".into())
-                }
+                DetailsTab::Versions => Content::None(tr("shell-details-folder-no-versions")),
+                DetailsTab::WhereUsed => Content::None(tr("shell-details-folder-not-used")),
             },
         },
         Some(Pick::Sample(i)) => match d.tab {
             DetailsTab::Info => Content::Sample(i, samples.0.get(&i).and_then(|(h, _)| h.clone())),
-            DetailsTab::Versions => {
-                Content::None("Samples have no versions. Open a copy to start its history.".into())
-            }
-            DetailsTab::WhereUsed => {
-                Content::None("Samples are not used by your documents.".into())
-            }
+            DetailsTab::Versions => Content::None(tr("shell-details-sample-no-versions")),
+            DetailsTab::WhereUsed => Content::None(tr("shell-details-sample-not-used")),
         },
     };
     let labels = lib.lib.labels_by_name();
@@ -893,19 +917,19 @@ pub fn rebuild_details(
                 title_row(b, &t, "file", &e.name);
                 big_thumbnail(b, &t, th, "part");
                 b.spawn(details_divider(&t));
-                b.spawn(details_caption(&t, "Owner"));
+                b.spawn(caption(&t, "shell-details-owner"));
                 b.spawn((
                     Name::new("details-owner"),
                     details_value(&t, owner_name(&e.meta.owned_by)),
                 ));
                 b.spawn(details_divider(&t));
-                b.spawn(details_caption(&t, "Document description"));
+                b.spawn(caption(&t, "shell-details-description"));
                 // P3E.2 (P3E.1 judge): a document in the Trash is read-only here: its
                 // description and labels are shown, not edited (Restore it to edit them).
                 let trashed = e.meta.trashed.is_some();
                 if trashed {
                     let text = if e.meta.description.is_empty() {
-                        "No description".to_string()
+                        tr("shell-details-no-description")
                     } else {
                         e.meta.description.clone()
                     };
@@ -917,7 +941,7 @@ pub fn rebuild_details(
                     b.spawn(
                         TextInput::new("details-description")
                             .value(e.meta.description.clone())
-                            .placeholder("Add a description")
+                            .placeholder(tr("shell-details-add-description"))
                             .height(28.0)
                             .width(Val::Percent(100.0))
                             .build(&t),
@@ -933,11 +957,12 @@ pub fn rebuild_details(
                     b.spawn((
                         Name::new("details-trashed-note"),
                         t.text(
-                            "In the Trash: restore it to edit its description and labels.",
+                            tr("shell-details-trashed-note"),
                             t.font_sm,
                             FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("shell-details-trashed-note"),
                         Node {
                             margin: UiRect::bottom(Val::Px(6.0)),
                             max_width: Val::Px(250.0),
@@ -950,32 +975,34 @@ pub fn rebuild_details(
                     ));
                 }
                 b.spawn(details_divider(&t));
-                b.spawn(details_caption(&t, "Created by"));
+                b.spawn(caption(&t, "shell-details-created-by"));
                 b.spawn((
                     Name::new("details-created-by"),
                     details_value(&t, owner_name(&e.meta.created_by)),
                 ));
-                b.spawn(details_caption(&t, "Created"));
+                b.spawn(caption(&t, "shell-details-created"));
                 b.spawn(details_value(&t, clock.format(e.meta.created)));
-                b.spawn(details_caption(&t, "Modified"));
+                b.spawn(caption(&t, "shell-landing-modified"));
                 b.spawn(details_value(
                     &t,
-                    format!(
-                        "{} by {}",
-                        clock.format(e.meta.modified),
-                        user.display(&e.meta.modified_by)
+                    tr_with(
+                        "shell-details-modified-by",
+                        &[
+                            ("time", &clock.format(e.meta.modified)),
+                            ("name", &user.display(&e.meta.modified_by)),
+                        ],
                     ),
                 ));
-                b.spawn(details_caption(&t, "Location"));
+                b.spawn(caption(&t, "shell-details-location"));
                 let location = match (
                     e.meta.trashed,
                     e.meta
                         .folder
                         .and_then(|f| folders.iter().find(|x| x.id == f)),
                 ) {
-                    (Some(_), _) => "Trash".to_string(),
-                    (None, Some(f)) => format!("Owned by me › {}", f.name),
-                    (None, None) => "Owned by me".to_string(),
+                    (Some(_), _) => tr("shell-landing-trash"),
+                    (None, Some(f)) => format!("{} › {}", tr("shell-landing-owned-by-me"), f.name),
+                    (None, None) => tr("shell-landing-owned-by-me"),
                 };
                 b.spawn((Name::new("details-location"), details_value(&t, location)));
             }
@@ -986,11 +1013,12 @@ pub fn rebuild_details(
                     b.spawn((
                         Name::new("details-empty"),
                         t.text(
-                            "No versions yet. Create one from the document's History panel.",
+                            tr("shell-details-no-versions"),
                             t.font_base,
                             FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("shell-details-no-versions"),
                         Node {
                             margin: UiRect::top(Val::Px(12.0)),
                             ..default()
@@ -1042,11 +1070,12 @@ pub fn rebuild_details(
                     b.spawn((
                         Name::new("details-empty"),
                         t.text(
-                            "No other document uses this one.",
+                            tr("shell-details-not-used"),
                             t.font_base,
                             FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("shell-details-not-used"),
                         Node {
                             margin: UiRect::top(Val::Px(12.0)),
                             ..default()
@@ -1079,15 +1108,22 @@ pub fn rebuild_details(
                                 t.foreground,
                             ));
                             c.spawn(t.text(
-                                format!("{} uses {} ({})", u.tab, u.element, u.version),
+                                tr_with(
+                                    "shell-details-tab-uses",
+                                    &[
+                                        ("tab", u.tab.as_str()),
+                                        ("element", u.element.as_str()),
+                                        ("version", u.version.as_str()),
+                                    ],
+                                ),
                                 t.font_sm,
                                 FontWeight::NORMAL,
                                 t.foreground,
                             ));
                             let n = if u.count == 1 {
-                                "1 use".to_string()
+                                tr("shell-details-one-use")
                             } else {
-                                format!("{} uses", u.count)
+                                tr_with("shell-details-uses", &[("count", &u.count.to_string())])
                             };
                             c.spawn(t.text(n, t.font_sm, FontWeight::NORMAL, t.muted_foreground));
                         });
@@ -1098,24 +1134,17 @@ pub fn rebuild_details(
                 title_row(b, &t, "folder", &name);
                 big_thumbnail(b, &t, None, "folder");
                 b.spawn(details_divider(&t));
-                b.spawn(details_caption(&t, "Owner"));
+                b.spawn(caption(&t, "shell-details-owner"));
                 b.spawn(details_value(&t, user.display_name.clone()));
-                b.spawn(details_caption(&t, "Created"));
+                b.spawn(caption(&t, "shell-details-created"));
                 b.spawn(details_value(&t, created));
-                b.spawn(details_caption(&t, "Contents"));
+                b.spawn(caption(&t, "shell-details-contents"));
                 b.spawn((
                     Name::new("details-folder-count"),
-                    details_value(
-                        &t,
-                        if count == 1 {
-                            "1 document".to_string()
-                        } else {
-                            format!("{count} documents")
-                        },
-                    ),
+                    details_value(&t, document_count(count)),
                 ));
                 b.spawn((Button::new("details-open")
-                    .label("Open folder")
+                    .label(tr("shell-details-open-folder"))
                     .icon("folder")
                     .outline()
                     .build(&t),))
@@ -1127,7 +1156,7 @@ pub fn rebuild_details(
                 title_row(b, &t, "file", s.title);
                 big_thumbnail(b, &t, th, "part");
                 b.spawn((Button::new("details-open-copy")
-                    .label("Open a copy")
+                    .label(tr("shell-details-open-copy"))
                     .icon("copy")
                     .primary()
                     .width(Val::Percent(100.0))
@@ -1138,11 +1167,11 @@ pub fn rebuild_details(
                         n.column_gap = Val::Px(6.0);
                     });
                 b.spawn(details_divider(&t));
-                b.spawn(details_caption(&t, "Owner"));
+                b.spawn(caption(&t, "shell-details-owner"));
                 b.spawn(details_value(&t, SAMPLE_OWNER));
-                b.spawn(details_caption(&t, "Course"));
+                b.spawn(caption(&t, "shell-details-course"));
                 b.spawn(details_value(&t, s.course));
-                b.spawn(details_caption(&t, "Document description"));
+                b.spawn(caption(&t, "shell-details-description"));
                 b.spawn((
                     Text::new(s.description),
                     t.font(t.font_base, FontWeight::NORMAL),
@@ -1156,6 +1185,15 @@ pub fn rebuild_details(
             }
         });
     });
+}
+
+/// "1 document", "3 documents".
+fn document_count(n: usize) -> String {
+    if n == 1 {
+        tr("shell-details-one-document")
+    } else {
+        tr_with("shell-details-documents", &[("count", &n.to_string())])
+    }
 }
 
 fn title_row(b: &mut ChildSpawnerCommands, t: &Theme, icon_name: &'static str, name: &str) {
@@ -1247,11 +1285,12 @@ fn labels_section(
         ));
         h.spawn((
             t.text(
-                "Document labels",
+                tr("shell-landing-document-labels"),
                 t.font_base,
                 FontWeight::BOLD,
                 t.foreground,
             ),
+            Translated("shell-landing-document-labels"),
             Pickable::IGNORE,
         ));
     });
@@ -1303,7 +1342,7 @@ fn labels_section(
     .with_children(|x| {
         x.spawn(
             TextInput::new("details-label-search")
-                .placeholder("Search labels")
+                .placeholder(tr("shell-landing-search-labels"))
                 .value(search.to_string())
                 .height(26.0)
                 .width(Val::Percent(100.0))
@@ -1315,11 +1354,12 @@ fn labels_section(
             x.spawn((
                 Name::new("details-no-labels"),
                 t.text(
-                    "No labels yet",
+                    tr("shell-details-no-labels"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("shell-details-no-labels"),
                 Node {
                     margin: UiRect::vertical(Val::Px(4.0)),
                     ..default()
@@ -1350,7 +1390,7 @@ fn labels_section(
         dark.foreground = cadrs_ui::StateColors::all(t.foreground);
         x.spawn(
             Button::new("details-create-label")
-                .label("New label")
+                .label(tr("shell-details-new-label"))
                 .icon("tag-new")
                 .icon_size(16.0)
                 .ghost()
@@ -1502,26 +1542,29 @@ pub fn open_new_label_dialog(commands: &mut Commands, theme: &Theme, assign: Opt
     let (t, tb, tf) = (theme.clone(), theme.clone(), theme.clone());
     commands.spawn((
         Dialog::new("new-label-dialog")
-            .title("Create label")
+            .title(tr("shell-details-create-label"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "Label name");
+                field_label(b, &tb, "shell-details-label-name");
                 b.spawn(
                     TextInput::new("new-label-name")
-                        .placeholder("Label name")
+                        .placeholder(tr("shell-details-label-name"))
                         .autofocus()
                         .build(&tb),
                 );
                 if assign.is_some() {
-                    b.spawn(tb.text(
-                        "The label is given to the selected document.",
-                        tb.font_sm,
-                        FontWeight::NORMAL,
-                        tb.muted_foreground,
+                    b.spawn((
+                        tb.text(
+                            tr("shell-details-label-given"),
+                            tb.font_sm,
+                            FontWeight::NORMAL,
+                            tb.muted_foreground,
+                        ),
+                        Translated("shell-details-label-given"),
                     ));
                 }
             })
-            .footer(move |f| dialog_buttons(f, &tf, "new-label-dialog", "Create"))
+            .footer(move |f| dialog_buttons(f, &tf, "new-label-dialog", "common-create"))
             .build(&t),
         LandingDialog::NewLabel(assign),
         DespawnOnExit(AppState::Landing),
@@ -1537,10 +1580,10 @@ fn open_rename_label_dialog(
     let name = label.name.clone();
     commands.spawn((
         Dialog::new("rename-label-dialog")
-            .title("Rename label")
+            .title(tr("shell-details-rename-label"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "Label name");
+                field_label(b, &tb, "shell-details-label-name");
                 b.spawn(
                     TextInput::new("rename-label-name")
                         .value(name)
@@ -1549,7 +1592,7 @@ fn open_rename_label_dialog(
                         .build(&tb),
                 );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "rename-label-dialog", "Rename"))
+            .footer(move |f| dialog_buttons(f, &tf, "rename-label-dialog", "common-rename"))
             .build(&t),
         LandingDialog::RenameLabel(label.id),
         DespawnOnExit(AppState::Landing),
@@ -1566,27 +1609,30 @@ fn open_delete_label_dialog(
     let name = label.name.clone();
     commands.spawn((
         Dialog::new("delete-label-dialog")
-            .title("Delete label")
+            .title(tr("shell-details-delete-label"))
             .width(420.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!("Delete the label \u{201c}{name}\u{201d}?")),
+                    Text::new(tr_with(
+                        "shell-details-delete-label-question",
+                        &[("name", name.as_str())],
+                    )),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
                 ));
-                let docs = if used == 1 {
-                    "1 document".to_string()
-                } else {
-                    format!("{used} documents")
-                };
                 b.spawn(tb.text(
-                    format!("It is taken off {docs}. The documents stay."),
+                    tr_with(
+                        "shell-details-label-taken-off",
+                        &[("documents", &document_count(used))],
+                    ),
                     tb.font_base,
                     FontWeight::NORMAL,
                     tb.muted_foreground,
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "delete-label-dialog", "Delete label"))
+            .footer(move |f| {
+                dialog_buttons(f, &tf, "delete-label-dialog", "shell-details-delete-label")
+            })
             .build(&t),
         LandingDialog::DeleteLabel(label.id),
         DespawnOnExit(AppState::Landing),
@@ -1600,19 +1646,33 @@ pub fn open_sample_copy_dialog(commands: &mut Commands, theme: &Theme, i: usize)
     let (t, tb, tf) = (theme.clone(), theme.clone(), theme.clone());
     commands.spawn((
         Dialog::new("sample-copy-dialog")
-            .title("Open a copy")
+            .title(tr("shell-details-open-copy"))
             .width(460.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!("\u{201c}{}\u{201d} is a sample. Its copy is yours to edit, and is listed in Owned by me.", s.title)),
+                    Text::new(tr_with(
+                        "shell-details-sample-copy-text",
+                        &[("name", s.title)],
+                    )),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
-                    Node { max_width: Val::Px(420.0), ..default() },
+                    Node {
+                        max_width: Val::Px(420.0),
+                        ..default()
+                    },
                 ));
-                field_label(b, &tb, "New document name");
-                b.spawn(TextInput::new("sample-copy-name").value(format!("Copy of {}", s.title)).select_all_on_focus().autofocus().build(&tb));
+                field_label(b, &tb, "shell-landing-new-document-name");
+                b.spawn(
+                    TextInput::new("sample-copy-name")
+                        .value(format!("Copy of {}", s.title))
+                        .select_all_on_focus()
+                        .autofocus()
+                        .build(&tb),
+                );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "sample-copy-dialog", "Open a copy"))
+            .footer(move |f| {
+                dialog_buttons(f, &tf, "sample-copy-dialog", "shell-details-open-copy")
+            })
             .build(&t),
         LandingDialog::SampleCopy(i),
         DespawnOnExit(AppState::Landing),
@@ -1643,7 +1703,7 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
                 show_toast(
                     &mut commands,
                     &theme,
-                    format!("A label named \u{201c}{name}\u{201d} already exists."),
+                    tr_with("shell-details-label-exists", &[("name", name.as_str())]),
                 );
                 world.flush();
                 return;
@@ -1657,7 +1717,10 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
                 assign: assign.into_iter().collect(),
             };
             world.resource_mut::<DocLibrary>().execute(&store, &cmd);
-            undo_toast(world, format!("Created label \u{201c}{name}\u{201d}"));
+            undo_toast(
+                world,
+                tr_with("shell-details-label-created", &[("name", name.as_str())]),
+            );
         }
         LandingDialog::RenameLabel(id) => {
             let name = field_value(world, "rename-label-name-field")
@@ -1674,7 +1737,10 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
                     name: name.clone(),
                 },
             );
-            undo_toast(world, format!("Renamed label to \u{201c}{name}\u{201d}"));
+            undo_toast(
+                world,
+                tr_with("shell-details-label-renamed", &[("name", name.as_str())]),
+            );
         }
         LandingDialog::DeleteLabel(id) => {
             close_dialogs(world);
@@ -1691,7 +1757,10 @@ pub fn confirm(world: &mut World, dialog: LandingDialog) {
             if state.filter == Filter::Label(id) {
                 state.filter = Filter::OwnedByMe;
             }
-            undo_toast(world, format!("Deleted label \u{201c}{name}\u{201d}"));
+            undo_toast(
+                world,
+                tr_with("shell-details-label-deleted", &[("name", name.as_str())]),
+            );
         }
         LandingDialog::SampleCopy(i) => {
             let name = field_value(world, "sample-copy-name-field");
@@ -1790,7 +1859,10 @@ pub fn import_file(world: &mut World, path: &Path) {
         show_toast(
             &mut commands,
             &theme,
-            format!("Cannot import \u{201c}{file_name}\u{201d}: {e}"),
+            tr_with(
+                "shell-details-cannot-import",
+                &[("name", file_name.as_str()), ("error", &e.to_string())],
+            ),
         );
         world.flush();
         return;
@@ -1834,7 +1906,7 @@ pub fn import_file(world: &mut World, path: &Path) {
     select(world, Pick::Doc(id), false);
     undo_toast(
         world,
-        format!("Imported \u{201c}{file_name}\u{201d} as a new document"),
+        tr_with("shell-details-imported", &[("name", file_name.as_str())]),
     );
 }
 

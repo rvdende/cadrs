@@ -173,7 +173,7 @@ impl FloatingPanel {
                     h.spawn((
                         IconButton::new(close_name, "close")
                             .icon_size(14.0)
-                            .tooltip("Close")
+                            .tooltip(crate::i18n::tr("common-close"))
                             .build(&t),
                         observe(move |_: On<Activate>, mut commands: Commands| {
                             commands.trigger(FloatingPanelClose { entity: panel });

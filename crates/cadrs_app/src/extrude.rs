@@ -31,6 +31,7 @@ use cadrs_core::document::{BooleanOp, DirectionRef, EdgeRef, EndType, FaceRef, U
 use cadrs_core::{ElementId, ElementKind, ExtrudeFeature, Feature, FeatureId, PartId, RegionRef};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::parts::{PartCache, PartOverride};
 use crate::viewport::{
@@ -2135,8 +2136,8 @@ pub fn face_label(cache: &PartCache, feature: FeatureId) -> String {
     let name = cache
         .part_of_feature(feature)
         .and_then(|p| cache.part_name(p.id))
-        .unwrap_or("part");
-    format!("Face of {name}")
+        .map_or_else(|| tr("model-unknown-part"), str::to_string);
+    tr_with("common-face-of", &[("name", &name)])
 }
 
 #[cfg(test)]

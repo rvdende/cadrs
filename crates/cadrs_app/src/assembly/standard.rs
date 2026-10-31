@@ -34,6 +34,7 @@ use cadrs_core::assembly::standard::{
 };
 use cadrs_core::{Element, ElementId};
 use cadrs_ui::dialog_fields::{SelectChange, SelectState};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FeatureDialogAccept, FeatureDialogCancel};
 
@@ -365,26 +366,26 @@ fn rebuild_panel(
             let levels: [(&str, &str, Vec<String>, &str); 4] = [
                 (
                     "std-standard",
-                    "Standard",
+                    "asm-std-standard",
                     lib.standards.iter().map(|s| s.name.clone()).collect(),
                     &spec.standard,
                 ),
                 (
                     "std-category",
-                    "Category",
+                    "asm-std-category",
                     st.categories.iter().map(|c| c.name.clone()).collect(),
                     &spec.category,
                 ),
                 (
                     "std-class",
-                    "Class",
+                    "asm-std-class",
                     cat.map(|c| c.classes.iter().map(|c| c.name.clone()).collect())
                         .unwrap_or_default(),
                     &spec.class,
                 ),
                 (
                     "std-component",
-                    "Component",
+                    "asm-std-component",
                     class
                         .map(|c| c.components.iter().map(|c| c.name.clone()).collect())
                         .unwrap_or_default(),
@@ -392,7 +393,7 @@ fn rebuild_panel(
                 ),
             ];
             for (name, label, options, value) in levels {
-                row(p, &t, name, label, |r| {
+                row(p, &t, name, &tr(label), |r| {
                     if edit {
                         fixed(r, &t, name, value)
                     } else {
@@ -406,9 +407,9 @@ fn rebuild_panel(
                 p.spawn((
                     Name::new("std-edit-count"),
                     t.text(
-                        format!(
-                            "{} instances: Size and Length change on all of them",
-                            instances.len()
+                        tr_with(
+                            "asm-std-edit-count",
+                            &[("count", &instances.len().to_string())],
                         ),
                         10.5,
                         FontWeight::NORMAL,
@@ -422,16 +423,14 @@ fn rebuild_panel(
             }
             separator(p);
             let sizes: Vec<String> = comp.sizes.iter().map(|s| s.name.clone()).collect();
-            row(p, &t, "std-size", "Size", |r| {
+            row(p, &t, "std-size", &tr("common-size"), |r| {
                 select(r, &t, "std-size", &sizes, &spec.size);
                 if !edit {
                     r.spawn(
                         IconButton::new("std-autosize", "measure")
                             .icon_size(15.0)
                             .selected(form.autosize_pick)
-                            .tooltip(
-                                "Auto-size: pick a hole or shaft (bolts round down, nuts round up)",
-                            )
+                            .tooltip(tr("asm-std-autosize-tooltip"))
                             .build(&t),
                     )
                     .entry::<Node>()
@@ -444,17 +443,23 @@ fn rebuild_panel(
             if let Some(l) = spec.length {
                 let lengths: Vec<String> =
                     comp.lengths.iter().map(|x| standard::fmt_len(*x)).collect();
-                row(p, &t, "std-length", "Length", |r| {
+                row(p, &t, "std-length", &tr("asm-std-length"), |r| {
                     select(r, &t, "std-length", &lengths, &standard::fmt_len(l))
                 });
                 let tl = standard::fmt_len(spec.thread_length.unwrap_or(l));
-                row(p, &t, "std-thread-length", "Thread length", |r| {
-                    if edit {
-                        fixed(r, &t, "std-thread-length", &tl)
-                    } else {
-                        select(r, &t, "std-thread-length", std::slice::from_ref(&tl), &tl)
-                    }
-                });
+                row(
+                    p,
+                    &t,
+                    "std-thread-length",
+                    &tr("asm-std-thread-length"),
+                    |r| {
+                        if edit {
+                            fixed(r, &t, "std-thread-length", &tl)
+                        } else {
+                            select(r, &t, "std-thread-length", std::slice::from_ref(&tl), &tl)
+                        }
+                    },
+                );
             }
             let mut option = |name: &str, label: &str, list: &[String], value: &Option<String>| {
                 if let Some(v) = value {
@@ -469,20 +474,25 @@ fn rebuild_panel(
             };
             option(
                 "std-bearing-face",
-                "Bearing face",
+                tr("asm-std-bearing-face").as_str(),
                 &comp.bearing_faces,
                 &spec.bearing_face,
             );
             option(
                 "std-material",
-                "Material",
+                tr("common-material").as_str(),
                 &comp.materials,
                 &Some(spec.material.clone()),
             );
-            option("std-finish", "Finish", &comp.finishes, &spec.finish);
+            option(
+                "std-finish",
+                tr("asm-std-finish").as_str(),
+                &comp.finishes,
+                &spec.finish,
+            );
             separator(p);
             // Part number and Description (A19.3): auto-filled, editable, per document.
-            row(p, &t, "std-part-number", "Part number", |r| {
+            row(p, &t, "std-part-number", &tr("asm-part-number"), |r| {
                 r.spawn(
                     TextInput::new("std-part-number")
                         .value(form.part_number.clone())
@@ -499,7 +509,7 @@ fn rebuild_panel(
                 r.spawn(
                     IconButton::new("std-generate-part-number", "tag-new")
                         .icon_size(14.0)
-                        .tooltip("Use the library's part number")
+                        .tooltip(tr("asm-std-library-part-number"))
                         .build(&t),
                 )
                 .entry::<Node>()
@@ -508,7 +518,7 @@ fn rebuild_panel(
                     n.height = Val::Px(22.0);
                 });
             });
-            row(p, &t, "std-description", "Description", |r| {
+            row(p, &t, "std-description", &tr("common-description"), |r| {
                 r.spawn(
                     TextInput::new("std-description")
                         .value(form.description.clone())
@@ -557,7 +567,7 @@ fn rebuild_panel(
                 if edit {
                     b.spawn(
                         cadrs_ui::Button::new("std-update")
-                            .label("Update")
+                            .label(tr("asm-std-update"))
                             .outline()
                             .small()
                             .build(&t),
@@ -565,29 +575,21 @@ fn rebuild_panel(
                 } else {
                     b.spawn(
                         cadrs_ui::Button::new("std-insert")
-                            .label("Insert")
+                            .label(tr("asm-std-insert"))
                             .outline()
                             .small()
                             .selected(form.placing)
-                            .tooltip("Insert on the selected holes, or pick holes one by one")
+                            .tooltip(tr("asm-std-insert-tooltip"))
                             .build(&t),
                     );
                     for (name, icon, tip) in [
-                        (
-                            "std-insert-closest",
-                            "arrow-down",
-                            "Insert closest to selection",
-                        ),
-                        (
-                            "std-insert-furthest",
-                            "arrow-up",
-                            "Insert furthest from selection",
-                        ),
+                        ("std-insert-closest", "arrow-down", "asm-std-insert-closest"),
+                        ("std-insert-furthest", "arrow-up", "asm-std-insert-furthest"),
                     ] {
                         b.spawn(
                             IconButton::new(name, icon)
                                 .icon_size(15.0)
-                                .tooltip(tip)
+                                .tooltip(tr(tip))
                                 .build(&t),
                         )
                         .entry::<Node>()
@@ -600,13 +602,14 @@ fn rebuild_panel(
             });
             if form.placing || form.autosize_pick {
                 let hint = if form.autosize_pick {
-                    "Click a hole or shaft edge to size it"
+                    "asm-std-autosize-hint"
                 } else {
-                    "Click hole edges to insert (A flips, Esc stops)"
+                    "asm-std-place-hint"
                 };
                 p.spawn((
                     Name::new("std-hint"),
-                    t.text(hint, 10.5, FontWeight::NORMAL, t.muted_foreground),
+                    t.text(tr(hint), 10.5, FontWeight::NORMAL, t.muted_foreground),
+                    Translated(hint),
                     Node {
                         align_self: AlignSelf::Center,
                         margin: UiRect::bottom(Val::Px(4.0)),
@@ -742,7 +745,7 @@ fn act(world: &mut World, name: &str) {
                     cadrs_ui::toast::show_toast(
                         &mut commands,
                         &theme,
-                        "Select a hole or a fastener's hole edge first",
+                        tr("asm-std-select-hole-first"),
                     );
                 }
                 return;
@@ -1099,9 +1102,9 @@ pub fn open_edit_dialog(world: &mut World, instances: Vec<InstanceId>) {
     };
     // How many instances it edits at once (A19.9 bulk edit; Final part 3).
     let title = if n > 1 {
-        format!("Edit standard content ({n})")
+        tr_with("asm-std-edit-title-count", &[("count", &n.to_string())])
     } else {
-        "Edit standard content".to_string()
+        tr("asm-std-edit-title")
     };
     let d = world
         .spawn((

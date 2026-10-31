@@ -31,6 +31,7 @@ use cadrs_core::{Feature, FeatureKind};
 use cadrs_sheetmetal::model::{HemAlignment, RipStyle};
 use cadrs_sheetmetal::sharp_edit::{FlangeAlignment, HemKind};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Collapsible, NumberField, NumberFieldState, OptionRow, Select, SelectionList};
 
@@ -456,45 +457,52 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-part"), |f| f.name.clone())
+}
+
+/// "Edge of …" for an edge made by `op`.
+fn edge_of(features: &[Feature], op: cadrs_sketch::OpId) -> String {
+    tr_with("common-edge-of", &[("name", &op_name(features, op))])
+}
+
+/// "Face of …" for a face made by `op`.
+fn face_of(features: &[Feature], op: cadrs_sketch::OpId) -> String {
+    tr_with("common-face-of", &[("name", &op_name(features, op))])
 }
 
 fn entity_label(features: &[Feature], e: &EdgeOrFace) -> String {
     match e {
-        EdgeOrFace::Edge(r) => format!(
-            "Edge of {}",
-            op_name(features, crate::parts::edge_maker(features, &r.edge))
-        ),
-        EdgeOrFace::Face(r) => format!("Face of {}", op_name(features, r.face.op)),
+        EdgeOrFace::Edge(r) => edge_of(features, crate::parts::edge_maker(features, &r.edge)),
+        EdgeOrFace::Face(r) => face_of(features, r.face.op),
     }
 }
 
 fn target_label(features: &[Feature], t: &SmTarget) -> String {
     match t {
-        SmTarget::Edge(r) => format!(
-            "Edge of {}",
-            op_name(features, crate::parts::edge_maker(features, &r.edge))
+        SmTarget::Edge(r) => edge_of(features, crate::parts::edge_maker(features, &r.edge)),
+        SmTarget::Face(r) => face_of(features, r.face.op),
+        SmTarget::Vertex(v) => tr_with(
+            "common-vertex-of",
+            &[("name", &op_name(features, v.vertex.faces[0].op))],
         ),
-        SmTarget::Face(r) => format!("Face of {}", op_name(features, r.face.op)),
-        SmTarget::Vertex(v) => format!("Vertex of {}", op_name(features, v.vertex.faces[0].op)),
         SmTarget::Plane(p) => crate::viewport::plane_label(features, *p),
     }
 }
 
 fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
     match d {
-        DirectionRef::Edge(r) => format!(
-            "Edge of {}",
-            op_name(features, crate::parts::edge_maker(features, &r.edge))
+        DirectionRef::Edge(r) => edge_of(features, crate::parts::edge_maker(features, &r.edge)),
+        DirectionRef::SketchLine { sketch, .. } => tr_with(
+            "common-line-of",
+            &[(
+                "name",
+                &features
+                    .iter()
+                    .find(|f| f.id == *sketch)
+                    .map_or_else(|| tr("sheet-fallback-sketch"), |f| f.name.clone()),
+            )],
         ),
-        DirectionRef::SketchLine { sketch, .. } => format!(
-            "Line of {}",
-            features
-                .iter()
-                .find(|f| f.id == *sketch)
-                .map_or("sketch".into(), |f| f.name.clone())
-        ),
-        DirectionRef::FaceNormal(f) => format!("Face of {}", op_name(features, f.face.op)),
+        DirectionRef::FaceNormal(f) => face_of(features, f.face.op),
         DirectionRef::PlaneNormal(p) => crate::viewport::plane_label(features, *p),
         DirectionRef::Connector(c) => c.label(features),
     }
@@ -620,21 +628,22 @@ fn number(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, num: SmfNum,
     });
 }
 
-/// A select, labelled ("Flange alignment  Inner ▾") or not ("Bend angle ▾"), with an arrow.
+/// A select, labelled ("Flange alignment  Inner ▾") or not ("Bend angle ▾"), with an arrow;
+/// `label` is a catalog key (or empty).
 #[allow(clippy::too_many_arguments)]
 fn select(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
-    label: &str,
+    label: &'static str,
     role: SmfRole,
-    options: Vec<&str>,
+    options: Vec<String>,
     selected: usize,
     flip: Option<(SmfRole, bool, &str)>,
 ) {
     let mut s = Select::new(name.to_string());
     for o in options {
-        s = s.option(o.to_string(), true);
+        s = s.option(o, true);
     }
     b.spawn(Node {
         height: Val::Px(30.0),
@@ -647,11 +656,12 @@ fn select(
         if !label.is_empty() {
             r.spawn((
                 t.text(
-                    label,
+                    tr(label),
                     LABEL_PX,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated(label),
                 Node {
                     width: Val::Px(100.0),
                     flex_shrink: 0.0,
@@ -680,11 +690,48 @@ fn index_of<T: PartialEq>(all: &[T], x: &T) -> usize {
 
 const HEM_ALIGNMENTS: [HemAlignment; 2] = [HemAlignment::Outer, HemAlignment::InPlace];
 
-fn hem_alignment_label(a: HemAlignment) -> &'static str {
-    match a {
-        HemAlignment::Outer => "Outer",
-        HemAlignment::InPlace => "In place",
-    }
+fn hem_alignment_label(a: HemAlignment) -> String {
+    tr(match a {
+        HemAlignment::Outer => "sheet-alignment-outer",
+        HemAlignment::InPlace => "sheet-hem-alignment-in-place",
+    })
+}
+
+/// A flange end type's label in the interface's language.
+fn flange_end_label(e: FlangeEnd) -> String {
+    tr(match e {
+        FlangeEnd::Blind => "sheet-end-blind",
+        FlangeEnd::UpToEntity => "sheet-up-to-entity",
+        FlangeEnd::UpToEntityOffset => "sheet-end-up-to-entity-offset",
+    })
+}
+
+/// A flange alignment's label in the interface's language.
+pub(crate) fn flange_alignment_label(a: FlangeAlignment) -> String {
+    tr(match a {
+        FlangeAlignment::Inner => "sheet-alignment-inner",
+        FlangeAlignment::Outer => "sheet-alignment-outer",
+        FlangeAlignment::Middle => "sheet-alignment-middle",
+        FlangeAlignment::HoldLine => "sheet-alignment-hold-line",
+    })
+}
+
+/// An angle control's label in the interface's language.
+pub(crate) fn angle_control_label(a: AngleControl) -> String {
+    tr(match a {
+        AngleControl::BendAngle => "sheet-bend-angle",
+        AngleControl::AlignToGeometry => "sheet-angle-align-to-geometry",
+        AngleControl::AngleFromDirection => "sheet-angle-from-direction",
+    })
+}
+
+/// A hem type's label in the interface's language.
+fn hem_kind_label(k: HemKind) -> String {
+    tr(match k {
+        HemKind::Straight => "sheet-hem-straight",
+        HemKind::Rolled => "sheet-hem-rolled",
+        HemKind::TearDrop => "sheet-hem-tear-drop",
+    })
 }
 
 /// The rows of one end condition of a partial flange.
@@ -718,7 +765,10 @@ fn bound_rows(
         &format!("{prefix}-type"),
         "",
         type_role,
-        FlangeEnd::ALL.iter().map(|e| e.label()).collect(),
+        FlangeEnd::ALL
+            .iter()
+            .map(|e| flange_end_label(*e))
+            .collect(),
         index_of(&FlangeEnd::ALL, &b.kind),
         None,
     );
@@ -727,11 +777,11 @@ fn bound_rows(
             c,
             t,
             &format!("{prefix}-distance"),
-            if second {
-                "Second distance"
+            &tr(if second {
+                "sheet-second-distance"
             } else {
-                "Distance"
-            },
+                "common-distance"
+            }),
             dist,
             &b.distance_expr,
         ),
@@ -741,7 +791,7 @@ fn bound_rows(
                 c,
                 t,
                 &format!("{prefix}-up-to-field"),
-                "Up to entity",
+                &tr("sheet-up-to-entity"),
                 list_field,
                 item(role),
                 field == AppliedField::Smf(list_field),
@@ -751,7 +801,7 @@ fn bound_rows(
                     c,
                     t,
                     &format!("{prefix}-offset"),
-                    "Offset value",
+                    &tr("sheet-offset-value"),
                     off,
                     &b.offset_expr,
                 );
@@ -782,7 +832,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-edges-field",
-                "Edges or side faces to flange",
+                &tr("sheet-edges-to-flange"),
                 SmfField::Edges,
                 item(SmfField::Edges),
                 active(SmfField::Edges),
@@ -791,9 +841,12 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-alignment",
-                "Flange alignment",
+                "sheet-flange-alignment",
                 SmfRole::Alignment,
-                FlangeAlignment::ALL.iter().map(|a| a.label()).collect(),
+                FlangeAlignment::ALL
+                    .iter()
+                    .map(|a| flange_alignment_label(*a))
+                    .collect(),
                 index_of(&FlangeAlignment::ALL, &f.alignment),
                 None,
             );
@@ -801,9 +854,12 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-end-type",
-                "End type",
+                "sheet-end-type",
                 SmfRole::EndType,
-                FlangeEnd::ALL.iter().map(|e| e.label()).collect(),
+                FlangeEnd::ALL
+                    .iter()
+                    .map(|e| flange_end_label(*e))
+                    .collect(),
                 index_of(&FlangeEnd::ALL, &f.end),
                 None,
             );
@@ -812,7 +868,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "smf-distance",
-                    "Distance",
+                    &tr("common-distance"),
                     SmfNum::Distance,
                     &f.distance_expr,
                 ),
@@ -821,7 +877,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-up-to-field",
-                        "Up to entity",
+                        &tr("sheet-up-to-entity"),
                         SmfField::UpTo,
                         item(SmfField::UpTo),
                         active(SmfField::UpTo),
@@ -831,7 +887,7 @@ pub(crate) fn body(
                             c,
                             t,
                             "smf-offset",
-                            "Offset value",
+                            &tr("sheet-offset-value"),
                             SmfNum::Offset,
                             &f.offset_expr,
                         );
@@ -844,16 +900,19 @@ pub(crate) fn body(
                 "smf-angle-control",
                 "",
                 SmfRole::AngleControl,
-                AngleControl::ALL.iter().map(|a| a.label()).collect(),
+                AngleControl::ALL
+                    .iter()
+                    .map(|a| angle_control_label(*a))
+                    .collect(),
                 index_of(&AngleControl::ALL, &f.angle_control),
-                Some((SmfRole::Flip, f.flip, "Opposite direction")),
+                Some((SmfRole::Flip, f.flip, &tr("common-opposite-direction"))),
             );
             match f.angle_control {
                 AngleControl::BendAngle => number(
                     c,
                     t,
                     "smf-bend-angle",
-                    "Bend angle",
+                    &tr("sheet-bend-angle"),
                     SmfNum::BendAngle,
                     &f.angle_expr,
                 ),
@@ -861,7 +920,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "smf-parallel-field",
-                    "Parallel to",
+                    &tr("sheet-parallel-to"),
                     SmfField::ParallelTo,
                     item(SmfField::ParallelTo),
                     active(SmfField::ParallelTo),
@@ -871,7 +930,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-direction-field",
-                        "Direction",
+                        &tr("common-direction"),
                         SmfField::Direction,
                         item(SmfField::Direction),
                         active(SmfField::Direction),
@@ -880,19 +939,25 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-direction-angle",
-                        "Angle",
+                        &tr("common-angle"),
                         SmfNum::DirectionAngle,
                         &f.direction_angle_expr,
                     );
                 }
             }
-            check(c, t, "smf-auto-miter", "Automatic miter", f.auto_miter);
+            check(
+                c,
+                t,
+                "smf-auto-miter",
+                &tr("sheet-automatic-miter"),
+                f.auto_miter,
+            );
             if !f.auto_miter {
                 number(
                     c,
                     t,
                     "smf-miter-angle",
-                    "Miter angle",
+                    &tr("sheet-miter-angle"),
                     SmfNum::MiterAngle,
                     &f.miter_angle_expr,
                 );
@@ -901,7 +966,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-model-radius",
-                "Use model bend radius",
+                &tr("sheet-use-model-bend-radius"),
                 f.use_model_radius,
             );
             if !f.use_model_radius {
@@ -909,14 +974,14 @@ pub(crate) fn body(
                     c,
                     t,
                     "smf-radius",
-                    "Bend radius",
+                    &tr("sheet-bend-radius"),
                     SmfNum::Radius,
                     &f.radius_expr,
                 );
             }
             // Greyed until an edge is picked (`sheetmetalflange-dialog-01.png`).
             c.spawn(
-                OptionRow::new("smf-partial", "Partial flange")
+                OptionRow::new("smf-partial", tr("sheet-partial-flange"))
                     .checked(f.partial)
                     .disabled(f.edges.is_empty())
                     .build(t),
@@ -924,7 +989,7 @@ pub(crate) fn body(
             if f.partial {
                 let (f1, t1) = (f.clone(), t.clone());
                 c.spawn(
-                    Collapsible::new("smf-overall", "Overall parameters")
+                    Collapsible::new("smf-overall", tr("sheet-overall-parameters"))
                         .open(true)
                         .content(move |c| {
                             select(
@@ -933,15 +998,23 @@ pub(crate) fn body(
                                 "smf-chain",
                                 "",
                                 SmfRole::Chain,
-                                ChainType::ALL.iter().map(|x| x.label()).collect(),
+                                ChainType::ALL
+                                    .iter()
+                                    .map(|x| {
+                                        tr(match x {
+                                            ChainType::PerEdge => "sheet-chain-per-edge",
+                                            ChainType::PerChain => "sheet-chain-per-chain",
+                                        })
+                                    })
+                                    .collect(),
                                 index_of(&ChainType::ALL, &f1.chain),
-                                Some((SmfRole::FlipSides, f1.flip_sides, "Flip sides")),
+                                Some((SmfRole::FlipSides, f1.flip_sides, &tr("sheet-flip-sides"))),
                             );
                             check(
                                 c,
                                 &t1,
                                 "smf-hold-adjacent",
-                                "Hold adjacent edges",
+                                &tr("sheet-hold-adjacent-edges"),
                                 f1.hold_adjacent,
                             );
                         })
@@ -951,7 +1024,7 @@ pub(crate) fn body(
                 let lists: Vec<(Role, Vec<String>)> =
                     LIST_ROLES.iter().map(|r| (*r, items_of(*r))).collect();
                 c.spawn(
-                    Collapsible::new("smf-end-conditions", "End conditions")
+                    Collapsible::new("smf-end-conditions", tr("sheet-end-conditions"))
                         .open(true)
                         .content(move |c| {
                             let item = |r: Role| {
@@ -966,7 +1039,7 @@ pub(crate) fn body(
                                 c,
                                 &t2,
                                 "smf-second-bound",
-                                "Second bound",
+                                &tr("sheet-second-bound"),
                                 f2.second.is_some(),
                             );
                             if let Some(s) = &f2.second {
@@ -982,7 +1055,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-edges-field",
-                "Edges or side faces to hem",
+                &tr("sheet-edges-to-hem"),
                 SmfField::Edges,
                 item(SmfField::Edges),
                 active(SmfField::Edges),
@@ -993,19 +1066,19 @@ pub(crate) fn body(
                 "smf-hem-type",
                 "",
                 SmfRole::HemType,
-                HemKind::ALL.iter().map(|k| k.label()).collect(),
+                HemKind::ALL.iter().map(|k| hem_kind_label(*k)).collect(),
                 index_of(&HemKind::ALL, &h.kind),
-                Some((SmfRole::Flip, h.flip, "Flip")),
+                Some((SmfRole::Flip, h.flip, &tr("sheet-flip"))),
             );
             match h.kind {
                 HemKind::Straight => {
-                    check(c, t, "smf-flattened", "Flattened", h.flattened);
+                    check(c, t, "smf-flattened", &tr("sheet-flattened"), h.flattened);
                     if !h.flattened {
                         number(
                             c,
                             t,
                             "smf-hem-radius",
-                            "Inner radius",
+                            &tr("sheet-inner-radius"),
                             SmfNum::HemRadius,
                             &h.radius_expr,
                         );
@@ -1014,7 +1087,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-hem-total",
-                        "Total length",
+                        &tr("sheet-total-length"),
                         SmfNum::HemTotal,
                         &h.total_expr,
                     );
@@ -1024,7 +1097,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-hem-radius",
-                        "Inner radius",
+                        &tr("sheet-inner-radius"),
                         SmfNum::HemRadius,
                         &h.radius_expr,
                     );
@@ -1032,7 +1105,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-hem-angle",
-                        "Angle",
+                        &tr("common-angle"),
                         SmfNum::HemAngle,
                         &h.angle_expr,
                     );
@@ -1042,19 +1115,32 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-hem-radius",
-                        "Inner radius",
+                        &tr("sheet-inner-radius"),
                         SmfNum::HemRadius,
                         &h.radius_expr,
                     );
-                    check(c, t, "smf-minimal-gap", "Minimal gap", h.use_minimal_gap);
+                    check(
+                        c,
+                        t,
+                        "smf-minimal-gap",
+                        &tr("sheet-minimal-gap"),
+                        h.use_minimal_gap,
+                    );
                     if !h.use_minimal_gap {
-                        number(c, t, "smf-hem-gap", "Gap", SmfNum::HemGap, &h.gap_expr);
+                        number(
+                            c,
+                            t,
+                            "smf-hem-gap",
+                            &tr("sheet-gap"),
+                            SmfNum::HemGap,
+                            &h.gap_expr,
+                        );
                     }
                     number(
                         c,
                         t,
                         "smf-hem-total",
-                        "Total length",
+                        &tr("sheet-total-length"),
                         SmfNum::HemTotal,
                         &h.total_expr,
                     );
@@ -1064,7 +1150,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-hem-alignment",
-                "Hem alignment",
+                "sheet-hem-alignment",
                 SmfRole::HemAlignment,
                 HEM_ALIGNMENTS
                     .iter()
@@ -1077,9 +1163,9 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-corner-type",
-                "Corner type",
+                "sheet-corner-type",
                 SmfRole::CornerType,
-                vec!["Simple", "Closed"],
+                vec![tr("sheet-relief-simple"), tr("sheet-relief-closed")],
                 usize::from(h.closed),
                 None,
             );
@@ -1089,7 +1175,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "smf-edges-field",
-                "Edges or side faces to join",
+                &tr("sheet-edges-to-join"),
                 SmfField::Edges,
                 item(SmfField::Edges),
                 active(SmfField::Edges),
@@ -1100,7 +1186,15 @@ pub(crate) fn body(
                 "smf-joint-type",
                 "",
                 SmfRole::JointType,
-                MakeJointType::ALL.iter().map(|k| k.label()).collect(),
+                MakeJointType::ALL
+                    .iter()
+                    .map(|k| {
+                        tr(match k {
+                            MakeJointType::Rip => "sheet-joint-rip",
+                            MakeJointType::Bend => "sheet-joint-bend",
+                        })
+                    })
+                    .collect(),
                 index_of(&MakeJointType::ALL, &j.kind),
                 None,
             );
@@ -1111,7 +1205,10 @@ pub(crate) fn body(
                     "smf-rip-style",
                     "",
                     SmfRole::RipStyle,
-                    RipStyle::ALL.iter().map(|s| s.label()).collect(),
+                    RipStyle::ALL
+                        .iter()
+                        .map(|s| crate::sheetmetal_joint_ui::rip_style_label(*s))
+                        .collect(),
                     index_of(&RipStyle::ALL, &j.style),
                     None,
                 ),
@@ -1120,7 +1217,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "smf-model-radius",
-                        "Use model bend radius",
+                        &tr("sheet-use-model-bend-radius"),
                         j.use_model_radius,
                     );
                     if !j.use_model_radius {
@@ -1128,7 +1225,7 @@ pub(crate) fn body(
                             c,
                             t,
                             "smf-radius",
-                            "Bend radius",
+                            &tr("sheet-bend-radius"),
                             SmfNum::Radius,
                             &j.radius_expr,
                         );
@@ -1357,22 +1454,23 @@ fn quantity(n: SmfNum) -> Quantity {
     }
 }
 
+/// A number's label (a catalog key).
 fn label(n: SmfNum) -> &'static str {
     match n {
-        SmfNum::Distance => "Distance",
-        SmfNum::Offset => "Offset value",
-        SmfNum::BendAngle => "Bend angle",
-        SmfNum::DirectionAngle => "Angle",
-        SmfNum::MiterAngle => "Miter angle",
-        SmfNum::Radius => "Bend radius",
-        SmfNum::BoundDistance => "Distance",
-        SmfNum::BoundOffset => "Offset value",
-        SmfNum::SecondDistance => "Second distance",
-        SmfNum::SecondOffset => "Offset value",
-        SmfNum::HemRadius => "Inner radius",
-        SmfNum::HemTotal => "Total length",
-        SmfNum::HemAngle => "Angle",
-        SmfNum::HemGap => "Gap",
+        SmfNum::Distance => "common-distance",
+        SmfNum::Offset => "sheet-offset-value",
+        SmfNum::BendAngle => "sheet-bend-angle",
+        SmfNum::DirectionAngle => "common-angle",
+        SmfNum::MiterAngle => "sheet-miter-angle",
+        SmfNum::Radius => "sheet-bend-radius",
+        SmfNum::BoundDistance => "common-distance",
+        SmfNum::BoundOffset => "sheet-offset-value",
+        SmfNum::SecondDistance => "sheet-second-distance",
+        SmfNum::SecondOffset => "sheet-offset-value",
+        SmfNum::HemRadius => "sheet-inner-radius",
+        SmfNum::HemTotal => "sheet-total-length",
+        SmfNum::HemAngle => "common-angle",
+        SmfNum::HemGap => "sheet-gap",
     }
 }
 
@@ -1451,7 +1549,7 @@ pub(crate) fn commit_number(
     } else {
         expr
     };
-    crate::applied::change_kind(world, label(n), |k| {
+    crate::applied::change_kind(world, &tr(label(n)), |k| {
         if let Some(x) = sm_mut(k)
             && let Some((value, e)) = slot(x, n)
         {
@@ -1909,11 +2007,11 @@ fn arrows_pointer(
                         crate::applied::set(
                             world,
                             d.kind,
-                            if d.which == ArrowValue::Distance {
-                                "Drag distance"
+                            &tr(if d.which == ArrowValue::Distance {
+                                "sheet-drag-distance"
                             } else {
-                                "Drag bound"
-                            },
+                                "sheet-drag-bound"
+                            }),
                         );
                     }
                 });

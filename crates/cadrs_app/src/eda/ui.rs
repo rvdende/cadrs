@@ -438,7 +438,7 @@ pub fn sync_strip(
                                 s.spawn((
                                     ToolButton::new(*name, *icon)
                                         .icon_size(18.0)
-                                        .tooltip(*tip)
+                                        .tooltip(cadrs_ui::i18n::tr(tip))
                                         .build(&t),
                                     StripButton { mode, action },
                                 ));

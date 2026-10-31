@@ -29,6 +29,7 @@ use cadrs_net::bevy_iroh::prelude::{NetSender, Peer, PeerJoined, PeerLeft, Recei
 use cadrs_net::bevy_iroh::{Iroh, IrohTask};
 use cadrs_net::{AccessChanged, Ask, Request, Requests, Sequenced, ShareLink, Verdict, Welcome};
 use cadrs_net::{session, transfer};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::{ActiveDocument, AppState, DocumentStore, UserProfile};
 
@@ -197,29 +198,34 @@ impl Live {
         let g = match &self.role {
             Role::Owner(Owner {
                 acting: Some(a), ..
-            }) => return Some(format!("{} away · you keep order", a.owner_name)),
+            }) => {
+                return Some(tr_with(
+                    "shell-live-status-you-keep-order",
+                    &[("owner", a.owner_name.as_str())],
+                ));
+            }
             Role::Owner(_) => return None,
             Role::Guest(g) => g,
         };
         if g.host != g.link.owner.id && matches!(g.state, GuestState::Following { .. }) {
-            return Some(format!(
-                "{} away · {} keeps order",
-                g.owner_name, g.host_name
+            return Some(tr_with(
+                "shell-live-status-host-keeps-order",
+                &[
+                    ("owner", g.owner_name.as_str()),
+                    ("host", g.host_name.as_str()),
+                ],
             ));
         }
-        Some(
-            match &g.state {
-                GuestState::Connecting { .. } => "Connecting…",
-                GuestState::Away { .. } => "Owner away · last copy",
-                GuestState::Removed => "No longer shared",
-                GuestState::Returning { .. } => "Handing back…",
-                GuestState::Following { .. } if g.access.permission == Permission::View => {
-                    "View only"
-                }
-                GuestState::Following { .. } => return None,
+        Some(tr(match &g.state {
+            GuestState::Connecting { .. } => "shell-live-status-connecting",
+            GuestState::Away { .. } => "shell-live-status-owner-away",
+            GuestState::Removed => "shell-live-status-removed",
+            GuestState::Returning { .. } => "shell-live-status-returning",
+            GuestState::Following { .. } if g.access.permission == Permission::View => {
+                "shell-live-status-view-only"
             }
-            .to_string(),
-        )
+            GuestState::Following { .. } => return None,
+        }))
     }
 
     /// This user's access: everything for the owner.
@@ -332,21 +338,17 @@ fn describe(doc: &Document, key: Key) -> String {
 
 /// Why a document shared with this user is read-only now, if it is.
 fn guest_read_only(g: &Guest) -> Option<String> {
-    let owner = &g.owner_name;
-    match &g.state {
-        GuestState::Connecting { .. } => Some(format!("Connecting to {owner}…")),
-        GuestState::Away { .. } => Some(format!(
-            "{owner} isn't sharing this document right now: you're viewing the last copy"
-        )),
-        GuestState::Removed => Some(format!(
-            "{owner} no longer shares this document with you: this is the last copy"
-        )),
-        GuestState::Returning { .. } => Some(format!("Handing the document back to {owner}…")),
-        GuestState::Following { .. } if g.access.permission == Permission::View => Some(format!(
-            "You can view this document; {owner} hasn't given you edit access"
-        )),
-        GuestState::Following { .. } => None,
-    }
+    let key = match &g.state {
+        GuestState::Connecting { .. } => "shell-live-connecting-to",
+        GuestState::Away { .. } => "shell-live-owner-away",
+        GuestState::Removed => "shell-live-removed",
+        GuestState::Returning { .. } => "shell-live-handing-back",
+        GuestState::Following { .. } if g.access.permission == Permission::View => {
+            "shell-live-view-only"
+        }
+        GuestState::Following { .. } => return None,
+    };
+    Some(tr_with(key, &[("owner", g.owner_name.as_str())]))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -887,9 +889,9 @@ fn act(world: &mut World, g: &Guest) -> Role {
     world.resource_mut::<ActiveDocument>().read_only = None;
     crate::linked::toast(
         world,
-        format!(
-            "{} is away: your cadrs keeps the edits in order until they're back",
-            g.owner_name
+        tr_with(
+            "shell-live-you-keep-order",
+            &[("owner", g.owner_name.as_str())],
         ),
     );
     Role::Owner(Owner {
@@ -915,8 +917,10 @@ fn step_down(world: &mut World, o: &mut Owner) -> Role {
         Ok(s) => transfer::start_handover(world.resource::<Iroh>(), &a.link, &s),
         Err(why) => world.resource::<Iroh>().spawn(async move { Err(why) }),
     };
-    world.resource_mut::<ActiveDocument>().read_only =
-        Some(format!("Handing the document back to {}…", a.owner_name));
+    world.resource_mut::<ActiveDocument>().read_only = Some(tr_with(
+        "shell-live-handing-back",
+        &[("owner", a.owner_name.as_str())],
+    ));
     Role::Guest(Guest {
         host: a.link.owner.id,
         host_name: a.owner_name.clone(),
@@ -1177,7 +1181,7 @@ fn welcome(world: &mut World, g: &mut Guest, w: Welcome) -> Result<(), String> {
     if lost {
         crate::linked::toast(
             world,
-            format!("Some of your edits didn't reach {}", g.owner_name),
+            tr_with("shell-live-edits-lost", &[("owner", g.owner_name.as_str())]),
         );
     }
     let mut active = world.resource_mut::<ActiveDocument>();

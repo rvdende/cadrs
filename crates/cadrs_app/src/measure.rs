@@ -26,6 +26,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::measure::{self, Entity as Measured, Measurement, Mode};
 use cadrs_sketch::units::Units;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FloatingPanel, FloatingPanelBody, FloatingPanelClose, TabStrip, TabStripSelect};
 
@@ -163,26 +164,30 @@ fn degrees(units: &Units, deg: f64) -> String {
 }
 
 /// The label of a distance in `mode`.
-fn distance_label(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Minimum => "Distance",
-        Mode::Maximum => "Maximum distance",
-        Mode::CenterToCenter => "Center distance",
-    }
+fn distance_label(mode: Mode) -> String {
+    tr(match mode {
+        Mode::Minimum => "common-distance",
+        Mode::Maximum => "model-measure-max-distance",
+        Mode::CenterToCenter => "model-measure-center-distance",
+    })
 }
 
 /// The bottom-right readout's items: "Distance: 15.000 mm", "Angle: 90.000°", …
 pub fn summary(m: &Measurement, units: &Units) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(d) = m.distance {
-        out.push(format!(
-            "{}: {}",
-            distance_label(m.mode),
-            units.fixed_length(d.value)
-        ));
+        let key = match m.mode {
+            Mode::Minimum => "model-measure-distance-value",
+            Mode::Maximum => "model-measure-max-distance-value",
+            Mode::CenterToCenter => "model-measure-center-distance-value",
+        };
+        out.push(tr_with(key, &[("value", &units.fixed_length(d.value))]));
     }
     if let Some(a) = m.angle {
-        out.push(format!("Angle: {}", degrees(units, a)));
+        out.push(tr_with(
+            "model-measure-angle-value",
+            &[("value", &degrees(units, a))],
+        ));
     }
     if let Some(p) = m.point {
         for (axis, v) in ["X", "Y", "Z"].iter().zip(p) {
@@ -190,11 +195,17 @@ pub fn summary(m: &Measurement, units: &Units) -> Vec<String> {
         }
     }
     if let Some(r) = m.radius {
-        out.push(format!("Diameter: {}", units.fixed_length(2.0 * r)));
+        out.push(tr_with(
+            "model-measure-diameter-value",
+            &[("value", &units.fixed_length(2.0 * r))],
+        ));
     } else if let Some(l) = m.length {
-        out.push(format!("Length: {}", units.fixed_length(l)));
+        out.push(tr_with(
+            "model-measure-length-value",
+            &[("value", &units.fixed_length(l))],
+        ));
     } else if let Some(a) = m.area {
-        out.push(format!("Area: {}", units.area(a)));
+        out.push(tr_with("model-area-value", &[("area", &units.area(a))]));
     }
     out
 }
@@ -208,7 +219,7 @@ fn rows(m: &Measurement, units: &Units) -> Vec<Row> {
     if let Some(d) = m.distance {
         out.push(row(
             "distance",
-            distance_label(m.mode),
+            &distance_label(m.mode),
             units.fixed_length(d.value),
             None,
         ));
@@ -227,7 +238,7 @@ fn rows(m: &Measurement, units: &Units) -> Vec<Row> {
         }
     }
     if let Some(a) = m.angle {
-        out.push(row("angle", "Angle", degrees(units, a), None));
+        out.push(row("angle", &tr("common-angle"), degrees(units, a), None));
     }
     if let Some(p) = m.point {
         for ((name, label), (v, color)) in [("x", "X"), ("y", "Y"), ("z", "Z")]
@@ -238,16 +249,26 @@ fn rows(m: &Measurement, units: &Units) -> Vec<Row> {
         }
     }
     if let Some(l) = m.length {
-        out.push(row("length", "Length", units.fixed_length(l), None));
+        out.push(row(
+            "length",
+            &tr("model-length"),
+            units.fixed_length(l),
+            None,
+        ));
     }
     if let Some(a) = m.area {
-        out.push(row("area", "Area", units.area(a), None));
+        out.push(row("area", &tr("model-area"), units.area(a), None));
     }
     if let Some(r) = m.radius {
-        out.push(row("radius", "Radius", units.fixed_length(r), None));
+        out.push(row(
+            "radius",
+            &tr("model-radius"),
+            units.fixed_length(r),
+            None,
+        ));
         out.push(row(
             "diameter",
-            "Diameter",
+            &tr("model-diameter"),
             units.fixed_length(2.0 * r),
             None,
         ));
@@ -468,7 +489,7 @@ fn sync_panel(
         };
         let e = commands
             .spawn((
-                FloatingPanel::new("measure-dialog", "Measure")
+                FloatingPanel::new("measure-dialog", tr("model-measure"))
                     .width(PANEL_WIDTH)
                     .build(&theme),
                 PanelRoot::default(),
@@ -513,10 +534,10 @@ fn sync_panel(
         if two {
             let mut strip = TabStrip::new("measure-mode")
                 .compact()
-                .tab("Minimum")
-                .tab("Maximum");
+                .tab(tr("model-measure-minimum"))
+                .tab(tr("model-measure-maximum"));
             if m_has_center(&built) {
-                strip = strip.tab("Center to center");
+                strip = strip.tab(tr("model-measure-center-to-center"));
             }
             b.spawn(Node {
                 margin: UiRect::bottom(Val::Px(4.0)),
@@ -529,11 +550,12 @@ fn sync_panel(
             b.spawn((
                 Name::new("measure-empty"),
                 t.text(
-                    "Select entities to measure",
+                    tr("model-measure-empty"),
                     11.5,
                     FontWeight::MEDIUM,
                     t.muted_foreground,
                 ),
+                cadrs_ui::i18n::Translated("model-measure-empty"),
                 Node {
                     margin: UiRect::vertical(Val::Px(6.0)),
                     ..default()

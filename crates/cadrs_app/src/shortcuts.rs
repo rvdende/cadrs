@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight, Strikethrough, StrikethroughColor};
 use bevy::ui_widgets::ScrollArea;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{DialogRoot, TabStrip, TabStripState};
@@ -26,13 +27,14 @@ impl Plugin for ShortcutsPlugin {
 }
 
 /// The dialog's tabs.
+/// Their names' catalog keys ([`tr`]).
 pub const TABS: [&str; 6] = [
-    "General",
-    "Part Studio",
-    "Assembly",
-    "3D view",
-    "Sketch",
-    "Drawing",
+    "view-shortcuts-tab-general",
+    "common-part-studio",
+    "common-assembly",
+    "view-shortcuts-tab-3d-view",
+    "common-sketch",
+    "common-drawing",
 ];
 
 /// Cannot be rebound (shown with a lock, like Onshape's "Onshape controlled").
@@ -40,125 +42,126 @@ pub const LOCKED: u8 = 1;
 /// Not in cadrs yet (shown struck through, like Onshape's "Disabled").
 pub const OFF: u8 = 2;
 
-/// (tab index, keys, action, flags). Keys: `+` joins a chord, ` / ` separates alternatives.
+/// (tab index, keys, action (its catalog key, [`tr`]), flags). Keys: `+` joins a chord, ` / `
+/// separates alternatives.
 pub const SHORTCUTS: &[(usize, &str, &str, u8)] = &[
-    (0, "Shift+Enter", "Accept & repeat command", LOCKED),
-    (0, "Enter", "Accept command", LOCKED),
-    (0, "Escape", "Cancel", LOCKED),
-    (0, "Space", "Clear selection", LOCKED),
-    (0, "Ctrl+= / Ctrl+-", "UI scale up or down", 0),
-    (0, "Ctrl+C", "Copy", LOCKED | OFF),
-    (0, "Shift+C", "Curve/surface analysis", OFF),
-    (0, "Delete / Backspace", "Delete selection", LOCKED),
-    (0, "Shift+D", "Dihedral analysis", OFF),
-    (0, "Shift+/", "Keyboard shortcuts", 0),
-    (0, "[", "Measure", 0),
-    (0, "Ctrl+V", "Paste", LOCKED | OFF),
-    (0, "Ctrl+Y / Ctrl+Shift+Z", "Redo", LOCKED),
-    (0, "`", "Select other", OFF),
-    (0, "Alt+C", "Search tools", 0),
+    (0, "Shift+Enter", "view-shortcut-accept-repeat", LOCKED),
+    (0, "Enter", "view-shortcut-accept", LOCKED),
+    (0, "Escape", "common-cancel", LOCKED),
+    (0, "Space", "common-clear-selection", LOCKED),
+    (0, "Ctrl+= / Ctrl+-", "view-shortcut-ui-scale", 0),
+    (0, "Ctrl+C", "common-copy", LOCKED | OFF),
+    (0, "Shift+C", "view-shortcut-curve-analysis", OFF),
     (
         0,
-        "Alt+click",
-        "Look here: point it out to everyone in a shared document",
+        "Delete / Backspace",
+        "view-shortcut-delete-selection",
         LOCKED,
     ),
-    (0, "S", "Shortcut toolbar", OFF),
-    (0, "Alt+T", "Tab manager", OFF),
-    (0, "Ctrl+Space", "Cycle recent tabs", OFF),
-    (0, "Ctrl+Z", "Undo", LOCKED),
-    (1, "Delete", "Delete selected features", LOCKED),
-    (1, "Shift+E", "Extrude", 0),
-    (1, "Shift+F", "Fillet", 0),
-    (1, "Shift+W", "Revolve", 0),
-    (1, "Shift+H", "Show or hide all sketches", OFF),
-    (1, "Shift+S", "Sketch", 0),
-    (1, "K", "Show or hide mate connectors", 0),
-    (1, "Ctrl+M", "Mate connector", 0),
-    (2, "M", "Fastened mate", 0),
-    (2, "I", "Insert parts and assemblies", 0),
-    (2, "Y", "Hide the instance under the pointer", 0),
-    (2, "Shift+Y", "Show all instances", 0),
-    (2, "Shift+S", "Snap mode", OFF),
-    (2, "Ctrl+M", "Mate connector", 0),
-    (2, "Shift+N", "Rename the selected instance", OFF),
-    (2, "J", "Show or hide mates", 0),
-    (2, "K", "Show or hide mate connectors", 0),
-    (2, "H", "Toggle show-mates mode", 0),
-    (3, "Shift+1", "Front view", 0),
-    (3, "Shift+2", "Back view", 0),
-    (3, "Shift+3", "Left view", 0),
-    (3, "Shift+4", "Right view", 0),
-    (3, "Shift+5", "Top view", 0),
-    (3, "Shift+6", "Bottom view", 0),
-    (3, "Shift+7", "Isometric view", 0),
-    (3, "Numpad 7", "Top view (Ctrl: Bottom)", 0),
-    (3, "Numpad 1", "Front view (Ctrl: Back)", 0),
-    (3, "Numpad 3", "Right view (Ctrl: Left)", 0),
-    (3, "Numpad 9", "Opposite view", 0),
-    (3, "Numpad 8 / 2 / 4 / 6", "Rotate, as the arrows", 0),
-    (3, "Numpad 5", "Perspective or orthographic", 0),
-    (3, "N", "Normal to", 0),
-    (3, "F", "Zoom to fit", 0),
-    (3, "Alt+F / Numpad .", "Zoom to selection", 0),
-    (3, "W / A / S / D", "Walk (walk mode)", 0),
-    (3, "Q / E", "Walk down or up (walk mode)", 0),
-    (3, "Escape", "Leave walk mode", 0),
-    (3, "W", "Zoom to window", OFF),
-    (3, "Z", "Zoom out", 0),
-    (3, "Shift+Z", "Zoom in", 0),
-    (3, "← / → / ↑ / ↓", "Rotate 15° (hold to keep turning)", 0),
-    (3, "Shift+←", "Rotate 90° (any arrow)", 0),
-    (3, "Ctrl+←", "Rotate 5° (any arrow)", 0),
-    (3, "Ctrl+Shift+←", "Pan (any arrow)", 0),
-    (3, "P", "Show or hide planes", 0),
-    (3, "F12", "Show or hide the frame rate", 0),
-    (3, "Shift+P", "Hide construction geometry", OFF),
-    (3, "Shift+I", "Isolate", OFF),
-    (3, "Shift+T", "Transparent", OFF),
-    (3, "Shift+X", "Section view", OFF),
-    (3, "Shift+V", "Named views", OFF),
-    (3, "Shift+R", "Render in high quality", OFF),
-    (4, "L", "Line", 0),
-    (4, "Shift+A", "Switch between line and tangent arc", 0),
-    (4, "G", "Corner rectangle", 0),
-    (4, "R", "Center point rectangle", 0),
-    (4, "C", "Center point circle", 0),
-    (4, "A", "3 point arc", 0),
-    (4, "Shift+S", "Point", 0),
-    (4, "D", "Dimension", 0),
-    (4, "Q", "Construction", 0),
-    (4, "Ctrl+A", "Select all", 0),
-    (4, "U", "Use", 0),
-    (4, "O", "Offset", 0),
-    (4, "M", "Trim", 0),
-    (4, "X", "Extend", 0),
-    (4, "Shift+F", "Sketch fillet", 0),
-    (4, "I", "Coincident", 0),
-    (4, "Shift+O", "Concentric", 0),
-    (4, "B", "Parallel", 0),
-    (4, "T", "Tangent", 0),
-    (4, "H", "Horizontal", 0),
-    (4, "V", "Vertical", 0),
-    (4, "Shift+L", "Perpendicular", 0),
-    (4, "E", "Equal", 0),
-    (4, "Shift+M", "Midpoint", 0),
-    (4, "Shift+K", "Normal", 0),
-    (4, "Shift+G", "Pierce", 0),
-    (4, "Shift+Q", "Symmetric", 0),
-    (4, "Shift+J", "Fix", 0),
-    (4, "Shift+U", "Curvature", OFF),
+    (0, "Shift+D", "view-shortcut-dihedral-analysis", OFF),
+    (0, "Shift+/", "view-shortcuts-title", 0),
+    (0, "[", "view-shortcut-measure", 0),
+    (0, "Ctrl+V", "common-paste", LOCKED | OFF),
+    (0, "Ctrl+Y / Ctrl+Shift+Z", "common-redo", LOCKED),
+    (0, "`", "view-shortcut-select-other", OFF),
+    (0, "Alt+C", "view-shortcut-search-tools", 0),
+    (0, "Alt+click", "view-shortcut-look-here", LOCKED),
+    (0, "S", "view-shortcut-shortcut-toolbar", OFF),
+    (0, "Alt+T", "view-shortcut-tab-manager", OFF),
+    (0, "Ctrl+Space", "view-shortcut-cycle-tabs", OFF),
+    (0, "Ctrl+Z", "common-undo", LOCKED),
+    (1, "Delete", "view-shortcut-delete-features", LOCKED),
+    (1, "Shift+E", "common-extrude", 0),
+    (1, "Shift+F", "view-shortcut-fillet", 0),
+    (1, "Shift+W", "view-shortcut-revolve", 0),
+    (1, "Shift+H", "view-shortcut-toggle-sketches", OFF),
+    (1, "Shift+S", "common-sketch", 0),
+    (1, "K", "view-shortcut-toggle-mate-connectors", 0),
+    (1, "Ctrl+M", "common-mate-connector", 0),
+    (2, "M", "view-shortcut-fastened-mate", 0),
+    (2, "I", "view-shortcut-insert-parts", 0),
+    (2, "Y", "view-shortcut-hide-instance", 0),
+    (2, "Shift+Y", "view-shortcut-show-all-instances", 0),
+    (2, "Shift+S", "view-shortcut-snap-mode", OFF),
+    (2, "Ctrl+M", "common-mate-connector", 0),
+    (2, "Shift+N", "view-shortcut-rename-instance", OFF),
+    (2, "J", "view-shortcut-toggle-mates", 0),
+    (2, "K", "view-shortcut-toggle-mate-connectors", 0),
+    (2, "H", "view-shortcut-show-mates-mode", 0),
+    (3, "Shift+1", "view-shortcut-front", 0),
+    (3, "Shift+2", "view-shortcut-back", 0),
+    (3, "Shift+3", "view-shortcut-left", 0),
+    (3, "Shift+4", "view-shortcut-right", 0),
+    (3, "Shift+5", "view-shortcut-top", 0),
+    (3, "Shift+6", "view-shortcut-bottom", 0),
+    (3, "Shift+7", "view-shortcut-isometric", 0),
+    (3, "Numpad 7", "view-shortcut-top-or-bottom", 0),
+    (3, "Numpad 1", "view-shortcut-front-or-back", 0),
+    (3, "Numpad 3", "view-shortcut-right-or-left", 0),
+    (3, "Numpad 9", "view-shortcut-opposite", 0),
+    (3, "Numpad 8 / 2 / 4 / 6", "view-shortcut-rotate-numpad", 0),
+    (3, "Numpad 5", "view-shortcut-perspective", 0),
+    (3, "N", "view-shortcut-normal-to", 0),
+    (3, "F", "common-zoom-to-fit", 0),
+    (3, "Alt+F / Numpad .", "common-zoom-to-selection", 0),
+    (3, "W / A / S / D", "view-shortcut-walk", 0),
+    (3, "Q / E", "view-shortcut-walk-down-up", 0),
+    (3, "Escape", "view-shortcut-leave-walk", 0),
+    (3, "W", "view-shortcut-zoom-window", OFF),
+    (3, "Z", "view-shortcut-zoom-out", 0),
+    (3, "Shift+Z", "view-shortcut-zoom-in", 0),
+    (3, "← / → / ↑ / ↓", "view-shortcut-rotate-15", 0),
+    (3, "Shift+←", "view-shortcut-rotate-90", 0),
+    (3, "Ctrl+←", "view-shortcut-rotate-5", 0),
+    (3, "Ctrl+Shift+←", "view-shortcut-pan", 0),
+    (3, "P", "view-shortcut-toggle-planes", 0),
+    (3, "F12", "view-shortcut-toggle-frame-rate", 0),
+    (3, "Shift+P", "view-shortcut-hide-construction", OFF),
+    (3, "Shift+I", "view-shortcut-isolate", OFF),
+    (3, "Shift+T", "view-shortcut-transparent", OFF),
+    (3, "Shift+X", "view-shortcut-section-view", OFF),
+    (3, "Shift+V", "view-shortcut-named-views", OFF),
+    (3, "Shift+R", "view-shortcut-render-hq", OFF),
+    (4, "L", "sketch-tool-line", 0),
+    (4, "Shift+A", "sketch-shortcut-line-tangent-arc", 0),
+    (4, "G", "sketch-tool-corner-rectangle", 0),
+    (4, "R", "sketch-tool-center-rectangle", 0),
+    (4, "C", "sketch-tool-center-circle", 0),
+    (4, "A", "sketch-tool-3-point-arc", 0),
+    (4, "Shift+S", "sketch-tool-point", 0),
+    (4, "D", "common-dimension", 0),
+    (4, "Q", "sketch-construction", 0),
+    (4, "Ctrl+A", "sketch-select-all", 0),
+    (4, "U", "sketch-tool-use", 0),
+    (4, "O", "common-offset", 0),
+    (4, "M", "sketch-tool-trim", 0),
+    (4, "X", "sketch-tool-extend", 0),
+    (4, "Shift+F", "sketch-tool-fillet", 0),
+    (4, "I", "sketch-constraint-coincident", 0),
+    (4, "Shift+O", "sketch-constraint-concentric", 0),
+    (4, "B", "sketch-constraint-parallel", 0),
+    (4, "T", "sketch-constraint-tangent", 0),
+    (4, "H", "sketch-constraint-horizontal", 0),
+    (4, "V", "sketch-constraint-vertical", 0),
+    (4, "Shift+L", "sketch-constraint-perpendicular", 0),
+    (4, "E", "sketch-constraint-equal", 0),
+    (4, "Shift+M", "sketch-constraint-midpoint", 0),
+    (4, "Shift+K", "sketch-constraint-normal", 0),
+    (4, "Shift+G", "sketch-constraint-pierce", 0),
+    (4, "Shift+Q", "sketch-constraint-symmetric", 0),
+    (4, "Shift+J", "sketch-constraint-fix", 0),
+    (4, "Shift+U", "sketch-constraint-curvature", OFF),
     // Drawings (X12, P3C.1): the keys of tools still to come are struck through.
-    (5, "F", "Zoom to fit the sheet", 0),
-    (5, "Ctrl+S", "Sheets flyout", 0),
-    (5, "Escape", "End the current tool", LOCKED),
-    (5, "D", "Dimension", 0),
-    (5, "Shift+R", "Radial dimension", 0),
-    (5, "Shift+D", "Diameter dimension", 0),
-    (5, "N", "Note", OFF),
-    (5, "Ctrl+Q", "Update from this workspace", 0),
-    (5, "Tab / Shift+Tab", "Next / previous table cell", OFF),
-    (4, "Shift", "Hold to turn off inferencing", LOCKED),
+    (5, "F", "view-shortcut-zoom-sheet", 0),
+    (5, "Ctrl+S", "view-shortcut-sheets-flyout", 0),
+    (5, "Escape", "view-shortcut-end-tool", LOCKED),
+    (5, "D", "common-dimension", 0),
+    (5, "Shift+R", "view-shortcut-radial-dimension", 0),
+    (5, "Shift+D", "view-shortcut-diameter-dimension", 0),
+    (5, "N", "view-shortcut-note", OFF),
+    (5, "Ctrl+Q", "view-shortcut-update-workspace", 0),
+    (5, "Tab / Shift+Tab", "view-shortcut-next-cell", OFF),
+    (4, "Shift", "view-shortcut-no-inferencing", LOCKED),
 ];
 
 /// The dialog root.
@@ -169,11 +172,13 @@ struct ShortcutsDialog;
 #[derive(Component)]
 struct ShortcutRows;
 
-/// The shortcuts matching a search (in any tab), or a tab's shortcuts.
-pub fn matching(tab: usize, query: &str) -> Vec<(usize, &'static str, &'static str, u8)> {
+/// The shortcuts matching a search (in any tab), or a tab's shortcuts, with their actions in
+/// the current language.
+pub fn matching(tab: usize, query: &str) -> Vec<(usize, &'static str, String, u8)> {
     let q = query.trim().to_lowercase();
     SHORTCUTS
         .iter()
+        .map(|(t, keys, action, flags)| (*t, *keys, tr(action), *flags))
         .filter(|(t, keys, action, _)| {
             if q.is_empty() {
                 *t == tab
@@ -181,7 +186,6 @@ pub fn matching(tab: usize, query: &str) -> Vec<(usize, &'static str, &'static s
                 action.to_lowercase().contains(&q) || keys.to_lowercase().contains(&q)
             }
         })
-        .copied()
         .collect()
 }
 
@@ -202,7 +206,7 @@ pub fn open_shortcuts(world: &mut World) {
     world.spawn((
         ShortcutsDialog,
         Dialog::new("shortcuts-dialog")
-            .title("Keyboard shortcuts")
+            .title(tr("view-shortcuts-title"))
             .title_font(20.0, FontWeight::NORMAL)
             .header_height(52.0)
             .width(994.0)
@@ -211,22 +215,23 @@ pub fn open_shortcuts(world: &mut World) {
                 h.spawn((
                     Name::new("shortcuts-customize"),
                     t.text(
-                        "Customize keyboard shortcuts",
+                        tr("view-shortcuts-customize"),
                         12.0,
                         FontWeight::SEMIBOLD,
                         t.link,
                     ),
+                    Translated("view-shortcuts-customize"),
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(200.0),
                         top: Val::Px(21.0),
                         ..default()
                     },
-                    Tooltip::new("Customizing shortcuts is not available in cadrs yet"),
+                    Tooltip::new(tr("view-shortcuts-customize-tooltip")),
                 ));
                 h.spawn(
                     TextInput::new("shortcuts-search")
-                        .placeholder("Search shortcuts")
+                        .placeholder(tr("view-shortcuts-search"))
                         .width(Val::Px(194.0))
                         .height(34.0)
                         .build(t),
@@ -244,7 +249,7 @@ pub fn open_shortcuts(world: &mut World) {
                 .with_children(|r| {
                     let mut strip = TabStrip::new("shortcuts-tab");
                     for tab in TABS {
-                        strip = strip.tab(tab);
+                        strip = strip.tab(tr(tab));
                     }
                     r.spawn(strip.build(t));
                 });
@@ -294,18 +299,20 @@ fn legend(f: &mut ChildSpawner, t: &Theme) {
         BorderColor::all(Color::srgb_u8(0x88, 0x88, 0x88)),
     ))
     .with_children(|l| {
-        l.spawn(dialog_keycap(t, "example".into(), false));
-        l.spawn(legend_text(t, "Default"));
-        l.spawn(dialog_keycap(t, "example".into(), true));
-        l.spawn(legend_text(t, "Not available in cadrs yet"));
+        l.spawn(dialog_keycap(t, tr("view-shortcuts-legend-example"), false));
+        l.spawn(legend_text(t, "view-shortcuts-legend-default"));
+        l.spawn(dialog_keycap(t, tr("view-shortcuts-legend-example"), true));
+        l.spawn(legend_text(t, "view-shortcuts-legend-off"));
         l.spawn(lock(t));
-        l.spawn(legend_text(t, "Cannot be changed"));
+        l.spawn(legend_text(t, "view-shortcuts-legend-locked"));
     });
 }
 
-fn legend_text(t: &Theme, s: &str) -> impl Bundle {
+/// A legend's text: the text of `key`.
+fn legend_text(t: &Theme, key: &'static str) -> impl Bundle {
     (
-        t.text(s, 14.0, FontWeight::NORMAL, t.foreground),
+        t.text(tr(key), 14.0, FontWeight::NORMAL, t.foreground),
+        Translated(key),
         Node {
             margin: UiRect::right(Val::Px(18.0)),
             ..default()
@@ -397,11 +404,12 @@ fn sync_rows(
             c.spawn((
                 Name::new("shortcuts-empty"),
                 t.text(
-                    "No shortcuts found",
+                    tr("view-shortcuts-none-found"),
                     t.font_base,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("view-shortcuts-none-found"),
                 Node {
                     align_self: AlignSelf::Center,
                     margin: UiRect::vertical(Val::Px(24.0)),
@@ -415,7 +423,8 @@ fn sync_rows(
                 group = Some(tab);
                 c.spawn((
                     Name::new(format!("shortcut-group-{tab}")),
-                    t.text(TABS[tab], 14.0, FontWeight::SEMIBOLD, t.foreground),
+                    t.text(tr(TABS[tab]), 14.0, FontWeight::SEMIBOLD, t.foreground),
+                    Translated(TABS[tab]),
                     Node {
                         height: Val::Px(30.0),
                         flex_shrink: 0.0,

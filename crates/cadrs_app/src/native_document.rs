@@ -5,6 +5,7 @@ use bevy::{
     text::{EditableText, FontWeight, TextEdit},
     ui_widgets::Activate,
 };
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::{
     Button, DialogClose, Notification, TextInputField, TextSubmit, prelude::*, show_notification,
 };
@@ -31,27 +32,105 @@ pub fn open_export(world: &mut World) {
         .unwrap_or_default();
     let theme = world.resource::<Theme>().clone();
     let (body, footer) = (theme.clone(), theme.clone());
-    world.commands().spawn((Dialog::new("native-export-dialog").title("Export document").width(460.0)
-        .body(move |b| {
-            let t = &body;
-            b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(10.0), width: Val::Percent(100.0), ..default() }).with_children(|g| {
-                g.spawn(t.text("File name", t.font_base, FontWeight::BOLD, t.foreground));
-                g.spawn(TextInput::new("native-export-name").value(base).autofocus().select_all_on_focus().width(Val::Percent(100.0)).height(26.0).build(t));
-                g.spawn(t.text("cadrs native document (*.cadrs)", t.font_base, FontWeight::NORMAL, t.foreground));
-                g.spawn(t.text("All current tabs and embedded assets. Saved versions and undo history are excluded.", t.font_sm, FontWeight::NORMAL, t.muted_foreground))
-                    .insert((
-                        TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary),
-                        Node { width: Val::Percent(100.0), min_width: Val::Px(0.0), ..default() },
+    world.commands().spawn((
+        Dialog::new("native-export-dialog")
+            .title(tr("io-native-export-title"))
+            .width(460.0)
+            .body(move |b| {
+                let t = &body;
+                b.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(10.0),
+                    width: Val::Percent(100.0),
+                    ..default()
+                })
+                .with_children(|g| {
+                    g.spawn((
+                        t.text(
+                            tr("common-file-name"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("common-file-name"),
                     ));
-                g.spawn(t.text("Folder", t.font_base, FontWeight::BOLD, t.foreground));
-                g.spawn(TextInput::new("native-export-folder").value(dir).width(Val::Percent(100.0)).height(26.0).build(t));
-                g.spawn(Button::new("native-export-browse").label("Browse…").outline().build(t));
-            });
-        })
-        .footer(move |f| {
-            f.spawn(Button::new("native-export-ok").label("Export").primary().build(&footer));
-            f.spawn(Button::new("native-export-cancel").label("Cancel").build(&footer));
-        }).build(&theme), NativeExport, DespawnOnExit(AppState::Document)));
+                    g.spawn(
+                        TextInput::new("native-export-name")
+                            .value(base)
+                            .autofocus()
+                            .select_all_on_focus()
+                            .width(Val::Percent(100.0))
+                            .height(26.0)
+                            .build(t),
+                    );
+                    g.spawn((
+                        t.text(
+                            tr("io-native-export-format"),
+                            t.font_base,
+                            FontWeight::NORMAL,
+                            t.foreground,
+                        ),
+                        Translated("io-native-export-format"),
+                    ));
+                    g.spawn(t.text(
+                        tr("io-native-export-contents"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ))
+                    .insert((
+                        Translated("io-native-export-contents"),
+                        TextLayout::new(
+                            bevy::text::Justify::Left,
+                            bevy::text::LineBreak::WordBoundary,
+                        ),
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_width: Val::Px(0.0),
+                            ..default()
+                        },
+                    ));
+                    g.spawn((
+                        t.text(
+                            tr("common-folder"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("common-folder"),
+                    ));
+                    g.spawn(
+                        TextInput::new("native-export-folder")
+                            .value(dir)
+                            .width(Val::Percent(100.0))
+                            .height(26.0)
+                            .build(t),
+                    );
+                    g.spawn(
+                        Button::new("native-export-browse")
+                            .label(tr("common-browse"))
+                            .outline()
+                            .build(t),
+                    );
+                });
+            })
+            .footer(move |f| {
+                f.spawn(
+                    Button::new("native-export-ok")
+                        .label(tr("common-export"))
+                        .primary()
+                        .build(&footer),
+                );
+                f.spawn(
+                    Button::new("native-export-cancel")
+                        .label(tr("common-cancel"))
+                        .build(&footer),
+                );
+            })
+            .build(&theme),
+        NativeExport,
+        DespawnOnExit(AppState::Document),
+    ));
     world.flush();
 }
 fn field(world: &mut World, name: &str) -> String {
@@ -80,10 +159,7 @@ fn export(world: &mut World) {
     let name = field(world, "native-export-name-field");
     let folder = field(world, "native-export-folder-field");
     if name.trim().is_empty() || folder.trim().is_empty() {
-        notify(
-            world,
-            Notification::warning("Enter a file name and destination folder"),
-        );
+        notify(world, Notification::warning(tr("io-native-export-missing")));
         return;
     }
     let base = name.trim();
@@ -113,10 +189,16 @@ fn export(world: &mut World) {
             close(world);
             notify(
                 world,
-                Notification::info(format!("Exported {}", path.display())),
+                Notification::info(tr_with(
+                    "io-exported-path",
+                    &[("path", &path.display().to_string())],
+                )),
             );
         }
-        Err(e) => notify(world, Notification::warning(format!("Export failed: {e}"))),
+        Err(e) => notify(
+            world,
+            Notification::warning(tr_with("io-export-failed", &[("error", &e.to_string())])),
+        ),
     }
 }
 fn activate(ev: On<Activate>, names: Query<&Name>, mut commands: Commands) {
@@ -138,7 +220,7 @@ fn activate(ev: On<Activate>, names: Query<&Name>, mut commands: Commands) {
                 &mut world.commands(),
                 &theme,
                 "folder-picker",
-                "Choose a folder",
+                &tr("common-choose-folder"),
                 "native-export-folder",
                 dir,
             );
@@ -183,8 +265,14 @@ pub fn import(world: &mut World, path: &Path) {
             world
                 .resource_mut::<NextState<AppState>>()
                 .set(AppState::Document);
-            notify(world, Notification::info(format!("Imported {name}")));
+            notify(
+                world,
+                Notification::info(tr_with("io-imported-name", &[("name", &name)])),
+            );
         }
-        Err(e) => notify(world, Notification::warning(format!("Import failed: {e}"))),
+        Err(e) => notify(
+            world,
+            Notification::warning(tr_with("io-import-failed", &[("error", &e.to_string())])),
+        ),
     }
 }

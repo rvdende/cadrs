@@ -13,6 +13,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::identity::{DEFAULT_KEY, Identities, Identity};
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_ui::avatar::Avatar;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::input::{TextInputField, TextSubmit};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, DialogClose, MenuAction, MenuHeader, MenuItem, open_menu};
@@ -87,7 +88,10 @@ enum IdentityDialog {
 pub fn spawn_identity_button(r: &mut ChildSpawnerCommands, t: &Theme, profile: &UserProfile) {
     let name = profile.display_name.clone();
     r.spawn((
-        Button::new("identity").ghost().tooltip("Account").build(t),
+        Button::new("identity")
+            .ghost()
+            .tooltip(tr("shell-identity-account"))
+            .build(t),
         IdentityButton,
     ))
     .entry::<Node>()
@@ -172,8 +176,8 @@ fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
     let ids = &world.resource::<IdentityList>().0;
     let cadrs_id = cadrs_net::cadrs_id(world.get_resource::<Iroh>());
     let subtitle = cadrs_id.as_deref().map_or_else(
-        || "Offline: on this computer only".to_string(),
-        |id| format!("cadrs ID {}", short_id(id)),
+        || tr("shell-identity-offline"),
+        |id| tr_with("shell-identity-cadrs-id", &[("id", &short_id(id))]),
     );
     let mut menu = cadrs_ui::Menu::new("identity-menu")
         .align_end()
@@ -195,22 +199,23 @@ fn identity_menu(world: &World, width: f32, theme: &Theme) -> cadrs_ui::Menu {
         menu = menu.separator();
     }
     menu = menu
-        .item(MenuItem::new("identity-new", "New identity…").icon("plus"))
-        .item(MenuItem::new("identity-edit", "Edit profile…").icon("user"))
+        .item(MenuItem::new("identity-new", tr("shell-identity-new-ellipsis")).icon("plus"))
+        .item(MenuItem::new("identity-edit", tr("shell-identity-edit-ellipsis")).icon("user"))
         .item(if cadrs_id.is_some() {
-            MenuItem::new("identity-copy-id", "Copy cadrs ID").icon("copy")
+            MenuItem::new("identity-copy-id", tr("shell-identity-copy-id")).icon("copy")
         } else {
-            MenuItem::new("identity-copy-id", "Copy cadrs ID")
+            MenuItem::new("identity-copy-id", tr("shell-identity-copy-id"))
                 .icon("copy")
                 .disabled(true)
-                .tooltip("cadrs is offline: no cadrs ID to share")
+                .tooltip(tr("shell-identity-copy-id-offline"))
         })
         .separator();
     for entry in crate::top_bar::menu_entries(world, width, theme) {
         menu = menu.entry(entry);
     }
-    menu.separator()
-        .item(MenuItem::new("identity-preferences", "Preferences…").icon("settings"))
+    menu.separator().item(
+        MenuItem::new("identity-preferences", tr("shell-preferences-ellipsis")).icon("settings"),
+    )
 }
 
 fn on_identity_action(
@@ -245,7 +250,7 @@ fn copy_id(world: &mut World) {
     if let Some(mut clip) = world.get_resource_mut::<bevy::clipboard::Clipboard>() {
         let _ = clip.set_text(id);
     }
-    crate::linked::toast(world, "Copied your cadrs ID");
+    crate::linked::toast(world, tr("shell-identity-id-copied"));
 }
 
 fn open_dialog(world: &mut World, kind: IdentityDialog) {
@@ -254,15 +259,15 @@ fn open_dialog(world: &mut World, kind: IdentityDialog) {
     let (name, title, ok, note) = match kind {
         IdentityDialog::New => (
             String::new(),
-            "New identity",
-            "Create",
-            "A new identity has a cadrs ID of its own: collaborators see it as someone else.",
+            tr("shell-identity-new"),
+            tr("common-create"),
+            "shell-identity-new-note",
         ),
         IdentityDialog::Edit => (
             world.resource::<UserProfile>().display_name.clone(),
-            "Edit profile",
-            "Save",
-            "Collaborators see this name beside your cursor, comments and versions.",
+            tr("shell-identity-edit"),
+            tr("common-save"),
+            "shell-identity-edit-note",
         ),
     };
     let mut commands = world.commands();
@@ -271,17 +276,31 @@ fn open_dialog(world: &mut World, kind: IdentityDialog) {
             .title(title)
             .width(420.0)
             .body(move |b| {
-                b.spawn(tb.text("Name", tb.font_sm, FontWeight::MEDIUM, tb.muted_foreground));
+                b.spawn((
+                    tb.text(
+                        tr("common-name"),
+                        tb.font_sm,
+                        FontWeight::MEDIUM,
+                        tb.muted_foreground,
+                    ),
+                    Translated("common-name"),
+                ));
                 b.spawn(
                     TextInput::new("identity-name")
-                        .placeholder("Your name")
+                        .placeholder(tr("shell-identity-name-placeholder"))
                         .value(name)
                         .select_all_on_focus()
                         .autofocus()
                         .build(&tb),
                 );
                 b.spawn((
-                    tb.text(note, tb.font_sm, FontWeight::NORMAL, tb.muted_foreground),
+                    tb.text(
+                        tr(note),
+                        tb.font_sm,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated(note),
                     Node {
                         max_width: Val::Px(380.0),
                         ..default()
@@ -300,7 +319,7 @@ fn open_dialog(world: &mut World, kind: IdentityDialog) {
                 ));
                 f.spawn((
                     Button::new("identity-dialog-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(&tf),
                     observe(
                         |_: On<Activate>,
@@ -359,7 +378,7 @@ fn confirm(world: &mut World) {
             list.0.list[active].name = name.clone();
             save(world);
             world.resource_mut::<UserProfile>().display_name = name;
-            crate::linked::toast(world, "Profile saved");
+            crate::linked::toast(world, tr("shell-identity-saved"));
         }
     }
 }
@@ -403,11 +422,17 @@ fn switch_to(world: &mut World, index: usize) {
         }
         crate::linked::toast(
             world,
-            format!("Restart cadrs to go online as {}", ident.name),
+            tr_with("shell-identity-restart", &[("name", ident.name.as_str())]),
         );
         return;
     }
-    crate::linked::toast(world, format!("Working as {}", ident.name));
+    crate::linked::toast(
+        world,
+        tr_with(
+            "shell-identity-working-as",
+            &[("name", ident.name.as_str())],
+        ),
+    );
 }
 
 #[cfg(test)]

@@ -30,6 +30,7 @@ use cadrs_core::{Feature, FeatureId, FeatureKind};
 use cadrs_sketch::Link;
 use cadrs_sketch::projection::Projected;
 use cadrs_ui::TabStrip;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::ActiveDocument;
@@ -200,12 +201,12 @@ pub(crate) fn items(features: &[Feature], kind: &FeatureKind, role: Role) -> Opt
                 features
                     .iter()
                     .find(|f| f.id == id)
-                    .map_or("sketch".into(), |f| f.name.clone())
+                    .map_or_else(|| tr("model-unknown-sketch"), |f| f.name.clone())
             };
             let mut v: Vec<String> = x
                 .regions
                 .iter()
-                .map(|r| format!("Face of {}", name(r.sketch)))
+                .map(|r| tr_with("common-face-of", &[("name", &name(r.sketch))]))
                 .collect();
             v.extend(
                 x.sketches.iter().map(|s| {
@@ -239,8 +240,8 @@ pub(crate) fn body(
         Role::OpTab,
         TabStrip::new("flat-extrude-operation")
             .compact()
-            .tab("Add")
-            .tab("Remove")
+            .tab(tr("common-add"))
+            .tab(tr("common-remove"))
             .selected(usize::from(x.remove))
             .build(t),
     ));
@@ -249,7 +250,7 @@ pub(crate) fn body(
             b,
             t,
             "flat-extrude-regions-field",
-            "Faces and sketch regions to extrude",
+            &tr("model-extrude-regions"),
             Role::FlatRegions,
             items_of(Role::FlatRegions),
             field == AppliedField::FlatRegions,
@@ -298,10 +299,7 @@ pub fn begin_flat_sketch(world: &mut World, model: FeatureId, part: usize) {
         cadrs_ui::show_notification(
             &mut commands,
             &theme,
-            cadrs_ui::Notification::warning(
-                "The sheet metal model has no flat pattern to sketch on",
-            )
-            .name("flat-sketch-toast"),
+            cadrs_ui::Notification::warning(tr("model-flat-no-pattern")).name("flat-sketch-toast"),
         );
         world.flush();
         return;
@@ -552,12 +550,13 @@ fn keep_flat_view(
                 Pickable::IGNORE,
                 children![(
                     theme.text(
-                        "The flat view stays open while a sketch on the flat pattern is edited",
+                        tr("model-flat-sketch-note"),
                         11.5,
                         bevy::text::FontWeight::NORMAL,
                         theme.foreground
                     ),
-                    Pickable::IGNORE
+                    Pickable::IGNORE,
+                    cadrs_ui::i18n::Translated("model-flat-sketch-note")
                 )],
             ))
             .id();

@@ -18,6 +18,7 @@ use cadrs_core::DocumentMeta;
 use cadrs_core::collab::{Permission, Rights, SharedInfo};
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::{Answer, ShareLink, Welcome, transfer};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::{ActiveDocument, AppClock, AppState, DocumentStore};
 
@@ -55,9 +56,9 @@ impl Plugin for CollabPlugin {
 /// Why a shared document opens read-only: until its room is joined ([`live`]), or while
 /// cadrs is offline ([`crate::network`]).
 pub fn read_only_reason(shared: &SharedInfo) -> String {
-    format!(
-        "Connecting to {}… (while cadrs is offline, this is the last copy)",
-        shared.owner_name
+    tr_with(
+        "shell-collab-read-only-reason",
+        &[("owner", shared.owner_name.as_str())],
     )
 }
 
@@ -80,7 +81,11 @@ pub fn lacks(world: &mut World, right: fn(&Rights) -> bool, what: &str) -> bool 
         .and_then(|d| d.meta.as_ref()?.shared.clone());
     match shared {
         Some(s) if !right(&s.access().rights) => {
-            let text = format!("{} hasn't let you {what} this document", s.owner_name);
+            let owner = s.owner_name.as_str();
+            let text = match what {
+                "export" => tr_with("shell-collab-may-not-export", &[("owner", owner)]),
+                _ => tr_with("shell-collab-may-not", &[("owner", owner), ("what", what)]),
+            };
             crate::linked::toast(world, text);
             true
         }
@@ -91,14 +96,19 @@ pub fn lacks(world: &mut World, right: fn(&Rights) -> bool, what: &str) -> bool 
 /// The **Share** button: the share dialog, for the owner or someone who may share.
 pub fn open_share(world: &mut World) {
     if world.get_resource::<Iroh>().is_none() {
-        crate::network::offer_connect(world, "Sharing needs the network", open_share);
+        crate::network::offer_connect(
+            world,
+            &tr("shell-collab-share-net-off"),
+            &tr("shell-collab-share-offline"),
+            open_share,
+        );
         return;
     }
     let Some((id, meta)) = world
         .get_resource::<ActiveDocument>()
         .and_then(|d| Some((d.doc.id, d.meta.clone()?)))
     else {
-        crate::linked::toast(world, "Only a saved document can be shared");
+        crate::linked::toast(world, tr("shell-collab-only-saved"));
         return;
     };
     if let Some(s) = &meta.shared
@@ -106,7 +116,10 @@ pub fn open_share(world: &mut World) {
     {
         crate::linked::toast(
             world,
-            format!("Only {} can share this document", s.owner_name),
+            tr_with(
+                "shell-collab-only-owner-shares",
+                &[("owner", s.owner_name.as_str())],
+            ),
         );
         return;
     }
@@ -118,12 +131,12 @@ pub fn share_current(world: &mut World) {
     let Some(id) = world.get_resource::<ActiveDocument>().map(|d| d.doc.id) else {
         return;
     };
-    let text = match sharing::set_link(world, id, Some(Permission::Edit), true)
-        .and_then(|()| sharing::link_for(world, id).ok_or("Sharing needs the network".into()))
-    {
+    let text = match sharing::set_link(world, id, Some(Permission::Edit), true).and_then(|()| {
+        sharing::link_for(world, id).ok_or_else(|| tr("shell-collab-share-needs-network"))
+    }) {
         Ok(link) => {
             copy_link(world, &link);
-            "Link copied: anyone with it can open and edit this document".to_string()
+            tr("shell-collab-link-copied-edit")
         }
         Err(why) => why,
     };
@@ -218,15 +231,20 @@ pub fn start_join(world: &mut World, text: &str) {
     let Some(iroh) = world.get_resource::<Iroh>() else {
         // Asked again once online: the link is kept for it.
         world.resource_mut::<PendingJoin>().0 = Some(text.to_string());
-        crate::network::offer_connect(world, "Joining needs the network", join_pending);
+        crate::network::offer_connect(
+            world,
+            &tr("shell-collab-join-net-off"),
+            &tr("shell-collab-join-offline"),
+            join_pending,
+        );
         return;
     };
     if link.owner.id == iroh.id() {
-        crate::linked::toast(world, "That is a link to your own document");
+        crate::linked::toast(world, tr("shell-collab-own-link"));
         return;
     }
     let task = transfer::start_fetch(iroh, link.clone());
-    let text = format!("Joining \u{201c}{}\u{201d}…", link.name);
+    let text = tr_with("shell-collab-joining", &[("name", link.name.as_str())]);
     world.resource_mut::<Joins>().0.push((link, true, task));
     crate::linked::toast(world, text);
 }
@@ -267,11 +285,17 @@ fn poll_joins(world: &mut World) {
                 } else if landing {
                     crate::landing::reload_library(world);
                 } else if open {
-                    let text = format!("\u{201c}{}\u{201d} is in Shared with me", link.name);
+                    let text = tr_with(
+                        "shell-collab-in-shared-with-me",
+                        &[("name", link.name.as_str())],
+                    );
                     crate::linked::toast(world, text);
                 }
             }
-            Err(why) if open => crate::linked::toast(world, format!("Cannot join: {why}")),
+            Err(why) if open => crate::linked::toast(
+                world,
+                tr_with("shell-collab-cannot-join", &[("why", why.as_str())]),
+            ),
             Err(why) => info!("cannot fetch {} yet: {why}", link.name),
         }
     }
@@ -287,7 +311,7 @@ fn keep_joined(
     let now = world.resource::<AppClock>().now();
     let doc = welcome.snapshot.install()?;
     if doc.id != link.document {
-        return Err("The owner sent another document".into());
+        return Err(tr("shell-collab-another-document"));
     }
     sharing::note_contact(world, &link.owner.id.to_string(), &welcome.owner_name);
     let shared = SharedInfo {

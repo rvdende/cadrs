@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use cadrs_eda::layer::Layer;
 use cadrs_eda::render::BoardTheme;
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 
 use super::layout_tools::LayoutState;
@@ -121,7 +122,7 @@ fn sync(world: &mut World) {
                 p.spawn((
                     ToolButton::new("eda-layers-toggle", "layers")
                         .icon_size(18.0)
-                        .tooltip("Layers")
+                        .tooltip(tr("pcb-layers"))
                         .build(&t),
                     LayersToggle,
                 ));
@@ -135,7 +136,13 @@ fn sync(world: &mut World) {
             })
             .with_children(|h| {
                 h.spawn((
-                    t.text("Layers", t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+                    t.text(
+                        tr("pcb-layers"),
+                        t.font_sm,
+                        FontWeight::MEDIUM,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-layers"),
                     Node {
                         flex_grow: 1.0,
                         ..default()
@@ -144,7 +151,7 @@ fn sync(world: &mut World) {
                 h.spawn((
                     ToolButton::new("eda-layers-toggle", "close")
                         .icon_size(14.0)
-                        .tooltip("Close")
+                        .tooltip(tr("common-close"))
                         .build(&t),
                     LayersToggle,
                 ));
@@ -208,7 +215,11 @@ fn sync(world: &mut World) {
                             if visible { "visible" } else { "hidden" },
                         )
                         .icon_size(14.0)
-                        .tooltip(if visible { "Hide" } else { "Show" })
+                        .tooltip(tr(if visible {
+                            "common-hide"
+                        } else {
+                            "common-show"
+                        }))
                         .build(&t),
                         LayerEye(*l),
                     ));
@@ -223,7 +234,7 @@ fn sync(world: &mut World) {
                 BackgroundColor(t.separator),
             ));
             let mut dim_btn = cadrs_ui::Button::new("eda-layers-dim")
-                .label("Dim other layers")
+                .label(tr("pcb-layers-dim"))
                 .small();
             if dim {
                 dim_btn = dim_btn.primary();

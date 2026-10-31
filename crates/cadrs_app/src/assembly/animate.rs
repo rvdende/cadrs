@@ -23,6 +23,7 @@ use cadrs_core::assembly::mate::{Dof, MateId, MateType};
 use cadrs_core::assembly::solver::{Drive, SolveOptions};
 use cadrs_core::assembly::{Assembly, InstanceId};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, NumberField, NumberFieldCommit, NumberFieldState,
@@ -67,12 +68,12 @@ pub enum PlayMode {
 impl PlayMode {
     const ALL: [PlayMode; 3] = [PlayMode::Single, PlayMode::Reciprocate, PlayMode::Loop];
 
-    fn label(self) -> &'static str {
-        match self {
-            PlayMode::Single => "Single",
-            PlayMode::Reciprocate => "Reciprocate",
-            PlayMode::Loop => "Loop",
-        }
+    fn label(self) -> String {
+        tr(match self {
+            PlayMode::Single => "asm-animate-mode-single",
+            PlayMode::Reciprocate => "asm-animate-mode-reciprocate",
+            PlayMode::Loop => "asm-animate-mode-loop",
+        })
     }
 }
 
@@ -410,13 +411,13 @@ struct AnimateLayout {
     dofs: usize,
 }
 
-fn dof_label(d: Dof) -> &'static str {
-    match d {
-        Dof::X => "X translation",
-        Dof::Y => "Y translation",
-        Dof::Z => "Z translation",
-        Dof::Angle => "Z rotation",
-    }
+fn dof_label(d: Dof) -> String {
+    tr(match d {
+        Dof::X => "asm-dof-x-translation",
+        Dof::Y => "asm-dof-y-translation",
+        Dof::Z => "asm-dof-z-translation",
+        Dof::Angle => "asm-dof-z-rotation",
+    })
 }
 
 fn value_text(units: &cadrs_sketch::units::Units, dof: Dof, v: f64) -> String {
@@ -444,7 +445,7 @@ fn animate_dialog(
         },
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("animate-dialog")
-            .title("Animate")
+            .title(tr("asm-animate"))
             .valid(true)
             .width(224.0)
             .body(move |b| {
@@ -452,7 +453,7 @@ fn animate_dialog(
                 let s = &s2;
                 b.spawn(
                     SelectionList::new("animate-mate")
-                        .placeholder("Mate")
+                        .placeholder(tr("asm-mate"))
                         .items(vec![s.name.clone()])
                         .build(t),
                 )
@@ -478,16 +479,21 @@ fn animate_dialog(
                     (
                         Field::Start,
                         "animate-start",
-                        "Start",
+                        tr("asm-animate-start"),
                         value_text(&units, s.dof, s.start),
                     ),
                     (
                         Field::End,
                         "animate-end",
-                        "End",
+                        tr("asm-animate-end"),
                         value_text(&units, s.dof, s.end),
                     ),
-                    (Field::Steps, "animate-steps", "Steps", s.steps.to_string()),
+                    (
+                        Field::Steps,
+                        "animate-steps",
+                        tr("asm-animate-steps"),
+                        s.steps.to_string(),
+                    ),
                 ] {
                     b.spawn((
                         field,
@@ -519,17 +525,18 @@ fn animate_dialog(
                         IconButton::new("animate-reverse", "flip-horizontal")
                             .icon_size(16.0)
                             .selected(s.reverse)
-                            .tooltip("Reverse direction")
+                            .tooltip(tr("asm-reverse-direction"))
                             .build(t),
                     );
                     r.spawn((
                         Name::new("animate-current-label"),
                         t.text(
-                            "Current value",
+                            tr("asm-animate-current-value"),
                             11.0,
                             bevy::text::FontWeight::NORMAL,
                             t.muted_foreground,
                         ),
+                        Translated("asm-animate-current-value"),
                     ));
                     r.spawn(Node {
                         flex_grow: 1.0,
@@ -568,13 +575,13 @@ fn animate_dialog(
                 })
                 .with_children(|r| {
                     for (name, icon_name, size, tip) in [
-                        ("animate-play", "play", 21.0, "Play"),
-                        ("animate-stop", "stop", 21.0, "Stop"),
+                        ("animate-play", "play", 21.0, "asm-animate-play"),
+                        ("animate-stop", "stop", 21.0, "asm-animate-stop"),
                     ] {
                         r.spawn(
                             IconButton::new(name, icon_name)
                                 .icon_size(size)
-                                .tooltip(tip)
+                                .tooltip(tr(tip))
                                 .build(t),
                         )
                         .entry::<Node>()
@@ -591,7 +598,7 @@ fn animate_dialog(
                     r.spawn((
                         Name::new("animate-help"),
                         icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new("Help"),
+                        Tooltip::new(tr("common-help")),
                     ));
                 });
             })
@@ -685,19 +692,19 @@ fn sync_animate_dialog(
     let current = pb.map(|p| p.current).unwrap_or(s.now_of(s.dof));
     let text = value_text(&units.0, s.dof, current);
     let direction = match pb {
-        Some(p) if p.playing && p.dwell > 0 => "turning at the end".to_string(),
+        Some(p) if p.playing && p.dwell > 0 => tr("asm-animate-turning"),
         Some(p) if p.playing => {
             // Along the values' order (Start → End unless reversed), or back.
             let up =
                 p.values.last().copied().unwrap_or(0.0) >= p.values.first().copied().unwrap_or(0.0);
             let to_end = p.forward == up;
             if to_end {
-                "→ toward End".to_string()
+                tr("asm-animate-toward-end")
             } else {
-                "← toward Start".to_string()
+                tr("asm-animate-toward-start")
             }
         }
-        Some(_) => "stopped".to_string(),
+        Some(_) => tr("asm-animate-stopped"),
         None => String::new(),
     };
     for (mut t, is_dir) in &mut q_current {

@@ -22,6 +22,7 @@ use cadrs_core::commands::{
 use cadrs_core::{ElementId, FeatureId, PartId};
 use cadrs_sketch::{CurveId, FaceName};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -207,25 +208,30 @@ fn describe(world: &World, element: ElementId, target: &AppearanceTarget) -> (St
                 .iter()
                 .filter_map(|p| cache.part_name(*p).map(str::to_string))
                 .collect();
-            ("Edit appearance".into(), names.join(", "))
+            (tr("model-appearance-edit"), names.join(", "))
         }
         AppearanceTarget::Faces(part, faces) => {
             let n = faces.len();
-            let name = cache.part_name(*part).unwrap_or("part").to_string();
+            let name = cache
+                .part_name(*part)
+                .map_or_else(|| tr("model-unknown-part"), str::to_string);
             (
-                "Face appearance".into(),
+                tr("model-appearance-face"),
                 if n == 1 {
-                    format!("Face of {name}")
+                    tr_with("common-face-of", &[("name", &name)])
                 } else {
-                    format!("{n} faces of {name}")
+                    tr_with(
+                        "model-appearance-n-faces-of",
+                        &[("count", &n.to_string()), ("name", &name)],
+                    )
                 },
             )
         }
-        AppearanceTarget::Feature(f) => ("Feature appearance".into(), feature_name(*f)),
-        AppearanceTarget::Sketch(f) => ("Sketch appearance".into(), feature_name(*f)),
+        AppearanceTarget::Feature(f) => (tr("model-appearance-feature"), feature_name(*f)),
+        AppearanceTarget::Sketch(f) => (tr("model-appearance-sketch"), feature_name(*f)),
         AppearanceTarget::Curve(s, _) => (
-            "Curve appearance".into(),
-            format!("Curve of {}", feature_name(*s)),
+            tr("model-appearance-curve"),
+            tr_with("common-curve-of", &[("name", &feature_name(*s))]),
         ),
     }
 }
@@ -484,8 +490,11 @@ fn on_custom_menu(
         .min_width(140.0)
         .item_height(22.0)
         .text_only()
-        .item(MenuItem::new("custom-color-update", "Update color"))
-        .item(MenuItem::new("custom-color-delete", "Delete"));
+        .item(MenuItem::new(
+            "custom-color-update",
+            tr("model-appearance-update-color"),
+        ))
+        .item(MenuItem::new("custom-color-delete", tr("common-delete")));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
         .entity(anchor)

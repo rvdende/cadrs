@@ -204,7 +204,7 @@ impl SelectableText {
                             colors,
                         },
                         Hovered::default(),
-                        Tooltip::new("Copy"),
+                        Tooltip::new(crate::i18n::tr("common-copy")),
                         crate::icon::icon("copy", icon_size, colors.normal),
                         Visibility::Hidden,
                     ));

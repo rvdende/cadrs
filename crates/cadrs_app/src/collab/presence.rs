@@ -27,6 +27,7 @@ use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::bevy_iroh::iroh::EndpointId;
 use cadrs_net::bevy_iroh::prelude::{NetSender, PeerLeft, Received};
 use cadrs_net::{Doing, Draft, Picked, Presence, SketchPlane, View};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{MenuAction, MenuHeader, MenuItem, open_menu};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Avatar, IconButton};
@@ -275,19 +276,24 @@ fn hear(
             continue;
         }
         if !people.by_id.contains_key(&m.from.to_string()) {
-            let how = if t - people.since < ALREADY_THERE {
-                "is here"
-            } else {
-                "joined"
-            };
+            let here = t - people.since < ALREADY_THERE;
             // Where they are, as the avatar says it.
             let at = m
                 .msg
                 .tab
                 .and_then(|t| doc.as_ref()?.doc.element(t).map(|e| e.name.clone()));
-            let text = match at {
-                Some(at) => format!("{} {how}, in {at}", m.msg.name),
-                None => format!("{} {how}", m.msg.name),
+            let name = m.msg.name.as_str();
+            let text = match (at, here) {
+                (Some(at), true) => tr_with(
+                    "shell-presence-is-here-in",
+                    &[("name", name), ("tab", at.as_str())],
+                ),
+                (Some(at), false) => tr_with(
+                    "shell-presence-joined-in",
+                    &[("name", name), ("tab", at.as_str())],
+                ),
+                (None, true) => tr_with("shell-presence-is-here", &[("name", name)]),
+                (None, false) => tr_with("shell-presence-joined", &[("name", name)]),
             };
             joined.push((m.from.to_string(), m.msg.name.clone(), text));
         }
@@ -298,12 +304,16 @@ fn hear(
         };
         let (was, is) = (follows(before.map(|b| &b.presence)), follows(Some(&m.msg)));
         if is && !was {
-            toasts.push((m.from.to_string(), m.msg.name.clone(), "is following you"));
+            toasts.push((
+                m.from.to_string(),
+                m.msg.name.clone(),
+                "shell-presence-follows-you",
+            ));
         } else if was && !is {
             toasts.push((
                 m.from.to_string(),
                 m.msg.name.clone(),
-                "stopped following you",
+                "shell-presence-stopped-following-you",
             ));
         }
         let active = match before {
@@ -325,7 +335,7 @@ fn hear(
             && let Some(p) = people.by_id.remove(&l.id.to_string())
         {
             people.doing.remove(&l.id.to_string());
-            toasts.push((p.key(), p.presence.name, "left"));
+            toasts.push((p.key(), p.presence.name, "shell-presence-left"));
         }
     }
     let quiet: std::collections::BTreeSet<String> = people
@@ -346,14 +356,15 @@ fn hear(
     for k in stale {
         people.doing.remove(&k);
         if let Some(p) = people.by_id.remove(&k) {
-            toasts.push((k, p.presence.name, "left"));
+            toasts.push((k, p.presence.name, "shell-presence-left"));
         }
     }
     for (id, name, what) in toasts {
+        let text = tr_with(what, &[("name", name.as_str())]);
         cadrs_ui::show_notification(
             &mut commands,
             &theme,
-            cadrs_ui::Notification::info(format!("{name} {what}"))
+            cadrs_ui::Notification::info(text)
                 .name("collab-person-toast")
                 .avatar(name, color_of(&id)),
         );
@@ -368,13 +379,16 @@ fn hear(
                 .seconds(8.0),
         );
         let short: String = id.chars().take(8).collect();
-        for (action, label) in [("goto", "Go to"), ("follow", "Follow")] {
+        for (action, label) in [
+            ("goto", "shell-presence-toast-go-to"),
+            ("follow", "shell-presence-toast-follow"),
+        ] {
             let link = cadrs_ui::toast_action(
                 &mut commands,
                 &theme,
                 toast,
                 format!("collab-joined-{action}-{short}"),
-                label,
+                tr(label),
             );
             let id = id.clone();
             commands.entity(link).observe(
@@ -903,7 +917,7 @@ fn follow(world: &mut World) {
         .map(|p| p.presence.clone());
     let Some(leader) = leader else {
         world.remove_resource::<Following>();
-        crate::linked::toast(world, "Stopped following: they left");
+        crate::linked::toast(world, tr("shell-presence-leader-left"));
         return;
     };
     if t - f.since > 0.3 {
@@ -927,7 +941,13 @@ fn follow(world: &mut World) {
             d.set_active(tab);
             // Not the switch that follows the start.
             if t - f.since > 0.5 {
-                crate::linked::toast(world, format!("Following {} to {name}", leader.name));
+                crate::linked::toast(
+                    world,
+                    tr_with(
+                        "shell-presence-following-to",
+                        &[("name", leader.name.as_str()), ("tab", name.as_str())],
+                    ),
+                );
             }
         }
     }
@@ -975,9 +995,12 @@ pub(crate) fn with_idle(text: String, idle: Option<u32>) -> String {
         return text;
     };
     let idle = if m < 1 {
-        "idle".to_string()
+        tr("shell-presence-idle")
     } else {
-        format!("idle {m} min")
+        tr_with(
+            "shell-presence-idle-minutes",
+            &[("minutes", &m.to_string())],
+        )
     };
     if text.is_empty() {
         idle
@@ -989,13 +1012,51 @@ pub(crate) fn with_idle(text: String, idle: Option<u32>) -> String {
 /// Where someone is and what they do, for their card and tooltip: "In Part Studio 1, editing
 /// Extrude 1 · Line".
 pub(crate) fn whereabouts(doc: &ActiveDocument, p: &Presence, doing: Option<&str>) -> String {
-    let mut text = String::new();
-    if let Some(e) = p.tab.and_then(|t| doc.doc.element(t)) {
-        text.push_str(&format!("In {}", e.name));
-    }
-    if let Some(f) = editing_name(doc, p) {
-        text.push_str(&format!(", editing {f}"));
-    }
+    place_and_doing(doc, p, doing, false)
+}
+
+/// [`whereabouts`] after their name, in lower case: "in Part Studio 1, editing Extrude 1".
+pub(crate) fn whereabouts_after_name(
+    doc: &ActiveDocument,
+    p: &Presence,
+    doing: Option<&str>,
+) -> String {
+    place_and_doing(doc, p, doing, true)
+}
+
+fn place_and_doing(
+    doc: &ActiveDocument,
+    p: &Presence,
+    doing: Option<&str>,
+    after_name: bool,
+) -> String {
+    let tab = p
+        .tab
+        .and_then(|t| doc.doc.element(t))
+        .map(|e| e.name.clone());
+    let mut text = match (tab, editing_name(doc, p)) {
+        (Some(tab), Some(f)) => tr_with(
+            if after_name {
+                "shell-presence-after-name-in-tab-editing"
+            } else {
+                "shell-presence-in-tab-editing"
+            },
+            &[("tab", tab.as_str()), ("feature", f.as_str())],
+        ),
+        (Some(tab), None) => tr_with(
+            if after_name {
+                "shell-presence-after-name-in-tab"
+            } else {
+                "shell-presence-in-tab"
+            },
+            &[("tab", tab.as_str())],
+        ),
+        (None, Some(f)) => format!(
+            ", {}",
+            tr_with("shell-presence-editing", &[("feature", f.as_str())])
+        ),
+        (None, None) => String::new(),
+    };
     if let Some(d) = doing.filter(|d| !d.is_empty()) {
         if !text.is_empty() {
             text.push_str(" · ");
@@ -1075,11 +1136,14 @@ fn sync_people_bar(
                 tip.push_str(&format!(" · {place}"));
             }
             if follows_me {
-                tip.push_str(" · following you");
+                tip.push_str(&format!(" · {}", tr("shell-presence-avatar-follows-you")));
             }
             let stale = people.stale.contains(&key);
             if stale {
-                tip = format!("{} · reconnecting…", p.presence.name);
+                tip = tr_with(
+                    "shell-presence-reconnecting-name",
+                    &[("name", p.presence.name.as_str())],
+                );
             }
             (
                 key,
@@ -1116,7 +1180,7 @@ fn sync_people_bar(
             b.spawn(
                 IconButton::new("collab-voice-join", "volume-mute")
                     .small()
-                    .tooltip("Join voice: talk with everyone in this document")
+                    .tooltip(tr("shell-presence-voice-join"))
                     .build(t),
             );
         } else if available {
@@ -1126,13 +1190,17 @@ fn sync_people_bar(
                     if muted { "volume-mute" } else { "volume" },
                 )
                 .small()
-                .tooltip(if muted { "Unmute" } else { "Mute" })
+                .tooltip(tr(if muted {
+                    "shell-presence-voice-unmute"
+                } else {
+                    "shell-presence-voice-mute"
+                }))
                 .build(t),
             );
             b.spawn(
                 IconButton::new("collab-voice-leave", "close")
                     .small()
-                    .tooltip("Leave voice")
+                    .tooltip(tr("shell-presence-voice-leave"))
                     .build(t),
             )
             .entry::<Node>()
@@ -1149,9 +1217,9 @@ fn sync_people_bar(
             };
             let outlined = *follows_me || *i_follow;
             let tip = if *i_follow {
-                format!("{tip}. Following: click for more")
+                tr_with("shell-presence-avatar-following", &[("who", tip.as_str())])
             } else {
-                format!("{tip}. Click to follow or go to them")
+                tr_with("shell-presence-avatar-click", &[("who", tip.as_str())])
             };
             b.spawn((
                 Name::new(format!("collab-avatar-{}", &key[..8.min(key.len())])),
@@ -1237,7 +1305,7 @@ fn on_avatar_click(ev: On<PointerClick>, q: Query<&PersonAvatar>, mut commands: 
             world.resource::<super::pointers::Pointers>().moved_at(&id),
         );
         let place = if world.resource::<People>().stale.contains(&id) {
-            "Reconnecting…".to_string()
+            tr("shell-presence-reconnecting")
         } else {
             world
                 .get_resource::<ActiveDocument>()
@@ -1254,11 +1322,14 @@ fn on_avatar_click(ev: On<PointerClick>, q: Query<&PersonAvatar>, mut commands: 
             header = header.subtitle(place);
         }
         let follow = if following {
-            MenuItem::new("collab-person-follow", "Stop following").icon("close")
+            MenuItem::new("collab-person-follow", tr("shell-person-stop-following")).icon("close")
         } else {
-            MenuItem::new("collab-person-follow", format!("Follow {name}"))
-                .icon("visible")
-                .tooltip("See their tab and their view as they move")
+            MenuItem::new(
+                "collab-person-follow",
+                tr_with("shell-person-follow", &[("name", name.as_str())]),
+            )
+            .icon("visible")
+            .tooltip(tr("shell-presence-follow-tooltip"))
         };
         // Beside the avatar, not under it.
         let menu = cadrs_ui::Menu::new("collab-person-menu")
@@ -1268,9 +1339,12 @@ fn on_avatar_click(ev: On<PointerClick>, q: Query<&PersonAvatar>, mut commands: 
             .separator()
             .item(follow)
             .item(
-                MenuItem::new("collab-person-goto", format!("Go to {name}'s view"))
-                    .icon("location")
-                    .tooltip("Open their tab and view, once"),
+                MenuItem::new(
+                    "collab-person-goto",
+                    tr_with("shell-person-go-to", &[("name", name.as_str())]),
+                )
+                .icon("location")
+                .tooltip(tr("shell-presence-go-to-tooltip")),
             );
         let theme = world.resource::<Theme>().clone();
         open_menu(&mut world.commands(), anchor, menu.build(&theme));
@@ -1475,7 +1549,10 @@ fn sync_follow_outline(
                 ),
                 (
                     t.text(
-                        format!("Following {name}"),
+                        tr_with(
+                            "shell-presence-following-banner",
+                            &[("name", name.as_str())]
+                        ),
                         t.font_sm,
                         FontWeight::SEMIBOLD,
                         Avatar::ink_on(color)
@@ -1496,10 +1573,16 @@ fn sync_follow_outline(
                     },
                     BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.28)),
                     cadrs_ui::color_scheme::KeepFill,
-                    Tooltip::new("Stop following (Esc, or click anywhere)"),
+                    Tooltip::new(tr("shell-presence-stop-tooltip")),
                     children![
                         (
-                            t.text("Stop", t.font_sm, FontWeight::MEDIUM, Color::WHITE),
+                            t.text(
+                                tr("shell-presence-stop"),
+                                t.font_sm,
+                                FontWeight::MEDIUM,
+                                Color::WHITE
+                            ),
+                            Translated("shell-presence-stop"),
                             Pickable::IGNORE,
                         ),
                         (

@@ -36,6 +36,7 @@ use cadrs_core::sheetmetal_loft::{
 use cadrs_core::{Feature, FeatureId, FeatureKind, PartId};
 use cadrs_sheetmetal::params::{BendCalc, BendReliefKind, CornerReliefKind};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, Collapsible, CollapsibleToggled, FloatingPanel, FloatingPanelClose,
@@ -121,10 +122,11 @@ impl Sm9Kind {
     }
 }
 
+/// The sections' names and their titles' catalog keys.
 const SECTIONS: [(&str, &str); 3] = [
-    ("sm9-general", "General"),
-    ("sm9-material", "Material"),
-    ("sm9-relief", "Relief"),
+    ("sm9-general", "sheet-section-general"),
+    ("sm9-material", "common-material"),
+    ("sm9-relief", "sheet-section-relief"),
 ];
 
 pub struct Sm9Plugin;
@@ -674,39 +676,44 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-part"), |f| f.name.clone())
 }
 
 fn name_of(features: &[Feature], id: FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-sketch"), |f| f.name.clone())
+}
+
+/// `key` ("… of { $name }") filled with `name`.
+fn of(key: &str, name: String) -> String {
+    tr_with(key, &[("name", &name)])
 }
 
 fn item_label(features: &[Feature], it: &LoftItem) -> String {
     match it {
-        LoftItem::Region(r) => format!("Face of {}", name_of(features, r.sketch)),
-        LoftItem::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
-        LoftItem::Curve(c) => format!("Edge of {}", name_of(features, c.sketch)),
-        LoftItem::Edge(e) => format!(
-            "Edge of {}",
-            op_name(features, crate::parts::edge_maker(features, &e.edge))
+        LoftItem::Region(r) => of("common-face-of", name_of(features, r.sketch)),
+        LoftItem::Face(f) => of("common-face-of", op_name(features, f.face.op)),
+        LoftItem::Curve(c) => of("common-edge-of", name_of(features, c.sketch)),
+        LoftItem::Edge(e) => of(
+            "common-edge-of",
+            op_name(features, crate::parts::edge_maker(features, &e.edge)),
         ),
-        LoftItem::SketchPoint { sketch, .. } => format!("Point of {}", name_of(features, *sketch)),
-        LoftItem::Vertex(v) => format!("Vertex of {}", name_of(features, v.part.feature)),
+        LoftItem::SketchPoint { sketch, .. } => of("sheet-point-of", name_of(features, *sketch)),
+        LoftItem::Vertex(v) => of("common-vertex-of", name_of(features, v.part.feature)),
     }
 }
 
 fn location_label(features: &[Feature], l: &FormLocation) -> String {
     match l {
-        FormLocation::SketchPoints(s) => format!("Vertices of {}", name_of(features, *s)),
+        FormLocation::SketchPoints(s) => of("sheet-vertices-of", name_of(features, *s)),
         FormLocation::Connector(ConnectorRef::Implicit(ConnectorOrigin::SketchPoint {
             sketch,
             ..
-        })) => format!("Point of {}", name_of(features, *sketch)),
+        })) => of("sheet-point-of", name_of(features, *sketch)),
         FormLocation::Connector(ConnectorRef::Implicit(ConnectorOrigin::Vertex(v))) => {
-            format!("Vertex of {}", name_of(features, v.part.feature))
+            of("common-vertex-of", name_of(features, v.part.feature))
         }
         FormLocation::Connector(c) => c.label(features),
     }
@@ -737,10 +744,16 @@ pub fn lists(
             for (i, c) in x.connections.iter().enumerate() {
                 let mut items = Vec::new();
                 if c.t1 >= 0.0 {
-                    items.push(format!("Point of Profile 1 ({:.0}%)", c.t1 * 100.0));
+                    items.push(tr_with(
+                        "sheet-point-of-profile-1",
+                        &[("percent", &format!("{:.0}", c.t1 * 100.0))],
+                    ));
                 }
                 if c.t2 >= 0.0 {
-                    items.push(format!("Point of Profile 2 ({:.0}%)", c.t2 * 100.0));
+                    items.push(tr_with(
+                        "sheet-point-of-profile-2",
+                        &[("percent", &format!("{:.0}", c.t2 * 100.0))],
+                    ));
                 }
                 v.push((Sm9Field::LoftConnection(i), items));
             }
@@ -758,7 +771,7 @@ pub fn lists(
                 Sm9Field::FormTargets,
                 x.targets
                     .iter()
-                    .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                    .map(|f| of("common-face-of", op_name(features, f.face.op)))
                     .collect(),
             ),
         ],
@@ -892,7 +905,7 @@ fn number(
                 &format!("{name}-flip"),
                 role,
                 on,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             ),
             None => {
                 r.spawn(Node {
@@ -905,11 +918,12 @@ fn number(
     });
 }
 
+/// A select with its label (a catalog key, or empty).
 fn select(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
-    label: &str,
+    label: &'static str,
     role: Sm9Role,
     options: &[String],
     selected: usize,
@@ -929,11 +943,12 @@ fn select(
         if !label.is_empty() {
             r.spawn((
                 t.text(
-                    label,
+                    tr(label),
                     11.0,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated(label),
                 Node {
                     width: Val::Px(90.0),
                     flex_shrink: 0.0,
@@ -955,8 +970,8 @@ fn check(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, on: bool) {
     );
 }
 
-fn labels<T: Copy>(all: &[T], label: impl Fn(T) -> &'static str) -> Vec<String> {
-    all.iter().map(|x| label(*x).to_string()).collect()
+fn labels<T: Copy>(all: &[T], label: impl Fn(T) -> String) -> Vec<String> {
+    all.iter().map(|x| label(*x)).collect()
 }
 
 fn index_of<T: PartialEq>(all: &[T], x: &T) -> usize {
@@ -1005,20 +1020,21 @@ pub fn body(
         FeatureKind::Form(x) => crate::applied_dialog::body_column(b, |c| {
             c.spawn((
                 t.text(
-                    "Form Part Studio",
+                    tr("sheet-form-part-studio"),
                     11.0,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("sheet-form-part-studio"),
                 Node {
                     margin: UiRect::new(Val::Px(4.0), Val::ZERO, Val::Px(4.0), Val::Px(2.0)),
                     ..default()
                 },
             ));
-            let label = x
-                .form
-                .as_ref()
-                .map_or("Select Part Studio...".to_string(), |f| f.name.clone());
+            let label = x.form.as_ref().map_or_else(
+                || tr("sheet-select-part-studio-ellipsis"),
+                |f| f.name.clone(),
+            );
             let picked = x.form.is_some();
             c.spawn((
                 Sm9Role::FormStudio,
@@ -1027,7 +1043,7 @@ pub fn body(
                     .icon("part-studio")
                     .outline()
                     .width(Val::Percent(100.0))
-                    .tooltip("Select Part Studio")
+                    .tooltip(tr("sheet-select-part-studio"))
                     .build(t),
             ))
             .entry::<Node>()
@@ -1054,7 +1070,7 @@ pub fn body(
                         l,
                         t,
                         "form-locations-field",
-                        "Location(s)",
+                        &tr("sheet-form-locations"),
                         Sm9Field::FormLocations,
                         items,
                         field,
@@ -1064,7 +1080,7 @@ pub fn body(
                     Sm9Role::FormConnectorIcon,
                     cadrs_ui::IconButton::new("form-connector", "mate-connector")
                         .icon_size(18.0)
-                        .tooltip("Mate connector: pick an implicit one in the view")
+                        .tooltip(tr("sheet-form-connector-tooltip"))
                         .build(t),
                 ))
                 .entry::<Node>()
@@ -1079,14 +1095,14 @@ pub fn body(
                     "form-flip",
                     Sm9Role::FormFlip,
                     x.flip,
-                    "Opposite direction",
+                    &tr("common-opposite-direction"),
                 );
             });
             list(
                 c,
                 t,
                 "form-targets-field",
-                "Target face(s)",
+                &tr("sheet-form-target-faces"),
                 Sm9Field::FormTargets,
                 items,
                 field,
@@ -1099,14 +1115,14 @@ pub fn body(
                 "tag-type",
                 "",
                 Sm9Role::TagType,
-                &["Form".to_string()],
+                &[tr("sheet-form")],
                 0,
             );
             list(
                 c,
                 t,
                 "tag-add-field",
-                "Part to add",
+                &tr("sheet-tag-part-to-add"),
                 Sm9Field::TagAdd,
                 items,
                 field,
@@ -1115,7 +1131,7 @@ pub fn body(
                 c,
                 t,
                 "tag-remove-field",
-                "Part to remove",
+                &tr("sheet-tag-part-to-remove"),
                 Sm9Field::TagRemove,
                 items,
                 field,
@@ -1124,7 +1140,7 @@ pub fn body(
                 c,
                 t,
                 "tag-sketch-field",
-                "Sketch for flat view",
+                &tr("sheet-tag-sketch-for-flat-view"),
                 Sm9Field::TagSketch,
                 items,
                 field,
@@ -1133,7 +1149,7 @@ pub fn body(
                 c,
                 t,
                 "tag-origin-field",
-                "Form origin mate connector",
+                &tr("sheet-tag-form-origin-connector"),
                 Sm9Field::TagOrigin,
                 items,
                 field,
@@ -1153,7 +1169,10 @@ fn loft_body(
 ) {
     let mut strip = TabStrip::new("sheet-metal-loft-op").compact();
     for op in SmLoftOp::ALL {
-        strip = strip.tab(op.label());
+        strip = strip.tab(tr(match op {
+            SmLoftOp::New => "sheet-loft-new",
+            SmLoftOp::Add => "common-add",
+        }));
     }
     b.spawn((
         Sm9Role::LoftTab,
@@ -1174,7 +1193,7 @@ fn loft_body(
                 c,
                 t,
                 "sm-loft-scope-field",
-                "Merge scope",
+                &tr("common-merge-scope"),
                 Sm9Field::LoftScope,
                 &items,
                 field,
@@ -1184,7 +1203,7 @@ fn loft_body(
             c,
             t,
             "sm-loft-profile1-field",
-            "Profile 1",
+            &tr("sheet-profile-1"),
             Sm9Field::LoftProfile1,
             &items,
             field,
@@ -1193,13 +1212,13 @@ fn loft_body(
             c,
             t,
             "sm-loft-profile2-field",
-            "Profile 2",
+            &tr("sheet-profile-2"),
             Sm9Field::LoftProfile2,
             &items,
             field,
         );
         c.spawn(
-            OptionRow::new("sm9-connections", "Connections")
+            OptionRow::new("sm9-connections", tr("sheet-connections"))
                 .chevron()
                 .checked(x.connections_on)
                 .build(t),
@@ -1214,11 +1233,14 @@ fn loft_body(
             })
             .insert(BorderColor::all(t.border))
             .with_children(|m| {
-                m.spawn(t.text(
-                    "Match connections",
-                    10.0,
-                    bevy::text::FontWeight::NORMAL,
-                    t.muted_foreground,
+                m.spawn((
+                    t.text(
+                        tr("sheet-match-connections"),
+                        10.0,
+                        bevy::text::FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("sheet-match-connections"),
                 ));
                 for (i, c) in x.connections.iter().enumerate() {
                     // Each connection a group under its "N selections" header, with a × that
@@ -1238,7 +1260,14 @@ fn loft_body(
                         h.spawn(cadrs_ui::icon::icon("chevron-down", 10.0, t.foreground));
                         h.spawn((
                             t.text(
-                                format!("{n} selection{}", if n == 1 { "" } else { "s" }),
+                                tr_with(
+                                    if n == 1 {
+                                        "sheet-one-selection"
+                                    } else {
+                                        "sheet-selections-count"
+                                    },
+                                    &[("count", &n.to_string())],
+                                ),
                                 11.0,
                                 bevy::text::FontWeight::NORMAL,
                                 t.foreground,
@@ -1256,7 +1285,7 @@ fn loft_body(
                             )
                             .icon_size(10.0)
                             .small()
-                            .tooltip("Remove connection")
+                            .tooltip(tr("sheet-remove-connection"))
                             .build(t),
                         ));
                     });
@@ -1270,18 +1299,18 @@ fn loft_body(
                             g,
                             t,
                             &format!("sm-loft-connection-{i}-field"),
-                            "Vertices or edges",
+                            &tr("sheet-vertices-or-edges"),
                             Sm9Field::LoftConnection(i),
                             &items,
                             field,
                         );
-                        check(g, t, &format!("sm9-rip-{i}"), "Rip", c.rip);
+                        check(g, t, &format!("sm9-rip-{i}"), &tr("sheet-joint-rip"), c.rip);
                     });
                 }
                 m.spawn((
                     Sm9Role::AddConnection,
                     cadrs_ui::Button::new("sm-loft-add-connection")
-                        .label("Add connection")
+                        .label(tr("sheet-add-connection"))
                         .ghost()
                         .small()
                         .build(t),
@@ -1292,7 +1321,7 @@ fn loft_body(
             c,
             t,
             "sm-loft-chordal-tolerance",
-            "Chordal tolerance",
+            &tr("sheet-chordal-tolerance"),
             Sm9Num::Chordal,
             &x.chordal_tolerance_expr,
             None,
@@ -1301,7 +1330,7 @@ fn loft_body(
             let x1 = x.clone();
             let t1 = t.clone();
             c.spawn(
-                Collapsible::new(SECTIONS[0].0, SECTIONS[0].1)
+                Collapsible::new(SECTIONS[0].0, tr(SECTIONS[0].1))
                     .section()
                     .open(open[0])
                     .content(move |c| {
@@ -1310,7 +1339,7 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-thickness",
-                            "Thickness",
+                            &tr("common-thickness"),
                             Sm9Num::Model(SmNum::Thickness),
                             &x.exprs.thickness,
                             Some((Sm9Role::ThicknessFlip, x.flip_thickness)),
@@ -1319,7 +1348,7 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-bend-radius",
-                            "Bend radius",
+                            &tr("sheet-bend-radius"),
                             Sm9Num::Model(SmNum::BendRadius),
                             &x.exprs.bend_radius,
                             None,
@@ -1328,7 +1357,7 @@ fn loft_body(
                             c,
                             t,
                             "sm9-flip-direction-up",
-                            "Flip direction up",
+                            &tr("sheet-flip-direction-up"),
                             x.params.flip_direction_up,
                         );
                     })
@@ -1337,7 +1366,7 @@ fn loft_body(
             let x2 = x.clone();
             let t2 = t.clone();
             c.spawn(
-                Collapsible::new(SECTIONS[1].0, SECTIONS[1].1)
+                Collapsible::new(SECTIONS[1].0, tr(SECTIONS[1].1))
                     .section()
                     .open(open[1])
                     .content(move |c| {
@@ -1347,9 +1376,9 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-bend-calculation",
-                            "Bend calculation",
+                            "sheet-bend-calculation",
                             Sm9Role::BendCalc,
-                            &labels(&BendCalc::ALL, BendCalc::label),
+                            &labels(&BendCalc::ALL, crate::sheetmetal_ui::bend_calc_label),
                             index_of(&BendCalc::ALL, &p.bend_calc),
                         );
                         match p.bend_calc {
@@ -1357,7 +1386,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-k-factor",
-                                "Default bend K Factor",
+                                &tr("sheet-default-bend-k-factor"),
                                 Sm9Num::Model(SmNum::KFactor),
                                 &x.exprs.k_factor,
                                 None,
@@ -1366,7 +1395,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-bend-allowance",
-                                "Default bend allowance",
+                                &tr("sheet-default-bend-allowance"),
                                 Sm9Num::Model(SmNum::Allowance),
                                 &x.exprs.bend_allowance,
                                 None,
@@ -1375,7 +1404,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-bend-deduction",
-                                "Default bend deduction",
+                                &tr("sheet-default-bend-deduction"),
                                 Sm9Num::Model(SmNum::Deduction),
                                 &x.exprs.bend_deduction,
                                 None,
@@ -1385,7 +1414,7 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-rolled-k-factor",
-                            "Rolled K Factor",
+                            &tr("sheet-rolled-k-factor"),
                             Sm9Num::Model(SmNum::RolledK),
                             &x.exprs.rolled_k_factor,
                             None,
@@ -1396,7 +1425,7 @@ fn loft_body(
             let x3 = x.clone();
             let t3 = t.clone();
             c.spawn(
-                Collapsible::new(SECTIONS[2].0, SECTIONS[2].1)
+                Collapsible::new(SECTIONS[2].0, tr(SECTIONS[2].1))
                     .section()
                     .open(open[2])
                     .content(move |c| {
@@ -1406,7 +1435,7 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-minimal-gap",
-                            "Minimal gap",
+                            &tr("sheet-minimal-gap"),
                             Sm9Num::Model(SmNum::MinimalGap),
                             &x.exprs.minimal_gap,
                             None,
@@ -1415,9 +1444,12 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-corner-relief-type",
-                            "Corner relief type",
+                            "sheet-corner-relief-type",
                             Sm9Role::CornerType,
-                            &labels(&CornerReliefKind::ALL, CornerReliefKind::label),
+                            &labels(
+                                &CornerReliefKind::ALL,
+                                crate::sheetmetal_ui::corner_relief_label,
+                            ),
                             index_of(&CornerReliefKind::ALL, &p.corner_relief.kind),
                         );
                         match p.corner_relief.kind {
@@ -1425,7 +1457,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-corner-relief-scale",
-                                "Corner relief scale",
+                                &tr("sheet-corner-relief-scale"),
                                 Sm9Num::Model(SmNum::CornerScale),
                                 &x.exprs.corner_relief_scale,
                                 None,
@@ -1434,7 +1466,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-corner-relief-size",
-                                "Corner relief width",
+                                &tr("sheet-corner-relief-width"),
                                 Sm9Num::Model(SmNum::CornerSize),
                                 &x.exprs.corner_relief_size,
                                 None,
@@ -1443,7 +1475,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-corner-relief-size",
-                                "Corner relief diameter",
+                                &tr("sheet-corner-relief-diameter"),
                                 Sm9Num::Model(SmNum::CornerSize),
                                 &x.exprs.corner_relief_size,
                                 None,
@@ -1454,9 +1486,12 @@ fn loft_body(
                             c,
                             t,
                             "sm-loft-bend-relief-type",
-                            "Bend relief type",
+                            "sheet-bend-relief-type",
                             Sm9Role::BendReliefType,
-                            &labels(&BendReliefKind::MODEL, BendReliefKind::label),
+                            &labels(
+                                &BendReliefKind::MODEL,
+                                crate::sheetmetal_ui::bend_relief_label,
+                            ),
                             index_of(&BendReliefKind::MODEL, &p.bend_relief.kind),
                         );
                         if p.bend_relief.kind.is_scaled() {
@@ -1464,7 +1499,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-bend-relief-depth-scale",
-                                "Bend relief depth scale",
+                                &tr("sheet-bend-relief-depth-scale"),
                                 Sm9Num::Model(SmNum::BendDepthScale),
                                 &x.exprs.bend_relief_depth_scale,
                                 None,
@@ -1473,7 +1508,7 @@ fn loft_body(
                                 c,
                                 t,
                                 "sm-loft-bend-relief-width-scale",
-                                "Bend relief width scale",
+                                &tr("sheet-bend-relief-width-scale"),
                                 Sm9Num::Model(SmNum::BendWidthScale),
                                 &x.exprs.bend_relief_width_scale,
                                 None,
@@ -1513,7 +1548,7 @@ fn range_error(kind: &FeatureKind, n: Sm9Num) -> Option<String> {
     match (kind, n) {
         (FeatureKind::SheetMetalLoft(x), Sm9Num::Chordal) => (x.chordal_tolerance.is_nan()
             || x.chordal_tolerance <= 0.0)
-            .then(|| "Chordal tolerance must be greater than 0".into()),
+            .then(|| tr("sheet-chordal-tolerance-greater-than-0")),
         (FeatureKind::SheetMetalLoft(x), Sm9Num::Model(m)) => {
             crate::sheetmetal_ui::range_error(&as_model(x), m)
         }
@@ -1576,7 +1611,7 @@ fn sync_dialog(
                 }
             }
         }
-        let want_tip = err.or_else(|| st.error.then(|| "Not a valid value".to_string()));
+        let want_tip = err.or_else(|| st.error.then(|| tr("sheet-not-a-valid-value")));
         match (want_tip, tip) {
             (Some(m), Some(t)) if t.text == m => {}
             (Some(m), _) => {
@@ -1593,12 +1628,13 @@ fn sync_dialog(
 // ---------------------------------------------------------------------------------------------
 // Input
 
+/// A change of the feature, one command named by `label` (a catalog key).
 fn change(
     commands: &mut Commands,
     label: &'static str,
     f: impl FnOnce(&mut FeatureKind) + Send + 'static,
 ) {
-    commands.queue(move |world: &mut World| crate::applied::change_kind(world, label, f));
+    commands.queue(move |world: &mut World| crate::applied::change_kind(world, &tr(label), f));
 }
 
 fn set_field(commands: &mut Commands, f: Sm9Field) {
@@ -1614,7 +1650,7 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Sm9Role>, mut commands: Commands) {
     match q.get(ev.entity) {
         Ok(Sm9Role::LoftTab) => {
             let op = SmLoftOp::ALL[i.min(1)];
-            change(&mut commands, "New / Add", move |k| {
+            change(&mut commands, "sheet-loft-new-add", move |k| {
                 if let FeatureKind::SheetMetalLoft(x) = k {
                     x.op = op;
                 }
@@ -1651,9 +1687,9 @@ fn on_select(ev: On<SelectChange>, q: Query<&Sm9Role>, mut commands: Commands) {
     match role {
         Sm9Role::BendCalc | Sm9Role::CornerType | Sm9Role::BendReliefType => {
             let label = match role {
-                Sm9Role::BendCalc => "Bend calculation",
-                Sm9Role::CornerType => "Corner relief type",
-                _ => "Bend relief type",
+                Sm9Role::BendCalc => "sheet-bend-calculation",
+                Sm9Role::CornerType => "sheet-corner-relief-type",
+                _ => "sheet-bend-relief-type",
             };
             change(&mut commands, label, move |k| {
                 if let FeatureKind::SheetMetalLoft(x) = k {
@@ -1706,7 +1742,7 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
                 .and_then(|a| Guides::decode(a))
         });
         let mut field = None;
-        crate::applied::change_kind(world, "Connections", |k| {
+        crate::applied::change_kind(world, &tr("sheet-connections"), |k| {
             let FeatureKind::SheetMetalLoft(x) = k else {
                 return;
             };
@@ -1792,12 +1828,14 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&Sm9Role>, mut commands: Comman
                 }
                 return;
             }
-            Sm9Num::Chordal => crate::applied::change_kind(world, "Chordal tolerance", |k| {
-                if let FeatureKind::SheetMetalLoft(x) = k {
-                    x.chordal_tolerance = v;
-                    x.chordal_tolerance_expr = expr;
-                }
-            }),
+            Sm9Num::Chordal => {
+                crate::applied::change_kind(world, &tr("sheet-chordal-tolerance"), |k| {
+                    if let FeatureKind::SheetMetalLoft(x) = k {
+                        x.chordal_tolerance = v;
+                        x.chordal_tolerance_expr = expr;
+                    }
+                })
+            }
             Sm9Num::Model(m) => {
                 crate::applied::change_kind(world, crate::sheetmetal_ui::number_label(m), |k| {
                     if let FeatureKind::SheetMetalLoft(x) = k {
@@ -1821,12 +1859,12 @@ fn on_button(a: On<Activate>, q: Query<&Sm9Role>, mut commands: Commands) {
         return;
     };
     match role {
-        Sm9Role::ThicknessFlip => change(&mut commands, "Flip thickness direction", |k| {
+        Sm9Role::ThicknessFlip => change(&mut commands, "sheet-flip-thickness-direction", |k| {
             if let FeatureKind::SheetMetalLoft(x) = k {
                 x.flip_thickness = !x.flip_thickness;
             }
         }),
-        Sm9Role::FormFlip => change(&mut commands, "Opposite direction", |k| {
+        Sm9Role::FormFlip => change(&mut commands, "common-opposite-direction", |k| {
             if let FeatureKind::Form(x) = k {
                 x.flip = !x.flip;
             }
@@ -1836,7 +1874,7 @@ fn on_button(a: On<Activate>, q: Query<&Sm9Role>, mut commands: Commands) {
         // on each profile (each pick goes to the profile it is nearer).
         Sm9Role::AddConnection => commands.queue(|world: &mut World| {
             let mut n = None;
-            crate::applied::change_kind(world, "Add connection", |k| {
+            crate::applied::change_kind(world, &tr("sheet-add-connection"), |k| {
                 if let FeatureKind::SheetMetalLoft(x) = k {
                     x.connections.retain(|c| c.t1 >= 0.0 || c.t2 >= 0.0);
                     x.connections.push(LoftConnection::pending());
@@ -1847,16 +1885,18 @@ fn on_button(a: On<Activate>, q: Query<&Sm9Role>, mut commands: Commands) {
                 s.field = AppliedField::Sm9(Sm9Field::LoftConnection(i));
             }
         }),
-        Sm9Role::RemoveConnection(i) => change(&mut commands, "Remove connection", move |k| {
-            if let FeatureKind::SheetMetalLoft(x) = k
-                && i < x.connections.len()
-            {
-                x.connections.remove(i);
-                if x.connections.is_empty() {
-                    x.connections_on = false;
+        Sm9Role::RemoveConnection(i) => {
+            change(&mut commands, "sheet-remove-connection", move |k| {
+                if let FeatureKind::SheetMetalLoft(x) = k
+                    && i < x.connections.len()
+                {
+                    x.connections.remove(i);
+                    if x.connections.is_empty() {
+                        x.connections_on = false;
+                    }
                 }
-            }
-        }),
+            })
+        }
         Sm9Role::FormStudio => commands.queue(open_picker),
         Sm9Role::PickerDone => commands.queue(picker_done),
         _ => {}
@@ -1868,7 +1908,7 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&Sm9Role>, mut commands:
     let Ok(Sm9Role::List(f)) = q.get(ev.entity).copied() else {
         return;
     };
-    change(&mut commands, "Remove selection", move |k| {
+    change(&mut commands, "common-remove-selection", move |k| {
         fn at<T>(v: &mut Vec<T>, i: usize) {
             if i < v.len() {
                 v.remove(i);
@@ -2127,7 +2167,7 @@ fn picker_done(world: &mut World) {
             .unwrap_or_default();
     }
     world.resource_mut::<FormPicker>().open = false;
-    crate::applied::change_kind(world, "Select Part Studio", |k| {
+    crate::applied::change_kind(world, &tr("sheet-select-part-studio"), |k| {
         if let FeatureKind::Form(x) = k {
             x.form = Some(pick);
             x.variables = values;
@@ -2195,16 +2235,13 @@ fn sync_picker(world: &mut World) {
     let q = p.query.clone();
     let (cur, oth) = (doc_shown(&p.current, &q), doc_shown(&p.others, &q));
     type Rows<'a> = Vec<(&'a str, Sm9Role, Vec<String>, usize)>;
-    let libraries = vec![LIBRARY_NAME.to_string(), MY_FORMS.to_string()];
+    let libraries = vec![LIBRARY_NAME.to_string(), tr(MY_FORMS)];
     let (rows, empty): (Rows, Option<&str>) = match tab {
         // My sheet metal forms: this document's form Part Studios.
         2 if p.document == 1 => {
             let lib = ("Library", Sm9Role::PickerDocument, libraries.clone(), 1);
             if cur.is_empty() {
-                (
-                    vec![lib],
-                    Some("No Part Studio of this document is tagged as a form"),
-                )
+                (vec![lib], Some("sheet-picker-none-tagged"))
             } else {
                 (
                     vec![
@@ -2222,7 +2259,7 @@ fn sync_picker(world: &mut World) {
         }
         2 if library_kinds(&q).is_empty() => (
             vec![("Library", Sm9Role::PickerDocument, libraries.clone(), 0)],
-            Some("No form matches the search"),
+            Some("sheet-picker-no-match"),
         ),
         2 => (
             vec![
@@ -2245,13 +2282,10 @@ fn sync_picker(world: &mut World) {
             ],
             None,
         ),
-        0 if p.current.is_empty() => (
-            Vec::new(),
-            Some("No Part Studio of this document has a Tag (Form)"),
-        ),
-        1 if p.others.is_empty() => (Vec::new(), Some("No other document has a form Part Studio")),
+        0 if p.current.is_empty() => (Vec::new(), Some("sheet-picker-none-in-document")),
+        1 if p.others.is_empty() => (Vec::new(), Some("sheet-picker-none-in-others")),
         _ if (if tab == 0 { &cur } else { &oth }).is_empty() => {
-            (Vec::new(), Some("No form matches the search"))
+            (Vec::new(), Some("sheet-picker-no-match"))
         }
         0 => (
             vec![(
@@ -2290,9 +2324,17 @@ fn sync_picker(world: &mut World) {
             .and_then(|d| studio_problem(&d.name, &d.studio)),
         _ => None,
     };
-    let rows: Vec<(String, Sm9Role, Vec<String>, usize)> = rows
+    // (Each row: its name, its label's catalog key, …)
+    let rows: Vec<(String, &'static str, Sm9Role, Vec<String>, usize)> = rows
         .into_iter()
-        .map(|(a, b, c, d)| (a.to_string(), b, c, d))
+        .map(|(a, b, c, d)| {
+            let key = match a {
+                "Library" => "sheet-picker-library",
+                "Type" => "common-type",
+                _ => "sheet-form",
+            };
+            (a.to_string(), key, b, c, d)
+        })
         .collect();
     // The shown form's preview (made once per form and variables).
     let pick = if refused.is_none() {
@@ -2325,7 +2367,8 @@ fn sync_picker(world: &mut World) {
         }
         _ => None,
     };
-    let empty = empty.map(str::to_string);
+    // (`empty` is a catalog key.)
+    let empty: Option<&'static str> = empty;
     let t = theme.clone();
     let tf = theme.clone();
     let left = world
@@ -2333,7 +2376,7 @@ fn sync_picker(world: &mut World) {
         .iter(world)
         .next()
         .map_or(230.0, |n| n.size().x * n.inverse_scale_factor() + 6.0);
-    let panel = FloatingPanel::new("form-picker", "Select Part Studio")
+    let panel = FloatingPanel::new("form-picker", tr("sheet-select-part-studio"))
         .width(300.0)
         .at(left, 2.0)
         .body(move |b| {
@@ -2341,9 +2384,9 @@ fn sync_picker(world: &mut World) {
             b.spawn((
                 Sm9Role::PickerTab,
                 TabStrip::new("form-picker-source")
-                    .tab("Current document")
-                    .tab("Other documents")
-                    .tab("Libraries")
+                    .tab(tr("sheet-picker-current-document"))
+                    .tab(tr("sheet-picker-other-documents"))
+                    .tab(tr("sheet-picker-libraries"))
                     .selected(tab)
                     .build(t),
             ));
@@ -2354,28 +2397,29 @@ fn sync_picker(world: &mut World) {
             .with_children(|r| {
                 r.spawn(
                     cadrs_ui::TextInput::new("form-picker-search")
-                        .placeholder("Search by name, folder, or configuration")
+                        .placeholder(tr("sheet-picker-search-placeholder"))
                         .value(q.clone())
                         .build(t),
                 );
             });
-            if let Some(e) = &empty {
+            if let Some(e) = empty {
                 b.spawn((
                     t.text(
-                        e.clone(),
+                        tr(e),
                         11.0,
                         bevy::text::FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated(e),
                     Node {
                         margin: UiRect::all(Val::Px(8.0)),
                         ..default()
                     },
                 ));
             }
-            for (label, role, opts, sel) in &rows {
+            for (label, key, role, opts, sel) in &rows {
                 let name = format!("form-picker-{}", label.to_lowercase());
-                select(b, t, &name, label, *role, opts, *sel);
+                select(b, t, &name, key, *role, opts, *sel);
             }
             if let Some(img) = &preview {
                 b.spawn((
@@ -2441,7 +2485,7 @@ fn sync_picker(world: &mut World) {
             f.spawn((
                 Sm9Role::PickerDone,
                 cadrs_ui::Button::new("form-picker-done")
-                    .label("Done")
+                    .label(tr("common-done"))
                     .outline()
                     .build(&tf),
             ));
@@ -2469,8 +2513,9 @@ fn sync_picker(world: &mut World) {
 }
 
 /// The name of the Libraries tab's second library: this document's Part Studios tagged as forms
-/// (Onshape's personal "My sheet metal forms" library; cadrs keeps it per document).
-const MY_FORMS: &str = "My sheet metal forms";
+/// (Onshape's personal "My sheet metal forms" library; cadrs keeps it per document); a catalog
+/// key.
+const MY_FORMS: &str = "sheet-my-sheet-metal-forms";
 
 /// Which list the panel's Form select shows: 0 this document's forms (Current document, or the
 /// Libraries tab on My sheet metal forms), 1 other documents', 2 cadrs's library.
@@ -2915,7 +2960,7 @@ fn place_handles(world: &mut World) {
                     },
                     BorderColor::all(Color::srgb_u8(0x55, 0x55, 0x55)),
                     BackgroundColor(Color::WHITE.with_alpha(0.85)),
-                    Tooltip::new("Drag along the profile"),
+                    Tooltip::new(tr("sheet-drag-along-profile")),
                     GlobalZIndex(5),
                 ))
                 .observe(on_handle_drag)
@@ -2972,7 +3017,7 @@ fn on_handle_drag_end(_: On<PointerDragEnd>, mut commands: Commands) {
         let Some((i, side, t)) = world.resource_mut::<ConnDrag>().0.take() else {
             return;
         };
-        crate::applied::change_kind(world, "Drag connection", |k| {
+        crate::applied::change_kind(world, &tr("sheet-drag-connection"), |k| {
             if let FeatureKind::SheetMetalLoft(x) = k
                 && let Some(c) = x.connections.get_mut(i)
             {

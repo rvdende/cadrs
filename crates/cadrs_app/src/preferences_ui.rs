@@ -38,6 +38,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
     ColorScheme, Modifiers, MouseButton, MousePreset, Preferences, UI_SCALES, ViewAction,
 };
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, DialogClose, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState, Select,
@@ -61,11 +62,31 @@ impl Plugin for PreferencesPlugin {
                     ui_scale_keys,
                     apply_ui_scale,
                     apply_vsync,
+                    apply_language,
                     save_color_scheme,
                 ),
             )
             .add_observer(on_preset_change)
             .add_observer(on_rotation_snap_commit);
+    }
+}
+
+/// The interface shows the language of the preferences (at start, and when it changes in the
+/// Preferences dialog: texts already shown that come from the catalogs change with it).
+fn apply_language(prefs: Res<LocalPreferences>, mut commands: Commands) {
+    let code = prefs.0.language.code();
+    if prefs.is_changed() && cadrs_ui::i18n::language() != code {
+        cadrs_ui::i18n::set_language(code);
+        // (A document's toolbars and top bar are built once: they follow when it is opened
+        // again. The documents page is made again at once.)
+        commands.queue(|world: &mut World| {
+            let in_document = world
+                .get_resource::<State<crate::AppState>>()
+                .is_some_and(|s| *s.get() == crate::AppState::Document);
+            if in_document && world.contains_resource::<cadrs_ui::Theme>() {
+                crate::linked::toast(world, tr("preferences-language-later"));
+            }
+        });
     }
 }
 
@@ -87,6 +108,8 @@ fn load_preferences(
     if let Some(store) = store {
         prefs.0 = Preferences::load(store.0.root());
     }
+    // Before the first window is made (a document opened at start builds it in Startup).
+    cadrs_ui::i18n::set_language(prefs.0.language.code());
     appearance.preference = to_ui(scheme_override().unwrap_or(prefs.0.color_scheme));
 }
 
@@ -228,7 +251,15 @@ pub fn step_ui_scale(world: &mut World, by: i32) {
     }
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    cadrs_ui::show_toast_for(&mut commands, &theme, format!("UI scale {next}%"), 1.5);
+    cadrs_ui::show_toast_for(
+        &mut commands,
+        &theme,
+        tr_with(
+            "shell-prefs-ui-scale-toast",
+            &[("percent", &next.to_string())],
+        ),
+        1.5,
+    );
     world.flush();
 }
 
@@ -339,11 +370,20 @@ struct PreferencesDialog;
 #[derive(Component)]
 struct GestureText(ViewAction);
 
-const ACTIONS: [(ViewAction, &str); 4] = [
-    (ViewAction::Rotate, "pref-mouse-rotate"),
-    (ViewAction::RotateTurntable, "pref-mouse-turntable"),
-    (ViewAction::Pan, "pref-mouse-pan"),
-    (ViewAction::Zoom, "pref-mouse-zoom"),
+/// The view actions: the row's name, its label's catalog key.
+const ACTIONS: [(ViewAction, &str, &str); 4] = [
+    (
+        ViewAction::Rotate,
+        "pref-mouse-rotate",
+        "shell-prefs-rotate",
+    ),
+    (
+        ViewAction::RotateTurntable,
+        "pref-mouse-turntable",
+        "shell-prefs-rotate-turntable",
+    ),
+    (ViewAction::Pan, "pref-mouse-pan", "shell-prefs-pan"),
+    (ViewAction::Zoom, "pref-mouse-zoom", "shell-prefs-zoom"),
 ];
 
 fn gesture_text(preset: MousePreset, action: ViewAction) -> String {
@@ -373,6 +413,7 @@ pub fn open_preferences(world: &mut World) {
         .0
         .rotation_snap_tolerance_degrees();
     let ui_scale = world.resource::<LocalPreferences>().0.ui_scale;
+    let language = world.resource::<LocalPreferences>().0.language;
     #[cfg(not(target_arch = "wasm32"))]
     let vsync = world.resource::<LocalPreferences>().0.vsync;
     #[cfg(not(target_arch = "wasm32"))]
@@ -386,159 +427,361 @@ pub fn open_preferences(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.commands().spawn((
         Dialog::new("preferences-dialog")
-            .title("Preferences")
+            .title(tr("preferences"))
             .width(440.0)
             .body(move |b| {
                 let t = &tb;
                 b.spawn((
                     Name::new("pref-mouse-heading"),
-                    t.text("3D view mouse controls", t.font_base, FontWeight::BOLD, t.foreground),
-                    Node { margin: UiRect::bottom(Val::Px(4.0)), ..default() },
+                    t.text(
+                        tr("preferences-mouse-heading"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Node {
+                        margin: UiRect::bottom(Val::Px(4.0)),
+                        ..default()
+                    },
                 ));
                 let mut select = Select::new("pref-mouse-preset").width(Val::Px(200.0));
                 for p in MousePreset::ALL {
                     select = select.option(p.label(), true);
                 }
-                let selected = MousePreset::ALL.iter().position(|p| *p == preset).unwrap_or(0);
-                b.spawn(form_row(t, "pref-mouse-row", "Mouse controls", 150.0)).with_child(select.selected(selected).build(t));
-                for (action, name) in ACTIONS {
-                    b.spawn(form_row(t, format!("{name}-row"), action.label(), 150.0)).with_child((
-                        Name::new(name),
-                        GestureText(action),
-                        t.text(gesture_text(preset, action), t.font_base, FontWeight::NORMAL, t.muted_foreground),
-                    ));
+                let selected = MousePreset::ALL
+                    .iter()
+                    .position(|p| *p == preset)
+                    .unwrap_or(0);
+                b.spawn(form_row(
+                    t,
+                    "pref-mouse-row",
+                    tr("preferences-mouse-controls"),
+                    150.0,
+                ))
+                .with_child(select.selected(selected).build(t));
+                for (action, name, label) in ACTIONS {
+                    b.spawn(form_row(t, format!("{name}-row"), tr(label), 150.0))
+                        .with_child((
+                            Name::new(name),
+                            GestureText(action),
+                            t.text(
+                                gesture_text(preset, action),
+                                t.font_base,
+                                FontWeight::NORMAL,
+                                t.muted_foreground,
+                            ),
+                        ));
                 }
                 b.spawn((
                     Name::new("pref-interface-heading"),
-                    t.text("Interface", t.font_base, FontWeight::BOLD, t.foreground),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
+                    t.text(
+                        tr("preferences-interface"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Node {
+                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
+                        ..default()
+                    },
                 ));
                 let mut sizes = Select::new("pref-ui-scale").width(Val::Px(200.0));
                 for p in UI_SCALES {
-                    sizes = sizes.option(if p == 100 { "100% (display default)".to_string() } else { format!("{p}%") }, true);
+                    sizes = sizes.option(
+                        if p == 100 {
+                            tr("shell-prefs-ui-scale-default")
+                        } else {
+                            format!("{p}%")
+                        },
+                        true,
+                    );
                 }
                 let at = UI_SCALES.iter().position(|p| *p == ui_scale).unwrap_or(2);
-                b.spawn(form_row(t, "pref-ui-scale-row", "UI scale", 150.0)).with_child(sizes.selected(at).build(t));
+                b.spawn(form_row(
+                    t,
+                    "pref-ui-scale-row",
+                    tr("preferences-ui-scale"),
+                    150.0,
+                ))
+                .with_child(sizes.selected(at).build(t));
+                // Issue #178: each language by its own name, known by its code (`pref-language-option-fr`).
+                // One not offered (its script has no font yet) shows as English, as it reads.
+                let mut languages = Select::new("pref-language").width(Val::Px(200.0));
+                for (code, name) in cadrs_ui::i18n::offered() {
+                    languages = languages.keyed_option(code, name, true);
+                }
+                let languages = languages.selected_key("en").selected_key(language.code());
+                b.spawn(form_row(
+                    t,
+                    "pref-language-row",
+                    tr("preferences-language"),
+                    150.0,
+                ))
+                .with_child(languages.build(t));
                 // A page presents as the browser does.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                b.spawn(form_row(t, "pref-vsync-row", "Display", 150.0))
-                    .with_child(Switch::new("pref-vsync").label("Vertical sync (VSync)").on(vsync).build(t));
-                b.spawn((
-                    Name::new("pref-vsync-note"),
-                    t.text(
-                        "On, frames wait for the screen's refresh. Off, they are drawn as fast as they are made: the frame rate shows what a frame costs, but cadrs uses more power.",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
-                    ),
-                    Node { width: Val::Px(400.0), margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(6.0), Val::Px(8.0)), ..default() },
-                ))
-                .insert(TextLayout::default());
+                    b.spawn(form_row(
+                        t,
+                        "pref-vsync-row",
+                        tr("preferences-display"),
+                        150.0,
+                    ))
+                    .with_child(
+                        Switch::new("pref-vsync")
+                            .label(tr("shell-prefs-vsync"))
+                            .on(vsync)
+                            .build(t),
+                    );
+                    b.spawn((
+                        Name::new("pref-vsync-note"),
+                        t.text(
+                            tr("shell-prefs-vsync-note"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("shell-prefs-vsync-note"),
+                        Node {
+                            width: Val::Px(400.0),
+                            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(6.0), Val::Px(8.0)),
+                            ..default()
+                        },
+                    ))
+                    .insert(TextLayout::default());
                 }
                 // The browser build has no system times to show.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                b.spawn(form_row(t, "pref-profile-cpu-row", "Frame panel (F12)", 150.0))
-                    .with_child(Switch::new("pref-profile-cpu").label("Time systems").on(profile_cpu).build(t));
-                b.spawn((
-                    Name::new("pref-profile-cpu-note"),
-                    t.text(
-                        "Shows where each frame's CPU time goes, system by system. It slows cadrs down, so it's off unless you need it. Takes effect at the next start.",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
-                    ),
-                    Node { width: Val::Px(400.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
-                ))
-                .insert(TextLayout::default());
+                    b.spawn(form_row(
+                        t,
+                        "pref-profile-cpu-row",
+                        tr("shell-prefs-frame-panel"),
+                        150.0,
+                    ))
+                    .with_child(
+                        Switch::new("pref-profile-cpu")
+                            .label(tr("shell-prefs-time-systems"))
+                            .on(profile_cpu)
+                            .build(t),
+                    );
+                    b.spawn((
+                        Name::new("pref-profile-cpu-note"),
+                        t.text(
+                            tr("shell-prefs-time-systems-note"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("shell-prefs-time-systems-note"),
+                        Node {
+                            width: Val::Px(400.0),
+                            margin: UiRect::top(Val::Px(6.0)),
+                            ..default()
+                        },
+                    ))
+                    .insert(TextLayout::default());
                 }
                 b.spawn((
                     Name::new("pref-assembly-heading"),
-                    t.text("Assembly manipulation", t.font_base, FontWeight::BOLD, t.foreground),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
+                    t.text(
+                        tr("shell-prefs-assembly-heading"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("shell-prefs-assembly-heading"),
+                    Node {
+                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
+                        ..default()
+                    },
                 ));
-                b.spawn(NumberField::new("pref-rotation-snap", "Rotation snap increment").text(format!("{snap} deg")).label_width(200.0).build(t));
-                b.spawn(NumberField::new("pref-rotation-snap-tolerance", "Snap tolerance").text(format!("{tolerance} deg")).label_width(200.0).build(t));
+                b.spawn(
+                    NumberField::new("pref-rotation-snap", tr("shell-prefs-rotation-snap"))
+                        .text(format!("{snap} deg"))
+                        .label_width(200.0)
+                        .build(t),
+                );
+                b.spawn(
+                    NumberField::new(
+                        "pref-rotation-snap-tolerance",
+                        tr("shell-prefs-snap-tolerance"),
+                    )
+                    .text(format!("{tolerance} deg"))
+                    .label_width(200.0)
+                    .build(t),
+                );
                 b.spawn((
                     Name::new("pref-rotation-snap-hint"),
-                    t.text("Snap when within the tolerance of an increment. Hold Shift to disable snapping. Increment: 0–180° (0 disables). Tolerance: 0–90°.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                    Node { width: Val::Px(400.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
-                )).insert(TextLayout::default());
-                // A page can't serve one.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                b.spawn((
-                    Name::new("pref-mcp-heading"),
-                    t.text("AI assistants (MCP)", t.font_base, FontWeight::BOLD, t.foreground),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
-                ));
-                b.spawn(form_row(t, "pref-mcp-row", "MCP server", 150.0))
-                    .with_child(Switch::new("pref-mcp-enabled").label("Enabled").on(mcp.enabled).build(t));
-                b.spawn(form_row(t, "pref-mcp-endpoint-row", "Endpoint", 150.0)).with_child((
-                    Name::new("pref-mcp-endpoint"),
-                    t.text(endpoint, t.font_base, FontWeight::NORMAL, t.muted_foreground),
-                ));
-                b.spawn((
-                    Name::new("pref-mcp-note"),
                     t.text(
-                        "While it is on, AI assistants on this computer (Claude, Cursor, …) can create and edit documents.",
+                        tr("shell-prefs-snap-hint"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
-                    Node { width: Val::Px(400.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
+                    Translated("shell-prefs-snap-hint"),
+                    Node {
+                        width: Val::Px(400.0),
+                        margin: UiRect::top(Val::Px(6.0)),
+                        ..default()
+                    },
                 ))
-                // Wrapped (the theme's text doesn't wrap).
                 .insert(TextLayout::default());
+                // A page can't serve one.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    b.spawn((
+                        Name::new("pref-mcp-heading"),
+                        t.text(
+                            tr("shell-prefs-mcp-heading"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("shell-prefs-mcp-heading"),
+                        Node {
+                            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
+                            ..default()
+                        },
+                    ));
+                    b.spawn(form_row(
+                        t,
+                        "pref-mcp-row",
+                        tr("shell-prefs-mcp-server"),
+                        150.0,
+                    ))
+                    .with_child(
+                        Switch::new("pref-mcp-enabled")
+                            .label(tr("shell-prefs-enabled"))
+                            .on(mcp.enabled)
+                            .build(t),
+                    );
+                    b.spawn(form_row(
+                        t,
+                        "pref-mcp-endpoint-row",
+                        tr("shell-prefs-endpoint"),
+                        150.0,
+                    ))
+                    .with_child((
+                        Name::new("pref-mcp-endpoint"),
+                        t.text(
+                            endpoint,
+                            t.font_base,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                    ));
+                    b.spawn((
+                        Name::new("pref-mcp-note"),
+                        t.text(
+                            tr("shell-prefs-mcp-note"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("shell-prefs-mcp-note"),
+                        Node {
+                            width: Val::Px(400.0),
+                            margin: UiRect::top(Val::Px(6.0)),
+                            ..default()
+                        },
+                    ))
+                    // Wrapped (the theme's text doesn't wrap).
+                    .insert(TextLayout::default());
                 }
                 b.spawn((
                     Name::new("pref-collab-heading"),
-                    t.text("Collaboration", t.font_base, FontWeight::BOLD, t.foreground),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)), ..default() },
+                    t.text(
+                        tr("shell-prefs-collab-heading"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("shell-prefs-collab-heading"),
+                    Node {
+                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(14.0), Val::Px(4.0)),
+                        ..default()
+                    },
                 ));
-                b.spawn(form_row(t, "pref-cadrs-id-row", "cadrs ID", 150.0)).with_children(|r| {
-                    match &cadrs_id {
-                        Some(id) => {
-                            r.spawn(SelectableText::new("pref-cadrs-id").value(id.clone()).font(t.font_sm, FontWeight::NORMAL).copy_button().build(t));
-                        }
-                        None => {
-                            r.spawn((
-                                Name::new("pref-cadrs-id"),
-                                t.text("Shown while online", t.font_base, FontWeight::NORMAL, t.muted_foreground),
-                            ));
-                        }
+                b.spawn(form_row(
+                    t,
+                    "pref-cadrs-id-row",
+                    tr("shell-share-cadrs-id"),
+                    150.0,
+                ))
+                .with_children(|r| match &cadrs_id {
+                    Some(id) => {
+                        r.spawn(
+                            SelectableText::new("pref-cadrs-id")
+                                .value(id.clone())
+                                .font(t.font_sm, FontWeight::NORMAL)
+                                .copy_button()
+                                .build(t),
+                        );
+                    }
+                    None => {
+                        r.spawn((
+                            Name::new("pref-cadrs-id"),
+                            t.text(
+                                tr("shell-prefs-id-while-online"),
+                                t.font_base,
+                                FontWeight::NORMAL,
+                                t.muted_foreground,
+                            ),
+                            Translated("shell-prefs-id-while-online"),
+                        ));
                     }
                 });
                 // A page has no network to connect to.
                 #[cfg(not(target_arch = "wasm32"))]
-                b.spawn(form_row(t, "pref-p2p-row", "P2P networking", 150.0))
-                    .with_child(Switch::new("pref-p2p-autoconnect").label("Connect when cadrs starts").on(autoconnect).build(t));
+                b.spawn(form_row(t, "pref-p2p-row", tr("shell-prefs-p2p"), 150.0))
+                    .with_child(
+                        Switch::new("pref-p2p-autoconnect")
+                            .label(tr("shell-network-autoconnect"))
+                            .on(autoconnect)
+                            .build(t),
+                    );
                 b.spawn((
                     Name::new("pref-collab-note"),
                     t.text(
-                        "Documents are shared peer to peer, with no server, through iroh's relays. Off, cadrs stays offline until you connect with the network button in the top bar, or share. Give your cadrs ID to someone who wants to share a document with you.",
+                        tr("shell-prefs-collab-note"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
-                    Node { width: Val::Px(400.0), margin: UiRect::top(Val::Px(6.0)), ..default() },
+                    Translated("shell-prefs-collab-note"),
+                    Node {
+                        width: Val::Px(400.0),
+                        margin: UiRect::top(Val::Px(6.0)),
+                        ..default()
+                    },
                 ))
                 .insert(TextLayout::default());
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pref-ok").label("OK").primary().build(t),
-                    observe(|_: On<Activate>, mut commands: Commands| commands.queue(save_preferences)),
+                    Button::new("pref-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
+                    observe(|_: On<Activate>, mut commands: Commands| {
+                        commands.queue(save_preferences)
+                    }),
                 ));
                 f.spawn((
-                    Button::new("pref-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<PreferencesDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("pref-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<PreferencesDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
@@ -609,6 +852,14 @@ fn save_preferences(world: &mut World) {
         .and_then(|(_, s)| MousePreset::ALL.get(s.selected).copied());
     if let Some(p) = preset {
         world.resource_mut::<LocalPreferences>().0.mouse = p;
+    }
+    let language = qs
+        .iter(world)
+        .find(|(n, _)| n.as_str() == "pref-language")
+        .and_then(|(_, s)| s.selected_key())
+        .and_then(cadrs_core::preferences::Language::from_code);
+    if let Some(l) = language {
+        world.resource_mut::<LocalPreferences>().0.language = l;
     }
     let size = qs
         .iter(world)
@@ -683,6 +934,21 @@ fn on_rotation_snap_commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each language of the preferences has a catalog (`cadrs_ui::i18n`) and the other way
+    /// round, in the same order.
+    #[test]
+    fn every_language_has_a_catalog() {
+        let ours: Vec<&str> = cadrs_core::preferences::Language::ALL
+            .iter()
+            .map(|l| l.code())
+            .collect();
+        let catalogs: Vec<&str> = cadrs_ui::i18n::LANGUAGES.iter().map(|(c, ..)| *c).collect();
+        assert_eq!(ours, catalogs);
+        for (code, _) in cadrs_ui::i18n::offered() {
+            assert!(cadrs_core::preferences::Language::from_code(code).is_some());
+        }
+    }
 
     /// Ctrl+= and Ctrl+- step through the UI scale's sizes, staying at the ends; from a size
     /// between them, to the next one that way.

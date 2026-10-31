@@ -23,6 +23,7 @@
 //! Names: `board-layout-<board>` (a layout mesh).
 
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
@@ -984,22 +985,18 @@ pub fn editable(world: &World, feature: FeatureId) -> Result<(), String> {
             .and_then(|s| s.board(board))
         {
             Some(b) if b.design().is_some() => Ok(()),
-            Some(_) => Err(format!(
-                "{name} came from IDF: it has no layout to edit here (edit it where it was designed, then import it again)"
-            )),
-            None => Err(format!("{name} is gone")),
+            Some(_) => Err(tr_with("pcb-board-from-idf", &[("name", &name)])),
+            None => Err(tr_with("pcb-board-gone", &[("name", &name)])),
         };
     }
-    let d = crate::derived_ui::derived_in_active(world, feature).ok_or("not a Derived feature")?;
+    let d = crate::derived_ui::derived_in_active(world, feature)
+        .ok_or_else(|| tr("pcb-not-derived"))?;
     let (r, b) = (
-        d.source.ok_or("no source")?,
-        d.board.as_ref().ok_or("not a board")?,
+        d.source.ok_or_else(|| tr("pcb-no-source"))?,
+        d.board.as_ref().ok_or_else(|| tr("pcb-not-a-board"))?,
     );
     if r.at != RefAt::Workspace || r.document_or(doc.doc.id) != doc.doc.id {
-        return Err(format!(
-            "{} is referenced at a version: open the linked document to edit its layout",
-            b.board_name
-        ));
+        return Err(tr_with("pcb-board-at-version", &[("name", &b.board_name)]));
     }
     // An IDF board (from another tool) shows its outline and package boxes, read-only.
     if doc
@@ -1009,10 +1006,7 @@ pub fn editable(world: &World, feature: FeatureId) -> Result<(), String> {
         .and_then(|s| s.board(b.board))
         .is_some_and(|x| x.design().is_none())
     {
-        return Err(format!(
-            "{} came from IDF: it has no layout to edit here (edit it where it was designed, then import it again)",
-            b.board_name
-        ));
+        return Err(tr_with("pcb-board-from-idf", &[("name", &b.board_name)]));
     }
     Ok(())
 }
@@ -1102,7 +1096,10 @@ fn sync_edit_bar(
         let studio = instance_board(doc, t.feature)
             .and_then(|(pcb, _, _)| doc.doc.element(pcb))
             .map_or_else(|| d.source_name.clone(), |e| e.name.clone());
-        Some(format!("Layout of {} ({studio})", b.board_name))
+        Some(tr_with(
+            "pcb-board-edit-title",
+            &[("board", &b.board_name), ("studio", &studio)],
+        ))
     });
     let existing = q.iter(world).next();
     match (title, existing) {
@@ -1133,10 +1130,10 @@ fn sync_edit_bar(
                             for (name, label, tip) in crate::board_fit::BUTTONS {
                                 b.spawn(
                                     cadrs_ui::Button::new(name)
-                                        .label(label)
+                                        .label(tr(label))
                                         .small()
                                         .outline()
-                                        .tooltip(tip)
+                                        .tooltip(tr(tip))
                                         .build(&t),
                                 );
                                 if name == "board-fit-context" {
@@ -1146,35 +1143,33 @@ fn sync_edit_bar(
                                         )
                                         .value((fit - 0.1) / 0.9)
                                         .width(64.0)
-                                        .tooltip("How see-through the parts around are")
+                                        .tooltip(tr("pcb-fit-opacity-tip"))
                                         .build(&t),
                                     );
                                 }
                             }
                             b.spawn(
                                 cadrs_ui::Button::new("board-edit-moveby")
-                                    .label("Move by…")
+                                    .label(tr("pcb-fit-move-by"))
                                     .small()
                                     .outline()
-                                    .tooltip(
-                                        "Move the selected footprints by typed distances (Shift+M)",
-                                    )
+                                    .tooltip(tr("pcb-fit-move-by-tip"))
                                     .build(&t),
                             );
                             b.spawn(
                                 cadrs_ui::Button::new("board-edit-open")
-                                    .label("Open in PCB Studio")
+                                    .label(tr("pcb-fit-open-studio"))
                                     .small()
                                     .outline()
-                                    .tooltip("Show the board in its PCB Studio")
+                                    .tooltip(tr("pcb-fit-open-studio-tip"))
                                     .build(&t),
                             );
                             b.spawn(
                                 cadrs_ui::Button::new("board-edit-done")
-                                    .label("Done")
+                                    .label(tr("common-done"))
                                     .small()
                                     .primary()
-                                    .tooltip("Stop editing the layout (Esc)")
+                                    .tooltip(tr("pcb-fit-done-tip"))
                                     .build(&t),
                             );
                         }),
@@ -1249,7 +1244,8 @@ fn sync_fit_buttons(world: &mut World) {
                     .iter()
                     .map(|(p, v)| format!("{}: {}", name(*p), v.join(", ")))
                     .collect();
-                (!lines.is_empty()).then(|| format!("⚠ Components run into {}", lines.join(" · ")))
+                (!lines.is_empty())
+                    .then(|| tr_with("pcb-fit-run-into", &[("parts", &lines.join(" · "))]))
             })
     });
     let mut q = world.query::<(Entity, &Name)>();
@@ -1954,10 +1950,7 @@ pub fn largest_region(
 pub fn create_from_sketch(world: &mut World, sketch: FeatureId) {
     let regions = sketch_regions(world, sketch);
     if regions.is_empty() {
-        crate::linked::error_toast(
-            world,
-            "The sketch has no closed region to make a board from",
-        );
+        crate::linked::error_toast(world, tr("pcb-sketch-no-region"));
         return;
     }
     let Some(element) = world
@@ -2010,10 +2003,7 @@ pub fn link_outline_menu(world: &mut World, feature: FeatureId) {
         .map(|f| (f.id, f.name.clone()))
         .collect();
     if before.is_empty() {
-        crate::linked::error_toast(
-            world,
-            "No sketch with a closed region comes before the board",
-        );
+        crate::linked::error_toast(world, tr("pcb-no-sketch-before-board"));
         return;
     }
     let pos = world

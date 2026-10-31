@@ -30,6 +30,7 @@ use cadrs_sketch::diagnostics::{
     self, EntityNames, EntityRef, Filter, Item, ItemId, ItemType, LooseEndGroup, Mode, Status,
 };
 use cadrs_sketch::{CurveKind, PlaneFrame, Sketch, SketchEntity, SketchOp, Vec2 as SVec2};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{Menu, MenuAction, MenuItem};
 use cadrs_ui::{
     ActionRow, ActionRowAction, FloatingPanel, FloatingPanelBody, FloatingPanelClose, IconButton,
@@ -217,10 +218,13 @@ fn on_diagnostics_button(
         .min_width(150.0)
         .item_height(22.0)
         .text_only()
-        .item(MenuItem::new("sketch-diag-profile", "Profile inspector…"))
+        .item(MenuItem::new(
+            "sketch-diag-profile",
+            tr("sketch-diag-profile-inspector-ellipsis"),
+        ))
         .item(MenuItem::new(
             "sketch-diag-constraints",
-            "Constraint manager…",
+            tr("sketch-diag-constraint-manager-ellipsis"),
         ));
     open_menu(&mut commands, ev.entity, menu.build(&theme));
 }
@@ -340,12 +344,12 @@ fn sync_panels(
             PANEL_LEFT
         };
         let (name, title) = if is_profile {
-            ("profile-inspector", "Profile inspector")
+            ("profile-inspector", "sketch-diag-profile-inspector")
         } else {
-            ("constraint-manager", "Constraint manager")
+            ("constraint-manager", "sketch-diag-constraint-manager")
         };
         let mut e = commands.spawn((
-            FloatingPanel::new(name, title)
+            FloatingPanel::new(name, tr(title))
                 .width(PANEL_WIDTH)
                 .at(left, top)
                 .max_height((rect.0.height() - top - 12.0).max(160.0))
@@ -436,21 +440,30 @@ fn profile_body(
         BorderColor::all(Color::srgb_u8(0xd0, 0xd4, 0xd8)),
     ))
     .with_children(|l| {
-        l.spawn(panel_caption(t, "Loose ends"));
+        l.spawn((
+            panel_caption(t, tr("sketch-diag-loose-ends")),
+            Translated("sketch-diag-loose-ends"),
+        ));
         if groups.is_empty() {
             l.spawn((
                 t.text(
-                    "No loose ends",
+                    tr("sketch-diag-no-loose-ends"),
                     11.0,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("sketch-diag-no-loose-ends"),
                 Pickable::IGNORE,
             ));
         }
         for (i, g) in groups.iter().enumerate() {
+            // "Loose end", "Loose ends (2)" (`LooseEndGroup::label` in English).
+            let label = match g.ends.len() {
+                1 => tr("sketch-diag-loose-end"),
+                n => tr_with("sketch-diag-loose-ends-count", &[("count", &n.to_string())]),
+            };
             l.spawn((
-                ActionRow::new(format!("loose-end-{i}"), g.label())
+                ActionRow::new(format!("loose-end-{i}"), label)
                     .height(19.0)
                     .selected(index == Some(i))
                     .build(t),
@@ -466,12 +479,12 @@ fn profile_body(
     })
     .with_children(|r| {
         for (name, label, step) in [
-            ("profile-inspector-previous", "Previous", -1i32),
-            ("profile-inspector-next", "Next", 1),
+            ("profile-inspector-previous", "sketch-diag-previous", -1i32),
+            ("profile-inspector-next", "sketch-diag-next", 1),
         ] {
             r.spawn((
                 cadrs_ui::Button::new(name)
-                    .label(label)
+                    .label(tr(label))
                     .primary()
                     .small()
                     .disabled(groups.is_empty())
@@ -486,7 +499,7 @@ fn profile_body(
         b,
         t,
         "profile-inspector-help",
-        "Profile inspector: lists the ends of regular geometry that join nothing",
+        &tr("sketch-diag-profile-help"),
     );
 }
 
@@ -549,6 +562,35 @@ fn entity_icon(sketch: &Sketch, e: EntityRef) -> &'static str {
     }
 }
 
+/// A constraint or dimension type's name in the current language (the filter grid's tooltips;
+/// [`ItemType::label`] is the English one, for names).
+fn item_type_label(ty: ItemType) -> String {
+    tr(match ty {
+        ItemType::Coincident => "sketch-constraint-coincident",
+        ItemType::Concentric => "sketch-constraint-concentric",
+        ItemType::Parallel => "sketch-constraint-parallel",
+        ItemType::Tangent => "sketch-constraint-tangent",
+        ItemType::Horizontal => "sketch-constraint-horizontal",
+        ItemType::Vertical => "sketch-constraint-vertical",
+        ItemType::Perpendicular => "sketch-constraint-perpendicular",
+        ItemType::Equal => "sketch-constraint-equal",
+        ItemType::Midpoint => "sketch-constraint-midpoint",
+        ItemType::Normal => "sketch-constraint-normal",
+        ItemType::Pierce => "sketch-constraint-pierce",
+        ItemType::Symmetric => "sketch-constraint-symmetric",
+        ItemType::Fix => "sketch-constraint-fix",
+        ItemType::Projected => "sketch-tool-use",
+        ItemType::Offset => "common-offset",
+        ItemType::Curvature => "sketch-constraint-curvature",
+        ItemType::Pattern => "sketch-tool-pattern",
+        ItemType::Distance => "common-distance",
+        ItemType::Angle => "common-angle",
+        ItemType::Radius => "sketch-diag-type-radius",
+        ItemType::Diameter => "sketch-diag-type-diameter",
+        ItemType::Count => "sketch-diag-type-count",
+    })
+}
+
 fn slug(s: &str) -> String {
     s.to_ascii_lowercase().replace(' ', "-")
 }
@@ -560,7 +602,7 @@ fn item_label(item: &Item, features: &[cadrs_core::Feature]) -> String {
             let name = features
                 .iter()
                 .find(|f| f.id.0 == src)
-                .map_or("external".to_string(), |f| f.name.clone());
+                .map_or_else(|| tr("sketch-diag-external-source"), |f| f.name.clone());
             format!("{} [{name}]", item.name)
         }
         None => item.name.clone(),
@@ -645,7 +687,13 @@ fn manager_body(
     })
     .with_children(|h| {
         h.spawn((
-            t.text("Filters", 11.0, FontWeight::SEMIBOLD, t.foreground),
+            t.text(
+                tr("sketch-diag-filters"),
+                11.0,
+                FontWeight::SEMIBOLD,
+                t.foreground,
+            ),
+            Translated("sketch-diag-filters"),
             Pickable::IGNORE,
         ));
         h.spawn((
@@ -664,13 +712,16 @@ fn manager_body(
     if state.filters_open {
         b.spawn((
             Switch::new("cm-auto-select")
-                .label("Automatically select constraints")
+                .label(tr("sketch-diag-auto-select"))
                 .label_width(140.0)
                 .on(state.auto_select)
                 .build(t),
             AutoSelectSwitch,
         ));
-        b.spawn(panel_caption(t, "Type"));
+        b.spawn((
+            panel_caption(t, tr("common-type")),
+            Translated("common-type"),
+        ));
         b.spawn(Node {
             flex_wrap: FlexWrap::Wrap,
             column_gap: Val::Px(7.0),
@@ -685,14 +736,17 @@ fn manager_body(
                     t,
                     format!("cm-type-{}", slug(ty.label())),
                     type_icon(ty),
-                    ty.label().to_string(),
+                    item_type_label(ty),
                     on,
                     None,
                     FilterToggle::Type(ty),
                 );
             }
         });
-        b.spawn(panel_caption(t, "Mode"));
+        b.spawn((
+            panel_caption(t, tr("sketch-diag-mode")),
+            Translated("sketch-diag-mode"),
+        ));
         b.spawn(Node {
             column_gap: Val::Px(6.0),
             ..default()
@@ -700,36 +754,66 @@ fn manager_body(
         .with_children(|g| {
             // Closest icon-rs icons (no dedicated internal / external / in-context glyphs).
             for (m, name, ic, tip) in [
-                (Mode::Internal, "internal", "sketch", "Internal"),
-                (Mode::External, "external", "use", "External"),
-                (Mode::InContext, "in-context", "link", "In context"),
+                (
+                    Mode::Internal,
+                    "internal",
+                    "sketch",
+                    "sketch-diag-mode-internal",
+                ),
+                (
+                    Mode::External,
+                    "external",
+                    "use",
+                    "sketch-diag-mode-external",
+                ),
+                (
+                    Mode::InContext,
+                    "in-context",
+                    "link",
+                    "sketch-diag-mode-in-context",
+                ),
             ] {
                 toggle(
                     g,
                     t,
                     format!("cm-mode-{name}"),
                     ic,
-                    tip.into(),
+                    tr(tip),
                     state.modes.contains(&m),
                     None,
                     FilterToggle::Mode(m),
                 );
             }
         });
-        b.spawn(panel_caption(t, "Status"));
+        b.spawn((
+            panel_caption(t, tr("sketch-diag-status")),
+            Translated("sketch-diag-status"),
+        ));
         b.spawn(Node {
             column_gap: Val::Px(6.0),
             ..default()
         })
         .with_children(|g| {
             for (st, name, ic, tip, color) in [
-                (Status::Driven, "driven", "ruler", "Driven", None),
-                (Status::Solved, "solved", "check", "Solved", None),
+                (
+                    Status::Driven,
+                    "driven",
+                    "ruler",
+                    "sketch-diag-status-driven",
+                    None,
+                ),
+                (
+                    Status::Solved,
+                    "solved",
+                    "check",
+                    "sketch-diag-status-solved",
+                    None,
+                ),
                 (
                     Status::Error,
                     "errors",
                     "error-filled",
-                    "Errors",
+                    "sketch-diag-status-errors",
                     Some(t.feature_error),
                 ),
             ] {
@@ -738,7 +822,7 @@ fn manager_body(
                     t,
                     format!("cm-status-{name}"),
                     ic,
-                    tip.into(),
+                    tr(tip),
                     state.statuses.contains(&st),
                     color,
                     FilterToggle::Status(st),
@@ -759,14 +843,20 @@ fn manager_body(
     ))
     .with_children(|r| {
         r.spawn((
-            t.text("Sort by", 11.0, FontWeight::NORMAL, t.muted_foreground),
+            t.text(
+                tr("sketch-diag-sort-by"),
+                11.0,
+                FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
+            Translated("sketch-diag-sort-by"),
             Pickable::IGNORE,
         ));
         r.spawn((
             TabStrip::new("cm-sort")
                 .compact()
-                .tab("Constraint")
-                .tab("Entity")
+                .tab(tr("sketch-diag-sort-constraint"))
+                .tab(tr("sketch-diag-sort-entity"))
                 .selected(usize::from(state.by_entity))
                 .build(t),
             SortTabs,
@@ -805,11 +895,12 @@ fn manager_body(
     .with_children(|l| {
         l.spawn((
             t.text(
-                "Entities and constraints",
+                tr("sketch-diag-list-caption"),
                 10.0,
                 FontWeight::NORMAL,
                 Color::srgb_u8(0x3d, 0x4b, 0x52),
             ),
+            Translated("sketch-diag-list-caption"),
             Node {
                 margin: UiRect::new(Val::Px(3.0), Val::ZERO, Val::ZERO, Val::Px(2.0)),
                 ..default()
@@ -854,7 +945,7 @@ fn manager_body(
                             .icon(type_icon(i.ty))
                             .indent(12.0)
                             .error(i.status == Status::Error)
-                            .action("delete", "delete", "Delete", i.deletable())
+                            .action("delete", "delete", tr("common-delete"), i.deletable())
                             .build(t),
                         ManagerRow {
                             item: Some(i.id),
@@ -874,14 +965,14 @@ fn manager_body(
                         .action(
                             "delete",
                             "delete",
-                            if i.deletable() {
-                                "Delete"
+                            tr(if i.deletable() {
+                                "common-delete"
                             } else {
-                                "Shared end: drag the ends apart to separate them"
-                            },
+                                "sketch-diag-shared-end"
+                            }),
                             i.deletable(),
                         )
-                        .action("dismiss", "close", "Remove from the list", true)
+                        .action("dismiss", "close", tr("sketch-diag-dismiss"), true)
                         .build(t),
                     ManagerRow {
                         item: Some(i.id),
@@ -920,10 +1011,10 @@ fn manager_body(
         v.foreground.disabled = DELETE_ALL_DISABLED_TEXT;
         r.spawn((
             cadrs_ui::Button::new("cm-delete-all")
-                .label("Delete all")
+                .label(tr("sketch-diag-delete-all"))
                 .small()
                 .disabled(!any)
-                .tooltip("Delete every constraint listed")
+                .tooltip(tr("sketch-diag-delete-all-tooltip"))
                 .build(t),
             observe(|_: On<Activate>, mut commands: Commands| {
                 commands.queue(delete_all_shown);
@@ -935,7 +1026,7 @@ fn manager_body(
         b,
         t,
         "constraint-manager-help",
-        "Constraint manager: lists the sketch's constraints and dimensions",
+        &tr("sketch-diag-manager-help"),
     );
 }
 

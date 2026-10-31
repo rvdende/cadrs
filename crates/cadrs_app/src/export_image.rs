@@ -19,6 +19,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::text::{EditableText, FontWeight, TextEdit};
 use bevy::ui_widgets::Activate;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, CheckboxState, DialogClose, Notification, Select, SelectState, TextInputField,
@@ -120,7 +121,7 @@ pub fn open(world: &mut World, name: Option<String>) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("export-image-dialog")
-            .title("Export image")
+            .title(tr("io-image-export-title"))
             .width(460.0)
             .body(move |b| {
                 let t = &tb;
@@ -137,11 +138,15 @@ pub fn open(world: &mut World, name: Option<String>) {
                         },
                     )
                 };
-                let label = |g: &mut ChildSpawner, s: &str| {
-                    g.spawn(t.text(s, t.font_base, FontWeight::BOLD, t.foreground));
+                // A field's label, from its catalog key.
+                let label = |g: &mut ChildSpawner, key: &'static str| {
+                    g.spawn((
+                        t.text(tr(key), t.font_base, FontWeight::BOLD, t.foreground),
+                        Translated(key),
+                    ));
                 };
                 b.spawn(row("export-image-name-row")).with_children(|g| {
-                    label(g, "File name");
+                    label(g, "common-file-name");
                     g.spawn(
                         TextInput::new("export-image-name")
                             .value(base)
@@ -151,15 +156,18 @@ pub fn open(world: &mut World, name: Option<String>) {
                             .height(26.0)
                             .build(t),
                     );
-                    g.spawn(t.text(
-                        "The view as shown: its orientation, shading, edges and any exploded view.",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
+                    g.spawn((
+                        t.text(
+                            tr("io-image-export-view-note"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("io-image-export-view-note"),
                     ));
                 });
                 b.spawn(row("export-image-format-row")).with_children(|g| {
-                    label(g, "Format");
+                    label(g, "common-format");
                     g.spawn(
                         Select::new("export-image-format")
                             .bordered()
@@ -170,15 +178,24 @@ pub fn open(world: &mut World, name: Option<String>) {
                     );
                 });
                 b.spawn(row("export-image-size-row")).with_children(|g| {
-                    label(g, "Size");
+                    label(g, "common-size");
                     let mut s = Select::new("export-image-size")
                         .bordered()
                         .width(full())
-                        .option(format!("Viewport ({} × {})", viewport.0, viewport.1), true);
+                        .option(
+                            tr_with(
+                                "io-image-export-viewport-size",
+                                &[
+                                    ("width", &viewport.0.to_string()),
+                                    ("height", &viewport.1.to_string()),
+                                ],
+                            ),
+                            true,
+                        );
                     for (_, _, l) in SIZES {
                         s = s.option(l, true);
                     }
-                    g.spawn(s.option("Custom", true).selected(2).build(t));
+                    g.spawn(s.option(tr("io-export-custom"), true).selected(2).build(t));
                 });
                 b.spawn(row("export-image-custom-row")).with_children(|g| {
                     g.spawn(Node {
@@ -188,8 +205,8 @@ pub fn open(world: &mut World, name: Option<String>) {
                     })
                     .with_children(|r| {
                         for (name, text, value) in [
-                            ("export-image-width", "Width (px)", "1920"),
-                            ("export-image-height", "Height (px)", "1080"),
+                            ("export-image-width", "io-image-export-width", "1920"),
+                            ("export-image-height", "io-image-export-height", "1080"),
                         ] {
                             r.spawn(Node {
                                 flex_direction: FlexDirection::Column,
@@ -219,13 +236,13 @@ pub fn open(world: &mut World, name: Option<String>) {
                 b.spawn(row("export-image-options-row")).with_children(|g| {
                     g.spawn(
                         Checkbox::new("export-image-transparent")
-                            .label("Transparent background (PNG)")
+                            .label(tr("io-image-export-transparent"))
                             .height(24.0)
                             .build(t),
                     );
                 });
                 b.spawn(row("export-image-folder-row")).with_children(|g| {
-                    label(g, "Folder");
+                    label(g, "common-folder");
                     g.spawn(Node {
                         column_gap: Val::Px(6.0),
                         align_items: AlignItems::Center,
@@ -242,7 +259,7 @@ pub fn open(world: &mut World, name: Option<String>) {
                         );
                         r.spawn(
                             Button::new("export-image-browse")
-                                .label("Browse…")
+                                .label(tr("common-browse"))
                                 .outline()
                                 .build(t),
                         );
@@ -253,11 +270,15 @@ pub fn open(world: &mut World, name: Option<String>) {
                 let t = &tf;
                 f.spawn(
                     Button::new("export-image-ok")
-                        .label("Export")
+                        .label(tr("common-export"))
                         .primary()
                         .build(t),
                 );
-                f.spawn(Button::new("export-image-cancel").label("Cancel").build(t));
+                f.spawn(
+                    Button::new("export-image-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                );
             })
             .build(&theme),
         ExportImageDialog { viewport },
@@ -291,14 +312,18 @@ fn checked(w: &mut World, name: &str) -> bool {
 pub fn parse_side(text: &str) -> Result<u32, String> {
     match text.trim().parse::<u32>() {
         Ok(v) if (1..=MAX_SIDE).contains(&v) => Ok(v),
-        Ok(_) => Err(format!("Width and height must be 1 to {MAX_SIDE} pixels")),
-        Err(_) => Err("Enter the width and height in whole pixels".into()),
+        Ok(_) => Err(tr_with(
+            "io-image-export-size-range",
+            &[("max", &MAX_SIDE.to_string())],
+        )),
+        Err(_) => Err(tr("io-image-export-size-whole")),
     }
 }
 
 /// Why Transparent background is off for JPEG (its tooltip while disabled): a card beside the
 /// checkbox, clear of the Folder label under it (Final regression judge: export_image 04b).
-pub const JPEG_NO_TRANSPARENCY: &str = "JPEG has no transparency: the background is always the viewport's colour.\nChoose PNG for a transparent background.";
+/// (Its catalog key.)
+pub const JPEG_NO_TRANSPARENCY: &str = "io-image-jpeg-no-transparency";
 
 /// The custom size row shows for Custom; its error under it. Transparent background is
 /// disabled, with why on hover, while the format is JPEG.
@@ -323,7 +348,7 @@ fn sync_rows(
             if jpeg {
                 commands.entity(e).try_insert((
                     bevy::ui::InteractionDisabled,
-                    cadrs_ui::Tooltip::card(JPEG_NO_TRANSPARENCY),
+                    cadrs_ui::Tooltip::card(tr(JPEG_NO_TRANSPARENCY)),
                 ));
             } else {
                 commands
@@ -388,7 +413,7 @@ fn on_activate(ev: On<Activate>, q: Query<&Name>, mut commands: Commands) {
                 &mut commands,
                 &theme,
                 "folder-picker",
-                "Choose a folder",
+                &tr("common-choose-folder"),
                 "export-image-folder",
                 dir,
             );
@@ -468,7 +493,7 @@ fn start(world: &mut World) {
     };
     close(world);
     if folder.is_empty() {
-        return toast(world, Notification::warning("Nowhere to save the image"));
+        return toast(world, Notification::warning(tr("io-image-export-nowhere")));
     }
     let dir = PathBuf::from(&folder);
     let stem = cadrs_core::export::sanitize(if base.is_empty() { "Image" } else { &base });
@@ -559,16 +584,18 @@ fn drive_capture(world: &mut World) {
         let note = match done {
             Some(Ok(path)) => {
                 info!("exported {}", path.display());
-                Notification::info(format!(
-                    "Exported {} ({} × {})",
-                    path.display(),
-                    p.size.0,
-                    p.size.1
+                Notification::info(tr_with(
+                    "io-image-exported",
+                    &[
+                        ("path", &path.display().to_string()),
+                        ("width", &p.size.0.to_string()),
+                        ("height", &p.size.1.to_string()),
+                    ],
                 ))
                 .seconds(8.0)
             }
-            Some(Err(e)) => Notification::warning(format!("Export failed: {e}")),
-            None => Notification::warning("Export failed: the image wasn't rendered"),
+            Some(Err(e)) => Notification::warning(tr_with("io-export-failed", &[("error", &e)])),
+            None => Notification::warning(tr("io-image-not-rendered")),
         };
         return toast(world, note);
     }
@@ -582,7 +609,10 @@ fn drive_capture(world: &mut World) {
             .observe(move |shot: On<ScreenshotCaptured>| {
                 let r = match shot.image.clone().try_into_dynamic() {
                     Ok(img) => write_image(img.to_rgba8(), &path, format, transparent),
-                    Err(e) => Err(format!("cannot read the image back: {e:?}")),
+                    Err(e) => Err(tr_with(
+                        "io-image-read-back-failed",
+                        &[("error", &format!("{e:?}"))],
+                    )),
                 };
                 *result.lock().unwrap() = Some(r);
             });

@@ -21,6 +21,7 @@ use cadrs_core::{DocumentId, FeatureId};
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::bevy_iroh::prelude::{NetSender, Received};
 use cadrs_net::{Answer, Ask, CommentChanged, Request, ShareLink, Verdict, transfer};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Avatar, Button, Checkbox, CheckboxChange, CheckboxState, IconButton, Select, SelectChange,
@@ -75,11 +76,12 @@ pub struct CommentsPanel {
     reply_to: Option<uuid::Uuid>,
 }
 
+/// The filters' catalog keys.
 const FILTERS: [&str; 4] = [
-    "All comments",
-    "All open tasks",
-    "Open tasks assigned to me",
-    "Completed tasks",
+    "shell-comments-filter-all",
+    "shell-comments-filter-open-tasks",
+    "shell-comments-filter-mine",
+    "shell-comments-filter-completed",
 ];
 
 /// This user's id (their cadrs ID, or the local user's without the network) and name.
@@ -133,7 +135,7 @@ fn load(world: &mut World) {
 fn apply_local(world: &mut World, op: &CommentOp, by: &str) -> Result<(), String> {
     let owner = owner_of(world);
     let Some(id) = world.resource::<DocComments>().document else {
-        return Err("No document is open".into());
+        return Err(tr("shell-comments-no-document"));
     };
     world
         .resource_mut::<DocComments>()
@@ -189,18 +191,18 @@ pub fn post(world: &mut World, op: CommentOp) -> Result<(), String> {
         return Ok(());
     };
     if !shared.access().rights.comment {
-        return Err(format!(
-            "{} hasn't let you comment on this document",
-            shared.owner_name
+        return Err(tr_with(
+            "shell-comments-may-not-comment",
+            &[("owner", shared.owner_name.as_str())],
         ));
     }
     let following = world.get_resource::<Live>().is_some_and(
         |l| matches!(&l.role, Role::Guest(g) if matches!(g.state, GuestState::Following { .. })),
     );
     if !following {
-        return Err(format!(
-            "Comments reach {} once they're back",
-            shared.owner_name
+        return Err(tr_with(
+            "shell-comments-owner-away",
+            &[("owner", shared.owner_name.as_str())],
         ));
     }
     let link: ShareLink = shared.link.parse()?;
@@ -311,12 +313,18 @@ fn notify(world: &mut World, op: &CommentOp, by: &str) {
     if task {
         crate::linked::toast(
             world,
-            format!("{} gave you a task: {}", c.author_name, c.text),
+            tr_with(
+                "shell-comments-task-for-you",
+                &[("name", c.author_name.as_str()), ("text", c.text.as_str())],
+            ),
         );
     } else if mentioned {
         crate::linked::toast(
             world,
-            format!("{} mentioned you: {}", c.author_name, c.text),
+            tr_with(
+                "shell-comments-mentioned-you",
+                &[("name", c.author_name.as_str()), ("text", c.text.as_str())],
+            ),
         );
     }
 }
@@ -397,12 +405,12 @@ fn tag_label(doc: &ActiveDocument, tag: Tag) -> String {
         Tag::Element(e) => doc
             .doc
             .element(e)
-            .map_or("a tab".into(), |e| e.name.clone()),
+            .map_or_else(|| tr("shell-comments-a-tab"), |e| e.name.clone()),
         Tag::Feature(e, f) => doc
             .doc
             .element(e)
             .and_then(|e| e.features().iter().find(|x| x.id == f))
-            .map_or("a feature".into(), |f| f.name.clone()),
+            .map_or_else(|| tr("shell-comments-a-feature"), |f| f.name.clone()),
     }
 }
 
@@ -486,12 +494,20 @@ fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static Panel
                 ..default()
             })
             .with_children(|h| {
-                h.spawn(t.text("Comments", t.font_lg, FontWeight::BOLD, t.foreground))
-                    .entry::<Node>()
-                    .and_modify(|mut n| n.flex_grow = 1.0);
+                h.spawn((
+                    t.text(
+                        tr("shell-comments-title"),
+                        t.font_lg,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("shell-comments-title"),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.flex_grow = 1.0);
                 let mut select = Select::new("comments-filter").width(Val::Px(150.0));
                 for f in FILTERS {
-                    select = select.option(f, true);
+                    select = select.option(tr(f), true);
                 }
                 h.spawn(select.selected(panel.filter).build(t));
                 h.spawn(IconButton::new("comments-close", "close").small().build(t));
@@ -511,15 +527,19 @@ fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static Panel
             ))
             .with_children(|l| {
                 if threads.is_empty() {
-                    l.spawn(t.text(
-                        if panel.filter == 0 {
-                            "No comments yet"
-                        } else {
-                            "Nothing here"
-                        },
-                        t.font_base,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
+                    let empty = if panel.filter == 0 {
+                        "shell-comments-none-yet"
+                    } else {
+                        "shell-comments-nothing-here"
+                    };
+                    l.spawn((
+                        t.text(
+                            tr(empty),
+                            t.font_base,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated(empty),
                     ));
                 }
                 for (c, replies) in &threads {
@@ -548,9 +568,14 @@ fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static Panel
             .insert(BorderColor::all(t.panel_border))
             .with_children(|c| {
                 for (label, name) in [
-                    (doc_tag.map(|n| format!("Tagged: {n}")), "comments-untag"),
                     (
-                        reply_name.map(|n| format!("Replying to {n}")),
+                        doc_tag.map(|n| tr_with("shell-comments-tagged", &[("name", n.as_str())])),
+                        "comments-untag",
+                    ),
+                    (
+                        reply_name.map(|n| {
+                            tr_with("shell-comments-replying-to", &[("name", n.as_str())])
+                        }),
                         "comments-unreply",
                     ),
                 ] {
@@ -567,7 +592,7 @@ fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static Panel
                 }
                 c.spawn(
                     TextInput::new("comment-text")
-                        .placeholder("Add a comment (@name to mention)")
+                        .placeholder(tr("shell-comments-placeholder"))
                         .build(t),
                 );
                 c.spawn(Node {
@@ -578,14 +603,14 @@ fn sync_panel(world: &mut World, q_root: &mut QueryState<(Entity, &'static Panel
                 .with_children(|r| {
                     r.spawn(
                         Checkbox::new("comment-assign")
-                            .label("Assign to the first @mention")
+                            .label(tr("shell-comments-assign"))
                             .build(t),
                     )
                     .entry::<Node>()
                     .and_modify(|mut n| n.flex_grow = 1.0);
                     r.spawn(
                         Button::new("comment-add")
-                            .label("Add")
+                            .label(tr("common-add"))
                             .primary()
                             .small()
                             .build(t),
@@ -651,7 +676,7 @@ fn message(
                 h.spawn(
                     IconButton::new(format!("comment-reply-{id}"), "comments")
                         .small()
-                        .tooltip("Reply")
+                        .tooltip(tr("shell-comments-reply"))
                         .build(t),
                 );
             }
@@ -659,11 +684,11 @@ fn message(
                 h.spawn(
                     IconButton::new(format!("comment-delete-{id}"), "delete")
                         .small()
-                        .tooltip(if reply {
-                            "Delete reply"
+                        .tooltip(tr(if reply {
+                            "shell-comments-delete-reply"
                         } else {
-                            "Delete thread"
-                        })
+                            "shell-comments-delete-thread"
+                        }))
                         .build(t),
                 );
             }
@@ -677,9 +702,13 @@ fn message(
         ))
         .insert(TextLayout::default());
         if let Some((_, name)) = &c.assignee {
-            let state = if c.resolved { "done" } else { "open" };
+            let task = if c.resolved {
+                "shell-comments-task-done"
+            } else {
+                "shell-comments-task-open"
+            };
             m.spawn(t.text(
-                format!("Task for {name} · {state}"),
+                tr_with(task, &[("name", name.as_str())]),
                 t.font_sm,
                 FontWeight::MEDIUM,
                 t.primary,
@@ -739,7 +768,7 @@ fn add(world: &mut World) {
         match first.and_then(|m| who(world, &m)) {
             Some(a) => Some(a),
             None => {
-                crate::linked::toast(world, "Mention someone with @ to give them the task");
+                crate::linked::toast(world, tr("shell-comments-mention-needed"));
                 return;
             }
         }

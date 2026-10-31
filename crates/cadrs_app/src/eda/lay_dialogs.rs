@@ -19,6 +19,7 @@ use cadrs_eda::layer::Layer;
 use cadrs_eda::units::{Nm, Pt, mm, to_mm};
 use cadrs_ui::checkbox::CheckboxState;
 use cadrs_ui::dialog_fields::{Select, SelectState};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Checkbox, Dialog};
 
@@ -46,7 +47,8 @@ fn spawn_dialog(w: &mut World, d: Dialog) {
     ));
 }
 
-fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSpawner)) {
+/// A labelled row: the label (a catalog key), then `f` spawns the field.
+fn row(p: &mut ChildSpawner, t: &Theme, label: &'static str, f: impl FnOnce(&mut ChildSpawner)) {
     p.spawn(Node {
         align_items: AlignItems::Center,
         column_gap: Val::Px(10.0),
@@ -55,7 +57,13 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
     })
     .with_children(|r| {
         r.spawn((
-            t.text(label, t.font_base, FontWeight::MEDIUM, t.muted_foreground),
+            t.text(
+                tr(label),
+                t.font_base,
+                FontWeight::MEDIUM,
+                t.muted_foreground,
+            ),
+            Translated(label),
             Node {
                 width: Val::Px(190.0),
                 ..default()
@@ -65,7 +73,7 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
     });
 }
 
-fn mm_row(p: &mut ChildSpawner, t: &Theme, label: &str, name: &'static str, v: Nm) {
+fn mm_row(p: &mut ChildSpawner, t: &Theme, label: &'static str, name: &'static str, v: Nm) {
     row(p, t, label, |r| {
         r.spawn(
             TextInput::new(name)
@@ -86,7 +94,8 @@ fn button(
     primary: bool,
     run: fn(&mut World),
 ) {
-    let mut b = cadrs_ui::Button::new(name).label(label);
+    // (`label` is a catalog key; a format's name, such as STEP, is shown as it is.)
+    let mut b = cadrs_ui::Button::new(name).label(tr(label));
     if primary {
         b = b.primary();
     }
@@ -164,38 +173,38 @@ pub fn open_update(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-update-dialog")
-            .title("Update PCB from schematic")
+            .title(tr("pcb-lay-update-title"))
             .width(640.0)
             .body(move |b| {
                 b.spawn(
                     Checkbox::new("eda-update-relink")
-                        .label("Re-link footprints to symbols by reference")
+                        .label(tr("pcb-update-relink"))
                         .checked(false)
                         .build(&t),
                 );
                 b.spawn(
                     Checkbox::new("eda-update-replace")
-                        .label("Replace footprints with those the symbols name")
+                        .label(tr("pcb-update-replace"))
                         .checked(true)
                         .build(&t),
                 );
                 b.spawn(
                     Checkbox::new("eda-update-delete")
-                        .label("Delete footprints with no symbol")
+                        .label(tr("pcb-update-delete"))
                         .checked(false)
                         .build(&t),
                 );
                 b.spawn(
                     Checkbox::new("eda-update-fields")
-                        .label("Update footprint fields from symbols")
+                        .label(tr("pcb-update-fields"))
                         .checked(true)
                         .build(&t),
                 );
                 b.spawn(list_node("eda-update-log", 320.0));
             })
             .footer(move |f| {
-                button(f, &tf, "eda-update-run", "Update PCB", true, run_update);
-                button(f, &tf, "eda-update-close", "Close", false, close_all);
+                button(f, &tf, "eda-update-run", "pcb-update-run", true, run_update);
+                button(f, &tf, "eda-update-close", "common-close", false, close_all);
             }),
     );
 }
@@ -229,9 +238,13 @@ fn run_update(w: &mut World) {
         lines.extend(
             r.warnings
                 .into_iter()
-                .map(|e| (format!("Warning: {e}"), true)),
+                .map(|e| (tr_with("pcb-warning-message", &[("message", &e)]), true)),
         );
-        lines.extend(r.errors.into_iter().map(|e| (format!("Error: {e}"), true)));
+        lines.extend(
+            r.errors
+                .into_iter()
+                .map(|e| (tr_with("pcb-error-message", &[("message", &e)]), true)),
+        );
         list_lines(w, "eda-update-log", lines);
     }
 }
@@ -239,15 +252,16 @@ fn run_update(w: &mut World) {
 // ---------------------------------------------------------------------------------------------
 // Board setup (GS13)
 
+/// The design rules: (label's catalog key, field name).
 const RULE_FIELDS: [(&str, &str); 8] = [
-    ("Minimum clearance", "eda-setup-min-clearance"),
-    ("Minimum track width", "eda-setup-min-track"),
-    ("Minimum annular width", "eda-setup-annular"),
-    ("Minimum via diameter", "eda-setup-min-via"),
-    ("Copper to hole clearance", "eda-setup-hole-clearance"),
-    ("Copper to edge clearance", "eda-setup-edge"),
-    ("Minimum drill size", "eda-setup-drill"),
-    ("Hole to hole clearance", "eda-setup-hole-hole"),
+    ("pcb-rule-min-clearance", "eda-setup-min-clearance"),
+    ("pcb-rule-min-track", "eda-setup-min-track"),
+    ("pcb-rule-min-annular", "eda-setup-annular"),
+    ("pcb-rule-min-via", "eda-setup-min-via"),
+    ("pcb-rule-hole-clearance", "eda-setup-hole-clearance"),
+    ("pcb-rule-edge-clearance", "eda-setup-edge"),
+    ("pcb-rule-min-drill", "eda-setup-drill"),
+    ("pcb-rule-hole-to-hole", "eda-setup-hole-hole"),
 ];
 
 pub fn open_setup(w: &mut World) {
@@ -260,16 +274,19 @@ pub fn open_setup(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-setup-dialog")
-            .title("Board setup")
+            .title(tr("pcb-lay-board-setup"))
             .width(560.0)
             .body(move |p| {
-                p.spawn(t.text(
-                    "Physical stackup",
-                    t.font_base,
-                    FontWeight::SEMIBOLD,
-                    t.foreground,
+                p.spawn((
+                    t.text(
+                        tr("pcb-setup-stackup"),
+                        t.font_base,
+                        FontWeight::SEMIBOLD,
+                        t.foreground,
+                    ),
+                    Translated("pcb-setup-stackup"),
                 ));
-                row(p, &t, "Copper layers", |r| {
+                row(p, &t, "pcb-setup-copper-layers", |r| {
                     let s = Select::new("eda-setup-copper")
                         .bordered()
                         .width(Val::Px(120.0))
@@ -281,14 +298,21 @@ pub fn open_setup(w: &mut World) {
                             .build(&t),
                     );
                 });
-                mm_row(p, &t, "Board thickness", "eda-setup-thickness", b.thickness);
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-setup-thickness",
+                    "eda-setup-thickness",
+                    b.thickness,
+                );
                 p.spawn((
                     t.text(
-                        "Constraints",
+                        tr("pcb-setup-constraints"),
                         t.font_base,
                         FontWeight::SEMIBOLD,
                         t.foreground,
                     ),
+                    Translated("pcb-setup-constraints"),
                     Node {
                         margin: UiRect::top(Val::Px(8.0)),
                         ..default()
@@ -311,7 +335,7 @@ pub fn open_setup(w: &mut World) {
                 let c = r.class_of("").clone();
                 p.spawn((
                     t.text(
-                        "Net class Default",
+                        tr_with("pcb-setup-net-class", &[("name", "Default")]),
                         t.font_base,
                         FontWeight::SEMIBOLD,
                         t.foreground,
@@ -321,14 +345,39 @@ pub fn open_setup(w: &mut World) {
                         ..default()
                     },
                 ));
-                mm_row(p, &t, "Clearance", "eda-setup-clearance", c.clearance);
-                mm_row(p, &t, "Track width", "eda-setup-track", c.track_width);
-                mm_row(p, &t, "Via size", "eda-setup-via", c.via_diameter);
-                mm_row(p, &t, "Via hole", "eda-setup-via-drill", c.via_drill);
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-class-clearance",
+                    "eda-setup-clearance",
+                    c.clearance,
+                );
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-class-track-width",
+                    "eda-setup-track",
+                    c.track_width,
+                );
+                mm_row(p, &t, "pcb-class-via-size", "eda-setup-via", c.via_diameter);
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-class-via-hole",
+                    "eda-setup-via-drill",
+                    c.via_drill,
+                );
             })
             .footer(move |f| {
-                button(f, &tf, "eda-setup-ok", "OK", true, accept_setup);
-                button(f, &tf, "eda-setup-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-setup-ok", "common-ok", true, accept_setup);
+                button(
+                    f,
+                    &tf,
+                    "eda-setup-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -373,7 +422,9 @@ fn accept_setup(w: &mut World) {
             r.hole_to_hole,
         ) = (v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
         let [cl, tw, vd, vh] = class;
-        let c = r.class_mut("Default").ok_or("No Default net class")?;
+        let c = r
+            .class_mut("Default")
+            .ok_or_else(|| tr("pcb-no-default-net-class"))?;
         (c.clearance, c.track_width, c.via_diameter, c.via_drill) = (cl?, tw?, vd?, vh?);
         Ok(())
     });
@@ -406,15 +457,15 @@ pub fn open_zone(w: &mut World, id: uuid::Uuid) {
     spawn_dialog(
         w,
         Dialog::new("eda-zone-dialog")
-            .title("Copper zone properties")
+            .title(tr("pcb-zone-props"))
             .width(440.0)
             .body(move |p| {
-                row(p, &t, "Net", |r| {
+                row(p, &t, "pcb-net", |r| {
                     let mut s = Select::new("eda-zone-net").bordered().width(Val::Px(240.0));
                     for n in &nets {
                         s = s.option(
                             if n.is_empty() {
-                                "(from what is wired to it)".to_string()
+                                tr("pcb-zone-net-from-wiring")
                             } else {
                                 n.clone()
                             },
@@ -423,18 +474,18 @@ pub fn open_zone(w: &mut World, id: uuid::Uuid) {
                     }
                     r.spawn(s.selected(net_i).build(&t));
                 });
-                row(p, &t, "Layer", |r| {
+                row(p, &t, "pcb-layer", |r| {
                     let s = Select::new("eda-zone-layer")
                         .bordered()
                         .width(Val::Px(240.0))
-                        .option("Top copper", true)
-                        .option("Bottom copper", true);
+                        .option(tr("pcb-top-copper"), true)
+                        .option(tr("pcb-bottom-copper"), true);
                     r.spawn(s.selected(usize::from(bottom)).build(&t));
                 });
             })
             .footer(move |f| {
-                button(f, &tf, "eda-zone-ok", "OK", true, accept_zone);
-                button(f, &tf, "eda-zone-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-zone-ok", "common-ok", true, accept_zone);
+                button(f, &tf, "eda-zone-cancel", "common-cancel", false, close_all);
             }),
     );
 }
@@ -461,7 +512,7 @@ fn accept_zone(w: &mut World) {
             .zones
             .iter_mut()
             .find(|z| z.id == id)
-            .ok_or("The zone is gone")?;
+            .ok_or_else(|| tr("pcb-zone-gone"))?;
         z.net = net.clone();
         z.layers = cadrs_eda::layer::LayerSet::of(&[layer]);
         Ok(())
@@ -480,10 +531,10 @@ pub fn open_text(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-btext-dialog")
-            .title("Text")
+            .title(tr("common-text"))
             .width(440.0)
             .body(move |p| {
-                row(p, &t, "Text", |r| {
+                row(p, &t, "common-text", |r| {
                     r.spawn(
                         TextInput::new("eda-btext-text")
                             .width(Val::Px(220.0))
@@ -491,15 +542,21 @@ pub fn open_text(w: &mut World) {
                             .build(&t),
                     );
                 });
-                mm_row(p, &t, "Height", "eda-btext-height", mm(look.height));
                 mm_row(
                     p,
                     &t,
-                    "Stroke width",
+                    "pcb-text-height",
+                    "eda-btext-height",
+                    mm(look.height),
+                );
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-text-stroke-width",
                     "eda-btext-thickness",
                     mm(look.thickness),
                 );
-                row(p, &t, "Alignment", |r| {
+                row(p, &t, "pcb-text-alignment", |r| {
                     let i = match look.align {
                         cadrs_eda::graphics::HAlign::Left => 0,
                         cadrs_eda::graphics::HAlign::Center => 1,
@@ -509,26 +566,30 @@ pub fn open_text(w: &mut World) {
                         Select::new("eda-btext-align")
                             .bordered()
                             .width(Val::Px(120.0))
-                            .option("Left", true)
-                            .option("Centre", true)
-                            .option("Right", true)
+                            .option(tr("pcb-align-left"), true)
+                            .option(tr("pcb-align-centre"), true)
+                            .option(tr("pcb-align-right"), true)
                             .selected(i)
                             .build(&t),
                     );
                 });
                 p.spawn(t.text(
-                    format!(
-                        "On {} (pick another layer in the layers panel).",
-                        layer.name()
-                    ),
+                    tr_with("pcb-text-layer-note", &[("layer", &layer.name())]),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ));
             })
             .footer(move |f| {
-                button(f, &tf, "eda-btext-ok", "OK", true, accept_text);
-                button(f, &tf, "eda-btext-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-btext-ok", "common-ok", true, accept_text);
+                button(
+                    f,
+                    &tf,
+                    "eda-btext-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -546,7 +607,7 @@ fn accept_text(w: &mut World) {
     };
     close_all(w);
     let (Ok(h), Ok(th)) = (h, th) else {
-        ui::toast(w, "Height and stroke width are lengths in mm");
+        ui::toast(w, &tr("pcb-text-lengths"));
         return;
     };
     w.resource_mut::<LayoutState>().text_style = super::layout_tools::TextLook {
@@ -575,10 +636,10 @@ pub fn open_board_text(w: &mut World, id: uuid::Uuid) {
     spawn_dialog(
         w,
         Dialog::new("eda-tprops-dialog")
-            .title(format!("Text on {}", bt.layer.name()))
+            .title(tr_with("pcb-text-on", &[("layer", &bt.layer.name())]))
             .width(440.0)
             .body(move |p| {
-                row(p, &t, "Text", |r| {
+                row(p, &t, "common-text", |r| {
                     r.spawn(
                         TextInput::new("eda-tprops-text")
                             .value(bt.text.text.clone())
@@ -587,18 +648,47 @@ pub fn open_board_text(w: &mut World, id: uuid::Uuid) {
                             .build(&t),
                     );
                 });
-                mm_row(p, &t, "Height", "eda-tprops-height", bt.text.style.size.h);
-                mm_row(p, &t, "Stroke width", "eda-tprops-thickness", thickness);
-                p.spawn(t.text(
-                    "Drag the text to move it (Select: press on it once selected).",
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.muted_foreground,
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-text-height",
+                    "eda-tprops-height",
+                    bt.text.style.size.h,
+                );
+                mm_row(
+                    p,
+                    &t,
+                    "pcb-text-stroke-width",
+                    "eda-tprops-thickness",
+                    thickness,
+                );
+                p.spawn((
+                    t.text(
+                        tr("pcb-text-drag-note"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-text-drag-note"),
                 ));
             })
             .footer(move |f| {
-                button(f, &tf, "eda-tprops-ok", "OK", true, accept_board_text);
-                button(f, &tf, "eda-tprops-cancel", "Cancel", false, close_all);
+                button(
+                    f,
+                    &tf,
+                    "eda-tprops-ok",
+                    "common-ok",
+                    true,
+                    accept_board_text,
+                );
+                button(
+                    f,
+                    &tf,
+                    "eda-tprops-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -616,11 +706,11 @@ fn accept_board_text(w: &mut World) {
     );
     close_all(w);
     let (Ok(h), Ok(th)) = (h, th) else {
-        ui::toast(w, "Height and stroke width are lengths in mm");
+        ui::toast(w, &tr("pcb-text-lengths"));
         return;
     };
     if text.trim().is_empty() {
-        ui::toast(w, "The text is empty (Del removes it)");
+        ui::toast(w, &tr("pcb-text-empty"));
         return;
     }
     ui::commit(w, "Text properties", |d| {
@@ -629,7 +719,7 @@ fn accept_board_text(w: &mut World) {
             .texts
             .iter_mut()
             .find(|t| t.id == id)
-            .ok_or("The text is gone")?;
+            .ok_or_else(|| tr("pcb-text-gone"))?;
         t.text.text = text.clone();
         let h = h.max(mm(0.1));
         // Its width scales with its height.
@@ -647,31 +737,38 @@ pub fn open_keepout(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-keepout-dialog")
-            .title("Keep-out properties")
+            .title(tr("pcb-keepout-props"))
             .width(440.0)
             .body(move |p| {
-                row(p, &t, "Layers", |r| {
+                row(p, &t, "pcb-layers", |r| {
                     let s = Select::new("eda-keepout-layers")
                         .bordered()
                         .width(Val::Px(200.0))
-                        .option("Top copper", true)
-                        .option("Bottom copper", true)
-                        .option("Both copper layers", true);
+                        .option(tr("pcb-top-copper"), true)
+                        .option(tr("pcb-bottom-copper"), true)
+                        .option(tr("pcb-both-copper"), true);
                     r.spawn(s.selected(2).build(&t));
                 });
                 for (name, label, on) in [
-                    ("eda-keepout-tracks", "No tracks", true),
-                    ("eda-keepout-vias", "No vias", true),
-                    ("eda-keepout-pads", "No pads", false),
-                    ("eda-keepout-pour", "No copper pours", true),
-                    ("eda-keepout-footprints", "No footprints", false),
+                    ("eda-keepout-tracks", "pcb-keepout-tracks", true),
+                    ("eda-keepout-vias", "pcb-keepout-vias", true),
+                    ("eda-keepout-pads", "pcb-keepout-pads", false),
+                    ("eda-keepout-pour", "pcb-keepout-pour", true),
+                    ("eda-keepout-footprints", "pcb-keepout-footprints", false),
                 ] {
-                    p.spawn(Checkbox::new(name).label(label).checked(on).build(&t));
+                    p.spawn(Checkbox::new(name).label(tr(label)).checked(on).build(&t));
                 }
             })
             .footer(move |f| {
-                button(f, &tf, "eda-keepout-ok", "OK", true, accept_keepout);
-                button(f, &tf, "eda-keepout-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-keepout-ok", "common-ok", true, accept_keepout);
+                button(
+                    f,
+                    &tf,
+                    "eda-keepout-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -710,12 +807,12 @@ pub fn open_drc(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-drc-dialog")
-            .title("Design rules checker")
+            .title(tr("pcb-lay-drc"))
             .width(680.0)
             .body(move |p| {
                 p.spawn(
                     Checkbox::new("eda-drc-refill")
-                        .label("Refill all zones before performing DRC")
+                        .label(tr("pcb-drc-refill"))
                         .checked(true)
                         .build(&t),
                 );
@@ -730,8 +827,8 @@ pub fn open_drc(w: &mut World) {
                 p.spawn(list_node("eda-drc-list", 300.0));
             })
             .footer(move |f| {
-                button(f, &tf, "eda-drc-run", "Run DRC", true, run_drc);
-                button(f, &tf, "eda-drc-close", "Close", false, close_all);
+                button(f, &tf, "eda-drc-run", "pcb-drc-run", true, run_drc);
+                button(f, &tf, "eda-drc-close", "common-close", false, close_all);
             }),
     );
 }
@@ -751,25 +848,29 @@ fn run_drc(w: &mut World) {
     let errors = rep.errors().count() + mechanical.len();
     let total = rep.violations.len() + mechanical.len();
     let warnings = total - errors;
-    let summary = format!(
-        "Violations ({total}): {errors} errors, {warnings} warnings. Unconnected items: {}",
-        rep.unconnected.len()
+    let summary = tr_with(
+        "pcb-drc-summary",
+        &[
+            ("count", &total.to_string()),
+            ("errors", &errors.to_string()),
+            ("warnings", &warnings.to_string()),
+            ("unconnected", &rep.unconnected.len().to_string()),
+        ],
     );
     ui::set_label(w, "eda-drc-summary", &summary);
     let mut lines = vec![];
     for m in mechanical {
-        lines.push((format!("Error: {m}"), true));
+        lines.push((tr_with("pcb-error-message", &[("message", &m)]), true));
     }
     for v in &rep.violations {
         lines.push((
-            format!(
-                "{}: {}",
+            tr_with(
                 if v.rule.is_warning() {
-                    "Warning"
+                    "pcb-warning-message"
                 } else {
-                    "Error"
+                    "pcb-error-message"
                 },
-                v.message
+                &[("message", &v.message)],
             ),
             true,
         ));
@@ -777,13 +878,16 @@ fn run_drc(w: &mut World) {
     }
     for a in &rep.unconnected {
         lines.push((
-            format!(
-                "Unconnected: {} ({:.2}, {:.2}) – ({:.2}, {:.2})",
-                a.net,
-                to_mm(a.a.x),
-                to_mm(a.a.y),
-                to_mm(a.b.x),
-                to_mm(a.b.y)
+            tr_with(
+                "pcb-drc-unconnected",
+                &[
+                    ("net", &a.net),
+                    (
+                        "from",
+                        &format!("({:.2}, {:.2})", to_mm(a.a.x), to_mm(a.a.y)),
+                    ),
+                    ("to", &format!("({:.2}, {:.2})", to_mm(a.b.x), to_mm(a.b.y))),
+                ],
             ),
             false,
         ));
@@ -844,21 +948,42 @@ pub fn open_plot(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-plot-dialog")
-            .title("Plot")
+            .title(tr("pcb-plot-title"))
             .width(600.0)
             .body(move |p| {
-                row(p, &t, "Output directory", |r| {
-                    r.spawn(TextInput::new("eda-plot-dir").value("fab/").width(Val::Px(320.0)).height(26.0).build(&t));
+                row(p, &t, "pcb-plot-output-dir", |r| {
+                    r.spawn(
+                        TextInput::new("eda-plot-dir")
+                            .value("fab/")
+                            .width(Val::Px(320.0))
+                            .height(26.0)
+                            .build(&t),
+                    );
                 });
-                p.spawn(t.text("Gerber X2: copper, board outline, solder mask, silkscreen and paste layers, with a job file. Drill files: Excellon, plated and not. Assembly: JLCPCB's BOM and placement (CPL) files. STEP: the board with its parts' 3D models.", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
+                p.spawn((
+                    t.text(
+                        tr("pcb-plot-hint"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-plot-hint"),
+                ));
                 p.spawn(list_node("eda-plot-log", 180.0));
             })
             .footer(move |f| {
                 button(f, &tf, "eda-plot-step", "STEP", false, run_step);
-                button(f, &tf, "eda-plot-assembly", "JLCPCB BOM and placement", false, run_assembly);
-                button(f, &tf, "eda-plot-drill", "Generate drill files", false, run_drill);
-                button(f, &tf, "eda-plot-run", "Plot", true, run_plot);
-                button(f, &tf, "eda-plot-close", "Close", false, close_all);
+                button(
+                    f,
+                    &tf,
+                    "eda-plot-assembly",
+                    "pcb-plot-assembly",
+                    false,
+                    run_assembly,
+                );
+                button(f, &tf, "eda-plot-drill", "pcb-plot-drill", false, run_drill);
+                button(f, &tf, "eda-plot-run", "pcb-plot-run", true, run_plot);
+                button(f, &tf, "eda-plot-close", "common-close", false, close_all);
             }),
     );
 }
@@ -879,26 +1004,26 @@ fn board_name(w: &World) -> String {
 /// Writes the Gerbers and the job file into `dir`; returns what was written.
 pub fn plot_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
     let Some((_, _, d)) = ui::current(w) else {
-        return Err("No board".into());
+        return Err(tr("pcb-no-board"));
     };
     let name = board_name(w);
     cadrs_fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut out = vec![];
     for (file, text) in cadrs_eda::fab::gerbers(&d.board, &name) {
         cadrs_fs::write(dir.join(&file), text).map_err(|e| format!("{file}: {e}"))?;
-        out.push(format!("Plotted {file}"));
+        out.push(tr_with("pcb-plotted", &[("file", &file)]));
     }
     let job = format!("{name}-job.gbrjob");
     cadrs_fs::write(dir.join(&job), cadrs_eda::fab::job_file(&d.board, &name))
         .map_err(|e| e.to_string())?;
-    out.push(format!("Created Gerber job file {job}"));
+    out.push(tr_with("pcb-created-job", &[("file", &job)]));
     Ok(out)
 }
 
 /// Writes the plated and non-plated Excellon files into `dir`.
 pub fn drill_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
     let Some((_, _, d)) = ui::current(w) else {
-        return Err("No board".into());
+        return Err(tr("pcb-no-board"));
     };
     let name = board_name(w);
     cadrs_fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -907,7 +1032,7 @@ pub fn drill_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, Str
         let file = format!("{name}-{suffix}.drl");
         cadrs_fs::write(dir.join(&file), cadrs_eda::fab::excellon(&d.board, plated))
             .map_err(|e| format!("{file}: {e}"))?;
-        out.push(format!("Created {file}"));
+        out.push(tr_with("pcb-created-file", &[("file", &file)]));
     }
     Ok(out)
 }
@@ -925,7 +1050,7 @@ fn run_plot(w: &mut World) {
     let dir = plot_dir(w);
     let lines = match plot_to(w, &dir) {
         Ok(v) => v.into_iter().map(|l| (l, false)).collect(),
-        Err(e) => vec![(format!("Error: {e}"), true)],
+        Err(e) => vec![(tr_with("pcb-error-message", &[("message", &e)]), true)],
     };
     list_lines(w, "eda-plot-log", lines);
 }
@@ -934,7 +1059,7 @@ fn run_drill(w: &mut World) {
     let dir = plot_dir(w);
     let lines = match drill_to(w, &dir) {
         Ok(v) => v.into_iter().map(|l| (l, false)).collect(),
-        Err(e) => vec![(format!("Error: {e}"), true)],
+        Err(e) => vec![(tr_with("pcb-error-message", &[("message", &e)]), true)],
     };
     list_lines(w, "eda-plot-log", lines);
 }
@@ -943,7 +1068,7 @@ fn run_drill(w: &mut World) {
 /// `<board>-cpl.csv` (the placement of the surface-mount parts).
 pub fn assembly_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
     let Some((_, _, d)) = ui::current(w) else {
-        return Err("No board".into());
+        return Err(tr("pcb-no-board"));
     };
     let name = board_name(w);
     cadrs_fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -959,7 +1084,7 @@ pub fn assembly_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, 
         ),
     ] {
         cadrs_fs::write(dir.join(&file), text).map_err(|e| format!("{file}: {e}"))?;
-        out.push(format!("Created {file}"));
+        out.push(tr_with("pcb-created-file", &[("file", &file)]));
     }
     Ok(out)
 }
@@ -968,7 +1093,7 @@ fn run_assembly(w: &mut World) {
     let dir = plot_dir(w);
     let lines = match assembly_to(w, &dir) {
         Ok(v) => v.into_iter().map(|l| (l, false)).collect(),
-        Err(e) => vec![(format!("Error: {e}"), true)],
+        Err(e) => vec![(tr_with("pcb-error-message", &[("message", &e)]), true)],
     };
     list_lines(w, "eda-plot-log", lines);
 }
@@ -976,7 +1101,7 @@ fn run_assembly(w: &mut World) {
 /// Writes `<board>.step` into `dir`: the board and its parts' 3D models.
 pub fn step_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, String> {
     let Some((el, b, d)) = ui::current(w) else {
-        return Err("No board".into());
+        return Err(tr("pcb-no-board"));
     };
     let pcb = w
         .resource::<crate::ActiveDocument>()
@@ -985,14 +1110,18 @@ pub fn step_to(w: &mut World, dir: &std::path::Path) -> Result<Vec<String>, Stri
         .and_then(|e| e.pcb())
         .and_then(|s| s.board(b))
         .map(|x| x.board.clone())
-        .ok_or("No board")?;
+        .ok_or_else(|| tr("pcb-no-board"))?;
     let name = board_name(w);
     cadrs_fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (bytes, warnings) = cadrs_pcb::step::native_board_step(&pcb, &d)?;
     let file = format!("{name}.step");
     cadrs_fs::write(dir.join(&file), bytes).map_err(|e| format!("{file}: {e}"))?;
-    let mut out = vec![format!("Created {file}")];
-    out.extend(warnings.into_iter().map(|w| format!("Warning: {w}")));
+    let mut out = vec![tr_with("pcb-created-file", &[("file", &file)])];
+    out.extend(
+        warnings
+            .into_iter()
+            .map(|w| tr_with("pcb-warning-message", &[("message", &w)])),
+    );
     Ok(out)
 }
 
@@ -1001,12 +1130,11 @@ fn run_step(w: &mut World) {
     let lines = match step_to(w, &dir) {
         Ok(v) => v
             .into_iter()
-            .map(|l| {
-                let warn = l.starts_with("Warning");
-                (l, warn)
-            })
+            .enumerate()
+            // (The lines after the first, the file written, are warnings.)
+            .map(|(i, l)| (l, i > 0))
             .collect(),
-        Err(e) => vec![(format!("Error: {e}"), true)],
+        Err(e) => vec![(tr_with("pcb-error-message", &[("message", &e)]), true)],
     };
     list_lines(w, "eda-plot-log", lines);
 }
@@ -1036,7 +1164,7 @@ pub fn open_footprint(w: &mut World, id: uuid::Uuid) {
     spawn_dialog(
         w,
         Dialog::new("eda-fprops-dialog")
-            .title(format!("Footprint properties: {}", f.reference()))
+            .title(tr_with("pcb-fp-props-of", &[("reference", f.reference())]))
             .width(460.0)
             .body(move |p| {
                 p.spawn(t.text(
@@ -1045,9 +1173,9 @@ pub fn open_footprint(w: &mut World, id: uuid::Uuid) {
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ));
-                mm_row(p, &t, "Position X", "eda-fprops-x", f.placement.at.x);
-                mm_row(p, &t, "Position Y", "eda-fprops-y", f.placement.at.y);
-                row(p, &t, "Rotation", |r| {
+                mm_row(p, &t, "pcb-fprops-x", "eda-fprops-x", f.placement.at.x);
+                mm_row(p, &t, "pcb-fprops-y", "eda-fprops-y", f.placement.at.y);
+                row(p, &t, "common-rotation", |r| {
                     r.spawn(
                         TextInput::new("eda-fprops-angle")
                             .value(format!("{}", f.placement.angle))
@@ -1057,14 +1185,14 @@ pub fn open_footprint(w: &mut World, id: uuid::Uuid) {
                     );
                     r.spawn(t.text("°", t.font_sm, FontWeight::NORMAL, t.muted_foreground));
                 });
-                row(p, &t, "Side", |r| {
+                row(p, &t, "pcb-fprops-side", |r| {
                     let i = usize::from(f.placement.side == cadrs_eda::layer::Side::Bottom);
                     r.spawn(
                         Select::new("eda-fprops-side")
                             .bordered()
                             .width(Val::Px(120.0))
-                            .option("Top", true)
-                            .option("Bottom", true)
+                            .option(tr("pcb-board-side-top"), true)
+                            .option(tr("pcb-board-side-bottom"), true)
                             .selected(i)
                             .build(&t),
                     );
@@ -1072,15 +1200,22 @@ pub fn open_footprint(w: &mut World, id: uuid::Uuid) {
                 if has_model {
                     p.spawn(
                         Checkbox::new("eda-fprops-model")
-                            .label("Show its 3D model")
+                            .label(tr("pcb-fprops-show-model"))
                             .checked(shows)
                             .build(&t),
                     );
                 }
             })
             .footer(move |f| {
-                button(f, &tf, "eda-fprops-ok", "OK", true, accept_footprint);
-                button(f, &tf, "eda-fprops-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-fprops-ok", "common-ok", true, accept_footprint);
+                button(
+                    f,
+                    &tf,
+                    "eda-fprops-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -1128,10 +1263,13 @@ pub fn open_create_board(
     spawn_dialog(
         w,
         Dialog::new("board-create-dialog")
-            .title(format!("Create PCB board from {sketch_name}"))
+            .title(tr_with(
+                "pcb-create-board-from",
+                &[("sketch", &sketch_name)],
+            ))
             .width(460.0)
             .body(move |p| {
-                row(p, &t, "Name", |r| {
+                row(p, &t, "common-name", |r| {
                     r.spawn(
                         TextInput::new("board-create-name")
                             .value(format!("Board from {sketch_name}"))
@@ -1140,43 +1278,50 @@ pub fn open_create_board(
                             .build(&t),
                     );
                 });
-                row(p, &t, "PCB Studio", |r| {
+                row(p, &t, "pcb-create-board-studio", |r| {
                     let mut sel = Select::new("board-create-studio")
                         .bordered()
                         .width(Val::Px(220.0));
                     for (_, n) in &studios {
                         sel = sel.option(n.clone(), true);
                     }
-                    r.spawn(sel.option("New PCB Studio", true).selected(0).build(&t));
+                    r.spawn(
+                        sel.option(tr("pcb-new-pcb-studio"), true)
+                            .selected(0)
+                            .build(&t),
+                    );
                 });
-                mm_row(p, &t, "Thickness", "board-create-thickness", mm(1.6));
-                row(p, &t, "Face on the sketch", |r| {
+                mm_row(p, &t, "common-thickness", "board-create-thickness", mm(1.6));
+                row(p, &t, "pcb-create-board-face", |r| {
                     r.spawn(
                         Select::new("board-create-seat")
                             .bordered()
                             .width(Val::Px(220.0))
-                            .option("Bottom face (it stands on it)", true)
-                            .option("Top face (it hangs under it)", true)
+                            .option(tr("pcb-create-board-bottom-face"), true)
+                            .option(tr("pcb-create-board-top-face"), true)
                             .selected(0)
                             .build(&t),
                     );
                 });
-                row(p, &t, "Circles inside it", |r| {
+                row(p, &t, "pcb-create-board-circles", |r| {
                     r.spawn(
                         Select::new("board-create-circles")
                             .bordered()
                             .width(Val::Px(220.0))
-                            .option("Cut-outs of the outline", true)
-                            .option("Mounting holes (NPTH)", true)
+                            .option(tr("pcb-create-board-cut-outs"), true)
+                            .option(tr("pcb-create-board-holes"), true)
                             .selected(0)
                             .build(&t),
                     );
                 });
-                p.spawn(t.text(
-                    "The outline (and the holes) follow the sketch.",
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.muted_foreground,
+                p.spawn((
+                    t.text(
+                        tr("pcb-create-board-note"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("pcb-create-board-note"),
                 ));
             })
             .footer(move |f| {
@@ -1184,11 +1329,18 @@ pub fn open_create_board(
                     f,
                     &tf,
                     "board-create-ok",
-                    "Create",
+                    "common-create",
                     true,
                     accept_create_board,
                 );
-                button(f, &tf, "board-create-cancel", "Cancel", false, close_all);
+                button(
+                    f,
+                    &tf,
+                    "board-create-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -1209,7 +1361,7 @@ fn accept_create_board(w: &mut World) {
     let thickness = match thickness {
         Ok(t) if t > 0 => to_mm(t),
         _ => {
-            ui::toast(w, "The thickness is a length above 0 (mm)");
+            ui::toast(w, &tr("pcb-create-board-thickness"));
             return;
         }
     };
@@ -1243,7 +1395,7 @@ struct MoveByOf(Vec<uuid::Uuid>);
 /// into a Part Studio: "0.5 mm further from the wall").
 pub fn open_move_by(w: &mut World, ids: Vec<uuid::Uuid>) {
     if ids.is_empty() {
-        ui::toast(w, "Select the footprints to move");
+        ui::toast(w, &tr("pcb-move-by-select"));
         return;
     }
     let what = match ui::current(w).map(|(_, _, d)| {
@@ -1255,7 +1407,7 @@ pub fn open_move_by(w: &mut World, ids: Vec<uuid::Uuid>) {
             .collect::<Vec<_>>()
     }) {
         Some(v) if v.len() <= 4 => v.join(", "),
-        Some(v) => format!("{} footprints", v.len()),
+        Some(v) => tr_with("pcb-move-by-footprints", &[("count", &v.len().to_string())]),
         None => return,
     };
     w.insert_resource(MoveByOf(ids));
@@ -1264,15 +1416,22 @@ pub fn open_move_by(w: &mut World, ids: Vec<uuid::Uuid>) {
     spawn_dialog(
         w,
         Dialog::new("eda-moveby-dialog")
-            .title(format!("Move by: {what}"))
+            .title(tr_with("pcb-move-by-title", &[("what", &what)]))
             .width(380.0)
             .body(move |p| {
-                mm_row(p, &t, "Along X", "eda-moveby-x", 0);
-                mm_row(p, &t, "Along Y", "eda-moveby-y", 0);
+                mm_row(p, &t, "pcb-move-by-x", "eda-moveby-x", 0);
+                mm_row(p, &t, "pcb-move-by-y", "eda-moveby-y", 0);
             })
             .footer(move |f| {
-                button(f, &tf, "eda-moveby-ok", "OK", true, accept_move_by);
-                button(f, &tf, "eda-moveby-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-moveby-ok", "common-ok", true, accept_move_by);
+                button(
+                    f,
+                    &tf,
+                    "eda-moveby-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -1284,7 +1443,7 @@ fn accept_move_by(w: &mut World) {
     let (x, y) = (read_mm(w, "eda-moveby-x"), read_mm(w, "eda-moveby-y"));
     close_all(w);
     let (Ok(x), Ok(y)) = (x, y) else {
-        ui::toast(w, "Type the distances as lengths (mm)");
+        ui::toast(w, &tr("pcb-move-by-lengths"));
         return;
     };
     if x == 0 && y == 0 {
@@ -1293,7 +1452,7 @@ fn accept_move_by(w: &mut World) {
     ui::commit(w, "Move by", |d| {
         use cadrs_eda::board_edit as be;
         for id in &ids {
-            let i = be::footprint_by_id(&d.board, *id).ok_or("A footprint is gone")?;
+            let i = be::footprint_by_id(&d.board, *id).ok_or_else(|| tr("pcb-a-footprint-gone"))?;
             let to = d.board.footprints[i].placement.at + Pt::new(x, y);
             be::move_footprint(&mut d.board, i, to);
         }
@@ -1329,12 +1488,12 @@ fn accept_footprint(w: &mut World) {
     let show = checkbox(w, "eda-fprops-model");
     close_all(w);
     let (Ok(x), Ok(y), Ok(angle)) = (x, y, angle) else {
-        ui::toast(w, "Position is a length (mm), rotation an angle (°)");
+        ui::toast(w, &tr("pcb-fprops-values"));
         return;
     };
     ui::commit(w, "Footprint properties", |d| {
         use cadrs_eda::board_edit as be;
-        let i = be::footprint_by_id(&d.board, id).ok_or("The footprint is gone")?;
+        let i = be::footprint_by_id(&d.board, id).ok_or_else(|| tr("pcb-footprint-gone"))?;
         if (d.board.footprints[i].placement.side == cadrs_eda::layer::Side::Bottom) != bottom {
             be::flip_footprint(&mut d.board, i);
         }
@@ -1371,30 +1530,36 @@ pub fn open_shape(w: &mut World, id: uuid::Uuid) {
     spawn_dialog(
         w,
         Dialog::new("eda-sprops-dialog")
-            .title(format!("Shape on {}", s.layer.name()))
+            .title(tr_with("pcb-shape-on", &[("layer", &s.layer.name())]))
             .width(460.0)
             .body(move |p| {
                 mm_row(
                     p,
                     &t,
-                    "Line width",
+                    "pcb-shape-line-width",
                     "eda-sprops-width",
                     s.shape.stroke.width,
                 );
                 p.spawn(
                     Checkbox::new("eda-sprops-filled")
-                        .label("Filled")
+                        .label(tr("pcb-shape-filled"))
                         .checked(s.shape.fill != cadrs_eda::graphics::Fill::None)
                         .build(&t),
                 );
                 if s.layer.is_copper() {
-                    row(p, &t, "Net", |r| {
+                    row(p, &t, "pcb-net", |r| {
                         let mut sel = Select::new("eda-sprops-net")
                             .bordered()
                             .width(Val::Px(200.0));
                         for n in &nets {
-                            sel =
-                                sel.option(if n.is_empty() { "(none)" } else { n.as_str() }, true);
+                            sel = sel.option(
+                                if n.is_empty() {
+                                    tr("pcb-net-none")
+                                } else {
+                                    n.clone()
+                                },
+                                true,
+                            );
                         }
                         let i = nets.iter().position(|n| *n == s.net).unwrap_or(0);
                         r.spawn(sel.selected(i).build(&t));
@@ -1402,8 +1567,15 @@ pub fn open_shape(w: &mut World, id: uuid::Uuid) {
                 }
             })
             .footer(move |f| {
-                button(f, &tf, "eda-sprops-ok", "OK", true, accept_shape);
-                button(f, &tf, "eda-sprops-cancel", "Cancel", false, close_all);
+                button(f, &tf, "eda-sprops-ok", "common-ok", true, accept_shape);
+                button(
+                    f,
+                    &tf,
+                    "eda-sprops-cancel",
+                    "common-cancel",
+                    false,
+                    close_all,
+                );
             }),
     );
 }
@@ -1426,7 +1598,7 @@ fn accept_shape(w: &mut World) {
         .unwrap_or_default();
     close_all(w);
     let Ok(width) = width else {
-        ui::toast(w, "The line width is a length in mm");
+        ui::toast(w, &tr("pcb-shape-width-length"));
         return;
     };
     ui::commit(w, "Shape properties", |d| {
@@ -1435,7 +1607,7 @@ fn accept_shape(w: &mut World) {
             .shapes
             .iter_mut()
             .find(|s| s.id == id)
-            .ok_or("The shape is gone")?;
+            .ok_or_else(|| tr("pcb-shape-gone"))?;
         s.shape.stroke.width = width;
         s.shape.fill = if filled {
             cadrs_eda::graphics::Fill::Outline

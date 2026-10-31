@@ -35,6 +35,7 @@ use cadrs_core::flat_export::{
 };
 use cadrs_core::{FeatureId, PartId};
 use cadrs_drawing::dxf::DxfVersion;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, CheckboxState, DialogClose, Notification, Select, SelectState, TextInputField,
@@ -77,36 +78,36 @@ fn versions() -> Vec<(&'static str, Option<DxfVersion>)> {
     v
 }
 
-/// The checkboxes: name, label, default.
+/// The checkboxes: name, label (its catalog key), default.
 const CHECKS: [(&str, &str, bool); 8] = [
-    ("flat-export-splines", "Export splines as polylines", false),
+    ("flat-export-splines", "io-flat-export-splines", false),
+    ("flat-export-z-zero", "io-flat-export-z-zero", true),
     (
-        "flat-export-z-zero",
-        "Set z-height to zero and normals to positive",
+        "flat-export-centerlines",
+        "io-flat-export-centerlines",
         true,
     ),
-    ("flat-export-centerlines", "Include bend centerlines", true),
-    ("flat-export-tangents", "Include bend tangent lines", false),
-    (
-        "flat-export-cbore",
-        "Include counterbore and countersink lines",
-        false,
-    ),
+    ("flat-export-tangents", "io-flat-export-tangents", false),
+    ("flat-export-cbore", "io-flat-export-cbore", false),
     (
         "flat-export-form-outlines",
-        "Include form feature outlines",
+        "io-flat-export-form-outlines",
         false,
     ),
     (
         "flat-export-form-centermarks",
-        "Include form feature centermarks",
+        "io-flat-export-form-centermarks",
         false,
     ),
-    ("flat-export-sketches", "Include visible sketches", true),
+    ("flat-export-sketches", "io-flat-export-sketches", true),
 ];
 
-fn label(p: &mut ChildSpawner, t: &Theme, text: &str) {
-    p.spawn(t.text(text, t.font_base, FontWeight::BOLD, t.foreground));
+/// A field's label, from its catalog key.
+fn label(p: &mut ChildSpawner, t: &Theme, key: &'static str) {
+    p.spawn((
+        t.text(tr(key), t.font_base, FontWeight::BOLD, t.foreground),
+        Translated(key),
+    ));
 }
 
 fn row(name: &str) -> impl Bundle {
@@ -176,10 +177,7 @@ pub fn open(world: &mut World, part: PartId) {
     // Named as the Parts list names them (a renamed part by its new name).
     let all = flat_parts_named(&build, &props(world));
     let Some(me) = all.iter().find(|r| r.part == part).cloned() else {
-        return toast(
-            world,
-            Notification::warning("That part has no flat pattern"),
-        );
+        return toast(world, Notification::warning(tr("io-flat-export-no-flat")));
     };
     let document = world
         .get_resource::<ActiveDocument>()
@@ -195,13 +193,18 @@ pub fn open(world: &mut World, part: PartId) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("flat-export-dialog")
-            .title("Export as DXF/DWG")
+            .title(tr("io-flat-export-title"))
             .width(WIDTH)
             // The header's "?" before the ✕, as Onshape's.
             .header({
                 let th = theme.clone();
                 move |h| {
-                    h.spawn(cadrs_ui::IconButton::new("flat-export-help", "help").icon_size(14.0).tooltip("Exports the flat pattern as DXF or DWG: outline, cut-outs, bend lines by direction and the options below, each on its own layer").build(&th));
+                    h.spawn(
+                        cadrs_ui::IconButton::new("flat-export-help", "help")
+                            .icon_size(14.0)
+                            .tooltip(tr("io-flat-export-help"))
+                            .build(&th),
+                    );
                 }
             })
             .body(move |b| {
@@ -209,73 +212,152 @@ pub fn open(world: &mut World, part: PartId) {
                 let full = || Val::Percent(100.0);
                 b.spawn(row("flat-export-name-row")).with_children(|g| {
                     // (Onshape's "View export rules" link isn't shown: cadrs has no export rules.)
-                    label(g, t, "File name");
-                    g.spawn(TextInput::new("flat-export-name").value(base).select_all_on_focus().autofocus().width(full()).height(FIELD_H).build(t));
+                    label(g, t, "common-file-name");
+                    g.spawn(
+                        TextInput::new("flat-export-name")
+                            .value(base)
+                            .select_all_on_focus()
+                            .autofocus()
+                            .width(full())
+                            .height(FIELD_H)
+                            .build(t),
+                    );
                 });
                 b.spawn(row("flat-export-format-row")).with_children(|g| {
-                    label(g, t, "Format");
+                    label(g, t, "common-format");
                     let dwg = match &converter {
                         Some(_) => ("DWG".to_string(), true),
-                        None => ("DWG (needs LibreDWG or the ODA File Converter on PATH)".to_string(), false),
+                        None => (tr("io-dwg-needs-converter"), false),
                     };
-                    g.spawn(Select::new("flat-export-format").bordered().width(full()).option("DXF", true).option(dwg.0, dwg.1).build(t));
+                    g.spawn(
+                        Select::new("flat-export-format")
+                            .bordered()
+                            .width(full())
+                            .option("DXF", true)
+                            .option(dwg.0, dwg.1)
+                            .build(t),
+                    );
                 });
                 b.spawn(row("flat-export-version-row")).with_children(|g| {
-                    label(g, t, "Version");
-                    let mut s = Select::new("flat-export-version").bordered().width(full()).mark_selected();
+                    label(g, t, "common-version");
+                    let mut s = Select::new("flat-export-version")
+                        .bordered()
+                        .width(full())
+                        .mark_selected();
                     let all = versions();
                     for (label, v) in &all {
                         s = s.option(*label, v.is_some());
                     }
-                    let default = all.iter().position(|(_, v)| *v == Some(DxfVersion::R2000)).unwrap_or(0);
+                    let default = all
+                        .iter()
+                        .position(|(_, v)| *v == Some(DxfVersion::R2000))
+                        .unwrap_or(0);
                     g.spawn(s.selected(default).build(t));
                 });
                 b.spawn(row("flat-export-scope-row")).with_children(|g| {
-                    label(g, t, "Scope");
+                    label(g, t, "io-flat-export-scope");
                     let mut s = Select::new("flat-export-scope").bordered().width(full());
                     for sc in FlatScope::ALL {
                         s = s.option(sc.label(), true);
                     }
                     g.spawn(s.build(t));
-                    g.spawn(Checkbox::new("flat-export-separate").label("Export each part as its own file").height(22.0).build(t))
-                        .entry::<Node>()
-                        .and_modify(|mut n| n.display = Display::None);
+                    g.spawn(
+                        Checkbox::new("flat-export-separate")
+                            .label(tr("io-flat-export-separate"))
+                            .height(22.0)
+                            .build(t),
+                    )
+                    .entry::<Node>()
+                    .and_modify(|mut n| n.display = Display::None);
                 });
                 b.spawn(row("flat-export-options-row")).with_children(|g| {
-                    label(g, t, "Options");
-                    g.spawn(Select::new("flat-export-options").bordered().width(full()).option("Download", true).build(t));
-                    g.spawn(Node { column_gap: Val::Px(6.0), align_items: AlignItems::Center, width: full(), ..default() }).with_children(|r| {
-                        r.spawn((Name::new("flat-export-folder-label"), t.text("Folder", t.font_sm, FontWeight::NORMAL, t.muted_foreground)));
-                        r.spawn(TextInput::new("flat-export-folder").value(dir).width(full()).height(26.0).build(t));
+                    label(g, t, "io-export-options");
+                    g.spawn(
+                        Select::new("flat-export-options")
+                            .bordered()
+                            .width(full())
+                            .option(tr("io-export-download"), true)
+                            .build(t),
+                    );
+                    g.spawn(Node {
+                        column_gap: Val::Px(6.0),
+                        align_items: AlignItems::Center,
+                        width: full(),
+                        ..default()
+                    })
+                    .with_children(|r| {
                         r.spawn((
-                            Button::new("flat-export-browse").label("Browse…").outline().build(t),
+                            Name::new("flat-export-folder-label"),
+                            t.text(
+                                tr("common-folder"),
+                                t.font_sm,
+                                FontWeight::NORMAL,
+                                t.muted_foreground,
+                            ),
+                            Translated("common-folder"),
+                        ));
+                        r.spawn(
+                            TextInput::new("flat-export-folder")
+                                .value(dir)
+                                .width(full())
+                                .height(26.0)
+                                .build(t),
+                        );
+                        r.spawn((
+                            Button::new("flat-export-browse")
+                                .label(tr("common-browse"))
+                                .outline()
+                                .build(t),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 commands.queue(browse_folder);
                             }),
                         ));
                     });
                 });
-                b.spawn((Name::new("flat-export-checks"), Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(2.0), ..default() })).with_children(|g| {
+                b.spawn((
+                    Name::new("flat-export-checks"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(2.0),
+                        ..default()
+                    },
+                ))
+                .with_children(|g| {
                     for (name, text, on) in CHECKS {
-                        g.spawn(Checkbox::new(name).label(text).checked(on).height(24.0).build(t));
+                        g.spawn(
+                            Checkbox::new(name)
+                                .label(tr(text))
+                                .checked(on)
+                                .height(24.0)
+                                .build(t),
+                        );
                     }
                 });
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("flat-export-ok").label("Export").primary().build(t),
+                    Button::new("flat-export-ok")
+                        .label(tr("common-export"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(start_export);
                     }),
                 ));
                 f.spawn((
-                    Button::new("flat-export-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<FlatExportDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("flat-export-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<FlatExportDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
@@ -321,7 +403,7 @@ fn browse_folder(world: &mut World) {
         &mut commands,
         &theme,
         "folder-picker",
-        "Choose a folder",
+        &tr("common-choose-folder"),
         "flat-export-folder",
         dir,
     );
@@ -395,7 +477,7 @@ fn start_export(world: &mut World) {
     };
     world.trigger(DialogClose { entity: dialog });
     if folder.is_empty() {
-        return toast(world, Notification::warning("Nowhere to save the export"));
+        return toast(world, Notification::warning(tr("io-export-nowhere")));
     }
     let Some((features, build)) = studio_build(world) else {
         return;
@@ -420,10 +502,7 @@ fn start_export(world: &mut World) {
         .filter_map(|r| Some((r.name.clone(), part_page(&build, &features, r, &o, &shown)?)))
         .collect();
     if pages.is_empty() {
-        return toast(
-            world,
-            Notification::warning("Export failed: no flat pattern to export"),
-        );
+        return toast(world, Notification::warning(tr("io-flat-export-nothing")));
     }
     let dir = PathBuf::from(&folder);
     let name = if base.is_empty() {
@@ -458,14 +537,23 @@ fn start_export(world: &mut World) {
             Err(why) => {
                 return toast(
                     world,
-                    Notification::warning(format!("Export failed: {why}")),
+                    Notification::warning(tr_with(
+                        "io-export-failed",
+                        &[("error", &why.to_string())],
+                    )),
                 );
             }
         }
     }
     let note = match written.as_slice() {
-        [one] => format!("Exported {}", one.display()),
-        many => format!("Exported {} files to {}", many.len(), dir.display()),
+        [one] => tr_with("io-exported-path", &[("path", &one.display().to_string())]),
+        many => tr_with(
+            "io-exported-files-to",
+            &[
+                ("count", &many.len().to_string()),
+                ("folder", &dir.display().to_string()),
+            ],
+        ),
     };
     toast(world, Notification::info(note).seconds(8.0));
 }

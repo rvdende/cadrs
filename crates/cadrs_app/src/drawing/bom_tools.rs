@@ -32,6 +32,7 @@ use cadrs_drawing::assembly::{
 };
 use cadrs_drawing::table::{Corner, Table, TableId};
 use cadrs_drawing::{SheetId, ViewId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Select, SelectChange, SelectState};
@@ -164,7 +165,48 @@ pub fn open_bom_tool(world: &mut World) {
         b.editing = None;
     }
     refresh_data(world);
-    spawn_bom_card(world, "Insert BOM", "bom-dialog", None);
+    spawn_bom_card(world, &tr("drawing-tool-insert-bom"), "bom-dialog", None);
+}
+
+/// A BOM table type's name as the interface shows it ([`BomType::label`]).
+fn bom_type_name(k: BomType) -> String {
+    tr(match k {
+        BomType::Flattened => "asm-bom-flattened",
+        BomType::TopLevel => "drawing-bom-type-top-level",
+        BomType::MultiLevel => "drawing-bom-type-multi-level",
+    })
+}
+
+/// A BOM table order's name as the interface shows it ([`BomOrder::label`]).
+fn bom_order_name(o: BomOrder) -> String {
+    tr(match o {
+        BomOrder::TopToBottom => "drawing-bom-order-top-to-bottom",
+        BomOrder::BottomToTop => "drawing-bom-order-bottom-to-top",
+    })
+}
+
+/// A callout border's name as the interface shows it ([`Border::label`]).
+fn border_name(b: Border) -> String {
+    tr(match b {
+        Border::Circle => "drawing-callout-border-circle",
+        Border::Underline => "drawing-callout-border-underline",
+        Border::Box => "drawing-callout-border-box",
+        Border::Triangle => "drawing-callout-border-triangle",
+        Border::None => "common-none",
+    })
+}
+
+/// A callout size's name ([`SIZES`]) as the interface shows it.
+fn size_name(n: u8, label: &str) -> String {
+    match (n, label) {
+        (0, "Tight Fit") => tr("drawing-callout-size-tight-fit"),
+        (1, "1 Character") => tr("drawing-callout-size-one-character"),
+        (n, l) if l == format!("{n} Characters") => tr_with(
+            "drawing-callout-size-characters",
+            &[("count", &n.to_string())],
+        ),
+        (_, l) => l.to_string(),
+    }
 }
 
 fn spawn_bom_card(
@@ -198,47 +240,101 @@ fn spawn_bom_card(
         })
         .with_children(|c| {
             header(c, &t, title, prefix, accept, cancel_bom);
-            c.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect::all(Val::Px(8.0)), row_gap: Val::Px(6.0), ..default() })
-                .with_children(|body| {
-                    // The assembly (an assembly icon and its name).
-                    body.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(6.0), ..default() }).with_children(|r| {
-                        r.spawn((icon("assembly", 16.0, t.tool_foreground), Pickable::IGNORE));
-                        let mut s = Select::new("bom-assembly").width(Val::Px(190.0));
-                        for (_, n) in &b.assemblies {
-                            s = s.option(n.clone(), b.editing.is_none());
-                        }
-                        let i = b.assemblies.iter().position(|(e, _)| Some(*e) == b.assembly).unwrap_or(0);
-                        r.spawn(s.selected(i).build(&t));
-                    });
-                    let row = |p: &mut ChildSpawnerCommands, label: &str, child: Select| {
-                        p.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), ..default() }).with_children(|r| {
-                            r.spawn((t.text(label, t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { width: Val::Px(62.0), ..default() }));
-                            r.spawn(child.build(&t));
-                        });
-                    };
-                    let mut s = Select::new("bom-type").width(Val::Px(150.0));
-                    for k in BomType::ALL {
-                        s = s.option(k.label(), true);
+            c.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(8.0)),
+                row_gap: Val::Px(6.0),
+                ..default()
+            })
+            .with_children(|body| {
+                // The assembly (an assembly icon and its name).
+                body.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn((icon("assembly", 16.0, t.tool_foreground), Pickable::IGNORE));
+                    let mut s = Select::new("bom-assembly").width(Val::Px(190.0));
+                    for (_, n) in &b.assemblies {
+                        s = s.option(n.clone(), b.editing.is_none());
                     }
-                    row(body, "BOM type", s.selected(BomType::ALL.iter().position(|k| *k == b.kind).unwrap_or(0)));
-                    let mut s = Select::new("bom-order").width(Val::Px(150.0));
-                    for o in BomOrder::ALL {
-                        s = s.option(o.label(), true);
-                    }
-                    row(body, "Order", s.selected(BomOrder::ALL.iter().position(|o| *o == b.order).unwrap_or(0)));
-                    corner_buttons(body, &t, &format!("{prefix}-corner"), b.fixed, |w, c| {
-                        w.resource_mut::<BomUi>().fixed = c;
-                        let prefix = if w.resource::<BomUi>().editing.is_some() { "bom-properties-corner" } else { "bom-dialog-corner" };
-                        refresh_corner_buttons(w, prefix, c);
-                    });
-                    if b.editing.is_none() {
-                        body.spawn((
-                            t.text("Click the sheet to place the table; it snaps to the border's corner or the title block.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-                            Node { max_width: Val::Px(218.0), ..default() },
-                        ))
-                        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
-                    }
+                    let i = b
+                        .assemblies
+                        .iter()
+                        .position(|(e, _)| Some(*e) == b.assembly)
+                        .unwrap_or(0);
+                    r.spawn(s.selected(i).build(&t));
                 });
+                let row = |p: &mut ChildSpawnerCommands, label: &str, child: Select| {
+                    p.spawn(Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        r.spawn((
+                            t.text(label, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                            Node {
+                                width: Val::Px(62.0),
+                                ..default()
+                            },
+                        ));
+                        r.spawn(child.build(&t));
+                    });
+                };
+                let mut s = Select::new("bom-type").width(Val::Px(150.0));
+                for k in BomType::ALL {
+                    s = s.option(bom_type_name(k), true);
+                }
+                row(
+                    body,
+                    tr("drawing-bom-type").as_str(),
+                    s.selected(BomType::ALL.iter().position(|k| *k == b.kind).unwrap_or(0)),
+                );
+                let mut s = Select::new("bom-order").width(Val::Px(150.0));
+                for o in BomOrder::ALL {
+                    s = s.option(bom_order_name(o), true);
+                }
+                row(
+                    body,
+                    tr("drawing-bom-order").as_str(),
+                    s.selected(
+                        BomOrder::ALL
+                            .iter()
+                            .position(|o| *o == b.order)
+                            .unwrap_or(0),
+                    ),
+                );
+                corner_buttons(body, &t, &format!("{prefix}-corner"), b.fixed, |w, c| {
+                    w.resource_mut::<BomUi>().fixed = c;
+                    let prefix = if w.resource::<BomUi>().editing.is_some() {
+                        "bom-properties-corner"
+                    } else {
+                        "bom-dialog-corner"
+                    };
+                    refresh_corner_buttons(w, prefix, c);
+                });
+                if b.editing.is_none() {
+                    body.spawn((
+                        t.text(
+                            tr("drawing-bom-place-hint"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("drawing-bom-place-hint"),
+                        Node {
+                            max_width: Val::Px(218.0),
+                            ..default()
+                        },
+                    ))
+                    .insert(TextLayout::new(
+                        bevy::text::Justify::Left,
+                        bevy::text::LineBreak::WordBoundary,
+                    ));
+                }
+            });
         });
     world.flush();
 }
@@ -388,7 +484,7 @@ pub fn open_bom_properties(world: &mut World, id: TableId) {
     refresh_data(world);
     spawn_bom_card(
         world,
-        "BOM Table properties",
+        &tr("drawing-bom-table-properties"),
         "bom-properties",
         Some(apply_bom_properties),
     );
@@ -508,13 +604,13 @@ pub struct CalloutUi {
 #[derive(Component)]
 struct CalloutCard;
 
-/// The five fields: (name, label as a placeholder).
+/// The five fields: (name, its label's catalog key: the label is a placeholder).
 const FIELDS: [(&str, &str); 5] = [
-    ("callout-upper", "Upper"),
-    ("callout-lower", "Lower"),
-    ("callout-left", "Left"),
-    ("callout-right", "Right"),
-    ("callout-center", "Center"),
+    ("callout-upper", "drawing-callout-upper"),
+    ("callout-lower", "drawing-callout-lower"),
+    ("callout-left", "drawing-callout-left"),
+    ("callout-right", "drawing-callout-right"),
+    ("callout-center", "drawing-callout-center"),
 ];
 
 /// The Callout tool (toolbar): the card, then pick a part and place.
@@ -611,7 +707,7 @@ fn spawn_callout_card(world: &mut World) {
             header(
                 c,
                 &t,
-                "Callout",
+                &tr("drawing-tool-callout"),
                 "callout-dialog",
                 Some(accept_callout),
                 cancel_callout,
@@ -630,11 +726,15 @@ fn spawn_callout_card(world: &mut World) {
                 })
                 .with_children(|r| {
                     for (name, ic, tip) in [
-                        ("callout-part-property", "part", "Insert component property"),
+                        (
+                            "callout-part-property",
+                            "part",
+                            "drawing-callout-insert-component-property",
+                        ),
                         (
                             "callout-table-property",
                             "bill-of-materials",
-                            "Insert BOM table property",
+                            "drawing-callout-insert-table-property",
                         ),
                     ] {
                         let n: &'static str = name;
@@ -642,7 +742,7 @@ fn spawn_callout_card(world: &mut World) {
                             ToolButton::new(name, ic)
                                 .dropdown(true)
                                 .icon_size(16.0)
-                                .tooltip(tip)
+                                .tooltip(tr(tip))
                                 .build(&t),
                             observe(move |a: On<Activate>, mut commands: Commands| {
                                 let button = a.entity;
@@ -657,7 +757,7 @@ fn spawn_callout_card(world: &mut World) {
                     |p: &mut ChildSpawnerCommands, name: &str, label: &str, value: &str, w: f32| {
                         p.spawn(
                             TextInput::new(name.to_string())
-                                .placeholder(label)
+                                .placeholder(tr(label))
                                 .value(value.to_string())
                                 .width(Val::Px(w))
                                 .chips()
@@ -706,7 +806,7 @@ fn spawn_callout_card(world: &mut World) {
                     );
                     let mut s = Select::new("callout-border").width(Val::Px(100.0));
                     for bd in Border::ALL {
-                        s = s.option(bd.label(), true);
+                        s = s.option(border_name(bd), true);
                     }
                     r.spawn(
                         s.selected(
@@ -718,8 +818,8 @@ fn spawn_callout_card(world: &mut World) {
                         .build(&t),
                     );
                     let mut s = Select::new("callout-size").width(Val::Px(100.0));
-                    for (_, l) in SIZES {
-                        s = s.option(l, true);
+                    for (n, l) in SIZES {
+                        s = s.option(size_name(n, l), true);
                     }
                     r.spawn(
                         s.selected(SIZES.iter().position(|x| x.0 == spec.size).unwrap_or(0))
@@ -729,11 +829,12 @@ fn spawn_callout_card(world: &mut World) {
             });
             c.spawn((
                 t.text(
-                    "Pick an edge of a part, then click to place",
+                    tr("drawing-callout-hint"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("drawing-callout-hint"),
                 Node {
                     margin: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(0.0), Val::Px(8.0)),
                     ..default()
@@ -892,14 +993,14 @@ fn open_property_menu(world: &mut World, button: Entity, which: &str) {
         for p in cadrs_drawing::assembly::PART_PROPERTIES {
             menu = menu.item(MenuItem::new(
                 format!("callout-part-{}", slug(p)),
-                format!("Part: {p}"),
+                tr_with("drawing-callout-part-property", &[("property", p)]),
             ));
         }
     } else {
         for p in cadrs_drawing::assembly::TABLE_PROPERTIES {
             menu = menu.item(MenuItem::new(
                 format!("callout-table-{}", slug(p)),
-                format!("Table: {p}"),
+                tr_with("drawing-callout-table-property", &[("property", p)]),
             ));
         }
     }

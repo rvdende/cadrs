@@ -45,7 +45,7 @@ impl BrowserSearch {
     pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
         Self {
             name: name.into(),
-            placeholder: "Search or paste document id".into(),
+            placeholder: crate::i18n::tr("ui-document-browser-search"),
             value: String::new(),
         }
     }
@@ -79,7 +79,7 @@ impl BrowserSearch {
                 p.spawn(
                     IconButton::new(format!("{name}-filter"), "filter")
                         .icon_size(15.0)
-                        .tooltip("Filter")
+                        .tooltip(crate::i18n::tr("ui-document-browser-filter"))
                         .build(&t),
                 );
                 p.spawn(Node {
@@ -363,7 +363,7 @@ impl OpenedHeader {
                     r.spawn(
                         IconButton::new(format!("{name}-back"), "chevron-left")
                             .icon_size(15.0)
-                            .tooltip("Back to the documents")
+                            .tooltip(crate::i18n::tr("ui-document-browser-back"))
                             .build(&t),
                     );
                 }
@@ -410,21 +410,21 @@ impl OpenedHeader {
                     buttons.push((
                         format!("{name}-create-version"),
                         "versions",
-                        "Create version",
+                        "common-create-version",
                         false,
                     ));
                 }
                 buttons.push((
                     format!("{name}-graph"),
                     "branches",
-                    "Version graph",
+                    "ui-document-browser-version-graph",
                     graph_open,
                 ));
                 for (n, i, tip, on) in buttons {
                     r.spawn(
                         IconButton::new(n, i.to_string())
                             .icon_size(16.0)
-                            .tooltip(tip)
+                            .tooltip(crate::i18n::tr(tip))
                             .selected(on)
                             .build(&t),
                     )

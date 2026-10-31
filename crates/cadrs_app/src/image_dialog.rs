@@ -124,6 +124,16 @@ impl Field {
         }
     }
 
+    /// The label the dialog shows (X and Y stay as they are).
+    fn shown_label(self) -> String {
+        match self {
+            Field::Width => cadrs_ui::i18n::tr("io-image-width"),
+            Field::Height => cadrs_ui::i18n::tr("io-image-height"),
+            Field::Rotation => cadrs_ui::i18n::tr("common-rotation"),
+            _ => self.label().to_string(),
+        }
+    }
+
     fn quantity(self) -> Quantity {
         if self == Field::Rotation {
             Quantity::Angle
@@ -385,23 +395,26 @@ fn sync_image_dialog(
                         .with_children(|b| {
                             b.spawn(
                                 SelectionField::new("image-plane-field")
-                                    .placeholder("Plane")
+                                    .placeholder(cadrs_ui::i18n::tr("common-plane"))
                                     .value(Some(plane))
                                     .build(&t),
                             );
                             for (k, text) in Field::ALL.into_iter().zip(texts) {
                                 b.spawn((
                                     k,
-                                    NumberField::new(k.name(), k.label())
+                                    NumberField::new(k.name(), k.shown_label())
                                         .text(text)
                                         .label_width(64.0)
                                         .build(&t),
                                 ));
                                 if k == Field::Height {
                                     b.spawn(
-                                        OptionRow::new("image-keep-aspect", "Keep aspect ratio")
-                                            .checked(keep)
-                                            .build(&t),
+                                        OptionRow::new(
+                                            "image-keep-aspect",
+                                            cadrs_ui::i18n::tr("io-image-keep-aspect"),
+                                        )
+                                        .checked(keep)
+                                        .build(&t),
                                     );
                                 }
                             }

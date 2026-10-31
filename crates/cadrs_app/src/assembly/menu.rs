@@ -26,6 +26,7 @@ use cadrs_core::assembly::structure::{
     DissolveSubassembly, MoveToNewSubassembly, SetInstancesSuppressed, SetSubassemblyFlexible,
 };
 use cadrs_core::{ElementId, FeatureId};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, Menu, MenuAction, MenuEntry, MenuItem};
 use cadrs_ui::{Theme, open_context_menu};
 
@@ -96,8 +97,8 @@ fn names(world: &World, instance: InstanceId) -> (String, String, String) {
         ),
         _ => cache
             .part_name(instance.part_id())
-            .unwrap_or("instance")
-            .to_string(),
+            .map(str::to_string)
+            .unwrap_or_else(|| tr("asm-instance")),
     };
     let studio = doc
         .active_element()
@@ -155,9 +156,9 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         .iter()
         .any(|p| world.resource::<PartCache>().transparent.contains(p));
     let hide = if inst.hidden {
-        MenuItem::new("asm-show", "Show").icon("visible")
+        MenuItem::new("asm-show", tr("common-show")).icon("visible")
     } else {
-        MenuItem::new("asm-hide", "Hide").icon("hidden")
+        MenuItem::new("asm-hide", tr("common-hide")).icon("hidden")
     };
     let is_sub = inst.source.is_assembly();
     // A PCB Studio's board: its layout is edited in its studio.
@@ -175,9 +176,9 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
     )
     .is_some();
     let suppress = if inst.suppressed {
-        MenuItem::new("asm-unsuppress", "Unsuppress")
+        MenuItem::new("asm-unsuppress", tr("common-unsuppress"))
     } else {
-        MenuItem::new("asm-suppress", "Suppress")
+        MenuItem::new("asm-suppress", tr("common-suppress"))
     };
     // P3G.1: a linked instance's source is a frozen copy: no tab to switch to or edit in context.
     let is_linked = inst.link.is_some();
@@ -185,8 +186,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         .link
         .is_some_and(|l| matches!(l.at, cadrs_core::external::RefAt::Version(_)));
     let pinned = inst.link.is_some_and(|l| l.pinned);
-    const LINKED: &str =
-        "A linked instance shows a frozen version of its source: there is no tab to switch to";
+
     // P3G.3 (DV1.9): its source document at the version, read-only; not while the source can't
     // be reached (DV1.7).
     let open_linked = {
@@ -207,60 +207,71 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .resource::<crate::linked::LinkStatus>()
                     .state(u.reference.document_or(doc.id))
                     .message()
-                    .unwrap_or("The linked document can't be opened"),
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| tr("asm-menu-linked-cant-open")),
             ),
-            _ => Some("Only a reference to a version opens its document"),
+            _ => Some(tr("asm-menu-only-version-opens")),
         }
     };
     let switch = if is_std {
-        MenuItem::new("asm-switch-to", "Switch to Standard content")
+        MenuItem::new("asm-switch-to", tr("asm-menu-switch-to-standard"))
             .icon("standard-content")
             .disabled(true)
     } else if is_linked {
-        MenuItem::new("asm-switch-to", format!("Switch to {studio}"))
-            .icon(if is_sub { "assembly" } else { "part-studio" })
-            .disabled(true)
-            .tooltip(LINKED)
+        MenuItem::new(
+            "asm-switch-to",
+            tr_with("asm-switch-to-named", &[("name", &studio)]),
+        )
+        .icon(if is_sub { "assembly" } else { "part-studio" })
+        .disabled(true)
+        .tooltip(tr("asm-menu-linked-no-tab"))
     } else if board.is_some() {
-        MenuItem::new("asm-switch-to", format!("Switch to {studio}")).icon("pcb-studio")
+        MenuItem::new(
+            "asm-switch-to",
+            tr_with("asm-switch-to-named", &[("name", &studio)]),
+        )
+        .icon("pcb-studio")
     } else {
-        MenuItem::new("asm-switch-to", format!("Switch to {studio}")).icon(if is_sub {
-            "assembly"
-        } else {
-            "part-studio"
-        })
+        MenuItem::new(
+            "asm-switch-to",
+            tr_with("asm-switch-to-named", &[("name", &studio)]),
+        )
+        .icon(if is_sub { "assembly" } else { "part-studio" })
     };
     let std_items = |menu: Menu| -> Menu {
         if !is_std {
             return menu;
         }
         menu.item(
-            MenuItem::new("asm-std-edit", "Edit standard content instance…")
+            MenuItem::new("asm-std-edit", tr("asm-menu-edit-standard-instance"))
                 .icon("standard-content"),
         )
         .item(MenuItem::new(
             "asm-select-same-config",
-            "Select instances with same configuration",
+            tr("asm-menu-select-same-config"),
         ))
         .item(MenuItem::new(
             "asm-select-same-part",
-            "Select instances with same part and same configuration",
+            tr("asm-menu-select-same-part"),
         ))
     };
     let copy_label = if targets.len() > 1 {
-        format!("Copy {} items", targets.len())
+        tr_with(
+            "asm-menu-copy-items",
+            &[("count", &targets.len().to_string())],
+        )
     } else {
-        format!("Copy {name}")
+        tr_with("asm-menu-copy-named", &[("name", &name)])
     };
     let fix = if inst.fixed {
-        MenuItem::new("asm-unfix", "Unfix").icon("constraint-fix")
+        MenuItem::new("asm-unfix", tr("asm-menu-unfix")).icon("constraint-fix")
     } else {
-        MenuItem::new("asm-fix", "Fix").icon("constraint-fix")
+        MenuItem::new("asm-fix", tr("asm-menu-fix")).icon("constraint-fix")
     };
     let transparent_item = if transparent {
-        MenuItem::new("asm-opaque", "Make opaque")
+        MenuItem::new("asm-opaque", tr("asm-make-opaque"))
     } else {
-        MenuItem::new("asm-transparent", "Make transparent…")
+        MenuItem::new("asm-transparent", tr("asm-make-transparent"))
     };
     // P3B.9: items of other stages stay disabled, saying what they wait for.
     let later = |id: &'static str, label: String, why: &str| {
@@ -268,9 +279,9 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             .disabled(true)
             .tooltip(why.to_string())
     };
-    const COLLAB: &str = "Collaboration (comments, tasks) is out of scope";
-    const RELEASE: &str = "Release management is out of scope";
-    const TESSELLATION: &str = "Parts are always drawn from their full tessellation";
+    let collab = tr("asm-menu-collaboration-out-of-scope");
+    let release = tr("asm-menu-release-out-of-scope");
+    let tessellation = tr("asm-menu-full-tessellation");
     let parts_only = targets.iter().all(|t| {
         world
             .resource::<ActiveDocument>()
@@ -305,27 +316,38 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             .iter()
             .enumerate()
             .map(|(k, (_, name))| {
-                MenuItem::new(format!("asm-board-ctx-{k}"), format!("{name} in context"))
-                    .icon("pcb-studio")
-                    .tooltip("Edit this board's layout here, among the parts around it")
-                    .into()
+                MenuItem::new(
+                    format!("asm-board-ctx-{k}"),
+                    tr_with("asm-menu-board-in-context", &[("name", name)]),
+                )
+                .icon("pcb-studio")
+                .tooltip(tr("asm-menu-board-in-context-tooltip"))
+                .into()
             })
             .collect();
-        MenuItem::new("asm-board-edit", "Edit layout")
+        MenuItem::new("asm-board-edit", tr("asm-menu-edit-layout"))
             .icon("pcb-studio")
             .submenu(items)
     } else if board.is_some() {
         // In context (here, among the parts around it) or in its PCB Studio.
-        MenuItem::new("asm-board-edit", "Edit layout").icon("pcb-studio").submenu(vec![
-            MenuItem::new("asm-board-edit-in-context", "In context").icon("assembly").tooltip("Edit the board's layout here, its components moved among the parts around it (the instance follows)").into(),
-            MenuItem::new("asm-board-edit-layout", "In its PCB Studio").icon("pcb-studio").tooltip("Edit the board's layout in its PCB Studio (the instance follows)").into(),
-        ])
+        MenuItem::new("asm-board-edit", tr("asm-menu-edit-layout"))
+            .icon("pcb-studio")
+            .submenu(vec![
+                MenuItem::new("asm-board-edit-in-context", tr("asm-menu-in-context"))
+                    .icon("assembly")
+                    .tooltip(tr("asm-menu-board-edit-in-context-tooltip"))
+                    .into(),
+                MenuItem::new("asm-board-edit-layout", tr("asm-menu-in-pcb-studio"))
+                    .icon("pcb-studio")
+                    .tooltip(tr("asm-menu-board-edit-layout-tooltip"))
+                    .into(),
+            ])
     } else if contexts.is_empty() || no_edit {
-        let mut item = MenuItem::new("asm-edit-in-context", "Edit in context")
+        let mut item = MenuItem::new("asm-edit-in-context", tr("asm-menu-edit-in-context"))
             .icon("part-studio")
             .disabled(no_edit);
         if is_linked && !external {
-            item = item.tooltip("A version of this document is edited at its tab");
+            item = item.tooltip(tr("asm-menu-version-edited-at-tab"));
         }
         item
     } else {
@@ -338,11 +360,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             })
             .collect();
         items.push(
-            MenuItem::new("asm-edit-in-context-new", "New context")
+            MenuItem::new("asm-edit-in-context-new", tr("asm-menu-new-context"))
                 .icon("plus")
                 .into(),
         );
-        MenuItem::new("asm-edit-in-context", "Edit in context")
+        MenuItem::new("asm-edit-in-context", tr("asm-menu-edit-in-context"))
             .icon("part-studio")
             .submenu(items)
     };
@@ -359,61 +381,70 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 } else if c.stale {
                     item = item
                         .dot(Color::srgb(0.17, 0.49, 0.91))
-                        .tooltip("An update is available");
+                        .tooltip(tr("asm-context-update-available"));
                 }
                 item.into()
             })
             .collect();
-        MenuItem::new("asm-update-context", "Update context")
+        MenuItem::new("asm-update-context", tr("asm-context-update"))
             .icon("restore")
             .submenu(items)
     });
     let set_primary = (!external && contexts.iter().any(|c| !c.primary))
-        .then(|| MenuItem::new("asm-set-primary", "Set as primary instance").icon("origin"));
+        .then(|| MenuItem::new("asm-set-primary", tr("asm-menu-set-primary")).icon("origin"));
     let mut menu = Menu::new("assembly-context-menu")
         .min_width(210.0)
         .item_height(20.0);
     match handle {
         TriadHandle::Origin => {
-            menu = menu.item(MenuItem::new("asm-move-to-origin", "Move to origin"))
+            menu = menu.item(MenuItem::new(
+                "asm-move-to-origin",
+                tr("asm-menu-move-to-origin"),
+            ))
         }
         TriadHandle::Arrow(_) => {
             menu = menu
-                .item(MenuItem::new("asm-align-z", "Align with Z"))
-                .item(MenuItem::new("asm-anti-align-z", "Anti-align with Z"));
+                .item(MenuItem::new("asm-align-z", tr("asm-menu-align-z")))
+                .item(MenuItem::new(
+                    "asm-anti-align-z",
+                    tr("asm-menu-anti-align-z"),
+                ));
         }
         TriadHandle::Ring(_) => {
             menu = menu
-                .item(MenuItem::new("asm-rotate-90", "Rotate 90°"))
-                .item(MenuItem::new("asm-rotate-180", "Rotate 180°"));
+                .item(MenuItem::new("asm-rotate-90", tr("asm-menu-rotate-90")))
+                .item(MenuItem::new("asm-rotate-180", tr("asm-menu-rotate-180")));
         }
         TriadHandle::Plane(_) | TriadHandle::View | TriadHandle::None => {}
     }
     if handle == TriadHandle::None {
         // The Instances list's menu (`ex1-step9.png`).
         menu = menu
-            .item(MenuItem::new("asm-properties", "Properties…").icon("properties"))
+            .item(MenuItem::new("asm-properties", tr("common-properties")).icon("properties"))
             .item(hide)
-            .item(MenuItem::new("asm-hide-others", "Hide other instances"))
-            .item(MenuItem::new("asm-hide-all", "Hide all instances"))
-            .item(MenuItem::new("asm-isolate", "Isolate…"))
+            .item(MenuItem::new("asm-hide-others", tr("asm-menu-hide-others")))
+            .item(MenuItem::new("asm-hide-all", tr("asm-menu-hide-all")))
+            .item(MenuItem::new("asm-isolate", tr("asm-isolate-ellipsis")))
             .item(transparent_item)
             .item(suppress)
             .item(fix)
-            .item(MenuItem::new("asm-show-mates", "Show mates"))
-            .item(MenuItem::new("asm-hide-mates", "Hide mates"))
-            .item(MenuItem::new("asm-interference", "Check interference").icon("intersection"))
+            .item(MenuItem::new("asm-show-mates", tr("asm-menu-show-mates")))
+            .item(MenuItem::new("asm-hide-mates", tr("asm-menu-hide-mates")))
+            .item(
+                MenuItem::new("asm-interference", tr("asm-interference-title"))
+                    .icon("intersection"),
+            )
             .item(later(
                 "asm-tessellation",
-                "Use best available tessellation".into(),
-                TESSELLATION,
+                tr("asm-menu-best-tessellation"),
+                tessellation.as_str(),
             ))
             .item(
-                MenuItem::new("asm-connector", "Add mate connector to instance origin…")
+                MenuItem::new("asm-connector", tr("asm-menu-connector-at-origin"))
                     .icon("mate-connector"),
             )
             .item(
-                MenuItem::new("asm-replace", "Replace instances…")
+                MenuItem::new("asm-replace", tr("asm-menu-replace-instances"))
                     .disabled(!parts_only)
                     .icon("transform"),
             );
@@ -428,7 +459,10 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             .item(switch.clone())
             .separator()
             .item(MenuItem::new("asm-copy", copy_label).icon("copy"))
-            .item(MenuItem::new("asm-move-to-new", "Move to new subassembly"));
+            .item(MenuItem::new(
+                "asm-move-to-new",
+                tr("asm-menu-move-to-new-sub"),
+            ));
         if is_sub {
             // A16.2: Lock / follow position to ▸ the current position or a Named position of
             // the subassembly's tab.
@@ -456,7 +490,7 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .position(|p| p.id == f)
             });
             let mut follow: Vec<MenuEntry> = vec![
-                MenuItem::new("asm-follow-none", "Current position")
+                MenuItem::new("asm-follow-none", tr("asm-menu-current-position"))
                     .checked(followed.is_none() && !inst.flexible)
                     .into(),
             ];
@@ -468,33 +502,34 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 );
             }
             menu = menu
-                .item(MenuItem::new("asm-dissolve", "Dissolve subassembly"))
+                .item(MenuItem::new("asm-dissolve", tr("asm-menu-dissolve-sub")))
                 .item(if inst.flexible {
-                    MenuItem::new("asm-rigid", "Make rigid").icon("lock-filled")
+                    MenuItem::new("asm-rigid", tr("asm-menu-make-rigid")).icon("lock-filled")
                 } else {
-                    MenuItem::new("asm-flexible", "Make flexible")
+                    MenuItem::new("asm-flexible", tr("asm-menu-make-flexible"))
                 })
-                .item(MenuItem::new("asm-follow", "Lock / follow position to").submenu(follow));
+                .item(MenuItem::new("asm-follow", tr("asm-menu-follow-position")).submenu(follow));
         }
         // A2.4: a rigid Part Studio instance's Edit adds or removes parts.
         if inst.source.is_studio() {
-            menu = menu.item(MenuItem::new("asm-studio-edit", "Edit…").icon("edit"));
+            menu = menu
+                .item(MenuItem::new("asm-studio-edit", tr("common-edit-ellipsis")).icon("edit"));
         }
         // A linked instance's items (ER2.4, ER5.1, ER5.7, ER6.7).
         if is_linked {
             let pin = if pinned {
-                MenuItem::new("asm-unpin", "Unpin reference").icon("location")
+                MenuItem::new("asm-unpin", tr("asm-menu-unpin-reference")).icon("location")
             } else {
-                MenuItem::new("asm-pin", "Pin reference")
+                MenuItem::new("asm-pin", tr("asm-menu-pin-reference"))
                     .icon("location")
                     .disabled(!is_version)
             };
             menu = menu
-                .item(MenuItem::new("asm-update-linked", "Update linked document…").icon("link"))
-                .item(match open_linked {
-                    None => MenuItem::new("asm-open-linked", "Open linked document")
+                .item(MenuItem::new("asm-update-linked", tr("asm-menu-update-linked")).icon("link"))
+                .item(match &open_linked {
+                    None => MenuItem::new("asm-open-linked", tr("asm-menu-open-linked"))
                         .icon("open-external"),
-                    Some(why) => later("asm-open-linked", "Open linked document".into(), why)
+                    Some(why) => later("asm-open-linked", tr("asm-menu-open-linked"), why.as_str())
                         .icon("open-external"),
                 })
                 .item(pin);
@@ -503,78 +538,122 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         let version_item = if is_std {
             later(
                 "asm-version",
-                "Change to version…".into(),
-                "Standard content has no versions",
+                tr("asm-menu-change-to-version"),
+                tr("asm-menu-standard-no-versions").as_str(),
             )
             .icon("versions")
         } else {
-            MenuItem::new("asm-version", "Change to version…").icon("versions")
+            MenuItem::new("asm-version", tr("asm-menu-change-to-version")).icon("versions")
         };
         menu = menu
             .item(version_item)
-            .item(MenuItem::new("asm-export", "Export…").icon("file-export"))
-            .item(MenuItem::new("asm-where-used", "Where used…").icon("find"))
-            .item(later("asm-revisions", "Revision history…".into(), RELEASE))
-            .item(later("asm-task", "Create task…".into(), COLLAB))
+            .item(MenuItem::new("asm-export", tr("asm-export-ellipsis")).icon("file-export"))
+            .item(MenuItem::new("asm-where-used", tr("asm-menu-where-used")).icon("find"))
+            .item(later(
+                "asm-revisions",
+                tr("asm-menu-revision-history"),
+                release.as_str(),
+            ))
+            .item(later(
+                "asm-task",
+                tr("asm-menu-create-task"),
+                collab.as_str(),
+            ))
             .separator()
-            .item(later("asm-comment", "Add comment".into(), COLLAB).icon("comments"))
+            .item(later("asm-comment", tr("common-add-comment"), collab.as_str()).icon("comments"))
             .separator()
-            .item(MenuItem::new("asm-zoom-selection", "Zoom to selection"))
+            .item(MenuItem::new(
+                "asm-zoom-selection",
+                tr("common-zoom-to-selection"),
+            ))
             .separator()
             .item(
-                MenuItem::new("asm-drawing", format!("Create Drawing of {drawing_of}…"))
-                    .icon("file-new"),
+                MenuItem::new(
+                    "asm-drawing",
+                    tr_with("asm-menu-create-drawing-of", &[("name", &drawing_of)]),
+                )
+                .icon("file-new"),
             )
             .separator()
-            .item(MenuItem::new("asm-folder", "Add selection to folder…"))
-            .item(MenuItem::new("asm-empty-sub", "Create empty subassembly"))
+            .item(MenuItem::new(
+                "asm-folder",
+                tr("asm-add-selection-to-folder"),
+            ))
+            .item(MenuItem::new(
+                "asm-empty-sub",
+                tr("asm-menu-create-empty-sub"),
+            ))
             .separator()
-            .item(MenuItem::new("asm-delete", "Delete").icon("remove-circle"));
+            .item(MenuItem::new("asm-delete", tr("common-delete")).icon("remove-circle"));
     } else {
         // In the view and on the triad (`ex1-step6.png`, `ex1-step7.png`).
         let part = name.clone();
         menu = menu
             .item(hide)
-            .item(MenuItem::new("asm-hide-others", "Hide other instances"))
-            .item(MenuItem::new("asm-hide-all", "Hide all instances"))
-            .item(MenuItem::new("asm-isolate", "Isolate…"))
+            .item(MenuItem::new("asm-hide-others", tr("asm-menu-hide-others")))
+            .item(MenuItem::new("asm-hide-all", tr("asm-menu-hide-all")))
+            .item(MenuItem::new("asm-isolate", tr("asm-isolate-ellipsis")))
             .item(transparent_item)
-            .item(MenuItem::new("asm-section", "Section view…").icon("section-view"))
+            .item(MenuItem::new("asm-section", tr("asm-menu-section-view")).icon("section-view"))
             .item(if inst.suppressed {
-                MenuItem::new("asm-unsuppress", format!("Unsuppress {part}"))
+                MenuItem::new(
+                    "asm-unsuppress",
+                    tr_with("asm-menu-unsuppress-named", &[("name", &part)]),
+                )
             } else {
-                MenuItem::new("asm-suppress", format!("Suppress {part}"))
+                MenuItem::new(
+                    "asm-suppress",
+                    tr_with("asm-menu-suppress-named", &[("name", &part)]),
+                )
             })
             .item(fix)
-            .item(MenuItem::new("asm-show-mates", "Show mates"))
-            .item(MenuItem::new("asm-hide-mates", "Hide mates"))
-            .item(MenuItem::new("asm-interference", "Check interference").icon("intersection"))
+            .item(MenuItem::new("asm-show-mates", tr("asm-menu-show-mates")))
+            .item(MenuItem::new("asm-hide-mates", tr("asm-menu-hide-mates")))
+            .item(
+                MenuItem::new("asm-interference", tr("asm-interference-title"))
+                    .icon("intersection"),
+            )
             .item(later(
                 "asm-tessellation",
-                "Use best available tessellation".into(),
-                TESSELLATION,
+                tr("asm-menu-best-tessellation"),
+                tessellation.as_str(),
             ))
             .separator()
-            .item(MenuItem::new("asm-copy", format!("Copy {part}")).icon("copy"))
             .item(
-                MenuItem::new("asm-drawing", format!("Create Drawing of {drawing_of}…"))
-                    .icon("file-new"),
+                MenuItem::new(
+                    "asm-copy",
+                    tr_with("asm-menu-copy-named", &[("name", &part)]),
+                )
+                .icon("copy"),
             )
             .item(
-                MenuItem::new("asm-drawing-asm", format!("Create Drawing of {asm}…"))
-                    .icon("file-new"),
+                MenuItem::new(
+                    "asm-drawing",
+                    tr_with("asm-menu-create-drawing-of", &[("name", &drawing_of)]),
+                )
+                .icon("file-new"),
             )
-            .item(MenuItem::new("asm-export", "Export…").icon("file-export"))
+            .item(
+                MenuItem::new(
+                    "asm-drawing-asm",
+                    tr_with("asm-menu-create-drawing-of", &[("name", &asm)]),
+                )
+                .icon("file-new"),
+            )
+            .item(MenuItem::new("asm-export", tr("asm-export-ellipsis")).icon("file-export"))
             .separator()
-            .item(MenuItem::new("asm-find", "Find in instance list"))
+            .item(MenuItem::new("asm-find", tr("asm-menu-find-in-list")))
             .item(
-                MenuItem::new("asm-connector", "Add mate connector to instance origin…")
+                MenuItem::new("asm-connector", tr("asm-menu-connector-at-origin"))
                     .icon("mate-connector"),
             )
             .item(
-                MenuItem::new("asm-replace", format!("Replace {part}…"))
-                    .disabled(!parts_only)
-                    .icon("transform"),
+                MenuItem::new(
+                    "asm-replace",
+                    tr_with("asm-menu-replace-named", &[("name", &part)]),
+                )
+                .disabled(!parts_only)
+                .icon("transform"),
             );
         menu = std_items(menu).item(in_context);
         if let Some(u) = update_context {
@@ -585,26 +664,44 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
         }
         menu = menu
             .item(switch)
-            .item(MenuItem::new("asm-where-used", format!("Where used for {studio}…")).icon("find"))
+            .item(
+                MenuItem::new(
+                    "asm-where-used",
+                    tr_with("asm-menu-where-used-for", &[("name", &studio)]),
+                )
+                .icon("find"),
+            )
             .separator()
-            .item(MenuItem::new("asm-clear-selection", "Clear selection"))
+            .item(MenuItem::new(
+                "asm-clear-selection",
+                tr("common-clear-selection"),
+            ))
             .item(later(
                 "asm-select-other",
-                "Select other…".into(),
-                "Select other (picking hidden faces) is not part of the assemblies course",
+                tr("asm-menu-select-other"),
+                tr("asm-menu-select-other-not-in-course").as_str(),
             ))
             .separator()
-            .item(later("asm-comment", "Add comment".into(), COLLAB).icon("comments"))
+            .item(later("asm-comment", tr("common-add-comment"), collab.as_str()).icon("comments"))
             .separator()
-            .item(MenuItem::new("asm-zoom-fit", "Zoom to fit"))
-            .item(MenuItem::new("asm-zoom-selection", "Zoom to selection"))
+            .item(MenuItem::new("asm-zoom-fit", tr("common-zoom-to-fit")))
+            .item(MenuItem::new(
+                "asm-zoom-selection",
+                tr("common-zoom-to-selection"),
+            ))
             .item(later(
                 "asm-normal-to",
-                "View normal to".into(),
-                "View normal to (a face) is not part of the assemblies course",
+                tr("asm-menu-view-normal-to"),
+                tr("asm-menu-view-normal-to-not-in-course").as_str(),
             ))
             .separator()
-            .item(MenuItem::new("asm-delete", format!("Delete {part}")).icon("remove-circle"));
+            .item(
+                MenuItem::new(
+                    "asm-delete",
+                    tr_with("asm-menu-delete-named", &[("name", &part)]),
+                )
+                .icon("remove-circle"),
+            );
     }
     // 28 items and 6 separators, plus the handle's own items: opened high enough to fit.
     let extra = match handle {
@@ -698,24 +795,34 @@ pub fn open_empty_menu(world: &mut World, at: Vec2) {
         .as_ref()
         .map(|c| c.name.clone());
     let paste = match clip {
-        Some(n) => MenuItem::new("asm-paste", format!("Paste {n}")),
-        None => MenuItem::new("asm-paste", "Paste").disabled(true),
+        Some(n) => MenuItem::new(
+            "asm-paste",
+            tr_with("asm-menu-paste-named", &[("name", &n)]),
+        ),
+        None => MenuItem::new("asm-paste", tr("common-paste")).disabled(true),
     };
     let menu = Menu::new("assembly-empty-menu")
         .min_width(180.0)
         .item_height(20.0)
-        .item(MenuItem::new("asm-show-all", "Show all"))
+        .item(MenuItem::new("asm-show-all", tr("asm-menu-show-all")))
         .item(MenuItem::new(
             "asm-show-all-instances",
-            "Show all instances",
+            tr("asm-menu-show-all-instances"),
         ))
         .item(paste)
-        .item(MenuItem::new("asm-interference-all", "Check interference").icon("intersection"))
         .item(
-            MenuItem::new("asm-drawing-asm", format!("Create Drawing of {asm}…")).icon("file-new"),
+            MenuItem::new("asm-interference-all", tr("asm-interference-title"))
+                .icon("intersection"),
         )
-        .item(MenuItem::new("asm-zoom-fit", "Zoom to fit"))
-        .item(MenuItem::new("asm-isometric", "Isometric"));
+        .item(
+            MenuItem::new(
+                "asm-drawing-asm",
+                tr_with("asm-menu-create-drawing-of", &[("name", &asm)]),
+            )
+            .icon("file-new"),
+        )
+        .item(MenuItem::new("asm-zoom-fit", tr("common-zoom-to-fit")))
+        .item(MenuItem::new("asm-isometric", tr("asm-menu-isometric")));
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, at, menu.build(&theme));

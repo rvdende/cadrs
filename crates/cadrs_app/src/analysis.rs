@@ -33,11 +33,12 @@ use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::analysis::{
-    CURVATURE_BANDS, CURVATURE_COLORS, DraftBand, curvature_band_label, curvature_comb,
+    CURVATURE_BANDS, CURVATURE_COLORS, DraftBand, curvature_band_range, curvature_comb,
     vertex_mean_curvature,
 };
 use cadrs_core::{ElementId, FeatureId, PartId};
 use cadrs_sketch::{EdgeName, FaceName};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, MenuAction, MenuItem, NumberField, NumberFieldCommit,
@@ -244,15 +245,18 @@ fn on_tool(a: On<Activate>, q: Query<&Name>, mut commands: Commands) {
             .item(MenuItem::new(
                 "analysis-draft",
                 if st.draft.is_some() {
-                    "Exit draft analysis"
+                    tr("model-analysis-exit-draft")
                 } else {
-                    "Draft analysis…"
+                    tr("model-analysis-draft-ellipsis")
                 },
             ))
             .separator()
-            .item(MenuItem::new("analysis-curvature", "Curvature").checked(st.curvature))
-            .item(MenuItem::new("analysis-combs", "Curvature combs").checked(st.combs))
-            .item(MenuItem::new("analysis-zebra", "Zebra stripes").checked(st.zebra));
+            .item(
+                MenuItem::new("analysis-curvature", tr("model-analysis-curvature"))
+                    .checked(st.curvature),
+            )
+            .item(MenuItem::new("analysis-combs", tr("model-analysis-combs")).checked(st.combs))
+            .item(MenuItem::new("analysis-zebra", tr("model-analysis-zebra")).checked(st.zebra));
         let mut commands = world.commands();
         open_menu(&mut commands, anchor, menu.build(&theme));
         world.flush();
@@ -424,7 +428,11 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
     let (reference, label, pull, anchor) = match pick {
         Pick::Plane(k) => (
             PullRef::Plane(k),
-            format!("{} plane", k.name()),
+            cadrs_ui::i18n::tr(match k {
+                PlaneKind::Top => "render-section-top-plane",
+                PlaneKind::Front => "render-section-front-plane",
+                PlaneKind::Right => "render-section-right-plane",
+            }),
             k.normal(),
             Vec3::ZERO,
         ),
@@ -443,9 +451,13 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
                 .map(v3)
                 .unwrap_or(Vec3::ZERO);
             let label = label_of(pick)
-                .filter(|l| l != "Face")
-                .or_else(|| cache.part_name(part).map(|n| format!("Face of {n}")))
-                .unwrap_or_else(|| "Face".into());
+                .filter(|l| *l != "Face" && *l != tr("common-face"))
+                .or_else(|| {
+                    cache
+                        .part_name(part)
+                        .map(|n| tr_with("common-face-of", &[("name", n)]))
+                })
+                .unwrap_or_else(|| tr("common-face"));
             (PullRef::Face(part, name), label, dir, at)
         }
         Pick::Edge(part, name) => {
@@ -461,7 +473,7 @@ fn resolve(world: &World, pick: Pick) -> Option<DraftState> {
             }
             (
                 PullRef::Edge(part, name),
-                label_of(pick).unwrap_or_else(|| "Edge".into()),
+                label_of(pick).unwrap_or_else(|| tr("common-edge")),
                 dir,
                 (a + b) / 2.0,
             )
@@ -602,7 +614,7 @@ fn draft_dialog(t: &Theme, d: &DraftState) -> impl Bundle {
     };
     let (flipped, angle) = (d.flip, degrees_text(d.angle));
     FeatureDialog::new("draft-analysis-dialog")
-        .title("Draft analysis")
+        .title(tr("model-analysis-draft"))
         .valid(true)
         .width(240.0)
         .body(move |b| {
@@ -614,7 +626,7 @@ fn draft_dialog(t: &Theme, d: &DraftState) -> impl Bundle {
             .with_children(|r| {
                 r.spawn(
                     SelectionList::new("draft-pull")
-                        .placeholder("Pull direction")
+                        .placeholder(tr("model-analysis-pull-direction"))
                         .items(items)
                         .active(true)
                         .build(&tb),
@@ -627,7 +639,7 @@ fn draft_dialog(t: &Theme, d: &DraftState) -> impl Bundle {
                 r.spawn((
                     IconButton::new("draft-flip", crate::extrude_dialog::flip_icon(flipped))
                         .icon_size(20.0)
-                        .tooltip("Flip the pull direction")
+                        .tooltip(tr("model-analysis-flip-pull"))
                         .build(&tb),
                     observe(|_: On<Activate>, mut commands: Commands| commands.queue(flip)),
                 ))
@@ -639,7 +651,7 @@ fn draft_dialog(t: &Theme, d: &DraftState) -> impl Bundle {
                 });
             });
             b.spawn(
-                NumberField::new("draft-angle", "Draft angle")
+                NumberField::new("draft-angle", tr("model-draft-angle"))
                     .text(angle)
                     .label_width(80.0)
                     .build(&tb),
@@ -694,6 +706,37 @@ fn sync_dialog(
     commands.entity(area).add_child(e);
 }
 
+/// A draft band's legend text, "3° to 6°" ([`DraftBand::label`] in the current language).
+fn draft_band_text(b: DraftBand, required: f64) -> String {
+    let (lo, hi) = b.range(required);
+    let f = |v: f64| {
+        let s = format!("{v:.1}");
+        let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+        if s == "-0" {
+            "0".into()
+        } else {
+            s.replace('-', "−")
+        }
+    };
+    tr_with(
+        "model-analysis-degrees-range",
+        &[("low", &f(lo)), ("high", &f(hi))],
+    )
+}
+
+/// A curvature band's legend text, "0.010 to 0.020 /mm" or "0 (flat)"
+/// ([`cadrs_core::analysis::curvature_band_label`] in the current language).
+fn curvature_band_text(band: usize, max: f64) -> String {
+    if band >= CURVATURE_BANDS - 1 {
+        return tr("model-analysis-flat");
+    }
+    let (lo, hi) = curvature_band_range(band, max);
+    tr_with(
+        "model-analysis-curvature-range",
+        &[("low", &format!("{lo:.3}")), ("high", &format!("{hi:.3}"))],
+    )
+}
+
 /// The draft analysis's or the curvature's legend at the right of the view.
 #[derive(Component)]
 struct Legend(String);
@@ -716,18 +759,18 @@ fn sync_legend(
     let rows: Option<LegendRows> = match st {
         Some(AnalysisState { draft: Some(d), .. }) => {
             let required = d.angle as f64;
-            let subtitle = format!(
-                "{}{} · {}",
-                d.label,
-                if d.flip { " (flipped)" } else { "" },
-                degrees_text(d.angle)
-            );
+            let pull = if d.flip {
+                tr_with("model-analysis-pull-flipped", &[("pull", &d.label)])
+            } else {
+                d.label.clone()
+            };
+            let subtitle = format!("{pull} · {}", degrees_text(d.angle));
             Some((
-                "Draft analysis".into(),
+                tr("model-analysis-draft"),
                 subtitle,
                 DraftBand::ALL
                     .into_iter()
-                    .map(|b| (b.color(), b.label(required)))
+                    .map(|b| (b.color(), draft_band_text(b, required)))
                     .collect(),
             ))
         }
@@ -735,12 +778,12 @@ fn sync_legend(
             curvature: true, ..
         }) => {
             let max = views.max_curvature.map_or(0.0, |(_, m)| m);
-            let subtitle = "Mean curvature (1 / radius)".to_string();
+            let subtitle = tr("model-analysis-mean-curvature");
             Some((
-                "Curvature".into(),
+                tr("model-analysis-curvature"),
                 subtitle,
                 (0..CURVATURE_BANDS)
-                    .map(|i| (CURVATURE_COLORS[i], curvature_band_label(i, max)))
+                    .map(|i| (CURVATURE_COLORS[i], curvature_band_text(i, max)))
                     .collect(),
             ))
         }
@@ -766,10 +809,11 @@ fn sync_legend(
         return;
     };
     let t = theme.clone();
-    let prefix = if title == "Curvature" {
-        "curvature"
-    } else {
+    // (The draft analysis's legend comes first when both are on.)
+    let prefix = if matches!(st, Some(AnalysisState { draft: Some(_), .. })) {
         "draft"
+    } else {
+        "curvature"
     };
     let legend = commands
         .spawn((

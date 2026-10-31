@@ -23,6 +23,7 @@ use cadrs_core::assembly::InstanceId;
 use cadrs_core::assembly::context::{self, ContextNo, StudioContext};
 use cadrs_core::link_update::{RefSite, Target, UpdateReferences};
 use cadrs_core::{Document, DocumentId, ElementId};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::{ActiveDocument, AppClock, DocumentStore, UserProfile};
 
@@ -97,12 +98,18 @@ pub fn edit_linked(
     let file = match store.load(d) {
         Ok(f) => f,
         Err(e) => {
-            crate::linked::error_toast(world, format!("The linked document can't be opened: {e}"));
+            crate::linked::error_toast(
+                world,
+                tr_with(
+                    "asm-linked-document-cant-open",
+                    &[("error", &e.to_string())],
+                ),
+            );
             return;
         }
     };
     let Some(el) = file.document.element(studio) else {
-        crate::linked::error_toast(world, "The linked Part Studio is no longer in its document");
+        crate::linked::error_toast(world, tr("asm-linked-studio-gone"));
         return;
     };
     let (id, pending) = match which {
@@ -294,8 +301,10 @@ pub fn update_from_assembly(
 /// The snapshot a context whose assembly is in another document takes now (MC5.8.2: from the
 /// Part Studio, no version).
 pub fn resnapshot(world: &mut World, ctx: &StudioContext) -> Result<StudioContext, String> {
-    let d = ctx.document.ok_or("not a linked context")?;
-    let asm_doc = document(world, d).ok_or("The assembly's document can't be read")?;
+    let d = ctx
+        .document
+        .ok_or_else(|| tr("asm-linked-not-linked-context"))?;
+    let asm_doc = document(world, d).ok_or_else(|| tr("asm-linked-assembly-document-cant-read"))?;
     context::resnapshot_external(&asm_doc, ctx).map_err(|e| e.to_string())
 }
 
@@ -311,7 +320,10 @@ pub fn open_assembly(world: &mut World, ctx: &StudioContext) {
         Err(e) => {
             crate::linked::error_toast(
                 world,
-                format!("The assembly's document can't be opened: {e}"),
+                tr_with(
+                    "asm-linked-assembly-document-cant-open",
+                    &[("error", &e.to_string())],
+                ),
             );
             return;
         }

@@ -127,7 +127,10 @@ pub fn insert_pictures(world: &mut World, paths: Vec<std::path::PathBuf>, at: Op
         let bytes = match cadrs_fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                notes.push(format!("Cannot read {name}: {e}"));
+                notes.push(cadrs_ui::i18n::tr_with(
+                    "io-cannot-read",
+                    &[("name", &name), ("error", &e.to_string())],
+                ));
                 continue;
             }
         };
@@ -154,7 +157,10 @@ pub fn insert_pictures(world: &mut World, paths: Vec<std::path::PathBuf>, at: Op
                     .unwrap_or(cadrs_core::picture::DEFAULT_SIZE);
                 center[0] += width + DROP_GAP;
             }
-            Err(e) => notes.push(format!("Cannot insert {name}: {e}")),
+            Err(e) => notes.push(cadrs_ui::i18n::tr_with(
+                "io-cannot-insert",
+                &[("name", &name), ("error", &e.to_string())],
+            )),
         }
     }
     if !notes.is_empty() {

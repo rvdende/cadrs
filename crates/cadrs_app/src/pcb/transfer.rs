@@ -37,6 +37,8 @@ use cadrs_ui::{
     Theme, show_notification,
 };
 
+use cadrs_ui::i18n::{Translated, tr, tr_with};
+
 use crate::{ActiveDocument, AppClock, AppState};
 
 pub fn register(app: &mut App) {
@@ -53,9 +55,11 @@ fn close<T: Component>(world: &mut World) {
     }
 }
 
-fn label(t: &Theme, text: &str) -> impl Bundle {
+/// A label from its catalog key.
+fn label(t: &Theme, key: &'static str) -> impl Bundle {
     (
-        t.text(text, t.font_sm, FontWeight::NORMAL, t.foreground),
+        t.text(tr(key), t.font_sm, FontWeight::NORMAL, t.foreground),
+        Translated(key),
         Node {
             margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(6.0), Val::Px(4.0)),
             ..default()
@@ -117,23 +121,23 @@ pub fn open_sync_dialog(world: &mut World) {
     let labels: Vec<String> = tabs.iter().map(|t| t.label.clone()).collect();
     world.spawn((
         Dialog::new("pcb-sync-dialog")
-            .title("Sync a Part Studio or assembly with PCB Studio")
+            .title(tr("pcb-sync-title"))
             .width(440.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(label(t, "Select part studio or assembly to use:"));
+                b.spawn(label(t, "pcb-sync-select-source"));
                 let mut sel = Select::new("pcb-sync-source")
                     .bordered()
                     .width(Val::Percent(100.0))
                     .selected(source);
                 if labels.is_empty() {
-                    sel = sel.option("No Part Studio or assembly in this document", false);
+                    sel = sel.option(tr("pcb-sync-no-source"), false);
                 }
                 for l in &labels {
                     sel = sel.option(l.clone(), true);
                 }
                 b.spawn(sel.build(t));
-                b.spawn(label(t, "Top face of board part is parallel to:"));
+                b.spawn(label(t, "pcb-sync-top-face"));
                 let mut planes = Select::new("pcb-sync-plane")
                     .bordered()
                     .width(Val::Percent(100.0))
@@ -150,13 +154,18 @@ pub fn open_sync_dialog(world: &mut World) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pcb-sync-ok").label("OK").primary().build(t),
+                    Button::new("pcb-sync-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(accept_sync);
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-sync-cancel").label("Cancel").build(t),
+                    Button::new("pcb-sync-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<SyncDialog>);
                     }),
@@ -209,8 +218,7 @@ fn accept_sync(world: &mut World) {
     let Some(tab) = tabs.get(si) else {
         toast(
             world,
-            Notification::warning("There is no Part Studio or assembly to sync")
-                .name("pcb-sync-toast"),
+            Notification::warning(tr("pcb-sync-nothing")).name("pcb-sync-toast"),
         );
         return;
     };
@@ -244,7 +252,7 @@ pub fn start_sync(world: &mut World, source: ElementId, plane: SyncPlaneChoice) 
         Err(e) => {
             toast(
                 world,
-                Notification::warning(format!("Couldn't sync: {e}"))
+                Notification::warning(tr_with("pcb-sync-failed", &[("error", &e.to_string())]))
                     .name("pcb-sync-toast")
                     .max_width(640.0),
             );
@@ -258,7 +266,7 @@ fn finish_syncs(q: Query<(Entity, &RunningSync)>, mut commands: Commands) {
         let Some(result) = run.pending.poll() else {
             continue;
         };
-        let result = result.unwrap_or_else(|| Err("The kernel thread stopped".into()));
+        let result = result.unwrap_or_else(|| Err(tr("io-kernel-stopped")));
         commands.entity(e).despawn();
         commands.queue(move |world: &mut World| finish_sync(world, result));
     }
@@ -270,7 +278,7 @@ fn finish_sync(world: &mut World, result: Result<SyncOutcome, String>) {
         Err(e) => {
             toast(
                 world,
-                Notification::warning(format!("Couldn't sync: {e}"))
+                Notification::warning(tr_with("pcb-sync-failed", &[("error", &e.to_string())]))
                     .name("pcb-sync-toast")
                     .max_width(640.0),
             );
@@ -282,7 +290,7 @@ fn finish_sync(world: &mut World, result: Result<SyncOutcome, String>) {
     if let Err(e) = run {
         toast(
             world,
-            Notification::warning(format!("Couldn't sync: {e}"))
+            Notification::warning(tr_with("pcb-sync-failed", &[("error", &e.to_string())]))
                 .name("pcb-sync-toast")
                 .max_width(640.0),
         );
@@ -324,11 +332,11 @@ pub fn open_export_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-export-dialog")
-            .title("Export ECAD files")
+            .title(tr("pcb-export-title"))
             .width(360.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(label(t, "Write to IDF Version:"));
+                b.spawn(label(t, "pcb-export-idf-version"));
                 b.spawn(
                     RadioGroup::new("pcb-export-version")
                         .option("pcb-export-idf2", "IDF 2.0")
@@ -338,8 +346,9 @@ pub fn open_export_dialog(world: &mut World) {
                 );
                 b.spawn((
                     Name::new("pcb-export-note"),
+                    Translated("pcb-export-idf2-note"),
                     t.text(
-                        "IDF 2.0 files are written without keep-in and keep-out areas.",
+                        tr("pcb-export-idf2-note"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
@@ -355,7 +364,7 @@ pub fn open_export_dialog(world: &mut World) {
                 let t = &tf;
                 f.spawn((
                     Button::new("pcb-export-ok")
-                        .label("Export")
+                        .label(tr("common-export"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -363,7 +372,9 @@ pub fn open_export_dialog(world: &mut World) {
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-export-cancel").label("Cancel").build(t),
+                    Button::new("pcb-export-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<ExportDialog>);
                     }),
@@ -431,7 +442,7 @@ pub fn export_shown(world: &mut World, version: IdfVersion) {
     let Some(dir) = dir else {
         toast(
             world,
-            Notification::warning("Nowhere to save the export").name("pcb-export-toast"),
+            Notification::warning(tr("io-export-nowhere")).name("pcb-export-toast"),
         );
         return;
     };
@@ -441,9 +452,15 @@ pub fn export_shown(world: &mut World, version: IdfVersion) {
     if let Err(e) = written {
         toast(
             world,
-            Notification::warning(format!("Export failed: {}: {e}", path.display()))
-                .name("pcb-export-toast")
-                .max_width(640.0),
+            Notification::warning(tr_with(
+                "io-export-failed-at",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("error", &e.to_string()),
+                ],
+            ))
+            .name("pcb-export-toast")
+            .max_width(640.0),
         );
         return;
     }
@@ -456,10 +473,13 @@ pub fn export_shown(world: &mut World, version: IdfVersion) {
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let note = Notification::info(format!(
-        "Exported {file} (IDF {}) to {}",
-        version.as_str(),
-        dir.display()
+    let note = Notification::info(tr_with(
+        "pcb-export-idf-done",
+        &[
+            ("file", &file),
+            ("version", version.as_str()),
+            ("folder", &dir.display().to_string()),
+        ],
     ))
     .seconds(10.0)
     .name("pcb-export-toast")
@@ -468,8 +488,13 @@ pub fn export_shown(world: &mut World, version: IdfVersion) {
     if let Some((name, text)) = emn {
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
-        let open =
-            cadrs_ui::toast_action(&mut commands, &theme, t, "pcb-export-open-emn", "Open .emn");
+        let open = cadrs_ui::toast_action(
+            &mut commands,
+            &theme,
+            t,
+            "pcb-export-open-emn",
+            tr("pcb-export-open-emn"),
+        );
         let file = name.rsplit('/').next().unwrap_or(&name).to_string();
         commands
             .entity(open)
@@ -514,7 +539,7 @@ pub fn open_emn_viewer(world: &mut World, file: &str, text: &str) {
                 let t = &tb;
                 b.spawn(
                     cadrs_ui::TextInput::new("pcb-emn-find")
-                        .placeholder("Find")
+                        .placeholder(tr("pcb-emn-find"))
                         .width(Val::Px(220.0))
                         .height(26.0)
                         .build(t),
@@ -567,7 +592,9 @@ pub fn open_emn_viewer(world: &mut World, file: &str, text: &str) {
             })
             .footer(move |f| {
                 f.spawn((
-                    Button::new("pcb-emn-close").label("Close").build(&tf),
+                    Button::new("pcb-emn-close")
+                        .label(tr("common-close"))
+                        .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<EmnViewer>);
                     }),

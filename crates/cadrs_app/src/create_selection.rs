@@ -19,6 +19,7 @@ use cadrs_core::applied::EdgeOrFace;
 use cadrs_core::plane::PlaneEntity;
 use cadrs_core::{FeatureKind, PartId};
 use cadrs_sketch::EdgeName;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogCancel, OptionRow, Select, SelectionList, SelectionListState, TabStrip,
@@ -109,7 +110,7 @@ fn open_with(world: &mut World, faces_mode: bool) {
             CreateSelectionPanel,
             DespawnOnExit(AppState::Document),
             FeatureDialog::new("create-selection-dialog")
-                .title("Create selection")
+                .title(tr("model-create-selection"))
                 .plain_title()
                 .no_accept()
                 .width(190.0)
@@ -119,8 +120,8 @@ fn open_with(world: &mut World, faces_mode: bool) {
                     b.spawn(
                         TabStrip::new("create-selection-type")
                             .compact()
-                            .tab("Faces")
-                            .tab("Edges")
+                            .tab(tr("model-faces"))
+                            .tab(tr("model-edges"))
                             .selected(if faces_mode { 0 } else { 1 })
                             .build(t),
                     );
@@ -138,38 +139,37 @@ fn open_with(world: &mut World, faces_mode: bool) {
                     .with_children(|c| {
                         let rule = if faces_mode {
                             Select::new("create-selection-rule")
-                                .option("Pocket", true)
-                                .option("Boss", false)
-                                .option("Tangent connected", false)
-                                .option("Feature", false)
+                                .option(tr("model-create-selection-pocket"), true)
+                                .option(tr("model-create-selection-boss"), false)
+                                .option(tr("model-create-selection-tangent-connected"), false)
+                                .option(tr("model-create-selection-feature"), false)
                         } else {
                             Select::new("create-selection-rule")
-                                .option("Tangent connected", true)
-                                .option("Loop", false)
-                                .option("Boundary", false)
+                                .option(tr("model-create-selection-tangent-connected"), true)
+                                .option(tr("model-create-selection-loop"), false)
+                                .option(tr("model-create-selection-boundary"), false)
                         };
                         c.spawn(rule.selected(0).build(t));
                         c.spawn((
                             SeedField,
                             SelectionList::new("create-selection-field")
-                                .placeholder("Selection")
+                                .placeholder(tr("model-selection"))
                                 .active(true)
                                 .build(t),
                         ));
                         c.spawn(
-                            OptionRow::new("create-selection-patterns", "Select patterns")
-                                .disabled(true)
-                                .build(t),
+                            OptionRow::new(
+                                "create-selection-patterns",
+                                tr("model-create-selection-patterns"),
+                            )
+                            .disabled(true)
+                            .build(t),
                         );
                         c.spawn((
                             CountText,
                             Name::new("create-selection-count"),
                             t.text(
-                                if faces_mode {
-                                    "0 faces selected"
-                                } else {
-                                    "0 edges selected"
-                                },
+                                count_text(0, faces_mode),
                                 t.font_sm,
                                 bevy::text::FontWeight::NORMAL,
                                 t.muted_foreground,
@@ -183,7 +183,7 @@ fn open_with(world: &mut World, faces_mode: bool) {
                         .with_child((
                             AddButton,
                             cadrs_ui::Button::new("create-selection-add")
-                                .label("Add selection")
+                                .label(tr("model-create-selection-add"))
                                 .small()
                                 .outline()
                                 .build(t),
@@ -302,18 +302,22 @@ fn sync_panel(
         features
             .iter()
             .find(|f| f.id.0 == op)
-            .map_or("part", |f| f.name.as_str())
-            .to_string()
+            .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
     };
     let items: Vec<String> = if c.faces_mode {
         c.face_seed
             .iter()
-            .map(|(_, f)| format!("Face of {}", name(f.op)))
+            .map(|(_, f)| tr_with("common-face-of", &[("name", &name(f.op))]))
             .collect()
     } else {
         c.seed
             .iter()
-            .map(|(_, e)| format!("Edge of {}", name(crate::parts::edge_maker(&features, e))))
+            .map(|(_, e)| {
+                tr_with(
+                    "common-edge-of",
+                    &[("name", &name(crate::parts::edge_maker(&features, e)))],
+                )
+            })
             .collect()
     };
     for mut l in &mut q_field {
@@ -321,12 +325,12 @@ fn sync_panel(
             l.items = items.clone();
         }
     }
-    let (n, what) = if c.faces_mode {
-        (c.faces.len(), "face")
+    let n = if c.faces_mode {
+        c.faces.len()
     } else {
-        (c.edges.len(), "edge")
+        c.edges.len()
     };
-    let text = format!("{n} {what}{} selected", if n == 1 { "" } else { "s" });
+    let text = count_text(n, c.faces_mode);
     for mut t in &mut q_count {
         if t.0 != text {
             t.0 = text.clone();
@@ -340,6 +344,17 @@ fn sync_panel(
             c.edges.iter().map(|(p, e)| Pick::Edge(*p, *e)).collect()
         };
     }
+}
+
+/// "3 faces selected", "1 edge selected".
+fn count_text(n: usize, faces: bool) -> String {
+    let key = match (faces, n == 1) {
+        (true, true) => "model-create-selection-one-face",
+        (true, false) => "model-create-selection-n-faces",
+        (false, true) => "model-create-selection-one-edge",
+        (false, false) => "model-create-selection-n-edges",
+    };
+    tr_with(key, &[("count", &n.to_string())])
 }
 
 fn on_add(a: On<Activate>, q: Query<(), With<AddButton>>, mut commands: Commands) {

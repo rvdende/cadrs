@@ -31,6 +31,7 @@ use cadrs_core::assembly::{Instance, InstanceId, InstanceSource, Pose};
 use cadrs_core::parts::PartKind;
 use cadrs_core::{ElementId, PartId};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FeatureDialogAccept, FeatureDialogCancel, TabStrip};
 
@@ -247,7 +248,7 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
         InsertDialog,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("insert-dialog")
-            .title("Insert parts and assemblies")
+            .title(tr("asm-insert-title"))
             .plain_title()
             .width(262.0)
             .body_padding(UiRect::ZERO)
@@ -257,9 +258,9 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                 b.spawn(
                     TabStrip::new("insert-source")
                         .compact()
-                        .tab("Current\ndocument")
-                        .tab("Other\ndocuments")
-                        .tab("Standard\ncontent")
+                        .tab(tr("asm-insert-tab-current-document"))
+                        .tab(tr("asm-insert-tab-other-documents"))
+                        .tab(tr("asm-insert-tab-standard-content"))
                         .build(t),
                 )
                 .entry::<Node>()
@@ -335,23 +336,19 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                     });
                     for (name, icon, tip) in [
                         // P3B.8 (A2.4): a Part Studio row inserts one rigid instance.
-                        (
-                            "insert-rigid",
-                            "assembly-rigid",
-                            "Insert the Part Studio as rigid",
-                        ),
+                        ("insert-rigid", "assembly-rigid", "asm-insert-rigid-tooltip"),
                         // P3G.1 (ER3.2, DV1.8): a version made on the fly, and the version graph.
-                        ("insert-create-version", "versions", "Create version"),
+                        ("insert-create-version", "versions", "common-create-version"),
                         (
                             "insert-version",
                             "branches",
-                            "Version graph: insert from the workspace or a version",
+                            "asm-insert-version-graph-tooltip",
                         ),
                     ] {
                         r.spawn(
                             ToolButton::new(name, icon)
                                 .icon_size(16.0)
-                                .tooltip(tip)
+                                .tooltip(tr(tip))
                                 .build(t),
                         )
                         .insert(BorderColor::all(Color::srgb_u8(0xd4, 0xd4, 0xd4)))
@@ -389,9 +386,9 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                     b.spawn(
                         TabStrip::new("insert-kind")
                             .compact()
-                            .tab("Part Studios")
-                            .tab("Assemblies")
-                            .tab("Boards")
+                            .tab(tr("asm-insert-tab-part-studios"))
+                            .tab(tr("asm-insert-tab-assemblies"))
+                            .tab(tr("asm-insert-tab-boards"))
                             .build(t),
                     );
                     b.spawn(Node {
@@ -406,7 +403,7 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                     .with_children(|r| {
                         r.spawn(
                             TextInput::new("insert-search")
-                                .placeholder("Search Part Studios")
+                                .placeholder(tr("asm-insert-search-part-studios"))
                                 .height(26.0)
                                 .width(Val::Percent(100.0))
                                 .build(t),
@@ -428,14 +425,14 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                             ToolButton::new("insert-filter-parts", "part")
                                 .icon_size(16.0)
                                 .selected(true)
-                                .tooltip("Parts")
+                                .tooltip(tr("parts"))
                                 .build(t),
                         );
                         r.spawn(
                             ToolButton::new("insert-filter-surfaces", "surface")
                                 .icon_size(16.0)
                                 .selected(true)
-                                .tooltip("Surfaces")
+                                .tooltip(tr("surfaces"))
                                 .build(t),
                         );
                         r.spawn(Node {
@@ -446,7 +443,7 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                             ToolButton::new("insert-filter-sketches", "sketch")
                                 .icon_size(16.0)
                                 .disabled(true)
-                                .tooltip("Sketches (not available yet)")
+                                .tooltip(tr("asm-insert-sketches-not-yet"))
                                 .build(t),
                         );
                     });
@@ -492,7 +489,12 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                     .with_child((
                         Name::new("insert-count"),
                         InsertCount,
-                        t.text("Inserted: 0", 11.5, FontWeight::BOLD, t.foreground),
+                        t.text(
+                            tr_with("asm-insert-inserted-count", &[("count", "0")]),
+                            11.5,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
                     ));
                 });
             })
@@ -510,7 +512,7 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                 .with_children(|r| {
                     r.spawn(
                         cadrs_ui::Button::new("insert-undo")
-                            .label("Undo to remove instances")
+                            .label(tr("asm-insert-undo-to-remove"))
                             .icon("undo")
                             .small()
                             .ghost()
@@ -876,9 +878,9 @@ fn rebuild_tree(
         let armed = s.armed.as_ref() == Some(&item);
         let label = item.label.clone();
         let rigid_tip = (!item.rigid.is_empty()).then(|| {
-            format!(
-                "{label}: inserted as one rigid instance ({} parts)",
-                item.rigid.len()
+            tr_with(
+                "asm-insert-rigid-row-tooltip",
+                &[("name", &label), ("count", &item.rigid.len().to_string())],
             )
         });
         let row = commands
@@ -943,19 +945,16 @@ fn rebuild_tree(
         }
     }
     if n == 0 {
+        let empty = if s.assemblies {
+            "asm-insert-no-other-assemblies"
+        } else if s.boards {
+            "asm-insert-no-boards"
+        } else {
+            "asm-insert-no-part-studios-match"
+        };
         commands.spawn((
-            t.text(
-                if s.assemblies {
-                    "No other assemblies"
-                } else if s.boards {
-                    "No PCB Studio boards in this document"
-                } else {
-                    "No Part Studios match"
-                },
-                11.5,
-                FontWeight::NORMAL,
-                t.muted_foreground,
-            ),
+            t.text(tr(empty), 11.5, FontWeight::NORMAL, t.muted_foreground),
+            Translated(empty),
             Node {
                 margin: UiRect::all(Val::Px(10.0)),
                 ..default()
@@ -1049,13 +1048,13 @@ fn sync_panels(
             n.display = show(want);
         }
     }
-    let want = if s.assemblies {
-        "Search assemblies"
+    let want = tr(if s.assemblies {
+        "asm-insert-search-assemblies"
     } else if s.boards {
-        "Search boards"
+        "asm-insert-search-boards"
     } else {
-        "Search Part Studios"
-    };
+        "asm-insert-search-part-studios"
+    });
     // The Current document's branch or version (ER3.2: "Main", or the version inserted from).
     let branch = s
         .current
@@ -1064,7 +1063,7 @@ fn sync_panels(
         .unwrap_or_else(|| "Main".into());
     for (name, mut t) in &mut q_text {
         if name.as_str() == "insert-search-placeholder" && t.0 != want {
-            t.0 = want.to_string();
+            t.0 = want.clone();
         }
         if name.as_str() == "insert-branch-label" && t.0 != branch {
             t.0 = branch.clone();
@@ -1380,7 +1379,10 @@ fn sync_counter(
     if keep != s.inserted {
         s.inserted = keep;
     }
-    let text = format!("Inserted: {}", s.inserted.len());
+    let text = tr_with(
+        "asm-insert-inserted-count",
+        &[("count", &s.inserted.len().to_string())],
+    );
     for mut t in &mut q {
         if t.0 != text {
             t.0 = text.clone();

@@ -2424,6 +2424,10 @@ fn place_radius_arrow(
 /// The part names a Parts field shows.
 pub fn part_names(cache: &PartCache, ids: &[PartId]) -> Vec<String> {
     ids.iter()
-        .map(|p| cache.part_name(*p).unwrap_or("Part").to_string())
+        .map(|p| {
+            cache
+                .part_name(*p)
+                .map_or_else(|| cadrs_ui::i18n::tr("common-part"), str::to_string)
+        })
         .collect()
 }

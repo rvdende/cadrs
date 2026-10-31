@@ -39,6 +39,8 @@ use cadrs_ui::{
     show_notification,
 };
 
+use cadrs_ui::i18n::{Translated, tr, tr_with};
+
 use crate::parts::PartCache;
 use crate::{ActiveDocument, AppState};
 
@@ -166,24 +168,29 @@ struct RunningExport {
 const WIDTH: f32 = 560.0;
 const FIELD_H: f32 = 26.0;
 
-/// Units for meshes: the label and file units per mm.
+/// Units for meshes: the label (its catalog key) and file units per mm.
 const UNITS: [(&str, f64); 5] = [
-    ("Millimeter", 1.0),
-    ("Centimeter", 0.1),
-    ("Meter", 0.001),
-    ("Inch", 1.0 / 25.4),
-    ("Foot", 1.0 / 304.8),
+    ("io-unit-millimeter", 1.0),
+    ("io-unit-centimeter", 0.1),
+    ("io-unit-meter", 0.001),
+    ("io-unit-inch", 1.0 / 25.4),
+    ("io-unit-foot", 1.0 / 304.8),
 ];
 
-/// Mesh resolutions: the label, chord tolerance (mm) and angle tolerance (degrees).
+/// Mesh resolutions: the label (its catalog key), chord tolerance (mm) and angle tolerance
+/// (degrees).
 const RESOLUTIONS: [(&str, f64, f64); 3] = [
-    ("Coarse (0.5 mm, 30°)", 0.5, 30.0),
-    ("Medium (0.1 mm, 15°)", 0.1, 15.0),
-    ("Fine (0.02 mm, 5°)", 0.02, 5.0),
+    ("io-export-res-coarse", 0.5, 30.0),
+    ("io-export-res-medium", 0.1, 15.0),
+    ("io-export-res-fine", 0.02, 5.0),
 ];
 
-fn label(p: &mut ChildSpawner, t: &Theme, text: &str) {
-    p.spawn(t.text(text, t.font_base, FontWeight::BOLD, t.foreground));
+/// A field's label, from its catalog key.
+fn label(p: &mut ChildSpawner, t: &Theme, key: &'static str) {
+    p.spawn((
+        t.text(tr(key), t.font_base, FontWeight::BOLD, t.foreground),
+        Translated(key),
+    ));
 }
 
 fn row(name: &str) -> impl Bundle {
@@ -292,18 +299,22 @@ pub fn open(world: &mut World, source: ExportSource) {
             .map(|id| cache.part_name(*id).unwrap_or("Part").to_string())
             .collect::<Vec<_>>()
     };
-    let plural = |n: usize| {
+    // What is exported: names, and how many parts.
+    let counted = |what: &str, n: usize| {
         if n == 1 {
-            "1 part".to_string()
+            tr_with("io-export-what-one-part", &[("name", what)])
         } else {
-            format!("{n} parts")
+            tr_with(
+                "io-export-what-parts",
+                &[("name", what), ("count", &n.to_string())],
+            )
         }
     };
     let (count, base, what) = match &source {
         ExportSource::Parts(p) | ExportSource::Assembly(p) if p.is_empty() => (
             cache.parts.len(),
             tab.clone(),
-            format!("{tab} ({})", plural(cache.parts.len())),
+            counted(&tab, cache.parts.len()),
         ),
         ExportSource::Parts(p) | ExportSource::Assembly(p) => {
             let n = names(p);
@@ -316,7 +327,7 @@ pub fn open(world: &mut World, source: ExportSource) {
             } else {
                 n.join(", ")
             };
-            (p.len(), base, format!("{listed} ({})", plural(p.len())))
+            (p.len(), base, counted(&listed, p.len()))
         }
         ExportSource::Sketch(s) => {
             let name = world
@@ -328,7 +339,10 @@ pub fn open(world: &mut World, source: ExportSource) {
         ExportSource::Face(p, _) => (
             1,
             format!("{tab} - {} face", cache.part_name(*p).unwrap_or("Part")),
-            format!("a face of {}", cache.part_name(*p).unwrap_or("Part")),
+            tr_with(
+                "io-export-what-face",
+                &[("part", cache.part_name(*p).unwrap_or("Part"))],
+            ),
         ),
     };
     if count == 0 {
@@ -353,41 +367,77 @@ pub fn open(world: &mut World, source: ExportSource) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("export-dialog")
-            .title("Export")
+            .title(tr("common-export"))
             .width(WIDTH)
             .body(move |b| {
                 let t = &tb;
                 let full = || Val::Percent(100.0);
                 b.spawn(row("export-name-row")).with_children(|g| {
-                    label(g, t, "File name");
-                    g.spawn(TextInput::new("export-name").value(base).select_all_on_focus().autofocus().width(full()).height(FIELD_H).build(t));
-                    g.spawn((Name::new("export-source"), t.text(format!("Exporting: {what}"), t.font_sm, FontWeight::NORMAL, t.muted_foreground)));
+                    label(g, t, "common-file-name");
+                    g.spawn(
+                        TextInput::new("export-name")
+                            .value(base)
+                            .select_all_on_focus()
+                            .autofocus()
+                            .width(full())
+                            .height(FIELD_H)
+                            .build(t),
+                    );
+                    g.spawn((
+                        Name::new("export-source"),
+                        t.text(
+                            tr_with("io-export-source", &[("what", &what)]),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                    ));
                 });
                 b.spawn(row("export-format-row")).with_children(|g| {
-                    g.spawn(Node { align_items: AlignItems::Baseline, column_gap: Val::Px(10.0), ..default() }).with_children(|l| {
-                        label(l, t, "Format");
+                    g.spawn(Node {
+                        align_items: AlignItems::Baseline,
+                        column_gap: Val::Px(10.0),
+                        ..default()
+                    })
+                    .with_children(|l| {
+                        label(l, t, "common-format");
                         let note = if flat {
-                            converter.is_none().then_some("DWG needs LibreDWG or the ODA File Converter on PATH.")
+                            converter
+                                .is_none()
+                                .then_some("io-export-dwg-needs-converter")
                         } else {
-                            Some("Parasolid is not offered (a proprietary format).")
+                            Some("io-export-no-parasolid")
                         };
-                        if let Some(note) = note {
-                            l.spawn((Name::new("export-format-note"), t.text(note, t.font_sm, FontWeight::NORMAL, t.muted_foreground)));
+                        if let Some(key) = note {
+                            l.spawn((
+                                Name::new("export-format-note"),
+                                t.text(tr(key), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                                Translated(key),
+                            ));
                         }
                     });
-                    g.spawn((Name::new("export-formats"), Node { column_gap: Val::Px(6.0), ..default() })).with_children(|r| {
+                    g.spawn((
+                        Name::new("export-formats"),
+                        Node {
+                            column_gap: Val::Px(6.0),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|r| {
                         for f in formats {
                             let disabled = f == Fmt::Dwg && converter.is_none();
                             let tip = match f {
-                                Fmt::Step => "STEP AP214: exact solids with part names".to_string(),
-                                Fmt::Iges => "IGES 5.3: exact solids".to_string(),
-                                Fmt::Brep => "OpenCASCADE BREP (experimental): exact geometry only".to_string(),
-                                Fmt::Stl => "STL mesh, for 3D printing".to_string(),
-                                Fmt::Obj => "Wavefront OBJ mesh".to_string(),
-                                Fmt::Dxf => "DXF in millimetres at full size, for cutting machines".to_string(),
+                                Fmt::Step => tr("io-export-tip-step"),
+                                Fmt::Iges => tr("io-export-tip-iges"),
+                                Fmt::Brep => tr("io-export-tip-brep"),
+                                Fmt::Stl => tr("io-export-tip-stl"),
+                                Fmt::Obj => tr("io-export-tip-obj"),
+                                Fmt::Dxf => tr("io-export-tip-dxf"),
                                 Fmt::Dwg => match &converter {
-                                    Some(c) => format!("DWG through the {}", c.name()),
-                                    None => "DWG: no converter on PATH".to_string(),
+                                    Some(c) => {
+                                        tr_with("io-export-tip-dwg", &[("converter", c.name())])
+                                    }
+                                    None => tr("io-export-tip-dwg-none"),
                                 },
                             };
                             r.spawn((
@@ -407,21 +457,48 @@ pub fn open(world: &mut World, source: ExportSource) {
                                 }),
                             ))
                             .insert(cadrs_ui::Visuals {
-                                background: cadrs_ui::StateColors::new(t.background, t.list_hover, t.list_active, t.background)
-                                    .with_selected(Color::srgb_u8(0xdd, 0xea, 0xfb)),
-                                border: cadrs_ui::StateColors::all(Color::srgb_u8(0xc8, 0xc8, 0xc8)).with_selected(Color::srgb_u8(0x1f, 0x7a, 0xe0)),
-                                foreground: cadrs_ui::StateColors::new(t.foreground, t.foreground, t.foreground, t.disabled_foreground)
-                                    .with_selected(Color::srgb_u8(0x14, 0x5c, 0xb8)),
+                                background: cadrs_ui::StateColors::new(
+                                    t.background,
+                                    t.list_hover,
+                                    t.list_active,
+                                    t.background,
+                                )
+                                .with_selected(Color::srgb_u8(0xdd, 0xea, 0xfb)),
+                                border: cadrs_ui::StateColors::all(Color::srgb_u8(
+                                    0xc8, 0xc8, 0xc8,
+                                ))
+                                .with_selected(Color::srgb_u8(0x1f, 0x7a, 0xe0)),
+                                foreground: cadrs_ui::StateColors::new(
+                                    t.foreground,
+                                    t.foreground,
+                                    t.foreground,
+                                    t.disabled_foreground,
+                                )
+                                .with_selected(Color::srgb_u8(0x14, 0x5c, 0xb8)),
                                 focus_ring: t.focus_ring,
                             });
                         }
                     });
                 });
                 b.spawn(row("export-brep-warning")).with_children(|g| {
-                    g.spawn((Name::new("export-brep-warning-text"), t.text("BREP is OpenCASCADE's own format (FreeCAD, CadQuery and other OpenCASCADE applications read it), written by cadrs' kernel. It holds the exact geometry only: no part names, colours or assembly structure. Use STEP to keep those, or .cadrs to keep the editable document.", t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { width: full(), ..default() })).insert(TextLayout::default());
+                    g.spawn((
+                        Name::new("export-brep-warning-text"),
+                        t.text(
+                            tr("io-export-brep-warning"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("io-export-brep-warning"),
+                        Node {
+                            width: full(),
+                            ..default()
+                        },
+                    ))
+                    .insert(TextLayout::default());
                 });
                 b.spawn(row("export-version-row")).with_children(|g| {
-                    label(g, t, "Version");
+                    label(g, t, "common-version");
                     // Read-only: which standard the format writes.
                     g.spawn((
                         Name::new("export-version"),
@@ -437,53 +514,111 @@ pub fn open(world: &mut World, source: ExportSource) {
                         BackgroundColor(Color::srgb_u8(0xf0, 0xf0, 0xf0)),
                         BorderColor::all(Color::srgb_u8(0xd8, 0xd8, 0xd8)),
                     ))
-                    .with_child((Name::new("export-version-value"), VersionText, t.text(format.version(), t.font_base, FontWeight::NORMAL, t.muted_foreground)));
+                    .with_child((
+                        Name::new("export-version-value"),
+                        VersionText,
+                        t.text(
+                            format.version(),
+                            t.font_base,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                    ));
                 });
                 b.spawn(row("export-stl-row")).with_children(|g| {
-                    label(g, t, "STL format");
-                    g.spawn(Select::new("export-stl-format").bordered().width(full()).option("Binary", true).option("Text", true).build(t));
+                    label(g, t, "io-export-stl-format");
+                    g.spawn(
+                        Select::new("export-stl-format")
+                            .bordered()
+                            .width(full())
+                            .option(tr("io-export-stl-binary"), true)
+                            .option(tr("io-export-stl-text"), true)
+                            .build(t),
+                    );
                 });
                 b.spawn(row("export-mesh-row")).with_children(|g| {
-                    g.spawn(Node { column_gap: Val::Px(10.0), width: full(), ..default() }).with_children(|r| {
-                        r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), flex_grow: 1.0, flex_basis: Val::Px(0.0), ..default() })
-                            .with_children(|c| {
-                                label(c, t, "Units");
-                                let mut s = Select::new("export-units").bordered().width(full());
-                                for (u, _) in UNITS {
-                                    s = s.option(u, true);
-                                }
-                                c.spawn(s.build(t));
-                            });
-                        r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), flex_grow: 1.0, flex_basis: Val::Px(0.0), ..default() })
-                            .with_children(|c| {
-                                label(c, t, "Resolution");
-                                let mut s = Select::new("export-resolution").bordered().width(full());
-                                for (r, ..) in RESOLUTIONS {
-                                    s = s.option(r, true);
-                                }
-                                c.spawn(s.option("Custom", true).selected(1).build(t));
-                            });
+                    g.spawn(Node {
+                        column_gap: Val::Px(10.0),
+                        width: full(),
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        r.spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(4.0),
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(0.0),
+                            ..default()
+                        })
+                        .with_children(|c| {
+                            label(c, t, "common-units");
+                            let mut s = Select::new("export-units").bordered().width(full());
+                            for (u, _) in UNITS {
+                                s = s.option(tr(u), true);
+                            }
+                            c.spawn(s.build(t));
+                        });
+                        r.spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(4.0),
+                            flex_grow: 1.0,
+                            flex_basis: Val::Px(0.0),
+                            ..default()
+                        })
+                        .with_children(|c| {
+                            label(c, t, "io-export-resolution");
+                            let mut s = Select::new("export-resolution").bordered().width(full());
+                            for (r, ..) in RESOLUTIONS {
+                                s = s.option(tr(r), true);
+                            }
+                            c.spawn(s.option(tr("io-export-custom"), true).selected(1).build(t));
+                        });
                     });
                 });
                 b.spawn(row("export-tolerance-row")).with_children(|g| {
-                    g.spawn(Node { column_gap: Val::Px(10.0), width: full(), ..default() }).with_children(|r| {
-                        for (name, text, value) in [("export-chord", "Chord tolerance (mm)", "0.1"), ("export-angle", "Angle tolerance (°)", "15")] {
-                            r.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), flex_grow: 1.0, flex_basis: Val::Px(0.0), ..default() })
-                                .with_children(|c| {
-                                    label(c, t, text);
-                                    c.spawn(TextInput::new(name).value(value).width(full()).height(FIELD_H).build(t));
-                                    // P3F.2 judge: why a typed tolerance can't be used, under it.
-                                    c.spawn((
-                                        Name::new(format!("{name}-error")),
-                                        ToleranceError,
-                                        t.text(String::new(), 11.0, bevy::text::FontWeight::NORMAL, t.feature_error),
-                                    ));
-                                });
+                    g.spawn(Node {
+                        column_gap: Val::Px(10.0),
+                        width: full(),
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        for (name, text, value) in [
+                            ("export-chord", "io-export-chord-tolerance", "0.1"),
+                            ("export-angle", "io-export-angle-tolerance", "15"),
+                        ] {
+                            r.spawn(Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(4.0),
+                                flex_grow: 1.0,
+                                flex_basis: Val::Px(0.0),
+                                ..default()
+                            })
+                            .with_children(|c| {
+                                label(c, t, text);
+                                c.spawn(
+                                    TextInput::new(name)
+                                        .value(value)
+                                        .width(full())
+                                        .height(FIELD_H)
+                                        .build(t),
+                                );
+                                // P3F.2 judge: why a typed tolerance can't be used, under it.
+                                c.spawn((
+                                    Name::new(format!("{name}-error")),
+                                    ToleranceError,
+                                    t.text(
+                                        String::new(),
+                                        11.0,
+                                        bevy::text::FontWeight::NORMAL,
+                                        t.feature_error,
+                                    ),
+                                ));
+                            });
                         }
                     });
                 });
                 b.spawn(row("export-dxf-row")).with_children(|g| {
-                    label(g, t, "DXF version");
+                    label(g, t, "io-export-dxf-version");
                     let mut v = Select::new("export-dxf-version").bordered().width(full());
                     for d in DxfVersion::ALL {
                         v = v.option(d.label(), true);
@@ -491,16 +626,50 @@ pub fn open(world: &mut World, source: ExportSource) {
                     g.spawn(v.build(t));
                 });
                 b.spawn(row("export-options-row")).with_children(|g| {
-                    g.spawn(Checkbox::new("export-y-up").label("Export models oriented Y axis up").height(24.0).build(t));
-                    g.spawn(Checkbox::new("export-assembly").label("Keep assembly structure (each part once, with its instances)").checked(whole).disabled(!assembly).height(24.0).build(t));
-                    g.spawn(Checkbox::new("export-individual").label("Export unique parts as individual files").checked(count > 1 && !whole).disabled(count < 2).height(24.0).build(t));
+                    g.spawn(
+                        Checkbox::new("export-y-up")
+                            .label(tr("io-export-y-up"))
+                            .height(24.0)
+                            .build(t),
+                    );
+                    g.spawn(
+                        Checkbox::new("export-assembly")
+                            .label(tr("io-export-keep-assembly"))
+                            .checked(whole)
+                            .disabled(!assembly)
+                            .height(24.0)
+                            .build(t),
+                    );
+                    g.spawn(
+                        Checkbox::new("export-individual")
+                            .label(tr("io-export-individual"))
+                            .checked(count > 1 && !whole)
+                            .disabled(count < 2)
+                            .height(24.0)
+                            .build(t),
+                    );
                 });
                 b.spawn(row("export-folder-row")).with_children(|g| {
-                    label(g, t, "Folder");
-                    g.spawn(Node { column_gap: Val::Px(6.0), align_items: AlignItems::Center, width: full(), ..default() }).with_children(|r| {
-                        r.spawn(TextInput::new("export-folder").value(dir).width(full()).height(FIELD_H).build(t));
+                    label(g, t, "common-folder");
+                    g.spawn(Node {
+                        column_gap: Val::Px(6.0),
+                        align_items: AlignItems::Center,
+                        width: full(),
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        r.spawn(
+                            TextInput::new("export-folder")
+                                .value(dir)
+                                .width(full())
+                                .height(FIELD_H)
+                                .build(t),
+                        );
                         r.spawn((
-                            Button::new("export-browse").label("Browse…").outline().build(t),
+                            Button::new("export-browse")
+                                .label(tr("common-browse"))
+                                .outline()
+                                .build(t),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 commands.queue(browse_folder);
                             }),
@@ -511,22 +680,35 @@ pub fn open(world: &mut World, source: ExportSource) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("export-ok").label("Export").primary().build(t),
+                    Button::new("export-ok")
+                        .label(tr("common-export"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(start_export);
                     }),
                 ));
                 f.spawn((
-                    Button::new("export-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<ExportDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("export-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<ExportDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
-        ExportDialog { source, format, count },
+        ExportDialog {
+            source,
+            format,
+            count,
+        },
         DespawnOnExit(AppState::Document),
     ));
     world.flush();
@@ -547,7 +729,7 @@ fn browse_folder(world: &mut World) {
         &mut commands,
         &theme,
         "folder-picker",
-        "Choose a folder",
+        &tr("common-choose-folder"),
         "export3d-folder",
         dir,
     );
@@ -648,6 +830,19 @@ pub fn tolerance_error(text: &str, angle: bool) -> Option<&'static str> {
     }
 }
 
+/// A [`tolerance_error`] in the current language.
+fn tolerance_error_shown(e: &str) -> String {
+    let key = match e {
+        "Enter a number" => "io-export-enter-number",
+        "Must be more than 0 mm" => "io-export-chord-too-small",
+        "At most 10 mm" => "io-export-chord-too-large",
+        "Must be more than 0°" => "io-export-angle-too-small",
+        "At most 90°" => "io-export-angle-too-large",
+        _ => return e.to_string(),
+    };
+    tr(key)
+}
+
 /// Validates the Custom tolerances as they are typed: each shows why it can't be used, and
 /// Export is disabled until both can (they were silently replaced by the defaults).
 #[allow(clippy::type_complexity)]
@@ -687,9 +882,9 @@ fn validate_tolerances(
             .and_then(|(_, e)| *e)
             .filter(|_| shown);
         bad |= e.is_some();
-        let want = e.unwrap_or("");
+        let want = e.map(tolerance_error_shown).unwrap_or_default();
         if t.0 != want {
-            t.0 = want.to_string();
+            t.0 = want;
         }
         let d = if e.is_some() {
             Display::Flex
@@ -754,8 +949,11 @@ fn toast(world: &mut World, note: Notification) {
 fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, String> {
     let doc = world
         .get_resource::<ActiveDocument>()
-        .ok_or("no document")?;
-    let el = doc.active_element().ok_or("no tab")?.clone();
+        .ok_or_else(|| tr("io-export-no-document"))?;
+    let el = doc
+        .active_element()
+        .ok_or_else(|| tr("io-export-no-tab"))?
+        .clone();
     let docs = doc.doc.clone();
     match source {
         ExportSource::Parts(parts) => {
@@ -782,7 +980,9 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
                 .collect())
         }
         ExportSource::Assembly(view) => {
-            let asm = el.assembly_model().ok_or("not an assembly")?;
+            let asm = el
+                .assembly_model()
+                .ok_or_else(|| tr("io-export-not-assembly"))?;
             let occ = cadrs_core::assembly::structure::occurrences(&docs, asm);
             let names: Vec<(PartId, String)> = {
                 let cache = world.resource::<PartCache>();
@@ -822,7 +1022,7 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
             }
             Ok(out)
         }
-        _ => Err("not a 3D export".into()),
+        _ => Err(tr("io-export-not-3d")),
     }
 }
 
@@ -863,7 +1063,7 @@ fn start_export(world: &mut World) {
         DxfVersion::ALL[select(world, "export-dxf-version").min(DxfVersion::ALL.len() - 1)];
     world.trigger(DialogClose { entity: dialog });
     if folder.is_empty() {
-        toast(world, Notification::warning("Nowhere to save the export"));
+        toast(world, Notification::warning(tr("io-export-nowhere")));
         return;
     }
     let dir = PathBuf::from(&folder);
@@ -883,7 +1083,7 @@ fn start_export(world: &mut World) {
                 _ => None,
             };
             let result = page
-                .ok_or_else(|| "the sketch or face is gone".to_string())
+                .ok_or_else(|| tr("io-export-source-gone"))
                 .and_then(|page| {
                     cadrs_core::dxf_export::write_file(
                         &page,
@@ -896,9 +1096,13 @@ fn start_export(world: &mut World) {
             let note = match result {
                 Ok(path) => {
                     info!("exported {}", path.display());
-                    Notification::info(format!("Exported {}", path.display())).seconds(8.0)
+                    Notification::info(tr_with(
+                        "io-exported-path",
+                        &[("path", &path.display().to_string())],
+                    ))
+                    .seconds(8.0)
                 }
-                Err(why) => Notification::warning(format!("Export failed: {why}")),
+                Err(why) => Notification::warning(tr_with("io-export-failed", &[("error", &why)])),
             };
             toast(world, note);
         }
@@ -906,15 +1110,12 @@ fn start_export(world: &mut World) {
             let items = match items(world, source) {
                 Ok(i) if !i.is_empty() => i,
                 Ok(_) => {
-                    return toast(
-                        world,
-                        Notification::warning("Export failed: nothing to export"),
-                    );
+                    return toast(world, Notification::warning(tr("io-export-nothing")));
                 }
                 Err(why) => {
                     return toast(
                         world,
-                        Notification::warning(format!("Export failed: {why}")),
+                        Notification::warning(tr_with("io-export-failed", &[("error", &why)])),
                     );
                 }
             };
@@ -972,15 +1173,12 @@ pub(crate) fn send_to_slicer(
     let items = match items(world, &ExportSource::Parts(parts)) {
         Ok(i) if !i.is_empty() => i,
         Ok(_) => {
-            return toast(
-                world,
-                Notification::warning("Nothing to send to the slicer"),
-            );
+            return toast(world, Notification::warning(tr("io-slicer-nothing")));
         }
         Err(why) => {
             return toast(
                 world,
-                Notification::warning(format!("Can't send to the slicer: {why}")),
+                Notification::warning(tr_with("io-slicer-cannot", &[("error", why.as_str())])),
             );
         }
     };
@@ -1019,10 +1217,10 @@ fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut command
             .duration_since(web_time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let sent = result
-            .unwrap_or_else(|| Err("The kernel thread stopped".into()))
+            .unwrap_or_else(|| Err(tr("io-kernel-stopped")))
             .and_then(|files| {
                 if files.is_empty() {
-                    return Err("no mesh was made".to_string());
+                    return Err(tr("io-slicer-no-mesh"));
                 }
                 let base = cadrs_core::slicer::cache_dir();
                 let dir = cadrs_core::slicer::send_dir(&base, now)
@@ -1035,9 +1233,15 @@ fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut command
                             .map_err(|e| format!("{}: {e}", dir.display()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                run.slicer
-                    .open(&paths)
-                    .map_err(|e| format!("cannot start {}: {e}", run.slicer.name))?;
+                run.slicer.open(&paths).map_err(|e| {
+                    tr_with(
+                        "io-slicer-cannot-start",
+                        &[
+                            ("slicer", run.slicer.name.as_str()),
+                            ("error", &e.to_string()),
+                        ],
+                    )
+                })?;
                 info!("sent {} to {}", dir.display(), run.slicer.name);
                 Ok(())
             });
@@ -1047,9 +1251,17 @@ fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut command
                 commands.queue(move |world: &mut World| {
                     crate::preferences_ui::set_last_slicer(world, id)
                 });
-                Notification::info(format!("Sent {} to {}", run.name, run.slicer.name))
+                Notification::info(tr_with(
+                    "io-slicer-sent",
+                    &[
+                        ("name", run.name.as_str()),
+                        ("slicer", run.slicer.name.as_str()),
+                    ],
+                ))
             }
-            Err(why) => Notification::warning(format!("Send to slicer failed: {why}")),
+            Err(why) => {
+                Notification::warning(tr_with("io-slicer-failed", &[("error", why.as_str())]))
+            }
         };
         show_notification(&mut commands, &theme, note.name("slicer-toast"));
     }
@@ -1062,11 +1274,11 @@ fn finish_exports(q: Query<(Entity, &RunningExport)>, theme: Res<Theme>, mut com
             continue;
         };
         commands.entity(e).despawn();
-        let result = result.unwrap_or_else(|| Err("The kernel thread stopped".into()));
+        let result = result.unwrap_or_else(|| Err(tr("io-kernel-stopped")));
         let message = result.and_then(|files| write_files(&run.dir, &run.base, &files));
         let note = match message {
             Ok(m) => Notification::info(m).seconds(8.0),
-            Err(why) => Notification::warning(format!("Export failed: {why}")),
+            Err(why) => Notification::warning(tr_with("io-export-failed", &[("error", &why)])),
         };
         show_notification(&mut commands, &theme, note.name("export-toast"));
     }
@@ -1084,8 +1296,14 @@ fn write_files(dir: &std::path::Path, base: &str, files: &[ExportFile]) -> Resul
         written.push(path);
     }
     Ok(match written.as_slice() {
-        [one] => format!("Exported {}", one.display()),
-        many => format!("Exported {} files to {}", many.len(), dir.display()),
+        [one] => tr_with("io-exported-path", &[("path", &one.display().to_string())]),
+        many => tr_with(
+            "io-exported-files-to",
+            &[
+                ("count", &many.len().to_string()),
+                ("folder", &dir.display().to_string()),
+            ],
+        ),
     })
 }
 

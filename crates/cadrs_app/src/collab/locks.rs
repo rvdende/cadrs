@@ -16,6 +16,7 @@ use cadrs_core::{DocumentId, ElementId, ElementKind};
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::bevy_iroh::prelude::{NetSender, Received};
 use cadrs_net::{Answer, Ask, LocksChanged, Request, Verdict, transfer};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::live::{GuestState, Live, Role};
 use super::presence::People;
@@ -95,7 +96,7 @@ fn set(
         .get_resource::<Live>()
         .filter(|l| l.is_owner())
         .map(|l| (l.document, l.room()))
-        .ok_or("Not shared")?;
+        .ok_or_else(|| tr("shell-locks-not-shared"))?;
     {
         let mut locks = world.resource_mut::<TabLocks>();
         if locks.document != Some(document) {
@@ -109,7 +110,10 @@ fn set(
             (Some((id, name)), Some(i)) => {
                 let (_, held_by, held_name) = &locks.locks[i];
                 if *held_by != id && !take {
-                    return Err(format!("{held_name} has this tab open"));
+                    return Err(tr_with(
+                        "shell-locks-tab-open",
+                        &[("name", held_name.as_str())],
+                    ));
                 }
                 locks.locks[i] = (element, id, name);
             }
@@ -147,10 +151,10 @@ pub fn lock(world: &mut World, element: ElementId, lock: bool, take: bool) {
         )),
     });
     let result = match role {
-        None => Err("This document isn't shared".to_string()),
+        None => Err(tr("shell-locks-document-not-shared")),
         Some(None) => set(world, element, lock.then_some((my_id, my_name)), take),
-        Some(Some((_, Permission::View, _))) => Err("You have view access to this document".into()),
-        Some(Some((_, _, false))) => Err("The owner's cadrs is away".into()),
+        Some(Some((_, Permission::View, _))) => Err(tr("shell-collab-view-access")),
+        Some(Some((_, _, false))) => Err(tr("shell-locks-owner-away")),
         Some(Some((link, _, true))) => {
             let task = transfer::start_lock(world.resource::<Iroh>(), &link, element, lock, take);
             world.resource_mut::<LockAsks>().0.push(task);
@@ -331,12 +335,15 @@ fn notice(world: &mut World, mut last_tab: Local<Option<ElementId>>) {
     if let Some(name) = refused {
         crate::linked::toast(
             world,
-            format!("{name} has this tab open: right-click the tab to take over"),
+            tr_with("shell-locks-take-over", &[("name", name.as_str())]),
         );
     } else if active != *last_tab
         && let Some(name) = held
     {
-        crate::linked::toast(world, format!("{name} has this tab open for editing"));
+        crate::linked::toast(
+            world,
+            tr_with("shell-locks-open-for-editing", &[("name", name.as_str())]),
+        );
     }
     *last_tab = active;
 }

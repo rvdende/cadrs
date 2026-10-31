@@ -18,6 +18,7 @@ use bevy::ui_widgets::Activate;
 use cadrs_net::CanConnect;
 use cadrs_net::bevy_iroh::{Iroh, NetStats, StartError};
 use cadrs_ui::button::visuals_for;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::icon::SolidTint;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -96,12 +97,12 @@ impl NetState {
         }
     }
 
-    fn tooltip(self) -> &'static str {
-        match self {
-            NetState::Unavailable | NetState::Offline => "Offline: nothing is sent to the network",
-            NetState::Failed => "Could not go online",
-            NetState::Online { .. } => "Online for sharing (peer to peer)",
-        }
+    fn tooltip(self) -> String {
+        tr(match self {
+            NetState::Unavailable | NetState::Offline => "shell-network-offline-tooltip",
+            NetState::Failed => "shell-network-failed",
+            NetState::Online { .. } => "shell-network-online-tooltip",
+        })
     }
 }
 
@@ -120,7 +121,10 @@ pub fn connect(world: &mut World) -> bool {
     match cadrs_net::start(world, key, name) {
         Ok(()) => true,
         Err(why) => {
-            crate::linked::toast(world, format!("Cannot go online: {why}"));
+            crate::linked::toast(
+                world,
+                tr_with("shell-network-cannot-go-online", &[("why", &why)]),
+            );
             false
         }
     }
@@ -133,14 +137,12 @@ pub fn disconnect(world: &mut World) {
     cadrs_net::stop(world);
 }
 
-/// A toast saying `text` (what needs the network), with **Connect**, which goes online and
-/// then does `then`. Without a way online in this run (`CADRS_NET=0`) the toast says so.
-pub fn offer_connect(world: &mut World, text: &str, then: fn(&mut World)) {
+/// A toast saying `offline` (what needs the network, and that cadrs is offline), with
+/// **Connect**, which goes online and then does `then`. Without a way online in this run
+/// (`CADRS_NET=0`) the toast says `net_off` instead.
+pub fn offer_connect(world: &mut World, net_off: &str, offline: &str, then: fn(&mut World)) {
     if !world.contains_resource::<CanConnect>() {
-        crate::linked::toast(
-            world,
-            format!("{text}, and the network is off (CADRS_NET=0)"),
-        );
+        crate::linked::toast(world, net_off);
         return;
     }
     let theme = world.resource::<Theme>().clone();
@@ -148,7 +150,7 @@ pub fn offer_connect(world: &mut World, text: &str, then: fn(&mut World)) {
     let toast = cadrs_ui::show_notification(
         &mut commands,
         &theme,
-        cadrs_ui::Notification::info(format!("{text}, and cadrs is offline"))
+        cadrs_ui::Notification::info(offline)
             .name("network-offer-toast")
             .seconds(10.0),
     );
@@ -157,7 +159,7 @@ pub fn offer_connect(world: &mut World, text: &str, then: fn(&mut World)) {
         &theme,
         toast,
         "network-offer-connect",
-        "Connect",
+        tr("shell-network-connect"),
     );
     commands
         .entity(link)
@@ -294,17 +296,17 @@ pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
                                 .get_resource::<crate::collab::pointers::Pointers>()
                                 .and_then(|ps| ps.moved_at(id)),
                         );
+                        // After the name, lower case: "Alex · in PCB Studio 1".
                         let place = doc.map_or_else(String::new, |d| {
                             crate::collab::presence::with_idle(
-                                crate::collab::presence::whereabouts(d, &person.presence, doing),
+                                crate::collab::presence::whereabouts_after_name(
+                                    d,
+                                    &person.presence,
+                                    doing,
+                                ),
                                 idle,
                             )
                         });
-                        // After the name, lower case: "Alex · in PCB Studio 1".
-                        let place = match place.strip_prefix("In ") {
-                            Some(rest) => format!("in {rest}"),
-                            None => place,
-                        };
                         (id.clone(), person.presence.name.clone(), place)
                     })
                     .collect()
@@ -319,30 +321,39 @@ pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
                     .filter(|s| s.tx_rate >= 1.0 || s.rx_rate >= 1.0)
                     .map_or_else(String::new, |s| {
                         format!(
-                            "\nSending {} · receiving {}",
-                            rate(s.tx_rate),
-                            rate(s.rx_rate)
+                            "\n{}",
+                            tr_with(
+                                "shell-network-rates",
+                                &[
+                                    ("sending", &rate(s.tx_rate)),
+                                    ("receiving", &rate(s.rx_rate))
+                                ],
+                            )
                         )
                     });
                 let who = match people.len() {
-                    0 => "No one else in this document".to_string(),
-                    1 => "1 other person here".to_string(),
-                    n => format!("{n} others here"),
+                    0 => tr("shell-network-alone"),
+                    1 => tr("shell-network-one-other"),
+                    n => tr_with("shell-network-others", &[("count", &n.to_string())]),
                 };
-                ("Online", format!("{who}{rates}"))
+                (tr("shell-network-online"), format!("{who}{rates}"))
             }
             NetState::Failed => (
-                "Could not go online",
+                tr("shell-network-failed"),
                 world
                     .get_resource::<StartError>()
                     .map_or_else(String::new, |e| e.0.clone()),
             ),
-            _ => ("Offline", "Nothing is sent to the network".to_string()),
+            _ => (
+                tr("shell-network-offline"),
+                tr("shell-network-nothing-sent"),
+            ),
         };
         let toggle = if matches!(state, NetState::Online { .. }) {
-            MenuItem::new("network-disconnect", "Disconnect").icon("network-disconnected")
+            MenuItem::new("network-disconnect", tr("shell-network-disconnect"))
+                .icon("network-disconnected")
         } else {
-            MenuItem::new("network-connect", "Connect").icon("network")
+            MenuItem::new("network-connect", tr("shell-network-connect")).icon("network")
         };
         let autoconnect = world.resource::<LocalPreferences>().0.autoconnect_p2p;
         let following = world
@@ -362,10 +373,17 @@ pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
                 format!("{name} · {place}")
             };
             let follow = if following_them {
-                MenuItem::new(format!("network-follow-{id}"), "Stop following").icon("close")
+                MenuItem::new(
+                    format!("network-follow-{id}"),
+                    tr("shell-person-stop-following"),
+                )
+                .icon("close")
             } else {
-                MenuItem::new(format!("network-follow-{id}"), format!("Follow {name}"))
-                    .icon("visible")
+                MenuItem::new(
+                    format!("network-follow-{id}"),
+                    tr_with("shell-person-follow", &[("name", name)]),
+                )
+                .icon("visible")
             };
             menu = menu.item(
                 MenuItem::new(format!("network-person-{id}"), label)
@@ -373,9 +391,12 @@ pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
                     .checked(following_them)
                     .submenu(vec![
                         follow.into(),
-                        MenuItem::new(format!("network-goto-{id}"), format!("Go to {name}'s view"))
-                            .icon("location")
-                            .into(),
+                        MenuItem::new(
+                            format!("network-goto-{id}"),
+                            tr_with("shell-person-go-to", &[("name", name)]),
+                        )
+                        .icon("location")
+                        .into(),
                     ]),
             );
         }
@@ -384,14 +405,15 @@ pub(crate) fn open_network_menu(commands: &mut Commands, anchor: Entity) {
             && world.get_resource::<crate::ActiveDocument>().is_some()
         {
             menu = menu.item(
-                MenuItem::new("network-invite", "Invite people…")
+                MenuItem::new("network-invite", tr("shell-network-invite"))
                     .icon("share")
-                    .tooltip("Share this document: by link, or with people by their cadrs ID"),
+                    .tooltip(tr("shell-network-invite-tooltip")),
             );
         }
         // (A separator twice in a row shows as one.)
         let menu = menu.separator().item(toggle).item(
-            MenuItem::new("network-autoconnect", "Connect when cadrs starts").checked(autoconnect),
+            MenuItem::new("network-autoconnect", tr("shell-network-autoconnect"))
+                .checked(autoconnect),
         );
         let theme = world.resource::<Theme>().clone();
         open_menu(&mut world.commands(), anchor, menu.build(&theme));

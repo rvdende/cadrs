@@ -32,6 +32,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::ElementId;
 use cadrs_core::named_views::{AddNamedView, DeleteNamedView, NamedView, next_name};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FloatingPanel, FloatingPanelBody, FloatingPanelClose, TextInputField, TextSubmit};
 
@@ -700,7 +701,7 @@ fn sync_named_views(
         let left = (rect.0.width() - PANEL_WIDTH - 12.0).max(0.0);
         let e = commands
             .spawn((
-                FloatingPanel::new("named-views", "Named views")
+                FloatingPanel::new("named-views", tr("view-shortcut-named-views"))
                     .width(PANEL_WIDTH)
                     .at(left, 178.0)
                     .build(&theme),
@@ -747,11 +748,12 @@ fn sync_named_views(
             b.spawn((
                 Name::new("named-views-empty"),
                 t.text(
-                    "No named views in this tab yet",
+                    tr("view-named-views-empty"),
                     t.font_base,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("view-named-views-empty"),
                 Node {
                     margin: UiRect::new(Val::Px(6.0), Val::ZERO, Val::Px(6.0), Val::Px(6.0)),
                     ..default()
@@ -768,7 +770,12 @@ fn sync_named_views(
                     .height(28.0)
                     .font_size(t.font_base)
                     .selected(current == Some(i))
-                    .action("delete", "delete", format!("Delete {name}"), true)
+                    .action(
+                        "delete",
+                        "delete",
+                        tr_with("view-delete-named", &[("name", name)]),
+                        true,
+                    )
                     .build(&t),
                 observe(move |_: On<Activate>, mut commands: Commands| {
                     let n = n.clone();
@@ -812,11 +819,11 @@ fn sync_named_views(
             });
             r.spawn((
                 cadrs_ui::Button::new("named-view-add")
-                    .label("Add view")
+                    .label(tr("view-named-view-add"))
                     .icon("plus")
                     .primary()
                     .small()
-                    .tooltip("Save the current view under this name")
+                    .tooltip(tr("view-named-view-add-tooltip"))
                     .build(&t),
                 observe(|_: On<Activate>, mut commands: Commands| {
                     commands.queue(add_named_view_from_field);
