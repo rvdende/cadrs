@@ -5,8 +5,8 @@ use super::applied::edge_ids;
 use super::*;
 use cadrs_kernel::naming::{self, BodyNames};
 use cadrs_kernel::{
-    Curve2, ExtrudeEnd, ExtrudeSpec, Kernel, LoftEnd, LoftSection, LoftSpec, PathCurve, SplitTool,
-    SweepControl, SweepSpec,
+    Curve2, CurveLoftEnd, CurveLoftSpec, CurveSection, ExtrudeEnd, ExtrudeSpec, Kernel, LoftEnd,
+    LoftSection, LoftSpec, PathCurve, SplitTool, SweepControl, SweepSpec,
 };
 use cadrs_sketch::{PlaneFrame, PlaneRef, Sketch};
 use nalgebra::{Point2, Point3, Unit, Vector3};
@@ -116,7 +116,7 @@ pub(super) fn sketch_curves2(g: &Sketch, id: CurveId) -> Option<Vec<Curve2>> {
 }
 
 /// A sketch and its plane's frame.
-fn sketch_of(before: &[Feature], sketch: FeatureId) -> Option<(&Sketch, PlaneFrame)> {
+pub(super) fn sketch_of(before: &[Feature], sketch: FeatureId) -> Option<(&Sketch, PlaneFrame)> {
     let sk = before.iter().find(|f| f.id == sketch)?.sketch()?;
     Some((&sk.geometry, sk.plane?.frame()))
 }
@@ -337,7 +337,7 @@ impl Rebuilder {
     // Sweep
 
     /// A sweep path's curves as kernel path curves.
-    fn path_curves(
+    pub(in crate::rebuild) fn path_curves(
         &self,
         before: &[Feature],
         state: &State,
@@ -363,15 +363,7 @@ impl Rebuilder {
                         });
                     }
                 }
-                PathRef::Curve(f) => {
-                    let h = state.curves.get(f).ok_or_else(lost)?;
-                    for (poles, weights) in h.beziers() {
-                        out.push(PathCurve::Bezier3 {
-                            poles: poles.iter().map(|p| Point3::from(*p)).collect(),
-                            weights,
-                        });
-                    }
-                }
+                PathRef::Curve(f) => out.extend(state.curves.get(f).ok_or_else(lost)?.path()),
                 PathRef::Sketch(sketch) => {
                     let (g, frame) = sketch_of(before, *sketch).ok_or_else(lost)?;
                     for (cid, c) in &g.curves {
@@ -454,6 +446,9 @@ impl Rebuilder {
         if let Some(p) = x.problem() {
             return Err(p.into());
         }
+        if !x.profile_curves.is_empty() {
+            return self.sweep_curves(before, id, x, state);
+        }
         let (groups, missing) = sweep_groups(before, &x.regions, &x.sketches, x.body);
         let faces = self.face_inputs(&x.faces, state)?;
         if groups.is_empty() && faces.is_empty() {
@@ -470,6 +465,9 @@ impl Rebuilder {
                     .as_ref()
                     .ok_or("Select a direction to lock")?;
                 SweepControl::LockDirection(self.direction(before, state, d)?)
+            }
+            ProfileControl::LockFaces => {
+                return Err("Lock profile faces sweeps a profile of curves".into());
             }
         };
         let body_kind = match x.body {
@@ -579,6 +577,9 @@ impl Rebuilder {
             LoftProfile::Vertex(v) => {
                 LoftSection::Point(Point3::from(vertex_point(state, v).ok_or_else(lost)?))
             }
+            LoftProfile::Wire(_) => {
+                return Err("Loft either curves or regions and faces, not both".into());
+            }
         })
     }
 
@@ -592,6 +593,9 @@ impl Rebuilder {
     ) -> Result<Output, String> {
         if let Some(p) = x.problem() {
             return Err(p.into());
+        }
+        if x.through_curves() {
+            return self.loft_curves(before, id, x, state);
         }
         let sections = x
             .profiles
@@ -617,19 +621,7 @@ impl Rebuilder {
             None
         };
         let end = |c: LoftCondition, m: f64, d: Option<[f64; 3]>| LoftEnd {
-            condition: match c {
-                LoftCondition::NormalToProfile => cadrs_kernel::LoftCondition::NormalToProfile,
-                LoftCondition::TangentToProfile => cadrs_kernel::LoftCondition::TangentToProfile,
-                LoftCondition::MatchTangent => cadrs_kernel::LoftCondition::MatchTangent,
-                LoftCondition::MatchCurvature => cadrs_kernel::LoftCondition::MatchCurvature,
-                LoftCondition::NormalDirection => {
-                    cadrs_kernel::LoftCondition::NormalDirection(d.unwrap_or([0.0, 0.0, 1.0]))
-                }
-                LoftCondition::TangentDirection => {
-                    cadrs_kernel::LoftCondition::TangentDirection(d.unwrap_or([0.0, 0.0, 1.0]))
-                }
-                LoftCondition::None => cadrs_kernel::LoftCondition::Default,
-            },
+            condition: kernel_condition(c, d),
             magnitude: m,
         };
         let body_kind = match x.body {
@@ -688,6 +680,146 @@ impl Rebuilder {
             o.arrows = arrows;
             o
         })
+    }
+
+    /// A sweep of curves: a sheet of the profile curves carried along the path.
+    fn sweep_curves(
+        &mut self,
+        before: &[Feature],
+        id: FeatureId,
+        x: &SweepFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        let profile = self.path_curves(before, state, &x.profile_curves)?;
+        let path = self.path_curves(before, state, &x.path)?;
+        let frame = match x.control {
+            ProfileControl::None => cadrs_kernel::SweepFrame::Follow,
+            ProfileControl::KeepOrientation => cadrs_kernel::SweepFrame::KeepOrientation,
+            ProfileControl::LockFaces => {
+                let mut faces = Vec::new();
+                for f in &x.lock_faces {
+                    let (part, ids) =
+                        face_ids(state, f).ok_or("A face to lock to no longer exists")?;
+                    let body = part.body.ok_or_else(|| super::super::no_body(part))?;
+                    faces.extend(ids.into_iter().map(|i| (body, i)));
+                }
+                cadrs_kernel::SweepFrame::LockFaces(faces)
+            }
+            ProfileControl::LockDirection => {
+                return Err("Lock profile direction sweeps regions and faces".into());
+            }
+        };
+        let spec = cadrs_kernel::CurveSweepSpec {
+            profile,
+            path,
+            frame,
+            source: naming::stable_hash(id.0.as_bytes()),
+        };
+        let tool = self
+            .kernel
+            .sweep_curves(&spec)
+            .and_then(|r| self.name_new(state, id.0, &r))
+            .map_err(|e| format!("Sweep failed: {e}"))?;
+        let merge = Merge {
+            op: x.op,
+            merge_all: x.merge_all,
+            scope: &x.merge_scope,
+            scope_set: false,
+            surface: true,
+        };
+        let geoms = state.geoms.clone();
+        self.combine(id, &merge, tool, state, geoms)
+    }
+
+    /// A loft through curves: a sheet through the curve profiles, along the guides.
+    fn loft_curves(
+        &mut self,
+        before: &[Feature],
+        id: FeatureId,
+        x: &LoftFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        let lost = || "A loft profile no longer exists".to_string();
+        let mut sections = Vec::with_capacity(x.profiles.len());
+        for p in &x.profiles {
+            sections.push(match p {
+                LoftProfile::Wire(w) => CurveSection::Wire(self.path_curves(before, state, w)?),
+                LoftProfile::SketchPoint { sketch, point } => {
+                    let (g, frame) = sketch_of(before, *sketch).ok_or_else(lost)?;
+                    let q = frame.to_world(g.points.get(*point).ok_or_else(lost)?.pos);
+                    CurveSection::Point(Point3::from(q))
+                }
+                LoftProfile::Vertex(v) => {
+                    CurveSection::Point(Point3::from(vertex_point(state, v).ok_or_else(lost)?))
+                }
+                _ => return Err("Loft either curves or regions and faces, not both".into()),
+            });
+        }
+        let guides = x
+            .guides
+            .iter()
+            .map(|g| self.path_curves(before, state, g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let faces = |fs: &[crate::document::FaceRef]| -> Result<Vec<_>, String> {
+            let mut out = Vec::new();
+            for f in fs {
+                let (part, ids) = face_ids(state, f).ok_or("A face to match no longer exists")?;
+                let body = part.body.ok_or_else(|| super::super::no_body(part))?;
+                out.extend(ids.into_iter().map(|i| (body, i)));
+            }
+            Ok(out)
+        };
+        let dir = |d: &Option<crate::document::DirectionRef>| -> Result<[f64; 3], String> {
+            let d = d
+                .as_ref()
+                .ok_or("Select a direction for the profile condition")?;
+            let v = self.direction(before, state, d)?;
+            Ok([v.x, v.y, v.z])
+        };
+        let mut ends = Vec::with_capacity(2);
+        for (c, m, d, fs) in [
+            (
+                x.start,
+                x.start_magnitude,
+                &x.start_direction,
+                &x.start_faces,
+            ),
+            (x.end, x.end_magnitude, &x.end_direction, &x.end_faces),
+        ] {
+            let d = if c.takes_direction() {
+                Some(dir(d)?)
+            } else {
+                None
+            };
+            ends.push(CurveLoftEnd {
+                condition: kernel_condition(c, d),
+                magnitude: m,
+                faces: faces(fs)?,
+            });
+        }
+        let end = ends.pop().unwrap_or_default();
+        let start = ends.pop().unwrap_or_default();
+        let spec = CurveLoftSpec {
+            sections,
+            guides,
+            start,
+            end,
+            source: naming::stable_hash(id.0.as_bytes()),
+        };
+        let tool = self
+            .kernel
+            .loft_curves(&spec)
+            .and_then(|r| self.name_new(state, id.0, &r))
+            .map_err(|e| format!("Loft failed: {e}"))?;
+        let merge = Merge {
+            op: x.op,
+            merge_all: x.merge_all,
+            scope: &x.merge_scope,
+            scope_set: false,
+            surface: true,
+        };
+        let geoms = state.geoms.clone();
+        self.combine(id, &merge, tool, state, geoms)
     }
 
     /// Roughly the middle of a loft section (for its direction arrow): the mean of its outer
@@ -799,6 +931,12 @@ impl Rebuilder {
                     },
                 }
             }
+            SplitToolRef::Curve(c) => {
+                if x.split_type != SplitType::Face {
+                    return Err("A curve splits faces, not parts".into());
+                }
+                SplitTool::Curves(state.curves.get(c).ok_or_else(lost)?.path())
+            }
             SplitToolRef::Sketch(s) => {
                 // The sketch's curves swept both ways through the parts: a sheet.
                 let (groups, _) = sweep_groups(before, &[], &[*s], BodyType::Surface);
@@ -873,6 +1011,23 @@ impl Rebuilder {
             out.state = Arc::new(next);
         }
         Ok(out)
+    }
+}
+
+/// The kernel's loft condition for a Loft dialog's (with its picked direction, if it takes one).
+fn kernel_condition(c: LoftCondition, d: Option<[f64; 3]>) -> cadrs_kernel::LoftCondition {
+    match c {
+        LoftCondition::NormalToProfile => cadrs_kernel::LoftCondition::NormalToProfile,
+        LoftCondition::TangentToProfile => cadrs_kernel::LoftCondition::TangentToProfile,
+        LoftCondition::MatchTangent => cadrs_kernel::LoftCondition::MatchTangent,
+        LoftCondition::MatchCurvature => cadrs_kernel::LoftCondition::MatchCurvature,
+        LoftCondition::NormalDirection => {
+            cadrs_kernel::LoftCondition::NormalDirection(d.unwrap_or([0.0, 0.0, 1.0]))
+        }
+        LoftCondition::TangentDirection => {
+            cadrs_kernel::LoftCondition::TangentDirection(d.unwrap_or([0.0, 0.0, 1.0]))
+        }
+        LoftCondition::None => cadrs_kernel::LoftCondition::Default,
     }
 }
 

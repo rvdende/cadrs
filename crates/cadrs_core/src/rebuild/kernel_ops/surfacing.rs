@@ -283,7 +283,134 @@ impl Rebuilder {
             return Err("The helix has no size".into());
         }
         let mut next = (**state).clone();
-        next.curves.insert(id, g);
+        next.curves
+            .insert(id, crate::surfacing::CurveGeom::Helix(g));
+        Ok(Output {
+            state: Arc::new(next),
+            error: None,
+            warning: None,
+            contacts: None,
+            owned: Vec::new(),
+            stage: None,
+            axis: None,
+            arrows: Vec::new(),
+            dots: None,
+            uses: Vec::new(),
+        })
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Face blend
+
+    /// A Face blend: the walls' surfaces trimmed to the blend and joined with it, as the first
+    /// wall's part (the second's, if another, is used up).
+    pub(in crate::rebuild) fn face_blend(
+        &mut self,
+        id: FeatureId,
+        x: &crate::surfacing::FaceBlendFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        if let Some(p) = x.problem() {
+            return Err(p.into());
+        }
+        let side = |fs: &[crate::document::FaceRef]| -> Result<(PartId, BodyId, cadrs_kernel::FaceId), String> {
+            let f = fs.first().ok_or("Select a face on each side")?;
+            let (part, ids) = face_ids(state, f).ok_or("A face to blend no longer exists")?;
+            let body = part.body.ok_or_else(|| super::super::no_body(part))?;
+            Ok((part.part.id, body, *ids.first().ok_or("A face to blend no longer exists")?))
+        };
+        let (p1, b1, f1) = side(&x.side1)?;
+        let (p2, b2, f2) = side(&x.side2)?;
+        let spec = cadrs_kernel::FaceBlendSpec {
+            side1: (b1, f1),
+            side2: (b2, f2),
+            size: match x.control {
+                crate::surfacing::BlendControl::Radius => cadrs_kernel::BlendSize::Radius(x.radius),
+                crate::surfacing::BlendControl::Width => cadrs_kernel::BlendSize::Width(x.width),
+            },
+            source: cadrs_kernel::naming::stable_hash(id.0.as_bytes()),
+        };
+        let r = self
+            .kernel
+            .face_blend(&spec)
+            .map_err(|e| format!("Face blend failed: {e}"))?;
+        let names1 = state.part(p1).map(|p| p.names.clone()).unwrap_or_default();
+        let names2 = state.part(p2).map(|p| p.names.clone()).unwrap_or_default();
+        let mut inputs: Vec<(BodyId, &cadrs_kernel::BodyNames)> = vec![(b1, &names1)];
+        if b2 != b1 {
+            inputs.push((b2, &names2));
+        }
+        let pieces = self.split_result(r, id.0, &inputs)?;
+        let mut next = State {
+            geoms: state.geoms.clone(),
+            ..(**state).clone()
+        };
+        let mut placed: Vec<Placed> = Vec::new();
+        for piece in pieces {
+            let pid = if placed.is_empty() {
+                p1
+            } else {
+                let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
+                Self::new_id(id, &next, &taken)
+            };
+            placed.push((pid, piece));
+        }
+        if p2 != p1 {
+            next.parts.retain(|p| p.part.id != p2);
+        }
+        let geoms = state.geoms.clone();
+        self.finish(id, placed, next, id.0, geoms, PartKind::Surface)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Projected curve
+
+    /// A Projected curve: the curves projected onto the faces, kept as a curve feature's curve.
+    pub(in crate::rebuild) fn project_curve(
+        &mut self,
+        before: &[Feature],
+        id: FeatureId,
+        x: &crate::surfacing::ProjectCurveFeature,
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        if let Some(p) = x.problem() {
+            return Err(p.into());
+        }
+        let curves = self.path_curves(before, state, &x.curves)?;
+        let mut faces = Vec::new();
+        for f in &x.faces {
+            let (part, ids) =
+                face_ids(state, f).ok_or("A face to project onto no longer exists")?;
+            let body = part.body.ok_or_else(|| super::super::no_body(part))?;
+            faces.extend(ids.into_iter().map(|i| (body, i)));
+        }
+        let mut d = match &x.direction {
+            Some(d) => self.direction(before, state, d)?.into_inner(),
+            None => {
+                let sketch = x
+                    .curves
+                    .iter()
+                    .find_map(crate::advanced::PathRef::sketch)
+                    .ok_or("Select a direction to project along")?;
+                let (_, frame) = super::advanced::sketch_of(before, sketch)
+                    .ok_or("The curves' sketch no longer exists")?;
+                Vector3::from(frame.normal())
+            }
+        };
+        if x.flip {
+            d = -d;
+        }
+        let pieces = self
+            .kernel
+            .project_curve(&cadrs_kernel::ProjectCurveSpec {
+                curves,
+                faces,
+                direction: d,
+            })
+            .map_err(|e| format!("Projected curve failed: {e}"))?;
+        let mut next = (**state).clone();
+        next.curves
+            .insert(id, crate::surfacing::CurveGeom::Bspline(pieces));
         Ok(Output {
             state: Arc::new(next),
             error: None,

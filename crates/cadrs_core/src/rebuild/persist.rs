@@ -75,7 +75,7 @@ plain!(
     cadrs_kernel::MassProperties,
     crate::transform::Composite,
     crate::pattern::InstanceDot,
-    crate::surfacing::HelixGeom,
+    crate::surfacing::CurveGeom,
 );
 
 impl<T: Persist> Persist for Option<T> {
@@ -394,7 +394,7 @@ pub struct SavedState {
     connectors: Vec<(FeatureId, PlaneFrame)>,
     connector_owners: Vec<(FeatureId, PartId)>,
     composites: Vec<crate::transform::Composite>,
-    curves: Vec<(FeatureId, crate::surfacing::HelixGeom)>,
+    curves: Vec<(FeatureId, crate::surfacing::CurveGeom)>,
     derived: u32,
     derived_sketches: u32,
     /// P3I.2.

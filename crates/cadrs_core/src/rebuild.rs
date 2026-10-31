@@ -85,8 +85,8 @@ pub struct Build {
     pub axes: HashMap<FeatureId, (Vec3, Vec3)>,
     /// Each Plane feature's frame (P3.7), where it built.
     pub planes: HashMap<FeatureId, cadrs_sketch::PlaneFrame>,
-    /// Each curve feature's curve (a Helix), where it built.
-    pub curves: HashMap<FeatureId, crate::surfacing::HelixGeom>,
+    /// Each curve feature's curve (a Helix, a Projected curve), where it built.
+    pub curves: HashMap<FeatureId, crate::surfacing::CurveGeom>,
     /// Each Mate connector feature's frame (P3.8), where it built.
     pub connectors: HashMap<FeatureId, cadrs_sketch::PlaneFrame>,
     /// Each pattern's instances with where their Skip dots go (P3.8, PS22.5).
@@ -148,6 +148,10 @@ pub struct Stage {
 /// More faces than a CAD body has: an imported mesh's facets (as the kernel's own limit for
 /// merging faces). Checks only for the dialogs' sake skip such a part.
 const HUGE_FACES: usize = 10_000;
+
+/// How close (mm) surfaces' edges must be for a surface Add to join them there (the curves of
+/// projections, blends and lofts through them are fitted within about this).
+const SURFACE_JOIN: f64 = 1e-4;
 
 /// The parts an extrude's new body meets (before its boolean).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -243,8 +247,8 @@ struct State {
     connector_owners: HashMap<FeatureId, PartId>,
     /// The composite parts so far (P3H.6).
     composites: Vec<crate::transform::Composite>,
-    /// The curves of the curve features so far (a Helix).
-    curves: HashMap<FeatureId, crate::surfacing::HelixGeom>,
+    /// The curves of the curve features so far (a Helix, a Projected curve).
+    curves: HashMap<FeatureId, crate::surfacing::CurveGeom>,
     /// P3G.4: what each Derived feature so far brought in, and its sketches (placed).
     derived: Arc<HashMap<FeatureId, crate::derived::DerivedOutput>>,
     derived_sketches: Arc<Vec<Feature>>,
@@ -2611,6 +2615,12 @@ impl Rebuilder {
             #[cfg(feature = "brep")]
             FeatureKind::Helix(x) => self.helix(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
+            FeatureKind::ProjectCurve(x) => self
+                .project_curve(before, f.id, x, state)
+                .unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
+            FeatureKind::FaceBlend(x) => self.face_blend(f.id, x, state).unwrap_or_else(fail),
+            #[cfg(feature = "brep")]
             FeatureKind::Fill(x) => self.fill(before, f.id, x, state).unwrap_or_else(fail),
             #[cfg(feature = "brep")]
             FeatureKind::Thread(x) => self.thread(f.id, x, state).unwrap_or_else(fail),
@@ -2675,6 +2685,8 @@ impl Rebuilder {
             #[cfg(not(feature = "brep"))]
             FeatureKind::Thicken(_)
             | FeatureKind::Helix(_)
+            | FeatureKind::ProjectCurve(_)
+            | FeatureKind::FaceBlend(_)
             | FeatureKind::Fill(_)
             | FeatureKind::Thread(_)
             | FeatureKind::Image(_) => fail("This feature needs the solid-modelling kernel".into()),
@@ -3275,19 +3287,25 @@ mod kernel_ops {
         /// only those it touches, as Onshape's: parts of the scope that just overlap one another
         /// stay apart.
         fn scope(e: &Merge, state: &State, contacts: &Contacts) -> Vec<PartId> {
-            let solids: Vec<PartId> = state
+            // (A surface's Add joins surfaces.)
+            let kind = if e.surface {
+                PartKind::Surface
+            } else {
+                PartKind::Solid
+            };
+            let candidates: Vec<PartId> = state
                 .parts
                 .iter()
-                .filter(|p| p.part.kind == PartKind::Solid)
+                .filter(|p| p.part.kind == kind)
                 .map(|p| p.part.id)
                 .collect();
             let mut scope = if e.merge_all {
-                solids
+                candidates
             } else if e.scope_set || !e.scope.is_empty() {
                 e.scope
                     .iter()
                     .copied()
-                    .filter(|p| solids.contains(p))
+                    .filter(|p| candidates.contains(p))
                     .collect()
             } else {
                 return match e.op {
@@ -3295,10 +3313,47 @@ mod kernel_ops {
                     _ => contacts.overlaps.clone(),
                 };
             };
-            if e.op == BooleanOp::Add {
+            if e.op == BooleanOp::Add && !e.surface {
                 scope.retain(|p| contacts.touches.contains(p));
             }
             scope
+        }
+
+        /// The surfaces of `scope` that a free edge of the sheet `tool` lies along a free edge of:
+        /// what a surface Add joins it to.
+        fn sharing_edges(&self, tool: BodyId, scope: &[PartId], state: &State) -> Vec<PartId> {
+            // (Ends and length: the same curve may run at another speed in each.)
+            type Free = (nalgebra::Point3<f64>, nalgebra::Point3<f64>, f64);
+            let free = |b: BodyId| -> Vec<Free> {
+                self.kernel
+                    .edges(b)
+                    .map(|es| {
+                        es.into_iter()
+                            .filter(|e| e.faces.iter().any(Option::is_none))
+                            .map(|e| (e.start, e.end, e.length))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let near = |a: &nalgebra::Point3<f64>, b: &nalgebra::Point3<f64>| {
+                (a - b).norm() < SURFACE_JOIN * 10.0
+            };
+            let same = |a: &Free, b: &Free| {
+                (a.2 - b.2).abs() < SURFACE_JOIN * 100.0
+                    && ((near(&a.0, &b.0) && near(&a.1, &b.1))
+                        || (near(&a.0, &b.1) && near(&a.1, &b.0)))
+            };
+            let mine = free(tool);
+            scope
+                .iter()
+                .copied()
+                .filter(|p| {
+                    state.part(*p).and_then(|p| p.body).is_some_and(|b| {
+                        let theirs = free(b);
+                        mine.iter().any(|a| theirs.iter().any(|t| same(a, t)))
+                    })
+                })
+                .collect()
         }
 
         /// What a Remove takes out of the `scope` parts: the tool's intersection with each, else
@@ -3354,19 +3409,22 @@ mod kernel_ops {
         ) -> Result<Output, String> {
             let op = id.0;
             let surface = e.surface;
-            let scope = Self::scope(e, state, contacts);
+            let mut scope = Self::scope(e, state, contacts);
+            if surface && e.op == BooleanOp::Add {
+                scope = self.sharing_edges(tool.0, &scope, state);
+            }
             let mut next = State {
                 geoms: geoms.clone(),
                 ..(**state).clone()
             };
             let result = (|| -> Result<Vec<Placed>, String> {
-                if surface && e.op != BooleanOp::New {
-                    return Err("Surfaces can only be New".into());
+                if surface && !matches!(e.op, BooleanOp::New | BooleanOp::Add) {
+                    return Err("Surfaces can only be New or Add".into());
                 }
                 match e.op {
                     BooleanOp::New => self.new_parts(id, &tool, &mut next),
                     BooleanOp::Add if scope.is_empty() => self.new_parts(id, &tool, &mut next),
-                    BooleanOp::Add => self.add(id, &tool, &scope, &mut next),
+                    BooleanOp::Add => self.add(id, &tool, &scope, surface, &mut next),
                     BooleanOp::Remove | BooleanOp::Intersect => {
                         if scope.is_empty() {
                             return Err(if e.op == BooleanOp::Remove {
@@ -3532,6 +3590,7 @@ mod kernel_ops {
             id: FeatureId,
             tool: &(BodyId, BodyNames),
             scope: &[PartId],
+            surface: bool,
             next: &mut State,
         ) -> Result<Vec<Placed>, String> {
             let parts: Vec<PartState> = next
@@ -3550,10 +3609,15 @@ mod kernel_ops {
                 .filter_map(|p| Some((p.body?, &*p.names)))
                 .collect();
             inputs.push((tool.0, &tool.1));
-            let r = self
-                .kernel
-                .boolean(BoolOp::Union, first, &others)
-                .map_err(|e| format!("Add failed: {e}"))?;
+            // Surfaces join along their common edges (Onshape's surface Add).
+            let r = if surface {
+                let mut all = vec![first];
+                all.extend(&others);
+                self.kernel.sew_sheets(&all, SURFACE_JOIN)
+            } else {
+                self.kernel.boolean(BoolOp::Union, first, &others)
+            }
+            .map_err(|e| format!("Add failed: {e}"))?;
             let pieces = self.split_result(r, id.0, &inputs)?;
             let mut placed: Vec<Placed> = Vec::new();
             let mut used: Vec<PartId> = Vec::new();
@@ -4542,7 +4606,7 @@ mod kernel_ops {
 /// extrude refers to, grouped by sketch with the sketch's plane, and how many of its regions
 /// could not be found (their sketch is gone, has no plane, or the region is gone).
 pub fn extrude_groups(features: &[Feature], e: &ExtrudeFeature) -> (Vec<ProfileGroup>, usize) {
-    sweep_groups(features, &e.regions, &e.sketches, e.body)
+    sweep_groups_of(features, &e.regions, &e.sketches, &e.curves, e.body)
 }
 
 /// False when a loft profile's regions (or its whole sketch) make more than one closed contour
@@ -4567,6 +4631,18 @@ pub fn sweep_groups(
     features: &[Feature],
     regions: &[RegionRef],
     sketches: &[FeatureId],
+    body: BodyType,
+) -> (Vec<ProfileGroup>, usize) {
+    sweep_groups_of(features, regions, sketches, &[], body)
+}
+
+/// [`sweep_groups`] with sketch curves picked one by one (a surface's or thin wall's): a sketch
+/// with curves among them gives the chains of only those.
+pub fn sweep_groups_of(
+    features: &[Feature],
+    regions: &[RegionRef],
+    sketches: &[FeatureId],
+    curves: &[(FeatureId, CurveId)],
     body: BodyType,
 ) -> (Vec<ProfileGroup>, usize) {
     struct E<'a> {
@@ -4623,6 +4699,15 @@ pub fn sweep_groups(
                     out[i].1.regions.push((key, r));
                 }
             }
+        } else if curves.iter().any(|(k, _)| *k == s) {
+            // Only the picked curves, chained among themselves.
+            let mut g = sk.geometry.clone();
+            for (id, c) in g.curves.iter_mut() {
+                if !curves.contains(&(s, id)) {
+                    c.construction = true;
+                }
+            }
+            out[i].1.chains.extend(sketch_chains(s, &g));
         } else {
             out[i].1.chains.extend(sketch_chains(s, &sk.geometry));
         }

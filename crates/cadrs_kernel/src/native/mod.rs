@@ -102,6 +102,16 @@ pub mod curve;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod curve;
 #[cfg(feature = "testkit")]
+pub mod curve_loft;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod curve_loft;
+#[cfg(feature = "testkit")]
+pub mod curve_split;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod curve_split;
+#[cfg(feature = "testkit")]
 pub mod distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -126,6 +136,11 @@ pub mod exchange;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod exchange;
+#[cfg(feature = "testkit")]
+pub mod face_blend;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod face_blend;
 #[cfg(feature = "testkit")]
 pub mod face_build;
 #[cfg(not(feature = "testkit"))]

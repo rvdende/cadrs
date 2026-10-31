@@ -826,6 +826,22 @@ impl Kernel for NativeKernel {
         super::loft_build::loft_with(self, spec)
     }
 
+    fn loft_curves(&mut self, spec: &CurveLoftSpec) -> Result<OpResult> {
+        super::curve_loft::loft_curves(self, spec)
+    }
+
+    fn project_curve(&self, spec: &ProjectCurveSpec) -> Result<Vec<Bspline3>> {
+        super::curve_split::project_curve(self, spec)
+    }
+
+    fn face_blend(&mut self, spec: &FaceBlendSpec) -> Result<OpResult> {
+        super::face_blend::face_blend(self, spec)
+    }
+
+    fn sweep_curves(&mut self, spec: &CurveSweepSpec) -> Result<OpResult> {
+        super::curve_loft::sweep_curves(self, spec)
+    }
+
     fn evolved(&mut self, spine: &[PathCurve], profile: &[Region]) -> Result<OpResult> {
         let segs = super::sweep::path::path_segments(self, spine)?;
         let (segs, _) = super::sweep::path::chain(segs).map_err(|_| {
@@ -939,6 +955,10 @@ impl Kernel for NativeKernel {
 
     fn fill(&mut self, spec: &FillSpec) -> Result<OpResult> {
         super::surfacing::fill(self, spec)
+    }
+
+    fn sew_sheets(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {
+        super::surfacing::sew_sheets(self, bodies, tol)
     }
 
     fn sew_solid(&mut self, bodies: &[BodyId], tol: f64) -> Result<OpResult> {

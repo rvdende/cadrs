@@ -1627,6 +1627,7 @@ model-plane-type-fit = 拟合
 model-plane-type-tangent = 相切
 model-sweep-keep-orientation = 保持轮廓方向
 model-sweep-lock-direction = 锁定轮廓方向
+model-sweep-lock-faces = 锁定轮廓面
 model-loft-normal-to-profile = 垂直于轮廓
 model-loft-tangent-to-profile = 与轮廓相切
 model-loft-match-tangent = 匹配相切

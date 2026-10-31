@@ -149,17 +149,9 @@ pub(crate) fn items(
             );
             v
         }
-        (FeatureKind::Sweep(x), Role::SweepPath) => x
-            .path
-            .iter()
-            .map(|p| match p {
-                PathRef::Edge(e) => edge_label(features, &e.edge),
-                PathRef::SketchCurve { sketch, .. } => {
-                    tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
-                }
-                PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
-            })
-            .collect(),
+        (FeatureKind::Sweep(x), Role::SweepPath) => {
+            x.path.iter().map(|p| path_label(features, p)).collect()
+        }
         (FeatureKind::Sweep(x), Role::LockDirection) => x
             .lock_direction
             .iter()
@@ -197,6 +189,11 @@ pub(crate) fn items(
                     "common-vertex-of",
                     &[("name", &op_name(features, v.vertex.faces[0].op))],
                 ),
+                LoftProfile::Wire(w) => w
+                    .iter()
+                    .map(|c| path_label(features, c))
+                    .collect::<Vec<_>>()
+                    .join(", "),
             })
             .collect(),
         (FeatureKind::Loft(x), Role::MergeScope) => parts(&x.merge_scope),
@@ -216,7 +213,7 @@ pub(crate) fn items(
                 SplitToolRef::Face(f) => {
                     tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
                 }
-                SplitToolRef::Sketch(s) => name_of(features, *s),
+                SplitToolRef::Sketch(s) | SplitToolRef::Curve(s) => name_of(features, *s),
             })
             .collect(),
         (k, r) => return crate::pattern_dialog::items(features, cache, k, r),
@@ -401,7 +398,19 @@ fn profile_control_text(c: ProfileControl) -> String {
         ProfileControl::None => "common-none",
         ProfileControl::KeepOrientation => "model-sweep-keep-orientation",
         ProfileControl::LockDirection => "model-sweep-lock-direction",
+        ProfileControl::LockFaces => "model-sweep-lock-faces",
     })
+}
+
+/// A sweep path's or a loft curve's item in its field ("Curve of Sketch 1", "Edge of Loft 1").
+fn path_label(features: &[Feature], p: &PathRef) -> String {
+    match p {
+        PathRef::Edge(e) => edge_label(features, &e.edge),
+        PathRef::SketchCurve { sketch, .. } => {
+            tr_with("common-curve-of", &[("name", &name_of(features, *sketch))])
+        }
+        PathRef::Sketch(s) | PathRef::Curve(s) => name_of(features, *s),
+    }
 }
 
 /// A loft's end condition, in the current language.

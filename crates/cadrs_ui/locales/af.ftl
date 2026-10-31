@@ -1627,6 +1627,7 @@ model-plane-type-fit = Pas
 model-plane-type-tangent = Raaklyn
 model-sweep-keep-orientation = Behou profieloriëntasie
 model-sweep-lock-direction = Sluit profielrigting
+model-sweep-lock-faces = Sluit profielvlakke
 model-loft-normal-to-profile = Loodreg op profiel
 model-loft-tangent-to-profile = Raaklyn aan profiel
 model-loft-match-tangent = Pas raaklyn

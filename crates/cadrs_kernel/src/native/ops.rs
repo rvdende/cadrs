@@ -59,6 +59,7 @@ fn tool_plane(k: &NativeKernel, tool: &SplitTool) -> Result<(P3, V3)> {
             }
         }
         SplitTool::Body(_) => Err(KernelError::Unsupported("splitting by a surface body")),
+        SplitTool::Curves(_) => Err(KernelError::Unsupported("splitting parts by curves")),
     }
 }
 
@@ -173,6 +174,9 @@ pub fn split_faces(
     faces: &[FaceId],
     tool: &SplitTool,
 ) -> Result<OpResult> {
+    if let SplitTool::Curves(curves) = tool {
+        return super::curve_split::split_faces_by_curves(k, body, faces, curves);
+    }
     let (o, n) = tool_plane(k, tool)?;
     let a = (**k.get(body)?).clone();
     let bb = a.bbox();

@@ -446,6 +446,18 @@ fn split_in(b: &mut Body, fi: usize, dir: Dir, values: &[f64]) -> Option<Vec<usi
     if cuts.is_empty() {
         return None;
     }
+    trace_pieces(b, fi, cuts, area0)
+}
+
+/// Face `fi` of `b` traced into pieces along `cuts` (new edges already in `b`, ending at
+/// vertices of its loops): the pieces replace it (`fi` first, the rest added to its shell).
+/// `None` when a piece's loop doesn't close or the pieces' areas don't add up to `area0`.
+pub(crate) fn trace_pieces(
+    b: &mut Body,
+    fi: usize,
+    cuts: Vec<SArc>,
+    area0: f64,
+) -> Option<Vec<usize>> {
     // 4. The face traced into pieces.
     let f = b.faces[fi].clone();
     let boundary: Vec<Vec<SArc>> = f

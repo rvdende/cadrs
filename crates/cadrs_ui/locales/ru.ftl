@@ -1627,6 +1627,7 @@ model-plane-type-fit = По точкам
 model-plane-type-tangent = Касательная
 model-sweep-keep-orientation = Сохранять ориентацию профиля
 model-sweep-lock-direction = Зафиксировать направление профиля
+model-sweep-lock-faces = Зафиксировать грани профиля
 model-loft-normal-to-profile = Перпендикулярно профилю
 model-loft-tangent-to-profile = По касательной к профилю
 model-loft-match-tangent = Совпадение касательных

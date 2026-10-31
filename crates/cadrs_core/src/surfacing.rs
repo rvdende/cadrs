@@ -132,6 +132,129 @@ impl ThickenFeature {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Face blend
+
+/// How a Face blend's ball is sized (Onshape's blend control).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BlendControl {
+    /// A constant radius.
+    #[default]
+    Radius,
+    /// A constant width: the distance between the blend's edges on the two walls.
+    Width,
+}
+
+/// A Face blend (Onshape's, rolling ball, walls trimmed): a blend between faces of two surfaces
+/// (or one) that meet along an edge; the walls are trimmed to it and joined with it into one
+/// surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaceBlendFeature {
+    /// The first wall's faces.
+    pub side1: Vec<FaceRef>,
+    /// The second wall's faces.
+    pub side2: Vec<FaceRef>,
+    #[serde(default)]
+    pub control: BlendControl,
+    /// mm.
+    pub radius: f64,
+    #[serde(default)]
+    pub radius_expr: String,
+    /// mm.
+    pub width: f64,
+    #[serde(default)]
+    pub width_expr: String,
+}
+
+impl Default for FaceBlendFeature {
+    fn default() -> Self {
+        Self {
+            side1: Vec::new(),
+            side2: Vec::new(),
+            control: BlendControl::Radius,
+            radius: 5.0,
+            radius_expr: "5 mm".into(),
+            width: 10.0,
+            width_expr: "10 mm".into(),
+        }
+    }
+}
+
+impl FaceBlendFeature {
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.side1.is_empty() || self.side2.is_empty() {
+            return Some("Select a face on each side");
+        }
+        let size = match self.control {
+            BlendControl::Radius => self.radius,
+            BlendControl::Width => self.width,
+        };
+        if !(size > 0.0 && size.is_finite()) {
+            return Some("The blend's size must be greater than zero");
+        }
+        None
+    }
+
+    pub fn parents(&self) -> Vec<FeatureId> {
+        self.side1
+            .iter()
+            .chain(&self.side2)
+            .map(|f| FeatureId(f.face.op))
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Projected curve
+
+/// A Projected curve (Onshape's, Curve to face type): curves projected along a direction onto
+/// faces. A curve feature, as a Helix: a sweep path, a loft guide, a face split's tool.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectCurveFeature {
+    /// The curves to project (sketch curves, part edges).
+    pub curves: Vec<crate::advanced::PathRef>,
+    /// The faces they land on.
+    pub faces: Vec<FaceRef>,
+    /// The way they go: a picked direction, else the normal of the first curve's sketch.
+    #[serde(default)]
+    pub direction: Option<crate::document::DirectionRef>,
+    /// Against it.
+    #[serde(default)]
+    pub flip: bool,
+}
+
+impl ProjectCurveFeature {
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.curves.is_empty() {
+            return Some("Select curves to project");
+        }
+        if self.faces.is_empty() {
+            return Some("Select faces to project onto");
+        }
+        None
+    }
+
+    pub fn parents(&self) -> Vec<FeatureId> {
+        let mut out: Vec<FeatureId> = Vec::new();
+        for c in &self.curves {
+            match c {
+                crate::advanced::PathRef::Edge(e) => {
+                    out.extend([FeatureId(e.edge.faces[0].op), FeatureId(e.edge.faces[1].op)])
+                }
+                crate::advanced::PathRef::Curve(f) => out.push(*f),
+                c => out.extend(c.sketch()),
+            }
+        }
+        out.extend(self.faces.iter().map(|f| FeatureId(f.face.op)));
+        out.extend(
+            self.direction
+                .as_ref()
+                .and_then(crate::document::direction_parent),
+        );
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Helix
 
 /// What a helix is built on (the dialog's type).
@@ -298,6 +421,92 @@ impl HelixFeature {
             HelixPath::TurnsAndPitch => (self.revolutions, self.revolutions * self.pitch),
         }
     }
+}
+
+/// A curve feature's curve, where it built: a Helix's, or B-spline pieces (a Projected curve's).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CurveGeom {
+    Helix(HelixGeom),
+    Bspline(Vec<cadrs_kernel::Bspline3>),
+}
+
+impl CurveGeom {
+    /// As the kernel's path curves (a Helix's in rational Bézier pieces).
+    pub fn path(&self) -> Vec<cadrs_kernel::PathCurve> {
+        match self {
+            CurveGeom::Helix(h) => h
+                .beziers()
+                .into_iter()
+                .map(|(poles, weights)| cadrs_kernel::PathCurve::Bezier3 {
+                    poles: poles.iter().map(|p| nalgebra::Point3::from(*p)).collect(),
+                    weights,
+                })
+                .collect(),
+            CurveGeom::Bspline(pieces) => pieces
+                .iter()
+                .cloned()
+                .map(cadrs_kernel::PathCurve::Bspline)
+                .collect(),
+        }
+    }
+
+    /// Points along each piece, for display.
+    pub fn polylines(&self) -> Vec<Vec<[f64; 3]>> {
+        match self {
+            CurveGeom::Helix(h) => vec![h.polyline()],
+            CurveGeom::Bspline(pieces) => pieces
+                .iter()
+                .map(|b| {
+                    let (lo, hi) = (b.knots[b.degree], b.knots[b.knots.len() - b.degree - 1]);
+                    let n = 8 * b.poles.len().max(8);
+                    (0..=n)
+                        .map(|i| bspline_point(b, lo + (hi - lo) * i as f64 / n as f64))
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+
+    /// Points along it, its pieces one after another.
+    pub fn polyline(&self) -> Vec<[f64; 3]> {
+        self.polylines().into_iter().flatten().collect()
+    }
+}
+
+/// A point of a B-spline (de Boor's algorithm).
+fn bspline_point(b: &cadrs_kernel::Bspline3, t: f64) -> [f64; 3] {
+    let p = b.degree;
+    let n = b.poles.len();
+    let k = &b.knots;
+    let t = t.clamp(k[p], k[n]);
+    let mut span = p;
+    while span + 1 < n && k[span + 1] <= t {
+        span += 1;
+    }
+    let w = |i: usize| b.weights.get(i).copied().unwrap_or(1.0);
+    let mut d: Vec<[f64; 4]> = (0..=p)
+        .map(|j| {
+            let i = span - p + j;
+            let q = b.poles[i];
+            [q.x * w(i), q.y * w(i), q.z * w(i), w(i)]
+        })
+        .collect();
+    for r in 1..=p {
+        for j in (r..=p).rev() {
+            let i = span - p + j;
+            let den = k[i + p + 1 - r] - k[i];
+            let a = if den.abs() > 0.0 {
+                (t - k[i]) / den
+            } else {
+                0.0
+            };
+            for c in 0..4 {
+                d[j][c] = (1.0 - a) * d[j - 1][c] + a * d[j][c];
+            }
+        }
+    }
+    let q = d[p];
+    [q[0] / q[3], q[1] / q[3], q[2] / q[3]]
 }
 
 /// A helix in space: it starts at `origin + r0·x` (turned `start_angle` about the axis) and

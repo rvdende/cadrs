@@ -578,7 +578,7 @@ impl Rebuilder {
                 merge_all: x.merge_all,
                 scope: &x.merge_scope,
                 scope_set: false,
-                surface: false,
+                surface: all_surfaces(state, &x.parts),
             };
             match x.pattern_type {
                 PatternType::Part => self.copy_parts(id, &x.parts, &make, &merge, state),
@@ -631,7 +631,8 @@ impl Rebuilder {
             merge_all: x.merge_all,
             scope: &x.merge_scope,
             scope_set: false,
-            surface: false,
+            // Surfaces' copies join them along their common edges.
+            surface: x.mirror_type == PatternType::Part && all_surfaces(state, &x.parts),
         };
         match x.mirror_type {
             PatternType::Part => self.copy_parts(id, &x.parts, &make, &merge, state),
@@ -926,7 +927,7 @@ impl Rebuilder {
             let joined = self.join(id, copies?)?;
             let result = match class {
                 PointClass::Outside => self.cut(id, pid, BoolOp::Subtract, &[&joined], &mut next),
-                PointClass::Inside => self.add(id, &joined, &[pid], &mut next),
+                PointClass::Inside => self.add(id, &joined, &[pid], false, &mut next),
                 PointClass::OnBoundary => Err("The faces don't bound a pocket or a boss".into()),
             };
             self.kernel.release(joined.0);
@@ -1080,7 +1081,7 @@ impl Rebuilder {
                         let placed = if *seed_op == BooleanOp::Remove {
                             self.cut(id, pid, BoolOp::Subtract, &[&joined], &mut next)
                         } else {
-                            self.add(id, &joined, &[pid], &mut next)
+                            self.add(id, &joined, &[pid], false, &mut next)
                         };
                         self.kernel.release(joined.0);
                         self.place_now(&mut next, placed?, &mut changed, &mut spare);
@@ -1129,7 +1130,7 @@ impl Rebuilder {
                     let copies = self.copies_of(id, b, &names, make);
                     self.kernel.release(b);
                     let joined = self.join(id, copies?)?;
-                    let placed = self.add(id, &joined, &[pid], &mut next);
+                    let placed = self.add(id, &joined, &[pid], false, &mut next);
                     self.kernel.release(joined.0);
                     self.place_now(&mut next, placed?, &mut changed, &mut spare);
                 }
@@ -1591,4 +1592,15 @@ fn remap_feature(
         kind,
         suppress_by: None,
     })
+}
+
+/// True when the parts are surfaces (and there are some): their pattern or mirror merges as
+/// surfaces do.
+fn all_surfaces(state: &State, parts: &[PartId]) -> bool {
+    !parts.is_empty()
+        && parts.iter().all(|p| {
+            state
+                .part(*p)
+                .is_some_and(|p| p.part.kind == crate::parts::PartKind::Surface)
+        })
 }

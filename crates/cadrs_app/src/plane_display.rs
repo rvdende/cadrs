@@ -314,28 +314,32 @@ fn draw_curve_features(
         return;
     };
     for f in el.features() {
-        if !matches!(f.kind, cadrs_core::FeatureKind::Helix(_))
-            || el.sketch_visibility(f.id) == Some(false)
+        if !matches!(
+            f.kind,
+            cadrs_core::FeatureKind::Helix(_) | cadrs_core::FeatureKind::ProjectCurve(_)
+        ) || el.sketch_visibility(f.id) == Some(false)
         {
             continue;
         }
         let Some(g) = cache.curves.get(&f.id) else {
             continue;
         };
-        let pts: Vec<Vec3> = g.polyline().into_iter().map(v3).collect();
         let p = Pick::Feature(f.id);
-        if highlight.is_hovered(p) {
-            hover_gizmos.linestrip(pts, theme.highlight);
-        } else if selection.contains(p) {
-            hl_gizmos.linestrip(pts, theme.selection_3d);
-        } else {
-            gizmos.linestrip(
-                pts,
-                cadrs_ui::by_scheme(
-                    Color::srgb_u8(0x30, 0x30, 0x30),
-                    Color::srgb_u8(0xb8, 0xbc, 0xc2),
-                ),
-            );
+        for line in g.polylines() {
+            let pts: Vec<Vec3> = line.into_iter().map(v3).collect();
+            if highlight.is_hovered(p) {
+                hover_gizmos.linestrip(pts, theme.highlight);
+            } else if selection.contains(p) {
+                hl_gizmos.linestrip(pts, theme.selection_3d);
+            } else {
+                gizmos.linestrip(
+                    pts,
+                    cadrs_ui::by_scheme(
+                        Color::srgb_u8(0x30, 0x30, 0x30),
+                        Color::srgb_u8(0xb8, 0xbc, 0xc2),
+                    ),
+                );
+            }
         }
     }
 }

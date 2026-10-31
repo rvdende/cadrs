@@ -3,7 +3,9 @@
 //! feature of the same name and adds it through the command layer.
 
 use crate::ids::stable_u128;
-use cadrs_core::advanced::{LoftFeature, LoftProfile, SplitFeature, SplitToolRef, SplitType};
+use cadrs_core::advanced::{
+    LoftCondition, LoftFeature, LoftProfile, PathRef, SplitFeature, SplitToolRef, SplitType,
+};
 use cadrs_core::applied::{ChamferFeature, ChamferType, EdgeOrFace, FilletFeature};
 use cadrs_core::command::CommandError;
 use cadrs_core::commands::{AddFeature, RenameFeature};
@@ -278,7 +280,7 @@ impl PartStudio<'_> {
     }
 
     /// A sketch curve a query names directly (a sketch line picked as an axis or direction).
-    fn sketch_curve(&self, q: &Q) -> Option<(FeatureId, CurveId)> {
+    pub(crate) fn sketch_curve(&self, q: &Q) -> Option<(FeatureId, CurveId)> {
         if q.get("queryType")?.as_str()? != "SKETCH_ENTITY" {
             return None;
         }
@@ -650,10 +652,14 @@ impl PartStudio<'_> {
         fid: &str,
         fr: &mut FeatureReport,
     ) -> Result<(), CommandError> {
+        if Self::text(f, "splitType") == "FACE" {
+            return self.split_faces(f, fid, fr);
+        }
         if Self::text(f, "splitType") != "PART" {
-            return Err(CommandError::Invalid(
-                "face splits are not imported yet".into(),
-            ));
+            return Err(CommandError::Invalid(format!(
+                "{} splits are not imported yet",
+                Self::text(f, "splitType").to_lowercase()
+            )));
         }
         let mut lost = 0;
         let parts = self.parts_param(f, "targets", &mut lost);
@@ -683,6 +689,75 @@ impl PartStudio<'_> {
             trim: Self::flag(f, "useTrimmed"),
             keep_both: Self::flag(f, "keepBothSides"),
             flip: !Self::flag(f, "keepFront"),
+            ..SplitFeature::default()
+        };
+        self.add(f, fid, "Split", FeatureKind::Split(x), fr)
+    }
+
+    /// A Split of faces (Onshape's Face type) by a curve feature's curve, a plane or a face.
+    fn split_faces(
+        &mut self,
+        f: &Value,
+        fid: &str,
+        fr: &mut FeatureReport,
+    ) -> Result<(), CommandError> {
+        let mut lost = 0;
+        let mut faces = Vec::new();
+        for p in refs::picks(param(f, "faceTargets")) {
+            match p {
+                Pick::Query(q) => {
+                    let found = self.faces_of(&q);
+                    if found.is_empty() {
+                        lost += 1;
+                    }
+                    for face in found {
+                        if !faces.contains(&face) {
+                            faces.push(face);
+                        }
+                    }
+                }
+                _ => lost += 1,
+            }
+        }
+        if faces.is_empty() {
+            return Err(CommandError::Invalid(
+                "its faces could not be translated".into(),
+            ));
+        }
+        let mut tool = None;
+        for p in refs::picks(param(f, "faceTools")) {
+            if let Some(pl) = self.plane_ref(&p) {
+                tool = Some(SplitToolRef::Plane(pl));
+                break;
+            }
+            let Pick::Query(q) = p else { continue };
+            // A curve feature's body (a Projected curve).
+            if q.get("entityType").and_then(Q::as_str) == Some("BODY")
+                && let Some(op) = q.get("operationId").and_then(Q::as_str)
+                && let Some(id) = self.features.get(op_feature(op))
+            {
+                tool = Some(SplitToolRef::Curve(*id));
+                break;
+            }
+            if let Some(face) = self.face_of(&q) {
+                tool = Some(SplitToolRef::Face(face));
+                break;
+            }
+        }
+        let tool =
+            tool.ok_or_else(|| CommandError::Invalid("its tool could not be translated".into()))?;
+        if Self::text(f, "projectionType") != "NORMAL_TO_TARGET"
+            && matches!(tool, SplitToolRef::Curve(_))
+        {
+            fr.notes
+                .push("the curve split along its own projection direction".into());
+        }
+        Self::lost_note(fr, lost, "face selections");
+        let x = SplitFeature {
+            tool: Some(tool),
+            split_type: SplitType::Face,
+            faces,
+            keep_tools: Self::flag(f, "keepToolSurfaces"),
             ..SplitFeature::default()
         };
         self.add(f, fid, "Split", FeatureKind::Split(x), fr)
@@ -1107,21 +1182,70 @@ impl PartStudio<'_> {
         } else {
             BodyType::Solid
         };
-        x.op = if surface {
-            BooleanOp::New
+        if surface {
+            // A surface's Add joins it to the surfaces it meets edge to edge.
+            x.op = match Self::text(f, "surfaceOperationType").as_str() {
+                "ADD" => BooleanOp::Add,
+                _ => BooleanOp::New,
+            };
         } else {
-            op_of(&Self::text(f, "operationType"))
-        };
+            x.op = op_of(&Self::text(f, "operationType"));
+        }
         let items: Vec<Value> = param(f, "sheetProfilesArray")
             .and_then(|p| p["items"].as_array())
             .cloned()
             .unwrap_or_default();
-        if param(f, "wireProfilesArray")
+        let wires: Vec<Value> = param(f, "wireProfilesArray")
             .and_then(|p| p["items"].as_array())
-            .is_some_and(|a| !a.is_empty())
-        {
+            .cloned()
+            .unwrap_or_default();
+        let mut lost = 0;
+        if surface && !wires.is_empty() {
+            // Curves (or points, first and last).
+            for item in &wires {
+                let picks = refs::picks(param(item, "wireProfileEntities"));
+                if let [Pick::Query(q)] = &picks[..]
+                    && q.get("entityType").and_then(Q::as_str) == Some("VERTEX")
+                {
+                    let parts = self.parts();
+                    let v = self.model(&parts).vertex(q).ok_or_else(|| {
+                        CommandError::Invalid("a point profile could not be translated".into())
+                    })?;
+                    x.profiles.push(LoftProfile::Vertex(v));
+                    continue;
+                }
+                let curves = self.curve_refs(picks, &mut lost);
+                if curves.is_empty() {
+                    return Err(CommandError::Invalid(
+                        "a curve profile could not be translated".into(),
+                    ));
+                }
+                x.profiles.push(LoftProfile::Wire(curves));
+            }
+            if param(f, "addGuides").and_then(|p| p["value"].as_bool()) != Some(false) {
+                for item in param(f, "guidesArray")
+                    .and_then(|p| p["items"].as_array())
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let curves =
+                        self.curve_refs(refs::picks(param(&item, "guideEntities")), &mut lost);
+                    if curves.is_empty() {
+                        return Err(CommandError::Invalid(
+                            "a guide could not be translated".into(),
+                        ));
+                    }
+                    if Self::text(&item, "guideDerivativeType") != "DEFAULT"
+                        && !Self::text(&item, "guideDerivativeType").is_empty()
+                    {
+                        fr.notes.push("guide tangency not imported".into());
+                    }
+                    x.guides.push(curves);
+                }
+            }
+        } else if !wires.is_empty() {
             return Err(CommandError::Invalid(
-                "wire (point or curve) profiles are not imported yet".into(),
+                "wire (point or curve) profiles of a solid loft are not imported yet".into(),
             ));
         }
         for item in &items {
@@ -1150,30 +1274,130 @@ impl PartStudio<'_> {
                     regions: regions.into_iter().map(|(_, r)| r).collect(),
                 });
             }
-            x.profiles.push(profile.ok_or_else(|| {
-                CommandError::Invalid("a profile could not be translated".into())
-            })?);
+            if wires.is_empty() || profile.is_some() {
+                x.profiles.push(profile.ok_or_else(|| {
+                    CommandError::Invalid("a profile could not be translated".into())
+                })?);
+            }
         }
         if x.profiles.len() < 2 {
             return Err(CommandError::Invalid("fewer than two profiles".into()));
         }
-        if Self::text(f, "startCondition") != "DEFAULT"
-            || Self::text(f, "endCondition") != "DEFAULT"
-        {
-            fr.notes.push("end conditions not imported".into());
+        // End conditions (Match tangent of a curve profile: to the faces picked along it).
+        for (end, key) in [(0, "start"), (1, "end")] {
+            let condition = match Self::text(f, &format!("{key}Condition")).as_str() {
+                "" | "DEFAULT" => LoftCondition::None,
+                "NORMAL_TO_PROFILE" => LoftCondition::NormalToProfile,
+                "TANGENT_TO_PROFILE" => LoftCondition::TangentToProfile,
+                "MATCH_TANGENT" => LoftCondition::MatchTangent,
+                "MATCH_CURVATURE" => LoftCondition::MatchCurvature,
+                other => {
+                    fr.notes
+                        .push(format!("{key} condition {other} not imported"));
+                    LoftCondition::None
+                }
+            };
+            let (m, m_expr) = self
+                .quantity(f, &format!("{key}Magnitude"), Quantity::Count)
+                .unwrap_or((1.0, "1".into()));
+            let mut faces = Vec::new();
+            let cap = |s: &str| format!("{}{}", s[..1].to_uppercase(), &s[1..]);
+            for p in refs::picks(param(f, &format!("adjacentFaces{}", cap(key)))) {
+                match p {
+                    Pick::Query(q) => {
+                        let found = self.faces_of(&q);
+                        if found.is_empty() {
+                            if std::env::var_os("CADRS_ONSHAPE_DEBUG").is_some() {
+                                eprintln!("LOST {} | {}", f["name"], self.describe(&q));
+                            }
+                            lost += 1;
+                        }
+                        for face in found {
+                            if !faces.contains(&face) {
+                                faces.push(face);
+                            }
+                        }
+                    }
+                    _ => lost += 1,
+                }
+            }
+            if end == 0 {
+                x.start = condition;
+                (x.start_magnitude, x.start_magnitude_expr) = (m, m_expr);
+                x.start_faces = faces;
+            } else {
+                x.end = condition;
+                (x.end_magnitude, x.end_magnitude_expr) = (m, m_expr);
+                x.end_faces = faces;
+            }
         }
-        if param(f, "guidesArray")
-            .and_then(|p| p["items"].as_array())
-            .is_some_and(|a| !a.is_empty())
+        if !x.through_curves()
+            && (x.start == LoftCondition::MatchTangent || x.end == LoftCondition::MatchTangent)
+        {
+            fr.notes
+                .push("match tangent of face profiles not imported".into());
+            if x.start == LoftCondition::MatchTangent {
+                x.start = LoftCondition::None;
+            }
+            if x.end == LoftCondition::MatchTangent {
+                x.end = LoftCondition::None;
+            }
+        }
+        if !x.through_curves()
+            && param(f, "guidesArray")
+                .and_then(|p| p["items"].as_array())
+                .is_some_and(|a| !a.is_empty())
         {
             fr.notes.push("guides not imported".into());
         }
         if x.op != BooleanOp::New {
-            let mut lost = 0;
-            x.merge_scope = self.parts_param(f, "booleanScope", &mut lost);
-            x.merge_all = Self::flag(f, "defaultScope");
+            if surface {
+                x.merge_scope = self.parts_param(f, "booleanSurfaceScope", &mut lost);
+                x.merge_all = Self::flag(f, "defaultSurfaceScope") || x.merge_scope.is_empty();
+            } else {
+                x.merge_scope = self.parts_param(f, "booleanScope", &mut lost);
+                x.merge_all = Self::flag(f, "defaultScope");
+            }
         }
+        Self::lost_note(fr, lost, "selections");
         self.add(f, fid, "Loft", FeatureKind::Loft(x), fr)
+    }
+
+    /// The curves a parameter picks, as path references: sketch curves, part edges, or a curve
+    /// feature's curve (a Helix, a Projected curve).
+    pub(crate) fn curve_refs(&mut self, picks: Vec<Pick>, lost: &mut usize) -> Vec<PathRef> {
+        let parts = self.parts();
+        let mut out: Vec<PathRef> = Vec::new();
+        let push = |out: &mut Vec<PathRef>, p: PathRef| {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        };
+        for p in picks {
+            let Pick::Query(q) = p else {
+                *lost += 1;
+                continue;
+            };
+            if q.get("entityType").and_then(Q::as_str) == Some("BODY")
+                && let Some(op) = q.get("operationId").and_then(Q::as_str)
+                && let Some(id) = self.features.get(op_feature(op))
+            {
+                push(&mut out, PathRef::Curve(*id));
+                continue;
+            }
+            if let Some((sketch, curve)) = self.sketch_curve(&q) {
+                push(&mut out, PathRef::SketchCurve { sketch, curve });
+                continue;
+            }
+            let found = self.model(&parts).edges(&q);
+            if found.is_empty() {
+                *lost += 1;
+            }
+            for e in found {
+                push(&mut out, PathRef::Edge(e));
+            }
+        }
+        out
     }
 }
 

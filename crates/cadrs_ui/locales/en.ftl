@@ -2198,6 +2198,7 @@ model-plane-type-fit = Fit
 model-plane-type-tangent = Tangent
 model-sweep-keep-orientation = Keep profile orientation
 model-sweep-lock-direction = Lock profile direction
+model-sweep-lock-faces = Lock profile faces
 model-loft-normal-to-profile = Normal to profile
 model-loft-tangent-to-profile = Tangent to profile
 model-loft-match-tangent = Match tangent
