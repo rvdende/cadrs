@@ -7,6 +7,8 @@
 //!   top (three small squares), a separator, then the value row: a grey `›` and the value,
 //!   right-aligned, **fully selected** (blue highlight) with keyboard focus.
 //! - **Enter** triggers [`DimEditCommit`] with the text; **Esc** [`DimEditCancel`]. Both bubble.
+//!   The mouse wheel over it steps the value by 1 a notch, 0.1 with Ctrl (issue #162), each step
+//!   offered to the owner as a [`DimEditPreview`] (the sketch follows it live); Enter keeps it.
 //!   The owner validates the text: for a value it cannot use it sets [`DimEditBox::error`], which
 //!   turns the border and text red and shows the message under the box. Typing clears it.
 //!
@@ -38,6 +40,7 @@ pub struct DimEditPlugin;
 impl Plugin for DimEditPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_key)
+            .add_observer(on_wheel)
             .add_observer(on_button_click)
             .add_systems(PostUpdate, style_boxes.before(bevy::ui::UiSystems::Prepare));
     }
@@ -47,6 +50,16 @@ impl Plugin for DimEditPlugin {
 #[derive(EntityEvent, Clone, Debug)]
 #[entity_event(propagate, auto_propagate)]
 pub struct DimEditCommit {
+    pub entity: Entity,
+    pub value: String,
+}
+
+/// The wheel stepped a dimension editor's value (issue #162): `value` is what it shows now. The
+/// owner may show it at once; Enter ([`DimEditCommit`]) keeps it and Esc ([`DimEditCancel`])
+/// takes it back. Bubbles like [`DimEditCommit`].
+#[derive(EntityEvent, Clone, Debug)]
+#[entity_event(propagate, auto_propagate)]
+pub struct DimEditPreview {
     pub entity: Entity,
     pub value: String,
 }
@@ -312,6 +325,38 @@ impl DimEdit {
 pub enum DimEditButton {
     Accept,
     Cancel,
+}
+
+/// The mouse wheel over the box (its value focused) steps the value (issue #162,
+/// [`crate::dialog_fields::step_number_text`]) and offers it as a [`DimEditPreview`]; an
+/// expression isn't stepped.
+fn on_wheel(
+    mut ev: On<PointerScroll>,
+    q_box: Query<(), With<DimEditBox>>,
+    mut q_field: Query<(Entity, &mut EditableText), With<DimEditField>>,
+    focus: Res<InputFocus>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut rest: Local<(Option<Entity>, f32)>,
+    mut commands: Commands,
+) {
+    if !(q_box.contains(ev.entity) || q_field.contains(ev.entity)) {
+        return;
+    }
+    let Some((field, mut text)) = q_field.iter_mut().find(|(e, _)| focus.get() == Some(*e)) else {
+        return;
+    };
+    ev.propagate(false);
+    let Some(delta) = crate::dialog_fields::wheel_step(&ev, &keys, field, &mut rest) else {
+        return;
+    };
+    if let Some(next) = crate::dialog_fields::step_number_text(&text.value().to_string(), delta) {
+        text.editor_mut().set_text(&next);
+        text.queue_edit(TextEdit::SelectAll);
+        commands.trigger(DimEditPreview {
+            entity: field,
+            value: next,
+        });
+    }
 }
 
 fn on_button_click(

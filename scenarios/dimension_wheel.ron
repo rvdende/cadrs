@@ -1,0 +1,36 @@
+// Issue #162: the mouse wheel over a sketch dimension's value box steps it, for Enter to apply.
+// 01 the Dimension tool on the rectangle's bottom edge, 40 typed into its box.
+// 02 the wheel 2 notches up: 42 (all selected, so typing still replaces it).
+// 03 Enter: the edge is 42 mm (the first dimension scales the sketch with it).
+Scenario(
+    start: Some("document"),
+    steps: [
+        WaitFor("document-shell"),
+        Click(ui("sketch")),
+        WaitFor("sketch-dialog"),
+        Click(ui("feature-top")),
+        Key("N"),
+        Key("G"),
+        ClickWorld(0, 0),
+        ClickWorld(40, 25),
+        Key("Escape"),
+        Key("Escape"),
+        Key("D"),
+        Click(world(15, 0)),
+        MoveWorld(15, -10),
+        Wait(2),
+        Click(world(15, -10)),
+        // The drawn width (about 40 mm) typed over as 40.
+        Type("40"),
+        ExpectText("dimension-edit-field", "40"),
+        Screenshot("01-dimension-40"),
+        Scroll(ui("dimension-edit-field"), 2),
+        Wait(2),
+        ExpectText("dimension-edit-field", "42"),
+        Screenshot("02-wheel-42"),
+        Key("Enter"),
+        MoveTo(1400, 850),
+        Wait(3),
+        Screenshot("03-applied-42"),
+    ],
+)

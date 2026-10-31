@@ -56,6 +56,8 @@ impl Plugin for ExportDialogPlugin {
                 validate_tolerances,
                 on_folder_picked,
                 finish_exports,
+                #[cfg(not(target_arch = "wasm32"))]
+                finish_sends,
             )
                 .run_if(in_state(AppState::Document)),
         )
@@ -1143,6 +1145,125 @@ fn start_export(world: &mut World) {
                 DespawnOnExit(AppState::Document),
             ));
         }
+    }
+}
+
+/// Parts on their way to a slicer (issue #176): their mesh being made, and where it goes.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Component)]
+struct RunningSend {
+    pending: PendingJob<Result<Vec<ExportFile>, String>>,
+    slicer: cadrs_core::slicer::Slicer,
+    name: String,
+}
+
+/// Sends `parts` of the active Part Studio (all of them if empty) to `slicer`: a binary STL in
+/// millimetres each, made as an export is ([`finish_sends`] opens them in the slicer, which
+/// is then remembered as the last one used). Like an export, it needs the Export right on a
+/// shared document.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn send_to_slicer(
+    world: &mut World,
+    parts: Vec<PartId>,
+    slicer: cadrs_core::slicer::Slicer,
+) {
+    if crate::collab::lacks(world, |r| r.export, "export") {
+        return;
+    }
+    let items = match items(world, &ExportSource::Parts(parts)) {
+        Ok(i) if !i.is_empty() => i,
+        Ok(_) => {
+            return toast(world, Notification::warning(tr("io-slicer-nothing")));
+        }
+        Err(why) => {
+            return toast(
+                world,
+                Notification::warning(tr_with("io-slicer-cannot", &[("error", why.as_str())])),
+            );
+        }
+    };
+    let name = match items.as_slice() {
+        [one] => one.name.clone(),
+        _ => world
+            .get_resource::<ActiveDocument>()
+            .map(|d| d.doc.name.clone())
+            .unwrap_or_else(|| "Parts".into()),
+    };
+    let mut req = ExportRequest::new(ModelFormat::Stl { binary: true }, name.clone(), items);
+    // A file a part: the slicer gets them as separate objects.
+    req.individual = true;
+    let pending = cadrs_core::rebuild::exchange::export_files(req);
+    world.spawn((
+        Name::new("running-send"),
+        RunningSend {
+            pending,
+            slicer,
+            name,
+        },
+        DespawnOnExit(AppState::Document),
+    ));
+}
+
+/// Writes a finished send's meshes into a new folder of cadrs's own and opens them in its
+/// slicer.
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_sends(q: Query<(Entity, &RunningSend)>, theme: Res<Theme>, mut commands: Commands) {
+    for (e, run) in &q {
+        let Some(result) = run.pending.poll() else {
+            continue;
+        };
+        commands.entity(e).despawn();
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let sent = result
+            .unwrap_or_else(|| Err(tr("io-kernel-stopped")))
+            .and_then(|files| {
+                if files.is_empty() {
+                    return Err(tr("io-slicer-no-mesh"));
+                }
+                let base = cadrs_core::slicer::cache_dir();
+                let dir = cadrs_core::slicer::send_dir(&base, now)
+                    .map_err(|e| format!("{}: {e}", base.display()))?;
+                let paths = files
+                    .iter()
+                    .map(|f| {
+                        let name = f.part.as_deref().unwrap_or(&run.name);
+                        cadrs_core::slicer::write_mesh(&dir, name, &f.bytes)
+                            .map_err(|e| format!("{}: {e}", dir.display()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                run.slicer.open(&paths).map_err(|e| {
+                    tr_with(
+                        "io-slicer-cannot-start",
+                        &[
+                            ("slicer", run.slicer.name.as_str()),
+                            ("error", &e.to_string()),
+                        ],
+                    )
+                })?;
+                info!("sent {} to {}", dir.display(), run.slicer.name);
+                Ok(())
+            });
+        let note = match sent {
+            Ok(()) => {
+                let id = run.slicer.id;
+                commands.queue(move |world: &mut World| {
+                    crate::preferences_ui::set_last_slicer(world, id)
+                });
+                Notification::info(tr_with(
+                    "io-slicer-sent",
+                    &[
+                        ("name", run.name.as_str()),
+                        ("slicer", run.slicer.name.as_str()),
+                    ],
+                ))
+            }
+            Err(why) => {
+                Notification::warning(tr_with("io-slicer-failed", &[("error", why.as_str())]))
+            }
+        };
+        show_notification(&mut commands, &theme, note.name("slicer-toast"));
     }
 }
 

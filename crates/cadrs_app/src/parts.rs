@@ -474,6 +474,21 @@ struct PendingRebuild {
     /// frame (every feature's parameters hashed: milliseconds for a long list), so set once
     /// that is done.
     keys: std::sync::Arc<std::sync::OnceLock<Vec<u64>>>,
+    /// When it was asked for (`CADRS_REBUILD_TIMES`).
+    requested: web_time::Instant,
+}
+
+/// Logs a rebuild's times with `CADRS_REBUILD_TIMES` ([`crate::debug_tools::rebuild_times`]).
+fn log_rebuild(what: &str, requested: web_time::Instant, build: &cadrs_core::rebuild::Build) {
+    if crate::debug_tools::rebuild_times() {
+        info!(
+            "rebuild {what}: {:.1} ms from the request, kernel {:.1} ms, {} computed{}",
+            requested.elapsed().as_secs_f64() * 1000.0,
+            build.elapsed.as_secs_f64() * 1000.0,
+            build.computed,
+            if build.stopped { ", stopped" } else { "" }
+        );
+    }
 }
 
 /// [`PendingRebuild::keys`] of `features`, worked out on a thread of their own (in a page, at
@@ -1516,6 +1531,7 @@ fn update_part_cache(
             && let Some(p) = &mut cache.pending
             && let Some(build) = p.rebuild.poll()
         {
+            log_rebuild("taken", p.requested, &build);
             let same_element = p.element == el.id;
             cache.pending = None;
             cache.superseded = None;
@@ -1536,6 +1552,7 @@ fn update_part_cache(
             && let Some(p) = &mut cache.superseded
             && let Some(build) = p.rebuild.poll()
         {
+            log_rebuild("superseded, taken", p.requested, &build);
             // An older rebuild finished first: show it while the newer one runs (not one
             // stopped early for it: that has only the parts as far as it got).
             let same_element = p.element == el.id;
@@ -1569,6 +1586,35 @@ fn update_part_cache(
         el.active_features()
     };
     let effective = effective_features(&built, &over);
+    // What the rebuilds asked for before are shown now if they are done (the older first): a
+    // drag asks for one every frame, and they were only taken in a frame that asked for
+    // nothing new, so the preview stood still until the pointer paused.
+    for superseded in [true, false] {
+        let slot = if superseded {
+            &mut cache.superseded
+        } else {
+            &mut cache.pending
+        };
+        let Some(p) = slot.as_mut().filter(|p| p.element == el.id) else {
+            continue;
+        };
+        let requested = p.requested;
+        let Some(build) = p.rebuild.poll() else {
+            continue;
+        };
+        *slot = None;
+        log_rebuild("taken before the next", requested, &build);
+        // (One stopped early has only the parts as far as it got.)
+        if !build.stopped {
+            log.0.push((features.len(), build.computed, build.elapsed));
+            cache.apply(
+                &build,
+                stage_feature(&features, &over),
+                over.staged.is_some(),
+                over.over_result,
+            );
+        }
+    }
     // Rebuild on the kernel thread; wait a little so quick rebuilds show in this frame.
     // Restored from the session snapshot of these features when the session doesn't have them
     // (a document opened again), and snapshotted afterwards.
@@ -1584,6 +1630,7 @@ fn update_part_cache(
     }
     // (One copy of the list, for the rebuild and the keys of its rows.)
     let shared: std::sync::Arc<[Feature]> = effective.as_slice().into();
+    let requested = web_time::Instant::now();
     let mut rebuild = cadrs_core::rebuild::request_persisted_shared(shared.clone());
     // A live drag doesn't hold the frame for its rebuild: the preview follows when it's done.
     let dragging = over.extrude.is_some() || over.revolve.is_some() || over.applied.is_some();
@@ -1594,6 +1641,7 @@ fn update_part_cache(
     };
     match rebuild.wait(wait) {
         Some(build) => {
+            log_rebuild("in the frame", requested, &build);
             log.0.push((features.len(), build.computed, build.elapsed));
             if cache.key.as_ref().is_some_and(|(id, ..)| *id != el.id) {
                 cache.parts.clear();
@@ -1625,6 +1673,7 @@ fn update_part_cache(
                     .map(|f| (f.id, f.is_part_feature()))
                     .collect(),
                 keys: rebuild_keys(shared),
+                requested,
             });
         }
     }
@@ -4399,5 +4448,108 @@ mod tests {
         assert!(close(top, [241, 180, 70]), "top {top:?}");
         let side = srgb(face_color_of(&v, -Vec3::Y, false, true));
         assert!(close(side, [190, 142, 59]), "side {side:?}");
+    }
+    /// A drag asks for a rebuild every frame: what the last one made shows before the next is
+    /// asked for, so the preview follows the drag (it stood still until the pointer paused).
+    #[test]
+    fn a_drag_shows_its_rebuilds_while_it_goes_on() {
+        use cadrs_core::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+        use cadrs_core::document::RegionRef;
+        use cadrs_core::{Document, ExtrudeFeature};
+        // A 40 × 20 box on Top, 10 mm high.
+        let mut doc = ActiveDocument::new(Document::new("Drag"));
+        let el = doc.doc.elements[0].id;
+        let (sk, ex) = (FeatureId::new(), FeatureId::new());
+        doc.execute(&AddSketch {
+            element: el,
+            feature: sk,
+            plane: Some(PlaneRef::Top),
+        })
+        .unwrap();
+        doc.execute(&EditSketch {
+            element: el,
+            feature: sk,
+            op: cadrs_sketch::SketchOp::AddPolyline {
+                points: vec![
+                    cadrs_sketch::Vec2::new(0.0, 0.0),
+                    cadrs_sketch::Vec2::new(40.0, 0.0),
+                    cadrs_sketch::Vec2::new(40.0, 20.0),
+                    cadrs_sketch::Vec2::new(0.0, 20.0),
+                ],
+                closed: true,
+                construction: false,
+                label: "Add rectangle",
+            },
+        })
+        .unwrap();
+        let g = &doc
+            .doc
+            .element(el)
+            .unwrap()
+            .feature(sk)
+            .unwrap()
+            .sketch()
+            .unwrap()
+            .geometry;
+        let regions: Vec<RegionRef> = cadrs_sketch::region::regions(g)
+            .iter()
+            .map(|r| RegionRef::new(sk, r))
+            .collect();
+        let box_at = |depth: f64| ExtrudeFeature {
+            regions: regions.clone(),
+            depth,
+            depth_expr: format!("{depth} mm"),
+            ..ExtrudeFeature::default()
+        };
+        let ten = box_at(10.0);
+        doc.execute(&AddExtrude {
+            element: el,
+            feature: ex,
+            extrude: ExtrudeFeature::default(),
+        })
+        .unwrap();
+        doc.execute(&SetExtrude {
+            element: el,
+            feature: ex,
+            extrude: ten,
+            label: "Depth".into(),
+        })
+        .unwrap();
+        let mut app = App::new();
+        app.insert_resource(doc)
+            .init_resource::<PartOverride>()
+            .init_resource::<RebuildBudget>()
+            .init_resource::<PartCache>()
+            .init_resource::<crate::assembly::AssemblyParts>()
+            .init_resource::<crate::scale_ui::RebuildLog>()
+            .add_systems(Update, update_part_cache);
+        let height = |app: &App| {
+            app.world()
+                .resource::<PartCache>()
+                .parts
+                .first()
+                .and_then(|p| p.solid.bounds())
+                .map(|(lo, hi)| hi[2] - lo[2])
+        };
+        let wait = || std::thread::sleep(std::time::Duration::from_millis(20));
+        for _ in 0..250 {
+            app.update();
+            if height(&app).is_some() {
+                break;
+            }
+            wait();
+        }
+        assert!((height(&app).unwrap() - 10.0).abs() < 1e-6);
+        // The arrow dragged up a millimetre a frame: every frame asks for a new depth.
+        let mut seen = Vec::new();
+        for i in 1..=30 {
+            app.world_mut().resource_mut::<PartOverride>().extrude =
+                Some((ex, box_at(10.0 + i as f64)));
+            app.update();
+            seen.extend(height(&app));
+            wait();
+        }
+        let tallest = seen.iter().copied().fold(0.0, f64::max);
+        assert!(tallest > 20.0, "the preview stood still: {seen:?}");
     }
 }

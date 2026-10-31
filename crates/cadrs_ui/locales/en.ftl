@@ -1397,6 +1397,9 @@ view-part-copy-named = Copy { $name }
 view-part-create-drawing-named = Create Drawing of { $name }…
 view-part-flat-drawing = Create drawing of flat pattern…
 view-part-export = Export…
+# A part's menu: opens the part in a 3D-printing slicer (a submenu of the slicers found).
+view-part-send-to-slicer = Send to slicer
+view-part-no-slicer-found = No slicer found
 view-part-where-used = Where used…
 view-part-create-task = Create task…
 # Shows only this part (the others hidden).
@@ -4919,6 +4922,17 @@ io-native-export-missing = Enter a file name and destination folder
 io-exported-path = Exported { $path }
 # { $error } is why it failed.
 io-export-failed = Export failed: { $error }
+io-slicer-nothing = Nothing to send to the slicer
+# { $error } is why (an English technical message).
+io-slicer-cannot = Can't send to the slicer: { $error }
+# Inside "Send to slicer failed: …" (lowercase, a reason).
+io-slicer-no-mesh = no mesh was made
+# Inside "Send to slicer failed: …" (lowercase); { $slicer } is a slicer's name (PrusaSlicer…), { $error } why.
+io-slicer-cannot-start = cannot start { $slicer }: { $error }
+# { $name } is the part's or document's name, { $slicer } the slicer's (PrusaSlicer…).
+io-slicer-sent = Sent { $name } to { $slicer }
+# { $error } is why it failed.
+io-slicer-failed = Send to slicer failed: { $error }
 # { $name } is the name of what was imported (a document or a file).
 io-imported-name = Imported { $name }
 # { $error } is why it failed.
