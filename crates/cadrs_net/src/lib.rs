@@ -10,12 +10,15 @@
 //!   owner over [`transfer`], and proposes their edits the same way. The owner's app decides
 //!   through [`Requests`], and its numbered edits ([`Sequenced`]) reach everyone over
 //!   the document's room ([`session`]).
+//! - Public documents ([`public`]): a room every online cadrs is in, signed listings of the
+//!   documents their owners published, and a protocol any peer answers with what it heard.
 //! - Only bevy_iroh's transport, rooms and typed messages are used; its entity replication of
 //!   `Transform` is off and its voice and video features are not built.
 
 use std::path::PathBuf;
 
 pub mod link;
+pub mod public;
 pub mod session;
 pub mod transfer;
 
@@ -62,6 +65,14 @@ impl Plugin for NetPlugin {
             .clone()
             .map_or(Identity::Ephemeral, Identity::File);
         let (handler, requests) = transfer::handler();
+        // The public directory: the app may have made it already (to show what was heard
+        // before going online).
+        let public = app
+            .world()
+            .get_resource::<public::Shared>()
+            .cloned()
+            .unwrap_or_default();
+        let public_handler = public::handler(public.clone());
         let mut iroh = IrohPlugin::default()
             .with_identity(identity)
             .with_relays(self.relays.clone())
@@ -70,16 +81,21 @@ impl Plugin for NetPlugin {
             // A handler for each start: they all feed the same `Requests`.
             .with_protocol_factory(transfer::ALPN, move || {
                 Box::new(handler.clone()) as Box<dyn DynProtocolHandler>
+            })
+            .with_protocol_factory(public::ALPN, move || {
+                Box::new(public_handler.clone()) as Box<dyn DynProtocolHandler>
             });
         // Documents travel as their own messages, never as replicated entities.
         iroh.replicate_transform = false;
         app.add_plugins(iroh)
             .insert_resource(requests)
+            .insert_resource(public)
             .insert_resource(CanConnect);
         if let Some(id) = cadrs_id(app.world().get_resource::<Iroh>()) {
             info!("cadrs ID: {id}");
         }
         session::register(app);
+        public::register(app);
     }
 }
 

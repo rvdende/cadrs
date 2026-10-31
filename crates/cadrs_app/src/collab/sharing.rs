@@ -100,7 +100,11 @@ pub fn read(world: &World, id: DocumentId) -> Option<(Document, DocumentMeta)> {
 }
 
 /// Saves `id`'s metadata (the open copy's, or the stored one's).
-fn write_meta(world: &mut World, id: DocumentId, meta: DocumentMeta) -> Result<(), String> {
+pub(super) fn write_meta(
+    world: &mut World,
+    id: DocumentId,
+    meta: DocumentMeta,
+) -> Result<(), String> {
     let store = world.resource::<DocumentStore>().0.clone();
     if let Some(mut d) = world
         .get_resource_mut::<ActiveDocument>()

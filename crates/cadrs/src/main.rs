@@ -12,6 +12,9 @@
 //! [--sketch <name>]` rebuilds a stored
 //! document and reports the features in error or warning, in detail (see [`check`]).
 //!
+//! `cadrs --public-seed [--data-dir <dir>] [--peer <cadrs ID>]…` runs a seed peer for public
+//! documents, with no window (see [`seed`]).
+//!
 //! `cadrs --kernel-process <port> <token>` is the geometry kernel the app starts for itself
 //! (`cadrs_core::rebuild::process`); `CADRS_KERNEL=thread` keeps the kernel in the app instead.
 //!
@@ -42,6 +45,8 @@ mod batch;
 mod check;
 #[cfg(not(target_arch = "wasm32"))]
 mod install;
+#[cfg(not(target_arch = "wasm32"))]
+mod seed;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -68,6 +73,10 @@ Usage:
       Rebuilds a stored document without a window and reports its features in error or warning.
   cadrs --headless --jobs N (--scenarios a,b,... | --all)
       Renders many scenarios, N at a time, each in its own process.
+  cadrs --public-seed [--data-dir <dir>] [--peer <cadrs ID>]...
+      Runs a seed peer for public documents without a window: it stays in the public room and
+      keeps every listing, star and published document, for others to start from. Its data dir
+      defaults to ~/.local/share/cadrs/seed; it prints its cadrs ID.
   cadrs --install
       Installs this build for the current user, with a launcher entry (Linux, macOS, Windows;
       `cargo install-local`).
@@ -134,6 +143,16 @@ fn main() -> AppExit {
             Err(e) => {
                 eprintln!("{e}");
                 AppExit::from_code(1)
+            }
+        };
+    }
+    // `--public-seed`: a seed peer for public documents, no window.
+    if let Some(s) = seed::parse(&args) {
+        return match s {
+            Ok(s) => seed::run(s),
+            Err(e) => {
+                eprintln!("{e}");
+                AppExit::from_code(2)
             }
         };
     }

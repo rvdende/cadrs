@@ -61,6 +61,12 @@ pub struct DocumentMeta {
     /// Set on a document someone else shared with this user: whose it is and how to rejoin it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<crate::collab::SharedInfo>,
+    /// Set while the document is public: the revision last published (Share ▸ Public).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<crate::collab::Published>,
+    /// Set on a fork of a public document: which one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<crate::collab::ForkedFrom>,
 }
 
 impl DocumentMeta {
@@ -88,6 +94,8 @@ impl DocumentMeta {
             workspace: None,
             sharing: None,
             shared: None,
+            published: None,
+            forked_from: None,
         }
     }
 }
@@ -393,7 +401,8 @@ impl Filter {
         let m = &entry.meta;
         let live = m.trashed.is_none();
         match self {
-            Filter::Explore | Filter::Public => false,
+            Filter::Explore => false,
+            Filter::Public => live && m.published.is_some(),
             Filter::SharedWithMe => live && m.shared.is_some(),
             Filter::OwnedByMe => live && m.owned_by == user,
             Filter::RecentlyOpened => live && m.last_opened.is_some(),

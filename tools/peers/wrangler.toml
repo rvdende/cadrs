@@ -1,0 +1,14 @@
+# peers.cadrs.net: the public documents rendezvous (see src/index.js and README.md).
+name = "cadrs-peers"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+routes = [{ pattern = "peers.cadrs.net", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "PEERS"
+class_name = "Peers"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Peers"]
