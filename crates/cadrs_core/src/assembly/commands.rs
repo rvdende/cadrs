@@ -231,6 +231,11 @@ impl Command for MoveInstances {
         if self.poses.is_empty() {
             return Err(CommandError::Invalid("no instances".into()));
         }
+        // A placement that isn't a number never reaches the document (#191: a diverged drag
+        // saved NaN placements).
+        if self.poses.iter().any(|(_, p)| !p.is_finite()) {
+            return Err(CommandError::Invalid("a placement is not a number".into()));
+        }
         // Top-level instances, or parts of subassemblies (the solver's placements).
         super::structure::place(doc, self.element, &self.poses)
     }

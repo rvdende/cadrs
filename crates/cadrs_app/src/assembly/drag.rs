@@ -517,6 +517,11 @@ fn update_drag(
     } else {
         cadrs_core::assembly::drag(&a.model, &a.solids, &[pull]).changed(&a.model)
     };
+    // (A frame whose solve diverged is dropped: the instances stay where the last one left
+    // them, #191.)
+    if changed.iter().any(|(_, p)| !p.is_finite()) {
+        return;
+    }
     for (id, p) in &changed {
         if let Some(i) = a.model.instance_mut(*id) {
             i.pose = *p;

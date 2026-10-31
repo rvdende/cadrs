@@ -197,6 +197,14 @@ impl Pose {
         }
     }
 
+    /// Whether all its numbers are finite (none is NaN or infinite).
+    pub fn is_finite(&self) -> bool {
+        self.translation
+            .iter()
+            .chain(self.rotation.iter().flatten())
+            .all(|x| x.is_finite())
+    }
+
     /// The inverse placement.
     pub fn inverse(&self) -> Pose {
         let rt = self.rotation_matrix().transpose();

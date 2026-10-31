@@ -539,10 +539,15 @@ fn bodies_of(asm: &Assembly) -> (Vec<Body>, HashMap<InstanceId, usize>) {
     let mut of: HashMap<InstanceId, usize> = HashMap::new();
     for (k, inst) in asm.instances.iter().enumerate() {
         let r = find(&mut parent, k);
+        // Placements are taken orthonormal: a rotation a little off it (saved, or composed with
+        // rounding) makes `pose × pose⁻¹` a little off the identity, and handing that back to
+        // the instance squares it, so a drag that continues from each frame's result doubled the
+        // error every frame until the mates broke (#191).
+        let pose = orthonormalize(&inst.pose);
         let b = *root_body.entry(r).or_insert_with(|| {
             bodies.push(Body {
                 members: Vec::new(),
-                pose: inst.pose,
+                pose,
                 ground: false,
                 var: None,
                 mobility: 1.0,
@@ -550,7 +555,12 @@ fn bodies_of(asm: &Assembly) -> (Vec<Body>, HashMap<InstanceId, usize>) {
             bodies.len() - 1
         });
         let body = &mut bodies[b];
-        let rel = inst.pose.then(&body.pose.inverse());
+        // The first member is the body's own placement.
+        let rel = if body.members.is_empty() {
+            Pose::IDENTITY
+        } else {
+            pose.then(&body.pose.inverse())
+        };
         body.members.push((inst.id, rel));
         body.ground |= inst.fixed;
         of.insert(inst.id, b);
@@ -1060,7 +1070,7 @@ impl Problem {
                     if b.ground || b.var.is_none() {
                         i.pose
                     } else {
-                        rel.then(&b.pose)
+                        orthonormalize(&rel.then(&b.pose))
                     },
                 ))
             })
@@ -1134,6 +1144,10 @@ pub struct Pull {
 /// How much more a turn weighs than a move while dragging (so a free instance slides).
 const DRAG_TURN_WEIGHT: f64 = 10.0;
 
+/// How far off (mm) the mates may be after a drag step (a drag's result counts as converged
+/// below it).
+const DRAG_HELD: f64 = 1e-6;
+
 /// Moves the assembly toward `pulls` as far as the mates and limits allow (see the module doc):
 /// the placements after the drag. Starts from the assembly's placements (which should satisfy
 /// the mates: a drag continues from the last frame's result).
@@ -1189,6 +1203,12 @@ pub fn drag(
             e
         };
         let norm = |e: &[f64]| e.iter().map(|x| x * x).sum::<f64>().sqrt();
+        // How far the mates are off as the drag starts (0 when they hold): a step must leave
+        // them no further off.
+        let held = p
+            .residual_vec()
+            .iter()
+            .fold(DRAG_HELD, |m, x| m.max(x.abs()));
         for _ in 0..40 {
             its += 1;
             let e = error(&p);
@@ -1261,8 +1281,11 @@ pub fn drag(
             for _ in 0..6 {
                 p.apply(&dx, &pivots);
                 p.cons.truncate(base);
-                p.solve_with_limits();
-                if norm(&error(&p)) < e0 - 1e-9 {
+                // A step counts only when projecting back onto the mates worked: near a chain's
+                // singular poses the projection can fail, and a step that leaves the mates broken
+                // is where every later frame starts from, until the assembly flies apart (#191).
+                let (_, res, _) = p.solve_with_limits();
+                if res <= held && norm(&error(&p)) < e0 - 1e-9 {
                     accepted = true;
                     break;
                 }
@@ -1280,7 +1303,7 @@ pub fn drag(
     let res = r.iter().fold(0.0f64, |m, x| m.max(x.abs()));
     Solution {
         poses: p.poses(asm),
-        converged: res < 1e-6,
+        converged: res < DRAG_HELD,
         residual: res,
         iterations: its,
     }
