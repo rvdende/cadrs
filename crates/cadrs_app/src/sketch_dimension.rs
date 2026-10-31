@@ -32,6 +32,7 @@ use cadrs_sketch::dimension::{accepts, propose_at};
 use cadrs_sketch::hit::hit_test;
 use cadrs_sketch::units;
 use cadrs_sketch::{Dimension, DimensionId, DimensionKind, SketchEntity, SketchOp};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::inline_edit::DOUBLE_CLICK_TIME;
 use cadrs_ui::{
     DimEdit, DimEditBox, DimEditCancel, DimEditCommit, ListedVariable, NewVariable, Theme,
@@ -462,7 +463,7 @@ pub fn open_dimension_menu(world: &mut World, id: DimensionId, at: Vec2) {
             let doc = world.get_resource::<ActiveDocument>()?;
             Some(doc.doc.element(s.element)?.feature(s.feature)?.name.clone())
         })
-        .unwrap_or_else(|| "sketch".into());
+        .unwrap_or_else(|| tr("sketch-fallback-name"));
     let theme = world.resource::<Theme>().clone();
     world
         .resource_mut::<crate::sketch_tools::SketchSelection>()
@@ -476,37 +477,40 @@ pub fn open_dimension_menu(world: &mut World, id: DimensionId, at: Vec2) {
     menu = if d.driven {
         menu.item(I::new(
             "dimension-make-driving",
-            "Change to driving dimension",
+            tr("sketch-dim-make-driving"),
         ))
     } else {
         menu.item(I::new(
             "dimension-make-driven",
-            "Change to driven dimension",
+            tr("sketch-dim-make-driven"),
         ))
     };
     menu = menu
-        .item(I::new("dimension-escape", "Escape dimension"))
-        .item(I::new("dimension-delete", "Delete"))
+        .item(I::new("dimension-escape", tr("sketch-dim-escape")))
+        .item(I::new("dimension-delete", tr("common-delete")))
         .item(I::new(
             "dimension-confirm",
-            format!("Confirm {sketch_name}"),
+            tr_with("sketch-menu-confirm-named", &[("name", &sketch_name)]),
         ))
         .separator()
-        .item(I::new("dimension-copy-sketch", "Copy sketch").disabled(true))
+        .item(I::new("dimension-copy-sketch", tr("sketch-menu-copy")).disabled(true))
         .separator()
-        .item(I::new("dimension-show-all", "Show all"))
+        .item(I::new("dimension-show-all", tr("sketch-menu-show-all")))
         .separator()
         .item(
-            I::new("dimension-select", "Select")
+            I::new("dimension-select", tr("common-select"))
                 .disabled(true)
                 .submenu(vec![]),
         )
-        .item(I::new("dimension-select-other", "Select other…").disabled(true))
+        .item(I::new("dimension-select-other", tr("sketch-menu-select-other")).disabled(true))
         .separator()
-        .item(I::new("dimension-comment", "Add comment").disabled(true))
+        .item(I::new("dimension-comment", tr("common-add-comment")).disabled(true))
         .separator()
-        .item(I::new("dimension-zoom-to-fit", "Zoom to fit"))
-        .item(I::new("dimension-normal-to", "View normal to sketch plane"));
+        .item(I::new("dimension-zoom-to-fit", tr("common-zoom-to-fit")))
+        .item(I::new(
+            "dimension-normal-to",
+            tr("sketch-menu-normal-to-plane"),
+        ));
     let mut commands = world.commands();
     let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
     commands
@@ -687,7 +691,7 @@ fn value_text(text: &str) -> String {
 fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> {
     let d = world_sketch(world)
         .and_then(|s| s.dimensions.get(id).copied())
-        .ok_or("The dimension is gone")?;
+        .ok_or_else(|| tr("sketch-dim-gone"))?;
     let q = d.kind.quantity();
     // P3F.4: `#piston_d + #clearance` reads the variables defined above the sketch.
     let u = world.resource::<crate::WorkspaceUnits>().0;
@@ -695,15 +699,15 @@ fn value_for(world: &World, id: DimensionId, text: &str) -> Result<f64, String> 
         .eval_vars(text, q, &sketch_variables(world))
         .map_err(|e| match e {
             units::ParseError::UnknownVariable(n) if n.is_empty() => {
-                "Type a variable's name after #".to_string()
+                tr("sketch-dim-type-variable-name")
             }
-            units::ParseError::Unexpected(t) if t == "#" => {
-                "Type a variable's name after #".to_string()
-            }
+            units::ParseError::Unexpected(t) if t == "#" => tr("sketch-dim-type-variable-name"),
             units::ParseError::UnknownVariable(n) if below_sketch(world, &n) => {
-                format!("#{n} is defined below this sketch; move it above the sketch to use it")
+                tr_with("sketch-dim-variable-below", &[("variable", &n)])
             }
-            units::ParseError::UnknownVariable(n) => format!("There is no variable #{n}"),
+            units::ParseError::UnknownVariable(n) => {
+                tr_with("sketch-dim-no-variable", &[("variable", &n)])
+            }
             e => e.to_string(),
         })?;
     // The sketch's own rule (#96: a distance may be negative, the other side; an angle up to

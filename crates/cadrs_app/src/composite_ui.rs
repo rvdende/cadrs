@@ -19,6 +19,7 @@ use cadrs_core::commands::{AddFeature, ReplaceFeature};
 use cadrs_core::transform::CompositeFeature;
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, FeatureKind, PartId};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, OptionRow,
@@ -476,7 +477,11 @@ fn sync_dialog(
     let names: Vec<String> = c
         .parts
         .iter()
-        .map(|p| cache.part_name(*p).unwrap_or("Part").to_string())
+        .map(|p| {
+            cache
+                .part_name(*p)
+                .map_or_else(|| tr("common-part"), str::to_string)
+        })
         .collect();
     let valid = f.is_valid() && !cache.errors.contains_key(&f.id) && !cache.rebuilding;
     let layout = BuiltFor(c.closed);
@@ -503,13 +508,13 @@ fn sync_dialog(
                         b.spawn((
                             PartsField,
                             SelectionList::new("composite-parts-field")
-                                .placeholder("Parts and composite parts")
+                                .placeholder(tr("model-composite-parts"))
                                 .items(items)
                                 .active(true)
                                 .build(&t),
                         ));
                         b.spawn(
-                            OptionRow::new("composite-closed", "Closed")
+                            OptionRow::new("composite-closed", tr("model-composite-closed"))
                                 .checked(closed)
                                 .build(&t),
                         );
@@ -522,7 +527,7 @@ fn sync_dialog(
                         f.spawn((
                             Name::new("composite-dialog-help"),
                             cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                            Tooltip::new("Help"),
+                            Tooltip::new(tr("common-help")),
                         ));
                     })
                     .build(&theme),

@@ -32,6 +32,7 @@ use cadrs_core::assembly::InstanceId;
 use cadrs_core::assembly::commands::SetInstancesHidden;
 use cadrs_core::assembly::folders::{FolderList, item};
 use cadrs_core::assembly::structure::derive;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{StateColors, Visuals};
 
@@ -224,8 +225,13 @@ enum RowSpec {
         fixed: bool,
         sub_child: bool,
     },
-    /// An open subassembly's Items or Mate Features group (read-only).
-    SubGroup { sub: InstanceId, label: String },
+    /// An open subassembly's Items or Mate Features group (read-only); `slug` names its row
+    /// ("items", "mate-features") whatever the language.
+    SubGroup {
+        sub: InstanceId,
+        slug: &'static str,
+        label: String,
+    },
     Folder {
         id: FeatureId,
         name: String,
@@ -269,7 +275,7 @@ fn rows(
                     &doc.doc, &i.source, None,
                 )))
             })
-            .unwrap_or_else(|| format!("Missing part <{}>", i.index))
+            .unwrap_or_else(|| tr_with("asm-missing-part", &[("index", &i.index.to_string())]))
     };
     let dof_of = |i: &cadrs_core::assembly::Instance| -> u32 {
         if i.fixed {
@@ -322,7 +328,7 @@ fn rows(
                     c.feature,
                     el.and_then(|e| e.feature(c.feature))
                         .map(|f| f.name.clone())
-                        .unwrap_or_else(|| "Mate connector".into()),
+                        .unwrap_or_else(|| tr("common-mate-connector")),
                 )
             })
             .collect()
@@ -422,7 +428,9 @@ fn rows(
                 cache
                     .part_name(super::occurrence_part(derive(i.id, c.id)))
                     .map(str::to_string)
-                    .unwrap_or_else(|| format!("Part <{}>", c.index))
+                    .unwrap_or_else(|| {
+                        tr_with("asm-part-index", &[("index", &c.index.to_string())])
+                    })
             };
             out.push(RowSpec::Child {
                 sub: i.id,
@@ -435,11 +443,19 @@ fn rows(
         // Its own Items and Mate Features, closed and read-only (`ex3-step11.png`).
         out.push(RowSpec::SubGroup {
             sub: i.id,
-            label: format!("Items ({})", child.items.len()),
+            slug: "items",
+            label: tr_with(
+                "asm-items-count",
+                &[("count", &child.items.len().to_string())],
+            ),
         });
         out.push(RowSpec::SubGroup {
             sub: i.id,
-            label: format!("Mate Features ({})", child.mates.len()),
+            slug: "mate-features",
+            label: tr_with(
+                "asm-mate-features-count",
+                &[("count", &child.mates.len().to_string())],
+            ),
         });
     };
     for inst in &model.instances {
@@ -577,7 +593,7 @@ fn rebuild_instance_rows(
         return;
     };
     let n = model.instances.len();
-    let count = format!("Instances ({n})");
+    let count = tr_with("asm-instances-count", &[("count", &n.to_string())]);
     for mut t in &mut q_count {
         if t.0 != count {
             t.0 = count.clone();
@@ -684,8 +700,7 @@ fn rebuild_instance_rows(
                 } => {
                     spawn_child_row(c, &t, *sub, *id, name, *fixed, *sub_child);
                 }
-                RowSpec::SubGroup { sub, label } => {
-                    let slug = super::insert::slug(label.split(" (").next().unwrap_or(label));
+                RowSpec::SubGroup { sub, slug, label } => {
                     c.spawn((
                         TreeItem::new(
                             format!("instance-sub-{slug}-{}", sub.0.as_u128() as u32),
@@ -694,7 +709,7 @@ fn rebuild_instance_rows(
                         .disclosure(Some(false))
                         .left(20.0)
                         .build(&t),
-                        Tooltip::new("Open the subassembly's tab to edit it"),
+                        Tooltip::new(tr("asm-list-open-subassembly-tooltip")),
                     ))
                     .insert(row_visuals(&t, t.foreground))
                     .entry::<Node>()
@@ -740,7 +755,7 @@ fn eye_bundle(name: String, row: Entity, instances: Vec<InstanceId>, hidden: boo
             ..default()
         },
         Visibility::Hidden,
-        Tooltip::new(if hidden { "Show" } else { "Hide" }),
+        Tooltip::new(tr(if hidden { "common-show" } else { "common-hide" })),
         children![(
             cadrs_ui::icon::icon(
                 if hidden { "hidden" } else { "visible" },
@@ -883,7 +898,7 @@ fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRo
         item = item.disclosure(open);
     }
     let tip = if studio.is_some() {
-        format!("{name}\nRigid Part Studio instance")
+        format!("{name}\n{}", tr("asm-list-rigid-studio-instance"))
     } else {
         name.to_string()
     };
@@ -916,12 +931,12 @@ fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRo
     // Fixed (hatched ground), free (a small triad: it has degrees of freedom, A16.1), or
     // nothing when the mates hold it.
     let state = if fixed {
-        Some(("constraint-fix", "fixed", "Fixed".to_string()))
+        Some(("constraint-fix", "fixed", tr("asm-list-fixed")))
     } else if dof > 0 && !suppressed {
         let tip = if dof == 1 {
-            "This instance has 1 degree of freedom".to_string()
+            tr("asm-list-one-dof")
         } else {
-            format!("This instance has {dof} degrees of freedom")
+            tr_with("asm-list-dofs", &[("count", &dof.to_string())])
         };
         Some(("instance-dof", "dof", tip))
     } else {
@@ -958,7 +973,7 @@ fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRo
                         ..default()
                     },
                 ),
-                Tooltip::new(format!("Follows the named position \"{pos}\"")),
+                Tooltip::new(tr_with("asm-list-follows-position", &[("name", pos)])),
             ));
         }
         if let Some((state_icon, suffix, tip)) = state {
@@ -1015,11 +1030,11 @@ fn spawn_instance_row(c: &mut ChildSpawnerCommands, t: &Theme, spec: &InstanceRo
                 // Over the row's own icons while hovered: on the hover colour.
                 BackgroundColor(t.list_hover),
                 Visibility::Hidden,
-                Tooltip::new(if flexible {
-                    "Flexible: its mates act here. Click to make it rigid"
+                Tooltip::new(tr(if flexible {
+                    "asm-list-flexible-tooltip"
                 } else {
-                    "Rigid. Click to make it flexible"
-                }),
+                    "asm-list-rigid-tooltip"
+                })),
                 children![(
                     cadrs_ui::icon::icon(
                         if flexible { "lock-open" } else { "lock-filled" },
@@ -1061,9 +1076,9 @@ fn spawn_studio_part_row(
             .build(t),
         PickRow(Pick::Part(super::occurrence_part(o))),
         Tooltip::new(if out {
-            format!("{label}: unticked in Edit (taken out on ✓)")
+            tr_with("asm-list-studio-part-unticked", &[("name", label)])
         } else {
-            format!("{label} (in the rigid Part Studio instance)")
+            tr_with("asm-list-studio-part", &[("name", label)])
         }),
     ));
     row.insert(row_visuals(t, fg))
@@ -1122,7 +1137,10 @@ fn spawn_replicate_row(
             .build(t),
         ReplicateRow(id),
         ContextMenuTarget,
-        Tooltip::new(format!("{name}: {count} instances")),
+        Tooltip::new(tr_with(
+            "asm-list-replicate-tooltip",
+            &[("name", name), ("count", &count.to_string())],
+        )),
     ));
     row.insert(row_visuals(t, t.foreground))
         .entry::<Node>()
@@ -1354,12 +1372,9 @@ fn sync_root_state(
         return;
     };
     let (name, tip) = if fastened {
-        ("instance-root-fastened", "Fastened to the origin by a mate")
+        ("instance-root-fastened", "asm-list-root-fastened-tooltip")
     } else {
-        (
-            "instance-root-fixed",
-            "Fastened to the origin: an instance of this assembly is fixed (not carried into a parent assembly)",
-        )
+        ("instance-root-fixed", "asm-list-root-fixed-tooltip")
     };
     let icon = commands
         .spawn((
@@ -1376,7 +1391,7 @@ fn sync_root_state(
                     ..default()
                 },
             ),
-            Tooltip::new(tip),
+            Tooltip::new(tr(tip)),
         ))
         .id();
     commands.entity(root).add_child(icon);

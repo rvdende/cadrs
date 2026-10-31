@@ -31,6 +31,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::dxf_import::{DxfUnits, InsertDxf, read_file, sketch_of};
 use cadrs_core::vector_import::{InsertVector, VectorFormat};
 use cadrs_drawing::sheet_sketch::Entity as DxfEntity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, CheckboxState, FilePicked, FloatingPanel, FloatingPanelClose, Notification,
@@ -266,7 +267,7 @@ pub fn open(world: &mut World) {
     // (`step-03.png`), not a modal: the view stays usable.
     let panel = commands
         .spawn((
-            FloatingPanel::new("sketch-dxf-dialog", "Insert a DXF or DWG file")
+            FloatingPanel::new("sketch-dxf-dialog", tr("sketch-dxf-title"))
                 .width(WIDTH)
                 .at(PANEL_AT.x, PANEL_AT.y)
                 .body(move |b| {
@@ -280,8 +281,8 @@ pub fn open(world: &mut World) {
                     ))
                     .with_child(
                         TabStrip::new("sketch-dxf-tabs")
-                            .tab("Current folder")
-                            .tab("Other folders")
+                            .tab(tr("sketch-dxf-current-folder"))
+                            .tab(tr("sketch-dxf-other-folders"))
                             .selected(0)
                             .build(t),
                     );
@@ -298,7 +299,7 @@ pub fn open(world: &mut World) {
                         });
                     b.spawn(
                         TextInput::new("sketch-dxf-search")
-                            .placeholder("Search DXF, DWG or vector files")
+                            .placeholder(tr("sketch-dxf-search"))
                             .width(Val::Percent(100.0))
                             .height(26.0)
                             .build(t),
@@ -316,11 +317,14 @@ pub fn open(world: &mut World) {
                     ))
                     .with_children(|l| {
                         if thumbs.is_empty() {
-                            l.spawn(t.text(
-                                "No DXF, DWG or vector files here. Use Import… to pick one.",
-                                t.font_sm,
-                                FontWeight::NORMAL,
-                                t.muted_foreground,
+                            l.spawn((
+                                t.text(
+                                    tr("sketch-dxf-no-files"),
+                                    t.font_sm,
+                                    FontWeight::NORMAL,
+                                    t.muted_foreground,
+                                ),
+                                Translated("sketch-dxf-no-files"),
                             ));
                         }
                         for (path, img) in thumbs {
@@ -368,7 +372,15 @@ pub fn open(world: &mut World) {
                         ..default()
                     })
                     .with_children(|r| {
-                        r.spawn(t.text("Units", t.font_sm, FontWeight::BOLD, t.foreground));
+                        r.spawn((
+                            t.text(
+                                tr("common-units"),
+                                t.font_sm,
+                                FontWeight::BOLD,
+                                t.foreground,
+                            ),
+                            Translated("common-units"),
+                        ));
                         let mut s = Select::new("sketch-dxf-units")
                             .bordered()
                             .width(Val::Px(200.0));
@@ -382,14 +394,14 @@ pub fn open(world: &mut World) {
                     });
                     b.spawn(
                         Checkbox::new("sketch-dxf-origin")
-                            .label("Use file origin position")
+                            .label(tr("sketch-dxf-use-origin"))
                             .checked(true)
                             .height(24.0)
                             .build(t),
                     );
                     b.spawn((
                         Button::new("sketch-dxf-import")
-                            .label("Import…")
+                            .label(tr("sketch-dxf-import"))
                             .icon("file-import")
                             .ghost()
                             .small()
@@ -455,7 +467,7 @@ fn pick_other(world: &mut World) {
         &mut commands,
         &theme,
         "sketch-dxf-picker",
-        "Insert a DXF, DWG or vector file",
+        &tr("sketch-dxf-picker-title"),
         "sketch-insert-dxf",
         dir,
         &VectorFormat::EXTENSIONS,
@@ -550,7 +562,13 @@ fn insert(world: &mut World, path: &Path) {
         Err(e) => {
             return toast(
                 world,
-                Notification::warning(format!("Cannot insert {}: {e}", path.display())),
+                Notification::warning(tr_with(
+                    "sketch-dxf-cannot-insert-named",
+                    &[
+                        ("file", &path.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                )),
             );
         }
     };
@@ -559,9 +577,9 @@ fn insert(world: &mut World, path: &Path) {
     if report.curves() == 0 {
         return toast(
             world,
-            Notification::warning(format!(
-                "{} has no lines, arcs, circles or splines",
-                path.display()
+            Notification::warning(tr_with(
+                "sketch-dxf-no-curves",
+                &[("file", &path.display().to_string())],
             )),
         );
     }
@@ -575,8 +593,7 @@ fn insert(world: &mut World, path: &Path) {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("the file")
-                .to_string();
+                .map_or_else(|| tr("sketch-dxf-the-file"), str::to_string);
             info!("inserted {name}: {report:?}");
             // Constraint glyphs only on hover and selection, as Onshape's sketch has them (Show
             // constraints off, `step-03.png`): an imported drawing's every shared corner had a
@@ -586,11 +603,20 @@ fn insert(world: &mut World, path: &Path) {
                 .show_constraints = false;
             toast(
                 world,
-                Notification::info(format!("Inserted {name}: {} curves", report.curves()))
-                    .seconds(5.0),
+                Notification::info(tr_with(
+                    "sketch-dxf-inserted",
+                    &[("file", &name), ("count", &report.curves().to_string())],
+                ))
+                .seconds(5.0),
             );
         }
-        Err(e) => toast(world, Notification::warning(format!("Cannot insert: {e}"))),
+        Err(e) => toast(
+            world,
+            Notification::warning(tr_with(
+                "sketch-dxf-cannot-insert",
+                &[("error", &e.to_string())],
+            )),
+        ),
     }
 }
 
@@ -605,6 +631,7 @@ fn insert_vector(
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
+        // (Saved with the sketch as the file's name: not translated.)
         .unwrap_or("the file")
         .to_string();
     let (geometry, report) = match cadrs_core::vector_import::read_sketch(path, None, origin) {
@@ -612,14 +639,17 @@ fn insert_vector(
         Err(e) => {
             return toast(
                 world,
-                Notification::warning(format!("Cannot insert {name}: {e}")),
+                Notification::warning(tr_with(
+                    "sketch-dxf-cannot-insert-named",
+                    &[("file", &name), ("error", &e.to_string())],
+                )),
             );
         }
     };
     if report.curves() == 0 {
         return toast(
             world,
-            Notification::warning(format!("{name} has no lines or curves to insert")),
+            Notification::warning(tr_with("sketch-dxf-nothing-to-insert", &[("file", &name)])),
         );
     }
     let cmd = InsertVector {
@@ -636,10 +666,19 @@ fn insert_vector(
                 .show_constraints = false;
             toast(
                 world,
-                Notification::info(format!("Inserted {name}: {} curves", report.curves()))
-                    .seconds(5.0),
+                Notification::info(tr_with(
+                    "sketch-dxf-inserted",
+                    &[("file", &name), ("count", &report.curves().to_string())],
+                ))
+                .seconds(5.0),
             );
         }
-        Err(e) => toast(world, Notification::warning(format!("Cannot insert: {e}"))),
+        Err(e) => toast(
+            world,
+            Notification::warning(tr_with(
+                "sketch-dxf-cannot-insert",
+                &[("error", &e.to_string())],
+            )),
+        ),
     }
 }

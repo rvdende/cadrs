@@ -18,6 +18,7 @@ use bevy::text::FontWeight;
 use cadrs_core::assembly::replace::{self, ReplaceInstances};
 use cadrs_core::assembly::{InstanceId, InstanceSource};
 use cadrs_core::{ElementId, PartId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, SelectionList,
@@ -194,9 +195,9 @@ pub fn accept(world: &mut World) {
         if n > 0 {
             let theme = world.resource::<Theme>().clone();
             let text = if n == 1 {
-                "1 mate removed (no matching geometry)".to_string()
+                tr("asm-replace-one-mate-removed")
             } else {
-                format!("{n} mates removed (no matching geometry)")
+                tr_with("asm-replace-mates-removed", &[("count", &n.to_string())])
             };
             let mut c = world.commands();
             cadrs_ui::toast::show_notification(
@@ -297,10 +298,13 @@ fn sync_dialog(world: &mut World) {
         return;
     }
     let summary = match plan(world, &s) {
-        None if s.with.is_none() => "Choose the part to replace them with".to_string(),
+        None if s.with.is_none() => tr("asm-replace-choose-part"),
         None => String::new(),
         Some((kept, dropped)) => {
-            let mut t = format!("Mates kept: {}", kept.len());
+            let mut t = tr_with(
+                "asm-replace-mates-kept",
+                &[("count", &kept.len().to_string())],
+            );
             if !dropped.is_empty() {
                 let model = world
                     .resource::<ActiveDocument>()
@@ -311,9 +315,10 @@ fn sync_dialog(world: &mut World) {
                     .iter()
                     .filter_map(|id| model.as_ref()?.mate(*id).map(|f| f.name.clone()))
                     .collect();
-                t.push_str(&format!(
-                    " · removed (no matching geometry): {}",
-                    names.join(", ")
+                t.push_str(" · ");
+                t.push_str(&tr_with(
+                    "asm-replace-removed-mates",
+                    &[("mates", &names.join(", "))],
                 ));
             }
             t
@@ -369,14 +374,14 @@ fn sync_dialog(world: &mut World) {
         key,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("replace-dialog")
-            .title("Replace instances")
+            .title(tr("asm-replace-title"))
             .valid(valid)
             .width(280.0)
             .body(move |b| {
                 let t = &tb;
                 b.spawn(
                     SelectionList::new("replace-instances")
-                        .placeholder("Instances to replace")
+                        .placeholder(tr("asm-replace-instances-placeholder"))
                         .tint_filled()
                         .items(names)
                         .active(true)
@@ -387,7 +392,15 @@ fn sync_dialog(world: &mut World) {
                     n.flex_grow = 0.0;
                     n.margin = UiRect::new(Val::ZERO, Val::Px(2.0), Val::Px(2.0), Val::Px(6.0));
                 });
-                b.spawn(t.text("Replace with", 12.0, FontWeight::SEMIBOLD, t.foreground));
+                b.spawn((
+                    t.text(
+                        tr("asm-replace-with"),
+                        12.0,
+                        FontWeight::SEMIBOLD,
+                        t.foreground,
+                    ),
+                    Translated("asm-replace-with"),
+                ));
                 b.spawn((
                     Name::new("replace-with"),
                     Node {
@@ -414,7 +427,10 @@ fn sync_dialog(world: &mut World) {
                             .selected(on)
                             .build(t),
                             PartRow(el, p),
-                            Tooltip::new(format!("{name} (Part Studio {studio})")),
+                            Tooltip::new(tr_with(
+                                "asm-replace-part-tooltip",
+                                &[("name", &name), ("studio", &studio)],
+                            )),
                         ));
                         row.observe(
                             |click: On<PointerClick>,

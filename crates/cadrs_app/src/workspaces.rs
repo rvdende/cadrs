@@ -22,6 +22,7 @@ use bevy::ui_widgets::Activate;
 use cadrs_core::history_log::{HistoryLog, VersionId, WorkspaceId};
 use cadrs_core::workspace_merge::{self as wm, ChangedTab, MergeWorkspace, TabChange};
 use cadrs_core::{DocumentId, ElementId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{Menu, MenuAction, MenuItem, open_context_menu, open_menu};
 use cadrs_ui::{Dialog, DialogClose, Select, SelectState, TextInput, Theme, show_toast};
 
@@ -218,7 +219,7 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
             .width(520.0)
             // The version goes in the body: a long version name doesn't run under the ✕ (P3E.5
             // judge).
-            .title("Branch to create workspace")
+            .title(tr("shell-workspaces-branch-title"))
             .title_font(theme.font_lg, FontWeight::NORMAL)
             .body(move |b| {
                 let t = &tb;
@@ -229,7 +230,15 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
                     ..default()
                 })
                 .with_children(|r| {
-                    r.spawn(t.text("From version:", t.font_base, FontWeight::BOLD, t.foreground));
+                    r.spawn((
+                        t.text(
+                            tr("shell-workspaces-from-version"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("shell-workspaces-from-version"),
+                    ));
                     r.spawn((
                         Name::new("branch-from-version"),
                         t.text(vname.clone(), t.font_base, FontWeight::NORMAL, t.foreground),
@@ -243,7 +252,15 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
                     ..default()
                 })
                 .with_children(|r| {
-                    r.spawn(t.text("Name:", t.font_base, FontWeight::BOLD, t.foreground));
+                    r.spawn((
+                        t.text(
+                            tr("shell-workspaces-name"),
+                            t.font_base,
+                            FontWeight::BOLD,
+                            t.foreground,
+                        ),
+                        Translated("shell-workspaces-name"),
+                    ));
                     r.spawn(
                         TextInput::new("branch-name")
                             .value(next)
@@ -258,15 +275,18 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
                     margin: UiRect::top(Val::Px(10.0)),
                     ..default()
                 })
-                .with_child(t.text(
-                    "Description:",
-                    t.font_base,
-                    FontWeight::BOLD,
-                    t.foreground,
+                .with_child((
+                    t.text(
+                        tr("shell-workspaces-description"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("shell-workspaces-description"),
                 ));
                 b.spawn(
                     TextInput::new("branch-description")
-                        .placeholder("Description")
+                        .placeholder(tr("common-description"))
                         .max_characters(10_000)
                         .width(Val::Percent(100.0))
                         .height(54.0)
@@ -276,24 +296,27 @@ pub fn open_branch_dialog(world: &mut World, i: usize) {
                     margin: UiRect::top(Val::Px(8.0)),
                     ..default()
                 })
-                .with_child(t.text(
-                    "The new workspace starts as a copy of the version. Main is not changed.",
-                    t.font_sm,
-                    FontWeight::NORMAL,
-                    t.muted_foreground,
+                .with_child((
+                    t.text(
+                        tr("shell-workspaces-branch-hint"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("shell-workspaces-branch-hint"),
                 ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn(
                     cadrs_ui::Button::new("branch-create")
-                        .label("Create")
+                        .label(tr("common-create"))
                         .primary()
                         .build(t),
                 );
                 f.spawn(
                     cadrs_ui::Button::new("branch-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                 );
             })
@@ -398,7 +421,10 @@ pub fn open_merge_dialog(world: &mut World, source: WorkspaceId) {
         show_toast(
             &mut commands,
             &theme,
-            format!("Nothing to merge: {sname} has no changed tabs."),
+            tr_with(
+                "shell-workspaces-nothing-changed",
+                &[("source", sname.as_str())],
+            ),
         );
         world.flush();
         return;
@@ -410,20 +436,23 @@ pub fn open_merge_dialog(world: &mut World, source: WorkspaceId) {
     commands.spawn((
         Dialog::new("merge-dialog")
             .width(660.0)
-            .title(format!("Merge {sname} into {dname}"))
+            .title(tr_with(
+                "shell-workspaces-merge-title",
+                &[("source", sname.as_str()), ("dest", dname.as_str())],
+            ))
             .title_font(theme.font_lg, FontWeight::NORMAL)
             .body(move |b| merge_body(b, &tb, &changed, &s2, &d2))
             .footer(move |f| {
                 let t = &tf;
                 f.spawn(
                     cadrs_ui::Button::new("merge-accept")
-                        .label("Merge")
+                        .label(tr("shell-workspaces-merge"))
                         .primary()
                         .build(t),
                 );
                 f.spawn(
                     cadrs_ui::Button::new("merge-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                 );
             })
@@ -435,8 +464,9 @@ pub fn open_merge_dialog(world: &mut World, source: WorkspaceId) {
 }
 
 fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &str, dest: &str) {
-    let intro = format!(
-        "{source} changed these tabs. For each, replace it with the branch's version or keep {dest}'s."
+    let intro = tr_with(
+        "shell-workspaces-merge-intro",
+        &[("source", source), ("dest", dest)],
     );
     b.spawn(Node {
         margin: UiRect::bottom(Val::Px(10.0)),
@@ -472,21 +502,39 @@ fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &
         ))
         .with_children(|h| {
             h.spawn((
-                t.text("Tab", t.font_sm, FontWeight::BOLD, t.muted_foreground),
+                t.text(
+                    tr("shell-workspaces-column-tab"),
+                    t.font_sm,
+                    FontWeight::BOLD,
+                    t.muted_foreground,
+                ),
+                Translated("shell-workspaces-column-tab"),
                 Node {
                     flex_grow: 1.0,
                     ..default()
                 },
             ));
             h.spawn((
-                t.text("Change", t.font_sm, FontWeight::BOLD, t.muted_foreground),
+                t.text(
+                    tr("shell-workspaces-column-change"),
+                    t.font_sm,
+                    FontWeight::BOLD,
+                    t.muted_foreground,
+                ),
+                Translated("shell-workspaces-column-change"),
                 Node {
                     width: Val::Px(80.0),
                     ..default()
                 },
             ));
             h.spawn((
-                t.text("Action", t.font_sm, FontWeight::BOLD, t.muted_foreground),
+                t.text(
+                    tr("shell-workspaces-column-action"),
+                    t.font_sm,
+                    FontWeight::BOLD,
+                    t.muted_foreground,
+                ),
+                Translated("shell-workspaces-column-action"),
                 Node {
                     width: Val::Px(300.0),
                     ..default()
@@ -530,12 +578,18 @@ fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &
                     },
                 ));
                 let change = match c.change {
-                    TabChange::Changed => "Modified",
-                    TabChange::Added => "Added",
-                    TabChange::Deleted => "Deleted",
+                    TabChange::Changed => "shell-workspaces-modified",
+                    TabChange::Added => "shell-workspaces-added",
+                    TabChange::Deleted => "shell-workspaces-deleted",
                 };
                 r.spawn((
-                    t.text(change, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    t.text(
+                        tr(change),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated(change),
                     Node {
                         width: Val::Px(80.0),
                         ..default()
@@ -548,8 +602,11 @@ fn merge_body(b: &mut ChildSpawner, t: &Theme, changed: &[ChangedTab], source: &
                 .with_child(
                     Select::new(format!("merge-tab-{i}"))
                         .bordered()
-                        .option(format!("Replace with {source}"), true)
-                        .option(format!("Keep {dest}"), true)
+                        .option(
+                            tr_with("shell-workspaces-replace-with", &[("source", source)]),
+                            true,
+                        )
+                        .option(tr_with("shell-workspaces-keep", &[("dest", dest)]), true)
                         .selected(0)
                         // Up, so the list doesn't cover the dialog's Merge and Cancel.
                         .open_up()
@@ -585,7 +642,11 @@ fn commit_merge(world: &mut World) {
     if replace.is_empty() {
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
-        show_toast(&mut commands, &theme, "Nothing to merge");
+        show_toast(
+            &mut commands,
+            &theme,
+            tr("shell-workspaces-nothing-to-merge"),
+        );
         world.flush();
         return;
     }

@@ -38,6 +38,7 @@ use cadrs_core::{Feature, FeatureId, FeatureKind};
 use cadrs_sheetmetal::model_edit::{BendAlignment, JogAnchor};
 use cadrs_sheetmetal::params::{BendReliefKind, CornerReliefKind};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, NumberField, NumberFieldCommit, NumberFieldState, OptionRow, Select,
@@ -877,14 +878,14 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-part"), |f| f.name.clone())
 }
 
 fn name_of(features: &[Feature], id: FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-sketch"), |f| f.name.clone())
 }
 
 fn pick_label(features: &[Feature], p: &SmPick) -> String {
@@ -892,7 +893,17 @@ fn pick_label(features: &[Feature], p: &SmPick) -> String {
         SmPick::Edge(e) => crate::parts::edge_maker(features, &e.edge),
         _ => p.op(),
     };
-    format!("{} of {}", p.what(), op_name(features, op))
+    let what = match p {
+        SmPick::Face(_) => "common-face-of",
+        SmPick::Edge(_) => "common-edge-of",
+        SmPick::Vertex(_) => "common-vertex-of",
+    };
+    tr_with(what, &[("name", &op_name(features, op))])
+}
+
+/// "Edge of …" for an edge made by `op`.
+fn edge_of(features: &[Feature], op: cadrs_sketch::OpId) -> String {
+    tr_with("common-edge-of", &[("name", &op_name(features, op))])
 }
 
 /// Every list's items (by field).
@@ -901,7 +912,7 @@ pub fn items(
     cache: &PartCache,
     x: &SheetMetalTool,
 ) -> Vec<(u8, Vec<String>)> {
-    let face = |f: &FaceRef| format!("Face of {}", op_name(features, f.face.op));
+    let face = |f: &FaceRef| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]);
     let mut out: Vec<(u8, Vec<String>)> = Vec::new();
     if let Some(b) = bend_of(x) {
         out.push((
@@ -909,11 +920,12 @@ pub fn items(
             b.line
                 .iter()
                 .map(|l| match l {
-                    LineRef::Sketch(c) => format!("Line of {}", name_of(features, c.sketch)),
-                    LineRef::Edge(e) => format!(
-                        "Edge of {}",
-                        op_name(features, crate::parts::edge_maker(features, &e.edge))
-                    ),
+                    LineRef::Sketch(c) => {
+                        tr_with("common-line-of", &[("name", &name_of(features, c.sketch))])
+                    }
+                    LineRef::Edge(e) => {
+                        edge_of(features, crate::parts::edge_maker(features, &e.edge))
+                    }
                 })
                 .collect(),
         ));
@@ -923,10 +935,9 @@ pub fn items(
             b.reference
                 .iter()
                 .map(|r| match r {
-                    EdgeOrFace::Edge(e) => format!(
-                        "Edge of {}",
-                        op_name(features, crate::parts::edge_maker(features, &e.edge))
-                    ),
+                    EdgeOrFace::Edge(e) => {
+                        edge_of(features, crate::parts::edge_maker(features, &e.edge))
+                    }
                     EdgeOrFace::Face(f) => face(f),
                 })
                 .collect(),
@@ -938,7 +949,7 @@ pub fn items(
             let mut v: Vec<String> = t
                 .regions
                 .iter()
-                .map(|r| format!("Face of {}", name_of(features, r.sketch)))
+                .map(|r| tr_with("common-face-of", &[("name", &name_of(features, r.sketch))]))
                 .collect();
             v.extend(t.sketches.iter().map(|s| name_of(features, *s)));
             out.push((F_PROFILE, v));
@@ -1026,12 +1037,13 @@ fn list_with_flip(
     });
 }
 
+/// A select with its label (a catalog key, or empty) and an arrow.
 #[allow(clippy::too_many_arguments)]
 fn select(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
-    label: &str,
+    label: &'static str,
     s: u8,
     options: Vec<String>,
     selected: usize,
@@ -1052,11 +1064,12 @@ fn select(
         if !label.is_empty() {
             r.spawn((
                 t.text(
-                    label,
+                    tr(label),
                     t.font_sm,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated(label),
                 Node {
                     width: Val::Px(96.0),
                     flex_shrink: 0.0,
@@ -1127,8 +1140,63 @@ fn check(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, on: bool) {
     );
 }
 
-fn labels<T: Copy>(all: &[T], f: impl Fn(T) -> &'static str) -> Vec<String> {
-    all.iter().map(|x| f(*x).to_string()).collect()
+fn labels<T: Copy>(all: &[T], f: impl Fn(T) -> String) -> Vec<String> {
+    all.iter().map(|x| f(*x)).collect()
+}
+
+/// A bend alignment's label in the interface's language.
+fn bend_alignment_label(a: BendAlignment) -> String {
+    tr(match a {
+        BendAlignment::BendLine => "sheet-bend-line",
+        BendAlignment::HoldLine => "sheet-alignment-hold-line",
+        BendAlignment::HoldOtherLine => "sheet-alignment-hold-other-line",
+        BendAlignment::Inner => "sheet-alignment-inner",
+        BendAlignment::Outer => "sheet-alignment-outer",
+        BendAlignment::Middle => "sheet-alignment-middle",
+    })
+}
+
+/// A jog's bounding type's label in the interface's language.
+fn jog_bounding_label(b: JogBounding) -> String {
+    tr(match b {
+        JogBounding::Blind => "sheet-end-blind",
+        JogBounding::UpToEntity => "sheet-up-to-entity",
+        JogBounding::Thickness => "common-thickness",
+    })
+}
+
+/// A jog offset anchor's label in the interface's language.
+fn jog_anchor_label(a: JogAnchor) -> String {
+    tr(match a {
+        JogAnchor::Inside => "sheet-anchor-inside",
+        JogAnchor::Nominal => "sheet-anchor-nominal",
+        JogAnchor::Outside => "sheet-anchor-outside",
+    })
+}
+
+/// A fillet measurement's label in the interface's language.
+fn fillet_measurement_label(m: FilletMeasurement) -> String {
+    tr(match m {
+        FilletMeasurement::Radius => "sheet-measure-radius",
+        FilletMeasurement::Width => "sheet-measure-width",
+    })
+}
+
+/// A chamfer measurement's label in the interface's language.
+fn chamfer_measurement_label(m: ChamferMeasurement) -> String {
+    tr(match m {
+        ChamferMeasurement::Offset => "common-offset",
+        ChamferMeasurement::Tangent => "sheet-measure-tangent",
+    })
+}
+
+/// A chamfer type's label in the interface's language.
+fn chamfer_type_label(c: ChamferType) -> String {
+    tr(match c {
+        ChamferType::EqualDistance => "sheet-chamfer-equal-distance",
+        ChamferType::TwoDistances => "sheet-chamfer-two-distances",
+        ChamferType::DistanceAngle => "sheet-chamfer-distance-angle",
+    })
 }
 
 fn index_of<T: PartialEq>(all: &[T], x: &T) -> usize {
@@ -1156,17 +1224,17 @@ fn bend_rows(
         c,
         t,
         &format!("{p}-line-field"),
-        "Bend line",
+        &tr("sheet-bend-line"),
         F_LINE,
         item(F_LINE),
         active == F_LINE,
-        (FL_HOLD, b.hold_opposite, "Hold opposite side"),
+        (FL_HOLD, b.hold_opposite, &tr("sheet-hold-opposite-side")),
     );
     list(
         c,
         t,
         &format!("{p}-face-field"),
-        "Sheet metal face to bend",
+        &tr("sheet-face-to-bend"),
         F_FACE,
         item(F_FACE),
         active == F_FACE,
@@ -1175,9 +1243,9 @@ fn bend_rows(
         c,
         t,
         &format!("{p}-alignment"),
-        "Bend alignment",
+        "sheet-bend-alignment",
         S_ALIGN,
-        labels(&BendAlignment::ALL, BendAlignment::label),
+        labels(&BendAlignment::ALL, bend_alignment_label),
         index_of(&BendAlignment::ALL, &b.alignment),
         None,
     );
@@ -1187,16 +1255,22 @@ fn bend_rows(
         &format!("{p}-angle-control"),
         "",
         S_CONTROL,
-        labels(&AngleControl::ALL, AngleControl::label),
+        labels(&AngleControl::ALL, |a| {
+            tr(match a {
+                AngleControl::BendAngle => "sheet-bend-angle",
+                AngleControl::AlignToGeometry => "sheet-angle-align-to-geometry",
+                AngleControl::AngleFromDirection => "sheet-angle-from-direction",
+            })
+        }),
         index_of(&AngleControl::ALL, &b.control),
-        Some((FL_OPPOSITE, b.opposite, "Opposite angle")),
+        Some((FL_OPPOSITE, b.opposite, &tr("sheet-opposite-angle"))),
     );
     match b.control {
         AngleControl::AlignToGeometry => list(
             c,
             t,
             &format!("{p}-reference-field"),
-            "Parallel to",
+            &tr("sheet-parallel-to"),
             F_REF,
             item(F_REF),
             active == F_REF,
@@ -1205,7 +1279,7 @@ fn bend_rows(
             c,
             t,
             &format!("{p}-reference-field"),
-            "Direction",
+            &tr("common-direction"),
             F_REF,
             item(F_REF),
             active == F_REF,
@@ -1213,16 +1287,16 @@ fn bend_rows(
         AngleControl::BendAngle => {}
     }
     if b.control != AngleControl::AlignToGeometry {
-        let label = if b.control == AngleControl::BendAngle {
-            "Bend angle"
+        let label = tr(if b.control == AngleControl::BendAngle {
+            "sheet-bend-angle"
         } else {
-            "Angle"
-        };
+            "common-angle"
+        });
         number(
             c,
             t,
             &format!("{p}-angle"),
-            label,
+            &label,
             N_ANGLE,
             &b.angle_expr,
             None,
@@ -1232,7 +1306,7 @@ fn bend_rows(
         c,
         t,
         "smt-use-model-radius",
-        "Use model bend radius",
+        &tr("sheet-use-model-bend-radius"),
         b.use_model_radius,
     );
     if !b.use_model_radius {
@@ -1240,19 +1314,25 @@ fn bend_rows(
             c,
             t,
             &format!("{p}-radius"),
-            "Bend radius",
+            &tr("sheet-bend-radius"),
             N_RADIUS,
             &b.radius_expr,
             None,
         );
     }
-    check(c, t, "smt-use-model-k", "Use model K Factor", b.use_model_k);
+    check(
+        c,
+        t,
+        "smt-use-model-k",
+        &tr("sheet-use-model-k-factor"),
+        b.use_model_k,
+    );
     if !b.use_model_k {
         number(
             c,
             t,
             &format!("{p}-k-factor"),
-            "K Factor",
+            &tr("sheet-bend-calc-k-factor"),
             N_K,
             &b.k_expr,
             None,
@@ -1287,9 +1367,9 @@ pub fn body(
                 c,
                 t,
                 "sm-jog-bounding",
-                "Bounding type",
+                "sheet-bounding-type",
                 S_BOUNDING,
-                labels(&JogBounding::ALL, JogBounding::label),
+                labels(&JogBounding::ALL, jog_bounding_label),
                 index_of(&JogBounding::ALL, &j.bounding),
                 None,
             );
@@ -1298,7 +1378,7 @@ pub fn body(
                     c,
                     t,
                     "sm-jog-offset",
-                    "Jog offset",
+                    &tr("sheet-jog-offset"),
                     N_OFFSET,
                     &j.offset_expr,
                     None,
@@ -1308,7 +1388,7 @@ pub fn body(
                         c,
                         t,
                         "sm-jog-up-to-field",
-                        "Up to entity",
+                        &tr("sheet-up-to-entity"),
                         F_UP_TO,
                         item(F_UP_TO),
                         active == F_UP_TO,
@@ -1317,7 +1397,7 @@ pub fn body(
                         c,
                         t,
                         "smt-up-to-offset",
-                        "Offset distance",
+                        &tr("sheet-offset-distance"),
                         j.up_to_offset_on,
                     );
                     if j.up_to_offset_on {
@@ -1325,7 +1405,7 @@ pub fn body(
                             c,
                             t,
                             "sm-jog-up-to-offset",
-                            "Offset distance",
+                            &tr("sheet-offset-distance"),
                             N_UP_TO_OFFSET,
                             &j.up_to_offset_expr,
                             None,
@@ -1336,7 +1416,7 @@ pub fn body(
                     c,
                     t,
                     "sm-jog-factor",
-                    "Thickness factor",
+                    &tr("sheet-thickness-factor"),
                     N_FACTOR,
                     &j.factor_expr,
                     None,
@@ -1346,9 +1426,9 @@ pub fn body(
                 c,
                 t,
                 "sm-jog-anchor",
-                "Jog offset anchor",
+                "sheet-jog-offset-anchor",
                 S_ANCHOR,
-                labels(&JogAnchor::ALL, JogAnchor::label),
+                labels(&JogAnchor::ALL, jog_anchor_label),
                 index_of(&JogAnchor::ALL, &j.anchor),
                 None,
             );
@@ -1356,7 +1436,7 @@ pub fn body(
                 c,
                 t,
                 "smt-preserve-material",
-                "Preserve material",
+                &tr("sheet-preserve-material"),
                 j.preserve_material,
             );
         }),
@@ -1365,7 +1445,7 @@ pub fn body(
                 c,
                 t,
                 "sm-tab-profile-field",
-                "Tab profile",
+                &tr("sheet-tab-profile"),
                 F_PROFILE,
                 item(F_PROFILE),
                 active == F_PROFILE,
@@ -1374,7 +1454,7 @@ pub fn body(
                 c,
                 t,
                 "sm-tab-flanges-field",
-                "Flange to merge",
+                &tr("sheet-flange-to-merge"),
                 F_FLANGES,
                 item(F_FLANGES),
                 active == F_FLANGES,
@@ -1383,7 +1463,7 @@ pub fn body(
                 c,
                 t,
                 "sm-tab-offset",
-                "Subtraction offset",
+                &tr("sheet-subtraction-offset"),
                 N_TAB_OFFSET,
                 &tb.offset_expr,
                 None,
@@ -1392,7 +1472,7 @@ pub fn body(
                 c,
                 t,
                 "sm-tab-scope-field",
-                "Subtraction scope",
+                &tr("sheet-subtraction-scope"),
                 F_SCOPE,
                 item(F_SCOPE),
                 active == F_SCOPE,
@@ -1403,7 +1483,7 @@ pub fn body(
                 c,
                 t,
                 "sm-corner-field",
-                "Corner",
+                &tr("sheet-corner-field"),
                 F_CORNER,
                 item(F_CORNER),
                 active == F_CORNER,
@@ -1412,11 +1492,12 @@ pub fn body(
             // Scaled" doesn't fit beside it.
             c.spawn((
                 t.text(
-                    "Corner relief type",
+                    tr("sheet-corner-relief-type"),
                     t.font_sm,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("sheet-corner-relief-type"),
                 Node {
                     margin: UiRect::new(Val::Px(2.0), Val::ZERO, Val::Px(6.0), Val::ZERO),
                     ..default()
@@ -1428,7 +1509,10 @@ pub fn body(
                 "sm-corner-type",
                 "",
                 S_CORNER_TYPE,
-                labels(&CornerReliefKind::ALL, CornerReliefKind::label),
+                labels(
+                    &CornerReliefKind::ALL,
+                    crate::sheetmetal_ui::corner_relief_label,
+                ),
                 index_of(&CornerReliefKind::ALL, &cf.relief.kind),
                 None,
             );
@@ -1437,7 +1521,7 @@ pub fn body(
                     c,
                     t,
                     "sm-corner-scale",
-                    "Corner relief scale",
+                    &tr("sheet-corner-relief-scale"),
                     N_CORNER_SCALE,
                     &cf.scale_expr,
                     None,
@@ -1446,7 +1530,7 @@ pub fn body(
                     c,
                     t,
                     "sm-corner-size",
-                    "Corner relief width",
+                    &tr("sheet-corner-relief-width"),
                     N_CORNER_SIZE,
                     &cf.size_expr,
                     None,
@@ -1455,7 +1539,7 @@ pub fn body(
                     c,
                     t,
                     "sm-corner-size",
-                    "Corner relief diameter",
+                    &tr("sheet-corner-relief-diameter"),
                     N_CORNER_SIZE,
                     &cf.size_expr,
                     None,
@@ -1468,7 +1552,7 @@ pub fn body(
                 c,
                 t,
                 "sm-bend-relief-field",
-                "Bend relief",
+                &tr("sheet-bend-relief-field"),
                 F_RELIEF,
                 item(F_RELIEF),
                 active == F_RELIEF,
@@ -1476,11 +1560,12 @@ pub fn body(
             // Onshape's dialog puts the type under its label (`sheetmetalbendrelief-dialog.png`).
             c.spawn((
                 t.text(
-                    "Bend relief type",
+                    tr("sheet-bend-relief-type"),
                     t.font_sm,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("sheet-bend-relief-type"),
                 Node {
                     margin: UiRect::new(Val::Px(2.0), Val::ZERO, Val::Px(6.0), Val::ZERO),
                     ..default()
@@ -1492,7 +1577,10 @@ pub fn body(
                 "sm-bend-relief-type",
                 "",
                 S_RELIEF_TYPE,
-                labels(&BendReliefKind::ALL, BendReliefKind::label),
+                labels(
+                    &BendReliefKind::ALL,
+                    crate::sheetmetal_ui::bend_relief_label,
+                ),
                 index_of(&BendReliefKind::ALL, &br.relief.kind),
                 None,
             );
@@ -1501,7 +1589,7 @@ pub fn body(
                     c,
                     t,
                     "sm-bend-relief-depth-scale",
-                    "Bend relief depth scale",
+                    &tr("sheet-bend-relief-depth-scale"),
                     N_DEPTH_SCALE,
                     &br.depth_scale_expr,
                     None,
@@ -1510,7 +1598,7 @@ pub fn body(
                     c,
                     t,
                     "sm-bend-relief-width-scale",
-                    "Bend relief width scale",
+                    &tr("sheet-bend-relief-width-scale"),
                     N_WIDTH_SCALE,
                     &br.width_scale_expr,
                     None,
@@ -1520,7 +1608,7 @@ pub fn body(
                     c,
                     t,
                     "sm-bend-relief-depth",
-                    "Bend relief depth",
+                    &tr("sheet-bend-relief-depth"),
                     N_DEPTH,
                     &br.depth_expr,
                     None,
@@ -1530,7 +1618,7 @@ pub fn body(
                 c,
                 t,
                 "smt-extend-bend-relief",
-                "Extend bend relief",
+                &tr("sheet-extend-bend-relief"),
                 br.relief.extend,
             );
         }),
@@ -1539,8 +1627,8 @@ pub fn body(
                 SmtRole::Tab,
                 TabStrip::new("sm-corner-break-type")
                     .compact()
-                    .tab("Fillet")
-                    .tab("Chamfer")
+                    .tab(tr("sheet-corner-break-fillet"))
+                    .tab(tr("sheet-corner-break-chamfer"))
                     .selected(usize::from(cb.chamfer))
                     .build(t),
             ));
@@ -1549,7 +1637,7 @@ pub fn body(
                     c,
                     t,
                     "sm-corner-break-field",
-                    "Entities to fillet or chamfer",
+                    &tr("sheet-entities-to-fillet-or-chamfer"),
                     F_ENTITIES,
                     item(F_ENTITIES),
                     active == F_ENTITIES,
@@ -1559,9 +1647,9 @@ pub fn body(
                         c,
                         t,
                         "sm-corner-break-measurement",
-                        "Measurement",
+                        "sheet-measurement",
                         S_CHAMFER_MEAS,
-                        labels(&ChamferMeasurement::ALL, ChamferMeasurement::label),
+                        labels(&ChamferMeasurement::ALL, chamfer_measurement_label),
                         index_of(&ChamferMeasurement::ALL, &cb.chamfer_measurement),
                         None,
                     );
@@ -1569,27 +1657,28 @@ pub fn body(
                         c,
                         t,
                         "sm-corner-break-chamfer-type",
-                        "Chamfer type",
+                        "sheet-chamfer-type",
                         S_CHAMFER_TYPE,
-                        labels(&ChamferType::ALL, ChamferType::label),
+                        labels(&ChamferType::ALL, chamfer_type_label),
                         index_of(&ChamferType::ALL, &cb.chamfer_type),
                         None,
                     );
+                    let opposite = tr("common-opposite-direction");
                     let flip = (cb.chamfer_type != ChamferType::EqualDistance).then_some((
                         FL_CHAMFER,
                         cb.flip,
-                        "Opposite direction",
+                        opposite.as_str(),
                     ));
-                    let first = if cb.chamfer_type == ChamferType::TwoDistances {
-                        "Distance 1"
+                    let first = tr(if cb.chamfer_type == ChamferType::TwoDistances {
+                        "sheet-distance-1"
                     } else {
-                        "Distance"
-                    };
+                        "common-distance"
+                    });
                     number(
                         c,
                         t,
                         "sm-corner-break-distance",
-                        first,
+                        &first,
                         N_DIST,
                         &cb.distance_expr,
                         flip,
@@ -1599,7 +1688,7 @@ pub fn body(
                             c,
                             t,
                             "sm-corner-break-distance2",
-                            "Distance 2",
+                            &tr("sheet-distance-2"),
                             N_DIST2,
                             &cb.distance2_expr,
                             None,
@@ -1608,7 +1697,7 @@ pub fn body(
                             c,
                             t,
                             "sm-corner-break-angle",
-                            "Angle",
+                            &tr("common-angle"),
                             N_CANGLE,
                             &cb.angle_expr,
                             None,
@@ -1620,9 +1709,9 @@ pub fn body(
                         c,
                         t,
                         "sm-corner-break-measurement",
-                        "Measurement",
+                        "sheet-measurement",
                         S_FILLET_MEAS,
-                        labels(&FilletMeasurement::ALL, FilletMeasurement::label),
+                        labels(&FilletMeasurement::ALL, fillet_measurement_label),
                         index_of(&FilletMeasurement::ALL, &cb.fillet_measurement),
                         None,
                     );
@@ -1631,9 +1720,9 @@ pub fn body(
                         c,
                         t,
                         "sm-corner-break-control",
-                        "Control",
+                        "sheet-control",
                         S_FILLET_CONTROL,
-                        vec!["Distance".into()],
+                        vec![tr("common-distance")],
                         0,
                         None,
                     );
@@ -1641,35 +1730,41 @@ pub fn body(
                         c,
                         t,
                         "sm-corner-break-size",
-                        cb.fillet_measurement.label(),
+                        &fillet_measurement_label(cb.fillet_measurement),
                         N_SIZE,
                         &cb.size_expr,
                         None,
                     );
                     // Asymmetric: a second radius, the flip arrow swapping the two ends
                     // (`sm-cornerbreak-01.png`).
-                    check(c, t, "smt-asymmetric", "Asymmetric", cb.asymmetric);
+                    check(
+                        c,
+                        t,
+                        "smt-asymmetric",
+                        &tr("sheet-asymmetric"),
+                        cb.asymmetric,
+                    );
                     if cb.asymmetric {
-                        let second = if cb.fillet_measurement == FilletMeasurement::Width {
-                            "Second width"
+                        let second = tr(if cb.fillet_measurement == FilletMeasurement::Width {
+                            "sheet-second-width"
                         } else {
-                            "Second radius"
-                        };
+                            "sheet-second-radius"
+                        });
                         number(
                             c,
                             t,
                             "sm-corner-break-size2",
-                            second,
+                            &second,
                             N_SIZE2,
                             &cb.size2_expr,
-                            Some((FL_ASYM, cb.flip_asymmetric, "Flip asymmetric")),
+                            Some((FL_ASYM, cb.flip_asymmetric, &tr("sheet-flip-asymmetric"))),
                         );
                     }
                     check(
                         c,
                         t,
                         "smt-allow-overflow",
-                        "Allow edge overflow",
+                        &tr("sheet-allow-edge-overflow"),
                         cb.allow_overflow,
                     );
                 }
@@ -1680,7 +1775,7 @@ pub fn body(
                 c,
                 t,
                 "sm-finish-parts-field",
-                "Sheet metal parts",
+                &tr("sheet-sheet-metal-parts"),
                 F_PARTS,
                 item(F_PARTS),
                 active == F_PARTS,
@@ -1708,11 +1803,12 @@ pub fn body(
                 });
                 r.spawn((
                     t.text(
-                        FINISH_WARNING,
+                        tr("sheet-finish-warning"),
                         t.font_sm,
                         bevy::text::FontWeight::NORMAL,
                         t.foreground,
                     ),
+                    Translated("sheet-finish-warning"),
                     Node {
                         flex_grow: 1.0,
                         flex_basis: Val::Px(0.0),
@@ -1755,7 +1851,7 @@ fn finish_info_bar(
         cadrs_ui::show_notification(
             &mut commands,
             &theme,
-            cadrs_ui::Notification::info(FINISH_WARNING)
+            cadrs_ui::Notification::info(tr("sheet-finish-warning"))
                 .autohide(false)
                 .name("sm-finish-info"),
         );
@@ -1889,13 +1985,14 @@ fn sync_tool_dialog(
 // ---------------------------------------------------------------------------------------------
 // Input
 
+/// A change of the tool's parameters, one command named by `label` (a catalog key).
 fn change(
     commands: &mut Commands,
     label: &'static str,
     f: impl FnOnce(&mut SheetMetalTool) + Send + 'static,
 ) {
     commands.queue(move |world: &mut World| {
-        crate::applied::change_kind(world, label, |k| {
+        crate::applied::change_kind(world, &tr(label), |k| {
             if let Some(x) = tool_mut(k) {
                 f(x);
             }
@@ -1924,7 +2021,7 @@ fn on_list_remove(ev: On<SelectionListRemove>, q: Query<&SmtRole>, mut commands:
         return;
     };
     let i = ev.index;
-    change(&mut commands, "Remove selection", move |x| {
+    change(&mut commands, "common-remove-selection", move |x| {
         fn at<T>(v: &mut Vec<T>, i: usize) {
             if i < v.len() {
                 v.remove(i);
@@ -1971,15 +2068,15 @@ fn on_select(ev: On<SelectChange>, q: Query<&SmtRole>, mut commands: Commands) {
     };
     let i = ev.index;
     let label = match s {
-        S_ALIGN => "Bend alignment",
-        S_CONTROL => "Angle control",
-        S_BOUNDING => "Bounding type",
-        S_ANCHOR => "Jog offset anchor",
-        S_CORNER_TYPE => "Corner relief type",
-        S_RELIEF_TYPE => "Bend relief type",
-        S_FILLET_MEAS | S_CHAMFER_MEAS => "Measurement",
-        S_CHAMFER_TYPE => "Chamfer type",
-        _ => "Control",
+        S_ALIGN => "sheet-bend-alignment",
+        S_CONTROL => "sheet-angle-control",
+        S_BOUNDING => "sheet-bounding-type",
+        S_ANCHOR => "sheet-jog-offset-anchor",
+        S_CORNER_TYPE => "sheet-corner-relief-type",
+        S_RELIEF_TYPE => "sheet-bend-relief-type",
+        S_FILLET_MEAS | S_CHAMFER_MEAS => "sheet-measurement",
+        S_CHAMFER_TYPE => "sheet-chamfer-type",
+        _ => "sheet-control",
     };
     change(&mut commands, label, move |x| {
         if let Some(b) = bend_mut(x) {
@@ -2023,13 +2120,13 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
     let Ok(name) = q.get(ev.entity) else { return };
     let on = ev.checked;
     let (label, which): (&'static str, u8) = match name.as_str() {
-        "smt-use-model-radius-checkbox" => ("Use model bend radius", 0),
-        "smt-use-model-k-checkbox" => ("Use model K Factor", 1),
-        "smt-preserve-material-checkbox" => ("Preserve material", 2),
-        "smt-up-to-offset-checkbox" => ("Offset distance", 3),
-        "smt-extend-bend-relief-checkbox" => ("Extend bend relief", 4),
-        "smt-asymmetric-checkbox" => ("Asymmetric", 5),
-        "smt-allow-overflow-checkbox" => ("Allow edge overflow", 6),
+        "smt-use-model-radius-checkbox" => ("sheet-use-model-bend-radius", 0),
+        "smt-use-model-k-checkbox" => ("sheet-use-model-k-factor", 1),
+        "smt-preserve-material-checkbox" => ("sheet-preserve-material", 2),
+        "smt-up-to-offset-checkbox" => ("sheet-offset-distance", 3),
+        "smt-extend-bend-relief-checkbox" => ("sheet-extend-bend-relief", 4),
+        "smt-asymmetric-checkbox" => ("sheet-asymmetric", 5),
+        "smt-allow-overflow-checkbox" => ("sheet-allow-edge-overflow", 6),
         _ => return,
     };
     change(&mut commands, label, move |x| {
@@ -2062,10 +2159,10 @@ fn on_flip(a: On<Activate>, q: Query<&SmtRole>, mut commands: Commands) {
         return;
     };
     let label = match f {
-        FL_HOLD => "Hold opposite side",
-        FL_OPPOSITE => "Opposite angle",
-        FL_ASYM => "Flip asymmetric",
-        _ => "Opposite direction",
+        FL_HOLD => "sheet-hold-opposite-side",
+        FL_OPPOSITE => "sheet-opposite-angle",
+        FL_ASYM => "sheet-flip-asymmetric",
+        _ => "common-opposite-direction",
     };
     change(&mut commands, label, move |x| match (x, f) {
         (SheetMetalTool::CornerBreak(c), FL_CHAMFER) => c.flip = !c.flip,
@@ -2089,7 +2186,7 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&SmtRole>, mut commands: Commands) {
         return;
     }
     let chamfer = ev.index == 1;
-    change(&mut commands, "Corner break type", move |x| {
+    change(&mut commands, "sheet-corner-break-type", move |x| {
         if let SheetMetalTool::CornerBreak(c) = x {
             c.chamfer = chamfer;
         }
@@ -2163,7 +2260,7 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&SmtRole>, mut commands: Comman
             }
         }
         let Some((v, expr)) = parsed else { return };
-        crate::applied::change_kind(world, "Change value", |k| {
+        crate::applied::change_kind(world, &tr("sheet-change-value"), |k| {
             if let Some(x) = tool_mut(k) {
                 set_number(x, n, v, expr);
             }
@@ -2488,7 +2585,7 @@ fn tool_arrows_pointer(
             {
                 (Some((A_FLIP, _)), Some(_)) => {
                     grab.0 = true;
-                    change(&mut commands, "Opposite angle", |x| {
+                    change(&mut commands, "sheet-opposite-angle", |x| {
                         if let Some(b) = bend_mut(x) {
                             b.opposite = !b.opposite;
                         }
@@ -2535,7 +2632,7 @@ fn tool_arrows_pointer(
                         return;
                     };
                     if crate::applied::current(world).is_some_and(|f| f.kind != d.kind) {
-                        crate::applied::set(world, d.kind, "Drag jog offset");
+                        crate::applied::set(world, d.kind, &tr("sheet-drag-jog-offset"));
                     }
                 });
             }

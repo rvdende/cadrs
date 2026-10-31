@@ -33,6 +33,7 @@ use cadrs_core::render::{
     self as model, RenderBackground, RenderEnvironment, RenderStudio, RenderView, SetRenderStudio,
 };
 use cadrs_core::{ElementId, ElementKind};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, CheckboxChange, DialogClose, Notification, Select, SelectChange, TextInputField,
@@ -441,17 +442,17 @@ fn start_preview(world: &mut World) {
         j.cancel.store(true, Ordering::Relaxed);
     }
     let Some(source) = studio.source else {
-        state.error = Some("Choose a Part Studio or an Assembly to render.".into());
+        state.error = Some(tr("render-error-no-source"));
         state.shown = Shown::None;
         return;
     };
     let Some(input) = scene_input(world, source) else {
-        world.resource_mut::<RenderState>().error = Some("The model isn't available.".into());
+        world.resource_mut::<RenderState>().error = Some(tr("render-error-model-unavailable"));
         return;
     };
     let mut state = world.resource_mut::<RenderState>();
     state.error = if input.0.is_empty() {
-        Some("The model has no parts to render.".into())
+        Some(tr("render-error-no-parts"))
     } else {
         None
     };
@@ -522,16 +523,20 @@ fn drive_jobs(world: &mut World) {
         let note = match saved {
             Some(Ok(p)) => {
                 info!("rendered {}", p.display());
-                Notification::info(format!(
-                    "Rendered {} ({} × {})",
-                    p.display(),
-                    f.width,
-                    f.height
+                Notification::info(tr_with(
+                    "render-rendered",
+                    &[
+                        ("file", &p.display().to_string()),
+                        ("width", &f.width.to_string()),
+                        ("height", &f.height.to_string()),
+                    ],
                 ))
                 .seconds(8.0)
             }
-            Some(Err(e)) => Notification::warning(format!("Render failed: {e}")),
-            None => Notification::warning("Render failed"),
+            Some(Err(e)) => {
+                Notification::warning(tr_with("render-failed-error", &[("error", &e.to_string())]))
+            }
+            None => Notification::warning(tr("render-failed")),
         };
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
@@ -710,9 +715,14 @@ fn sync_view(
     let caption = match (&state.final_job, &state.shown, &state.preview) {
         (Some(f), _, _) => {
             let (done, total, ..) = f.job.snapshot();
-            format!(
-                "Rendering {} × {}: {done} of {total} samples",
-                f.width, f.height
+            tr_with(
+                "render-caption-rendering",
+                &[
+                    ("width", &f.width.to_string()),
+                    ("height", &f.height.to_string()),
+                    ("done", &done.to_string()),
+                    ("total", &total.to_string()),
+                ],
             )
         }
         (
@@ -728,7 +738,16 @@ fn sync_view(
             _,
         ) => {
             format!(
-                "Render result: {width} × {height}, {samples} samples, {seconds:.1} s{}",
+                "{}{}",
+                tr_with(
+                    "render-caption-result",
+                    &[
+                        ("width", &width.to_string()),
+                        ("height", &height.to_string()),
+                        ("samples", &samples.to_string()),
+                        ("seconds", &format!("{seconds:.1}")),
+                    ],
+                ),
                 if file.is_empty() {
                     String::new()
                 } else {
@@ -739,9 +758,15 @@ fn sync_view(
         (None, Shown::Preview(_), Some((_, j))) => {
             let (done, total, ..) = j.snapshot();
             if done >= total {
-                format!("Preview: {total} samples, denoised")
+                tr_with(
+                    "render-caption-preview-done",
+                    &[("total", &total.to_string())],
+                )
             } else {
-                format!("Preview: {done} of {total} samples")
+                tr_with(
+                    "render-caption-preview",
+                    &[("done", &done.to_string()), ("total", &total.to_string())],
+                )
             }
         }
         _ => state.error.clone().unwrap_or_default(),
@@ -768,15 +793,15 @@ pub fn render_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     crate::document::feature_list_toggle(tb, t);
     tb.spawn(
         Button::new("render-toolbar-render")
-            .label("Render…")
+            .label(tr("render-render-ellipsis"))
             .icon("render-studio")
             .primary()
-            .tooltip("Render the scene to a PNG")
+            .tooltip(tr("render-render-tooltip"))
             .build(t),
     );
     tb.spawn(
         ToolButton::new("render-toolbar-capture", "screenshot")
-            .tooltip("Use the model's current view as the camera")
+            .tooltip(tr("render-capture-tooltip"))
             .build(t),
     );
 }
@@ -822,8 +847,15 @@ fn panel_model(world: &mut World) -> Option<PanelModel> {
             seconds,
             file,
             ..
-        } => Some(format!(
-            "{file}: {width} × {height}, {samples} samples, {seconds:.1} s"
+        } => Some(tr_with(
+            "render-result-line",
+            &[
+                ("file", file),
+                ("width", &width.to_string()),
+                ("height", &height.to_string()),
+                ("samples", &samples.to_string()),
+                ("seconds", &format!("{seconds:.1}")),
+            ],
         )),
         _ => None,
     };
@@ -958,24 +990,35 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
             h.spawn(cadrs_ui::icon("render-studio", 16.0, t.foreground));
             h.spawn((
                 Name::new("render-panel-title"),
-                t.text("Render Studio", 13.0, FontWeight::BOLD, t.foreground),
+                t.text(
+                    tr("common-render-studio"),
+                    13.0,
+                    FontWeight::BOLD,
+                    t.foreground,
+                ),
+                Translated("common-render-studio"),
             ));
         });
-        section(b, t, "render-model-heading", "Model");
+        section(b, t, "render-model-heading", &tr("render-model"));
         let names: Vec<String> = m.sources.iter().map(|(_, n)| n.clone()).collect();
         let current = m.sources.iter().position(|(e, _)| Some(*e) == s.source);
         let mut opts = names.clone();
         if current.is_none() {
-            opts.insert(0, "Choose a tab…".into());
+            opts.insert(0, tr("render-choose-tab"));
         }
         field_row(
             b,
             t,
-            "Model",
+            &tr("render-model"),
             select("render-source", &opts, current.unwrap_or(0)).build(t),
         );
 
-        section(b, t, "render-environment-heading", "Environment");
+        section(
+            b,
+            t,
+            "render-environment-heading",
+            &tr("render-environment"),
+        );
         let envs: Vec<String> = RenderEnvironment::ALL
             .iter()
             .map(|e| e.label().to_string())
@@ -983,7 +1026,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         field_row(
             b,
             t,
-            "Environment",
+            &tr("render-environment"),
             select(
                 "render-environment",
                 &envs,
@@ -998,7 +1041,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         field_row(
             b,
             t,
-            "Rotation",
+            &tr("common-rotation"),
             select(
                 "render-rotation",
                 &rots,
@@ -1016,7 +1059,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         field_row(
             b,
             t,
-            "Background",
+            &tr("render-background"),
             select(
                 "render-background",
                 &bgs,
@@ -1033,14 +1076,14 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         })
         .with_child(
             Checkbox::new("render-ground")
-                .label("Ground shadow")
+                .label(tr("render-ground-shadow"))
                 .checked(s.ground_shadow)
                 .height(22.0)
                 .build(t),
         );
 
-        section(b, t, "render-camera-heading", "Camera");
-        let mut views: Vec<String> = vec!["Current view".into()];
+        section(b, t, "render-camera-heading", &tr("render-camera"));
+        let mut views: Vec<String> = vec![tr("render-current-view")];
         views.extend(RenderView::NAMED.iter().map(|v| v.label().to_string()));
         let sel = match s.view {
             RenderView::Current { .. } => 0,
@@ -1050,20 +1093,25 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
                 .map(|i| i + 1)
                 .unwrap_or(2),
         };
-        field_row(b, t, "View", select("render-view", &views, sel).build(t));
+        field_row(
+            b,
+            t,
+            &tr("render-view"),
+            select("render-view", &views, sel).build(t),
+        );
         b.spawn(Node {
             margin: UiRect::new(Val::Px(98.0), Val::Px(10.0), Val::Px(2.0), Val::Px(2.0)),
             ..default()
         })
         .with_child(
             Checkbox::new("render-perspective")
-                .label("Perspective")
+                .label(tr("render-perspective"))
                 .checked(s.perspective)
                 .height(22.0)
                 .build(t),
         );
 
-        section(b, t, "render-output-heading", "Output");
+        section(b, t, "render-output-heading", &tr("render-output"));
         let mut sizes: Vec<String> = model::RESOLUTIONS.iter().map(|r| r.2.to_string()).collect();
         let size_sel = model::RESOLUTIONS
             .iter()
@@ -1074,7 +1122,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         field_row(
             b,
             t,
-            "Size",
+            &tr("common-size"),
             select(
                 "render-resolution",
                 &sizes,
@@ -1085,19 +1133,22 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         let mut quals: Vec<String> = model::QUALITIES.iter().map(|q| q.1.to_string()).collect();
         let q_sel = model::QUALITIES.iter().position(|q| q.0 == s.samples);
         if q_sel.is_none() {
-            quals.push(format!("{} samples", s.samples));
+            quals.push(tr_with(
+                "render-samples",
+                &[("count", &s.samples.to_string())],
+            ));
         }
         field_row(
             b,
             t,
-            "Quality",
+            &tr("render-quality"),
             select("render-quality", &quals, q_sel.unwrap_or(quals.len() - 1)).build(t),
         );
         let exps: Vec<String> = EXPOSURES.iter().map(|e| e.1.to_string()).collect();
         field_row(
             b,
             t,
-            "Exposure",
+            &tr("render-exposure"),
             select(
                 "render-exposure",
                 &exps,
@@ -1111,7 +1162,7 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         field_row(
             b,
             t,
-            "Seed",
+            &tr("render-seed"),
             TextInput::new("render-seed")
                 .value(s.seed.to_string())
                 .select_all_on_focus()
@@ -1125,17 +1176,23 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         })
         .with_child(
             Checkbox::new("render-denoise")
-                .label("Denoise")
+                .label(tr("render-denoise"))
                 .checked(s.denoise)
                 .height(22.0)
                 .build(t),
         );
 
-        section(b, t, "render-materials-heading", "Materials");
+        section(b, t, "render-materials-heading", &tr("render-materials"));
         if m.materials.is_empty() {
             b.spawn((
                 Name::new("render-materials-empty"),
-                t.text("No parts.", 11.0, FontWeight::NORMAL, t.muted_foreground),
+                t.text(
+                    tr("render-no-parts"),
+                    11.0,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("render-no-parts"),
                 Node {
                     margin: UiRect::horizontal(Val::Px(10.0)),
                     ..default()
@@ -1196,21 +1253,30 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         .with_children(|r| {
             r.spawn(
                 Button::new("render-start")
-                    .label("Render…")
+                    .label(tr("render-render-ellipsis"))
                     .icon("render-studio")
                     .primary()
                     .disabled(m.running || s.source.is_none())
                     .build(t),
             );
             if m.running {
-                r.spawn(Button::new("render-cancel").label("Cancel").build(t));
+                r.spawn(
+                    Button::new("render-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                );
             }
         });
         if m.running {
             b.spawn((
                 Name::new("render-progress"),
                 ProgressText,
-                t.text("Rendering…", 11.0, FontWeight::NORMAL, t.muted_foreground),
+                t.text(
+                    tr("render-rendering"),
+                    11.0,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
                 Node {
                     margin: UiRect::horizontal(Val::Px(10.0)),
                     ..default()
@@ -1285,10 +1351,16 @@ fn update_progress(
     let Some(f) = &state.final_job else { return };
     let (done, total, _, _, held) = f.job.snapshot();
     let pct = done as f32 / total.max(1) as f32 * 100.0;
+    let args = [
+        ("done", done.to_string()),
+        ("total", total.to_string()),
+        ("percent", format!("{pct:.0}")),
+    ];
+    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let text = if held {
-        format!("Paused at {done} of {total} samples ({pct:.0} %)")
+        tr_with("render-progress-paused", &args)
     } else {
-        format!("Rendering… {done} of {total} samples ({pct:.0} %)")
+        tr_with("render-progress", &args)
     };
     for mut t in &mut q_text {
         if t.0 != text {
@@ -1490,7 +1562,7 @@ fn on_activate(ev: On<Activate>, q: Query<&Name>, mut commands: Commands) {
                 &mut commands,
                 &theme,
                 "folder-picker",
-                "Choose a folder",
+                &tr("common-choose-folder"),
                 "render-folder",
                 dir,
             );
@@ -1561,7 +1633,7 @@ fn open_dialog(world: &mut World) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("render-dialog")
-            .title("Render")
+            .title(tr("render-render"))
             .width(460.0)
             .body(move |b| {
                 let t = &tb;
@@ -1582,7 +1654,7 @@ fn open_dialog(world: &mut World) {
                     g.spawn(t.text(s, t.font_base, FontWeight::BOLD, t.foreground));
                 };
                 b.spawn(row("render-dialog-name-row")).with_children(|g| {
-                    label(g, "File name");
+                    label(g, tr("common-file-name").as_str());
                     g.spawn(
                         TextInput::new("render-dialog-name")
                             .value(base)
@@ -1592,15 +1664,18 @@ fn open_dialog(world: &mut World) {
                             .height(26.0)
                             .build(t),
                     );
-                    g.spawn(t.text(
-                        "A PNG image, the same for the same seed.",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
+                    g.spawn((
+                        t.text(
+                            tr("render-dialog-png-help"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("render-dialog-png-help"),
                     ));
                 });
                 b.spawn(row("render-dialog-size-row")).with_children(|g| {
-                    label(g, "Size");
+                    label(g, tr("common-size").as_str());
                     let mut s = Select::new("render-dialog-resolution")
                         .bordered()
                         .width(full());
@@ -1617,7 +1692,7 @@ fn open_dialog(world: &mut World) {
                 });
                 b.spawn(row("render-dialog-quality-row"))
                     .with_children(|g| {
-                        label(g, "Quality");
+                        label(g, tr("render-quality").as_str());
                         let mut s = Select::new("render-dialog-quality")
                             .bordered()
                             .width(full());
@@ -1625,12 +1700,15 @@ fn open_dialog(world: &mut World) {
                             s = s.option(q.1, true);
                         }
                         if q_sel.is_none() {
-                            s = s.option(format!("{n} samples"), true);
+                            s = s.option(
+                                tr_with("render-samples", &[("count", &n.to_string())]),
+                                true,
+                            );
                         }
                         g.spawn(s.selected(q_sel.unwrap_or(model::QUALITIES.len())).build(t));
                     });
                 b.spawn(row("render-dialog-folder-row")).with_children(|g| {
-                    label(g, "Folder");
+                    label(g, tr("common-folder").as_str());
                     g.spawn(Node {
                         column_gap: Val::Px(6.0),
                         align_items: AlignItems::Center,
@@ -1647,7 +1725,7 @@ fn open_dialog(world: &mut World) {
                         );
                         r.spawn(
                             Button::new("render-dialog-browse")
-                                .label("Browse…")
+                                .label(tr("common-browse"))
                                 .outline()
                                 .build(t),
                         );
@@ -1658,12 +1736,16 @@ fn open_dialog(world: &mut World) {
                 let t = &tf;
                 f.spawn(
                     Button::new("render-dialog-ok")
-                        .label("Render")
+                        .label(tr("render-render"))
                         .icon("render-studio")
                         .primary()
                         .build(t),
                 );
-                f.spawn(Button::new("render-dialog-cancel").label("Cancel").build(t));
+                f.spawn(
+                    Button::new("render-dialog-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                );
             })
             .build(&theme),
         RenderDialog,
@@ -1707,7 +1789,7 @@ fn start_final(world: &mut World) {
         show_notification(
             &mut commands,
             &theme,
-            Notification::warning("Nowhere to save the render").name("render-toast"),
+            Notification::warning(tr("render-nowhere-to-save")).name("render-toast"),
         );
         world.flush();
         return;

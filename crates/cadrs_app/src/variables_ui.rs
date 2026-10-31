@@ -28,6 +28,7 @@ use cadrs_core::variables::{self, VariableFeature, VariableType};
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, FeatureKind};
 use cadrs_sketch::units::{Quantity, Units, VarValue};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::tr;
 use cadrs_ui::{
     FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, FieldVariables,
     ListedVariable, NewVariable, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState,
@@ -1043,7 +1044,7 @@ fn sync_variable_dialog(
                     .body(move |p| {
                         let mut strip = TabStrip::new("variable-type").compact();
                         for k in VariableType::ALL {
-                            strip = strip.tab(k.label());
+                            strip = strip.tab(variable_type_text(k));
                         }
                         let i = VariableType::ALL
                             .iter()
@@ -1064,14 +1065,14 @@ fn sync_variable_dialog(
                         .with_children(|b| {
                             b.spawn((
                                 Field::Name,
-                                NumberField::new("variable-name", "Name  #")
+                                NumberField::new("variable-name", tr("model-variable-name-field"))
                                     .text(v.name.clone())
                                     .label_width(74.0)
                                     .build(&t),
                             ));
                             b.spawn((
                                 Field::Value,
-                                NumberField::new("variable-value", "Value")
+                                NumberField::new("variable-value", tr("common-value"))
                                     .text(v.expr.clone())
                                     .label_width(74.0)
                                     .variables()
@@ -1093,7 +1094,7 @@ fn sync_variable_dialog(
                             ));
                             b.spawn((
                                 Field::Description,
-                                NumberField::new("variable-description", "Description")
+                                NumberField::new("variable-description", tr("common-description"))
                                     .text(v.description.clone())
                                     .label_width(74.0)
                                     .build(&t),
@@ -1148,7 +1149,7 @@ fn sync_variable_dialog(
         }
     }
     let (line, red) = match (&s.name_error, &s.value_error, &error) {
-        (Some(_), ..) => ("A name is letters, digits and _".to_string(), true),
+        (Some(_), ..) => (tr("model-variable-name-rule"), true),
         (None, Some((_, why)), _) => (why.clone(), true),
         (None, None, Some(why)) => (why.clone(), true),
         _ => (format!("= {}", v.display(&units.0)), false),
@@ -1166,6 +1167,16 @@ fn sync_variable_dialog(
             color.0 = c;
         }
     }
+}
+
+/// A variable's type, in the current language (its `label()` is English).
+pub(crate) fn variable_type_text(t: VariableType) -> String {
+    tr(match t {
+        VariableType::Length => "model-length",
+        VariableType::Angle => "common-angle",
+        VariableType::Number => "model-variable-type-number",
+        VariableType::Any => "model-variable-type-any",
+    })
 }
 
 #[cfg(test)]

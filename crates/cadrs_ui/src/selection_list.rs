@@ -408,7 +408,7 @@ fn spawn_contents(
                         .icon("delete")
                         .icon_size(12.0)
                         .ghost()
-                        .tooltip("Clear all")
+                        .tooltip(crate::i18n::tr("ui-selection-list-clear-all"))
                         .build(t),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         commands.trigger(SelectionListClear { entity: list });
@@ -423,7 +423,7 @@ fn spawn_contents(
                         .icon_size(12.0)
                         .ghost()
                         .selected(reordering)
-                        .tooltip("Reorder items")
+                        .tooltip(crate::i18n::tr("ui-selection-list-reorder"))
                         .build(t),
                     observe(
                         move |_: On<Activate>, mut q: Query<&mut SelectionListReorder>| {
@@ -492,7 +492,7 @@ fn spawn_contents(
                         row,
                     },
                     icon("drag-handle", 12.0, Color::srgb_u8(0x70, 0x70, 0x70)),
-                    Tooltip::new("Drag to reorder"),
+                    Tooltip::new(crate::i18n::tr("ui-selection-list-drag")),
                 ))
                 .insert(Node {
                     width: Val::Px(12.0),
@@ -573,7 +573,7 @@ fn spawn_contents(
                         .icon("copy")
                         .icon_size(12.0)
                         .ghost()
-                        .tooltip("Replace reference")
+                        .tooltip(crate::i18n::tr("ui-selection-list-replace"))
                         .build(t),
                     observe(
                         |a: On<Activate>, q: Query<&ItemReplace>, mut commands: Commands| {
@@ -619,7 +619,7 @@ fn spawn_contents(
                     .icon("close")
                     .icon_size(10.0)
                     .ghost()
-                    .tooltip("Remove")
+                    .tooltip(crate::i18n::tr("common-remove"))
                     .build(t),
                 observe(
                     |a: On<Activate>, q: Query<&ItemRemove>, mut commands: Commands| {
@@ -643,7 +643,7 @@ fn spawn_contents(
         })
         .with_child((
             Button::new(format!("{}-done", meta.name))
-                .label("Done")
+                .label(crate::i18n::tr("common-done"))
                 .small()
                 .build(t),
             observe(

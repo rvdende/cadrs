@@ -28,6 +28,7 @@ use bevy::text::FontWeight;
 use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialKey, UiMaterialPlugin};
 use bevy::ui_widgets::Activate;
 use bevy::ui_widgets::popover::PopoverSide;
+use cadrs_ui::i18n::tr;
 use cadrs_ui::{Theme, by_scheme};
 
 use crate::AppState;
@@ -184,6 +185,18 @@ impl CubeFace {
             CubeFace::Right => "Right",
             CubeFace::Top => "Top",
             CubeFace::Bottom => "Bottom",
+        }
+    }
+
+    /// The catalog key of the caption beside the ball (its view's name).
+    fn caption_key(self) -> &'static str {
+        match self {
+            CubeFace::Front => "view-ball-front",
+            CubeFace::Back => "view-ball-back",
+            CubeFace::Left => "view-ball-left",
+            CubeFace::Right => "view-ball-right",
+            CubeFace::Top => "view-ball-top",
+            CubeFace::Bottom => "view-ball-bottom",
         }
     }
 
@@ -792,11 +805,11 @@ pub fn spawn_view_cube(p: &mut ChildSpawnerCommands, theme: &Theme, image: Handl
                 }),
                 RollArrow(roll),
                 Hovered::default(),
-                cadrs_ui::Tooltip::new(if roll > 0.0 {
-                    "Roll counter-clockwise"
+                cadrs_ui::Tooltip::new(tr(if roll > 0.0 {
+                    "view-cube-roll-ccw"
                 } else {
-                    "Roll clockwise"
-                }),
+                    "view-cube-roll-cw"
+                })),
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(at.x - 13.0),
@@ -851,7 +864,7 @@ pub(crate) fn spawn_view_options(bar: &mut ChildSpawnerCommands, t: &Theme) {
     bar.spawn((
         cadrs_ui::ToolButton::new("render-mode", "part")
             .icon_size(18.0)
-            .tooltip("View options")
+            .tooltip(tr("view-options"))
             .build(t),
         ViewOptionsButton,
         cadrs_ui::prelude::observe(|a: On<Activate>, mut commands: Commands| {
@@ -990,35 +1003,35 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
         .align_end()
         .min_width(222.0)
         .item_height(23.0)
-        .item(I::new("view-isometric", "Isometric").shortcut("Shift+7"))
-        .item(I::new("view-dimetric", "Dimetric"))
-        .item(I::new("view-trimetric", "Trimetric"))
+        .item(I::new("view-isometric", tr("view-menu-isometric")).shortcut("Shift+7"))
+        .item(I::new("view-dimetric", tr("view-menu-dimetric")))
+        .item(I::new("view-trimetric", tr("view-menu-trimetric")))
         .separator()
         .item(
-            I::new("view-graphics", "Graphics preferences…")
+            I::new("view-graphics", tr("view-menu-graphics-preferences"))
                 .icon("settings")
                 .disabled(true),
         )
         .separator()
-        .item(I::new("view-named", "Named views…").disabled(!st.modeling))
-        .item(I::new("view-previous", "Previous view").disabled(!st.previous))
+        .item(I::new("view-named", tr("view-menu-named-views")).disabled(!st.modeling))
+        .item(I::new("view-previous", tr("view-menu-previous-view")).disabled(!st.previous))
         .separator()
-        .item(I::new("view-zoom-to-fit", "Zoom to fit").shortcut("F"))
-        .item(I::new("view-zoom-window", "Zoom to window"))
+        .item(I::new("view-zoom-to-fit", tr("common-zoom-to-fit")).shortcut("F"))
+        .item(I::new("view-zoom-window", tr("view-shortcut-zoom-window")))
         .separator()
         .item(check(
             st.perspective,
-            I::new("view-perspective", "Perspective view"),
+            I::new("view-perspective", tr("view-menu-perspective")),
         ))
-        .item(check(st.keep_up, I::new("view-keep-up", "Keep camera up")))
+        .item(check(
+            st.keep_up,
+            I::new("view-keep-up", tr("view-menu-keep-up")),
+        ))
         .item(
-            check(
-                st.walking,
-                I::new("view-walk", "Walk mode (W A S D, Q E, Esc)"),
-            )
-            .disabled(!st.modeling || st.sketching),
+            check(st.walking, I::new("view-walk", tr("view-menu-walk-mode")))
+                .disabled(!st.modeling || st.sketching),
         )
-        .item(I::new("view-orient-normal", "Orient normal to sketch on edit").disabled(true))
+        .item(I::new("view-orient-normal", tr("view-menu-orient-normal")).disabled(true))
         .separator()
         .item(
             check(!line, I::new("view-shaded", shaded_label))
@@ -1029,22 +1042,22 @@ fn view_menu(st: ViewMenuState) -> cadrs_ui::Menu {
                 .submenu(crate::view_options::render_items(st.render, true)),
         )
         .item(
-            I::new("view-tangent-edges", "Tangent edges visible")
+            I::new("view-tangent-edges", tr("view-menu-tangent-edges"))
                 .icon("check")
                 .submenu(vec![]),
         )
         .separator()
-        .item(I::new("view-high-quality", "View in high quality").disabled(true))
-        .item(I::new("view-boundary", "Highlight boundary edges").disabled(true))
+        .item(I::new("view-high-quality", tr("view-menu-high-quality")).disabled(true))
+        .item(I::new("view-boundary", tr("view-menu-boundary-edges")).disabled(true))
         .separator()
         .item(
             I::new(
                 "view-section-item",
-                if st.section {
-                    "Exit section view"
+                tr(if st.section {
+                    "view-menu-exit-section"
                 } else {
-                    "Section view…"
-                },
+                    "view-menu-section-view"
+                }),
             )
             .icon("section-view")
             .disabled(!st.modeling),
@@ -1238,14 +1251,19 @@ fn cube_hover(
 /// What a click on `spot` does, for the caption beside the ball.
 fn caption(spot: BallSpot) -> String {
     match spot {
-        BallSpot::Knob(f) => f.label().to_string(),
-        BallSpot::Corner(c) => format!(
-            "{} {} {}",
-            if c.z > 0 { "Top" } else { "Bottom" },
-            if c.y < 0 { "front" } else { "back" },
-            if c.x > 0 { "right" } else { "left" }
-        ),
-        BallSpot::Glass => "Drag to turn".to_string(),
+        BallSpot::Knob(f) => tr(f.caption_key()),
+        // "Top front right" and the like: one text each, as the words' order differs.
+        BallSpot::Corner(c) => tr(match (c.z > 0, c.y < 0, c.x > 0) {
+            (true, true, true) => "view-ball-top-front-right",
+            (true, true, false) => "view-ball-top-front-left",
+            (true, false, true) => "view-ball-top-back-right",
+            (true, false, false) => "view-ball-top-back-left",
+            (false, true, true) => "view-ball-bottom-front-right",
+            (false, true, false) => "view-ball-bottom-front-left",
+            (false, false, true) => "view-ball-bottom-back-right",
+            (false, false, false) => "view-ball-bottom-back-left",
+        }),
+        BallSpot::Glass => tr("view-ball-drag-to-turn"),
     }
 }
 

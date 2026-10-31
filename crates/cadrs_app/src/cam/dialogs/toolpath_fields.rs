@@ -2,6 +2,7 @@
 //! tabs are laid out with them in [`Draft::fields`]).
 
 use super::*;
+use cadrs_ui::i18n::{tr, tr_with};
 
 /// The Axis tab: the tool's axis, the work plane's or a picked face's normal (3+2).
 pub(super) fn axis_fields(
@@ -12,22 +13,20 @@ pub(super) fn axis_fields(
     picking: Option<&str>,
 ) {
     use cadrs_core::cam::cadrs_cam::strategy::ToolAxis;
-    f.push(Field::section("Tool axis"));
+    f.push(Field::section(&tr("cam-tool-axis")));
     f.push(Field::select(
         "axis",
-        "Tool axis",
-        vec!["Work plane Z", "Normal of a picked face"],
+        &tr("cam-tool-axis"),
+        vec![tr("cam-work-plane-z"), tr("cam-normal-of-picked-face")],
         usize::from(p.axis != ToolAxis::WorkPlane),
     ));
     let ToolAxis::Direction(z) = p.axis else {
-        f.push(Field::note(
-            "The tool cuts along the Z of the work plane above the toolpath (or the setup's).",
-        ));
+        f.push(Field::note(tr("cam-tool-axis-work-plane-note")));
         return;
     };
     f.push(Field::picks(
         "axis-face",
-        "Planar face for the tool axis",
+        &tr("cam-planar-face-for-tool-axis"),
         vec![format!("Z ({:.3}, {:.3}, {:.3})", z[0], z[1], z[2])],
         picking == Some("axis-face"),
     ));
@@ -38,17 +37,18 @@ pub(super) fn axis_fields(
     let frame = cadrs_core::cam::program::setup_frame(ctx.cam, job, s, ctx.parts);
     let local = frame.dir_to_local(z);
     let tilt = local[2].clamp(-1.0, 1.0).acos().to_degrees();
-    f.push(Field::note(format!(
-        "Tilted {tilt:.1}° from the setup's Z: cut in a tilted working plane (3+2)"
+    f.push(Field::note(tr_with(
+        "cam-tilted-from-setup-z",
+        &[("angle", &format!("{tilt:.1}"))],
     )));
     if let Some(m) = &job.machine
         && !m.can_tilt_to(local)
     {
-        f.push(Field::error(if m.indexing.is_none() {
-            "The machine has no indexing axes to tilt the tool"
+        f.push(Field::error(tr(if m.indexing.is_none() {
+            "cam-machine-no-indexing-axes"
         } else {
-            "The machine can't tilt the tool that far"
-        }));
+            "cam-machine-cant-tilt-that-far"
+        })));
     }
 }
 
@@ -56,43 +56,51 @@ pub(super) fn axis_fields(
 pub(super) fn collision_fields(f: &mut Vec<Field>, p: &Params, tool: Option<&Tool>) {
     use cadrs_core::cam::cadrs_cam::strategy::collision::CollisionAction;
     let c = &p.collision;
-    f.push(Field::section("Tool assembly"));
-    f.push(Field::check("coll", "Check the shank and holder", c.check));
+    f.push(Field::section(&tr("cam-tool-assembly-section")));
+    f.push(Field::check(
+        "coll",
+        &tr("cam-check-shank-and-holder"),
+        c.check,
+    ));
     if !c.check {
         return;
     }
     f.push(Field::number(
         "coll-shank",
-        "Shank clearance",
+        &tr("cam-shank-clearance"),
         c.shank_clearance,
         Unit::Mm,
     ));
     f.push(Field::number(
         "coll-holder",
-        "Holder clearance",
+        &tr("cam-holder-clearance"),
         c.holder_clearance,
         Unit::Mm,
     ));
     f.push(Field::select(
         "coll-action",
-        "Where they'd hit",
+        &tr("cam-where-theyd-hit"),
         labels(&CollisionAction::ALL, CollisionAction::label),
         index_of(&CollisionAction::ALL, c.action),
     ));
     if let Some(t) = tool {
         f.push(Field::note(match &t.holder {
-            Some(h) => format!(
-                "{}: flutes {} mm, stick-out {} mm, in {}",
-                t.name,
-                fmt(t.cutting_length),
-                fmt(t.overall_length),
-                h.name
+            Some(h) => tr_with(
+                "cam-tool-lengths-in-holder",
+                &[
+                    ("tool", &t.name),
+                    ("flutes", &fmt(t.cutting_length)),
+                    ("stickout", &fmt(t.overall_length)),
+                    ("holder", &h.name),
+                ],
             ),
-            None => format!(
-                "{}: flutes {} mm, stick-out {} mm, no holder",
-                t.name,
-                fmt(t.cutting_length),
-                fmt(t.overall_length)
+            None => tr_with(
+                "cam-tool-lengths-no-holder",
+                &[
+                    ("tool", &t.name),
+                    ("flutes", &fmt(t.cutting_length)),
+                    ("stickout", &fmt(t.overall_length)),
+                ],
             ),
         }));
     }
@@ -111,13 +119,18 @@ pub(super) fn toolpath_fields(
     machine: MachineKind,
     picking: Option<&str>,
 ) {
-    f.push(Field::text("name", "Name", &op.name));
+    f.push(Field::text("name", &tr("common-name"), &op.name));
     // Start from a template saved in the library (one this tool and machine can run).
     let templates = usable_templates(ctx.cam, tk, machine);
     if !templates.is_empty() {
-        let mut opts = vec!["None".to_string()];
+        let mut opts = vec![tr("common-none")];
         opts.extend(templates.iter().map(|t| t.name.clone()));
-        f.push(Field::select("template", "Start from template", opts, 0));
+        f.push(Field::select(
+            "template",
+            &tr("cam-start-from-template"),
+            opts,
+            0,
+        ));
     }
     let types: Vec<Type> = Type::ALL
         .into_iter()
@@ -125,14 +138,14 @@ pub(super) fn toolpath_fields(
         .collect();
     f.push(Field::select(
         "type",
-        "Type",
+        &tr("common-type"),
         labels(&types, Type::label),
         index_of(&types, kind),
     ));
     let pats = Pattern::available(kind, tk, machine);
     f.push(Field::select(
         "pattern",
-        "Pattern",
+        &tr("cam-toolpath-pattern"),
         labels(&pats, Pattern::label),
         index_of(&pats, p.pattern),
     ));
@@ -141,7 +154,7 @@ pub(super) fn toolpath_fields(
     if matches!(pat, Rough2D | Rough3D) {
         f.push(Field::select(
             "sub",
-            "Sub-pattern",
+            &tr("cam-sub-pattern"),
             labels(&SubPattern::ALL, SubPattern::label),
             index_of(&SubPattern::ALL, p.sub_pattern),
         ));
@@ -149,46 +162,46 @@ pub(super) fn toolpath_fields(
     // Drive geometry.
     let (placeholder, items): (&str, Vec<String>) = match kind {
         Type::Edges => (
-            "Drive edges (the part's outline when empty)",
+            "cam-drive-edges",
             p.drive
                 .edges
                 .iter()
-                .map(|k| entity_label(ctx, k, "Edge"))
+                .map(|k| entity_label(ctx, k, "common-edge", "common-edge-of"))
                 .collect(),
         ),
         Type::Faces => (
             match pat {
-                Fill => "Faces to fill",
-                Face => "Faces (the stock's top when empty)",
-                _ => "Floor faces (all when empty)",
+                Fill => "cam-faces-to-fill",
+                Face => "cam-faces-stock-top",
+                _ => "cam-floor-faces",
             },
             p.drive
                 .faces
                 .iter()
-                .map(|k| entity_label(ctx, k, "Face"))
+                .map(|k| entity_label(ctx, k, "common-face", "common-face-of"))
                 .collect(),
         ),
         Type::Bodies => (
-            "Faces to finish (all when empty)",
+            "cam-faces-to-finish",
             p.drive
                 .faces
                 .iter()
-                .map(|k| entity_label(ctx, k, "Face"))
+                .map(|k| entity_label(ctx, k, "common-face", "common-face-of"))
                 .collect(),
         ),
         Type::Holes => (
-            "Holes (by the cycle's selection when empty)",
+            "cam-drive-holes",
             p.drive
                 .holes
                 .iter()
-                .map(|h| format!("Hole at ({}, {})", fmt(h[0]), fmt(h[1])))
+                .map(|h| tr_with("cam-hole-at", &[("x", &fmt(h[0])), ("y", &fmt(h[1]))]))
                 .collect(),
         ),
     };
     if pat != Engrave || kind == Type::Edges {
         f.push(Field::picks(
             "drive",
-            placeholder,
+            &tr(placeholder),
             items,
             picking == Some("drive"),
         ));
@@ -196,14 +209,14 @@ pub(super) fn toolpath_fields(
     if kind == Type::Edges && !p.drive.edges.is_empty() {
         f.push(Field::check(
             "reverse",
-            "Reverse direction",
+            &tr("cam-reverse-direction"),
             p.drive.reverse,
         ));
     }
     if matches!(pat, Profile2D | Cut) {
         f.push(Field::select(
             "side",
-            "Side",
+            &tr("cam-side"),
             labels(&Side::ALL, Side::label),
             index_of(&Side::ALL, p.side),
         ));
@@ -211,18 +224,18 @@ pub(super) fn toolpath_fields(
     if pat == Profile2D && p.side != Side::On {
         f.push(Field::select(
             "comp",
-            "Compensation",
+            &tr("cam-compensation"),
             labels(&Compensation::ALL, Compensation::label),
             index_of(&Compensation::ALL, p.compensation),
         ));
     }
     let beam = tk.is_beam();
     if !beam && !matches!(pat, Drill) {
-        f.push(Field::section("Offset"));
+        f.push(Field::section(&tr("common-offset")));
         if !matches!(pat, Face | Engrave | Chamfer2D) {
             f.push(Field::number(
                 "wall",
-                "Wall stock to leave",
+                &tr("cam-wall-stock-to-leave"),
                 p.wall_stock,
                 Unit::Mm,
             ));
@@ -230,7 +243,7 @@ pub(super) fn toolpath_fields(
         if !matches!(pat, Engrave | Chamfer2D) {
             f.push(Field::number(
                 "floor",
-                "Floor stock to leave",
+                &tr("cam-floor-stock-to-leave"),
                 p.floor_stock,
                 Unit::Mm,
             ));
@@ -238,7 +251,7 @@ pub(super) fn toolpath_fields(
     } else if beam && pat == Cut {
         f.push(Field::number(
             "wall",
-            "Extra offset",
+            &tr("cam-extra-offset"),
             p.wall_stock,
             Unit::Mm,
         ));
@@ -247,21 +260,21 @@ pub(super) fn toolpath_fields(
         pat,
         Rough2D | Rough3D | Adaptive | Profile2D | ConstantZ | Face | Engrave | Bore
     ) {
-        f.push(Field::section("Step down"));
+        f.push(Field::section(&tr("cam-step-down")));
         f.push(Field::number(
             "stepdown",
-            if pat == Bore {
-                "Helix pitch"
+            &tr(if pat == Bore {
+                "cam-helix-pitch"
             } else {
-                "Step down"
-            },
+                "cam-step-down"
+            }),
             p.step_down,
             Unit::Mm,
         ));
         if matches!(pat, Rough2D | Rough3D | Profile2D) {
             f.push(Field::number(
                 "first",
-                "First step down (0: same)",
+                &tr("cam-first-step-down"),
                 p.first_step_down,
                 Unit::Mm,
             ));
@@ -280,62 +293,60 @@ pub(super) fn toolpath_fields(
             | Fill
             | Profile2D
     ) {
-        f.push(Field::section("Step over"));
+        f.push(Field::section(&tr("cam-step-over")));
         f.push(Field::number(
             "stepover",
-            if pat == Fill {
-                "Line spacing"
+            &tr(if pat == Fill {
+                "cam-line-spacing"
             } else {
-                "Step over"
-            },
+                "cam-step-over"
+            }),
             p.step_over,
             Unit::Mm,
         ));
         if pat == Profile2D {
-            f.push(Field::count("passes", "Passes", p.passes as i64));
+            f.push(Field::count("passes", &tr("cam-passes"), p.passes as i64));
         }
         if pat == Scallop {
             f.push(Field::number(
                 "steep",
-                "Steep angle (walls left to Constant Z)",
+                &tr("cam-steep-angle"),
                 p.steep_angle,
                 Unit::Deg,
             ));
         }
     }
     if pat == ThreadMill {
-        f.push(Field::section("Thread"));
+        f.push(Field::section(&tr("cam-thread")));
         f.push(Field::number(
             "thread-d",
-            "Major diameter (0: from the hole)",
+            &tr("cam-major-diameter"),
             p.thread_diameter,
             Unit::Mm,
         ));
-        f.push(Field::count("passes", "Radial passes", p.passes as i64));
+        f.push(Field::count(
+            "passes",
+            &tr("cam-radial-passes"),
+            p.passes as i64,
+        ));
         f.push(Field::check(
             "left-thread",
-            "Left-hand thread",
+            &tr("cam-left-hand-thread"),
             p.left_hand_thread,
         ));
-        f.push(Field::note(
-            "The tool's pitch sets the thread's; climb milling follows the spindle's direction \
-             (a left-hand tool turns M4).",
-        ));
+        f.push(Field::note(tr("cam-thread-pitch-note")));
     }
     if !matches!(pat, Drill) {
-        f.push(Field::section("Sorting"));
+        f.push(Field::section(&tr("cam-sorting")));
         f.push(Field::select(
             "direction",
-            if beam {
-                "Direction"
+            &tr(if beam {
+                "common-direction"
             } else {
-                "Cutting direction"
-            },
+                "cam-cutting-direction"
+            }),
             if beam {
-                vec![
-                    "Part on the right".to_string(),
-                    "Part on the left".to_string(),
-                ]
+                vec![tr("cam-part-on-the-right"), tr("cam-part-on-the-left")]
             } else {
                 labels(&Direction::ALL, Direction::label)
             },
@@ -346,36 +357,46 @@ pub(super) fn toolpath_fields(
         if rastered {
             f.push(Field::select(
                 "method",
-                "Cutting method",
+                &tr("cam-cutting-method"),
                 labels(&CuttingMethod::ALL, CuttingMethod::label),
                 index_of(&CuttingMethod::ALL, p.cutting_method),
             ));
-            f.push(Field::number("angle", "Angle", p.angle, Unit::Deg));
+            f.push(Field::number(
+                "angle",
+                &tr("common-angle"),
+                p.angle,
+                Unit::Deg,
+            ));
         }
         if matches!(pat, Rough2D | Rough3D | Profile2D) {
             f.push(Field::select(
                 "machine-by",
-                "Machine by",
+                &tr("cam-machine-by"),
                 labels(&MachineBy::ALL, MachineBy::label),
                 index_of(&MachineBy::ALL, p.machine_by),
             ));
         }
     }
     if !beam && !matches!(pat, Drill | Bore | Chamfer2D | Engrave) {
-        f.push(Field::section("Heights"));
-        for (k, name, h) in [
-            ("top", "Top", p.heights.top),
-            ("bottom", "Bottom", p.heights.bottom),
+        f.push(Field::section(&tr("cam-heights")));
+        for (k, from, offset, h) in [
+            ("top", "cam-top-from", "cam-top-offset", p.heights.top),
+            (
+                "bottom",
+                "cam-bottom-from",
+                "cam-bottom-offset",
+                p.heights.bottom,
+            ),
         ] {
             f.push(Field::select(
                 &format!("{k}-from"),
-                &format!("{name} from"),
+                &tr(from),
                 labels(&HeightRef::ALL, HeightRef::label),
                 index_of(&HeightRef::ALL, h.from),
             ));
             f.push(Field::number(
                 &format!("{k}-off"),
-                &format!("{name} offset"),
+                &tr(offset),
                 h.offset,
                 Unit::Mm,
             ));
@@ -383,42 +404,61 @@ pub(super) fn toolpath_fields(
     }
     match pat {
         Chamfer2D => {
-            f.push(Field::section("Chamfer"));
-            f.push(Field::number("depth", "Chamfer width", p.depth, Unit::Mm));
+            f.push(Field::section(&tr("cam-chamfer")));
+            f.push(Field::number(
+                "depth",
+                &tr("cam-chamfer-width"),
+                p.depth,
+                Unit::Mm,
+            ));
             f.push(Field::number(
                 "tip-off",
-                "Tip offset",
+                &tr("cam-tip-offset"),
                 p.tip_offset,
                 Unit::Mm,
             ));
         }
         Engrave => {
-            f.push(Field::section("Engrave"));
-            f.push(Field::number("depth", "Depth", p.depth, Unit::Mm));
+            f.push(Field::section(&tr("cam-engrave")));
+            f.push(Field::number(
+                "depth",
+                &tr("common-depth"),
+                p.depth,
+                Unit::Mm,
+            ));
         }
         Profile2D => {
-            f.push(Field::section("Tabs"));
-            f.push(Field::check("tabs", "Tabs", p.tabs.enabled));
+            f.push(Field::section(&tr("cam-tabs")));
+            f.push(Field::check("tabs", &tr("cam-tabs"), p.tabs.enabled));
             if p.tabs.enabled {
                 f.push(Field::count(
                     "tab-count",
-                    "Tabs per contour",
+                    &tr("cam-tabs-per-contour"),
                     p.tabs.count as i64,
                 ));
-                f.push(Field::number("tab-w", "Tab width", p.tabs.width, Unit::Mm));
+                f.push(Field::number(
+                    "tab-w",
+                    &tr("cam-tab-width"),
+                    p.tabs.width,
+                    Unit::Mm,
+                ));
                 f.push(Field::number(
                     "tab-h",
-                    "Tab height",
+                    &tr("cam-tab-height"),
                     p.tabs.height,
                     Unit::Mm,
                 ));
             }
         }
         Drill | Bore => {
-            f.push(Field::section(if pat == Drill { "Cycle" } else { "Holes" }));
+            f.push(Field::section(&tr(if pat == Drill {
+                "cam-cycle"
+            } else {
+                "cam-holes"
+            })));
             f.push(Field::select(
                 "hole-select",
-                "Holes",
+                &tr("cam-holes"),
                 labels(&HoleSelect::ALL, HoleSelect::label),
                 index_of(&HoleSelect::ALL, p.cycle.select),
             ));
@@ -431,60 +471,65 @@ pub(super) fn toolpath_fields(
                 ];
                 f.push(Field::select(
                     "cycle",
-                    "Cycle",
+                    &tr("cam-cycle"),
                     labels(&cycles, CycleKind::label),
                     index_of(&cycles, p.cycle.kind),
                 ));
                 if matches!(p.cycle.kind, CycleKind::Peck | CycleKind::ChipBreak) {
-                    f.push(Field::number("peck", "Peck depth", p.cycle.peck, Unit::Mm));
+                    f.push(Field::number(
+                        "peck",
+                        &tr("cam-peck-depth"),
+                        p.cycle.peck,
+                        Unit::Mm,
+                    ));
                 }
                 f.push(Field::number(
                     "dwell",
-                    "Dwell",
+                    &tr("cam-dwell"),
                     p.cycle.dwell,
                     Unit::Seconds,
                 ));
                 f.push(Field::check(
                     "retract-full",
-                    "Retract to clearance between holes",
+                    &tr("cam-retract-between-holes"),
                     p.cycle.retract_full,
                 ));
             }
             f.push(Field::number(
                 "break",
-                "Break through",
+                &tr("cam-break-through"),
                 p.cycle.break_through,
                 Unit::Mm,
             ));
         }
         _ => {}
     }
-    f.push(Field::section("Speeds"));
+    f.push(Field::section(&tr("cam-speeds")));
     if !beam {
         f.push(Field::number(
             "rpm",
-            "Spindle speed",
+            &tr("cam-spindle-speed"),
             p.speeds.spindle_rpm,
             Unit::Rpm,
         ));
     }
     f.push(Field::number(
         "feed",
-        "Feed rate",
+        &tr("cam-feed-rate"),
         p.speeds.feed,
         Unit::Feed,
     ));
     if !beam {
         f.push(Field::number(
             "plunge",
-            "Plunge rate",
+            &tr("cam-plunge-rate"),
             p.speeds.plunge,
             Unit::Feed,
         ));
         if !matches!(pat, Drill) {
             f.push(Field::number(
                 "ramp-feed",
-                "Ramp rate",
+                &tr("cam-ramp-rate"),
                 p.speeds.ramp,
                 Unit::Feed,
             ));
@@ -492,130 +537,139 @@ pub(super) fn toolpath_fields(
     }
     f.push(Field::number(
         "lead-feed",
-        "Lead rate",
+        &tr("cam-lead-rate"),
         p.speeds.lead,
         Unit::Feed,
     ));
-    f.push(Field::section("Posting"));
+    f.push(Field::section(&tr("cam-posting")));
     if !beam {
         f.push(Field::select(
             "coolant",
-            "Coolant",
+            &tr("cam-coolant"),
             labels(&Coolant::ALL, Coolant::label),
             index_of(&Coolant::ALL, p.posting.coolant),
         ));
         f.push(Field::check(
             "force-tc",
-            "Force tool change",
+            &tr("cam-force-tool-change"),
             p.posting.force_tool_change,
         ));
     }
     f.push(Field::check(
         "stop",
-        "Stop before (M0)",
+        &tr("cam-stop-before"),
         p.posting.stop_before,
     ));
-    f.push(Field::text("comment", "Comment", &p.posting.comment));
+    f.push(Field::text(
+        "comment",
+        &tr("cam-comment"),
+        &p.posting.comment,
+    ));
     if matches!(pat, Rough2D | Rough3D | Adaptive) {
-        f.push(Field::check(
-            "rest",
-            "Rest machining (what the operations above left)",
-            p.rest,
-        ));
+        f.push(Field::check("rest", &tr("cam-rest-machining"), p.rest));
     }
 }
 
 pub(super) fn link_fields(f: &mut Vec<Field>, p: &Params, beam: bool) {
     let l = &p.links;
-    f.push(Field::section("Clearance area"));
+    f.push(Field::section(&tr("cam-clearance-area")));
     f.push(Field::number(
         "clearance",
-        "Clearance above stock",
+        &tr("cam-clearance-above-stock"),
         l.clearance,
         Unit::Mm,
     ));
     if !beam {
         f.push(Field::number(
             "rapid-d",
-            "Rapid distance",
+            &tr("cam-rapid-distance"),
             l.rapid_distance,
             Unit::Mm,
         ));
         f.push(Field::number(
             "feed-d",
-            "Feed distance",
+            &tr("cam-feed-distance"),
             l.feed_distance,
             Unit::Mm,
         ));
-        f.push(Field::section("Gaps"));
+        f.push(Field::section(&tr("cam-gaps")));
         f.push(Field::number(
             "gap",
-            "Small gaps up to",
+            &tr("cam-small-gaps-up-to"),
             l.small_gap,
             Unit::Mm,
         ));
         let acts = labels(&LinkAction::ALL, LinkAction::label);
         f.push(Field::select(
             "small",
-            "Small gaps",
+            &tr("cam-small-gaps"),
             acts.clone(),
             index_of(&LinkAction::ALL, l.small_gaps),
         ));
         f.push(Field::select(
             "large",
-            "Large gaps",
+            &tr("cam-large-gaps"),
             acts,
             index_of(&LinkAction::ALL, l.large_gaps),
         ));
-        f.push(Field::section("First entry"));
+        f.push(Field::section(&tr("cam-first-entry")));
         f.push(Field::select(
             "entry",
-            "Entry",
+            &tr("cam-entry"),
             labels(&Entry::ALL, Entry::label),
             index_of(&Entry::ALL, l.entry),
         ));
         if l.entry == Entry::Ramp {
             f.push(Field::number(
                 "ramp-angle",
-                "Ramp angle",
+                &tr("cam-ramp-angle"),
                 l.ramp_angle,
                 Unit::Deg,
             ));
         }
     }
-    f.push(Field::section("Leads"));
+    f.push(Field::section(&tr("cam-leads")));
     let leads = labels(&LeadKind::ALL, LeadKind::label);
     f.push(Field::select(
         "lead-in",
-        "Lead in",
+        &tr("cam-lead-in"),
         leads.clone(),
         index_of(&LeadKind::ALL, l.lead_in),
     ));
     f.push(Field::select(
         "lead-out",
-        "Lead out",
+        &tr("cam-lead-out"),
         leads,
         index_of(&LeadKind::ALL, l.lead_out),
     ));
     if l.lead_in != LeadKind::None || l.lead_out != LeadKind::None {
         f.push(Field::number(
             "lead-r",
-            "Lead radius",
+            &tr("cam-lead-radius"),
             l.lead_radius,
             Unit::Mm,
         ));
     }
-    f.push(Field::number("overlap", "Overlap", l.overlap, Unit::Mm));
+    f.push(Field::number(
+        "overlap",
+        &tr("cam-overlap"),
+        l.overlap,
+        Unit::Mm,
+    ));
 }
 
 /// The Misc tab's pattern: the toolpath repeated in a line or round a centre.
 pub(super) fn repeat_fields(f: &mut Vec<Field>, r: &cadrs_core::cam::cadrs_cam::strategy::Repeat) {
     use cadrs_core::cam::cadrs_cam::strategy::Repeat;
-    f.push(Field::section("Pattern"));
+    f.push(Field::section(&tr("cam-repeat-pattern")));
     f.push(Field::select(
         "repeat",
-        "Repeat",
-        vec!["None", "Linear", "Circular"],
+        &tr("cam-repeat"),
+        vec![
+            tr("common-none"),
+            tr("cam-repeat-linear"),
+            tr("cam-repeat-circular"),
+        ],
         match r {
             Repeat::None => 0,
             Repeat::Linear { .. } => 1,
@@ -625,29 +679,55 @@ pub(super) fn repeat_fields(f: &mut Vec<Field>, r: &cadrs_core::cam::cadrs_cam::
     match *r {
         Repeat::None => {}
         Repeat::Linear { count, step } => {
-            f.push(Field::count("rep-count", "Instances", count as i64));
-            f.push(Field::number("rep-dx", "Spacing X", step[0], Unit::Mm));
-            f.push(Field::number("rep-dy", "Spacing Y", step[1], Unit::Mm));
+            f.push(Field::count(
+                "rep-count",
+                &tr("cam-instances"),
+                count as i64,
+            ));
+            f.push(Field::number(
+                "rep-dx",
+                &tr("cam-spacing-x"),
+                step[0],
+                Unit::Mm,
+            ));
+            f.push(Field::number(
+                "rep-dy",
+                &tr("cam-spacing-y"),
+                step[1],
+                Unit::Mm,
+            ));
         }
         Repeat::Circular {
             count,
             center,
             angle,
         } => {
-            f.push(Field::count("rep-count", "Instances", count as i64));
-            f.push(Field::number("rep-cx", "Centre X", center[0], Unit::Mm));
-            f.push(Field::number("rep-cy", "Centre Y", center[1], Unit::Mm));
+            f.push(Field::count(
+                "rep-count",
+                &tr("cam-instances"),
+                count as i64,
+            ));
+            f.push(Field::number(
+                "rep-cx",
+                &tr("cam-centre-x"),
+                center[0],
+                Unit::Mm,
+            ));
+            f.push(Field::number(
+                "rep-cy",
+                &tr("cam-centre-y"),
+                center[1],
+                Unit::Mm,
+            ));
             f.push(Field::number(
                 "rep-angle",
-                "Angle between",
+                &tr("cam-angle-between"),
                 angle,
                 Unit::Deg,
             ));
         }
     }
     if *r != Repeat::None {
-        f.push(Field::note(
-            "In the toolpath's work plane; each copy is checked for collisions like the first.",
-        ));
+        f.push(Field::note(tr("cam-repeat-note")));
     }
 }

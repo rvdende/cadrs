@@ -177,7 +177,7 @@ impl SelectionField {
                         .icon("close")
                         .icon_size(10.0)
                         .ghost()
-                        .tooltip("Clear")
+                        .tooltip(crate::i18n::tr("ui-selection-field-clear"))
                         .build(&t),
                     observe(
                         |a: On<Activate>, q: Query<&FieldClear>, mut commands: Commands| {

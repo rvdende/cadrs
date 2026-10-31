@@ -60,7 +60,7 @@ impl PathField {
             value: String::new(),
             placeholder: None,
             icon: "folder".into(),
-            tooltip: "Browse…".into(),
+            tooltip: crate::i18n::tr("common-browse"),
             height: 30.0,
             read_only: false,
             value_tooltip: None,

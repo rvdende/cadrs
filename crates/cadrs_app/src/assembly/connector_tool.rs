@@ -36,6 +36,7 @@ use cadrs_core::assembly::{InstanceId, Pose};
 use cadrs_core::mate::OriginType;
 use cadrs_core::solid::Solid;
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, NumberFieldCommit, NumberFieldState,
@@ -285,7 +286,7 @@ pub fn edit_mate_connector(world: &mut World, mate: MateId, index: usize) {
     world.insert_resource(session_on(
         element,
         Target::Mate { mate, index },
-        "Mate connector".into(),
+        tr("common-mate-connector"),
         c,
     ));
 }
@@ -356,15 +357,19 @@ pub fn world_frame(
 fn part_name(cache: &PartCache, i: InstanceId) -> String {
     let n = cache
         .part_name(super::occurrence_part(i))
-        .unwrap_or("instance");
-    n.rsplit_once(" <").map(|(p, _)| p).unwrap_or(n).to_string()
+        .map(str::to_string)
+        .unwrap_or_else(|| tr("asm-instance"));
+    n.rsplit_once(" <")
+        .map(|(p, _)| p)
+        .unwrap_or(n.as_str())
+        .to_string()
 }
 
 /// How a field or a list names a connector: "Origin", "Mate connector 2" (an explicit one's
 /// name), "Mate connector of Slot Plate" (an implicit one), "Face of Pin" (a Tangent entity).
 pub fn connector_label(doc: &ActiveDocument, cache: &PartCache, c: &MateConnector) -> String {
     if c.is_origin() {
-        return "Origin".into();
+        return tr("asm-connector-origin");
     }
     match c.anchor {
         ConnectorAnchor::Explicit { feature } => {
@@ -375,32 +380,49 @@ pub fn connector_label(doc: &ActiveDocument, cache: &PartCache, c: &MateConnecto
                     .find(|o| o.id == c.instance)?;
                 Some(doc.doc.element(o.element)?.feature(feature)?.name.clone())
             });
-            format!(
-                "{} of {}",
-                name.unwrap_or_else(|| "Mate connector".into()),
-                part_name(cache, c.instance)
+            tr_with(
+                "asm-connector-of-part",
+                &[
+                    (
+                        "connector",
+                        &name.unwrap_or_else(|| tr("common-mate-connector")),
+                    ),
+                    ("part", &part_name(cache, c.instance)),
+                ],
             )
         }
         ConnectorAnchor::Local { id } => {
             let name = doc
                 .active_element()
                 .and_then(|e| Some(e.assembly_model()?.local_connector(id)?.name.clone()));
-            name.unwrap_or_else(|| "Mate connector".into())
+            name.unwrap_or_else(|| tr("common-mate-connector"))
         }
         _ => match c.surface_kind() {
-            Some(k) => format!("{} of {}", k.noun(), part_name(cache, c.instance)),
-            None => format!("Mate connector of {}", part_name(cache, c.instance)),
+            Some(k) => {
+                use cadrs_core::assembly::connector::SurfaceKind;
+                // (SurfaceKind::noun's "Face", "Edge", "Vertex".)
+                let key = match k {
+                    SurfaceKind::Line => "common-edge-of",
+                    SurfaceKind::Point => "common-vertex-of",
+                    _ => "common-face-of",
+                };
+                tr_with(key, &[("name", &part_name(cache, c.instance))])
+            }
+            None => tr_with(
+                "asm-mate-connector-of",
+                &[("part", &part_name(cache, c.instance))],
+            ),
         },
     }
 }
 
 fn entity_label(cache: &PartCache, i: InstanceId, e: &EntityRef) -> String {
-    let what = match e {
-        EntityRef::Face(_) => "Face",
-        EntityRef::Edge(_) => "Edge",
-        EntityRef::Vertex(_) => "Vertex",
+    let key = match e {
+        EntityRef::Face(_) => "common-face-of",
+        EntityRef::Edge(_) => "common-edge-of",
+        EntityRef::Vertex(_) => "common-vertex-of",
     };
-    format!("{what} of {}", part_name(cache, i))
+    tr_with(key, &[("name", &part_name(cache, i))])
 }
 
 /// The explicit connectors in the view: each instance's Part Studio connectors and the
@@ -1131,7 +1153,7 @@ fn sync_dialog(
         owner_on: s.owner_on,
         flip,
         texts: tx,
-        owner_placeholder: "Select owner instance",
+        owner_placeholder: "asm-connector-select-owner-instance",
     };
     let field = s.field;
     let tb = theme.clone();
@@ -1166,7 +1188,7 @@ fn sync_dialog(
                     f.spawn((
                         Name::new("mate-connector-help"),
                         icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                        Tooltip::new("Help"),
+                        Tooltip::new(tr("common-help")),
                     ));
                     let _ = &tf;
                 })

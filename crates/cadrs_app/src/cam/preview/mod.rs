@@ -24,6 +24,7 @@ use cadrs_core::cam::cadrs_cam::tool::Tool;
 use cadrs_core::cam::cadrs_cam::toolpath::{Segment, Timeline};
 use cadrs_core::cam::cadrs_cam::{Frame, P3};
 use cadrs_core::cam::{CamId, NodeRef, OpKind, program};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, Checkbox, CheckboxChange, Slider, SliderChange};
 
@@ -241,7 +242,7 @@ pub fn open_for_selection(world: &mut World) {
         }) {
             Some(f) => f,
             None => {
-                toast(world, "Select a toolpath or setup to preview");
+                toast(world, &tr("cam-select-toolpath-to-preview"));
                 return;
             }
         }
@@ -252,7 +253,7 @@ pub fn open_for_selection(world: &mut World) {
         return;
     };
     let Some(parts) = super::compute::studio_parts(world, element) else {
-        toast(world, "The parts are still being built");
+        toast(world, &tr("cam-parts-still-being-built"));
         return;
     };
     // Every toolpath must be calculated.
@@ -290,14 +291,11 @@ pub fn open_for_selection(world: &mut World) {
         .collect();
     if !missing.is_empty() {
         world.resource_mut::<Computed>().request(missing);
-        toast(
-            world,
-            "Calculating the toolpaths first: preview again when they're done",
-        );
+        toast(world, &tr("cam-calculating-toolpaths-first-preview"));
         return;
     }
     if wanted.is_empty() {
-        toast(world, "The setup has no toolpaths");
+        toast(world, &tr("cam-setup-has-no-toolpaths"));
         return;
     }
     let paths = world.resource::<Computed>().paths();
@@ -401,7 +399,7 @@ pub fn open_for_selection(world: &mut World) {
                 )
             }))
             .unwrap_or_else(|_| Analysis {
-                summary: "The check failed unexpectedly".into(),
+                summary: tr("cam-check-failed-unexpectedly"),
                 collisions: Vec::new(),
                 part: None,
                 start: None,
@@ -435,7 +433,7 @@ pub fn open_for_selection(world: &mut World) {
         top,
         mesh_dirty: true,
         mesh_at: None,
-        summary: "Checking the run…".into(),
+        summary: tr("cam-checking-the-run"),
         collisions: Vec::new(),
         paused_at: None,
         start: None,
@@ -455,7 +453,7 @@ fn poll_analysis(state: Option<ResMut<PreviewState>>) {
         Ok(Ok(a)) => a,
         Ok(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
         _ => Analysis {
-            summary: "The check stopped unexpectedly".into(),
+            summary: tr("cam-check-stopped-unexpectedly"),
             collisions: Vec::new(),
             part: None,
             start: None,
@@ -465,8 +463,12 @@ fn poll_analysis(state: Option<ResMut<PreviewState>>) {
     s.analysis = None;
     s.summary = match s.warnings {
         0 => got.summary,
-        1 => format!("{} · ⚠ 1 toolpath warning", got.summary),
-        n => format!("{} · ⚠ {n} toolpath warnings", got.summary),
+        1 => format!("{} · ⚠ {}", got.summary, tr("cam-one-toolpath-warning")),
+        n => format!(
+            "{} · ⚠ {}",
+            got.summary,
+            tr_with("cam-toolpath-warnings", &[("count", &n.to_string())])
+        ),
     };
     s.collisions = got.collisions;
     s.part = got.part;
@@ -611,11 +613,11 @@ fn sync_bar(
             ))
             .with_children(|r| {
                 for (name, label, m) in [
-                    ("cam-pv-backplot", "Back plot", Mode::BackPlot),
-                    ("cam-pv-verify", "Verify", Mode::Verify),
-                    ("cam-pv-simulate", "Simulate", Mode::Simulate),
+                    ("cam-pv-backplot", "cam-back-plot", Mode::BackPlot),
+                    ("cam-pv-verify", "cam-verify", Mode::Verify),
+                    ("cam-pv-simulate", "cam-simulate", Mode::Simulate),
                 ] {
-                    let mut bt = Button::new(name).label(label).small();
+                    let mut bt = Button::new(name).label(tr(label)).small();
                     bt = if s.mode == m {
                         bt.primary()
                     } else {
@@ -630,12 +632,20 @@ fn sync_bar(
                         ..default()
                     },
                 ));
-                r.spawn(t.text("Speed", 11.0, FontWeight::NORMAL, t.muted_foreground));
+                r.spawn((
+                    t.text(
+                        tr("cam-preview-speed"),
+                        11.0,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("cam-preview-speed"),
+                ));
                 r.spawn(
                     Slider::new("cam-pv-speed")
                         .value(speed)
                         .width(110.0)
-                        .tooltip("Playback speed")
+                        .tooltip(tr("cam-playback-speed"))
                         .build(&t),
                 );
                 r.spawn((
@@ -645,26 +655,27 @@ fn sync_bar(
                         ..default()
                     },
                 ));
+                // (`tip` is a catalog key.)
                 for (name, icon, tip) in [
-                    ("cam-pv-back", "chevron-left", "Step back"),
+                    ("cam-pv-back", "chevron-left", "cam-step-back"),
                     (
                         "cam-pv-run",
                         if s.playing { "pause" } else { "play" },
-                        if s.playing { "Pause" } else { "Run" },
+                        if s.playing { "cam-pause" } else { "cam-run" },
                     ),
-                    ("cam-pv-next", "chevron-right", "Step next"),
-                    ("cam-pv-end", "skip-forward", "Go to end"),
-                    ("cam-pv-reset", "skip-back", "Reset"),
-                    ("cam-pv-close", "close", "Close the preview"),
+                    ("cam-pv-next", "chevron-right", "cam-step-next"),
+                    ("cam-pv-end", "skip-forward", "cam-go-to-end"),
+                    ("cam-pv-reset", "skip-back", "cam-reset"),
+                    ("cam-pv-close", "close", "cam-close-the-preview"),
                 ] {
-                    r.spawn(IconButton::new(name, icon).tooltip(tip).build(&t));
+                    r.spawn(IconButton::new(name, icon).tooltip(tr(tip)).build(&t));
                 }
             });
             b.spawn(
                 Slider::new("cam-pv-progress")
                     .value(progress)
                     .width(638.0)
-                    .tooltip("Drag to move through the program")
+                    .tooltip(tr("cam-drag-through-program"))
                     .build(&t),
             );
             b.spawn((
@@ -678,26 +689,26 @@ fn sync_bar(
             .with_children(|r| {
                 r.spawn(
                     Checkbox::new("cam-pv-tool")
-                        .label("Tool")
+                        .label(tr("cam-tool"))
                         .checked(s.show_tool)
                         .build(&t),
                 );
                 r.spawn(
                     Checkbox::new("cam-pv-path")
-                        .label("Toolpath")
+                        .label(tr("cam-toolpath"))
                         .checked(s.show_path)
                         .build(&t),
                 );
                 r.spawn(
                     Checkbox::new("cam-pv-part")
-                        .label("Part")
+                        .label(tr("common-part"))
                         .checked(s.show_part)
                         .build(&t),
                 );
                 if s.mode == Mode::Simulate && !s.beam {
                     r.spawn(
                         Checkbox::new("cam-pv-pause")
-                            .label("Pause on collision")
+                            .label(tr("cam-pause-on-collision"))
                             .checked(s.pause_on_collision)
                             .build(&t),
                     );
@@ -725,8 +736,8 @@ fn sync_readout(
     let pos = s.timeline.at(s.t).map(|(p, _)| p).unwrap_or([0.0; 3]);
     let op = s.op_at(i).map(|o| o.name.as_str()).unwrap_or("");
     let feed = match seg.and_then(|g| g.feed) {
-        Some(f) => format!("feed {} mm/min", fmt0(f)),
-        None => "rapid".into(),
+        Some(f) => tr_with("cam-readout-feed", &[("feed", &fmt0(f))]),
+        None => tr("cam-readout-rapid"),
     };
     let mut text = format!(
         "{} · {} / {} · {} · {} · X{:.3} Y{:.3} Z{:.3}",
@@ -747,7 +758,7 @@ fn sync_readout(
         && (p - s.t).abs() < 1e-9
         && let Some((_, why)) = s.collisions.iter().find(|(t, _)| (*t - p).abs() < 1e-9)
     {
-        text = format!("Paused: {why}");
+        text = tr_with("cam-readout-paused", &[("reason", why)]);
     }
     for mut t in &mut q {
         if t.0 != text {

@@ -32,6 +32,7 @@ use cadrs_core::{ElementId, PartId};
 use cadrs_drawing::flat_view::{self as fv, BendLineStyle, FlatSettings};
 use cadrs_drawing::style::TangentEdges;
 use cadrs_drawing::{NamedView, ObjectRef, View, ViewId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{MenuEntry, Select, SelectState, form_row};
 
@@ -134,7 +135,7 @@ pub fn flat_filter_button(f: &mut ChildSpawnerCommands, t: &Theme, st: &InsertVi
         ToolButton::new("insert-view-filter-flat", "flat-pattern")
             .icon_size(16.0)
             .selected(st.filter_flat)
-            .tooltip("Flat patterns")
+            .tooltip(tr("drawing-flat-patterns"))
             .build(t),
         observe(|_: On<Activate>, mut s: ResMut<InsertViewState>| {
             s.filter_flat = !s.filter_flat;
@@ -152,11 +153,12 @@ pub fn flat_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewStat
     if shown.is_empty() {
         tree.spawn((
             t.text(
-                "No sheet metal flat patterns in this document",
+                tr("drawing-no-flat-patterns"),
                 t.font_sm,
                 bevy::text::FontWeight::NORMAL,
                 t.muted_foreground,
             ),
+            Translated("drawing-no-flat-patterns"),
             Node {
                 margin: UiRect::all(Val::Px(10.0)),
                 ..default()
@@ -257,11 +259,11 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         .doc
         .element(ElementId(v.reference.element))
         .map(|e| e.name.clone())
-        .unwrap_or_else(|| "the referenced tab".into());
+        .unwrap_or_else(|| tr("drawing-view-menu-the-referenced-tab"));
     let f = v.flat.clone().unwrap_or_default();
     let theme = world.resource::<Theme>().clone();
     let tangent = |t: TangentEdges, name: &'static str, label: &'static str| {
-        let item = MenuItem::new(name, label);
+        let item = MenuItem::new(name, tr(label));
         MenuEntry::Item(if v.tangent_edges == t {
             item.icon("check")
         } else {
@@ -269,7 +271,7 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
         })
     };
     let orientation = |o: NamedView, name: &'static str| {
-        let item = MenuItem::new(name, o.label());
+        let item = MenuItem::new(name, super::views::named_view_name(o));
         MenuEntry::Item(if v.frame == o.frame() {
             item.icon("check")
         } else {
@@ -283,86 +285,120 @@ pub fn open_flat_view_menu(world: &mut World, pos: Vec2, id: ViewId) {
     let menu = Menu::new("flat-view-context-menu")
         .min_width(220.0)
         .item(
-            MenuItem::new("flat-menu-show-hide", "Show/hide").submenu(vec![
+            MenuItem::new("flat-menu-show-hide", tr("drawing-flat-menu-show-hide")).submenu(vec![
                 MenuEntry::Item(MenuItem::new(
                     "flat-menu-bend-lines",
-                    if f.bend_lines_hidden {
-                        "Show bend lines"
+                    tr(if f.bend_lines_hidden {
+                        "drawing-flat-show-bend-lines"
                     } else {
-                        "Hide bend lines"
-                    },
+                        "drawing-flat-hide-bend-lines"
+                    }),
                 )),
                 MenuEntry::Item(MenuItem::new(
                     "flat-menu-bend-notes-sub",
-                    if f.bend_notes_hidden {
-                        "Show bend notes"
+                    tr(if f.bend_notes_hidden {
+                        "drawing-flat-show-bend-notes"
                     } else {
-                        "Hide bend notes"
-                    },
+                        "drawing-flat-hide-bend-notes"
+                    }),
                 )),
                 MenuEntry::Item(MenuItem::new(
                     "view-menu-hidden-lines",
-                    if v.hidden_lines {
-                        "Hide hidden lines"
+                    tr(if v.hidden_lines {
+                        "drawing-view-menu-hide-hidden-lines"
                     } else {
-                        "Show hidden lines"
-                    },
+                        "drawing-view-menu-show-hidden-lines"
+                    }),
                 )),
             ]),
         )
         .item(
-            MenuItem::new("flat-menu-orientation", "View orientation").submenu(vec![
+            MenuItem::new(
+                "flat-menu-orientation",
+                tr("drawing-flat-menu-view-orientation"),
+            )
+            .submenu(vec![
                 orientation(NamedView::Top, "flat-menu-orientation-top"),
                 orientation(NamedView::Bottom, "flat-menu-orientation-bottom"),
                 MenuEntry::Item(MenuItem::new(
                     "flat-menu-rotate-ccw",
-                    "Rotate 90° counterclockwise",
+                    tr("drawing-flat-rotate-ccw"),
                 )),
-                MenuEntry::Item(MenuItem::new("flat-menu-rotate-cw", "Rotate 90° clockwise")),
+                MenuEntry::Item(MenuItem::new(
+                    "flat-menu-rotate-cw",
+                    tr("drawing-flat-rotate-cw"),
+                )),
             ]),
         )
         .item(
-            MenuItem::new("flat-menu-tangent-edges", "Tangent edges").submenu(vec![
-                tangent(TangentEdges::Hidden, "view-menu-tangent-hidden", "Hidden"),
-                tangent(TangentEdges::Solid, "view-menu-tangent-solid", "Solid"),
+            MenuItem::new(
+                "flat-menu-tangent-edges",
+                tr("drawing-view-menu-tangent-edges"),
+            )
+            .submenu(vec![
+                tangent(
+                    TangentEdges::Hidden,
+                    "view-menu-tangent-hidden",
+                    "drawing-view-menu-tangent-hidden",
+                ),
+                tangent(
+                    TangentEdges::Solid,
+                    "view-menu-tangent-solid",
+                    "drawing-view-menu-tangent-solid",
+                ),
                 tangent(
                     TangentEdges::Phantom,
                     "view-menu-tangent-phantom",
-                    "Phantom",
+                    "drawing-view-menu-tangent-phantom",
                 ),
             ]),
         )
-        .item(MenuItem::new("flat-menu-linestyle", "Adjust linestyle…").planned())
+        .item(MenuItem::new("flat-menu-linestyle", tr("drawing-flat-adjust-linestyle")).planned())
         .separator()
-        .item(MenuItem::new("view-menu-properties", "View properties…"))
-        .item(MenuItem::new("flat-menu-order", "Order").submenu(vec![
-            MenuEntry::Item(MenuItem::new("view-menu-front", "Bring to front").planned()),
-            MenuEntry::Item(MenuItem::new("view-menu-back", "Send to back").planned()),
-        ]))
-        .item(MenuItem::new("flat-menu-align", "Align view").submenu(vec![
-            MenuEntry::Item(MenuItem::new(
-                "view-menu-align-vertical",
-                "Align view vertical",
-            )),
-            MenuEntry::Item(MenuItem::new(
-                "view-menu-align-horizontal",
-                "Align view horizontal",
-            )),
-        ]))
+        .item(MenuItem::new(
+            "view-menu-properties",
+            tr("drawing-view-menu-properties"),
+        ))
+        .item(
+            MenuItem::new("flat-menu-order", tr("drawing-flat-menu-order")).submenu(vec![
+                MenuEntry::Item(
+                    MenuItem::new("view-menu-front", tr("drawing-view-menu-bring-to-front"))
+                        .planned(),
+                ),
+                MenuEntry::Item(
+                    MenuItem::new("view-menu-back", tr("drawing-view-menu-send-to-back")).planned(),
+                ),
+            ]),
+        )
+        .item(
+            MenuItem::new("flat-menu-align", tr("drawing-flat-menu-align-view")).submenu(vec![
+                MenuEntry::Item(MenuItem::new(
+                    "view-menu-align-vertical",
+                    tr("drawing-view-menu-align-vertical"),
+                )),
+                MenuEntry::Item(MenuItem::new(
+                    "view-menu-align-horizontal",
+                    tr("drawing-view-menu-align-horizontal"),
+                )),
+            ]),
+        )
         .separator()
         .item(MenuItem::new(
             "view-menu-switch",
-            format!("Switch to {reference}"),
+            tr_with("asm-switch-to-named", &[("name", &reference)]),
         ))
-        .item(MenuItem::new("view-menu-move-to-sheet", "Move to sheet…"))
-        .item(MenuItem::new("flat-menu-copy", "Copy").planned())
+        .item(MenuItem::new(
+            "view-menu-move-to-sheet",
+            tr("drawing-view-menu-move-to-sheet"),
+        ))
+        .item(MenuItem::new("flat-menu-copy", tr("common-copy")).planned())
         .separator()
         .item(MenuItem::new(
             "view-menu-clear-selection",
-            "Clear selection",
+            tr("common-clear-selection"),
         ))
-        .item(MenuItem::new("view-menu-zoom", "Zoom to fit"))
-        .item(MenuItem::new("view-menu-delete", "Delete"));
+        .item(MenuItem::new("view-menu-zoom", tr("common-zoom-to-fit")))
+        .item(MenuItem::new("view-menu-delete", tr("common-delete")));
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
     commands
@@ -413,7 +449,10 @@ pub fn open_bend_note_menu(world: &mut World, pos: Vec2) -> bool {
     let theme = world.resource::<Theme>().clone();
     let menu = Menu::new("bend-note-context-menu")
         .min_width(180.0)
-        .item(MenuItem::new("flat-menu-bend-notes", "Hide bend notes"));
+        .item(MenuItem::new(
+            "flat-menu-bend-notes",
+            tr("drawing-flat-hide-bend-notes"),
+        ));
     world.resource_mut::<DrawingUi>().hovered = Some(v.id);
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
@@ -530,7 +569,7 @@ fn weight_select(name: &str, current: f64, t: &Theme) -> impl Bundle {
 fn color_select(name: &str, current: [u8; 3], t: &Theme) -> impl Bundle {
     let mut s = Select::new(name.to_string()).width(Val::Px(100.0));
     for (n, _) in fv::COLORS {
-        s = s.option(n, true);
+        s = s.option(color_name(n), true);
     }
     let i = fv::COLORS
         .iter()
@@ -539,16 +578,30 @@ fn color_select(name: &str, current: [u8; 3], t: &Theme) -> impl Bundle {
     s.selected(i).build(t)
 }
 
+/// A bend line colour's name ([`fv::COLORS`]) as the interface shows it.
+fn color_name(n: &str) -> String {
+    match n {
+        "Black" => tr("drawing-color-black"),
+        "Red" => tr("drawing-color-red"),
+        "Blue" => tr("drawing-color-blue"),
+        "Green" => tr("drawing-color-green"),
+        "Orange" => tr("drawing-color-orange"),
+        "Grey" => tr("drawing-color-grey"),
+        other => other.to_string(),
+    }
+}
+
 /// The View properties dialog's Flat pattern rows: Up and Down bend lines' weight and colour.
 pub fn properties_rows(b: &mut ChildSpawner, t: &Theme, f: &FlatSettings, lw: f32) {
     b.spawn((
         Name::new("view-props-flat-title"),
         t.text(
-            "Flat pattern",
+            tr("drawing-flat-pattern"),
             t.font_base,
             bevy::text::FontWeight::SEMIBOLD,
             t.foreground,
         ),
+        Translated("drawing-flat-pattern"),
         Node {
             margin: UiRect::top(Val::Px(6.0)),
             ..default()
@@ -557,20 +610,20 @@ pub fn properties_rows(b: &mut ChildSpawner, t: &Theme, f: &FlatSettings, lw: f3
     for (row, label, style, w, c) in [
         (
             "view-props-up-row",
-            "Up bend lines",
+            "drawing-flat-up-bend-lines",
             f.up,
             "view-props-up-weight",
             "view-props-up-color",
         ),
         (
             "view-props-down-row",
-            "Down bend lines",
+            "drawing-flat-down-bend-lines",
             f.down,
             "view-props-down-weight",
             "view-props-down-color",
         ),
     ] {
-        b.spawn(form_row(t, row, label, lw)).with_children(|r| {
+        b.spawn(form_row(t, row, tr(label), lw)).with_children(|r| {
             r.spawn(weight_select(w, style.weight, t));
             r.spawn(Node {
                 width: Val::Px(6.0),

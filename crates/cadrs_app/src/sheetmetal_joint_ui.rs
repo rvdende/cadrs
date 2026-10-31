@@ -29,6 +29,7 @@ use cadrs_core::{ElementId, Feature, FeatureId, FeatureKind};
 use cadrs_sheetmetal::{BendCalc, RipStyle};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -212,7 +213,7 @@ pub fn accept(world: &mut World) {
     let Some(f) = current(world, &s).filter(|f| f.is_valid()) else {
         return;
     };
-    let label = format!("Edit {}", f.name);
+    let label = tr_with("common-edit-named", &[("name", &f.name)]);
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
         doc.squash_element_since(s.mark, s.element, label);
     }
@@ -226,14 +227,18 @@ pub fn cancel(world: &mut World) {
     let cur = current(world, &s);
     if let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() {
         let name = cur.as_ref().map(|f| f.name.clone()).unwrap_or_default();
-        doc.squash_element_since(s.mark, s.element, format!("Edit {name}"));
+        doc.squash_element_since(
+            s.mark,
+            s.element,
+            tr_with("common-edit-named", &[("name", &name)]),
+        );
         if let (Some(before), Some(f)) = (s.before.clone(), cur)
             && f != before
         {
             let _ = doc.execute(&ReplaceFeature {
                 element: s.element,
                 feature: before,
-                label: format!("Cancel {name}"),
+                label: tr_with("common-cancel-named", &[("name", &name)]),
             });
         }
     }
@@ -267,7 +272,7 @@ fn joint_picks(
             continue;
         };
         commands.queue(move |world: &mut World| {
-            update(world, "Select joint", |x| {
+            update(world, &tr("sheet-select-joint"), |x| {
                 if x.model == model {
                     x.joint = Some(joint);
                 }
@@ -316,10 +321,14 @@ fn on_checkbox(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) 
     let on = ev.checked;
     match n.as_str() {
         "smj-model-radius-checkbox" => commands.queue(move |world: &mut World| {
-            update(world, "Use model bend radius", |x| x.use_model_radius = on)
+            update(world, &tr("sheet-use-model-bend-radius"), |x| {
+                x.use_model_radius = on
+            })
         }),
         "smj-model-k-checkbox" => commands.queue(move |world: &mut World| {
-            update(world, "Use model K Factor", |x| x.use_model_value = on)
+            update(world, &tr("sheet-use-model-k-factor"), |x| {
+                x.use_model_value = on
+            })
         }),
         _ => {}
     }
@@ -331,17 +340,17 @@ fn on_select(ev: On<SelectChange>, q: Query<&Name>, mut commands: Commands) {
     match n.as_str() {
         "smj-type" => commands.queue(move |world: &mut World| {
             if let Some(t) = JointType::ALL.get(i).copied() {
-                update(world, "Joint type", |x| x.joint_type = t);
+                update(world, &tr("sheet-joint-type"), |x| x.joint_type = t);
             }
         }),
         "smj-rip-style" => commands.queue(move |world: &mut World| {
             if let Some(s) = RipStyle::ALL.get(i).copied() {
-                update(world, "Rip style", |x| x.rip_style = s);
+                update(world, &tr("sheet-rip-style"), |x| x.rip_style = s);
             }
         }),
         "smj-calc" => commands.queue(move |world: &mut World| {
             if let Some(c) = BendCalc::ALL.get(i).copied() {
-                update(world, "Bend calculation", |x| {
+                update(world, &tr("sheet-bend-calculation"), |x| {
                     if x.calc != c {
                         // A new calculation starts from the model's default for it.
                         let p = cadrs_sheetmetal::Params::default();
@@ -382,11 +391,11 @@ fn on_number(ev: On<NumberFieldCommit>, q: Query<&Num>, mut commands: Commands) 
             return;
         };
         match n {
-            Num::Radius => update(world, "Bend radius", |x| {
+            Num::Radius => update(world, &tr("sheet-bend-radius"), |x| {
                 x.radius = v;
                 x.radius_expr = expr;
             }),
-            Num::Value => update(world, x.calc.label(), |x| {
+            Num::Value => update(world, &crate::sheetmetal_ui::bend_calc_label(x.calc), |x| {
                 x.value = v;
                 x.value_expr = expr;
             }),
@@ -408,7 +417,7 @@ fn on_slider(ev: On<cadrs_ui::SliderChange>, q: Query<&Name>, mut commands: Comm
     }
     let k = ((K_MIN + (K_MAX - K_MIN) * ev.value as f64) * 100.0).round() / 100.0;
     commands.queue(move |world: &mut World| {
-        update(world, "K Factor", |x| {
+        update(world, &tr("sheet-bend-calc-k-factor"), |x| {
             if x.calc == BendCalc::KFactor {
                 x.value = k;
                 x.value_expr = value_expr(BendCalc::KFactor, k);
@@ -419,7 +428,9 @@ fn on_slider(ev: On<cadrs_ui::SliderChange>, q: Query<&Name>, mut commands: Comm
 
 fn on_remove(ev: On<SelectionListRemove>, q: Query<(), With<JointField>>, mut commands: Commands) {
     if q.contains(ev.entity) {
-        commands.queue(|world: &mut World| update(world, "Remove joint", |x| x.joint = None));
+        commands.queue(|world: &mut World| {
+            update(world, &tr("sheet-remove-joint"), |x| x.joint = None)
+        });
     }
 }
 
@@ -469,17 +480,18 @@ fn show_joint(
 // ---------------------------------------------------------------------------------------------
 // Dialog
 
+/// A select with its label (a catalog key, or empty for none).
 fn labelled_select(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
-    label: &str,
-    options: &[(&str, bool)],
+    label: &'static str,
+    options: &[(String, bool)],
     selected: usize,
 ) {
     let mut s = Select::new(name.to_string());
     for (o, en) in options {
-        s = s.option(*o, *en);
+        s = s.option(o.clone(), *en);
     }
     b.spawn(Node {
         height: Val::Px(28.0),
@@ -492,11 +504,12 @@ fn labelled_select(
         if !label.is_empty() {
             r.spawn((
                 t.text(
-                    label,
+                    tr(label),
                     11.0,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated(label),
                 Node {
                     width: Val::Px(100.0),
                     flex_shrink: 0.0,
@@ -508,6 +521,24 @@ fn labelled_select(
             .entry::<Node>()
             .and_modify(|mut n| n.flex_grow = 1.0);
     });
+}
+
+/// A joint type's label in the interface's language.
+pub(crate) fn joint_type_label(j: JointType) -> String {
+    tr(match j {
+        JointType::Bend => "sheet-joint-bend",
+        JointType::Rip => "sheet-joint-rip",
+        JointType::Tangent => "sheet-joint-tangent",
+    })
+}
+
+/// A rip style's label in the interface's language.
+pub(crate) fn rip_style_label(s: RipStyle) -> String {
+    tr(match s {
+        RipStyle::EdgeJoint => "sheet-rip-edge-joint",
+        RipStyle::ButtDirection1 => "sheet-rip-butt-direction-1",
+        RipStyle::ButtDirection2 => "sheet-rip-butt-direction-2",
+    })
 }
 
 /// The joint's name in its model (from the last rebuild).
@@ -574,7 +605,7 @@ fn sync_dialog(
         .map(|f| f.name.clone());
     let names: Vec<String> = joint_name(&cache, x)
         .map(|j| match &model_name {
-            Some(m) => format!("{j} of {m}"),
+            Some(m) => tr_with("sheet-joint-of-model", &[("joint", &j), ("model", m)]),
             None => j,
         })
         .into_iter()
@@ -614,15 +645,17 @@ fn sync_dialog(
                         b.spawn((
                             JointField,
                             SelectionList::new("smj-joint-field")
-                                .placeholder("Joint")
+                                .placeholder(tr("sheet-joint"))
                                 .items(names)
-                                .item_icon("sheet-metal-modify-joint", "Joint")
+                                .item_icon("sheet-metal-modify-joint", tr("sheet-joint"))
                                 .tint_filled()
                                 .active(true)
                                 .build(&t),
                         ));
-                        let types: Vec<(&str, bool)> =
-                            JointType::ALL.iter().map(|j| (j.label(), true)).collect();
+                        let types: Vec<(String, bool)> = JointType::ALL
+                            .iter()
+                            .map(|j| (joint_type_label(*j), true))
+                            .collect();
                         labelled_select(
                             b,
                             &t,
@@ -636,9 +669,11 @@ fn sync_dialog(
                         );
                         match x.joint_type {
                             JointType::Rip => {
-                                let styles: Vec<(&str, bool)> = RipStyle::ALL
+                                let styles: Vec<(String, bool)> = RipStyle::ALL
                                     .iter()
-                                    .map(|s| (s.label(), *s == RipStyle::EdgeJoint || ninety))
+                                    .map(|s| {
+                                        (rip_style_label(*s), *s == RipStyle::EdgeJoint || ninety)
+                                    })
                                     .collect();
                                 labelled_select(
                                     b,
@@ -654,14 +689,17 @@ fn sync_dialog(
                             }
                             JointType::Bend => {
                                 b.spawn(
-                                    OptionRow::new("smj-model-radius", "Use model bend radius")
-                                        .checked(x.use_model_radius)
-                                        .build(&t),
+                                    OptionRow::new(
+                                        "smj-model-radius",
+                                        tr("sheet-use-model-bend-radius"),
+                                    )
+                                    .checked(x.use_model_radius)
+                                    .build(&t),
                                 );
                                 if !x.use_model_radius {
                                     b.spawn((
                                         Num::Radius,
-                                        NumberField::new("smj-radius", "Bend radius")
+                                        NumberField::new("smj-radius", tr("sheet-bend-radius"))
                                             .text(radius.clone())
                                             .label_width(100.0)
                                             .variables()
@@ -669,18 +707,20 @@ fn sync_dialog(
                                     ));
                                 }
                                 b.spawn(
-                                    OptionRow::new("smj-model-k", "Use model K Factor")
+                                    OptionRow::new("smj-model-k", tr("sheet-use-model-k-factor"))
                                         .checked(x.use_model_value)
                                         .build(&t),
                                 );
                                 if !x.use_model_value {
-                                    let calcs: Vec<(&str, bool)> =
-                                        BendCalc::ALL.iter().map(|c| (c.label(), true)).collect();
+                                    let calcs: Vec<(String, bool)> = BendCalc::ALL
+                                        .iter()
+                                        .map(|c| (crate::sheetmetal_ui::bend_calc_label(*c), true))
+                                        .collect();
                                     labelled_select(
                                         b,
                                         &t,
                                         "smj-calc",
-                                        "Bend calculation",
+                                        "sheet-bend-calculation",
                                         &calcs,
                                         BendCalc::ALL
                                             .iter()
@@ -689,11 +729,14 @@ fn sync_dialog(
                                     );
                                     b.spawn((
                                         Num::Value,
-                                        NumberField::new("smj-value", x.calc.label())
-                                            .text(value.clone())
-                                            .label_width(100.0)
-                                            .variables()
-                                            .build(&t),
+                                        NumberField::new(
+                                            "smj-value",
+                                            crate::sheetmetal_ui::bend_calc_label(x.calc),
+                                        )
+                                        .text(value.clone())
+                                        .label_width(100.0)
+                                        .variables()
+                                        .build(&t),
                                     ));
                                     if x.calc == BendCalc::KFactor {
                                         b.spawn(Node {
@@ -709,7 +752,7 @@ fn sync_dialog(
                                             cadrs_ui::Slider::new("smj-k-slider")
                                                 .value(k_to_slider(x.value))
                                                 .width(130.0)
-                                                .tooltip("K Factor")
+                                                .tooltip(tr("sheet-bend-calc-k-factor"))
                                                 .build(&t),
                                         );
                                     }
@@ -726,7 +769,7 @@ fn sync_dialog(
                         f.spawn((
                             Name::new("modify-joint-dialog-help"),
                             cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                            Tooltip::new("Help"),
+                            Tooltip::new(tr("common-help")),
                         ));
                     })
                     .build(&theme),

@@ -38,6 +38,7 @@ use bevy::text::FontWeight;
 use bevy::ui_widgets::Activate;
 use cadrs_core::history_log::{HistoryLog, Origin, RestoreDocument, WorkspaceId};
 use cadrs_core::{ElementId, FeatureId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, ContextMenuRequested, Menu, MenuAction, MenuItem};
 use cadrs_ui::{IconButton, Theme, TimelineMarker, TimelineRow, Tooltip, open_context_menu};
 
@@ -566,7 +567,13 @@ fn sync_panel(
             ))
             .with_children(|h| {
                 h.spawn((
-                    t.text("Versions and history", 13.0, FontWeight::BOLD, t.foreground),
+                    t.text(
+                        tr("view-history-title"),
+                        13.0,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("view-history-title"),
                     Node {
                         flex_grow: 1.0,
                         ..default()
@@ -574,12 +581,12 @@ fn sync_panel(
                 ));
                 h.spawn(
                     IconButton::new("history-create-version", "versions")
-                        .tooltip("Create version…")
+                        .tooltip(tr("view-history-create-version-tooltip"))
                         .build(&t),
                 );
                 h.spawn(
                     IconButton::new("history-repair", "tool")
-                        .tooltip("Repair")
+                        .tooltip(tr("view-history-repair"))
                         .build(&t),
                 )
                 .insert(cadrs_ui::style::InitState {
@@ -589,7 +596,7 @@ fn sync_panel(
                 });
                 h.spawn(
                     IconButton::new("history-close", "close")
-                        .tooltip("Close")
+                        .tooltip(tr("common-close"))
                         .build(&t),
                 );
             });
@@ -606,12 +613,13 @@ fn sync_panel(
                 ))
                 .with_children(|b| {
                     b.spawn(t.text(
-                        "Select a history entry to repair this Part Studio.",
+                        tr("view-history-repair-banner"),
                         11.5,
                         FontWeight::NORMAL,
                         t.foreground,
                     ))
                     .insert((
+                        Translated("view-history-repair-banner"),
                         TextLayout::default(),
                         Node {
                             max_width: Val::Px(240.0),
@@ -674,15 +682,18 @@ fn sync_panel(
                         },
                         BorderColor::all(t.panel_border),
                     ))
-                    .with_child(t.text(
-                        "Other workspaces",
-                        10.5,
-                        FontWeight::BOLD,
-                        t.muted_foreground,
+                    .with_child((
+                        t.text(
+                            tr("view-history-other-workspaces"),
+                            10.5,
+                            FontWeight::BOLD,
+                            t.muted_foreground,
+                        ),
+                        Translated("view-history-other-workspaces"),
                     ));
                     for (row, b) in others {
                         l.spawn((row, b.build(&t)))
-                            .insert(Tooltip::new("Click to switch; right-click to merge"));
+                            .insert(Tooltip::new(tr("view-history-workspace-tooltip")));
                     }
                 }
             });
@@ -697,11 +708,14 @@ fn sync_panel(
                 },
                 BorderColor::all(t.panel_border),
             ))
-            .with_child(t.text(
-                "Right-click a row for actions",
-                10.5,
-                FontWeight::NORMAL,
-                t.muted_foreground,
+            .with_child((
+                t.text(
+                    tr("view-history-footer-hint"),
+                    10.5,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("view-history-footer-hint"),
             ));
         })
         .id();
@@ -719,7 +733,7 @@ fn version_subtitle(
 ) -> String {
     let mut sub = format!("{} · {}", user.display(v.user()), clock.format(v.time()));
     if v.auto() {
-        sub = format!("Auto version · {sub}");
+        sub = tr_with("view-history-auto-version", &[("rest", &sub)]);
     }
     if !v.description().is_empty() {
         sub = format!("{sub} · {}", v.description());
@@ -777,9 +791,9 @@ fn rows(
         let title = if n == 1 && l.entries[newest].action == "Merge" {
             l.entries[newest].label.clone()
         } else if n == 1 {
-            "1 change".to_string()
+            tr("view-history-one-change")
         } else {
-            format!("{n} changes")
+            tr_with("view-history-changes", &[("count", &n.to_string())])
         };
         out.push((
             Row::Group(oldest),
@@ -807,13 +821,15 @@ fn rows(
         .and_then(|w| l.version(w.from_version()).map(|v| (v.clone(), w.clone())));
     let start = match &origin {
         Some((v, w)) => TimelineRow::new("history-start", v.name().to_string())
-            .subtitle(format!(
-                "{} · branched {}",
-                l.workspace_name(v.workspace()),
-                clock.format(w.time())
+            .subtitle(tr_with(
+                "view-history-branched",
+                &[
+                    ("workspace", &l.workspace_name(v.workspace())),
+                    ("time", &clock.format(w.time())),
+                ],
             ))
             .marker(TimelineMarker::Version),
-        None => TimelineRow::new("history-start", "Start")
+        None => TimelineRow::new("history-start", tr("view-history-start"))
             .subtitle(when(0))
             .marker(TimelineMarker::Start),
     };
@@ -843,7 +859,10 @@ fn other_rows(log: &DocLog, clock: &AppClock, user: &UserProfile) -> Vec<(Row, T
             if let Some(b) = l.branch_info(w)
                 && let Some(v) = l.version(b.from_version())
             {
-                sub = format!("From {} · {sub}", v.name());
+                sub = tr_with(
+                    "view-history-from-version",
+                    &[("version", v.name()), ("rest", &sub)],
+                );
             }
             (
                 Row::Workspace(w),
@@ -911,9 +930,9 @@ pub fn open_create_version(world: &mut World, at: Vec2) {
     };
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    cadrs_ui::NamePopup::new("version-popup", "Create version", at)
+    cadrs_ui::NamePopup::new("version-popup", tr("common-create-version"), at)
         .value(name)
-        .description("Description (optional)")
+        .description(tr("view-history-description-optional"))
         .spawn(&mut commands, &theme);
     world.flush();
 }
@@ -1012,8 +1031,11 @@ fn on_row_menu(
                 .min_width(150.0)
                 .item_height(22.0)
                 .text_only()
-                .item(MenuItem::new("history-restore", "Restore").disabled(k == head))
-                .item(MenuItem::new("history-view-repair", "View in repair")),
+                .item(MenuItem::new("history-restore", tr("common-restore")).disabled(k == head))
+                .item(MenuItem::new(
+                    "history-view-repair",
+                    tr("view-history-view-in-repair"),
+                )),
             MenuFor::Entry(k),
         ),
         Ok(&Row::Version(i)) => {
@@ -1023,12 +1045,14 @@ fn on_row_menu(
                     .min_width(150.0)
                     .item_height(22.0)
                     .text_only()
-                    .item(MenuItem::new("history-open-read-only", "Open read-only"))
-                    .item(MenuItem::new("history-restore", "Restore").disabled(at == head))
                     .item(MenuItem::new(
-                        "history-branch",
-                        "Branch to create workspace…",
-                    )),
+                        "history-open-read-only",
+                        tr("view-history-open-read-only"),
+                    ))
+                    .item(
+                        MenuItem::new("history-restore", tr("common-restore")).disabled(at == head),
+                    )
+                    .item(MenuItem::new("history-branch", tr("view-history-branch"))),
                 MenuFor::Version(i),
             )
         }
@@ -1037,11 +1061,11 @@ fn on_row_menu(
                 .min_width(190.0)
                 .item_height(22.0)
                 .text_only()
-                .item(MenuItem::new("history-switch", "Switch to workspace"))
                 .item(MenuItem::new(
-                    "history-merge",
-                    "Merge into current workspace…",
-                )),
+                    "history-switch",
+                    tr("view-history-switch-workspace"),
+                ))
+                .item(MenuItem::new("history-merge", tr("view-history-merge"))),
             MenuFor::Workspace(w),
         ),
         _ => return,

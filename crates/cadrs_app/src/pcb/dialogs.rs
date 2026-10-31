@@ -37,6 +37,8 @@ use cadrs_ui::{
     SelectChange, Theme, set_path_field_display, show_notification,
 };
 
+use cadrs_ui::i18n::{Translated, tr, tr_with};
+
 use crate::{ActiveDocument, AppClock, AppState, DocumentStore, UserProfile};
 
 /// The dialogs' state.
@@ -121,37 +123,60 @@ pub fn open_import_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-import-dialog")
-            .title("Import ECAD files")
+            .title(tr("pcb-import-title"))
             .width(430.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(Node { column_gap: Val::Px(8.0), align_items: AlignItems::Center, padding: UiRect::vertical(Val::Px(4.0)), ..default() })
-                    .with_children(|row| {
-                        row.spawn((
-                            Button::new("pcb-import-choose").label("Choose Files").build(t),
-                            observe(|_: On<Activate>, mut commands: Commands| {
-                                commands.queue(open_import_picker);
-                            }),
-                        ));
-                        row.spawn((Name::new("pcb-import-chosen"), t.text("No file chosen", t.font_base, FontWeight::NORMAL, t.foreground)));
-                    });
+                b.spawn(Node {
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::vertical(Val::Px(4.0)),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Button::new("pcb-import-choose")
+                            .label(tr("pcb-import-choose-files"))
+                            .build(t),
+                        observe(|_: On<Activate>, mut commands: Commands| {
+                            commands.queue(open_import_picker);
+                        }),
+                    ));
+                    row.spawn((
+                        Name::new("pcb-import-chosen"),
+                        t.text(
+                            tr("pcb-import-no-file"),
+                            t.font_base,
+                            FontWeight::NORMAL,
+                            t.foreground,
+                        ),
+                    ));
+                });
                 let hint = if cfg!(feature = "kicad") {
-                    "Choose an IDF board file (.emn) and its library file (.emp), or a KiCad project (.kicad_pro)."
+                    "pcb-import-hint-kicad"
                 } else {
-                    "Choose an IDF board file (.emn) and its library file (.emp)."
+                    "pcb-import-hint"
                 };
-                b.spawn(wrapped(t, "pcb-import-hint", hint, false, t.muted_foreground));
+                b.spawn((
+                    wrapped(t, "pcb-import-hint", &tr(hint), false, t.muted_foreground),
+                    Translated(hint),
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pcb-import-ok").label("Import").primary().build(t),
+                    Button::new("pcb-import-ok")
+                        .label(tr("common-import"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(accept_import);
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-import-cancel").label("Cancel").build(t),
+                    Button::new("pcb-import-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<ImportDialog>);
                     }),
@@ -184,7 +209,7 @@ fn open_import_picker(world: &mut World) {
         &mut commands,
         &theme,
         "pcb-import-picker",
-        "Choose ECAD files",
+        &tr("pcb-import-picker-title"),
         "pcb-import",
         dir,
         &exts,
@@ -222,8 +247,7 @@ fn accept_import(world: &mut World) {
         show_notification(
             &mut commands,
             &theme,
-            Notification::warning("Choose the board (.emn) and library (.emp) files first.")
-                .name("pcb-import-toast"),
+            Notification::warning(tr("pcb-import-choose-first")).name("pcb-import-toast"),
         );
         world.flush();
         return;
@@ -283,36 +307,52 @@ pub fn import_paths(world: &mut World, paths: &[PathBuf]) {
                                 .and_then(|s| s.active_board())
                                 .map(|b| b.name().to_string())
                                 .unwrap_or_default();
-                            names.push(format!("{name} ({n} components)"));
+                            names.push(tr_with(
+                                "pcb-import-board-components",
+                                &[("name", &name), ("count", &n.to_string())],
+                            ));
                         }
                         Err(e) => errors.push(e.to_string()),
                     }
                 }
             }
-            None => errors.push("Open a PCB Studio tab to import into".into()),
+            None => errors.push(tr("pcb-import-open-studio")),
         }
     }
     let mut commands = world.commands();
     let n = if !errors.is_empty() {
-        let mut msg = format!("Couldn't import: {}", errors.join("; "));
+        let mut msg = tr_with("pcb-import-failed", &[("errors", &errors.join("; "))]);
         if !names.is_empty() {
-            msg = format!("Imported {}. {msg}", names.join(", "));
+            msg = tr_with(
+                "pcb-imported-but",
+                &[("boards", &names.join(", ")), ("problem", &msg)],
+            );
         }
         Notification::warning(msg).max_width(640.0)
     } else if !report.warnings.is_empty() {
-        let more = if report.warnings.len() > 1 {
-            format!(" (and {} more)", report.warnings.len() - 1)
+        let (boards, warning) = (names.join(", "), &report.warnings[0]);
+        Notification::warning(if report.warnings.len() > 1 {
+            tr_with(
+                "pcb-imported-warning-more",
+                &[
+                    ("boards", &boards),
+                    ("warning", warning),
+                    ("more", &(report.warnings.len() - 1).to_string()),
+                ],
+            )
         } else {
-            String::new()
-        };
-        Notification::warning(format!(
-            "Imported {}. {}{more}",
-            names.join(", "),
-            report.warnings[0]
-        ))
+            tr_with(
+                "pcb-imported-but",
+                &[("boards", &boards), ("problem", warning)],
+            )
+        })
         .max_width(640.0)
     } else {
-        Notification::info(format!("Imported {}", names.join(", "))).seconds(3.0)
+        Notification::info(tr_with(
+            "pcb-imported-boards",
+            &[("boards", &names.join(", "))],
+        ))
+        .seconds(3.0)
     };
     show_notification(&mut commands, &theme, n.name("pcb-import-toast"));
     world.flush();
@@ -372,8 +412,11 @@ fn library_display(world: &World, s: &PcbSettings) -> (String, String) {
 /// The folder field's text and tooltip ("" shows the placeholder).
 fn folder_display(s: &PcbSettings) -> (String, String) {
     match &s.component_folder {
-        Some(f) => (f.name.clone(), format!("Documents › {}", f.name)),
-        None => (String::new(), "Select a folder".into()),
+        Some(f) => (
+            f.name.clone(),
+            tr_with("pcb-settings-folder-tip", &[("folder", &f.name)]),
+        ),
+        None => (String::new(), tr("pcb-select-folder")),
     }
 }
 
@@ -395,41 +438,104 @@ pub fn open_settings_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-settings-dialog")
-            .title("PCB Studio settings")
+            .title(tr("pcb-settings-title"))
             .width(470.0)
             .body(move |b| {
                 let t = &tb;
-                let label = |s: &'static str| t.text(s, t.font_base, FontWeight::MEDIUM, t.foreground);
-                b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), width: Val::Percent(100.0), ..default() }).with_children(|c| {
-                    c.spawn((Name::new("pcb-settings-library-label"), label("Component library document")));
-                    c.spawn(PathField::new("pcb-settings-library").value(library).icon("file").read_only(true).value_tooltip(library_tip).tooltip("Choose the library document").build(t));
-                    c.spawn(wrapped(t, "pcb-settings-library-hint", "Holds the mappings from ECAD packages to their 3D representations. Every PCB Studio in this workspace uses it.", false, t.muted_foreground));
-                    c.spawn((Name::new("pcb-settings-folder-label"), label("Create new component documents in this folder"), Node { margin: UiRect::top(Val::Px(10.0)), ..default() }));
-                    c.spawn(PathField::new("pcb-settings-folder").value(folder).placeholder("Select a folder…").read_only(true).value_tooltip(folder_tip).tooltip("Select a folder").build(t));
-                    c.spawn(wrapped(
-                        t,
-                        "pcb-settings-folder-hint",
-                        "PCB Studio creates a document in this folder for each ECAD component it models. Everyone who uses this PCB Studio needs write access to it.",
-                        true,
-                        t.muted_foreground,
+                let label = |key: &'static str| {
+                    (
+                        t.text(tr(key), t.font_base, FontWeight::MEDIUM, t.foreground),
+                        Translated(key),
+                    )
+                };
+                b.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(6.0),
+                    width: Val::Percent(100.0),
+                    ..default()
+                })
+                .with_children(|c| {
+                    c.spawn((
+                        Name::new("pcb-settings-library-label"),
+                        label("pcb-settings-library"),
+                    ));
+                    c.spawn(
+                        PathField::new("pcb-settings-library")
+                            .value(library)
+                            .icon("file")
+                            .read_only(true)
+                            .value_tooltip(library_tip)
+                            .tooltip(tr("pcb-settings-library-tip"))
+                            .build(t),
+                    );
+                    c.spawn((
+                        wrapped(
+                            t,
+                            "pcb-settings-library-hint",
+                            &tr("pcb-settings-library-hint"),
+                            false,
+                            t.muted_foreground,
+                        ),
+                        Translated("pcb-settings-library-hint"),
+                    ));
+                    c.spawn((
+                        Name::new("pcb-settings-folder-label"),
+                        label("pcb-settings-folder"),
+                        Node {
+                            margin: UiRect::top(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+                    c.spawn(
+                        PathField::new("pcb-settings-folder")
+                            .value(folder)
+                            .placeholder(tr("pcb-select-folder-ellipsis"))
+                            .read_only(true)
+                            .value_tooltip(folder_tip)
+                            .tooltip(tr("pcb-select-folder"))
+                            .build(t),
+                    );
+                    c.spawn((
+                        wrapped(
+                            t,
+                            "pcb-settings-folder-hint",
+                            &tr("pcb-settings-folder-hint"),
+                            true,
+                            t.muted_foreground,
+                        ),
+                        Translated("pcb-settings-folder-hint"),
                     ));
                     c.spawn((
                         Name::new("pcb-settings-build"),
-                        t.text(BUILD_STRING, t.font_sm, FontWeight::NORMAL, t.subtle_foreground),
-                        Node { align_self: AlignSelf::Center, margin: UiRect::top(Val::Px(14.0)), ..default() },
+                        t.text(
+                            BUILD_STRING,
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.subtle_foreground,
+                        ),
+                        Node {
+                            align_self: AlignSelf::Center,
+                            margin: UiRect::top(Val::Px(14.0)),
+                            ..default()
+                        },
                     ));
                 });
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pcb-settings-update").label("Update").primary().build(t),
+                    Button::new("pcb-settings-update")
+                        .label(tr("pcb-settings-update"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(update_settings);
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-settings-close").label("Close").build(t),
+                    Button::new("pcb-settings-close")
+                        .label(tr("common-close"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<SettingsDialog>);
                     }),
@@ -570,18 +676,18 @@ pub fn open_picker(world: &mut World, kind: PickerKind, select: Option<String>) 
     let prefix = kind.prefix();
     let (title, root, icon, new_label, empty) = match kind {
         PickerKind::Library => (
-            "Select a library document",
-            "My documents",
+            tr("pcb-select-library-document"),
+            tr("pcb-picker-my-documents"),
             "file",
-            "New library document",
-            "No documents yet.",
+            tr("pcb-picker-new-library-document"),
+            tr("pcb-picker-no-documents"),
         ),
         PickerKind::Folder => (
-            "Select a folder",
-            "My documents",
+            tr("pcb-select-folder"),
+            tr("pcb-picker-my-documents"),
             "folder",
-            "New folder",
-            "No folders yet: New folder makes one.",
+            tr("common-new-folder"),
+            tr("pcb-picker-no-folders"),
         ),
     };
     world.spawn((
@@ -613,17 +719,23 @@ pub fn open_picker(world: &mut World, kind: PickerKind, select: Option<String>) 
                         l.spawn(wrapped(
                             t,
                             &format!("{prefix}-empty"),
-                            empty,
+                            &empty,
                             true,
                             t.muted_foreground,
                         ));
                     }
                     for (key, label) in &rows {
                         let row_icon = if key == "default" { "books" } else { icon };
+                        // (The default library's row is named in English, as its id.)
+                        let shown = if key == "default" {
+                            tr("pcb-default-library")
+                        } else {
+                            label.clone()
+                        };
                         l.spawn((
                             ListItem::new(format!("{prefix}-row-{}", super::slug(label)))
                                 .icon(row_icon)
-                                .label(label.clone())
+                                .label(shown)
                                 .padding_left(28.0)
                                 .height(28.0)
                                 .selected(selected.as_deref() == Some(key.as_str()))
@@ -674,7 +786,7 @@ pub fn open_picker(world: &mut World, kind: PickerKind, select: Option<String>) 
                 });
                 f.spawn((
                     Button::new(format!("{prefix}-select"))
-                        .label("Select")
+                        .label(tr("common-select"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -683,7 +795,7 @@ pub fn open_picker(world: &mut World, kind: PickerKind, select: Option<String>) 
                 ));
                 f.spawn((
                     Button::new(format!("{prefix}-cancel"))
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(|w: &mut World| {
@@ -850,7 +962,7 @@ fn load_pick(world: &World, pick: &mut CustomPick) {
             .ok()
             .flatten()
     });
-    let mut versions = vec![(None, "Current (latest changes)".to_string())];
+    let mut versions = vec![(None, tr("pcb-custom-current-version"))];
     if let Some(l) = &log {
         versions.extend(
             l.versions()
@@ -903,7 +1015,7 @@ pub fn open_custom_part_dialog(world: &mut World, element: ElementId, package: &
         .unwrap_or_default();
     documents.sort_by(|a, b| cadrs_core::library::natural_cmp(&a.1, &b.1));
     if let Some((id, name)) = open {
-        documents.push((id, format!("{name} (this document)")));
+        documents.push((id, tr_with("pcb-custom-this-document", &[("name", &name)])));
     }
     // The document of the current custom part, if there is one.
     let current = world
@@ -938,26 +1050,47 @@ fn spawn_custom_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-custom-part-dialog")
-            .title("Select custom part")
+            .title(tr("pcb-custom-title"))
             .width(460.0)
             .body(move |b| {
                 let t = &tb;
-                let label = |s: &str| t.text(s.to_string(), t.font_sm, FontWeight::MEDIUM, t.muted_foreground);
-                b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), width: Val::Percent(100.0), ..default() }).with_children(|c| {
-                    c.spawn(wrapped(t, "pcb-custom-part-for", &format!("The 3D representation of {} in every PCB Studio that uses this library.", pick.package), false, t.foreground));
-                    c.spawn(label("Document"));
-                    let mut sel = Select::new("pcb-custom-document").bordered().width(Val::Percent(100.0));
+                let label = |key: &'static str| {
+                    (
+                        t.text(tr(key), t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+                        Translated(key),
+                    )
+                };
+                b.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(6.0),
+                    width: Val::Percent(100.0),
+                    ..default()
+                })
+                .with_children(|c| {
+                    c.spawn(wrapped(
+                        t,
+                        "pcb-custom-part-for",
+                        &tr_with("pcb-custom-part-for", &[("package", &pick.package)]),
+                        false,
+                        t.foreground,
+                    ));
+                    c.spawn(label("pcb-custom-document"));
+                    let mut sel = Select::new("pcb-custom-document")
+                        .bordered()
+                        .width(Val::Percent(100.0));
                     for (_, name) in &pick.documents {
                         sel = sel.option(name.clone(), true);
                     }
                     c.spawn(sel.selected(pick.document).build(t));
-                    c.spawn(label("Version"));
-                    let mut sel = Select::new("pcb-custom-version").bordered().width(Val::Percent(100.0));
+                    c.spawn(label("common-version"));
+                    let mut sel = Select::new("pcb-custom-version")
+                        .bordered()
+                        .width(Val::Percent(100.0));
                     for (_, name) in &pick.versions {
                         sel = sel.option(name.clone(), true);
                     }
                     c.spawn(sel.selected(pick.version).build(t));
-                    c.spawn(label("Part"));
+                    c.spawn(label("common-part"));
                     c.spawn((
                         Name::new("pcb-custom-parts"),
                         Node {
@@ -974,25 +1107,48 @@ fn spawn_custom_dialog(world: &mut World) {
                     ))
                     .with_children(|l| {
                         if pick.parts.is_empty() {
-                            l.spawn(wrapped(t, "pcb-custom-no-parts", "This document has no parts.", true, t.muted_foreground));
+                            l.spawn((
+                                wrapped(
+                                    t,
+                                    "pcb-custom-no-parts",
+                                    &tr("pcb-custom-no-parts"),
+                                    true,
+                                    t.muted_foreground,
+                                ),
+                                Translated("pcb-custom-no-parts"),
+                            ));
                         }
                         for (i, (_, studio, _, part)) in pick.parts.iter().enumerate() {
                             l.spawn((
-                                ListItem::new(format!("pcb-custom-part-row-{i}")).icon("part").label(part.clone()).detail(studio.clone()).height(28.0).selected(pick.part == Some(i)).build(t),
+                                ListItem::new(format!("pcb-custom-part-row-{i}"))
+                                    .icon("part")
+                                    .label(part.clone())
+                                    .detail(studio.clone())
+                                    .height(28.0)
+                                    .selected(pick.part == Some(i))
+                                    .build(t),
                                 CustomPartRow(i),
-                                observe(|a: On<Activate>, q: Query<&CustomPartRow>, q_rows: Query<(Entity, &CustomPartRow)>, mut d: ResMut<PcbDialogs>, mut commands: Commands| {
-                                    let Ok(r) = q.get(a.entity) else { return };
-                                    if let Some(p) = d.custom.as_mut() {
-                                        p.part = Some(r.0);
-                                    }
-                                    for (e, x) in &q_rows {
-                                        if x.0 == r.0 {
-                                            commands.entity(e).try_insert(cadrs_ui::Selected);
-                                        } else {
-                                            commands.entity(e).try_remove::<cadrs_ui::Selected>();
+                                observe(
+                                    |a: On<Activate>,
+                                     q: Query<&CustomPartRow>,
+                                     q_rows: Query<(Entity, &CustomPartRow)>,
+                                     mut d: ResMut<PcbDialogs>,
+                                     mut commands: Commands| {
+                                        let Ok(r) = q.get(a.entity) else { return };
+                                        if let Some(p) = d.custom.as_mut() {
+                                            p.part = Some(r.0);
                                         }
-                                    }
-                                }),
+                                        for (e, x) in &q_rows {
+                                            if x.0 == r.0 {
+                                                commands.entity(e).try_insert(cadrs_ui::Selected);
+                                            } else {
+                                                commands
+                                                    .entity(e)
+                                                    .try_remove::<cadrs_ui::Selected>();
+                                            }
+                                        }
+                                    },
+                                ),
                             ));
                         }
                     });
@@ -1001,13 +1157,19 @@ fn spawn_custom_dialog(world: &mut World) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pcb-custom-ok").icon("check").label("OK").primary().build(t),
+                    Button::new("pcb-custom-ok")
+                        .icon("check")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(accept_custom_part);
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-custom-cancel").label("Cancel").build(t),
+                    Button::new("pcb-custom-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(cancel_custom_part);
                     }),
@@ -1058,7 +1220,7 @@ fn accept_custom_part(world: &mut World) {
         show_notification(
             &mut commands,
             &theme,
-            Notification::warning("Choose a part first.").name("pcb-custom-toast"),
+            Notification::warning(tr("pcb-custom-choose-part")).name("pcb-custom-toast"),
         );
         world.flush();
         return;
@@ -1069,7 +1231,11 @@ fn accept_custom_part(world: &mut World) {
         .get(pick.version)
         .cloned()
         .unwrap_or((None, String::new()));
-    let doc_name = doc_name.trim_end_matches(" (this document)").to_string();
+    // The open document is listed with "(this document)" after its name.
+    let doc_name = match world.get_resource::<ActiveDocument>() {
+        Some(d) if d.doc.id == doc_id => d.doc.name.clone(),
+        _ => doc_name,
+    };
     let source = PartSource {
         document: doc_id,
         document_name: doc_name,
@@ -1144,39 +1310,16 @@ pub fn store_sample_part_document(world: &mut World) {
 // ---------------------------------------------------------------------------------------------
 // Help
 
+/// The help's sections: heading and text (their catalog keys).
 const HELP: &[(&str, &str)] = &[
-    (
-        "Boards",
-        "A PCB Studio holds any number of boards. + creates a new board (a 100 × 80 mm outline) and lets you type its name; double-click a board to rename it. Click a board under Boards to show it; the board shown is bold and blue. Right-click a board to delete it (Undo brings it back).",
-    ),
-    (
-        "Import ECAD files",
-        "Click the Import ECAD files button, choose a board's .emn file and its .emp library (Ctrl+click picks both), then Import. Each import adds a board.",
-    ),
-    (
-        "Viewport",
-        "The board is green and components are coloured by package. Orbit with the right mouse button, pan with the middle button, zoom with the wheel; F fits the board. Click a component to select it.",
-    ),
-    (
-        "Components",
-        "+ creates a component and lets you type its name; double-click it to rename it. Click a board under Components to list its packages; click a package for its component view (the part alone on a grid). Click the board again to go back.",
-    ),
-    (
-        "Component properties",
-        "The right edge's first button shows the selected component's part name, part number and representation: None, From ECAD data (a box from the outline and height) or Custom part (a part from a Part Studio, moved with Translate, Center and Rotate, then Accept). The choice is kept in the component library, so every PCB Studio follows.",
-    ),
-    (
-        "Bill of materials",
-        "The right edge's second button lists the board's components grouped by part number. Click a row to select its components; double-click a designator to rename it.",
-    ),
-    (
-        "Search",
-        "Type in Search and press Enter (or the magnifier): matching designators, packages, part numbers and boards light up. The arrows step through them; the cross clears.",
-    ),
-    (
-        "Settings",
-        "The gear sets the component library document and the folder for component documents, for every PCB Studio in this workspace.",
-    ),
+    ("pcb-help-boards-title", "pcb-help-boards"),
+    ("pcb-import-title", "pcb-help-import"),
+    ("pcb-help-viewport-title", "pcb-help-viewport"),
+    ("pcb-help-components-title", "pcb-help-components"),
+    ("pcb-help-properties-title", "pcb-help-properties"),
+    ("common-bill-of-materials", "pcb-help-bom"),
+    ("pcb-help-search-title", "pcb-help-search"),
+    ("pcb-help-settings-title", "pcb-help-settings"),
 ];
 
 /// Opens the help dialog (the toolbar's ?).
@@ -1189,7 +1332,7 @@ pub fn open_help_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-help-dialog")
-            .title("PCB Studio help")
+            .title(tr("pcb-help-title"))
             .width(480.0)
             .body(move |b| {
                 let t = &tb;
@@ -1203,21 +1346,21 @@ pub fn open_help_dialog(world: &mut World) {
                     for (i, (head, text)) in HELP.iter().enumerate() {
                         c.spawn((
                             Name::new(format!("pcb-help-{i}-title")),
-                            t.text(*head, t.font_base, FontWeight::BOLD, t.foreground),
+                            t.text(tr(head), t.font_base, FontWeight::BOLD, t.foreground),
+                            Translated(head),
                         ));
-                        c.spawn(wrapped(
-                            t,
-                            &format!("pcb-help-{i}"),
-                            text,
-                            false,
-                            t.foreground,
+                        c.spawn((
+                            wrapped(t, &format!("pcb-help-{i}"), &tr(text), false, t.foreground),
+                            Translated(text),
                         ));
                     }
                 });
             })
             .footer(move |f| {
                 f.spawn((
-                    Button::new("pcb-help-close").label("Close").build(&tf),
+                    Button::new("pcb-help-close")
+                        .label(tr("common-close"))
+                        .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close::<HelpDialog>);
                     }),

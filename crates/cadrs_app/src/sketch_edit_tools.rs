@@ -22,6 +22,7 @@
 //! Both change the sketch only through [`cadrs_core::commands::EditSketch`] commands.
 
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::tr;
 use std::collections::VecDeque;
 
 use bevy::input::ButtonState;
@@ -150,7 +151,7 @@ fn selected_chains(
                 })
                 .count();
             if count > 2 {
-                return Err("Offset selection branches. Select a chain without a junction.".into());
+                return Err(tr("sketch-offset-branches"));
             }
         }
     }
@@ -246,7 +247,7 @@ fn offset_operation(
     // back onto itself (which would hold the copy still when its parent dimension changes).
     if let Some(id) = dim {
         let DimensionKind::Offset { source, target } = trial.dimensions[id].kind else {
-            return Err("not an offset dimension".into());
+            return Err(tr("sketch-offset-not-offset-dimension"));
         };
         let targets: Vec<_> = std::iter::once(target)
             .chain(trial.constraints.values().filter_map(|c| match c {
@@ -279,7 +280,7 @@ fn offset_operation(
                 matches!(d.kind, DimensionKind::Offset { target, .. } if target == made[0])
                     .then_some(id)
             })
-            .ok_or("missing offset dimension")?;
+            .ok_or_else(|| tr("sketch-offset-missing-dimension"))?;
         ops.push(SketchOp::Offset {
             chain: chain.clone(),
             distance,
@@ -288,7 +289,7 @@ fn offset_operation(
         });
         if let Some(master) = dim {
             let DimensionKind::Offset { source, target } = trial.dimensions[master].kind else {
-                return Err("not an offset dimension".into());
+                return Err(tr("sketch-offset-not-offset-dimension"));
             };
             let constraints: Vec<_> = trial
                 .constraints
@@ -331,7 +332,10 @@ fn offset_operation(
             dim = Some(own);
         }
     }
-    Ok((SketchOp::Batch(ops), dim.ok_or("nothing to offset")?))
+    Ok((
+        SketchOp::Batch(ops),
+        dim.ok_or_else(|| tr("sketch-offset-nothing"))?,
+    ))
 }
 
 fn offset_selection_error(commands: &mut Commands, message: String) {
@@ -393,8 +397,8 @@ fn mirror_prompt(
     let want = match session_sketch(session.as_deref(), doc.as_deref()) {
         Some(sketch) if tool.tool == SketchTool::Mirror => {
             Some(match mirror_axis(sketch, &selection) {
-                None => "Select a mirror line.",
-                Some(_) => "Select entities to be mirrored. Enter or Esc to finish.",
+                None => "sketch-mirror-select-line",
+                Some(_) => "sketch-mirror-select-entities",
             })
         }
         _ => None,
@@ -406,11 +410,11 @@ fn mirror_prompt(
     for e in &q_prompt {
         commands.entity(e).try_despawn();
     }
-    if let Some(text) = want {
+    if let Some(key) = want {
         let toast = cadrs_ui::show_notification(
             &mut commands,
             &theme,
-            cadrs_ui::Notification::info(text)
+            cadrs_ui::Notification::info(tr(key))
                 .name("mirror-prompt")
                 .autohide(false),
         );
@@ -1144,7 +1148,7 @@ pub(crate) fn offset_failed_toast(world: &mut World) {
     cadrs_ui::show_notification(
         &mut commands,
         &theme,
-        cadrs_ui::Notification::warning("Offset could not be created at this distance.")
+        cadrs_ui::Notification::warning(tr("sketch-offset-failed"))
             .name("sketch-offset-toast")
             // Right of the sketch dialog's title (`ex1-step10.png`).
             .at(212.0, 6.0),

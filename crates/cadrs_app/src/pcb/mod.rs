@@ -45,6 +45,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::ElementId;
 use cadrs_core::pcb::search::{Hit, SearchState};
 use cadrs_core::pcb::{BoardId, DeleteBoard, ItemId, PartTransform, PcbStudio};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::{ContextMenuAnchor, LastPointerButton};
 use cadrs_ui::prelude::*;
@@ -345,20 +346,21 @@ struct SearchStep;
 /// The toolbar of a PCB Studio tab (built by `crate::document` for the active tab).
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     crate::document::feature_list_toggle(tb, t);
+    // (`tip` is a catalog key.)
     let tool = |name: &'static str, icon: &'static str, tip: &'static str| {
         ToolButton::new(name, icon)
             .icon_size(20.0)
-            .tooltip(tip)
+            .tooltip(tr(tip))
             .build(t)
     };
     tb.spawn((
-        tool("pcb-import", "file-import", "Import ECAD files"),
+        tool("pcb-import", "file-import", "pcb-import-title"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(dialogs::open_import_dialog);
         }),
     ));
     tb.spawn((
-        tool("pcb-export", "file-export", "Export this board to IDF"),
+        tool("pcb-export", "file-export", "pcb-tool-export"),
         NeedsBoard,
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(transfer::open_export_dialog);
@@ -366,11 +368,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     ));
     tb.spawn(toolbar_separator(t));
     tb.spawn((
-        tool(
-            "pcb-sync",
-            "sync-document",
-            "Sync a Part Studio or assembly with PCB Studio",
-        ),
+        tool("pcb-sync", "sync-document", "pcb-sync-title"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(transfer::open_sync_dialog);
         }),
@@ -379,7 +377,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tool(
             "pcb-create-assembly",
             "create-assembly",
-            "Create an assembly from this ECAD data",
+            "pcb-tool-create-assembly",
         ),
         NeedsBoard,
         observe(|_: On<Activate>, mut commands: Commands| {
@@ -389,7 +387,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn(toolbar_separator(t));
     tb.spawn(
         TextInput::new("pcb-search")
-            .placeholder("Search")
+            .placeholder(tr("pcb-search-placeholder"))
             .width(Val::Px(150.0))
             .height(26.0)
             .build(t),
@@ -400,11 +398,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         n.margin = UiRect::horizontal(Val::Px(4.0));
     });
     tb.spawn((
-        tool(
-            "pcb-search-go",
-            "search",
-            "Search designators, packages, part numbers and boards",
-        ),
+        tool("pcb-search-go", "search", "pcb-search-tip"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(|w: &mut World| {
                 let term = search_text(w);
@@ -413,7 +407,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         }),
     ));
     tb.spawn((
-        tool("pcb-search-clear", "close", "Clear search"),
+        tool("pcb-search-clear", "close", "pcb-search-clear"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(clear_search);
         }),
@@ -429,13 +423,13 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         },
     ));
     for (name, icon, tip, up) in [
-        ("pcb-search-prev", "chevron-up", "Previous result", true),
-        ("pcb-search-next", "chevron-down", "Next result", false),
+        ("pcb-search-prev", "chevron-up", "pcb-search-prev", true),
+        ("pcb-search-next", "chevron-down", "pcb-search-next", false),
     ] {
         tb.spawn((
             ToolButton::new(name, icon)
                 .icon_size(16.0)
-                .tooltip(tip)
+                .tooltip(tr(tip))
                 .build(t),
             SearchStep,
             observe(move |_: On<Activate>, mut commands: Commands| {
@@ -449,13 +443,13 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         });
     }
     tb.spawn((
-        tool("pcb-settings", "settings", "PCB Studio settings"),
+        tool("pcb-settings", "settings", "pcb-settings-title"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(dialogs::open_settings_dialog);
         }),
     ));
     tb.spawn((
-        tool("pcb-help", "help", "PCB Studio help"),
+        tool("pcb-help", "help", "pcb-help-title"),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(dialogs::open_help_dialog);
         }),
@@ -677,8 +671,8 @@ type PackageInfo = (String, String, usize);
 struct TreeSnap {
     element: Option<ElementId>,
     boards: Vec<(BoardId, String, bool, Vec<PackageInfo>)>,
-    /// Each board's outline link: (the sketch it follows, why it doesn't now).
-    links: Vec<Option<(String, Option<String>)>>,
+    /// Each board's outline link: (the sketch it follows, its Part Studio, why it doesn't now).
+    links: Vec<Option<(String, String, Option<String>)>>,
     components: Vec<(cadrs_core::pcb::ComponentId, String)>,
     open: Vec<BoardId>,
     viewing: Option<(BoardId, String)>,
@@ -744,10 +738,8 @@ fn rebuild_tree(
                     .map(|f| f.name.clone())
                     .unwrap_or_default();
                 Some((
-                    format!(
-                        "{sketch} in {}",
-                        studio.map(|e| e.name.as_str()).unwrap_or_default()
-                    ),
+                    sketch,
+                    studio.map(|e| e.name.clone()).unwrap_or_default(),
                     l.problem.clone(),
                 ))
             })
@@ -781,7 +773,7 @@ fn rebuild_tree(
     commands.entity(tree).despawn_children();
     commands.entity(tree).with_children(|p| {
         p.spawn(
-            TreeItem::new("pcb-boards", "Boards")
+            TreeItem::new("pcb-boards", tr("pcb-help-boards-title"))
                 .icon("board", 16.0)
                 .icon_color(t.foreground)
                 .left(4.0)
@@ -789,7 +781,7 @@ fn rebuild_tree(
                 .build(&t),
         )
         .insert(Pickable::IGNORE)
-        .with_children(|h| header_add(h, &t, "pcb-add-board", "Create board"));
+        .with_children(|h| header_add(h, &t, "pcb-add-board", &tr("pcb-create-board")));
         for (k, (id, name, active, _)) in snap.boards.iter().enumerate() {
             let mut item = TreeItem::new(format!("pcb-board-{}", slug(name)), name.clone())
                 .icon("board", 16.0)
@@ -806,10 +798,19 @@ fn rebuild_tree(
             // follow it now), saying which sketch.
             let link = snap.links.get(k).cloned().flatten();
             let tip = match &link {
-                Some((sketch, None)) => format!("{name}: its outline follows {sketch}"),
-                Some((sketch, Some(why))) => {
-                    format!("{name}: its outline no longer follows {sketch}: {why}")
-                }
+                Some((sketch, studio, None)) => tr_with(
+                    "pcb-board-outline-follows",
+                    &[("board", name), ("sketch", sketch), ("studio", studio)],
+                ),
+                Some((sketch, studio, Some(why))) => tr_with(
+                    "pcb-board-outline-broken",
+                    &[
+                        ("board", name),
+                        ("sketch", sketch),
+                        ("studio", studio),
+                        ("problem", why),
+                    ],
+                ),
                 None => name.clone(),
             };
             let mut row = p.spawn((
@@ -819,7 +820,7 @@ fn rebuild_tree(
                 DoubleClickable,
                 Tooltip::new(tip),
             ));
-            if let Some((_, problem)) = &link {
+            if let Some((_, _, problem)) = &link {
                 let (glyph, color) = if problem.is_some() {
                     ("warning-filled", t.warning_icon)
                 } else {
@@ -868,7 +869,7 @@ fn rebuild_tree(
         ));
         // (Right-click it to paste a component copied in a studio.)
         p.spawn(
-            TreeItem::new("pcb-components", "Components")
+            TreeItem::new("pcb-components", tr("pcb-help-components-title"))
                 .icon("chip", 16.0)
                 .icon_color(t.foreground)
                 .left(4.0)
@@ -876,7 +877,7 @@ fn rebuild_tree(
                 .build(&t),
         )
         .insert((ComponentsHeader(el), ContextMenuTarget))
-        .with_children(|h| header_add(h, &t, "pcb-add-component", "Create component"));
+        .with_children(|h| header_add(h, &t, "pcb-add-component", &tr("pcb-create-component")));
         for (id, name) in &snap.components {
             p.spawn((
                 TreeItem::new(format!("pcb-part-{}", slug(name)), name.clone())
@@ -888,9 +889,7 @@ fn rebuild_tree(
                 NativeComponentRow(el, *id),
                 ContextMenuTarget,
                 DoubleClickable,
-                Tooltip::new(format!(
-                    "{name}: click to edit, double-click to rename, right-click for more"
-                )),
+                Tooltip::new(tr_with("pcb-component-row-tip", &[("name", name)])),
             ));
         }
         for (id, name, _, pkgs) in &snap.boards {
@@ -903,9 +902,15 @@ fn rebuild_tree(
                     .height(24.0)
                     .build(&t),
                 ComponentsRow(el, *id),
-                Tooltip::new(format!(
-                    "{name}: {} components",
-                    pkgs.iter().map(|p| p.2).sum::<usize>()
+                Tooltip::new(tr_with(
+                    "pcb-board-components-tip",
+                    &[
+                        ("board", name),
+                        (
+                            "count",
+                            &pkgs.iter().map(|p| p.2).sum::<usize>().to_string(),
+                        ),
+                    ],
                 )),
             ));
             if is_open {
@@ -927,9 +932,15 @@ fn rebuild_tree(
                         .build(&t),
                         PackageRow(el, *id, pkg.clone()),
                         Tooltip::new(if pn.is_empty() {
-                            format!("{pkg}: {n} placed")
+                            tr_with(
+                                "pcb-package-placed",
+                                &[("package", pkg), ("count", &n.to_string())],
+                            )
                         } else {
-                            format!("{pkg}, part number {pn}: {n} placed")
+                            tr_with(
+                                "pcb-package-number-placed",
+                                &[("package", pkg), ("number", pn), ("count", &n.to_string())],
+                            )
                         }),
                     ));
                 }
@@ -1055,13 +1066,16 @@ fn on_board_menu(
     match board {
         Some(b) if b.outline_link.is_some() => {
             let note = b.outline_link.as_ref().and_then(|l| l.problem.clone());
-            menu =
-                menu.item(MenuItem::new("pcb-unlink-outline", "Break outline link").icon("link"));
+            menu = menu
+                .item(MenuItem::new("pcb-unlink-outline", tr("pcb-unlink-outline")).icon("link"));
             if let Some(p) = note {
                 menu = menu.item(
-                    MenuItem::new("pcb-outline-problem", format!("Outline link: {p}"))
-                        .icon("warning-filled")
-                        .disabled(true),
+                    MenuItem::new(
+                        "pcb-outline-problem",
+                        tr_with("pcb-outline-problem", &[("problem", &p)]),
+                    )
+                    .icon("warning-filled")
+                    .disabled(true),
                 );
             }
         }
@@ -1079,7 +1093,10 @@ fn on_board_menu(
                         menu = menu.item(
                             MenuItem::new(
                                 format!("pcb-link-outline-{}", targets.0.len()),
-                                format!("Link outline to {} ({})", f.name, el.name),
+                                tr_with(
+                                    "pcb-link-outline-to",
+                                    &[("sketch", &f.name), ("studio", &el.name)],
+                                ),
                             )
                             .icon("sketch"),
                         );
@@ -1090,7 +1107,7 @@ fn on_board_menu(
         }
         _ => {}
     }
-    menu = menu.item(MenuItem::new("pcb-delete-board", "Delete this board").icon("delete"));
+    menu = menu.item(MenuItem::new("pcb-delete-board", tr("pcb-delete-board")).icon("delete"));
     let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
     commands.entity(anchor).insert((
         BoardMenuFor(r.0, r.1),
@@ -1170,9 +1187,19 @@ pub fn delete_board(world: &mut World, el: ElementId, id: BoardId) {
     }
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let toast =
-        cadrs_ui::show_toast_for(&mut commands, &theme, format!("Deleted board {name}."), 3.0);
-    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    let toast = cadrs_ui::show_toast_for(
+        &mut commands,
+        &theme,
+        tr_with("pcb-deleted-board", &[("name", &name)]),
+        3.0,
+    );
+    let undo = cadrs_ui::toast_action(
+        &mut commands,
+        &theme,
+        toast,
+        "toast-undo",
+        tr("common-undo"),
+    );
     commands
         .entity(undo)
         .insert(observe(|_: On<Activate>, mut commands: Commands| {
@@ -1209,9 +1236,9 @@ fn below_row(ev: &ContextMenuRequested, tf: &UiGlobalTransform, node: &ComputedN
 /// The Paste item: what it would paste, greyed out with nothing copied.
 fn paste_item(clip: &PartClipboard) -> MenuItem {
     match &clip.0 {
-        Some(c) => MenuItem::new("pcb-paste-component", "Paste")
-            .tooltip(format!("Adds a copy of {}", c.name)),
-        None => MenuItem::new("pcb-paste-component", "Paste").disabled(true),
+        Some(c) => MenuItem::new("pcb-paste-component", tr("common-paste"))
+            .tooltip(tr_with("pcb-paste-component-tip", &[("name", &c.name)])),
+        None => MenuItem::new("pcb-paste-component", tr("common-paste")).disabled(true),
     }
 }
 
@@ -1245,24 +1272,24 @@ fn on_component_menu(
     });
     let mut menu = Menu::new("pcb-component-menu")
         .min_width(190.0)
-        .item(MenuItem::new("pcb-edit-component", "Edit").icon("edit"))
+        .item(MenuItem::new("pcb-edit-component", tr("pcb-edit-component")).icon("edit"))
         .separator()
-        .item(MenuItem::new("pcb-copy-component", "Copy").icon("copy"))
+        .item(MenuItem::new("pcb-copy-component", tr("common-copy")).icon("copy"))
         .item(paste_item(&clip));
     if can_add {
         menu = menu.item(
-            MenuItem::new("pcb-add-component-to-library", "Add to my library")
+            MenuItem::new("pcb-add-component-to-library", tr("pcb-add-to-my-library"))
                 .icon("books")
-                .tooltip(format!(
-                    "Keeps it in {} for every studio",
-                    crate::eda::libraries::MY_LIBRARY
+                .tooltip(tr_with(
+                    "pcb-add-to-my-library-tip",
+                    &[("library", crate::eda::libraries::MY_LIBRARY)],
                 )),
         );
     }
     let menu = menu
         .separator()
-        .item(MenuItem::new("pcb-rename-component", "Rename"))
-        .item(MenuItem::new("pcb-delete-component", "Delete").icon("delete"));
+        .item(MenuItem::new("pcb-rename-component", tr("common-rename")))
+        .item(MenuItem::new("pcb-delete-component", tr("common-delete")).icon("delete"));
     let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
     commands.entity(anchor).insert((
         ComponentMenuFor(r.0, r.1),
@@ -1345,10 +1372,7 @@ pub fn copy_component(world: &mut World, el: ElementId, id: cadrs_core::pcb::Com
     let Some(c) = studio_component(world, el, id) else {
         return;
     };
-    let msg = format!(
-        "Copied {}: right-click Components in any studio to paste it.",
-        c.name
-    );
+    let msg = tr_with("pcb-copied-component", &[("name", &c.name)]);
     world.resource_mut::<PartClipboard>().0 = Some(c);
     crate::eda::ui::toast(world, &msg);
 }
@@ -1382,8 +1406,11 @@ pub fn add_component_to_library(
         .resource_mut::<crate::eda::libraries::UserLibraries>()
         .add_part(&c);
     let msg = match r {
-        Ok(id) => format!("Added {} to your library as {id}.", c.name),
-        Err(e) => format!("Couldn't add {} to your library: {e}", c.name),
+        Ok(id) => tr_with("pcb-added-to-library", &[("name", &c.name), ("id", &id)]),
+        Err(e) => tr_with(
+            "pcb-add-to-library-failed",
+            &[("name", &c.name), ("error", &e)],
+        ),
     };
     crate::eda::ui::toast(world, &msg);
 }
@@ -1416,10 +1443,16 @@ pub fn delete_component(world: &mut World, el: ElementId, id: cadrs_core::pcb::C
     let toast = cadrs_ui::show_toast_for(
         &mut commands,
         &theme,
-        format!("Deleted component {name}."),
+        tr_with("pcb-deleted-component", &[("name", &name)]),
         3.0,
     );
-    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    let undo = cadrs_ui::toast_action(
+        &mut commands,
+        &theme,
+        toast,
+        "toast-undo",
+        tr("common-undo"),
+    );
     commands
         .entity(undo)
         .insert(observe(|_: On<Activate>, mut commands: Commands| {
@@ -1471,7 +1504,8 @@ fn spawn_chrome(
             Pickable::IGNORE,
         ))
         .with_child((
-            Text::new("Import an ECAD file, or sync a Part Studio or assembly, from the toolbar to get started."),
+            Text::new(tr("pcb-empty-studio")),
+            Translated("pcb-empty-studio"),
             {
                 let mut f = t.font(t.font_base, FontWeight::NORMAL);
                 f.style = bevy::text::FontStyle::Italic;
@@ -1499,11 +1533,24 @@ fn spawn_chrome(
         ))
         .with_children(|s| {
             for (name, icon, tip, pane) in [
-                ("pcb-panel-component", "properties", "Component properties", PcbPane::Component),
-                ("pcb-panel-bom", "bill-of-materials", "Bill of materials", PcbPane::Bom),
+                (
+                    "pcb-panel-component",
+                    "properties",
+                    "pcb-help-properties-title",
+                    PcbPane::Component,
+                ),
+                (
+                    "pcb-panel-bom",
+                    "bill-of-materials",
+                    "common-bill-of-materials",
+                    PcbPane::Bom,
+                ),
             ] {
                 s.spawn((
-                    ToolButton::new(name, icon).icon_size(18.0).tooltip(tip).build(&t),
+                    ToolButton::new(name, icon)
+                        .icon_size(18.0)
+                        .tooltip(tr(tip))
+                        .build(&t),
                     observe(move |_: On<Activate>, mut ui: ResMut<PcbUi>| {
                         ui.pane = if ui.pane == pane { PcbPane::None } else { pane };
                     }),

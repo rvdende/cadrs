@@ -25,6 +25,7 @@ use cadrs_core::cam::cadrs_cam::toolpath::{Stats, Toolpath};
 use cadrs_core::cam::program::{self, OpInput};
 use cadrs_core::cam::{CamId, CamStudio, OpKind, geometry};
 use cadrs_core::{ElementId, Part};
+use cadrs_ui::i18n::tr;
 
 /// A calculated toolpath: in its work plane's coordinates, with that plane's frame.
 #[derive(Debug, Clone)]
@@ -54,11 +55,11 @@ impl Status {
     /// The trailing text of its row.
     pub fn short(&self) -> String {
         match self {
-            Status::NotCalculated => "not calculated".into(),
-            Status::OutOfDate => "out of date".into(),
-            Status::Calculating => "calculating…".into(),
+            Status::NotCalculated => tr("cam-status-not-calculated"),
+            Status::OutOfDate => tr("cam-status-out-of-date"),
+            Status::Calculating => tr("cam-status-calculating"),
             Status::Done(s) => fmt_minutes(s.minutes),
-            Status::Failed(_) => "failed".into(),
+            Status::Failed(_) => tr("cam-status-failed"),
             Status::Blocked(_) => "—".into(),
         }
     }
@@ -589,7 +590,7 @@ fn spawn_generate(input: Arc<OpInput>, model: Arc<Model>, rest: Option<Arc<RestI
             let rest = rest.map(|r| rest_stock(&input, &r));
             program::generate(&input, &model, rest.as_ref())
         }))
-        .unwrap_or_else(|_| Err("The strategy failed unexpectedly".into()));
+        .unwrap_or_else(|_| Err(tr("cam-strategy-failed-unexpectedly")));
         let _ = tx.send(r);
     });
     if spawned.is_err() {
@@ -652,7 +653,7 @@ fn step(world: &mut World, r: &mut Running, parts: &[Part]) -> Option<Outcome> {
             })),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err("The strategy stopped unexpectedly".into()))
+                Some(Err(tr("cam-strategy-stopped-unexpectedly")))
             }
         },
     }

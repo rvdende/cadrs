@@ -60,8 +60,9 @@ pub fn copy_sketch(world: &mut World, id: FeatureId) {
     show_notification(
         &mut commands,
         &theme,
-        Notification::info(format!(
-            "{name} copied. Paste it into a sketch with Ctrl+V."
+        Notification::info(cadrs_ui::i18n::tr_with(
+            "model-sketch-copied",
+            &[("name", &name)],
         ))
         .name("sketch-copied-toast"),
     );

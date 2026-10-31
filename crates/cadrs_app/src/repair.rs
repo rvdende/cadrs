@@ -35,6 +35,7 @@ use bevy::ui_widgets::Activate;
 use cadrs_core::rebuild::{Build, Pending};
 use cadrs_core::repair::{Reference, outline, references};
 use cadrs_core::{ElementId, Feature, FeatureId};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{
     ContextMenuAnchor, ContextMenuRequested, ContextMenuTarget, Menu, MenuAction, MenuItem,
 };
@@ -143,7 +144,8 @@ pub struct Repair {
     pub label: String,
     /// What the header says it views: "Main :: <entry>", or a version's name.
     pub title: String,
-    /// Its tab: "Repair", or "Read-only" for a version opened read-only.
+    /// Its tab: "Repair", or "Read-only" for a version opened read-only (the text's catalog
+    /// key).
     pub tab: &'static str,
     /// The Part Studio shown and its features at that entry.
     pub element: Option<ElementId>,
@@ -181,7 +183,7 @@ impl Default for Repair {
             entry: None,
             label: String::new(),
             title: String::new(),
-            tab: "Repair",
+            tab: "view-history-repair",
             element: None,
             features: Vec::new(),
             pending: None,
@@ -337,7 +339,7 @@ pub fn open_at(world: &mut World, k: usize) {
         k,
         format!("{} :: {label}", crate::workspaces::current_name(world)),
     );
-    world.resource_mut::<Repair>().tab = "Repair";
+    world.resource_mut::<Repair>().tab = "view-history-repair";
 }
 
 /// Open read-only (P3D.3): version `i` (by its place in the log) shown in the view-only panel,
@@ -355,7 +357,7 @@ pub fn open_version(world: &mut World, i: usize) {
         return;
     };
     open_entry(world, k, name);
-    world.resource_mut::<Repair>().tab = "Read-only";
+    world.resource_mut::<Repair>().tab = "view-repair-read-only";
 }
 
 fn open_entry(world: &mut World, k: usize, title: String) {
@@ -474,8 +476,8 @@ fn sync_panel(
     q_children: Query<&Children>,
     mut commands: Commands,
 ) {
-    let title = format!("Viewing {}", repair.title);
-    let tab = repair.tab;
+    let title = tr_with("view-repair-viewing", &[("what", &repair.title)]);
+    let tab = tr(repair.tab);
     let want = repair.open.then(|| format!("{tab}|{title}"));
     let have = q_panel.iter().next().map(|(_, p)| p.0.clone());
     if have == want {
@@ -532,10 +534,24 @@ fn sync_panel(
                     },
                     BorderColor::all(t.link),
                 ))
-                .with_child(t.text(tab, 12.0, FontWeight::SEMIBOLD, t.link));
+                .with_child(t.text(
+                    tab.clone(),
+                    12.0,
+                    FontWeight::SEMIBOLD,
+                    t.link,
+                ));
                 h.spawn((
-                    Node { position_type: PositionType::Absolute, right: Val::Px(2.0), ..default() },
-                    children![IconButton::new("repair-close", "close").icon_size(12.0).tooltip("Close Repair").build(&t)],
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: Val::Px(2.0),
+                        ..default()
+                    },
+                    children![
+                        IconButton::new("repair-close", "close")
+                            .icon_size(12.0)
+                            .tooltip(tr("view-repair-close"))
+                            .build(&t)
+                    ],
                 ));
             });
             // "Viewing Main :: …", open in new, ?, and Synchronize view.
@@ -564,10 +580,26 @@ fn sync_panel(
                 ))
                 .with_children(|v| {
                     v.spawn(t.text(title.clone(), 11.0, FontWeight::NORMAL, t.foreground));
-                    v.spawn(IconButton::new("repair-open-new", "open-external").icon_size(12.0).tooltip("Open in a new tab (one window only)").disabled(true).build(&t));
-                    v.spawn(IconButton::new("repair-help", "help").icon_size(12.0).tooltip("Repair shows the Part Studio at a history entry, to see where missing references were").build(&t));
+                    v.spawn(
+                        IconButton::new("repair-open-new", "open-external")
+                            .icon_size(12.0)
+                            .tooltip(tr("view-repair-open-new-tab"))
+                            .disabled(true)
+                            .build(&t),
+                    );
+                    v.spawn(
+                        IconButton::new("repair-help", "help")
+                            .icon_size(12.0)
+                            .tooltip(tr("view-repair-help"))
+                            .build(&t),
+                    );
                 });
-                h.spawn(Checkbox::new("repair-sync").label("Synchronize view").checked(repair.sync).build(&t));
+                h.spawn(
+                    Checkbox::new("repair-sync")
+                        .label(tr("view-repair-sync"))
+                        .checked(repair.sync)
+                        .build(&t),
+                );
             });
             p.spawn((
                 Name::new("repair-view"),
@@ -643,7 +675,7 @@ fn sync_strip_icon(
             RepairStripIcon,
             ToolButton::new("panel-repair", "tool")
                 .icon_size(18.0)
-                .tooltip("Repair")
+                .tooltip(tr("view-history-repair"))
                 .build(&theme),
         ))
         .insert(cadrs_ui::style::InitState {
@@ -1053,8 +1085,8 @@ fn on_view_menu(
         .min_width(140.0)
         .item_height(22.0)
         .text_only()
-        .item(MenuItem::new("repair-zoom-fit", "Zoom to fit"))
-        .item(MenuItem::new("repair-isometric", "Isometric"));
+        .item(MenuItem::new("repair-zoom-fit", tr("common-zoom-to-fit")))
+        .item(MenuItem::new("repair-isometric", tr("view-menu-isometric")));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
         .entity(anchor)
@@ -1111,7 +1143,7 @@ fn on_item_menu(
         .item(
             MenuItem::new(
                 "missing-edit-healthy",
-                format!("Edit healthy moment of {fname}…"),
+                tr_with("view-repair-edit-healthy", &[("name", &fname)]),
             )
             .disabled(!has_healthy_moment(&log, element, feature)),
         );

@@ -38,6 +38,7 @@ use cadrs_core::commands::{
 use cadrs_core::{ElementId, FeatureId};
 use cadrs_ui::Button;
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -314,7 +315,7 @@ fn spawn_shell(
     let doc_name = doc
         .as_ref()
         .map(|d| d.doc.name.clone())
-        .unwrap_or_else(|| "Untitled document".into());
+        .unwrap_or_else(|| tr("common-untitled-document"));
     commands
         .spawn((
             Name::new("document-shell"),
@@ -535,7 +536,7 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             },
             bevy::ui_widgets::Button,
             bevy::picking::hover::Hovered::default(),
-            Tooltip::new("Workspaces"),
+            Tooltip::new(tr("shell-doc-workspaces")),
         ));
         bar.spawn(Node {
             flex_grow: 1.0,
@@ -553,8 +554,12 @@ fn top_bar(root: &mut ChildSpawnerCommands, t: &Theme, doc_name: &str, profile: 
             // (`crate::collab`), then a divider.
             spawn_folding(r, Fold::Phone, |r| {
                 for (name, icon_name, tip) in [
-                    ("document-comments", "comments", "Comments".to_string()),
-                    ("document-history", "history", "History".to_string()),
+                    (
+                        "document-comments",
+                        "comments",
+                        tr("shell-top-bar-comments"),
+                    ),
+                    ("document-history", "history", tr("shell-top-bar-history")),
                     (
                         "document-share",
                         "share",
@@ -624,7 +629,7 @@ pub(crate) fn feature_list_toggle(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn((
         ToolButton::new("feature-list-toggle", "list-details")
             .icon_size(18.0)
-            .tooltip("Show or hide the feature list")
+            .tooltip(tr("shell-doc-feature-list-toggle"))
             .build(t),
         observe(
             |_: On<Activate>, q: Query<(Entity, &Name)>, mut commands: Commands| {
@@ -697,19 +702,23 @@ fn right_strip(vp: &mut ChildSpawnerCommands, t: &Theme) {
     .with_children(|s| {
         for (name, icon_name, tip) in [
             // P3B.6: the Bill of Materials.
-            ("panel-bom", "bill-of-materials", "Bill of materials"),
+            ("panel-bom", "bill-of-materials", "common-bill-of-materials"),
             // P3B.8: Exploded views and Named positions.
-            ("panel-exploded-views", "explode", "Exploded views"),
+            (
+                "panel-exploded-views",
+                "explode",
+                "shell-doc-exploded-views",
+            ),
             (
                 "panel-named-positions",
                 "named-positions",
-                "Named positions",
+                "shell-doc-named-positions",
             ),
         ] {
             s.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
-                    .tooltip(tip)
+                    .tooltip(tr(tip))
                     .build(t),
             )
             .entry::<Node>()
@@ -807,26 +816,30 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
     ))
     .with_children(|g| {
         for (name, icon_name, tip) in [
-            ("view-section", "section-view", "Section view"),
-            ("view-measure", "measure", "Measure"),
+            ("view-section", "section-view", "shell-doc-section-view"),
+            ("view-measure", "measure", "shell-doc-measure"),
             // P3E.3b: the Analysis tools (icon-rs has no analysis icon: the curvature glyph
             // stands in).
-            ("view-analysis", "constraint-curvature", "Analysis tools"),
-            ("view-mass", "mass-properties", "Mass properties"),
+            (
+                "view-analysis",
+                "constraint-curvature",
+                "shell-doc-analysis-tools",
+            ),
+            ("view-mass", "mass-properties", "shell-doc-mass-properties"),
             // P3F.5: the Simulation panel (`crate::simulation_ui`; icon-rs has no simulation
             // icon: Thicken's deformed sheet stands in).
-            ("panel-simulation", "thicken", "Simulation"),
+            ("panel-simulation", "thicken", "shell-doc-simulation"),
             // P3I.3: shown once a sheet metal model exists (`crate::sheetmetal_table`).
             (
                 "panel-sheet-metal",
                 "sheet-metal-table",
-                "Sheet metal table and flat view",
+                "shell-doc-sheet-metal-table",
             ),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
                     .icon_size(18.0)
-                    .tooltip(tip)
+                    .tooltip(tr(tip))
                     .build(t),
             )
             .insert(view_tool_node(t));
@@ -877,7 +890,7 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
         bar.spawn((
             IconButton::new("insert-tab", "plus")
                 .icon_size(20.0)
-                .tooltip("Insert new tab")
+                .tooltip(tr("shell-doc-insert-tab"))
                 .build(t),
             InsertTabButton,
             observe(
@@ -903,20 +916,24 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
             (
                 IconButton::new(name, icon_name)
                     .icon_size(18.0)
-                    .tooltip(tip)
+                    .tooltip(tr(tip))
                     .build(t),
                 crate::scale_ui::TabStripChevron,
             )
         };
-        bar.spawn(chevron("tab-strip-prev", "chevron-left", "Earlier tabs"))
-            .insert(dark.clone())
-            .entry::<Node>()
-            .and_modify(|mut n| {
-                n.width = Val::Px(20.0);
-                n.height = Val::Auto;
-                n.border_radius = BorderRadius::ZERO;
-                n.display = Display::None;
-            });
+        bar.spawn(chevron(
+            "tab-strip-prev",
+            "chevron-left",
+            "shell-doc-earlier-tabs",
+        ))
+        .insert(dark.clone())
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.width = Val::Px(20.0);
+            n.height = Val::Auto;
+            n.border_radius = BorderRadius::ZERO;
+            n.display = Display::None;
+        });
         bar.spawn((
             Name::new("tab-strip-frame"),
             Node {
@@ -944,25 +961,33 @@ fn tab_bar(root: &mut ChildSpawnerCommands, t: &Theme) {
                 Pickable::IGNORE,
             ));
         });
-        bar.spawn(chevron("tab-strip-next", "chevron-right", "Later tabs"))
-            .insert(dark.clone())
-            .entry::<Node>()
-            .and_modify(|mut n| {
-                n.width = Val::Px(20.0);
-                n.height = Val::Auto;
-                n.border_radius = BorderRadius::ZERO;
-                n.display = Display::None;
-            });
+        bar.spawn(chevron(
+            "tab-strip-next",
+            "chevron-right",
+            "shell-doc-later-tabs",
+        ))
+        .insert(dark.clone())
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.width = Val::Px(20.0);
+            n.height = Val::Auto;
+            n.border_radius = BorderRadius::ZERO;
+            n.display = Display::None;
+        });
         // P3E.2 (T1.2): ▾ lists every tab of this level, the hidden ones included.
-        bar.spawn(chevron("tab-overflow", "chevron-down", "All tabs"))
-            .insert(dark)
-            .entry::<Node>()
-            .and_modify(|mut n| {
-                n.width = Val::Px(22.0);
-                n.height = Val::Auto;
-                n.border_radius = BorderRadius::ZERO;
-                n.display = Display::None;
-            });
+        bar.spawn(chevron(
+            "tab-overflow",
+            "chevron-down",
+            "shell-doc-all-tabs",
+        ))
+        .insert(dark)
+        .entry::<Node>()
+        .and_modify(|mut n| {
+            n.width = Val::Px(22.0);
+            n.height = Val::Auto;
+            n.border_radius = BorderRadius::ZERO;
+            n.display = Display::None;
+        });
         view_tools(bar, t);
     });
 }
@@ -1034,55 +1059,74 @@ fn insert_menu(paste: Option<String>) -> Menu {
         .min_width(232.0)
         .item_height(25.0)
         .item(
-            MenuItem::new("insert-applications", "Applications")
+            MenuItem::new("insert-applications", tr("shell-doc-applications"))
                 .icon("apps")
                 .submenu(vec![
-                    MenuItem::new("insert-no-apps", "No applications installed")
+                    MenuItem::new("insert-no-apps", tr("shell-doc-no-applications"))
                         .planned()
                         .into(),
                 ]),
         )
         .item(
-            MenuItem::new("create-material-library", "Create Material Library")
-                .icon("material-library")
-                .planned(),
+            MenuItem::new(
+                "create-material-library",
+                tr("shell-doc-create-material-library"),
+            )
+            .icon("material-library")
+            .planned(),
         )
         .item(
-            MenuItem::new("create-feature-studio", "Create Feature Studio")
-                .icon("feature-studio")
-                .planned(),
+            MenuItem::new(
+                "create-feature-studio",
+                tr("shell-doc-create-feature-studio"),
+            )
+            .icon("feature-studio")
+            .planned(),
         )
         .item(
             // CAM Studio: jobs, setups, tools and toolpaths for mills, routers, lasers, plasma
             // tables and waterjets.
-            MenuItem::new("create-cam-studio", "Create CAM Studio").icon("cam-studio"),
+            MenuItem::new("create-cam-studio", tr("shell-doc-create-cam-studio"))
+                .icon("cam-studio"),
         )
         .item(
             // P3H.3: PCB Studio tabs.
-            MenuItem::new("create-pcb-studio", "Create PCB Studio").icon("pcb-studio"),
+            MenuItem::new("create-pcb-studio", tr("shell-doc-create-pcb-studio"))
+                .icon("pcb-studio"),
         )
         .item(
             // P3F.6: a Render Studio of the active (or first) Part Studio or Assembly.
-            MenuItem::new("create-render-studio", "Create Render Studio").icon("render-studio"),
+            MenuItem::new("create-render-studio", tr("shell-doc-create-render-studio"))
+                .icon("render-studio"),
         )
         .separator()
-        .item(MenuItem::new("create-part-studio", "Create Part Studio").icon("part-studio"))
-        .item(MenuItem::new("create-assembly", "Create Assembly").icon("assembly"))
         .item(
-            MenuItem::new("create-variable-studio", "Create Variable Studio")
-                .icon("variable-studio"),
+            MenuItem::new("create-part-studio", tr("shell-doc-create-part-studio"))
+                .icon("part-studio"),
+        )
+        .item(MenuItem::new("create-assembly", tr("shell-doc-create-assembly")).icon("assembly"))
+        .item(
+            MenuItem::new(
+                "create-variable-studio",
+                tr("shell-doc-create-variable-studio"),
+            )
+            .icon("variable-studio"),
         )
         // P3C.1: drawings.
-        .item(MenuItem::new("create-drawing", "Create Drawing…").icon("details"))
-        .item(MenuItem::new("create-folder", "Create folder").icon("folder"))
+        .item(MenuItem::new("create-drawing", tr("shell-doc-create-drawing")).icon("details"))
+        .item(MenuItem::new("create-folder", tr("shell-doc-create-folder")).icon("folder"))
         .item(
             // P3F.2: STEP and IGES files as new tabs.
-            MenuItem::new("import-files", "Import…").icon("file-import"),
+            MenuItem::new("import-files", tr("shell-doc-import-ellipsis")).icon("file-import"),
         );
     match paste {
-        Some(name) => menu
-            .separator()
-            .item(MenuItem::new("paste-tab", format!("Paste {name}")).icon("copy")),
+        Some(name) => menu.separator().item(
+            MenuItem::new(
+                "paste-tab",
+                tr_with("shell-doc-paste-tab", &[("name", name.as_str())]),
+            )
+            .icon("copy"),
+        ),
         None => menu,
     }
 }
@@ -1121,11 +1165,14 @@ fn loading_overlay(root: &mut ChildSpawnerCommands, t: &Theme) {
                     .thickness(4.0)
                     .build(t),
             );
-            c.spawn(t.text(
-                "Loading…",
-                t.font_base,
-                FontWeight::NORMAL,
-                t.muted_foreground,
+            c.spawn((
+                t.text(
+                    tr("shell-linked-loading"),
+                    t.font_base,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("shell-linked-loading"),
             ));
         });
     });
@@ -1269,7 +1316,10 @@ fn rebuild_tabs(
                             .marked(holds_active(*id))
                             .build(&theme),
                         crate::tab_folders::FolderTab(*id),
-                        Tooltip::new(format!("{name} ({count} tabs)")),
+                        Tooltip::new(tr_with(
+                            "shell-doc-folder-tab-tooltip",
+                            &[("name", name.as_str()), ("count", &count.to_string())],
+                        )),
                     ));
                 }
             }
@@ -1539,16 +1589,17 @@ pub(crate) fn search_tools(tb: &mut ChildSpawnerCommands, t: &Theme) {
         },
         BackgroundColor(t.search_background),
         SearchTools,
-        Tooltip::new("Search tools (Alt+C)"),
+        Tooltip::new(tr("shell-doc-search-tools-tooltip")),
     ))
     .with_children(|s| {
         s.spawn((
             t.text(
-                "Search tools…",
+                tr("shell-search-placeholder"),
                 t.font_base,
                 FontWeight::MEDIUM,
                 t.tool_foreground,
             ),
+            Translated("shell-search-placeholder"),
             Node {
                 margin: UiRect::right(Val::Px(2.0)),
                 ..default()
@@ -1566,9 +1617,9 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     crate::reference_manager::update_all_button(tb, t);
     tb.spawn((
         ToolButton::new("sketch", "sketch")
-            .label("Sketch")
+            .label(tr("common-sketch"))
             .icon_size(18.0)
-            .tooltip("Sketch (Shift+S)")
+            .tooltip(tr("shell-tool-sketch"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(crate::sketch::begin_sketch);
@@ -1577,42 +1628,47 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn(toolbar_separator(t));
     let groups: [&[(&str, &str, bool, &str)]; 6] = [
         &[
-            ("extrude", "extrude", false, "Extrude (Shift+E)"),
-            ("revolve", "revolve", false, "Revolve (Shift+W)"),
-            ("sweep", "sweep", false, "Sweep"),
-            ("loft", "loft", false, "Loft"),
-            ("thicken", "thicken", true, "Thicken"),
+            ("extrude", "extrude", false, "shell-tool-extrude"),
+            ("revolve", "revolve", false, "shell-tool-revolve"),
+            ("sweep", "sweep", false, "shell-tool-sweep"),
+            ("loft", "loft", false, "shell-tool-loft"),
+            ("thicken", "thicken", true, "shell-tool-thicken"),
         ],
         &[
-            ("fillet", "fillet", true, "Fillet (Shift+F)"),
-            ("chamfer", "chamfer", false, "Chamfer"),
-            ("draft", "draft", true, "Draft"),
-            ("rib", "rib", false, "Rib"),
-            ("shell", "shell", false, "Shell"),
-            ("hole", "hole", false, "Hole"),
-            ("thread", "thread", false, "Thread"),
-            (
-                "move-face",
-                "offset",
-                true,
-                "Move face, Delete face, Simplify",
-            ),
+            ("fillet", "fillet", true, "shell-tool-fillet"),
+            ("chamfer", "chamfer", false, "shell-tool-chamfer"),
+            ("draft", "draft", true, "shell-tool-draft"),
+            ("rib", "rib", false, "shell-tool-rib"),
+            ("shell", "shell", false, "shell-tool-shell"),
+            ("hole", "hole", false, "shell-tool-hole"),
+            ("thread", "thread", false, "shell-tool-thread"),
+            ("move-face", "offset", true, "shell-tool-direct-edit"),
         ],
         &[
-            ("pattern", "linear-pattern", true, "Linear pattern"),
-            ("mirror", "mirror", false, "Mirror"),
             (
-                "boolean",
-                "boolean",
+                "pattern",
+                "linear-pattern",
                 true,
-                "Boolean (Union, Subtract, Intersect)",
+                "shell-tool-linear-pattern",
             ),
-            ("split", "split", true, "Split"),
-            ("transform", "transform", true, "Transform"),
-            ("composite-part", "composite-part", false, "Composite part"),
-            ("plane", "plane", true, "Plane"),
-            ("mate-connector", "mate-connector", true, "Mate connector"),
-            ("variable", "variables", false, "Variable"),
+            ("mirror", "mirror", false, "shell-tool-mirror"),
+            ("boolean", "boolean", true, "shell-tool-boolean"),
+            ("split", "split", true, "shell-tool-split"),
+            ("transform", "transform", true, "shell-tool-transform"),
+            (
+                "composite-part",
+                "composite-part",
+                false,
+                "shell-tool-composite-part",
+            ),
+            ("plane", "plane", true, "common-plane"),
+            (
+                "mate-connector",
+                "mate-connector",
+                true,
+                "common-mate-connector",
+            ),
+            ("variable", "variables", false, "shell-tool-variable"),
         ],
         // P3I.2 (X1): the sheet metal group, where Onshape has it (after the Part Studio's
         // general tools, before custom features).
@@ -1620,27 +1676,17 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             "sheet-metal-model",
             "sheet-metal-model",
             true,
-            "Sheet metal model",
+            "shell-tool-sheet-metal-model",
         )],
         &[(
             "custom-feature",
             "custom-feature",
             false,
-            "Add custom features",
+            "shell-tool-custom-features",
         )],
         &[
-            (
-                "import",
-                "file-import",
-                false,
-                "Import (a STEP, IGES, BREP or STL file)",
-            ),
-            (
-                "derived",
-                "link",
-                false,
-                "Derived (parts of another Part Studio)",
-            ),
+            ("import", "file-import", false, "shell-tool-import"),
+            ("derived", "link", false, "shell-tool-derived"),
         ],
     ];
     for (i, group) in groups.iter().enumerate() {
@@ -1651,7 +1697,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             if *name == "extrude" {
                 // M9: Extrude works.
                 tb.spawn((
-                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(crate::extrude::begin_extrude);
                     }),
@@ -1663,7 +1709,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(*dropdown)
-                        .tooltip(*tip)
+                        .tooltip(tr(tip))
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(crate::revolve::begin_revolve);
@@ -1676,7 +1722,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(true)
-                        .tooltip("Linear, Circular and Curve pattern")
+                        .tooltip(tr("shell-tool-patterns"))
                         .build(t),
                     // The toolbar clips its children: the menu opens at the button's lower left
                     // corner, on its own anchor, which gets the chosen item.
@@ -1726,7 +1772,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 // P3I.2 (X1): the button starts a Sheet metal model; its ▾ lists the other
                 // sheet metal tools in Onshape's order.
                 tb.spawn((
-                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(|world: &mut World| {
                             crate::applied::begin(world, crate::applied::AppliedKind::SheetMetal)
@@ -1779,7 +1825,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(true)
-                        .tooltip("Thicken, Fill, Helix")
+                        .tooltip(tr("shell-tool-surfacing"))
                         .build(t),
                     observe(
                         |a: On<Activate>,
@@ -1823,7 +1869,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(true)
-                        .tooltip(*tip)
+                        .tooltip(tr(tip))
                         .build(t),
                     observe(
                         |a: On<Activate>,
@@ -1869,7 +1915,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(*dropdown)
-                        .tooltip(*tip)
+                        .tooltip(tr(tip))
                         .build(t),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         commands.queue(move |world: &mut World| crate::applied::begin(world, kind));
@@ -1880,7 +1926,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             if *name == "composite-part" {
                 // P3H.6 (PCB7.9): Composite part.
                 tb.spawn((
-                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(crate::composite_ui::begin);
                     }),
@@ -1890,7 +1936,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             if *name == "variable" {
                 // P3F.4: the Variable feature.
                 tb.spawn((
-                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(crate::variables_ui::begin_variable);
                     }),
@@ -1901,7 +1947,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 // Onshape import: Import and Derived.
                 let derived = *name == "derived";
                 tb.spawn((
-                    ToolButton::new(*name, *icon_name).tooltip(*tip).build(t),
+                    ToolButton::new(*name, *icon_name).tooltip(tr(tip)).build(t),
                     observe(move |_: On<Activate>, mut commands: Commands| {
                         if derived {
                             commands.queue(crate::derived_ui::begin_derived);
@@ -1917,7 +1963,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(*dropdown)
-                        .tooltip(*tip)
+                        .tooltip(tr(tip))
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(crate::boolean::begin_boolean);
@@ -1929,7 +1975,7 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 ToolButton::new(*name, *icon_name)
                     .dropdown(*dropdown)
                     .disabled(true)
-                    .tooltip(*tip)
+                    .tooltip(tr(tip))
                     .build(t),
             );
         }
@@ -1941,9 +1987,9 @@ fn part_studio_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
 fn surfacing_menu() -> Menu {
     Menu::new("surfacing-menu")
         .min_width(160.0)
-        .item(MenuItem::new("surfacing-menu-thicken", "Thicken").icon("thicken"))
-        .item(MenuItem::new("surfacing-menu-fill", "Fill").icon("surface"))
-        .item(MenuItem::new("surfacing-menu-helix", "Helix").icon("thread"))
+        .item(MenuItem::new("surfacing-menu-thicken", tr("shell-tool-thicken")).icon("thicken"))
+        .item(MenuItem::new("surfacing-menu-fill", tr("shell-tool-fill")).icon("surface"))
+        .item(MenuItem::new("surfacing-menu-helix", tr("shell-tool-helix")).icon("thread"))
 }
 
 /// The Move face button's menu: the direct edits (icon-rs has no move face, delete face or
@@ -1951,9 +1997,14 @@ fn surfacing_menu() -> Menu {
 fn direct_edit_menu() -> Menu {
     Menu::new("direct-edit-menu")
         .min_width(160.0)
-        .item(MenuItem::new("direct-edit-menu-move-face", "Move face").icon("offset"))
-        .item(MenuItem::new("direct-edit-menu-delete-face", "Delete face").icon("delete"))
-        .item(MenuItem::new("direct-edit-menu-simplify", "Simplify").icon("surface"))
+        .item(
+            MenuItem::new("direct-edit-menu-move-face", tr("shell-tool-move-face")).icon("offset"),
+        )
+        .item(
+            MenuItem::new("direct-edit-menu-delete-face", tr("shell-tool-delete-face"))
+                .icon("delete"),
+        )
+        .item(MenuItem::new("direct-edit-menu-simplify", tr("shell-tool-simplify")).icon("surface"))
 }
 
 /// The Sheet metal model button's ▾ (P3I.2, X1): the other sheet metal tools in Onshape's order,
@@ -1967,7 +2018,7 @@ fn sheet_metal_menu() -> Menu {
                     "sheet-metal-menu-{}",
                     name.trim_start_matches("sheet-metal-")
                 ),
-                label,
+                crate::sheetmetal_ui::tool_label(name, label),
             )
             .icon(icon)
             .disabled(!crate::sheetmetal_ui::tool_built(name)),
@@ -1980,9 +2031,15 @@ fn sheet_metal_menu() -> Menu {
 fn pattern_menu() -> Menu {
     Menu::new("pattern-menu")
         .min_width(180.0)
-        .item(MenuItem::new("pattern-menu-linear", "Linear pattern").icon("linear-pattern"))
-        .item(MenuItem::new("pattern-menu-circular", "Circular pattern").icon("circular-pattern"))
-        .item(MenuItem::new("pattern-menu-curve", "Curve pattern").icon("spline"))
+        .item(
+            MenuItem::new("pattern-menu-linear", tr("shell-tool-linear-pattern"))
+                .icon("linear-pattern"),
+        )
+        .item(
+            MenuItem::new("pattern-menu-circular", tr("shell-tool-circular-pattern"))
+                .icon("circular-pattern"),
+        )
+        .item(MenuItem::new("pattern-menu-curve", tr("shell-tool-curve-pattern")).icon("spline"))
 }
 
 fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
@@ -1991,9 +2048,9 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     crate::reference_manager::update_all_button(tb, t);
     tb.spawn((
         ToolButton::new("insert", "file-import")
-            .label("Insert")
+            .label(tr("shell-tool-insert"))
             .icon_size(18.0)
-            .tooltip("Insert parts and assemblies (I)")
+            .tooltip(tr("shell-tool-insert-tooltip"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(crate::assembly::insert::open_insert_dialog);
@@ -2002,46 +2059,78 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn(toolbar_separator(t));
     // About 30 tools in groups, like reference/onshape/assembly_empty/Assemblytoolbar-scrnshot.png.
     let groups: [&[(&str, &str, &str)]; 5] = [
-        &[("named-positions", "named-positions", "Named positions")],
+        &[(
+            "named-positions",
+            "named-positions",
+            "shell-doc-named-positions",
+        )],
         &[
-            ("mate-fastened", "mate-fastened", "Fastened mate (M)"),
-            ("mate-revolute", "mate-revolute", "Revolute mate"),
-            ("mate-slider", "mate-slider", "Slider mate"),
-            ("mate-planar", "mate-planar", "Planar mate"),
-            ("mate-cylindrical", "mate-cylindrical", "Cylindrical mate"),
-            ("mate-pin-slot", "mate-pin-slot", "Pin slot mate"),
-            ("mate-ball", "mate-ball", "Ball mate"),
-            ("mate-parallel", "mate-parallel", "Parallel mate"),
-            ("mate-tangent", "mate-tangent", "Tangent mate"),
-            ("mate-width", "mate-width", "Width mate"),
+            ("mate-fastened", "mate-fastened", "shell-tool-mate-fastened"),
+            ("mate-revolute", "mate-revolute", "shell-tool-mate-revolute"),
+            ("mate-slider", "mate-slider", "shell-tool-mate-slider"),
+            ("mate-planar", "mate-planar", "shell-tool-mate-planar"),
+            (
+                "mate-cylindrical",
+                "mate-cylindrical",
+                "shell-tool-mate-cylindrical",
+            ),
+            ("mate-pin-slot", "mate-pin-slot", "shell-tool-mate-pin-slot"),
+            ("mate-ball", "mate-ball", "shell-tool-mate-ball"),
+            ("mate-parallel", "mate-parallel", "shell-tool-mate-parallel"),
+            ("mate-tangent", "mate-tangent", "shell-tool-mate-tangent"),
+            ("mate-width", "mate-width", "shell-tool-mate-width"),
         ],
         // P3F.4 (A1.8): Variable, for mate offsets.
         &[
-            ("relations", "relations", "Relations"),
-            ("asm-variable", "variables", "Variable"),
+            ("relations", "relations", "shell-tool-relations"),
+            ("asm-variable", "variables", "shell-tool-variable"),
         ],
         &[
-            ("mate-connector", "mate-connector", "Mate connector"),
-            ("group", "group", "Group"),
-            ("replicate", "replicate", "Replicate"),
-            ("gear-relation", "gear-relation", "Gear relation"),
-            ("rack-pinion", "rack-pinion", "Rack and pinion relation"),
-            ("screw-relation", "screw-relation", "Screw relation"),
-            ("linear-relation", "linear-relation", "Linear relation"),
-            ("assembly-pattern", "linear-pattern", "Linear pattern"),
-            ("circular-pattern", "circular-pattern", "Circular pattern"),
+            ("mate-connector", "mate-connector", "common-mate-connector"),
+            ("group", "group", "shell-tool-group"),
+            ("replicate", "replicate", "shell-tool-replicate"),
+            ("gear-relation", "gear-relation", "shell-tool-gear-relation"),
+            ("rack-pinion", "rack-pinion", "shell-tool-rack-pinion"),
+            (
+                "screw-relation",
+                "screw-relation",
+                "shell-tool-screw-relation",
+            ),
+            (
+                "linear-relation",
+                "linear-relation",
+                "shell-tool-linear-relation",
+            ),
+            (
+                "assembly-pattern",
+                "linear-pattern",
+                "shell-tool-linear-pattern",
+            ),
+            (
+                "circular-pattern",
+                "circular-pattern",
+                "shell-tool-circular-pattern",
+            ),
         ],
         &[
-            ("explode", "explode", "Explode"),
-            ("measure", "measure", "Measure"),
-            ("section-view", "section-view", "Section view"),
-            ("display-states", "display-states", "Display states"),
+            ("explode", "explode", "shell-tool-explode"),
+            ("measure", "measure", "shell-doc-measure"),
+            ("section-view", "section-view", "shell-doc-section-view"),
+            (
+                "display-states",
+                "display-states",
+                "shell-tool-display-states",
+            ),
             (
                 "assembly-properties",
                 "assembly-properties",
-                "Assembly properties",
+                "shell-props-assembly-title",
             ),
-            ("assembly-bom", "bill-of-materials", "Bill of materials"),
+            (
+                "assembly-bom",
+                "bill-of-materials",
+                "common-bill-of-materials",
+            ),
         ],
     ];
     for (i, group) in groups.iter().enumerate() {
@@ -2054,7 +2143,7 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon_name)
                         .dropdown(true)
-                        .tooltip("Display states, Create Part Studio in context")
+                        .tooltip(tr("shell-tool-display-states-menu"))
                         .build(t),
                     observe(
                         |a: On<Activate>,
@@ -2106,7 +2195,7 @@ fn assembly_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             tb.spawn(
                 ToolButton::new(*name, *icon_name)
                     .disabled(!on)
-                    .tooltip(*tip)
+                    .tooltip(tr(tip))
                     .build(t),
             );
         }
@@ -2201,14 +2290,14 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                             ..default()
                         },
                     ),
-                    Tooltip::new("A feature has errors: click to select the first one"),
+                    Tooltip::new(tr("shell-doc-feature-errors")),
                     Pickable::default(),
                 ));
                 h.spawn((
                     Name::new("features-count"),
                     FeatureCountLabel,
                     t.text(
-                        "Features (4)",
+                        tr_with("features-count", &[("count", "4")]),
                         t.font_sm,
                         FontWeight::EXTRA_BOLD,
                         t.foreground,
@@ -2221,7 +2310,14 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                         ..default()
                     },
                 ));
-                header_button(h, "feature-new-folder", "folder-new", "New folder", t, 0.0);
+                header_button(
+                    h,
+                    "feature-new-folder",
+                    "folder-new",
+                    &tr("common-new-folder"),
+                    t,
+                    0.0,
+                );
             });
             // P3.9: Show dependencies' legend (hidden until used).
             crate::feature_list::dependency_legend(pane, t);
@@ -2261,10 +2357,13 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                             ))
                             .with_children(|tree| {
                                 tree.spawn((
-                                    TreeItem::new("feature-default-geometry", "Default geometry")
-                                        .disclosure(Some(true))
-                                        .left(2.0)
-                                        .build(t),
+                                    TreeItem::new(
+                                        "feature-default-geometry",
+                                        tr("shell-doc-default-geometry"),
+                                    )
+                                    .disclosure(Some(true))
+                                    .left(2.0)
+                                    .build(t),
                                     DefaultGeometryRow,
                                 ));
                                 tree.spawn((
@@ -2279,7 +2378,7 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                     c.spawn(tree_guide(t, 9.0, 0.0, 94.0));
                                     c.spawn(tree_guide_tick(t));
                                     c.spawn((
-                                        TreeItem::new("feature-origin", "Origin")
+                                        TreeItem::new("feature-origin", tr("shell-doc-origin"))
                                             // A 7 px ring with a filled centre (`screens/05c`).
                                             .icon("origin", 12.0)
                                             .icon_color(Color::srgb_u8(0x44, 0x44, 0x44))
@@ -2290,17 +2389,20 @@ fn feature_list(p: &mut ChildSpawnerCommands, t: &Theme, element: ElementId, hei
                                     for k in PlaneKind::ALL {
                                         let lower = k.name().to_lowercase();
                                         c.spawn((
-                                            TreeItem::new(format!("feature-{lower}"), k.name())
-                                                .icon("plane", 16.0)
-                                                .left(22.0)
-                                                // Show/hide this plane (S1.4); the eye shows on hover.
-                                                .toggle(
-                                                    format!("feature-{lower}-visibility"),
-                                                    "visible",
-                                                    "hidden",
-                                                    true,
-                                                )
-                                                .build(t),
+                                            TreeItem::new(
+                                                format!("feature-{lower}"),
+                                                k.shown_name(),
+                                            )
+                                            .icon("plane", 16.0)
+                                            .left(22.0)
+                                            // Show/hide this plane (S1.4); the eye shows on hover.
+                                            .toggle(
+                                                format!("feature-{lower}-visibility"),
+                                                "visible",
+                                                "hidden",
+                                                true,
+                                            )
+                                            .build(t),
                                             PickRow(Pick::Plane(k)),
                                         ));
                                     }
@@ -2415,7 +2517,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                 r.spawn((icon("filter", 18.0, t.tool_foreground), Pickable::IGNORE));
                 r.spawn(
                     TextInput::new("instance-filter")
-                        .placeholder("Filter by name")
+                        .placeholder(tr("shell-doc-filter-by-name"))
                         .height(28.0)
                         .width(Val::Px(118.0))
                         .build(t),
@@ -2424,7 +2526,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                     ToolButton::new("instance-list-view", "list")
                         .icon_size(18.0)
                         .selected(true)
-                        .tooltip("List view")
+                        .tooltip(tr("shell-doc-list-view"))
                         .build(t),
                 );
             });
@@ -2473,7 +2575,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                         .with_children(|h| {
                             h.spawn((
                                 t.text(
-                                    "Instances (0)",
+                                    tr_with("asm-instances-count", &[("count", "0")]),
                                     t.font_base,
                                     FontWeight::BOLD,
                                     t.foreground,
@@ -2488,7 +2590,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                                 h,
                                 "instance-new-folder",
                                 "folder-new",
-                                "New folder",
+                                &tr("common-new-folder"),
                                 t,
                                 0.0,
                             );
@@ -2504,7 +2606,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                             crate::assembly::list::RootRow,
                         ));
                         pane.spawn((
-                            TreeItem::new("instance-origin", "Origin")
+                            TreeItem::new("instance-origin", tr("shell-doc-origin"))
                                 .icon("origin", 12.0)
                                 .muted(true)
                                 .left(22.0)
@@ -2522,10 +2624,13 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                         ));
                         // P3B.8 (A1.7): the Items group, with its + and rows (`crate::assembly::items`).
                         pane.spawn((
-                            TreeItem::new("assembly-items", "Items (0)")
-                                .disclosure(Some(true))
-                                .left(2.0)
-                                .build(t),
+                            TreeItem::new(
+                                "assembly-items",
+                                tr_with("asm-items-count", &[("count", "0")]),
+                            )
+                            .disclosure(Some(true))
+                            .left(2.0)
+                            .build(t),
                             crate::assembly::items::ItemsHeader,
                             ContextMenuTarget,
                         ))
@@ -2536,7 +2641,7 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                             });
                             h.spawn(
                                 IconButton::new("assembly-items-add", "plus")
-                                    .tooltip("Add item")
+                                    .tooltip(tr("shell-doc-add-item"))
                                     .build(t),
                             )
                             .entry::<Node>()
@@ -2556,10 +2661,13 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                         ));
                         // P3F.5 (A1.7): the simulation's loads (`crate::simulation_ui`).
                         pane.spawn((
-                            TreeItem::new("assembly-loads", "Loads (0)")
-                                .disclosure(Some(true))
-                                .left(2.0)
-                                .build(t),
+                            TreeItem::new(
+                                "assembly-loads",
+                                tr_with("model-sim-loads-count", &[("count", "0")]),
+                            )
+                            .disclosure(Some(true))
+                            .left(2.0)
+                            .build(t),
                             crate::simulation_ui::LoadsHeader,
                         ));
                         pane.spawn((
@@ -2572,10 +2680,13 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                         ));
                         // P3B.2: the mates and groups (`crate::assembly::mates_list`).
                         pane.spawn((
-                            TreeItem::new("mate-features", "Mate Features (0)")
-                                .disclosure(Some(true))
-                                .left(2.0)
-                                .build(t),
+                            TreeItem::new(
+                                "mate-features",
+                                tr_with("asm-mate-features-count", &[("count", "0")]),
+                            )
+                            .disclosure(Some(true))
+                            .left(2.0)
+                            .build(t),
                             crate::assembly::mates_list::MateFeaturesHeader,
                         ));
                         pane.spawn((
@@ -2590,11 +2701,12 @@ fn instance_list(p: &mut ChildSpawnerCommands, t: &Theme, assembly_name: &str) {
                             crate::assembly::list::EmptyHint,
                             Name::new("assembly-empty-hint"),
                             t.text(
-                                "Insert parts to start (I)",
+                                tr("shell-doc-insert-to-start"),
                                 t.font_base,
                                 FontWeight::NORMAL,
                                 t.subtle_foreground,
                             ),
+                            Translated("shell-doc-insert-to-start"),
                             Node {
                                 margin: UiRect::new(
                                     Val::Px(8.0),
@@ -2763,12 +2875,14 @@ fn on_tab_context_menu(
         (live && el.is_some_and(|e| crate::collab::locks::lockable(&e.kind))).then(|| {
             match lock_holder.as_ref() {
                 Some((id, _)) if Some(id) == me.as_ref() => {
-                    MenuItem::new("tab-unlock", "Let others edit this tab").icon("lock-open")
+                    MenuItem::new("tab-unlock", tr("shell-doc-tab-unlock")).icon("lock-open")
                 }
-                Some((_, name)) => MenuItem::new("tab-take-lock", format!("Take over from {name}"))
-                    .icon("lock-filled"),
-                None => MenuItem::new("tab-lock", "Open tab, close it for other users")
-                    .icon("lock-filled"),
+                Some((_, name)) => MenuItem::new(
+                    "tab-take-lock",
+                    tr_with("shell-doc-tab-take-lock", &[("name", name.as_str())]),
+                )
+                .icon("lock-filled"),
+                None => MenuItem::new("tab-lock", tr("shell-doc-tab-lock")).icon("lock-filled"),
             }
         });
     // The tab bar's menus share one row height and an icon column; Delete, destructive, last.
@@ -2776,33 +2890,36 @@ fn on_tab_context_menu(
         .side(PopoverSide::Top)
         .min_width(196.0)
         .item_height(25.0)
-        .item(MenuItem::new("tab-open-new", "Open in new window").planned())
-        .item(MenuItem::new("tab-rename", "Rename…").icon("edit"))
-        .item(MenuItem::new("tab-properties", "Properties…").icon("info"));
+        .item(MenuItem::new("tab-open-new", tr("shell-doc-open-new-window")).planned())
+        .item(MenuItem::new("tab-rename", tr("common-rename-ellipsis")).icon("edit"))
+        .item(MenuItem::new("tab-properties", tr("common-properties")).icon("info"));
     // Editing together (`crate::collab::locks`): a tab that can't be edited together can be
     // opened for oneself.
     if let Some(lock) = lock_item {
         menu = menu.separator().item(lock);
     }
     if is_part_studio {
-        menu = menu.item(MenuItem::new("tab-show-code", "Show code").planned());
+        menu = menu.item(MenuItem::new("tab-show-code", tr("shell-doc-show-code")).planned());
     }
     let menu = menu
         .separator()
-        .item(MenuItem::new("tab-duplicate", "Duplicate").icon("plus"))
-        .item(MenuItem::new("tab-copy", "Copy to clipboard").icon("copy"))
+        .item(MenuItem::new("tab-duplicate", tr("shell-doc-duplicate")).icon("plus"))
+        .item(MenuItem::new("tab-copy", tr("shell-share-copy-link")).icon("copy"))
         .item(
-            MenuItem::new("tab-create-drawing", format!("Create Drawing of {name}…"))
-                .icon("file-new")
-                .disabled(is_drawing || is_pcb || is_render),
+            MenuItem::new(
+                "tab-create-drawing",
+                tr_with("shell-doc-create-drawing-of", &[("name", name.as_str())]),
+            )
+            .icon("file-new")
+            .disabled(is_drawing || is_pcb || is_render),
         )
         .separator()
-        .item(MenuItem::new("tab-thumbnail", "Select as document thumbnail").planned())
+        .item(MenuItem::new("tab-thumbnail", tr("shell-doc-thumbnail")).planned())
         .separator()
-        .item(MenuItem::new("tab-move", "Move to document…").icon("file-export"))
+        .item(MenuItem::new("tab-move", tr("shell-doc-move-to-document")).icon("file-export"))
         // P3E.2 (TD5.3): into a tab folder, out to the top level, or a new folder.
         .item(
-            MenuItem::new("tab-move-folder", "Move to folder")
+            MenuItem::new("tab-move-folder", tr("shell-doc-move-to-folder"))
                 .icon("move-to-folder")
                 .submenu(crate::tab_folders::move_to_folder_entries(&doc.doc, tab.0)),
         );
@@ -2820,8 +2937,8 @@ fn on_tab_context_menu(
     };
     let mut menu = menu;
     if has_links {
-        menu =
-            menu.item(MenuItem::new("tab-update-linked", "Update linked document…").icon("link"));
+        menu = menu
+            .item(MenuItem::new("tab-update-linked", tr("shell-doc-update-linked")).icon("link"));
         // P3G.3 (DV1.9): the tab's linked documents, opened read-only at their versions.
         let sources = crate::linked_session::tab_sources(&doc.doc, tab.0);
         match sources.len() {
@@ -2830,7 +2947,10 @@ fn on_tab_context_menu(
                 menu = menu.item(
                     MenuItem::new(
                         "tab-open-linked",
-                        format!("Open linked document ({})", sources[0].0),
+                        tr_with(
+                            "shell-doc-open-linked-named",
+                            &[("source", sources[0].0.as_str())],
+                        ),
                     )
                     .icon("open-external"),
                 )
@@ -2847,7 +2967,7 @@ fn on_tab_context_menu(
                     })
                     .collect();
                 menu = menu.item(
-                    MenuItem::new("tab-open-linked-menu", "Open linked document")
+                    MenuItem::new("tab-open-linked-menu", tr("shell-doc-open-linked"))
                         .icon("open-external")
                         .submenu(items),
                 );
@@ -2855,29 +2975,32 @@ fn on_tab_context_menu(
         }
     }
     if is_drawing && (has_links || has_sources) {
-        menu = menu.item(MenuItem::new("tab-change-version", "Change to version…"));
+        menu = menu.item(MenuItem::new(
+            "tab-change-version",
+            tr("shell-doc-change-to-version"),
+        ));
     }
     let menu = menu
         // P3F.2: a Part Studio's parts, an assembly's instances, a drawing's sheets.
         .item(
-            MenuItem::new("tab-export", "Export…")
+            MenuItem::new("tab-export", tr("shell-doc-export-ellipsis"))
                 .icon("file-export")
                 .disabled(is_render),
         )
         // P3F.6 (P3.7): the tab's view as a PNG or JPEG.
         .item(
-            MenuItem::new("tab-export-image", "Export image…")
+            MenuItem::new("tab-export-image", tr("shell-doc-export-image"))
                 .icon("image")
                 .disabled(is_drawing || is_render),
         )
         .item(if is_assembly {
-            MenuItem::new("tab-create-task", "Create task…").planned()
+            MenuItem::new("tab-create-task", tr("shell-doc-create-task")).planned()
         } else {
-            MenuItem::new("tab-release", "Release…").planned()
+            MenuItem::new("tab-release", tr("shell-doc-release")).planned()
         })
         .separator()
         .item(
-            MenuItem::new("tab-delete", "Delete")
+            MenuItem::new("tab-delete", tr("common-delete"))
                 .icon("remove-circle")
                 .danger()
                 .disabled(only_tab),
@@ -2955,10 +3078,11 @@ fn on_tab_menu_action(
                     };
                     let theme = world.resource::<Theme>().clone();
                     let mut commands = world.commands();
-                    let popup = cadrs_ui::NamePopup::new("tab-rename-popup", "Tab name", at)
-                        .value(name)
-                        .above()
-                        .spawn(&mut commands, &theme);
+                    let popup =
+                        cadrs_ui::NamePopup::new("tab-rename-popup", tr("shell-doc-tab-name"), at)
+                            .value(name)
+                            .above()
+                            .spawn(&mut commands, &theme);
                     commands.entity(popup).insert(RenameTabPopup(id));
                     world.flush();
                 });
@@ -2989,7 +3113,7 @@ fn on_tab_menu_action(
         }
         "tab-properties" => open_properties_dialog(&mut commands, &theme, id, &el),
         "tab-copy" => {
-            let text = format!("Copied {} to the clipboard", el.name);
+            let text = tr_with("shell-doc-tab-copied", &[("name", el.name.as_str())]);
             commands.insert_resource(crate::drawing::ElementClipboard(Some(el)));
             show_toast(&mut commands, &theme, text);
         }
@@ -3049,8 +3173,14 @@ fn on_tab_menu_action(
 fn deleted_toast(world: &mut World) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let toast = cadrs_ui::show_toast_for(&mut commands, &theme, "Tab deleted.", 3.0);
-    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    let toast = cadrs_ui::show_toast_for(&mut commands, &theme, tr("shell-doc-tab-deleted"), 3.0);
+    let undo = cadrs_ui::toast_action(
+        &mut commands,
+        &theme,
+        toast,
+        "toast-undo",
+        tr("common-undo"),
+    );
     commands
         .entity(undo)
         .insert(observe(|_: On<Activate>, mut commands: Commands| {
@@ -3077,22 +3207,25 @@ fn open_properties_dialog(
     let tb = theme.clone();
     let tf = theme.clone();
     let name = el.name.clone();
-    let kind = match el.kind {
-        cadrs_core::ElementKind::PartStudio { .. } => "Part Studio",
-        cadrs_core::ElementKind::Assembly => "Assembly",
-        cadrs_core::ElementKind::Drawing(_) => "Drawing",
-        cadrs_core::ElementKind::PcbStudio(_) => "PCB Studio",
-        cadrs_core::ElementKind::Render(_) => "Render Studio",
-        cadrs_core::ElementKind::CamStudio(_) => "CAM Studio",
-        cadrs_core::ElementKind::VariableStudio(_) => "Variable Studio",
-    };
+    let kind = tr(crate::tab_preview::tab_type_key(el));
     commands.spawn((
         Dialog::new("tab-properties-dialog")
-            .title(format!("{kind} properties"))
+            .title(tr_with(
+                "shell-doc-tab-properties-title",
+                &[("kind", kind.as_str())],
+            ))
             .width(420.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(t.text("Name", t.font_base, FontWeight::BOLD, t.foreground));
+                b.spawn((
+                    t.text(
+                        tr("common-name"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("common-name"),
+                ));
                 b.spawn(
                     TextInput::new("tab-properties-name")
                         .value(name)
@@ -3101,7 +3234,7 @@ fn open_properties_dialog(
                         .build(t),
                 );
                 b.spawn(t.text(
-                    format!("Type: {kind}"),
+                    tr_with("shell-doc-tab-type", &[("kind", kind.as_str())]),
                     t.font_base,
                     FontWeight::NORMAL,
                     t.muted_foreground,
@@ -3111,7 +3244,7 @@ fn open_properties_dialog(
                 let t = &tf;
                 f.spawn((
                     Button::new("tab-properties-save")
-                        .label("Save")
+                        .label(tr("common-save"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -3120,7 +3253,7 @@ fn open_properties_dialog(
                 ));
                 f.spawn((
                     Button::new("tab-properties-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(t),
                     observe(
                         |_: On<Activate>,
@@ -3763,12 +3896,9 @@ fn rebuild_feature_rows(
                 .or_else(|| {
                     f.sketch()?;
                     if faces_lost.0.contains(&f.id) {
-                        Some("The face this sketch is on no longer exists".to_string())
+                        Some(tr("shell-doc-sketch-face-gone"))
                     } else if errors.0.contains(&f.id) {
-                        Some(
-                            "The sketch has conflicting constraints or broken references"
-                                .to_string(),
-                        )
+                        Some(tr("shell-doc-sketch-errors"))
                     } else {
                         None
                     }
@@ -4067,11 +4197,14 @@ fn rebuild_feature_rows(
                 || matches!(*kind, RowKind::Sm9("sheet-metal-form") | RowKind::Plane)
             {
                 // The eye shows or hides the sketch (PS1.5); it shows while the row is hovered.
-                let tip = if *shown {
-                    format!("Hide {name}")
-                } else {
-                    format!("Show {name}")
-                };
+                let tip = tr_with(
+                    if *shown {
+                        "shell-doc-hide-named"
+                    } else {
+                        "shell-doc-show-named"
+                    },
+                    &[("name", name.as_str())],
+                );
                 item = item
                     .toggle(
                         format!("{row_name}-visibility"),
@@ -4134,14 +4267,15 @@ fn rebuild_feature_rows(
                 // A sketch's status beside its row while it is hovered, as Onshape shows it ("Sketch 4
                 // (Hidden) is not fully defined"); the viewport draws its curves in the hover orange.
                 if kind.is_sketch() && failed.is_none() && warning.is_none() {
-                    let hidden = if *shown { "" } else { " (Hidden)" };
-                    let status = if *under_defined {
-                        "is not fully defined"
-                    } else {
-                        "is fully defined"
+                    let status = match (*shown, *under_defined) {
+                        (true, true) => "shell-doc-sketch-under-defined",
+                        (true, false) => "shell-doc-sketch-fully-defined",
+                        (false, true) => "shell-doc-sketch-hidden-under-defined",
+                        (false, false) => "shell-doc-sketch-hidden-fully-defined",
                     };
-                    row.insert(cadrs_ui::Tooltip::beside(format!(
-                        "{name}{hidden} {status}"
+                    row.insert(cadrs_ui::Tooltip::beside(tr_with(
+                        status,
+                        &[("name", name.as_str())],
                     )));
                 }
 
@@ -4222,13 +4356,21 @@ fn rebuild_feature_rows(
                 // ("#withHole"), grey with the row while it suppresses.
                 if let Some((_, label)) = state.suppress_vars.iter().find(|(f, _)| f == id) {
                     let (when, colour) = if suppressed {
-                        ("currently suppressed", crate::feature_list::ROLLED_BACK_FG)
+                        (
+                            "shell-doc-currently-suppressed",
+                            crate::feature_list::ROLLED_BACK_FG,
+                        )
                     } else {
-                        ("currently active", t.muted_foreground)
+                        ("shell-doc-currently-active", t.muted_foreground)
                     };
                     let rule = label.strip_prefix("not ").map_or_else(
-                        || format!("{label} is 0 (false)"),
-                        |l| format!("{l} is not 0 (true)"),
+                        || {
+                            tr_with(
+                                "shell-doc-suppressed-while-false",
+                                &[("variable", label.as_str())],
+                            )
+                        },
+                        |l| tr_with("shell-doc-suppressed-while-true", &[("variable", l)]),
                     );
                     let tag = row
                         .commands()
@@ -4240,7 +4382,7 @@ fn rebuild_feature_rows(
                             .color(colour)
                             .outline()
                             .build(&t),
-                            cadrs_ui::Tooltip::new(format!("Suppressed while {rule} · {when}")),
+                            cadrs_ui::Tooltip::new(format!("{rule} · {}", tr(when))),
                         ))
                         // Hoverable for its tooltip; clicks go to the row.
                         .insert(Pickable {
@@ -4304,11 +4446,14 @@ fn rebuild_feature_rows(
                         .muted(!shown && !matches!(child, D::BoardView(_)));
                     match child {
                         D::Part(_) | D::Component(_) | D::Sketch(_) | D::Plane(_) => {
-                            let tip = if *shown {
-                                format!("Hide {label}")
-                            } else {
-                                format!("Show {label}")
-                            };
+                            let tip = tr_with(
+                                if *shown {
+                                    "shell-doc-hide-named"
+                                } else {
+                                    "shell-doc-show-named"
+                                },
+                                &[("name", label.as_str())],
+                            );
                             ci = ci
                                 .toggle(format!("{cname}-visibility"), "visible", "hidden", *shown)
                                 .toggle_tooltip(tip);
@@ -4317,11 +4462,11 @@ fn rebuild_feature_rows(
                         D::BoardView(_) => {}
                         D::Components(f) => {
                             let open = components_open.0.contains(f);
-                            let tip = if *shown {
-                                "Hide the components"
+                            let tip = tr(if *shown {
+                                "shell-doc-hide-components"
                             } else {
-                                "Show the components"
-                            };
+                                "shell-doc-show-components"
+                            });
                             ci = ci
                                 .disclosure(Some(open))
                                 .toggle(format!("{cname}-visibility"), "visible", "hidden", *shown)
@@ -4340,15 +4485,11 @@ fn rebuild_feature_rows(
                     let mut crow = c.spawn((ci.build(&t), *child, PickRow(pick)));
                     if let D::BoardView(_) = child {
                         let seg = cadrs_ui::Segmented::new(format!("{cname}-segments"))
+                            .option("3D", None, tr("shell-doc-board-3d-tooltip"))
                             .option(
-                                "3D",
+                                tr("shell-doc-board-layout"),
                                 None,
-                                "Show the board's 3D model: its solid and its components",
-                            )
-                            .option(
-                                "Layout",
-                                None,
-                                "Show the board's layout on its faces (its components hidden)",
+                                tr("shell-doc-board-layout-tooltip"),
                             )
                             .selected(usize::from(!*shown))
                             .build(&t);
@@ -4638,11 +4779,15 @@ fn on_feature_context_menu(
         .is_some_and(|f| matches!(f.kind, cadrs_core::FeatureKind::Plane(_)));
     let appearance = match kind {
         Some((true, _)) => Some(
-            MenuItem::new("feature-sketch-appearance", "Edit sketch appearance…")
-                .icon("appearance"),
+            MenuItem::new(
+                "feature-sketch-appearance",
+                tr("shell-doc-sketch-appearance"),
+            )
+            .icon("appearance"),
         ),
         Some((_, true)) => Some(
-            MenuItem::new("feature-appearance", "Add appearance to feature…").icon("appearance"),
+            MenuItem::new("feature-appearance", tr("shell-doc-feature-appearance"))
+                .icon("appearance"),
         ),
         _ => None,
     };
@@ -4676,10 +4821,13 @@ fn on_feature_context_menu(
         .min_width(190.0)
         .item_height(22.0)
         .icon_size(14.0)
-        .item(MenuItem::new("feature-rename", "Rename"))
-        .item(MenuItem::new("feature-edit", "Edit…").disabled(editing || !can_edit))
+        .item(MenuItem::new("feature-rename", tr("common-rename")))
+        .item(
+            MenuItem::new("feature-edit", tr("common-edit-ellipsis"))
+                .disabled(editing || !can_edit),
+        )
         // Comments (`crate::collab::comments`): a comment tagged to the feature.
-        .item(MenuItem::new("feature-add-comment", "Add comment").icon("comments"));
+        .item(MenuItem::new("feature-add-comment", tr("common-add-comment")).icon("comments"));
     // P3D.4 (IR3.3): Repair on the feature's last healthy regeneration (not a Derived feature's:
     // its source is fixed by its own tab or version, P3G.4).
     let is_derived = el
@@ -4689,7 +4837,7 @@ fn on_feature_context_menu(
         menu = menu.item(
             MenuItem::new(
                 "feature-edit-healthy",
-                format!("Edit healthy moment of {name}…"),
+                tr_with("shell-doc-edit-healthy", &[("name", name.as_str())]),
             )
             .disabled(
                 editing
@@ -4716,18 +4864,20 @@ fn on_feature_context_menu(
                     .item(
                         MenuItem::new(
                             "feature-open-linked",
-                            format!("Open linked document ({label})"),
+                            tr_with("shell-doc-open-linked-named", &[("source", label.as_str())]),
                         )
                         .icon("open-external"),
                     )
                     .item(
-                        MenuItem::new("feature-update-linked", "Update linked document…")
+                        MenuItem::new("feature-update-linked", tr("shell-doc-update-linked"))
                             .icon("link"),
                     )
                     .item(if r.pinned {
-                        MenuItem::new("feature-unpin-reference", "Unpin reference").icon("location")
+                        MenuItem::new("feature-unpin-reference", tr("shell-doc-unpin-reference"))
+                            .icon("location")
                     } else {
-                        MenuItem::new("feature-pin-reference", "Pin reference").icon("location")
+                        MenuItem::new("feature-pin-reference", tr("shell-doc-pin-reference"))
+                            .icon("location")
                     });
             }
             Some(_) => {
@@ -4736,13 +4886,16 @@ fn on_feature_context_menu(
                     .item(
                         MenuItem::new(
                             "feature-switch-to-source",
-                            format!("Switch to {}", d.source_name),
+                            tr_with("shell-doc-switch-to", &[("name", d.source_name.as_str())]),
                         )
                         .icon("part-studio"),
                     )
                     .item(
-                        MenuItem::new("feature-change-to-version", "Change to version…")
-                            .icon("versions"),
+                        MenuItem::new(
+                            "feature-change-to-version",
+                            tr("shell-doc-change-to-version"),
+                        )
+                        .icon("versions"),
                     );
             }
             None => {}
@@ -4762,43 +4915,53 @@ fn on_feature_context_menu(
             menu = menu
                 .separator()
                 .item(
-                    MenuItem::new("feature-board-edit", "Edit layout")
+                    MenuItem::new("feature-board-edit", tr("shell-doc-board-edit-layout"))
                         .icon("edit")
                         .disabled(!workspace || in_dialog),
                 )
                 .item(if linked {
-                    MenuItem::new("feature-board-unlink", "Break outline link")
+                    MenuItem::new("feature-board-unlink", tr("shell-doc-board-unlink"))
                         .icon("link")
                         .disabled(!workspace)
                 } else {
-                    MenuItem::new("feature-board-link", "Link outline to a sketch")
+                    MenuItem::new("feature-board-link", tr("shell-doc-board-link"))
                         .icon("link")
                         .disabled(!workspace || in_dialog)
                 })
                 .item(if layout {
-                    MenuItem::new("feature-board-show-3d", "Show 3D model").icon("board-3d")
+                    MenuItem::new("feature-board-show-3d", tr("shell-doc-board-show-3d"))
+                        .icon("board-3d")
                 } else {
-                    MenuItem::new("feature-board-show-layout", "Show layout").icon("pcb-studio")
+                    MenuItem::new(
+                        "feature-board-show-layout",
+                        tr("shell-doc-board-show-layout"),
+                    )
+                    .icon("pcb-studio")
                 });
         }
     }
     if is_sketch {
         // A board from the sketch's regions.
         menu = menu.item(
-            MenuItem::new("feature-create-board", "Create PCB board…")
+            MenuItem::new("feature-create-board", tr("shell-doc-create-board"))
                 .icon("pcb-studio")
                 .disabled(editing || in_dialog),
         );
         menu = menu
-            .item(MenuItem::new("feature-copy-sketch", "Copy sketch"))
+            .item(MenuItem::new(
+                "feature-copy-sketch",
+                tr("shell-doc-copy-sketch"),
+            ))
             .item(if shown_dims.0.contains(&row.0) {
-                MenuItem::new("feature-hide-dimensions", "Hide dimensions")
+                MenuItem::new("feature-hide-dimensions", tr("shell-doc-hide-dimensions"))
             } else {
-                MenuItem::new("feature-show-dimensions", "Show dimensions").disabled(editing)
+                MenuItem::new("feature-show-dimensions", tr("shell-doc-show-dimensions"))
+                    .disabled(editing)
             });
         // P3F.2 (P3.2): the sketch flat, for cutting machines.
-        menu = menu
-            .item(MenuItem::new("feature-export-dxf", "Export as DXF/DWG…").icon("file-export"));
+        menu = menu.item(
+            MenuItem::new("feature-export-dxf", tr("shell-doc-export-dxf")).icon("file-export"),
+        );
     }
     // P3I.6 (SM14.1, SM15.1): a Sheet metal model's flat pattern, until the flat view's menu (P3I.3).
     if el
@@ -4807,12 +4970,12 @@ fn on_feature_context_menu(
     {
         menu = menu
             .item(
-                MenuItem::new("feature-flat-sketch", "New sketch on flat pattern")
+                MenuItem::new("feature-flat-sketch", tr("shell-doc-flat-sketch"))
                     .icon("sketch")
                     .disabled(in_dialog),
             )
             .item(
-                MenuItem::new("feature-flat-export", "Export DXF/DWG of flat pattern…")
+                MenuItem::new("feature-flat-export", tr("shell-doc-flat-export"))
                     .icon("flat-pattern"),
             );
     }
@@ -4820,46 +4983,56 @@ fn on_feature_context_menu(
         .separator()
         .item(MenuItem::new(
             "feature-add-to-folder",
-            "Add selection to folder…",
+            tr("shell-doc-add-to-folder"),
         ))
         .separator();
     if is_sketch || is_plane {
         menu = menu.item(if shown {
-            MenuItem::new("feature-hide", "Hide").icon("hidden")
+            MenuItem::new("feature-hide", tr("common-hide")).icon("hidden")
         } else {
-            MenuItem::new("feature-show", "Show").icon("visible")
+            MenuItem::new("feature-show", tr("common-show")).icon("visible")
         });
     }
     menu = menu
         .item(MenuItem::new(
             "feature-show-all-sketches",
-            "Show all sketches",
+            tr("shell-doc-show-all-sketches"),
         ))
         .separator()
         .item(
-            MenuItem::new("feature-section-view", "Section view…")
-                .icon("section-view")
-                .disabled(in_dialog),
+            MenuItem::new(
+                "feature-section-view",
+                tr("shell-doc-section-view-ellipsis"),
+            )
+            .icon("section-view")
+            .disabled(in_dialog),
         )
         .separator()
         .item(if suppressed {
-            MenuItem::new("feature-unsuppress", "Unsuppress").disabled(in_dialog)
+            MenuItem::new("feature-unsuppress", tr("common-unsuppress")).disabled(in_dialog)
         } else {
-            MenuItem::new("feature-suppress", "Suppress").disabled(editing || in_dialog)
+            MenuItem::new("feature-suppress", tr("common-suppress")).disabled(editing || in_dialog)
         })
         // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
         .item(
-            MenuItem::new("feature-dynamic-suppression", "Dynamic suppression").submenu({
+            MenuItem::new(
+                "feature-dynamic-suppression",
+                tr("shell-doc-dynamic-suppression"),
+            )
+            .submenu({
                 let mut items: Vec<cadrs_ui::menu::MenuEntry> = vec![
-                    MenuItem::new("feature-suppress-by-variable", "Suppress by variable…")
-                        .disabled(editing || in_dialog)
-                        .into(),
+                    MenuItem::new(
+                        "feature-suppress-by-variable",
+                        tr("shell-doc-suppress-by-variable"),
+                    )
+                    .disabled(editing || in_dialog)
+                    .into(),
                 ];
                 if by_variable {
                     items.push(
                         MenuItem::new(
                             "feature-remove-suppression-variable",
-                            "Remove suppression variable",
+                            tr("shell-doc-remove-suppression-variable"),
                         )
                         .disabled(in_dialog)
                         .into(),
@@ -4868,7 +5041,7 @@ fn on_feature_context_menu(
                 items.push(
                     MenuItem::new(
                         "feature-suppress-by-configuration",
-                        "Suppress by configuration…",
+                        tr("shell-doc-suppress-by-configuration"),
                     )
                     .planned()
                     .into(),
@@ -4878,24 +5051,34 @@ fn on_feature_context_menu(
         )
         .separator()
         .item(
-            MenuItem::new("feature-add-comment", "Add comment")
+            MenuItem::new("feature-add-comment", tr("common-add-comment"))
                 .icon("comments")
                 .planned(),
         )
         .separator()
-        .item(MenuItem::new("feature-zoom-to", "Zoom to selection"))
+        .item(MenuItem::new(
+            "feature-zoom-to",
+            tr("common-zoom-to-selection"),
+        ))
         .separator()
-        .item(MenuItem::new("feature-dependencies", "Show dependencies…"))
+        .item(MenuItem::new(
+            "feature-dependencies",
+            tr("shell-doc-show-dependencies"),
+        ))
         .separator()
-        .item(MenuItem::new("feature-roll-here", "Roll to here").disabled(below_this || in_dialog));
+        .item(
+            MenuItem::new("feature-roll-here", tr("shell-doc-roll-here"))
+                .disabled(below_this || in_dialog),
+        );
     if !bar_at_end {
-        menu = menu.item(MenuItem::new("feature-roll-end", "Roll to end").disabled(in_dialog));
+        menu = menu
+            .item(MenuItem::new("feature-roll-end", tr("shell-doc-roll-end")).disabled(in_dialog));
     }
     if let Some(item) = appearance {
         menu = menu.separator().item(item);
     }
     menu = menu.separator().item(
-        MenuItem::new("feature-delete", "Delete")
+        MenuItem::new("feature-delete", tr("common-delete"))
             .icon("remove-circle")
             .disabled(editing),
     );
@@ -4941,10 +5124,8 @@ fn on_feature_menu_action(
                     cadrs_ui::show_notification(
                         &mut commands,
                         &theme,
-                        cadrs_ui::Notification::warning(
-                            "The sheet metal model has no flat pattern part",
-                        )
-                        .name("flat-export-toast"),
+                        cadrs_ui::Notification::warning(tr("shell-doc-no-flat-pattern"))
+                            .name("flat-export-toast"),
                     );
                     world.flush();
                 }

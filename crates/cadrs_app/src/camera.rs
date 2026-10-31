@@ -82,15 +82,15 @@ impl RenderMode {
     ];
 
     /// The menu's label.
-    pub fn label(self) -> &'static str {
-        match self {
-            RenderMode::Shaded => "Shaded with edges",
-            RenderMode::ShadedWithoutEdges => "Shaded without edges",
-            RenderMode::ShadedWithHiddenEdges => "Shaded with hidden edges",
-            RenderMode::HiddenEdgesRemoved => "Hidden edges removed",
-            RenderMode::HiddenEdgesVisible => "Hidden edges visible",
-            RenderMode::Translucent => "Translucent",
-        }
+    pub fn label(self) -> String {
+        cadrs_ui::i18n::tr(match self {
+            RenderMode::Shaded => "view-render-shaded",
+            RenderMode::ShadedWithoutEdges => "view-render-shaded-no-edges",
+            RenderMode::ShadedWithHiddenEdges => "view-render-shaded-hidden-edges",
+            RenderMode::HiddenEdgesRemoved => "view-render-hidden-removed",
+            RenderMode::HiddenEdgesVisible => "view-render-hidden-visible",
+            RenderMode::Translucent => "view-render-translucent",
+        })
     }
 
     /// The menu item's name: `view-render-<slug>`.

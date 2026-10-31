@@ -28,6 +28,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_eda::library::LibraryTable;
 use cadrs_eda::render::{self, DrawList};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Dialog, TabStrip, TextSubmit};
 #[cfg(feature = "easyeda")]
@@ -124,11 +125,11 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
     let online = cfg!(feature = "easyeda");
     let theme = w.resource::<Theme>().clone();
     let (tb, tf) = (theme.clone(), theme.clone());
-    let title = match &kind {
-        Kind::Symbols { power: true } => "Choose a power symbol",
-        Kind::Symbols { power: false } => "Choose a symbol",
-        Kind::Footprints { .. } => "Choose a footprint",
-    };
+    let title = tr(match &kind {
+        Kind::Symbols { power: true } => "pcb-browser-choose-power-symbol",
+        Kind::Symbols { power: false } => "pcb-browser-choose-symbol",
+        Kind::Footprints { .. } => "pcb-browser-choose-footprint",
+    });
     let footprints = matches!(kind, Kind::Footprints { .. });
     w.spawn((
         Dialog::new("eda-chooser")
@@ -157,8 +158,8 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                                 t.spawn(
                                     TabStrip::new("eda-chooser-source")
                                         .compact()
-                                        .tab("Libraries")
-                                        .tab("JLCPCB parts")
+                                        .tab(tr("pcb-browser-libraries"))
+                                        .tab(tr("pcb-browser-jlcpcb-parts"))
                                         .build(&tb),
                                 );
                             });
@@ -171,7 +172,7 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                         .with_children(|r| {
                             r.spawn(
                                 TextInput::new("eda-chooser-filter")
-                                    .placeholder("Filter")
+                                    .placeholder(tr("pcb-browser-filter"))
                                     .width(Val::Percent(100.0))
                                     .height(28.0)
                                     .build(&tb),
@@ -187,7 +188,7 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                                 .with_children(|b| {
                                     b.spawn((
                                         cadrs_ui::Button::new("eda-chooser-search")
-                                            .label("Search")
+                                            .label(tr("pcb-browser-search"))
                                             .build(&tb),
                                         observe(|_: On<Activate>, mut commands: Commands| {
                                             commands.queue(submit);
@@ -290,7 +291,7 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                     .with_children(|b| {
                         b.spawn((
                             cadrs_ui::Button::new("eda-chooser-add")
-                                .label("Add to library")
+                                .label(tr("pcb-browser-add-to-library"))
                                 .build(&tf),
                             observe(|_: On<Activate>, mut commands: Commands| {
                                 #[cfg(feature = "easyeda")]
@@ -302,7 +303,7 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                 }
                 f.spawn((
                     cadrs_ui::Button::new("eda-chooser-ok")
-                        .label("OK")
+                        .label(tr("common-ok"))
                         .primary()
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -311,7 +312,7 @@ pub fn open(w: &mut World, kind: Kind, purpose: Purpose) {
                 ));
                 f.spawn((
                     cadrs_ui::Button::new("eda-chooser-cancel")
-                        .label("Cancel")
+                        .label(tr("common-cancel"))
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close);
@@ -764,10 +765,12 @@ fn preview(world: &mut World) {
                         .map_or("", |f| f.value());
                     text = format!("{id}\n{desc}");
                     if !s.keywords.is_empty() {
-                        text += &format!("\nKeywords: {}", s.keywords);
+                        text += "\n";
+                        text += &tr_with("pcb-browser-keywords", &[("keywords", &s.keywords)]);
                     }
                     if !fp_id.is_empty() {
-                        text += &format!("\nFootprint: {fp_id}");
+                        text += "\n";
+                        text += &tr_with("pcb-browser-footprint", &[("footprint", &fp_id)]);
                     }
                 }
             }
@@ -777,7 +780,11 @@ fn preview(world: &mut World) {
                         render::footprint_view(Some(f), &brd, &[]),
                         cadrs_eda::units::mm(1.0),
                     ));
-                    text = format!("{id}\n{}\n{} pads", f.description, f.pads.len());
+                    text = format!(
+                        "{id}\n{}\n{}",
+                        f.description,
+                        tr_with("pcb-browser-pads", &[("count", &f.pads.len().to_string())])
+                    );
                 }
             }
         }
@@ -822,17 +829,30 @@ fn preview_online(world: &mut World) {
                     (Some(sym), Some(fp))
                 };
                 text += &format!(
-                    "\n\n{} · {} pins\n{} · {} pads",
-                    c.symbol.id,
-                    c.symbol.pins.len(),
-                    c.footprint.id,
-                    c.footprint.pads.len()
+                    "\n\n{}\n{}",
+                    tr_with(
+                        "pcb-browser-symbol-pins",
+                        &[
+                            ("symbol", &c.symbol.id),
+                            ("count", &c.symbol.pins.len().to_string()),
+                        ],
+                    ),
+                    tr_with(
+                        "pcb-browser-footprint-pads",
+                        &[
+                            ("footprint", &c.footprint.id),
+                            ("count", &c.footprint.pads.len().to_string()),
+                        ],
+                    )
                 );
                 for w in &c.warnings {
                     text += &format!("\n{w}");
                 }
             }
-            None => text += "\n\nLoading its symbol and footprint…",
+            None => {
+                text += "\n\n";
+                text += &tr("pcb-browser-loading");
+            }
         }
     }
     world.resource_mut::<Browser>().previewed = Some(key);

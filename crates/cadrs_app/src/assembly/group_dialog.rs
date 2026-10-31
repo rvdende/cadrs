@@ -9,6 +9,7 @@ use cadrs_core::ElementId;
 use cadrs_core::assembly::InstanceId;
 use cadrs_core::assembly::commands::{AddMateFeature, SetMateFeature};
 use cadrs_core::assembly::mate::{MateFeature, MateId, MateKind, next_name};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, SelectionList,
@@ -203,7 +204,7 @@ fn group_dialog(t: &Theme, name: &str, items: Vec<String>) -> impl Bundle {
             .body(move |b| {
                 b.spawn(
                     SelectionList::new("group-instances")
-                        .placeholder("Instances")
+                        .placeholder(tr("asm-instances"))
                         .items(items)
                         .active(true)
                         .build(&tb),
@@ -218,7 +219,7 @@ fn group_dialog(t: &Theme, name: &str, items: Vec<String>) -> impl Bundle {
                 f.spawn((
                     Name::new("group-help"),
                     icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new("Help"),
+                    Tooltip::new(tr("common-help")),
                 ));
                 let _ = &tf;
             })

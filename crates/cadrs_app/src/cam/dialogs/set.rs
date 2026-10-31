@@ -3,6 +3,7 @@
 //! edits ✓ makes ([`Draft::commit`]).
 
 use super::*;
+use cadrs_ui::i18n::{tr, tr_with};
 
 impl Draft {
     /// Takes a changed field.
@@ -287,7 +288,7 @@ impl Draft {
                     &mut commands,
                     &theme,
                     "cam-library-import",
-                    "Import tool library",
+                    &tr("cam-import-tool-library-title"),
                     "cam-library-import",
                     dir,
                     &["json"],
@@ -447,10 +448,7 @@ impl Draft {
                 let fallback = Tool::new(tk, 6.0);
                 lib.save_template(Template::new(&name, p, tool.as_ref().unwrap_or(&fallback)));
                 edit(world, Edit::SetLibrary(Box::new(lib)));
-                toast(
-                    world,
-                    &format!("Saved the template \"{name}\" to the library"),
-                );
+                toast(world, &tr_with("cam-saved-template", &[("name", &name)]));
             }
             ("type", Value::Index(i)) => {
                 let types: Vec<Type> = Type::ALL
@@ -925,7 +923,7 @@ pub(super) fn face_z(w: &mut WorkPlane, ctx: &Ctx, pick: Pick) {
 
 pub(super) fn export_library(world: &mut World, cam: &CamStudio) {
     let Some(dir) = crate::export_dir(world) else {
-        toast(world, "Nowhere to export to");
+        toast(world, &tr("cam-nowhere-to-export"));
         return;
     };
     let path = cadrs_core::export::unique_path_ext(&dir, "cadrs-tool-library", "json");
@@ -936,16 +934,24 @@ pub(super) fn export_library(world: &mut World, cam: &CamStudio) {
             cadrs_ui::show_notification(
                 &mut commands,
                 &theme,
-                cadrs_ui::Notification::info(format!(
-                    "Exported {} tools to {}",
-                    cam.library.tools.len(),
-                    path.display()
+                cadrs_ui::Notification::info(tr_with(
+                    "cam-exported-tools",
+                    &[
+                        ("count", &cam.library.tools.len().to_string()),
+                        ("path", &path.display().to_string()),
+                    ],
                 ))
                 .name("cam-toast"),
             );
             world.flush();
         }
-        Err(e) => toast(world, &format!("Couldn't write the tool library: {e}")),
+        Err(e) => toast(
+            world,
+            &tr_with(
+                "cam-couldnt-write-tool-library",
+                &[("error", &e.to_string())],
+            ),
+        ),
     }
 }
 
@@ -956,7 +962,16 @@ pub(super) fn import_library(world: &mut World, path: std::path::PathBuf) {
     let text = match cadrs_fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) => {
-            toast(world, &format!("Couldn't read {}: {e}", path.display()));
+            toast(
+                world,
+                &tr_with(
+                    "cam-couldnt-read-file",
+                    &[
+                        ("path", &path.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                ),
+            );
             return;
         }
     };
@@ -970,7 +985,11 @@ pub(super) fn import_library(world: &mut World, path: std::path::PathBuf) {
             cadrs_ui::show_notification(
                 &mut commands,
                 &theme,
-                cadrs_ui::Notification::info(format!("Imported {n} new tools")).name("cam-toast"),
+                cadrs_ui::Notification::info(tr_with(
+                    "cam-imported-tools",
+                    &[("count", &n.to_string())],
+                ))
+                .name("cam-toast"),
             );
             world.flush();
             if let Some(mut d) = world.get_resource_mut::<CamDialog>() {

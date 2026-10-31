@@ -45,6 +45,7 @@ use cadrs_core::properties::{
     GenerateMissingPartNumbers, PropertyKey, PropertyOwner, PropertyValue, SetProperties,
 };
 use cadrs_ui::ellipsis::Ellipsis;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::inline_edit::{
     DoubleClick, DoubleClickable, InlineEdit, InlineEditCommit, InlineEditLabel, InlineEditOptions,
     begin_inline_edit,
@@ -500,7 +501,12 @@ fn spawn_panel(
             },
             ZIndex(10),
         ));
-        crate::side_panel::side_panel_header(p, t, "Bill of materials", "bom-panel-close");
+        crate::side_panel::side_panel_header(
+            p,
+            t,
+            &tr("common-bill-of-materials"),
+            "bom-panel-close",
+        );
         // The toolbar: the view, Apply template, Add column, ⋯.
         p.spawn((
             Name::new("bom-toolbar"),
@@ -521,8 +527,8 @@ fn spawn_panel(
                 Select::new("bom-view")
                     .width(Val::Px(120.0))
                     .bordered()
-                    .option("Structured", true)
-                    .option("Flattened", true)
+                    .option(tr("asm-bom-structured"), true)
+                    .option(tr("asm-bom-flattened"), true)
                     .selected(view)
                     .build(t),
             )
@@ -531,7 +537,7 @@ fn spawn_panel(
             r.spawn((
                 Button::new("bom-apply-template")
                     .icon("custom-table")
-                    .label("Apply template")
+                    .label(tr("asm-bom-apply-template"))
                     .small()
                     .ghost()
                     .build(t),
@@ -540,7 +546,7 @@ fn spawn_panel(
             r.spawn((
                 Button::new("bom-add-column")
                     .icon("column-add")
-                    .label("Add column")
+                    .label(tr("asm-bom-add-column"))
                     .small()
                     .ghost()
                     .build(t),
@@ -552,7 +558,7 @@ fn spawn_panel(
             });
             r.spawn((
                 IconButton::new("bom-overflow", "more-horizontal")
-                    .tooltip("More")
+                    .tooltip(tr("asm-more"))
                     .build(t),
                 BomToolbarButton,
             ));
@@ -733,15 +739,26 @@ fn spawn_panel(
                 BorderColor::all(t.panel_border),
             ))
             .with_children(|f| {
-                f.spawn(t.text("Totals", t.font_base, FontWeight::BOLD, t.foreground));
+                f.spawn((
+                    t.text(
+                        tr("asm-bom-totals"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("asm-bom-totals"),
+                ));
                 f.spawn(t.text(
-                    format!("Quantity {}", bom.total_quantity),
+                    tr_with(
+                        "asm-bom-total-quantity",
+                        &[("count", &bom.total_quantity.to_string())],
+                    ),
                     t.font_base,
                     FontWeight::MEDIUM,
                     t.foreground,
                 ));
                 f.spawn(t.text(
-                    format!("Mass {mass}"),
+                    tr_with("asm-bom-total-mass", &[("mass", &mass)]),
                     t.font_base,
                     FontWeight::MEDIUM,
                     t.foreground,
@@ -907,8 +924,10 @@ fn on_activate(
                 )
                 .separator();
             if templates.is_empty() {
-                menu = menu
-                    .item(MenuItem::new("bom-template-none", "No saved templates").disabled(true));
+                menu = menu.item(
+                    MenuItem::new("bom-template-none", tr("asm-bom-no-saved-templates"))
+                        .disabled(true),
+                );
             }
             for (i, t) in templates.iter().enumerate() {
                 menu = menu.item(
@@ -950,25 +969,31 @@ fn on_activate(
             let menu = Menu::new("bom-overflow-menu")
                 .min_width(230.0)
                 .item_height(22.0)
-                .item(MenuItem::new("bom-save-template", "Save as template…").icon("custom-table"))
-                .item(MenuItem::new("bom-copy", "Copy table").icon("copy"))
-                .item(MenuItem::new("bom-export-csv", "Export to CSV").icon("file-export"))
+                .item(
+                    MenuItem::new("bom-save-template", tr("asm-bom-save-as-template"))
+                        .icon("custom-table"),
+                )
+                .item(MenuItem::new("bom-copy", tr("asm-bom-copy-table")).icon("copy"))
+                .item(MenuItem::new("bom-export-csv", tr("asm-bom-export-csv")).icon("file-export"))
                 .separator()
                 .item(if s.show_excluded {
-                    MenuItem::new("bom-hide-excluded", "Hide excluded/suppressed")
+                    MenuItem::new("bom-hide-excluded", tr("asm-bom-hide-excluded"))
                 } else {
-                    MenuItem::new("bom-show-excluded", "Show excluded/suppressed")
+                    MenuItem::new("bom-show-excluded", tr("asm-bom-show-excluded"))
                 })
                 .item(if s.top_level_row {
-                    MenuItem::new("bom-hide-top-row", "Hide top-level assembly row")
+                    MenuItem::new("bom-hide-top-row", tr("asm-bom-hide-top-row"))
                 } else {
-                    MenuItem::new("bom-show-top-row", "Show top-level assembly row")
+                    MenuItem::new("bom-show-top-row", tr("asm-bom-show-top-row"))
                 })
-                .item(MenuItem::new("bom-reset-sort", "Reset sort").disabled(!sorted))
+                .item(MenuItem::new("bom-reset-sort", tr("asm-bom-reset-sort")).disabled(!sorted))
                 .separator()
                 .item(
-                    MenuItem::new("bom-generate-numbers", "Generate missing part numbers")
-                        .icon("tag-new"),
+                    MenuItem::new(
+                        "bom-generate-numbers",
+                        tr("asm-bom-generate-missing-numbers"),
+                    )
+                    .icon("tag-new"),
                 )
                 .align_end();
             let theme = world.resource::<Theme>().clone();
@@ -1048,7 +1073,7 @@ fn on_double_click(
                     .item_height(20.0)
                     .text_only()
                     .item(
-                        MenuItem::new("bom-material-none", "No material")
+                        MenuItem::new("bom-material-none", tr("asm-bom-no-material"))
                             .checked(current.is_empty()),
                     );
                 for (i, m) in materials(&doc).iter().enumerate() {
@@ -1057,9 +1082,10 @@ fn on_double_click(
                             .checked(m.name == current),
                     );
                 }
-                menu = menu
-                    .separator()
-                    .item(MenuItem::new("bom-material-more", "Assign material…"));
+                menu = menu.separator().item(MenuItem::new(
+                    "bom-material-more",
+                    tr("asm-assign-material"),
+                ));
                 let theme = world.resource::<Theme>().clone();
                 let mut cm = world.commands();
                 let anchor = open_context_menu(&mut cm, at, menu.build(&theme));
@@ -1173,8 +1199,11 @@ fn on_context_menu(
                     .map(|e| e.name.clone()),
             };
             let switch = match &tab {
-                Some(name) => MenuItem::new("bom-row-switch-to", format!("Switch to {name}")),
-                None => MenuItem::new("bom-row-switch-to", "Switch to").disabled(true),
+                Some(name) => MenuItem::new(
+                    "bom-row-switch-to",
+                    tr_with("asm-switch-to-named", &[("name", name)]),
+                ),
+                None => MenuItem::new("bom-row-switch-to", tr("asm-switch-to")).disabled(true),
             };
             let menu = Menu::new("bom-row-menu")
                 .min_width(210.0)
@@ -1190,19 +1219,19 @@ fn on_context_menu(
                                 settings(world, *e).is_some_and(|s| s.excluded.contains(&row.key))
                             })
                     {
-                        MenuItem::new("bom-unsuppress", "Unsuppress in this BOM")
+                        MenuItem::new("bom-unsuppress", tr("asm-bom-unsuppress-in-bom"))
                     } else {
-                        MenuItem::new("bom-suppress", "Suppress from this BOM")
+                        MenuItem::new("bom-suppress", tr("asm-bom-suppress-from-bom"))
                             .disabled(row.excluded)
                     },
                 )
-                .item(MenuItem::new("bom-row-properties", "Properties…"))
+                .item(MenuItem::new("bom-row-properties", tr("common-properties")))
                 .item(
-                    MenuItem::new("bom-row-material", "Assign material…")
+                    MenuItem::new("bom-row-material", tr("asm-assign-material"))
                         .disabled(row.key.owner.is_assembly()),
                 )
                 .item(
-                    MenuItem::new("bom-row-part-number", "Generate next part number")
+                    MenuItem::new("bom-row-part-number", tr("asm-bom-generate-next-number"))
                         .disabled(has_pn),
                 )
                 .item(switch);
@@ -1248,13 +1277,18 @@ fn on_context_menu(
                 .min_width(200.0)
                 .item_height(22.0)
                 .text_only()
-                .item(MenuItem::new("bom-remove-column", "Remove column").disabled(n <= 1))
-                .item(MenuItem::new("bom-move-left", "Move left").disabled(c == 0))
-                .item(MenuItem::new("bom-move-right", "Move right").disabled(c + 1 >= n));
+                .item(
+                    MenuItem::new("bom-remove-column", tr("asm-bom-remove-column"))
+                        .disabled(n <= 1),
+                )
+                .item(MenuItem::new("bom-move-left", tr("asm-bom-move-left")).disabled(c == 0))
+                .item(
+                    MenuItem::new("bom-move-right", tr("asm-bom-move-right")).disabled(c + 1 >= n),
+                );
             if bom.columns.get(c) == Some(&BomColumn::Property(PropertyKey::PartNumber)) {
                 menu = menu.separator().item(MenuItem::new(
                     "bom-generate-numbers",
-                    "Generate missing part numbers",
+                    tr("asm-bom-generate-missing-numbers"),
                 ));
             }
             let theme = world.resource::<Theme>().clone();
@@ -1329,9 +1363,12 @@ fn on_template_name(ev: On<NamePopupCommit>, q: Query<&Name>, mut commands: Comm
             cadrs_ui::toast::show_notification(
                 &mut c,
                 &theme,
-                cadrs_ui::toast::Notification::info(format!("Saved template \"{}\"", name.trim()))
-                    .max_width(TOAST_W)
-                    .name("bom-toast"),
+                cadrs_ui::toast::Notification::info(tr_with(
+                    "asm-bom-saved-template",
+                    &[("name", name.trim())],
+                ))
+                .max_width(TOAST_W)
+                .name("bom-toast"),
             );
         }
     });
@@ -1434,7 +1471,7 @@ fn toolbar_action(world: &mut World, item: &str, at: Vec2) {
                 None => at - Vec2::new(150.0, 0.0),
             };
             let mut c = world.commands();
-            NamePopup::new("bom-template-name", "Template name", pos)
+            NamePopup::new("bom-template-name", tr("asm-bom-template-name"), pos)
                 .value(format!("BOM template {n}"))
                 .spawn(&mut c, &theme);
             world.flush();
@@ -1473,9 +1510,9 @@ fn generate_numbers(world: &mut World) {
         let theme = world.resource::<Theme>().clone();
         let mut c = world.commands();
         let text = match plan.len() {
-            0 => "Every item has a part number".to_string(),
-            1 => "Generated 1 part number".to_string(),
-            n => format!("Generated {n} part numbers"),
+            0 => tr("asm-bom-every-item-numbered"),
+            1 => tr("asm-bom-generated-one-number"),
+            n => tr_with("asm-bom-generated-numbers", &[("count", &n.to_string())]),
         };
         cadrs_ui::toast::show_notification(
             &mut c,
@@ -1504,9 +1541,12 @@ fn copy_table(world: &mut World) {
     cadrs_ui::toast::show_notification(
         &mut c,
         &theme,
-        cadrs_ui::toast::Notification::info(format!("Copied the table ({} rows)", bom.rows.len()))
-            .max_width(TOAST_W)
-            .name("bom-toast"),
+        cadrs_ui::toast::Notification::info(tr_with(
+            "asm-bom-copied-table",
+            &[("count", &bom.rows.len().to_string())],
+        ))
+        .max_width(TOAST_W)
+        .name("bom-toast"),
     );
 }
 
@@ -1523,7 +1563,7 @@ fn export_csv(world: &mut World) {
         .unwrap_or_else(|| "Assembly".into());
     let dir = crate::export_dir(world);
     let result = (|| -> Result<PathBuf, String> {
-        let dir = dir.ok_or("no folder to export to")?;
+        let dir = dir.ok_or_else(|| tr("asm-bom-no-export-folder"))?;
         cadrs_fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let stem = cadrs_core::export::sanitize(&format!("{name} BOM"));
         let mut path = dir.join(format!("{stem}.csv"));
@@ -1545,11 +1585,17 @@ fn export_csv(world: &mut World) {
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| p.display().to_string());
-            let n = cadrs_ui::toast::Notification::info(format!("Exported {file}"));
+            let n = cadrs_ui::toast::Notification::info(tr_with(
+                "asm-bom-exported-file",
+                &[("file", &file)],
+            ));
             world.resource_mut::<BomUi>().last_export = Some(p);
             n
         }
-        Err(e) => cadrs_ui::toast::Notification::warning(format!("Export failed: {e}")),
+        Err(e) => cadrs_ui::toast::Notification::warning(tr_with(
+            "asm-bom-export-failed",
+            &[("error", &e)],
+        )),
     };
     let mut c = world.commands();
     cadrs_ui::toast::show_notification(

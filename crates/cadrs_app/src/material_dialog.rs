@@ -26,6 +26,7 @@ use cadrs_core::material::{self, LIBRARY_NAME, Material, MaterialLibrary};
 use cadrs_core::{ElementId, PartId};
 use cadrs_sketch::units::{LengthUnit, Units};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField, NumberFieldCommit,
@@ -194,7 +195,7 @@ struct MaterialPopup;
 fn choose_label(s: &MaterialSession) -> String {
     s.chosen
         .clone()
-        .unwrap_or_else(|| "Select a material".into())
+        .unwrap_or_else(|| tr("render-material-select"))
 }
 
 #[derive(Component)]
@@ -236,27 +237,33 @@ pub fn property_rows(m: &Material, units: &Units) -> Vec<(String, String)> {
     let (su, pa) = stress_unit(units);
     let stress = |v: Option<f64>| v.map(|v| trim(v / pa, 3)).unwrap_or_default();
     vec![
-        ("Name".into(), m.name.clone()),
-        (format!("Density ({du})"), trim(density, 3)),
+        (tr("common-name"), m.name.clone()),
         (
-            "Poisson's ratio".into(),
+            tr_with("render-material-density", &[("unit", &du)]),
+            trim(density, 3),
+        ),
+        (
+            tr("render-material-poisson"),
             m.poisson.map(|v| trim(v, 3)).unwrap_or_default(),
         ),
-        (format!("Young's modulus ({su})"), stress(m.youngs_modulus)),
         (
-            format!("Tensile yield strength ({su})"),
+            tr_with("render-material-youngs", &[("unit", su)]),
+            stress(m.youngs_modulus),
+        ),
+        (
+            tr_with("render-material-tensile-yield", &[("unit", su)]),
             stress(m.tensile_yield),
         ),
         (
-            format!("Ultimate tensile strength ({su})"),
+            tr_with("render-material-ultimate-tensile", &[("unit", su)]),
             stress(m.ultimate_tensile),
         ),
         (
-            format!("Compressive yield strength ({su})"),
+            tr_with("render-material-compressive-yield", &[("unit", su)]),
             stress(m.compressive_yield),
         ),
         (
-            format!("Ultimate compressive strength ({su})"),
+            tr_with("render-material-ultimate-compressive", &[("unit", su)]),
             stress(m.ultimate_compressive),
         ),
     ]
@@ -660,11 +667,14 @@ fn spawn_list(p: &mut ChildSpawner, t: &Theme, s: &MaterialSession) {
     let hits = search(s);
     if hits.is_empty() {
         let empty = if s.library > 0 && s.query.is_empty() {
-            "No materials yet: add one in the Custom tab"
+            "render-material-none-yet"
         } else {
-            "No materials match"
+            "render-material-none-match"
         };
-        p.spawn(t.text(empty, 11.5, FontWeight::NORMAL, t.muted_foreground));
+        p.spawn((
+            t.text(tr(empty), 11.5, FontWeight::NORMAL, t.muted_foreground),
+            Translated(empty),
+        ));
     }
     for name in hits {
         let selected = s.chosen.as_deref() == Some(name.as_str());
@@ -702,11 +712,14 @@ fn spawn_props(p: &mut ChildSpawner, t: &Theme, s: &MaterialSession, units: &Uni
             }
         }
         None => {
-            p.spawn(t.text(
-                "Choose a material",
-                11.5,
-                FontWeight::NORMAL,
-                t.muted_foreground,
+            p.spawn((
+                t.text(
+                    tr("render-material-choose"),
+                    11.5,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("render-material-choose"),
             ));
         }
     }
@@ -757,7 +770,7 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
         MaterialDialog,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("material-dialog")
-            .title("Material")
+            .title(tr("common-material"))
             .valid(chosen_material(&s).is_some())
             .plain_title()
             .width(310.0)
@@ -767,8 +780,8 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                 b.spawn(
                     TabStrip::new("material-tabs")
                         .compact()
-                        .tab("Library")
-                        .tab("Custom")
+                        .tab(tr("render-material-tab-library"))
+                        .tab(tr("render-material-tab-custom"))
                         .selected(s.tab)
                         .build(t),
                 );
@@ -804,7 +817,7 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                         r.spawn(select.selected(s.library).build(t));
                         r.spawn(
                             IconButton::new("material-add-library", "plus")
-                                .tooltip("Create a material library")
+                                .tooltip(tr("render-material-create-library"))
                                 .build(t),
                         );
                     });
@@ -874,7 +887,7 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                     .with_children(|pop| {
                         pop.spawn(
                             TextInput::new("material-search")
-                                .placeholder("Search materials")
+                                .placeholder(tr("render-material-search"))
                                 .width(Val::Percent(100.0))
                                 .height(24.0)
                                 .build(t),
@@ -954,7 +967,7 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                         })
                         .with_child(
                             cadrs_ui::Button::new("material-add-to-library")
-                                .label(format!("Add to {}", lib.name))
+                                .label(tr_with("render-material-add-to", &[("library", &lib.name)]))
                                 .size(ButtonSize::Small)
                                 .build(t),
                         );
@@ -968,7 +981,7 @@ fn material_dialog(t: &Theme, s: &MaterialSession, units: Units) -> impl Bundle 
                     })
                     .with_child(
                         cadrs_ui::Button::new("material-remove")
-                            .label("Remove material")
+                            .label(tr("render-material-remove"))
                             .size(ButtonSize::Small)
                             .build(t),
                     );

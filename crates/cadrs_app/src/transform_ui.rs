@@ -17,6 +17,7 @@ use cadrs_core::mate::ConnectorRef;
 use cadrs_core::transform::{SecondaryAxis, TransformFeature, TransformType};
 use cadrs_core::{Feature, FeatureKind, PartId};
 use cadrs_ui::OptionRow;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::ActiveDocument;
@@ -266,26 +267,31 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn name_of(features: &[Feature], id: cadrs_core::FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-sketch"), |f| f.name.clone())
 }
 
 fn direction_label(features: &[Feature], d: &DirectionRef) -> String {
     match d {
-        DirectionRef::Edge(r) => format!(
-            "Edge of {}",
-            op_name(features, crate::parts::edge_maker(features, &r.edge))
+        DirectionRef::Edge(r) => tr_with(
+            "common-edge-of",
+            &[(
+                "name",
+                &op_name(features, crate::parts::edge_maker(features, &r.edge)),
+            )],
         ),
         DirectionRef::SketchLine { sketch, .. } => {
-            format!("Line of {}", name_of(features, *sketch))
+            tr_with("common-line-of", &[("name", &name_of(features, *sketch))])
         }
-        DirectionRef::FaceNormal(f) => format!("Face of {}", op_name(features, f.face.op)),
+        DirectionRef::FaceNormal(f) => {
+            tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+        }
         DirectionRef::PlaneNormal(p) => crate::viewport::plane_label(features, *p),
         DirectionRef::Connector(c) => c.label(features),
     }
@@ -392,10 +398,23 @@ fn list_with_flip(
                 &format!("{name}-flip"),
                 Role::Flip,
                 flip,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         });
     });
+}
+
+/// A transform type, in the current language (the core's label is English).
+fn transform_type_text(ty: TransformType) -> String {
+    tr(match ty {
+        TransformType::TranslateByLine => "model-transform-by-line",
+        TransformType::TranslateByDistance => "model-transform-by-distance",
+        TransformType::TranslateXyz => "model-transform-by-xyz",
+        TransformType::MateConnectors => "model-transform-by-mate-connectors",
+        TransformType::Rotate => "model-transform-rotate",
+        TransformType::CopyInPlace => "model-transform-copy-in-place",
+        TransformType::ScaleUniformly => "model-transform-scale-uniformly",
+    })
 }
 
 pub(crate) fn body(
@@ -409,7 +428,7 @@ pub(crate) fn body(
         return;
     };
     body_column(b, |b| {
-        let types = opts(&TransformType::ALL, |m| m.label(), |_| true);
+        let types = opts(&TransformType::ALL, transform_type_text, |_| true);
         select_row(
             b,
             t,
@@ -424,7 +443,7 @@ pub(crate) fn body(
             b,
             t,
             "transform-parts-field",
-            "Parts to transform",
+            &tr("model-transform-parts"),
             Role::TransformParts,
             items_of(Role::TransformParts),
             field == AppliedField::TransformParts,
@@ -435,7 +454,7 @@ pub(crate) fn body(
                 b,
                 t,
                 "transform-line-field",
-                "Line or axis",
+                &tr("model-transform-line"),
                 Role::TransformLine,
                 items_of(Role::TransformLine),
                 active(AppliedField::TransformLine),
@@ -446,7 +465,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-direction-field",
-                    "Direction",
+                    &tr("common-direction"),
                     Role::TransformDirection,
                     items_of(Role::TransformDirection),
                     active(AppliedField::TransformDirection),
@@ -455,7 +474,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-distance",
-                    "Distance",
+                    &tr("common-distance"),
                     Role::TransformDistance,
                     &x.distance_expr,
                     Some(x.flip),
@@ -471,7 +490,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-from-field",
-                    "From mate connector",
+                    &tr("model-transform-from"),
                     Role::TransformFrom,
                     items_of(Role::TransformFrom),
                     active(AppliedField::TransformFrom),
@@ -480,7 +499,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-to-field",
-                    "To mate connector",
+                    &tr("model-transform-to"),
                     Role::TransformTo,
                     items_of(Role::TransformTo),
                     active(AppliedField::TransformTo),
@@ -498,12 +517,15 @@ pub(crate) fn body(
                         "transform-flip-primary",
                         Role::TransformFlipPrimary,
                         "flip-direction-up",
-                        "Flip primary axis",
+                        &tr("model-connector-flip-primary"),
                         x.flip_primary,
                     );
-                    let tip = format!(
-                        "Reorient secondary axis ({})",
-                        x.secondary.onshape().replace('_', " ").to_lowercase()
+                    let tip = tr_with(
+                        "model-transform-reorient-secondary",
+                        &[(
+                            "axis",
+                            &x.secondary.onshape().replace('_', " ").to_lowercase(),
+                        )],
                     );
                     crate::pattern_dialog::icon_button(
                         r,
@@ -521,7 +543,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-axis-field",
-                    "Axis of rotation",
+                    &tr("model-transform-axis"),
                     Role::TransformAxis,
                     items_of(Role::TransformAxis),
                     active(AppliedField::TransformAxis),
@@ -530,7 +552,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-angle",
-                    "Angle",
+                    &tr("common-angle"),
                     Role::TransformAngle,
                     &x.angle_expr,
                     Some(x.flip),
@@ -542,7 +564,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-scale-point-field",
-                    "Point to scale about (origin)",
+                    &tr("model-transform-scale-point"),
                     Role::TransformScalePoint,
                     items_of(Role::TransformScalePoint),
                     active(AppliedField::TransformScalePoint),
@@ -551,7 +573,7 @@ pub(crate) fn body(
                     b,
                     t,
                     "transform-scale",
-                    "Scale",
+                    &tr("model-transform-scale"),
                     Role::TransformScale,
                     &x.scale_expr,
                     None,
@@ -560,7 +582,7 @@ pub(crate) fn body(
         }
         if x.transform_type != TransformType::CopyInPlace {
             b.spawn(
-                OptionRow::new("transform-copy", "Copy part")
+                OptionRow::new("transform-copy", tr("model-transform-copy-part"))
                     .checked(x.copy)
                     .build(t),
             );

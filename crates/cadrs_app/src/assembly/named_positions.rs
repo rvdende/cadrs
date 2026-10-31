@@ -25,6 +25,7 @@ use cadrs_core::assembly::positions::{
     self, DeleteNamedPosition, NamedPosition, NamedPositionId, SetNamedPosition,
 };
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, Menu, MenuAction, MenuItem};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -252,7 +253,12 @@ fn rebuild(world: &mut World) {
     let mut rows: Vec<(NamedPositionId, Entity)> = Vec::new();
     let mut commands = world.commands();
     commands.entity(panel).with_children(|p| {
-        side_panel_header(p, &t, "Named positions", "named-positions-panel-close");
+        side_panel_header(
+            p,
+            &t,
+            &tr("asm-named-positions"),
+            "named-positions-panel-close",
+        );
         p.spawn(Node {
             padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(6.0), Val::Px(6.0)),
             ..default()
@@ -260,24 +266,23 @@ fn rebuild(world: &mut World) {
         .with_children(|r| {
             r.spawn(
                 cadrs_ui::Button::new("named-position-add")
-                    .label("Add position")
+                    .label(tr("asm-named-positions-add"))
                     .icon("plus")
                     .small()
                     .build(&t),
             )
-            .insert(Tooltip::new(
-                "Save the mates' current positions as a new row",
-            ));
+            .insert(Tooltip::new(tr("asm-named-positions-add-tooltip")));
         });
         if list.is_empty() {
             p.spawn((
                 Name::new("named-positions-empty"),
                 t.text(
-                    "No named positions yet",
+                    tr("asm-named-positions-empty"),
                     11.5,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("asm-named-positions-empty"),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
                     ..default()
@@ -300,7 +305,13 @@ fn rebuild(world: &mut World) {
         ))
         .with_children(|h| {
             h.spawn((
-                t.text("Name", 11.0, FontWeight::MEDIUM, t.muted_foreground),
+                t.text(
+                    tr("common-name"),
+                    11.0,
+                    FontWeight::MEDIUM,
+                    t.muted_foreground,
+                ),
+                Translated("common-name"),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -321,7 +332,7 @@ fn rebuild(world: &mut World) {
                         overflow: Overflow::clip(),
                         ..default()
                     },
-                    Tooltip::new(format!("{label}: {}", d.label())),
+                    Tooltip::new(format!("{label}: {}", super::dof_name(*d))),
                 ))
                 .insert(TextLayout::no_wrap());
             }
@@ -339,9 +350,9 @@ fn rebuild(world: &mut World) {
                 ContextMenuTarget,
                 DoubleClickable,
                 Tooltip::new(if *is_current {
-                    format!("{name} (the assembly is in this position)")
+                    tr_with("asm-named-positions-current-row", &[("name", name)])
                 } else {
-                    format!("{name}: double-click to apply")
+                    tr_with("asm-named-positions-row", &[("name", name)])
                 }),
             ));
             row.entry::<Node>().and_modify(|mut n| {
@@ -367,7 +378,7 @@ fn rebuild(world: &mut World) {
                                 ..default()
                             },
                         ),
-                        Tooltip::new("Current position"),
+                        Tooltip::new(tr("asm-menu-current-position")),
                     ));
                 }
                 // Its stored values, each editable (Enter saves, one undo step).
@@ -386,7 +397,10 @@ fn rebuild(world: &mut World) {
                             mate: *mate,
                             dof: *dof,
                         },
-                        Tooltip::new(format!("{label} in {name}: type a value, Enter")),
+                        Tooltip::new(tr_with(
+                            "asm-named-positions-value-tooltip",
+                            &[("mate", label), ("name", name)],
+                        )),
                     ));
                     cell.entry::<Node>().and_modify(|mut n| n.flex_shrink = 0.0);
                     if marked {
@@ -395,7 +409,7 @@ fn rebuild(world: &mut World) {
                 }
                 r.spawn(
                     cadrs_ui::Button::new(format!("{row_name}-apply"))
-                        .label("Apply")
+                        .label(tr("common-apply"))
                         .small()
                         .ghost()
                         .build(&t),
@@ -657,14 +671,16 @@ fn on_row_menu(ev: On<ContextMenuRequested>, q: Query<&PositionRow>, mut command
         let menu = Menu::new("named-position-menu")
             .min_width(190.0)
             .item_height(20.0)
-            .item(MenuItem::new("named-position-apply", "Apply"))
+            .item(MenuItem::new("named-position-apply", tr("common-apply")))
             .item(MenuItem::new(
                 "named-position-update",
-                "Update to current position",
+                tr("asm-named-positions-update"),
             ))
-            .item(MenuItem::new("named-position-rename", "Rename"))
+            .item(MenuItem::new("named-position-rename", tr("common-rename")))
             .separator()
-            .item(MenuItem::new("named-position-delete", "Delete").icon("remove-circle"));
+            .item(
+                MenuItem::new("named-position-delete", tr("common-delete")).icon("remove-circle"),
+            );
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
         let anchor = open_context_menu(&mut commands, at, menu.build(&theme));

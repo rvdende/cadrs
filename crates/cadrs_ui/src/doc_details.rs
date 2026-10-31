@@ -153,7 +153,7 @@ pub fn details_header(
                 IconButton::new(close, "close")
                     .icon_size(14.0)
                     .small()
-                    .tooltip("Close")
+                    .tooltip(crate::i18n::tr("common-close"))
                     .build(&t),
             )
             .insert(v);

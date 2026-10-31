@@ -2,6 +2,7 @@
 //! Regenerate, Preview and Post.
 
 use super::*;
+use cadrs_ui::i18n::tr;
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Needs {
@@ -17,17 +18,18 @@ pub(super) enum Needs {
 /// The toolbar of a CAM Studio tab.
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     crate::document::feature_list_toggle(tb, t);
+    // (`tip` is a catalog key.)
     let tool = |name: &'static str, icon: &'static str, tip: &'static str| {
         ToolButton::new(name, icon)
             .icon_size(20.0)
-            .tooltip(tip)
+            .tooltip(tr(tip))
             .build(t)
     };
     tb.spawn((
         ToolButton::new("cam-tb-insert", "cam-insert")
             .icon_size(20.0)
             .dropdown(true)
-            .tooltip("Insert part, workholding and stock")
+            .tooltip(tr("cam-insert-tooltip"))
             .build(t),
         observe(
             |ev: On<Activate>,
@@ -46,12 +48,14 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                     .unwrap_or(Vec2::new(60.0, 80.0));
                 let menu = Menu::new("cam-insert-menu")
                     .min_width(190.0)
-                    .item(MenuItem::new("cam-insert-part", "Insert part").icon("part"))
+                    .item(MenuItem::new("cam-insert-part", tr("cam-insert-part")).icon("part"))
                     .item(
-                        MenuItem::new("cam-insert-workholding", "Insert workholding")
+                        MenuItem::new("cam-insert-workholding", tr("cam-insert-workholding"))
                             .icon("cam-workholding"),
                     )
-                    .item(MenuItem::new("cam-insert-stock", "Insert stock").icon("cam-stock"));
+                    .item(
+                        MenuItem::new("cam-insert-stock", tr("cam-insert-stock")).icon("cam-stock"),
+                    );
                 let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
                 commands
                     .entity(anchor)
@@ -77,7 +81,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-job",
         "cam-job",
-        "Create job",
+        "cam-create-job",
         Needs::Part,
         dialogs::create_job,
     );
@@ -85,7 +89,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-machine",
         "cam-machine",
-        "Create machine",
+        "cam-create-machine",
         Needs::Job,
         dialogs::create_machine,
     );
@@ -93,7 +97,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-setup",
         "cam-setup",
-        "Create setup",
+        "cam-create-setup",
         Needs::Machine,
         dialogs::create_setup,
     );
@@ -101,7 +105,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-tool",
         "cam-tool",
-        "Create tool",
+        "cam-create-tool",
         Needs::Setup,
         dialogs::create_tool,
     );
@@ -109,7 +113,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-toolpath",
         "cam-toolpath",
-        "Create toolpath",
+        "cam-create-toolpath",
         Needs::Tool,
         dialogs::create_toolpath,
     );
@@ -117,7 +121,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-workplane",
         "cam-work-plane",
-        "Create work plane",
+        "cam-create-work-plane",
         Needs::Setup,
         dialogs::create_work_plane,
     );
@@ -126,7 +130,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-regenerate",
         "cam-regenerate",
-        "Regenerate the selected toolpaths (all out-of-date ones of the active job when none is selected)",
+        "cam-regenerate-tooltip",
         Needs::Toolpath,
         regenerate_selection,
     );
@@ -134,7 +138,7 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-preview",
         "cam-preview",
-        "Preview operation: back plot, verify and simulate",
+        "cam-preview-tooltip",
         Needs::Calculated,
         preview::open_for_selection,
     );
@@ -142,17 +146,13 @@ pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         tb,
         "cam-tb-post",
         "cam-post",
-        "Post the setup to G-code",
+        "cam-post-tooltip",
         Needs::Calculated,
         export::open_for_selection,
     );
     tb.spawn(toolbar_separator(t));
     tb.spawn((
-        tool(
-            "cam-tb-stock",
-            "cam-stock",
-            "Show or hide the active job's stock",
-        ),
+        tool("cam-tb-stock", "cam-stock", "cam-show-hide-stock"),
         observe(|_: On<Activate>, mut ui: ResMut<CamUi>| {
             ui.show_stock = !ui.show_stock;
         }),

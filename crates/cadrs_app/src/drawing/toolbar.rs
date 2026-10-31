@@ -13,6 +13,7 @@
 
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, observe};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{ToolButton, toolbar_separator};
 
@@ -285,91 +286,126 @@ fn start_tool(world: &mut World, name: &str, button: Entity) {
     }
 }
 
-/// (name, icon, dropdown, tooltip).
+/// (name, icon, dropdown, its tooltip's catalog key).
 type Tool = (&'static str, &'static str, bool, &'static str);
 
 /// The toolbar's groups.
 pub const GROUPS: [&[Tool]; 7] = [
-    &[(
-        "drawing-update",
-        "history",
-        false,
-        "Update from this workspace (Ctrl+Q)",
-    )],
+    &[("drawing-update", "history", false, "drawing-tool-update")],
     &[
-        ("drawing-insert-view", "part", false, "Insert view"),
+        ("drawing-insert-view", "part", false, "drawing-insert-view"),
         (
             "drawing-projected-view",
             "replicate",
             false,
-            "Projected view",
+            "drawing-tool-projected-view",
         ),
         (
             "drawing-auxiliary-view",
             "arrow-up-right",
             false,
-            "Auxiliary view",
+            "drawing-tool-auxiliary-view",
         ),
         (
             "drawing-section-view",
             "section-view",
             false,
-            "Section view",
+            "drawing-tool-section-view",
         ),
-        ("drawing-detail-view", "find", true, "Detail view"),
+        (
+            "drawing-detail-view",
+            "find",
+            true,
+            "drawing-kind-detail-view",
+        ),
     ],
     &[
-        ("drawing-dimension", "dimension", true, "Dimension (D)"),
-        ("drawing-hole-callout", "hole", false, "Hole callout"),
+        (
+            "drawing-dimension",
+            "dimension",
+            true,
+            "drawing-tool-dimension-shortcut",
+        ),
+        (
+            "drawing-hole-callout",
+            "hole",
+            false,
+            "drawing-tool-hole-callout",
+        ),
     ],
     &[
         (
             "drawing-surface-finish",
             "check",
             false,
-            "Surface finish symbol",
+            "drawing-tool-surface-finish-symbol",
         ),
-        ("drawing-weld", "fillet", false, "Weld symbol"),
+        ("drawing-weld", "fillet", false, "drawing-tool-weld-symbol"),
         (
             "drawing-gdt",
             "constraint-parallel",
             true,
-            "Geometric tolerance",
+            "drawing-tool-geometric-tolerance",
         ),
     ],
     &[
-        ("drawing-note", "note", false, "Note (N)"),
-        ("drawing-callout", "comments", false, "Callout"),
-        ("drawing-table", "custom-table", false, "Table"),
-        ("drawing-bom", "bill-of-materials", false, "Insert BOM"),
+        ("drawing-note", "note", false, "drawing-tool-note-shortcut"),
+        ("drawing-callout", "comments", false, "drawing-tool-callout"),
+        ("drawing-table", "custom-table", false, "drawing-tool-table"),
+        (
+            "drawing-bom",
+            "bill-of-materials",
+            false,
+            "drawing-tool-insert-bom",
+        ),
     ],
     &[
-        ("drawing-centerline", "construction", true, "Centerline"),
-        ("drawing-centermark", "origin", false, "Centermark"),
-        ("drawing-virtual-sharp", "extend", false, "Virtual sharp"),
+        (
+            "drawing-centerline",
+            "construction",
+            true,
+            "drawing-tool-centerline",
+        ),
+        (
+            "drawing-centermark",
+            "origin",
+            false,
+            "drawing-tool-centermark",
+        ),
+        (
+            "drawing-virtual-sharp",
+            "extend",
+            false,
+            "drawing-tool-virtual-sharp",
+        ),
     ],
     &[
-        ("drawing-line", "line", false, "Line"),
-        ("drawing-spline", "spline", false, "Spline"),
+        ("drawing-line", "line", false, "drawing-tool-line"),
+        ("drawing-spline", "spline", false, "drawing-tool-spline"),
         (
             "drawing-insert-dxf",
             "file-import",
             false,
-            "Insert DXF or DWG",
+            "drawing-tool-insert-dxf",
         ),
-        ("drawing-insert-image", "image", false, "Insert image"),
+        (
+            "drawing-insert-image",
+            "image",
+            false,
+            "drawing-tool-insert-image",
+        ),
     ],
 ];
 
 /// The milestone a disabled tool waits for, for its tooltip.
-fn not_yet(name: &str) -> &'static str {
-    match name {
-        "drawing-update" => "updating views from the workspace arrives in a later version",
+fn not_yet(name: &str) -> String {
+    tr(match name {
+        "drawing-update" => "drawing-tool-not-yet-update",
         "drawing-line" | "drawing-spline" | "drawing-insert-dxf" | "drawing-insert-image" => {
-            "sheet sketching and import arrive in a later version"
+            "drawing-tool-not-yet-sketching"
         }
-        _ => "not available yet",
-    }
+        _ => "drawing-tool-not-yet",
+    })
 }
 
 pub fn drawing_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
@@ -385,7 +421,7 @@ pub fn drawing_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 tb.spawn((
                     ToolButton::new(*name, *icon)
                         .dropdown(*dropdown)
-                        .tooltip(*tip)
+                        .tooltip(tr(tip))
                         .build(t),
                     observe(move |a: On<Activate>, mut commands: Commands| {
                         let button = a.entity;
@@ -398,7 +434,10 @@ pub fn drawing_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 ToolButton::new(*name, *icon)
                     .dropdown(*dropdown)
                     .disabled(true)
-                    .tooltip(format!("{tip}: {}", not_yet(name)))
+                    .tooltip(tr_with(
+                        "drawing-tool-disabled-tooltip",
+                        &[("tool", &tr(tip)), ("why", &not_yet(name))],
+                    ))
                     .build(t),
             );
         }

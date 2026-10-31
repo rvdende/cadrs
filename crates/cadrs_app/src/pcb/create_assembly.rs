@@ -32,6 +32,8 @@ use cadrs_ui::{
     show_notification,
 };
 
+use cadrs_ui::i18n::{Translated, tr, tr_with};
+
 use crate::viewport::ViewportArea;
 use crate::{ActiveDocument, AppState};
 
@@ -111,43 +113,90 @@ pub fn open_create_dialog(world: &mut World) {
     let (tb, tf) = (theme.clone(), theme.clone());
     world.spawn((
         Dialog::new("pcb-create-dialog")
-            .title(format!("Create assembly from '{}'", b.name()))
+            .title(tr_with("pcb-create-title", &[("board", b.name())]))
             .width(450.0)
             .body(move |b| {
                 let t = &tb;
                 b.spawn((
-                    t.text("Select features to include in the assembly:", t.font_sm, FontWeight::NORMAL, t.foreground),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(4.0), Val::Px(6.0)), ..default() },
-                ));
-                // The rows 19 px apart, as the course's dialog (the body's 8 px row gap left
-                // out: they are one group).
-                b.spawn((Name::new("pcb-create-options"), Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(0.0), ..default() })).with_children(|c| {
-                    c.spawn(Checkbox::new("pcb-create-board").label("Board").checked(true).height(19.0).build(t));
-                    c.spawn(Checkbox::new("pcb-create-components").label("Components").checked(true).height(19.0).build(t));
-                    c.spawn(Checkbox::new("pcb-create-keeps").label("Keep-In and Keep-Out Areas").height(19.0).build(t));
-                });
-                b.spawn((
-                    Name::new("pcb-create-note"),
                     t.text(
-                        "Building the assembly can take several minutes. You can keep working in cadrs while it is built.",
+                        tr("pcb-create-select-features"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.foreground,
                     ),
-                    Node { margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(10.0), Val::Px(6.0)), width: Val::Px(420.0), ..default() },
+                    Translated("pcb-create-select-features"),
+                    Node {
+                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(4.0), Val::Px(6.0)),
+                        ..default()
+                    },
+                ));
+                // The rows 19 px apart, as the course's dialog (the body's 8 px row gap left
+                // out: they are one group).
+                b.spawn((
+                    Name::new("pcb-create-options"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(0.0),
+                        ..default()
+                    },
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .with_children(|c| {
+                    c.spawn(
+                        Checkbox::new("pcb-create-board")
+                            .label(tr("pcb-create-asm-board"))
+                            .checked(true)
+                            .height(19.0)
+                            .build(t),
+                    );
+                    c.spawn(
+                        Checkbox::new("pcb-create-components")
+                            .label(tr("pcb-create-components"))
+                            .checked(true)
+                            .height(19.0)
+                            .build(t),
+                    );
+                    c.spawn(
+                        Checkbox::new("pcb-create-keeps")
+                            .label(tr("pcb-create-keep-areas"))
+                            .height(19.0)
+                            .build(t),
+                    );
+                });
+                b.spawn((
+                    Name::new("pcb-create-note"),
+                    Translated("pcb-create-note"),
+                    t.text(
+                        tr("pcb-create-note"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.foreground,
+                    ),
+                    Node {
+                        margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(10.0), Val::Px(6.0)),
+                        width: Val::Px(420.0),
+                        ..default()
+                    },
+                ))
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("pcb-create-ok").label("OK").primary().build(t),
+                    Button::new("pcb-create-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(accept);
                     }),
                 ));
                 f.spawn((
-                    Button::new("pcb-create-cancel").label("Cancel").build(t),
+                    Button::new("pcb-create-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_dialog);
                     }),
@@ -338,7 +387,7 @@ fn show_progress(world: &mut World, board: &str) {
             );
             c.spawn((
                 t.text(
-                    format!("Creating assembly from '{board}'…"),
+                    tr_with("pcb-create-progress", &[("board", board)]),
                     t.font_sm,
                     FontWeight::MEDIUM,
                     t.foreground,
@@ -363,7 +412,7 @@ fn finish_create(
         let Some(result) = run.pending.poll() else {
             continue;
         };
-        let result = result.unwrap_or_else(|| Err("The kernel thread stopped".into()));
+        let result = result.unwrap_or_else(|| Err(tr("io-kernel-stopped")));
         let name = run.board_name.clone();
         commands.entity(e).despawn();
         commands.queue(move |world: &mut World| finish(world, &name, result));
@@ -375,25 +424,23 @@ fn finish_create(
 /// Components" (and how many were reused: "… with 1 new component document in PCB Components,
 /// 6 reused").
 pub fn created_message(board: &str, created: usize, reused: usize, folder: &str) -> String {
-    let docs = |n: usize| {
-        format!(
-            "{n} {}component document{}",
-            if reused > 0 { "new " } else { "" },
-            if n == 1 { "" } else { "s" }
-        )
+    let (c, r) = (created.to_string(), reused.to_string());
+    let args = [
+        ("board", board),
+        ("folder", folder),
+        ("count", c.as_str()),
+        ("reused", r.as_str()),
+    ];
+    let key = match (created, reused) {
+        (0, 0) => "pcb-create-done",
+        (1, 0) => "pcb-create-done-one-doc",
+        (_, 0) => "pcb-create-done-docs",
+        (0, 1) => "pcb-create-done-its-one-doc",
+        (0, _) => "pcb-create-done-its-docs",
+        (1, _) => "pcb-create-done-one-new-doc",
+        (_, _) => "pcb-create-done-new-docs",
     };
-    match (created, reused) {
-        (0, 0) => format!("Created the Part Studio and Assembly \"{board}\""),
-        (c, 0) => format!("Created \"{board}\" with {} in {folder}", docs(c)),
-        (0, r) => format!(
-            "Created \"{board}\" with its {r} component document{}",
-            if r == 1 { "" } else { "s" }
-        ),
-        (c, r) => format!(
-            "Created \"{board}\" with {} in {folder}, {r} reused",
-            docs(c)
-        ),
-    }
+    tr_with(key, &args)
 }
 
 fn toast(world: &mut World, n: Notification) -> Entity {
@@ -415,9 +462,12 @@ fn finish(world: &mut World, board: &str, result: Result<Created, String>) {
         Err(e) => {
             toast(
                 world,
-                Notification::warning(format!("Couldn't create the assembly from {board}: {e}"))
-                    .name("pcb-create-toast")
-                    .max_width(640.0),
+                Notification::warning(tr_with(
+                    "pcb-create-failed",
+                    &[("board", board), ("error", &e.to_string())],
+                ))
+                .name("pcb-create-toast")
+                .max_width(640.0),
             );
             return;
         }
@@ -427,9 +477,12 @@ fn finish(world: &mut World, board: &str, result: Result<Created, String>) {
     if let Err(e) = world.resource_mut::<ActiveDocument>().execute(&cmd) {
         toast(
             world,
-            Notification::warning(format!("Couldn't create the assembly from {board}: {e}"))
-                .name("pcb-create-toast")
-                .max_width(640.0),
+            Notification::warning(tr_with(
+                "pcb-create-failed",
+                &[("board", board), ("error", &e.to_string())],
+            ))
+            .name("pcb-create-toast")
+            .max_width(640.0),
         );
         return;
     }
@@ -451,7 +504,13 @@ fn finish(world: &mut World, board: &str, result: Result<Created, String>) {
     );
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    let open = cadrs_ui::toast_action(&mut commands, &theme, t, "pcb-create-open", "Open assembly");
+    let open = cadrs_ui::toast_action(
+        &mut commands,
+        &theme,
+        t,
+        "pcb-create-open",
+        tr("pcb-create-open-assembly"),
+    );
     commands
         .entity(open)
         .insert(observe(move |_: On<Activate>, mut commands: Commands| {

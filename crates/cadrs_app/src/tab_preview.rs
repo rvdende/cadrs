@@ -14,6 +14,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::{FontStyle, FontWeight};
 use cadrs_core::{ElementId, ElementKind};
 use cadrs_ui::Theme;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use crate::document::TabButton;
 use crate::{ActiveDocument, AppState};
@@ -48,7 +49,21 @@ pub fn tab_icon(el: &cadrs_core::Element) -> &'static str {
     }
 }
 
-/// A tab's type, as its card's second line says it.
+/// A tab's type's catalog key: `tr(tab_type_key(el))` is the type as its card's second line
+/// says it.
+pub fn tab_type_key(el: &cadrs_core::Element) -> &'static str {
+    match el.kind {
+        ElementKind::PartStudio { .. } => "common-part-studio",
+        ElementKind::Assembly => "common-assembly",
+        ElementKind::Drawing(_) => "common-drawing",
+        ElementKind::Render(_) => "common-render-studio",
+        ElementKind::PcbStudio(_) => "shell-tab-pcb-studio",
+        ElementKind::CamStudio(_) => "shell-tab-cam-studio",
+        ElementKind::VariableStudio(_) => "shell-tab-variable-studio",
+    }
+}
+
+/// A tab's type in English (the window's title; [`tab_type_key`] is the translated one's key).
 pub fn tab_type(el: &cadrs_core::Element) -> &'static str {
     match el.kind {
         ElementKind::PartStudio { .. } => "Part Studio",
@@ -63,17 +78,31 @@ pub fn tab_type(el: &cadrs_core::Element) -> &'static str {
 
 /// What is in a tab, in a few words, where that is quick to tell.
 fn tab_detail(el: &cadrs_core::Element) -> Option<String> {
-    let count =
-        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let count = |n: usize, one: &str, many: &str| {
+        tr_with(
+            if n == 1 { one } else { many },
+            &[("count", &n.to_string())],
+        )
+    };
     match &el.kind {
         // Counted as the feature list counts them, the default geometry's four with them.
-        ElementKind::PartStudio { .. } => {
-            Some(count(4 + el.features().len(), "feature", "features"))
-        }
-        ElementKind::Assembly => el
-            .assembly_model()
-            .map(|a| count(a.instances.len(), "instance", "instances")),
-        ElementKind::Drawing(d) => Some(count(d.sheets.len(), "sheet", "sheets")),
+        ElementKind::PartStudio { .. } => Some(count(
+            4 + el.features().len(),
+            "shell-tab-preview-feature",
+            "shell-tab-preview-features",
+        )),
+        ElementKind::Assembly => el.assembly_model().map(|a| {
+            count(
+                a.instances.len(),
+                "shell-tab-preview-instance",
+                "shell-tab-preview-instances",
+            )
+        }),
+        ElementKind::Drawing(d) => Some(count(
+            d.sheets.len(),
+            "shell-tab-preview-sheet",
+            "shell-tab-preview-sheets",
+        )),
         _ => None,
     }
 }
@@ -294,7 +323,12 @@ fn show_preview(
     let bottom = window.height() - tab.min.y + 8.0;
     let t = &*theme;
     let thumb = thumbs.get(id);
-    let (name, kind, detail, icon) = (el.name.clone(), tab_type(el), tab_detail(el), tab_icon(el));
+    let (name, kind, detail, icon) = (
+        el.name.clone(),
+        tr(tab_type_key(el)),
+        tab_detail(el),
+        tab_icon(el),
+    );
     commands
         .spawn((
             Name::new("tab-preview"),

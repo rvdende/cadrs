@@ -26,6 +26,7 @@ use cadrs_core::cam::{
     geometry,
 };
 use cadrs_core::{ElementId, ElementKind, PartId};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FeatureDialog, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState};
 
@@ -316,7 +317,7 @@ pub fn insert_component(world: &mut World, role: Role) {
     let others_pending = found.is_none();
     let others = found.unwrap_or_default();
     if studios.is_empty() && others.is_empty() && !others_pending {
-        toast(world, "No Part Studio to take parts from");
+        toast(world, &tr("cam-no-part-studio"));
         return;
     }
     let mut d = InsertDraft {
@@ -556,7 +557,7 @@ pub fn create_setup(world: &mut World) {
         .or_else(|| cam.active().map(|j| j.id));
     let Some(job) = job else { return };
     if cam.job(job).is_some_and(|j| j.machine.is_none()) {
-        toast(world, "Create the job's machine first");
+        toast(world, &tr("cam-create-machine-first"));
         return;
     }
     let n = cam.job(job).map_or(0, |j| j.setups.len()) as u32;
@@ -585,7 +586,7 @@ pub fn create_tool(world: &mut World) {
     };
     let ui = world.resource::<CamUi>().clone();
     let Some((setup, after)) = target_setup(&cam, &ui) else {
-        toast(world, "Create a setup first");
+        toast(world, &tr("cam-create-setup-first"));
         return;
     };
     let Some((job, _)) = cam.setup(setup) else {
@@ -640,7 +641,7 @@ pub fn create_toolpath(world: &mut World) {
     };
     let ui = world.resource::<CamUi>().clone();
     let Some((setup, after)) = target_setup(&cam, &ui) else {
-        toast(world, "Create a setup first");
+        toast(world, &tr("cam-create-setup-first"));
         return;
     };
     let Some((job, s)) = cam.setup(setup) else {
@@ -657,7 +658,7 @@ pub fn create_toolpath(world: &mut World) {
         .filter(|o| !o.suppressed)
         .find_map(|o| o.tool())
     else {
-        toast(world, "Create a tool above the toolpath first");
+        toast(world, &tr("cam-create-tool-first"));
         return;
     };
     let types: Vec<Type> = Type::ALL
@@ -665,7 +666,7 @@ pub fn create_toolpath(world: &mut World) {
         .filter(|t| !Pattern::available(*t, tool.tool.kind, kind).is_empty())
         .collect();
     let Some(&t) = types.first() else {
-        toast(world, "The tool has no toolpath patterns on this machine");
+        toast(world, &tr("cam-tool-no-patterns"));
         return;
     };
     let pattern = Pattern::available(t, tool.tool.kind, kind)[0];
@@ -698,7 +699,7 @@ pub fn create_work_plane(world: &mut World) {
     };
     let ui = world.resource::<CamUi>().clone();
     let Some((setup, after)) = target_setup(&cam, &ui) else {
-        toast(world, "Create a setup first");
+        toast(world, &tr("cam-create-setup-first"));
         return;
     };
     let wcs = cam.setup(setup).map(|(_, s)| s.wcs).unwrap_or_default();
@@ -800,11 +801,11 @@ pub fn update_component(world: &mut World, id: CamId) {
     let Some(src) = c.derived.source else { return };
     let vs = versions(world);
     let Some((name, vid)) = vs.last().cloned() else {
-        toast(world, "The document has no version");
+        toast(world, &tr("cam-document-no-version"));
         return;
     };
     if c.derived.version_name == name {
-        toast(world, "The component is at the newest version");
+        toast(world, &tr("cam-component-newest"));
         return;
     }
     let doc = world.resource::<ActiveDocument>().doc.clone();
@@ -999,7 +1000,7 @@ fn sync_dialog(world: &mut World) {
         && pop == op.id
         && !done.toolpath.warnings.is_empty()
     {
-        fields.push(Field::section("Warnings"));
+        fields.push(Field::section(&tr("cam-warnings")));
         for w in &done.toolpath.warnings {
             fields.push(Field::note(format!("⚠ {w}")));
         }
@@ -1094,7 +1095,7 @@ fn on_cancel(
 /// ✓: the draft's edits (and a toolpath's calculation), then closes.
 pub fn accept(world: &mut World) {
     if world.contains_resource::<InsertParts>() {
-        toast(world, "Still reading the Part Studio's parts");
+        toast(world, &tr("cam-still-reading-parts"));
         return;
     }
     // Text typed without Enter counts too.

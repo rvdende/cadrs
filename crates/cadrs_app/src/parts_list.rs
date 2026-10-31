@@ -22,6 +22,7 @@ use bevy::text::FontWeight;
 use cadrs_core::PartId;
 use cadrs_core::commands::{AddFeature, RenamePart, SetPartsHidden};
 use cadrs_core::parts::PartKind;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{InlineEditOptions, StateColors, TreeToggle, Visuals, begin_inline_edit};
@@ -254,8 +255,8 @@ fn rebuild_part_list(
                 continue;
             }
             let (title, name) = match kind {
-                PartKind::Solid => (cadrs_ui::i18n::tr("parts"), "parts-section-header"),
-                PartKind::Surface => (cadrs_ui::i18n::tr("surfaces"), "surfaces-section-header"),
+                PartKind::Solid => (tr("parts"), "parts-section-header"),
+                PartKind::Surface => (tr("surfaces"), "surfaces-section-header"),
             };
             let is_open = open.get(kind);
             if slots.take(PART_ROW_PITCH) {
@@ -406,11 +407,14 @@ fn spawn_row(
     let row_name = tab_node_name(label).replacen("tab-", "part-row-", 1);
     // The eye shows while the row is hovered (always, crossed, on a hidden part); a click shows
     // or hides the part.
-    let tip = if *hidden {
-        format!("Show {label}")
-    } else {
-        format!("Hide {label}")
-    };
+    let tip = tr_with(
+        if *hidden {
+            "view-part-show-named"
+        } else {
+            "view-part-hide-named"
+        },
+        &[("name", label)],
+    );
     let mut item = TreeItem::new(row_name.clone(), label.clone())
         .toggle(
             format!("{row_name}-visibility"),
@@ -528,12 +532,14 @@ fn on_part_context_menu(
     let Ok(row) = q.get(ev.entity) else {
         return;
     };
-    let name = cache.part_name(row.0).unwrap_or("part").to_string();
+    let name = cache
+        .part_name(row.0)
+        .map_or_else(|| tr("view-part-fallback-name"), str::to_string);
     let hidden = cache.is_hidden_part(row.0);
     // Add to folder ▸ a new folder or one there is (`crate::part_folders`).
     let el = doc.as_deref().and_then(|d| d.active_element());
     let mut into: Vec<MenuEntry> = vec![
-        MenuItem::new("part-folder-new", "New folder")
+        MenuItem::new("part-folder-new", tr("common-new-folder"))
             .icon("folder-new")
             .into(),
     ];
@@ -551,30 +557,48 @@ fn on_part_context_menu(
     let menu = Menu::new("part-context-menu")
         .min_width(180.0)
         .item_height(22.0)
-        .item(MenuItem::new("part-rename", "Rename"))
-        .item(MenuItem::new("part-properties", "Properties…"))
-        .item(MenuItem::new("part-material", "Assign material…"))
-        .item(MenuItem::new("part-appearance", "Edit appearance…"))
+        .item(MenuItem::new("part-rename", tr("common-rename")))
+        .item(MenuItem::new("part-properties", tr("common-properties")))
+        .item(MenuItem::new(
+            "part-material",
+            tr("view-part-assign-material"),
+        ))
+        .item(MenuItem::new(
+            "part-appearance",
+            tr("view-part-edit-appearance"),
+        ))
         .separator()
         .item(
-            MenuItem::new("part-folder", "Add to folder")
+            MenuItem::new("part-folder", tr("view-part-add-to-folder"))
                 .icon("folder")
                 .submenu(into),
         );
     let menu = if in_folder {
-        menu.item(MenuItem::new("part-folder-remove", "Remove from folder"))
+        menu.item(MenuItem::new(
+            "part-folder-remove",
+            tr("view-part-remove-from-folder"),
+        ))
     } else {
         menu
     };
     let menu = menu
         .separator()
-        .item(MenuItem::new("part-copy-here", "Copy here…").planned())
+        .item(MenuItem::new("part-copy-here", tr("view-part-copy-here")).planned())
         .item(
-            MenuItem::new("part-copy", format!("Copy {name}"))
-                .icon("copy")
-                .disabled(true),
+            MenuItem::new(
+                "part-copy",
+                tr_with("view-part-copy-named", &[("name", &name)]),
+            )
+            .icon("copy")
+            .disabled(true),
         )
-        .item(MenuItem::new("part-drawing", format!("Create Drawing of {name}…")).icon("file-new"));
+        .item(
+            MenuItem::new(
+                "part-drawing",
+                tr_with("view-part-create-drawing-named", &[("name", &name)]),
+            )
+            .icon("file-new"),
+        );
     // P3I.7 (SM16.1): a sheet metal part's flat pattern.
     let sheet_metal = doc
         .as_deref()
@@ -586,41 +610,40 @@ fn on_part_context_menu(
         .unwrap_or(false);
     let menu = if sheet_metal {
         menu.item(
-            MenuItem::new("part-flat-drawing", "Create drawing of flat pattern…")
-                .icon("flat-pattern"),
+            MenuItem::new("part-flat-drawing", tr("view-part-flat-drawing")).icon("flat-pattern"),
         )
     } else {
         menu
     };
     let menu = menu
-        .item(MenuItem::new("part-export", "Export…").icon("file-export"))
+        .item(MenuItem::new("part-export", tr("view-part-export")).icon("file-export"))
         .item(
-            MenuItem::new("part-where-used", "Where used…")
+            MenuItem::new("part-where-used", tr("view-part-where-used"))
                 .icon("tab-manager")
                 .planned(),
         )
-        .item(MenuItem::new("part-task", "Create task…").planned())
+        .item(MenuItem::new("part-task", tr("view-part-create-task")).planned())
         .separator()
         .item(if hidden {
-            MenuItem::new("part-show", "Show").icon("visible")
+            MenuItem::new("part-show", tr("common-show")).icon("visible")
         } else {
-            MenuItem::new("part-hide", "Hide").icon("hidden")
+            MenuItem::new("part-hide", tr("common-hide")).icon("hidden")
         })
-        .item(MenuItem::new("part-isolate", "Isolate…"))
+        .item(MenuItem::new("part-isolate", tr("view-part-isolate")))
         .item(if cache.transparent.contains(&row.0) {
-            MenuItem::new("part-opaque", "Make opaque")
+            MenuItem::new("part-opaque", tr("view-part-make-opaque"))
         } else {
-            MenuItem::new("part-transparent", "Make transparent…")
+            MenuItem::new("part-transparent", tr("view-part-make-transparent"))
         })
         .separator()
         .item(
-            MenuItem::new("part-comment", "Add comment")
+            MenuItem::new("part-comment", tr("common-add-comment"))
                 .icon("comments")
                 .planned(),
         )
-        .item(MenuItem::new("part-zoom", "Zoom to selection"))
+        .item(MenuItem::new("part-zoom", tr("common-zoom-to-selection")))
         .separator()
-        .item(MenuItem::new("part-delete", "Delete…").icon("remove-circle"));
+        .item(MenuItem::new("part-delete", tr("view-part-delete")).icon("remove-circle"));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
         .entity(anchor)
@@ -895,10 +918,18 @@ fn sync_isolate_bar(
             BackgroundColor(Color::srgb_u8(0x3a, 0x3f, 0x44)),
         ))
         .with_children(|b| {
-            b.spawn(t.text("Isolated", t.font_sm, FontWeight::MEDIUM, Color::WHITE));
+            b.spawn((
+                t.text(
+                    tr("view-isolated"),
+                    t.font_sm,
+                    FontWeight::MEDIUM,
+                    Color::WHITE,
+                ),
+                Translated("view-isolated"),
+            ));
             b.spawn(
                 cadrs_ui::Button::new("exit-isolate")
-                    .label("Exit isolate")
+                    .label(tr("view-exit-isolate"))
                     .size(ButtonSize::Small)
                     .build(&t),
             );

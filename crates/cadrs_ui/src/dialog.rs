@@ -213,7 +213,7 @@ impl Dialog {
                             }
                             h.spawn((
                                 IconButton::new(close_name, "close")
-                                    .tooltip("Close")
+                                    .tooltip(crate::i18n::tr("common-close"))
                                     .build(&theme),
                                 DialogCloseButton(root),
                             ));

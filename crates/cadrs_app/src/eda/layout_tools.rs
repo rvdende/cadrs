@@ -41,82 +41,59 @@ use cadrs_eda::board_edit::{self as be, BoardItem};
 use cadrs_eda::layer::Layer;
 use cadrs_eda::units::{Nm, Pt, mm};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::ui::{self, StripAction};
 use super::{EdaClick, EdaPointer, Mode, Preview, SceneInputs};
 use crate::AppState;
 
+// The tooltips are catalog keys ([`ui::sync_strip`] translates them).
 const STRIP: ui::StripSpec = &[
-    Some(("pcb-select", "drag-handle", "Select (Esc)", "select")),
+    Some(("pcb-select", "drag-handle", "pcb-tool-select", "select")),
     None,
+    Some(("pcb-update", "update-pcb", "pcb-lay-update", "update")),
     Some((
-        "pcb-update",
-        "update-pcb",
-        "Update PCB from schematic (F8)",
-        "update",
+        "pcb-board-setup",
+        "settings",
+        "pcb-lay-board-setup",
+        "setup",
     )),
-    Some(("pcb-board-setup", "settings", "Board setup", "setup")),
-    Some((
-        "pcb-outline",
-        "board-outline",
-        "Draw the board outline",
-        "outline",
-    )),
-    Some(("pcb-route", "route-track", "Route tracks (X)", "route")),
+    Some(("pcb-outline", "board-outline", "pcb-lay-outline", "outline")),
+    Some(("pcb-route", "route-track", "pcb-lay-route", "route")),
     Some((
         "pcb-autoroute",
         "ratsnest",
-        "Auto-route the unconnected nets",
+        "pcb-lay-autoroute",
         "autoroute",
     )),
-    Some(("pcb-zone", "copper-zone", "Add a filled zone (Z)", "zone")),
-    Some(("pcb-keepout", "keepout-zone", "Add a keep-out", "keepout")),
-    Some((
-        "pcb-draw-line",
-        "line",
-        "Draw lines on the drawing layer",
-        "line",
-    )),
+    Some(("pcb-zone", "copper-zone", "pcb-lay-zone", "zone")),
+    Some(("pcb-keepout", "keepout-zone", "pcb-lay-keepout", "keepout")),
+    Some(("pcb-draw-line", "line", "pcb-lay-draw-line", "line")),
     Some((
         "pcb-draw-rect",
         "corner-rectangle",
-        "Draw a rectangle on the drawing layer",
+        "pcb-lay-draw-rect",
         "rect",
     )),
     Some((
         "pcb-draw-circle",
         "center-circle",
-        "Draw a circle on the drawing layer",
+        "pcb-lay-draw-circle",
         "circle",
     )),
     Some((
         "pcb-draw-polygon",
         "inscribed-polygon",
-        "Draw a filled polygon on the drawing layer (a copper area on a copper layer)",
+        "pcb-lay-draw-polygon",
         "polygon",
     )),
-    Some(("pcb-text", "text", "Add text on the drawing layer", "text")),
-    Some((
-        "pcb-graphic",
-        "image",
-        "Import a graphic (SVG) onto the drawing layer",
-        "graphic",
-    )),
-    Some(("pcb-measure", "ruler", "Measure (Ctrl+Shift+M)", "measure")),
-    Some((
-        "pcb-layer",
-        "layers",
-        "Switch the active layer (front / back)",
-        "layer",
-    )),
+    Some(("pcb-text", "text", "pcb-lay-text", "text")),
+    Some(("pcb-graphic", "image", "pcb-lay-graphic", "graphic")),
+    Some(("pcb-measure", "ruler", "pcb-lay-measure", "measure")),
+    Some(("pcb-layer", "layers", "pcb-lay-layer", "layer")),
     None,
-    Some(("pcb-drc", "drc", "Design rules checker", "drc")),
-    Some((
-        "pcb-plot",
-        "plot-gerbers",
-        "Plot fabrication outputs",
-        "plot",
-    )),
+    Some(("pcb-drc", "drc", "pcb-lay-drc", "drc")),
+    Some(("pcb-plot", "plot-gerbers", "pcb-lay-plot", "plot")),
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -321,12 +298,12 @@ struct Autorouting {
 /// live); [`poll_autoroute`] puts the tracks and vias down as one undo step.
 fn start_autoroute(w: &mut World) {
     if w.contains_resource::<Autorouting>() {
-        ui::toast(w, "Already auto-routing");
+        ui::toast(w, &tr("pcb-autoroute-busy"));
         return;
     }
     let Some(d) = board_of(w) else { return };
     if cadrs_eda::copper::ratsnest(&d.board).is_empty() {
-        ui::toast(w, "Nothing to route: every net is connected");
+        ui::toast(w, &tr("pcb-autoroute-nothing"));
         return;
     }
     let board = d.board.clone();
@@ -338,7 +315,7 @@ fn start_autoroute(w: &mut World) {
         board,
         started: web_time::Instant::now(),
     });
-    ui::toast(w, "Auto-routing…");
+    ui::toast(w, &tr("pcb-autoroute-running"));
 }
 
 /// The auto-route's tracks and vias put down when it finishes (one undo step), with what it
@@ -352,10 +329,7 @@ fn poll_autoroute(world: &mut World) {
     };
     let job = world.remove_resource::<Autorouting>().expect("just polled");
     if board_of(world).map(|d| d.board).as_ref() != Some(&job.board) {
-        ui::toast(
-            world,
-            "The board changed while it was being auto-routed: nothing was put down (auto-route again)",
-        );
+        ui::toast(world, &tr("pcb-autoroute-board-changed"));
         return;
     }
     let took = job.started.elapsed().as_secs_f64();
@@ -365,23 +339,28 @@ fn poll_autoroute(world: &mut World) {
             Ok(())
         });
     }
-    let on = out
-        .gpu
-        .as_deref()
-        .map_or_else(|| "the CPU".to_string(), |g| g.to_string());
-    let mut msg = format!(
-        "Auto-routed in {took:.1} s on {on}: {} tracks, {} vias",
-        out.tracks.len(),
-        out.vias.len()
+    let shown: Vec<&str> = out.unrouted.iter().take(6).map(|s| s.as_str()).collect();
+    let nets = format!(
+        "{}{}",
+        shown.join(", "),
+        if out.unrouted.len() > 6 { ", …" } else { "" }
     );
-    if !out.unrouted.is_empty() {
-        let shown: Vec<&str> = out.unrouted.iter().take(6).map(|s| s.as_str()).collect();
-        msg.push_str(&format!(
-            "; not fully routed: {}{}",
-            shown.join(", "),
-            if out.unrouted.len() > 6 { ", …" } else { "" }
-        ));
-    }
+    let key = match (out.gpu.is_some(), out.unrouted.is_empty()) {
+        (false, true) => "pcb-autoroute-done-cpu",
+        (true, true) => "pcb-autoroute-done-gpu",
+        (false, false) => "pcb-autoroute-partial-cpu",
+        (true, false) => "pcb-autoroute-partial-gpu",
+    };
+    let msg = tr_with(
+        key,
+        &[
+            ("seconds", &format!("{took:.1}")),
+            ("gpu", out.gpu.as_deref().unwrap_or_default()),
+            ("tracks", &out.tracks.len().to_string()),
+            ("vias", &out.vias.len().to_string()),
+            ("nets", &nets),
+        ],
+    );
     ui::toast(world, &msg);
 }
 
@@ -394,7 +373,7 @@ fn pick_graphic(w: &mut World) {
         &mut c,
         &theme,
         "eda-graphic-picker",
-        "Import a graphic",
+        &tr("pcb-lay-import-graphic-title"),
         "eda-graphic-file",
         dir,
         &["svg"],
@@ -495,10 +474,7 @@ pub fn run_action(w: &mut World, action: &str) {
         // A linked outline: what is drawn now is a cut-out in it (the sketch keeps the outer
         // edge; its shapes can't be changed here).
         "outline" if !linked_outline(w).is_empty() => {
-            let note = format!(
-                "{}. A rectangle drawn now cuts out of the board",
-                outline_link_note(w)
-            );
+            let note = tr_with("pcb-outline-cut-out", &[("note", &outline_link_note(w))]);
             ui::toast(w, &note);
             set_tool(w, Tool::Outline(None));
         }
@@ -595,9 +571,15 @@ fn outline_link_note(w: &World) -> String {
         .and_then(|e| e.feature(link.sketch))
         .map(|f| f.name.clone())
         .unwrap_or_default();
-    format!(
-        "The outline follows {sketch} in {}: edit the sketch, or break the link (the board's Derived feature's menu)",
-        studio.map(|e| e.name.clone()).unwrap_or_default()
+    tr_with(
+        "pcb-outline-linked",
+        &[
+            ("sketch", &sketch),
+            (
+                "studio",
+                studio.map(|e| e.name.as_str()).unwrap_or_default(),
+            ),
+        ],
     )
 }
 
@@ -1220,7 +1202,7 @@ fn finish_move(w: &mut World, m: &Moving, at: Pt) {
             "Move footprint"
         },
         |des| {
-            let i = be::footprint_by_id(&des.board, fp).ok_or("The footprint is gone")?;
+            let i = be::footprint_by_id(&des.board, fp).ok_or_else(|| tr("pcb-footprint-gone"))?;
             if drag {
                 be::drag_footprint(&mut des.board, i, d);
             } else {
@@ -1316,7 +1298,10 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                 world.resource_mut::<LayoutState>().track_width = Some(next);
                 ui::toast(
                     world,
-                    &format!("Track width {} mm", cadrs_eda::units::to_mm(next)),
+                    &tr_with(
+                        "pcb-track-width",
+                        &[("width", &cadrs_eda::units::to_mm(next).to_string())],
+                    ),
                 );
             }
             KeyCode::KeyX => run_action(world, "route"),
@@ -1417,8 +1402,8 @@ fn handle_keys(world: &mut World, keys: Vec<KeyboardInput>) {
                             "Flip footprint"
                         },
                         |d| {
-                            let i =
-                                be::footprint_by_id(&d.board, fp).ok_or("The footprint is gone")?;
+                            let i = be::footprint_by_id(&d.board, fp)
+                                .ok_or_else(|| tr("pcb-footprint-gone"))?;
                             if rotate {
                                 be::rotate_footprint(&mut d.board, i, 90.0);
                             } else {

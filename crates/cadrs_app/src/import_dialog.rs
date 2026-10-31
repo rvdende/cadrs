@@ -17,6 +17,7 @@ use cadrs_core::commands::{ReplaceFeature, SetFeature};
 use cadrs_core::import::{AddImport, ImportFeature, ImportFormat, ImportUnit};
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, FeatureKind};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, FilePicked,
@@ -130,7 +131,7 @@ fn open_picker(world: &mut World) {
         &mut commands,
         &theme,
         "import-picker",
-        "Import",
+        &tr("common-import"),
         PICK_TAG,
         start_dir(),
         &["step", "stp", "iges", "igs", "brep", "brp", "stl"],
@@ -540,21 +541,21 @@ fn sync_import_dialog(
                                 r.spawn((
                                     ChooseFile,
                                     cadrs_ui::Button::new("import-choose-file")
-                                        .label("Choose file")
+                                        .label(tr("io-import-choose-file"))
                                         .small()
                                         .outline()
-                                        .tooltip("Import another file")
+                                        .tooltip(tr("io-import-another-file"))
                                         .build(&t),
                                 ));
                             });
                             b.spawn(
-                                OptionRow::new("import-y-up", "Y axis is up")
+                                OptionRow::new("import-y-up", tr("io-import-y-axis-up"))
                                     .checked(x.y_axis_up)
                                     .build(&t),
                             );
                             if x.format == ImportFormat::Stl {
                                 b.spawn(
-                                    OptionRow::new("import-units", "Specify units")
+                                    OptionRow::new("import-units", tr("io-import-specify-units"))
                                         .checked(x.units.is_some())
                                         .build(&t),
                                 );
@@ -570,7 +571,7 @@ fn sync_import_dialog(
                                     b.spawn(cadrs_ui::form_row(
                                         &t,
                                         "import-units-row",
-                                        "Units",
+                                        tr("common-units"),
                                         60.0,
                                     ))
                                     .with_children(|r| {
@@ -579,9 +580,9 @@ fn sync_import_dialog(
                                 }
                             }
                             let what = match parts {
-                                0 => "No parts yet".to_string(),
-                                1 => "1 part".to_string(),
-                                n => format!("{n} parts"),
+                                0 => tr("io-import-no-parts"),
+                                1 => tr("io-import-one-part"),
+                                n => tr_with("io-import-parts", &[("count", &n.to_string())]),
                             };
                             b.spawn((
                                 Name::new("import-summary"),

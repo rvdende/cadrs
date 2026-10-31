@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use bevy::text::{EditableText, FontWeight};
 use cadrs_core::ElementId;
 use cadrs_core::assembly::items::{DeleteItems, Item, ItemId, SetItem};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, Menu, MenuAction, MenuItem};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
@@ -86,6 +87,7 @@ fn rebuild_rows(
     q_header: Query<(Entity, &Children), With<ItemsHeader>>,
     q_children: Query<&Children>,
     mut q_text: Query<&mut Text>,
+    q_label: Query<(), With<cadrs_ui::ellipsis::Ellipsis>>,
     theme: Res<Theme>,
     mut last: Local<Option<RowsKey>>,
     mut commands: Commands,
@@ -100,12 +102,14 @@ fn rebuild_rows(
         .map(|i| (i.id, i.name.clone(), i.quantity))
         .collect();
     // The header's count.
-    let count = format!("Items ({})", key.len());
+    let count = tr_with("asm-items-count", &[("count", &key.len().to_string())]);
     for (_, children) in &q_header {
         let mut stack: Vec<Entity> = children.iter().collect();
         while let Some(e) = stack.pop() {
+            // (The header row's label: the one text of its row that ellipsizes, whatever the
+            // language it was written in.)
             if let Ok(mut t) = q_text.get_mut(e)
-                && t.0.starts_with("Items (")
+                && q_label.contains(e)
                 && t.0 != count
             {
                 t.0 = count.clone();
@@ -136,7 +140,8 @@ fn rebuild_rows(
                 ContextMenuTarget,
                 DoubleClickable,
                 Tooltip::new(format!(
-                    "{name}\nItem (no geometry), quantity {qty}; listed in the Bill of Materials"
+                    "{name}\n{}",
+                    tr_with("asm-item-row-tooltip", &[("quantity", &qty.to_string())])
                 )),
             ));
             row.entry::<Node>().and_modify(|mut n| {
@@ -222,9 +227,9 @@ fn on_row_menu(ev: On<ContextMenuRequested>, q: Query<&ItemRow>, mut commands: C
         let menu = Menu::new("item-menu")
             .min_width(140.0)
             .item_height(20.0)
-            .item(MenuItem::new("item-edit", "Edit…").icon("edit"))
+            .item(MenuItem::new("item-edit", tr("common-edit-ellipsis")).icon("edit"))
             .separator()
-            .item(MenuItem::new("item-delete", "Delete").icon("remove-circle"));
+            .item(MenuItem::new("item-delete", tr("common-delete")).icon("remove-circle"));
         menu_at(world, at, menu, RowMenu::Item(r.0));
     });
 }
@@ -243,7 +248,7 @@ fn on_header_menu(
         let menu = Menu::new("items-menu")
             .min_width(140.0)
             .item_height(20.0)
-            .item(MenuItem::new("items-add", "Add item…").icon("plus"));
+            .item(MenuItem::new("items-add", tr("asm-item-add-ellipsis")).icon("plus"));
         menu_at(world, at, menu, RowMenu::Header);
     });
 }
@@ -367,18 +372,18 @@ fn sync_dialog(
             DespawnOnExit(AppState::Document),
             FeatureDialog::new("item-dialog")
                 .title(if s.editing {
-                    format!("Edit {}", it.name)
+                    tr_with("common-edit-named", &[("name", &it.name)])
                 } else {
-                    "Add item".to_string()
+                    tr("asm-item-add")
                 })
                 .width(240.0)
                 .body(move |b| {
                     let rows = [
-                        ("item-name", "Name", it.name.clone()),
-                        ("item-quantity", "Quantity", it.quantity.to_string()),
+                        ("item-name", tr("common-name"), it.name.clone()),
+                        ("item-quantity", tr("asm-quantity"), it.quantity.to_string()),
                         (
                             "item-unit",
-                            "Unit",
+                            tr("asm-item-unit"),
                             it.properties
                                 .unit_of_measure
                                 .clone()
@@ -386,12 +391,12 @@ fn sync_dialog(
                         ),
                         (
                             "item-part-number",
-                            "Part number",
+                            tr("asm-part-number"),
                             it.properties.part_number.clone().unwrap_or_default(),
                         ),
                         (
                             "item-description",
-                            "Description",
+                            tr("common-description"),
                             it.properties.description.clone().unwrap_or_default(),
                         ),
                     ];

@@ -91,7 +91,7 @@ impl SelectedRegions {
 /// The readout text: "Area: 16682.524 mm²" (three decimals, like Onshape's measurements), in
 /// the workspace units (X1).
 pub fn area_text(area: f64, units: &cadrs_sketch::units::Units) -> String {
-    format!("Area: {}", units.area(area))
+    cadrs_ui::i18n::tr_with("model-area-value", &[("area", &units.area(area))])
 }
 
 /// The "Area: … mm²" text at the bottom right of the viewport.

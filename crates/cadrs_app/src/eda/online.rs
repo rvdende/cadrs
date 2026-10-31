@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use cadrs_easyeda::{Hit, Imported, PartInfo};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::libraries::{ONLINE_LIBRARY, UserLibraries};
 
@@ -117,7 +118,7 @@ pub fn search(w: &mut World, query: &str) {
     let query = query.trim().to_string();
     let mut o = w.resource_mut::<Online>();
     if query.is_empty() {
-        o.status = "Type a part name, part number or LCSC number (C…), then Enter".into();
+        o.status = tr("pcb-online-type-query");
         return;
     }
     let fixtures = o.fixtures.clone();
@@ -127,7 +128,7 @@ pub fn search(w: &mut World, query: &str) {
         None => cadrs_easyeda::search(&q, 1),
     }));
     o.query = query;
-    o.status = "Searching JLCPCB…".into();
+    o.status = tr("pcb-online-searching");
 }
 
 /// Chooses a part: fetches and converts it for the previews.
@@ -160,12 +161,12 @@ fn info_of(h: Option<&Hit>) -> PartInfo {
 /// Adds the chosen part to the user library; `then_accept`: then use it as the browser's choice.
 pub fn add(w: &mut World, then_accept: bool) {
     let Some(dir) = w.resource::<UserLibraries>().library_dir(ONLINE_LIBRARY) else {
-        w.resource_mut::<Online>().status = "There's no folder to keep libraries in".into();
+        w.resource_mut::<Online>().status = tr("pcb-library-no-folder");
         return;
     };
     let mut o = w.resource_mut::<Online>();
     let Some(lcsc) = o.chosen.clone() else {
-        o.status = "Choose a part first".into();
+        o.status = tr("pcb-online-choose-part");
         return;
     };
     if o.import.is_some() {
@@ -173,7 +174,10 @@ pub fn add(w: &mut World, then_accept: bool) {
     }
     let info = info_of(o.hits.iter().find(|h| h.lcsc == lcsc));
     let fixtures = o.fixtures.clone();
-    o.status = format!("Adding {lcsc} to {ONLINE_LIBRARY}…");
+    o.status = tr_with(
+        "pcb-online-adding",
+        &[("part", &lcsc), ("library", ONLINE_LIBRARY)],
+    );
     o.then_accept = then_accept;
     o.import = Some(spawn(move || match &fixtures {
         Some(fx) => cadrs_easyeda::write_part(&fixture(fx, &lcsc)?, &dir, &info, None),
@@ -201,14 +205,18 @@ pub fn poll(w: &mut World) -> Done {
         match r {
             Ok((hits, total)) => {
                 o.status = match (hits.len(), total) {
-                    (0, _) => format!("No parts match \"{}\"", o.query),
-                    (n, t) if t as usize > n => format!("The first {n} of {t} parts"),
-                    (n, _) => format!("{n} part{}", if n == 1 { "" } else { "s" }),
+                    (0, _) => tr_with("pcb-online-no-match", &[("query", &o.query)]),
+                    (n, t) if t as usize > n => tr_with(
+                        "pcb-online-first-of",
+                        &[("count", &n.to_string()), ("total", &t.to_string())],
+                    ),
+                    (1, _) => tr("pcb-online-one-part"),
+                    (n, _) => tr_with("pcb-online-parts", &[("count", &n.to_string())]),
                 };
                 o.hits = hits;
                 o.total = total;
             }
-            Err(e) => o.status = format!("Search failed: {e}"),
+            Err(e) => o.status = tr_with("pcb-online-search-failed", &[("error", &e)]),
         }
         o.generation += 1;
         done = Done::Redraw;
@@ -226,17 +234,23 @@ pub fn poll(w: &mut World) -> Done {
         match r {
             Ok(i) => {
                 o.status = match i.warnings.as_slice() {
-                    [] => format!(
-                        "Added {} to {ONLINE_LIBRARY}",
-                        i.symbol.split_once(':').map_or(i.symbol.as_str(), |s| s.1)
+                    [] => tr_with(
+                        "pcb-online-added",
+                        &[
+                            (
+                                "part",
+                                i.symbol.split_once(':').map_or(i.symbol.as_str(), |s| s.1),
+                            ),
+                            ("library", ONLINE_LIBRARY),
+                        ],
                     ),
-                    w => format!("Added, but: {}", w.join("; ")),
+                    w => tr_with("pcb-online-added-but", &[("warnings", &w.join("; "))]),
                 };
                 done = Done::Added(i.symbol, i.footprint, o.then_accept);
                 w.resource_mut::<UserLibraries>().reload();
             }
             Err(e) => {
-                o.status = format!("Couldn't add it: {e}");
+                o.status = tr_with("pcb-online-add-failed", &[("error", &e)]);
                 done = Done::Redraw;
             }
         }
@@ -246,7 +260,11 @@ pub fn poll(w: &mut World) -> Done {
 
 /// A hit's one-line detail and its longer description.
 pub fn describe(h: &Hit) -> (String, String) {
-    let class = if h.basic { "Basic" } else { "Extended" };
+    let class = tr(if h.basic {
+        "pcb-online-class-basic"
+    } else {
+        "pcb-online-class-extended"
+    });
     let price = h.price.map(|p| format!(" · ${p:.4}")).unwrap_or_default();
     let detail = format!(
         "{} · {class}{price}",
@@ -264,12 +282,20 @@ pub fn describe(h: &Hit) -> (String, String) {
         text += &format!("{}\n", h.category);
     }
     if h.stock > 0 || h.price.is_some() {
-        text += &format!("Stock {} · {class} part{price}\n", h.stock);
+        let stock = tr_with(
+            if h.basic {
+                "pcb-online-stock-basic"
+            } else {
+                "pcb-online-stock-extended"
+            },
+            &[("stock", &h.stock.to_string()), ("price", &price)],
+        );
+        text += &format!("{stock}\n");
     }
     // The source on two lines: one is too wide to wrap.
-    text +=
-        &cadrs_easyeda::SOURCE
-            .replacen(" (", "\n(", 1)
-            .replacen("JLCEDA", "From the JLCEDA", 1);
+    text += &tr_with(
+        "pcb-online-from-library",
+        &[("library", &cadrs_easyeda::SOURCE.replacen(" (", "\n(", 1))],
+    );
     (detail, text)
 }

@@ -67,7 +67,12 @@ pub fn spawn_rebuild_indicator(p: &mut ChildSpawnerCommands, t: &Theme) {
             pill.spawn((
                 Name::new("rebuild-indicator-text"),
                 RebuildIndicatorText,
-                t.text("Rebuilding…", t.font_sm, FontWeight::NORMAL, t.foreground),
+                t.text(
+                    cadrs_ui::i18n::tr("view-rebuilding"),
+                    t.font_sm,
+                    FontWeight::NORMAL,
+                    t.foreground,
+                ),
                 Pickable::IGNORE,
             ));
         });
@@ -97,9 +102,15 @@ fn sync_indicator(
     if show {
         let (done, total) = cadrs_core::rebuild::progress();
         let label = if total > 0 {
-            format!("Rebuilding… {} / {total}", done.min(total))
+            cadrs_ui::i18n::tr_with(
+                "view-rebuilding-progress",
+                &[
+                    ("done", &done.min(total).to_string()),
+                    ("total", &total.to_string()),
+                ],
+            )
         } else {
-            "Rebuilding…".to_string()
+            cadrs_ui::i18n::tr("view-rebuilding")
         };
         for mut text in &mut q_text {
             if text.0 != label {

@@ -40,6 +40,7 @@ use cadrs_core::{
     Document, DocumentEntry, DocumentId, DocumentMeta, Filter, FolderId, LabelId, Library,
     LibraryCommand, LibraryHistory, SortDir, SortKey,
 };
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::input::TextInputField;
 use cadrs_ui::menu::ContextMenuAnchor;
 use cadrs_ui::prelude::*;
@@ -70,7 +71,9 @@ impl Plugin for LandingPlugin {
             )
             .add_systems(
                 Update,
-                (sync_search, rebuild_main, landing_shortcuts).run_if(in_state(AppState::Landing)),
+                (relanguage, sync_search, rebuild_main, landing_shortcuts)
+                    .chain()
+                    .run_if(in_state(AppState::Landing)),
             )
             .add_systems(
                 Update,
@@ -248,14 +251,28 @@ fn filter_icon(f: Filter) -> &'static str {
     }
 }
 
+/// A filter's label (`Filter::label`'s, in the interface's language).
+fn filter_label(f: Filter) -> String {
+    tr(match f {
+        Filter::Explore => "shell-landing-explore",
+        Filter::OwnedByMe => "shell-landing-owned-by-me",
+        Filter::RecentlyOpened => "shell-loc-recently-opened",
+        Filter::CreatedByMe => "shell-loc-created-by-me",
+        Filter::SharedWithMe => "shell-landing-shared-with-me",
+        Filter::Public => "shell-landing-public",
+        Filter::Trash => "shell-landing-trash",
+        Filter::Label(_) => "shell-loc-label",
+    })
+}
+
 /// The filter's title: its label, or the label's name (P3E.1).
 fn filter_title(f: Filter, lib: &Library) -> String {
     match f {
         Filter::Label(id) => lib
             .label(id)
             .map(|l| l.name.clone())
-            .unwrap_or_else(|| "Label".into()),
-        f => f.label().to_string(),
+            .unwrap_or_else(|| tr("shell-loc-label")),
+        f => filter_label(f),
     }
 }
 
@@ -336,11 +353,35 @@ fn thumbnail_image(images: &mut Assets<Image>, img: image::RgbaImage) -> Option<
 // ---------------------------------------------------------------------------------------------
 // Layout
 
+/// Marks the documents page's root.
+#[derive(Component)]
+struct LandingRoot;
+
+/// The documents page made again when the interface's language changes (Preferences ›
+/// Language): it is built at once, so all of it follows.
+fn relanguage(
+    mut last: Local<&'static str>,
+    q_root: Query<Entity, With<LandingRoot>>,
+    (commands, theme, profile): (Commands, Res<Theme>, Res<UserProfile>),
+) {
+    let now = cadrs_ui::i18n::language();
+    let before = std::mem::replace(&mut *last, now);
+    if before.is_empty() || before == now {
+        return;
+    }
+    let mut commands = commands;
+    for root in &q_root {
+        commands.entity(root).despawn();
+    }
+    spawn_landing(commands, theme, profile);
+}
+
 fn spawn_landing(mut commands: Commands, theme: Res<Theme>, profile: Res<UserProfile>) {
     let t = theme.clone();
     commands
         .spawn((
             Name::new("landing"),
+            LandingRoot,
             bevy::input_focus::tab_navigation::TabGroup::new(0),
             DespawnOnExit(AppState::Landing),
             Node {
@@ -449,12 +490,12 @@ fn fill_heading(
     if filter != Filter::OwnedByMe {
         h.spawn((
             Button::new("filter-back")
-                .label("All documents")
+                .label(tr("shell-app-menu-all-documents"))
                 .icon("chevron-left")
                 .icon_size(14.0)
                 .ghost()
                 .small()
-                .tooltip("Back to all documents")
+                .tooltip(tr("shell-landing-back-to-all"))
                 .build(t),
             observe(|_: On<Activate>, mut state: ResMut<LandingState>| {
                 state.filter = Filter::OwnedByMe;
@@ -481,8 +522,8 @@ fn fill_heading(
         }
     }
     let title = match filter {
-        Filter::OwnedByMe => "Documents".to_string(),
-        Filter::Explore => "Samples".to_string(),
+        Filter::OwnedByMe => tr("shell-landing-documents"),
+        Filter::Explore => tr("shell-landing-samples"),
         f => filter_title(f, lib),
     };
     h.spawn((
@@ -509,13 +550,19 @@ fn fill_heading(
             IconButton::new("label-more", "more-horizontal")
                 .icon_size(16.0)
                 .small()
-                .tooltip("Label")
+                .tooltip(tr("shell-loc-label"))
                 .build(t),
             observe(
                 |a: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
                     let menu = Menu::new("label-menu")
-                        .item(MenuItem::new("label-rename", "Rename…").icon("edit"))
-                        .item(MenuItem::new("label-delete", "Delete…").icon("delete"))
+                        .item(
+                            MenuItem::new("label-rename", tr("common-rename-ellipsis"))
+                                .icon("edit"),
+                        )
+                        .item(
+                            MenuItem::new("label-delete", tr("shell-landing-delete-ellipsis"))
+                                .icon("delete"),
+                        )
                         .min_width(160.0);
                     open_menu(&mut commands, a.entity, menu.build(&theme));
                 },
@@ -557,11 +604,11 @@ fn actions(p: &mut ChildSpawnerCommands, t: &Theme) {
         create_button(a, t);
         a.spawn((
             Button::new("new-folder-button")
-                .label("New folder")
+                .label(tr("common-new-folder"))
                 .icon("folder-new")
                 .icon_size(16.0)
                 .outline()
-                .tooltip("New folder")
+                .tooltip(tr("common-new-folder"))
                 .build(t),
             observe(
                 |_: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
@@ -574,7 +621,7 @@ fn actions(p: &mut ChildSpawnerCommands, t: &Theme) {
         .and_modify(|mut n| page_control(&mut n));
         a.spawn(
             TextInput::new("search")
-                .placeholder("Search…")
+                .placeholder(tr("shell-landing-search"))
                 .leading_icon("search")
                 .height(cadrs_ui::glass::CONTROL_HEIGHT)
                 .width(Val::Px(260.0))
@@ -625,11 +672,11 @@ fn create_button(p: &mut ChildSpawnerCommands, t: &Theme) {
     .with_children(|g| {
         g.spawn((
             Button::new("create-document")
-                .label("New document")
+                .label(tr("shell-landing-new-document"))
                 .icon("file-new")
                 .icon_size(16.0)
                 .primary()
-                .tooltip("Create a new document")
+                .tooltip(tr("shell-landing-create-document-tooltip"))
                 .build(t),
             observe(
                 |_: On<Activate>, mut commands: Commands, theme: Res<Theme>| {
@@ -647,7 +694,7 @@ fn create_button(p: &mut ChildSpawnerCommands, t: &Theme) {
             IconButton::new("create", "caret-down")
                 .primary()
                 .icon_size(14.0)
-                .tooltip("More ways to start: join a shared document, open a sample")
+                .tooltip(tr("shell-landing-more-ways"))
                 .build(t),
             observe(open_create_menu),
             observe(on_create_menu_action),
@@ -719,17 +766,17 @@ fn columns(state: &LandingState, labels: bool) -> Vec<Column> {
     // The name takes twice the others' share of the free width, so a narrow window still
     // shows every column.
     let mut v = vec![
-        Column::new("name", "Name")
+        Column::new("name", tr("common-name"))
             .grow(2.0)
             .min_width(200.0)
             .sortable()
             .sort(sort(SortKey::Name)),
     ];
     if labels {
-        v.push(Column::new("labels", "Labels").width(200.0));
+        v.push(Column::new("labels", tr("shell-landing-labels")).width(200.0));
     }
     v.push(
-        Column::new("modified", "Modified")
+        Column::new("modified", tr("shell-landing-modified"))
             .grow(1.0)
             .min_width(150.0)
             .sortable()
@@ -737,14 +784,14 @@ fn columns(state: &LandingState, labels: bool) -> Vec<Column> {
             .first_sort(ColumnSort::Descending),
     );
     v.push(
-        Column::new("modified-by", "Modified by")
+        Column::new("modified-by", tr("shell-landing-modified-by"))
             .grow(0.8)
             .min_width(110.0)
             .sortable()
             .sort(sort(SortKey::ModifiedBy)),
     );
     v.push(
-        Column::new("owned-by", "Owned by")
+        Column::new("owned-by", tr("shell-landing-owned-by"))
             .grow(0.8)
             .min_width(110.0)
             .sortable()
@@ -911,7 +958,7 @@ fn rebuild_main(
             .with_children(|h| fill_heading(h, &t, state.filter, &lib.lib, count));
     }
     let title = match state.filter {
-        Filter::OwnedByMe => "Documents".to_string(),
+        Filter::OwnedByMe => tr("shell-landing-documents"),
         f => filter_title(f, &lib.lib),
     };
     let folder_path: Vec<(FolderId, String)> = folder
@@ -957,52 +1004,53 @@ fn rebuild_main(
             let (icon_name, title, text, create) = match state.filter {
                 _ if !state.search.trim().is_empty() => (
                     "search",
-                    "No matching documents".to_string(),
-                    format!("Nothing in {} matches \"{}\".", title, state.search.trim()),
+                    tr("shell-landing-empty-search"),
+                    tr_with(
+                        "shell-landing-empty-search-text",
+                        &[("place", title.as_str()), ("search", state.search.trim())],
+                    ),
                     false,
                 ),
                 _ if folder.is_some() => (
                     "folder",
-                    "This folder is empty".into(),
-                    "Drag documents or folders here, or right-click one and choose Move to…."
-                        .into(),
+                    tr("shell-landing-empty-folder"),
+                    tr("shell-landing-empty-folder-text"),
                     false,
                 ),
                 Filter::Label(_) => (
                     "tag",
-                    "No documents with this label".into(),
-                    "Give documents this label in the Details panel or with right-click ▸ Labels."
-                        .into(),
+                    tr("shell-landing-empty-label"),
+                    tr("shell-landing-empty-label-text"),
                     false,
                 ),
                 Filter::Trash => (
                     "delete",
-                    "Trash is empty".into(),
-                    "Documents you move to the trash appear here.".into(),
+                    tr("shell-landing-empty-trash"),
+                    tr("shell-landing-empty-trash-text"),
                     false,
                 ),
                 Filter::SharedWithMe => (
                     "shared-with-me",
-                    "Nothing shared with you".into(),
-                    "Documents other people share with you appear here.".into(),
+                    tr("shell-landing-empty-shared"),
+                    tr("shell-landing-empty-shared-text"),
                     false,
                 ),
                 Filter::Public => (
                     "public",
-                    "No public documents".into(),
-                    "cadrs keeps your documents on this computer.".into(),
+                    tr("shell-landing-empty-public"),
+                    tr("shell-landing-empty-public-text"),
                     false,
                 ),
                 Filter::RecentlyOpened => (
                     "clock",
-                    "No recently opened documents".into(),
-                    "Documents you open appear here.".into(),
+                    tr("shell-landing-empty-recent"),
+                    tr("shell-landing-empty-recent-text"),
                     false,
                 ),
                 _ => (
                     "file",
-                    "No documents yet".into(),
-                    "Create a document to start modeling.".into(),
+                    tr("shell-landing-empty-none"),
+                    tr("shell-landing-empty-none-text"),
                     true,
                 ),
             };
@@ -1085,8 +1133,8 @@ fn rebuild_main(
                         }
                         let row = row
                             .text_cell(&t, f.date)
-                            .text_cell(&t, "me")
-                            .text_cell(&t, "me")
+                            .text_cell(&t, tr("shell-landing-me"))
+                            .text_cell(&t, tr("shell-landing-me"))
                             .selected(selection.contains(&Pick::Folder(f.id)));
                         let more = format!("folder-more-{i}");
                         list.spawn((
@@ -1213,7 +1261,7 @@ fn row_more_button(r: &mut ChildSpawnerCommands, t: &Theme, name: String) {
     r.spawn((
         IconButton::new(name, "more-horizontal")
             .icon_size(16.0)
-            .tooltip("More actions")
+            .tooltip(tr("shell-landing-more-actions"))
             .build(t),
         RowMore,
     ))
@@ -1302,7 +1350,7 @@ fn empty_state(
             .with_children(|r| {
                 r.spawn((
                     Button::new("empty-create")
-                        .label("New document")
+                        .label(tr("shell-landing-new-document"))
                         .icon("file-new")
                         .primary()
                         .build(t),
@@ -1316,7 +1364,7 @@ fn empty_state(
                 .and_modify(|mut n| page_control(&mut n));
                 r.spawn((
                     Button::new("empty-samples")
-                        .label("Open a sample")
+                        .label(tr("shell-landing-open-sample"))
                         .icon("idea")
                         .outline()
                         .build(t),
@@ -1453,12 +1501,17 @@ fn create_menu(t: &Theme, name: &'static str) -> impl Bundle {
     // Dark (#333) icons, as in `screens/02`.
     Menu::new(name)
         .strong_icons()
-        .item(MenuItem::new("new-document", "New document…").icon("file-new"))
-        .item(MenuItem::new("new-folder", "New folder…").icon("folder-new"))
-        .separator()
-        .item(MenuItem::new("import-files", "Import files…").icon("file-import"))
         .item(
-            MenuItem::new("import-from", "Import from")
+            MenuItem::new("new-document", tr("shell-landing-new-document-ellipsis"))
+                .icon("file-new"),
+        )
+        .item(
+            MenuItem::new("new-folder", tr("shell-landing-new-folder-ellipsis")).icon("folder-new"),
+        )
+        .separator()
+        .item(MenuItem::new("import-files", tr("shell-landing-import-files")).icon("file-import"))
+        .item(
+            MenuItem::new("import-from", tr("shell-landing-import-from"))
                 .icon("cloud-upload")
                 .submenu(vec![
                     MenuItem::new("import-from-dropbox", "Dropbox…")
@@ -1472,10 +1525,10 @@ fn create_menu(t: &Theme, name: &'static str) -> impl Bundle {
                         .into(),
                 ]),
         )
-        .item(MenuItem::new("new-label", "New label…").icon("tag-new"))
-        .item(MenuItem::new("open-samples", "From a sample…").icon("idea"))
+        .item(MenuItem::new("new-label", tr("shell-landing-new-label-ellipsis")).icon("tag-new"))
+        .item(MenuItem::new("open-samples", tr("shell-landing-from-sample")).icon("idea"))
         .separator()
-        .item(MenuItem::new("join-shared", "Join shared document…").icon("share"))
+        .item(MenuItem::new("join-shared", tr("shell-landing-join-ellipsis")).icon("share"))
         .build(t)
 }
 
@@ -1557,19 +1610,19 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
         labels.push(MenuEntry::Separator);
     }
     labels.push(
-        MenuItem::new("app-new-label", "New label…")
+        MenuItem::new("app-new-label", tr("shell-landing-new-label-ellipsis"))
             .icon("tag-new")
             .into(),
     );
     let mut entries = vec![
-        MenuItem::new("app-open-folder", "Open documents folder")
+        MenuItem::new("app-open-folder", tr("shell-landing-open-documents-folder"))
             .icon("folder")
             .into(),
-        MenuItem::new("app-labels", "Labels")
+        MenuItem::new("app-labels", tr("shell-landing-labels"))
             .icon("tag")
             .submenu(labels)
             .into(),
-        MenuItem::new("app-trash", "Trash")
+        MenuItem::new("app-trash", tr("shell-landing-trash"))
             .icon("delete")
             .checked(filter == Filter::Trash)
             .into(),
@@ -1577,7 +1630,7 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
     if filter == Filter::Trash {
         let (docs, folders) = lib.trash();
         entries.push(
-            MenuItem::new("app-empty-trash", "Empty trash…")
+            MenuItem::new("app-empty-trash", tr("shell-landing-empty-trash-ellipsis"))
                 .icon("delete")
                 .disabled(docs.is_empty() && folders.is_empty())
                 .into(),
@@ -1681,18 +1734,23 @@ fn log_opened(doc: &Document, meta: &DocumentMeta, dir: &std::path::Path) {
 /// doesn't know), anything else an error.
 pub(crate) fn open_failed(world: &mut World, id: DocumentId, e: &cadrs_core::StoreError) {
     error!("cannot open document {id}: {e}");
-    let name = world
-        .resource::<DocLibrary>()
-        .lib
-        .get(id)
-        .map_or_else(|| "the document".to_string(), |d| format!("\"{}\"", d.name));
+    let name = world.resource::<DocLibrary>().lib.get(id).map_or_else(
+        || tr("shell-landing-the-document"),
+        |d| format!("\"{}\"", d.name),
+    );
     let note = if e.is_newer() {
-        cadrs_ui::Notification::warning(format!(
-            "Can't open {name}: {}.",
-            cadrs_core::store::newer_reason()
+        cadrs_ui::Notification::warning(tr_with(
+            "shell-landing-cant-open-newer",
+            &[
+                ("name", name.as_str()),
+                ("reason", &cadrs_core::store::newer_reason()),
+            ],
         ))
     } else {
-        cadrs_ui::Notification::error(format!("Can't open {name}: {e}"))
+        cadrs_ui::Notification::error(tr_with(
+            "shell-landing-cant-open",
+            &[("name", name.as_str()), ("error", &e.to_string())],
+        ))
     };
     let theme = world.resource::<Theme>().clone();
     cadrs_ui::show_notification(
@@ -1767,20 +1825,32 @@ fn on_row_context_menu(
     commands.queue(move |world: &mut World| details::select(world, Pick::Doc(id), false));
     let menu = if state.filter == Filter::Trash {
         Menu::new("doc-context-menu")
-            .item(MenuItem::new("ctx-restore", "Restore").icon("restore"))
-            .item(MenuItem::new("ctx-delete-forever", "Delete permanently…").icon("delete"))
+            .item(MenuItem::new("ctx-restore", tr("common-restore")).icon("restore"))
+            .item(
+                MenuItem::new(
+                    "ctx-delete-forever",
+                    tr("shell-landing-delete-forever-ellipsis"),
+                )
+                .icon("delete"),
+            )
             .separator()
-            .item(MenuItem::new("ctx-open-folder", "Open document folder").icon("folder"))
-            .item(MenuItem::new("ctx-properties", "Properties…").icon("info"))
+            .item(
+                MenuItem::new("ctx-open-folder", tr("shell-landing-open-document-folder"))
+                    .icon("folder"),
+            )
+            .item(MenuItem::new("ctx-properties", tr("common-properties")).icon("info"))
             .min_width(190.0)
     } else {
         Menu::new("doc-context-menu")
-            .item(MenuItem::new("ctx-open", "Open").icon("open-external"))
-            .item(MenuItem::new("ctx-open-folder", "Open document folder").icon("folder"))
-            .item(MenuItem::new("ctx-rename", "Rename…").icon("edit"))
+            .item(MenuItem::new("ctx-open", tr("common-open")).icon("open-external"))
+            .item(
+                MenuItem::new("ctx-open-folder", tr("shell-landing-open-document-folder"))
+                    .icon("folder"),
+            )
+            .item(MenuItem::new("ctx-rename", tr("common-rename-ellipsis")).icon("edit"))
             .separator()
             .item(
-                MenuItem::new("ctx-copy", "Copy…")
+                MenuItem::new("ctx-copy", tr("shell-landing-copy-ellipsis"))
                     .icon("copy")
                     .disabled(!may_copy),
             )
@@ -1788,7 +1858,7 @@ fn on_row_context_menu(
                 // P3G.1 (ER1.2, ER X8): a folder of the library (the Other documents browser's
                 // locations, by path since #112), or back to the top level.
                 let current = lib.lib.get(row.0).map(|e| e.meta.folder);
-                MenuItem::new("ctx-move", "Move to…")
+                MenuItem::new("ctx-move", tr("shell-landing-move-to"))
                     .icon("move-to-folder")
                     .submenu(organize::move_entries(&lib.lib, current, &[]))
             })
@@ -1818,29 +1888,31 @@ fn on_row_context_menu(
                     entries.push(MenuEntry::Separator);
                 }
                 entries.push(
-                    MenuItem::new("ctx-new-label", "Create new label…")
+                    MenuItem::new("ctx-new-label", tr("shell-landing-create-label"))
                         .icon("tag-new")
                         .into(),
                 );
-                MenuItem::new("ctx-labels", "Labels")
+                MenuItem::new("ctx-labels", tr("shell-landing-labels"))
                     .icon("tag")
                     .submenu(entries)
             })
             .separator()
-            .item(MenuItem::new("ctx-properties", "Properties…").icon("info"))
-            .item(MenuItem::new("ctx-history", "History…").icon("versions"))
-            .item(MenuItem::new("ctx-used-in", "Used in…").icon("link"))
+            .item(MenuItem::new("ctx-properties", tr("common-properties")).icon("info"))
             .item(
-                MenuItem::new("ctx-transfer", "Transfer ownership…")
+                MenuItem::new("ctx-history", tr("shell-landing-history-ellipsis")).icon("versions"),
+            )
+            .item(MenuItem::new("ctx-used-in", tr("shell-landing-used-in")).icon("link"))
+            .item(
+                MenuItem::new("ctx-transfer", tr("shell-landing-transfer-ellipsis"))
                     .icon("share")
                     .disabled(!transferable),
             )
             .separator()
             .item(if shared {
                 // Shared with me (`crate::collab`): the owner hears of it; the copy goes.
-                MenuItem::new("ctx-unshare", "Unshare with me").icon("delete")
+                MenuItem::new("ctx-unshare", tr("shell-landing-unshare")).icon("delete")
             } else {
-                MenuItem::new("ctx-trash", "Move to trash").icon("delete")
+                MenuItem::new("ctx-trash", tr("shell-landing-move-to-trash")).icon("delete")
             })
             .min_width(190.0)
     };
@@ -1883,7 +1955,10 @@ fn on_context_action(
                 world
                     .resource_mut::<DocLibrary>()
                     .execute(&store, &TrashEntry { id, now });
-                undo_toast(world, format!("Unshared \u{201c}{name}\u{201d} with you"));
+                undo_toast(
+                    world,
+                    tr_with("shell-landing-unshared", &[("name", name.as_str())]),
+                );
             });
         }
         "ctx-delete-forever" => open_purge_dialog(&mut commands, &theme, &entry),
@@ -1919,7 +1994,10 @@ fn on_context_action(
                 world
                     .resource_mut::<DocLibrary>()
                     .execute(&store, &RestoreEntry { id });
-                undo_toast(world, format!("Restored \u{201c}{name}\u{201d}"));
+                undo_toast(
+                    world,
+                    tr_with("shell-landing-restored", &[("name", name.as_str())]),
+                );
             });
         }
         _ => {}
@@ -1929,11 +2007,15 @@ fn on_context_action(
 // ---------------------------------------------------------------------------------------------
 // Dialogs
 
-fn field_label(p: &mut ChildSpawner, t: &Theme, text: &str) {
+/// A field's label: the catalog key of its text.
+fn field_label(p: &mut ChildSpawner, t: &Theme, key: &'static str) {
     // Bold in `screens/03`; ExtraBold matches its ink here (Bevy draws text lighter).
-    p.spawn(t.text(text, t.font_base, FontWeight::EXTRA_BOLD, t.foreground))
-        .entry::<Node>()
-        .and_modify(|mut n| n.margin = UiRect::bottom(Val::Px(-2.0)));
+    p.spawn((
+        t.text(tr(key), t.font_base, FontWeight::EXTRA_BOLD, t.foreground),
+        Translated(key),
+    ))
+    .entry::<Node>()
+    .and_modify(|mut n| n.margin = UiRect::bottom(Val::Px(-2.0)));
 }
 
 fn close_dialogs(world: &mut World) {
@@ -1966,7 +2048,13 @@ fn undo_toast(world: &mut World, text: String) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
     let toast = cadrs_ui::show_toast_for(&mut commands, &theme, text, 4.0);
-    let undo = cadrs_ui::toast_action(&mut commands, &theme, toast, "toast-undo", "Undo");
+    let undo = cadrs_ui::toast_action(
+        &mut commands,
+        &theme,
+        toast,
+        "toast-undo",
+        tr("common-undo"),
+    );
     commands
         .entity(undo)
         .insert(observe(|_: On<Activate>, mut commands: Commands| {
@@ -2020,7 +2108,13 @@ fn confirm_dialog(world: &mut World) {
             world
                 .resource_mut::<DocLibrary>()
                 .execute(&store, &PurgeEntry { id });
-            undo_toast(world, format!("Deleted \u{201c}{name}\u{201d} permanently"));
+            undo_toast(
+                world,
+                tr_with(
+                    "shell-landing-deleted-permanently",
+                    &[("name", name.as_str())],
+                ),
+            );
         }
         LandingDialog::Join => {
             let link = field_value(world, "join-link-field");
@@ -2041,7 +2135,7 @@ fn confirm_dialog(world: &mut World) {
                 return;
             }
             close_dialogs(world);
-            let label = format!("Renamed to \u{201c}{}\u{201d}", name.trim());
+            let label = tr_with("shell-landing-renamed-to", &[("name", name.trim())]);
             world.resource_mut::<DocLibrary>().execute(
                 &store,
                 &RenameEntry {
@@ -2065,7 +2159,10 @@ fn confirm_dialog(world: &mut World) {
                     world
                         .resource_mut::<DocLibrary>()
                         .execute(&store, &AddEntry { entry });
-                    undo_toast(world, format!("Copied to \u{201c}{}\u{201d}", name.trim()));
+                    undo_toast(
+                        world,
+                        tr_with("shell-landing-copied-to", &[("name", name.trim())]),
+                    );
                 }
                 Err(e) => error!("cannot copy the document: {e}"),
             }
@@ -2076,7 +2173,10 @@ fn confirm_dialog(world: &mut World) {
             world
                 .resource_mut::<DocLibrary>()
                 .execute(&store, &TrashEntry { id, now });
-            undo_toast(world, format!("Moved \u{201c}{name}\u{201d} to trash"));
+            undo_toast(
+                world,
+                tr_with("shell-landing-moved-to-trash", &[("name", name.as_str())]),
+            );
         }
         LandingDialog::NewLabel(_)
         | LandingDialog::RenameLabel(_)
@@ -2090,10 +2190,11 @@ fn confirm_dialog(world: &mut World) {
     }
 }
 
-fn dialog_buttons(p: &mut ChildSpawner, t: &Theme, prefix: &str, ok: &str) {
+/// OK (`ok`: its label's catalog key) and Cancel.
+fn dialog_buttons(p: &mut ChildSpawner, t: &Theme, prefix: &str, ok: &'static str) {
     p.spawn((
         Button::new(format!("{prefix}-ok"))
-            .label(ok)
+            .label(tr(ok))
             .primary()
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
@@ -2102,7 +2203,7 @@ fn dialog_buttons(p: &mut ChildSpawner, t: &Theme, prefix: &str, ok: &str) {
     ));
     p.spawn((
         Button::new(format!("{prefix}-cancel"))
-            .label("Cancel")
+            .label(tr("common-cancel"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(close_dialogs);
@@ -2140,11 +2241,11 @@ fn open_new_document_dialog(commands: &mut Commands, theme: &Theme) {
     let tf = theme.clone();
     commands.spawn((
         Dialog::new("new-document-dialog")
-            .title("New document")
+            .title(tr("shell-landing-new-document"))
             .width(548.0)
             .body(move |b| {
                 let t = &tb;
-                field_label(b, t, "Document name");
+                field_label(b, t, "shell-landing-document-name");
                 b.spawn(
                     TextInput::new("new-document-name")
                         .value("Untitled document")
@@ -2154,24 +2255,24 @@ fn open_new_document_dialog(commands: &mut Commands, theme: &Theme) {
                 )
                 .entry::<Node>()
                 .and_modify(|mut n| n.margin = UiRect::bottom(Val::Px(8.0)));
-                field_label(b, t, "Document labels");
+                field_label(b, t, "shell-landing-document-labels");
                 b.spawn(
                     TextInput::new("new-document-labels")
-                        .placeholder("Search labels")
+                        .placeholder(tr("shell-landing-search-labels"))
                         .disabled(true)
                         .height(32.0)
                         .build(t),
                 )
                 .entry::<Node>()
                 .and_modify(|mut n| n.margin = UiRect::bottom(Val::Px(8.0)));
-                field_label(b, t, "Document location");
+                field_label(b, t, "shell-landing-document-location");
                 location_browser(b, t);
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
                     Button::new("new-document-create")
-                        .label("Create document")
+                        .label(tr("shell-landing-create-document"))
                         .primary()
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -2179,7 +2280,9 @@ fn open_new_document_dialog(commands: &mut Commands, theme: &Theme) {
                     }),
                 ));
                 f.spawn((
-                    Button::new("new-document-cancel").label("Cancel").build(t),
+                    Button::new("new-document-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_dialogs);
                     }),
@@ -2196,14 +2299,14 @@ fn open_join_dialog(commands: &mut Commands, theme: &Theme) {
     let (tb, tf) = (theme.clone(), theme.clone());
     commands.spawn((
         Dialog::new("join-dialog")
-            .title("Join shared document")
+            .title(tr("shell-landing-join"))
             .width(548.0)
             .body(move |b| {
                 let t = &tb;
-                field_label(b, t, "Link");
+                field_label(b, t, "shell-landing-link");
                 b.spawn(
                     TextInput::new("join-link")
-                        .placeholder("Paste the link someone shared with you")
+                        .placeholder(tr("shell-landing-link-placeholder"))
                         .autofocus()
                         .build(t),
                 );
@@ -2211,13 +2314,18 @@ fn open_join_dialog(commands: &mut Commands, theme: &Theme) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("join-confirm").label("Join").primary().build(t),
+                    Button::new("join-confirm")
+                        .label(tr("shell-landing-join-button"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(confirm_dialog);
                     }),
                 ));
                 f.spawn((
-                    Button::new("join-cancel").label("Cancel").build(t),
+                    Button::new("join-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_dialogs);
                     }),
@@ -2265,7 +2373,15 @@ fn location_browser(b: &mut ChildSpawner, t: &Theme) {
             })
             .with_children(|c| {
                 c.spawn(icon("owned-by-me", 16.0, t.foreground));
-                c.spawn(t.text("Owned by me", t.font_base, FontWeight::BOLD, t.foreground));
+                c.spawn((
+                    t.text(
+                        tr("shell-landing-owned-by-me"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("shell-landing-owned-by-me"),
+                ));
             });
             h.spawn(icon("sort-descending", 16.0, t.foreground));
         });
@@ -2285,11 +2401,14 @@ fn location_browser(b: &mut ChildSpawner, t: &Theme) {
                 BackgroundColor(t.info_background),
                 BorderColor::all(t.info_border),
             ))
-            .with_child(t.text(
-                "No additional folders",
-                t.font_base,
-                FontWeight::NORMAL,
-                Color::srgb_u8(0x2c, 0x4a, 0x66),
+            .with_child((
+                t.text(
+                    tr("shell-landing-no-folders"),
+                    t.font_base,
+                    FontWeight::NORMAL,
+                    Color::srgb_u8(0x2c, 0x4a, 0x66),
+                ),
+                Translated("shell-landing-no-folders"),
             ));
         });
     });
@@ -2302,10 +2421,10 @@ fn open_rename_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEn
     let name = entry.name.clone();
     commands.spawn((
         Dialog::new("rename-dialog")
-            .title("Rename document")
+            .title(tr("rename-document"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "Document name");
+                field_label(b, &tb, "shell-landing-document-name");
                 b.spawn(
                     TextInput::new("rename-name")
                         .value(name)
@@ -2314,7 +2433,7 @@ fn open_rename_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEn
                         .build(&tb),
                 );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "rename-dialog", "Rename"))
+            .footer(move |f| dialog_buttons(f, &tf, "rename-dialog", "common-rename"))
             .build(&t),
         LandingDialog::Rename(entry.id),
         DespawnOnExit(AppState::Landing),
@@ -2329,10 +2448,10 @@ fn open_copy_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEntr
     let name = format!("Copy of {}", entry.name);
     commands.spawn((
         Dialog::new("copy-dialog")
-            .title("Copy document")
+            .title(tr("shell-landing-copy-document"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "New document name");
+                field_label(b, &tb, "shell-landing-new-document-name");
                 b.spawn(
                     TextInput::new("copy-name")
                         .value(name)
@@ -2341,7 +2460,7 @@ fn open_copy_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEntr
                         .build(&tb),
                 );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "copy-dialog", "Copy"))
+            .footer(move |f| dialog_buttons(f, &tf, "copy-dialog", "common-copy"))
             .build(&t),
         LandingDialog::Copy(entry.id),
         DespawnOnExit(AppState::Landing),
@@ -2355,22 +2474,28 @@ fn open_trash_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEnt
     let name = entry.name.clone();
     commands.spawn((
         Dialog::new("trash-dialog")
-            .title("Move to trash")
+            .title(tr("shell-landing-move-to-trash"))
             .width(420.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!("Move \u{201c}{name}\u{201d} to the trash?")),
+                    Text::new(tr_with(
+                        "shell-landing-trash-question",
+                        &[("name", name.as_str())],
+                    )),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
                 ));
-                b.spawn(tb.text(
-                    "You can restore it from Trash.",
-                    tb.font_base,
-                    FontWeight::NORMAL,
-                    tb.muted_foreground,
+                b.spawn((
+                    tb.text(
+                        tr("shell-landing-can-restore"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated("shell-landing-can-restore"),
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "trash-dialog", "Move to trash"))
+            .footer(move |f| dialog_buttons(f, &tf, "trash-dialog", "shell-landing-move-to-trash"))
             .build(&t),
         LandingDialog::Trash(entry.id),
         DespawnOnExit(AppState::Landing),
@@ -2383,10 +2508,10 @@ fn open_new_folder_dialog(commands: &mut Commands, theme: &Theme) {
     let tf = theme.clone();
     commands.spawn((
         Dialog::new("new-folder-dialog")
-            .title("New folder")
+            .title(tr("common-new-folder"))
             .width(420.0)
             .body(move |b| {
-                field_label(b, &tb, "Folder name");
+                field_label(b, &tb, "shell-tab-folders-folder-name");
                 b.spawn(
                     TextInput::new("new-folder-name")
                         .value("Untitled folder")
@@ -2395,7 +2520,7 @@ fn open_new_folder_dialog(commands: &mut Commands, theme: &Theme) {
                         .build(&tb),
                 );
             })
-            .footer(move |f| dialog_buttons(f, &tf, "new-folder-dialog", "Create"))
+            .footer(move |f| dialog_buttons(f, &tf, "new-folder-dialog", "common-create"))
             .build(&t),
         LandingDialog::NewFolder,
         DespawnOnExit(AppState::Landing),
@@ -2409,22 +2534,28 @@ fn open_purge_dialog(commands: &mut Commands, theme: &Theme, entry: &DocumentEnt
     let name = entry.name.clone();
     commands.spawn((
         Dialog::new("purge-dialog")
-            .title("Delete permanently")
+            .title(tr("shell-landing-delete-forever"))
             .width(420.0)
             .body(move |b| {
                 b.spawn((
-                    Text::new(format!("Permanently delete \u{201c}{name}\u{201d}?")),
+                    Text::new(tr_with(
+                        "shell-landing-purge-question",
+                        &[("name", name.as_str())],
+                    )),
                     tb.font(tb.font_base, FontWeight::NORMAL),
                     TextColor(tb.foreground),
                 ));
-                b.spawn(tb.text(
-                    "You cannot restore it from Trash.",
-                    tb.font_base,
-                    FontWeight::NORMAL,
-                    tb.muted_foreground,
+                b.spawn((
+                    tb.text(
+                        tr("shell-landing-cannot-restore"),
+                        tb.font_base,
+                        FontWeight::NORMAL,
+                        tb.muted_foreground,
+                    ),
+                    Translated("shell-landing-cannot-restore"),
                 ));
             })
-            .footer(move |f| dialog_buttons(f, &tf, "purge-dialog", "Delete permanently"))
+            .footer(move |f| dialog_buttons(f, &tf, "purge-dialog", "shell-landing-delete-forever"))
             .build(&t),
         LandingDialog::Purge(entry.id),
         DespawnOnExit(AppState::Landing),

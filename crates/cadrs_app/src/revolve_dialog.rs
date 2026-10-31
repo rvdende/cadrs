@@ -28,6 +28,7 @@ use cadrs_core::document::{
 };
 use cadrs_core::{Feature, FeatureId, PartId, RevolveFeature};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -140,14 +141,22 @@ fn feature_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn up_to_label(features: &[Feature], cache: &PartCache, u: &UpTo) -> String {
     match u {
-        UpTo::Face(f) => format!("Face of {}", feature_name(features, f.face.op)),
-        UpTo::Part(p) => cache.part_name(*p).unwrap_or("Part").to_string(),
-        UpTo::Vertex(v) => format!("Vertex of {}", feature_name(features, v.vertex.faces[0].op)),
+        UpTo::Face(f) => tr_with(
+            "common-face-of",
+            &[("name", &feature_name(features, f.face.op))],
+        ),
+        UpTo::Part(p) => cache
+            .part_name(*p)
+            .map_or_else(|| tr("common-part"), str::to_string),
+        UpTo::Vertex(v) => tr_with(
+            "common-vertex-of",
+            &[("name", &feature_name(features, v.vertex.faces[0].op))],
+        ),
     }
 }
 
@@ -161,31 +170,36 @@ fn labels(
         features
             .iter()
             .find(|f| f.id == id)
-            .map_or("sketch".into(), |f| f.name.clone())
+            .map_or_else(|| tr("model-unknown-sketch"), |f| f.name.clone())
     };
     // A surface revolves the region's boundary curves: "Curves of Sketch 1" (P3.4 judge).
     let what = if r.body == cadrs_core::BodyType::Surface {
-        "Curves"
+        "model-curves-of"
     } else {
-        "Face"
+        "common-face-of"
     };
     let mut input: Vec<String> = r
         .regions
         .iter()
-        .map(|x| format!("{what} of {}", name(x.sketch)))
+        .map(|x| tr_with(what, &[("name", &name(x.sketch))]))
         .collect();
     input.extend(
         r.sketches
             .iter()
             .map(|s| crate::extrude_dialog::whole_sketch_label(features, *s, r.body)),
     );
-    input.extend(
-        r.faces
-            .iter()
-            .map(|f| format!("Face of {}", feature_name(features, f.face.op))),
-    );
+    input.extend(r.faces.iter().map(|f| {
+        tr_with(
+            "common-face-of",
+            &[("name", &feature_name(features, f.face.op))],
+        )
+    }));
     let input_missing = crate::extrude_dialog::missing_marks(cache, feature, &mut input);
-    let part_name = |p: &PartId| cache.part_name(*p).unwrap_or("Part").to_string();
+    let part_name = |p: &PartId| {
+        cache
+            .part_name(*p)
+            .map_or_else(|| tr("common-part"), str::to_string)
+    };
     let merge_scope = if r.merge_scope_set || !r.merge_scope.is_empty() {
         r.merge_scope.iter().map(part_name).collect()
     } else {
@@ -251,13 +265,13 @@ fn select_row(
     t: &Theme,
     name: &str,
     role: Role,
-    options: &[&'static str],
+    options: &[String],
     selected: usize,
     flip: Option<(Role, bool)>,
 ) {
     let mut select = Select::new(name.to_string());
     for o in options {
-        select = select.option(*o, true);
+        select = select.option(o.clone(), true);
     }
     b.spawn(Node {
         height: Val::Px(30.0),
@@ -275,7 +289,7 @@ fn select_row(
                 &format!("{name}-flip"),
                 flip_role,
                 flipped,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         }
     });
@@ -314,17 +328,30 @@ fn offset_row(
             &format!("{name}-flip"),
             flip_role,
             o.flip,
-            "Opposite direction",
+            &tr("common-opposite-direction"),
         );
     });
 }
 
-fn placeholder(end: EndType) -> &'static str {
-    match end {
-        EndType::UpToFace => "Up to face",
-        EndType::UpToPart => "Up to part",
-        _ => "Up to vertex",
-    }
+fn placeholder(end: EndType) -> String {
+    tr(match end {
+        EndType::UpToFace => "model-up-to-face",
+        EndType::UpToPart => "model-up-to-part",
+        _ => "model-up-to-vertex",
+    })
+}
+
+/// A revolve type, in the current language (the core's label is English).
+fn revolve_type_text(k: RevolveType) -> String {
+    tr(match k {
+        RevolveType::Full => "model-revolve-full",
+        RevolveType::Blind => "model-blind",
+        RevolveType::Symmetric => "common-symmetric",
+        RevolveType::UpToNext => "model-up-to-next",
+        RevolveType::UpToFace => "model-up-to-face",
+        RevolveType::UpToPart => "model-up-to-part",
+        RevolveType::UpToVertex => "model-up-to-vertex",
+    })
 }
 
 /// The fields of an end: its angle, or its "Up to" target and offset angle.
@@ -345,7 +372,7 @@ fn end_fields(
         EndType::Blind => {
             b.spawn((
                 angle_role,
-                NumberField::new(format!("{prefix}angle"), "Revolve angle")
+                NumberField::new(format!("{prefix}angle"), tr("model-revolve-angle"))
                     .text(angle_expr.to_string())
                     .label_width(92.0)
                     .variables()
@@ -357,7 +384,7 @@ fn end_fields(
             b,
             t,
             &format!("{prefix}up-to-field"),
-            placeholder(e),
+            &placeholder(e),
             up_to_role,
             up_to_items,
             up_to_active,
@@ -365,7 +392,7 @@ fn end_fields(
     }
     if end.is_up_to() {
         b.spawn(
-            OptionRow::new(format!("{prefix}offset"), "Offset angle")
+            OptionRow::new(format!("{prefix}offset"), tr("model-revolve-offset-angle"))
                 .checked(offset.is_some())
                 .build(t),
         );
@@ -374,7 +401,7 @@ fn end_fields(
                 b,
                 t,
                 &format!("{prefix}offset-angle"),
-                "Offset angle",
+                &tr("model-revolve-offset-angle"),
                 offset_role,
                 offset_flip_role,
                 o,
@@ -415,9 +442,9 @@ fn revolve_dialog(
                     Role::Body,
                     TabStrip::new("revolve-body-type")
                         .compact()
-                        .tab("Solid")
-                        .tab("Surface")
-                        .tab("Thin")
+                        .tab(tr("common-solid"))
+                        .tab(tr("model-body-surface"))
+                        .tab(tr("model-body-thin"))
                         .selected(body_index)
                         .build(t),
                 ));
@@ -425,7 +452,7 @@ fn revolve_dialog(
                     let op_index = BooleanOp::ALL.iter().position(|o| *o == r.op).unwrap_or(0);
                     let mut strip = TabStrip::new("revolve-operation").compact();
                     for op in BooleanOp::ALL {
-                        strip = strip.tab(op.label());
+                        strip = strip.tab(crate::extrude_dialog::boolean_op_text(op));
                     }
                     b.spawn((Role::Op, strip.selected(op_index).build(t)));
                 }
@@ -436,15 +463,15 @@ fn revolve_dialog(
                 })
                 .with_children(|b| {
                     let input = if r.body == BodyType::Surface {
-                        "Sketch curves to revolve"
+                        tr("model-revolve-curves")
                     } else {
-                        "Faces and sketch regions to revolve"
+                        tr("model-revolve-regions")
                     };
                     list(
                         b,
                         t,
                         "revolve-regions-field",
-                        input,
+                        &input,
                         Role::Input,
                         labels.input.clone(),
                         field == ExtrudeField::Input,
@@ -459,7 +486,7 @@ fn revolve_dialog(
                         row.spawn((
                             Role::Axis,
                             SelectionList::new("revolve-axis-field")
-                                .placeholder("Revolve axis")
+                                .placeholder(tr("model-revolve-axis"))
                                 .items(labels.axis.clone())
                                 .active(matches!(
                                     field,
@@ -478,12 +505,14 @@ fn revolve_dialog(
                             IconButton::new("revolve-axis-mate-connector", "mate-connector")
                                 .icon_size(16.0)
                                 .selected(field == ExtrudeField::AxisConnector)
-                                .tooltip("Select a mate connector")
+                                .tooltip(tr("model-select-a-mate-connector"))
                                 .build(t),
                         ));
                     });
-                    let kinds: Vec<&'static str> =
-                        RevolveType::ALL.iter().map(|k| k.label()).collect();
+                    let kinds: Vec<String> = RevolveType::ALL
+                        .iter()
+                        .map(|k| revolve_type_text(*k))
+                        .collect();
                     let kind_index = RevolveType::ALL
                         .iter()
                         .position(|k| *k == r.kind)
@@ -512,7 +541,7 @@ fn revolve_dialog(
                         .with_children(|row| {
                             row.spawn((
                                 Role::Thickness1,
-                                NumberField::new("revolve-thickness1", "Thickness 1")
+                                NumberField::new("revolve-thickness1", tr("model-thickness-1"))
                                     .text(r.thin.thickness1_expr.clone())
                                     .label_width(70.0)
                                     .variables()
@@ -526,18 +555,18 @@ fn revolve_dialog(
                                 "revolve-flip-wall",
                                 Role::FlipWall,
                                 r.thin.flip_wall,
-                                "Flip wall",
+                                &tr("model-flip-wall"),
                             );
                         });
                         b.spawn(
-                            OptionRow::new("revolve-mid-plane", "Mid plane")
+                            OptionRow::new("revolve-mid-plane", tr("model-thin-mid-plane"))
                                 .checked(r.thin.mid_plane)
                                 .build(t),
                         );
                         if !r.thin.mid_plane {
                             b.spawn((
                                 Role::Thickness2,
-                                NumberField::new("revolve-thickness2", "Thickness 2")
+                                NumberField::new("revolve-thickness2", tr("model-thickness-2"))
                                     .text(r.thin.thickness2_expr.clone())
                                     .label_width(70.0)
                                     .variables()
@@ -547,14 +576,16 @@ fn revolve_dialog(
                     }
                     if r.kind.one_sided() {
                         b.spawn(
-                            OptionRow::new("revolve-second-end", "Second end position")
+                            OptionRow::new("revolve-second-end", tr("model-second-end-position"))
                                 .chevron()
                                 .checked(r.second.is_some())
                                 .build(t),
                         );
                         if let Some(sec) = &r.second {
-                            let ends: Vec<&'static str> =
-                                REVOLVE_SECOND_ENDS.iter().map(|e| e.label()).collect();
+                            let ends: Vec<String> = REVOLVE_SECOND_ENDS
+                                .iter()
+                                .map(|e| crate::extrude_dialog::end_type_text(*e))
+                                .collect();
                             let i = REVOLVE_SECOND_ENDS
                                 .iter()
                                 .position(|e| *e == sec.end)
@@ -588,7 +619,7 @@ fn revolve_dialog(
                     }
                     if r.op != BooleanOp::New && r.body != BodyType::Surface {
                         b.spawn(
-                            OptionRow::new("revolve-merge-all", "Merge with all")
+                            OptionRow::new("revolve-merge-all", tr("common-merge-with-all"))
                                 .checked(r.merge_all)
                                 .build(t),
                         );
@@ -597,7 +628,7 @@ fn revolve_dialog(
                                 b,
                                 t,
                                 "revolve-merge-scope-field",
-                                "Merge scope",
+                                &tr("common-merge-scope"),
                                 Role::MergeScope,
                                 labels.merge_scope.clone(),
                                 field == ExtrudeField::MergeScope,
@@ -618,7 +649,7 @@ fn revolve_dialog(
                 f.spawn((
                     Name::new("revolve-help"),
                     icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new("Help"),
+                    Tooltip::new(tr("common-help")),
                 ));
             })
             .build(theme),

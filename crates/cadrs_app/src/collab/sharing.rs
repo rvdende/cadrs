@@ -30,6 +30,7 @@ use cadrs_net::{
 
 use super::live::Live;
 use crate::{ActiveDocument, DocumentStore, UserProfile};
+use cadrs_ui::i18n::{tr, tr_with};
 
 /// How long a member's cadrs gets between tries to deliver their link.
 const RETRY_INVITES: f64 = 30.0;
@@ -160,11 +161,11 @@ pub fn edit_sharing(
     id: DocumentId,
     f: impl FnOnce(&mut Sharing) -> bool,
 ) -> Result<(), String> {
-    let (_, mut meta) = read(world, id).ok_or("The document is not in the store")?;
+    let (_, mut meta) = read(world, id).ok_or_else(|| tr("shell-sharing-not-in-store"))?;
     if let Some(s) = &meta.shared {
-        return Err(format!(
-            "Only {} can change who this is shared with",
-            s.owner_name
+        return Err(tr_with(
+            "shell-sharing-only-owner-changes",
+            &[("owner", s.owner_name.as_str())],
         ));
     }
     let sharing = meta
@@ -188,10 +189,10 @@ pub fn share_with(
 ) -> Result<(), String> {
     let me = world.get_resource::<Iroh>().map(|i| i.id().to_string());
     if me.as_deref() == Some(member.id.as_str()) {
-        return Err("That is your own cadrs ID".into());
+        return Err(tr("shell-sharing-own-id"));
     }
     if member.id.parse::<EndpointId>().is_err() {
-        return Err("That is not a cadrs ID (Preferences ▸ Collaboration shows yours)".into());
+        return Err(tr("shell-sharing-not-an-id"));
     }
     note_contact(world, &member.id, &member.name);
     let mid = member.id.clone();
@@ -346,7 +347,7 @@ fn edit_meta(
     id: DocumentId,
     f: impl FnOnce(&mut Sharing),
 ) -> Result<(), String> {
-    let (_, mut meta) = read(world, id).ok_or("The document is not in the store")?;
+    let (_, mut meta) = read(world, id).ok_or_else(|| tr("shell-sharing-not-in-store"))?;
     let Some(s) = meta.sharing.as_mut() else {
         return Ok(());
     };
@@ -469,13 +470,22 @@ fn invited(world: &mut World, r: Request, invite: Invite) {
         None => super::fetch_in_background(world, link.clone()),
     }
     if !invite.update {
-        let mut text = format!(
-            "{} shared \u{201c}{}\u{201d} with you",
-            invite.owner_name, link.name
-        );
-        if !invite.message.is_empty() {
-            text.push_str(&format!(": \u{201c}{}\u{201d}", invite.message));
-        }
+        let (owner, name) = (invite.owner_name.as_str(), link.name.as_str());
+        let text = if invite.message.is_empty() {
+            tr_with(
+                "shell-sharing-shared-with-you",
+                &[("owner", owner), ("name", name)],
+            )
+        } else {
+            tr_with(
+                "shell-sharing-shared-with-you-message",
+                &[
+                    ("owner", owner),
+                    ("name", name),
+                    ("message", invite.message.as_str()),
+                ],
+            )
+        };
         crate::linked::toast(world, text);
     }
     r.verdict(Verdict::Accepted(0));
@@ -490,12 +500,14 @@ struct PendingAsks(Vec<(String, Answer<Verdict>)>);
 
 /// Asks the owner of the shared document `id` to share it with `member`.
 pub fn ask_owner_to_share(world: &mut World, id: DocumentId, member: Member) -> Result<(), String> {
-    let (_, meta) = read(world, id).ok_or("The document is not in the store")?;
-    let shared = meta.shared.ok_or("This is your own document")?;
+    let (_, meta) = read(world, id).ok_or_else(|| tr("shell-sharing-not-in-store"))?;
+    let shared = meta
+        .shared
+        .ok_or_else(|| tr("shell-sharing-own-document"))?;
     if !shared.access().rights.share {
-        return Err(format!(
-            "Only {} can share this document",
-            shared.owner_name
+        return Err(tr_with(
+            "shell-collab-only-owner-shares",
+            &[("owner", shared.owner_name.as_str())],
         ));
     }
     let link: ShareLink = shared.link.parse()?;
@@ -508,7 +520,13 @@ pub fn ask_owner_to_share(world: &mut World, id: DocumentId, member: Member) -> 
         member.name.clone(),
         access,
     );
-    let done = format!("{} shared it with {}", shared.owner_name, member.name);
+    let done = tr_with(
+        "shell-sharing-owner-shared-it",
+        &[
+            ("owner", shared.owner_name.as_str()),
+            ("name", member.name.as_str()),
+        ],
+    );
     world.resource_mut::<PendingAsks>().0.push((done, task));
     Ok(())
 }
@@ -565,22 +583,25 @@ pub struct Transfers(Vec<(DocumentId, String, String, Answer<Verdict>)>);
 
 /// Transfer ownership of `id` to member `to` (their cadrs must be running).
 pub fn transfer(world: &mut World, id: DocumentId, to: &str) -> Result<(), String> {
-    let (doc, meta) = read(world, id).ok_or("The document is not in the store")?;
+    let (doc, meta) = read(world, id).ok_or_else(|| tr("shell-sharing-not-in-store"))?;
     if let Some(s) = &meta.shared {
-        return Err(format!("Only {} can transfer this document", s.owner_name));
+        return Err(tr_with(
+            "shell-sharing-only-owner-transfers",
+            &[("owner", s.owner_name.as_str())],
+        ));
     }
     let sharing = meta
         .sharing
         .clone()
-        .ok_or("Share the document with them first")?;
+        .ok_or_else(|| tr("shell-sharing-share-first"))?;
     let member = sharing
         .members
         .iter()
         .find(|m| m.id == to)
         .cloned()
-        .ok_or("Only someone it is shared with can become its owner")?;
+        .ok_or_else(|| tr("shell-sharing-only-members-own"))?;
     let to_id = to.parse::<EndpointId>().map_err(|e| e.to_string())?;
-    let link = link_for(world, id).ok_or("Sharing needs the network")?;
+    let link = link_for(world, id).ok_or_else(|| tr("shell-collab-share-needs-network"))?;
     // The document as everyone has it: its edits numbered first.
     super::live::number_own(world);
     let doc = world
@@ -652,12 +673,19 @@ pub(super) fn poll_transfers(world: &mut World) {
                 }
                 crate::linked::toast(
                     world,
-                    format!("\u{201c}{}\u{201d} now belongs to {name}", d.name),
+                    tr_with(
+                        "shell-sharing-now-belongs-to",
+                        &[("document", d.name.as_str()), ("name", name.as_str())],
+                    ),
                 );
             }
-            Ok(Verdict::Refused(why)) | Err(why) => {
-                crate::linked::toast(world, format!("Cannot transfer it to {name}: {why}"))
-            }
+            Ok(Verdict::Refused(why)) | Err(why) => crate::linked::toast(
+                world,
+                tr_with(
+                    "shell-sharing-cannot-transfer",
+                    &[("name", name.as_str()), ("why", why.as_str())],
+                ),
+            ),
             Ok(_) => {}
         }
     }
@@ -722,9 +750,9 @@ fn take_ownership(world: &mut World, r: Request, o: Ownership) {
     world.resource_mut::<Invites>().next = 0.0;
     crate::linked::toast(
         world,
-        format!(
-            "{} made you the owner of \u{201c}{name}\u{201d}",
-            o.from_name
+        tr_with(
+            "shell-sharing-made-you-owner",
+            &[("name", o.from_name.as_str()), ("document", name.as_str())],
         ),
     );
     r.verdict(Verdict::Accepted(0));

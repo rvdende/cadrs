@@ -49,6 +49,7 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::section::{Cap, SectionItem, SectionPlane};
 use cadrs_core::{ElementId, FeatureId, PartId};
 use cadrs_sketch::FaceName;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField, NumberFieldCommit,
@@ -747,7 +748,7 @@ pub fn open_for_instance(world: &mut World, parts: &[PartId]) {
     };
     let plane = SectionCutPlane::new(
         SectionRef::Instance(first),
-        "Front plane".into(),
+        plane_label(PlaneKind::Front),
         (lo + hi) / 2.0,
         PlaneKind::Front.normal(),
     );
@@ -760,12 +761,7 @@ fn resolve(world: &World, pick: Pick) -> Option<SectionCutPlane> {
     let cache = world.resource::<PartCache>();
     let v3 = |p: [f64; 3]| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32);
     let (reference, label, origin, normal) = match pick {
-        Pick::Plane(k) => (
-            SectionRef::Plane(k),
-            format!("{} plane", k.name()),
-            Vec3::ZERO,
-            k.normal(),
-        ),
+        Pick::Plane(k) => (SectionRef::Plane(k), plane_label(k), Vec3::ZERO, k.normal()),
         Pick::Face(part, name) => {
             let p = cache.part(part)?;
             let f = p.solid.face(&name)?;
@@ -784,7 +780,7 @@ fn resolve(world: &World, pick: Pick) -> Option<SectionCutPlane> {
                 cache,
                 pick,
             )
-            .unwrap_or_else(|| "Face".into());
+            .unwrap_or_else(|| tr("common-face"));
             (SectionRef::Face(part, name), label, o, n)
         }
         Pick::Feature(f) => {
@@ -1169,7 +1165,31 @@ fn plane_row(i: usize, p: &SectionCutPlane) -> String {
     } else {
         String::new()
     };
-    format!("Section plane {} ({}{angle})", i + 1, p.label)
+    tr_with(
+        "render-section-plane-row",
+        &[
+            ("number", &(i + 1).to_string()),
+            ("plane", &format!("{}{angle}", p.label)),
+        ],
+    )
+}
+
+/// A default plane's name as the chooser shows it ([`PlaneKind::name`]: "Top").
+fn plane_name(k: PlaneKind) -> String {
+    tr(match k {
+        PlaneKind::Top => "render-section-plane-top",
+        PlaneKind::Front => "render-section-plane-front",
+        PlaneKind::Right => "render-section-plane-right",
+    })
+}
+
+/// A default plane as a section plane's label: "Front plane".
+fn plane_label(k: PlaneKind) -> String {
+    tr(match k {
+        PlaneKind::Top => "render-section-top-plane",
+        PlaneKind::Front => "render-section-front-plane",
+        PlaneKind::Right => "render-section-right-plane",
+    })
 }
 
 fn axis_name(a: Vec3) -> String {
@@ -1222,14 +1242,14 @@ fn section_dialog(
     let has_plane = active.is_some();
     let (mode, field, picker) = (s.mode, s.field, s.picker);
     FeatureDialog::new("section-dialog")
-        .title("Section view")
+        .title(tr("drawing-tool-section-view"))
         .valid(!s.planes.is_empty())
         .width(260.0)
         .body(move |b| {
             let strip = TabStrip::new("section-mode")
                 .compact()
-                .tab("Exclude")
-                .tab("Include");
+                .tab(tr("render-section-exclude"))
+                .tab(tr("render-section-include"));
             b.spawn(
                 strip
                     .selected(if mode == SectionMode::Exclude { 0 } else { 1 })
@@ -1245,7 +1265,7 @@ fn section_dialog(
             .with_children(|r| {
                 r.spawn(
                     SelectionList::new("section-planes")
-                        .placeholder("Section planes")
+                        .placeholder(tr("render-section-planes"))
                         .items(rows)
                         .active(field == SectionField::Planes)
                         .build(&tb),
@@ -1258,7 +1278,7 @@ fn section_dialog(
                 r.spawn((
                     IconButton::new("section-default-plane", "plane")
                         .icon_size(18.0)
-                        .tooltip("Section by a default plane: Top, Front or Right")
+                        .tooltip(tr("render-section-default-plane-tooltip"))
                         .build(&tb),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(|w: &mut World| {
@@ -1292,7 +1312,7 @@ fn section_dialog(
                 .with_children(|r| {
                     let mut kinds = Select::new("section-default-plane-kind").width(Val::Px(130.0));
                     for k in PlaneKind::ALL {
-                        kinds = kinds.option(k.name(), true);
+                        kinds = kinds.option(plane_name(k), true);
                     }
                     r.spawn(kinds.selected(p.kind.index()).build(&tb))
                         .entry::<Node>()
@@ -1301,15 +1321,19 @@ fn section_dialog(
                         (
                             "section-default-plane-flip",
                             crate::extrude_dialog::flip_icon(p.flip),
-                            "Flip the side removed",
+                            "render-section-flip-side",
                         ),
-                        ("section-default-plane-ok", "check", "Add the section plane"),
-                        ("section-default-plane-cancel", "close", "Cancel"),
+                        (
+                            "section-default-plane-ok",
+                            "check",
+                            "render-section-add-plane",
+                        ),
+                        ("section-default-plane-cancel", "close", "common-cancel"),
                     ] {
                         r.spawn((
                             IconButton::new(name, icon)
                                 .icon_size(16.0)
-                                .tooltip(tip)
+                                .tooltip(tr(tip))
                                 .build(&tb),
                             observe(on_chooser_button),
                         ))
@@ -1322,11 +1346,11 @@ fn section_dialog(
                     }
                 });
             }
-            let placeholder = if mode == SectionMode::Exclude {
-                "Items to exclude"
+            let placeholder = tr(if mode == SectionMode::Exclude {
+                "render-section-items-exclude"
             } else {
-                "Items to include"
-            };
+                "render-section-items-include"
+            });
             b.spawn(
                 SelectionList::new("section-items")
                     .placeholder(placeholder)
@@ -1349,7 +1373,7 @@ fn section_dialog(
             })
             .with_children(|r| {
                 r.spawn(
-                    NumberField::new("section-offset", "Offset")
+                    NumberField::new("section-offset", tr("common-offset"))
                         .text(offset)
                         .label_width(52.0)
                         .build(&tb),
@@ -1359,7 +1383,7 @@ fn section_dialog(
                 r.spawn((
                     IconButton::new("section-flip", crate::extrude_dialog::flip_icon(flipped))
                         .icon_size(20.0)
-                        .tooltip("Flip the side removed")
+                        .tooltip(tr("render-section-flip-side"))
                         .build(&tb),
                     observe(|_: On<Activate>, mut commands: Commands| commands.queue(flip)),
                 ))
@@ -1371,20 +1395,27 @@ fn section_dialog(
                 });
             });
             b.spawn(
-                NumberField::new("section-angle", format!("Tilt 1 ({})", axis_labels[0]))
-                    .text(angle)
-                    .label_width(92.0)
-                    .build(&tb),
+                NumberField::new(
+                    "section-angle",
+                    tr_with("render-section-tilt-1", &[("axis", &axis_labels[0])]),
+                )
+                .text(angle)
+                .label_width(92.0)
+                .build(&tb),
             );
             b.spawn(
-                NumberField::new("section-angle-2", format!("Tilt 2 ({})", axis_labels[1]))
-                    .text(angle2)
-                    .label_width(92.0)
-                    .build(&tb),
+                NumberField::new(
+                    "section-angle-2",
+                    tr_with("render-section-tilt-2", &[("axis", &axis_labels[1])]),
+                )
+                .text(angle2)
+                .label_width(92.0)
+                .build(&tb),
             );
             b.spawn((
                 Name::new("section-rotation-axis"),
-                Text::new("Blue: tilt 1 · Orange: tilt 2\nLocal axes · order: tilt 1, then tilt 2"),
+                Text::new(tr("render-section-tilt-help")),
+                Translated("render-section-tilt-help"),
                 TextFont {
                     font_size: bevy::text::FontSize::Px(12.0),
                     ..default()
@@ -1432,7 +1463,7 @@ fn sync_dialog(
             cache
                 .part(*p)
                 .map(|q| q.name.clone())
-                .unwrap_or_else(|| "Part".into())
+                .unwrap_or_else(|| tr("common-part"))
         })
         .collect();
     let key = format!(

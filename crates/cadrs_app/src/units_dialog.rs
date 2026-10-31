@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::commands::SetUnits;
 use cadrs_sketch::units::{LengthUnit, MAX_DECIMALS, MassUnit, Units};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, DialogClose, Select, SelectState, form_row};
 
@@ -46,7 +47,7 @@ pub fn open_units_dialog(world: &mut World) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("workspace-units-dialog")
-            .title("Workspace units")
+            .title(tr("io-units-title"))
             .width(400.0)
             .body(move |b| {
                 let t = &tb;
@@ -58,15 +59,20 @@ pub fn open_units_dialog(world: &mut World) {
                     .iter()
                     .position(|u| *u == units.length)
                     .unwrap_or(0);
-                b.spawn(form_row(t, "units-length-row", "Length units", 150.0))
-                    .with_child(length.selected(selected).build(t));
+                b.spawn(form_row(
+                    t,
+                    "units-length-row",
+                    tr("io-units-length"),
+                    150.0,
+                ))
+                .with_child(length.selected(selected).build(t));
                 // Angles are always degrees (shown for parity with Onshape's dialog).
-                b.spawn(form_row(t, "units-angle-row", "Angle units", 150.0))
+                b.spawn(form_row(t, "units-angle-row", tr("io-units-angle"), 150.0))
                     .with_child(
                         Select::new("units-angle")
                             .width(Val::Px(180.0))
-                            .option("Degree", true)
-                            .option("Radian", false)
+                            .option(tr("io-units-degree"), true)
+                            .option(tr("io-units-radian"), false)
                             .build(t),
                     );
                 // Mass (X8, P3.5): the unit of Mass properties.
@@ -78,7 +84,7 @@ pub fn open_units_dialog(world: &mut World) {
                     .iter()
                     .position(|u| *u == units.mass)
                     .unwrap_or(0);
-                b.spawn(form_row(t, "units-mass-row", "Mass units", 150.0))
+                b.spawn(form_row(t, "units-mass-row", tr("io-units-mass"), 150.0))
                     .with_child(mass.selected(mass_selected).build(t));
                 // The decimal lists open upward so they do not cover OK and Cancel.
                 let decimals_select = |name: &'static str, selected: u8| {
@@ -91,14 +97,14 @@ pub fn open_units_dialog(world: &mut World) {
                 b.spawn(form_row(
                     t,
                     "units-decimals-row",
-                    "Length decimal places",
+                    tr("io-units-length-decimals"),
                     150.0,
                 ))
                 .with_child(decimals_select("units-decimals", units.decimals).build(t));
                 b.spawn(form_row(
                     t,
                     "units-angle-decimals-row",
-                    "Angle decimal places",
+                    tr("io-units-angle-decimals"),
                     150.0,
                 ))
                 .with_child(decimals_select("units-angle-decimals", units.angle_decimals).build(t));
@@ -115,13 +121,18 @@ pub fn open_units_dialog(world: &mut World) {
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("units-ok").label("OK").primary().build(t),
+                    Button::new("units-ok")
+                        .label(tr("common-ok"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(save_units);
                     }),
                 ));
                 f.spawn((
-                    Button::new("units-cancel").label("Cancel").build(t),
+                    Button::new("units-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(
                         |_: On<Activate>,
                          q: Query<Entity, With<UnitsDialog>>,

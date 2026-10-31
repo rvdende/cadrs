@@ -34,6 +34,7 @@ use cadrs_core::assembly::InstanceSource;
 use cadrs_core::external::{LinkState, RefAt};
 use cadrs_core::link_update::{RefSite, RefUse};
 use cadrs_core::{Document, DocumentId, ElementId, PartId};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::history_panel::DocLog;
@@ -88,8 +89,16 @@ pub struct LinkedSession {
 impl LinkedSession {
     /// "V1 of Block source".
     pub fn label(&self) -> String {
-        format!("{} of {}", self.version_name, self.name)
+        version_of(&self.version_name, &self.name)
     }
+}
+
+/// "V1 of Block source": a version of a document.
+fn version_of(version: &str, document: &str) -> String {
+    tr_with(
+        "shell-linked-session-version-of",
+        &[("version", version), ("document", document)],
+    )
 }
 
 /// True while a linked document is open read-only.
@@ -137,10 +146,7 @@ fn part_of(doc: &Document, u: &RefUse) -> Option<PartId> {
 pub fn open_use(world: &mut World, u: RefUse) {
     let doc = world.resource::<ActiveDocument>().doc.clone();
     let RefAt::Version(v) = u.reference.at else {
-        linked::toast(
-            world,
-            "It references the workspace: switch to its tab instead",
-        );
+        linked::toast(world, tr("shell-linked-session-references-workspace"));
         return;
     };
     let d = u.reference.document_or(doc.id);
@@ -150,7 +156,7 @@ pub fn open_use(world: &mut World, u: RefUse) {
         // This document at a version (ER3): from its own history.
         let log = world.resource::<DocLog>().log.clone();
         let Some(at) = log.as_ref().and_then(|l| l.document_at_version(v)) else {
-            linked::error_toast(world, "The version can't be read");
+            linked::error_toast(world, tr("shell-linked-session-version-unreadable"));
             return;
         };
         let vn = log
@@ -184,7 +190,16 @@ pub fn open_use(world: &mut World, u: RefUse) {
     };
     let element = u.reference.element;
     if at.elements.iter().all(|e| e.id != element) {
-        linked::error_toast(world, format!("{} has no such tab at {version_name}", name));
+        linked::error_toast(
+            world,
+            tr_with(
+                "shell-linked-session-no-such-tab",
+                &[
+                    ("document", name.as_str()),
+                    ("version", version_name.as_str()),
+                ],
+            ),
+        );
         return;
     }
     // Save what is open, and keep it to go back to (the first document, when a linked
@@ -208,7 +223,7 @@ pub fn open_use(world: &mut World, u: RefUse) {
         }
     };
     crate::reference_manager::close(world);
-    let label = format!("{version_name} of {name}");
+    let label = version_of(&version_name, &name);
     let mut open = ActiveDocument::new(at);
     open.read_only = Some(label);
     open.set_active(element);
@@ -432,7 +447,7 @@ fn sync_banner(
                 b.spawn((
                     Name::new("linked-session-banner-text"),
                     t.text(
-                        format!("Viewing {} (read-only). Edits are turned off.", s.label()),
+                        tr_with("shell-linked-session-viewing", &[("what", &s.label())]),
                         t.font_sm,
                         FontWeight::MEDIUM,
                         t.foreground,
@@ -444,16 +459,22 @@ fn sync_banner(
                 if s.document != s.back.doc.id {
                     b.spawn(
                         cadrs_ui::Button::new("linked-session-main")
-                            .label("Edit Main")
+                            .label(tr("shell-linked-session-edit-main"))
                             .icon("edit")
-                            .tooltip(format!("Open {}'s workspace (Main) to edit it", s.name))
+                            .tooltip(tr_with(
+                                "shell-linked-session-edit-main-tooltip",
+                                &[("document", s.name.as_str())],
+                            ))
                             .small()
                             .build(t),
                     );
                 }
                 b.spawn(
                     cadrs_ui::Button::new("linked-session-back")
-                        .label(format!("Back to {}", s.back.doc.name))
+                        .label(tr_with(
+                            "shell-linked-session-back",
+                            &[("document", s.back.doc.name.as_str())],
+                        ))
                         .icon("chevron-left")
                         .primary()
                         .small()
@@ -504,7 +525,14 @@ fn sync_edit_banner(
     let banner = commands
         .spawn((
             EditBanner(key),
-            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), right: Val::Px(0.0), bottom: Val::Px(14.0), justify_content: JustifyContent::Center, ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                bottom: Val::Px(14.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
             Pickable::IGNORE,
             GlobalZIndex(40),
         ))
@@ -525,18 +553,66 @@ fn sync_edit_banner(
                 BorderColor::all(linked::UPDATE_BLUE),
             ))
             .with_children(|b| {
-                b.spawn((Node { flex_shrink: 0.0, ..default() }, Pickable::IGNORE)).with_children(|i| {
-                    i.spawn((cadrs_ui::icon::icon("edit", 16.0, linked::UPDATE_BLUE), cadrs_ui::icon::SolidTint));
+                b.spawn((
+                    Node {
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|i| {
+                    i.spawn((
+                        cadrs_ui::icon::icon("edit", 16.0, linked::UPDATE_BLUE),
+                        cadrs_ui::icon::SolidTint,
+                    ));
                 });
                 // The banner is as wide as what it holds; the text wraps past 640 px (long
                 // document names), so the Back button always stays inside the border.
                 b.spawn((
                     Name::new("linked-edit-banner-text"),
-                    t.text(format!("Editing Main of {}. Create a version, then update the reference in {}.", e.name, e.back.doc.name), t.font_sm, FontWeight::MEDIUM, t.foreground),
+                    t.text(
+                        tr_with(
+                            "shell-linked-session-editing-main",
+                            &[
+                                ("document", e.name.as_str()),
+                                ("back", e.back.doc.name.as_str()),
+                            ],
+                        ),
+                        t.font_sm,
+                        FontWeight::MEDIUM,
+                        t.foreground,
+                    ),
                 ))
-                .insert((Node { flex_shrink: 0.0, max_width: Val::Px(640.0), ..default() }, TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary)));
-                b.spawn((Name::new("linked-edit-back-slot"), Node { flex_shrink: 0.0, ..default() })).with_children(|s| {
-                    s.spawn(cadrs_ui::Button::new("linked-edit-back").label(format!("Back to {}", e.back.doc.name)).icon("chevron-left").primary().small().build(t));
+                .insert((
+                    Node {
+                        flex_shrink: 0.0,
+                        max_width: Val::Px(640.0),
+                        ..default()
+                    },
+                    TextLayout::new(
+                        bevy::text::Justify::Left,
+                        bevy::text::LineBreak::WordBoundary,
+                    ),
+                ));
+                b.spawn((
+                    Name::new("linked-edit-back-slot"),
+                    Node {
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                ))
+                .with_children(|s| {
+                    s.spawn(
+                        cadrs_ui::Button::new("linked-edit-back")
+                            .label(tr_with(
+                                "shell-linked-session-back",
+                                &[("document", e.back.doc.name.as_str())],
+                            ))
+                            .icon("chevron-left")
+                            .primary()
+                            .small()
+                            .build(t),
+                    );
                 });
             });
         })
@@ -661,7 +737,7 @@ fn sync_veil(
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.97, 0.97, 0.97, 0.62)),
-                Tooltip::new("This version is open read-only: its tools are turned off"),
+                Tooltip::new(tr("shell-linked-session-tools-off")),
             ))
             .id();
         commands.entity(bar).add_child(veil);
@@ -686,16 +762,15 @@ fn notify_refused(
         return;
     }
     let text = match session {
-        Some(s) => format!(
-            "{} is open read-only: it can't be edited. Go back to {} to edit.",
-            s.label(),
-            s.back.doc.name
+        Some(s) => tr_with(
+            "shell-linked-session-cannot-edit",
+            &[("what", &s.label()), ("back", s.back.doc.name.as_str())],
         ),
         // A shared document (`crate::collab`): the reason it is read-only.
         None => doc
             .read_only
             .clone()
-            .unwrap_or_else(|| crate::READ_ONLY.into()),
+            .unwrap_or_else(|| tr("shell-linked-session-read-only")),
     };
     cadrs_ui::show_notification(
         &mut commands,

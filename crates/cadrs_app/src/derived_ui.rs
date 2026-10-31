@@ -28,6 +28,7 @@
 //! Stand-in icon (see `docs/icon-migration.md`): Derived is `file-import`.
 
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use std::collections::HashSet;
 
 use bevy::input::ButtonState;
@@ -867,7 +868,7 @@ fn source_connectors(d: &DerivedFeature) -> Vec<(ConnectorRef, String)> {
 /// A location's label.
 fn location_label(features: &[Feature], c: &ConnectorRef) -> String {
     match c {
-        ConnectorRef::Implicit(ConnectorOrigin::Origin) => "Origin".into(),
+        ConnectorRef::Implicit(ConnectorOrigin::Origin) => tr("view-derived-origin"),
         c => c.label(features),
     }
 }
@@ -879,8 +880,11 @@ fn source_text(doc: &cadrs_core::Document, d: &DerivedFeature) -> (String, Strin
     };
     let this = r.document_or(doc.id) == doc.id;
     let sub = match (this, r.at) {
-        (true, RefAt::Workspace) => "This document · Main (follows the tab)".to_string(),
-        (true, RefAt::Version(_)) => format!("This document · {}", d.version_name),
+        (true, RefAt::Workspace) => tr("view-derived-this-document-main"),
+        (true, RefAt::Version(_)) => tr_with(
+            "view-derived-this-document-version",
+            &[("version", &d.version_name)],
+        ),
         (false, _) => format!("{} · {}", d.document_name, d.version_name),
     };
     match &d.board {
@@ -911,7 +915,7 @@ fn studio_rows(world: &World, s: &DerivedSession) -> Vec<SourceRow> {
                 let studio = if b.design().is_some() {
                     e.name.clone()
                 } else {
-                    format!("{} · IDF, read-only", e.name)
+                    tr_with("view-derived-idf-read-only", &[("studio", &e.name)])
                 };
                 v.push((e.id, b.name().to_string(), Some(b.id), studio));
             }
@@ -932,7 +936,7 @@ fn studio_rows(world: &World, s: &DerivedSession) -> Vec<SourceRow> {
                 .map(|(e, n, b, st)| {
                     (
                         n,
-                        sub(&st, "Main · follows the tab"),
+                        sub(&st, &tr("view-derived-main-follows-tab")),
                         SourceRef {
                             document: None,
                             at: RefAt::Workspace,
@@ -987,11 +991,12 @@ struct BoardRows {
     off_board: bool,
     /// Each footprint with a model: its id, "J1 MCU left (bottom)", whether it comes in, and
     /// whether the side filter or its place off the board leaves it out regardless.
-    footprints: Vec<(uuid::Uuid, String, bool, bool)>,
+    footprints: Vec<(uuid::Uuid, String, String, bool, bool)>,
     /// The footprint the board is placed by (with anchor 3).
     anchor_footprint: Option<uuid::Uuid>,
-    /// The sketch a board made from a sketch lies on (instead of locations).
-    on_sketch: Option<String>,
+    /// The sketch a board made from a sketch lies on (instead of locations): its name, if it
+    /// is still there.
+    on_sketch: Option<Option<String>>,
 }
 
 /// Everything the dialog shows (it is rebuilt when this changes).
@@ -1114,15 +1119,26 @@ fn view(world: &World) -> Option<(View, bool)> {
                     } else {
                         format!("{} {value}", f.reference())
                     };
+                    // (The row's name keeps the English label: it doesn't change with the language.)
+                    let mut name = label.clone();
                     if f.placement.side == cadrs_eda::layer::Side::Bottom {
-                        label.push_str(" (bottom)");
+                        name.push_str(" (bottom)");
+                        label = tr_with("view-derived-footprint-bottom", &[("footprint", &label)]);
                     }
                     let off = !on_board(&region, f);
                     if off {
-                        label.push_str(" (off the board)");
+                        name.push_str(" (off the board)");
+                        label =
+                            tr_with("view-derived-footprint-off-board", &[("footprint", &label)]);
                     }
                     let blocked = !o.components.takes(f.placement.side) || (off && !o.off_board);
-                    (f.id, label, !blocked && !o.exclude.contains(&f.id), blocked)
+                    (
+                        f.id,
+                        name,
+                        label,
+                        !blocked && !o.exclude.contains(&f.id),
+                        blocked,
+                    )
                 })
                 .collect();
             BoardRows {
@@ -1145,10 +1161,7 @@ fn view(world: &World) -> Option<(View, bool)> {
                     A::Footprint(id) => Some(id),
                     _ => None,
                 },
-                on_sketch: b.on_sketch.map(|f| {
-                    el.feature(f)
-                        .map_or_else(|| "its sketch".to_string(), |f| f.name.clone())
-                }),
+                on_sketch: b.on_sketch.map(|f| el.feature(f).map(|f| f.name.clone())),
             }
         }),
         linked: d.source.is_some_and(|r| r.at != RefAt::Workspace),
@@ -1225,7 +1238,7 @@ fn sync_dialog(
                                     14.0,
                                     Color::srgb_u8(0xa8, 0xa8, 0xa8),
                                 ),
-                                Tooltip::new(HELP),
+                                Tooltip::new(tr(HELP)),
                             ));
                             let _ = &tf;
                         })
@@ -1310,14 +1323,15 @@ fn sync_dialog(
     *last = Some(v);
 }
 
-const HELP: &str = "Derived brings parts, sketches, planes and mate connectors of another Part Studio into this one, \
-or a PCB Studio board with its components. \
-A tab of this document follows its edits; a version (of this or another document) stays as it was until you update it.";
+/// The help tooltip's key.
+const HELP: &str = "view-derived-help";
 
-fn section(p: &mut ChildSpawnerCommands, t: &Theme, name: &str, label: &str) {
+/// A section's heading, the text of `key`.
+fn section(p: &mut ChildSpawnerCommands, t: &Theme, name: &str, key: &'static str) {
     p.spawn((
         Name::new(name.to_string()),
-        t.text(label, t.font_sm, FontWeight::BOLD, t.muted_foreground),
+        t.text(tr(key), t.font_sm, FontWeight::BOLD, t.muted_foreground),
+        Translated(key),
         Node {
             margin: UiRect::new(Val::Px(6.0), Val::Px(4.0), Val::Px(8.0), Val::Px(3.0)),
             ..default()
@@ -1343,8 +1357,8 @@ fn spawn_body(
             TabStrip::new("derived-source-tabs")
                 .compact()
                 .equal()
-                .tab("Current document")
-                .tab("Other documents")
+                .tab(tr("view-derived-current-document"))
+                .tab(tr("view-derived-other-documents"))
                 .selected(v.source_tab)
                 .build(t),
         );
@@ -1401,7 +1415,7 @@ fn spawn_body(
             })
             .with_child(
                 cadrs_ui::Button::new("derived-change-source")
-                    .label("Keep current source")
+                    .label(tr("view-derived-keep-source"))
                     .small()
                     .outline()
                     .build(t),
@@ -1421,11 +1435,11 @@ fn spawn_body(
             ..default()
         },
         BorderColor::all(t.border),
-        Tooltip::new(if v.linked {
-            "Referenced at a version: it changes only when you update it"
+        Tooltip::new(tr(if v.linked {
+            "view-derived-source-linked-tooltip"
         } else {
-            "A tab of this document: its edits show here at once"
-        }),
+            "view-derived-source-tab-tooltip"
+        })),
     ))
     .with_children(|r| {
         r.spawn(cadrs_ui::icon(
@@ -1482,10 +1496,10 @@ fn spawn_body(
         }
         r.spawn(
             cadrs_ui::Button::new("derived-change-source")
-                .label("Change")
+                .label(tr("view-derived-change"))
                 .small()
                 .outline()
-                .tooltip("Pick another Part Studio, board or version")
+                .tooltip(tr("view-derived-change-tooltip"))
                 .build(t),
         );
     });
@@ -1494,7 +1508,7 @@ fn spawn_body(
         return;
     }
     // Derive.
-    section(p, t, "derived-derive-label", "Derive");
+    section(p, t, "derived-derive-label", "view-derived-derive");
     p.spawn(Node {
         flex_direction: FlexDirection::Column,
         padding: UiRect::horizontal(Val::Px(4.0)),
@@ -1502,7 +1516,7 @@ fn spawn_body(
     })
     .with_children(|c| {
         c.spawn(
-            OptionRow::new("derived-all", "Part Studio (every part, sketch and plane)")
+            OptionRow::new("derived-all", tr("view-derived-all"))
                 .checked(v.all)
                 .build(t),
         );
@@ -1527,7 +1541,7 @@ fn spawn_body(
         }
     });
     // Locations.
-    section(p, t, "derived-locations-label", "Locations");
+    section(p, t, "derived-locations-label", "view-derived-locations");
     p.spawn(Node {
         flex_direction: FlexDirection::Column,
         padding: UiRect::horizontal(Val::Px(4.0)),
@@ -1536,20 +1550,20 @@ fn spawn_body(
     .with_children(|c| {
         c.spawn(
             SelectionList::new("derived-locations")
-                .placeholder("Mate connectors (the origin when empty)")
+                .placeholder(tr("view-derived-locations-placeholder"))
                 .items(v.locations.clone())
                 .active(v.locations_active)
                 .build(t),
         );
     });
     // Placement.
-    section(p, t, "derived-placement-label", "Placement");
+    section(p, t, "derived-placement-label", "view-derived-placement");
     p.spawn(
         TabStrip::new("derived-placement")
             .compact()
             .equal()
-            .tab("Base origin")
-            .tab("Base mate connector")
+            .tab(tr("view-derived-base-origin"))
+            .tab(tr("view-derived-base-connector"))
             .selected(usize::from(v.placement.is_some()))
             .build(t),
     );
@@ -1563,7 +1577,7 @@ fn spawn_body(
         .with_children(|c| {
             c.spawn(
                 SelectionList::new("derived-base-field")
-                    .placeholder("Base mate connector")
+                    .placeholder(tr("view-derived-base-connector"))
                     .items(chosen.iter().cloned().collect())
                     .active(false)
                     .build(t),
@@ -1571,11 +1585,12 @@ fn spawn_body(
             if v.bases.is_empty() {
                 c.spawn((
                     t.text(
-                        "The source has no mate connectors",
+                        tr("view-derived-no-connectors"),
                         t.font_sm,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("view-derived-no-connectors"),
                     Node {
                         margin: UiRect::all(Val::Px(4.0)),
                         ..default()
@@ -1602,14 +1617,20 @@ fn spawn_body(
     })
     .with_children(|c| {
         c.spawn(
-            OptionRow::new("derived-include-connectors", "Include mate connectors")
-                .checked(v.include_connectors)
-                .build(t),
+            OptionRow::new(
+                "derived-include-connectors",
+                tr("view-derived-include-connectors"),
+            )
+            .checked(v.include_connectors)
+            .build(t),
         );
         c.spawn(
-            OptionRow::new("derived-include-properties", "Include properties")
-                .checked(v.include_properties)
-                .build(t),
+            OptionRow::new(
+                "derived-include-properties",
+                tr("view-derived-include-properties"),
+            )
+            .checked(v.include_properties)
+            .build(t),
         );
     });
 }
@@ -1617,25 +1638,25 @@ fn spawn_body(
 /// The dialog's body under the source card for a PCB Studio board:
 /// what it shows, which components come in, where it goes and how it sits there.
 fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &BoardRows) {
-    section(p, t, "derived-board-view-label", "Show");
+    section(p, t, "derived-board-view-label", "view-derived-show");
     p.spawn(
         TabStrip::new("derived-board-view")
             .compact()
             .equal()
-            .tab("3D model")
-            .tab("Layout")
+            .tab(tr("view-derived-3d-model"))
+            .tab(tr("view-derived-layout"))
             .selected(b.view)
             .build(t),
     );
-    section(p, t, "derived-components-label", "Components");
+    section(p, t, "derived-components-label", "view-derived-components");
     p.spawn(
         TabStrip::new("derived-board-components")
             .compact()
             .equal()
-            .tab("All")
-            .tab("Top")
-            .tab("Bottom")
-            .tab("None")
+            .tab(tr("view-derived-components-all"))
+            .tab(tr("view-derived-components-top"))
+            .tab(tr("view-derived-components-bottom"))
+            .tab(tr("common-none"))
             .selected(b.components)
             .build(t),
     );
@@ -1660,11 +1681,11 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
                 },
             ))
             .with_children(|c| {
-                for (id, label, on, blocked) in &b.footprints {
+                for (id, name, label, on, blocked) in &b.footprints {
                     c.spawn((
                         EntityRow(EntityKey::Footprint(*id)),
                         OptionRow::new(
-                            format!("derived-footprint-{}", linked::slug(label)),
+                            format!("derived-footprint-{}", linked::slug(name)),
                             label.clone(),
                         )
                         .icon("chip")
@@ -1689,19 +1710,30 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
     .with_child(
         OptionRow::new(
             "derived-board-off-board",
-            "Include parts placed off the board",
+            tr("view-derived-include-off-board"),
         )
         .checked(b.off_board)
         .build(t),
     );
-    section(p, t, "derived-locations-label", "Locations");
+    section(p, t, "derived-locations-label", "view-derived-locations");
     if let Some(sk) = &b.on_sketch {
+        let text = match sk {
+            Some(sk) => tr_with("view-derived-on-sketch", &[("sketch", sk)]),
+            None => tr("view-derived-on-its-sketch"),
+        };
         p.spawn((
             Name::new("derived-board-on-sketch"),
-            t.text(format!("On {sk}'s plane, as the board was made from it. Pick a mate connector to place it elsewhere."), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
-            Node { margin: UiRect::new(Val::Px(8.0), Val::Px(6.0), Val::Px(0.0), Val::Px(4.0)), max_width: Val::Percent(100.0), ..default() },
+            t.text(text, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+            Node {
+                margin: UiRect::new(Val::Px(8.0), Val::Px(6.0), Val::Px(0.0), Val::Px(4.0)),
+                max_width: Val::Percent(100.0),
+                ..default()
+            },
         ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+        .insert(TextLayout::new(
+            bevy::text::Justify::Left,
+            bevy::text::LineBreak::WordBoundary,
+        ));
     }
     p.spawn(Node {
         flex_direction: FlexDirection::Column,
@@ -1711,7 +1743,7 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
     .with_children(|c| {
         c.spawn(
             SelectionList::new("derived-locations")
-                .placeholder("Mate connectors (the origin when empty)")
+                .placeholder(tr("view-derived-locations-placeholder"))
                 .items(v.locations.clone())
                 .active(v.locations_active)
                 .build(t),
@@ -1721,29 +1753,30 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
         p,
         t,
         "derived-board-anchor-label",
-        "Board point on the location",
+        "view-derived-board-point",
     );
     p.spawn(
         TabStrip::new("derived-board-anchor")
             .compact()
             .equal()
-            .tab("Fixed")
-            .tab("Origin")
-            .tab("Centre")
-            .tab("Footprint")
+            .tab(tr("view-derived-anchor-fixed"))
+            .tab(tr("view-derived-origin"))
+            .tab(tr("view-derived-anchor-centre"))
+            .tab(tr("view-derived-anchor-footprint"))
             .selected(b.anchor)
             .build(t),
     );
     let hint = match b.anchor {
-        0 => "Where the outline's centre was: outline edits don't move the board",
-        1 => "The layout's origin (0, 0)",
-        2 => "The outline's centre: the board moves when the outline changes",
-        _ => "A footprint's origin: the part lands on the location",
+        0 => "view-derived-anchor-fixed-hint",
+        1 => "view-derived-anchor-origin-hint",
+        2 => "view-derived-anchor-centre-hint",
+        _ => "view-derived-anchor-footprint-hint",
     };
     // (Wrapped: the theme's text doesn't wrap.)
     p.spawn((
         Name::new("derived-board-anchor-hint"),
-        t.text(hint, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+        t.text(tr(hint), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+        Translated(hint),
         Node {
             margin: UiRect::new(Val::Px(8.0), Val::Px(6.0), Val::Px(3.0), Val::Px(0.0)),
             max_width: Val::Percent(100.0),
@@ -1766,10 +1799,10 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
             },
         ))
         .with_children(|c| {
-            for (id, label, _, _) in &b.footprints {
+            for (id, name, label, _, _) in &b.footprints {
                 let mut row = c.spawn((
                     cadrs_ui::location_row(
-                        format!("derived-anchor-{}", linked::slug(label)),
+                        format!("derived-anchor-{}", linked::slug(name)),
                         "chip",
                         label.clone(),
                         t,
@@ -1782,18 +1815,13 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
             }
         });
     }
-    section(
-        p,
-        t,
-        "derived-board-seat-label",
-        "Board face on the location",
-    );
+    section(p, t, "derived-board-seat-label", "view-derived-board-face");
     p.spawn(
         TabStrip::new("derived-board-seat")
             .compact()
             .equal()
-            .tab("Bottom face")
-            .tab("Top face")
+            .tab(tr("view-derived-bottom-face"))
+            .tab(tr("view-derived-top-face"))
             .selected(b.seat)
             .build(t),
     );
@@ -1804,12 +1832,9 @@ fn spawn_board_options(p: &mut ChildSpawnerCommands, t: &Theme, v: &View, b: &Bo
     })
     .with_children(|c| {
         c.spawn(
-            OptionRow::new(
-                "derived-board-skins",
-                "Show the mask, copper and silkscreen",
-            )
-            .checked(b.skins)
-            .build(t),
+            OptionRow::new("derived-board-skins", tr("view-derived-skins"))
+                .checked(b.skins)
+                .build(t),
         );
     });
 }
@@ -1832,11 +1857,12 @@ fn studio_list(c: &mut ChildSpawnerCommands, t: &Theme, rows: &[SourceRow]) {
         if rows.is_empty() {
             l.spawn((
                 t.text(
-                    "No other Part Studios or boards",
+                    tr("view-derived-no-sources"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("view-derived-no-sources"),
                 Node {
                     margin: UiRect::all(Val::Px(8.0)),
                     ..default()
@@ -1849,13 +1875,14 @@ fn studio_list(c: &mut ChildSpawnerCommands, t: &Theme, rows: &[SourceRow]) {
             if heading != Some(board.is_some()) {
                 heading = Some(board.is_some());
                 let (name, text) = if board.is_some() {
-                    ("derived-heading-boards", "Boards")
+                    ("derived-heading-boards", "view-derived-heading-boards")
                 } else {
-                    ("derived-heading-studios", "Part Studios")
+                    ("derived-heading-studios", "view-derived-heading-studios")
                 };
                 l.spawn((
                     Name::new(name),
-                    t.text(text, t.font_sm, FontWeight::BOLD, t.muted_foreground),
+                    t.text(tr(text), t.font_sm, FontWeight::BOLD, t.muted_foreground),
+                    Translated(text),
                     Node {
                         margin: UiRect::new(Val::Px(6.0), Val::Px(4.0), Val::Px(6.0), Val::Px(2.0)),
                         ..default()
@@ -1874,7 +1901,7 @@ fn studio_list(c: &mut ChildSpawnerCommands, t: &Theme, rows: &[SourceRow]) {
                     sub.clone(),
                 )
                 .icon(icon)
-                .tooltip(format!("Derive {label}"))
+                .tooltip(tr_with("view-derived-derive-named", &[("name", label)]))
                 .build(t),
                 StudioPick(*r, *board),
             ));
@@ -1959,7 +1986,7 @@ pub fn children(
         }
         v.push((
             DerivedChild::BoardView(feature),
-            "View".to_string(),
+            tr("view-derived-board-view"),
             if view == BoardView::Layout {
                 "pcb-studio"
             } else {
@@ -1970,7 +1997,10 @@ pub fn children(
             // (Short: the row has its eye and chevron too.)
             v.push((
                 DerivedChild::Components(feature),
-                format!("Parts ({})", out.footprints.len()),
+                tr_with(
+                    "view-derived-components-count",
+                    &[("count", &out.footprints.len().to_string())],
+                ),
                 "chip",
             ));
             if components_open {

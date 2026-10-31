@@ -15,6 +15,7 @@
 use bevy::prelude::*;
 use cadrs_core::FeatureId;
 use cadrs_core::commands::{CreateFolder, DeleteFolder, MoveFeatures, SetFolder, UnpackFolder};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::menu::{ContextMenuAnchor, ContextMenuRequested, MenuAction, open_context_menu};
 use cadrs_ui::prelude::*;
 
@@ -146,13 +147,13 @@ fn on_folder_menu(
         .min_width(160.0)
         .item_height(22.0)
         .text_only()
-        .item(MenuItem::new("folder-rename", "Rename"))
-        .item(MenuItem::new("folder-toggle", "Open / close folder"))
-        .item(MenuItem::new("folder-unpack", "Unpack folder"))
+        .item(MenuItem::new("folder-rename", tr("common-rename")))
+        .item(MenuItem::new("folder-toggle", tr("view-folder-toggle")))
+        .item(MenuItem::new("folder-unpack", tr("view-folder-unpack")))
         .separator()
         .item(MenuItem::new(
             "folder-delete",
-            "Delete folder and its features",
+            tr("view-folder-delete-with-features"),
         ));
     let anchor = open_context_menu(&mut commands, ev.position, menu.build(&theme));
     commands
@@ -708,7 +709,10 @@ fn place_drop_line(
         None => {
             let label = match drag.features.as_slice() {
                 [one] => el.feature(*one).map(|f| f.name.clone()).unwrap_or_default(),
-                many => format!("{} features", many.len()),
+                many => cadrs_ui::i18n::tr_with(
+                    "view-drag-features",
+                    &[("count", &many.len().to_string())],
+                ),
             };
             let t = &*theme;
             commands.spawn((

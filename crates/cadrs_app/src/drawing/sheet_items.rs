@@ -30,6 +30,7 @@ use cadrs_drawing::annotation::PlacedText;
 use cadrs_drawing::sheet_sketch::{
     self as sk, Entity as DxfEntity, ItemGrip, ItemId, ItemKind, SketchItem,
 };
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::{FilePicked, Notification, Theme, show_notification};
 
 use super::annotations::{AnnTool, AnnotationUi, SceneText, blue, hover_orange, orange, square};
@@ -373,7 +374,7 @@ pub fn open_dxf_picker(w: &mut World) {
         &mut commands,
         &theme,
         "dxf-picker",
-        "Insert DXF or DWG",
+        &tr("drawing-tool-insert-dxf"),
         "insert-dxf",
         dir,
         &["dxf", "dwg"],
@@ -390,7 +391,7 @@ pub fn open_image_picker(w: &mut World) {
         &mut commands,
         &theme,
         "image-picker",
-        "Insert image",
+        &tr("drawing-tool-insert-image"),
         "insert-image",
         dir,
         &["png", "jpg", "jpeg"],
@@ -407,7 +408,8 @@ fn load_import(tag: &str, path: &std::path::Path) -> Result<SketchItem, String> 
             .map(|b| SketchItem::new(ItemKind::Block(b))),
         "insert-image" => {
             let data = cadrs_fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let px = cadrs_drawing::export::image_size(&data).ok_or("not a PNG or JPEG image")?;
+            let px = cadrs_drawing::export::image_size(&data)
+                .ok_or_else(|| tr("drawing-not-an-image"))?;
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -421,7 +423,7 @@ fn load_import(tag: &str, path: &std::path::Path) -> Result<SketchItem, String> 
                 IMAGE_WIDTH,
             ))))
         }
-        _ => Err("unknown import".into()),
+        _ => Err(tr("drawing-unknown-import")),
     }
 }
 
@@ -448,8 +450,11 @@ fn on_file_picked(mut msgs: MessageReader<FilePicked>, mut commands: Commands) {
                     show_notification(
                         &mut commands,
                         &theme,
-                        Notification::warning(format!("Cannot insert {}: {e}", path.display()))
-                            .name("insert-toast"),
+                        Notification::warning(tr_with(
+                            "drawing-cannot-insert",
+                            &[("file", &path.display().to_string()), ("error", &e)],
+                        ))
+                        .name("insert-toast"),
                     );
                     w.flush();
                 }

@@ -33,6 +33,7 @@ use cadrs_core::import::{
 };
 use cadrs_core::rebuild::PendingJob;
 use cadrs_core::{DocumentMeta, ElementKind};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, DialogClose, Notification, show_notification};
 
@@ -123,7 +124,7 @@ pub fn start(world: &mut World, target: ImportTarget) {
         &mut commands,
         &theme,
         "import-picker",
-        "Import",
+        &tr("common-import"),
         target.tag(),
         start_dir(),
         &exts,
@@ -176,10 +177,8 @@ pub fn read(commands: &mut Commands, theme: &Theme, target: ImportTarget, path: 
         show_notification(
             commands,
             theme,
-            Notification::warning(format!(
-                "{file_name}: only STEP, IGES and BREP files can be imported"
-            ))
-            .name("import-toast"),
+            Notification::warning(tr_with("io-import-only-exchange", &[("name", &file_name)]))
+                .name("import-toast"),
         );
         return;
     };
@@ -199,7 +198,7 @@ pub fn read(commands: &mut Commands, theme: &Theme, target: ImportTarget, path: 
     show_notification(
         commands,
         theme,
-        Notification::info(format!("Reading {file_name}…"))
+        Notification::info(tr_with("io-import-reading", &[("name", &file_name)]))
             .seconds(4.0)
             .name("import-reading"),
     );
@@ -222,7 +221,7 @@ fn poll_reading(q: Query<(Entity, &Reading)>, theme: Res<Theme>, mut commands: C
             continue;
         };
         commands.entity(e).despawn();
-        match result.unwrap_or_else(|| Err("the kernel thread stopped".into())) {
+        match result.unwrap_or_else(|| Err(tr("io-import-kernel-stopped"))) {
             Ok(plan) => {
                 let file = r.file.clone();
                 commands.queue(move |w: &mut World| open_dialog(w, file, plan));
@@ -231,19 +230,14 @@ fn poll_reading(q: Query<(Entity, &Reading)>, theme: Res<Theme>, mut commands: C
                 show_notification(
                     &mut commands,
                     &theme,
-                    Notification::warning(format!("Import of {} failed: {why}", r.file.file_name))
-                        .name("import-toast"),
+                    Notification::warning(tr_with(
+                        "io-import-of-failed",
+                        &[("name", &r.file.file_name), ("error", &why.to_string())],
+                    ))
+                    .name("import-toast"),
                 );
             }
         }
-    }
-}
-
-fn plural(n: usize, one: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {one}s")
     }
 }
 
@@ -257,26 +251,39 @@ fn open_dialog(world: &mut World, file: ReadFile, plan: ImportPlan) {
     };
     let distinct = plan.parts.len();
     let summary = if assembly {
-        format!(
-            "{} file: an assembly of {} with {}",
-            plan.format.label(),
-            plural(distinct, "part"),
-            plural(plan.occurrences.len(), "instance")
+        let instances = plan.occurrences.len();
+        let key = match (distinct == 1, instances == 1) {
+            (true, true) => "io-import-summary-assembly-1-1",
+            (true, false) => "io-import-summary-assembly-1-n",
+            (false, true) => "io-import-summary-assembly-n-1",
+            (false, false) => "io-import-summary-assembly-n-n",
+        };
+        tr_with(
+            key,
+            &[
+                ("format", plan.format.label()),
+                ("parts", &distinct.to_string()),
+                ("instances", &instances.to_string()),
+            ],
         )
     } else {
-        format!(
-            "{} file: {}",
-            plan.format.label(),
-            plural(
-                plan.part_count(cadrs_core::import::ImportMode::Flatten),
-                "part"
-            )
+        let parts = plan.part_count(cadrs_core::import::ImportMode::Flatten);
+        tr_with(
+            if parts == 1 {
+                "io-import-summary-one-part"
+            } else {
+                "io-import-summary-parts"
+            },
+            &[
+                ("format", plan.format.label()),
+                ("parts", &parts.to_string()),
+            ],
         )
     };
     let stem = cadrs_core::import::stem(&file.file_name);
     let into = match file.target {
-        ImportTarget::NewDocument => format!("Into a new document, \"{stem}\""),
-        ImportTarget::ActiveDocument => "Into new tabs of this document".to_string(),
+        ImportTarget::NewDocument => tr_with("io-import-into-new", &[("name", &stem)]),
+        ImportTarget::ActiveDocument => tr("io-import-into-tabs"),
     };
     let names: Vec<String> = plan
         .parts
@@ -295,38 +302,90 @@ fn open_dialog(world: &mut World, file: ReadFile, plan: ImportPlan) {
     let mut commands = world.commands();
     commands.spawn((
         Dialog::new("import-dialog")
-            .title("Import")
+            .title(tr("common-import"))
             .width(520.0)
             .body(move |b| {
                 let t = &tb;
-                b.spawn(Node { align_items: AlignItems::Center, column_gap: Val::Px(8.0), margin: UiRect::bottom(Val::Px(4.0)), ..default() })
-                    .with_children(|r| {
-                        r.spawn(cadrs_ui::icon::icon("file-import", 18.0, t.foreground));
-                        r.spawn((Name::new("import-file-name"), t.text(file_name, t.font_base, FontWeight::BOLD, t.foreground)));
-                    });
-                b.spawn((Name::new("import-summary"), t.text(summary, t.font_base, FontWeight::NORMAL, t.foreground)));
+                b.spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    margin: UiRect::bottom(Val::Px(4.0)),
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn(cadrs_ui::icon::icon("file-import", 18.0, t.foreground));
+                    r.spawn((
+                        Name::new("import-file-name"),
+                        t.text(file_name, t.font_base, FontWeight::BOLD, t.foreground),
+                    ));
+                });
+                b.spawn((
+                    Name::new("import-summary"),
+                    t.text(summary, t.font_base, FontWeight::NORMAL, t.foreground),
+                ));
                 // The parts, as the file names them.
                 let shown: Vec<String> = names.iter().take(6).cloned().collect();
                 let more = names.len().saturating_sub(shown.len());
-                let mut list = shown.join(", ");
-                if more > 0 {
-                    list.push_str(&format!(", and {more} more"));
-                }
-                b.spawn((Name::new("import-parts"), t.text(format!("Parts: {list}"), t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::bottom(Val::Px(10.0)), ..default() }));
-                b.spawn(t.text("Import as", t.font_base, FontWeight::BOLD, t.foreground));
-                b.spawn(Node { column_gap: Val::Px(6.0), margin: UiRect::vertical(Val::Px(4.0)), ..default() }).with_children(|r| {
+                let list = shown.join(", ");
+                let parts = if more > 0 {
+                    tr_with(
+                        "io-import-parts-list-more",
+                        &[("list", &list), ("more", &more.to_string())],
+                    )
+                } else {
+                    tr_with("io-import-parts-list", &[("list", &list)])
+                };
+                b.spawn((
+                    Name::new("import-parts"),
+                    t.text(parts, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    Node {
+                        margin: UiRect::bottom(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
+                b.spawn((
+                    t.text(
+                        tr("io-import-as"),
+                        t.font_base,
+                        FontWeight::BOLD,
+                        t.foreground,
+                    ),
+                    Translated("io-import-as"),
+                ));
+                b.spawn(Node {
+                    column_gap: Val::Px(6.0),
+                    margin: UiRect::vertical(Val::Px(4.0)),
+                    ..default()
+                })
+                .with_children(|r| {
                     for (name, text, choice, tip, disabled) in [
-                        ("import-as-studio", "Part Studio (flatten)", ImportAs::PartStudio, "Every part where the file puts it, in one Part Studio", false),
+                        (
+                            "import-as-studio",
+                            tr("io-import-as-studio"),
+                            ImportAs::PartStudio,
+                            tr("io-import-as-studio-tip"),
+                            false,
+                        ),
                         (
                             "import-as-assembly",
-                            "Keep assembly structure",
+                            tr("io-import-as-assembly"),
                             ImportAs::Assembly,
-                            if assembly { "Each part once in a Part Studio, and an Assembly with its instances" } else { "The file is not an assembly" },
+                            tr(if assembly {
+                                "io-import-as-assembly-tip"
+                            } else {
+                                "io-import-not-assembly"
+                            }),
                             !assembly,
                         ),
                     ] {
                         r.spawn((
-                            Button::new(name).label(text).outline().selected(choice == how).disabled(disabled).tooltip(tip).build(t),
+                            Button::new(name)
+                                .label(text)
+                                .outline()
+                                .selected(choice == how)
+                                .disabled(disabled)
+                                .tooltip(tip)
+                                .build(t),
                             ChoiceButton(choice),
                             observe(move |_: On<Activate>, mut q: Query<&mut ImportDialog>| {
                                 for mut d in &mut q {
@@ -335,33 +394,67 @@ fn open_dialog(world: &mut World, file: ReadFile, plan: ImportPlan) {
                             }),
                         ))
                         .insert(cadrs_ui::Visuals {
-                            background: cadrs_ui::StateColors::new(t.background, t.list_hover, t.list_active, t.background).with_selected(Color::srgb_u8(0xdd, 0xea, 0xfb)),
-                            border: cadrs_ui::StateColors::all(Color::srgb_u8(0xc8, 0xc8, 0xc8)).with_selected(Color::srgb_u8(0x1f, 0x7a, 0xe0)),
-                            foreground: cadrs_ui::StateColors::new(t.foreground, t.foreground, t.foreground, t.disabled_foreground).with_selected(Color::srgb_u8(0x14, 0x5c, 0xb8)),
+                            background: cadrs_ui::StateColors::new(
+                                t.background,
+                                t.list_hover,
+                                t.list_active,
+                                t.background,
+                            )
+                            .with_selected(Color::srgb_u8(0xdd, 0xea, 0xfb)),
+                            border: cadrs_ui::StateColors::all(Color::srgb_u8(0xc8, 0xc8, 0xc8))
+                                .with_selected(Color::srgb_u8(0x1f, 0x7a, 0xe0)),
+                            foreground: cadrs_ui::StateColors::new(
+                                t.foreground,
+                                t.foreground,
+                                t.foreground,
+                                t.disabled_foreground,
+                            )
+                            .with_selected(Color::srgb_u8(0x14, 0x5c, 0xb8)),
                             focus_ring: t.focus_ring,
                         });
                     }
                 });
                 // P3F.2 judge: a file made Y axis up (as many tools write) is turned so its +Y is
                 // up here (+Z).
-                b.spawn(cadrs_ui::Checkbox::new("import-y-up").label("File is Y axis up").height(24.0).build(t));
-                b.spawn((Name::new("import-into"), t.text(into, t.font_sm, FontWeight::NORMAL, t.muted_foreground), Node { margin: UiRect::top(Val::Px(6.0)), ..default() }));
+                b.spawn(
+                    cadrs_ui::Checkbox::new("import-y-up")
+                        .label(tr("io-import-y-up"))
+                        .height(24.0)
+                        .build(t),
+                );
+                b.spawn((
+                    Name::new("import-into"),
+                    t.text(into, t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    Node {
+                        margin: UiRect::top(Val::Px(6.0)),
+                        ..default()
+                    },
+                ));
             })
             .footer(move |f| {
                 let t = &tf;
                 f.spawn((
-                    Button::new("import-ok").label("Import").primary().build(t),
+                    Button::new("import-ok")
+                        .label(tr("common-import"))
+                        .primary()
+                        .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(run_import);
                     }),
                 ));
                 f.spawn((
-                    Button::new("import-cancel").label("Cancel").build(t),
-                    observe(|_: On<Activate>, q: Query<Entity, With<ImportDialog>>, mut commands: Commands| {
-                        for e in &q {
-                            commands.trigger(DialogClose { entity: e });
-                        }
-                    }),
+                    Button::new("import-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                    observe(
+                        |_: On<Activate>,
+                         q: Query<Entity, With<ImportDialog>>,
+                         mut commands: Commands| {
+                            for e in &q {
+                                commands.trigger(DialogClose { entity: e });
+                            }
+                        },
+                    ),
                 ));
             })
             .build(&theme),
@@ -474,17 +567,23 @@ fn run_import(world: &mut World) {
                 }
                 r
             }
-            None => Err("no open document".into()),
+            None => Err(tr("io-import-no-document")),
         },
     };
     let note = match message {
-        Ok(()) => Notification::info(format!(
-            "Imported {}: {}",
-            d.file.file_name,
-            plural(parts, "part")
+        Ok(()) => Notification::info(tr_with(
+            if parts == 1 {
+                "io-import-done-one-part"
+            } else {
+                "io-import-done-parts"
+            },
+            &[("name", &d.file.file_name), ("count", &parts.to_string())],
         ))
         .seconds(6.0),
-        Err(why) => Notification::warning(format!("Import of {} failed: {why}", d.file.file_name)),
+        Err(why) => Notification::warning(tr_with(
+            "io-import-of-failed",
+            &[("name", &d.file.file_name), ("error", &why)],
+        )),
     };
     let mut commands = world.commands();
     show_notification(&mut commands, &theme, note.name("import-toast"));

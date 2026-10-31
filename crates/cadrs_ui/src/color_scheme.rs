@@ -25,6 +25,7 @@ use bevy::prelude::*;
 use bevy::text::TextCursorStyle;
 use bevy::window::{WindowFocused, WindowThemeChanged};
 
+use crate::i18n::tr;
 use crate::segmented::{Segmented, SegmentedSelect, SegmentedState};
 use crate::style::Selected;
 use crate::theme::{ColorRole, Theme};
@@ -865,9 +866,9 @@ const CHOICES: [SchemePreference; 3] = [
 pub fn scheme_toggle(theme: &Theme) -> impl Bundle {
     (
         Segmented::new("color-scheme")
-            .option("", Some("theme-light-medium"), "Light")
-            .option("", Some("theme-dark"), "Dark")
-            .option("", Some("theme-system"), "Match the system")
+            .option("", Some("theme-light-medium"), tr("ui-color-scheme-light"))
+            .option("", Some("theme-dark"), tr("ui-color-scheme-dark"))
+            .option("", Some("theme-system"), tr("ui-color-scheme-system"))
             .selected(2)
             .size(22.0, 14.0)
             .build(theme),

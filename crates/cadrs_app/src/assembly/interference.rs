@@ -18,6 +18,7 @@ use cadrs_core::ElementId;
 use cadrs_core::assembly::interference::{self, Clash};
 use cadrs_core::assembly::{Assembly, InstanceId};
 use cadrs_core::rebuild::PendingJob;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{FeatureDialogCancel, Spinner};
 
@@ -88,7 +89,7 @@ fn poll_check(doc: Option<Res<ActiveDocument>>, check: Option<ResMut<Interferenc
     if let Some(p) = &c.pending
         && let Some(r) = p.poll()
     {
-        c.result = Some(r.unwrap_or_else(|| Err("The kernel thread stopped".into())));
+        c.result = Some(r.unwrap_or_else(|| Err(tr("asm-kernel-thread-stopped"))));
         c.pending = None;
     }
 }
@@ -221,21 +222,31 @@ fn sync_panel(
         }
         return;
     };
-    let name = |p: cadrs_core::PartId| cache.part_name(p).unwrap_or("part").to_string();
+    let name = |p: cadrs_core::PartId| {
+        cache
+            .part_name(p)
+            .map(str::to_string)
+            .unwrap_or_else(|| tr("asm-part-fallback"))
+    };
     // (status line, rows)
     let (status, rows): (
         String,
         Vec<(cadrs_core::PartId, cadrs_core::PartId, String, String)>,
     ) = match &c.result {
-        _ if c.pending.is_some() && c.result.is_none() => ("Checking…".into(), Vec::new()),
-        None => ("Checking…".into(), Vec::new()),
-        Some(Err(e)) => (format!("Check interference failed: {e}"), Vec::new()),
-        Some(Ok(v)) if v.is_empty() => ("No interference found".into(), Vec::new()),
+        _ if c.pending.is_some() && c.result.is_none() => {
+            (tr("asm-interference-checking"), Vec::new())
+        }
+        None => (tr("asm-interference-checking"), Vec::new()),
+        Some(Err(e)) => (
+            tr_with("asm-interference-failed", &[("error", &e.to_string())]),
+            Vec::new(),
+        ),
+        Some(Ok(v)) if v.is_empty() => (tr("asm-interference-none"), Vec::new()),
         Some(Ok(v)) => (
             if v.len() == 1 {
-                "1 interference".into()
+                tr("asm-interference-one")
             } else {
-                format!("{} interferences", v.len())
+                tr_with("asm-interference-many", &[("count", &v.len().to_string())])
             },
             v.iter()
                 .map(|k| {
@@ -250,7 +261,7 @@ fn sync_panel(
         ),
     };
     let scope = if c.among.is_empty() {
-        "All instances".to_string()
+        tr("asm-interference-all-instances")
     } else {
         let names: Vec<String> = c
             .among
@@ -259,7 +270,7 @@ fn sync_panel(
                 cache
                     .part_name(i.part_id())
                     .map(str::to_string)
-                    .unwrap_or_else(|| "instance".into())
+                    .unwrap_or_else(|| tr("asm-instance"))
             })
             .collect();
         names.join(", ")
@@ -283,14 +294,14 @@ fn sync_panel(
             InterferencePanel(key),
             DespawnOnExit(AppState::Document),
             FeatureDialog::new("interference-dialog")
-                .title("Check interference")
+                .title(tr("asm-interference-title"))
                 .valid(false)
                 .plain_title()
                 .width(330.0)
                 .body(move |b| {
                     b.spawn((
                         t.text(
-                            format!("Instances: {scope}"),
+                            tr_with("asm-interference-instances", &[("instances", &scope)]),
                             11.5,
                             FontWeight::NORMAL,
                             t.muted_foreground,
@@ -354,7 +365,7 @@ fn sync_panel(
                                 foreground: cadrs_ui::StateColors::all(t.foreground),
                                 focus_ring: t.focus_ring,
                             },
-                            Tooltip::new("Select these instances"),
+                            Tooltip::new(tr("asm-interference-select-instances")),
                         ))
                         .observe(
                             |click: On<PointerClick>,

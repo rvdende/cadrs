@@ -25,7 +25,7 @@ pub fn title(state: AppState, doc: Option<(&str, Option<(&str, &str)>)>) -> Stri
             format!("{doc} – {tab} ({kind}) – cadrs")
         }
         (AppState::Document, Some((doc, None))) => format!("{doc} – cadrs"),
-        (AppState::Landing, _) => "Documents – cadrs".into(),
+        (AppState::Landing, _) => cadrs_ui::i18n::tr("io-window-title-documents"),
         _ => "cadrs".into(),
     }
 }
@@ -39,9 +39,12 @@ fn sync_window_title(
         return;
     };
     let doc = doc.as_deref();
-    let tab = doc
-        .and_then(|d| d.active_element())
-        .map(|el| (el.name.as_str(), crate::tab_preview::tab_type(el)));
+    // (The tab's type in the interface's language.)
+    let tab = doc.and_then(|d| d.active_element()).map(|el| {
+        let kind = cadrs_ui::i18n::tr(crate::tab_preview::tab_type_key(el));
+        (el.name.as_str(), kind)
+    });
+    let tab = tab.as_ref().map(|(name, kind)| (*name, kind.as_str()));
     let want = title(*state.get(), doc.map(|d| (d.doc.name.as_str(), tab)));
     if window.title != want {
         window.title = want;

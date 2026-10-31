@@ -211,8 +211,8 @@ pub fn copy_instances(world: &mut World, instances: &[InstanceId]) {
             pose: inst.pose,
             name: cache
                 .part_name(inst.id.part_id())
-                .unwrap_or("instance")
-                .to_string(),
+                .map(str::to_string)
+                .unwrap_or_else(|| cadrs_ui::i18n::tr("asm-instance")),
             link: inst.link,
             more: Vec::new(),
         })
@@ -222,7 +222,10 @@ pub fn copy_instances(world: &mut World, instances: &[InstanceId]) {
     }
     let mut first = items.remove(0);
     if !items.is_empty() {
-        first.name = format!("{} items", items.len() + 1);
+        first.name = cadrs_ui::i18n::tr_with(
+            "asm-clipboard-items",
+            &[("count", &(items.len() + 1).to_string())],
+        );
     }
     first.more = items;
     world.resource_mut::<InstanceClipboard>().0 = Some(first);
@@ -816,6 +819,51 @@ pub fn shown_points(doc: &ActiveDocument) -> Vec<Vec3> {
         }));
     }
     out
+}
+
+/// A mate type's name as the interface shows it: [`MateType::label`] in the current language
+/// (a new mate's name, "Revolute 1", is made from the English one: it is document data).
+///
+/// [`MateType::label`]: cadrs_core::assembly::mate::MateType::label
+pub fn mate_type_name(t: cadrs_core::assembly::mate::MateType) -> String {
+    use cadrs_core::assembly::mate::MateType;
+    cadrs_ui::i18n::tr(match t {
+        MateType::Fastened => "asm-mate-type-fastened",
+        MateType::Revolute => "asm-mate-type-revolute",
+        MateType::Slider => "asm-mate-type-slider",
+        MateType::Cylindrical => "asm-mate-type-cylindrical",
+        MateType::PinSlot => "asm-mate-type-pin-slot",
+        MateType::Planar => "asm-mate-type-planar",
+        MateType::Ball => "asm-mate-type-ball",
+        MateType::Parallel => "asm-mate-type-parallel",
+        MateType::Tangent => "asm-mate-type-tangent",
+        MateType::Width => "asm-mate-type-width",
+    })
+}
+
+/// A relation type's name as the interface shows it: [`RelationType::label`] in the current
+/// language (a new relation's name is made from the English one).
+///
+/// [`RelationType::label`]: cadrs_core::assembly::relation::RelationType::label
+pub fn relation_type_name(t: cadrs_core::assembly::relation::RelationType) -> String {
+    use cadrs_core::assembly::relation::RelationType;
+    cadrs_ui::i18n::tr(match t {
+        RelationType::Gear => "asm-relation-type-gear",
+        RelationType::RackPinion => "asm-relation-type-rack-pinion",
+        RelationType::Screw => "asm-relation-type-screw",
+        RelationType::Linear => "asm-relation-type-linear",
+    })
+}
+
+/// A mate DOF's name as menus show it: [`Dof::label`] ("X", "Y", "Z", "Z angle"), the angle's
+/// in the current language.
+///
+/// [`Dof::label`]: cadrs_core::assembly::mate::Dof::label
+pub fn dof_name(d: cadrs_core::assembly::mate::Dof) -> String {
+    match d {
+        cadrs_core::assembly::mate::Dof::Angle => cadrs_ui::i18n::tr("asm-dof-z-angle"),
+        _ => d.label().to_string(),
+    }
 }
 
 /// Runs an assembly command on the active assembly.

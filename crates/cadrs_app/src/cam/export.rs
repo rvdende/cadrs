@@ -11,6 +11,7 @@ use bevy::text::{EditableText, FontWeight};
 use cadrs_core::cam::cadrs_cam::post;
 use cadrs_core::cam::cadrs_cam::tool::Unit as LenUnit;
 use cadrs_core::cam::{CamId, NodeRef, OpKind, program};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, Checkbox, CheckboxChange, Dialog, DialogClose, Notification, Select, show_notification,
@@ -86,7 +87,7 @@ pub fn open_for_selection(world: &mut World) {
         (!cam.jobs[j].setups.is_empty()).then_some((j, 0))
     });
     let Some((j, s)) = setup else {
-        toast(world, "Select a setup or toolpaths to post");
+        toast(world, &tr("cam-select-setup-to-post"));
         return;
     };
     let job = &cam.jobs[j];
@@ -105,15 +106,12 @@ pub fn open_for_selection(world: &mut World) {
         .filter(|o| world.resource::<Computed>().current(*o).is_none())
         .collect();
     if wanted.is_empty() {
-        toast(world, "The setup has no toolpaths to post");
+        toast(world, &tr("cam-setup-no-toolpaths-to-post"));
         return;
     }
     if !missing.is_empty() {
         world.resource_mut::<Computed>().request(missing);
-        toast(
-            world,
-            "Calculating the toolpaths first: post again when they're done",
-        );
+        toast(world, &tr("cam-calculating-toolpaths-first"));
         return;
     }
     let inch = job
@@ -152,16 +150,20 @@ struct Program {
 
 fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
     let doc = world.resource::<ActiveDocument>();
-    let (_, cam) = super::active_cam(doc).ok_or("No CAM Studio")?;
-    let job = cam.job(s.job).ok_or("The job is gone")?;
+    let (_, cam) = super::active_cam(doc).ok_or_else(|| tr("cam-no-cam-studio"))?;
+    let job = cam.job(s.job).ok_or_else(|| tr("cam-job-is-gone"))?;
     let setup = job
         .setups
         .iter()
         .find(|x| x.id == s.setup)
-        .ok_or("The setup is gone")?;
-    let parts =
-        super::compute::studio_parts(world, super::active_cam(doc).ok_or("No CAM Studio")?.0)
-            .ok_or("The parts are still being built")?;
+        .ok_or_else(|| tr("cam-setup-is-gone"))?;
+    let parts = super::compute::studio_parts(
+        world,
+        super::active_cam(doc)
+            .ok_or_else(|| tr("cam-no-cam-studio"))?
+            .0,
+    )
+    .ok_or_else(|| tr("cam-parts-still-being-built"))?;
     let paths = world.resource::<Computed>().paths();
     let run = program::setup_run(cam, job, setup, &parts, &paths, s.ops.as_deref())?;
     let mut job2 = job.clone();
@@ -169,7 +171,10 @@ fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
         m.post.output_unit = if s.inch { LenUnit::Inch } else { LenUnit::Mm };
     }
     let nc = program::post_setup(setup, &job2, &run)?;
-    let m = job2.machine.as_ref().ok_or("The job has no machine")?;
+    let m = job2
+        .machine
+        .as_ref()
+        .ok_or_else(|| tr("cam-job-has-no-machine"))?;
     let names = run
         .ops
         .iter()
@@ -180,7 +185,7 @@ fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
     // The work offsets to set beyond the setup's own.
     let mut notes: Vec<String> = program::offset_lines(setup, job, &run)
         .into_iter()
-        .map(|l| format!("Set {l}"))
+        .map(|l| tr_with("cam-set-offset", &[("offset", &l)]))
         .collect();
     // Where the machine mating puts it on the table: inside the travel?
     let travel = program::stock_shape(cam, job, &parts)
@@ -193,16 +198,15 @@ fn program_text(world: &World, s: &ExportSession) -> Result<Program, String> {
         && m.dialect == post::Dialect::LinuxCnc
         && run.ops.iter().any(|o| o.tool.beam.material == 0)
     {
-        notes.push(
-            "No material number on the torch: QtPlasmaC cuts with the material it has loaded \
-             (set one on the tool)"
-                .to_string(),
-        );
+        notes.push(tr("cam-no-material-number-on-torch"));
     }
     Ok(Program {
         nc,
         file,
-        machine: format!("{} (post: {})", m.title(), m.dialect.label()),
+        machine: tr_with(
+            "cam-machine-with-post",
+            &[("machine", &m.title()), ("post", m.dialect.label())],
+        ),
         names,
         sheet,
         notes,
@@ -239,10 +243,13 @@ fn open_dialog(world: &mut World) {
     let dir = crate::export_dir(world)
         .map(|d| d.display().to_string())
         .unwrap_or_default();
-    let summary = format!(
-        "{} lines, {}",
-        nc.lines().count(),
-        if s.inch { "inches" } else { "millimetres" }
+    let summary = tr_with(
+        if s.inch {
+            "cam-export-summary-inches"
+        } else {
+            "cam-export-summary-millimetres"
+        },
+        &[("count", &nc.lines().count().to_string())],
     );
     let head: String = nc.lines().take(80).collect::<Vec<_>>().join("\n");
     let theme = world.resource::<Theme>().clone();
@@ -252,36 +259,40 @@ fn open_dialog(world: &mut World) {
         ExportDialog,
         DespawnOnExit(AppState::Document),
         Dialog::new("cam-export-dialog")
-            .title("Post")
+            .title(tr("cam-post"))
             .width(560.0)
             .body(move |b| {
                 let t = &tb;
                 let full = || Val::Percent(100.0);
-                let row =
-                    |b: &mut ChildSpawner, label: &str, f: &mut dyn FnMut(&mut ChildSpawner)| {
-                        b.spawn((
-                            Name::new(format!("cam-export-row {label}")),
+                // (`label` names the row; `key` is its text's catalog key.)
+                let row = |b: &mut ChildSpawner,
+                           label: &str,
+                           key: &'static str,
+                           f: &mut dyn FnMut(&mut ChildSpawner)| {
+                    b.spawn((
+                        Name::new(format!("cam-export-row {label}")),
+                        Node {
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(8.0),
+                            width: full(),
+                            margin: UiRect::bottom(Val::Px(6.0)),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|r| {
+                        r.spawn((
+                            t.text(tr(key), t.font_base, FontWeight::BOLD, t.foreground),
+                            Translated(key),
                             Node {
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(8.0),
-                                width: full(),
-                                margin: UiRect::bottom(Val::Px(6.0)),
+                                width: Val::Px(120.0),
+                                flex_shrink: 0.0,
                                 ..default()
                             },
-                        ))
-                        .with_children(|r| {
-                            r.spawn((
-                                t.text(label, t.font_base, FontWeight::BOLD, t.foreground),
-                                Node {
-                                    width: Val::Px(120.0),
-                                    flex_shrink: 0.0,
-                                    ..default()
-                                },
-                            ));
-                            f(r);
-                        });
-                    };
-                row(b, "Program number", &mut |r| {
+                        ));
+                        f(r);
+                    });
+                };
+                row(b, "Program number", "cam-program-number", &mut |r| {
                     r.spawn(
                         TextInput::new("cam-export-number")
                             .value(program_number.to_string())
@@ -290,7 +301,7 @@ fn open_dialog(world: &mut World) {
                             .build(t),
                     );
                 });
-                row(b, "File name", &mut |r| {
+                row(b, "File name", "common-file-name", &mut |r| {
                     r.spawn(
                         TextInput::new("cam-export-name")
                             .value(file.clone())
@@ -301,21 +312,21 @@ fn open_dialog(world: &mut World) {
                             .build(t),
                     );
                 });
-                row(b, "Machine", &mut |r| {
+                row(b, "Machine", "cam-machine", &mut |r| {
                     r.spawn(t.text(&machine, t.font_base, FontWeight::NORMAL, t.foreground));
                 });
-                row(b, "Output units", &mut |r| {
+                row(b, "Output units", "cam-output-units", &mut |r| {
                     r.spawn(
                         Select::new("cam-export-units")
                             .bordered()
                             .width(Val::Px(160.0))
-                            .option("Millimetres", true)
-                            .option("Inches", true)
+                            .option(tr("cam-millimetres"), true)
+                            .option(tr("cam-inches"), true)
                             .selected(usize::from(s.inch))
                             .build(t),
                     );
                 });
-                row(b, "Operations", &mut |r| {
+                row(b, "Operations", "cam-operations", &mut |r| {
                     r.spawn(t.text(
                         &names.join(", "),
                         t.font_base,
@@ -323,15 +334,15 @@ fn open_dialog(world: &mut World) {
                         t.foreground,
                     ));
                 });
-                row(b, "Setup sheet", &mut |r| {
+                row(b, "Setup sheet", "cam-setup-sheet", &mut |r| {
                     r.spawn(
                         Checkbox::new("cam-export-sheet")
-                            .label("Write the setup sheet beside it (HTML)")
+                            .label(tr("cam-write-setup-sheet"))
                             .checked(s.sheet)
                             .build(t),
                     );
                 });
-                row(b, "Folder", &mut |r| {
+                row(b, "Folder", "common-folder", &mut |r| {
                     r.spawn(
                         TextInput::new("cam-export-folder")
                             .value(dir.clone())
@@ -341,7 +352,7 @@ fn open_dialog(world: &mut World) {
                     );
                     r.spawn(
                         Button::new("cam-export-browse")
-                            .label("Browse…")
+                            .label(tr("common-browse"))
                             .outline()
                             .build(t),
                     );
@@ -374,7 +385,7 @@ fn open_dialog(world: &mut World) {
                 if !travel.is_empty() {
                     b.spawn(
                         Checkbox::new("cam-export-beyond-travel")
-                            .label("Post anyway: I've checked where it runs on the machine")
+                            .label(tr("cam-post-anyway"))
                             .checked(s.beyond_travel)
                             .build(t),
                     );
@@ -384,12 +395,16 @@ fn open_dialog(world: &mut World) {
                 let t = &tf;
                 f.spawn(
                     Button::new("cam-export-ok")
-                        .label("Post")
+                        .label(tr("cam-post"))
                         .icon("cam-post")
                         .primary()
                         .build(t),
                 );
-                f.spawn(Button::new("cam-export-cancel").label("Cancel").build(t));
+                f.spawn(
+                    Button::new("cam-export-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                );
             })
             .build(&theme),
     ));
@@ -455,7 +470,7 @@ fn on_activate(ev: On<bevy::ui_widgets::Activate>, q: Query<&Name>, mut commands
                 &mut commands,
                 &theme,
                 "cam-export-folder-picker",
-                "Post to folder",
+                &tr("cam-post-to-folder"),
                 "cam-export-folder",
                 dir,
             );
@@ -526,15 +541,15 @@ pub fn post_now(world: &mut World) {
     if !travel.is_empty() && !s.beyond_travel {
         toast(
             world,
-            &format!(
-                "{} (tick \"Post anyway\" once you've checked it on the machine)",
-                travel[0]
+            &tr_with(
+                "cam-beyond-travel-tick-post-anyway",
+                &[("problem", &travel[0])],
             ),
         );
         return;
     }
     if folder.is_empty() {
-        toast(world, "Choose a folder to post to");
+        toast(world, &tr("cam-choose-folder-to-post-to"));
         return;
     }
     let file = if name.is_empty() { default_name } else { name };
@@ -557,13 +572,18 @@ pub fn post_now(world: &mut World) {
             let theme = world.resource::<Theme>().clone();
             let mut commands = world.commands();
             let what = match &sheet_path {
-                Some(p) => format!(
-                    "Posted {} and its setup sheet {}",
-                    path.display(),
-                    p.file_name()
-                        .map_or(String::new(), |n| n.to_string_lossy().into())
+                Some(p) => tr_with(
+                    "cam-posted-with-sheet",
+                    &[
+                        ("path", &path.display().to_string()),
+                        (
+                            "sheet",
+                            &p.file_name()
+                                .map_or(String::new(), |n| n.to_string_lossy().into()),
+                        ),
+                    ],
                 ),
-                None => format!("Posted {}", path.display()),
+                None => tr_with("cam-posted", &[("path", &path.display().to_string())]),
             };
             show_notification(
                 &mut commands,
@@ -572,6 +592,15 @@ pub fn post_now(world: &mut World) {
             );
             world.flush();
         }
-        Err(e) => toast(world, &format!("Couldn't write {}: {e}", path.display())),
+        Err(e) => toast(
+            world,
+            &tr_with(
+                "cam-couldnt-write-file",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("error", &e.to_string()),
+                ],
+            ),
+        ),
     }
 }

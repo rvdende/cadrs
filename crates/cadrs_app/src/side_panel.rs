@@ -117,7 +117,11 @@ pub(crate) fn side_panel_header(
     .insert(BorderColor::all(t.panel_border))
     .with_children(|h| {
         h.spawn(t.text(title.to_string(), 13.0, FontWeight::BOLD, t.foreground));
-        h.spawn(IconButton::new(close, "close").tooltip("Close").build(t));
+        h.spawn(
+            IconButton::new(close, "close")
+                .tooltip(cadrs_ui::i18n::tr("common-close"))
+                .build(t),
+        );
     });
 }
 

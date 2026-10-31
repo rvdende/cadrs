@@ -9,6 +9,7 @@
 //! dot; with none, "You're all caught up".
 
 use bevy::prelude::*;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::update::UpdateStatus;
@@ -75,7 +76,7 @@ pub fn spawn_bell(r: &mut ChildSpawnerCommands, t: &Theme) {
         f.spawn(
             IconButton::new("notifications", "notifications")
                 .icon_size(16.0)
-                .tooltip("Notifications")
+                .tooltip(tr("shell-notifications"))
                 .build(t),
         )
         .entry::<Node>()
@@ -118,12 +119,8 @@ fn collect(
             notes.push(Notice {
                 id: "whats-new".into(),
                 icon: "idea",
-                title: "A new look for cadrs".into(),
-                body: "The cadrs mark at the top left is the menu now: Labels, Trash, the \
-                       documents folder, Preferences and the shortcuts, and in a document what \
-                       ☰ had. Right-click a document for Properties, History and Used in. Your \
-                       name at the top right switches identities."
-                    .into(),
+                title: tr("shell-notice-whats-new-title"),
+                body: tr("shell-notice-whats-new-body"),
                 unread: true,
             });
         }
@@ -134,8 +131,11 @@ fn collect(
         notes.push(Notice {
             id: "update".into(),
             icon: "download",
-            title: format!("cadrs {} is available", r.version),
-            body: "Click to read the release notes and update.".into(),
+            title: tr_with(
+                "shell-notice-update-title",
+                &[("version", r.version.as_str())],
+            ),
+            body: tr("shell-notice-update-body"),
             unread: true,
         });
     }
@@ -177,7 +177,7 @@ pub(crate) fn open_notifications(
 ) {
     let mut menu = Menu::new("notifications-menu").align_end().min_width(260.0);
     if notes.items.is_empty() {
-        menu = menu.item(MenuItem::new("notice-none", "You're all caught up").disabled(true));
+        menu = menu.item(MenuItem::new("notice-none", tr("shell-notice-none")).disabled(true));
     }
     for n in &notes.items {
         let mut item = MenuItem::new(format!("notice-{}", n.id), n.title.clone())

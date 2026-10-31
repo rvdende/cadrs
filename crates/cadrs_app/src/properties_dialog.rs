@@ -27,6 +27,7 @@ use cadrs_core::properties::{
     self, AddPropertyDefinition, CATEGORIES, GenerateMissingPartNumbers, PropertyKey, PropertyKind,
     PropertyOwner, PropertyValue, SetProperties, SubassemblyBom, UNITS_OF_MEASURE,
 };
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, Checkbox, CheckboxState, DialogClose, Select, SelectState, form_row};
 
@@ -61,13 +62,25 @@ const FIELD_W: f32 = 290.0;
 /// The Add property row's Add button.
 const ADD_W: f32 = 48.0;
 
-/// The text fields: (key, field name, label).
+/// The text fields: (key, field name, label's catalog key).
 const TEXT_FIELDS: [(PropertyKey, &str, &str); 5] = [
-    (PropertyKey::Name, "props-name", "Name"),
-    (PropertyKey::PartNumber, "props-part-number", "Part number"),
-    (PropertyKey::Description, "props-description", "Description"),
-    (PropertyKey::Revision, "props-revision", "Revision"),
-    (PropertyKey::Vendor, "props-vendor", "Vendor"),
+    (PropertyKey::Name, "props-name", "common-name"),
+    (
+        PropertyKey::PartNumber,
+        "props-part-number",
+        "shell-props-part-number",
+    ),
+    (
+        PropertyKey::Description,
+        "props-description",
+        "common-description",
+    ),
+    (
+        PropertyKey::Revision,
+        "props-revision",
+        "shell-props-revision",
+    ),
+    (PropertyKey::Vendor, "props-vendor", "shell-props-vendor"),
 ];
 
 /// The materials offered: none, the bundled library, the document's libraries.
@@ -217,11 +230,11 @@ fn spawn(world: &mut World) {
     let is_std = matches!(owner, PropertyOwner::Part { element, .. } if doc.standard_part(element).is_some());
     let mats = materials(&doc);
     let defs = doc.properties.definitions.clone();
-    let title = if is_asm {
-        "Assembly properties"
+    let title = tr(if is_asm {
+        "shell-props-assembly-title"
     } else {
-        "Part properties"
-    };
+        "shell-props-part-title"
+    });
     let override_on = session
         .draft
         .get("props-mass-override")
@@ -259,6 +272,7 @@ fn spawn(world: &mut World) {
                         });
                 };
                 for (key, name, label) in TEXT_FIELDS {
+                    let label = &tr(label);
                     let value = v.get(name).cloned().unwrap_or_default();
                     if key == PropertyKey::PartNumber {
                         b.spawn(form_row(t, "props-part-number-row", label, LABEL_W))
@@ -272,7 +286,7 @@ fn spawn(world: &mut World) {
                                 );
                                 r.spawn(
                                     IconButton::new("props-generate-part-number", "tag-new")
-                                        .tooltip("Generate next part number")
+                                        .tooltip(tr("shell-props-generate-part-number"))
                                         .build(t),
                                 );
                             });
@@ -290,8 +304,13 @@ fn spawn(world: &mut World) {
                     .iter()
                     .position(|u| *u == unit)
                     .unwrap_or(0);
-                b.spawn(form_row(t, "props-unit-row", "Unit of measure", LABEL_W))
-                    .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
+                b.spawn(form_row(
+                    t,
+                    "props-unit-row",
+                    tr("shell-props-unit-of-measure"),
+                    LABEL_W,
+                ))
+                .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
                 let cat = v.get("props-category").cloned().unwrap_or_default();
                 let mut cats: Vec<String> = vec![String::new()];
                 cats.extend(CATEGORIES.iter().map(|c| c.to_string()));
@@ -312,15 +331,20 @@ fn spawn(world: &mut World) {
                     );
                 }
                 let sel = cats.iter().position(|c| *c == cat).unwrap_or(0);
-                b.spawn(form_row(t, "props-category-row", "Category", LABEL_W))
-                    .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
+                b.spawn(form_row(
+                    t,
+                    "props-category-row",
+                    tr("shell-props-category"),
+                    LABEL_W,
+                ))
+                .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
                 if !is_asm {
                     // Material: none or a library material (Assign material… has the rest).
                     let now = v.get("props-material").cloned().unwrap_or_default();
                     let mut s = Select::new("props-material")
                         .width(Val::Px(FIELD_W))
                         .bordered();
-                    s = s.option("No material", true);
+                    s = s.option(tr("shell-props-no-material"), true);
                     let mut sel = 0;
                     for (i, m) in mats.iter().enumerate() {
                         s = s.option(m.name.clone(), true);
@@ -328,44 +352,47 @@ fn spawn(world: &mut World) {
                             sel = i + 1;
                         }
                     }
-                    b.spawn(form_row(t, "props-material-row", "Material", LABEL_W))
-                        .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
+                    b.spawn(form_row(
+                        t,
+                        "props-material-row",
+                        tr("common-material"),
+                        LABEL_W,
+                    ))
+                    .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
                     // Appearance: its colour (Edit appearance… changes it).
-                    b.spawn(form_row(t, "props-appearance-row", "Appearance", LABEL_W))
-                        .with_children(|r| {
-                            let c = appearance
-                                .map(|a| Color::srgba_u8(a.rgb[0], a.rgb[1], a.rgb[2], a.alpha))
-                                .unwrap_or(Color::NONE);
-                            r.spawn((
-                                Name::new("props-appearance"),
-                                Node {
-                                    width: Val::Px(40.0),
-                                    height: Val::Px(18.0),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    ..default()
-                                },
-                                BackgroundColor(c),
-                                cadrs_ui::KeepFill,
-                                BorderColor::all(Color::srgba(0.0, 0.0, 0.0, 0.3)),
-                            ));
-                            let hex = appearance
-                                .map(|a| {
-                                    format!("#{:02X}{:02X}{:02X}", a.rgb[0], a.rgb[1], a.rgb[2])
-                                })
-                                .unwrap_or_default();
-                            r.spawn(t.text(
-                                hex,
-                                t.font_base,
-                                FontWeight::NORMAL,
-                                t.muted_foreground,
-                            ));
-                        });
+                    b.spawn(form_row(
+                        t,
+                        "props-appearance-row",
+                        tr("shell-props-appearance"),
+                        LABEL_W,
+                    ))
+                    .with_children(|r| {
+                        let c = appearance
+                            .map(|a| Color::srgba_u8(a.rgb[0], a.rgb[1], a.rgb[2], a.alpha))
+                            .unwrap_or(Color::NONE);
+                        r.spawn((
+                            Name::new("props-appearance"),
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(18.0),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(c),
+                            cadrs_ui::KeepFill,
+                            BorderColor::all(Color::srgba(0.0, 0.0, 0.0, 0.3)),
+                        ));
+                        let hex = appearance
+                            .map(|a| format!("#{:02X}{:02X}{:02X}", a.rgb[0], a.rgb[1], a.rgb[2]))
+                            .unwrap_or_default();
+                        r.spawn(t.text(hex, t.font_base, FontWeight::NORMAL, t.muted_foreground));
+                    });
                 }
                 // Mass: computed, or the override typed.
                 b.spawn(form_row(
                     t,
                     "props-mass-row",
-                    format!("Mass ({})", units.mass.symbol()),
+                    tr_with("shell-props-mass", &[("unit", units.mass.symbol())]),
                     LABEL_W,
                 ))
                 .with_children(|r| {
@@ -381,7 +408,7 @@ fn spawn(world: &mut World) {
                     .with_children(|r| {
                         r.spawn(
                             Checkbox::new("props-mass-override")
-                                .label("Override the computed mass")
+                                .label(tr("shell-props-mass-override"))
                                 .checked(override_on)
                                 .build(t),
                         );
@@ -401,28 +428,32 @@ fn spawn(world: &mut World) {
                     b.spawn(form_row(
                         t,
                         "props-bom-behavior-row",
-                        "Subassembly BOM behavior",
+                        tr("shell-props-bom-behavior"),
                         LABEL_W,
                     ))
                     .with_children(|r| fixed(r.spawn(s.selected(sel).build(t))));
                 }
                 if is_std {
-                    b.spawn(t.text(
-                        "Standard content: Part number and Description are the configuration's.",
-                        t.font_sm,
-                        FontWeight::NORMAL,
-                        t.muted_foreground,
+                    b.spawn((
+                        t.text(
+                            tr("shell-props-standard-content"),
+                            t.font_sm,
+                            FontWeight::NORMAL,
+                            t.muted_foreground,
+                        ),
+                        Translated("shell-props-standard-content"),
                     ));
                 }
                 // Custom properties of the document.
                 if !defs.is_empty() {
                     b.spawn((
                         t.text(
-                            "Custom properties",
+                            tr("shell-props-custom"),
                             t.font_base,
                             FontWeight::BOLD,
                             t.foreground,
                         ),
+                        Translated("shell-props-custom"),
                         Node {
                             margin: UiRect::top(Val::Px(4.0)),
                             ..default()
@@ -468,39 +499,58 @@ fn spawn(world: &mut World) {
                     }
                 }
                 // Add property: a name and a kind.
-                b.spawn(form_row(t, "props-new-row", "Add property", LABEL_W))
-                    .with_children(|r| {
-                        // Name, kind and Add together as wide as a field.
+                b.spawn(form_row(
+                    t,
+                    "props-new-row",
+                    tr("shell-props-add-property"),
+                    LABEL_W,
+                ))
+                .with_children(|r| {
+                    // Name, kind and Add together as wide as a field.
+                    r.spawn(
+                        TextInput::new("props-new-name")
+                            .placeholder(tr("common-name"))
+                            .width(Val::Px(FIELD_W - 90.0 - ADD_W - 24.0))
+                            .height(26.0)
+                            .build(t),
+                    );
+                    fixed(
                         r.spawn(
-                            TextInput::new("props-new-name")
-                                .placeholder("Name")
-                                .width(Val::Px(FIELD_W - 90.0 - ADD_W - 24.0))
-                                .height(26.0)
+                            Select::new("props-new-kind")
+                                .width(Val::Px(90.0))
+                                .bordered()
+                                .option(tr("common-text"), true)
+                                .option(tr("shell-props-kind-number"), true)
+                                .option(tr("shell-props-kind-boolean"), true)
                                 .build(t),
-                        );
-                        fixed(
-                            r.spawn(
-                                Select::new("props-new-kind")
-                                    .width(Val::Px(90.0))
-                                    .bordered()
-                                    .option("Text", true)
-                                    .option("Number", true)
-                                    .option("Boolean", true)
-                                    .build(t),
-                            ),
-                        );
-                        r.spawn(Button::new("props-new-add").label("Add").small().build(t))
-                            .entry::<Node>()
-                            .and_modify(|mut n| {
-                                n.width = Val::Px(ADD_W);
-                                n.justify_content = JustifyContent::Center;
-                            });
+                        ),
+                    );
+                    r.spawn(
+                        Button::new("props-new-add")
+                            .label(tr("common-add"))
+                            .small()
+                            .build(t),
+                    )
+                    .entry::<Node>()
+                    .and_modify(|mut n| {
+                        n.width = Val::Px(ADD_W);
+                        n.justify_content = JustifyContent::Center;
                     });
+                });
             })
             .footer(move |f| {
                 let t = &tf;
-                f.spawn(Button::new("props-save").label("Save").primary().build(t));
-                f.spawn(Button::new("props-cancel").label("Cancel").build(t));
+                f.spawn(
+                    Button::new("props-save")
+                        .label(tr("common-save"))
+                        .primary()
+                        .build(t),
+                );
+                f.spawn(
+                    Button::new("props-cancel")
+                        .label(tr("common-cancel"))
+                        .build(t),
+                );
             })
             .build(&theme),
         PropsDialog,

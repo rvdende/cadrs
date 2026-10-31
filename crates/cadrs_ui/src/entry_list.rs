@@ -305,7 +305,11 @@ impl Entry {
                     h.spawn((
                         Button::new(toggle)
                             .ghost()
-                            .tooltip(if open { "Collapse" } else { "Expand" })
+                            .tooltip(crate::i18n::tr(if open {
+                                "ui-entry-list-collapse"
+                            } else {
+                                "ui-entry-list-expand"
+                            }))
                             .build(&t),
                         EntryButton::Toggle(entry),
                     ))
@@ -341,7 +345,7 @@ impl Entry {
                             .icon("close")
                             .icon_size(10.0)
                             .ghost()
-                            .tooltip("Remove")
+                            .tooltip(crate::i18n::tr("common-remove"))
                             .build(&t),
                         EntryButton::Remove(entry),
                     ))

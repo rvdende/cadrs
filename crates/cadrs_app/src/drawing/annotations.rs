@@ -42,6 +42,7 @@ use cadrs_drawing::annotation::{
     Shape,
 };
 use cadrs_drawing::{Drawing, DrawingOp, View, ViewId};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use super::view_tools::{ViewTool, edit_drawing};
@@ -1341,12 +1342,18 @@ pub fn open_annotation_menu(world: &mut World, pos: Vec2) -> bool {
         a.kind,
         AnnotationKind::HoleCallout(_) | AnnotationKind::Callout(_)
     ) {
-        menu = menu.item(MenuItem::new("annotation-menu-edit", "Edit…"));
+        menu = menu.item(MenuItem::new(
+            "annotation-menu-edit",
+            tr("common-edit-ellipsis"),
+        ));
     }
     if matches!(a.kind, AnnotationKind::Dimension(_)) {
-        menu = menu.item(MenuItem::new("annotation-menu-palette", "Format…"));
+        menu = menu.item(MenuItem::new(
+            "annotation-menu-palette",
+            tr("drawing-format-ellipsis"),
+        ));
     }
-    menu = menu.item(MenuItem::new("annotation-menu-delete", "Delete"));
+    menu = menu.item(MenuItem::new("annotation-menu-delete", tr("common-delete")));
     let mut commands = world.commands();
     let anchor = open_context_menu(&mut commands, pos, menu.build(&theme));
     commands
@@ -1396,115 +1403,120 @@ fn on_annotation_menu(ev: On<MenuAction>, q: Query<&AnnotationMenuFor>, mut comm
 #[derive(Component, Clone, Copy)]
 pub struct ToolMenuFor;
 
-/// The dimension tools' ▾ menu.
+/// The dimension tools' ▾ menu: (id, tool, its name's catalog key, icon, shortcut).
 pub const DIMENSION_TOOLS: [(&str, Option<DimTool>, &str, &str, &str); 10] = [
     (
         "drawing-dim-smart",
         Some(DimTool::Smart),
-        "Dimension",
+        "drawing-tool-dimension",
         "dimension",
         "D",
     ),
     (
         "drawing-dim-radial",
         Some(DimTool::Radial),
-        "Radial dimension",
+        "drawing-tool-radial-dimension",
         "center-arc",
         "Shift+R",
     ),
     (
         "drawing-dim-diameter",
         Some(DimTool::Diameter),
-        "Diameter dimension",
+        "drawing-tool-diameter-dimension",
         "center-circle",
         "Shift+D",
     ),
     (
         "drawing-dim-point-to-point",
         Some(DimTool::PointToPoint),
-        "Point to point dimension",
+        "drawing-tool-point-to-point-dimension",
         "ruler",
         "",
     ),
     (
         "drawing-dim-line-to-line",
         Some(DimTool::LineToLine),
-        "Line to line dimension",
+        "drawing-tool-line-to-line-dimension",
         "constraint-parallel",
         "",
     ),
     (
         "drawing-dim-angular",
         Some(DimTool::Angular),
-        "Angular dimension",
+        "drawing-tool-angular-dimension",
         "constraint-perpendicular",
         "",
     ),
     (
         "drawing-dim-baseline",
         Some(DimTool::Baseline),
-        "Baseline dimension",
+        "drawing-tool-baseline-dimension",
         "linear-pattern",
         "",
     ),
     (
         "drawing-dim-ordinate",
         Some(DimTool::Ordinate),
-        "Ordinate dimension",
+        "drawing-tool-ordinate-dimension",
         "list",
         "",
     ),
     (
         "drawing-dim-chamfer",
         Some(DimTool::Chamfer),
-        "Chamfer dimension",
+        "drawing-tool-chamfer-dimension",
         "chamfer",
         "",
     ),
     (
         "drawing-dim-arc-length",
         Some(DimTool::ArcLength),
-        "Arc length dimension",
+        "drawing-tool-arc-length-dimension",
         "three-point-arc",
         "",
     ),
 ];
 
-/// The Geometric tolerance ▾ menu (P3C.8).
+/// The Geometric tolerance ▾ menu (P3C.8): (id, tool, its name's catalog key, icon).
 pub const GDT_TOOLS: [(&str, AnnTool, &str, &str); 2] = [
     (
         "drawing-gdt-frame",
         AnnTool::Gdt,
-        "Feature control frame",
+        "drawing-tool-feature-control-frame",
         "constraint-parallel",
     ),
-    ("drawing-gdt-datum", AnnTool::Datum, "Datum feature", "tag"),
+    (
+        "drawing-gdt-datum",
+        AnnTool::Datum,
+        "drawing-tool-datum-feature",
+        "tag",
+    ),
 ];
 
-/// The centerline modes' ▾ menu.
+/// The centerline modes' ▾ menu: (id, mode, its name's catalog key, icon).
 pub const CENTERLINE_TOOLS: [(&str, CenterlineMode, &str, &str); 4] = [
     (
         "drawing-centerline-point-to-point",
         CenterlineMode::PointToPoint,
-        "Point to point centerline",
+        "drawing-tool-point-to-point-centerline",
         "construction",
     ),
     (
         "drawing-centerline-line-to-line",
         CenterlineMode::LineToLine,
-        "Line to line centerline",
+        "drawing-tool-line-to-line-centerline",
         "constraint-parallel",
     ),
     (
         "drawing-centerline-3-point-circle",
         CenterlineMode::ThreePointCircle,
-        "3 point circle centerline",
+        "drawing-tool-3-point-circle-centerline",
         "three-point-circle",
     ),
     (
         "drawing-centerline-2-point-circle",
         CenterlineMode::TwoPointCircle,
-        "2 point circle centerline",
+        "drawing-tool-2-point-circle-centerline",
         "center-circle",
     ),
 ];
@@ -1530,15 +1542,15 @@ pub fn open_tool_menu(world: &mut World, button: Entity, which: &str) {
         .keycap_shortcuts();
     if which == "drawing-gdt" {
         for (name, _, label, icon_name) in GDT_TOOLS {
-            menu = menu.item(MenuItem::new(name, label).icon(icon_name));
+            menu = menu.item(MenuItem::new(name, tr(label)).icon(icon_name));
         }
     } else if which == "drawing-detail-view" {
         for (name, label, icon_name) in super::view_kind_tools::VIEW_KINDS {
-            menu = menu.item(MenuItem::new(name, label).icon(icon_name));
+            menu = menu.item(MenuItem::new(name, tr(label)).icon(icon_name));
         }
     } else if which == "drawing-dimension" {
         for (name, tool, label, icon_name, key) in DIMENSION_TOOLS {
-            let mut item = MenuItem::new(name, label)
+            let mut item = MenuItem::new(name, tr(label))
                 .icon(icon_name)
                 .disabled(tool.is_none());
             if !key.is_empty() {
@@ -1548,7 +1560,7 @@ pub fn open_tool_menu(world: &mut World, button: Entity, which: &str) {
         }
     } else {
         for (name, _, label, icon_name) in CENTERLINE_TOOLS {
-            menu = menu.item(MenuItem::new(name, label).icon(icon_name));
+            menu = menu.item(MenuItem::new(name, tr(label)).icon(icon_name));
         }
     }
     let mut commands = world.commands();
@@ -2169,67 +2181,87 @@ fn hint_text(ui: &AnnotationUi) -> Option<String> {
     let n = ui.picks.len();
     Some(match ui.tool {
         AnnTool::None => return None,
-        AnnTool::Note if ui.picks.is_empty() => {
-            "Note: click the sheet for a note, or an edge or point for a note with a leader".into()
-        }
-        AnnTool::Note => "Note: click to place the text".into(),
-        AnnTool::Table => "Table: click the sheet to place the table".into(),
-        AnnTool::AddLeader(_) => "Add leader: pick an edge or point · Esc to finish".into(),
-        AnnTool::SheetLine => "Line: click the start, then the end · Esc to finish".into(),
-        AnnTool::SheetSpline => "Spline: click its points · double-click or Enter to finish".into(),
-        AnnTool::PlaceImport => "Click the sheet to place it · Esc to cancel".into(),
-        AnnTool::PlaceBom => "Insert BOM: click the sheet to place the table (it snaps to the border's corner or the title block) · Esc to cancel".into(),
-        AnnTool::Callout if ui.preview.is_none() => "Callout: pick an edge of a part in an assembly view · ✓ to finish".into(),
-        AnnTool::Callout => "Callout: click to place it (it lines up with the others) · Esc to cancel".into(),
+        AnnTool::Note if ui.picks.is_empty() => tr("drawing-hint-note"),
+        AnnTool::Note => tr("drawing-hint-note-place"),
+        AnnTool::Table => tr("drawing-hint-table"),
+        AnnTool::AddLeader(_) => tr("drawing-hint-add-leader"),
+        AnnTool::SheetLine => tr("drawing-hint-line"),
+        AnnTool::SheetSpline => tr("drawing-hint-spline"),
+        AnnTool::PlaceImport => tr("drawing-hint-place-import"),
+        AnnTool::PlaceBom => tr("drawing-hint-place-bom"),
+        AnnTool::Callout if ui.preview.is_none() => tr("drawing-hint-callout-pick"),
+        AnnTool::Callout => tr("drawing-hint-callout-place"),
         AnnTool::Dimension(t) => {
-            let name = match t {
-                DimTool::Smart => "Dimension",
-                DimTool::Radial => "Radial dimension",
-                DimTool::Diameter => "Diameter dimension",
-                DimTool::PointToPoint => "Point to point dimension",
-                DimTool::LineToLine => "Line to line dimension",
-                DimTool::Angular => "Angular dimension",
-                DimTool::Baseline => "Baseline dimension",
-                DimTool::Ordinate => "Ordinate dimension",
-                DimTool::Chamfer => "Chamfer dimension",
-                DimTool::ArcLength => "Arc length dimension",
-            };
+            let name = tr(match t {
+                DimTool::Smart => "drawing-tool-dimension",
+                DimTool::Radial => "drawing-tool-radial-dimension",
+                DimTool::Diameter => "drawing-tool-diameter-dimension",
+                DimTool::PointToPoint => "drawing-tool-point-to-point-dimension",
+                DimTool::LineToLine => "drawing-tool-line-to-line-dimension",
+                DimTool::Angular => "drawing-tool-angular-dimension",
+                DimTool::Baseline => "drawing-tool-baseline-dimension",
+                DimTool::Ordinate => "drawing-tool-ordinate-dimension",
+                DimTool::Chamfer => "drawing-tool-chamfer-dimension",
+                DimTool::ArcLength => "drawing-tool-arc-length-dimension",
+            });
+            let tool = [("tool", name.as_str())];
             if ui.extending.is_some() {
-                return Some(format!("{name}: pick more points to add · Esc to finish"));
+                return Some(tr_with("drawing-hint-pick-more-points", &tool));
             }
             if ui.preview.is_some() {
-                format!("{name}: click to place the text · Esc to cancel")
+                tr_with("drawing-hint-place-text", &tool)
             } else {
-                match t {
-                    DimTool::Radial | DimTool::Diameter => format!("{name}: pick a circle or arc"),
-                    DimTool::LineToLine | DimTool::Angular => format!("{name}: pick two lines"),
-                    DimTool::PointToPoint => format!("{name}: pick two points"),
-                    DimTool::Smart => format!("{name}: pick edges or points"),
-                    DimTool::Baseline => format!("{name}: pick the base, then a point"),
-                    DimTool::Ordinate => format!("{name}: pick the zero point"),
-                    DimTool::Chamfer => format!("{name}: pick a chamfer's edge"),
-                    DimTool::ArcLength => format!("{name}: pick an arc"),
-                }
+                tr_with(
+                    match t {
+                        DimTool::Radial | DimTool::Diameter => "drawing-hint-pick-circle-or-arc",
+                        DimTool::LineToLine | DimTool::Angular => "drawing-hint-pick-two-lines",
+                        DimTool::PointToPoint => "drawing-hint-pick-two-points",
+                        DimTool::Smart => "drawing-hint-pick-edges-or-points",
+                        DimTool::Baseline => "drawing-hint-pick-base",
+                        DimTool::Ordinate => "drawing-hint-pick-zero-point",
+                        DimTool::Chamfer => "drawing-hint-pick-chamfer-edge",
+                        DimTool::ArcLength => "drawing-hint-pick-arc",
+                    },
+                    &tool,
+                )
             }
         }
         AnnTool::Gdt | AnnTool::Datum | AnnTool::SurfaceFinish | AnnTool::Weld => {
-            let name = match ui.tool {
-                AnnTool::Gdt => "Feature control frame",
-                AnnTool::Datum => "Datum feature",
-                AnnTool::SurfaceFinish => "Surface finish",
-                _ => "Weld symbol",
-            };
-            if n == 0 { format!("{name}: pick an edge") } else { format!("{name}: click to place · Esc to cancel") }
+            let name = tr(match ui.tool {
+                AnnTool::Gdt => "drawing-tool-feature-control-frame",
+                AnnTool::Datum => "drawing-tool-datum-feature",
+                AnnTool::SurfaceFinish => "drawing-tool-surface-finish",
+                _ => "drawing-tool-weld-symbol",
+            });
+            let tool = [("tool", name.as_str())];
+            if n == 0 {
+                tr_with("drawing-hint-pick-an-edge", &tool)
+            } else {
+                tr_with("drawing-hint-click-to-place", &tool)
+            }
         }
-        AnnTool::HoleCallout if n == 0 => "Hole callout: pick a hole's edge".into(),
-        AnnTool::HoleCallout => "Hole callout: click to place the callout".into(),
-        AnnTool::Centermark => "Centermark: pick circles or arcs · Esc to finish".into(),
-        AnnTool::VirtualSharp => "Virtual sharp: pick two straight edges".into(),
-        AnnTool::Centerline(CenterlineMode::PointToPoint) => format!("Centerline: pick two points ({n} of 2)"),
-        AnnTool::Centerline(CenterlineMode::LineToLine) => format!("Centerline: pick two edges ({n} of 2)"),
-        AnnTool::Centerline(CenterlineMode::ThreePointCircle) => format!("Circle centerline: pick three points ({n} of 3)"),
+        AnnTool::HoleCallout if n == 0 => tr("drawing-hint-hole-callout-pick"),
+        AnnTool::HoleCallout => tr("drawing-hint-hole-callout-place"),
+        AnnTool::Centermark => tr("drawing-hint-centermark"),
+        AnnTool::VirtualSharp => tr("drawing-hint-virtual-sharp"),
+        AnnTool::Centerline(CenterlineMode::PointToPoint) => tr_with(
+            "drawing-hint-centerline-points",
+            &[("count", &n.to_string())],
+        ),
+        AnnTool::Centerline(CenterlineMode::LineToLine) => tr_with(
+            "drawing-hint-centerline-edges",
+            &[("count", &n.to_string())],
+        ),
+        AnnTool::Centerline(CenterlineMode::ThreePointCircle) => tr_with(
+            "drawing-hint-circle-centerline-points",
+            &[("count", &n.to_string())],
+        ),
         AnnTool::Centerline(CenterlineMode::TwoPointCircle) => {
-            if n == 0 { "Circle centerline: pick the centre".into() } else { "Circle centerline: pick a point on the circle".into() }
+            if n == 0 {
+                tr("drawing-hint-circle-centerline-centre")
+            } else {
+                tr("drawing-hint-circle-centerline-point")
+            }
         }
     })
 }

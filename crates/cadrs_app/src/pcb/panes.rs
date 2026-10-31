@@ -35,6 +35,7 @@ use cadrs_core::pcb::{
     BoardId, ItemId, PartTransform, Representation, SetRefdes, SetRepresentation,
 };
 use cadrs_sketch::units::{Quantity, format_with_unit};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::inline_edit::{
     DoubleClick, DoubleClickable, InlineEdit, InlineEditCommit, InlineEditLabel, InlineEditOptions,
     begin_inline_edit,
@@ -186,7 +187,8 @@ pub fn sync_panes(world: &mut World, q_panes: &mut QueryState<Entity, With<PaneR
     world.entity_mut(parent).insert_children(at, &[panel]);
 }
 
-fn pane_frame(world: &mut World, t: &Theme, name: &str, title: &str, icon: &str) -> Entity {
+/// A pane with its title (a catalog key) and icon.
+fn pane_frame(world: &mut World, t: &Theme, name: &str, title: &'static str, icon: &str) -> Entity {
     let mut commands = world.commands();
     let e = commands
         .spawn((
@@ -205,7 +207,7 @@ fn pane_frame(world: &mut World, t: &Theme, name: &str, title: &str, icon: &str)
             BorderColor::all(t.panel_border),
         ))
         .id();
-    let (title, icon, t2) = (title.to_string(), icon.to_string(), t.clone());
+    let (key, icon, t2) = (title, icon.to_string(), t.clone());
     commands.entity(e).with_children(move |p| {
         p.spawn((
             Node {
@@ -222,7 +224,8 @@ fn pane_frame(world: &mut World, t: &Theme, name: &str, title: &str, icon: &str)
         .with_children(|h| {
             h.spawn((icon_bundle(&icon, 16.0, t2.primary), Pickable::IGNORE));
             h.spawn((
-                t2.text(title, 13.0, FontWeight::BOLD, t2.foreground),
+                t2.text(tr(key), 13.0, FontWeight::BOLD, t2.foreground),
+                Translated(key),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -230,7 +233,7 @@ fn pane_frame(world: &mut World, t: &Theme, name: &str, title: &str, icon: &str)
             ));
             h.spawn((
                 IconButton::new("pcb-pane-close", "close")
-                    .tooltip("Close")
+                    .tooltip(tr("common-close"))
                     .build(&t2),
                 observe(|_: On<Activate>, mut ui: ResMut<PcbUi>| ui.pane = PcbPane::None),
             ));
@@ -247,14 +250,11 @@ fn icon_bundle(name: &str, size: f32, color: Color) -> impl Bundle {
 // ---------------------------------------------------------------------------------------------
 // Component pane
 
-fn caption(t: &Theme, text: &str) -> impl Bundle {
+/// A field's caption, from its catalog key.
+fn caption(t: &Theme, key: &'static str) -> impl Bundle {
     (
-        t.text(
-            text.to_string(),
-            t.font_sm,
-            FontWeight::MEDIUM,
-            t.muted_foreground,
-        ),
+        t.text(tr(key), t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+        Translated(key),
         Node {
             margin: UiRect::top(Val::Px(8.0)),
             ..default()
@@ -291,7 +291,13 @@ fn read_only(t: &Theme, name: &str, text: &str) -> impl Bundle {
 }
 
 fn spawn_component_pane(world: &mut World, t: &Theme) -> Entity {
-    let pane = pane_frame(world, t, "pcb-component-pane", "Component", "properties");
+    let pane = pane_frame(
+        world,
+        t,
+        "pcb-component-pane",
+        "pcb-pane-component",
+        "properties",
+    );
     let s = subject(world);
     let edit = world.resource::<PcbUi>().edit.clone();
     let units = world.resource::<ActiveDocument>().doc.units;
@@ -299,41 +305,71 @@ fn spawn_component_pane(world: &mut World, t: &Theme) -> Entity {
     let t = t.clone();
     let mut commands = world.commands();
     commands.entity(pane).with_children(move |p| {
-        p.spawn(Node { flex_direction: FlexDirection::Column, padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(4.0), Val::Px(12.0)), row_gap: Val::Px(4.0), overflow: Overflow::scroll_y(), flex_grow: 1.0, ..default() })
-            .with_children(|b| {
-                let Some(s) = s else {
-                    b.spawn((
-                        Name::new("pcb-component-hint"),
-                        Text::new("Click a component in the view to see its properties, or open one under Components."),
-                        t.font(t.font_sm, FontWeight::NORMAL),
-                        TextColor(t.muted_foreground),
-                        Node { margin: UiRect::top(Val::Px(10.0)), max_width: Val::Percent(100.0), ..default() },
-                    ));
-                    return;
-                };
-                b.spawn(caption(&t, "Part name"));
-                b.spawn(read_only(&t, "pcb-part-name", &s.package));
-                b.spawn(caption(&t, "Part number"));
-                b.spawn(read_only(&t, "pcb-part-number", if s.part_number.is_empty() { "–" } else { &s.part_number }));
-                b.spawn(caption(&t, "Representation"));
-                let sel = match s.representation {
-                    Representation::None => 0,
-                    Representation::FromEcad => 1,
-                    Representation::Custom(_) => 2,
-                };
-                b.spawn(
-                    RadioGroup::new("pcb-representation")
-                        .option("pcb-rep-none", "None")
-                        .option("pcb-rep-ecad", "From ECAD data")
-                        .option_icon("open-external", "pcb-rep-ecad-link", "Open in the component view")
-                        .option("pcb-rep-custom", "Custom part")
-                        .selected(Some(sel))
-                        .build(&t),
+        p.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::new(Val::Px(12.0), Val::Px(12.0), Val::Px(4.0), Val::Px(12.0)),
+            row_gap: Val::Px(4.0),
+            overflow: Overflow::scroll_y(),
+            flex_grow: 1.0,
+            ..default()
+        })
+        .with_children(|b| {
+            let Some(s) = s else {
+                b.spawn((
+                    Name::new("pcb-component-hint"),
+                    Text::new(tr("pcb-component-hint")),
+                    Translated("pcb-component-hint"),
+                    t.font(t.font_sm, FontWeight::NORMAL),
+                    TextColor(t.muted_foreground),
+                    Node {
+                        margin: UiRect::top(Val::Px(10.0)),
+                        max_width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
+                return;
+            };
+            b.spawn(caption(&t, "pcb-part-name"));
+            b.spawn(read_only(&t, "pcb-part-name", &s.package));
+            b.spawn(caption(&t, "pcb-part-number"));
+            b.spawn(read_only(
+                &t,
+                "pcb-part-number",
+                if s.part_number.is_empty() {
+                    "–"
+                } else {
+                    &s.part_number
+                },
+            ));
+            b.spawn(caption(&t, "pcb-representation"));
+            let sel = match s.representation {
+                Representation::None => 0,
+                Representation::FromEcad => 1,
+                Representation::Custom(_) => 2,
+            };
+            b.spawn(
+                RadioGroup::new("pcb-representation")
+                    .option("pcb-rep-none", tr("common-none"))
+                    .option("pcb-rep-ecad", tr("pcb-rep-ecad"))
+                    .option_icon(
+                        "open-external",
+                        "pcb-rep-ecad-link",
+                        tr("pcb-rep-ecad-link"),
+                    )
+                    .option("pcb-rep-custom", tr("pcb-rep-custom"))
+                    .selected(Some(sel))
+                    .build(&t),
+            );
+            if let Representation::Custom(c) = &s.representation {
+                custom_section(
+                    b,
+                    &t,
+                    &c.source.label(),
+                    edit.as_ref().map(|e| e.transform).unwrap_or(c.transform),
+                    c.transform,
                 );
-                if let Representation::Custom(c) = &s.representation {
-                    custom_section(b, &t, &c.source.label(), edit.as_ref().map(|e| e.transform).unwrap_or(c.transform), c.transform);
-                }
-            });
+            }
+        });
     });
     world.flush();
     pane
@@ -359,7 +395,7 @@ fn custom_section(
     ));
     b.spawn((
         Button::new("pcb-custom-select")
-            .label("Select custom part")
+            .label(tr("pcb-custom-title"))
             .small()
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
@@ -375,7 +411,7 @@ fn custom_section(
         n.align_self = AlignSelf::FlexStart;
         n.margin = UiRect::left(Val::Px(19.0));
     });
-    b.spawn(caption(t, "Translate"));
+    b.spawn(caption(t, "pcb-custom-translate"));
     for (i, axis) in ["x", "y", "z"].into_iter().enumerate() {
         b.spawn(
             NumberField::new(format!("pcb-translate-{axis}"), axis.to_uppercase())
@@ -387,9 +423,9 @@ fn custom_section(
     b.spawn((
         Button::new("pcb-custom-center")
             .icon("origin")
-            .label("Center")
+            .label(tr("pcb-custom-center"))
             .small()
-            .tooltip("Put the part in the middle of the footprint, standing on the board")
+            .tooltip(tr("pcb-custom-center-tip"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(center_part);
@@ -400,7 +436,7 @@ fn custom_section(
         n.align_self = AlignSelf::FlexStart;
         n.margin = UiRect::top(Val::Px(4.0));
     });
-    b.spawn(caption(t, "Rotate"));
+    b.spawn(caption(t, "pcb-custom-rotate"));
     for (i, axis) in ["x", "y", "z"].into_iter().enumerate() {
         b.spawn(
             NumberField::new(format!("pcb-rotate-{axis}"), axis.to_uppercase())
@@ -419,11 +455,11 @@ fn custom_section(
         r.spawn((
             Button::new("pcb-custom-accept")
                 .icon("check")
-                .label("Accept")
+                .label(tr("pcb-custom-accept"))
                 .primary()
                 .small()
                 .disabled(!changed)
-                .tooltip("Accept the new position")
+                .tooltip(tr("pcb-custom-accept-tip"))
                 .build(t),
             observe(|_: On<Activate>, mut commands: Commands| {
                 commands.queue(accept_edit);
@@ -431,7 +467,7 @@ fn custom_section(
         ));
         r.spawn((
             Button::new("pcb-custom-cancel")
-                .label("Cancel")
+                .label(tr("common-cancel"))
                 .small()
                 .disabled(!changed)
                 .build(t),
@@ -611,10 +647,10 @@ struct BomDesignator {
 
 fn bom_columns() -> Vec<Column> {
     vec![
-        Column::new("qty", "Qty").width(46.0),
-        Column::new("designator", "Designator").width(96.0),
-        Column::new("part-name", "Part name").width(112.0),
-        Column::new("part-number", "Part number").width(PANE_W - 46.0 - 96.0 - 112.0 - 4.0),
+        Column::new("qty", tr("pcb-bom-qty")).width(46.0),
+        Column::new("designator", tr("pcb-bom-designator")).width(96.0),
+        Column::new("part-name", tr("pcb-part-name")).width(112.0),
+        Column::new("part-number", tr("pcb-part-number")).width(PANE_W - 46.0 - 96.0 - 112.0 - 4.0),
     ]
 }
 
@@ -623,7 +659,7 @@ fn spawn_bom_pane(world: &mut World, t: &Theme) -> Entity {
         world,
         t,
         "pcb-bom-pane",
-        "Bill of materials",
+        "common-bill-of-materials",
         "bill-of-materials",
     );
     let Some((_, _, board)) = super::shown(world) else {
@@ -753,11 +789,12 @@ fn spawn_bom_pane(world: &mut World, t: &Theme) -> Entity {
                                 e.insert((
                                     Name::new(n),
                                     DoubleClickable,
-                                    Tooltip::new(if editable {
-                                        "Double-click to rename"
+                                    // (`tr` is the table row here.)
+                                    Tooltip::new(cadrs_ui::i18n::tr(if editable {
+                                        "pcb-bom-rename-tip"
                                     } else {
-                                        "Double-click to list its components"
-                                    }),
+                                        "pcb-bom-list-tip"
+                                    })),
                                 ));
                                 e.entry::<Node>().and_modify(move |mut node| {
                                     node.padding = UiRect::left(Val::Px(pad))
@@ -801,11 +838,12 @@ fn spawn_bom_pane(world: &mut World, t: &Theme) -> Entity {
         p.spawn((
             Name::new("pcb-bom-hint"),
             t.text(
-                "Double-click a designator to rename it.",
+                tr("pcb-bom-hint"),
                 t.font_sm,
                 FontWeight::NORMAL,
                 t.muted_foreground,
             ),
+            Translated("pcb-bom-hint"),
             Node {
                 padding: UiRect::all(Val::Px(8.0)),
                 flex_shrink: 0.0,
@@ -973,8 +1011,11 @@ fn on_bom_commit(ev: On<InlineEditCommit>, q: Query<&BomDesignator>, mut command
             show_notification(
                 &mut commands,
                 &theme,
-                Notification::warning(format!("Couldn't rename {}: {e}", d.refdes))
-                    .name("pcb-refdes-toast"),
+                Notification::warning(tr_with(
+                    "pcb-bom-rename-failed",
+                    &[("designator", &d.refdes), ("error", &e.to_string())],
+                ))
+                .name("pcb-refdes-toast"),
             );
             w.flush();
             // Show the designator as it was.

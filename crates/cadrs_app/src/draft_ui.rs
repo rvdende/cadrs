@@ -24,6 +24,7 @@ use cadrs_core::hole::{
 use cadrs_core::pattern::MirrorPlane;
 use cadrs_core::{Feature, FeatureKind};
 use cadrs_sketch::units::{Quantity, Units};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Entry, EntryGroup, NumberField, OptionRow, TabStrip};
 
@@ -33,8 +34,8 @@ use crate::applied_dialog::{Role, body_column, index_of, list, number, opts, sel
 use crate::parts::PartCache;
 use crate::viewport::Pick;
 
-/// What Smooth fillet corners does (its row's tooltip; Final, PS14.6).
-pub const SMOOTH_CORNERS_WHY: &str = "Where three fillets meet, set the corner back 1.5 × the radius and blend it with one smooth patch";
+/// What Smooth fillet corners does (its row's tooltip; Final, PS14.6): the catalog key.
+pub const SMOOTH_CORNERS_WHY: &str = "model-fillet-smooth-corners-why";
 
 // ---------------------------------------------------------------------------------------------
 // New features and picks
@@ -226,13 +227,15 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("model-unknown-part"), |f| f.name.clone())
 }
 
 fn plane_label(features: &[Feature], p: &MirrorPlane) -> String {
     match p {
         MirrorPlane::Plane(p) => crate::viewport::plane_label(features, *p),
-        MirrorPlane::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+        MirrorPlane::Face(f) => {
+            tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+        }
         MirrorPlane::Connector(c) => c.label(features),
     }
 }
@@ -250,7 +253,7 @@ pub(crate) fn items(
         (FeatureKind::Draft(x), Role::DraftFaces) => x
             .faces
             .iter()
-            .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+            .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
             .collect(),
         (FeatureKind::Hole(x), Role::HoleStartPlane) => x
             .start_plane
@@ -264,9 +267,9 @@ pub(crate) fn items(
             .vertices
             .iter()
             .map(|v| {
-                format!(
-                    "Vertex of {}",
-                    op_name(features, v.vertex.vertex.faces[0].op)
+                tr_with(
+                    "common-vertex-of",
+                    &[("name", &op_name(features, v.vertex.vertex.faces[0].op))],
                 )
             })
             .collect(),
@@ -274,9 +277,12 @@ pub(crate) fn items(
             .edge_points
             .iter()
             .map(|p| {
-                format!(
-                    "Point on Edge of {}",
-                    op_name(features, crate::parts::edge_maker(features, &p.edge.edge))
+                tr_with(
+                    "model-point-on-edge-of",
+                    &[(
+                        "name",
+                        &op_name(features, crate::parts::edge_maker(features, &p.edge.edge)),
+                    )],
                 )
             })
             .collect(),
@@ -338,8 +344,8 @@ pub(crate) fn body(
         Role::DraftTypeTab,
         TabStrip::new("draft-type")
             .compact()
-            .tab("Neutral plane")
-            .tab("Parting line")
+            .tab(tr("model-draft-neutral-plane"))
+            .tab(tr("model-draft-parting-line"))
             .selected(tab)
             .build(t),
     ));
@@ -348,7 +354,7 @@ pub(crate) fn body(
             b,
             t,
             "draft-neutral-field",
-            "Neutral plane",
+            &tr("model-draft-neutral-plane"),
             Role::DraftNeutral,
             items_of(Role::DraftNeutral),
             field == AppliedField::DraftNeutral,
@@ -357,7 +363,7 @@ pub(crate) fn body(
             b,
             t,
             "draft-faces-field",
-            "Faces to draft",
+            &tr("model-draft-faces"),
             Role::DraftFaces,
             items_of(Role::DraftFaces),
             field == AppliedField::DraftFaces,
@@ -366,13 +372,13 @@ pub(crate) fn body(
             b,
             t,
             "draft-angle",
-            "Draft angle",
+            &tr("model-draft-angle"),
             Role::DraftAngle,
             &x.angle_expr,
             Some(x.flip),
         );
         b.spawn(
-            OptionRow::new("draft-tangent-propagation", "Tangent propagation")
+            OptionRow::new("draft-tangent-propagation", tr("model-tangent-propagation"))
                 .checked(x.tangent_propagation)
                 .build(t),
         );
@@ -380,8 +386,8 @@ pub(crate) fn body(
             b,
             t,
             "draft-reference-propagation",
-            "Reference entity propagation",
-            "Not available: faces are drafted as picked",
+            &tr("model-draft-reference-propagation"),
+            &tr("model-draft-reference-propagation-why"),
         );
     });
 }
@@ -395,7 +401,7 @@ pub(crate) fn fillet_rows(
     items_of: &dyn Fn(Role) -> Vec<String>,
 ) {
     b.spawn(
-        OptionRow::new("fillet-asymmetric", "Asymmetric")
+        OptionRow::new("fillet-asymmetric", tr("model-fillet-asymmetric"))
             .checked(x.asymmetric)
             .build(t),
     );
@@ -404,14 +410,14 @@ pub(crate) fn fillet_rows(
             b,
             t,
             "fillet-second-radius",
-            "Second radius",
+            &tr("model-fillet-second-radius"),
             Role::FilletSecond,
             &x.second_expr,
             Some(x.flip_asymmetric),
         );
     }
     b.spawn(
-        OptionRow::new("fillet-partial", "Partial fillet")
+        OptionRow::new("fillet-partial", tr("model-fillet-partial"))
             .chevron()
             .checked(x.partial)
             .build(t),
@@ -420,7 +426,7 @@ pub(crate) fn fillet_rows(
         partial_rows(b, t, x);
     }
     b.spawn(
-        OptionRow::new("fillet-variable", "Variable fillet")
+        OptionRow::new("fillet-variable", tr("model-fillet-variable"))
             .chevron()
             .checked(x.variable)
             .build(t),
@@ -429,24 +435,24 @@ pub(crate) fn fillet_rows(
         variable_rows(b, t, x, field, items_of);
     }
     b.spawn(
-        OptionRow::new("fillet-overflow", "Allow edge overflow")
+        OptionRow::new("fillet-overflow", tr("model-fillet-allow-overflow"))
             .chevron()
             .checked(x.allow_overflow)
             .build(t),
     );
     b.spawn(
-        OptionRow::new("fillet-smooth-corners", "Smooth fillet corners")
+        OptionRow::new("fillet-smooth-corners", tr("model-fillet-smooth-corners"))
             .chevron()
             .checked(x.smooth_corners)
             .build(t),
     )
-    .insert(Tooltip::new(SMOOTH_CORNERS_WHY.to_string()));
+    .insert(Tooltip::new(tr(SMOOTH_CORNERS_WHY)));
 }
 
-/// Why a variable fillet's magnitudes can't be set (their rows' tooltip): Magnitude belongs to
-/// the Curvature cross section, out of scope with the other niche fillet sections.
-pub const MAGNITUDE_WHY: &str =
-    "Magnitude applies to the Curvature cross section with a variable fillet; not available";
+/// Why a variable fillet's magnitudes can't be set (their rows' tooltip; the catalog key):
+/// Magnitude belongs to the Curvature cross section, out of scope with the other niche fillet
+/// sections.
+pub const MAGNITUDE_WHY: &str = "model-fillet-magnitude-why";
 
 /// A partial fillet's rows (P3.11, PS14.6), nested under its checkbox: Boundary type
 /// (Parameter or Length), the First bound with its opposite-direction flip (measured from the
@@ -468,9 +474,9 @@ fn partial_rows(b: &mut ChildSpawner, t: &Theme, x: &FilletFeature) {
             b,
             t,
             "fillet-partial-bound",
-            "Boundary type",
+            &tr("model-fillet-boundary-type"),
             Role::PartialBound,
-            &opts(&PartialBound::ALL, PartialBound::label, |_| true),
+            &opts(&PartialBound::ALL, partial_bound_text, |_| true),
             index_of(&PartialBound::ALL, &x.partial_bound),
             None,
         );
@@ -482,7 +488,7 @@ fn partial_rows(b: &mut ChildSpawner, t: &Theme, x: &FilletFeature) {
         .with_children(|r| {
             r.spawn((
                 Role::PartialFirst(length),
-                NumberField::new("fillet-partial-first", "First bound")
+                NumberField::new("fillet-partial-first", tr("model-fillet-first-bound"))
                     .text(x.partial_first_expr.clone())
                     .label_width(96.0)
                     .variables()
@@ -496,14 +502,14 @@ fn partial_rows(b: &mut ChildSpawner, t: &Theme, x: &FilletFeature) {
                 "fillet-partial-first-flip",
                 Role::PartialFlip,
                 x.flip_partial,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             );
         });
         number(
             b,
             t,
             "fillet-partial-second",
-            "Second bound",
+            &tr("model-fillet-second-bound"),
             Role::PartialSecond(length),
             &x.partial_second_expr,
             None,
@@ -595,7 +601,7 @@ fn variable_rows(
         let tp = tv.clone();
         b.spawn((
             Role::FilletVertices,
-            EntryGroup::new("fillet-vertices-field", "Vertices")
+            EntryGroup::new("fillet-vertices-field", tr("model-fillet-vertices"))
                 .active(field == AppliedField::FilletVertices)
                 .content(move |g| {
                     for (k, title, expr) in vertices {
@@ -608,7 +614,7 @@ fn variable_rows(
                                         c,
                                         &te,
                                         &format!("fillet-vertex-radius-{k}"),
-                                        "Radius",
+                                        &tr("model-radius"),
                                         Role::VertexRadius(k),
                                         &expr,
                                         None,
@@ -622,10 +628,10 @@ fn variable_rows(
                 .build(t),
         ));
         let has_points = !points.is_empty();
-        let mut group = EntryGroup::new("fillet-points-field", "Points on edges")
+        let mut group = EntryGroup::new("fillet-points-field", tr("model-fillet-points-on-edges"))
             .active(field == AppliedField::FilletEdgePoints);
         if has_points {
-            group = group.action("CLEAR");
+            group = group.action(tr("model-fillet-clear-points"));
         }
         b.spawn((
             Role::FilletEdgePoints,
@@ -641,7 +647,7 @@ fn variable_rows(
                                         c,
                                         &te,
                                         &format!("fillet-point-edge-{k}"),
-                                        "Edge",
+                                        &tr("common-edge"),
                                         Role::PointEdge(k),
                                         vec![edge],
                                         false,
@@ -650,7 +656,7 @@ fn variable_rows(
                                         c,
                                         &te,
                                         &format!("fillet-point-location-{k}"),
-                                        "Location",
+                                        &tr("model-fillet-location"),
                                         Role::PointLocation(k),
                                         &location,
                                         None,
@@ -659,7 +665,7 @@ fn variable_rows(
                                         c,
                                         &te,
                                         &format!("fillet-point-radius-{k}"),
-                                        "Radius",
+                                        &tr("model-radius"),
                                         Role::PointRadius(k),
                                         &expr,
                                         None,
@@ -672,7 +678,7 @@ fn variable_rows(
                     g.spawn((
                         Role::AddEdgePoint,
                         cadrs_ui::Button::new("fillet-add-point")
-                            .label("Add point on edge")
+                            .label(tr("model-fillet-add-point"))
                             .outline()
                             .small()
                             .width(Val::Percent(100.0))
@@ -682,9 +688,12 @@ fn variable_rows(
                 .build(t),
         ));
         b.spawn(
-            OptionRow::new("fillet-smooth-transition", "Smooth transition")
-                .checked(x.smooth_transition)
-                .build(t),
+            OptionRow::new(
+                "fillet-smooth-transition",
+                tr("model-fillet-smooth-transition"),
+            )
+            .checked(x.smooth_transition)
+            .build(t),
         );
     });
 }
@@ -692,12 +701,12 @@ fn variable_rows(
 /// A magnitude row the kernel can't use: disabled, with why on hover.
 fn magnitude(b: &mut ChildSpawner, t: &Theme, name: &str) {
     b.spawn((
-        NumberField::new(name.to_string(), "Magnitude")
+        NumberField::new(name.to_string(), tr("model-magnitude"))
             .text("0.5")
             .label_width(72.0)
             .disabled(true)
             .build(t),
-        Tooltip::new(MAGNITUDE_WHY),
+        Tooltip::new(tr(MAGNITUDE_WHY)),
     ));
 }
 
@@ -803,9 +812,12 @@ pub(crate) fn sync_fillet_entries(
 
 fn vertex_title(features: &[Feature], v: &VertexRadius) -> String {
     format!(
-        "[{}] Vertex of {}",
+        "[{}] {}",
         v.expr,
-        op_name(features, v.vertex.vertex.faces[0].op)
+        tr_with(
+            "common-vertex-of",
+            &[("name", &op_name(features, v.vertex.vertex.faces[0].op))],
+        )
     )
 }
 
@@ -814,9 +826,12 @@ fn point_title(features: &[Feature], p: &EdgePoint) -> String {
 }
 
 fn edge_name(features: &[Feature], p: &EdgePoint) -> String {
-    format!(
-        "Edge of {}",
-        op_name(features, crate::parts::edge_maker(features, &p.edge.edge))
+    tr_with(
+        "common-edge-of",
+        &[(
+            "name",
+            &op_name(features, crate::parts::edge_maker(features, &p.edge.edge)),
+        )],
     )
 }
 
@@ -824,7 +839,7 @@ fn edge_name(features: &[Feature], p: &EdgePoint) -> String {
 pub(crate) fn thread_class_row(b: &mut ChildSpawner, t: &Theme, s: &HoleSpec) {
     // P3.11 (P3.10 judge): the chevron of a section with more settings (`ex5-step8.png`).
     b.spawn(
-        OptionRow::new("hole-thread-class", "Thread class")
+        OptionRow::new("hole-thread-class", tr("model-hole-thread-class"))
             .chevron()
             .checked(s.thread_class)
             .build(t),
@@ -851,7 +866,7 @@ pub(crate) fn thread_class_row(b: &mut ChildSpawner, t: &Theme, s: &HoleSpec) {
                 b,
                 t,
                 "hole-class",
-                "Class",
+                &tr("model-hole-class"),
                 Role::ThreadClass,
                 &classes,
                 i,
@@ -899,7 +914,7 @@ pub(crate) fn hole_offset_row(b: &mut ChildSpawner, t: &Theme, s: &HoleSpec) {
         t,
         "hole-offset",
         "hole-offset-distance",
-        "Offset",
+        &tr("common-offset"),
         value,
         Role::HoleOffset,
         Role::HoleOffsetFlip,
@@ -951,9 +966,9 @@ pub(crate) fn tolerance_rows(
             b,
             t,
             &format!("{name}-type"),
-            "Type",
+            &tr("common-type"),
             roles[0],
-            &opts(kinds, |k| k.label(), |_| true),
+            &opts(kinds, tolerance_type_text, |_| true),
             i,
             None,
         );
@@ -962,7 +977,7 @@ pub(crate) fn tolerance_rows(
                 b,
                 t,
                 &format!("{name}-upper"),
-                "Tolerance",
+                &tr("model-tolerance"),
                 roles[1],
                 &with_unit(tol.upper, unit),
                 None,
@@ -972,7 +987,7 @@ pub(crate) fn tolerance_rows(
                     b,
                     t,
                     &format!("{name}-upper"),
-                    "Upper",
+                    &tr("model-tolerance-upper"),
                     roles[1],
                     &with_unit(tol.upper, unit),
                     None,
@@ -981,7 +996,7 @@ pub(crate) fn tolerance_rows(
                     b,
                     t,
                     &format!("{name}-lower"),
-                    "Lower",
+                    &tr("model-tolerance-lower"),
                     roles[2],
                     &with_unit(tol.lower, unit),
                     None,
@@ -995,7 +1010,7 @@ pub(crate) fn tolerance_rows(
             b,
             t,
             &format!("{name}-precision"),
-            "Precision",
+            &tr("model-tolerance-precision"),
             roles[3],
             &precisions,
             tol.precision.clamp(1, 4) - 1,
@@ -1025,11 +1040,43 @@ pub(crate) fn style_tolerance_rows(
         b,
         t,
         which.name(),
-        which.label(),
+        &style_tolerance_text(which),
         s.style_tol(which),
         unit,
         [0, 1, 2, 3].map(|r| Role::StyleTol(k, r)),
     );
+}
+
+/// A partial fillet's boundary type, in the current language (the core's label is English).
+fn partial_bound_text(b: cadrs_core::applied::PartialBound) -> String {
+    use cadrs_core::applied::PartialBound;
+    tr(match b {
+        PartialBound::Parameter => "model-fillet-bound-parameter",
+        PartialBound::Length => "model-fillet-bound-length",
+    })
+}
+
+/// A tolerance type, in the current language (the core's label is English).
+fn tolerance_type_text(k: ToleranceType) -> String {
+    tr(match k {
+        ToleranceType::None => "common-none",
+        ToleranceType::Symmetrical => "model-tolerance-symmetrical",
+        ToleranceType::Deviation => "model-tolerance-deviation",
+        ToleranceType::Limits => "model-tolerance-limits",
+        ToleranceType::Min => "model-tolerance-min",
+        ToleranceType::Max => "model-tolerance-max",
+        ToleranceType::Basic => "model-tolerance-basic",
+    })
+}
+
+/// A counterbore or countersink tolerance section's title, in the current language.
+fn style_tolerance_text(w: StyleTolerance) -> String {
+    tr(match w {
+        StyleTolerance::CboreDiameter => "model-hole-counterbore-diameter-tolerance",
+        StyleTolerance::CboreDepth => "model-hole-counterbore-depth-tolerance",
+        StyleTolerance::CsinkDiameter => "model-hole-countersink-diameter-tolerance",
+        StyleTolerance::CsinkAngle => "model-hole-countersink-angle-tolerance",
+    })
 }
 
 /// The tolerance a [`Role::StyleTol`] is for, and its unit.

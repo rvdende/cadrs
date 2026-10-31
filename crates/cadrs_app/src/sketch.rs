@@ -32,6 +32,7 @@ use cadrs_core::commands::{
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId};
 use cadrs_sketch::{ConstraintKind, PlaneRef};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, CheckboxState, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState,
@@ -176,38 +177,44 @@ pub enum SketchTool {
 }
 
 impl SketchTool {
-    pub fn label(self) -> &'static str {
+    /// The tool's name in the current language.
+    pub fn label(self) -> String {
+        tr(self.label_key())
+    }
+
+    /// The catalog key of the tool's name.
+    pub fn label_key(self) -> &'static str {
         match self {
-            SketchTool::Select => "Select",
-            SketchTool::Use => "Use",
-            SketchTool::Line => "Line",
-            SketchTool::MidpointLine => "Midpoint line",
-            SketchTool::CornerRectangle => "Corner rectangle",
-            SketchTool::CenterRectangle => "Center point rectangle",
-            SketchTool::AlignedRectangle => "Aligned rectangle",
-            SketchTool::Circle => "Center point circle",
-            SketchTool::ThreePointCircle => "3 point circle",
-            SketchTool::Ellipse => "Ellipse",
-            SketchTool::Arc => "3 point arc",
-            SketchTool::TangentArc => "Tangent arc",
-            SketchTool::CenterArc => "Center point arc",
-            SketchTool::Polygon => "Inscribed polygon",
-            SketchTool::CircumscribedPolygon => "Circumscribed polygon",
-            SketchTool::Spline => "Spline",
-            SketchTool::Bezier => "Bézier curve",
-            SketchTool::Point => "Point",
-            SketchTool::Text => "Text",
-            SketchTool::Fillet => "Sketch fillet",
-            SketchTool::Chamfer => "Sketch chamfer",
-            SketchTool::Trim => "Trim",
-            SketchTool::Extend => "Extend",
-            SketchTool::Split => "Split",
-            SketchTool::Offset => "Offset",
-            SketchTool::Slot => "Slot",
-            SketchTool::Mirror => "Mirror",
-            SketchTool::Pattern => "Pattern",
-            SketchTool::Dimension => "Dimension",
-            SketchTool::Constrain(k) => k.label(),
+            SketchTool::Select => "common-select",
+            SketchTool::Use => "sketch-tool-use",
+            SketchTool::Line => "sketch-tool-line",
+            SketchTool::MidpointLine => "sketch-tool-midpoint-line",
+            SketchTool::CornerRectangle => "sketch-tool-corner-rectangle",
+            SketchTool::CenterRectangle => "sketch-tool-center-rectangle",
+            SketchTool::AlignedRectangle => "sketch-tool-aligned-rectangle",
+            SketchTool::Circle => "sketch-tool-center-circle",
+            SketchTool::ThreePointCircle => "sketch-tool-3-point-circle",
+            SketchTool::Ellipse => "sketch-tool-ellipse",
+            SketchTool::Arc => "sketch-tool-3-point-arc",
+            SketchTool::TangentArc => "sketch-tool-tangent-arc",
+            SketchTool::CenterArc => "sketch-tool-center-arc",
+            SketchTool::Polygon => "sketch-tool-inscribed-polygon",
+            SketchTool::CircumscribedPolygon => "sketch-tool-circumscribed-polygon",
+            SketchTool::Spline => "sketch-tool-spline",
+            SketchTool::Bezier => "sketch-tool-bezier",
+            SketchTool::Point => "sketch-tool-point",
+            SketchTool::Text => "common-text",
+            SketchTool::Fillet => "sketch-tool-fillet",
+            SketchTool::Chamfer => "sketch-tool-chamfer",
+            SketchTool::Trim => "sketch-tool-trim",
+            SketchTool::Extend => "sketch-tool-extend",
+            SketchTool::Split => "sketch-tool-split",
+            SketchTool::Offset => "common-offset",
+            SketchTool::Slot => "sketch-tool-slot",
+            SketchTool::Mirror => "sketch-tool-mirror",
+            SketchTool::Pattern => "sketch-tool-pattern",
+            SketchTool::Dimension => "common-dimension",
+            SketchTool::Constrain(k) => constraint_label_key(k),
         }
     }
 
@@ -654,10 +661,16 @@ fn cancelled_toast(world: &mut World, name: String, feature: FeatureId) {
     let toast = cadrs_ui::show_toast_for(
         &mut commands,
         &theme,
-        format!("{name} has been cancelled."),
+        tr_with("sketch-cancelled", &[("name", &name)]),
         RESTORE_TOAST_SECONDS,
     );
-    let restore = toast_action(&mut commands, &theme, toast, "toast-restore", "Restore");
+    let restore = toast_action(
+        &mut commands,
+        &theme,
+        toast,
+        "toast-restore",
+        tr("common-restore"),
+    );
     commands
         .entity(restore)
         .insert(observe(move |_: On<Activate>, mut commands: Commands| {
@@ -1091,14 +1104,14 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-line",
                 Some(SketchTool::Line),
-                "Line",
+                "sketch-tool-line",
                 "line",
                 "L",
             ),
             (
                 "sketch-variant-midpoint-line",
                 Some(SketchTool::MidpointLine),
-                "Midpoint line",
+                "sketch-tool-midpoint-line",
                 "midpoint-line",
                 "",
             ),
@@ -1107,21 +1120,21 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-corner-rectangle",
                 Some(SketchTool::CornerRectangle),
-                "Corner rectangle",
+                "sketch-tool-corner-rectangle",
                 "corner-rectangle",
                 "G",
             ),
             (
                 "sketch-variant-center-rectangle",
                 Some(SketchTool::CenterRectangle),
-                "Center point rectangle",
+                "sketch-tool-center-rectangle",
                 "center-rectangle",
                 "R",
             ),
             (
                 "sketch-variant-aligned-rectangle",
                 Some(SketchTool::AlignedRectangle),
-                "Aligned rectangle",
+                "sketch-tool-aligned-rectangle",
                 "aligned-rectangle",
                 "",
             ),
@@ -1130,21 +1143,21 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-center-circle",
                 Some(SketchTool::Circle),
-                "Center point circle",
+                "sketch-tool-center-circle",
                 "center-circle",
                 "C",
             ),
             (
                 "sketch-variant-3-point-circle",
                 Some(SketchTool::ThreePointCircle),
-                "3 point circle",
+                "sketch-tool-3-point-circle",
                 "three-point-circle",
                 "",
             ),
             (
                 "sketch-variant-ellipse",
                 Some(SketchTool::Ellipse),
-                "Ellipse",
+                "sketch-tool-ellipse",
                 "ellipse",
                 "",
             ),
@@ -1153,21 +1166,21 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-3-point-arc",
                 Some(SketchTool::Arc),
-                "3 point arc",
+                "sketch-tool-3-point-arc",
                 "three-point-arc",
                 "A",
             ),
             (
                 "sketch-variant-tangent-arc",
                 Some(SketchTool::TangentArc),
-                "Tangent arc",
+                "sketch-tool-tangent-arc",
                 "tangent-arc",
                 "",
             ),
             (
                 "sketch-variant-center-arc",
                 Some(SketchTool::CenterArc),
-                "Center point arc",
+                "sketch-tool-center-arc",
                 "center-arc",
                 "",
             ),
@@ -1176,14 +1189,14 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-inscribed-polygon",
                 Some(SketchTool::Polygon),
-                "Inscribed polygon",
+                "sketch-tool-inscribed-polygon",
                 "inscribed-polygon",
                 "",
             ),
             (
                 "sketch-variant-circumscribed-polygon",
                 Some(SketchTool::CircumscribedPolygon),
-                "Circumscribed polygon",
+                "sketch-tool-circumscribed-polygon",
                 "circumscribed-polygon",
                 "",
             ),
@@ -1192,14 +1205,14 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-fillet",
                 Some(SketchTool::Fillet),
-                "Sketch fillet",
+                "sketch-tool-fillet",
                 "sketch-fillet",
                 "Shift+F",
             ),
             (
                 "sketch-variant-chamfer",
                 Some(SketchTool::Chamfer),
-                "Sketch chamfer",
+                "sketch-tool-chamfer",
                 "sketch-chamfer",
                 "",
             ),
@@ -1210,32 +1223,38 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-trim",
                 Some(SketchTool::Trim),
-                "Trim",
+                "sketch-tool-trim",
                 "trim",
                 "M",
             ),
             (
                 "sketch-variant-extend",
                 Some(SketchTool::Extend),
-                "Extend",
+                "sketch-tool-extend",
                 "extend",
                 "X",
             ),
             (
                 "sketch-variant-split",
                 Some(SketchTool::Split),
-                "Split",
+                "sketch-tool-split",
                 "sketch-split",
                 "",
             ),
         ],
         // Onshape's Spline ▾: the fit-point Spline (not built) and the Bézier curve.
         SketchTool::Spline => &[
-            ("sketch-variant-spline", None, "Spline", "spline", ""),
+            (
+                "sketch-variant-spline",
+                None,
+                "sketch-tool-spline",
+                "spline",
+                "",
+            ),
             (
                 "sketch-variant-bezier",
                 Some(SketchTool::Bezier),
-                "Bézier curve",
+                "sketch-tool-bezier",
                 "spline",
                 "",
             ),
@@ -1244,14 +1263,14 @@ fn tool_variants(family: SketchTool) -> &'static [Variant] {
             (
                 "sketch-variant-offset",
                 Some(SketchTool::Offset),
-                "Offset",
+                "common-offset",
                 "offset",
                 "O",
             ),
             (
                 "sketch-variant-slot",
                 Some(SketchTool::Slot),
-                "Slot",
+                "sketch-tool-slot",
                 "slot",
                 "",
             ),
@@ -1270,103 +1289,128 @@ const CONSTRAINT_VARIANTS: &[Variant] = {
         (
             "sketch-constraint-coincident",
             Some(C(K::Coincident)),
-            "Coincident",
+            "sketch-constraint-coincident",
             "constraint-coincident",
             "I",
         ),
         (
             "sketch-constraint-concentric",
             Some(C(K::Concentric)),
-            "Concentric",
+            "sketch-constraint-concentric",
             "constraint-concentric",
             "Shift+O",
         ),
         (
             "sketch-constraint-parallel",
             Some(C(K::Parallel)),
-            "Parallel",
+            "sketch-constraint-parallel",
             "constraint-parallel",
             "B",
         ),
         (
             "sketch-constraint-tangent",
             Some(C(K::Tangent)),
-            "Tangent",
+            "sketch-constraint-tangent",
             "constraint-tangent",
             "T",
         ),
         (
             "sketch-constraint-horizontal",
             Some(C(K::Horizontal)),
-            "Horizontal",
+            "sketch-constraint-horizontal",
             "constraint-horizontal",
             "H",
         ),
         (
             "sketch-constraint-vertical",
             Some(C(K::Vertical)),
-            "Vertical",
+            "sketch-constraint-vertical",
             "constraint-vertical",
             "V",
         ),
         (
             "sketch-constraint-perpendicular",
             Some(C(K::Perpendicular)),
-            "Perpendicular",
+            "sketch-constraint-perpendicular",
             "constraint-perpendicular",
             "Shift+L",
         ),
         (
             "sketch-constraint-equal",
             Some(C(K::Equal)),
-            "Equal",
+            "sketch-constraint-equal",
             "constraint-equal",
             "E",
         ),
         (
             "sketch-constraint-midpoint",
             Some(C(K::Midpoint)),
-            "Midpoint",
+            "sketch-constraint-midpoint",
             "constraint-midpoint",
             "Shift+M",
         ),
         (
             "sketch-constraint-normal",
             Some(C(K::Normal)),
-            "Normal",
+            "sketch-constraint-normal",
             "constraint-normal",
             "Shift+K",
         ),
         (
             "sketch-constraint-pierce",
             Some(C(K::Pierce)),
-            "Pierce",
+            "sketch-constraint-pierce",
             "constraint-pierce",
             "Shift+G",
         ),
         (
             "sketch-constraint-symmetric",
             Some(C(K::Symmetric)),
-            "Symmetric",
+            "sketch-constraint-symmetric",
             "constraint-symmetric",
             "Shift+Q",
         ),
         (
             "sketch-constraint-fix",
             Some(C(K::Fix)),
-            "Fix",
+            "sketch-constraint-fix",
             "constraint-fix",
             "Shift+J",
         ),
         (
             "sketch-constraint-curvature",
             Some(C(K::Curvature)),
-            "Curvature",
+            "sketch-constraint-curvature",
             "constraint-curvature",
             "Shift+U",
         ),
     ]
 };
+
+/// The catalog key of a constraint's name ("Coincident").
+pub fn constraint_label_key(k: ConstraintKind) -> &'static str {
+    match k {
+        ConstraintKind::Coincident => "sketch-constraint-coincident",
+        ConstraintKind::Concentric => "sketch-constraint-concentric",
+        ConstraintKind::Parallel => "sketch-constraint-parallel",
+        ConstraintKind::Tangent => "sketch-constraint-tangent",
+        ConstraintKind::Horizontal => "sketch-constraint-horizontal",
+        ConstraintKind::Vertical => "sketch-constraint-vertical",
+        ConstraintKind::Perpendicular => "sketch-constraint-perpendicular",
+        ConstraintKind::Equal => "sketch-constraint-equal",
+        ConstraintKind::Midpoint => "sketch-constraint-midpoint",
+        ConstraintKind::Normal => "sketch-constraint-normal",
+        ConstraintKind::Symmetric => "sketch-constraint-symmetric",
+        ConstraintKind::Fix => "sketch-constraint-fix",
+        ConstraintKind::Pierce => "sketch-constraint-pierce",
+        ConstraintKind::Curvature => "sketch-constraint-curvature",
+    }
+}
+
+/// A constraint's name in the current language.
+pub fn constraint_label(k: ConstraintKind) -> String {
+    tr(constraint_label_key(k))
+}
 
 /// The icon of a constraint tool (the Constraints button shows the last one used).
 pub fn constraint_icon(k: ConstraintKind) -> &'static str {
@@ -1389,7 +1433,7 @@ pub(crate) fn button_variants(button: SketchToolButton) -> Vec<ToolVariant> {
         .map(|(name, tool, label, icon, key)| {
             (
                 name.to_string(),
-                label.to_string(),
+                tr(label),
                 icon.to_string(),
                 (!key.is_empty()).then(|| key.to_string()),
                 *tool,
@@ -1465,7 +1509,7 @@ fn on_tool_button(
                         .keycap_shortcuts();
                 }
                 for (name, variant, label, icon_name, key) in variants {
-                    let mut item = MenuItem::new(*name, *label)
+                    let mut item = MenuItem::new(*name, tr(label))
                         .icon(*icon_name)
                         .disabled(variant.is_none());
                     if !key.is_empty() {
@@ -1609,7 +1653,7 @@ fn sync_sketch_dialog(
         .unwrap_or_default();
     let plane_label = plane.map(|p| {
         if face_lost {
-            "Missing face".to_string()
+            tr("sketch-missing-face")
         } else {
             plane_label(p, &features, &parts)
         }
@@ -1668,7 +1712,7 @@ fn sync_sketch_dialog(
         let toast = show_notification(
             &mut commands,
             &theme,
-            Notification::info("Select a sketch plane")
+            Notification::info(tr("sketch-select-plane"))
                 .name("sketch-plane-toast")
                 .autohide(false),
         );
@@ -1725,7 +1769,7 @@ fn sketch_dialog(
                     row.spawn((
                         PlaneField,
                         SelectionField::new("sketch-plane-field")
-                            .placeholder("Sketch plane")
+                            .placeholder(tr("sketch-plane"))
                             .value(plane.clone())
                             .active(plane.is_none())
                             .build(t),
@@ -1733,7 +1777,7 @@ fn sketch_dialog(
                     row.spawn(
                         IconButton::new("sketch-mate-connector", "mate-connector")
                             .icon_size(20.0)
-                            .tooltip("Implicit mate connector")
+                            .tooltip(tr("sketch-implicit-mate-connector"))
                             .build(t),
                     )
                     .entry::<Node>()
@@ -1752,32 +1796,36 @@ fn sketch_dialog(
                     for (name, label, option, checked) in [
                         (
                             "sketch-disable-imprinting",
-                            "Disable imprinting",
+                            "sketch-disable-imprinting",
                             SketchOption::DisableImprinting,
                             disable_imprinting,
                         ),
                         (
                             "sketch-show-constraints",
-                            "Show constraints",
+                            "sketch-show-constraints",
                             SketchOption::ShowConstraints,
                             settings.show_constraints,
                         ),
                         (
                             "sketch-show-expressions",
-                            "Show expressions",
+                            "sketch-show-expressions",
                             SketchOption::ShowExpressions,
                             settings.show_expressions,
                         ),
                         (
                             "sketch-show-errors",
-                            "Show errors",
+                            "sketch-show-errors",
                             SketchOption::ShowErrors,
                             settings.show_errors,
                         ),
                     ] {
                         c.spawn((
                             option,
-                            Checkbox::new(name).label(label).checked(checked).build(t),
+                            // (The checkbox's name and its text's catalog key are the same.)
+                            Checkbox::new(name)
+                                .label(tr(label))
+                                .checked(checked)
+                                .build(t),
                         ));
                     }
                 });
@@ -1789,7 +1837,7 @@ fn sketch_dialog(
                 f.spawn(
                     IconButton::new("sketch-diagnostics", "diagnostics")
                         .icon_size(16.0)
-                        .tooltip("Show sketch diagnostic tools")
+                        .tooltip(tr("sketch-diagnostics-tooltip"))
                         .build(t),
                 )
                 .insert((boxed, crate::sketch_diagnostics::DiagnosticsButton))
@@ -1804,10 +1852,10 @@ fn sketch_dialog(
                 f.spawn((
                     SketchFinal,
                     cadrs_ui::Button::new("sketch-final")
-                        .label("Final")
+                        .label(tr("sketch-final"))
                         .small()
                         .outline()
-                        .tooltip("Show the final result")
+                        .tooltip(tr("sketch-final-tooltip"))
                         .build(t),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(|world: &mut World| {
@@ -1820,7 +1868,7 @@ fn sketch_dialog(
                 f.spawn((
                     Name::new("sketch-help"),
                     icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new("Help"),
+                    Tooltip::new(tr("common-help")),
                 ));
             })
             .build(theme),
@@ -1857,7 +1905,7 @@ fn sync_sketch_final(
 }
 
 /// The sketch toolbar (`reference/onshape/screens/08a`, `08b`): greyed out until the sketch has
-/// a plane.
+/// a plane. (A button's tooltip is a catalog key.)
 pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     use SketchTool as T;
     use SketchToolButton as B;
@@ -1870,73 +1918,91 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     );
     let groups: [&[Spec]; 4] = [
         &[
-            ("sketch-use", "use", false, "Use (U)", B::Tool(T::Use)),
+            (
+                "sketch-use",
+                "use",
+                false,
+                "sketch-toolbar-use",
+                B::Tool(T::Use),
+            ),
             (
                 "sketch-intersection",
                 "intersection",
                 false,
-                "Intersection",
+                "sketch-toolbar-intersection",
                 B::Other("Intersection"),
             ),
         ],
         &[
-            ("sketch-line", "line", true, "Line (L)", B::Tool(T::Line)),
+            (
+                "sketch-line",
+                "line",
+                true,
+                "sketch-toolbar-line",
+                B::Tool(T::Line),
+            ),
             (
                 "sketch-rectangle",
                 "corner-rectangle",
                 true,
-                "Corner rectangle (G)",
+                "sketch-toolbar-rectangle",
                 B::Tool(T::CornerRectangle),
             ),
             (
                 "sketch-circle",
                 "center-circle",
                 true,
-                "Center point circle (C)",
+                "sketch-toolbar-circle",
                 B::Tool(T::Circle),
             ),
             (
                 "sketch-arc",
                 "three-point-arc",
                 true,
-                "3 point arc (A)",
+                "sketch-toolbar-arc",
                 B::Tool(T::Arc),
             ),
             (
                 "sketch-polygon",
                 "inscribed-polygon",
                 true,
-                "Inscribed polygon",
+                "sketch-tool-inscribed-polygon",
                 B::Tool(T::Polygon),
             ),
             (
                 "sketch-spline",
                 "spline",
                 true,
-                "Bézier curve",
+                "sketch-tool-bezier",
                 B::Tool(T::Bezier),
             ),
             (
                 "sketch-point",
                 "point",
                 false,
-                "Point (Shift+S)",
+                "sketch-toolbar-point",
                 B::Tool(T::Point),
             ),
-            ("sketch-text", "text", false, "Text", B::Tool(T::Text)),
+            (
+                "sketch-text",
+                "text",
+                false,
+                "common-text",
+                B::Tool(T::Text),
+            ),
             (
                 "sketch-construction",
                 "construction",
                 // A ▾ like Onshape's (`screens/08a`).
                 true,
-                "Construction (Q)",
+                "sketch-toolbar-construction",
                 B::Construction,
             ),
             (
                 "sketch-image",
                 "image",
                 false,
-                "Insert image",
+                "sketch-toolbar-insert-image",
                 B::Other("Inserting images"),
             ),
         ],
@@ -1945,36 +2011,42 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
                 "sketch-fillet",
                 "sketch-fillet",
                 true,
-                "Sketch fillet (Shift+F)",
+                "sketch-toolbar-fillet",
                 B::Tool(T::Fillet),
             ),
-            ("sketch-trim", "trim", true, "Trim (M)", B::Tool(T::Trim)),
+            (
+                "sketch-trim",
+                "trim",
+                true,
+                "sketch-toolbar-trim",
+                B::Tool(T::Trim),
+            ),
             (
                 "sketch-offset",
                 "offset",
                 true,
-                "Offset (O): pick curves, then click empty space or press Enter",
+                "sketch-toolbar-offset",
                 B::Tool(T::Offset),
             ),
             (
                 "sketch-mirror",
                 "mirror",
                 false,
-                "Mirror",
+                "sketch-tool-mirror",
                 B::Tool(T::Mirror),
             ),
             (
                 "sketch-pattern",
                 "sketch-pattern",
                 true,
-                "Linear pattern",
+                "sketch-toolbar-linear-pattern",
                 B::Tool(T::Pattern),
             ),
             (
                 "sketch-dxf",
                 "dxf-import",
                 true,
-                "Insert DXF, DWG, SVG, EPS or PDF",
+                "sketch-toolbar-insert-dxf",
                 B::InsertDxf,
             ),
         ],
@@ -1982,7 +2054,7 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
             "sketch-dimension",
             "dimension",
             false,
-            "Dimension (D)",
+            "sketch-toolbar-dimension",
             B::Tool(T::Dimension),
         )],
     ];
@@ -2002,7 +2074,7 @@ pub fn sketch_toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
         "sketch-constraints",
         "constraint-coincident",
         true,
-        "Coincident (I)",
+        "sketch-toolbar-constraints",
         B::Tool(T::Constrain(ConstraintKind::Coincident)),
     );
     crate::document::search_tools(tb, t);
@@ -2025,7 +2097,7 @@ fn spawn_sketch_tool(
         ToolButton::new(name, icon_name)
             .dropdown(dropdown)
             .disabled(true)
-            .tooltip(tip)
+            .tooltip(tr(tip))
             .build(t),
         button,
     ))

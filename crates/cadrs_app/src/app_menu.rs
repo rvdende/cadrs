@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 use bevy::text::FontWeight;
 use bevy::ui_widgets::Activate;
+use cadrs_ui::i18n::tr;
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Button, MenuAction, MenuEntry, MenuItem, open_menu};
 
@@ -28,7 +29,10 @@ struct AppMenuButton;
 /// The cadrs mark, its name and a caret: the app menu's button.
 pub fn spawn_app_button(bar: &mut ChildSpawnerCommands, t: &Theme) {
     bar.spawn((
-        Button::new("app-menu").ghost().tooltip("Menu").build(t),
+        Button::new("app-menu")
+            .ghost()
+            .tooltip(tr("shell-app-menu"))
+            .build(t),
         AppMenuButton,
     ))
     .entry::<Node>()
@@ -68,10 +72,10 @@ pub fn spawn_app_button(bar: &mut ChildSpawnerCommands, t: &Theme) {
 /// What the app menu ends with, everywhere.
 fn app_entries() -> Vec<MenuEntry> {
     vec![
-        MenuItem::new("app-preferences", "Preferences…")
+        MenuItem::new("app-preferences", tr("shell-preferences-ellipsis"))
             .icon("settings")
             .into(),
-        MenuItem::new("app-shortcuts", "Keyboard shortcuts")
+        MenuItem::new("app-shortcuts", tr("shell-app-menu-shortcuts"))
             .icon("keyboard")
             .shortcut("Shift+/")
             .into(),
@@ -96,38 +100,44 @@ fn document_entries(workspaces: Vec<MenuEntry>) -> Vec<MenuEntry> {
         workspaces.push(
             MenuItem::new(
                 "document-menu-workspace-hint",
-                "Branch from a version in History",
+                tr("shell-app-menu-workspace-hint"),
             )
             .icon("history")
             .disabled(true)
             .into(),
         );
     }
-    let workspace = MenuItem::new("document-menu-workspaces", "Workspace")
+    let workspace = MenuItem::new("document-menu-workspaces", tr("shell-app-menu-workspace"))
         .icon("branches")
         .submenu(workspaces);
     vec![
-        MenuItem::new("app-documents", "All documents")
+        MenuItem::new("app-documents", tr("shell-app-menu-all-documents"))
             .icon("home")
             .into(),
         MenuEntry::Separator,
-        MenuItem::new("document-menu-rename", "Rename document…")
+        MenuItem::new("document-menu-rename", tr("shell-app-menu-rename-document"))
             .icon("edit")
             .into(),
-        MenuItem::new("document-menu-export", "Export document…")
+        MenuItem::new("document-menu-export", tr("shell-app-menu-export-document"))
             .icon("file-export")
             .into(),
-        MenuItem::new("document-menu-create-version", "Create version…")
-            .icon("versions")
-            .into(),
+        MenuItem::new(
+            "document-menu-create-version",
+            tr("shell-app-menu-create-version"),
+        )
+        .icon("versions")
+        .into(),
         workspace.into(),
         MenuEntry::Separator,
-        MenuItem::new("document-menu-units", "Workspace units…")
+        MenuItem::new("document-menu-units", tr("shell-app-menu-workspace-units"))
             .icon("measure")
             .into(),
-        MenuItem::new("document-menu-full-rebuild", "Full rebuild (clear cache)")
-            .icon("sync-document")
-            .into(),
+        MenuItem::new(
+            "document-menu-full-rebuild",
+            tr("shell-app-menu-full-rebuild"),
+        )
+        .icon("sync-document")
+        .into(),
         MenuEntry::Separator,
     ]
 }

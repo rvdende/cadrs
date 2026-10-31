@@ -17,6 +17,7 @@ use cadrs_eda::assign::{Filters, candidates};
 use cadrs_eda::sch_edit as se;
 use cadrs_eda::symbol::fields;
 use cadrs_ui::checkbox::CheckboxState;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Checkbox, Dialog};
 use uuid::Uuid;
@@ -36,8 +37,9 @@ fn close_all(w: &mut World) {
     }
 }
 
-/// A labelled row: the label, then `f` spawns the field.
-fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSpawner)) {
+/// A labelled row: the label (a catalog key, or a symbol field's name, shown as it is), then
+/// `f` spawns the field.
+fn row(p: &mut ChildSpawner, t: &Theme, label: &'static str, f: impl FnOnce(&mut ChildSpawner)) {
     p.spawn(Node {
         align_items: AlignItems::Center,
         column_gap: Val::Px(10.0),
@@ -46,7 +48,13 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
     })
     .with_children(|r| {
         r.spawn((
-            t.text(label, t.font_base, FontWeight::MEDIUM, t.muted_foreground),
+            t.text(
+                tr(label),
+                t.font_base,
+                FontWeight::MEDIUM,
+                t.muted_foreground,
+            ),
+            Translated(label),
             Node {
                 width: Val::Px(110.0),
                 ..default()
@@ -56,7 +64,7 @@ fn row(p: &mut ChildSpawner, t: &Theme, label: &str, f: impl FnOnce(&mut ChildSp
     });
 }
 
-fn text_row(p: &mut ChildSpawner, t: &Theme, label: &str, name: &'static str, value: &str) {
+fn text_row(p: &mut ChildSpawner, t: &Theme, label: &'static str, name: &'static str, value: &str) {
     let value = value.to_string();
     row(p, t, label, |r| {
         r.spawn(
@@ -73,7 +81,7 @@ fn text_row(p: &mut ChildSpawner, t: &Theme, label: &str, name: &'static str, va
 fn ok_cancel(f: &mut ChildSpawner, t: &Theme, ok_name: &'static str, ok: fn(&mut World)) {
     f.spawn((
         cadrs_ui::Button::new(ok_name)
-            .label("OK")
+            .label(tr("common-ok"))
             .primary()
             .build(t),
         observe(move |_: On<Activate>, mut commands: Commands| {
@@ -82,7 +90,7 @@ fn ok_cancel(f: &mut ChildSpawner, t: &Theme, ok_name: &'static str, ok: fn(&mut
     ));
     f.spawn((
         cadrs_ui::Button::new(format!("{ok_name}-cancel"))
-            .label("Cancel")
+            .label(tr("common-cancel"))
             .build(t),
         observe(|_: On<Activate>, mut commands: Commands| {
             commands.queue(close_all);
@@ -108,9 +116,9 @@ pub fn open_label(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-label-dialog")
-            .title("Net label")
+            .title(tr("pcb-net-label"))
             .width(440.0)
-            .body(move |b| text_row(b, &t, "Label", "eda-label-text", ""))
+            .body(move |b| text_row(b, &t, "pcb-sch-label", "eda-label-text", ""))
             .footer(move |f| ok_cancel(f, &tf, "eda-label-ok", accept_label)),
     );
 }
@@ -130,9 +138,9 @@ pub fn open_global_label(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-glabel-dialog")
-            .title("Global label")
+            .title(tr("pcb-global-label"))
             .width(440.0)
-            .body(move |b| text_row(b, &t, "Label", "eda-glabel-text", ""))
+            .body(move |b| text_row(b, &t, "pcb-sch-label", "eda-glabel-text", ""))
             .footer(move |f| ok_cancel(f, &tf, "eda-glabel-ok", accept_global_label)),
     );
 }
@@ -152,9 +160,9 @@ pub fn open_text(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-text-dialog")
-            .title("Text")
+            .title(tr("common-text"))
             .width(440.0)
-            .body(move |b| text_row(b, &t, "Text", "eda-text-text", ""))
+            .body(move |b| text_row(b, &t, "common-text", "eda-text-text", ""))
             .footer(move |f| ok_cancel(f, &tf, "eda-text-ok", accept_text)),
     );
 }
@@ -174,9 +182,9 @@ pub fn open_find(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-find-dialog")
-            .title("Find")
+            .title(tr("pcb-find"))
             .width(440.0)
-            .body(move |b| text_row(b, &t, "Reference or value", "eda-find-text", ""))
+            .body(move |b| text_row(b, &t, "pcb-find-reference-or-value", "eda-find-text", ""))
             .footer(move |f| ok_cancel(f, &tf, "eda-find-ok", accept_find)),
     );
 }
@@ -210,7 +218,7 @@ fn accept_find(w: &mut World) {
                 v.1 = false;
             }
         }
-        None => ui::toast(w, &format!("Nothing matches \u{201c}{text}\u{201d}")),
+        None => ui::toast(w, &tr_with("pcb-find-nothing", &[("text", &text)])),
     }
 }
 // ---------------------------------------------------------------------------------------------
@@ -249,7 +257,7 @@ pub fn open_properties(w: &mut World, symbol: Uuid) {
     w.insert_resource(PropsTarget(Some(symbol)));
     let t = w.resource::<Theme>().clone();
     let tf = t.clone();
-    let title = format!("Symbol properties: {}", s.reference());
+    let title = tr_with("pcb-sym-props-of", &[("reference", s.reference())]);
     spawn_dialog(
         w,
         Dialog::new("eda-props-dialog")
@@ -267,14 +275,14 @@ pub fn open_properties(w: &mut World, symbol: Uuid) {
                         r.spawn(
                             TextInput::new(field)
                                 .value(value)
-                                .placeholder("None: choose one")
+                                .placeholder(tr("pcb-props-footprint-none"))
                                 .width(Val::Px(250.0))
                                 .height(28.0)
                                 .build(&t),
                         );
                         r.spawn((
                             cadrs_ui::Button::new("eda-props-footprint-choose")
-                                .label("Choose…")
+                                .label(tr("pcb-choose-ellipsis"))
                                 .build(&t),
                             observe(move |_: On<Activate>, mut commands: Commands| {
                                 let globs = globs.clone();
@@ -358,7 +366,7 @@ pub fn open_wire(w: &mut World, wire: Uuid) {
     spawn_dialog(
         w,
         Dialog::new("eda-wire-dialog")
-            .title("Wire colour")
+            .title(tr("pcb-wire-colour"))
             .width(300.0)
             .body(move |b| {
                 b.spawn(
@@ -376,7 +384,7 @@ pub fn open_wire(w: &mut World, wire: Uuid) {
                     .with_children(|r| {
                         r.spawn(
                             Checkbox::new("eda-wire-only")
-                                .label(format!("Only this wire (else all {run} connected)"))
+                                .label(tr_with("pcb-wire-only", &[("count", &run.to_string())]))
                                 .checked(false)
                                 .build(&t),
                         );
@@ -472,7 +480,7 @@ pub fn open_assign(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-assign-dialog")
-            .title("Assign footprints")
+            .title(tr("pcb-sch-assign"))
             .width(860.0)
             .body(move |b| {
                 b.spawn(Node {
@@ -483,19 +491,19 @@ pub fn open_assign(w: &mut World) {
                 .with_children(|r| {
                     r.spawn(
                         Checkbox::new("eda-assign-by-symbol")
-                            .label("Symbol's filters")
+                            .label(tr("pcb-assign-by-symbol"))
                             .checked(true)
                             .build(&t),
                     );
                     r.spawn(
                         Checkbox::new("eda-assign-by-pins")
-                            .label("Pin count")
+                            .label(tr("pcb-assign-by-pins"))
                             .checked(true)
                             .build(&t),
                     );
                     r.spawn(
                         TextInput::new("eda-assign-filter")
-                            .placeholder("Filter footprints")
+                            .placeholder(tr("pcb-assign-filter"))
                             .width(Val::Px(260.0))
                             .height(28.0)
                             .build(&t),
@@ -540,7 +548,7 @@ pub fn open_assign(w: &mut World) {
             .footer(move |f| {
                 f.spawn((
                     cadrs_ui::Button::new("eda-assign-ok")
-                        .label("Close")
+                        .label(tr("common-close"))
                         .primary()
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -732,7 +740,7 @@ pub fn open_erc(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-erc-dialog")
-            .title("Electrical rules checker")
+            .title(tr("pcb-erc-title"))
             .width(620.0)
             .body(move |b| {
                 b.spawn((
@@ -754,7 +762,7 @@ pub fn open_erc(w: &mut World) {
             .footer(move |f| {
                 f.spawn((
                     cadrs_ui::Button::new("eda-erc-run")
-                        .label("Run ERC")
+                        .label(tr("pcb-erc-run"))
                         .primary()
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -763,7 +771,7 @@ pub fn open_erc(w: &mut World) {
                 ));
                 f.spawn((
                     cadrs_ui::Button::new("eda-erc-close")
-                        .label("Close")
+                        .label(tr("common-close"))
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_all);
@@ -785,11 +793,15 @@ fn run_erc(w: &mut World) {
         .count();
     let warnings = vs.len() - errors;
     let summary = if vs.is_empty() {
-        "No violations".to_string()
+        tr("pcb-erc-none")
     } else {
-        format!(
-            "Violations ({}): {errors} errors, {warnings} warnings",
-            vs.len()
+        tr_with(
+            "pcb-erc-summary",
+            &[
+                ("count", &vs.len().to_string()),
+                ("errors", &errors.to_string()),
+                ("warnings", &warnings.to_string()),
+            ],
         )
     };
     ui::set_label(w, "eda-erc-summary", &summary);
@@ -801,14 +813,14 @@ fn run_erc(w: &mut World) {
     commands.entity(list).with_children(|l| {
         for (i, v) in vs.iter().enumerate() {
             let sev = if v.severity() == cadrs_eda::erc::Severity::Error {
-                "Error"
+                "pcb-error-message"
             } else {
-                "Warning"
+                "pcb-warning-message"
             };
             l.spawn((
                 Name::new(format!("eda-erc-{i}")),
                 t.text(
-                    format!("{sev}: {}", v.rule.message()),
+                    tr_with(sev, &[("message", v.rule.message())]),
                     t.font_base,
                     FontWeight::SEMIBOLD,
                     t.foreground,
@@ -846,7 +858,7 @@ pub fn open_bom(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-bom-dialog")
-            .title("Bill of materials")
+            .title(tr("common-bill-of-materials"))
             .width(760.0)
             .body(move |b| {
                 b.spawn((
@@ -858,7 +870,13 @@ pub fn open_bom(w: &mut World) {
                     },
                 ))
                 .with_children(|l| {
-                    let head = ["Reference", "Value", "Footprint", "Qty", "DNP"];
+                    let head = [
+                        "pcb-bom-reference",
+                        "common-value",
+                        "pcb-sym-footprint",
+                        "pcb-bom-qty",
+                        "pcb-bom-dnp",
+                    ];
                     let widths = [120.0, 90.0, 430.0, 40.0, 40.0];
                     let line = |l: &mut ChildSpawner, cells: [String; 5], bold: bool| {
                         l.spawn(Node {
@@ -886,7 +904,7 @@ pub fn open_bom(w: &mut World) {
                             }
                         });
                     };
-                    line(l, head.map(String::from), true);
+                    line(l, head.map(tr), true);
                     for r in &rows {
                         line(
                             l,
@@ -895,7 +913,11 @@ pub fn open_bom(w: &mut World) {
                                 r.value.clone(),
                                 r.footprint.clone(),
                                 r.qty().to_string(),
-                                if r.dnp { "DNP".into() } else { String::new() },
+                                if r.dnp {
+                                    tr("pcb-bom-dnp")
+                                } else {
+                                    String::new()
+                                },
                             ],
                             false,
                         );
@@ -905,7 +927,7 @@ pub fn open_bom(w: &mut World) {
             .footer(move |f| {
                 f.spawn((
                     cadrs_ui::Button::new("eda-bom-export")
-                        .label("Export…")
+                        .label(tr("pcb-bom-export"))
                         .primary()
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
@@ -917,7 +939,7 @@ pub fn open_bom(w: &mut World) {
                                 &mut c,
                                 &theme,
                                 "eda-bom-folder",
-                                "Export the BOM to",
+                                &tr("pcb-bom-export-to"),
                                 "eda-bom",
                                 dir,
                             );
@@ -927,7 +949,7 @@ pub fn open_bom(w: &mut World) {
                 ));
                 f.spawn((
                     cadrs_ui::Button::new("eda-bom-close")
-                        .label("Close")
+                        .label(tr("common-close"))
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_all);
@@ -951,11 +973,23 @@ pub fn export_bom(w: &mut World, dir: &std::path::Path) -> Option<std::path::Pat
     let path = dir.join(format!("{}.csv", cadrs_idf::safe_file_name(&name)));
     match cadrs_fs::write(&path, cadrs_eda::bom::csv(&d.schematic)) {
         Ok(()) => {
-            ui::toast(w, &format!("Wrote {}", path.display()));
+            ui::toast(
+                w,
+                &tr_with("pcb-wrote", &[("path", &path.display().to_string())]),
+            );
             Some(path)
         }
         Err(e) => {
-            ui::toast(w, &format!("Couldn't write {}: {e}", path.display()));
+            ui::toast(
+                w,
+                &tr_with(
+                    "pcb-couldnt-write",
+                    &[
+                        ("name", &path.display().to_string()),
+                        ("error", &e.to_string()),
+                    ],
+                ),
+            );
             None
         }
     }
@@ -1045,10 +1079,10 @@ pub fn open_plot(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-splot-dialog")
-            .title("Plot schematic")
+            .title(tr("pcb-plot-schematic"))
             .width(560.0)
             .body(move |p| {
-                text_row(p, &t, "Output directory", "eda-splot-dir", "plots/");
+                text_row(p, &t, "pcb-plot-output-dir", "eda-splot-dir", "plots/");
                 p.spawn((
                     Name::new("eda-splot-log"),
                     t.text("", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
@@ -1062,10 +1096,11 @@ pub fn open_plot(w: &mut World) {
                 for (name, label, kind) in [
                     ("eda-splot-svg", "SVG", "svg"),
                     ("eda-splot-pdf", "PDF", "pdf"),
-                    ("eda-splot-netlist", "Netlist (CSV)", "net"),
+                    ("eda-splot-netlist", "pcb-plot-netlist", "net"),
                 ] {
+                    // (A label is a catalog key; SVG and PDF are shown as they are.)
                     f.spawn((
-                        cadrs_ui::Button::new(name).label(label).build(&tf),
+                        cadrs_ui::Button::new(name).label(tr(label)).build(&tf),
                         observe(move |_: On<Activate>, mut commands: Commands| {
                             commands.queue(move |w: &mut World| run_plot(w, kind));
                         }),
@@ -1073,7 +1108,7 @@ pub fn open_plot(w: &mut World) {
                 }
                 f.spawn((
                     cadrs_ui::Button::new("eda-splot-close")
-                        .label("Close")
+                        .label(tr("common-close"))
                         .build(&tf),
                     observe(|_: On<Activate>, mut commands: Commands| {
                         commands.queue(close_all);
@@ -1089,7 +1124,7 @@ pub fn plot_schematic_to(
     dir: &std::path::Path,
     kind: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let (el, b, d) = ui::current(w).ok_or("No board")?;
+    let (el, b, d) = ui::current(w).ok_or_else(|| tr("pcb-no-board"))?;
     let name = w
         .resource::<crate::ActiveDocument>()
         .doc
@@ -1129,8 +1164,8 @@ fn run_plot(w: &mut World, kind: &str) {
         dir
     });
     let msg = match plot_schematic_to(w, &dir, kind) {
-        Ok(p) => format!("Wrote {}", p.display()),
-        Err(e) => format!("Error: {e}"),
+        Ok(p) => tr_with("pcb-wrote", &[("path", &p.display().to_string())]),
+        Err(e) => tr_with("pcb-error-message", &[("message", &e)]),
     };
     ui::set_label(w, "eda-splot-log", &msg);
 }
@@ -1173,7 +1208,7 @@ pub fn open_fields_table(w: &mut World) {
     spawn_dialog(
         w,
         Dialog::new("eda-fields-table")
-            .title("Symbol fields")
+            .title(tr("pcb-sym-fields"))
             .width(900.0)
             .body(move |p| {
                 p.spawn(Node {
@@ -1182,14 +1217,15 @@ pub fn open_fields_table(w: &mut World) {
                 })
                 .with_children(|h| {
                     for (label, wd) in [
-                        ("Reference", 80.0),
-                        ("Value", 170.0),
-                        ("Footprint", 380.0),
-                        ("LCSC part", 110.0),
-                        ("DNP", 40.0),
+                        ("pcb-bom-reference", 80.0),
+                        ("common-value", 170.0),
+                        ("pcb-sym-footprint", 380.0),
+                        ("pcb-fields-lcsc", 110.0),
+                        ("pcb-bom-dnp", 40.0),
                     ] {
                         h.spawn((
-                            t.text(label, t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+                            t.text(tr(label), t.font_sm, FontWeight::MEDIUM, t.muted_foreground),
+                            Translated(label),
                             Node {
                                 width: Val::Px(wd),
                                 ..default()

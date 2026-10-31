@@ -13,6 +13,7 @@ use cadrs_core::ElementId;
 use cadrs_core::assembly::context::{assembly_used_in, where_used};
 use cadrs_core::assembly::{InstanceId, InstanceSource};
 use cadrs_ui::FeatureDialogCancel;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use crate::viewport::ViewportArea;
@@ -52,12 +53,18 @@ pub fn open(world: &mut World, instance: InstanceId) {
         InstanceSource::Part { element, part } => {
             let name = cadrs_core::assembly::source_part_name(&doc.doc, &inst.source, None);
             (
-                format!(
-                    "{name} (Part Studio {})",
-                    doc.doc
-                        .element(element)
-                        .map(|e| e.name.clone())
-                        .unwrap_or_default()
+                tr_with(
+                    "asm-replace-part-tooltip",
+                    &[
+                        ("name", &name),
+                        (
+                            "studio",
+                            &doc.doc
+                                .element(element)
+                                .map(|e| e.name.clone())
+                                .unwrap_or_default(),
+                        ),
+                    ],
                 ),
                 where_used(&doc.doc, element, Some(part)),
             )
@@ -66,12 +73,15 @@ pub fn open(world: &mut World, instance: InstanceId) {
             element,
             board: None,
         } => (
-            format!(
-                "Part Studio {}",
-                doc.doc
-                    .element(element)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_default()
+            tr_with(
+                "asm-where-used-part-studio",
+                &[(
+                    "name",
+                    &doc.doc
+                        .element(element)
+                        .map(|e| e.name.clone())
+                        .unwrap_or_default(),
+                )],
             ),
             where_used(&doc.doc, element, None),
         ),
@@ -86,25 +96,39 @@ pub fn open(world: &mut World, instance: InstanceId) {
                 .and_then(|s| s.board(b))
                 .map(|b| b.name().to_string())
                 .unwrap_or_default();
-            (format!("Board {name}"), where_used(&doc.doc, element, None))
+            (
+                tr_with("asm-where-used-board", &[("name", &name)]),
+                where_used(&doc.doc, element, None),
+            )
         }
         InstanceSource::Assembly { element } => (
-            format!(
-                "Assembly {}",
-                doc.doc
-                    .element(element)
-                    .map(|e| e.name.clone())
-                    .unwrap_or_default()
+            tr_with(
+                "asm-where-used-assembly",
+                &[(
+                    "name",
+                    &doc.doc
+                        .element(element)
+                        .map(|e| e.name.clone())
+                        .unwrap_or_default(),
+                )],
             ),
             assembly_used_in(&doc.doc, element),
         ),
     };
     // P3G.2 carried: a linked instance names its source document and version.
     let what = match (inst.link, doc.doc.linked_element(inst.source.element())) {
-        (Some(r), Some(l)) if r.document_or(doc.doc.id) != doc.doc.id => {
-            format!("{what}, in {} ({})", l.document_name, l.version_name)
-        }
-        (Some(_), Some(l)) => format!("{what}, this document ({})", l.version_name),
+        (Some(r), Some(l)) if r.document_or(doc.doc.id) != doc.doc.id => tr_with(
+            "asm-where-used-linked-in",
+            &[
+                ("what", &what),
+                ("document", &l.document_name),
+                ("version", &l.version_name),
+            ],
+        ),
+        (Some(_), Some(l)) => tr_with(
+            "asm-where-used-this-document",
+            &[("what", &what), ("version", &l.version_name)],
+        ),
         _ => what,
     };
     let rows: Vec<(ElementId, String, String)> = rows
@@ -112,9 +136,9 @@ pub fn open(world: &mut World, instance: InstanceId) {
         .filter_map(|(e, n, direct)| {
             let name = doc.doc.element(e)?.name.clone();
             let count = if n == 1 {
-                "1 instance".to_string()
+                tr("asm-instance-count-one")
             } else {
-                format!("{n} instances")
+                tr_with("asm-instance-count", &[("count", &n.to_string())])
             };
             Some((
                 e,
@@ -122,7 +146,7 @@ pub fn open(world: &mut World, instance: InstanceId) {
                 if direct {
                     count
                 } else {
-                    format!("{count}, in a subassembly")
+                    tr_with("asm-where-used-in-subassembly", &[("count", &count)])
                 },
             ))
         })
@@ -163,9 +187,9 @@ pub fn open(world: &mut World, instance: InstanceId) {
                     u.tab,
                     u.version,
                     if u.count == 1 {
-                        "1 use".to_string()
+                        tr("asm-where-used-one-use")
                     } else {
-                        format!("{} uses", u.count)
+                        tr_with("asm-where-used-uses", &[("count", &u.count.to_string())])
                     }
                 )
             })
@@ -179,7 +203,7 @@ pub fn open(world: &mut World, instance: InstanceId) {
         WhereUsedDialog,
         DespawnOnExit(AppState::Document),
         FeatureDialog::new("where-used-dialog")
-            .title("Where used")
+            .title(tr("asm-where-used-title"))
             .valid(false)
             .plain_title()
             .width(320.0)
@@ -195,9 +219,9 @@ pub fn open(world: &mut World, instance: InstanceId) {
                 b.spawn((
                     t.text(
                         if n == 1 {
-                            "Used in 1 assembly of this document".to_string()
+                            tr("asm-where-used-in-one-assembly")
                         } else {
-                            format!("Used in {n} assemblies of this document")
+                            tr_with("asm-where-used-in-assemblies", &[("count", &n.to_string())])
                         },
                         11.5,
                         FontWeight::NORMAL,
@@ -216,7 +240,7 @@ pub fn open(world: &mut World, instance: InstanceId) {
                             .left(4.0)
                             .build(t),
                         UseRow(e),
-                        Tooltip::new(format!("Open {name}")),
+                        Tooltip::new(tr_with("asm-where-used-open", &[("name", &name)])),
                     ));
                     row.with_child((
                         t.text(count, 11.0, FontWeight::NORMAL, t.muted_foreground),
@@ -239,11 +263,11 @@ pub fn open(world: &mut World, instance: InstanceId) {
                 }
                 b.spawn((
                     t.text(
-                        if others.is_empty() {
-                            "No references to it at a version".to_string()
+                        tr(if others.is_empty() {
+                            "asm-where-used-no-version-references"
                         } else {
-                            "References at a version (this and other documents):".to_string()
-                        },
+                            "asm-where-used-version-references"
+                        }),
                         11.5,
                         FontWeight::NORMAL,
                         t.muted_foreground,

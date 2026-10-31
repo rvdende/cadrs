@@ -183,7 +183,11 @@ impl NamePopup {
                             ..default()
                         },
                         BackgroundColor(bg),
-                        crate::tooltip::Tooltip::new(if accept { "Accept" } else { "Cancel" }),
+                        crate::tooltip::Tooltip::new(crate::i18n::tr(if accept {
+                            "ui-name-popup-accept"
+                        } else {
+                            "common-cancel"
+                        })),
                         children![(crate::icon::icon(icon, 15.0, fg), Pickable::IGNORE)],
                     ));
                 }

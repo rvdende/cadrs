@@ -32,6 +32,7 @@ use bevy::ui_widgets::{Activate, observe};
 
 use crate::button::{Button, IconButton};
 use crate::dialog::{Dialog, DialogClose};
+use crate::i18n::{Translated, tr, tr_with};
 use crate::inline_edit::{DoubleClick, DoubleClickable};
 use crate::input::{TextInput, TextInputField, TextSubmit};
 use crate::list::ListItem;
@@ -502,7 +503,7 @@ fn spawn_in_app_picker(
     let (n1, n2) = (name.clone(), name.clone());
     let dir_text = display_dir(&dir);
     let types = if extensions.is_empty() {
-        "All files".to_string()
+        tr("ui-file-picker-all-files")
     } else {
         extensions
             .iter()
@@ -524,7 +525,15 @@ fn spawn_in_app_picker(
                     ..default()
                 })
                 .with_children(|row| {
-                    row.spawn(t.text("Look in", t.font_base, FontWeight::MEDIUM, t.foreground));
+                    row.spawn((
+                        t.text(
+                            tr("ui-file-picker-look-in"),
+                            t.font_base,
+                            FontWeight::MEDIUM,
+                            t.foreground,
+                        ),
+                        Translated("ui-file-picker-look-in"),
+                    ));
                     row.spawn(
                         TextInput::new(format!("{n}-folder"))
                             .value(dir_text)
@@ -535,7 +544,7 @@ fn spawn_in_app_picker(
                     let nn = n.clone();
                     row.spawn((
                         IconButton::new(format!("{n}-up"), "arrow-up")
-                            .tooltip("Up one folder")
+                            .tooltip(tr("ui-file-picker-up"))
                             .build(t),
                         observe(move |_: On<Activate>, mut commands: Commands| {
                             let nn = nn.clone();
@@ -589,11 +598,14 @@ fn spawn_in_app_picker(
                         ..default()
                     })
                     .with_children(|row| {
-                        row.spawn(t.text(
-                            "File name",
-                            t.font_base,
-                            FontWeight::MEDIUM,
-                            t.foreground,
+                        row.spawn((
+                            t.text(
+                                tr("common-file-name"),
+                                t.font_base,
+                                FontWeight::MEDIUM,
+                                t.foreground,
+                            ),
+                            Translated("common-file-name"),
                         ));
                         row.spawn(
                             TextInput::new(format!("{n}-name"))
@@ -607,11 +619,11 @@ fn spawn_in_app_picker(
                     Name::new(format!("{n}-types")),
                     t.text(
                         if folders_only {
-                            "Open a folder, then Select folder".to_string()
+                            tr("ui-file-picker-folders-hint")
                         } else if multi {
-                            format!("Files of type: {types}. Ctrl+click to choose several files")
+                            tr_with("ui-file-picker-types-multi", &[("types", &types)])
                         } else {
-                            format!("Files of type: {types}")
+                            tr_with("ui-file-picker-types", &[("types", &types)])
                         },
                         t.font_sm,
                         FontWeight::NORMAL,
@@ -626,9 +638,9 @@ fn spawn_in_app_picker(
                 f.spawn((
                     Button::new(format!("{n}-open"))
                         .label(if folders_only {
-                            "Select folder"
+                            tr("ui-file-picker-select-folder")
                         } else {
-                            "Open"
+                            tr("common-open")
                         })
                         .primary()
                         .build(t),
@@ -639,7 +651,9 @@ fn spawn_in_app_picker(
                 ));
                 let n_cancel = n.clone();
                 f.spawn((
-                    Button::new(format!("{n}-cancel")).label("Cancel").build(t),
+                    Button::new(format!("{n}-cancel"))
+                        .label(tr("common-cancel"))
+                        .build(t),
                     observe(
                         move |_: On<Activate>,
                               q: Query<(Entity, &FilePickerState)>,
@@ -850,11 +864,12 @@ fn rebuild_lists(
                 l.spawn((
                     Name::new(format!("{name}-empty")),
                     t.text(
-                        "No matching files in this folder",
+                        tr("ui-file-picker-empty"),
                         t.font_base,
                         FontWeight::NORMAL,
                         t.muted_foreground,
                     ),
+                    Translated("ui-file-picker-empty"),
                     Node {
                         margin: UiRect::all(Val::Px(10.0)),
                         ..default()

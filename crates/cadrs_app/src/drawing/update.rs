@@ -30,6 +30,7 @@ use cadrs_core::{ElementId, ElementKind};
 use cadrs_drawing::annotation::ViewModel;
 use cadrs_drawing::{ModelSource, ObjectRef, ViewId};
 use cadrs_ui::Tooltip;
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::active_drawing;
 use super::views::ViewCache;
@@ -534,25 +535,33 @@ fn sync_update_button(
             *vis = want;
         }
         let text = match (n, ws.updating()) {
-            (_, true) => "Updating from this workspace… (Ctrl+Q)".to_string(),
-            (0, _) => "Update from this workspace: the drawing is up to date (Ctrl+Q)".to_string(),
+            (_, true) => tr("drawing-update-updating"),
+            (0, _) => tr("drawing-update-up-to-date"),
             (_, _) if !ws.stale_boms.is_empty() => {
                 let v = ws.stale.len();
                 let b = ws.stale_boms.len();
-                let views = match v {
-                    0 => String::new(),
-                    1 => "1 view, ".to_string(),
-                    v => format!("{v} views, "),
-                };
                 let tables = if b == 1 {
-                    "1 BOM table".to_string()
+                    tr("drawing-update-one-bom-table")
                 } else {
-                    format!("{b} BOM tables")
+                    tr_with("drawing-update-bom-tables", &[("count", &b.to_string())])
                 };
-                format!("Update from this workspace: {views}{tables} out of date (Ctrl+Q)")
+                match v {
+                    0 => tr_with("drawing-update-tables-stale", &[("tables", &tables)]),
+                    _ => {
+                        let views = if v == 1 {
+                            tr("drawing-update-one-view")
+                        } else {
+                            tr_with("drawing-update-views", &[("count", &v.to_string())])
+                        };
+                        tr_with(
+                            "drawing-update-views-tables-stale",
+                            &[("views", &views), ("tables", &tables)],
+                        )
+                    }
+                }
             }
-            (1, _) => "Update from this workspace: 1 view is out of date (Ctrl+Q)".to_string(),
-            (n, _) => format!("Update from this workspace: {n} views are out of date (Ctrl+Q)"),
+            (1, _) => tr("drawing-update-one-view-stale"),
+            (n, _) => tr_with("drawing-update-views-stale", &[("count", &n.to_string())]),
         };
         let want_tip = Tooltip::new(text);
         if tip != Some(&want_tip) {

@@ -242,10 +242,10 @@ impl UserProfile {
         Self { id, display_name }
     }
 
-    /// How a user id is shown in the list: "me" for the local user.
+    /// How a user id is shown in the list: "me" for the local user (in the interface's language).
     pub fn display(&self, user: &str) -> String {
         if user == self.id {
-            "me".into()
+            cadrs_ui::i18n::tr("shell-landing-me")
         } else {
             user.into()
         }

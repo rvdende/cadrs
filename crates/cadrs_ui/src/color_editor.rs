@@ -29,6 +29,7 @@ use crate::color_picker::{
 use crate::dialog_fields::{
     NumberField, NumberFieldCommit, NumberFieldState, Slider, SliderChange, SliderState,
 };
+use crate::i18n::{Translated, tr};
 use crate::menu::{ContextMenuTarget, LastPointerButton};
 use crate::theme::Theme;
 
@@ -194,7 +195,7 @@ impl ColorEditor {
                 let editor = c.target_entity();
                 let piece = |kind| Piece { editor, kind };
                 let rgb = [rgba[0], rgba[1], rgba[2]];
-                section(c, &t, "Colors");
+                section(c, &t, "ui-color-editor-colors");
                 for (r, row) in presets.chunks(8).enumerate() {
                     c.spawn(Node {
                         column_gap: Val::Px(6.0),
@@ -215,7 +216,7 @@ impl ColorEditor {
                     });
                 }
                 if let Some(custom) = &custom {
-                    section(c, &t, "Custom colors");
+                    section(c, &t, "ui-color-editor-custom-colors");
                     c.spawn((
                         Name::new(format!("{prefix}-custom-row")),
                         piece(Kind::CustomRow),
@@ -228,7 +229,7 @@ impl ColorEditor {
                     ))
                     .with_children(|r| custom_row(r, &t, &prefix, editor, custom, rgb));
                 }
-                section(c, &t, "Mixer");
+                section(c, &t, "ui-color-editor-mixer");
                 let [h, s, v] = hsv(rgb);
                 c.spawn((
                     ColorMixer::new(format!("{prefix}-mixer"))
@@ -260,7 +261,7 @@ impl ColorEditor {
                         BorderColor::all(Color::srgba(0.0, 0.0, 0.0, 0.25)),
                     ));
                     r.spawn((
-                        NumberField::new(format!("{prefix}-hex"), "Hex")
+                        NumberField::new(format!("{prefix}-hex"), tr("ui-color-editor-hex"))
                             .label_width(26.0)
                             .text(hex(rgb))
                             .build(&t),
@@ -299,11 +300,12 @@ impl ColorEditor {
                     .with_children(|r| {
                         r.spawn((
                             t.text(
-                                "Opacity",
+                                tr("ui-color-editor-opacity"),
                                 11.0,
                                 FontWeight::NORMAL,
                                 Color::srgb_u8(0x6b, 0x6b, 0x6b),
                             ),
+                            Translated("ui-color-editor-opacity"),
                             Node {
                                 width: Val::Px(52.0),
                                 ..default()
@@ -313,7 +315,7 @@ impl ColorEditor {
                             Slider::new(format!("{prefix}-opacity"))
                                 .value(rgba[3] as f32 / 255.0)
                                 .width(160.0)
-                                .tooltip("Opacity")
+                                .tooltip(tr("ui-color-editor-opacity"))
                                 .build(&t),
                             piece(Kind::Opacity),
                         ));
@@ -331,7 +333,7 @@ impl ColorEditor {
                     })
                     .with_child((
                         Button::new(format!("{prefix}-reset"))
-                            .label("Default")
+                            .label(tr("ui-color-editor-default"))
                             .size(ButtonSize::Small)
                             .build(&t),
                         piece(Kind::Default),
@@ -342,14 +344,10 @@ impl ColorEditor {
     }
 }
 
-fn section(p: &mut ChildSpawner, t: &Theme, label: &str) {
+fn section(p: &mut ChildSpawner, t: &Theme, key: &'static str) {
     p.spawn((
-        t.text(
-            label.to_string(),
-            11.0,
-            FontWeight::MEDIUM,
-            t.muted_foreground,
-        ),
+        t.text(tr(key), 11.0, FontWeight::MEDIUM, t.muted_foreground),
+        Translated(key),
         Node {
             margin: UiRect::top(Val::Px(4.0)),
             ..default()
@@ -382,7 +380,7 @@ fn custom_row(
     }
     r.spawn((
         IconButton::new(format!("{prefix}-add-custom"), "plus")
-            .tooltip("Save this color")
+            .tooltip(tr("ui-color-editor-save-color"))
             .build(t),
         Piece {
             editor,

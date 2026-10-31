@@ -49,6 +49,7 @@ use cadrs_core::assembly::mate::MateFeature;
 use cadrs_core::assembly::{Assembly, InstanceId, Pose};
 use cadrs_core::rebuild::Build;
 use cadrs_core::variable_studio::{self as vs, InsertedTable, SetVariableStudio, VariableStudio};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, Column, ContextMenuRequested, GridCell, GridCellCommit, MenuAction, TabStrip,
@@ -238,8 +239,8 @@ struct AvailableBox;
 pub fn toolbar(tb: &mut ChildSpawnerCommands, t: &Theme) {
     tb.spawn(
         ToolButton::new("variable-studio-insert", "file-import")
-            .label("Insert Variable Studio")
-            .tooltip("Insert the variables of another Variable Studio, of this document or a version of another")
+            .label(tr("model-vs-insert"))
+            .tooltip(tr("model-vs-insert-tooltip"))
             .build(t),
     );
 }
@@ -372,11 +373,14 @@ fn view(world: &mut World) -> Option<View> {
                 .map(|(n, winner, others)| {
                     if *winner == el.id {
                         let others: Vec<String> = others.iter().map(|o| tab_name(*o)).collect();
-                        format!("#{n} is also in {}: this one is used", others.join(", "))
+                        tr_with(
+                            "model-vs-also-in",
+                            &[("name", n), ("tabs", &others.join(", "))],
+                        )
                     } else {
-                        format!(
-                            "Part Studios use #{n} of {} (a later tab)",
-                            tab_name(*winner)
+                        tr_with(
+                            "model-vs-used-from",
+                            &[("name", n), ("tab", &tab_name(*winner))],
                         )
                     }
                 });
@@ -572,33 +576,39 @@ fn footer(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
     p.spawn((
         AvailableBox,
         Checkbox::new("variable-studio-available")
-            .label("Make variables available to Part Studios and Assemblies")
+            .label(tr("model-vs-available"))
             .checked(v.available)
             .build(t),
-        Tooltip::new(
-            "Unchecked, this studio's variables are a draft: no Part Studio or Assembly sees them",
-        ),
+        Tooltip::new(tr("model-vs-available-tooltip")),
     ));
     p.spawn(Node {
         flex_grow: 1.0,
         ..default()
     });
     let n: usize = v.rows.len() + v.inserted.iter().map(|i| i.rows.len()).sum::<usize>();
-    let mut summary = match n {
-        1 => "1 variable".to_string(),
-        n => format!("{n} variables"),
+    // "3 variables · 1 error · used in 2 tabs": separate facts, each in the current language.
+    let counted = |n: usize, one: &str, many: &str| {
+        tr_with(
+            if n == 1 { one } else { many },
+            &[("count", &n.to_string())],
+        )
     };
-    match v.errors {
-        0 => {}
-        1 => summary.push_str(" · 1 error"),
-        e => summary.push_str(&format!(" · {e} errors")),
+    let mut summary = variables_text(n);
+    if v.errors > 0 {
+        summary.push_str(" · ");
+        summary.push_str(&counted(
+            v.errors,
+            "model-vs-one-error",
+            "model-vs-n-errors",
+        ));
     }
-    if v.available {
-        match v.users {
-            0 => {}
-            1 => summary.push_str(" · used in 1 tab"),
-            u => summary.push_str(&format!(" · used in {u} tabs")),
-        }
+    if v.available && v.users > 0 {
+        summary.push_str(" · ");
+        summary.push_str(&counted(
+            v.users,
+            "model-vs-used-in-one-tab",
+            "model-vs-used-in-n-tabs",
+        ));
     }
     p.spawn((
         Name::new("variable-studio-summary"),
@@ -625,17 +635,19 @@ fn columns(widths: &[(String, f32)]) -> Vec<Column> {
     };
     vec![
         Column::new("handle", "").width(24.0).min_width(24.0),
-        Column::new("name", "Name")
+        Column::new("name", tr("common-name"))
             .width(w("name", 190.0))
             .min_width(80.0),
-        Column::new("type", "Type")
+        Column::new("type", tr("common-type"))
             .width(w("type", 110.0))
             .min_width(80.0),
-        Column::new("value", "Value").grow(2.0).min_width(100.0),
-        Column::new("result", "Evaluates to")
+        Column::new("value", tr("common-value"))
+            .grow(2.0)
+            .min_width(100.0),
+        Column::new("result", tr("model-vs-evaluates-to"))
             .width(w("result", 220.0))
             .min_width(90.0),
-        Column::new("description", "Description")
+        Column::new("description", tr("common-description"))
             .grow(3.0)
             .min_width(80.0),
         Column::new("delete", "").width(36.0).min_width(36.0),
@@ -685,9 +697,19 @@ fn section(
     });
 }
 
+/// "1 variable", "3 variables".
+fn variables_text(n: usize) -> String {
+    let key = if n == 1 {
+        "model-vs-one-variable"
+    } else {
+        "model-vs-n-variables"
+    };
+    tr_with(key, &[("count", &n.to_string())])
+}
+
 fn count_text(t: &Theme, n: usize) -> impl Bundle {
     t.text(
-        format!("{n} {}", if n == 1 { "variable" } else { "variables" }),
+        variables_text(n),
         t.font_sm,
         FontWeight::NORMAL,
         t.muted_foreground,
@@ -730,9 +752,9 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
                 h.spawn(count_text(t, ins.rows.len()));
                 h.spawn(t.text(
                     match (&ins.newer, ins.live) {
-                        (_, true) => "Follows this document".to_string(),
-                        (Some(v), false) => format!("Newer version: {v}"),
-                        (None, false) => "Version: stays as inserted".to_string(),
+                        (_, true) => tr("model-vs-follows-document"),
+                        (Some(v), false) => tr_with("model-vs-newer-version", &[("version", v)]),
+                        (None, false) => tr("model-vs-version-stays"),
                     },
                     t.font_sm,
                     FontWeight::NORMAL,
@@ -756,11 +778,11 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
                     h.spawn((
                         ChangeVersion(ins.id),
                         cadrs_ui::Button::new(format!("{ne}-change-version"))
-                            .label("Change version…")
+                            .label(tr("model-vs-change-version-ellipsis"))
                             .icon("versions")
                             .ghost()
                             .small()
-                            .tooltip("Insert another version of this Variable Studio in its place")
+                            .tooltip(tr("model-vs-change-version-tooltip"))
                             .build(t),
                     ));
                 }
@@ -769,7 +791,7 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
                     IconButton::new(format!("{ne}-remove"), "close")
                         .ghost()
                         .small()
-                        .tooltip("Remove this table from the Variable Studio")
+                        .tooltip(tr("model-vs-remove-table"))
                         .build(t),
                 ));
             },
@@ -792,7 +814,7 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
                             .cell(spawned(text_cell(
                                 t,
                                 None,
-                                r.var_type.label().into(),
+                                crate::variables_ui::variable_type_text(r.var_type),
                                 t.muted_foreground,
                             )))
                             .cell(spawned(text_cell(t, None, r.expr, t.muted_foreground)))
@@ -834,7 +856,7 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
                 IconButton::new("variable-studio-more", "more-horizontal")
                     .ghost()
                     .small()
-                    .tooltip("More")
+                    .tooltip(tr("model-vs-more"))
                     .build(t),
             ));
         },
@@ -857,14 +879,22 @@ fn tables(p: &mut ChildSpawnerCommands, t: &Theme, v: &View) {
         p.spawn((
             Name::new("variable-studio-empty"),
             t.text(
-                "Type a name in the table's last row to add a variable. Every Part Studio and Assembly of this document can then use it in any value field as #name, and follows it when it changes.",
+                tr("model-vs-empty"),
                 t.font_sm,
                 FontWeight::NORMAL,
                 t.muted_foreground,
             ),
-            Node { max_width: Val::Px(560.0), margin: UiRect::left(Val::Px(4.0)), ..default() },
+            cadrs_ui::i18n::Translated("model-vs-empty"),
+            Node {
+                max_width: Val::Px(560.0),
+                margin: UiRect::left(Val::Px(4.0)),
+                ..default()
+            },
         ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+        .insert(TextLayout::new(
+            bevy::text::Justify::Left,
+            bevy::text::LineBreak::WordBoundary,
+        ));
     }
 }
 
@@ -923,7 +953,7 @@ fn own_row(
             align_items: AlignItems::Center,
             ..default()
         },
-        Tooltip::new("Drag to reorder; click to pick (Delete deletes it)"),
+        Tooltip::new(tr("model-vs-drag-handle")),
         children![(
             cadrs_ui::icon("drag-handle", 12.0, t.subtle_foreground),
             Pickable::IGNORE
@@ -941,7 +971,7 @@ fn own_row(
     let type_cell = (
         TypeButton(id),
         cadrs_ui::Button::new(format!("{name}-type"))
-            .label(r.var_type.label())
+            .label(crate::variables_ui::variable_type_text(r.var_type))
             .ghost()
             .small()
             .dropdown_caret()
@@ -974,7 +1004,7 @@ fn own_row(
         IconButton::new(format!("{name}-delete"), "close")
             .ghost()
             .small()
-            .tooltip("Delete this variable")
+            .tooltip(tr("model-vs-delete-variable"))
             .build(t),
     );
     b.spawn((
@@ -1015,7 +1045,7 @@ fn new_row(b: &mut ChildSpawner, t: &Theme, cols: &[Column]) {
             col: Col::Name,
         },
         GridCell::new("variable-studio-new-name")
-            .placeholder("Add variable")
+            .placeholder(tr("model-vs-add-variable"))
             .grow(1.0)
             .accept(name_char)
             .build(t),
@@ -1555,8 +1585,11 @@ fn on_button(
         let mut menu = Menu::new("variable-studio-type-menu").min_width(110.0);
         for k in VariableType::ALL {
             menu = menu.item(
-                MenuItem::new(format!("type-{}", k.label().to_lowercase()), k.label())
-                    .checked(current == Some(k)),
+                MenuItem::new(
+                    format!("type-{}", k.label().to_lowercase()),
+                    crate::variables_ui::variable_type_text(k),
+                )
+                .checked(current == Some(k)),
             );
         }
         // A floating menu under the cell: the table's cells clip their children.
@@ -1580,8 +1613,8 @@ fn on_button(
     }
     if q_more.contains(e) {
         let menu = Menu::new("variable-studio-more-menu")
-            .item(MenuItem::new("collapse-all", "Collapse all tables"))
-            .item(MenuItem::new("expand-all", "Expand all tables"))
+            .item(MenuItem::new("collapse-all", tr("model-vs-collapse-all")))
+            .item(MenuItem::new("expand-all", tr("model-vs-expand-all")))
             .min_width(170.0)
             .build(&theme);
         let anchor = open_context_menu(&mut commands, below(&q_place, e, 170.0), menu);
@@ -1813,20 +1846,20 @@ fn on_row_menu(
         .map_or(0, |s| s.variables.len());
     let menu = Menu::new("variable-studio-row-menu")
         .item(
-            MenuItem::new("row-move-up", "Move up")
+            MenuItem::new("row-move-up", tr("common-move-up"))
                 .icon("arrow-up")
                 .disabled(line.index == 0),
         )
         .item(
-            MenuItem::new("row-move-down", "Move down")
+            MenuItem::new("row-move-down", tr("common-move-down"))
                 .icon("arrow-down")
                 .disabled(line.index + 1 >= n),
         )
         .separator()
-        .item(MenuItem::new("row-insert-above", "Insert variable above").icon("plus"))
-        .item(MenuItem::new("row-duplicate", "Duplicate").icon("copy"))
+        .item(MenuItem::new("row-insert-above", tr("model-vs-insert-above")).icon("plus"))
+        .item(MenuItem::new("row-duplicate", tr("model-vs-duplicate")).icon("copy"))
         .separator()
-        .item(MenuItem::new("row-delete", "Delete").icon("delete"))
+        .item(MenuItem::new("row-delete", tr("common-delete")).icon("delete"))
         .build(&theme);
     let anchor = open_context_menu(&mut commands, ev.position, menu);
     commands.entity(anchor).insert(RowMenu(line.row));
@@ -2137,7 +2170,7 @@ fn insert_sources(world: &World) -> Vec<Source> {
                     })
                     .unwrap_or_default();
                 let blocked = if this && vs::would_cycle(d, s.studio, e.id) {
-                    Some("Inserts this Variable Studio".to_string())
+                    Some(tr("model-vs-would-cycle"))
                 } else if this
                     && d.element(s.studio)
                         .and_then(vs::studio_of)
@@ -2147,7 +2180,7 @@ fn insert_sources(world: &World) -> Vec<Source> {
                                 .any(|t| t.is_live() && t.source.element == e.id)
                         })
                 {
-                    Some("Already inserted".to_string())
+                    Some(tr("model-vs-already-inserted"))
                 } else {
                     None
                 };
@@ -2395,18 +2428,18 @@ fn sync_insert_dialog(
         {
             let tf = theme.clone();
             let ok = if s.replace.is_some() {
-                "Change version"
+                tr("model-vs-change-version")
             } else {
-                "Insert"
+                tr("model-vs-insert-button")
             };
             world.spawn((
                 InsertDialog,
                 DespawnOnExit(AppState::Document),
                 Dialog::new("vs-insert-dialog")
                     .title(if s.replace.is_some() {
-                        "Change version"
+                        tr("model-vs-change-version")
                     } else {
-                        "Insert Variable Studio"
+                        tr("model-vs-insert")
                     })
                     .width(460.0)
                     .body(|b| {
@@ -2428,7 +2461,7 @@ fn sync_insert_dialog(
                         });
                         f.spawn(
                             cadrs_ui::Button::new("vs-insert-cancel")
-                                .label("Cancel")
+                                .label(tr("common-cancel"))
                                 .build(&tf),
                         );
                         f.spawn(
@@ -2478,16 +2511,14 @@ fn sync_insert_dialog(
             TabStrip::new("vs-insert-tabs")
                 .compact()
                 .equal()
-                .tab("Current document")
-                .tab("Other documents")
+                .tab(tr("model-vs-current-document"))
+                .tab(tr("model-vs-other-documents"))
                 .selected(vv.tab)
                 .build(&t),
         );
         if vv.tab == 0 {
             p.spawn(t.text(
-                format!(
-                    "Variable Studios of {doc_name}: inserted live, so they follow their edits"
-                ),
+                tr_with("model-vs-studios-of", &[("document", &doc_name)]),
                 t.font_sm,
                 FontWeight::NORMAL,
                 t.muted_foreground,
@@ -2530,17 +2561,24 @@ fn source_list(p: &mut ChildSpawnerCommands, t: &Theme, v: &InsertView) {
             Name::new("vs-insert-none"),
             t.text(
                 if v.tab == 0 {
-                    "This document has no other Variable Studio. Create one with + ▸ Create Variable Studio."
+                    tr("model-vs-none-in-document")
                 } else {
-                    "This version has no Variable Studio."
+                    tr("model-vs-none-in-version")
                 },
                 t.font_sm,
                 FontWeight::NORMAL,
                 t.muted_foreground,
             ),
-            Node { margin: UiRect::all(Val::Px(8.0)), max_width: Val::Px(420.0), ..default() },
+            Node {
+                margin: UiRect::all(Val::Px(8.0)),
+                max_width: Val::Px(420.0),
+                ..default()
+            },
         ))
-        .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+        .insert(TextLayout::new(
+            bevy::text::Justify::Left,
+            bevy::text::LineBreak::WordBoundary,
+        ));
         return;
     }
     p.spawn(Node {
@@ -2554,15 +2592,7 @@ fn source_list(p: &mut ChildSpawnerCommands, t: &Theme, v: &InsertView) {
             let picked = v.source == Some(s.id);
             let subtitle = match &s.blocked {
                 Some(why) => why.clone(),
-                None => format!(
-                    "{} {}",
-                    s.vars.len(),
-                    if s.vars.len() == 1 {
-                        "variable"
-                    } else {
-                        "variables"
-                    }
-                ),
+                None => variables_text(s.vars.len()),
             };
             l.spawn(
                 cadrs_ui::DocumentRow::new(
@@ -2586,7 +2616,7 @@ fn source_list(p: &mut ChildSpawnerCommands, t: &Theme, v: &InsertView) {
                     c.spawn((
                         PickVar(None),
                         Checkbox::new("vs-insert-whole")
-                            .label("Whole table")
+                            .label(tr("model-vs-whole-table"))
                             .checked(v.only.is_empty())
                             .build(t),
                     ));

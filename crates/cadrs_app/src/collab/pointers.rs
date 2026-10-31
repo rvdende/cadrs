@@ -25,6 +25,7 @@ use cadrs_core::{DocumentId, ElementId, PartId};
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::bevy_iroh::prelude::{NetSender, PeerLeft, Received};
 use cadrs_net::{Draft, EdaOf, Picked, Ping, Pointer, PointerAt, SketchPlane};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 
 use super::live::Live;
@@ -352,19 +353,28 @@ fn hear_pings(
         let name = people
             .by_id
             .get(&id)
-            .map_or_else(|| "Someone".to_string(), |p| p.presence.name.clone());
-        let place = doc
-            .as_ref()
-            .and_then(|d| d.doc.element(m.msg.tab))
-            .map_or_else(String::new, |e| format!(" in {}", e.name));
+            .map_or_else(|| tr("shell-pointers-someone"), |p| p.presence.name.clone());
+        let text = match doc.as_ref().and_then(|d| d.doc.element(m.msg.tab)) {
+            Some(e) => tr_with(
+                "shell-pointers-ping-in",
+                &[("name", name.as_str()), ("tab", e.name.as_str())],
+            ),
+            None => tr_with("shell-pointers-ping", &[("name", name.as_str())]),
+        };
         let toast = cadrs_ui::show_notification(
             &mut commands,
             &theme,
-            cadrs_ui::Notification::info(format!("{name} wants you to look here{place}"))
+            cadrs_ui::Notification::info(text)
                 .name("collab-ping-toast")
                 .seconds(8.0),
         );
-        let link = cadrs_ui::toast_action(&mut commands, &theme, toast, "collab-ping-go", "Go to");
+        let link = cadrs_ui::toast_action(
+            &mut commands,
+            &theme,
+            toast,
+            "collab-ping-go",
+            tr("shell-presence-toast-go-to"),
+        );
         commands
             .entity(link)
             .observe(move |_: On<Activate>, mut commands: Commands| {
@@ -713,7 +723,10 @@ fn label_of(people: &People, doc: Option<&ActiveDocument>, id: &str) -> String {
         return id.chars().take(8).collect();
     };
     if people.stale.contains(id) {
-        return format!("{} · reconnecting…", p.presence.name);
+        return tr_with(
+            "shell-presence-reconnecting-name",
+            &[("name", p.presence.name.as_str())],
+        );
     }
     let mut label = p.presence.name.clone();
     if let Some(f) = doc.and_then(|d| super::presence::editing_name(d, &p.presence)) {
@@ -992,7 +1005,7 @@ fn edge_chip(t: &Theme, id: &str, name: &str, label: &str) -> impl Bundle {
                 },
                 BackgroundColor(Color::WHITE),
                 cadrs_ui::color_scheme::KeepFill,
-                Tooltip::new(format!("{label}: click to look there")),
+                Tooltip::new(tr_with("shell-pointers-edge-tooltip", &[("who", label)])),
                 children![(
                     cadrs_ui::Avatar::new(format!("collab-edge-{short}-face"), name.to_string())
                         .size(26.0)
@@ -1403,7 +1416,10 @@ fn sync_overlays(
                 );
                 spawned.push(commands.spawn(ring(at, 3.0, 3.0, color)).id());
             }
-            let label = format!("{}'s view", person.presence.name);
+            let label = tr_with(
+                "shell-pointers-view-of",
+                &[("name", person.presence.name.as_str())],
+            );
             spawned.push(
                 commands
                     .spawn(mark_label(
@@ -1444,8 +1460,13 @@ fn sync_overlays(
         let name = people
             .by_id
             .get(id)
-            .map(|p| format!("{}: look here", p.presence.name))
-            .unwrap_or_else(|| "Look here".into());
+            .map(|p| {
+                tr_with(
+                    "shell-pointers-look-here-name",
+                    &[("name", p.presence.name.as_str())],
+                )
+            })
+            .unwrap_or_else(|| tr("shell-pointers-look-here"));
         spawned.push(
             commands
                 .spawn(mark_label(

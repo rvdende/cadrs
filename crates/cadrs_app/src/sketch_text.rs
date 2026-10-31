@@ -13,6 +13,7 @@
 use bevy::prelude::*;
 use cadrs_sketch::text::{TextFont, TextStyle, layout};
 use cadrs_sketch::{SketchEntity, SketchOp, TextId, Vec2 as SVec2};
+use cadrs_ui::i18n::tr;
 use cadrs_ui::menu::{Menu, MenuAction, MenuItem};
 use cadrs_ui::{
     FeatureDialogAccept, FeatureDialogCancel, TextCancel, TextDialog, TextDialogState, TextSubmit,
@@ -370,8 +371,8 @@ pub fn open_text_menu(world: &mut World, id: TextId, at: Vec2) {
     let menu = Menu::new("sketch-text-menu")
         .min_width(180.0)
         .item_height(23.0)
-        .item(MenuItem::new("sketch-text-edit", "Edit text").icon("edit"))
-        .item(MenuItem::new("sketch-text-delete", "Delete").icon("delete"));
+        .item(MenuItem::new("sketch-text-edit", tr("sketch-text-edit")).icon("edit"))
+        .item(MenuItem::new("sketch-text-delete", tr("common-delete")).icon("delete"));
     let mut commands = world.commands();
     let anchor = cadrs_ui::open_context_menu(&mut commands, at, menu.build(&theme));
     commands

@@ -245,20 +245,20 @@ pub fn source_section(c: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewSt
                 (
                     "insert-view-create-version",
                     "versions",
-                    "Create version",
+                    "common-create-version",
                     false,
                 ),
                 (
                     "insert-view-version",
                     "branches",
-                    "Version graph: views of the workspace or of a version",
+                    "drawing-version-graph-tooltip",
                     st.current_graph,
                 ),
             ] {
                 r.spawn(
                     ToolButton::new(name, icon)
                         .icon_size(16.0)
-                        .tooltip(tip)
+                        .tooltip(cadrs_ui::i18n::tr(tip))
                         .selected(on)
                         .build(t),
                 )

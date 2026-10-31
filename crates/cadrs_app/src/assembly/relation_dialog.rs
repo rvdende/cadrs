@@ -26,6 +26,7 @@ use cadrs_core::assembly::commands::{AddMateFeature, SetMateFeature};
 use cadrs_core::assembly::mate::{MateFeature, MateId, MateKind, next_name};
 use cadrs_core::assembly::relation::{self, Relation, RelationType};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -85,7 +86,10 @@ pub fn open_relations_menu(world: &mut World, button: Entity) {
         menu = menu.item(
             cadrs_ui::menu::MenuItem::new(
                 format!("relations-menu-{}", t.icon()),
-                format!("{} relation", t.label()),
+                tr_with(
+                    "asm-mates-type-relation",
+                    &[("type", &super::relation_type_name(t))],
+                ),
             )
             .icon(t.icon()),
         );
@@ -273,9 +277,15 @@ fn follow_mate_selection(
                 s.refused = None;
                 return;
             }
-            s.refused = Some(format!("{} is a {} mate", f.name, m.mate_type.label()));
+            s.refused = Some(tr_with(
+                "asm-relation-refused-mate-type",
+                &[
+                    ("name", &f.name),
+                    ("type", &super::mate_type_name(m.mate_type)),
+                ],
+            ));
         }
-        None => s.refused = Some(format!("{} is not a mate", f.name)),
+        None => s.refused = Some(tr_with("asm-relation-not-a-mate", &[("name", &f.name)])),
     }
 }
 
@@ -497,11 +507,11 @@ fn relation_dialog(
     let tb = theme.clone();
     let t = s.relation.relation_type;
     let reverse = s.relation.reverse;
-    let placeholder = if t.mate_count() == 1 {
-        "Cylindrical mate"
+    let placeholder = tr(if t.mate_count() == 1 {
+        "asm-relation-cylindrical-mate"
     } else {
-        "Mates"
-    };
+        "asm-mates"
+    });
     let active = items.len() < t.mate_count();
     (
         RelationDialog,
@@ -515,7 +525,7 @@ fn relation_dialog(
                 let t0 = &tb;
                 let mut select = Select::new("relation-type");
                 for rt in RelationType::ALL {
-                    select = select.option(rt.label(), true);
+                    select = select.option(super::relation_type_name(rt), true);
                 }
                 let i = RelationType::ALL.iter().position(|x| *x == t).unwrap_or(0);
                 b.spawn(Node {
@@ -528,7 +538,7 @@ fn relation_dialog(
                     Role::Mates,
                     SelectionList::new("relation-mates")
                         .placeholder(placeholder)
-                        .item_icon(t.icon(), "Mate")
+                        .item_icon(t.icon(), tr("asm-mate"))
                         .tint_filled()
                         .items(items)
                         .active(active)
@@ -585,7 +595,14 @@ fn relation_dialog(
                                 ..default()
                             };
                             r.spawn(col(1.0)).with_children(|c| {
-                                field(c, Role::RatioA, "relation-ratio-a", "Ratio", &tx[0], 40.0)
+                                field(
+                                    c,
+                                    Role::RatioA,
+                                    "relation-ratio-a",
+                                    tr("asm-relation-ratio-label").as_str(),
+                                    &tx[0],
+                                    40.0,
+                                )
                             });
                             r.spawn(t0.text(":", t0.font_base, FontWeight::BOLD, t0.foreground));
                             r.spawn(col(0.55)).with_children(|c| {
@@ -593,14 +610,19 @@ fn relation_dialog(
                             });
                         });
                     }
-                    RelationType::Linear => {
-                        field(b, Role::Ratio, "relation-ratio", "Ratio", &tx[2], 84.0)
-                    }
+                    RelationType::Linear => field(
+                        b,
+                        Role::Ratio,
+                        "relation-ratio",
+                        tr("asm-relation-ratio-label").as_str(),
+                        &tx[2],
+                        84.0,
+                    ),
                     RelationType::RackPinion => field(
                         b,
                         Role::Distance,
                         "relation-distance",
-                        "Distance per revolution",
+                        tr("asm-relation-distance-per-revolution-label").as_str(),
                         &tx[3],
                         128.0,
                     ),
@@ -608,13 +630,13 @@ fn relation_dialog(
                         b,
                         Role::Distance,
                         "relation-distance",
-                        "Pitch",
+                        tr("asm-relation-pitch-label").as_str(),
                         &tx[3],
                         84.0,
                     ),
                 }
                 b.spawn(
-                    OptionRow::new("relation-reverse", "Reverse direction")
+                    OptionRow::new("relation-reverse", tr("asm-reverse-direction"))
                         .checked(reverse)
                         .build(t0),
                 );
@@ -627,7 +649,7 @@ fn relation_dialog(
                 f.spawn((
                     Name::new("relation-help"),
                     icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-                    Tooltip::new("Help"),
+                    Tooltip::new(tr("common-help")),
                 ));
             })
             .build(theme),
@@ -666,7 +688,7 @@ fn sync_relation_dialog(
             model
                 .mate(*m)
                 .map(|f| f.name.clone())
-                .unwrap_or_else(|| "Mate".into())
+                .unwrap_or_else(|| tr("asm-mate"))
         })
         .collect();
     let r = ordered(s.relation.clone(), model);

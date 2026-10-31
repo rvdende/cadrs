@@ -39,7 +39,7 @@ pub fn import(world: &mut World, paths: &[PathBuf]) -> (Vec<String>, Vec<String>
         .filter(|e| e.pcb().is_some())
         .map(|e| e.id)
     else {
-        errors.push("Open a PCB Studio tab to import into".into());
+        errors.push(cadrs_ui::i18n::tr("pcb-import-open-studio"));
         return (names, warnings, errors);
     };
     for path in projects {
@@ -72,7 +72,10 @@ pub fn import(world: &mut World, paths: &[PathBuf]) -> (Vec<String>, Vec<String>
                     .and_then(|s| s.active_board())
                     .map(|b| b.name().to_string())
                     .unwrap_or_default();
-                names.push(format!("{name} ({n} components)"));
+                names.push(cadrs_ui::i18n::tr_with(
+                    "pcb-import-board-components",
+                    &[("name", &name), ("count", &n.to_string())],
+                ));
                 warnings.extend(project.warnings);
             }
             Err(e) => errors.push(e.to_string()),
@@ -125,6 +128,6 @@ fn load_models(design: &mut cadrs_eda::Design, project_dir: &Path) -> Vec<String
     }
     missing
         .into_iter()
-        .map(|s| format!("3D model not found: {s}"))
+        .map(|s| cadrs_ui::i18n::tr_with("pcb-model-not-found", &[("file", &s)]))
         .collect()
 }

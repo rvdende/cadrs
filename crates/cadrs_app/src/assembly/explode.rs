@@ -37,6 +37,7 @@ use cadrs_core::assembly::explode::{
 use cadrs_core::assembly::{InstanceId, Pose};
 use cadrs_sketch::units::Quantity;
 use cadrs_ui::dialog_fields::{NumberField, NumberFieldCommit, Slider, SliderChange};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::menu::{ContextMenuAnchor, Menu, MenuAction, MenuItem};
 use cadrs_ui::name_popup::{NamePopup, NamePopupCommit};
 use cadrs_ui::prelude::*;
@@ -526,7 +527,7 @@ fn instance_name(world: &World, i: InstanceId) -> String {
                 None,
             ))
         })
-        .unwrap_or_else(|| "instance".into())
+        .unwrap_or_else(|| tr("asm-instance"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -680,7 +681,12 @@ fn rebuild(world: &mut World) {
         ..default()
     });
     commands.entity(panel).with_children(|p| {
-        side_panel_header(p, &t, "Exploded views", "exploded-views-panel-close");
+        side_panel_header(
+            p,
+            &t,
+            &tr("asm-exploded-views"),
+            "exploded-views-panel-close",
+        );
         p.spawn(Node {
             padding: UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(6.0), Val::Px(4.0)),
             ..default()
@@ -688,7 +694,7 @@ fn rebuild(world: &mut World) {
         .with_children(|r| {
             r.spawn(
                 cadrs_ui::Button::new("exploded-view-add")
-                    .label("Add exploded view")
+                    .label(tr("asm-explode-add-view"))
                     .icon("plus")
                     .small()
                     .build(&t),
@@ -698,11 +704,12 @@ fn rebuild(world: &mut World) {
             p.spawn((
                 Name::new("exploded-views-empty"),
                 t.text(
-                    "No exploded views yet",
+                    tr("asm-explode-no-views"),
                     11.5,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("asm-explode-no-views"),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
                     max_width: Val::Px(235.0),
@@ -721,10 +728,14 @@ fn rebuild(world: &mut World) {
                     .build(&t),
                 ViewRow(*id),
                 ContextMenuTarget,
-                Tooltip::new(format!(
-                    "{name}: {n} step{}",
-                    if *n == 1 { "" } else { "s" }
-                )),
+                Tooltip::new(if *n == 1 {
+                    tr_with("asm-explode-view-one-step", &[("name", name)])
+                } else {
+                    tr_with(
+                        "asm-explode-view-steps",
+                        &[("name", name), ("count", &n.to_string())],
+                    )
+                }),
             ));
             row.entry::<Node>()
                 .and_modify(|mut nd| nd.height = Val::Px(26.0));
@@ -741,7 +752,15 @@ fn rebuild(world: &mut World) {
         .insert(BorderColor::all(t.panel_border))
         .with_children(|r| {
             // Assembled (0 %) at the left end, Exploded (100 %) at the right.
-            r.spawn(t.text("Assembled", 10.5, FontWeight::NORMAL, t.muted_foreground));
+            r.spawn((
+                t.text(
+                    tr("asm-explode-assembled"),
+                    10.5,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("asm-explode-assembled"),
+            ));
             r.spawn(
                 Slider::new("exploded-view-slider")
                     .value(if edit.is_some() {
@@ -750,10 +769,18 @@ fn rebuild(world: &mut World) {
                         ui.fraction as f32
                     })
                     .width(84.0)
-                    .tooltip("0 % assembled … 100 % exploded")
+                    .tooltip(tr("asm-explode-slider-tooltip"))
                     .build(&t),
             );
-            r.spawn(t.text("Exploded", 10.5, FontWeight::NORMAL, t.muted_foreground));
+            r.spawn((
+                t.text(
+                    tr("asm-explode-exploded"),
+                    10.5,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("asm-explode-exploded"),
+            ));
             r.spawn((
                 Name::new("exploded-view-percent"),
                 t.text(
@@ -774,7 +801,7 @@ fn rebuild(world: &mut World) {
         .with_children(|r| {
             r.spawn(
                 Checkbox::new("exploded-view-trails")
-                    .label("Trail lines")
+                    .label(tr("asm-explode-trail-lines"))
                     .checked(trails)
                     .build(&t),
             );
@@ -787,7 +814,7 @@ fn rebuild(world: &mut World) {
             .with_children(|r| {
                 r.spawn(
                     cadrs_ui::Button::new("exploded-view-edit-button")
-                        .label("Edit steps")
+                        .label(tr("asm-explode-edit-steps"))
                         .icon("edit")
                         .small()
                         .ghost()
@@ -796,7 +823,7 @@ fn rebuild(world: &mut World) {
                 // P3F.6 (P3.7): the exploded view as a picture for instructions and manuals.
                 r.spawn(
                     cadrs_ui::Button::new("exploded-view-export-image")
-                        .label("Export image…")
+                        .label(tr("asm-explode-export-image"))
                         .icon("image")
                         .small()
                         .ghost()
@@ -808,7 +835,7 @@ fn rebuild(world: &mut World) {
         // The step list.
         p.spawn((
             t.text(
-                format!("{}: steps", v.name),
+                tr_with("asm-explode-steps-heading", &[("name", &v.name)]),
                 11.5,
                 FontWeight::BOLD,
                 t.foreground,
@@ -820,7 +847,13 @@ fn rebuild(world: &mut World) {
         ));
         if steps.is_empty() {
             p.spawn((
-                t.text("No steps yet", 11.0, FontWeight::NORMAL, t.muted_foreground),
+                t.text(
+                    tr("asm-explode-no-steps"),
+                    11.0,
+                    FontWeight::NORMAL,
+                    t.muted_foreground,
+                ),
+                Translated("asm-explode-no-steps"),
                 Node {
                     margin: UiRect::left(Val::Px(12.0)),
                     ..default()
@@ -834,7 +867,10 @@ fn rebuild(world: &mut World) {
                     .left(10.0)
                     .selected(e.index == Some(k))
                     .build(&t),
-                Tooltip::new(format!("Step {}: {who}, {what}. Click to change it", k + 1)),
+                Tooltip::new(tr_with(
+                    "asm-explode-step-tooltip",
+                    &[("step", &(k + 1).to_string()), ("who", who), ("what", what)],
+                )),
             ));
             row.entry::<Node>().and_modify(|mut nd| {
                 nd.height = Val::Px(24.0);
@@ -854,13 +890,13 @@ fn rebuild(world: &mut World) {
                     Pickable::IGNORE,
                 ));
                 for (suffix, icon, tip) in [
-                    ("up", "arrow-up", "Move up"),
-                    ("down", "arrow-down", "Move down"),
-                    ("delete", "delete", "Delete step"),
+                    ("up", "arrow-up", "common-move-up"),
+                    ("down", "arrow-down", "common-move-down"),
+                    ("delete", "delete", "asm-explode-delete-step"),
                 ] {
                     r.spawn(
                         IconButton::new(format!("{name}-{suffix}"), icon)
-                            .tooltip(tip)
+                            .tooltip(tr(tip))
                             .build(&t),
                     )
                     .entry::<Node>()
@@ -874,8 +910,8 @@ fn rebuild(world: &mut World) {
         }
         // The step editor.
         let head = match e.index {
-            Some(i) => format!("Change step {}", i + 1),
-            None => "New step".to_string(),
+            Some(i) => tr_with("asm-explode-change-step", &[("step", &(i + 1).to_string())]),
+            None => tr("asm-explode-new-step"),
         };
         p.spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -890,7 +926,7 @@ fn rebuild(world: &mut World) {
             b.spawn(t.text(head, 11.5, FontWeight::BOLD, t.foreground));
             b.spawn(
                 SelectionList::new("explode-step-instances")
-                    .placeholder("Instances (select in the view)")
+                    .placeholder(tr("asm-explode-instances-placeholder"))
                     .items(edit_items.clone())
                     .active(true)
                     .build(&t),
@@ -905,14 +941,14 @@ fn rebuild(world: &mut World) {
                     ToolButton::new("explode-kind-move", "transform")
                         .icon_size(15.0)
                         .selected(!e.rotate)
-                        .tooltip("Move along an axis")
+                        .tooltip(tr("asm-explode-move-along-axis"))
                         .build(&t),
                 );
                 r.spawn(
                     ToolButton::new("explode-kind-rotate", "revolve")
                         .icon_size(15.0)
                         .selected(e.rotate)
-                        .tooltip("Rotate about an axis")
+                        .tooltip(tr("asm-explode-rotate-about-axis"))
                         .build(&t),
                 );
                 r.spawn(Node {
@@ -928,17 +964,24 @@ fn rebuild(world: &mut World) {
                             .selected(e.axis == k)
                             .build(&t),
                     )
-                    .insert(Tooltip::new(format!(
-                        "{} {}",
-                        if e.rotate { "About" } else { "Along" },
-                        a.to_uppercase()
+                    .insert(Tooltip::new(tr_with(
+                        if e.rotate {
+                            "asm-explode-about-axis"
+                        } else {
+                            "asm-explode-along-axis"
+                        },
+                        &[("axis", &a.to_uppercase())],
                     )));
                 }
             });
             b.spawn(
                 NumberField::new(
                     "explode-amount",
-                    if e.rotate { "Angle" } else { "Distance" },
+                    tr(if e.rotate {
+                        "common-angle"
+                    } else {
+                        "common-distance"
+                    }),
                 )
                 .label_width(58.0)
                 .text(amount_text.clone())
@@ -946,11 +989,12 @@ fn rebuild(world: &mut World) {
             );
             b.spawn((
                 t.text(
-                    "Or drag an arrow of the triad in the view",
+                    tr("asm-explode-drag-hint"),
                     10.5,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("asm-explode-drag-hint"),
                 Node {
                     max_width: Val::Px(235.0),
                     ..default()
@@ -965,18 +1009,18 @@ fn rebuild(world: &mut World) {
                 let ok = !e.instances.is_empty() && e.amount != 0.0;
                 r.spawn(
                     cadrs_ui::Button::new("explode-step-add")
-                        .label(if e.index.is_some() {
-                            "Update step"
+                        .label(tr(if e.index.is_some() {
+                            "asm-explode-update-step"
                         } else {
-                            "Add step"
-                        })
+                            "asm-explode-add-step"
+                        }))
                         .small()
                         .disabled(!ok)
                         .build(&t),
                 );
                 r.spawn(
                     cadrs_ui::Button::new("exploded-view-done")
-                        .label("Done")
+                        .label(tr("common-done"))
                         .small()
                         .ghost()
                         .build(&t),
@@ -1196,10 +1240,10 @@ fn on_row_menu(ev: On<ContextMenuRequested>, q: Query<&ViewRow>, mut commands: C
         let menu = Menu::new("exploded-view-menu")
             .min_width(170.0)
             .item_height(20.0)
-            .item(MenuItem::new("exploded-view-edit", "Edit…").icon("edit"))
-            .item(MenuItem::new("exploded-view-rename", "Rename"))
+            .item(MenuItem::new("exploded-view-edit", tr("common-edit-ellipsis")).icon("edit"))
+            .item(MenuItem::new("exploded-view-rename", tr("common-rename")))
             .separator()
-            .item(MenuItem::new("exploded-view-delete", "Delete").icon("remove-circle"));
+            .item(MenuItem::new("exploded-view-delete", tr("common-delete")).icon("remove-circle"));
         let theme = world.resource::<Theme>().clone();
         let mut commands = world.commands();
         let anchor = open_context_menu(&mut commands, at, menu.build(&theme));
@@ -1247,7 +1291,7 @@ fn on_menu_action(
             let at = left_of(world, row, Vec2::new(900.0, 200.0), 150.0);
             let theme = world.resource::<Theme>().clone();
             let mut c = world.commands();
-            let popup = NamePopup::new("exploded-view-name", "Rename exploded view", at)
+            let popup = NamePopup::new("exploded-view-name", tr("asm-explode-rename-view"), at)
                 .value(v.name)
                 .spawn(&mut c, &theme);
             c.entity(popup)

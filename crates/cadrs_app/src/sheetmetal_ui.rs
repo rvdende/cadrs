@@ -31,6 +31,7 @@ use cadrs_core::sheetmetal::{CurveRef, EXTRUDE_ENDS, SheetMetalModelFeature, She
 use cadrs_core::{Feature, FeatureId, FeatureKind};
 use cadrs_sheetmetal::params::{BendCalc, BendReliefKind, CornerReliefKind};
 use cadrs_sketch::units::Quantity;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Collapsible, CollapsibleToggled, NumberField, NumberFieldState, OptionRow, Select,
@@ -43,12 +44,13 @@ use crate::applied_dialog::{Role, SmNum};
 use crate::parts::PartCache;
 use crate::viewport::Pick;
 
-/// The sections' names, in order (their open state is kept in the session).
+/// The sections' names and their titles' catalog keys, in order (their open state is kept in
+/// the session).
 pub const SECTIONS: [(&str, &str); 4] = [
-    ("sm-selections", "Selections"),
-    ("sm-general", "General"),
-    ("sm-material", "Material"),
-    ("sm-relief", "Relief"),
+    ("sm-selections", "sheet-section-selections"),
+    ("sm-general", "sheet-section-general"),
+    ("sm-material", "common-material"),
+    ("sm-relief", "sheet-section-relief"),
 ];
 
 /// The other sheet metal tools, in Onshape's order (the ▾ of the toolbar's Sheet metal model
@@ -84,6 +86,27 @@ pub const OTHER_TOOLS: [(&str, &str, &str); 12] = [
     ),
 ];
 
+/// The label of a tool of [`OTHER_TOOLS`] (by its id) in the interface's language; `label`
+/// (the English one) for an id it doesn't know.
+pub fn tool_label(name: &str, label: &str) -> String {
+    let key = match name {
+        "sheet-metal-finish" => "sheet-tool-finish",
+        "sheet-metal-flange" => "sheet-tool-flange",
+        "sheet-metal-hem" => "sheet-tool-hem",
+        "sheet-metal-tab" => "sheet-tool-tab",
+        "sheet-metal-bend" => "sheet-tool-bend",
+        "sheet-metal-jog" => "sheet-tool-jog",
+        "sheet-metal-form" => "sheet-form",
+        "sheet-metal-loft" => "sheet-tool-loft",
+        "sheet-metal-make-joint" => "sheet-tool-make-joint",
+        "sheet-metal-corner" => "sheet-tool-corner",
+        "sheet-metal-bend-relief" => "sheet-tool-bend-relief",
+        "sheet-metal-corner-break" => "sheet-tool-corner-break",
+        _ => return label.to_string(),
+    };
+    tr(key)
+}
+
 /// Whether a tool of the Sheet metal model's ▾ is built (P3I.4, P3I.5, P3I.9): by its id
 /// (`sheet-metal-flange`) or its menu item (`sheet-metal-menu-flange`).
 pub fn tool_built(name: &str) -> bool {
@@ -118,8 +141,8 @@ pub fn start_tool(world: &mut World, name: &str) -> bool {
     false
 }
 
-/// Why the other sheet metal tools are greyed.
-pub const NOT_YET: &str = "Not available yet: comes with the next sheet metal tools";
+/// Why the other sheet metal tools are greyed (a catalog key).
+pub const NOT_YET: &str = "sheet-not-available-yet";
 
 // ---------------------------------------------------------------------------------------------
 // New features and picks
@@ -525,14 +548,14 @@ fn op_name(features: &[Feature], op: cadrs_sketch::OpId) -> String {
     features
         .iter()
         .find(|f| f.id.0 == op)
-        .map_or("part".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-part"), |f| f.name.clone())
 }
 
 fn name_of(features: &[Feature], id: FeatureId) -> String {
     features
         .iter()
         .find(|f| f.id == id)
-        .map_or("sketch".into(), |f| f.name.clone())
+        .map_or_else(|| tr("sheet-fallback-sketch"), |f| f.name.clone())
 }
 
 fn curve_label(features: &[Feature], c: &CurveRef) -> String {
@@ -541,20 +564,25 @@ fn curve_label(features: &[Feature], c: &CurveRef) -> String {
         .find(|f| f.id == c.sketch)
         .and_then(|f| f.sketch())
         .and_then(|s| s.geometry.curves.get(c.curve))
-        .map_or("Curve", |cv| match cv.kind {
-            cadrs_sketch::CurveKind::Line { .. } => "Line",
-            cadrs_sketch::CurveKind::Arc { .. } => "Arc",
-            cadrs_sketch::CurveKind::Circle { .. } => "Circle",
-            _ => "Curve",
+        .map_or("common-curve-of", |cv| match cv.kind {
+            cadrs_sketch::CurveKind::Line { .. } => "common-line-of",
+            cadrs_sketch::CurveKind::Arc { .. } => "sheet-arc-of",
+            cadrs_sketch::CurveKind::Circle { .. } => "sheet-circle-of",
+            _ => "common-curve-of",
         });
-    format!("{what} of {}", name_of(features, c.sketch))
+    tr_with(what, &[("name", &name_of(features, c.sketch))])
 }
 
 fn up_to_label(features: &[Feature], cache: &PartCache, u: &UpTo) -> String {
     match u {
-        UpTo::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
-        UpTo::Part(p) => cache.part_name(*p).unwrap_or("Part").to_string(),
-        UpTo::Vertex(v) => format!("Vertex of {}", op_name(features, v.vertex.faces[0].op)),
+        UpTo::Face(f) => tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]),
+        UpTo::Part(p) => cache
+            .part_name(*p)
+            .map_or_else(|| tr("common-part"), str::to_string),
+        UpTo::Vertex(v) => tr_with(
+            "common-vertex-of",
+            &[("name", &op_name(features, v.vertex.faces[0].op))],
+        ),
     }
 }
 
@@ -570,17 +598,22 @@ pub(crate) fn items(
         Role::SmExclude => x
             .exclude
             .iter()
-            .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+            .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
             .collect(),
         Role::SmBends => x
             .bends
             .iter()
             .map(|b| match b {
-                EdgeOrFace::Edge(e) => format!(
-                    "Edge of {}",
-                    op_name(features, crate::parts::edge_maker(features, &e.edge))
+                EdgeOrFace::Edge(e) => tr_with(
+                    "common-edge-of",
+                    &[(
+                        "name",
+                        &op_name(features, crate::parts::edge_maker(features, &e.edge)),
+                    )],
                 ),
-                EdgeOrFace::Face(f) => format!("Face of {}", op_name(features, f.face.op)),
+                EdgeOrFace::Face(f) => {
+                    tr_with("common-face-of", &[("name", &op_name(features, f.face.op))])
+                }
             })
             .collect(),
         Role::SmCurves => {
@@ -597,12 +630,12 @@ pub(crate) fn items(
             let mut v: Vec<String> = x
                 .faces
                 .iter()
-                .map(|f| format!("Face of {}", op_name(features, f.face.op)))
+                .map(|f| tr_with("common-face-of", &[("name", &op_name(features, f.face.op))]))
                 .collect();
             v.extend(
                 x.regions
                     .iter()
-                    .map(|r| format!("Face of {}", name_of(features, r.sketch))),
+                    .map(|r| tr_with("common-face-of", &[("name", &name_of(features, r.sketch))])),
             );
             v.extend(x.region_sketches.iter().map(|s| name_of(features, *s)));
             v
@@ -703,7 +736,7 @@ fn number(
                 &format!("{name}-flip"),
                 role,
                 on,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             ),
             // Keep the values in line with the ones that have an arrow.
             None => {
@@ -717,12 +750,12 @@ fn number(
     });
 }
 
-/// A labelled select ("Bend calculation  K Factor ▾").
+/// A labelled select ("Bend calculation  K Factor ▾"); `label` is a catalog key (or empty).
 fn select(
     b: &mut ChildSpawner,
     t: &Theme,
     name: &str,
-    label: &str,
+    label: &'static str,
     role: Role,
     options: &[(String, bool)],
     selected: usize,
@@ -742,11 +775,12 @@ fn select(
         if !label.is_empty() {
             r.spawn((
                 t.text(
-                    label,
+                    tr(label),
                     11.0,
                     bevy::text::FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated(label),
                 Node {
                     width: Val::Px(90.0),
                     flex_shrink: 0.0,
@@ -768,8 +802,40 @@ fn check(b: &mut ChildSpawner, t: &Theme, name: &str, label: &str, on: bool) {
     );
 }
 
-fn opts<T: Copy>(all: &[T], label: impl Fn(T) -> &'static str) -> Vec<(String, bool)> {
-    all.iter().map(|x| (label(*x).to_string(), true)).collect()
+fn opts<T: Copy>(all: &[T], label: impl Fn(T) -> String) -> Vec<(String, bool)> {
+    all.iter().map(|x| (label(*x), true)).collect()
+}
+
+/// A bend calculation's label in the interface's language.
+pub(crate) fn bend_calc_label(c: BendCalc) -> String {
+    tr(match c {
+        BendCalc::KFactor => "sheet-bend-calc-k-factor",
+        BendCalc::BendAllowance => "sheet-bend-calc-allowance",
+        BendCalc::BendDeduction => "sheet-bend-calc-deduction",
+    })
+}
+
+/// A corner relief's label in the interface's language.
+pub(crate) fn corner_relief_label(k: CornerReliefKind) -> String {
+    tr(match k {
+        CornerReliefKind::SquareSized => "sheet-relief-square-sized",
+        CornerReliefKind::RectangleScaled => "sheet-relief-rectangle-scaled",
+        CornerReliefKind::RoundSized => "sheet-relief-round-sized",
+        CornerReliefKind::RoundScaled => "sheet-relief-round-scaled",
+        CornerReliefKind::Closed => "sheet-relief-closed",
+        CornerReliefKind::Simple => "sheet-relief-simple",
+    })
+}
+
+/// A bend relief's label in the interface's language.
+pub(crate) fn bend_relief_label(k: BendReliefKind) -> String {
+    tr(match k {
+        BendReliefKind::SquareSized => "sheet-relief-square-sized",
+        BendReliefKind::RectangleScaled => "sheet-relief-rectangle-scaled",
+        BendReliefKind::ObroundScaled => "sheet-relief-obround-scaled",
+        BendReliefKind::ObroundSized => "sheet-relief-obround-sized",
+        BendReliefKind::Tear => "sheet-relief-tear",
+    })
 }
 
 fn index_of<T: PartialEq>(all: &[T], x: &T) -> usize {
@@ -807,7 +873,7 @@ fn end_row(
                 &format!("{name}-flip"),
                 fr,
                 on,
-                "Opposite direction",
+                &tr("common-opposite-direction"),
             ),
             None => {
                 r.spawn(Node {
@@ -837,7 +903,7 @@ fn end_rows(
             b,
             t,
             &format!("{prefix}-depth"),
-            "Depth",
+            &tr("common-depth"),
             depth.0,
             depth.1,
             None,
@@ -847,7 +913,7 @@ fn end_rows(
             b,
             t,
             &format!("{prefix}-up-to-field"),
-            "Up to face",
+            &tr("sheet-up-to-face"),
             list_role,
             items,
             active,
@@ -856,7 +922,7 @@ fn end_rows(
             b,
             t,
             &format!("{prefix}-up-to-field"),
-            "Up to part",
+            &tr("sheet-up-to-part"),
             list_role,
             items,
             active,
@@ -865,7 +931,7 @@ fn end_rows(
             b,
             t,
             &format!("{prefix}-up-to-field"),
-            "Up to vertex",
+            &tr("sheet-up-to-vertex"),
             list_role,
             items,
             active,
@@ -884,7 +950,11 @@ pub(crate) fn body(
 ) {
     let mut strip = TabStrip::new("sheet-metal-model-operation").compact();
     for op in SheetMetalOp::ALL {
-        strip = strip.tab(op.label());
+        strip = strip.tab(tr(match op {
+            SheetMetalOp::Convert => "sheet-op-convert",
+            SheetMetalOp::Extrude => "common-extrude",
+            SheetMetalOp::Thicken => "sheet-op-thicken",
+        }));
     }
     b.spawn((
         Role::SmOpTab,
@@ -902,7 +972,7 @@ pub(crate) fn body(
     };
     let x1 = x.clone();
     let t1 = t.clone();
-    let selections = Collapsible::new(SECTIONS[0].0, SECTIONS[0].1)
+    let selections = Collapsible::new(SECTIONS[0].0, tr(SECTIONS[0].1))
         .section()
         .open(open[0])
         .error(x.is_empty())
@@ -914,7 +984,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-parts-field",
-                        "Parts and surfaces to convert",
+                        &tr("sheet-parts-and-surfaces-to-convert"),
                         Role::SmParts,
                         item(Role::SmParts),
                         field == AppliedField::SmParts,
@@ -923,7 +993,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-exclude-field",
-                        "Faces to exclude",
+                        &tr("sheet-faces-to-exclude"),
                         Role::SmExclude,
                         item(Role::SmExclude),
                         field == AppliedField::SmExclude,
@@ -932,7 +1002,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-bends-field",
-                        "Edges or cylinders to bend",
+                        &tr("sheet-edges-or-cylinders-to-bend"),
                         Role::SmBends,
                         item(Role::SmBends),
                         field == AppliedField::SmBends,
@@ -941,20 +1011,32 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-clearance",
-                        "Clearance from input",
+                        &tr("sheet-clearance-from-input"),
                         SmNum::Clearance,
                         &x.clearance_expr,
                         None,
                     );
-                    check(c, t, "sm-include-bends", "Include bends", x.include_bends);
-                    check(c, t, "sm-keep-input", "Keep input parts", x.keep_input);
+                    check(
+                        c,
+                        t,
+                        "sm-include-bends",
+                        &tr("sheet-include-bends"),
+                        x.include_bends,
+                    );
+                    check(
+                        c,
+                        t,
+                        "sm-keep-input",
+                        &tr("sheet-keep-input-parts"),
+                        x.keep_input,
+                    );
                 }
                 SheetMetalOp::Extrude => {
                     list(
                         c,
                         t,
                         "sm-curves-field",
-                        "Sketch curves to extrude",
+                        &tr("sheet-sketch-curves-to-extrude"),
                         Role::SmCurves,
                         item(Role::SmCurves),
                         field == AppliedField::SmCurves,
@@ -963,7 +1045,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-arcs-field",
-                        "Arcs to extrude as bends",
+                        &tr("sheet-arcs-to-extrude-as-bends"),
                         Role::SmArcs,
                         item(Role::SmArcs),
                         field == AppliedField::SmArcs,
@@ -987,14 +1069,14 @@ pub(crate) fn body(
                         field == AppliedField::SmUpTo,
                     );
                     if x.end == EndType::Blind {
-                        check(c, t, "sm-symmetric", "Symmetric", x.symmetric);
+                        check(c, t, "sm-symmetric", &tr("common-symmetric"), x.symmetric);
                     }
                     if !x.symmetric || x.end != EndType::Blind {
                         check(
                             c,
                             t,
                             "sm-second-end",
-                            "Second end position",
+                            &tr("sheet-second-end-position"),
                             x.second.is_some(),
                         );
                         if let Some(s) = &x.second {
@@ -1024,7 +1106,7 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-faces-field",
-                        "Faces or sketch regions to thicken",
+                        &tr("sheet-faces-or-regions-to-thicken"),
                         Role::SmFaces,
                         item(Role::SmFaces),
                         field == AppliedField::SmFaces,
@@ -1033,14 +1115,14 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-tangent-propagation",
-                        "Tangent propagation",
+                        &tr("sheet-tangent-propagation"),
                         x.tangent_propagation,
                     );
                     list(
                         c,
                         t,
                         "sm-bends-field",
-                        "Edges or cylinders to bend",
+                        &tr("sheet-edges-or-cylinders-to-bend"),
                         Role::SmBends,
                         item(Role::SmBends),
                         field == AppliedField::SmBends,
@@ -1049,19 +1131,25 @@ pub(crate) fn body(
                         c,
                         t,
                         "sm-clearance",
-                        "Clearance from input",
+                        &tr("sheet-clearance-from-input"),
                         SmNum::Clearance,
                         &x.clearance_expr,
                         None,
                     );
-                    check(c, t, "sm-include-bends", "Include bends", x.include_bends);
+                    check(
+                        c,
+                        t,
+                        "sm-include-bends",
+                        &tr("sheet-include-bends"),
+                        x.include_bends,
+                    );
                 }
             }
         })
         .build(t);
     let x2 = x.clone();
     let t2 = t.clone();
-    let general = Collapsible::new(SECTIONS[1].0, SECTIONS[1].1)
+    let general = Collapsible::new(SECTIONS[1].0, tr(SECTIONS[1].1))
         .section()
         .open(open[1])
         .content(move |c| {
@@ -1070,7 +1158,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-thickness",
-                "Thickness",
+                &tr("common-thickness"),
                 SmNum::Thickness,
                 &x.exprs.thickness,
                 Some((Role::SmThicknessFlip, x.flip_thickness)),
@@ -1079,7 +1167,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-bend-radius",
-                "Bend radius",
+                &tr("sheet-bend-radius"),
                 SmNum::BendRadius,
                 &x.exprs.bend_radius,
                 None,
@@ -1088,14 +1176,14 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-flip-direction-up",
-                "Flip direction up",
+                &tr("sheet-flip-direction-up"),
                 x.params.flip_direction_up,
             );
         })
         .build(t);
     let x3 = x.clone();
     let t3 = t.clone();
-    let material = Collapsible::new(SECTIONS[2].0, SECTIONS[2].1)
+    let material = Collapsible::new(SECTIONS[2].0, tr(SECTIONS[2].1))
         .section()
         .open(open[2])
         .content(move |c| {
@@ -1105,9 +1193,9 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-bend-calculation",
-                "Bend calculation",
+                "sheet-bend-calculation",
                 Role::SmBendCalc,
-                &opts(&BendCalc::ALL, BendCalc::label),
+                &opts(&BendCalc::ALL, bend_calc_label),
                 index_of(&BendCalc::ALL, &p.bend_calc),
             );
             match p.bend_calc {
@@ -1115,7 +1203,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-k-factor",
-                    "Default bend K Factor",
+                    &tr("sheet-default-bend-k-factor"),
                     SmNum::KFactor,
                     &x.exprs.k_factor,
                     None,
@@ -1124,7 +1212,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-bend-allowance",
-                    "Default bend allowance",
+                    &tr("sheet-default-bend-allowance"),
                     SmNum::Allowance,
                     &x.exprs.bend_allowance,
                     None,
@@ -1133,7 +1221,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-bend-deduction",
-                    "Default bend deduction",
+                    &tr("sheet-default-bend-deduction"),
                     SmNum::Deduction,
                     &x.exprs.bend_deduction,
                     None,
@@ -1143,7 +1231,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-rolled-k-factor",
-                "Rolled K Factor",
+                &tr("sheet-rolled-k-factor"),
                 SmNum::RolledK,
                 &x.exprs.rolled_k_factor,
                 None,
@@ -1152,7 +1240,7 @@ pub(crate) fn body(
         .build(t);
     let x4 = x.clone();
     let t4 = t.clone();
-    let relief = Collapsible::new(SECTIONS[3].0, SECTIONS[3].1)
+    let relief = Collapsible::new(SECTIONS[3].0, tr(SECTIONS[3].1))
         .section()
         .open(open[3])
         .content(move |c| {
@@ -1162,7 +1250,7 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-minimal-gap",
-                "Minimal gap",
+                &tr("sheet-minimal-gap"),
                 SmNum::MinimalGap,
                 &x.exprs.minimal_gap,
                 None,
@@ -1171,9 +1259,9 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-corner-relief-type",
-                "Corner relief type",
+                "sheet-corner-relief-type",
                 Role::SmCornerType,
-                &opts(&CornerReliefKind::ALL, CornerReliefKind::label),
+                &opts(&CornerReliefKind::ALL, corner_relief_label),
                 index_of(&CornerReliefKind::ALL, &p.corner_relief.kind),
             );
             match p.corner_relief.kind {
@@ -1181,7 +1269,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-corner-relief-scale",
-                    "Corner relief scale",
+                    &tr("sheet-corner-relief-scale"),
                     SmNum::CornerScale,
                     &x.exprs.corner_relief_scale,
                     None,
@@ -1190,7 +1278,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-corner-relief-size",
-                    "Corner relief width",
+                    &tr("sheet-corner-relief-width"),
                     SmNum::CornerSize,
                     &x.exprs.corner_relief_size,
                     None,
@@ -1199,7 +1287,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-corner-relief-size",
-                    "Corner relief diameter",
+                    &tr("sheet-corner-relief-diameter"),
                     SmNum::CornerSize,
                     &x.exprs.corner_relief_size,
                     None,
@@ -1210,9 +1298,9 @@ pub(crate) fn body(
                 c,
                 t,
                 "sm-bend-relief-type",
-                "Bend relief type",
+                "sheet-bend-relief-type",
                 Role::SmBendReliefType,
-                &opts(&BendReliefKind::MODEL, BendReliefKind::label),
+                &opts(&BendReliefKind::MODEL, bend_relief_label),
                 index_of(&BendReliefKind::MODEL, &p.bend_relief.kind),
             );
             if p.bend_relief.kind.is_scaled() {
@@ -1220,7 +1308,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-bend-relief-depth-scale",
-                    "Bend relief depth scale",
+                    &tr("sheet-bend-relief-depth-scale"),
                     SmNum::BendDepthScale,
                     &x.exprs.bend_relief_depth_scale,
                     None,
@@ -1229,7 +1317,7 @@ pub(crate) fn body(
                     c,
                     t,
                     "sm-bend-relief-width-scale",
-                    "Bend relief width scale",
+                    &tr("sheet-bend-relief-width-scale"),
                     SmNum::BendWidthScale,
                     &x.exprs.bend_relief_width_scale,
                     None,
@@ -1528,15 +1616,16 @@ pub fn number_label(n: SmNum) -> &'static str {
 pub fn range_error(x: &SheetMetalModelFeature, n: SmNum) -> Option<String> {
     match n {
         // (NaN counts as out of range too.)
-        SmNum::Clearance => (x.clearance.is_nan() || x.clearance < 0.0)
-            .then(|| "Clearance from input must be at least 0".into()),
+        SmNum::Clearance => {
+            (x.clearance.is_nan() || x.clearance < 0.0).then(|| tr("sheet-clearance-at-least-0"))
+        }
         SmNum::Depth => (x.end == EndType::Blind && (x.depth.is_nan() || x.depth <= 0.0))
-            .then(|| "Depth must be greater than 0".into()),
+            .then(|| tr("sheet-depth-greater-than-0")),
         SmNum::SecondDepth => x
             .second
             .as_ref()
             .filter(|s| s.end == EndType::Blind && (s.depth.is_nan() || s.depth <= 0.0))
-            .map(|_| "Depth must be greater than 0".into()),
+            .map(|_| tr("sheet-depth-greater-than-0")),
         n => {
             let label = number_label(n);
             x.params
@@ -1612,7 +1701,7 @@ pub(crate) fn sync_numbers(
         }
         let want_tip = err
             .clone()
-            .or_else(|| (st.error).then(|| "Not a valid value".to_string()));
+            .or_else(|| (st.error).then(|| tr("sheet-not-a-valid-value")));
         match (want_tip, tip) {
             (Some(m), Some(t)) if t.text == m => {}
             (Some(m), _) => {
@@ -1815,11 +1904,15 @@ pub(crate) fn sm_flip_arrow_pointer(
                     && arrow.base_tip.is_some_and(|bt| near(pos, bt))
                 {
                     commands.queue(|world: &mut World| {
-                        crate::applied::change_kind(world, "Flip thickness direction", |k| {
-                            if let FeatureKind::SheetMetalModel(x) = k {
-                                flip(x, Role::SmThicknessFlip);
-                            }
-                        });
+                        crate::applied::change_kind(
+                            world,
+                            &tr("sheet-flip-thickness-direction"),
+                            |k| {
+                                if let FeatureKind::SheetMetalModel(x) = k {
+                                    flip(x, Role::SmThicknessFlip);
+                                }
+                            },
+                        );
                     });
                 }
             }

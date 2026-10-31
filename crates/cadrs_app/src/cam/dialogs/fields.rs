@@ -1,9 +1,17 @@
 //! The dialogs' fields: what each [`Draft`] shows, laid out with [`form`].
 
 use super::*;
+use cadrs_ui::i18n::{tr, tr_with};
 
-pub(super) const ORIGINS: [&str; 4] = ["World", "Component box point", "Stock box point", "Manual"];
-pub(super) const BOX_AXIS: [&str; 3] = ["Minimum", "Middle", "Maximum"];
+/// The work plane origins offered (catalog keys).
+pub(super) const ORIGINS: [&str; 4] = [
+    "cam-world",
+    "cam-origin-component-box-point",
+    "cam-origin-stock-box-point",
+    "cam-manual",
+];
+/// Where on a box's axis a box point is (catalog keys).
+pub(super) const BOX_AXIS: [&str; 3] = ["cam-box-minimum", "cam-box-middle", "cam-box-maximum"];
 /// The axis directions offered for a work plane's Z and X, and a stock's direction.
 pub(super) const AXES: [(&str, [f64; 3]); 6] = [
     ("+Z", [0.0, 0.0, 1.0]),
@@ -29,21 +37,26 @@ pub(super) fn labels<T: Copy>(all: &[T], f: impl Fn(T) -> &'static str) -> Vec<S
 
 /// A work plane's fields (`p` prefixes the keys).
 pub(super) fn plane_fields(out: &mut Vec<Field>, w: &WorkPlane, picking: bool, with_type: bool) {
-    out.push(Field::section("Origin"));
+    out.push(Field::section(&tr("cam-section-origin")));
     let o = match w.origin {
         Origin::World => 0,
         Origin::ComponentBox(_) => 1,
         Origin::StockBox(_) => 2,
         Origin::Manual(_) => 3,
     };
-    out.push(Field::select("p-origin", "Work plane origin", ORIGINS, o));
+    out.push(Field::select(
+        "p-origin",
+        &tr("cam-work-plane-origin"),
+        ORIGINS.iter().map(|k| tr(k)),
+        o,
+    ));
     match w.origin {
         Origin::ComponentBox(bp) | Origin::StockBox(bp) => {
             for (i, a) in ["X", "Y", "Z"].iter().enumerate() {
                 out.push(Field::select(
                     &format!("p-box-{i}"),
-                    &format!("Position {a}"),
-                    BOX_AXIS,
+                    &tr_with("cam-position-axis", &[("axis", a)]),
+                    BOX_AXIS.iter().map(|k| tr(k)),
                     (bp[i] + 1).clamp(0, 2) as usize,
                 ));
             }
@@ -55,20 +68,23 @@ pub(super) fn plane_fields(out: &mut Vec<Field>, w: &WorkPlane, picking: bool, w
         }
         Origin::World => {}
     }
-    out.push(Field::section("Orientation"));
+    out.push(Field::section(&tr("cam-section-orientation")));
     let zi = axis_index(w.z);
-    let mut zs: Vec<String> = AXES.iter().map(|(n, _)| format!("Z along {n}")).collect();
-    zs.push("Normal of a picked face".into());
+    let mut zs: Vec<String> = AXES
+        .iter()
+        .map(|(n, _)| tr_with("cam-z-along", &[("axis", n)]))
+        .collect();
+    zs.push(tr("cam-normal-of-picked-face"));
     out.push(Field::select(
         "p-z",
-        "Tool axis (Z)",
+        &tr("cam-tool-axis-z"),
         zs,
         zi.unwrap_or(AXES.len()),
     ));
     if zi.is_none() || picking {
         out.push(Field::picks(
             "p-face",
-            "Planar face for Z",
+            &tr("cam-planar-face-for-z"),
             if zi.is_none() {
                 vec![format!("Z ({:.3}, {:.3}, {:.3})", w.z[0], w.z[1], w.z[2])]
             } else {
@@ -77,32 +93,35 @@ pub(super) fn plane_fields(out: &mut Vec<Field>, w: &WorkPlane, picking: bool, w
             picking,
         ));
     }
-    let xs: Vec<String> = AXES.iter().map(|(n, _)| format!("X along {n}")).collect();
+    let xs: Vec<String> = AXES
+        .iter()
+        .map(|(n, _)| tr_with("cam-x-along", &[("axis", n)]))
+        .collect();
     out.push(Field::select(
         "p-x",
-        "X direction",
+        &tr("cam-x-direction"),
         xs,
         axis_index(w.x).unwrap_or(2),
     ));
     if with_type {
         out.push(Field::select(
             "p-type",
-            "Type",
+            &tr("common-type"),
             labels(&WorkPlaneType::ALL, WorkPlaneType::label),
             index_of(&WorkPlaneType::ALL, w.kind),
         ));
     }
-    let mut datums = vec!["Automatic".to_string()];
+    let mut datums = vec![tr("cam-automatic")];
     datums.extend((1..=6).map(cadrs_core::cam::cadrs_cam::post::datum_code));
     out.push(Field::select(
         "p-datum",
-        "Override datum",
+        &tr("cam-override-datum"),
         datums,
         w.datum.map_or(0, |d| d.min(6) as usize),
     ));
     out.push(Field::check(
         "p-triad",
-        "Show work coordinate system",
+        &tr("cam-show-work-coordinate-system"),
         w.show_triad,
     ));
 }
@@ -160,8 +179,12 @@ pub(super) fn set_plane(w: &mut WorkPlane, key: &str, v: &Value) -> bool {
 }
 
 pub(super) fn stock_direction_options() -> Vec<String> {
-    let mut v = vec!["World".to_string()];
-    v.extend(AXES.iter().skip(1).map(|(n, _)| format!("Z along {n}")));
+    let mut v = vec![tr("cam-world")];
+    v.extend(
+        AXES.iter()
+            .skip(1)
+            .map(|(n, _)| tr_with("cam-z-along", &[("axis", n)])),
+    );
     v
 }
 
@@ -176,10 +199,14 @@ impl Draft {
     /// The dialog's title.
     pub fn title(&self) -> String {
         match self {
-            Draft::Insert(d) => format!("Insert {}", d.role.label().to_lowercase()),
+            Draft::Insert(d) => tr(match d.role {
+                Role::Part => "cam-insert-part",
+                Role::Workholding => "cam-insert-workholding",
+                Role::Stock => "cam-insert-stock",
+            }),
             Draft::Component(c) => c.name.clone(),
             Draft::Job { job, .. } => job.name.clone(),
-            Draft::Machine { .. } => "Machine".into(),
+            Draft::Machine { .. } => tr("cam-machine"),
             Draft::Setup { setup, .. } => setup.name.clone(),
             Draft::Tool { op, .. } | Draft::Toolpath { op, .. } | Draft::WorkPlane { op, .. } => {
                 op.name.clone()
@@ -190,12 +217,12 @@ impl Draft {
     /// What's wrong with it (✓ is off while there is).
     pub fn problem(&self, ctx: &Ctx) -> Option<String> {
         match self {
-            Draft::Insert(d) => (!d.parts.iter().any(|p| p.2)).then(|| "Tick a part".into()),
+            Draft::Insert(d) => (!d.parts.iter().any(|p| p.2)).then(|| tr("cam-tick-a-part")),
             Draft::Job { job, .. } => {
                 if job.name.trim().is_empty() {
-                    Some("The job needs a name".into())
+                    Some(tr("cam-job-needs-a-name"))
                 } else if cadrs_core::cam::program::job_bodies(ctx.cam, job, ctx.parts).is_empty() {
-                    Some("Pick the bodies to machine (or insert a part)".into())
+                    Some(tr("cam-pick-bodies-to-machine"))
                 } else {
                     None
                 }
@@ -209,7 +236,7 @@ impl Draft {
                 OpKind::Toolpath(tp) => {
                     let tool = tool_above(ctx.cam, *setup, op.id);
                     match tool {
-                        None => Some("No tool above the toolpath".into()),
+                        None => Some(tr("cam-no-tool-above-toolpath")),
                         Some(t) => tp.params.check(&t).err().or_else(|| {
                             let p = &tp.params;
                             let needs_edges =
@@ -217,9 +244,9 @@ impl Draft {
                             let needs_faces =
                                 p.pattern == Pattern::Fill && p.drive.faces.is_empty();
                             if needs_edges {
-                                Some("Pick the edges to engrave".into())
+                                Some(tr("cam-pick-edges-to-engrave"))
                             } else if needs_faces {
-                                Some("Pick the faces to fill".into())
+                                Some(tr("cam-pick-faces-to-fill"))
                             } else {
                                 None
                             }
@@ -239,90 +266,104 @@ impl Draft {
             Draft::Insert(d) => {
                 f.push(Field::select(
                     "role",
-                    "Insert as",
+                    &tr("cam-insert-as"),
                     labels(&Role::ALL, Role::label),
                     index_of(&Role::ALL, d.role),
                 ));
                 if !d.others.is_empty() {
-                    let mut docs = vec!["This document".to_string()];
+                    let mut docs = vec![tr("cam-this-document")];
                     docs.extend(d.others.iter().map(|o| o.1.clone()));
-                    f.push(Field::select("document", "Document", docs, d.document));
+                    f.push(Field::select(
+                        "document",
+                        &tr("cam-document"),
+                        docs,
+                        d.document,
+                    ));
                 }
                 match &d.other {
                     Some(o) if d.document > 0 => {
                         f.push(Field::select(
                             "studio",
-                            "Part Studio",
+                            &tr("common-part-studio"),
                             o.studios.iter().map(|s| s.1.clone()),
                             d.studio,
                         ));
                         f.push(Field::select(
                             "version",
-                            "Version",
+                            &tr("common-version"),
                             o.versions.iter().map(|v| v.1.clone()),
                             d.version,
                         ));
-                        f.push(Field::note(
-                            "Parts from another document come in at a version: Update brings a \
-                             newer one.",
-                        ));
+                        f.push(Field::note(tr("cam-insert-other-document-note")));
                     }
                     _ => {
                         let studios = ctx.part_studios();
                         f.push(Field::select(
                             "studio",
-                            "Part Studio",
+                            &tr("common-part-studio"),
                             studios.iter().map(|s| s.1.clone()),
                             d.studio,
                         ));
-                        let mut refs = vec!["Workspace (follows edits)".to_string()];
-                        refs.extend(ctx.versions.iter().map(|v| format!("Version {}", v.0)));
-                        f.push(Field::select("version", "Reference", refs, d.version));
+                        let mut refs = vec![tr("cam-workspace-follows-edits")];
+                        refs.extend(
+                            ctx.versions
+                                .iter()
+                                .map(|v| tr_with("cam-version-named", &[("name", &v.0)])),
+                        );
+                        f.push(Field::select(
+                            "version",
+                            &tr("cam-reference"),
+                            refs,
+                            d.version,
+                        ));
                         if d.version == 0 {
-                            f.push(Field::note(
-                                "A version keeps the part as it is; the workspace follows every \
-                                 edit.",
-                            ));
+                            f.push(Field::note(tr("cam-insert-workspace-note")));
                         }
                     }
                 }
-                f.push(Field::section("Parts"));
+                f.push(Field::section(&tr("parts")));
                 if d.parts.is_empty() {
-                    f.push(Field::error("The Part Studio has no parts"));
+                    f.push(Field::error(tr("cam-part-studio-has-no-parts")));
                 }
                 for (i, (_, name, on)) in d.parts.iter().enumerate() {
                     f.push(Field::check(&format!("part-{i}"), name, *on));
                 }
             }
             Draft::Component(c) => {
-                f.push(Field::text("name", "Name", &c.name));
+                f.push(Field::text("name", &tr("common-name"), &c.name));
                 f.push(Field::select(
                     "role",
-                    "Used as",
+                    &tr("cam-used-as"),
                     labels(&Role::ALL, Role::label),
                     index_of(&Role::ALL, c.role),
                 ));
-                f.push(Field::note(format!("Reference: {}", c.reference_label())));
+                f.push(Field::note(tr_with(
+                    "cam-component-reference",
+                    &[("reference", &c.reference_label())],
+                )));
             }
             Draft::Job { .. } => self.job_fields(&mut f, ctx, picking),
             Draft::Machine { .. } => self.machine_fields(&mut f),
             Draft::Setup { setup, job, .. } => {
-                f.push(Field::text("name", "Setup name", &setup.name));
+                f.push(Field::text("name", &tr("cam-setup-name"), &setup.name));
                 f.push(Field::count(
                     "program",
-                    "Program number",
+                    &tr("cam-program-number"),
                     setup.program_number as i64,
                 ));
                 let man = matches!(setup.mating, Mating::Manual(_));
                 f.push(Field::select(
                     "mating",
-                    "Machine mating",
-                    ["Automatic", "Manual"],
+                    &tr("cam-machine-mating"),
+                    [tr("cam-automatic"), tr("cam-manual")],
                     usize::from(man),
                 ));
                 if let Mating::Manual(o) = setup.mating {
-                    for (i, a) in ["Offset X", "Offset Y", "Offset Z"].iter().enumerate() {
-                        f.push(Field::number(&format!("mate-{i}"), a, o[i], Unit::Mm));
+                    for (i, a) in ["cam-offset-x", "cam-offset-y", "cam-offset-z"]
+                        .iter()
+                        .enumerate()
+                    {
+                        f.push(Field::number(&format!("mate-{i}"), &tr(a), o[i], Unit::Mm));
                     }
                 }
                 plane_fields(&mut f, &setup.wcs, picking == Some("p-face"), false);
@@ -333,13 +374,11 @@ impl Draft {
                     .is_some_and(|m| m.kind.is_cutting())
                     && setup.wcs.z != [0.0, 0.0, 1.0]
                 {
-                    f.push(Field::note(
-                        "A cutting machine cuts down its Z: lay the sheet flat.",
-                    ));
+                    f.push(Field::note(tr("cam-cutting-machine-lay-flat")));
                 }
             }
             Draft::WorkPlane { op, .. } => {
-                f.push(Field::text("name", "Name", &op.name));
+                f.push(Field::text("name", &tr("common-name"), &op.name));
                 if let OpKind::WorkPlane(w) = &op.kind {
                     plane_fields(&mut f, w, picking == Some("p-face"), true);
                 }
@@ -358,35 +397,35 @@ impl Draft {
         let Draft::Job { job, .. } = self else {
             return;
         };
-        f.push(Field::text("name", "Job name", &job.name));
+        f.push(Field::text("name", &tr("cam-job-name"), &job.name));
         f.push(Field::picks(
             "bodies",
-            "Bodies (all parts when empty)",
+            &tr("cam-bodies-all-when-empty"),
             job.bodies.iter().map(|p| ctx.part_name(*p)).collect(),
             picking == Some("bodies"),
         ));
-        f.push(Field::section("Stock"));
+        f.push(Field::section(&tr("cam-stock")));
         let stocks: Vec<&cadrs_core::cam::Component> = ctx
             .cam
             .components
             .iter()
             .filter(|c| c.role == Role::Stock)
             .collect();
-        let kinds = ["Box", "Cylinder", "User defined"];
+        let kinds = [tr("cam-box"), tr("cam-cylinder"), tr("cam-user-defined")];
         let k = match job.stock.kind {
             StockKind::Box => 0,
             StockKind::Cylinder => 1,
             StockKind::Component(_) => 2,
         };
-        f.push(Field::select("stock-kind", "Stock type", kinds, k));
+        f.push(Field::select("stock-kind", &tr("cam-stock-type"), kinds, k));
         match job.stock.kind {
             StockKind::Component(id) => {
                 if stocks.is_empty() {
-                    f.push(Field::error("Insert a stock component first"));
+                    f.push(Field::error(tr("cam-insert-stock-component-first")));
                 } else {
                     f.push(Field::select(
                         "stock-comp",
-                        "Stock body",
+                        &tr("cam-stock-body"),
                         stocks.iter().map(|c| c.name.clone()),
                         stocks.iter().position(|c| c.id == id).unwrap_or(0),
                     ));
@@ -395,44 +434,44 @@ impl Draft {
             _ => {
                 f.push(Field::select(
                     "stock-dir",
-                    "Stock direction",
+                    &tr("cam-stock-direction"),
                     stock_direction_options(),
                     stock_direction_index(job.stock.direction),
                 ));
                 if job.stock.kind == StockKind::Cylinder {
                     f.push(Field::number(
                         "radial",
-                        "Radial offset",
+                        &tr("cam-radial-offset"),
                         job.stock.radial,
                         Unit::Mm,
                     ));
                     f.push(Field::number(
                         "off-4",
-                        "Offset −Z",
+                        &tr("cam-offset-minus-z"),
                         job.stock.offsets[4],
                         Unit::Mm,
                     ));
                     f.push(Field::number(
                         "off-5",
-                        "Offset +Z",
+                        &tr("cam-offset-plus-z"),
                         job.stock.offsets[5],
                         Unit::Mm,
                     ));
                 } else {
                     for (i, n) in [
-                        "Offset −X",
-                        "Offset +X",
-                        "Offset −Y",
-                        "Offset +Y",
-                        "Offset −Z",
-                        "Offset +Z",
+                        "cam-offset-minus-x",
+                        "cam-offset-plus-x",
+                        "cam-offset-minus-y",
+                        "cam-offset-plus-y",
+                        "cam-offset-minus-z",
+                        "cam-offset-plus-z",
                     ]
                     .iter()
                     .enumerate()
                     {
                         f.push(Field::number(
                             &format!("off-{i}"),
-                            n,
+                            &tr(n),
                             job.stock.offsets[i],
                             Unit::Mm,
                         ));
@@ -453,10 +492,10 @@ impl Draft {
                 }
             }
         }
-        f.push(Field::section("Workholding"));
+        f.push(Field::section(&tr("cam-workholding")));
         f.push(Field::picks(
             "workholdings",
-            "Workholding bodies",
+            &tr("cam-workholding-bodies"),
             job.workholdings.iter().map(|p| ctx.part_name(*p)).collect(),
             picking == Some("workholdings"),
         ));
@@ -471,7 +510,11 @@ impl Draft {
             return;
         };
         let cat = catalog();
-        f.push(Field::check("by-kind", "Group by machine type", *by_kind));
+        f.push(Field::check(
+            "by-kind",
+            &tr("cam-group-by-machine-type"),
+            *by_kind,
+        ));
         let mut order: Vec<usize> = (0..cat.len()).collect();
         if *by_kind {
             order.sort_by_key(|i| index_of(&MachineKind::ALL, cat[*i].kind));
@@ -492,171 +535,179 @@ impl Draft {
             .iter()
             .position(|i| cat[*i].title() == machine.title())
             .unwrap_or(0);
-        f.push(Field::select("machine", "Machine", opts, current));
-        f.push(Field::note(format!(
-            "{} · {} controller",
-            machine.kind.label(),
-            machine.dialect.label()
+        f.push(Field::select("machine", &tr("cam-machine"), opts, current));
+        f.push(Field::note(tr_with(
+            "cam-machine-kind-controller",
+            &[
+                ("kind", machine.kind.label()),
+                ("controller", machine.dialect.label()),
+            ],
         )));
-        f.push(Field::section("Machine"));
+        f.push(Field::section(&tr("cam-machine")));
         for (i, a) in ["X", "Y", "Z"].iter().enumerate() {
             f.push(Field::number(
                 &format!("travel-{i}"),
-                &format!("{a} travel"),
+                &tr_with("cam-axis-travel", &[("axis", a)]),
                 machine.travel[i],
                 Unit::Mm,
             ));
         }
         f.push(Field::number(
             "rapid",
-            "Rapid rate",
+            &tr("cam-rapid-rate"),
             machine.rapid_rate,
             Unit::Feed,
         ));
         f.push(Field::number(
             "max-feed",
-            "Fastest feed",
+            &tr("cam-fastest-feed"),
             machine.max_feed,
             Unit::Feed,
         ));
         if machine.kind.is_milling() {
             f.push(Field::number(
                 "max-spindle",
-                "Fastest spindle",
+                &tr("cam-fastest-spindle"),
                 machine.max_spindle,
                 Unit::Rpm,
             ));
             f.push(Field::check(
                 "changer",
-                "Automatic tool changer",
+                &tr("cam-automatic-tool-changer"),
                 machine.tool_changer,
             ));
             f.push(Field::check(
                 "indexing",
-                "Indexing rotary axes (3+2)",
+                &tr("cam-indexing-rotary-axes"),
                 machine.indexing.is_some(),
             ));
             if let Some(ix) = machine.indexing {
                 f.push(Field::number(
                     "max-tilt",
-                    "Largest tilt",
+                    &tr("cam-largest-tilt"),
                     ix.max_tilt,
                     Unit::Deg,
                 ));
                 f.push(Field::select(
                     "rotary",
-                    "Rotary axes",
-                    vec!["A and C (trunnion)", "B and C (trunnion)"],
+                    &tr("cam-rotary-axes"),
+                    vec![tr("cam-rotary-a-and-c"), tr("cam-rotary-b-and-c")],
                     usize::from(ix.rotary[0] == 'B'),
                 ));
                 if machine.dialect != cadrs_core::cam::cadrs_cam::Dialect::Fanuc {
-                    f.push(Field::note(
-                        "Tilted work planes are posted as Fanuc's G68.2 only",
-                    ));
+                    f.push(Field::note(tr("cam-tilted-planes-fanuc-only")));
                 }
             }
         } else if machine.kind == MachineKind::Laser {
             f.push(Field::number(
                 "max-spindle",
-                "S at full power",
+                &tr("cam-s-at-full-power"),
                 machine.max_spindle,
                 Unit::None,
             ));
         }
         let s = &machine.post;
-        f.push(Field::section("Post settings"));
+        f.push(Field::section(&tr("cam-post-settings")));
         f.push(Field::select(
             "unit",
-            "Output unit",
-            ["Millimetres", "Inches"],
+            &tr("cam-output-unit"),
+            [tr("cam-millimetres"), tr("cam-inches")],
             usize::from(s.output_unit == LenUnit::Inch),
         ));
         f.push(Field::check(
             "adv-wp",
-            "Advanced work planes (own datums)",
+            &tr("cam-advanced-work-planes"),
             s.advanced_work_planes,
         ));
-        f.push(Field::check("seq", "Sequence numbers", s.sequence_numbers));
+        f.push(Field::check(
+            "seq",
+            &tr("cam-sequence-numbers"),
+            s.sequence_numbers,
+        ));
         if s.sequence_numbers {
             f.push(Field::count(
                 "block-start",
-                "Block number start",
+                &tr("cam-block-number-start"),
                 s.block_start as i64,
             ));
             f.push(Field::count(
                 "block-inc",
-                "Block increment",
+                &tr("cam-block-increment"),
                 s.block_increment as i64,
             ));
             f.push(Field::check(
                 "tools-only",
-                "Numbers at tool changes only",
+                &tr("cam-numbers-at-tool-changes-only"),
                 s.numbers_at_tools_only,
             ));
         }
         f.push(Field::check(
             "rapid-pos",
-            "Rapid positioning (G0)",
+            &tr("cam-rapid-positioning"),
             s.rapid_positioning,
         ));
         if !s.rapid_positioning {
             f.push(Field::number(
                 "post-rapid",
-                "Rapid feed (G1)",
+                &tr("cam-rapid-feed"),
                 s.rapid_rate,
                 Unit::Feed,
             ));
         }
-        f.push(Field::check("arcs", "Output arcs (G2/G3)", s.output_arcs));
+        f.push(Field::check("arcs", &tr("cam-output-arcs"), s.output_arcs));
         if s.output_arcs {
-            f.push(Field::check("helices", "Output helices", s.output_helices));
+            f.push(Field::check(
+                "helices",
+                &tr("cam-output-helices"),
+                s.output_helices,
+            ));
         }
         f.push(Field::count(
             "decimals",
-            "Decimal places",
+            &tr("cam-decimal-places"),
             s.decimals as i64,
         ));
         f.push(Field::check(
             "dec-point",
-            "Always write a decimal point",
+            &tr("cam-always-write-decimal-point"),
             s.decimal_point,
         ));
         if machine.kind.is_milling() {
             f.push(Field::check(
                 "ret-tool",
-                "Retract on tool changes",
+                &tr("cam-retract-on-tool-changes"),
                 s.force_retract_on_tool_change,
             ));
             f.push(Field::check(
                 "ret-plane",
-                "Retract on work plane changes",
+                &tr("cam-retract-on-plane-changes"),
                 s.force_retract_on_plane_change,
             ));
             f.push(Field::check(
                 "ret-end",
-                "Retract at the program end",
+                &tr("cam-retract-at-program-end"),
                 s.force_retract_on_end,
             ));
             if machine.dialect.has_cycles() {
-                f.push(Field::section("Fixed cycles"));
+                f.push(Field::section(&tr("cam-fixed-cycles")));
                 f.push(Field::check(
                     "cy-drill",
-                    "Drilling canned cycles",
+                    &tr("cam-cycles-drilling"),
                     s.canned_drill,
                 ));
                 f.push(Field::check(
                     "cy-peck",
-                    "Peck drilling canned cycles",
+                    &tr("cam-cycles-peck-drilling"),
                     s.canned_peck,
                 ));
                 f.push(Field::check(
                     "cy-tap",
-                    "Thread tapping canned cycles",
+                    &tr("cam-cycles-tapping"),
                     s.canned_tap,
                 ));
                 f.push(Field::check(
                     "cy-chip",
-                    "Chip break canned cycles",
+                    &tr("cam-cycles-chip-break"),
                     s.canned_chip_break,
                 ));
             }
@@ -664,14 +715,14 @@ impl Draft {
         if machine.kind == MachineKind::Laser {
             f.push(Field::select(
                 "laser-mode",
-                "Laser power",
-                ["Dynamic (M4)", "Constant (M3)"],
+                &tr("cam-laser-power"),
+                [tr("cam-laser-dynamic"), tr("cam-laser-constant")],
                 usize::from(s.laser_mode == LaserMode::Constant),
             ));
         }
         f.push(Field::check(
             "comments",
-            "Comments in the program",
+            &tr("cam-comments-in-program"),
             s.comments,
         ));
     }
@@ -699,70 +750,79 @@ impl Draft {
             .into_iter()
             .filter(|(_, x)| x.kind.fits(machine))
             .collect();
-        f.push(Field::check("library", "From the tool library", *library));
+        f.push(Field::check(
+            "library",
+            &tr("cam-from-tool-library"),
+            *library,
+        ));
         if *library {
-            let mut types = vec!["All".to_string()];
+            let mut types = vec![tr("cam-all-types")];
             types.extend(labels(&MachiningType::ALL, MachiningType::label));
             f.push(Field::select(
                 "lib-type",
-                "Machining type",
+                &tr("cam-machining-type"),
                 types,
                 filter.map_or(0, |m| index_of(&MachiningType::ALL, m) + 1),
             ));
             if lib.is_empty() {
-                f.push(Field::note("No tool of this type for this machine yet"));
+                f.push(Field::note(tr("cam-no-tool-of-this-type")));
             } else {
                 let cur = lib.iter().position(|(_, x)| **x == t.tool);
                 let mut opts: Vec<String> = lib.iter().map(|(_, x)| x.name.clone()).collect();
                 if cur.is_none() {
-                    opts.insert(0, "Choose a tool…".into());
+                    opts.insert(0, tr("cam-choose-a-tool"));
                 }
-                f.push(Field::select("lib-tool", "Tool", opts, cur.unwrap_or(0)));
+                f.push(Field::select(
+                    "lib-tool",
+                    &tr("cam-tool"),
+                    opts,
+                    cur.unwrap_or(0),
+                ));
             }
             f.push(Field::button(
                 "lib-import",
-                "Import tool library…",
+                &tr("cam-import-tool-library"),
                 "file-import",
             ));
             f.push(Field::button(
                 "lib-export",
-                "Export tool library…",
+                &tr("cam-export-tool-library"),
                 "file-export",
             ));
         }
         let tool = &t.tool;
-        f.push(Field::section("Cutter"));
-        f.push(Field::text("name", "Name", &op.name));
+        f.push(Field::section(&tr("cam-cutter")));
+        f.push(Field::text("name", &tr("common-name"), &op.name));
         let kinds = ToolKind::for_machine(machine);
         f.push(Field::select(
             "kind",
-            "Cutter type",
+            &tr("cam-cutter-type"),
             labels(&kinds, ToolKind::label),
             index_of(&kinds, tool.kind),
         ));
         if tool.is_beam() {
             f.push(Field::number(
                 "diameter",
-                "Kerf width",
+                &tr("cam-kerf-width"),
                 tool.diameter,
                 Unit::Mm,
             ));
         } else {
             f.push(Field::select(
                 "unit",
-                "Unit",
-                ["Millimetres", "Inches"],
+                &tr("cam-unit"),
+                [tr("cam-millimetres"), tr("cam-inches")],
                 usize::from(tool.unit == LenUnit::Inch),
             ));
             f.push(Field::select(
                 "hand",
-                "Tool hand",
-                ["Right", "Left"],
+                &tr("cam-tool-hand"),
+                [tr("cam-hand-right"), tr("cam-hand-left")],
                 usize::from(tool.hand == Hand::Left),
             ));
             f.push(Field::number(
                 "diameter",
-                "Diameter",
+                &tr("cam-diameter"),
                 tool.diameter,
                 Unit::Mm,
             ));
@@ -770,7 +830,7 @@ impl Draft {
                 ToolKind::BullMill => {
                     f.push(Field::number(
                         "corner",
-                        "Corner radius",
+                        &tr("cam-corner-radius"),
                         tool.corner_radius,
                         Unit::Mm,
                     ));
@@ -778,134 +838,165 @@ impl Draft {
                 ToolKind::ChamferMill | ToolKind::TaperMill => {
                     f.push(Field::number(
                         "angle",
-                        "Included angle",
+                        &tr("cam-included-angle"),
                         tool.angle,
                         Unit::Deg,
                     ));
                     f.push(Field::number(
                         "tip",
-                        "Tip diameter",
+                        &tr("cam-tip-diameter"),
                         tool.tip_diameter,
                         Unit::Mm,
                     ));
                 }
                 ToolKind::Drill => {
-                    f.push(Field::number("angle", "Point angle", tool.angle, Unit::Deg));
+                    f.push(Field::number(
+                        "angle",
+                        &tr("cam-point-angle"),
+                        tool.angle,
+                        Unit::Deg,
+                    ));
                 }
                 ToolKind::Tap | ToolKind::ThreadMill => {
-                    f.push(Field::number("pitch", "Thread pitch", tool.pitch, Unit::Mm));
+                    f.push(Field::number(
+                        "pitch",
+                        &tr("cam-thread-pitch"),
+                        tool.pitch,
+                        Unit::Mm,
+                    ));
                 }
                 _ => {}
             }
             f.push(Field::number(
                 "cut-len",
-                "Cutting length",
+                &tr("cam-cutting-length"),
                 tool.cutting_length,
                 Unit::Mm,
             ));
             f.push(Field::number(
                 "overall",
-                "Overall length",
+                &tr("cam-overall-length"),
                 tool.overall_length,
                 Unit::Mm,
             ));
-            f.push(Field::count("flutes", "Flutes", tool.flutes as i64));
+            f.push(Field::count(
+                "flutes",
+                &tr("cam-flutes"),
+                tool.flutes as i64,
+            ));
             f.push(Field::check(
                 "center",
-                "Center cutting",
+                &tr("cam-center-cutting"),
                 tool.center_cutting,
             ));
         }
         if tool.is_beam() {
-            f.push(Field::section("Beam"));
+            f.push(Field::section(&tr("cam-beam")));
             if tool.kind != ToolKind::Plasma {
                 f.push(Field::number(
                     "power",
-                    "Power",
+                    &tr("cam-power"),
                     tool.beam.power,
                     Unit::Percent,
                 ));
             }
             f.push(Field::number(
                 "pierce",
-                "Pierce delay",
+                &tr("cam-pierce-delay"),
                 tool.beam.pierce_delay,
                 Unit::Seconds,
             ));
             if tool.kind == ToolKind::Plasma {
                 f.push(Field::number(
                     "pierce-h",
-                    "Pierce height",
+                    &tr("cam-pierce-height"),
                     tool.beam.pierce_height,
                     Unit::Mm,
                 ));
-                f.push(Field::check("thc", "Torch height control", tool.beam.thc));
+                f.push(Field::check(
+                    "thc",
+                    &tr("cam-torch-height-control"),
+                    tool.beam.thc,
+                ));
                 f.push(Field::count(
                     "material",
-                    "Material number (0: as set)",
+                    &tr("cam-material-number"),
                     tool.beam.material as i64,
                 ));
             }
             if tool.kind != ToolKind::Laser {
                 f.push(Field::number(
                     "cut-h",
-                    "Cut height",
+                    &tr("cam-cut-height"),
                     tool.beam.cut_height,
                     Unit::Mm,
                 ));
             } else {
-                f.push(Field::check("air", "Air assist", tool.beam.air_assist));
+                f.push(Field::check(
+                    "air",
+                    &tr("cam-air-assist"),
+                    tool.beam.air_assist,
+                ));
                 f.push(Field::count(
                     "beam-passes",
-                    "Passes",
+                    &tr("cam-passes"),
                     tool.beam.passes as i64,
                 ));
             }
         }
-        f.push(Field::section("Cutting data"));
+        f.push(Field::section(&tr("cam-cutting-data")));
         if !tool.is_beam() {
-            let mut opts = vec!["Set by hand".to_string()];
+            let mut opts = vec![tr("cam-set-by-hand")];
             opts.extend(WorkMaterial::ALL.iter().map(|m| m.label().to_string()));
             let at = tool
                 .cutting
                 .material
                 .and_then(|m| WorkMaterial::ALL.iter().position(|x| *x == m))
                 .map_or(0, |i| i + 1);
-            f.push(Field::select("work-material", "Worked out for", opts, at));
+            f.push(Field::select(
+                "work-material",
+                &tr("cam-worked-out-for"),
+                opts,
+                at,
+            ));
             f.push(Field::number(
                 "rpm",
-                "Spindle speed",
+                &tr("cam-spindle-speed"),
                 tool.cutting.spindle_rpm,
                 Unit::Rpm,
             ));
         }
         f.push(Field::number(
             "feed",
-            "Feed rate",
+            &tr("cam-feed-rate"),
             tool.cutting.feed,
             Unit::Feed,
         ));
         if !tool.is_beam() {
             f.push(Field::number(
                 "plunge",
-                "Plunge rate",
+                &tr("cam-plunge-rate"),
                 tool.cutting.plunge_feed,
                 Unit::Feed,
             ));
             f.push(Field::number(
                 "stepdown",
-                "Step down",
+                &tr("cam-step-down"),
                 tool.cutting.step_down,
                 Unit::Mm,
             ));
             f.push(Field::number(
                 "stepover",
-                "Step over",
+                &tr("cam-step-over"),
                 tool.cutting.step_over,
                 Unit::Mm,
             ));
-            f.push(Field::section("Holder"));
-            f.push(Field::check("holder", "Holder", tool.holder.is_some()));
+            f.push(Field::section(&tr("cam-holder")));
+            f.push(Field::check(
+                "holder",
+                &tr("cam-holder"),
+                tool.holder.is_some(),
+            ));
             if let Some(h) = &tool.holder {
                 let holders: Vec<String> = ctx
                     .cam
@@ -915,7 +1006,7 @@ impl Draft {
                     .map(|x| x.name.clone())
                     .collect();
                 if !holders.is_empty() {
-                    let mut opts = vec!["Cylinder".to_string()];
+                    let mut opts = vec![tr("cam-cylinder")];
                     opts.extend(holders);
                     let cur = ctx
                         .cam
@@ -924,26 +1015,26 @@ impl Draft {
                         .iter()
                         .position(|x| x == h)
                         .map_or(0, |i| i + 1);
-                    f.push(Field::select("holder-lib", "Holder", opts, cur));
+                    f.push(Field::select("holder-lib", &tr("cam-holder"), opts, cur));
                 }
                 f.push(Field::number(
                     "holder-d",
-                    "Holder diameter",
+                    &tr("cam-holder-diameter"),
                     h.max_radius() * 2.0,
                     Unit::Mm,
                 ));
                 f.push(Field::number(
                     "holder-l",
-                    "Holder length",
+                    &tr("cam-holder-length"),
                     h.length(),
                     Unit::Mm,
                 ));
             }
         }
-        f.push(Field::section("Assembly"));
+        f.push(Field::section(&tr("cam-tool-assembly")));
         f.push(Field::count(
             "number",
-            "Assembly number (T)",
+            &tr("cam-assembly-number"),
             t.number as i64,
         ));
     }
@@ -964,55 +1055,75 @@ impl Draft {
         let tool = tool_above(ctx.cam, *setup, op.id);
         let tk = tool.as_ref().map_or(ToolKind::EndMill, |t| t.kind);
         let beam = tk.is_beam();
-        let tabs: &[&str] = if beam {
-            &["Tool path", "Link", "Misc", "Beam"]
+        // (Each tab: its id, its label's catalog key.)
+        let tabs: &[(&str, &str)] = if beam {
+            &[
+                ("Tool path", "cam-tab-tool-path"),
+                ("Link", "cam-tab-link"),
+                ("Misc", "cam-tab-misc"),
+                ("Beam", "cam-beam"),
+            ]
         } else {
-            &["Tool path", "Link", "Axis", "Collision", "Misc"]
+            &[
+                ("Tool path", "cam-tab-tool-path"),
+                ("Link", "cam-tab-link"),
+                ("Axis", "cam-tab-axis"),
+                ("Collision", "cam-tab-collision"),
+                ("Misc", "cam-tab-misc"),
+            ]
         };
         let selected = tab.min(tabs.len() - 1);
         f.push(Field::Tabs {
             key: "tab".into(),
-            labels: tabs.iter().map(|s| s.to_string()).collect(),
+            labels: tabs.iter().map(|(_, k)| tr(k)).collect(),
             selected,
         });
-        match tabs[selected] {
+        match tabs[selected].0 {
             "Link" => link_fields(f, p, beam),
             "Axis" => axis_fields(f, ctx, *setup, p, picking),
             "Collision" => collision_fields(f, p, tool.as_ref()),
             "Misc" => {
-                f.push(Field::section("Quality"));
+                f.push(Field::section(&tr("cam-quality")));
                 f.push(Field::number(
                     "tolerance",
-                    "Cut tolerance",
+                    &tr("cam-cut-tolerance"),
                     p.tolerance,
                     Unit::Mm,
                 ));
                 if !beam {
-                    f.push(Field::section("Smoothing"));
+                    f.push(Field::section(&tr("cam-smoothing")));
                     f.push(Field::number(
                         "smooth",
-                        "Smooth corners",
+                        &tr("cam-smooth-corners"),
                         p.smooth_corners,
                         Unit::Mm,
                     ));
                 }
                 repeat_fields(f, &p.repeat);
-                f.push(Field::section("Template"));
-                f.push(Field::button("save-template", "Save as template", "books"));
+                f.push(Field::section(&tr("cam-template")));
+                f.push(Field::button(
+                    "save-template",
+                    &tr("cam-save-as-template"),
+                    "books",
+                ));
             }
             "Beam" => {
-                f.push(Field::section("Beam"));
+                f.push(Field::section(&tr("cam-beam")));
                 f.push(Field::number(
                     "beam-power",
-                    "Power",
+                    &tr("cam-power"),
                     p.beam.power,
                     Unit::Percent,
                 ));
-                f.push(Field::count("beam-passes", "Passes", p.beam.passes as i64));
+                f.push(Field::count(
+                    "beam-passes",
+                    &tr("cam-passes"),
+                    p.beam.passes as i64,
+                ));
                 if p.beam.passes > 1 {
                     f.push(Field::number(
                         "pass-depth",
-                        "Depth per pass",
+                        &tr("cam-depth-per-pass"),
                         p.beam.pass_depth,
                         Unit::Mm,
                     ));
@@ -1020,27 +1131,27 @@ impl Draft {
                 if p.pattern == Pattern::Cut {
                     f.push(Field::count(
                         "micro",
-                        "Microjoints per part",
+                        &tr("cam-microjoints-per-part"),
                         p.beam.microjoints as i64,
                     ));
                     if p.beam.microjoints > 0 {
                         f.push(Field::number(
                             "micro-w",
-                            "Microjoint width",
+                            &tr("cam-microjoint-width"),
                             p.beam.microjoint_width,
                             Unit::Mm,
                         ));
                     }
                     f.push(Field::number(
                         "small-hole",
-                        "Small holes under",
+                        &tr("cam-small-holes-under"),
                         p.beam.small_hole,
                         Unit::Mm,
                     ));
                     if p.beam.small_hole > 0.0 {
                         f.push(Field::number(
                             "small-feed",
-                            "Small hole feed",
+                            &tr("cam-small-hole-feed"),
                             p.beam.small_hole_feed * 100.0,
                             Unit::Percent,
                         ));
@@ -1050,7 +1161,7 @@ impl Draft {
             _ => toolpath_fields(f, ctx, op, p, *kind, tk, machine, picking),
         }
         if tool.is_none() {
-            f.push(Field::error("No tool above the toolpath"));
+            f.push(Field::error(tr("cam-no-tool-above-toolpath")));
         }
     }
 }
@@ -1126,11 +1237,12 @@ pub(super) fn tool_above(cam: &CamStudio, setup: CamId, op: CamId) -> Option<Too
     })
 }
 
-/// A drive entity's label: the face or edge and its part.
-pub(super) fn entity_label(ctx: &Ctx, key: &str, what: &str) -> String {
+/// A drive entity's label: the face or edge and its part (`what` and `what_of` are catalog
+/// keys: the entity alone, and "… of { $name }").
+pub(super) fn entity_label(ctx: &Ctx, key: &str, what: &str, what_of: &str) -> String {
     match pick_of_key(key).and_then(|p| p.part()) {
-        Some(part) => format!("{what} of {}", ctx.part_name(part)),
-        None => what.to_string(),
+        Some(part) => tr_with(what_of, &[("name", &ctx.part_name(part))]),
+        None => tr(what),
     }
 }
 

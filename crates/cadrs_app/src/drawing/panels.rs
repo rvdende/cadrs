@@ -20,6 +20,7 @@ use cadrs_core::commands::EditDrawing;
 use cadrs_drawing::style::{FIELDS, FieldValue, StyleSection};
 use cadrs_drawing::{Drawing, DrawingOp, SheetId};
 use cadrs_ui::Button;
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, DoubleClickable, InlineEditOptions, Select, SelectChange, begin_inline_edit,
@@ -261,7 +262,7 @@ fn ensure_overlay(
             o.spawn((
                 ToolButton::new("drawing-sheets-toggle", "list")
                     .icon_size(18.0)
-                    .tooltip("Sheets (Ctrl+S)")
+                    .tooltip(tr("drawing-sheets-toggle-tooltip"))
                     .build(&t),
                 SheetsToggle,
                 observe(|_: On<Activate>, mut ui: ResMut<DrawingUi>| {
@@ -272,7 +273,7 @@ fn ensure_overlay(
             o.spawn((
                 ToolButton::new("drawing-properties-toggle", "tool")
                     .icon_size(18.0)
-                    .tooltip("Drawing properties")
+                    .tooltip(tr("drawing-drawing-properties"))
                     .build(&t),
                 PropsToggle,
                 observe(|_: On<Activate>, mut ui: ResMut<DrawingUi>| {
@@ -476,7 +477,10 @@ fn sheets_flyout(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
     .with_children(|h| {
         h.spawn((
             t.text(
-                format!("Sheets({})", key.drawing.sheets.len()),
+                tr_with(
+                    "drawing-sheets-count",
+                    &[("count", &key.drawing.sheets.len().to_string())],
+                ),
                 t.font_md,
                 FontWeight::SEMIBOLD,
                 t.primary,
@@ -490,7 +494,7 @@ fn sheets_flyout(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
         h.spawn((
             ToolButton::new("drawing-insert-sheet", "file-new")
                 .icon_size(18.0)
-                .tooltip("Insert sheet")
+                .tooltip(tr("drawing-insert-sheet"))
                 .build(t),
             observe(|_: On<Activate>, mut commands: Commands| {
                 commands.queue(insert_sheet);
@@ -562,14 +566,16 @@ fn sheets_flyout(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
             ));
             // P3G.4 (P3G.3 carried): the label is cut in the narrow pane; its tooltip names the
             // source document and version in full.
+            // (The badge's first line less its "Linked document: ", in the language shown.)
+            let badge = tr_with("shell-linked-badge", &[("what", "")]);
             let full = match &g.link {
                 Some((_, tip, _)) => tip
                     .lines()
                     .next()
                     .unwrap_or_default()
-                    .trim_start_matches("Linked document: ")
+                    .trim_start_matches(badge.as_str())
                     .to_string(),
-                None => format!("{} (this document)", g.name),
+                None => tr_with("drawing-this-document-named", &[("name", &g.name)]),
             };
             row.insert(cadrs_ui::Tooltip::new(full));
             if let Some((_, tip, icon)) = g.link.clone() {
@@ -745,12 +751,12 @@ fn on_sheet_context_menu(
         .unwrap_or(0);
     let menu = Menu::new("sheet-context-menu")
         .min_width(160.0)
-        .item(MenuItem::new("sheet-menu-activate", "Activate").icon("details"))
+        .item(MenuItem::new("sheet-menu-activate", tr("drawing-sheet-activate")).icon("details"))
         .separator()
-        .item(MenuItem::new("sheet-menu-properties", "Properties…").icon("info"))
-        .item(MenuItem::new("sheet-menu-rename", "Rename…").icon("edit"))
+        .item(MenuItem::new("sheet-menu-properties", tr("common-properties")).icon("info"))
+        .item(MenuItem::new("sheet-menu-rename", tr("common-rename-ellipsis")).icon("edit"))
         .item(
-            MenuItem::new("sheet-menu-delete", "Delete")
+            MenuItem::new("sheet-menu-delete", tr("common-delete"))
                 .icon("delete")
                 .disabled(count <= 1),
         );
@@ -847,11 +853,12 @@ fn properties_panel(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
         },
         children![(
             t.text(
-                "Drawing properties",
+                tr("drawing-drawing-properties"),
                 t.font_md,
                 FontWeight::SEMIBOLD,
                 t.primary
             ),
+            Translated("drawing-drawing-properties"),
             Pickable::IGNORE,
         )],
     ));
@@ -1006,12 +1013,12 @@ fn properties_panel(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
     .with_children(|f| {
         f.spawn((
             Button::new("drawing-props-update-template")
-                .label("Update properties from a template…")
+                .label(tr("drawing-update-from-template-ellipsis"))
                 .icon("file-import")
                 .icon_size(14.0)
                 .link()
                 .disabled(d.locked)
-                .tooltip("Replace the drawing properties with a template's")
+                .tooltip(tr("drawing-update-from-template-tooltip"))
                 .build(t),
             observe(|_: On<Activate>, mut commands: Commands| {
                 commands.queue(super::create_dialog::open_update_from_template);
@@ -1019,7 +1026,7 @@ fn properties_panel(p: &mut ChildSpawnerCommands, t: &Theme, key: &PanelsKey) {
         ));
         f.spawn(
             Checkbox::new("drawing-props-lock")
-                .label("Lock drawing properties")
+                .label(tr("drawing-lock-properties"))
                 .checked(d.locked)
                 .build(t),
         );

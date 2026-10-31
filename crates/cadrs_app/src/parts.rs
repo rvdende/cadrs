@@ -4316,21 +4316,25 @@ pub fn pick_label(features: &[Feature], cache: &PartCache, pick: Pick) -> Option
         && cadrs_core::assembly::context::is_context(p.feature)
     {
         let what = match pick {
-            Pick::Face(..) => "Face",
-            Pick::Edge(..) => "Edge",
-            Pick::Vertex(..) => "Vertex",
+            Pick::Face(..) => "common-face-of",
+            Pick::Edge(..) => "common-edge-of",
+            Pick::Vertex(..) => "common-vertex-of",
             _ => return cache.part_name(p).map(str::to_string),
         };
-        return Some(format!("{what} of {}", cache.part_name(p)?));
+        return Some(of(what, cache.part_name(p)?));
+    }
+    // "Face of { $name }" and the like.
+    fn of(key: &str, name: &str) -> String {
+        cadrs_ui::i18n::tr_with(key, &[("name", name)])
     }
     match pick {
-        Pick::Face(_, face) => Some(format!("Face of {}", feature_name(face.op)?)),
-        Pick::Edge(_, edge) => Some(format!(
-            "Edge of {}",
-            feature_name(edge_maker(features, &edge))?
+        Pick::Face(_, face) => Some(of("common-face-of", &feature_name(face.op)?)),
+        Pick::Edge(_, edge) => Some(of(
+            "common-edge-of",
+            &feature_name(edge_maker(features, &edge))?,
         )),
-        Pick::Vertex(_, v) => Some(format!("Vertex of {}", feature_name(v.faces[0].op)?)),
-        Pick::SketchPoint(s, _) => Some(format!("Vertex of {}", feature_name(s.0)?)),
+        Pick::Vertex(_, v) => Some(of("common-vertex-of", &feature_name(v.faces[0].op)?)),
+        Pick::SketchPoint(s, _) => Some(of("common-vertex-of", &feature_name(s.0)?)),
         Pick::Part(f) => cache.part_name(f).map(str::to_string),
         _ => None,
     }

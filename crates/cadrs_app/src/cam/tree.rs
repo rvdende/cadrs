@@ -2,6 +2,7 @@
 //! rows' clicks, menus and their actions, and Delete.
 
 use super::*;
+use cadrs_ui::i18n::{tr, tr_with};
 
 #[derive(Component)]
 pub struct CamTree;
@@ -70,6 +71,8 @@ pub(super) struct TreeSnap {
     rows: Vec<RowSnap>,
     components: usize,
     jobs: usize,
+    /// The interface's language (the tree is rebuilt in a new one).
+    language: &'static str,
 }
 
 pub(super) fn rows_of(
@@ -114,7 +117,7 @@ pub(super) fn rows_of(
                         m.title()
                     }
                 })
-                .unwrap_or_else(|| "No machine: Create machine".into()),
+                .unwrap_or_else(|| tr("cam-no-machine-create-machine")),
             icon: job
                 .machine
                 .as_ref()
@@ -210,7 +213,7 @@ pub(super) fn rows_of(
             struck: false,
             selected: ui.selected.contains(&c.id),
             trailing: Some(if c.derived.version_name.is_empty() {
-                "workspace".into()
+                tr("cam-component-workspace")
             } else {
                 c.derived.version_name.clone()
             }),
@@ -246,6 +249,7 @@ pub(super) fn rebuild_tree(
         components: comps.len(),
         jobs: cam.jobs.len(),
         rows: jobs.iter().chain(comps.iter()).cloned().collect(),
+        language: cadrs_ui::i18n::language(),
     };
     if *last == snap {
         return;
@@ -257,17 +261,17 @@ pub(super) fn rebuild_tree(
             p,
             &t,
             "cam-jobs-header",
-            &format!("Jobs ({})", cam.jobs.len()),
+            &tr_with("cam-jobs-count", &[("count", &cam.jobs.len().to_string())]),
         );
         if jobs.is_empty() {
             note(
                 p,
                 &t,
-                if cam.components.is_empty() {
-                    "Insert the part to machine, then create a job."
+                &tr(if cam.components.is_empty() {
+                    "cam-tree-insert-part-then-job"
                 } else {
-                    "Create a job for the parts."
-                },
+                    "cam-tree-create-job-for-parts"
+                }),
             );
         }
         for r in &jobs {
@@ -285,14 +289,13 @@ pub(super) fn rebuild_tree(
             p,
             &t,
             "cam-components-header",
-            &format!("Components ({})", comps.len()),
+            &tr_with(
+                "cam-components-count",
+                &[("count", &comps.len().to_string())],
+            ),
         );
         if comps.is_empty() {
-            note(
-                p,
-                &t,
-                "Insert part, workholding and stock from Part Studios.",
-            );
+            note(p, &t, &tr("cam-tree-insert-components-note"));
         }
         for r in &comps {
             spawn_row(p, &t, r);
@@ -367,7 +370,7 @@ pub(super) fn spawn_row(p: &mut ChildSpawnerCommands, t: &Theme, r: &RowSnap) {
     if let Some(on) = r.eye {
         item = item
             .toggle(format!("{}-eye", row_name(r.row)), "visible", "hidden", on)
-            .toggle_tooltip(if on { "Hide" } else { "Show" });
+            .toggle_tooltip(tr(if on { "common-hide" } else { "common-show" }));
         if !on {
             item = item.toggle_keeps_off();
         }
@@ -477,107 +480,142 @@ pub(super) fn on_row_menu(
     match row {
         CamRow::Component(id) => {
             let Some(c) = cam.component(id) else { return };
-            menu = menu.item(item("cam-m-edit", "Edit…", "edit"));
+            menu = menu.item(item("cam-m-edit", &tr("common-edit-ellipsis"), "edit"));
             menu = menu.item(item(
                 "cam-m-hide",
-                if c.hidden { "Show" } else { "Hide" },
+                &tr(if c.hidden {
+                    "common-show"
+                } else {
+                    "common-hide"
+                }),
                 if c.hidden { "visible" } else { "hidden" },
             ));
             if !c.derived.version_name.is_empty() {
-                menu = menu.item(item("cam-m-update", "Update to the latest version", "link"));
+                menu = menu.item(item(
+                    "cam-m-update",
+                    &tr("cam-update-to-latest-version"),
+                    "link",
+                ));
             }
             menu = menu
                 .separator()
-                .item(item("cam-m-delete", "Delete", "delete"));
+                .item(item("cam-m-delete", &tr("common-delete"), "delete"));
         }
         CamRow::Job(id) => {
             let Some(j) = cam.job(id) else { return };
             menu = menu
-                .item(item("cam-m-edit", "Edit job…", "edit"))
+                .item(item("cam-m-edit", &tr("cam-edit-job"), "edit"))
                 .item(item(
                     "cam-m-machine",
-                    if j.machine.is_some() {
-                        "Edit machine…"
+                    &tr(if j.machine.is_some() {
+                        "cam-edit-machine"
                     } else {
-                        "Create machine…"
-                    },
+                        "cam-create-machine-ellipsis"
+                    }),
                     "cam-machine",
                 ));
             if j.machine.is_some() {
-                menu = menu.item(item("cam-m-setup", "Create setup…", "cam-setup"));
+                menu = menu.item(item(
+                    "cam-m-setup",
+                    &tr("cam-create-setup-ellipsis"),
+                    "cam-setup",
+                ));
             }
             menu = menu
                 .item(item(
                     "cam-m-regenerate",
-                    "Regenerate all toolpaths",
+                    &tr("cam-regenerate-all-toolpaths"),
                     "cam-regenerate",
                 ))
                 .separator()
-                .item(item("cam-m-duplicate", "Duplicate", "copy"))
+                .item(item("cam-m-duplicate", &tr("cam-duplicate"), "copy"))
                 .item(item(
                     "cam-m-suppress",
-                    if j.suppressed {
-                        "Unsuppress"
+                    &tr(if j.suppressed {
+                        "common-unsuppress"
                     } else {
-                        "Suppress"
-                    },
+                        "common-suppress"
+                    }),
                     "",
                 ))
-                .item(item("cam-m-delete", "Delete", "delete"));
+                .item(item("cam-m-delete", &tr("common-delete"), "delete"));
         }
         CamRow::Machine(_) => {
-            menu = menu.item(item("cam-m-machine", "Edit machine…", "cam-machine"));
+            menu = menu.item(item(
+                "cam-m-machine",
+                &tr("cam-edit-machine"),
+                "cam-machine",
+            ));
         }
         CamRow::Setup(id) => {
             let Some((_, s)) = cam.setup(id) else { return };
             menu = menu
-                .item(item("cam-m-edit", "Edit setup…", "edit"))
-                .item(item("cam-m-tool", "Create tool…", "cam-tool"))
-                .item(item("cam-m-toolpath", "Create toolpath…", "cam-toolpath"))
+                .item(item("cam-m-edit", &tr("cam-edit-setup"), "edit"))
+                .item(item(
+                    "cam-m-tool",
+                    &tr("cam-create-tool-ellipsis"),
+                    "cam-tool",
+                ))
+                .item(item(
+                    "cam-m-toolpath",
+                    &tr("cam-create-toolpath-ellipsis"),
+                    "cam-toolpath",
+                ))
                 .item(item(
                     "cam-m-workplane",
-                    "Create work plane…",
+                    &tr("cam-create-work-plane-ellipsis"),
                     "cam-work-plane",
                 ))
                 .separator()
                 .item(item(
                     "cam-m-regenerate",
-                    "Regenerate all toolpaths",
+                    &tr("cam-regenerate-all-toolpaths"),
                     "cam-regenerate",
                 ))
-                .item(item("cam-m-preview", "Preview operation", "cam-preview"))
-                .item(item("cam-m-post", "Post child operations…", "cam-post"))
+                .item(item(
+                    "cam-m-preview",
+                    &tr("cam-preview-operation"),
+                    "cam-preview",
+                ))
+                .item(item(
+                    "cam-m-post",
+                    &tr("cam-post-child-operations"),
+                    "cam-post",
+                ))
                 .separator()
-                .item(item("cam-m-duplicate", "Duplicate", "copy"))
+                .item(item("cam-m-duplicate", &tr("cam-duplicate"), "copy"))
                 .item(item(
                     "cam-m-suppress",
-                    if s.suppressed {
-                        "Unsuppress"
+                    &tr(if s.suppressed {
+                        "common-unsuppress"
                     } else {
-                        "Suppress"
-                    },
+                        "common-suppress"
+                    }),
                     "",
                 ))
-                .item(item("cam-m-delete", "Delete", "delete"));
+                .item(item("cam-m-delete", &tr("common-delete"), "delete"));
         }
         CamRow::Operation(id) => {
             let Some((_, setup, o)) = cam.operation(id) else {
                 return;
             };
-            menu = menu.item(item("cam-m-edit", "Edit…", "edit"));
+            menu = menu.item(item("cam-m-edit", &tr("common-edit-ellipsis"), "edit"));
             if o.toolpath().is_some() {
                 let calc = computed.current(id).is_some();
                 menu = menu
                     .item(item(
                         "cam-m-regenerate",
-                        "Regenerate operation",
+                        &tr("cam-regenerate-operation"),
                         "cam-regenerate",
                     ))
-                    .item(item("cam-m-preview", "Preview operation", "cam-preview").disabled(!calc))
+                    .item(
+                        item("cam-m-preview", &tr("cam-preview-operation"), "cam-preview")
+                            .disabled(!calc),
+                    )
                     .item(
                         item(
                             "cam-m-post-selected",
-                            "Post selected operations…",
+                            &tr("cam-post-selected-operations"),
                             "cam-post",
                         )
                         .disabled(!calc),
@@ -590,12 +628,12 @@ pub(super) fn on_row_menu(
                 .unwrap_or(0);
             menu = menu
                 .separator()
-                .item(item("cam-m-up", "Move up", "arrow-up").disabled(i == 0))
+                .item(item("cam-m-up", &tr("common-move-up"), "arrow-up").disabled(i == 0))
                 .item(
-                    item("cam-m-down", "Move down", "arrow-down")
+                    item("cam-m-down", &tr("common-move-down"), "arrow-down")
                         .disabled(i + 1 >= setup.operations.len()),
                 )
-                .item(item("cam-m-duplicate", "Duplicate", "copy"));
+                .item(item("cam-m-duplicate", &tr("cam-duplicate"), "copy"));
             // To the other setups: moved within its job, copied to any.
             for (jj, other_job) in cam.jobs.iter().enumerate() {
                 for other in &other_job.setups {
@@ -615,34 +653,38 @@ pub(super) fn on_row_menu(
                     {
                         menu = menu.item(item(
                             &format!("cam-m-moveto-{:x}", other.id.0),
-                            &format!("Move to {place}"),
+                            &tr_with("cam-move-to", &[("place", &place)]),
                             "",
                         ));
                     }
                     menu = menu.item(item(
                         &format!("cam-m-copyto-{:x}", other.id.0),
-                        &format!("Copy to {place}"),
+                        &tr_with("cam-copy-to", &[("place", &place)]),
                         "copy",
                     ));
                 }
             }
             menu = menu.item(item(
                 "cam-m-suppress",
-                if o.suppressed {
-                    "Unsuppress"
+                &tr(if o.suppressed {
+                    "common-unsuppress"
                 } else {
-                    "Suppress"
-                },
+                    "common-suppress"
+                }),
                 "",
             ));
             if !matches!(o.kind, OpKind::Tool(_)) {
                 menu = menu.item(item(
                     "cam-m-hide",
-                    if o.hidden { "Show" } else { "Hide" },
+                    &tr(if o.hidden {
+                        "common-show"
+                    } else {
+                        "common-hide"
+                    }),
                     if o.hidden { "visible" } else { "hidden" },
                 ));
             }
-            menu = menu.item(item("cam-m-delete", "Delete", "delete"));
+            menu = menu.item(item("cam-m-delete", &tr("common-delete"), "delete"));
         }
     }
     let at = Vec2::new(ev.position.x + 2.0, ev.position.y + 4.0);

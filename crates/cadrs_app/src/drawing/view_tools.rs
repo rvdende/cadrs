@@ -33,6 +33,7 @@ use cadrs_core::commands::EditDrawing;
 use cadrs_core::{ElementId, ElementKind, PartId};
 use cadrs_drawing::view::{Placement, auxiliary_view, placement_for, projected_view, rotate};
 use cadrs_drawing::{DrawingOp, NamedView, ObjectRef, Scale, SheetId, View, ViewId};
+use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{Select, SelectChange, TabStrip, TabStripSelect, TreeToggle};
 
@@ -322,9 +323,9 @@ pub fn open_insert_view(world: &mut World) {
                         flats.push((
                             el.id,
                             p,
-                            format!(
-                                "Flat pattern of {}",
-                                cadrs_core::parts::display_name(part, props)
+                            tr_with(
+                                "drawing-flat-pattern-of",
+                                &[("name", cadrs_core::parts::display_name(part, props))],
                             ),
                         ));
                     }
@@ -577,7 +578,13 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         ))
         .with_children(|h| {
             h.spawn((
-                t.text("Insert view", t.font_base, FontWeight::BOLD, t.foreground),
+                t.text(
+                    tr("drawing-insert-view"),
+                    t.font_base,
+                    FontWeight::BOLD,
+                    t.foreground,
+                ),
+                Translated("drawing-insert-view"),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -589,7 +596,7 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     .icon("x-bold")
                     .icon_size(14.0)
                     .ghost()
-                    .tooltip("Close (Esc)")
+                    .tooltip(tr("drawing-close-esc"))
                     .build(t),
                 observe(|_: On<Activate>, mut commands: Commands| {
                     commands.queue(end_tool);
@@ -606,17 +613,28 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         .with_children(|b| {
             // The reference: its name (a part or studio icon), or a prompt; opens the browser.
             // P3G.1: a version's part names it ("Part 1 (V1)").
-            let label = reference_label(st).map(|(n, ok)| match st.reference.and_then(|r| super::view_linked::version_suffix(st, &r)) {
-                Some(v) => (format!("{n} ({v})"), ok),
-                None => (n, ok),
+            let label = reference_label(st).map(|(n, ok)| {
+                match st
+                    .reference
+                    .and_then(|r| super::view_linked::version_suffix(st, &r))
+                {
+                    Some(v) => (format!("{n} ({v})"), ok),
+                    None => (n, ok),
+                }
             });
-            let is_asm = st.reference.is_some_and(|r| st.assemblies.iter().any(|(e, _)| e.0 == r.element));
+            let is_asm = st
+                .reference
+                .is_some_and(|r| st.assemblies.iter().any(|(e, _)| e.0 == r.element));
             let (text, color, icon_name) = match &label {
                 Some((n, true)) if st.flat => (n.clone(), t.foreground, "flat-pattern"),
                 Some((n, true)) if is_asm => (n.clone(), t.foreground, "assembly"),
                 Some((n, true)) => (n.clone(), t.foreground, "part"),
                 Some((n, false)) => (n.clone(), t.foreground, "part-studio"),
-                None => ("Select a part or assembly".to_string(), t.muted_foreground, "part"),
+                None => (
+                    tr("drawing-select-part-or-assembly"),
+                    t.muted_foreground,
+                    "part",
+                ),
             };
             b.spawn((
                 Name::new("insert-view-reference"),
@@ -628,8 +646,16 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     border: UiRect::all(Val::Px(1.0)),
                     ..default()
                 },
-                BorderColor::all(if label.is_some() { Color::srgb_u8(0xc8, 0xc8, 0xc8) } else { t.primary }),
-                BackgroundColor(if label.is_some() { t.background } else { Color::srgb_u8(0xee, 0xf4, 0xfb) }),
+                BorderColor::all(if label.is_some() {
+                    Color::srgb_u8(0xc8, 0xc8, 0xc8)
+                } else {
+                    t.primary
+                }),
+                BackgroundColor(if label.is_some() {
+                    t.background
+                } else {
+                    Color::srgb_u8(0xee, 0xf4, 0xfb)
+                }),
                 observe(|_: On<PointerClick>, mut s: ResMut<InsertViewState>| {
                     s.browser_open = !s.browser_open;
                 }),
@@ -644,20 +670,24 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                         ..default()
                     },
                     Pickable::IGNORE,
-                )).insert(TextLayout::no_wrap());
+                ))
+                .insert(TextLayout::no_wrap());
                 if matches!(label, Some((_, false))) {
                     r.spawn((
                         Name::new("insert-view-studio-warning"),
                         icon("warning-filled", 14.0, Color::srgb_u8(0xe0, 0x9a, 0x10)),
-                        Tooltip::new("A Part Studio is referenced, not a part"),
+                        Tooltip::new(tr("drawing-studio-referenced-tooltip")),
                     ));
                 }
             });
             let mut o = Select::new("insert-view-orientation").width(Val::Percent(100.0));
             for n in NamedView::ALL {
-                o = o.option(n.label(), true);
+                o = o.option(super::views::named_view_name(n), true);
             }
-            let oi = NamedView::ALL.iter().position(|n| *n == st.orientation).unwrap_or(0);
+            let oi = NamedView::ALL
+                .iter()
+                .position(|n| *n == st.orientation)
+                .unwrap_or(0);
             b.spawn(o.selected(oi).build(t));
             let list = scales(st.scale);
             let mut sc = Select::new("insert-view-scale").width(Val::Percent(100.0));
@@ -671,10 +701,10 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
             b.spawn((
                 Select::new("insert-view-named-position")
                     .width(Val::Percent(100.0))
-                    .option("None", true)
-                    .option("Named positions and exploded views (assemblies)", false)
+                    .option(tr("common-none"), true)
+                    .option(tr("drawing-named-positions-option"), false)
                     .build(t),
-                Tooltip::new("Named positions and exploded views come with assemblies"),
+                Tooltip::new(tr("drawing-named-positions-tooltip")),
             ));
             if matches!(label, Some((_, false))) {
                 b.spawn((
@@ -689,25 +719,39 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     BackgroundColor(Color::srgb_u8(0xfd, 0xf3, 0xdd)),
                 ))
                 .with_children(|w| {
-                    w.spawn((icon("warning-filled", 14.0, Color::srgb_u8(0xd9, 0x8c, 0x00)), Pickable::IGNORE));
+                    w.spawn((
+                        icon("warning-filled", 14.0, Color::srgb_u8(0xd9, 0x8c, 0x00)),
+                        Pickable::IGNORE,
+                    ));
                     w.spawn((
                         t.text(
-                            "A whole Part Studio is referenced. Its properties differ from a part's, so the title block and notes won't show a part's name. Expand the studio and pick the part.",
+                            tr("drawing-studio-referenced-warning"),
                             t.font_sm,
                             FontWeight::NORMAL,
                             t.foreground,
                         ),
+                        Translated("drawing-studio-referenced-warning"),
                         Node {
                             max_width: Val::Px(170.0),
                             ..default()
                         },
                         Pickable::IGNORE,
-                    )).insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                    ))
+                    .insert(TextLayout::new(
+                        bevy::text::Justify::Left,
+                        bevy::text::LineBreak::WordBoundary,
+                    ));
                 });
             }
             if st.reference.is_some() {
                 b.spawn((
-                    t.text("Click on the sheet to place the view.", t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+                    t.text(
+                        tr("drawing-click-sheet-to-place-view"),
+                        t.font_sm,
+                        FontWeight::NORMAL,
+                        t.muted_foreground,
+                    ),
+                    Translated("drawing-click-sheet-to-place-view"),
                     Node {
                         margin: UiRect::top(Val::Px(4.0)),
                         max_width: Val::Px(188.0),
@@ -715,7 +759,10 @@ fn insert_card(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     },
                     Pickable::IGNORE,
                 ))
-                .insert(TextLayout::new(bevy::text::Justify::Left, bevy::text::LineBreak::WordBoundary));
+                .insert(TextLayout::new(
+                    bevy::text::Justify::Left,
+                    bevy::text::LineBreak::WordBoundary,
+                ));
             }
         });
     });
@@ -747,11 +794,12 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         .with_children(|h| {
             h.spawn((
                 t.text(
-                    "Select a part or assembly",
+                    tr("drawing-select-part-or-assembly"),
                     t.font_base,
                     FontWeight::SEMIBOLD,
                     t.foreground,
                 ),
+                Translated("drawing-select-part-or-assembly"),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -763,7 +811,7 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                     .icon("close")
                     .icon_size(14.0)
                     .ghost()
-                    .tooltip("Close")
+                    .tooltip(tr("common-close"))
                     .build(t),
                 observe(|_: On<Activate>, mut s: ResMut<InsertViewState>| {
                     s.browser_open = false;
@@ -773,8 +821,8 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         c.spawn(
             // The two tabs share the browser's width (`ex1-step4.png`).
             TabStrip::new("insert-view-source-tabs")
-                .tab("Current document")
-                .tab("Other documents")
+                .tab(tr("drawing-tab-current-document"))
+                .tab(tr("drawing-tab-other-documents"))
                 .selected(st.source_tab)
                 .compact()
                 .build(t),
@@ -786,8 +834,8 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         }
         c.spawn(
             TabStrip::new("insert-view-kind-tabs")
-                .tab("Part Studios")
-                .tab("Assemblies")
+                .tab(tr("asm-insert-tab-part-studios"))
+                .tab(tr("asm-insert-tab-assemblies"))
                 .selected(st.tab)
                 .build(t),
         );
@@ -799,11 +847,11 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         .with_children(|s| {
             s.spawn(
                 TextInput::new("insert-view-search")
-                    .placeholder(if st.tab == 0 {
-                        "Search parts or sketches"
+                    .placeholder(tr(if st.tab == 0 {
+                        "drawing-search-parts-or-sketches"
                     } else {
-                        "Search assemblies"
-                    })
+                        "asm-insert-search-assemblies"
+                    }))
                     .value(st.search.clone())
                     .width(Val::Percent(100.0))
                     .build(t),
@@ -821,7 +869,7 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                 ToolButton::new("insert-view-filter-parts", "part")
                     .icon_size(16.0)
                     .selected(!st.filter_flat)
-                    .tooltip("Parts")
+                    .tooltip(tr("parts"))
                     .build(t),
                 observe(|_: On<Activate>, mut s: ResMut<InsertViewState>| {
                     s.filter_flat = false;
@@ -831,7 +879,7 @@ fn browser(p: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
                 ToolButton::new("insert-view-filter-sketches", "sketch")
                     .icon_size(16.0)
                     .disabled(true)
-                    .tooltip("Sketches: views of sketches come later")
+                    .tooltip(tr("drawing-sketches-come-later"))
                     .build(t),
             );
             // P3I.7 (SM16.2): sheet metal flat patterns.
@@ -866,11 +914,12 @@ fn tree_rows(tree: &mut ChildSpawnerCommands, t: &Theme, st: &InsertViewState) {
         if st.assemblies.is_empty() {
             tree.spawn((
                 t.text(
-                    "No assemblies in this document",
+                    tr("drawing-no-assemblies"),
                     t.font_sm,
                     FontWeight::NORMAL,
                     t.muted_foreground,
                 ),
+                Translated("drawing-no-assemblies"),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
                     ..default()
@@ -1563,29 +1612,18 @@ fn sync_tool_hint(
         match ui.tool {
             ViewTool::None => None,
             ViewTool::Insert if insert.reference.is_none() => {
-                Some("Select a part or assembly to insert".to_string())
+                Some(tr("drawing-hint-insert-select"))
             }
-            ViewTool::Insert => Some("Click on the sheet to place the view".to_string()),
-            ViewTool::Projected { parent: None } => {
-                Some("Projected view: click a view to project from".to_string())
-            }
-            ViewTool::Projected { parent: Some(_) } => Some(
-                "Projected view: move away from the view and click to place · Esc to finish"
-                    .to_string(),
-            ),
-            ViewTool::Auxiliary { from: None } => {
-                Some("Auxiliary view: click a straight edge of a view".to_string())
-            }
-            ViewTool::Auxiliary { from: Some(_) } => {
-                Some("Auxiliary view: click to place the view".to_string())
-            }
-            ViewTool::Align { vertical: true, .. } => {
-                Some("Align view vertical: click an edge of the view".to_string())
-            }
+            ViewTool::Insert => Some(tr("drawing-hint-insert-place")),
+            ViewTool::Projected { parent: None } => Some(tr("drawing-hint-projected-pick")),
+            ViewTool::Projected { parent: Some(_) } => Some(tr("drawing-hint-projected-place")),
+            ViewTool::Auxiliary { from: None } => Some(tr("drawing-hint-auxiliary-pick")),
+            ViewTool::Auxiliary { from: Some(_) } => Some(tr("drawing-hint-auxiliary-place")),
+            ViewTool::Align { vertical: true, .. } => Some(tr("drawing-hint-align-vertical")),
             ViewTool::Align {
                 vertical: false, ..
-            } => Some("Align view horizontal: click an edge of the view".to_string()),
-            t => super::view_kind_tools::hint(t).map(str::to_string),
+            } => Some(tr("drawing-hint-align-horizontal")),
+            t => super::view_kind_tools::hint(t),
         }
     };
     match (text, q.single_mut()) {

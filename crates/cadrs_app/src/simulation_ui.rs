@@ -46,6 +46,7 @@ use cadrs_core::simulation::{
 };
 use cadrs_core::{ElementId, PartId};
 use cadrs_fea::{FeaError, Solution, Stage};
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, ColorLegend, DoubleClick, DoubleClickable, FeatureDialogAccept,
@@ -508,11 +509,62 @@ fn load_color(k: &LoadKind) -> Color {
 }
 
 fn faces_word(n: usize) -> String {
-    if n == 1 {
-        "1 face".into()
+    let key = if n == 1 {
+        "model-sim-one-face"
     } else {
-        format!("{n} faces")
+        "model-sim-n-faces"
+    };
+    tr_with(key, &[("count", &n.to_string())])
+}
+
+/// A load's short description for the Loads lists ("100 N along −Z", "1 MPa"):
+/// [`LoadKind::summary`] in the current language.
+fn load_summary(k: &LoadKind) -> String {
+    match *k {
+        LoadKind::Fixed => String::new(),
+        LoadKind::Force {
+            newtons,
+            direction,
+            flip,
+        } => {
+            let force = sim::format_force(newtons);
+            match (direction, flip) {
+                (ForceDirection::Normal, false) => {
+                    tr_with("model-sim-force-normal", &[("force", &force)])
+                }
+                (ForceDirection::Normal, true) => {
+                    tr_with("model-sim-force-normal-out", &[("force", &force)])
+                }
+                (d, f) => {
+                    let axis = format!("{}{}", if f { "−" } else { "+" }, &d.label()[6..]);
+                    tr_with(
+                        "model-sim-force-along",
+                        &[("force", &force), ("axis", &axis)],
+                    )
+                }
+            }
+        }
+        LoadKind::Pressure { pascals } => sim::format_pressure(pascals),
     }
+}
+
+/// A force's direction, in the current language (the core's label is English).
+fn direction_text(d: ForceDirection) -> String {
+    tr(match d {
+        ForceDirection::Normal => "model-sim-normal-to-faces",
+        ForceDirection::X => "model-sim-along-x",
+        ForceDirection::Y => "model-sim-along-y",
+        ForceDirection::Z => "model-sim-along-z",
+    })
+}
+
+/// A mesh density, in the current language (the core's label is English).
+fn mesh_density_text(d: MeshDensity) -> String {
+    tr(match d {
+        MeshDensity::Coarse => "model-sim-mesh-coarse",
+        MeshDensity::Medium => "model-sim-mesh-medium",
+        MeshDensity::Fine => "model-sim-mesh-fine",
+    })
 }
 
 /// The results in view for the active element, if they're current.
@@ -578,7 +630,7 @@ fn panel_model(
                         cadrs_ui::color_legend::format_value(e / 1e9),
                         cadrs_ui::color_legend::format_value(nu)
                     ),
-                    _ => "no Young's modulus or Poisson's ratio".into(),
+                    _ => tr("model-sim-no-elastic-properties"),
                 };
                 materials.push((
                     format!("{name} · {}", m.name),
@@ -586,11 +638,7 @@ fn panel_model(
                     m.youngs_modulus.is_none(),
                 ));
             }
-            None => materials.push((
-                name,
-                "no material: right-click it → Assign material".into(),
-                true,
-            )),
+            None => materials.push((name, tr("model-sim-no-material"), true)),
         }
     }
     let loads = s
@@ -599,7 +647,7 @@ fn panel_model(
         .map(|l| {
             let summary = match l.kind {
                 LoadKind::Fixed => faces_word(l.faces.len()),
-                k => k.summary(),
+                k => load_summary(&k),
             };
             (l.id, l.name.clone(), summary, l.suppressed, l.kind)
         })
@@ -621,17 +669,20 @@ fn panel_model(
         let mut rows = vec![
             (
                 "sim-elements".to_string(),
-                "Mesh".to_string(),
-                format!("{} elements", s.stats.elements),
+                tr("model-sim-mesh"),
+                tr_with(
+                    "model-sim-elements",
+                    &[("count", &s.stats.elements.to_string())],
+                ),
             ),
             (
                 "sim-max-displacement".to_string(),
-                "Max displacement".to_string(),
+                tr("model-sim-max-displacement"),
                 val(s.max_displacement(), "mm"),
             ),
             (
                 "sim-max-stress".to_string(),
-                "Max von Mises".to_string(),
+                tr("model-sim-max-von-mises"),
                 val(s.max_von_mises(), "MPa"),
             ),
         ];
@@ -639,7 +690,7 @@ fn panel_model(
         if let Some(sf) = min_safety(r) {
             rows.push((
                 "sim-safety".to_string(),
-                "Min safety factor".to_string(),
+                tr("model-sim-min-safety-factor"),
                 format!("{sf:.2}"),
             ));
         }
@@ -647,10 +698,7 @@ fn panel_model(
     });
     let exaggeration = cur.and_then(|r| exaggeration(r, inputs.size));
     let notes = cur.map(|r| r.notes.clone()).unwrap_or_default();
-    let hint = (s.loads.is_empty()).then(|| {
-        "Add a Fixed load on the faces that are held, and a Force or a Pressure, then Solve."
-            .to_string()
-    });
+    let hint = (s.loads.is_empty()).then(|| tr("model-sim-hint"));
     Some(PanelModel {
         materials,
         loads,
@@ -761,7 +809,7 @@ fn sync_panel(
             side_panel_node(&t),
         ))
         .with_children(|p| {
-            side_panel_header(p, &t, "Simulation", "simulation-panel-close");
+            side_panel_header(p, &t, &tr("model-sim-title"), "simulation-panel-close");
             p.spawn(Node {
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(6.0), Val::Px(10.0)),
@@ -776,14 +824,16 @@ fn sync_panel(
     dock_beside_viewport(&mut commands, area, &q_children, panel);
 }
 
-fn heading(b: &mut ChildSpawnerCommands, t: &Theme, name: &str, text: impl Into<String>) {
+/// A section heading, from its catalog key.
+fn heading(b: &mut ChildSpawnerCommands, t: &Theme, name: &str, key: &'static str) {
     b.spawn((
         Name::new(name.to_string()),
-        t.text(text.into(), 12.0, FontWeight::BOLD, t.foreground),
+        t.text(tr(key), 12.0, FontWeight::BOLD, t.foreground),
         Node {
             margin: UiRect::top(Val::Px(8.0)),
             ..default()
         },
+        cadrs_ui::i18n::Translated(key),
     ));
 }
 
@@ -794,6 +844,18 @@ fn wrapped(
     text: impl Into<String>,
     color: Color,
 ) {
+    wrapped_with(b, t, name, text, color, ());
+}
+
+/// [`wrapped`] with more components (a fixed text's [`cadrs_ui::i18n::Translated`]).
+fn wrapped_with(
+    b: &mut ChildSpawnerCommands,
+    t: &Theme,
+    name: &str,
+    text: impl Into<String>,
+    color: Color,
+    extra: impl Bundle,
+) {
     b.spawn((
         Name::new(name.to_string()),
         t.text(text.into(), 11.0, FontWeight::NORMAL, color),
@@ -801,6 +863,7 @@ fn wrapped(
             width: Val::Px(214.0),
             ..default()
         },
+        extra,
     ))
     .insert(TextLayout::new(
         bevy::text::Justify::Left,
@@ -809,9 +872,16 @@ fn wrapped(
 }
 
 fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
-    heading(b, t, "sim-materials-heading", "Materials");
+    heading(b, t, "sim-materials-heading", "model-sim-materials");
     if m.materials.is_empty() {
-        wrapped(b, t, "sim-materials-empty", "No parts.", t.muted_foreground);
+        wrapped_with(
+            b,
+            t,
+            "sim-materials-empty",
+            tr("model-sim-no-parts"),
+            t.muted_foreground,
+            cadrs_ui::i18n::Translated("model-sim-no-parts"),
+        );
     }
     for (k, (line, detail, red)) in m.materials.iter().enumerate() {
         let color = if *red { t.feature_error } else { t.foreground };
@@ -844,7 +914,10 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         h.spawn((
             Name::new("sim-loads-heading"),
             t.text(
-                format!("Loads ({})", m.loads.len()),
+                tr_with(
+                    "model-sim-loads-count",
+                    &[("count", &m.loads.len().to_string())],
+                ),
                 12.0,
                 FontWeight::BOLD,
                 t.foreground,
@@ -862,24 +935,28 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
     ))
     .with_children(|h| {
         for (name, label, tip) in [
-            ("sim-add-fixed", "Fixed", "Add Fixed: faces that don't move"),
+            (
+                "sim-add-fixed",
+                "model-sim-fixed",
+                "model-sim-add-fixed-tooltip",
+            ),
             (
                 "sim-add-force",
-                "Force",
-                "Add Force: a force spread over faces",
+                "model-sim-force",
+                "model-sim-add-force-tooltip",
             ),
             (
                 "sim-add-pressure",
-                "Pressure",
-                "Add Pressure: a pressure on faces",
+                "model-sim-pressure",
+                "model-sim-add-pressure-tooltip",
             ),
         ] {
             h.spawn(
                 cadrs_ui::Button::new(name)
-                    .label(format!("+ {label}"))
+                    .label(format!("+ {}", tr(label)))
                     .small()
                     .outline()
-                    .tooltip(tip)
+                    .tooltip(tr(tip))
                     .build(t),
             );
         }
@@ -898,13 +975,16 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
                 .left(0.0)
                 .build(t),
             LoadRow(*id),
-            Tooltip::new(format!("{name}: {summary}\nClick to edit")),
+            Tooltip::new(tr_with(
+                "model-sim-load-tooltip",
+                &[("name", name), ("summary", summary)],
+            )),
         ))
         .with_children(|r| {
             r.spawn((
                 DeleteLoadButton(*id),
                 IconButton::new(format!("{row}-delete"), "close")
-                    .tooltip("Delete")
+                    .tooltip(tr("common-delete"))
                     .build(t),
             ))
             .entry::<Node>()
@@ -923,10 +1003,13 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         ..default()
     })
     .with_children(|r| {
-        r.spawn(t.text("Mesh", 11.5, FontWeight::MEDIUM, t.foreground));
+        r.spawn((
+            t.text(tr("model-sim-mesh"), 11.5, FontWeight::MEDIUM, t.foreground),
+            cadrs_ui::i18n::Translated("model-sim-mesh"),
+        ));
         let mut s = Select::new("sim-mesh").bordered().width(Val::Px(96.0));
         for d in MeshDensity::ALL {
-            s = s.option(d.label(), true);
+            s = s.option(mesh_density_text(d), true);
         }
         r.spawn((
             PanelSelect::Mesh,
@@ -947,21 +1030,30 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
     .with_children(|r| {
         r.spawn(
             cadrs_ui::Button::new("sim-solve")
-                .label("Solve")
+                .label(tr("model-sim-solve"))
                 .icon("play")
                 .primary()
                 .disabled(m.running)
                 .build(t),
         );
         if m.running {
-            r.spawn(cadrs_ui::Button::new("sim-cancel").label("Cancel").build(t));
+            r.spawn(
+                cadrs_ui::Button::new("sim-cancel")
+                    .label(tr("common-cancel"))
+                    .build(t),
+            );
         }
     });
     if m.running {
         b.spawn((
             Name::new("sim-progress"),
             ProgressText,
-            t.text("Meshing…", 11.0, FontWeight::NORMAL, t.muted_foreground),
+            t.text(
+                tr("model-sim-meshing"),
+                11.0,
+                FontWeight::NORMAL,
+                t.muted_foreground,
+            ),
         ));
         b.spawn((
             Name::new("sim-progress-bar"),
@@ -988,17 +1080,18 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         wrapped(b, t, "sim-error", e.clone(), t.feature_error);
     }
     if m.stale {
-        wrapped(
+        wrapped_with(
             b,
             t,
             "sim-stale",
-            "The model or its loads changed since the last solve: Solve again for results.",
+            tr("model-sim-stale"),
             t.muted_foreground,
+            cadrs_ui::i18n::Translated("model-sim-stale"),
         );
     }
     // Results.
     if let Some(rows) = &m.results {
-        heading(b, t, "sim-results-heading", "Results");
+        heading(b, t, "sim-results-heading", "model-sim-results");
         b.spawn(Node {
             align_items: AlignItems::Center,
             column_gap: Val::Px(8.0),
@@ -1006,20 +1099,21 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         })
         .with_children(|r| {
             r.spawn((
-                t.text("Show", 11.5, FontWeight::MEDIUM, t.foreground),
+                t.text(tr("model-sim-show"), 11.5, FontWeight::MEDIUM, t.foreground),
                 Node {
                     width: Val::Px(74.0),
                     ..default()
                 },
+                cadrs_ui::i18n::Translated("model-sim-show"),
             ));
             r.spawn((
                 PanelSelect::Show,
                 Select::new("sim-show")
                     .bordered()
                     .width(Val::Px(132.0))
-                    .option("Von Mises stress", true)
-                    .option("Displacement", true)
-                    .option("Safety factor", m.safety)
+                    .option(tr("model-sim-von-mises-stress"), true)
+                    .option(tr("model-sim-displacement"), true)
+                    .option(tr("model-sim-safety-factor"), m.safety)
                     .selected(m.show.index())
                     .build(t),
             ));
@@ -1031,18 +1125,30 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
         })
         .with_children(|r| {
             r.spawn((
-                t.text("Deformation", 11.5, FontWeight::MEDIUM, t.foreground),
+                t.text(
+                    tr("model-sim-deformation"),
+                    11.5,
+                    FontWeight::MEDIUM,
+                    t.foreground,
+                ),
                 Node {
                     width: Val::Px(74.0),
                     ..default()
                 },
+                cadrs_ui::i18n::Translated("model-sim-deformation"),
             ));
-            let ex = m.exaggeration.map_or("Exaggerated".to_string(), |e| {
-                format!(
-                    "Exaggerated ×{}",
-                    cadrs_ui::color_legend::format_value(e.round().max(1.0))
-                )
-            });
+            let ex = m.exaggeration.map_or_else(
+                || tr("model-sim-exaggerated"),
+                |e| {
+                    tr_with(
+                        "model-sim-exaggerated-by",
+                        &[(
+                            "factor",
+                            &cadrs_ui::color_legend::format_value(e.round().max(1.0)),
+                        )],
+                    )
+                },
+            );
             let selected = match m.deform {
                 Deform::Undeformed => 0,
                 Deform::Actual => 1,
@@ -1053,8 +1159,8 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
                 Select::new("sim-deform")
                     .bordered()
                     .width(Val::Px(132.0))
-                    .option("Undeformed", true)
-                    .option("Actual (×1)", true)
+                    .option(tr("model-sim-undeformed"), true)
+                    .option(tr("model-sim-actual"), true)
                     .option(ex, true)
                     .selected(selected)
                     .build(t),
@@ -1082,12 +1188,13 @@ fn panel_body(b: &mut ChildSpawnerCommands, t: &Theme, m: &PanelModel) {
                 ));
             });
         }
-        wrapped(
+        wrapped_with(
             b,
             t,
             "sim-probe-hint",
-            "Hover the model to read the value at a point.",
+            tr("model-sim-probe-hint"),
             t.muted_foreground,
+            cadrs_ui::i18n::Translated("model-sim-probe-hint"),
         );
     }
     for (k, n) in m.notes.iter().enumerate() {
@@ -1119,7 +1226,17 @@ fn update_progress(
         Stage::Stresses => (0.95, 0.05),
     };
     let total = (start + span * f.clamp(0.0, 1.0)) * 100.0;
-    let text = format!("{}… {:.0} %", stage.label(), total);
+    let stage = tr(match stage {
+        Stage::Meshing => "model-sim-stage-meshing",
+        Stage::Assembling => "model-sim-stage-assembling",
+        Stage::Factoring => "model-sim-stage-factoring",
+        Stage::Solving => "model-sim-stage-solving",
+        Stage::Stresses => "model-sim-stage-stresses",
+    });
+    let text = tr_with(
+        "model-sim-progress",
+        &[("stage", &stage), ("percent", &format!("{total:.0}"))],
+    );
     for mut t in &mut q_text {
         if t.0 != text {
             t.0 = text.clone();
@@ -1351,7 +1468,10 @@ struct DirectionSelect;
 struct MagnitudeField;
 
 fn face_label(cache: &PartCache, f: &SimFace) -> String {
-    format!("Face of {}", cache.part_name(f.part).unwrap_or("a part"))
+    let name = cache
+        .part_name(f.part)
+        .map_or_else(|| tr("model-sim-a-part"), str::to_string);
+    tr_with("common-face-of", &[("name", &name)])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1433,7 +1553,7 @@ fn sync_load_dialog(
                     b.spawn((
                         FacesField,
                         SelectionList::new("sim-load-faces")
-                            .placeholder("Faces")
+                            .placeholder(tr("model-faces"))
                             .items(items.clone())
                             .active(true)
                             .build(t),
@@ -1443,11 +1563,12 @@ fn sync_load_dialog(
                             b.spawn((
                                 Name::new("sim-load-fixed-note"),
                                 t.text(
-                                    "The faces don't move.",
+                                    tr("model-sim-fixed-note"),
                                     11.0,
                                     FontWeight::NORMAL,
                                     t.muted_foreground,
                                 ),
+                                cadrs_ui::i18n::Translated("model-sim-fixed-note"),
                                 Node {
                                     margin: UiRect::top(Val::Px(4.0)),
                                     ..default()
@@ -1459,7 +1580,7 @@ fn sync_load_dialog(
                         } => {
                             b.spawn((
                                 MagnitudeField,
-                                NumberField::new("sim-load-magnitude", "Force")
+                                NumberField::new("sim-load-magnitude", tr("model-sim-force"))
                                     .text(text.clone())
                                     .label_width(64.0)
                                     .build(t),
@@ -1472,7 +1593,13 @@ fn sync_load_dialog(
                             })
                             .with_children(|r| {
                                 r.spawn((
-                                    t.text("Direction", 11.5, FontWeight::NORMAL, t.foreground),
+                                    t.text(
+                                        tr("common-direction"),
+                                        11.5,
+                                        FontWeight::NORMAL,
+                                        t.foreground,
+                                    ),
+                                    cadrs_ui::i18n::Translated("common-direction"),
                                     Node {
                                         width: Val::Px(64.0),
                                         ..default()
@@ -1481,7 +1608,7 @@ fn sync_load_dialog(
                                 let mut sel =
                                     Select::new("sim-load-direction").width(Val::Px(130.0));
                                 for d in ForceDirection::ALL {
-                                    sel = sel.option(d.label(), true);
+                                    sel = sel.option(direction_text(d), true);
                                 }
                                 r.spawn((
                                     DirectionSelect,
@@ -1495,7 +1622,7 @@ fn sync_load_dialog(
                                 ));
                             });
                             b.spawn(
-                                OptionRow::new("sim-load-flip", "Flip direction")
+                                OptionRow::new("sim-load-flip", tr("common-flip-direction"))
                                     .checked(flip)
                                     .build(t),
                             );
@@ -1503,7 +1630,7 @@ fn sync_load_dialog(
                         LoadKind::Pressure { .. } => {
                             b.spawn((
                                 MagnitudeField,
-                                NumberField::new("sim-load-magnitude", "Pressure")
+                                NumberField::new("sim-load-magnitude", tr("model-sim-pressure"))
                                     .text(text.clone())
                                     .label_width(64.0)
                                     .build(t),
@@ -1511,11 +1638,12 @@ fn sync_load_dialog(
                             b.spawn((
                                 Name::new("sim-load-pressure-note"),
                                 t.text(
-                                    "Pushes into the faces.",
+                                    tr("model-sim-pressure-note"),
                                     11.0,
                                     FontWeight::NORMAL,
                                     t.muted_foreground,
                                 ),
+                                cadrs_ui::i18n::Translated("model-sim-pressure-note"),
                                 Node {
                                     margin: UiRect::top(Val::Px(2.0)),
                                     ..default()
@@ -1748,14 +1876,29 @@ fn sync_load_rows(
         .simulation
         .loads
         .iter()
-        .map(|l| (l.id, l.name.clone(), l.kind.summary()))
+        .map(|l| (l.id, l.name.clone(), load_summary(&l.kind)))
         .collect();
-    let count = format!("Loads ({})", key.len());
+    let count = tr_with(
+        "model-sim-loads-count",
+        &[("count", &key.len().to_string())],
+    );
+    // The header's label: the text that reads as a loads count (in English, or as the current
+    // language writes it).
+    let pattern = tr("model-sim-loads-count");
+    let (before, after) = pattern
+        .split_once("{ $count }")
+        .unwrap_or((pattern.as_str(), ""));
+    let is_count = |s: &str| {
+        s.starts_with("Loads (")
+            || (!(before.is_empty() && after.is_empty())
+                && s.starts_with(before)
+                && s.ends_with(after))
+    };
     for children in &q_header {
         let mut stack: Vec<Entity> = children.iter().collect();
         while let Some(e) = stack.pop() {
             if let Ok(mut t) = q_text.get_mut(e)
-                && t.0.starts_with("Loads (")
+                && is_count(&t.0)
                 && t.0 != count
             {
                 t.0 = count.clone();
@@ -1776,7 +1919,7 @@ fn sync_load_rows(
         .simulation
         .loads
         .iter()
-        .map(|l| (l.id, l.name.clone(), l.kind.summary(), l.kind))
+        .map(|l| (l.id, l.name.clone(), load_summary(&l.kind), l.kind))
         .collect();
     commands.entity(container).despawn_children();
     commands.entity(container).with_children(|c| {
@@ -1794,7 +1937,7 @@ fn sync_load_rows(
                     .build(&t),
                 TreeLoadRow(*id),
                 DoubleClickable,
-                Tooltip::new(format!("{name}\nDouble-click to edit (Simulation panel)")),
+                Tooltip::new(tr_with("model-sim-load-row-tooltip", &[("name", name)])),
             ))
             .entry::<Node>()
             .and_modify(|mut n| {
@@ -2074,21 +2217,34 @@ fn sync_legend(
         let s = &r.solution;
         // The bar's bottom and top values.
         let (title, unit, lo, max) = match state.show {
-            Show::VonMises => ("Von Mises stress", "MPa", 0.0, s.max_von_mises()),
-            Show::Displacement => ("Displacement", "mm", 0.0, s.max_displacement()),
+            Show::VonMises => (
+                tr("model-sim-von-mises-stress"),
+                "MPa",
+                0.0,
+                s.max_von_mises(),
+            ),
+            Show::Displacement => (
+                tr("model-sim-displacement"),
+                "mm",
+                0.0,
+                s.max_displacement(),
+            ),
             Show::SafetyFactor => {
                 let (a, b) = safety_range(min_safety(r).unwrap_or(1.0));
-                ("Safety factor", "", b, a)
+                (tr("model-sim-safety-factor"), "", b, a)
             }
         };
         let caption = match state.deform {
-            Deform::Undeformed => "Undeformed shape".to_string(),
-            Deform::Actual => "Deformed ×1 (actual)".to_string(),
-            Deform::Exaggerated => format!(
-                "Deformed ×{} (exaggerated)",
-                cadrs_ui::color_legend::format_value(
-                    exaggeration(r, inputs.size).unwrap_or(1.0).round().max(1.0)
-                )
+            Deform::Undeformed => tr("model-sim-undeformed-shape"),
+            Deform::Actual => tr("model-sim-deformed-actual"),
+            Deform::Exaggerated => tr_with(
+                "model-sim-deformed-exaggerated",
+                &[(
+                    "factor",
+                    &cadrs_ui::color_legend::format_value(
+                        exaggeration(r, inputs.size).unwrap_or(1.0).round().max(1.0),
+                    ),
+                )],
             ),
         };
         (title, unit, lo, max, caption)
@@ -2183,12 +2339,12 @@ fn update_probe(
     let du = at(&geometry.displacement) as f64;
     let (first, second) = match state.show {
         Show::VonMises => (
-            format!("Von Mises: {}", val(vm, "MPa")),
-            format!("Displacement: {}", val(du, "mm")),
+            tr_with("model-sim-probe-von-mises", &[("value", &val(vm, "MPa"))]),
+            tr_with("model-sim-probe-displacement", &[("value", &val(du, "mm"))]),
         ),
         Show::Displacement => (
-            format!("Displacement: {}", val(du, "mm")),
-            format!("Von Mises: {}", val(vm, "MPa")),
+            tr_with("model-sim-probe-displacement", &[("value", &val(du, "mm"))]),
+            tr_with("model-sim-probe-von-mises", &[("value", &val(vm, "MPa"))]),
         ),
         Show::SafetyFactor => {
             // From the interpolated stress (the corner factors can be infinite).
@@ -2203,8 +2359,8 @@ fn update_probe(
                 _ => "—".into(),
             };
             (
-                format!("Safety factor: {fs}"),
-                format!("Von Mises: {}", val(vm, "MPa")),
+                tr_with("model-sim-probe-safety-factor", &[("value", &fs)]),
+                tr_with("model-sim-probe-von-mises", &[("value", &val(vm, "MPa"))]),
             )
         }
     };

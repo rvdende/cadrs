@@ -98,13 +98,16 @@ fn sync_server(world: &mut World) {
             let url = server.url();
             info!("MCP server on {url}");
             state.server = Some(server);
-            cadrs_ui::Notification::info(format!("MCP server on {url}"))
+            cadrs_ui::Notification::info(cadrs_ui::i18n::tr_with(
+                "model-mcp-server-on",
+                &[("url", &url)],
+            ))
         }
         Err(e) => {
             warn!("cannot start the MCP server on {addr}: {e}");
-            cadrs_ui::Notification::error(format!(
-                "Cannot start the MCP server on port {}: {e}",
-                mcp.port
+            cadrs_ui::Notification::error(cadrs_ui::i18n::tr_with(
+                "model-mcp-cannot-start",
+                &[("port", &mcp.port.to_string()), ("error", &e.to_string())],
             ))
         }
     };

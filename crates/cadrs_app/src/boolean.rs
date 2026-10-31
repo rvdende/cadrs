@@ -18,6 +18,7 @@ use cadrs_core::commands::{AddFeature, ReplaceFeature, SetBoolean};
 use cadrs_core::document::{BooleanFeature, BooleanKind, BooleanOffset};
 use cadrs_core::{ElementId, ElementKind, Feature, FeatureId, PartId};
 use cadrs_ui::ShortcutKey;
+use cadrs_ui::i18n::{tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     CheckboxChange, FeatureDialogAccept, FeatureDialogCancel, FeatureDialogState, NumberField,
@@ -615,6 +616,15 @@ fn on_remove(ev: On<SelectionListRemove>, q: Query<&ListRole>, mut commands: Com
     });
 }
 
+/// A Boolean's operation tab, in the current language (the core's label is English).
+fn boolean_kind_text(k: BooleanKind) -> String {
+    tr(match k {
+        BooleanKind::Union => "model-boolean-union",
+        BooleanKind::Subtract => "model-boolean-subtract",
+        BooleanKind::Intersect => "model-op-intersect",
+    })
+}
+
 /// The footer: the before/after slider and Final (P3.9, PS13.2, PS13.3).
 fn boolean_footer(f: &mut ChildSpawner, t: &Theme) {
     f.spawn(Node {
@@ -627,10 +637,10 @@ fn boolean_footer(f: &mut ChildSpawner, t: &Theme) {
         crate::feature_list::FinalButton,
         BooleanFinal,
         cadrs_ui::Button::new("boolean-final")
-            .label("Final")
+            .label(tr("model-dialog-final"))
             .small()
             .outline()
-            .tooltip("Show the final result")
+            .tooltip(tr("model-dialog-final-tooltip"))
             .build(t),
         bevy::ui_widgets::observe(
             |_: On<bevy::ui_widgets::Activate>, mut commands: Commands| {
@@ -647,7 +657,7 @@ fn boolean_footer(f: &mut ChildSpawner, t: &Theme) {
     f.spawn((
         Name::new("boolean-help"),
         cadrs_ui::icon("help-filled", 14.0, Color::srgb_u8(0xa8, 0xa8, 0xa8)),
-        Tooltip::new("Help"),
+        Tooltip::new(tr("common-help")),
     ));
 }
 
@@ -715,7 +725,11 @@ fn sync_boolean_dialog(
     let Some(b) = f.boolean() else { return };
     let names = |ids: &[PartId]| -> Vec<String> {
         ids.iter()
-            .map(|p| cache.part_name(*p).unwrap_or("Part").to_string())
+            .map(|p| {
+                cache
+                    .part_name(*p)
+                    .map_or_else(|| tr("common-part"), str::to_string)
+            })
             .collect()
     };
     let valid = f.is_valid() && !cache.errors.contains_key(&f.id) && !cache.rebuilding;
@@ -739,8 +753,8 @@ fn sync_boolean_dialog(
             let op = features
                 .iter()
                 .find(|x| x.id.0 == f.face.op)
-                .map_or("part".to_string(), |x| x.name.clone());
-            format!("Face of {op}")
+                .map_or_else(|| tr("model-unknown-part"), |x| x.name.clone());
+            tr_with("common-face-of", &[("name", &op)])
         })
         .collect();
     let built = q_dialog.iter().next().map(|(e, k, _)| (e, *k));
@@ -771,7 +785,7 @@ fn sync_boolean_dialog(
                     .body(move |p| {
                         let mut strip = TabStrip::new("boolean-operation").compact();
                         for k in BooleanKind::ALL {
-                            strip = strip.tab(k.label());
+                            strip = strip.tab(boolean_kind_text(k));
                         }
                         let i = BooleanKind::ALL.iter().position(|k| *k == op).unwrap_or(0);
                         p.spawn(strip.selected(i).build(&t));
@@ -790,7 +804,7 @@ fn sync_boolean_dialog(
                             b.spawn((
                                 ListRole::Tools,
                                 SelectionList::new("boolean-tools-field")
-                                    .placeholder("Tools")
+                                    .placeholder(tr("model-boolean-tools"))
                                     .items(tools.clone())
                                     .active(
                                         (!targets_active || op != BooleanKind::Subtract)
@@ -803,14 +817,14 @@ fn sync_boolean_dialog(
                                 b.spawn((
                                     ListRole::Targets,
                                     SelectionList::new("boolean-targets-field")
-                                        .placeholder("Targets")
+                                        .placeholder(tr("model-boolean-targets"))
                                         .items(targets.clone())
                                         .active(targets_active)
                                         .build(&t),
                                 ));
                                 // P3.10 (PS5.5): the tools offset before they cut.
                                 b.spawn(
-                                    OptionRow::new("boolean-offset", "Offset")
+                                    OptionRow::new("boolean-offset", tr("common-offset"))
                                         .chevron()
                                         .checked(offset.is_some())
                                         .build(&t),
@@ -829,15 +843,20 @@ fn sync_boolean_dialog(
                                     ))
                                     .with_children(|b| {
                                         b.spawn(
-                                            OptionRow::new("boolean-offset-all", "Offset all")
-                                                .checked(o.all)
-                                                .build(&t),
+                                            OptionRow::new(
+                                                "boolean-offset-all",
+                                                tr("model-boolean-offset-all"),
+                                            )
+                                            .checked(o.all)
+                                            .build(&t),
                                         );
                                         if !o.all {
                                             b.spawn((
                                                 ListRole::OffsetFaces,
                                                 SelectionList::new("boolean-offset-faces-field")
-                                                    .placeholder("Faces to offset")
+                                                    .placeholder(tr(
+                                                        "model-boolean-faces-to-offset",
+                                                    ))
                                                     .items(face_items.clone())
                                                     .active(faces_active)
                                                     .build(&t),
@@ -854,7 +873,7 @@ fn sync_boolean_dialog(
                                                     OffsetDistance,
                                                     NumberField::new(
                                                         "boolean-offset-distance",
-                                                        "Distance",
+                                                        tr("common-distance"),
                                                     )
                                                     .text(o.expr.clone())
                                                     .label_width(82.0)
@@ -869,7 +888,7 @@ fn sync_boolean_dialog(
                                                     "boolean-offset-flip",
                                                     OffsetFlip,
                                                     o.flip,
-                                                    "Opposite direction",
+                                                    &tr("common-opposite-direction"),
                                                 );
                                             },
                                         );
@@ -877,7 +896,7 @@ fn sync_boolean_dialog(
                                 }
                             }
                             b.spawn(
-                                OptionRow::new("boolean-keep-tools", "Keep tools")
+                                OptionRow::new("boolean-keep-tools", tr("model-keep-tools"))
                                     .checked(keep)
                                     .build(&t),
                             );

@@ -18,6 +18,7 @@ use cadrs_core::history_log::VersionId;
 use cadrs_net::bevy_iroh::Iroh;
 use cadrs_net::bevy_iroh::prelude::{NetSender, Received};
 use cadrs_net::{Answer, Ask, Request, Verdict, VersionCreated, transfer};
+use cadrs_ui::i18n::{tr, tr_with};
 
 use super::live::{GuestState, Live, Role};
 use crate::history_panel::DocLog;
@@ -84,9 +85,11 @@ fn owner_version(
 ) -> Result<String, String> {
     super::live::number_own(world);
     let (document, room, epoch, seq, doc) = {
-        let live = world.get_resource::<Live>().ok_or("Not shared")?;
+        let live = world
+            .get_resource::<Live>()
+            .ok_or_else(|| tr("shell-locks-not-shared"))?;
         let Role::Owner(o) = &live.role else {
-            return Err("Not the owner".into());
+            return Err(tr("shell-versions-not-owner"));
         };
         (
             live.document,
@@ -99,7 +102,7 @@ fn owner_version(
     let id = VersionId::new();
     let time = world.resource::<AppClock>().now();
     let name = make_version(world, &doc, id, name, description, time, user)
-        .ok_or("The document's history isn't open")?;
+        .ok_or_else(|| tr("shell-versions-history-closed"))?;
     let msg = VersionCreated {
         document,
         epoch,
@@ -142,7 +145,13 @@ pub fn intercept(world: &mut World, name: &str, description: &str) -> bool {
             }
         }
         Some((_, owner, Permission::View, _)) => {
-            crate::linked::toast(world, format!("{owner} hasn't given you edit access"));
+            crate::linked::toast(
+                world,
+                tr_with(
+                    "shell-versions-no-edit-access",
+                    &[("owner", owner.as_str())],
+                ),
+            );
         }
         Some((link, owner, _, Some(epoch))) => {
             let task = transfer::start_create_version(
@@ -153,12 +162,15 @@ pub fn intercept(world: &mut World, name: &str, description: &str) -> bool {
                 description.to_string(),
             );
             world.resource_mut::<Waiting>().asks.push(task);
-            crate::linked::toast(world, format!("Asked {owner}'s cadrs for the version"));
+            crate::linked::toast(
+                world,
+                tr_with("shell-versions-asked-owner", &[("owner", owner.as_str())]),
+            );
         }
         Some((_, owner, _, None)) => {
             crate::linked::toast(
                 world,
-                format!("Versions of this document are made by {owner}'s cadrs, which is away"),
+                tr_with("shell-versions-owner-away", &[("owner", owner.as_str())]),
             );
         }
     }
@@ -268,7 +280,7 @@ fn poll(world: &mut World) {
     for r in done {
         match r {
             Ok(Verdict::Refused(why)) | Err(why) => crate::linked::toast(world, why),
-            Ok(Verdict::Closed) => crate::linked::toast(world, "The owner has closed the document"),
+            Ok(Verdict::Closed) => crate::linked::toast(world, tr("shell-versions-owner-closed")),
             _ => {}
         }
     }
