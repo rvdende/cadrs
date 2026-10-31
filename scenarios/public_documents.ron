@@ -1,0 +1,45 @@
+// Public documents (Share ▸ Public; the documents page's Public documents panel), offline, with
+// made-up documents (`public sample 8`: signed by keys made for them, their revisions kept
+// here, with stars).
+// 01 the panel beside the documents: most starred first, each with its picture, owner and date,
+//    ★ and its count, and Fork; "The network is off for this run".
+// 02 Recent: newest first.
+// 03 a search: "case" finds the Raspberry Pi 5 case.
+// 04 its row clicked: it opens read-only, with the banner "“Raspberry Pi 5 case” by Jonas Berg,
+//    revision 2: public, view only", Fork and Close.
+// 05 Fork: a document of one's own, "Raspberry Pi 5 case", open for editing (no banner).
+// 06 back on the documents page: the fork is listed under Documents.
+// 07 the app menu's Public: the documents this user published (none here).
+Scenario(
+    start: Some("landing"),
+    seed_documents: 4,
+    steps: [
+        WaitFor("public-card"),
+        Custom("public sample 8"),
+        Wait(5),
+        Screenshot("01-public-panel"),
+        Click(ui("public-sort-1")),
+        Wait(3),
+        Screenshot("02-recent"),
+        Click(ui("public-search")),
+        Type("case"),
+        Wait(3),
+        Screenshot("03-search"),
+        Click(ui("public-row-0")),
+        WaitFor("public-view-banner"),
+        Wait(10),
+        Screenshot("04-view"),
+        Click(ui("public-view-fork")),
+        Wait(30),
+        Screenshot("05-forked"),
+        Click(ui("app-menu")),
+        Click(ui("app-documents")),
+        WaitFor("public-card"),
+        Wait(5),
+        Screenshot("06-fork-listed"),
+        Click(ui("app-menu")),
+        Click(ui("app-public")),
+        Wait(5),
+        Screenshot("07-my-public"),
+    ],
+)

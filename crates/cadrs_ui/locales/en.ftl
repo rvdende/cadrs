@@ -556,6 +556,65 @@ shell-share-new-owner = New owner
 shell-share-transfer-hint = Their cadrs must be running. You keep the document, with Can edit.
 shell-share-transfer = Transfer ownership
 shell-share-transferring = Transferring…
+# The share dialog's third tab: making the document public.
+shell-share-public = Public
+shell-share-public-tooltip = Let anyone using cadrs find, view and fork it
+shell-share-public-off = This document is private
+# "Public documents" is the documents page's panel (shell-public-title).
+shell-share-public-hint = Publishing lists it under Public documents for anyone using cadrs: they can view it and fork a copy of their own, but nobody else can edit it. It is published as it is now; changes you make later stay private until you publish again.
+shell-share-publish = Publish
+# { $revision } counts the times it was published (1, 2, …); { $date } is when ("2 hours ago").
+shell-share-public-on = Public: revision { $revision }, published { $date }
+shell-share-public-hint-on = Anyone using cadrs can view it and fork a copy; nobody else can edit it. Changes you made since are private until you publish again.
+shell-share-publish-again = Publish again
+shell-share-make-private = Make private
+# Toasts. { $revision } is as in shell-share-public-on.
+shell-share-published = Published (revision { $revision })
+shell-share-made-private = It is private again
+
+## crates/cadrs_app/src/collab/public.rs, crates/cadrs_app/src/landing_public.rs
+# The documents page's panel of public documents.
+shell-public-title = Public documents
+# Its order: most starred first, or newest first.
+shell-public-by-stars = Stars
+shell-public-by-stars-tooltip = Most starred first
+shell-public-recent = Recent
+shell-public-recent-tooltip = Newest first
+shell-public-search = Search public documents…
+# Where cadrs stands with other users, under the search box.
+shell-public-status-offline = Offline: connect to find public documents
+shell-public-status-no-network = The network is off for this run
+# Online, but the user doesn't take part in public documents; the button turns it on.
+shell-public-status-off = Public documents are off
+shell-public-turn-on = Turn on
+shell-public-turn-on-tooltip = Find public documents while online (Preferences › Collaboration)
+shell-public-status-joining = Looking for other cadrs users…
+shell-public-status-alone = Online; nobody else found yet
+# { $count } is how many other cadrs users (or seed peers) this one is connected to.
+shell-public-status-peers = Online · { $count } connected
+shell-public-empty-search = No matching public documents
+shell-public-empty-search-text = Try another name, owner or word.
+shell-public-empty-text = Documents people publish appear here when cadrs is online.
+# Under a public document's name: { $owner } is who published it, { $date } when ("2 days ago").
+shell-public-row-detail = { $owner } · { $date }
+shell-public-open-tooltip = View it (read-only)
+shell-public-star = Star it
+shell-public-unstar = Take your star back
+# "Fork" copies a public document into a document of the user's own (as GitHub's fork).
+shell-public-fork = Fork
+shell-public-fork-tooltip = Fork: make a copy of your own
+# The banner over a public document opened read-only; { $revision } as in shell-share-public-on.
+shell-public-view-banner = “{ $name }” by { $owner }, revision { $revision }: public, view only
+# The top bar's label for a public document opened read-only.
+shell-public-view-label = “{ $name }” by { $owner } (public)
+shell-public-opening = Opening “{ $name }”…
+shell-public-forking = Forking “{ $name }”…
+# { $why } is the reason, as cadrs gives it.
+shell-public-cannot-open = Cannot open “{ $name }”: { $why }
+shell-public-gone = That document is not public any more
+shell-public-only-owner = Only { $owner } can make this document public
+shell-public-net-off = Public documents need the network, and the network is off (CADRS_NET=0)
+shell-public-offline = Public documents need the network, and cadrs is offline
 
 ## crates/cadrs_app/src/identity.rs
 # Tooltip of the user's name and avatar at the top right.
@@ -814,6 +873,11 @@ shell-prefs-mcp-note = While it is on, AI assistants on this computer (Claude, C
 shell-prefs-collab-heading = Collaboration
 shell-prefs-id-while-online = Shown while online
 shell-prefs-p2p = P2P networking
+shell-prefs-public = Public documents
+shell-prefs-public-switch = Find public documents while online
+# Seed peers: other cadrs users (their cadrs IDs) that stay online, to find public documents through.
+shell-prefs-public-seeds = Seed peers
+shell-prefs-public-seeds-placeholder = cadrs IDs, separated by commas
 # "iroh" is the name of the networking library: keep it.
 shell-prefs-collab-note = Documents are shared peer to peer, with no server, through iroh's relays. Off, cadrs stays offline until you connect with the network button in the top bar, or share. Give your cadrs ID to someone who wants to share a document with you.
 
@@ -1067,7 +1131,8 @@ shell-landing-empty-trash-text = Documents you move to the trash appear here.
 shell-landing-empty-shared = Nothing shared with you
 shell-landing-empty-shared-text = Documents other people share with you appear here.
 shell-landing-empty-public = No public documents
-shell-landing-empty-public-text = cadrs keeps your documents on this computer.
+# The Public list (the app menu's Public): the documents the user made public.
+shell-landing-empty-public-mine-text = Documents you make public (Share › Public) appear here, for anyone using cadrs to find.
 shell-landing-empty-recent = No recently opened documents
 shell-landing-empty-recent-text = Documents you open appear here.
 shell-landing-empty-none = No documents yet

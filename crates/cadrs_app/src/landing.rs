@@ -1,7 +1,8 @@
 //! The documents page, on the glass wallpaper ([`cadrs_ui::glass`]).
 //!
 //! - Top bar: the app menu (the cadrs mark, [`crate::app_menu`]), whose first items here are
-//!   Open documents folder, Labels ▸ (each shows its documents) and Trash ([`app_entries`]);
+//!   Open documents folder, Labels ▸ (each shows its documents), Public (the documents this
+//!   user published) and Trash ([`app_entries`]);
 //!   the version, notifications ([`crate::notifications`]), the color scheme and the account
 //!   ([`crate::identity`]).
 //! - A command strip along the top, one height and small capitals: **New document** (with ▾
@@ -9,6 +10,8 @@
 //!   Import, Label and the list and grid toggles.
 //! - The list in a glass card: a caption (DOCUMENTS and the count, or the Trash, a label or the
 //!   samples with ‹ back), and the sortable columns NAME | MODIFIED | MODIFIED BY | OWNED BY.
+//! - Beside it, the Public documents panel ([`public_panel`]): what anyone using cadrs
+//!   published, to view, star and fork.
 //!
 //! Clicking a row selects it; double-clicking it (or Enter) opens it (P3E.1). Right-clicking it
 //! selects it and opens a context menu with Rename… (a dialog), Labels ▸, Properties…,
@@ -52,6 +55,8 @@ use crate::{ActiveDocument, AppClock, AppState, DocumentStore, UserProfile};
 mod details;
 #[path = "landing_organize.rs"]
 mod organize;
+#[path = "landing_public.rs"]
+mod public_panel;
 pub use details::import_file as import_mesh_document;
 pub use details::{DetailsTab, LandingDetails, Pick};
 
@@ -99,6 +104,7 @@ impl Plugin for LandingPlugin {
             .add_observer(on_row_more)
             .add_observer(on_context_action);
         organize::plugin(app);
+        public_panel::plugin(app);
     }
 }
 
@@ -362,7 +368,12 @@ struct LandingRoot;
 fn relanguage(
     mut last: Local<&'static str>,
     q_root: Query<Entity, With<LandingRoot>>,
-    (commands, theme, profile): (Commands, Res<Theme>, Res<UserProfile>),
+    (commands, theme, profile, panel): (
+        Commands,
+        Res<Theme>,
+        Res<UserProfile>,
+        Res<public_panel::PublicPanel>,
+    ),
 ) {
     let now = cadrs_ui::i18n::language();
     let before = std::mem::replace(&mut *last, now);
@@ -373,10 +384,15 @@ fn relanguage(
     for root in &q_root {
         commands.entity(root).despawn();
     }
-    spawn_landing(commands, theme, profile);
+    spawn_landing(commands, theme, profile, panel);
 }
 
-fn spawn_landing(mut commands: Commands, theme: Res<Theme>, profile: Res<UserProfile>) {
+fn spawn_landing(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    profile: Res<UserProfile>,
+    panel: Res<public_panel::PublicPanel>,
+) {
     let t = theme.clone();
     commands
         .spawn((
@@ -422,7 +438,10 @@ fn spawn_landing(mut commands: Commands, theme: Res<Theme>, profile: Res<UserPro
                     column_gap: Val::Px(16.0),
                     ..default()
                 })
-                .with_children(|body| documents_card(body, &t));
+                .with_children(|body| {
+                    documents_card(body, &t);
+                    public_panel::public_card(body, &t, &panel);
+                });
             });
         });
 }
@@ -1038,7 +1057,7 @@ fn rebuild_main(
                 Filter::Public => (
                     "public",
                     tr("shell-landing-empty-public"),
-                    tr("shell-landing-empty-public-text"),
+                    tr("shell-landing-empty-public-mine-text"),
                     false,
                 ),
                 Filter::RecentlyOpened => (
@@ -1622,6 +1641,10 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
             .icon("tag")
             .submenu(labels)
             .into(),
+        MenuItem::new("app-public", tr("shell-landing-public"))
+            .icon("public")
+            .checked(filter == Filter::Public)
+            .into(),
         MenuItem::new("app-trash", tr("shell-landing-trash"))
             .icon("delete")
             .checked(filter == Filter::Trash)
@@ -1644,6 +1667,7 @@ pub(crate) fn app_entries(lib: &Library, filter: Filter) -> Vec<MenuEntry> {
 pub(crate) fn app_action(world: &mut World, item: &str) -> bool {
     match item {
         "app-open-folder" => open_documents_folder(world),
+        "app-public" => show_filter(world, Filter::Public),
         "app-trash" => show_filter(world, Filter::Trash),
         "app-empty-trash" => {
             let theme = world.resource::<Theme>().clone();
