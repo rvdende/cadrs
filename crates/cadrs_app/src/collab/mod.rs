@@ -12,6 +12,8 @@
 //! - Opened, a shared document is edited together ([`live`]), with everyone's avatars, where
 //!   they are, and Follow mode ([`presence`]), and everyone's pointer and camera live
 //!   ([`pointers`]).
+//! - Share ▸ **Public** publishes a document for anyone using cadrs to find, view and fork
+//!   ([`public`]; the documents page's Public documents panel lists them).
 
 use bevy::prelude::*;
 use cadrs_core::DocumentMeta;
@@ -27,6 +29,7 @@ pub mod live;
 pub mod locks;
 pub mod pointers;
 pub mod presence;
+pub mod public;
 pub mod share_dialog;
 pub mod sharing;
 pub mod versions;
@@ -45,6 +48,7 @@ impl Plugin for CollabPlugin {
         locks::plugin(app);
         pointers::plugin(app);
         presence::plugin(app);
+        public::plugin(app);
         sharing::plugin(app);
         share_dialog::plugin(app);
         versions::plugin(app);

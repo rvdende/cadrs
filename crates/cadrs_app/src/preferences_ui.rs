@@ -22,7 +22,9 @@
 //! Below it, **AI assistants (MCP)**: the *Enable MCP server* switch and the endpoint it serves
 //! (`crate::mcp` starts and stops the server as OK changes it).
 //!
-//! Last, **Collaboration**: the cadrs ID while online, and *Connect when cadrs starts*
+//! Last, **Collaboration**: the cadrs ID while online, *Public documents* (take part in the
+//! public documents room while online, and the seed peers to start from: `public/seeds.txt`,
+//! [`crate::collab::public`]), and *Connect when cadrs starts*
 //! (`autoconnect_p2p`, off by default: cadrs stays offline until the user connects,
 //! [`crate::network`]). It takes effect at the next start; the top bar's network button goes
 //! online or offline now.
@@ -403,6 +405,13 @@ pub fn open_preferences(world: &mut World) {
     #[cfg(not(target_arch = "wasm32"))]
     let autoconnect = world.resource::<LocalPreferences>().0.autoconnect_p2p;
     #[cfg(not(target_arch = "wasm32"))]
+    let public_on = world.resource::<LocalPreferences>().0.public_documents;
+    #[cfg(not(target_arch = "wasm32"))]
+    let seeds = world
+        .resource::<crate::collab::public::Seeds>()
+        .0
+        .join(", ");
+    #[cfg(not(target_arch = "wasm32"))]
     let profile_cpu = world.resource::<LocalPreferences>().0.profile_cpu;
     let snap = world
         .resource::<LocalPreferences>()
@@ -741,6 +750,34 @@ pub fn open_preferences(world: &mut World) {
                             .on(autoconnect)
                             .build(t),
                     );
+                // Public documents: take part while online, and the seed peers to start from.
+                #[cfg(not(target_arch = "wasm32"))]
+                b.spawn(form_row(
+                    t,
+                    "pref-public-row",
+                    tr("shell-prefs-public"),
+                    150.0,
+                ))
+                .with_child(
+                    Switch::new("pref-public-documents")
+                        .label(tr("shell-prefs-public-switch"))
+                        .on(public_on)
+                        .build(t),
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                b.spawn(form_row(
+                    t,
+                    "pref-public-seeds-row",
+                    tr("shell-prefs-public-seeds"),
+                    150.0,
+                ))
+                .with_child(
+                    TextInput::new("pref-public-seeds")
+                        .placeholder(tr("shell-prefs-public-seeds-placeholder"))
+                        .value(seeds.clone())
+                        .width(Val::Px(330.0))
+                        .build(t),
+                );
                 b.spawn((
                     Name::new("pref-collab-note"),
                     t.text(
@@ -882,6 +919,28 @@ fn save_preferences(world: &mut World) {
         .map(|(_, s)| s.on);
     if let Some(on) = autoconnect {
         world.resource_mut::<LocalPreferences>().0.autoconnect_p2p = on;
+    }
+    let public_on = qm
+        .iter(world)
+        .find(|(n, _)| n.as_str() == "pref-public-documents")
+        .map(|(_, s)| s.on);
+    if let Some(on) = public_on {
+        world.resource_mut::<LocalPreferences>().0.public_documents = on;
+    }
+    let mut qt = world.query::<(&Name, &EditableText)>();
+    let seeds = qt
+        .iter(world)
+        .find(|(n, _)| n.as_str() == "pref-public-seeds-field")
+        .map(|(_, t)| crate::collab::public::Seeds::parse(&t.value().to_string()));
+    if let Some(seeds) = seeds
+        && *world.resource::<crate::collab::public::Seeds>() != seeds
+    {
+        if let Some(store) = world.get_resource::<DocumentStore>()
+            && let Err(e) = seeds.save(store.0.root())
+        {
+            warn!("cannot keep the seed peers: {e}");
+        }
+        world.insert_resource(seeds);
     }
     let profile_cpu = qm
         .iter(world)

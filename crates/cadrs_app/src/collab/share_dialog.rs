@@ -1,13 +1,16 @@
 //! The share dialog, as Onshape's (**Share** in the document's top bar), for a peer-to-peer
 //! cadrs: people are added by their **cadrs ID** (Preferences ▸ Collaboration shows one's
-//! own) or picked from the contacts, rather than by email; Teams, Companies and Public need a
-//! server and are left out.
+//! own) or picked from the contacts, rather than by email; Teams and Companies need a server
+//! and are left out.
 //!
 //! - **Individuals**: the cadrs ID, **Can edit** or **Can view**, the checkboxes (Copy,
 //!   Export, Share, Comment, Link document), an optional message, and **Share**. Below, who it
 //!   is shared with, each with their permission (changed in place) and an ✕.
 //! - **Link sharing**: **Turn on link sharing**; then the link, **Copy to clipboard**, its
 //!   permission, **Allow exporting from the link** and an ✕ next to "Anyone with link".
+//! - **Public** ([`super::public`]): **Publish** the document as it is, for anyone using cadrs
+//!   to find, view and fork (never edit); once it is public, the revision and its stars,
+//!   **Publish again** and **Make private**.
 //!
 //! Someone it is shared with who may share sees Individuals only, and their additions go
 //! through the owner.
@@ -106,6 +109,11 @@ pub fn open(world: &mut World, id: DocumentId) {
                                 None,
                                 tr("shell-share-link-sharing-tooltip"),
                             )
+                            .option(
+                                tr("shell-share-public"),
+                                None,
+                                tr("shell-share-public-tooltip"),
+                            )
                             .size(26.0, 12.0)
                             .build(t),
                     )
@@ -126,6 +134,15 @@ pub fn open(world: &mut World, id: DocumentId) {
                     Node {
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(8.0),
+                        display: Display::None,
+                        ..default()
+                    },
+                ));
+                b.spawn((
+                    Name::new("share-public"),
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
                         display: Display::None,
                         ..default()
                     },
@@ -495,6 +512,148 @@ fn refresh(world: &mut World) {
                 }
             });
     }
+    if d.owner
+        && let Some(panel) = named(world, "share-public")
+    {
+        world.entity_mut(panel).despawn_children();
+        let date = meta
+            .published
+            .as_ref()
+            .map(|p| world.resource::<crate::AppClock>().format(p.time));
+        let stars = super::public::own_stars(world, d.document).unwrap_or(0);
+        world
+            .entity_mut(panel)
+            .with_children(|p| public_tab(p, t, meta.published.as_ref(), date, stars));
+    }
+}
+
+/// The Public tab: what publishing means, and Publish, or (published) the revision, its stars,
+/// Publish again and Make private.
+fn public_tab(
+    p: &mut ChildSpawner,
+    t: &Theme,
+    published: Option<&cadrs_core::collab::Published>,
+    date: Option<String>,
+    stars: usize,
+) {
+    let note = |p: &mut ChildSpawner, key: &'static str| {
+        p.spawn((
+            t.text(tr(key), t.font_sm, FontWeight::NORMAL, t.muted_foreground),
+            Translated(key),
+            Node {
+                width: Val::Px(520.0),
+                ..default()
+            },
+        ))
+        .insert(TextLayout::default());
+    };
+    let publish = |what: &'static str| {
+        observe(move |_: On<Activate>, mut commands: Commands| {
+            commands.queue(move |w: &mut World| {
+                let Some(d) = dialog(w) else { return };
+                let text = match what {
+                    "publish" => super::public::publish(w, d.document).map(|l| {
+                        tr_with(
+                            "shell-share-published",
+                            &[("revision", &l.revision.to_string())],
+                        )
+                    }),
+                    _ => super::public::make_private(w, d.document)
+                        .map(|()| tr("shell-share-made-private")),
+                };
+                crate::linked::toast(w, text.unwrap_or_else(|why| why));
+                refresh(w);
+            });
+        })
+    };
+    match published {
+        None => {
+            p.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(icon("public", 16.0, t.foreground));
+                r.spawn((
+                    t.text(
+                        tr("shell-share-public-off"),
+                        t.font_base,
+                        FontWeight::MEDIUM,
+                        t.foreground,
+                    ),
+                    Translated("shell-share-public-off"),
+                ));
+            });
+            note(p, "shell-share-public-hint");
+            p.spawn(Node::default()).with_children(|r| {
+                r.spawn((
+                    Button::new("share-publish")
+                        .label(tr("shell-share-publish"))
+                        .icon("public")
+                        .primary()
+                        .build(t),
+                    publish("publish"),
+                ));
+            });
+        }
+        Some(pb) => {
+            let status = tr_with(
+                "shell-share-public-on",
+                &[
+                    ("revision", &pb.revision.to_string()),
+                    ("date", date.as_deref().unwrap_or("")),
+                ],
+            );
+            p.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(icon("public", 16.0, t.foreground));
+                r.spawn((
+                    Name::new("share-public-status"),
+                    t.text(status, t.font_base, FontWeight::MEDIUM, t.foreground),
+                ))
+                .entry::<Node>()
+                .and_modify(|mut n| n.flex_grow = 1.0);
+                r.spawn(icon("star", 14.0, t.muted_foreground));
+                r.spawn((
+                    Name::new("share-public-stars"),
+                    t.text(
+                        stars.to_string(),
+                        t.font_base,
+                        FontWeight::NORMAL,
+                        t.foreground,
+                    ),
+                ));
+            });
+            note(p, "shell-share-public-hint-on");
+            p.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn((
+                    Button::new("share-publish")
+                        .label(tr("shell-share-publish-again"))
+                        .icon("public")
+                        .primary()
+                        .build(t),
+                    publish("publish"),
+                ));
+                r.spawn((
+                    Button::new("share-make-private")
+                        .label(tr("shell-share-make-private"))
+                        .outline()
+                        .build(t),
+                    publish("private"),
+                ));
+            });
+        }
+    }
 }
 
 /// A row of the Shared with list: an avatar, the name, the permission (a select for the
@@ -677,6 +836,9 @@ fn on_segment(ev: On<SegmentedSelect>, q: Query<&Name>, mut nodes: Query<(&Name,
         let show = match n.as_str() {
             "share-individuals" => ev.index == 0,
             "share-link" => ev.index == 1,
+            "share-public" => ev.index == 2,
+            // Share is for the people added; the Public tab has its own buttons.
+            "share-confirm" => ev.index != 2,
             _ => continue,
         };
         node.display = if show { Display::Flex } else { Display::None };

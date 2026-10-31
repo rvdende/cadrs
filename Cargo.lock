@@ -2643,7 +2643,9 @@ version = "0.2.4"
 dependencies = [
  "bevy",
  "bevy_iroh",
+ "blake3",
  "cadrs_core",
+ "cadrs_fs",
  "cadrs_sketch",
  "data-encoding",
  "n0-future",

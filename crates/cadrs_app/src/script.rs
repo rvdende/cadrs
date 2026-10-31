@@ -107,6 +107,8 @@
 //!   share dialog; `share-with <cadrs ID> <name> edit|view`, `unshare <cadrs ID>` and
 //!   `share-link off|view|edit` do what it does; `follow <cadrs ID prefix>` follows a
 //!   collaborator; `transfer <cadrs ID prefix>` transfers ownership to a member;
+//!   `public sample <n>`, `public view <n>` and `public fork <n>`: made-up public documents,
+//!   and viewing or forking one ([`crate::collab::public::script`]);
 //!   `voice join|mute|leave` as the voice buttons (with the `voice` feature). `branch <version index> <name>` branches from a version (and opens the
 //!   branch); `workspace main` opens Main again.
 //! - `selection-readout`: shows the selection readout (off by default, see
@@ -231,6 +233,12 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
                     _ => warn!("voice {what}: join, leave or mute"),
                 }
             });
+            continue;
+        }
+        // Public documents (see [`crate::collab::public::script`]).
+        if let Some(rest) = m.0.trim().strip_prefix("public ") {
+            let arg = rest.trim().to_string();
+            commands.queue(move |world: &mut World| crate::collab::public::script(world, &arg));
             continue;
         }
         if m.0.trim() == "share-dialog" {

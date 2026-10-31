@@ -220,6 +220,26 @@ impl SharedInfo {
     }
 }
 
+/// A document this user made public (Share ▸ Public; `cadrs_net::public` keeps the listing):
+/// the revision last published. Edits made since stay private until it is published again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Published {
+    /// 1 for the first time it was published, one more each time after.
+    pub revision: u32,
+    pub time: crate::library::Timestamp,
+}
+
+/// The public document this one was forked from (a copy of it as it was published).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkedFrom {
+    pub document: crate::DocumentId,
+    /// Its owner's cadrs ID and name.
+    pub owner: String,
+    pub owner_name: String,
+    pub name: String,
+    pub revision: u32,
+}
+
 /// Someone this user has shared with or been shared by, to pick in the share dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contact {

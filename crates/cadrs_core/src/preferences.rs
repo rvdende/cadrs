@@ -313,6 +313,10 @@ pub struct Preferences {
     /// as cadrs starts. Off, cadrs stays off the network until the user connects (issue #148).
     #[serde(default)]
     pub autoconnect_p2p: bool,
+    /// While online, take part in the public documents room (`cadrs_net::public`): find the
+    /// documents others published, and help others find them. On unless the user turns it off.
+    #[serde(default = "default_true")]
+    pub public_documents: bool,
     /// Time every system and schedule, for the frame panel's details (F12) and
     /// `get_frame_stats`. It costs about a fifth of each frame, so it's off unless wanted, and
     /// takes effect at the next start (`cadrs_app::frame_profile::CpuProfiling`).
@@ -410,6 +414,10 @@ impl Language {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_vsync() -> bool {
     true
 }
@@ -432,6 +440,7 @@ impl Default for Preferences {
             color_scheme: ColorScheme::default(),
             whats_new_seen: 0,
             autoconnect_p2p: false,
+            public_documents: true,
             profile_cpu: false,
             vsync: true,
             language: Language::English,
@@ -621,6 +630,7 @@ mod tests {
             color_scheme: ColorScheme::Dark,
             whats_new_seen: 1,
             autoconnect_p2p: true,
+            public_documents: false,
             profile_cpu: true,
             vsync: false,
             language: Language::PortugueseBrazil,
