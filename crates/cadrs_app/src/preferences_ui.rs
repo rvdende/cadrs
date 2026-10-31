@@ -408,9 +408,9 @@ pub fn open_preferences(world: &mut World) {
     let public_on = world.resource::<LocalPreferences>().0.public_documents;
     #[cfg(not(target_arch = "wasm32"))]
     let seeds = world
-        .resource::<crate::collab::public::Seeds>()
-        .0
-        .join(", ");
+        .get_resource::<crate::collab::public::Seeds>()
+        .map(|s| s.0.join(", "))
+        .unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]
     let profile_cpu = world.resource::<LocalPreferences>().0.profile_cpu;
     let snap = world
@@ -933,7 +933,7 @@ fn save_preferences(world: &mut World) {
         .find(|(n, _)| n.as_str() == "pref-public-seeds-field")
         .map(|(_, t)| crate::collab::public::Seeds::parse(&t.value().to_string()));
     if let Some(seeds) = seeds
-        && *world.resource::<crate::collab::public::Seeds>() != seeds
+        && world.get_resource::<crate::collab::public::Seeds>() != Some(&seeds)
     {
         if let Some(store) = world.get_resource::<DocumentStore>()
             && let Err(e) = seeds.save(store.0.root())
