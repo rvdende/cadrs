@@ -346,6 +346,12 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::AddFootprint(p) => crate::mcp_board::add_footprint(world, p),
         Call::RemoveFootprint(p) => crate::mcp_board::remove_footprint(world, p),
         Call::LinkOutline(p) => crate::mcp_board::link_outline(world, p),
+        Call::GetConfiguration(p) => crate::mcp_config::get_configuration(world, p),
+        Call::SetConfiguration(p) => crate::mcp_config::set_configuration(world, p),
+        Call::SetActiveConfiguration(p) => crate::mcp_config::set_active_configuration(world, p),
+        Call::SetInstanceConfiguration(p) => {
+            crate::mcp_config::set_instance_configuration(world, p)
+        }
     }
 }
 
@@ -567,7 +573,7 @@ fn delete_tab(world: &mut World, name: &str) -> Result<Value, String> {
 }
 
 /// The Assembly tab a call names, or the active tab.
-fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
+pub(crate) fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
     let e = match name {
         Some(n) => d
             .doc
@@ -588,7 +594,7 @@ fn assembly(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String>
 }
 
 /// An assembly's instances and mate features.
-fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, String> {
+pub(crate) fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, String> {
     use cadrs_core::assembly::InstanceSource;
     let e = d.doc.element(element).ok_or("the Assembly is gone")?;
     let asm = e.assembly_model().ok_or("not an Assembly")?;
@@ -623,6 +629,9 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
             }
             if i.pose.rotation != cadrs_core::assembly::Pose::IDENTITY.rotation {
                 v["rotation"] = json!(i.pose.rotation);
+            }
+            if let Some(c) = &i.configuration {
+                v["configuration"] = crate::mcp_config::instance_label(d, c);
             }
             for (k, on) in [("fixed", i.fixed), ("hidden", i.hidden), ("suppressed", i.suppressed)] {
                 if on {
@@ -687,6 +696,11 @@ fn insert_instance(world: &mut World, p: &tools::InsertInstance) -> Result<Value
             }
         };
         instance.fixed = p.fixed;
+        if let Some(map) = &p.configuration {
+            instance.configuration = Some(crate::mcp_config::instance_configuration(
+                world, studio, map,
+            )?);
+        }
         doc_mut(world)?
             .execute(&InsertInstance { element, instance })
             .map_err(|e| e.to_string())?;
@@ -878,13 +892,13 @@ fn open_document(world: &mut World, name: &str) -> Result<Value, String> {
     describe(world)
 }
 
-fn doc(world: &World) -> Result<&ActiveDocument, String> {
+pub(crate) fn doc(world: &World) -> Result<&ActiveDocument, String> {
     world
         .get_resource::<ActiveDocument>()
         .ok_or_else(|| "no document is open: call create_document or open_document first".into())
 }
 
-fn doc_mut(world: &mut World) -> Result<Mut<'_, ActiveDocument>, String> {
+pub(crate) fn doc_mut(world: &mut World) -> Result<Mut<'_, ActiveDocument>, String> {
     world
         .get_resource_mut::<ActiveDocument>()
         .ok_or_else(|| "no document is open: call create_document or open_document first".into())
@@ -903,7 +917,7 @@ fn kind_label(kind: &ElementKind) -> &'static str {
 }
 
 /// The Part Studio a call names, or the active tab.
-fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
+pub(crate) fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, String> {
     let e = match name {
         Some(n) => d
             .doc
@@ -924,7 +938,7 @@ fn part_studio(d: &ActiveDocument, name: Option<&str>) -> Result<ElementId, Stri
 }
 
 /// The document, its tabs, and the active Part Studio's features and parts.
-fn describe(world: &World) -> Result<Value, String> {
+pub(crate) fn describe(world: &World) -> Result<Value, String> {
     let d = doc(world)?;
     let tabs: Vec<Value> = d
         .doc

@@ -85,6 +85,10 @@ pub enum Call {
     AddFootprint(AddFootprint),
     RemoveFootprint(RemoveFootprint),
     LinkOutline(LinkOutline),
+    GetConfiguration(GetConfiguration),
+    SetConfiguration(SetConfiguration),
+    SetActiveConfiguration(SetActiveConfiguration),
+    SetInstanceConfiguration(SetInstanceConfiguration),
 }
 
 /// What the app answers.
@@ -462,6 +466,46 @@ impl Cadrs {
         Parameters(p): Parameters<SetFeatureVisible>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::SetFeatureVisible(p)).await
+    }
+
+    #[tool(
+        description = "A Part Studio's configuration (Onshape-style): its inputs (List: a table of named configurations; Checkbox: #name 1 or 0), each List's or Checkbox's configured parameters with their value in each row, the values the Part Studio shows now, and `configurable`: every parameter of its features that can be configured, by the name set_configuration takes."
+    )]
+    async fn get_configuration(
+        &self,
+        Parameters(p): Parameters<GetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::GetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Define a Part Studio's whole configuration (one undo step): its inputs in order (Lists and Checkboxes), each List's rows, the defaults, and each input's configured parameters with a value per row (the configuration table). A column can set a Variable feature's value; fields can name a Checkbox as #name. Returns the configuration as get_configuration does."
+    )]
+    async fn set_configuration(
+        &self,
+        Parameters(p): Parameters<SetConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Pick the configuration a Part Studio shows (one undo step): input name → value. Its features take that configuration's values and rebuild; returns the parts after it."
+    )]
+    async fn set_active_configuration(
+        &self,
+        Parameters(p): Parameters<SetActiveConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetActiveConfiguration(p)).await
+    }
+
+    #[tool(
+        description = "Set the configuration of assembly instances of a configured Part Studio (one undo step): each builds its own copy of the studio in that configuration; mates stay. Null configuration: the instances follow the studio's active configuration."
+    )]
+    async fn set_instance_configuration(
+        &self,
+        Parameters(p): Parameters<SetInstanceConfiguration>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetInstanceConfiguration(p)).await
     }
 
     #[tool(
