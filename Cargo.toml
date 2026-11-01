@@ -37,7 +37,47 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/rvdende/cadrs"
 
 [workspace.dependencies]
-bevy = { version = "0.20.1", features = ["bevy_dev_tools", "system_clipboard"] }
+# Only the parts of Bevy the app uses, as everything else is code a browser downloads too: no
+# audio, gamepads, animation, glTF, scenes, KTX2 or tonemapping tables (every camera has
+# `Tonemapping::None`), WebGL (a page draws with WebGPU), default font (cadrs_ui puts Inter in its
+# place), system info or reflection's automatic registration. The desktop's own (threads, X11,
+# Wayland) are cadrs_ui's.
+bevy = { version = "0.20.1", default-features = false, features = [
+    # The app and its window
+    "std",
+    "async_executor",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "bevy_winit",
+    "bevy_window",
+    "system_clipboard",
+    # 3D: parts, planes, gizmos
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_camera",
+    "bevy_mesh",
+    "bevy_image",
+    "bevy_shader",
+    "bevy_material",
+    "bevy_color",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "png",
+    # 2D: drawings' and boards' fills (Mesh2d, ColorMaterial)
+    "bevy_sprite",
+    "bevy_sprite_render",
+    # The interface
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_text",
+    "bevy_ui_widgets",
+    "bevy_input_focus",
+    "bevy_picking",
+    "ui_picking",
+] }
 serde = { version = "1", features = ["derive", "rc"] }
 ron = "0.12"
 # The kernel process's messages (`cadrs_core::rebuild::process`): self-describing, so the
