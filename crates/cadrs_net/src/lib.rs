@@ -60,10 +60,7 @@ pub struct NetPlugin {
 
 impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
-        let identity = self
-            .identity
-            .clone()
-            .map_or(Identity::Ephemeral, Identity::File);
+        let identity = identity_at(self.identity.clone());
         let (handler, requests) = transfer::handler();
         // The public directory: the app may have made it already (to show what was heard
         // before going online).
@@ -118,7 +115,7 @@ pub fn start(
         return Err("The network is off for this run".into());
     }
     world.commands().queue(StartIroh {
-        identity: identity.map(Identity::File),
+        identity: identity.map(|p| identity_at(Some(p))),
         display_name: Some(display_name),
     });
     world.flush();
@@ -141,6 +138,36 @@ pub fn stop(world: &mut World) {
         world.flush();
         info!("offline");
     }
+}
+
+/// The identity whose key is kept at `path` (made there the first time); ephemeral without one.
+/// A page has no `std::fs`, which bevy_iroh's `Identity::File` reads, so there the key goes
+/// through `cadrs_fs` (kept in the page's IndexedDB) and the identity is the key itself.
+fn identity_at(path: Option<PathBuf>) -> Identity {
+    let Some(path) = path else {
+        return Identity::Ephemeral;
+    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        use bevy_iroh::iroh::SecretKey;
+        let kept = cadrs_fs::read(&path)
+            .ok()
+            .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+        if let Some(bytes) = kept {
+            return Identity::Key(SecretKey::from_bytes(&bytes));
+        }
+        let key = SecretKey::generate();
+        let written = path
+            .parent()
+            .map_or(Ok(()), cadrs_fs::create_dir_all)
+            .and_then(|()| cadrs_fs::write(&path, key.to_bytes()));
+        if let Err(e) = written {
+            warn!("cannot keep this page's key ({}): {e}", path.display());
+        }
+        Identity::Key(key)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    Identity::File(path)
 }
 
 /// This user's cadrs ID: the node's public key, what someone shares a document with. `None`

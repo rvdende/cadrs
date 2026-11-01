@@ -13,7 +13,8 @@
 //! the Model Context Protocol, and on which loopback port.
 //!
 //! And whether cadrs goes online for sharing as soon as it starts
-//! ([`Preferences::autoconnect_p2p`], off unless the user turns it on).
+//! ([`Preferences::autoconnect_p2p`]: off unless the user turns it on, but on in a browser,
+//! where the page is how people try cadrs, public documents among it).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -311,7 +312,8 @@ pub struct Preferences {
     pub whats_new_seen: u32,
     /// Go online for sharing and collaboration (peer to peer, through iroh's relays) as soon
     /// as cadrs starts. Off, cadrs stays off the network until the user connects (issue #148).
-    #[serde(default)]
+    /// Off by default in the app, on in a browser (the page, and the site's embed).
+    #[serde(default = "default_autoconnect")]
     pub autoconnect_p2p: bool,
     /// While online, take part in the public documents room (`cadrs_net::public`): find the
     /// documents others published, and help others find them. On unless the user turns it off.
@@ -418,6 +420,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Online at start in a browser only.
+fn default_autoconnect() -> bool {
+    cfg!(target_arch = "wasm32")
+}
+
 fn default_vsync() -> bool {
     true
 }
@@ -439,7 +446,7 @@ impl Default for Preferences {
             ui_scale: 100,
             color_scheme: ColorScheme::default(),
             whats_new_seen: 0,
-            autoconnect_p2p: false,
+            autoconnect_p2p: default_autoconnect(),
             public_documents: true,
             profile_cpu: false,
             vsync: true,

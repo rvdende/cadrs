@@ -3,7 +3,8 @@
 //!
 //! A page has one thread and no processes, so the kernel's jobs run on it as they are sent
 //! (`cadrs_core::rebuild`), and there is no MCP server and no update check (the page is
-//! deployed with the site, always the latest).
+//! deployed with the site, always the latest). It goes online as the app does ([`cadrs_net`]:
+//! iroh over its relays, its key kept with the documents).
 //!
 //! Its files are `cadrs_fs`'s, kept in the browser: the documents in [`DOCUMENTS`], the user's
 //! libraries in [`LIBRARIES`]. Exports go to [`DOWNLOADS`], and each file written there is
@@ -65,6 +66,17 @@ pub fn run() -> AppExit {
         }
     }
     cadrs_fs::web::set_downloads(Some(DOWNLOADS.into()));
+    // Sharing, collaboration and public documents, as in the app: iroh over its relays (a page
+    // has no UDP). The identity in use names the key, kept with the documents; the page goes
+    // online when the user connects, or at start with *Connect when cadrs starts*.
+    let root = PathBuf::from(DOCUMENTS);
+    let ids = cadrs_app::identity::load(&root);
+    app.add_plugins(cadrs_net::NetPlugin {
+        identity: Some(ids.key_path(&root)),
+        display_name: ids.active().name.clone(),
+        relays: Default::default(),
+        autostart: cadrs_core::preferences::Preferences::load(&root).autoconnect_p2p,
+    });
     app.insert_resource(DocumentStore(Store::new(DOCUMENTS)))
         .insert_resource(ExportDirOverride(Some(DOWNLOADS.into())))
         .insert_resource(cadrs_ui::file_picker::NativeFileDialogs(true))
