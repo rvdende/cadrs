@@ -1,22 +1,15 @@
 name: Pages
 
-# The project site (site/), rendered to static files with `proa export` and published to
-# GitHub Pages. Pull requests build it as a check; main and new releases deploy it.
+# https://cadrs.net is the app itself, full screen: the latest release's browser build
+# (tools/web/build.sh, attached to every release as cadrs-web.tar.gz) at the site's root. In a
+# browser without WebGPU the page offers the downloads instead (tools/web/index.html). /app/,
+# where the app used to be, and any path there is no page for go to it. Deployed when a release
+# is published (the release workflow also asks for it), when this file changes, and by hand.
 on:
   push:
     branches: [main]
     paths:
-      - "site/**"
-      - ".github/images/**"
-      - "assets/icons/**"
       - ".github/workflows/pages.yml"
-  pull_request:
-    paths:
-      - "site/**"
-      - ".github/images/**"
-      - "assets/icons/**"
-      - ".github/workflows/pages.yml"
-  # The download links point at the latest release.
   release:
     types: [published]
   workflow_dispatch:
@@ -25,92 +18,39 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.event.pull_request.number || 'deploy' }}
+  group: pages-deploy
   cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  # The repo's .cargo/config.toml adds nightly-only rustflags for the app; the site builds on
-  # the stable toolchain in site/rust-toolchain.toml.
-  RUSTFLAGS: ""
-  # Static export is on our Proa fork until it lands upstream.
-  PROA_REPO: https://github.com/rvdende/proa
-  PROA_BRANCH: feat/static-export
-  TAILWIND_VERSION: "4.3.3"
-  TAILWIND_SHA256: dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a
 
 jobs:
   build:
     name: Build the site
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # A release event checks out its tag; the site always comes from main.
-          ref: ${{ github.event_name == 'release' && 'main' || '' }}
-
-      - name: Tailwind CLI
+      - name: The latest release's browser build
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL -o "$RUNNER_TEMP/bin/tailwindcss" \
-            "https://github.com/tailwindlabs/tailwindcss/releases/download/v$TAILWIND_VERSION/tailwindcss-linux-x64"
-          echo "$TAILWIND_SHA256  $RUNNER_TEMP/bin/tailwindcss" | sha256sum --check --strict
-          chmod +x "$RUNNER_TEMP/bin/tailwindcss"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Proa CLI revision
-        id: proa
-        run: echo "rev=$(git ls-remote "$PROA_REPO" "refs/heads/$PROA_BRANCH" | cut -f1)" >> "$GITHUB_OUTPUT"
-
-      # The CLI lives in a directory of its own: rust-cache manages ~/.cargo/bin, and a binary
-      # installed there was never saved by this cache.
-      - name: Cache the Proa CLI
-        id: proa-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/proa-cli
-          key: proa-cli-${{ steps.proa.outputs.rev }}
-
-      - name: Install the Proa CLI
-        if: steps.proa-cache.outputs.cache-hit != 'true'
-        # From site/, so cargo uses the site's stable toolchain.
-        working-directory: site
-        run: cargo install --locked --root ~/proa-cli --git "$PROA_REPO" --rev "${{ steps.proa.outputs.rev }}" proa-cli --bin proa
-
-      - name: Put the Proa CLI on PATH
-        run: echo "$HOME/proa-cli/bin" >> "$GITHUB_PATH"
-
-      # The Cargo registry only: rust-cache prunes target directories, which deletes the
-      # ownership markers `proa build` keeps in target/proa-rsjs.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-registry
-          workspaces: site -> target
-          cache-targets: false
-
-      # proa builds in target/proa-rsjs, kept whole. An exact key (no fallback) means a change
-      # to the site's own code reuses the compiled dependencies, and old build plans never pile up.
-      - name: Cache the linked build
-        uses: actions/cache@v4
-        with:
-          path: site/target/proa-rsjs
-          key: proa-rsjs-${{ runner.os }}-${{ hashFiles('site/Cargo.lock', 'site/rust-toolchain.toml') }}-${{ steps.proa.outputs.rev }}
-
-      - name: Build and export
-        run: site/export.sh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          gh release download --repo "${{ github.repository }}" --pattern cadrs-web.tar.gz \
+            --dir "$RUNNER_TEMP"
+          mkdir -p site
+          tar -xzf "$RUNNER_TEMP/cadrs-web.tar.gz" -C site --strip-components=1
+          test -f site/index.html
+          # Where the app used to be, and pages that are no more: to the app, keeping the query
+          # (/app/?quick-start).
+          redirect='<!doctype html><meta charset="utf-8"><title>cadrs</title><link rel="canonical" href="https://cadrs.net/"><script>location.replace("/" + location.search + location.hash)</script><noscript><meta http-equiv="refresh" content="0; url=/"></noscript><a href="/">cadrs</a>'
+          mkdir -p site/app
+          printf '%s\n' "$redirect" > site/app/index.html
+          printf '%s\n' "$redirect" > site/404.html
+          ls -la site
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/dist
+          path: site
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

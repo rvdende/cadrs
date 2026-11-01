@@ -4,8 +4,8 @@ name: Release
 # archives, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
 # build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
 # tools/release/notes/<tag>.md (GitHub's generated notes when there is none); a tag with a `-` in
-# it (v0.1.7-beta.1) is a pre-release. Then the site is redeployed so its download links point at
-# the new release. Running it by hand with a tag (Actions › Release › Run workflow) releases the
+# it (v0.1.7-beta.1) is a pre-release. Then the site (the new release's browser build, at
+# https://cadrs.net) is redeployed. Running it by hand with a tag (Actions › Release › Run workflow) releases the
 # chosen branch's head and creates the tag; with "Only build" ticked it publishes nothing, and the
 # archives are the run's artifacts (to try a build before releasing it).
 on:
@@ -168,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   # The browser build (tools/web/build.sh): the app as WebAssembly, drawn with WebGPU. The site
-  # serves the latest release's at /cadrs/app/ (site/export.sh).
+  # is the latest release's (.github/workflows/pages.yml).
   web:
     name: Build (browser)
     runs-on: ubuntu-24.04

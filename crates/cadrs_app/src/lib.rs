@@ -175,6 +175,40 @@ pub struct StartState(pub String);
 #[derive(Resource, Debug, Clone)]
 pub struct OpenAtStart(pub std::path::PathBuf);
 
+/// The cadrs repository, for the app menu's GitHub.
+pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
+
+/// Opens `url` in the user's browser (in a page, a new tab).
+pub fn open_url(url: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use js_sys::wasm_bindgen::JsCast;
+        let global = js_sys::global();
+        let opened = js_sys::Reflect::get(&global, &"open".into())
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .map(|open| open.call2(&global, &url.into(), &"_blank".into()));
+        if !matches!(opened, Some(Ok(_))) {
+            warn!("cannot open {url}");
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "start", ""]);
+            c
+        } else if cfg!(target_os = "macos") {
+            std::process::Command::new("open")
+        } else {
+            std::process::Command::new("xdg-open")
+        };
+        if let Err(e) = cmd.arg(url).spawn() {
+            warn!("cannot open {url}: {e}");
+        }
+    }
+}
+
 /// Start in a document instead of on the documents page (`cadrs --quick-start`, the browser
 /// build's `?quick-start`, which the site's embed uses): the one modified last, or a new
 /// "Untitled document" when there is none, ready to draw in.

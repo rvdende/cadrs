@@ -184,6 +184,7 @@ ui-version-graph-auto-version = Outomatiese weergawe
 shell-app-menu = Kieslys
 shell-preferences-ellipsis = Voorkeure…
 shell-app-menu-shortcuts = Kortpadsleutels
+shell-app-menu-github = GitHub
 shell-app-menu-workspace-hint = Vertak vanaf 'n weergawe in Geskiedenis
 shell-app-menu-workspace = Werkruimte
 shell-app-menu-all-documents = Alle dokumente

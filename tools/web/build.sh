@@ -3,8 +3,9 @@
 #   index.html, files.js, cadrs.js (and its snippets/), cadrs_bg.wasm.gz, cadrs.png, and
 #   bundle.tar.gz: the built-in libraries and the sample documents, which the page unpacks into
 #   its files (/libraries, /fixtures) before the app starts
-# Serve that folder over HTTP (`python3 -m http.server -d target/web`); the site deploys it at
-# /cadrs/app/ (site/export.sh). It needs a browser with WebGPU.
+# Serve that folder over HTTP (`python3 -m http.server -d target/web`); https://cadrs.net is the
+# latest release's (.github/workflows/pages.yml). It needs a browser with WebGPU; in one without,
+# the page offers the downloads.
 #
 # Needs the wasm32 target (rust-toolchain.toml installs it) and wasm-bindgen-cli at the version
 # of the wasm-bindgen crate in Cargo.lock:

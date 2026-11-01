@@ -184,6 +184,7 @@ ui-version-graph-auto-version = 自动版本
 shell-app-menu = 菜单
 shell-preferences-ellipsis = 首选项…
 shell-app-menu-shortcuts = 键盘快捷键
+shell-app-menu-github = GitHub
 shell-app-menu-workspace-hint = 在“历史记录”中从某个版本创建分支
 shell-app-menu-workspace = 工作区
 shell-app-menu-all-documents = 所有文档

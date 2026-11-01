@@ -184,6 +184,7 @@ ui-version-graph-auto-version = Автоверсия
 shell-app-menu = Меню
 shell-preferences-ellipsis = Настройки…
 shell-app-menu-shortcuts = Сочетания клавиш
+shell-app-menu-github = GitHub
 shell-app-menu-workspace-hint = Создайте ветвь от версии в «Истории»
 shell-app-menu-workspace = Рабочая область
 shell-app-menu-all-documents = Все документы
