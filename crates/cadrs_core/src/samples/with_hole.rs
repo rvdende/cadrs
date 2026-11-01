@@ -160,7 +160,7 @@ pub fn configured_in(s: &mut dyn Studio, el: ElementId) -> Result<ElementId, Com
         element: el,
         configuration: Configuration {
             inputs: vec![size, hole],
-            active: ConfigValues::default(),
+            ..Default::default()
         },
         label: "Edit configuration".into(),
     })?;

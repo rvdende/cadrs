@@ -43,6 +43,27 @@ pub struct Configuration {
     /// The configuration the Part Studio shows (its features hold these values).
     #[serde(default, skip_serializing_if = "ConfigValues::is_empty")]
     pub active: ConfigValues,
+    /// Parts' names and properties set for one configuration (a configured instance's
+    /// Properties, a BOM row's cells): its copies take them ([`generate`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub part_properties: Vec<ConfiguredPartProps>,
+}
+
+/// A part's own name and properties in one configuration (Part number, Description, …; its
+/// material and appearance are the studio's in every configuration).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfiguredPartProps {
+    /// The configuration ([`Configuration::complete`]).
+    pub values: ConfigValues,
+    pub part: crate::ids::PartId,
+    /// Its name in this configuration (else the studio's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::properties::Properties::is_empty"
+    )]
+    pub properties: crate::properties::Properties,
 }
 
 impl Configuration {
@@ -56,6 +77,46 @@ impl Configuration {
 
     pub fn input_mut(&mut self, id: ConfigInputId) -> Option<&mut ConfigInput> {
         self.inputs.iter_mut().find(|i| i.id == id)
+    }
+
+    /// The name and properties set for `part` in the configuration `values`.
+    pub fn part_props(
+        &self,
+        values: &ConfigValues,
+        part: crate::ids::PartId,
+    ) -> Option<&ConfiguredPartProps> {
+        let values = self.complete(values);
+        self.part_properties
+            .iter()
+            .find(|p| p.part == part && p.values == values)
+    }
+
+    /// [`Configuration::part_props`] for writing, made from `now` (the part's name and
+    /// properties in that configuration) if missing.
+    pub fn part_props_mut(
+        &mut self,
+        values: &ConfigValues,
+        part: crate::ids::PartId,
+        now: (Option<String>, crate::properties::Properties),
+    ) -> &mut ConfiguredPartProps {
+        let values = self.complete(values);
+        let i = match self
+            .part_properties
+            .iter()
+            .position(|p| p.part == part && p.values == values)
+        {
+            Some(i) => i,
+            None => {
+                self.part_properties.push(ConfiguredPartProps {
+                    values,
+                    part,
+                    name: now.0,
+                    properties: now.1,
+                });
+                self.part_properties.len() - 1
+            }
+        };
+        &mut self.part_properties[i]
     }
 
     pub fn input_named(&self, name: &str) -> Option<&ConfigInput> {
@@ -923,7 +984,54 @@ pub fn generate(source: &Element, values: &ConfigValues, id: ElementId, units: &
         crate::variables::refresh(&base, features, suppressed, units);
         crate::parts::regenerate_now(&studio, features);
     }
+    // The parts' names and properties set for this configuration.
+    let own: Vec<ConfiguredPartProps> = cfg
+        .part_properties
+        .iter()
+        .filter(|p| p.values == cfg.active)
+        .cloned()
+        .collect();
+    if let Some(props) = el.part_props_mut() {
+        for o in own {
+            let i = match props.iter().position(|p| p.part == o.part) {
+                Some(i) => i,
+                None => {
+                    props.push(crate::document::PartProps::new(o.part));
+                    props.len() - 1
+                }
+            };
+            if o.name.is_some() {
+                props[i].name = o.name;
+            }
+            props[i].properties = o.properties;
+        }
+    }
     el
+}
+
+/// The configured copy `element` is, if it is one: its studio and values.
+pub fn copy_of(doc: &Document, element: ElementId) -> Option<(ElementId, ConfigValues)> {
+    doc.configured
+        .iter()
+        .find(|c| c.element.id == element)
+        .map(|c| (c.studio, c.values.clone()))
+}
+
+/// How a part's configuration reads (the BOM's Configuration column): a configured copy's
+/// values, a configured studio's active ones ("M5, 20, Hole"); empty for a studio without one.
+pub fn describe_element(doc: &Document, element: ElementId) -> String {
+    let (studio, values) = match copy_of(doc, element) {
+        Some(x) => x,
+        None => match doc.element(element) {
+            Some(e) => (e.id, e.configuration.active.clone()),
+            None => return String::new(),
+        },
+    };
+    doc.elements
+        .iter()
+        .find(|e| e.id == studio)
+        .map(|e| e.configuration.describe(&values))
+        .unwrap_or_default()
 }
 
 /// Every assembly instance's configured copy made and up to date, each instance's source
@@ -1229,6 +1337,7 @@ impl Command for SetInstanceConfiguration {
             .element_mut(self.assembly)
             .and_then(|e| e.assembly_model_mut())
             .ok_or(CommandError::ElementNotFound(self.assembly))?;
+        let had = a.instances.iter().any(|i| i.configuration.is_some());
         for (id, c, studio) in set {
             if let Some(i) = a.instance_mut(id) {
                 set_source_element(
@@ -1238,8 +1347,30 @@ impl Command for SetInstanceConfiguration {
                 i.configuration = c;
             }
         }
+        show_bom_column(a, had);
         Ok(())
     }
+}
+
+/// Shows the BOM's Configuration column (after Name) when an assembly gets its first
+/// configured instance (`had`: it had one before); a column removed afterwards stays removed.
+pub fn show_bom_column(asm: &mut crate::assembly::Assembly, had: bool) {
+    use crate::assembly::bom::BomColumn;
+    use crate::properties::PropertyKey;
+    let col = BomColumn::Property(PropertyKey::Configuration);
+    if had
+        || !asm.instances.iter().any(|i| i.configuration.is_some())
+        || asm.bom.columns.contains(&col)
+    {
+        return;
+    }
+    let at = asm
+        .bom
+        .columns
+        .iter()
+        .position(|c| *c == BomColumn::Property(PropertyKey::Name))
+        .map_or(asm.bom.columns.len(), |i| i + 1);
+    asm.bom.columns.insert(at, col);
 }
 
 /// The Part Studio tab an element is (itself), or is a configured copy of.

@@ -214,6 +214,8 @@ fn build(
     let mut c = Configuration {
         inputs: Vec::new(),
         active: old.active.clone(),
+        // (The parts' properties per configuration are kept.)
+        part_properties: old.part_properties.clone(),
     };
     for s in specs {
         let before = old.input_named(&s.name);

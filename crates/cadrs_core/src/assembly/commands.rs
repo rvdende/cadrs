@@ -165,7 +165,9 @@ impl Command for InsertInstance {
             }
         }
         inst.index = asm.next_index_of(doc_id, &inst);
+        let had = asm.instances.iter().any(|i| i.configuration.is_some());
         asm.instances.push(inst);
+        crate::configuration::show_bom_column(asm, had);
         Ok(())
     }
 }

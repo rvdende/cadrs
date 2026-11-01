@@ -102,6 +102,8 @@ pub enum PropertyKey {
     Appearance,
     /// The mass (kg): the override if set, else density × volume (read only in the BOM).
     Mass,
+    /// A configured part's configuration ("M5, 20, Hole"; read only, [`crate::configuration`]).
+    Configuration,
     /// An assembly's **Subassembly BOM behavior** (A20.5).
     BomBehavior,
     /// A property defined in the document ([`PropertySettings::definitions`]).
@@ -110,7 +112,7 @@ pub enum PropertyKey {
 
 impl PropertyKey {
     /// The built-in properties, in the order the Properties dialog and "Add column" list them.
-    pub const BUILT_IN: [PropertyKey; 10] = [
+    pub const BUILT_IN: [PropertyKey; 11] = [
         PropertyKey::Name,
         PropertyKey::PartNumber,
         PropertyKey::Description,
@@ -121,6 +123,7 @@ impl PropertyKey {
         PropertyKey::Category,
         PropertyKey::Appearance,
         PropertyKey::Mass,
+        PropertyKey::Configuration,
     ];
 
     /// Its label ("Part number"); a custom property's name from `settings`.
@@ -136,6 +139,7 @@ impl PropertyKey {
             PropertyKey::Category => "Category".into(),
             PropertyKey::Appearance => "Appearance".into(),
             PropertyKey::Mass => "Mass".into(),
+            PropertyKey::Configuration => "Configuration".into(),
             PropertyKey::BomBehavior => "Subassembly BOM behavior".into(),
             PropertyKey::Custom(id) => settings
                 .definition(*id)
@@ -152,6 +156,7 @@ impl PropertyKey {
             PropertyKey::Material
                 | PropertyKey::Appearance
                 | PropertyKey::Mass
+                | PropertyKey::Configuration
                 | PropertyKey::BomBehavior
         )
     }
@@ -498,6 +503,12 @@ pub fn text(
             .map(|a| format!("#{:02X}{:02X}{:02X}", a.rgb[0], a.rgb[1], a.rgb[2]))
             .unwrap_or_default(),
         PropertyKey::Mass => String::new(),
+        PropertyKey::Configuration => match owner {
+            PropertyOwner::Part { element, .. } => {
+                crate::configuration::describe_element(doc, element)
+            }
+            PropertyOwner::Assembly { .. } | PropertyOwner::Item { .. } => String::new(),
+        },
         PropertyKey::BomBehavior => properties(doc, owner).bom_behavior.label().to_string(),
         PropertyKey::UnitOfMeasure => properties(doc, owner)
             .unit_of_measure
@@ -612,6 +623,23 @@ pub fn part_numbers_in_use(doc: &Document) -> Vec<String> {
 // ---------------------------------------------------------------------------------------------
 // Writing
 
+/// A configured instance's part (`element` a configured copy): its name and properties in
+/// that configuration, kept on its Part Studio's configuration (made from what it has now).
+fn configured_props_mut(
+    doc: &mut Document,
+    element: ElementId,
+    part: PartId,
+) -> Option<&mut crate::configuration::ConfiguredPartProps> {
+    let (studio, values) = crate::configuration::copy_of(doc, element)?;
+    let now = doc
+        .element(element)
+        .and_then(|e| e.part_prop(part))
+        .map(|p| (p.name.clone(), p.properties.clone()))
+        .unwrap_or_default();
+    let cfg = &mut doc.element_mut(studio)?.configuration;
+    Some(cfg.part_props_mut(&values, part, now))
+}
+
 /// The owner's [`PartProps`] entry, made if missing (a part of a Part Studio tab or of a
 /// standard content studio).
 fn part_props_mut(
@@ -682,7 +710,10 @@ pub fn set(
                 opt(t).ok_or_else(|| CommandError::Invalid("the name can't be empty".into()))?;
             match owner {
                 PropertyOwner::Part { element, part } => {
-                    part_props_mut(doc, element, part)?.name = Some(n)
+                    match configured_props_mut(doc, element, part) {
+                        Some(c) => c.name = Some(n),
+                        None => part_props_mut(doc, element, part)?.name = Some(n),
+                    }
                 }
                 PropertyOwner::Assembly { element } => {
                     doc.element_mut(element)
@@ -812,9 +843,11 @@ fn own_mut(
     f: &mut dyn FnMut(&mut Properties),
 ) -> Result<(), CommandError> {
     match owner {
-        PropertyOwner::Part { element, part } => {
-            f(&mut part_props_mut(doc, element, part)?.properties)
-        }
+        // A configured part's in its configuration; else the studio's.
+        PropertyOwner::Part { element, part } => match configured_props_mut(doc, element, part) {
+            Some(c) => f(&mut c.properties),
+            None => f(&mut part_props_mut(doc, element, part)?.properties),
+        },
         PropertyOwner::Assembly { element } => {
             f(&mut crate::assembly::commands::assembly_mut(doc, element)?.properties)
         }

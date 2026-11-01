@@ -11,6 +11,8 @@
 // 08 from below (the Thick plates' hole is cut 10 mm up from the bottom): Part 1 <2>'s menu ▸
 //    Configuration ▸ Hole unticked: that plate's hole is gone (the Checkbox suppresses
 //    Extrude 2 in its configuration), the others keep theirs.
+// 09 the Bill of Materials: a row per configuration ("Thick, Hole" × 2, "Thick, No Hole" × 1),
+//    named in the Configuration column added after Name with the first configured instance.
 Scenario(
     start: Some("document"),
     steps: [
@@ -63,5 +65,10 @@ Scenario(
         MoveTo(700, 900),
         Wait(3),
         Screenshot("08-no-hole"),
+        Click(ui("assembly-bom")),
+        WaitFor("bom-panel"),
+        MoveTo(700, 900),
+        Wait(3),
+        Screenshot("09-bom"),
     ],
 )

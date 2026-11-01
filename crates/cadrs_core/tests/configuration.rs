@@ -501,3 +501,121 @@ fn a_sketch_dimension_and_a_variable_feature_are_configured() {
         .geometry;
     assert!((g.dimensions[dimension].value - 20.0).abs() < 1e-9);
 }
+
+#[test]
+fn the_bom_lists_each_configuration_with_its_own_properties() {
+    use cadrs_core::assembly::bom::{self, BomColumn, BomOptions};
+    use cadrs_core::properties::{PropertyKey, PropertyOwner, PropertyValue, SetProperties};
+    let mut doc = Document::new("Configured plate");
+    let el = doc.elements[0].id;
+    let mut h = History::default();
+    let asm = wh::configured_in(&mut DocHistory(&mut doc, &mut h), el).unwrap();
+    let mut d = Doc { d: doc, h, el };
+    // A second Thick plate: Thin × 1, Thick × 2.
+    let mut i = Instance::new(
+        InstanceId::new(),
+        InstanceSource::Part {
+            element: d.el,
+            part: PLATE_PART,
+        },
+        Pose::default(),
+    );
+    let mut values = ConfigValues::default();
+    values.set(d.input("Size").id, d.row("Size", "Thick"));
+    i.configuration = Some(InstanceConfiguration {
+        studio: d.el,
+        values,
+    });
+    d.run(&InsertInstance {
+        element: asm,
+        instance: i,
+    });
+    let compute = |d: &Doc| {
+        bom::compute(
+            &d.d,
+            asm,
+            &BomOptions::default(),
+            &Default::default(),
+            |e| Some(rebuild::build(&d.d.element(e)?.assembly_features())),
+        )
+        .unwrap()
+    };
+    let b = compute(&d);
+    let col = |k| {
+        b.columns
+            .iter()
+            .position(|c| *c == BomColumn::Property(k))
+            .unwrap()
+    };
+    let (cfg, pn) = (
+        col(PropertyKey::Configuration),
+        col(PropertyKey::PartNumber),
+    );
+    let rows: Vec<(String, u32)> = b
+        .rows
+        .iter()
+        .filter(|r| !r.top_level || r.depth > 0 || r.key.owner.element() != asm)
+        .filter(|r| matches!(r.key.owner, PropertyOwner::Part { .. }))
+        .map(|r| (r.cells[cfg].clone(), r.quantity))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![("Thin, Hole".into(), 1), ("Thick, Hole".into(), 2)]
+    );
+    // A Part number set on the Thick row is Thick's alone; the studio's part keeps none.
+    let thick = b
+        .rows
+        .iter()
+        .find(|r| r.cells[cfg] == "Thick, Hole")
+        .unwrap()
+        .key
+        .owner;
+    d.run(&SetProperties {
+        owners: vec![thick],
+        values: vec![
+            (PropertyKey::PartNumber, PropertyValue::Text("PL-20".into())),
+            (PropertyKey::Name, PropertyValue::Text("Plate 20".into())),
+        ],
+        label: "Edit Part number".into(),
+    });
+    let b = compute(&d);
+    let name = b
+        .columns
+        .iter()
+        .position(|c| *c == BomColumn::Property(PropertyKey::Name))
+        .unwrap();
+    let cells: Vec<(String, String, String)> = b
+        .rows
+        .iter()
+        .filter(|r| matches!(r.key.owner, PropertyOwner::Part { .. }))
+        .map(|r| {
+            (
+                r.cells[cfg].clone(),
+                r.cells[pn].clone(),
+                r.cells[name].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(cells[0].1, "", "{cells:?}");
+    assert_eq!(cells[0].2, "Part 1", "{cells:?}");
+    assert_eq!(
+        cells[1],
+        ("Thick, Hole".into(), "PL-20".into(), "Plate 20".into())
+    );
+    let studio_part = PropertyOwner::Part {
+        element: d.el,
+        part: PLATE_PART,
+    };
+    assert_eq!(
+        cadrs_core::properties::text(&d.d, studio_part, PropertyKey::PartNumber, None),
+        ""
+    );
+    // Kept when the studio changes (its copies are made again).
+    d.pick("Size", d.row("Size", "Thick"));
+    let b = compute(&d);
+    assert!(
+        b.rows
+            .iter()
+            .any(|r| r.cells.get(pn).is_some_and(|c| c == "PL-20"))
+    );
+}
