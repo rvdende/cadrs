@@ -21,7 +21,8 @@
 //!   source origin goes onto each location; *Base mate connector*: a mate connector of the
 //!   source goes onto it), **Include mate connectors** (the explicit connectors on the derived
 //!   parts) and **Include properties** (off: only the name, material and appearance come over).
-//!   Configurations are out of scope (user decision 2026-09-29); cadrs Part Studios have no
+//!   A configured source is derived in the configuration it shows (no configuration of its
+//!   own per Derived feature yet, [`crate::configuration`]); cadrs Part Studios have no
 //!   composite parts.
 //! - **Identity.** Derived geometry is namespaced like pattern instances: a derived part's id is
 //!   `(the Derived feature, a hash of the source part and the copy)` ([`derived_part`]), its

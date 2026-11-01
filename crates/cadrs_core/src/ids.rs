@@ -56,6 +56,14 @@ id_type!(
     /// Identifies a document label on the documents page (P3E.1, TD3.3, TD3.8).
     LabelId
 );
+id_type!(
+    /// Identifies an input of a Part Studio's configuration ([`crate::configuration`]).
+    ConfigInputId
+);
+id_type!(
+    /// Identifies a row (a configuration) of a List configuration input.
+    ConfigRowId
+);
 
 /// Identifies a part (P3.3): the feature that made it and which of the bodies that feature made
 /// (0 for the first). A part keeps its id while later features add to it, cut it or trim it.

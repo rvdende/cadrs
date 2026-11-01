@@ -26,6 +26,10 @@ pub struct Document {
     /// that are not tabs, found by [`Document::element`] (see [`crate::assembly::standard`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub standard_content: Vec<crate::assembly::standard::StandardPart>,
+    /// Part Studios built in the configurations their assembly instances pick
+    /// ([`crate::configuration::refresh_copies`]): not tabs, found by [`Document::element`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured: Vec<crate::configuration::ConfiguredStudio>,
     /// Custom property definitions, part numbering and BOM templates (P3B.6, see
     /// [`crate::properties`]).
     #[serde(
@@ -59,6 +63,7 @@ impl Document {
             custom_colors: Vec::new(),
             material_libraries: Vec::new(),
             standard_content: Vec::new(),
+            configured: Vec::new(),
             properties: Default::default(),
             linked: Vec::new(),
             moved: Vec::new(),
@@ -89,6 +94,12 @@ impl Document {
             .find(|e| e.id == id)
             .or_else(|| self.standard_part(id).map(|p| &p.element))
             .or_else(|| self.linked_element(id).map(|l| &l.element))
+            .or_else(|| {
+                self.configured
+                    .iter()
+                    .find(|c| c.element.id == id)
+                    .map(|c| &c.element)
+            })
     }
 
     /// The linked element (P3G.1) stored under `id`.
@@ -161,6 +172,13 @@ pub struct Element {
     /// with their values, kept up to date by [`crate::variable_studio::propagate`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub studio_variables: Vec<crate::variable_studio::ImportedVariable>,
+    /// A Part Studio's configuration: its inputs, table and active values
+    /// ([`crate::configuration`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::configuration::Configuration::is_empty"
+    )]
+    pub configuration: crate::configuration::Configuration,
 }
 
 impl Element {
@@ -185,6 +203,7 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 
@@ -200,16 +219,26 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 
     /// The Variable Studios' variables as this Part Studio's or Assembly's expressions see
     /// them (defined above its own list), see [`crate::variable_studio`].
     pub fn variable_base(&self) -> Vec<(String, cadrs_sketch::units::VarValue)> {
-        self.studio_variables
+        let mut out: Vec<_> = self
+            .studio_variables
             .iter()
             .map(|v| (v.name.clone(), v.var_value()))
-            .collect()
+            .collect();
+        // The configuration's inputs, after (so over) the Variable Studios'.
+        if !self.configuration.is_empty() {
+            out.extend(crate::configuration::input_variables(
+                &self.configuration,
+                &self.configuration.active,
+            ));
+        }
+        out
     }
 
     /// A Render Studio tab of `source` (P3F.6).
@@ -224,6 +253,7 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 
@@ -238,6 +268,7 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 
@@ -253,6 +284,7 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 
@@ -396,12 +428,19 @@ impl Element {
     /// starts with them ([`Self::active_features`], [`Self::features_to_build`]).
     pub fn studio_features(&self) -> Vec<Feature> {
         match self.kind {
-            ElementKind::PartStudio { .. } => self
-                .studio_variables
-                .iter()
-                .filter(|v| v.used)
-                .map(|v| v.feature())
-                .collect(),
+            ElementKind::PartStudio { .. } => {
+                let mut out: Vec<Feature> = self
+                    .studio_variables
+                    .iter()
+                    .filter(|v| v.used)
+                    .map(|v| v.feature())
+                    .collect();
+                out.extend(crate::configuration::input_features(
+                    &self.configuration,
+                    &self.configuration.active,
+                ));
+                out
+            }
             _ => Vec::new(),
         }
     }

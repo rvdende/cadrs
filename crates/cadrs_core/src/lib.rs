@@ -19,6 +19,7 @@ pub mod check;
 pub mod collab;
 pub mod command;
 pub mod commands;
+pub mod configuration;
 pub mod derived;
 pub mod direct_edit;
 pub mod document;
@@ -94,7 +95,9 @@ pub use document::{
     Feature, FeatureKind, Offset, PartProps, RegionRef, RevolveFeature, RevolveType, SketchFeature,
     ThinWall, UpTo, VertexRef,
 };
-pub use ids::{DocumentId, ElementId, FeatureId, FolderId, LabelId, PartId};
+pub use ids::{
+    ConfigInputId, ConfigRowId, DocumentId, ElementId, FeatureId, FolderId, LabelId, PartId,
+};
 pub use library::{
     DocumentEntry, DocumentMeta, Filter, FolderEntry, LabelEntry, Library, LibraryCommand,
     LibraryHistory, SortDir, SortKey, Timestamp,

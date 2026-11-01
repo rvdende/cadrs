@@ -172,6 +172,7 @@ fn shell_of(e: &Element) -> Element {
         simulation,
         named_views,
         studio_variables,
+        configuration,
     } = e;
     let kind = match kind {
         ElementKind::PartStudio {
@@ -207,6 +208,7 @@ fn shell_of(e: &Element) -> Element {
         simulation: simulation.clone(),
         named_views: named_views.clone(),
         studio_variables: studio_variables.clone(),
+        configuration: configuration.clone(),
     }
 }
 
@@ -283,6 +285,7 @@ fn head_of(doc: &Document) -> Document {
         custom_colors,
         material_libraries,
         standard_content,
+        configured,
         properties,
         linked,
         moved,
@@ -296,6 +299,7 @@ fn head_of(doc: &Document) -> Document {
         custom_colors: custom_colors.clone(),
         material_libraries: material_libraries.clone(),
         standard_content: standard_content.clone(),
+        configured: configured.clone(),
         properties: properties.clone(),
         linked: linked.clone(),
         moved: moved.clone(),

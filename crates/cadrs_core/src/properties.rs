@@ -619,6 +619,8 @@ fn part_props_mut(
     element: ElementId,
     part: PartId,
 ) -> Result<&mut PartProps, CommandError> {
+    // A configured instance's part: its Part Studio's (the copies follow it).
+    let element = crate::configuration::tab_of(doc, element);
     let props = if doc.elements.iter().any(|e| e.id == element) {
         doc.element_mut(element).and_then(|e| e.part_props_mut())
     } else {

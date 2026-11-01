@@ -226,11 +226,15 @@ impl History {
             crate::parts::take_deferred();
             return Err(e);
         }
+        // Configured fields edited go into the active configuration's row.
+        crate::configuration::after_command(doc);
         // The Variable Studios' variables reach every Part Studio and Assembly first, so the
         // Derived features below copy their sources with the new values.
         crate::variable_studio::propagate(doc, Some(scope));
         // P3G.4: Derived features that follow a tab of this document live.
         crate::derived::refresh(doc);
+        // Assembly instances' configured copies of their Part Studios.
+        crate::configuration::refresh_copies(doc);
         drop(deferring);
         let after = Snapshot::take(doc, scope)?;
         if after == before {
@@ -285,6 +289,7 @@ impl History {
         crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
+        crate::configuration::refresh_copies(doc);
         let label = entry.label.clone();
         self.redo.push(entry);
         self.bump();
@@ -298,6 +303,7 @@ impl History {
         crate::parts::note_regenerated(doc);
         crate::variable_studio::propagate(doc, None);
         crate::derived::refresh(doc);
+        crate::configuration::refresh_copies(doc);
         let label = entry.label.clone();
         self.undo.push(entry);
         self.bump();
@@ -430,6 +436,7 @@ impl History {
         if let Some(&first) = idx.first() {
             self.undo[first].before.restore(doc);
             crate::derived::refresh(doc);
+            crate::configuration::refresh_copies(doc);
         }
         for i in idx.iter().rev() {
             self.undo.remove(*i);

@@ -20,8 +20,8 @@
 //!   ([`cadrs_sheetmetal::forms::check_footprint`]); each placed form goes into its flat-pattern
 //!   part's `forms` (outline and centermark) for the flat view, DXF and drawings.
 //!
-//! cadrs has variables but no configurations: a form's "configuration variables" are its Part
-//! Studio's Variable features, set by the Form feature for its copy of the studio.
+//! A form's "configuration variables" are its Part Studio's Variable features, set by the Form
+//! feature for its copy of the studio.
 
 use serde::{Deserialize, Serialize};
 

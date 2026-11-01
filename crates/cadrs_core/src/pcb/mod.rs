@@ -488,6 +488,7 @@ impl Element {
             simulation: Default::default(),
             named_views: Vec::new(),
             studio_variables: Vec::new(),
+            configuration: Default::default(),
         }
     }
 

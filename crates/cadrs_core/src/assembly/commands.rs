@@ -45,7 +45,50 @@ impl Command for InsertInstance {
         Scope::Element(self.element)
     }
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
-        let src = self.instance.source.element();
+        // A configured instance: checked against its Part Studio; its source names the
+        // configured copy, made after the command ([`crate::configuration::refresh_copies`]).
+        let mut completed = None;
+        // An instance of a configured Part Studio (a part, or the whole studio) takes the
+        // studio's active configuration when it isn't given one: it then keeps it, whatever
+        // the studio shows later.
+        let mut defaulted = None;
+        if self.instance.configuration.is_none()
+            && let super::InstanceSource::Part { element, .. }
+            | super::InstanceSource::Studio {
+                element,
+                board: None,
+            } = self.instance.source
+            && let Some(e) = doc.elements.iter().find(|e| e.id == element)
+            && !e.configuration.is_empty()
+        {
+            defaulted = Some(crate::configuration::InstanceConfiguration {
+                studio: element,
+                values: e.configuration.active.clone(),
+            });
+        }
+        let given = self.instance.configuration.clone().or(defaulted);
+        let src = match &given {
+            Some(c) => {
+                let studio = doc
+                    .elements
+                    .iter()
+                    .find(|e| e.id == c.studio)
+                    .ok_or_else(|| {
+                        CommandError::Invalid("the configured Part Studio is not a tab".into())
+                    })?;
+                for (input, v) in &c.values.0 {
+                    studio
+                        .configuration
+                        .input(*input)
+                        .ok_or_else(|| CommandError::Invalid("no such configuration input".into()))?
+                        .check_value(v)
+                        .map_err(CommandError::Invalid)?;
+                }
+                completed = Some(studio.configuration.complete(&c.values));
+                c.studio
+            }
+            None => self.instance.source.element(),
+        };
         match self.instance.source {
             super::InstanceSource::Part { .. } => {
                 if !doc.element(src).is_some_and(|e| {
@@ -109,6 +152,18 @@ impl Command for InsertInstance {
             return Err(CommandError::Invalid("instance id already in use".into()));
         }
         let mut inst = self.instance.clone();
+        inst.configuration = given;
+        if let (Some(c), Some(v)) = (&mut inst.configuration, completed) {
+            c.values = v;
+        }
+        if let Some(c) = &inst.configuration {
+            let id = c.copy_id();
+            match &mut inst.source {
+                super::InstanceSource::Part { element, .. }
+                | super::InstanceSource::Studio { element, .. } => *element = id,
+                super::InstanceSource::Assembly { .. } => {}
+            }
+        }
         inst.index = asm.next_index_of(doc_id, &inst);
         asm.instances.push(inst);
         Ok(())

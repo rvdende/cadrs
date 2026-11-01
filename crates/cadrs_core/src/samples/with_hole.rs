@@ -118,3 +118,75 @@ pub fn build_in(s: &mut dyn Studio, el: ElementId) -> Result<(), CommandError> {
     }
     Ok(())
 }
+
+/// Configurations' stand-in: the plate of [`build_in`] with a **Size** List (Thin, Thick)
+/// configuring Extrude 1's depth (10 mm, 20 mm), a **Hole** Checkbox (checked by default;
+/// unchecked suppresses Extrude 2, the hole), and an Assembly ("Assembly 1") with the plate
+/// in each configuration, Thin at the origin and Thick 80 mm along X. Returns the Assembly.
+pub fn configured_in(s: &mut dyn Studio, el: ElementId) -> Result<ElementId, CommandError> {
+    use crate::assembly::commands::InsertInstance;
+    use crate::assembly::{Instance, InstanceId, InstanceSource, Pose};
+    use crate::configuration::{
+        CellValue, ConfigInput, ConfigValues, Configuration, ConfiguredParam, EditConfiguration,
+        InputKind, InputValue, InstanceConfiguration, ParamTarget,
+    };
+    build_in(s, el)?;
+    let size = ConfigInput {
+        params: vec![ConfiguredParam {
+            target: ParamTarget::Field {
+                feature: PLATE,
+                label: "Depth".into(),
+                occurrence: 0,
+            },
+            values: vec![
+                CellValue::Expr("10 mm".into()),
+                CellValue::Expr("20 mm".into()),
+            ],
+        }],
+        ..ConfigInput::list("Size", &["Thin", "Thick"])
+    };
+    let InputKind::List { rows, .. } = &size.kind else {
+        unreachable!()
+    };
+    let (input, thin, thick) = (size.id, rows[0].id, rows[1].id);
+    let hole = ConfigInput {
+        params: vec![ConfiguredParam {
+            target: ParamTarget::Suppressed { feature: HOLE },
+            values: vec![CellValue::Bool(true), CellValue::Bool(false)],
+        }],
+        ..ConfigInput::checkbox("Hole", true)
+    };
+    s.run(&EditConfiguration {
+        element: el,
+        configuration: Configuration {
+            inputs: vec![size, hole],
+            active: ConfigValues::default(),
+        },
+        label: "Edit configuration".into(),
+    })?;
+    let asm = ElementId::new();
+    s.run(&crate::commands::AddElement {
+        id: asm,
+        kind: crate::commands::NewElementKind::Assembly,
+        name: None,
+        after: None,
+    })?;
+    for (row, x) in [(thin, 0.0), (thick, 80.0)] {
+        let mut values = ConfigValues::default();
+        values.set(input, InputValue::Row(row));
+        let mut i = Instance::new(
+            InstanceId::new(),
+            InstanceSource::Part {
+                element: el,
+                part: PLATE_PART,
+            },
+            Pose::translation([x, 0.0, 0.0]),
+        );
+        i.configuration = Some(InstanceConfiguration { studio: el, values });
+        s.run(&InsertInstance {
+            element: asm,
+            instance: i,
+        })?;
+    }
+    Ok(asm)
+}
