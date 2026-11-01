@@ -10,6 +10,8 @@
 //!   whose **Fork** and **Close** do what they say.
 //! - **Fork** saves the revision as a new document of this user's, with
 //!   [`cadrs_core::collab::ForkedFrom`] naming where it came from, and opens it.
+//! - The user's name (the account menu's Edit) goes with their public documents as a signed
+//!   profile, said again whenever it changes, so peers show the name as it is now.
 //! - The peers to start from in the public room ([`PublicPeers`]) are the seeds (cadrs's own
 //!   and `public/seeds.txt`, one cadrs ID a line, from the Preferences dialog) and the
 //!   contacts; the Preferences' *Public documents* switch says whether to take part at all.
@@ -51,7 +53,7 @@ pub(super) fn plugin(app: &mut App) {
                 .chain()
                 .before(cadrs_net::public::PublicSystems),
         )
-        .add_systems(Update, poll_fetches)
+        .add_systems(Update, (poll_fetches, keep_profile))
         .add_systems(
             Update,
             sync_view_banner.run_if(in_state(AppState::Document)),
@@ -145,6 +147,32 @@ fn keep_peers(
     }
 }
 
+/// The user's name for their public documents ([`cadrs_net::public::Profile`]): said again
+/// whenever it changes (the account menu's Edit), or cadrs goes online, while they have public
+/// documents, so every peer shows the name as it is now.
+fn keep_profile(world: &mut World, mut said: Local<Option<(String, bool)>>) {
+    let name = world.resource::<UserProfile>().display_name.clone();
+    let me = cadrs_net::cadrs_id(world.get_resource::<cadrs_net::bevy_iroh::Iroh>());
+    let now = (name.clone(), me.is_some());
+    if said.as_ref() == Some(&now) {
+        return;
+    }
+    *said = Some(now);
+    let Some(me) = me else {
+        return;
+    };
+    let publishes = !world
+        .resource::<Shared>()
+        .lock()
+        .directory
+        .signed_by(&me)
+        .listings
+        .is_empty();
+    if publishes && let Err(why) = net::say_profile(world, &name) {
+        warn!("cannot say the profile's name: {why}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Publishing
 
@@ -164,10 +192,12 @@ pub fn publish(world: &mut World, id: DocumentId) -> Result<Listing, String> {
     let picture = picture_now(world, id)
         .or_else(|| cadrs_fs::read(store.thumbnail_path(id)).ok())
         .unwrap_or_default();
+    let owner_name = world.resource::<UserProfile>().display_name.clone();
     let draft = Draft {
         document: id,
         name: doc.name.clone(),
         description: meta.description.clone(),
+        owner_name: owner_name.clone(),
         picture,
         forked_from: meta.forked_from.as_ref().map(|f| Origin {
             document: f.document,
@@ -178,6 +208,10 @@ pub fn publish(world: &mut World, id: DocumentId) -> Result<Listing, String> {
         previous: meta.published.as_ref().map_or(0, |p| p.revision),
     };
     let listing = net::publish(world, draft, bytes)?;
+    // The name the panel shows for all of this user's documents.
+    if let Err(why) = net::say_profile(world, &owner_name) {
+        warn!("cannot say the profile's name: {why}");
+    }
     meta.published = Some(Published {
         revision: listing.revision,
         time: listing.published,
