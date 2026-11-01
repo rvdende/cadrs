@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use proa_core::{perf_ok, DataLoader, WebContext, WebRenderSync, WriteError};
+use proa_core::{perf_ok, DataLoader, StaticRaw, WebContext, WebRenderSync, WriteError};
 use proa_core::{MdRenderSync, WriteBuf};
 use proa_macros::html_sync;
 use proa_macros::md_sync;
@@ -98,14 +98,6 @@ struct Shot {
     height: u32,
     alt: &'static str,
 }
-
-const PART_STUDIO: Shot = Shot {
-    light: "/images/part-studio-light.webp",
-    dark: "/images/part-studio-dark.webp",
-    width: 1920,
-    height: 1050,
-    alt: "A house in a cadrs Part Studio: 1,681 features and 628 parts in the feature list beside the 3D view",
-};
 
 const DOCUMENTS: Shot = Shot {
     light: "/images/documents-light.webp",
@@ -363,7 +355,7 @@ fn web_app() -> bool {
     std::env::var_os("CADRS_WEB_APP").is_some_and(|v| !v.is_empty())
 }
 
-/// The hero's link to the browser build, when the export has one.
+/// The hero's link to the browser build on a page of its own, when the export has one.
 struct TryInBrowser;
 
 impl<L: DataLoader> WebRenderSync<L> for TryInBrowser {
@@ -374,8 +366,88 @@ impl<L: DataLoader> WebRenderSync<L> for TryInBrowser {
         let app = cx.request().url("/app/");
         html_sync! {
             <a href={app} class={link_button(ButtonSize::Lg, ButtonVariant::Outline)}>
-                "Try it in your browser"
+                "Open it full screen"
             </a>
+        }
+        .render(cx)
+    }
+}
+
+/// Runs [`HeroApp`]: loads the app at once on a wide screen, on a narrow one (a phone: a large
+/// download, and WebGPU seldom there) only when asked; lifts the veil on a click and lowers it
+/// again when the pointer leaves, so the wheel scrolls the page until the app is wanted. Until
+/// that first click the page keeps the keyboard and its place: the app takes focus as it starts,
+/// which would scroll the page to it, so focus is taken back and a scroll nobody made undone.
+const APP_SCRIPT: &str = "<script>(function(){\
+var box=document.querySelector(\"[data-cadrs-embed]\");if(!box)return;\
+var frame=box.querySelector(\"iframe\"),veil=box.querySelector(\"[data-cadrs-veil]\"),\
+ask=box.querySelector(\"[data-cadrs-ask]\");\
+function show(e,on){e.classList.toggle(\"hidden\",!on);e.classList.toggle(\"flex\",on)}\
+function load(){if(!frame.getAttribute(\"src\"))frame.src=frame.getAttribute(\"data-src\");show(ask,false);show(veil,true)}\
+if(matchMedia(\"(min-width: 768px)\").matches)load();else show(ask,true);\
+box.querySelector(\"[data-cadrs-load]\").addEventListener(\"click\",load);\
+var wanted=false,y=scrollY,input=0;\
+[\"wheel\",\"touchmove\",\"keydown\",\"pointerdown\"].forEach(function(t){\
+addEventListener(t,function(){input=Date.now()},{capture:true,passive:true})});\
+addEventListener(\"scroll\",function(){if(!wanted&&Date.now()-input>1000&&document.activeElement===frame)\
+scrollTo(0,y);else y=scrollY});\
+addEventListener(\"blur\",function(){setTimeout(function(){\
+if(!wanted&&document.activeElement===frame){frame.blur();scrollTo(0,y)}})});\
+veil.addEventListener(\"click\",function(){wanted=true;show(veil,false);frame.focus()});\
+box.addEventListener(\"mouseleave\",function(){if(frame.getAttribute(\"src\"))show(veil,true)})\
+})()</script>";
+
+/// The browser build itself across the page, where a screenshot used to be (it aged with every
+/// release): the real app, as it is now. Until it is clicked, a veil keeps the wheel scrolling
+/// the page ([`APP_SCRIPT`]).
+struct HeroApp;
+
+impl<L: DataLoader> WebRenderSync<L> for HeroApp {
+    fn render(self, cx: &mut WebContext<L>) -> Result<(), WriteError> {
+        if !web_app() {
+            return Ok(());
+        }
+        // Straight into a document, ready to draw in (the app's `?quick-start`).
+        let app = cx.request().url("/app/?quick-start");
+        html_sync! {
+            <div
+                id="app"
+                data-cadrs-embed=""
+                class="relative h-[min(80vh,860px)] min-h-[480px] w-full scroll-mt-14 border-y border-border bg-card"
+            >
+                <iframe
+                    title="cadrs, running in this page"
+                    data-src={app}
+                    allow="fullscreen; clipboard-read; clipboard-write"
+                    class="absolute inset-0 h-full w-full border-0"
+                ></iframe>
+                <button
+                    type="button"
+                    data-cadrs-veil=""
+                    aria-label="Use cadrs"
+                    class="absolute inset-0 hidden cursor-pointer items-start justify-center pt-28"
+                >
+                    <span class="rounded-full border border-border bg-background/90 px-4 py-2 text-sm text-foreground shadow-lg">
+                        "Click to use cadrs"
+                    </span>
+                </button>
+                <div
+                    data-cadrs-ask=""
+                    class="absolute inset-0 hidden flex-col items-center justify-center gap-4 px-6 text-center"
+                >
+                    <p class="max-w-sm text-pretty text-muted-foreground">
+                        "cadrs runs in the browser too: about 40 MB, in a browser with WebGPU."
+                    </p>
+                    <button
+                        type="button"
+                        data-cadrs-load=""
+                        class={link_button(ButtonSize::Lg, ButtonVariant::Solid)}
+                    >
+                        "Start cadrs here"
+                    </button>
+                </div>
+            </div>
+            {StaticRaw(APP_SCRIPT)}
         }
         .render(cx)
     }
@@ -898,8 +970,8 @@ impl<L: DataLoader> WebRenderSync<L> for HomePage {
                         aria-hidden="true"
                         class="absolute inset-x-0 top-0 h-80 bg-gradient-to-b from-primary/10 to-transparent"
                     ></div>
-                    <div class="relative mx-auto grid max-w-6xl items-center gap-12 px-4 py-14 sm:px-6 md:py-20 lg:grid-cols-[0.85fr_1.15fr]">
-                        <div class="flex flex-col items-start">
+                    <div class="relative mx-auto max-w-6xl px-4 pb-10 pt-12 sm:px-6 md:pt-14">
+                        <div class="mx-auto flex max-w-3xl flex-col items-center text-center">
                             <a
                                 href={LATEST_RELEASE}
                                 class="inline-flex items-center gap-2 rounded-full border border-border bg-background/80 px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
@@ -908,13 +980,13 @@ impl<L: DataLoader> WebRenderSync<L> for HomePage {
                                 <span data-release-label>{latest}</span>
                                 <span class="font-medium text-primary">"What's new"</span>
                             </a>
-                            <h1 class="mt-6 max-w-xl text-balance text-4xl font-semibold tracking-tight text-foreground md:text-5xl lg:text-6xl">
+                            <h1 class="mt-6 text-balance text-4xl font-semibold tracking-tight text-foreground md:text-5xl lg:text-6xl">
                                 "Parametric CAD, written in Rust"
                             </h1>
-                            <p class="mt-6 max-w-lg text-pretty text-lg leading-8 text-muted-foreground">
+                            <p class="mt-6 max-w-2xl text-pretty text-lg leading-8 text-muted-foreground">
                                 "Sketch, constrain and dimension, then build parts, assemblies, drawings and circuit boards from features you can always go back and change. It runs on your own computer, with your documents in a folder you own."
                             </p>
-                            <div class="mt-8 flex flex-wrap gap-3">
+                            <div class="mt-8 flex flex-wrap justify-center gap-3">
                                 <a
                                     href="#download"
                                     class={link_button(ButtonSize::Lg, ButtonVariant::Solid)}
@@ -933,28 +1005,9 @@ impl<L: DataLoader> WebRenderSync<L> for HomePage {
                                 "Free and open source (MIT or Apache-2.0) · Windows, Linux and macOS · An independent project"
                             </p>
                         </div>
-                        <div class="relative mx-auto w-full max-w-3xl">
-                            <div
-                                aria-hidden="true"
-                                class="absolute -inset-6 rounded-[2rem] bg-primary/10 blur-3xl"
-                            ></div>
-                            {Card {
-                                class: Some("relative overflow-hidden rounded-2xl border-border/80 bg-card/95 shadow-2xl"),
-                                children: Some(html_sync! {
-                                    <a href={cx.request().url(PART_STUDIO.light)} class="block">
-                                        {ShotImages { shot: PART_STUDIO, eager: true }}
-                                    </a>
-                                    <div class="flex items-center justify-between gap-4 border-t border-border px-5 py-3 text-sm">
-                                        <span class="text-muted-foreground">
-                                            "A house: 1,681 features and 628 parts in one Part Studio"
-                                        </span>
-                                        <a href="#features" class={LINK}>"Features"</a>
-                                    </div>
-                                }),
-                            }}
-                        </div>
                     </div>
-                    <div class="relative mx-auto max-w-6xl px-4 pb-14 sm:px-6">
+                    {HeroApp}
+                    <div class="relative mx-auto max-w-6xl px-4 py-14 sm:px-6">
                         <p class="text-xs font-medium uppercase tracking-widest text-muted-foreground">
                             "On this page"
                         </p>

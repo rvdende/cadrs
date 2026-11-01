@@ -99,7 +99,8 @@
       }
     }
     status.classList.add("done");
-    document.getElementById("cadrs").focus();
+    // Embedded in another page (the site's), the keys stay that page's until the app is clicked.
+    if (window.top === window) document.getElementById("cadrs").focus();
   }
   start();
 </script>

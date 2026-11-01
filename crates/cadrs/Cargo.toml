@@ -22,6 +22,8 @@ cadrs_app = { workspace = true, features = ["easyeda"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy = { workspace = true, features = ["webgpu"] }
 cadrs_fs.workspace = true
+# The page's address (`?quick-start`).
+js-sys.workspace = true
 
 [features]
 default = ["gpu", "profiler"]

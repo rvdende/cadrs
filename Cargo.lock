@@ -2389,6 +2389,7 @@ dependencies = [
  "cadrs_net",
  "cadrs_ui",
  "image",
+ "js-sys",
 ]
 
 [[package]]
