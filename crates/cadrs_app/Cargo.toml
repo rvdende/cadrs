@@ -41,6 +41,10 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 # Not in the browser build (`tools/web`): the MCP server listens on a port, updates replace the
 # executable, and the online part search asks JLCPCB over plain HTTP.
 web-time.workspace = true
+# A page opens links with `window.open` (`open_url`).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cadrs_mcp.workspace = true
 cadrs_easyeda = { workspace = true, optional = true }

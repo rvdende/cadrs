@@ -6,8 +6,7 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 ## Commands
 - Build in release everywhere so nothing builds twice: `cargo build -r`,
   `cargo clippy --workspace --all-targets`.
-- Format before committing: `cargo fmt --all` (and `cargo fmt` in `site/`); CI's "Format" job
-  checks it.
+- Format before committing: `cargo fmt --all`; CI's "Format" job checks it.
 - Tests:
   - `cargo test -r`: the fast tests of the crates without Bevy (about a minute).
   - `cargo test -r -- --ignored`: the slow core tests (each over 5 s).
@@ -26,7 +25,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
 - Browser build: `tools/web/build.sh` → `target/web/` (WebAssembly, drawn with WebGPU; serve the
   folder over HTTP). Needs wasm-bindgen-cli at Cargo.lock's version. Releases attach it as
-  `cadrs-v<version>-web.tar.gz` and the site serves the latest at `/cadrs/app/`. A page has one
+  `cadrs-v<version>-web.tar.gz`, and the latest is the whole site, https://cadrs.net (see
+  "Project site" below). A page has one
   thread and no `std::fs` or `std` clock, so code it runs (everything but `cadrs_mcp`, the
   updater and the kernel's debug dumps) reads files through `cadrs_fs` (also `cadrs_fs::exists`,
   `is_file`, `is_dir`, not `Path`'s), tells the time with `web_time`, and starts threads with
@@ -56,8 +56,10 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   (with `CADRS_TRACE_AT=<s>`) writes a quarter second of every system's span, by thread, as a
   Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
-- Project site: `site/` is a Proa app of its own (stable toolchain, built with `RUSTFLAGS=`),
-  exported to GitHub Pages by `.github/workflows/pages.yml`; see `site/README.md`.
+- Project site: https://cadrs.net is the app itself, full screen: `.github/workflows/pages.yml`
+  deploys the latest release's browser build to GitHub Pages (on a release, or by hand), so a
+  change to `tools/web/index.html` shows there after the next release. In a browser without
+  WebGPU the page offers the downloads instead; the app menu links to GitHub.
 
 ## Layout
 - Crates in `crates/*`; shared versions in root `[workspace.dependencies]`.

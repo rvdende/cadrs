@@ -20,8 +20,8 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  # Per push and pull request: every crate is rustfmt-clean (default style; run `cargo fmt --all`,
-  # and `cargo fmt` in site/, before committing). Mark "Format" as a required status check too.
+  # Per push and pull request: every crate is rustfmt-clean (default style; run `cargo fmt --all`
+  # before committing). Mark "Format" as a required status check too.
   fmt:
     name: Format
     runs-on: ubuntu-24.04
@@ -34,11 +34,6 @@ jobs:
 
       - name: cargo fmt (workspace)
         run: cargo fmt --all --check
-
-      # site/ is its own workspace on its own toolchain (site/rust-toolchain.toml).
-      - name: cargo fmt (site)
-        working-directory: site
-        run: rustup toolchain install && cargo fmt --check
 
   # Per push and pull request: the kernel's builds without the test feature, its clippy gate and
   # a fast subset of the gate (tools/kernel_gate.sh: the unit tests, conformance, smlib_booleans,

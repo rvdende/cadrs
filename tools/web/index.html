@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cadrs</title>
+<title>cadrs: parametric CAD, written in Rust</title>
+<meta name="description" content="cadrs is free, open-source parametric CAD: sketches, parts, assemblies, drawings and circuit boards, in your browser or on Windows, macOS and Linux.">
 <link rel="icon" type="image/png" href="cadrs.png">
 <style>
   :root { color-scheme: light dark; --bg: #f7f7f8; --fg: #18181b; --muted: #71717a; --bar: #e4e4e7; --accent: #2563eb; }
@@ -19,6 +20,12 @@
   #status .fill { width: 0; height: 100%; background: var(--accent); transition: width .2s; }
   #status .note { max-width: 460px; color: var(--muted); }
   #status a { color: var(--accent); }
+  #status h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+  #status .downloads { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
+  #status .downloads a { padding: 9px 16px; border: 1px solid var(--bar); border-radius: 8px;
+    color: var(--fg); text-decoration: none; font-weight: 500; }
+  #status .downloads a.mine { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #status .downloads a:hover { border-color: var(--accent); }
   #status.done { display: none; }
 </style>
 </head>
@@ -38,6 +45,27 @@
   const message = document.getElementById("message");
   const note = document.getElementById("note");
   const fill = document.getElementById("fill");
+
+  // Without WebGPU: the downloads, this system's first.
+  function downloads() {
+    const latest = "https://github.com/rvdende/cadrs/releases/latest/download/";
+    const all = [
+      ["Windows", "cadrs-x86_64-windows.zip", /Windows/],
+      ["macOS", "cadrs-universal-macos.dmg", /Macintosh|Mac OS X/],
+      ["Linux", "cadrs-x86_64-linux.tar.gz", /Linux|X11/],
+    ];
+    const ua = navigator.userAgent;
+    const mine = /Android|iPhone|iPad/.test(ua) ? -1 : all.findIndex(([, , re]) => re.test(ua));
+    if (mine > 0) all.unshift(all.splice(mine, 1)[0]);
+    message.innerHTML = "<h1>cadrs</h1>Parametric CAD, written in Rust";
+    note.innerHTML = "cadrs draws with WebGPU, which this browser doesn't have: try a recent Chrome, " +
+      "Edge, Firefox or Safari. Or download it for your computer:" +
+      '<div class="downloads">' +
+      all.map(([name, file], i) =>
+        `<a class="${i === 0 && mine >= 0 ? "mine" : ""}" href="${latest}${file}">${name}</a>`).join("") +
+      '</div><p><a href="https://github.com/rvdende/cadrs">cadrs on GitHub</a></p>';
+    fill.parentElement?.remove();
+  }
 
   function fail(what, detail) {
     message.textContent = what;
@@ -66,8 +94,7 @@
 
   async function start() {
     if (!navigator.gpu || !(await navigator.gpu.requestAdapter())) {
-      fail("Your browser has no WebGPU",
-        'cadrs draws with WebGPU: try a recent Chrome, Edge, Firefox or Safari. Or <a href="https://github.com/rvdende/cadrs/releases/latest">download cadrs</a> for Windows, Linux or macOS.');
+      downloads();
       return;
     }
     // A panic traps the module, in whatever frame it happens: say so instead of a frozen page.

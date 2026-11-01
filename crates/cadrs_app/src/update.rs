@@ -489,7 +489,7 @@ fn sync_dialog_footer(
                         .label(tr("shell-update-release-page"))
                         .primary()
                         .build(t),
-                    observe(move |_: On<Activate>| open_url(&page)),
+                    observe(move |_: On<Activate>| crate::open_url(&page)),
                 ));
             }
             UpdateStatus::Downloading { .. } => {
@@ -844,21 +844,6 @@ fn inline_runs(md: &str) -> Vec<(String, bool)> {
         .filter(|(_, s)| !s.is_empty())
         .map(|(i, s)| (s.to_string(), i % 2 == 1))
         .collect()
-}
-
-fn open_url(url: &str) {
-    let mut cmd = if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-    } else {
-        std::process::Command::new("xdg-open")
-    };
-    if let Err(e) = cmd.arg(url).spawn() {
-        warn!("cannot open {url}: {e}");
-    }
 }
 
 // ---------------------------------------------------------------------------------------------

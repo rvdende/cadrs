@@ -5,7 +5,7 @@
 #   package.sh macos <cadrs>       → dist/cadrs-v<version>-universal-macos.dmg (on macOS, from a
 #                                    universal Apple silicon and Intel executable)
 #   package.sh web <dir>           → dist/cadrs-v<version>-web.tar.gz (the browser build's folder,
-#                                    tools/web/build.sh; the site serves it at /cadrs/app/)
+#                                    tools/web/build.sh; the site at https://cadrs.net)
 # Each holds the stripped executable, the built-in libraries/, README.md and the licenses; the
 # macOS one holds them as the app bundle cadrs.app (`cadrs --bundle`, as `cadrs --install` makes
 # it), ad-hoc signed, beside a link to /Applications to drag it to. Used by

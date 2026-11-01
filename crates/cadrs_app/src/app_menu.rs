@@ -1,8 +1,8 @@
 //! The app menu: the cadrs mark at the top left opens it, on the documents page and in a
 //! document. In a document it has the way back to the documents and what the document menu
 //! had (rename, export, a version, the workspaces, the units, a full rebuild); on the documents
-//! page, the documents folder, the labels and the Trash. Both end with Preferences and the
-//! keyboard shortcuts.
+//! page, the documents folder, the labels and the Trash. Both end with Preferences, the
+//! keyboard shortcuts and GitHub (the repository, in the browser).
 
 use bevy::prelude::*;
 use bevy::text::FontWeight;
@@ -78,6 +78,10 @@ fn app_entries() -> Vec<MenuEntry> {
         MenuItem::new("app-shortcuts", tr("shell-app-menu-shortcuts"))
             .icon("keyboard")
             .shortcut("Shift+/")
+            .into(),
+        MenuEntry::Separator,
+        MenuItem::new("app-github", tr("shell-app-menu-github"))
+            .icon("github")
             .into(),
     ]
 }
@@ -198,6 +202,7 @@ fn on_app_menu_action(
     match ev.item.as_str() {
         "app-preferences" => commands.queue(crate::preferences_ui::open_preferences),
         "app-shortcuts" => commands.queue(crate::shortcuts::open_shortcuts),
+        "app-github" => crate::open_url(crate::GITHUB),
         "app-documents" => commands.queue(crate::thumbnail::close_document),
         "document-menu-export" => commands.queue(crate::native_document::open_export),
         "document-menu-units" => commands.queue(crate::units_dialog::open_units_dialog),
