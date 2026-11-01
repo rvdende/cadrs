@@ -38,6 +38,8 @@ pub enum SidePanel {
     Simulation,
     /// P3I.3: the Sheet metal table and flat view ([`crate::sheetmetal_table`]).
     SheetMetal,
+    /// A Part Studio's Configuration panel ([`crate::configuration_ui`]).
+    Configuration,
 }
 
 fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>) {
@@ -51,9 +53,11 @@ fn on_panel_button(a: On<Activate>, q: Query<&Name>, mut open: ResMut<SidePanel>
         "panel-named-positions" => toggle(&mut open, SidePanel::NamedPositions),
         "panel-exploded-views" => toggle(&mut open, SidePanel::ExplodedViews),
         "panel-sheet-metal" => toggle(&mut open, SidePanel::SheetMetal),
-        "bom-panel-close" | "named-positions-panel-close" | "exploded-views-panel-close" => {
-            *open = SidePanel::None
-        }
+        "panel-configuration" => toggle(&mut open, SidePanel::Configuration),
+        "bom-panel-close"
+        | "named-positions-panel-close"
+        | "exploded-views-panel-close"
+        | "configuration-panel-close" => *open = SidePanel::None,
         _ => {}
     }
 }
@@ -90,6 +94,7 @@ fn sync_panel_buttons(
             "panel-exploded-views" => *open == SidePanel::ExplodedViews,
             "panel-simulation" => *open == SidePanel::Simulation,
             "panel-sheet-metal" => *open == SidePanel::SheetMetal,
+            "panel-configuration" => *open == SidePanel::Configuration,
             _ => continue,
         };
         if want && !selected {

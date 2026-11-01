@@ -22,6 +22,7 @@ pub mod camera;
 pub mod change_preview;
 pub mod collab;
 pub mod composite_ui;
+pub mod configuration_ui;
 pub mod create_selection;
 pub mod cursor;
 pub mod debug_tools;
@@ -451,6 +452,7 @@ impl ActiveDocument {
         // Derived features take their sources' snapshots (neither is an edit).
         cadrs_core::variable_studio::propagate(&mut doc, None);
         cadrs_core::derived::resolve_document(&mut doc);
+        cadrs_core::configuration::refresh_copies(&mut doc);
         Self {
             saved: std::sync::Arc::new(doc.clone()),
             opened: doc.clone(),
@@ -974,6 +976,7 @@ impl Plugin for CadrsAppPlugin {
                 workspaces::WorkspacesPlugin,
                 repair::RepairPlugin,
                 replace_reference::ReplaceReferencePlugin,
+                configuration_ui::ConfigurationPlugin,
             ))
             .add_plugins((
                 appearance::AppearancePlugin,

@@ -835,6 +835,12 @@ fn view_tools(bar: &mut ChildSpawnerCommands, t: &Theme) {
                 "sheet-metal-table",
                 "shell-doc-sheet-metal-table",
             ),
+            // A Part Studio's Configuration panel (`crate::configuration_ui`).
+            (
+                "panel-configuration",
+                "configurations",
+                "config-panel-tooltip",
+            ),
         ] {
             g.spawn(
                 ToolButton::new(name, icon_name)
@@ -5015,7 +5021,7 @@ fn on_feature_context_menu(
         } else {
             MenuItem::new("feature-suppress", tr("common-suppress")).disabled(editing || in_dialog)
         })
-        // Suppression driven by a variable (IR5.5) or a configuration (out of scope).
+        // Suppression driven by a variable (IR5.5) or a configuration.
         .item(
             MenuItem::new(
                 "feature-dynamic-suppression",
@@ -5040,17 +5046,21 @@ fn on_feature_context_menu(
                         .into(),
                     );
                 }
-                items.push(
-                    MenuItem::new(
-                        "feature-suppress-by-configuration",
-                        tr("shell-doc-suppress-by-configuration"),
-                    )
-                    .planned()
-                    .into(),
-                );
+                if let Some(el) = el {
+                    items.push(
+                        crate::configuration_ui::suppress_entry(el, row.0)
+                            .disabled(in_dialog)
+                            .into(),
+                    );
+                }
                 items
             }),
-        )
+        );
+    // Configure ▸ its fields (Configurations, `crate::configuration_ui`).
+    if let Some(item) = el.and_then(|el| crate::configuration_ui::configure_entries(el, row.0)) {
+        menu = menu.item(item.disabled(in_dialog));
+    }
+    menu = menu
         .separator()
         .item(
             MenuItem::new("feature-add-comment", tr("common-add-comment"))
@@ -5218,6 +5228,15 @@ fn on_feature_menu_action(
         }
         "feature-remove-suppression-variable" => {
             commands.queue(move |world: &mut World| crate::suppress_variable::remove(world, id))
+        }
+        // Configurations: Configure ▸ a field, Dynamic suppression ▸ Suppress by configuration.
+        s if s.starts_with("feature-configure-")
+            || s.starts_with("feature-suppress-by-configuration") =>
+        {
+            let item = s.to_string();
+            commands.queue(move |world: &mut World| {
+                crate::configuration_ui::configure_action(world, id, &item)
+            })
         }
         "feature-unsuppress" => commands
             .queue(move |world: &mut World| crate::feature_list::set_suppressed(world, id, false)),

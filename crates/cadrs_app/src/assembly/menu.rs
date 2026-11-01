@@ -255,6 +255,8 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
             tr("asm-menu-select-same-part"),
         ))
     };
+    // Configurations: the instances' configuration of their Part Studio.
+    let config_item = crate::configuration_ui::instance_menu_item(world, element, &targets);
     let copy_label = if targets.len() > 1 {
         tr_with(
             "asm-menu-copy-items",
@@ -448,7 +450,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                     .disabled(!parts_only)
                     .icon("transform"),
             );
-        menu = std_items(menu).item(in_context.clone());
+        menu = std_items(menu);
+        if let Some(c) = config_item.clone() {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context.clone());
         if let Some(u) = update_context.clone() {
             menu = menu.item(u);
         }
@@ -655,7 +661,11 @@ pub fn open_instance_menu(world: &mut World, at: Vec2, instance: InstanceId, han
                 .disabled(!parts_only)
                 .icon("transform"),
             );
-        menu = std_items(menu).item(in_context);
+        menu = std_items(menu);
+        if let Some(c) = config_item {
+            menu = menu.item(c);
+        }
+        menu = menu.item(in_context);
         if let Some(u) = update_context {
             menu = menu.item(u);
         }
@@ -896,6 +906,9 @@ fn act(world: &mut World, menu: &AsmMenu, handle: TriadHandle, item: &str) {
     let parts: Vec<cadrs_core::PartId> = super::view_parts(world.resource::<PartCache>(), &targets);
     match item {
         // P3B.6: the instance's part or subassembly properties.
+        s if s.starts_with("asm-config-") => {
+            crate::configuration_ui::instance_menu_action(world, element, targets, s);
+        }
         "asm-properties" => {
             if let Some(i) = menu.instance {
                 crate::properties_dialog::open_for_instance(world, i);
@@ -1431,7 +1444,11 @@ pub fn switch_to(world: &mut World, instance: InstanceId) {
     else {
         return;
     };
-    let element = source.element();
+    // A configured instance's source is its studio's configured copy: the studio's tab.
+    let element = cadrs_core::configuration::tab_of(
+        &world.resource::<ActiveDocument>().doc,
+        source.element(),
+    );
     if world
         .resource::<ActiveDocument>()
         .doc

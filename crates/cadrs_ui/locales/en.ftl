@@ -6083,3 +6083,38 @@ cam-component-newest = The component is at the newest version
 cam-still-reading-parts = Still reading the Part Studio's parts
 # The heading of a CAM dialog's list of warnings.
 cam-warnings = Warnings
+
+## crates/cadrs_app/src/configuration_ui.rs
+# The Configuration panel of a Part Studio: inputs (List, Checkbox) that build the studio in several variants.
+config-title = Configuration
+config-panel-tooltip = Configuration
+config-add-input = Add input
+config-add-input-tooltip = Add a List or Checkbox input
+config-empty = No configuration inputs. A List makes a table of configurations; a Checkbox turns features on or off. Values typed in are Variables (fx), which a List can set.
+# { $name } is the input's name.
+config-input-tooltip = { $name }: right-click to rename, move or delete
+# The heading of a configuration table's first column (the configurations' names).
+config-configuration = Configuration
+# Marks the default configuration of a List.
+config-default-tag = default
+# { $name } is the configuration's name.
+config-row-shown-tooltip = { $name } is shown in the Part Studio
+config-row-tooltip = Double-click to show { $name } in the Part Studio
+config-suppressed-tooltip = Suppressed in this configuration
+config-add-row = Add configuration
+config-no-params = Nothing configured yet: a feature's menu › Configure adds its fields here.
+config-list = List
+config-checkbox = Checkbox
+config-move-up = Move up
+config-move-down = Move down
+config-move-left = Move left
+config-move-right = Move right
+config-checked-by-default = Checked by default
+config-show = Show in Part Studio
+config-set-default = Set as default
+config-remove-column = Remove from configuration
+common-duplicate = Duplicate
+config-configure = Configure
+config-instance-configuration = Configuration
+# The Insert dialog's configuration section for the picked item; { $name } is its Part Studio.
+config-insert-title = Configuration of { $name }

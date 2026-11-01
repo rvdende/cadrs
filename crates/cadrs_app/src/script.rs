@@ -581,6 +581,11 @@ fn run_script_commands(mut msgs: MessageReader<ScriptCommand>, mut commands: Com
             (Some("with-hole"), None) => {
                 commands.queue(with_hole);
             }
+            // Configurations: the plate with a Size List and an Assembly of both sizes
+            // (`cadrs_core::samples::with_hole::configured_in`).
+            (Some("configured-plate"), None) => {
+                commands.queue(configured_plate);
+            }
             // P3I.8: exercise E4's rework after Finish (steps 3–9) on its stand-in.
             (Some("sm-e4-rework"), None) => {
                 commands.queue(sm_e4_rework);
@@ -1227,6 +1232,18 @@ fn with_hole(world: &mut World) {
     };
     if let Err(e) = cadrs_core::samples::with_hole::build_in(&mut *doc, element) {
         warn!("with-hole: {e}");
+    }
+}
+
+fn configured_plate(world: &mut World) {
+    let Some(mut doc) = world.get_resource_mut::<ActiveDocument>() else {
+        return;
+    };
+    let Some(element) = doc.active_element().map(|e| e.id) else {
+        return;
+    };
+    if let Err(e) = cadrs_core::samples::with_hole::configured_in(&mut *doc, element) {
+        warn!("configured-plate: {e}");
     }
 }
 

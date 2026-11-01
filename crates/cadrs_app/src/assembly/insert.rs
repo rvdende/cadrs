@@ -54,6 +54,7 @@ impl Plugin for InsertPlugin {
                     insert_pointer,
                     update_ghosts,
                     sync_counter,
+                    crate::configuration_ui::sync_insert_panel,
                     insert_keys,
                     end_on_tab_change,
                 )
@@ -139,6 +140,9 @@ pub struct InsertSession {
     /// version graph shown.
     pub current: Option<crate::linked::Opened>,
     pub current_graph: bool,
+    /// The configuration chosen for each configured Part Studio (Configurations; the studio's
+    /// active one until another is picked, [`crate::configuration_ui`]).
+    pub configs: Vec<(ElementId, cadrs_core::configuration::ConfigValues)>,
 }
 
 impl InsertSession {
@@ -231,6 +235,7 @@ pub fn open_insert_dialog(world: &mut World) {
         browse: Default::default(),
         current: None,
         current_graph: false,
+        configs: Vec::new(),
     });
     let theme = world.resource::<Theme>().clone();
     let mut q = world.query_filtered::<Entity, With<ViewportArea>>();
@@ -476,6 +481,23 @@ fn dialog(t: &Theme, doc_name: String) -> impl Bundle {
                             tree,
                         ));
                     });
+                    // The picked item's configuration (Configurations).
+                    b.spawn((
+                        Name::new("insert-configuration"),
+                        crate::configuration_ui::InsertConfigPanel,
+                        Node {
+                            display: Display::None,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            padding: UiRect::new(
+                                Val::Px(10.0),
+                                Val::Px(10.0),
+                                Val::Px(6.0),
+                                Val::Px(2.0),
+                            ),
+                            ..default()
+                        },
+                    ));
                     b.spawn(Node {
                         justify_content: JustifyContent::FlexEnd,
                         padding: UiRect::new(
@@ -1145,6 +1167,8 @@ fn insert_item(world: &mut World, item: &Item, pose: Pose) {
             } => Instance::board(id, *el, *b, item.rigid.clone(), pose),
             _ => Instance::new(id, *src, pose),
         };
+        let mut instance = instance;
+        instance.configuration = crate::configuration_ui::insert_configuration(world, src);
         if super::run(world, &InsertInstance { element, instance })
             && let Some(mut s) = world.get_resource_mut::<InsertSession>()
         {
@@ -1331,7 +1355,16 @@ fn update_ghosts(world: &mut World) {
             .is_some_and(|hits| areas.iter().any(|a| hits.contains_key(a)))
     };
     let pointer = world.resource::<crate::viewport::ViewportDrag>().pointer();
-    let ghosts: Vec<Instance> = match &s.armed {
+    // A configured studio's ghost shows the configuration chosen.
+    let armed = s.armed.clone().map(|mut item| {
+        if item.link.is_none() {
+            for src in &mut item.sources {
+                *src = crate::configuration_ui::ghost_source(world, *src);
+            }
+        }
+        item
+    });
+    let ghosts: Vec<Instance> = match &armed {
         Some(item) if over => {
             let pose = pose_at_pointer(world, item, pointer);
             item.sources
