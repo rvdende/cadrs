@@ -3,8 +3,8 @@
 //!
 //! cadrs goes online (peer to peer, [`cadrs_net`]) only when the user asks: the button's
 //! **Connect**, the **Connect** of a toast when sharing or joining needs the network, or at
-//! start with **Connect when cadrs starts** (`Preferences::autoconnect_p2p`, off by default;
-//! the button's menu and the Preferences dialog both set it). **Disconnect** goes offline
+//! start with **Connect when cadrs starts** (`Preferences::autoconnect_p2p`, off by default,
+//! on in a browser; the button's menu and the Preferences dialog both set it). **Disconnect** goes offline
 //! again: the open shared document's session ends and every room is left.
 //!
 //! The button (`network`) shows the state with icon-rs's network icons: struck through while

@@ -40,15 +40,13 @@ use bevy::ui_widgets::{Activate, observe};
 use cadrs_core::preferences::{
     ColorScheme, Modifiers, MouseButton, MousePreset, Preferences, UI_SCALES, ViewAction,
 };
+use cadrs_ui::Switch;
 use cadrs_ui::i18n::{Translated, tr, tr_with};
 use cadrs_ui::prelude::*;
 use cadrs_ui::{
     Button, DialogClose, NumberField, NumberFieldCommit, NumberFieldEdit, NumberFieldState, Select,
     SelectChange, SelectState, SelectableText, ShortcutKey, SwitchState, form_row,
 };
-// The MCP server's and P2P networking's switches (not in a page).
-#[cfg(not(target_arch = "wasm32"))]
-use cadrs_ui::Switch;
 
 use crate::{AppState, DocumentStore};
 
@@ -409,11 +407,8 @@ pub fn open_preferences(world: &mut World) {
     let preset = world.resource::<LocalPreferences>().mouse();
     #[cfg(not(target_arch = "wasm32"))]
     let mcp = world.resource::<LocalPreferences>().0.mcp;
-    #[cfg(not(target_arch = "wasm32"))]
     let autoconnect = world.resource::<LocalPreferences>().0.autoconnect_p2p;
-    #[cfg(not(target_arch = "wasm32"))]
     let public_on = world.resource::<LocalPreferences>().0.public_documents;
-    #[cfg(not(target_arch = "wasm32"))]
     let seeds = world
         .get_resource::<crate::collab::public::Seeds>()
         .map(|s| s.0.join(", "))
@@ -748,8 +743,6 @@ pub fn open_preferences(world: &mut World) {
                         ));
                     }
                 });
-                // A page has no network to connect to.
-                #[cfg(not(target_arch = "wasm32"))]
                 b.spawn(form_row(t, "pref-p2p-row", tr("shell-prefs-p2p"), 150.0))
                     .with_child(
                         Switch::new("pref-p2p-autoconnect")
@@ -758,7 +751,6 @@ pub fn open_preferences(world: &mut World) {
                             .build(t),
                     );
                 // Public documents: take part while online, and the seed peers to start from.
-                #[cfg(not(target_arch = "wasm32"))]
                 b.spawn(form_row(
                     t,
                     "pref-public-row",
@@ -771,7 +763,6 @@ pub fn open_preferences(world: &mut World) {
                         .on(public_on)
                         .build(t),
                 );
-                #[cfg(not(target_arch = "wasm32"))]
                 b.spawn(form_row(
                     t,
                     "pref-public-seeds-row",

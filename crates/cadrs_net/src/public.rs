@@ -123,6 +123,8 @@ const REMEMBER_PEERS: usize = 32;
 const REACH_WITHIN: Duration = Duration::from_secs(15);
 
 const DIRECTORY_FILE: &str = "directory.bin";
+/// The owners' names ([`Profile`]), in a file of their own so the directory's stays as it was.
+const PROFILES_FILE: &str = "profiles.bin";
 const REVISIONS_DIR: &str = "revisions";
 
 /// Seconds since the Unix epoch, by this machine's clock.
@@ -225,6 +227,23 @@ impl Statement for Star {
     const CONTEXT: &'static [u8] = b"cadrs public star 1\0";
     fn signer(&self) -> &str {
         &self.by
+    }
+}
+
+/// What someone calls themselves now: shown for their documents, whatever name each listing was
+/// published under, so a rename reaches everyone without publishing again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profile {
+    /// Their cadrs ID: the key that signs it.
+    pub owner: String,
+    pub name: String,
+    pub time: i64,
+}
+
+impl Statement for Profile {
+    const CONTEXT: &'static [u8] = b"cadrs public profile 1\0";
+    fn signer(&self) -> &str {
+        &self.owner
     }
 }
 
@@ -334,6 +353,8 @@ pub struct Directory {
     listings: BTreeMap<Key, Held>,
     withdrawn: BTreeMap<Key, (Withdrawal, Signed<Withdrawal>)>,
     stars: BTreeMap<Key, BTreeMap<String, Starring>>,
+    /// The owners' names, by their cadrs ID.
+    profiles: BTreeMap<String, (Profile, Signed<Profile>)>,
     /// The listings' pictures, by their hash.
     pictures: HashMap<[u8; 32], Vec<u8>>,
 }
@@ -601,12 +622,53 @@ impl Directory {
         listed.max(withdrawn)
     }
 
-    /// The public documents, with their stars as `who` sees them.
+    /// Takes someone's name: true if it is their latest.
+    pub fn add_profile(&mut self, signed: &Signed<Profile>, now: i64) -> Result<bool, String> {
+        let p = signed.open()?;
+        if p.name.len() > MAX_NAME {
+            return Err("The name is too long".into());
+        }
+        if p.time > now + MAX_AHEAD {
+            return Err("Named in the future".into());
+        }
+        if self
+            .profiles
+            .get(&p.owner)
+            .is_some_and(|(x, _)| x.time >= p.time)
+        {
+            return Ok(false);
+        }
+        self.profiles.insert(p.owner.clone(), (p, signed.clone()));
+        Ok(true)
+    }
+
+    /// What `owner` calls themselves now, if they said.
+    pub fn profile(&self, owner: &str) -> Option<&Profile> {
+        self.profiles.get(owner).map(|(p, _)| p)
+    }
+
+    /// Every name kept, to hand on (or only `owner`'s).
+    pub fn profiles(&self, owner: Option<&str>) -> Vec<Signed<Profile>> {
+        self.profiles
+            .iter()
+            .filter(|(o, _)| owner.is_none_or(|w| w == o.as_str()))
+            .map(|(_, (_, s))| s.clone())
+            .collect()
+    }
+
+    /// The public documents, with their stars as `who` sees them, under their owners' names as
+    /// they are now.
     pub fn docs(&self, who: &str) -> Vec<PublicDoc> {
         self.listings
             .iter()
             .map(|(key, h)| PublicDoc {
-                listing: h.listing.clone(),
+                listing: match self.profile(&h.listing.owner) {
+                    Some(p) => Listing {
+                        owner_name: p.name.clone(),
+                        ..h.listing.clone()
+                    },
+                    None => h.listing.clone(),
+                },
                 picture: h
                     .listing
                     .picture
@@ -631,6 +693,14 @@ impl Directory {
         let listed: HashSet<Key> = self.listings.keys().cloned().collect();
         self.withdrawn
             .retain(|k, (w, _)| w.time >= old || listed.contains(k));
+        let owners: HashSet<&String> = self.listings.keys().map(|(o, _)| o).collect();
+        let names_before = self.profiles.len();
+        let kept: BTreeMap<String, (Profile, Signed<Profile>)> = std::mem::take(&mut self.profiles)
+            .into_iter()
+            .filter(|(o, (p, _))| p.time >= old || owners.contains(o))
+            .collect();
+        self.profiles = kept;
+        let names_forgotten = self.profiles.len() != names_before;
         let pictured = self.pictured();
         self.pictures.retain(|h, _| pictured.contains(h));
         self.stars.retain(|k, by| {
@@ -639,7 +709,7 @@ impl Directory {
             }
             !by.is_empty()
         });
-        before != (self.listings.len(), self.withdrawn.len(), self.stars.len())
+        names_forgotten || before != (self.listings.len(), self.withdrawn.len(), self.stars.len())
     }
 }
 
@@ -673,6 +743,8 @@ pub struct State {
     peers: Vec<[u8; 32]>,
     /// What peers told this one that was new here: said in the room in turn.
     told: Vec<(EndpointId, Catalog, Merged)>,
+    /// Names peers told this one that were new here: said in the room in turn.
+    told_profiles: Vec<Signed<Profile>>,
     /// Changed since it was last written out.
     dirty: bool,
     /// One more on every change, for the page to notice.
@@ -710,11 +782,21 @@ impl Shared {
         for p in saved.pictures {
             directory.add_picture(p);
         }
+        let profiles: Vec<Signed<Profile>> = cadrs_fs::read(dir.join(PROFILES_FILE))
+            .ok()
+            .and_then(|b| postcard::from_bytes(&b).ok())
+            .unwrap_or_default();
+        for p in &profiles {
+            let _ = directory.add_profile(p, now);
+        }
         directory.forget_old(now);
         let mut state = self.lock();
         // Anything heard before it was opened (it is opened at startup, so rarely anything).
         let heard = state.directory.catalog();
         directory.merge(&heard, now);
+        for p in state.directory.profiles(None) {
+            let _ = directory.add_profile(&p, now);
+        }
         state.directory = directory;
         state.peers = saved.peers;
         state.dir = Some(dir);
@@ -848,15 +930,20 @@ impl State {
             pictures: d.pictures.values().cloned().collect(),
             peers: self.peers.clone(),
         };
-        let written = postcard::to_stdvec(&saved)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| {
-                cadrs_fs::create_dir_all(&dir)?;
-                let path = dir.join(DIRECTORY_FILE);
-                let tmp = path.with_extension("tmp");
-                cadrs_fs::write(&tmp, bytes)?;
-                cadrs_fs::rename(&tmp, path)
-            });
+        let write = |file: &str, bytes: Result<Vec<u8>, postcard::Error>| {
+            let bytes = bytes.map_err(std::io::Error::other)?;
+            cadrs_fs::create_dir_all(&dir)?;
+            let path = dir.join(file);
+            let tmp = path.with_extension("tmp");
+            cadrs_fs::write(&tmp, bytes)?;
+            cadrs_fs::rename(&tmp, path)
+        };
+        let written = write(DIRECTORY_FILE, postcard::to_stdvec(&saved)).and_then(|()| {
+            write(
+                PROFILES_FILE,
+                postcard::to_stdvec(&self.directory.profiles(None)),
+            )
+        });
         if let Err(e) = written {
             warn!("cannot keep the public documents: {e}");
         }
@@ -890,6 +977,11 @@ enum Ask {
     Picture([u8; 32]),
     /// Statements the asker signed or heard (and their pictures), to take and say in the room.
     Tell(Catalog),
+    /// The owners' names it keeps ([`Profile`]: asked beside the catalog, which older peers
+    /// answer without them).
+    Profiles,
+    /// Names the asker signed or heard, to take and say in the room.
+    TellProfiles(Vec<Signed<Profile>>),
 }
 
 #[derive(Debug, Clone)]
@@ -920,6 +1012,23 @@ impl Handler {
                 .lock()
                 .revision(&hash)
                 .ok_or_else(|| "Not kept here".to_string()),
+            Ask::Profiles => {
+                let profiles = self.0.lock().directory.profiles(None);
+                postcard::to_stdvec(&profiles).map_err(|e| e.to_string())
+            }
+            Ask::TellProfiles(profiles) => {
+                let mut state = self.0.lock();
+                let now = unix_now();
+                let new: Vec<Signed<Profile>> = profiles
+                    .into_iter()
+                    .filter(|p| state.directory.add_profile(p, now).unwrap_or(false))
+                    .collect();
+                if !new.is_empty() {
+                    state.changed();
+                    state.told_profiles.extend(new);
+                }
+                Ok(Vec::new())
+            }
             Ask::Picture(hash) => self
                 .0
                 .lock()
@@ -1107,6 +1216,25 @@ pub fn start_check_in(iroh: &Iroh, base: &str) -> IrohTask<Result<Vec<EndpointId
     })
 }
 
+/// Asks `peer` for the owners' names it keeps.
+pub fn start_profiles(
+    iroh: &Iroh,
+    peer: EndpointAddr,
+) -> IrohTask<Result<Vec<Signed<Profile>>, String>> {
+    let endpoint = dial_from(iroh);
+    iroh.spawn(async move {
+        let bytes = ask(endpoint, peer, Ask::Profiles, MAX_CATALOG).await?;
+        postcard::from_bytes(&bytes).map_err(|_| "Not a list of names".to_string())
+    })
+}
+
+/// Tells `peer` names, to take and say in its room.
+fn start_tell_profiles(iroh: &Iroh, peer: EndpointAddr, profiles: &[Signed<Profile>]) -> Asked {
+    let endpoint = dial_from(iroh);
+    let profiles = profiles.to_vec();
+    iroh.spawn(async move { ask(endpoint, peer, Ask::TellProfiles(profiles), 16).await })
+}
+
 /// Asks `peer` for a listing's picture, checked against its hash.
 pub fn start_picture(
     iroh: &Iroh,
@@ -1183,6 +1311,8 @@ pub struct Announce(pub Signed<Listing>);
 pub struct Withdraw(pub Signed<Withdrawal>);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Starred(pub Signed<Star>);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileSaid(pub Signed<Profile>);
 
 /// The peers to start from: seeds and others the app knows (contacts, owners of documents
 /// shared with this user). Peers met in the room before are added to them.
@@ -1237,9 +1367,9 @@ impl Default for Rendezvous {
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct KeepAll;
 
-/// Statements made here, to say in the room.
+/// Statements made here, to say in the room, and names.
 #[derive(Resource, Default)]
-struct Outbox(Catalog);
+struct Outbox(Catalog, Vec<Signed<Profile>>);
 
 /// This node's place in the public room.
 #[derive(Resource, Default)]
@@ -1261,6 +1391,8 @@ pub struct PublicRoom {
     asked: HashSet<EndpointId>,
     answered: usize,
     syncs: Vec<(EndpointId, IrohTask<Result<Catalog, String>>)>,
+    /// The names asked for beside each catalog.
+    profile_syncs: Vec<IrohTask<Result<Vec<Signed<Profile>>, String>>>,
     announced_at: f64,
     resynced_at: f64,
     /// A seed's revisions on their way.
@@ -1327,6 +1459,7 @@ pub(crate) fn register(app: &mut App) {
         .add_net_message::<Announce>()
         .add_net_message::<Withdraw>()
         .add_net_message::<Starred>()
+        .add_net_message::<ProfileSaid>()
         .add_systems(
             Update,
             (keep_room, hear, sync, send, fetch_all, save)
@@ -1471,6 +1604,7 @@ fn bootstrap(
 
 fn ask_catalog(iroh: &Iroh, room: &mut PublicRoom, addr: EndpointAddr) {
     if room.asked.insert(addr.id) {
+        room.profile_syncs.push(start_profiles(iroh, addr.clone()));
         room.syncs.push((addr.id, start_catalog(iroh, addr)));
     }
 }
@@ -1481,6 +1615,7 @@ fn hear(
     mut announce: MessageReader<Received<Announce>>,
     mut withdraw: MessageReader<Received<Withdraw>>,
     mut starred: MessageReader<Received<Starred>>,
+    mut named: MessageReader<Received<ProfileSaid>>,
     mut joined: MessageReader<PeerJoined>,
     iroh: Option<Res<Iroh>>,
     keep_all: Option<Res<KeepAll>>,
@@ -1514,6 +1649,9 @@ fn hear(
         }
         for m in starred.read().filter(|m| Some(m.room) == public) {
             changed |= state.directory.add_star(&m.msg.0, now).unwrap_or(false);
+        }
+        for m in named.read().filter(|m| Some(m.room) == public) {
+            changed |= state.directory.add_profile(&m.msg.0, now).unwrap_or(false);
         }
         if changed {
             state.changed();
@@ -1608,6 +1746,26 @@ fn sync(
     peers: Query<&Peer>,
     time: Res<Time<Real>>,
 ) {
+    // The names asked for beside the catalogs (a peer before them answers none).
+    room.profile_syncs.retain_mut(|task| match task.try_take() {
+        None => true,
+        Some(Ok(profiles)) => {
+            let mut state = shared.lock();
+            let now = unix_now();
+            let mut changed = false;
+            for p in &profiles {
+                changed |= state.directory.add_profile(p, now).unwrap_or(false);
+            }
+            if changed {
+                state.changed();
+            }
+            false
+        }
+        Some(Err(why)) => {
+            debug!("public names: {why}");
+            false
+        }
+    });
     let mut arrived = Vec::new();
     room.syncs.retain_mut(|(id, task)| match task.try_take() {
         None => true,
@@ -1690,6 +1848,8 @@ fn send(
         return;
     };
     // What peers told this one, new here: said in the room in turn.
+    let told_profiles = std::mem::take(&mut shared.lock().told_profiles);
+    outbox.1.extend(told_profiles);
     let told = std::mem::take(&mut shared.lock().told);
     for (from, catalog, merged) in told {
         outbox.0.listings.extend(catalog.listings);
@@ -1708,14 +1868,26 @@ fn send(
     let now = now_secs(&time);
     if now - room.announced_at > ANNOUNCE_EVERY {
         room.announced_at = now;
-        let own = shared.lock().directory.signed_by(&iroh.id().to_string());
+        let me = iroh.id().to_string();
+        let (own, name) = {
+            let state = shared.lock();
+            (
+                state.directory.signed_by(&me),
+                state.directory.profiles(Some(&me)),
+            )
+        };
         outbox.0.listings.extend(own.listings);
         outbox.0.withdrawals.extend(own.withdrawals);
         outbox.0.stars.extend(own.stars);
+        outbox.1.extend(name);
     }
     let mut out = std::mem::take(&mut outbox.0);
-    if out == Catalog::default() {
+    let names = std::mem::take(&mut outbox.1);
+    if out == Catalog::default() && names.is_empty() {
         return;
+    }
+    for p in &names {
+        net.broadcast(public, &ProfileSaid(p.clone()));
     }
     for w in &out.withdrawals {
         net.broadcast(public, &Withdraw(w.clone()));
@@ -1752,9 +1924,16 @@ fn send(
     }
     let me = iroh.id();
     let mut told = HashSet::new();
+    let has_statements = out != Catalog::default();
     for addr in to {
         if addr.id != me && told.insert(addr.id) {
-            room.tells.push(start_tell(&iroh, addr, &out));
+            if !names.is_empty() {
+                room.tells
+                    .push(start_tell_profiles(&iroh, addr.clone(), &names));
+            }
+            if has_statements {
+                room.tells.push(start_tell(&iroh, addr, &out));
+            }
         }
     }
 }
@@ -1858,6 +2037,8 @@ pub struct Draft {
     pub document: DocumentId,
     pub name: String,
     pub description: String,
+    /// The owner's name as it is now (else the node's display name).
+    pub owner_name: String,
     /// The documents page's picture of it (PNG); none if empty or too big.
     pub picture: Vec<u8>,
     pub forked_from: Option<Origin>,
@@ -1885,7 +2066,11 @@ pub fn publish(world: &mut World, draft: Draft, revision: Vec<u8>) -> Result<Lis
     }
     let key = secret_key(iroh)?;
     let owner = iroh.id().to_string();
-    let owner_name = iroh.display_name().to_string();
+    let owner_name = if draft.owner_name.trim().is_empty() {
+        iroh.display_name().to_string()
+    } else {
+        draft.owner_name.clone()
+    };
     let now = unix_now();
     let shared = world.resource::<Shared>().clone();
     let mut state = shared.lock();
@@ -1932,6 +2117,31 @@ pub fn publish(world: &mut World, draft: Draft, revision: Vec<u8>) -> Result<Lis
         listing.name, listing.revision, listing.size
     );
     Ok(listing)
+}
+
+/// Says what this node's user calls themselves now, for their public documents everywhere
+/// ([`Profile`]); nothing when it is the name already said. True if it was said.
+pub fn say_profile(world: &mut World, name: &str) -> Result<bool, String> {
+    let iroh = world
+        .get_resource::<Iroh>()
+        .ok_or("Renaming yourself for others needs cadrs to be online")?;
+    let key = secret_key(iroh)?;
+    let owner = iroh.id().to_string();
+    let name = fit(name.trim(), MAX_NAME);
+    let shared = world.resource::<Shared>().clone();
+    let mut state = shared.lock();
+    let last = state.directory.profile(&owner).cloned();
+    if last.as_ref().is_some_and(|p| p.name == name) {
+        return Ok(false);
+    }
+    // Later than the name it replaces, whatever the clocks did.
+    let time = last.map_or(unix_now(), |p| unix_now().max(p.time + 1));
+    let signed = Signed::new(&Profile { owner, name, time }, &key)?;
+    state.directory.add_profile(&signed, unix_now())?;
+    state.changed();
+    drop(state);
+    world.resource_mut::<Outbox>().1.push(signed);
+    Ok(true)
 }
 
 /// Makes a document this node published private again.
@@ -2232,6 +2442,41 @@ mod tests {
         );
         // Again: nothing new.
         assert!(!b.merge(&catalog, 1001).changed());
+    }
+
+    #[test]
+    fn the_latest_name_shows_for_all_of_an_owner_s_documents_and_only_they_sign_it() {
+        let k = key();
+        let me = k.public().to_string();
+        let mut d = Directory::default();
+        d.add_listing(
+            &Signed::new(&listing(&k, DocumentId::new(), 1, 100), &k).unwrap(),
+            1000,
+        )
+        .unwrap();
+        assert_eq!(d.docs("")[0].listing.owner_name, "Ann");
+        let named = |name: &str, time| {
+            Signed::new(
+                &Profile {
+                    owner: me.clone(),
+                    name: name.into(),
+                    time,
+                },
+                &k,
+            )
+            .unwrap()
+        };
+        assert_eq!(d.add_profile(&named("Annie", 200), 1000), Ok(true));
+        assert_eq!(d.add_profile(&named("Old", 150), 1000), Ok(false));
+        assert_eq!(d.docs("")[0].listing.owner_name, "Annie");
+        assert_eq!(d.profiles(Some(&me)).len(), 1);
+        // Nobody else signs this owner's name.
+        let forged = Profile {
+            owner: me.clone(),
+            name: "Mallory".into(),
+            time: 300,
+        };
+        assert!(Signed::new(&forged, &key()).is_err());
     }
 
     /// What the rendezvous (`tools/peers`) checks: the ID's key signed the context, the ID and

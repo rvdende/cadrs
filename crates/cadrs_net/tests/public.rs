@@ -82,6 +82,7 @@ fn a_published_document_is_found_fetched_starred_and_outlives_its_owner_on_a_see
             document,
             name: "Bracket".into(),
             description: "A bracket".into(),
+            owner_name: String::new(),
             picture: picture.clone(),
             forked_from: None,
             previous: 0,
@@ -161,6 +162,7 @@ fn a_withdrawn_document_leaves_everyone_s_list() {
         document,
         name: "Bracket".into(),
         description: String::new(),
+        owner_name: String::new(),
         picture: Vec::new(),
         forked_from: None,
         previous: 0,
@@ -212,6 +214,7 @@ fn peers_the_room_does_not_join_still_reach_each_other_through_a_seed() {
             document: DocumentId::new(),
             name: "Bracket".into(),
             description: String::new(),
+            owner_name: String::new(),
             picture: picture.clone(),
             forked_from: None,
             previous: 0,
@@ -244,6 +247,7 @@ fn peers_the_room_does_not_join_still_reach_each_other_through_a_seed() {
             document: DocumentId::new(),
             name: "Clip".into(),
             description: String::new(),
+            owner_name: String::new(),
             picture: Vec::new(),
             forked_from: None,
             previous: 0,
@@ -362,4 +366,59 @@ fn nothing_is_said_to_the_rendezvous_or_the_room_until_the_user_connects() {
     until(&mut [&mut app], "the room once connected", |a| {
         public::room_state(a[0].world()) == public::RoomState::Joined(0)
     });
+}
+
+#[test]
+fn a_rename_reaches_peers_and_newcomers_without_publishing_again() {
+    let mut owner = peer("Owner", &[]);
+    let mut viewer = peer("Viewer", &[&owner]);
+    let listing = public::publish(
+        owner.world_mut(),
+        Draft {
+            document: DocumentId::new(),
+            name: "Bracket".into(),
+            description: String::new(),
+            owner_name: "Ann".into(),
+            picture: Vec::new(),
+            forked_from: None,
+            previous: 0,
+        },
+        b"one".to_vec(),
+    )
+    .unwrap();
+    assert_eq!(listing.owner_name, "Ann");
+    let key = listing.key();
+    let name_seen = |a: &App| {
+        shared(a)
+            .lock()
+            .directory
+            .docs("")
+            .first()
+            .map(|d| d.listing.owner_name.clone())
+    };
+    until(&mut [&mut owner, &mut viewer], "the listing", |a| {
+        name_seen(a[1]).as_deref() == Some("Ann")
+    });
+    // Renamed: said in the room; the same name again says nothing.
+    assert!(public::say_profile(owner.world_mut(), "Annie").unwrap());
+    assert!(!public::say_profile(owner.world_mut(), "Annie").unwrap());
+    until(&mut [&mut owner, &mut viewer], "the new name", |a| {
+        name_seen(a[1]).as_deref() == Some("Annie")
+    });
+    // A newcomer starting from the viewer asks for the names beside the catalog.
+    let mut newcomer = peer("Newcomer", &[&viewer]);
+    until(
+        &mut [&mut owner, &mut viewer, &mut newcomer],
+        "the newcomer's name",
+        |a| name_seen(a[2]).as_deref() == Some("Annie"),
+    );
+    // The listing itself is as it was published.
+    let held = shared(&newcomer)
+        .lock()
+        .directory
+        .get(&key)
+        .unwrap()
+        .listing
+        .clone();
+    assert_eq!(held.owner_name, "Ann");
 }
