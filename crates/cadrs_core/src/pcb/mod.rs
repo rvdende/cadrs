@@ -524,6 +524,30 @@ impl Element {
         }
     }
 
+    /// What an assembly's instance of the element builds: a Part Studio's features without the
+    /// suppressed ones (by Suppress, by a variable or by its configuration), whatever its
+    /// rollback bar (an assembly shows the whole studio, as Onshape's do), after the variables
+    /// it names ([`Element::studio_features`]); a PCB or CAM Studio's [`Element::part_features`].
+    pub fn assembly_features(&self) -> std::borrow::Cow<'_, [crate::document::Feature]> {
+        match &self.kind {
+            ElementKind::PartStudio { .. } => {
+                let off = self.all_suppressed();
+                if off.is_empty() {
+                    return self.part_features();
+                }
+                let mut out = self.studio_features();
+                out.extend(
+                    self.features()
+                        .iter()
+                        .filter(|f| !off.contains(&f.id))
+                        .cloned(),
+                );
+                out.into()
+            }
+            _ => self.part_features(),
+        }
+    }
+
     /// [`Element::active_features`] of a Part Studio (above its rollback bar, not suppressed), a
     /// PCB Studio's boards as Derived features: what an assembly's occurrence of it rebuilds.
     pub fn active_part_features(&self) -> Vec<crate::document::Feature> {

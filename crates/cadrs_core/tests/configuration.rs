@@ -202,6 +202,14 @@ fn a_checkbox_suppresses_a_feature() {
     d.pick("Hole", InputValue::Checked(false));
     assert!(d.studio().is_suppressed(HOLE));
     rel(d.volume(), AREA * 10.0);
+    // An assembly's instance builds without it too (whatever the rollback bar).
+    let built = d.studio().assembly_features();
+    assert!(!built.iter().any(|f| f.id == HOLE));
+    let b = rebuild::build(&built);
+    rel(
+        b.part(PLATE_PART).unwrap().mass.unwrap().volume,
+        AREA * 10.0,
+    );
     d.pick("Hole", InputValue::Checked(true));
     assert!(!d.studio().is_suppressed(HOLE));
     // The checkbox is #Hole (1 or 0) in expressions too.

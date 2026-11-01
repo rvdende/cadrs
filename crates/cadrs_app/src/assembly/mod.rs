@@ -478,8 +478,9 @@ impl AssemblyParts {
         if el.assembly_model().is_some() {
             return (None, true);
         }
-        // (A PCB Studio's boards as Derived features: a board's instance.)
-        let features = el.part_features();
+        // (A PCB Studio's boards as Derived features: a board's instance. A Part Studio's
+        // suppressed features, by its configuration too, are left out.)
+        let features = el.assembly_features();
         if let Some((f, b)) = self.builds.get(&element)
             && f.as_slice() == features
             && !self.stale.contains(&element)
