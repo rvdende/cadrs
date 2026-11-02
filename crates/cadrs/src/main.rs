@@ -255,8 +255,9 @@ fn main() -> AppExit {
             .unwrap_or_else(|| opts.resolved_out_dir().join("libraries"))
     });
     if !scripted && !opts.headless {
-        // Only a person's own runs ask GitHub for a newer release.
-        app.insert_resource(cadrs_app::update::CheckForUpdates);
+        // Only a person's own runs ask GitHub for a newer release and the star count.
+        app.insert_resource(cadrs_app::update::CheckForUpdates)
+            .insert_resource(cadrs_app::github::FetchStars);
     }
     // Sharing and collaboration: only a person's own runs are a peer (`CADRS_NET=0` keeps
     // one off the network for good). The identity lives with the documents, so each data dir

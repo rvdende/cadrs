@@ -263,6 +263,8 @@ shell-top-bar-network-offline = Network: offline
 # { $version } is the new version's number ("0.9.1").
 shell-top-bar-update = Update to v{ $version }…
 shell-top-bar-update-tooltip = Read the release notes and update
+shell-top-bar-github = cadrs on GitHub
+shell-top-bar-github-stars = { $stars } stars on GitHub
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = A new look for cadrs

@@ -204,6 +204,8 @@ shell-top-bar-network-failed = Rete: impossibile andare online
 shell-top-bar-network-offline = Rete: offline
 shell-top-bar-update = Aggiorna a v{ $version }…
 shell-top-bar-update-tooltip = Leggi le note di rilascio e aggiorna
+shell-top-bar-github = cadrs su GitHub
+shell-top-bar-github-stars = { $stars } stelle su GitHub
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = Un nuovo aspetto per cadrs

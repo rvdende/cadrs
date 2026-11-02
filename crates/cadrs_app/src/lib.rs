@@ -45,6 +45,7 @@ pub mod flat_ui;
 pub mod frame_profile;
 pub mod frame_stats;
 pub mod gallery;
+pub mod github;
 pub mod ground_grid;
 pub mod hidden_edges;
 pub mod history_panel;
@@ -175,7 +176,7 @@ pub struct StartState(pub String);
 #[derive(Resource, Debug, Clone)]
 pub struct OpenAtStart(pub std::path::PathBuf);
 
-/// The cadrs repository, for the app menu's GitHub.
+/// The cadrs repository, for the app menu's GitHub and the top bar's (`github`).
 pub const GITHUB: &str = "https://github.com/rvdende/cadrs";
 
 /// Opens `url` in the user's browser (in a page, a new tab).
@@ -935,6 +936,7 @@ impl Plugin for CadrsAppPlugin {
                 debug_tools::DebugToolsPlugin,
                 collab::CollabPlugin,
                 update::UpdatePlugin,
+                github::GitHubPlugin,
                 notifications::NotificationsPlugin,
                 network::NetworkPlugin,
                 identity::IdentityPlugin,

@@ -204,6 +204,8 @@ shell-top-bar-network-failed = Netwerk: kon nie aanlyn gaan nie
 shell-top-bar-network-offline = Netwerk: vanlyn
 shell-top-bar-update = Dateer op na v{ $version }…
 shell-top-bar-update-tooltip = Lees die vrystellingsnotas en dateer op
+shell-top-bar-github = cadrs op GitHub
+shell-top-bar-github-stars = { $stars } sterre op GitHub
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = 'n Nuwe voorkoms vir cadrs

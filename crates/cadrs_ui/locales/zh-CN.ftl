@@ -204,6 +204,8 @@ shell-top-bar-network-failed = 网络：无法联网
 shell-top-bar-network-offline = 网络：离线
 shell-top-bar-update = 更新到 v{ $version }…
 shell-top-bar-update-tooltip = 阅读发行说明并更新
+shell-top-bar-github = GitHub 上的 cadrs
+shell-top-bar-github-stars = GitHub 上 { $stars } 颗星
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = cadrs 焕然一新
