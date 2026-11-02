@@ -43,6 +43,7 @@ pub enum Call {
     OpenDocument(OpenDocument),
     GetDocument,
     GetFrameStats(GetFrameStats),
+    Rebuild(Rebuild),
     AddPartStudio(AddPartStudio),
     AddAssembly(AddPartStudio),
     AddSketch(AddSketch),
@@ -276,6 +277,18 @@ impl Cadrs {
         Parameters(p): Parameters<GetFrameStats>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::GetFrameStats(p)).await
+    }
+
+    #[tool(
+        description = "Rebuild a Part Studio of the open document from scratch, as the app menu's Full rebuild \
+        does (the rebuild cache is emptied first, so every feature is computed again), and report how long \
+        it took: the whole rebuild and each part feature, in ms. Use it to measure what a change costs."
+    )]
+    async fn rebuild(
+        &self,
+        Parameters(p): Parameters<Rebuild>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::Rebuild(p)).await
     }
 
     #[tool(

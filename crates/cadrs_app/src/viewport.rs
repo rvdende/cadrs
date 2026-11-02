@@ -2910,14 +2910,14 @@ fn place_plane_labels(
     // part's boxes cost a large one half a second on each switch to its tab).
     let mut part_boxes: Option<Vec<Rect>> = None;
     // (Each part's 3D box kept until the parts change: reading every part's each frame cost
-    // a Part Studio of hundreds of parts a cache miss or two apiece.)
+    // a Part Studio of hundreds of parts a cache miss or two apiece. The boxes are the cache's:
+    // a part's pick index, built for its box alone, cost a pattern of thousands a second.)
     let mut boxes = || -> Vec<Rect> {
         part_bounds
             .get_or_insert_with(|| {
                 parts
                     .iter()
-                    .flat_map(|c| c.parts.iter())
-                    .filter_map(|part| part.solid.pick_index().bounds)
+                    .flat_map(|c| c.bounds.iter().copied())
                     .collect()
             })
             .iter()

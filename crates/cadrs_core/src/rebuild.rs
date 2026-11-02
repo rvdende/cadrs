@@ -2974,6 +2974,14 @@ mod kernel_ops {
     /// A new or changed part: its id and its piece.
     type Placed = (PartId, Piece);
 
+    /// A [`Placed`] with its mesh and mass properties, ready for [`Rebuilder::finish_prepared`].
+    type Prepared = (
+        PartId,
+        Piece,
+        crate::solid::Solid,
+        cadrs_kernel::MassProperties,
+    );
+
     /// How a new body combines with the parts (an extrude's or a revolve's tabs).
     struct Merge<'a> {
         op: BooleanOp,
@@ -3467,12 +3475,11 @@ mod kernel_ops {
             &mut self,
             id: FeatureId,
             placed: Vec<Placed>,
-            mut next: State,
+            next: State,
             op: cadrs_kernel::OpId,
             geoms: Arc<crate::brep::Geoms>,
             kind: PartKind,
         ) -> Result<Output, String> {
-            let mut owned = Vec::new();
             let mut built = Vec::new();
             for (pid, piece) in placed {
                 let solid =
@@ -3482,15 +3489,9 @@ mod kernel_ops {
                     .mass_properties(piece.body)
                     .map_err(|e| e.to_string());
                 match (solid, mass) {
-                    (Ok(s), Ok(m)) => {
-                        owned.push(piece.body);
-                        built.push((pid, piece, s, m));
-                    }
+                    (Ok(s), Ok(m)) => built.push((pid, piece, s, m)),
                     (Err(err), _) | (_, Err(err)) => {
                         self.kernel.release(piece.body);
-                        for b in owned {
-                            self.kernel.release(b);
-                        }
                         for (_, p, _, _) in built {
                             self.kernel.release(p.body);
                         }
@@ -3498,6 +3499,19 @@ mod kernel_ops {
                     }
                 }
             }
+            Ok(self.finish_prepared(id, built, next, kind))
+        }
+
+        /// [`Self::finish`] with each piece's mesh and mass properties already made: a pattern's
+        /// copies have their seed's, moved (`kernel_ops::pattern`), not computed again.
+        fn finish_prepared(
+            &mut self,
+            id: FeatureId,
+            built: Vec<Prepared>,
+            mut next: State,
+            kind: PartKind,
+        ) -> Output {
+            let owned: Vec<BodyId> = built.iter().map(|(_, p, ..)| p.body).collect();
             for (pid, piece, solid, mass) in built {
                 let names = Arc::new(piece.names);
                 match next.parts.iter_mut().find(|p| p.part.id == pid) {
@@ -3541,7 +3555,7 @@ mod kernel_ops {
                     }
                 }
             }
-            Ok(Output {
+            Output {
                 state: Arc::new(next),
                 error: None,
                 warning: None,
@@ -3552,7 +3566,7 @@ mod kernel_ops {
                 arrows: Vec::new(),
                 dots: None,
                 uses: Vec::new(),
-            })
+            }
         }
 
         /// A free id for a new part of feature `id`.

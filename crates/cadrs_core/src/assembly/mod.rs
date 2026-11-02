@@ -650,8 +650,21 @@ pub fn source_part_name(doc: &Document, source: &InstanceSource, build: Option<&
 
 /// Moves a mesh (and its face frames, edges, vertices and silhouette data) by `pose`.
 pub fn transform_solid(s: &Solid, pose: &Pose) -> Solid {
-    let p = |v: &Vec3| pose.apply(*v);
-    let r = |v: &Vec3| pose.rotate(*v);
+    // (Plain arithmetic on the rows: a pattern moves thousands of meshes, each of thousands of
+    // points, and a 3×3 product through nalgebra's generic loops cost most of it.)
+    let [a, b, c] = pose.rotation;
+    let t = pose.translation;
+    let r = |v: &Vec3| {
+        [
+            a[0] * v[0] + a[1] * v[1] + a[2] * v[2],
+            b[0] * v[0] + b[1] * v[1] + b[2] * v[2],
+            c[0] * v[0] + c[1] * v[1] + c[2] * v[2],
+        ]
+    };
+    let p = |v: &Vec3| {
+        let q = r(v);
+        [q[0] + t[0], q[1] + t[1], q[2] + t[2]]
+    };
     let mut out = s.clone();
     out.positions.iter_mut().for_each(|v| *v = p(v));
     out.normals.iter_mut().for_each(|v| *v = r(v));

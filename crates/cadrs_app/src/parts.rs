@@ -617,8 +617,9 @@ pub struct PartCache {
     /// What each feature depends on beyond its references (P3.11, PS11.2; see
     /// [`cadrs_core::rebuild::Build::uses`]).
     pub uses: HashMap<FeatureId, Vec<FeatureId>>,
-    /// Each part's bounding box (for sizing the Plane features' squares, P3.11).
-    bounds: Vec<([f64; 3], [f64; 3])>,
+    /// Each part's bounding box (for sizing the Plane features' squares, P3.11; the plane
+    /// labels keep out of them).
+    pub(crate) bounds: Vec<([f64; 3], [f64; 3])>,
     /// The sketches' eye settings the hidden sketches were worked out with.
     visibility: Vec<(FeatureId, bool)>,
     /// Every part's default name (see [`cadrs_core::rebuild::Build::names`]).
@@ -2230,6 +2231,21 @@ pub(crate) struct EdgesOnly(pub(crate) bool);
 pub(crate) struct PartMesh {
     pub(crate) id: PartId,
     preview: bool,
+    /// Where the mesh goes when it is the seed's, shared ([`PartMeshStore::mesh`]): the
+    /// copy's pose. `None`: the part's own mesh, in place.
+    pose: Option<Mat4>,
+}
+
+/// A pattern copy's pose ([`cadrs_core::solid::SolidInstance`]) as a matrix.
+fn pose_matrix(pose: &cadrs_core::assembly::Pose) -> Mat4 {
+    let r = pose.rotation;
+    let t = pose.translation;
+    Mat4::from_cols(
+        Vec4::new(r[0][0] as f32, r[1][0] as f32, r[2][0] as f32, 0.0),
+        Vec4::new(r[0][1] as f32, r[1][1] as f32, r[2][1] as f32, 0.0),
+        Vec4::new(r[0][2] as f32, r[1][2] as f32, r[2][2] as f32, 0.0),
+        Vec4::new(t[0] as f32, t[1] as f32, t[2] as f32, 1.0),
+    )
 }
 
 #[derive(Resource, Default)]
@@ -2257,8 +2273,20 @@ type MeshKey = (u64, Option<FeatureId>, GhostKey, bool, Vec<PartId>);
 #[derive(Resource, Default)]
 struct PartMeshStore {
     meshes: HashMap<(Option<ElementId>, PartId), StoredMesh>,
+    /// A pattern's copies share one mesh of their seed, each placed by its pose (a pattern of
+    /// thousands made and uploaded thousands of meshes, a second of one frame, for one shape):
+    /// by tab, the seed's mesh (by its address, which it keeps while a copy holds it) and
+    /// whether as a preview.
+    shared: HashMap<(Option<ElementId>, usize, bool), SharedMesh>,
     /// The tabs shown, most recent first.
     recent: Vec<Option<ElementId>>,
+}
+
+/// A seed's mesh its copies share.
+struct SharedMesh {
+    seed: std::sync::Arc<cadrs_core::solid::Solid>,
+    bases: Vec<FaceBase>,
+    handle: Handle<Mesh>,
 }
 
 /// How many tabs' part meshes are kept.
@@ -2272,11 +2300,14 @@ struct StoredMesh {
     /// The selection colouring in the mesh now ([`shade_parts`]): the part selected, the
     /// picked faces.
     shading: (bool, Vec<usize>),
+    /// The copy's pose when `handle` is its seed's shared mesh ([`PartMeshStore::shared`]).
+    pose: Option<Mat4>,
 }
 
 impl PartMeshStore {
     /// The mesh of `part` as `preview` with these face colours: the stored one if it is still
-    /// that, else a new one.
+    /// that, else a new one. A pattern's copy gets its seed's shared mesh and the pose to draw
+    /// it at (its own mesh once it is coloured apart: [`shade_parts`]).
     fn mesh(
         &mut self,
         meshes: &mut Assets<Mesh>,
@@ -2284,30 +2315,72 @@ impl PartMeshStore {
         part: &Part,
         preview: bool,
         bases: Vec<FaceBase>,
-    ) -> Handle<Mesh> {
-        match self.meshes.get(&(element, part.id)) {
-            Some(m)
-                if std::sync::Arc::ptr_eq(&m.solid, &part.solid)
-                    && m.preview == preview
-                    && m.bases == bases =>
-            {
-                m.handle.clone()
-            }
-            _ => {
-                let handle = meshes.add(part_base_mesh(part, preview, &bases));
-                self.meshes.insert(
-                    (element, part.id),
-                    StoredMesh {
-                        solid: part.solid.clone(),
-                        preview,
-                        bases,
-                        handle: handle.clone(),
-                        shading: (false, Vec::new()),
-                    },
-                );
-                handle
-            }
+    ) -> (Handle<Mesh>, Option<Mat4>) {
+        if let Some(m) = self.meshes.get(&(element, part.id))
+            && std::sync::Arc::ptr_eq(&m.solid, &part.solid)
+            && m.preview == preview
+            && m.bases == bases
+        {
+            return (m.handle.clone(), m.pose);
         }
+        let (handle, pose) = match &part.solid.instance_of.0 {
+            Some(inst) => {
+                let key = (
+                    element,
+                    std::sync::Arc::as_ptr(&inst.seed) as usize,
+                    preview,
+                );
+                let handle = match self.shared.get(&key) {
+                    Some(s) if std::sync::Arc::ptr_eq(&s.seed, &inst.seed) && s.bases == bases => {
+                        s.handle.clone()
+                    }
+                    _ => {
+                        // The seed's mesh coloured as the copy is (its colours are its seed's,
+                        // face by face, and the curvature turns with it).
+                        let mut seed = part.clone();
+                        seed.solid = inst.seed.clone();
+                        let handle = meshes.add(part_base_mesh(&seed, preview, &bases));
+                        self.shared.insert(
+                            key,
+                            SharedMesh {
+                                seed: inst.seed.clone(),
+                                bases: bases.clone(),
+                                handle: handle.clone(),
+                            },
+                        );
+                        handle
+                    }
+                };
+                (handle, Some(pose_matrix(&inst.pose)))
+            }
+            None => (meshes.add(part_base_mesh(part, preview, &bases)), None),
+        };
+        self.meshes.insert(
+            (element, part.id),
+            StoredMesh {
+                solid: part.solid.clone(),
+                preview,
+                bases,
+                handle: handle.clone(),
+                shading: (false, Vec::new()),
+                pose,
+            },
+        );
+        (handle, pose)
+    }
+
+    /// `part`'s own mesh in place of the shared one it has ([`shade_parts`]: coloured apart
+    /// from its seed's other copies). Nothing when it has its own already.
+    fn own_mesh(
+        &mut self,
+        meshes: &mut Assets<Mesh>,
+        element: Option<ElementId>,
+        part: &Part,
+    ) -> Option<Handle<Mesh>> {
+        let m = self.meshes.get_mut(&(element, part.id))?;
+        m.pose.take()?;
+        m.handle = meshes.add(part_base_mesh(part, m.preview, &m.bases));
+        Some(m.handle.clone())
     }
 
     /// Drops the meshes of this tab's parts not shown now, and of tabs not shown lately.
@@ -2323,6 +2396,21 @@ impl PartMeshStore {
                 recent.contains(e)
             }
         });
+        let used: HashSet<&Handle<Mesh>> = self
+            .meshes
+            .values()
+            .filter(|m| m.pose.is_some())
+            .map(|m| &m.handle)
+            .collect();
+        let shared: Vec<_> = self
+            .shared
+            .iter()
+            .filter(|(_, s)| !used.contains(&s.handle))
+            .map(|(k, _)| *k)
+            .collect();
+        for k in shared {
+            self.shared.remove(&k);
+        }
     }
 }
 
@@ -2455,11 +2543,14 @@ fn sync_part_meshes(
             || crate::assembly::standard::is_ghost(part.id);
         let bases = ghosted_bases(&cache, &over, &ghosts, part);
         let want = material_for(part, preview, &bases);
-        let handle = store.mesh(&mut meshes, element, part, preview, bases);
+        let (handle, pose) = store.mesh(&mut meshes, element, part, preview, bases);
         if mesh.0 != handle {
             mesh.0 = handle;
         }
         pm.preview = preview;
+        if pm.pose != pose {
+            pm.pose = pose;
+        }
         if mat.0 != want {
             mat.0 = want;
         }
@@ -2481,7 +2572,7 @@ fn sync_part_meshes(
             || crate::assembly::standard::is_ghost(part.id);
         let bases = ghosted_bases(&cache, &over, &ghosts, part);
         let material = material_for(part, preview, &bases);
-        let mesh = store.mesh(&mut meshes, element, part, preview, bases);
+        let (mesh, pose) = store.mesh(&mut meshes, element, part, preview, bases);
         let mut e = commands.spawn((
             Name::new(format!(
                 "part-{}",
@@ -2490,6 +2581,7 @@ fn sync_part_meshes(
             PartMesh {
                 id: part.id,
                 preview,
+                pose,
             },
             Mesh3d(mesh),
             MeshMaterial3d(material),
@@ -2510,23 +2602,23 @@ fn sync_part_meshes(
     store.keep(element, &shown);
 }
 
-/// Puts the part meshes (and their hidden lines) where [`PartCache::moved`] draws them.
+/// Puts the part meshes (and their hidden lines) where [`PartCache::moved`] draws them, a
+/// pattern copy's shared mesh at the copy's pose ([`PartMesh::pose`]) first.
 fn place_moved_parts(
     cache: Res<PartCache>,
     mut q: Query<(&PartMesh, &mut Transform)>,
     mut q_hidden: Query<(&crate::hidden_edges::HiddenLines, &mut Transform), Without<PartMesh>>,
 ) {
-    let want = |id: &PartId| {
-        cache
-            .moved
-            .get(id)
-            .map_or(Transform::IDENTITY, |m| Transform::from_matrix(*m))
-    };
+    let moved = |id: &PartId| cache.moved.get(id).copied().unwrap_or(Mat4::IDENTITY);
     for (pm, mut t) in &mut q {
-        t.set_if_neq(want(&pm.id));
+        let m = match pm.pose {
+            Some(pose) => moved(&pm.id) * pose,
+            None => moved(&pm.id),
+        };
+        t.set_if_neq(Transform::from_matrix(m));
     }
     for (h, mut t) in &mut q_hidden {
-        t.set_if_neq(want(&h.0));
+        t.set_if_neq(Transform::from_matrix(moved(&h.0)));
     }
 }
 
@@ -2659,7 +2751,7 @@ fn shade_parts(
     ghosts: Res<PartGhosts>,
     selection: Res<Selection>,
     faces: Res<FaceSelection>,
-    q: Query<(&PartMesh, &Mesh3d)>,
+    mut q: Query<(&mut PartMesh, &mut Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut last: Local<Option<(u64, Option<FeatureId>, Vec<PartId>, GhostKey, Vec<Pick>)>>,
     (mut store, doc): (ResMut<PartMeshStore>, Option<Res<ActiveDocument>>),
@@ -2705,7 +2797,7 @@ fn shade_parts(
     }
     *last = Some(key);
     let element = doc.and_then(|d| d.active);
-    for (pm, mesh) in &q {
+    for (mut pm, mut mesh) in &mut q {
         let Some(part) = cache.drawn(pm.id) else {
             continue;
         };
@@ -2731,6 +2823,16 @@ fn shade_parts(
         if stored.shading == want {
             continue;
         }
+        // A pattern copy coloured apart from its seed's other copies: a mesh of its own.
+        if stored.pose.is_some()
+            && let Some(own) = store.own_mesh(&mut meshes, element, part)
+        {
+            mesh.0 = own;
+            pm.pose = None;
+        }
+        let Some(stored) = store.meshes.get_mut(&(element, part.id)) else {
+            continue;
+        };
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             let (colors, flags) = base_colors(part, pm.preview, want.0, &stored.bases, &want.1);
             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);

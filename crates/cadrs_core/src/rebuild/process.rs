@@ -192,7 +192,37 @@ pub(super) enum Event {
 const SOLID_WINDOW: u64 = 4096;
 
 /// A build's meshes as sent ([`Event::Rebuilt`]): each one's id, and the mesh unless sent before.
-type SentMeshes = Vec<(u64, Option<Arc<crate::solid::Solid>>)>;
+type SentMeshes = Vec<(u64, SentMesh)>;
+
+/// A mesh as sent. The meshes are nearly all of a build's bytes, so each goes as one byte
+/// string of bincode (as MessagePack with field names, like the rest of a message, they took
+/// longer to write and read than to build), and a pattern's copy of a mesh sent before goes as
+/// the seed's id and its pose ([`crate::solid::Solid::instance_of`]): a pattern of thousands
+/// sends one mesh.
+#[derive(Serialize, Deserialize)]
+pub(super) enum SentMesh {
+    /// Sent before, by this id.
+    Before,
+    Bytes(serde_bytes::ByteBuf),
+    Instance {
+        seed: u64,
+        pose: crate::assembly::Pose,
+        op: cadrs_sketch::OpId,
+        instance: u32,
+    },
+}
+
+/// A mesh as sent.
+fn mesh_bytes(s: &crate::solid::Solid) -> SentMesh {
+    SentMesh::Bytes(serde_bytes::ByteBuf::from(
+        bincode::serialize(s).expect("a mesh serializes"),
+    ))
+}
+
+/// A sent mesh.
+fn mesh_from_bytes(bytes: &[u8]) -> Result<crate::solid::Solid, String> {
+    bincode::deserialize(bytes).map_err(|e| format!("the geometry kernel sent a bad mesh: {e}"))
+}
 
 /// Every mesh of `b` the app tells changes by (the parts', the stage's), in one order.
 fn each_solid(b: &mut Build, mut f: impl FnMut(&mut Arc<crate::solid::Solid>)) {
@@ -228,13 +258,25 @@ impl SentSolids {
         each_solid(&mut b, |s| {
             let solid = std::mem::replace(s, empty.clone());
             let ptr = Arc::as_ptr(&solid) as usize;
+            let next = self.next;
+            let sent = move |id: &u64| id + SOLID_WINDOW > next;
             match self.by_ptr.get(&ptr) {
-                Some((id, _)) if id + SOLID_WINDOW > self.next => out.push((*id, None)),
+                Some((id, _)) if sent(id) => out.push((*id, SentMesh::Before)),
                 _ => {
                     let id = self.next;
                     self.next += 1;
-                    self.by_ptr.insert(ptr, (id, solid.clone()));
-                    out.push((id, Some(solid)));
+                    // A pattern's copy of a mesh sent (its seed comes before it in the parts).
+                    let instance = solid.instance_of.0.as_ref().and_then(|i| {
+                        let (seed, _) = self.by_ptr.get(&(Arc::as_ptr(&i.seed) as usize))?;
+                        sent(seed).then_some(SentMesh::Instance {
+                            seed: *seed,
+                            pose: i.pose,
+                            op: i.op,
+                            instance: i.instance,
+                        })
+                    });
+                    out.push((id, instance.unwrap_or_else(|| mesh_bytes(&solid))));
+                    self.by_ptr.insert(ptr, (id, solid));
                 }
             }
         });
@@ -258,18 +300,47 @@ impl ReceivedSolids {
         solids: SentMeshes,
         recent: &mut Recent,
     ) -> Result<(), String> {
-        let mut it = solids.into_iter();
+        use rayon::prelude::*;
+        // The meshes sent whole, read side by side; then the copies, moved from their seeds side
+        // by side (a seed is sent whole, or was sent before).
+        let whole: Vec<(u64, Arc<crate::solid::Solid>)> = solids
+            .par_iter()
+            .filter_map(|(id, m)| match m {
+                SentMesh::Bytes(bytes) => Some(mesh_from_bytes(bytes).map(|s| (*id, Arc::new(s)))),
+                _ => None,
+            })
+            .collect::<Result<_, _>>()?;
+        for (id, new) in whole {
+            // A mesh equal to one of an earlier kernel process's keeps its pointer too.
+            self.by_id.insert(id, recent.solid(&new));
+        }
+        let copies: Vec<(u64, Arc<crate::solid::Solid>)> = solids
+            .par_iter()
+            .filter_map(|(id, m)| match m {
+                SentMesh::Instance {
+                    seed,
+                    pose,
+                    op,
+                    instance,
+                } => Some(match self.by_id.get(seed) {
+                    Some(seed) => Ok((
+                        *id,
+                        Arc::new(crate::solid::Solid::instance(seed, pose, *op, *instance)),
+                    )),
+                    None => Err(format!(
+                        "the geometry kernel sent a copy of an unknown mesh ({seed})"
+                    )),
+                }),
+                _ => None,
+            })
+            .collect::<Result<_, _>>()?;
+        self.by_id.extend(copies);
+        let mut it = solids.iter();
         let mut missing = None;
         each_solid(b, |s| match it.next() {
-            Some((id, Some(new))) => {
-                // A mesh equal to one of an earlier kernel process's keeps its pointer too.
-                let new = recent.solid(&new);
-                self.by_id.insert(id, new.clone());
-                *s = new;
-            }
-            Some((id, None)) => match self.by_id.get(&id) {
-                Some(old) => *s = old.clone(),
-                None => missing = Some(id),
+            Some((id, _)) => match self.by_id.get(id) {
+                Some(mesh) => *s = mesh.clone(),
+                None => missing = Some(*id),
             },
             None => missing = Some(u64::MAX),
         });
@@ -1176,5 +1247,42 @@ mod tests {
             let back: Build = decode(&encode(&build).unwrap()).unwrap();
             assert!(back == build, "the build changed on the way");
         }
+    }
+
+    /// A pattern's copy of a mesh crosses as its seed's id and its pose, not as a mesh, and
+    /// comes back the copy: moved, renamed as the instance, and remembering nothing (a clone
+    /// of a copy is a mesh of its own).
+    #[test]
+    fn a_pattern_copy_crosses_as_its_seed_and_pose() {
+        use cadrs_sketch::FaceOrigin;
+        let mut build = Rebuilder::new().rebuild(&crate::samples::bracket_pair::bracket());
+        let seed = build.parts[0].clone();
+        let pose = crate::assembly::Pose::translation([0.0, 0.0, 100.0]);
+        let op = crate::ids::FeatureId::new().0;
+        let solid = crate::solid::Solid::instance(&seed.solid, &pose, op, 1);
+        assert!(solid.instance_of.0.is_some());
+        assert!(solid.clone().instance_of.0.is_none());
+        assert!(solid.faces.iter().all(|f| {
+            f.name.op == op && matches!(f.name.origin, FaceOrigin::Instance { instance: 1, .. })
+        }));
+        assert_eq!(solid.positions[0][2], seed.solid.positions[0][2] + 100.0);
+        let mut copy = seed.clone();
+        copy.id = crate::ids::PartId::new(seed.id.feature, 7);
+        copy.solid = Arc::new(solid);
+        build.parts.push(copy);
+
+        let (stripped, meshes) = SentSolids::default().strip(&build);
+        // (The parts' meshes first, in order; a stage's after them.)
+        assert!(matches!(meshes.first(), Some((_, SentMesh::Bytes(_)))));
+        assert!(matches!(
+            meshes.get(build.parts.len() - 1),
+            Some((_, SentMesh::Instance { .. }))
+        ));
+        let mut back: Build = decode(&encode(&stripped).unwrap()).unwrap();
+        let meshes: SentMeshes = decode(&encode(&meshes).unwrap()).unwrap();
+        ReceivedSolids::default()
+            .restore(&mut back, meshes, &mut Recent::default())
+            .unwrap();
+        assert!(back == build, "the copy changed on the way");
     }
 }

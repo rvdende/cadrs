@@ -185,6 +185,85 @@ pub struct Solid {
     /// Bounding boxes for picking, built on the first pick ([`Solid::pick_index`]).
     #[serde(skip)]
     pub pick_cache: PickCache,
+    /// What this mesh is a moved copy of, when [`Solid::instance`] made it: a pattern's copies
+    /// travel from the kernel process as their seed's id and a pose, not as meshes
+    /// (`crate::rebuild::process`). Never saved; a clone of the mesh (to change it) drops it.
+    #[serde(skip)]
+    pub instance_of: InstanceOf,
+}
+
+/// The seed a [`Solid`] is a moved, renamed copy of ([`Solid::instance`]).
+#[derive(Debug)]
+pub struct SolidInstance {
+    pub seed: std::sync::Arc<Solid>,
+    pub pose: crate::assembly::Pose,
+    /// The pattern (or mirror) the copy is instance `instance` of.
+    pub op: OpId,
+    pub instance: u32,
+}
+
+/// [`Solid::instance_of`]: only on the mesh [`Solid::instance`] made, not on its clones, and
+/// never part of what a mesh is (two equal meshes are equal whatever made them).
+#[derive(Debug, Default)]
+pub struct InstanceOf(pub Option<std::sync::Arc<SolidInstance>>);
+
+impl Clone for InstanceOf {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for InstanceOf {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Solid {
+    /// A seed's mesh as instance `k` of pattern `op`: moved by `pose` (a proper rigid motion,
+    /// not a reflection) and renamed as [`crate::pattern::instance_face`] names the copy's
+    /// faces, with the edges and vertices named from them. What a copy made from the kernel
+    /// wouldn't have (the seed's mate connectors and pictures) is left out. The copy remembers
+    /// what it is a copy of ([`Solid::instance_of`]).
+    pub fn instance(
+        seed: &std::sync::Arc<Solid>,
+        pose: &crate::assembly::Pose,
+        op: OpId,
+        k: u32,
+    ) -> Solid {
+        let face = |n: &FaceName| crate::pattern::instance_face(op, n, k);
+        let mut s = crate::assembly::transform_solid(seed, pose);
+        for f in &mut s.faces {
+            f.name = face(&f.name);
+        }
+        for e in &mut s.edges {
+            e.name = EdgeName::new(face(&e.name.faces[0]), face(&e.name.faces[1]), e.name.index);
+        }
+        for v in &mut s.vertices {
+            let mut faces = v.name.faces.map(|f| face(&f));
+            faces.sort();
+            v.name = VertexName {
+                faces,
+                index: v.name.index,
+            };
+        }
+        for a in &mut s.face_aliases {
+            a.name = face(&a.name);
+            a.face = face(&a.face);
+        }
+        for (n, _) in &mut s.looks {
+            *n = face(n);
+        }
+        s.connectors.clear();
+        s.images.clear();
+        s.instance_of = InstanceOf(Some(std::sync::Arc::new(SolidInstance {
+            seed: seed.clone(),
+            pose: *pose,
+            op,
+            instance: k,
+        })));
+        s
+    }
 }
 
 /// An axis-aligned box: its lowest and highest corners.
