@@ -53,7 +53,7 @@ fn open_next(q: Query<(Entity, &OpenNext)>, mut commands: Commands) {
 /// What folds, in the order it goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fold {
-    /// The version, and the update button beside it.
+    /// The version, with the GitHub and update buttons beside it.
     Version,
     /// The light / dark / system toggle.
     Scheme,
@@ -175,6 +175,13 @@ pub fn menu_entries(world: &World, width: f32, theme: &Theme) -> Vec<MenuEntry> 
     }
     if Fold::Version.folded(width) {
         entries.push(MenuEntry::Separator);
+        let stars = *world.resource::<crate::github::Stars>();
+        entries.push(
+            MenuItem::new("account-github", tr("shell-app-menu-github"))
+                .icon("github")
+                .tooltip(stars.tooltip())
+                .into(),
+        );
         let item = match world.resource::<UpdateStatus>().release() {
             Some(r) => MenuItem::new(
                 "account-update",
@@ -212,6 +219,7 @@ pub fn fold_action(commands: &mut Commands, anchor: Entity, item: &str) -> bool 
             commands.entity(anchor).insert(OpenNext::Network);
         }
         "account-update" => commands.queue(crate::update::show_release_notes),
+        "account-github" => crate::open_url(crate::GITHUB),
         _ if item.starts_with("network-") => crate::network::network_menu_action(commands, item),
         _ if item.starts_with("notice-") => crate::notifications::notice_action(commands, item),
         _ => {

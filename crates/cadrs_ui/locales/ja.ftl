@@ -204,6 +204,8 @@ shell-top-bar-network-failed = ネットワーク：オンラインにできま�
 shell-top-bar-network-offline = ネットワーク：オフライン
 shell-top-bar-update = v{ $version }に更新…
 shell-top-bar-update-tooltip = リリースノートを読んで更新
+shell-top-bar-github = GitHub の cadrs
+shell-top-bar-github-stars = GitHub のスター { $stars } 件
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = cadrs の新しいデザイン

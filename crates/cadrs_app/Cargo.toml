@@ -41,9 +41,12 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 # Not in the browser build (`tools/web`): the MCP server listens on a port, updates replace the
 # executable, and the online part search asks JLCPCB over plain HTTP.
 web-time.workspace = true
-# A page opens links with `window.open` (`open_url`).
+# A page opens links with `window.open` (`open_url`), and asks GitHub for the star count with
+# the browser's fetch (`github`).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys.workspace = true
+reqwest.workspace = true
+wasm-bindgen-futures.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cadrs_mcp.workspace = true

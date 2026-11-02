@@ -89,6 +89,8 @@ pub fn run() -> AppExit {
     if quick_start() {
         app.insert_resource(cadrs_app::QuickStart);
     }
+    // The top bar's star count (the page is always the latest release: it never checks for one).
+    app.insert_resource(cadrs_app::github::FetchStars);
     app.add_plugins((CadrsUiPlugin, CadrsAppPlugin)).run()
 }
 

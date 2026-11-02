@@ -204,6 +204,8 @@ shell-top-bar-network-failed = 네트워크: 온라인에 연결할 수 없음
 shell-top-bar-network-offline = 네트워크: 오프라인
 shell-top-bar-update = v{ $version } 업데이트…
 shell-top-bar-update-tooltip = 릴리스 노트를 보고 업데이트합니다
+shell-top-bar-github = GitHub의 cadrs
+shell-top-bar-github-stars = GitHub 스타 { $stars }개
 
 ## crates/cadrs_app/src/notifications.rs
 shell-notice-whats-new-title = 새로워진 cadrs
