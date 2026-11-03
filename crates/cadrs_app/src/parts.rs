@@ -351,10 +351,12 @@ impl Change {
             Change::Add => FaceBase {
                 rgb: [80.0, 190.0, 96.0],
                 alpha: 0.6,
+                share: [0; 2],
             },
             Change::Remove => FaceBase {
                 rgb: [222.0, 72.0, 72.0],
                 alpha: 0.6,
+                share: [0; 2],
             },
         }
     }
@@ -1844,6 +1846,11 @@ pub fn warm(base: FaceBase) -> bool {
 pub struct FaceBase {
     pub rgb: [f32; 3],
     pub alpha: f32,
+    /// Where the face lies on another part's face, in the same plane or cylinder
+    /// ([`shared_faces`]): its rank among the parts' faces there and how many there are (0:
+    /// none; [`SHARE_CURVED`] set on a cylinder's). They are drawn in diagonal stripes, taking
+    /// turns, so they read apart instead of fighting for the depth (`part_shading.wesl`).
+    pub share: [u8; 2],
 }
 
 impl FaceBase {
@@ -1851,6 +1858,7 @@ impl FaceBase {
         Self {
             rgb: a.rgb.map(|c| c as f32),
             alpha: a.alpha as f32 / 255.0,
+            share: [0; 2],
         }
     }
 }
@@ -1860,6 +1868,7 @@ impl Default for FaceBase {
         Self {
             rgb: PART_BASE,
             alpha: 1.0,
+            share: [0; 2],
         }
     }
 }
@@ -1978,7 +1987,7 @@ pub fn part_base_mesh(part: &Part, preview: bool, bases: &[FaceBase]) -> Mesh {
         }
     }
     let (colors, sel) = base_colors(part, preview, false, bases, &[]);
-    Mesh::new(
+    let mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
@@ -1986,7 +1995,390 @@ pub fn part_base_mesh(part: &Part, preview: bool, bases: &[FaceBase]) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, sel)
-    .with_inserted_indices(Indices::U32(indices))
+    .with_inserted_indices(Indices::U32(indices));
+    // Faces in another part's face's plane ([`FaceBase::share`]): their rank and count as UV 1,
+    // only on a mesh that has one (the shader's striped variant writes the depth, which the
+    // others are better without).
+    if !bases.iter().any(|b| b.share[1] & !SHARE_CURVED > 1) {
+        return mesh;
+    }
+    let faces = vertex_faces(part);
+    let copies = if two_sided(part, preview) { 2 } else { 1 };
+    // (A curved face's count negative.)
+    let share: Vec<[f32; 2]> = (0..copies * faces.len())
+        .map(|i| {
+            let b = bases
+                .get(faces[i % faces.len()])
+                .map_or([0; 2], |b| b.share);
+            let count = (b[1] & !SHARE_CURVED) as f32;
+            [
+                b[0] as f32,
+                if b[1] & SHARE_CURVED != 0 {
+                    -count
+                } else {
+                    count
+                },
+            ]
+        })
+        .collect();
+    mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, share)
+}
+
+/// Set in [`FaceBase::share`]'s count for a curved face (its stripes are where slabs of space
+/// cross it, not on axes in its plane).
+pub const SHARE_CURVED: u8 = 0x80;
+
+/// The faces of different parts that lie in one plane or on one cylinder and overlap there
+/// (their bounding boxes), or other curved faces of one kind whose meshes lie on each other
+/// ([`meshes_coincide`]: a swept ellipse's), for [`FaceBase::share`]: by part, each such face's
+/// index and its rank and count among the parts with a face there. (A pattern's copies, drawn
+/// from their seed's mesh, are left out.) Two parts sharing a face's surface drew it in
+/// whichever of them won the depth test at each pixel, flickering as the view turned.
+pub fn shared_faces<'a>(
+    parts: impl Iterator<Item = &'a Part>,
+) -> HashMap<PartId, Vec<(usize, [u8; 2])>> {
+    type V = [f64; 3];
+    let dot = |a: V, b: V| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: V, b: V| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let unit = |a: V| {
+        let l = dot(a, a).sqrt().max(1e-300);
+        a.map(|x| x / l)
+    };
+    struct Planar {
+        part: PartId,
+        order: usize,
+        face: usize,
+        lo: [f64; 3],
+        hi: [f64; 3],
+    }
+    // A direction turned to point up its first clear axis (a plane's normal, a cylinder's axis
+    // either way round).
+    let canonical = |a: V| {
+        let n = unit(a);
+        match n.iter().copied().find(|x| x.abs() > 1e-9) {
+            Some(first) if first < 0.0 => n.map(|x| -x),
+            _ => n,
+        }
+    };
+    let q = |x: f64, k: f64| (x * k).round() as i64;
+    // By surface: a plane by its normal and its distance along it; a cylinder (tagged by its
+    // radius, never 0 for a plane) by its axis, where the axis passes nearest the origin, and
+    // its radius.
+    let mut by_plane: HashMap<([i64; 3], [i64; 3], i64), Vec<Planar>> = HashMap::new();
+    let mut curved: HashSet<([i64; 3], [i64; 3], i64)> = HashSet::new();
+    // Other curved faces: compared mesh to mesh.
+    let mut others: Vec<(Planar, &'a Part, Option<cadrs_kernel::SurfaceKind>)> = Vec::new();
+    for (order, part) in parts.enumerate() {
+        if part.solid.instance_of.0.is_some() {
+            continue;
+        }
+        for (fi, f) in part.solid.faces.iter().enumerate() {
+            if f.plane.is_none() && f.kind != Some(cadrs_kernel::SurfaceKind::Cylinder) {
+                let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for x in f.loops.iter().flatten() {
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(x[i]);
+                        hi[i] = hi[i].max(x[i]);
+                    }
+                }
+                if lo[0].is_finite() {
+                    others.push((
+                        Planar {
+                            part: part.id,
+                            order,
+                            face: fi,
+                            lo,
+                            hi,
+                        },
+                        part,
+                        f.kind,
+                    ));
+                }
+                continue;
+            }
+            // A cylinder's faces: compared by their boxes in space.
+            if f.kind == Some(cadrs_kernel::SurfaceKind::Cylinder)
+                && let (Some((p, dir)), Some(r)) = (f.axis, f.radius)
+                && r > 1e-9
+            {
+                let a = canonical(dir);
+                let foot = {
+                    let t = dot(p, a);
+                    [p[0] - a[0] * t, p[1] - a[1] * t, p[2] - a[2] * t]
+                };
+                let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for x in f.loops.iter().flatten() {
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(x[i]);
+                        hi[i] = hi[i].max(x[i]);
+                    }
+                }
+                let key = (a.map(|x| q(x, 1e5)), foot.map(|x| q(x, 1e3)), q(r, 1e3));
+                curved.insert(key);
+                by_plane.entry(key).or_default().push(Planar {
+                    part: part.id,
+                    order,
+                    face: fi,
+                    lo,
+                    hi,
+                });
+                continue;
+            }
+            let (Some(plane), Some(lp)) = (f.plane, f.loops.first()) else {
+                continue;
+            };
+            let n = canonical(plane.normal());
+            let d = dot(n, plane.origin);
+            // The same in-plane axes for every face of the plane.
+            let k = (0..3)
+                .min_by(|a, b| n[*a].abs().total_cmp(&n[*b].abs()))
+                .unwrap_or(0);
+            let mut e = [0.0; 3];
+            e[k] = 1.0;
+            let u = unit(cross(n, e));
+            let v = cross(n, u);
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for p in lp {
+                let w = [dot(*p, u), dot(*p, v), 0.0];
+                for i in 0..3 {
+                    lo[i] = lo[i].min(w[i]);
+                    hi[i] = hi[i].max(w[i]);
+                }
+            }
+            let key = (n.map(|x| q(x, 1e5)), [q(d, 1e3), 0, 0], 0);
+            by_plane.entry(key).or_default().push(Planar {
+                part: part.id,
+                order,
+                face: fi,
+                lo,
+                hi,
+            });
+        }
+    }
+    let mut out: HashMap<PartId, Vec<(usize, [u8; 2])>> = HashMap::new();
+    // The other curved faces whose meshes coincide, as one more group of surfaces (by their
+    // boxes' left sides, so each is compared with those its box reaches along x only).
+    others.sort_by(|a, b| a.0.lo[0].total_cmp(&b.0.lo[0]));
+    {
+        let mut g: Vec<usize> = (0..others.len()).collect();
+        fn root(g: &mut [usize], mut i: usize) -> usize {
+            while g[i] != i {
+                g[i] = g[g[i]];
+                i = g[i];
+            }
+            i
+        }
+        for i in 0..others.len() {
+            for j in i + 1..others.len() {
+                let ((a, pa, ka), (b, pb, kb)) = (&others[i], &others[j]);
+                if b.lo[0] >= a.hi[0] {
+                    break;
+                }
+                if a.part != b.part
+                    && ka == kb
+                    && (0..3).all(|k| a.lo[k] < b.hi[k] && b.lo[k] < a.hi[k])
+                    && meshes_coincide(pa, a.face, pb, b.face)
+                {
+                    let (ri, rj) = (root(&mut g, i), root(&mut g, j));
+                    g[ri] = rj;
+                }
+            }
+        }
+        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..others.len() {
+            let r = root(&mut g, i);
+            members.entry(r).or_default().push(i);
+        }
+        for m in members.values() {
+            let mut parts: Vec<(usize, PartId)> = m
+                .iter()
+                .map(|i| (others[*i].0.order, others[*i].0.part))
+                .collect();
+            parts.sort_by_key(|(o, _)| *o);
+            parts.dedup_by_key(|(_, p)| *p);
+            if parts.len() < 2 {
+                continue;
+            }
+            let count = parts.len().min(127) as u8 | SHARE_CURVED;
+            for i in m {
+                let f = &others[*i].0;
+                let rank = parts.iter().position(|(_, p)| *p == f.part).unwrap_or(0) as u8;
+                out.entry(f.part).or_default().push((f.face, [rank, count]));
+            }
+        }
+    }
+    for (key, faces) in &by_plane {
+        if faces.len() < 2 {
+            continue;
+        }
+        let flag = if curved.contains(key) {
+            SHARE_CURVED
+        } else {
+            0
+        };
+        let dims = if flag != 0 { 3 } else { 2 };
+        // Faces of different parts whose boxes overlap (more than touching), joined into groups.
+        let mut group: Vec<usize> = (0..faces.len()).collect();
+        fn root(g: &mut [usize], mut i: usize) -> usize {
+            while g[i] != i {
+                g[i] = g[g[i]];
+                i = g[i];
+            }
+            i
+        }
+        const EPS: f64 = 1e-4;
+        for i in 0..faces.len() {
+            for j in i + 1..faces.len() {
+                let (a, b) = (&faces[i], &faces[j]);
+                if a.part != b.part
+                    && (0..dims).all(|k| a.lo[k] < b.hi[k] - EPS && b.lo[k] < a.hi[k] - EPS)
+                {
+                    let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                    group[ri] = rj;
+                }
+            }
+        }
+        let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..faces.len() {
+            let r = root(&mut group, i);
+            members.entry(r).or_default().push(i);
+        }
+        for m in members.values() {
+            let mut parts: Vec<(usize, PartId)> = m
+                .iter()
+                .map(|i| (faces[*i].order, faces[*i].part))
+                .collect();
+            parts.sort_by_key(|(o, _)| *o);
+            parts.dedup_by_key(|(_, p)| *p);
+            if parts.len() < 2 {
+                continue;
+            }
+            let count = parts.len().min(127) as u8 | flag;
+            for i in m {
+                let f = &faces[*i];
+                let rank = parts.iter().position(|(_, p)| *p == f.part).unwrap_or(0) as u8;
+                out.entry(f.part).or_default().push((f.face, [rank, count]));
+            }
+        }
+    }
+    out
+}
+
+/// Whether face `fa` of `a` and face `fb` of `b` lie on each other where they meet: a few of
+/// each one's vertices (on its exact surface) are on the other's triangles (within twice their
+/// tessellation's tolerance), facing the same way or opposite (surfaces that only cross
+/// don't).
+fn meshes_coincide(a: &Part, fa: usize, b: &Part, fb: usize) -> bool {
+    const SAMPLES: usize = 48;
+    const NEEDED: usize = 3;
+    let tris = |p: &Part, fi: usize| -> Vec<[[f64; 3]; 3]> {
+        let s = &p.solid;
+        let f = &s.faces[fi];
+        s.indices[3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count)]
+            .chunks(3)
+            .map(|t| [0, 1, 2].map(|k| s.positions[t[k] as usize]))
+            .collect()
+    };
+    let verts = |p: &Part, fi: usize| -> Vec<([f64; 3], [f64; 3])> {
+        let s = &p.solid;
+        let f = &s.faces[fi];
+        let mut v: Vec<u32> =
+            s.indices[3 * f.first_triangle..3 * (f.first_triangle + f.triangle_count)].to_vec();
+        v.sort_unstable();
+        v.dedup();
+        let step = v.len().div_ceil(SAMPLES).max(1);
+        v.iter()
+            .step_by(step)
+            .map(|i| (s.positions[*i as usize], s.normals[*i as usize]))
+            .collect()
+    };
+    let size = |p: &Part| {
+        let s = &p.solid;
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for x in &s.positions {
+            for i in 0..3 {
+                lo[i] = lo[i].min(x[i]);
+                hi[i] = hi[i].max(x[i]);
+            }
+        }
+        ((0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>()).sqrt()
+    };
+    let on = |from: &[([f64; 3], [f64; 3])], to: &[[[f64; 3]; 3]], tol: f64| {
+        from.iter()
+            .filter(|(p, n)| {
+                to.iter().any(|t| {
+                    let (d, tn) = point_triangle(*p, t);
+                    d <= tol && (n[0] * tn[0] + n[1] * tn[1] + n[2] * tn[2]).abs() > 0.995
+                })
+            })
+            .count()
+            >= NEEDED
+    };
+    let tol = |p: &Part| 2.0 * cadrs_core::brep::tessellation_for(size(p)).deflection;
+    let (ta, tb) = (tris(a, fa), tris(b, fb));
+    on(&verts(a, fa), &tb, tol(b)) && on(&verts(b, fb), &ta, tol(a))
+}
+
+/// How far `p` is from triangle `t`, and the triangle's unit normal.
+fn point_triangle(p: [f64; 3], t: &[[f64; 3]; 3]) -> (f64, [f64; 3]) {
+    let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (a, b, c) = (t[0], t[1], t[2]);
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let n = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    let nl = dot(n, n).sqrt();
+    if nl < 1e-300 {
+        return (f64::INFINITY, [0.0; 3]);
+    }
+    let n = n.map(|x| x / nl);
+    // The closest point (Ericson, Real-Time Collision Detection 5.1.5).
+    let at = |u: f64, v: f64| {
+        let q = [
+            a[0] + ab[0] * u + ac[0] * v,
+            a[1] + ab[1] * u + ac[1] * v,
+            a[2] + ab[2] * u + ac[2] * v,
+        ];
+        dot(sub(p, q), sub(p, q)).sqrt()
+    };
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return (at(0.0, 0.0), n);
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return (at(1.0, 0.0), n);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return (at(d1 / (d1 - d3), 0.0), n);
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return (at(0.0, 1.0), n);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return (at(0.0, d2 / (d2 - d6)), n);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (at(1.0 - w, w), n);
+    }
+    let den = 1.0 / (va + vb + vc);
+    (at(vb * den, vc * den), n)
 }
 
 /// The vertex colours and selection flags of [`part_base_mesh`]: what [`shade`] starts from
@@ -2434,6 +2826,7 @@ fn sync_part_meshes(
     section: Res<crate::section_view::SectionClip>,
     (mut store, doc): (ResMut<PartMeshStore>, Option<Res<ActiveDocument>>),
     mut commands: Commands,
+    mut shared: Local<(u64, HashMap<PartId, Vec<(usize, [u8; 2])>>)>,
 ) {
     // Nothing to do while the parts, their overrides, the render mode and the section are as
     // they were.
@@ -2532,6 +2925,10 @@ fn sync_part_meshes(
         }
     };
     let element = doc.and_then(|d| d.active);
+    // The faces that lie on another part's face (worked out again when the parts change).
+    if shared.0 != cache.generation || cache.generation == 0 {
+        *shared = (cache.generation, shared_faces(cache.shown()));
+    }
     let mut have: HashMap<PartId, Entity> = HashMap::new();
     for (e, mut pm, mut mesh, mut mat) in &mut q {
         let Some(part) = cache.drawn(pm.id) else {
@@ -2541,7 +2938,12 @@ fn sync_part_meshes(
         let preview = over.previews(part)
             || cache.tool.iter().any(|t| t.id == part.id)
             || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &over, &ghosts, part);
+        let mut bases = ghosted_bases(&cache, &over, &ghosts, part);
+        for (fi, share) in shared.1.get(&part.id).into_iter().flatten() {
+            if let Some(b) = bases.get_mut(*fi) {
+                b.share = *share;
+            }
+        }
         let want = material_for(part, preview, &bases);
         let (handle, pose) = store.mesh(&mut meshes, element, part, preview, bases);
         if mesh.0 != handle {
@@ -2570,7 +2972,12 @@ fn sync_part_meshes(
         let preview = over.previews(part)
             || cache.tool.iter().any(|t| t.id == part.id)
             || crate::assembly::standard::is_ghost(part.id);
-        let bases = ghosted_bases(&cache, &over, &ghosts, part);
+        let mut bases = ghosted_bases(&cache, &over, &ghosts, part);
+        for (fi, share) in shared.1.get(&part.id).into_iter().flatten() {
+            if let Some(b) = bases.get_mut(*fi) {
+                b.share = *share;
+            }
+        }
         let material = material_for(part, preview, &bases);
         let (mesh, pose) = store.mesh(&mut meshes, element, part, preview, bases);
         let mut e = commands.spawn((
@@ -2690,11 +3097,13 @@ fn sync_ghost_meshes(
                     } else {
                         0.42
                     },
+                    share: [0; 2],
                 };
             } else if pick.is_some() && pick == hovered {
                 *b = FaceBase {
                     rgb: [255.0, 214.0, 140.0],
                     alpha: 0.32,
+                    share: [0; 2],
                 };
             }
         }
@@ -4551,6 +4960,222 @@ mod tests {
         let side = srgb(face_color_of(&v, -Vec3::Y, false, true));
         assert!(close(side, [190, 142, 59]), "side {side:?}");
     }
+    /// Two boxes standing side by side on Top, overlapping, share their tops', bottoms', fronts'
+    /// and backs' planes there: those faces get each part's stripes; a third box apart, the same
+    /// height, shares none (its top is in the plane, but nowhere near).
+    #[test]
+    fn faces_on_another_parts_face_are_striped_apart() {
+        use cadrs_core::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+        use cadrs_core::document::{Document, ExtrudeFeature, RegionRef};
+        let mut d = Document::new("Shared");
+        let el = d.elements[0].id;
+        let mut h = cadrs_core::History::default();
+        for x in [0.0, 30.0, 100.0] {
+            let (sk, ex) = (FeatureId::new(), FeatureId::new());
+            h.execute(
+                &mut d,
+                &AddSketch {
+                    element: el,
+                    feature: sk,
+                    plane: Some(PlaneRef::Top),
+                },
+            )
+            .unwrap();
+            let v = cadrs_sketch::Vec2::new;
+            h.execute(
+                &mut d,
+                &EditSketch {
+                    element: el,
+                    feature: sk,
+                    op: cadrs_sketch::SketchOp::AddPolyline {
+                        points: vec![v(x, 0.0), v(x + 40.0, 0.0), v(x + 40.0, 20.0), v(x, 20.0)],
+                        closed: true,
+                        construction: false,
+                        label: "Add rectangle",
+                    },
+                },
+            )
+            .unwrap();
+            let g = &d
+                .element(el)
+                .unwrap()
+                .feature(sk)
+                .unwrap()
+                .sketch()
+                .unwrap()
+                .geometry;
+            let regions: Vec<RegionRef> = cadrs_sketch::region::regions(g)
+                .iter()
+                .map(|r| RegionRef::new(sk, r))
+                .collect();
+            h.execute(
+                &mut d,
+                &AddExtrude {
+                    element: el,
+                    feature: ex,
+                    extrude: ExtrudeFeature::default(),
+                },
+            )
+            .unwrap();
+            h.execute(
+                &mut d,
+                &SetExtrude {
+                    element: el,
+                    feature: ex,
+                    extrude: ExtrudeFeature {
+                        regions,
+                        depth: 10.0,
+                        ..ExtrudeFeature::default()
+                    },
+                    label: "Select".into(),
+                },
+            )
+            .unwrap();
+        }
+        let built = cadrs_core::rebuild::build(d.element(el).unwrap().features());
+        assert_eq!(built.parts.len(), 3);
+        let shared = shared_faces(built.parts.iter());
+        let (a, b, c) = (built.parts[0].id, built.parts[1].id, built.parts[2].id);
+        assert!(!shared.contains_key(&c));
+        for (p, rank) in [(a, 0), (b, 1)] {
+            let marks = &shared[&p];
+            // The top, bottom, front and back, each the part's own stripes of the two (not the
+            // ends, a box's length apart).
+            assert_eq!(marks.len(), 4, "{marks:?}");
+            assert!(marks.iter().all(|(_, m)| *m == [rank, 2]));
+        }
+    }
+
+    /// Parts extruded `depths` high from Top, each from a sketch `shape` draws.
+    fn extruded(shape: cadrs_sketch::SketchOp, depths: &[f64]) -> Vec<Part> {
+        use cadrs_core::commands::{AddExtrude, AddSketch, EditSketch, SetExtrude};
+        use cadrs_core::document::{Document, ExtrudeFeature, RegionRef};
+        let mut d = Document::new("Shared");
+        let el = d.elements[0].id;
+        let mut h = cadrs_core::History::default();
+        for depth in depths {
+            let (sk, ex) = (FeatureId::new(), FeatureId::new());
+            h.execute(
+                &mut d,
+                &AddSketch {
+                    element: el,
+                    feature: sk,
+                    plane: Some(PlaneRef::Top),
+                },
+            )
+            .unwrap();
+            h.execute(
+                &mut d,
+                &EditSketch {
+                    element: el,
+                    feature: sk,
+                    op: shape.clone(),
+                },
+            )
+            .unwrap();
+            let g = &d
+                .element(el)
+                .unwrap()
+                .feature(sk)
+                .unwrap()
+                .sketch()
+                .unwrap()
+                .geometry;
+            let regions: Vec<RegionRef> = cadrs_sketch::region::regions(g)
+                .iter()
+                .map(|r| RegionRef::new(sk, r))
+                .collect();
+            h.execute(
+                &mut d,
+                &AddExtrude {
+                    element: el,
+                    feature: ex,
+                    extrude: ExtrudeFeature::default(),
+                },
+            )
+            .unwrap();
+            h.execute(
+                &mut d,
+                &SetExtrude {
+                    element: el,
+                    feature: ex,
+                    extrude: ExtrudeFeature {
+                        regions,
+                        depth: *depth,
+                        ..ExtrudeFeature::default()
+                    },
+                    label: "Select".into(),
+                },
+            )
+            .unwrap();
+        }
+        cadrs_core::rebuild::build(d.element(el).unwrap().features())
+            .parts
+            .clone()
+    }
+
+    /// Two parts' shared curved side (one face, or the pieces a seam makes) and bottom: each
+    /// part's stripes of the two, the side's marked curved.
+    fn assert_side_and_bottom_shared(parts: &[Part]) {
+        assert_eq!(parts.len(), 2);
+        let shared = shared_faces(parts.iter());
+        for (i, part) in parts.iter().enumerate() {
+            let marks = &shared[&part.id];
+            let curved = marks
+                .iter()
+                .filter(|(_, m)| m[1] & SHARE_CURVED != 0)
+                .count();
+            let flat = marks
+                .iter()
+                .filter(|(_, m)| m[1] & SHARE_CURVED == 0)
+                .count();
+            assert!(curved > 0 && flat == 1, "{marks:?}");
+            assert!(
+                marks
+                    .iter()
+                    .all(|(_, m)| m[0] == i as u8 && m[1] & !SHARE_CURVED == 2)
+            );
+        }
+    }
+
+    /// Two extrudes of one circle, 10 and 20 mm high, share their side (a cylinder) and their
+    /// bottom.
+    #[test]
+    fn coaxial_cylinders_of_one_radius_are_striped_apart() {
+        let circle = cadrs_sketch::SketchOp::AddCircle {
+            center: cadrs_sketch::Vec2::new(0.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        };
+        assert_side_and_bottom_shared(&extruded(circle, &[10.0, 20.0]));
+    }
+
+    /// So do two extrudes of one ellipse (a swept ellipse, compared mesh to mesh: the presso
+    /// df64 foot's rim); a smaller one inside, its side apart from the other's all round, shares
+    /// only the bottom's plane.
+    #[test]
+    fn two_extrudes_of_one_ellipse_are_striped_apart() {
+        let ellipse = |major: f64, minor: f64| cadrs_sketch::SketchOp::AddEllipse {
+            center: cadrs_sketch::Vec2::new(0.0, 0.0),
+            major: cadrs_sketch::Vec2::new(0.0, major),
+            minor,
+            construction: false,
+        };
+        assert_side_and_bottom_shared(&extruded(ellipse(20.0, 12.0), &[10.0, 20.0]));
+        // Sides 2 mm apart all round (an ellipse 2 mm smaller every way, inside): not on each
+        // other.
+        let mut parts = extruded(ellipse(20.0, 12.0), &[10.0]);
+        parts.extend(extruded(ellipse(18.0, 10.0), &[20.0]));
+        let shared = shared_faces(parts.iter());
+        assert!(
+            shared
+                .values()
+                .flatten()
+                .all(|(_, m)| m[1] & SHARE_CURVED == 0),
+            "{shared:?}"
+        );
+    }
+
     /// A drag asks for a rebuild every frame: what the last one made shows before the next is
     /// asked for, so the preview follows the drag (it stood still until the pointer paused).
     #[test]

@@ -374,6 +374,7 @@ fn prepare_thumbnail_scene(world: &mut World) {
                     body.color[2] as f32,
                 ],
                 alpha: body.color[3] as f32 / 255.0,
+                share: [0; 2],
             };
             let mesh = world
                 .resource_mut::<Assets<Mesh>>()

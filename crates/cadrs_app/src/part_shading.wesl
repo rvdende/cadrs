@@ -1,6 +1,16 @@
 // Part faces lit by the head light (`crate::parts::shade` on the GPU): the vertex colour is the
 // face's base colour (sRGB, 0–1) and opacity, UV x is 1 on a selected face. The light follows
 // the camera, so turning the view costs nothing on the CPU.
+//
+// A mesh with a UV 1 has faces that lie on another part's face (`crate::parts::shared_faces`):
+// x their rank among the parts there, y how many (0: not shared; negative on a curved face).
+// Such a face's depth is moved a hair, by stripe: the parts' order front to back turns by one
+// from stripe to stripe, so they take turns in front, and any of them there differ in depth
+// (instead of fighting for each pixel's, flickering as the view turns). Where no other part's
+// face is there, it looks as it is. The stripes stay where they are on the model as the view
+// turns: on a plane at 45° to axes the plane picks (the same for both parts' faces), running
+// another way on a face at an angle to it; on a curved face where diagonal slabs of space
+// cross it.
 
 import bevy_pbr::render::forward_io::VertexOutput;
 import bevy_pbr::render::mesh_view_bindings::view;
@@ -16,6 +26,57 @@ struct PartShadingParams {
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> params: PartShadingParams;
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @if(VERTEX_UVS_B)
+    @builtin(frag_depth) depth: f32,
+}
+
+// About how many pixels wide a shared face's stripes are: their width in mm is the power of
+// two nearest that (so zooming steps it, turning the view doesn't).
+const STRIPE_PX: f32 = 7.0;
+
+// How far `p` (world) is across the stripes of the plane with normal `n`: along the diagonal
+// of two axes in the plane that only the plane decides (its normal turned to point up its first
+// clear axis, so two faces of one plane facing either way agree).
+fn stripe_coord(p: vec3<f32>, n_in: vec3<f32>) -> f32 {
+    var n = normalize(n_in);
+    let first = select(select(n.z, n.y, abs(n.y) > 1e-3), n.x, abs(n.x) > 1e-3);
+    n = select(n, -n, first < 0.0);
+    let e = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(n.x) < 0.6);
+    let u = normalize(cross(n, e));
+    let v = cross(n, u);
+    return (dot(p, u) + dot(p, v)) * 0.70710678;
+}
+
+// The depth of a fragment at `pos` (its framebuffer position; reversed depth, larger nearer),
+// `world` on a face with normal `n` and `share`: nearer in its own stripes, farther in the
+// others'. `px` is the size of a pixel there (mm).
+fn shared_depth(pos: vec4<f32>, world: vec3<f32>, n: vec3<f32>, share: vec2<f32>, px: f32) -> f32 {
+    let count = abs(round(share.y));
+    if (count < 1.5) {
+        return pos.z;
+    }
+    let width = exp2(round(log2(max(STRIPE_PX * px, 1e-6))));
+    let across = select(stripe_coord(world, n), dot(world, vec3(0.57735027)), share.y < 0.0);
+    // This face's place in the stripe's order: (stripe + rank) mod count, front last.
+    let k = floor(across / width) + round(share.x);
+    let place = k - count * floor(k / count);
+    return pos.z * (1.0 + 4e-6 * (place - (count - 1.0) * 0.5));
+}
+
+// The size of a pixel (mm) at `world`: the same everywhere in an orthographic view, growing
+// with the distance in a perspective one.
+fn pixel_size(world: vec3<f32>) -> f32 {
+    let w = max(view.viewport.z, 1.0);
+    let scale = 2.0 / (max(abs(view.clip_from_view[0][0]), 1e-12) * w);
+    if (view.clip_from_view[3][3] > 0.5) {
+        return scale;
+    }
+    let depth = -(view.view_from_world * vec4(world, 1.0)).z;
+    return scale * max(depth, 1e-6);
+}
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
@@ -40,7 +101,7 @@ fn section_removed(clip: array<vec4<f32>, 4>, p: vec3<f32>) -> bool {
 }
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(in: VertexOutput) -> FragmentOutput {
     // The section view's removed part: on the removed side of every plane.
     if (section_removed(params.clip, in.world_position.xyz)) {
         discard;
@@ -117,5 +178,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let g = mix(0.22, 0.96, white) * mix(1.0, b, 0.3);
         lin = srgb_to_linear(vec3(g));
     }
-    return vec4(lin, in.color.a * params.style.y);
+    var out: FragmentOutput;
+    out.color = vec4(lin, in.color.a * params.style.y);
+    @if(VERTEX_UVS_B)
+    out.depth = shared_depth(in.position, in.world_position.xyz, in.world_normal, in.uv_b, pixel_size(in.world_position.xyz));
+    return out;
 }

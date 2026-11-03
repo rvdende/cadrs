@@ -565,6 +565,7 @@ pub fn sync_context_parts(
     let base = FaceBase {
         rgb: CONTEXT_RGB,
         alpha: view.opacity.clamp(0.05, 0.95),
+        share: [0; 2],
     };
     let mut tints: HashMap<PartId, FaceBase> = cache
         .tints

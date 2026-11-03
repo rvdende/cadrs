@@ -765,6 +765,7 @@ pub fn sync_pcb_view(world: &mut World) {
         let base = FaceBase {
             rgb: [b.color[0] as f32, b.color[1] as f32, b.color[2] as f32],
             alpha: b.color[3] as f32 / 255.0,
+            share: [0; 2],
         };
         let level = b.item.and_then(|i| levels.get(&i).copied()).unwrap_or(0);
         let m = body_mesh(b, &view, base, level);
@@ -936,6 +937,7 @@ fn colors(b: &BodyMesh, view: &ViewState, base: FaceBase, level: u8) -> Vec<[f32
     let mix = |t: [f32; 3], k: f32| FaceBase {
         rgb: std::array::from_fn(|i| base.rgb[i] * (1.0 - k) + t[i] * k),
         alpha: base.alpha,
+        share: [0; 2],
     };
     let base = match level {
         1 => mix(HIGHLIGHT, 0.6),

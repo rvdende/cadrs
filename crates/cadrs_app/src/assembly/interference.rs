@@ -122,6 +122,7 @@ fn tint_clashes(
                     FaceBase {
                         rgb: [236.0, 150.0, 140.0],
                         alpha: 0.3,
+                        share: [0; 2],
                     },
                 );
             }
