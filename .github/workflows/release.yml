@@ -4,8 +4,8 @@ name: Release
 # archives, as tools/release/build.sh does locally, the macOS disk image (#103) and the browser
 # build (tools/web), and publishes them as a GitHub release with SHA256SUMS.txt. The release notes are
 # tools/release/notes/<tag>.md (GitHub's generated notes when there is none); a tag with a `-` in
-# it (v0.1.7-beta.1) is a pre-release. Then the site (the new release's browser build, at
-# https://cadrs.net) is redeployed. Running it by hand with a tag (Actions › Release › Run workflow) releases the
+# it (v0.1.7-beta.1) is a pre-release. (The site, https://cadrs.net, is main's head, deployed on
+# every push to main: .github/workflows/pages.yml.) Running it by hand with a tag (Actions › Release › Run workflow) releases the
 # chosen branch's head and creates the tag; with "Only build" ticked it publishes nothing, and the
 # archives are the run's artifacts (to try a build before releasing it).
 on:
@@ -167,8 +167,8 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
-  # The browser build (tools/web/build.sh): the app as WebAssembly, drawn with WebGPU. The site
-  # is the latest release's (.github/workflows/pages.yml).
+  # The browser build (tools/web/build.sh): the app as WebAssembly, drawn with WebGPU, attached
+  # to the release. (The site is main's: .github/workflows/pages.yml.)
   web:
     name: Build (browser)
     runs-on: ubuntu-24.04
@@ -261,9 +261,3 @@ jobs:
           if [[ -f "$notes" ]]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
           gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/*.dmg dist/SHA256SUMS.txt "${args[@]}"
-
-      # A release made with the workflow's token doesn't trigger other workflows' `release`
-      # events, but a dispatch does.
-      - name: Redeploy the site
-        if: ${{ !contains(inputs.tag || github.ref_name, '-') }}
-        run: gh workflow run pages.yml --ref main
