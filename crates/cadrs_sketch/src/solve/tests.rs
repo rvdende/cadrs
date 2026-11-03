@@ -1719,3 +1719,111 @@ fn a_negative_angle_and_hinges_on_a_line_turned_round() {
     assert!((m - 330.0).abs() < 1e-6, "{m}");
     assert!(!analyze(&s).has_conflicts());
 }
+
+/// presso df64's foot sketch (Sketch 6): a 130 mm circle whose centre is the top end of a
+/// vertical construction line from the origin, and two lines from points on it level with its
+/// centre down to a fixed ellipse (the leg's edge, used), tangent to it there. Dragging the
+/// centre anywhere off the axis can't put it at the cursor: it follows as near as it can (up
+/// and down the axis, level with the cursor), the lines with it, frame after frame without a
+/// jump (it went to wherever projecting the constraints back from the cursor landed, a line
+/// flipping to the ellipse's other tangent).
+#[test]
+fn a_drag_the_constraints_cant_reach_follows_as_near_as_they_let_it() {
+    let mut s = Sketch::new();
+    let (yc, top) = (-13.502607321446826, 57.33074843455763);
+    SketchOp::AddEllipse {
+        center: v(0.0, yc),
+        major: v(0.0, top),
+        minor: 65.0,
+        construction: true,
+    }
+    .apply(&mut s)
+    .unwrap();
+    let ellipse = s
+        .curves
+        .iter()
+        .find(|(_, c)| matches!(c.kind, CurveKind::Ellipse { .. }))
+        .map(|(k, _)| k)
+        .unwrap();
+    s.add_constraint(ConstraintOf::FixCurve(CurveRef::Curve(ellipse)));
+    let (axis, o, c) = line(&mut s, v(0.0, 0.0), v(0.0, 245.0));
+    s.curves[axis].construction = true;
+    s.add_constraint(ConstraintOf::Coincident(
+        PointRef::Point(o),
+        PointRef::Origin,
+    ));
+    s.add_constraint(ConstraintOf::Vertical(Orient::Line(CurveRef::Curve(axis))));
+    let round = s.curves.insert(Curve {
+        kind: CurveKind::Circle {
+            center: c,
+            radius: 65.0,
+        },
+        construction: false,
+    });
+    s.dimensions.insert(Dimension {
+        kind: DimensionKind::Diameter { curve: round },
+        value: 130.0,
+        offset: 0.0,
+        along: 0.0,
+        driven: false,
+    });
+    let mut sides = Vec::new();
+    for x in [65.0, -65.0] {
+        let (l, a, b) = line(&mut s, v(x, 245.0), v(x, yc));
+        s.add_constraint(ConstraintOf::PointOnCurve(
+            PointRef::Point(a),
+            CurveRef::Curve(round),
+        ));
+        s.add_constraint(ConstraintOf::Horizontal(Orient::Points(
+            PointRef::Point(a),
+            PointRef::Point(c),
+        )));
+        s.add_constraint(ConstraintOf::PointOnCurve(
+            PointRef::Point(b),
+            CurveRef::Curve(ellipse),
+        ));
+        s.add_constraint(ConstraintOf::Tangent(
+            CurveRef::Curve(ellipse),
+            CurveRef::Curve(l),
+        ));
+        sides.push((a, b, x));
+    }
+    let skip = HashSet::new();
+    let base = s.clone();
+    let mut live = s.clone();
+    // The cursor wanders off the axis while it goes up and back down.
+    let mut last = live.pos(c);
+    for i in 0..=60 {
+        let t = i as f64 / 60.0;
+        let cursor = v(
+            40.0 * (t * 9.0).sin(),
+            245.0 + 60.0 * (t * std::f64::consts::PI).sin(),
+        );
+        assert!(
+            drag_from(&base, &mut live, &Drag::Points(vec![(c, cursor)]), &skip),
+            "frame {i}"
+        );
+        let at = live.pos(c);
+        // On the axis, level with the cursor.
+        assert!(
+            at.x.abs() < 1e-6 && (at.y - cursor.y).abs() < 1e-6,
+            "{i}: {at:?} for {cursor:?}"
+        );
+        // No jump: it moved no more than the cursor did up or down.
+        assert!((at.y - last.y).abs() < 10.0, "{i}: {last:?} -> {at:?}");
+        last = at;
+        // The lines kept to the minor axis's ends, vertical.
+        for (a, b, x) in &sides {
+            assert!(
+                live.pos(*a).distance(v(*x, at.y)) < 1e-6,
+                "{i}: {:?}",
+                live.pos(*a)
+            );
+            assert!(
+                live.pos(*b).distance(v(*x, yc)) < 1e-4,
+                "{i}: {:?}",
+                live.pos(*b)
+            );
+        }
+    }
+}

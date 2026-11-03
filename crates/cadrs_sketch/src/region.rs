@@ -180,11 +180,14 @@ impl Piece {
 /// ellipse's end, 1e-6 mm away, turns its tangent by 1e-8) must still sort by curvature.
 const SAME_TANGENT: f64 = 1e-6;
 
+/// A half-edge leaving a vertex: its [`Piece::leave_key`] and its index.
+type Leaving = ((f64, f64), usize);
+
 /// Sorts the pieces leaving a vertex (by their [`Piece::leave_key`]) counter-clockwise:
 /// directions within [`SAME_TANGENT`] of each other count as one (the run of them takes its
 /// first's angle, and one just under a full turn is at 0), and pieces along one direction sort
 /// by curvature, right-turning first.
-fn sort_leaving(list: &mut [((f64, f64), usize)]) {
+fn sort_leaving(list: &mut [Leaving]) {
     use std::f64::consts::TAU;
     for (k, _) in list.iter_mut() {
         if k.0 > TAU - SAME_TANGENT {
@@ -1036,7 +1039,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             e.path.iter().rev().copied().collect()
         }
     };
-    let mut outgoing: HashMap<usize, Vec<((f64, f64), usize)>> = HashMap::new();
+    let mut outgoing: HashMap<usize, Vec<Leaving>> = HashMap::new();
     for h in 0..edges.len() * 2 {
         outgoing
             .entry(half_from(h))

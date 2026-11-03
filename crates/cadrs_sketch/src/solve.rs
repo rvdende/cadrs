@@ -1538,6 +1538,85 @@ impl System {
         j
     }
 
+    /// Moves the unknowns `vars` so the `goals` come as near being met as the `hard` equations
+    /// allow: every hard one kept (to [`TOLERANCE`]), the goals' residuals as small as they get
+    /// (a dragged point as near the cursor as its constraints let it go). Each step goes along
+    /// the directions the hard equations allow to first order (a Gauss–Newton step for the
+    /// goals, projected onto the hard Jacobian's null space), then the hard equations are met
+    /// again by the least move ([`Self::solve_sub`]); a step is taken only if it brings the
+    /// goals nearer. Returns true if the hard equations hold at the end.
+    fn solve_nearest(
+        &mut self,
+        vars: &[usize],
+        hard: &[usize],
+        goals: &[usize],
+        weight: &dyn Fn(usize) -> f64,
+    ) -> bool {
+        if !self.solve_sub(vars, hard, weight) || vars.is_empty() {
+            return false;
+        }
+        let n = vars.len();
+        let scale: Vec<f64> = vars.iter().map(|v| 1.0 / weight(*v).sqrt()).collect();
+        let scaled = |mut j: DMatrix<f64>| {
+            for (c, k) in scale.iter().enumerate() {
+                j.column_mut(c).scale_mut(*k);
+            }
+            j
+        };
+        let mut err = self.residuals(goals).norm();
+        for _ in 0..40 {
+            if err < TOLERANCE {
+                break;
+            }
+            // The projector onto the directions the hard equations allow.
+            let mut along = DMatrix::<f64>::identity(n, n);
+            if !hard.is_empty() {
+                let svd = scaled(self.jacobian(vars, hard)).svd(false, true);
+                let eps = (svd.singular_values.max() * 1e-10).max(1e-14);
+                if let Some(vt) = &svd.v_t {
+                    for (i, sv) in svd.singular_values.iter().enumerate() {
+                        if *sv > eps {
+                            let row = vt.row(i);
+                            along -= row.transpose() * row;
+                        }
+                    }
+                }
+            }
+            let a = scaled(self.jacobian(vars, goals)) * &along;
+            let svd = a.svd(true, true);
+            let eps = (svd.singular_values.max() * 1e-10).max(1e-14);
+            let Ok(y) = svd.solve(&(-self.residuals(goals)), eps) else {
+                break;
+            };
+            let step = &along * y;
+            if step.norm() < 1e-12 {
+                break;
+            }
+            let saved = self.x.clone();
+            let mut alpha = 1.0;
+            let mut improved = false;
+            for _ in 0..10 {
+                for (i, v) in vars.iter().enumerate() {
+                    self.x[*v] = saved[*v] + alpha * step[i] * scale[i];
+                }
+                if self.solve_sub(vars, hard, weight) {
+                    let e2 = self.residuals(goals).norm();
+                    if e2 < err * (1.0 - 1e-9) {
+                        err = e2;
+                        improved = true;
+                        break;
+                    }
+                }
+                alpha *= 0.5;
+            }
+            if !improved {
+                self.x = saved;
+                break;
+            }
+        }
+        self.max_residual(hard) < TOLERANCE && !self.degenerate(vars)
+    }
+
     /// Solves `eqs` for the unknowns `vars` from the current values, moving them as little as
     /// possible (weighted by `weight`: a heavier unknown moves less). Returns true if every
     /// equation is satisfied. On failure the unknowns are left at the best point found.
@@ -2458,11 +2537,26 @@ pub enum Drag {
     Rim(CurveId, Vec2),
 }
 
+/// How [`drag_with`] may meet a drag's target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// The dragged geometry exactly at the target.
+    Exact,
+    /// As near it as the constraints allow (when it can't be exact).
+    Nearest,
+}
+
 /// Moves the sketch toward a drag target, keeping every constraint (except `skip`, the
-/// conflicting ones) satisfied: pins the target and solves with the minimum-norm step; if that
-/// is impossible, moves the dragged geometry to the target and projects the constraints back.
-/// Returns false (leaving the sketch unchanged) if neither works.
+/// conflicting ones) satisfied: pins the target and solves with the minimum-norm step; where
+/// the constraints don't let the dragged geometry reach it, takes it as near as they let it go
+/// (see `System::solve_nearest`); failing that, moves the dragged geometry to the target and
+/// projects the constraints back. Returns false (leaving the sketch unchanged) if none works.
 pub fn drag(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>) -> bool {
+    drag_with(s, drag, skip, Reach::Exact) || drag_with(s, drag, skip, Reach::Nearest)
+}
+
+/// [`drag`] reaching the target only as `reach` says (the projection after the nearest).
+fn drag_with(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>, reach: Reach) -> bool {
     let mut sys = System::new(s, skip);
     let base = sys.eqs.len();
     let mut heavy: HashSet<usize> = HashSet::new();
@@ -2500,9 +2594,22 @@ pub fn drag(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>) -> bool {
     let eqs: Vec<usize> = comps.iter().flat_map(|(_, e)| e.clone()).collect();
     let weight = |v: usize| if heavy.contains(&v) { 100.0 } else { 1.0 };
     let start = sys.x.clone();
-    if sys.solve_sub(&vars, &eqs, &weight) {
-        sys.write(s);
-        return true;
+    let real: Vec<usize> = eqs.iter().copied().filter(|e| !pins.contains(e)).collect();
+    match reach {
+        Reach::Exact => {
+            if sys.solve_sub(&vars, &eqs, &weight) {
+                sys.write(s);
+                return true;
+            }
+            return false;
+        }
+        Reach::Nearest => {
+            // As near the target as the constraints let the dragged geometry go.
+            if sys.solve_nearest(&vars, &real, &pins, &weight) {
+                sys.write(s);
+                return true;
+            }
+        }
     }
     // Projection: put the dragged geometry at the target, then satisfy the constraints.
     sys.x = start.clone();
@@ -2539,7 +2646,6 @@ pub fn drag(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>) -> bool {
             _ => {}
         },
     }
-    let real: Vec<usize> = eqs.iter().copied().filter(|e| !pins.contains(e)).collect();
     if sys.solve_sub(&vars, &real, &|_| 1.0) {
         sys.write(s);
         return true;
@@ -2550,23 +2656,26 @@ pub fn drag(s: &mut Sketch, drag: &Drag, skip: &HashSet<Source>) -> bool {
 /// One frame of an interactive drag: moves `live` toward `drag`, solving from `base` (the
 /// sketch when the drag began) rather than from the previous frame, so the result depends only
 /// on where the cursor is now, not on the path it took (dragging out and back returns to the
-/// start). If no solution is reached from `base`, the previous frame's geometry is tried as the
-/// starting point, and if that fails too the sketch stays as it was. Returns true if `live`
-/// changed.
+/// start). Where the constraints don't let the dragged geometry reach the cursor, it goes as
+/// near as they let it, from the previous frame (so it slides along smoothly rather than
+/// jumping to wherever a solve from the start lands), else from `base`; if that fails too the
+/// sketch stays as it was. Returns true if `live` changed.
 ///
 /// A drag may turn a shape inside out: pulling a rectangle's corner past the opposite side
 /// flips the rectangle over, as a segment's length passes through zero (#38). Nothing stops at
 /// the crossing; only a frame whose target collapses a line or a circle exactly is skipped.
 pub fn drag_from(base: &Sketch, live: &mut Sketch, drag_to: &Drag, skip: &HashSet<Source>) -> bool {
     let mut from_base = base.clone();
-    if drag(&mut from_base, drag_to, skip) {
+    if drag_with(&mut from_base, drag_to, skip, Reach::Exact) {
         *live = from_base;
         return true;
     }
-    let mut from_live = live.clone();
-    if drag(&mut from_live, drag_to, skip) {
-        *live = from_live;
-        return true;
+    let starts = [live.clone(), base.clone()];
+    for mut s in starts {
+        if drag_with(&mut s, drag_to, skip, Reach::Nearest) {
+            *live = s;
+            return true;
+        }
     }
     false
 }
