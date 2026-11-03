@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = 메이트 커넥터를 선택하세요
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = 도구
 model-boolean-targets = 대상
+model-boolean-keep-remainder = 나머지 파트 유지
 model-boolean-offset-all = 모두 오프셋
 model-boolean-faces-to-offset = 오프셋할 면
 model-boolean-union = 합치기

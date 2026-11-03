@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Selecione um conector de posicionamento
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Ferramentas
 model-boolean-targets = Alvos
+model-boolean-keep-remainder = Manter as peças restantes
 model-boolean-offset-all = Deslocar tudo
 model-boolean-faces-to-offset = Faces a deslocar
 model-boolean-union = União

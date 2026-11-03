@@ -4407,6 +4407,107 @@ mod kernel_ops {
             }
         }
 
+        /// Intersect with targets: each target's overlap with each tool (pieces of their own)
+        /// and, with Keep remainder parts, what of it is outside them all. The target's id goes
+        /// to its largest remainder piece (else its largest overlap); the other pieces are new
+        /// parts. A target the tools don't reach is left as it is with the remainder kept, and
+        /// gone without it.
+        fn intersect_targets(
+            &mut self,
+            id: FeatureId,
+            b: &BooleanFeature,
+            tools: &[PartState],
+            state: &Arc<State>,
+            next: &mut State,
+        ) -> Result<Vec<Placed>, String> {
+            let op = id.0;
+            let mut placed: Vec<Placed> = Vec::new();
+            let mut release = |this: &mut Self, pieces: &[Placed]| {
+                for (_, p) in pieces {
+                    this.kernel.release(p.body);
+                }
+            };
+            for target in &b.targets {
+                let t = state
+                    .part(*target)
+                    .ok_or("A selected part no longer exists")?;
+                let Some(body) = t.body else {
+                    release(self, &placed);
+                    return Err(no_body(t));
+                };
+                // `kind` of the target with `with`: its pieces (none for an empty result).
+                let mut pieces_of = |this: &mut Self,
+                                     kind: BoolOp,
+                                     with: &[&PartState]|
+                 -> Result<Vec<Piece>, String> {
+                    let bodies: Vec<BodyId> = with.iter().filter_map(|w| w.body).collect();
+                    let mut inputs: Vec<(BodyId, &BodyNames)> = vec![(body, &*t.names)];
+                    inputs.extend(with.iter().filter_map(|w| Some((w.body?, &*w.names))));
+                    match this.kernel.boolean(kind, body, &bodies) {
+                        Ok(r) => this.split_result(r, op, &inputs),
+                        Err(cadrs_kernel::KernelError::EmptyResult(_)) => Ok(Vec::new()),
+                        Err(e) => Err(format!("Intersect failed: {e}")),
+                    }
+                };
+                let mut inside: Vec<Piece> = Vec::new();
+                for tool in tools {
+                    match pieces_of(self, BoolOp::Intersect, &[tool]) {
+                        Ok(p) => inside.extend(p),
+                        Err(e) => {
+                            for p in inside {
+                                self.kernel.release(p.body);
+                            }
+                            release(self, &placed);
+                            return Err(e);
+                        }
+                    }
+                }
+                let mut outside: Vec<Piece> = Vec::new();
+                if b.keep_remainder {
+                    let all: Vec<&PartState> = tools.iter().collect();
+                    match pieces_of(self, BoolOp::Subtract, &all) {
+                        Ok(p) => outside = p,
+                        Err(e) => {
+                            for p in inside {
+                                self.kernel.release(p.body);
+                            }
+                            release(self, &placed);
+                            return Err(e);
+                        }
+                    }
+                }
+                if inside.is_empty() && outside.is_empty() {
+                    next.parts.retain(|p| p.part.id != *target);
+                    continue;
+                }
+                inside.sort_by(|x, y| y.volume.total_cmp(&x.volume));
+                outside.sort_by(|x, y| y.volume.total_cmp(&x.volume));
+                // The target's own piece first: its largest remainder, else its largest overlap.
+                let (own, rest): (Vec<Piece>, Vec<Piece>) = if outside.is_empty() {
+                    let mut it = inside.into_iter();
+                    (it.next().into_iter().collect(), it.collect())
+                } else {
+                    let mut it = outside.into_iter();
+                    let own: Vec<Piece> = it.next().into_iter().collect();
+                    (own, it.chain(inside).collect())
+                };
+                for p in own {
+                    placed.push((*target, p));
+                }
+                for p in rest {
+                    let taken: Vec<PartId> = placed.iter().map(|(p, _)| *p).collect();
+                    placed.push((Self::new_id(id, next, &taken), p));
+                }
+            }
+            if placed.is_empty() {
+                return Err("Intersect: the tools don't reach the targets".into());
+            }
+            if !b.keep_tools {
+                next.parts.retain(|p| !b.tools.contains(&p.part.id));
+            }
+            Ok(placed)
+        }
+
         /// The Boolean feature (PS5.5).
         pub(super) fn boolean(
             &mut self,
@@ -4430,6 +4531,9 @@ mod kernel_ops {
                 .collect();
             let mut nothing_to_union = false;
             let placed = match b.op {
+                BooleanKind::Intersect if !b.targets.is_empty() => {
+                    self.intersect_targets(id, b, &tools, state, &mut next)?
+                }
                 BooleanKind::Union | BooleanKind::Intersect => {
                     let kind = if b.op == BooleanKind::Union {
                         BoolOp::Union
@@ -6272,6 +6376,7 @@ mod ahead_tests {
                 tools: vec![part(blocks[2]), part(across)],
                 targets: Vec::new(),
                 keep_tools: false,
+                keep_remainder: false,
                 offset: None,
             }),
             suppress_by: None,

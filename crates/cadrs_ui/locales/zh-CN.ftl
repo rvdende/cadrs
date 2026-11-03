@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = 选择配合连接器
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = 工具
 model-boolean-targets = 目标
+model-boolean-keep-remainder = 保留剩余零件
 model-boolean-offset-all = 全部偏移
 model-boolean-faces-to-offset = 要偏移的面
 model-boolean-union = 合并

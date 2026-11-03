@@ -2422,6 +2422,7 @@ model-select-a-mate-connector = Select a mate connector
 model-boolean-tools = Tools
 # The parts a Subtract cuts (a field's placeholder).
 model-boolean-targets = Targets
+model-boolean-keep-remainder = Keep remainder parts
 model-boolean-offset-all = Offset all
 model-boolean-faces-to-offset = Faces to offset
 # A Boolean's operation: joins parts into one.

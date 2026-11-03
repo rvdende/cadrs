@@ -890,6 +890,7 @@ fn boolean_offset_and_tool_order() {
         tools: vec![b.id],
         targets: vec![a.id],
         keep_tools: false,
+        keep_remainder: false,
         offset: Some(BooleanOffset::default()),
     };
     let f = d.add(AddFeature::boolean(d.el, FeatureId::new(), sub.clone()));
@@ -954,6 +955,75 @@ fn boolean_offset_and_tool_order() {
         d.parts().iter().map(|p| p.id).collect::<Vec<_>>(),
         vec![b.id]
     );
+}
+
+#[test]
+fn intersect_with_targets_splits_them_with_the_remainder_kept() {
+    // A target A (0..60)² × 0..30, a tool B (20..40)² × 0..40 standing in it and out of its
+    // top, and a target C (100..110)² × 0..10 the tool doesn't reach.
+    let mut d = Doc::new();
+    d.block(0.0, 0.0, 60.0, 60.0, 30.0);
+    d.block(20.0, 20.0, 40.0, 40.0, 40.0);
+    d.block(100.0, 100.0, 110.0, 110.0, 10.0);
+    let a = d.part_at([5.0, 5.0, 30.0]);
+    let b = d.part_at([30.0, 30.0, 40.0]);
+    let c = d.part_at([105.0, 105.0, 10.0]);
+    let split = BooleanFeature {
+        op: BooleanKind::Intersect,
+        tools: vec![b.id],
+        targets: vec![a.id, c.id],
+        keep_remainder: true,
+        ..BooleanFeature::default()
+    };
+    let f = d.add(AddFeature::boolean(d.el, FeatureId::new(), split.clone()));
+    // Keep remainder parts: A split in two along B (A keeps the 96 000 outside it, the
+    // 20·20·30 = 12 000 inside is a new part), C as it was, and the tool used up.
+    let parts = d.parts();
+    assert_eq!(parts.len(), 3, "{parts:?}");
+    let vol = |id: cadrs_core::PartId| {
+        parts
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .mass
+            .unwrap()
+            .volume
+    };
+    close(vol(a.id), 108_000.0 - 12_000.0, 1e-6);
+    close(vol(c.id), 1000.0, 1e-6);
+    let inside: Vec<_> = parts
+        .iter()
+        .filter(|p| p.id != a.id && p.id != c.id)
+        .collect();
+    assert!(inside.iter().all(|p| p.id.feature == f));
+    close(inside[0].mass.unwrap().volume, 12_000.0, 1e-6);
+    // Without it: only the overlap, as A; C, which the tool doesn't reach, is gone.
+    d.set(
+        f,
+        FeatureKind::Boolean(BooleanFeature {
+            keep_remainder: false,
+            ..split.clone()
+        }),
+    );
+    let parts = d.parts();
+    assert_eq!(parts.iter().map(|p| p.id).collect::<Vec<_>>(), vec![a.id]);
+    close(d.volume(), 12_000.0, 1e-6);
+    // Keep tools: the tool stays as well.
+    d.set(
+        f,
+        FeatureKind::Boolean(BooleanFeature {
+            keep_tools: true,
+            ..split.clone()
+        }),
+    );
+    assert_eq!(d.parts().len(), 4);
+    close(d.volume(), 108_000.0 + 1000.0 + 16_000.0, 1e-6);
+    // A part can't be both: an error, not a result.
+    let both = BooleanFeature {
+        targets: vec![a.id, b.id],
+        ..split
+    };
+    assert!(both.problem().is_some());
 }
 
 #[test]

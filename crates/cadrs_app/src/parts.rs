@@ -5032,7 +5032,7 @@ mod tests {
             )
             .unwrap();
         }
-        let built = cadrs_core::rebuild::build(d.element(el).unwrap().features());
+        let built = cadrs_core::rebuild::build(&d.element(el).unwrap().features_to_build());
         assert_eq!(built.parts.len(), 3);
         let shared = shared_faces(built.parts.iter());
         let (a, b, c) = (built.parts[0].id, built.parts[1].id, built.parts[2].id);
@@ -5109,7 +5109,7 @@ mod tests {
             )
             .unwrap();
         }
-        cadrs_core::rebuild::build(d.element(el).unwrap().features())
+        cadrs_core::rebuild::build(&d.element(el).unwrap().features_to_build())
             .parts
             .clone()
     }

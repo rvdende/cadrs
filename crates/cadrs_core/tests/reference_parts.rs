@@ -1361,6 +1361,7 @@ impl Recipe {
                         tools,
                         targets,
                         keep_tools: f["keep_tools"].as_bool().unwrap_or(false),
+                        keep_remainder: false,
                         offset: None,
                     }),
                 )?

@@ -141,10 +141,11 @@ impl Piece {
         }
     }
 
-    /// The direction the piece leaves its start, as an angle (0..2π), nudged by its curvature
-    /// so pieces leaving along the same tangent sort by how they turn (one turning left comes
-    /// counter-clockwise after one going straight).
-    fn leave_key(&self) -> f64 {
+    /// The direction the piece leaves its start, as an angle (0..2π), and its signed curvature
+    /// there (positive turning left): pieces leaving along the same tangent sort by how they
+    /// turn (one turning left comes counter-clockwise after one going straight), see
+    /// [`sort_leaving`].
+    fn leave_key(&self) -> (f64, f64) {
         let (t, k) = match *self {
             Piece::Line(a, b) => ((b - a).normalize(), 0.0),
             Piece::Arc(g) => {
@@ -154,9 +155,10 @@ impl Piece {
             Piece::Ellipse { g, t0, sweep } => {
                 let d = g.tangent_at(t0);
                 let t = if sweep >= 0.0 { d } else { -d };
-                // Curvature sign: an ellipse run counter-clockwise turns left.
-                let k = if sweep >= 0.0 { 1.0 } else { -1.0 } / g.major().max(1e-300);
-                (t.normalize(), k)
+                // Its curvature there, |a × b| / |p'|³; an ellipse run counter-clockwise turns
+                // left.
+                let k = g.a.cross(g.b()).abs() / d.length().powi(3).max(1e-300);
+                (t.normalize(), if sweep >= 0.0 { k } else { -k })
             }
             Piece::Bezier(g) => {
                 // A handle on the end leaves along the next control point.
@@ -169,8 +171,38 @@ impl Piece {
                 (d.normalize(), g.curvature_at(0.0))
             }
         };
-        norm_angle(t.angle()) + 1e-9 * (k * 100.0).atan() / std::f64::consts::FRAC_PI_2
+        (norm_angle(t.angle()), k)
     }
+}
+
+/// How far apart (radians) two pieces' directions may be and still leave a vertex along the
+/// same tangent: a tangent touch whose split point is a rounding off the exact touch (an
+/// ellipse's end, 1e-6 mm away, turns its tangent by 1e-8) must still sort by curvature.
+const SAME_TANGENT: f64 = 1e-6;
+
+/// Sorts the pieces leaving a vertex (by their [`Piece::leave_key`]) counter-clockwise:
+/// directions within [`SAME_TANGENT`] of each other count as one (the run of them takes its
+/// first's angle, and one just under a full turn is at 0), and pieces along one direction sort
+/// by curvature, right-turning first.
+fn sort_leaving(list: &mut [((f64, f64), usize)]) {
+    use std::f64::consts::TAU;
+    for (k, _) in list.iter_mut() {
+        if k.0 > TAU - SAME_TANGENT {
+            k.0 -= TAU;
+        }
+    }
+    list.sort_by(|a, b| a.0.0.total_cmp(&b.0.0));
+    let mut run_start: Option<f64> = None;
+    let mut last = f64::NEG_INFINITY;
+    for (k, _) in list.iter_mut() {
+        let a = k.0;
+        match run_start {
+            Some(s) if a - last < SAME_TANGENT => k.0 = s,
+            _ => run_start = Some(a),
+        }
+        last = a;
+    }
+    list.sort_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)));
 }
 
 /// The signed area enclosed by a closed boundary of pieces (positive when counter-clockwise).
@@ -1004,7 +1036,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             e.path.iter().rev().copied().collect()
         }
     };
-    let mut outgoing: HashMap<usize, Vec<(f64, usize)>> = HashMap::new();
+    let mut outgoing: HashMap<usize, Vec<((f64, f64), usize)>> = HashMap::new();
     for h in 0..edges.len() * 2 {
         outgoing
             .entry(half_from(h))
@@ -1012,7 +1044,7 @@ pub fn regions(s: &Sketch) -> Vec<Region> {
             .push((half_piece(h).leave_key(), h));
     }
     for list in outgoing.values_mut() {
-        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        sort_leaving(list);
     }
 
     // 6. Trace faces: after arriving at v along h, leave along the half-edge just clockwise of
@@ -1357,6 +1389,50 @@ mod tests {
         // Without imprinting (the flag clears the imprint): only the circle.
         s.imprint.clear();
         assert_eq!(regions(&s).len(), 1);
+    }
+
+    #[test]
+    fn pieces_along_one_tangent_sort_by_curvature_despite_rounding() {
+        // The presso df64 foot's sketch: a face's elliptical edge touching another face's edge at
+        // its major end. The split point was a rounding off the exact end, so the arc's tangent
+        // there was off by more than the curvature's tie-break: the line and the arc leaving
+        // the point sorted the wrong way round, the region traced ran into the ellipse and back
+        // (a slit), and the foot extruded from it kept walls inside.
+        let g = EllipseGeom::new(Vec2::new(0.0, 0.0), Vec2::new(0.0, 20.0), 10.0);
+        // Both leave (0, 20) to the west; the arc (counter-clockwise) turns left.
+        let line = Piece::Line(Vec2::new(0.0, 20.0), Vec2::new(-30.0, 20.0));
+        for d in [-1e-7, 0.0, 1e-7] {
+            let arc = Piece::Ellipse {
+                g,
+                t0: d,
+                sweep: 1.0,
+            };
+            assert!(arc.leave_key().1 > 0.0);
+            for first in [0, 1] {
+                let mut list = vec![(line.leave_key(), 0), (arc.leave_key(), 1)];
+                list.rotate_left(first);
+                sort_leaving(&mut list);
+                assert_eq!(
+                    list.iter().map(|x| x.1).collect::<Vec<_>>(),
+                    vec![0, 1],
+                    "{d}: {list:?}"
+                );
+            }
+        }
+        // Leaving just under a full turn and at 0 (east): one direction too.
+        let east = Piece::Line(Vec2::new(0.0, 0.0), Vec2::new(30.0, -1e-9));
+        let up = Piece::Ellipse {
+            g: EllipseGeom::new(Vec2::new(0.0, 20.0), Vec2::new(0.0, 0.0), 10.0),
+            t0: 0.0,
+            sweep: 1.0,
+        };
+        let mut list = vec![(up.leave_key(), 1), (east.leave_key(), 0)];
+        sort_leaving(&mut list);
+        assert_eq!(
+            list.iter().map(|x| x.1).collect::<Vec<_>>(),
+            vec![0, 1],
+            "{list:?}"
+        );
     }
 
     #[test]

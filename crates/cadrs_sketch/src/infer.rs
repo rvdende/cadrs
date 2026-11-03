@@ -700,6 +700,25 @@ pub fn infer(cursor: Vec2, px_per_mm: f64, s: &Sketch, ctx: &ToolContext) -> Vec
             });
         }
     }
+    // A line ending on a round curve along it is tangent to it, though another snap sits on the
+    // same spot (a face edge's midpoint at an ellipse's axis end, the presso df64 foot's): the
+    // tangent first, unless that snap is an existing point (the line then shares it).
+    if let Some(first) = out.first()
+        && !matches!(first.kind, Kind::Point(_) | Kind::Origin)
+        && !first
+            .constraints
+            .iter()
+            .any(|p| matches!(p, Placed::Tangent(_)))
+        && let Some(i) = out.iter().position(|c| {
+            c.constraints
+                .iter()
+                .any(|p| matches!(p, Placed::Tangent(_)))
+                && px(c.pos.distance(first.pos)) < 1.0
+        })
+    {
+        let c = out.remove(i);
+        out.insert(0, c);
+    }
     out
 }
 
@@ -1412,6 +1431,53 @@ mod tests {
         let t = Vec2::from_angle(0.5).perp();
         let c = best(st - t * 20.0 + t.perp() * 0.5, &s, &ctx).unwrap();
         assert_eq!(c.constraints, vec![Placed::Tangent(CurveRef::Curve(arc))]);
+    }
+
+    #[test]
+    fn a_tangent_end_wins_over_a_midpoint_on_the_same_spot() {
+        // The presso df64 foot: a line drawn down to an ellipse's minor-axis end, where another
+        // edge's midpoint also is (the reference box's side, along the drawn line): tangent to
+        // the ellipse, not the midpoint of the other edge.
+        let mut s = Sketch::new();
+        SketchOp::AddEllipse {
+            center: Vec2::ZERO,
+            major: Vec2::new(0.0, 12.0),
+            minor: 10.0,
+            construction: false,
+        }
+        .apply(&mut s)
+        .unwrap();
+        let side = line(&mut s, Vec2::new(10.0, 20.0), Vec2::new(10.0, -20.0));
+        let ellipse = s
+            .curves
+            .iter()
+            .find(|(_, c)| matches!(c.kind, CurveKind::Ellipse { .. }))
+            .map(|(k, _)| k)
+            .unwrap();
+        let ctx = ToolContext {
+            anchor: Some(Vec2::new(10.0, 40.0)),
+            hv_from_anchor: true,
+            ..default_ctx()
+        };
+        let all = infer(Vec2::new(10.1, 0.2), PPM, &s, &ctx);
+        assert!(
+            all.iter()
+                .any(|c| c.constraints == vec![Placed::Midpoint(side)])
+        );
+        assert_eq!(
+            all[0].constraints,
+            vec![
+                Placed::OnCurve(CurveRef::Curve(ellipse)),
+                Placed::Tangent(CurveRef::Curve(ellipse))
+            ]
+        );
+        // An existing point there still wins (the line shares it).
+        let mut s2 = s.clone();
+        s2.add_point(Vec2::new(10.0, 0.0));
+        assert!(matches!(
+            infer(Vec2::new(10.1, 0.2), PPM, &s2, &ctx)[0].kind,
+            Kind::Point(_)
+        ));
     }
 
     #[test]
