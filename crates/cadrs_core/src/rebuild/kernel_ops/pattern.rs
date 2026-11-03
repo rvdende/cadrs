@@ -62,6 +62,7 @@ fn instance_id(pattern: FeatureId, f: FeatureId, k: u32) -> FeatureId {
 
 /// The name a copy gives the face named `n`.
 use crate::pattern::instance_face;
+use crate::rebuild::profiled;
 
 /// A seed's names as its instance `k`'s: every face an instance of its original, the edges
 /// and vertices named from those (the copy has the seed's topology, so the names line up with
@@ -789,10 +790,12 @@ impl Rebuilder {
         }
         let first = copies[0].0;
         let rest: Vec<BodyId> = copies[1..].iter().map(|(b, _)| *b).collect();
+        let t0 = web_time::Instant::now();
         let joined = self
             .kernel
             .boolean(BoolOp::Union, first, &rest)
             .and_then(|r| {
+                profiled("pattern's union of the copies", t0);
                 let body = r.bodies[0];
                 let inputs: Vec<(BodyId, &BodyNames)> =
                     copies.iter().map(|(b, n)| (*b, n)).collect();
@@ -818,6 +821,7 @@ impl Rebuilder {
         if merge.op == BooleanOp::New && make.iter().all(|i| i.motion.linear.determinant() > 0.0) {
             return self.copy_parts_moved(id, seeds, make, state);
         }
+        let t0 = web_time::Instant::now();
         let mut copies: Vec<(BodyId, BodyNames, PartId, u32)> = Vec::new();
         for seed in seeds {
             let Some(p) = state.part(*seed) else {
@@ -839,6 +843,7 @@ impl Rebuilder {
                 }
             }
         }
+        profiled("pattern's copies", t0);
         if copies.is_empty() {
             return Err("There is nothing to copy".into());
         }
@@ -870,7 +875,9 @@ impl Rebuilder {
             }
             return Ok(out);
         }
+        let t0 = web_time::Instant::now();
         let joined = self.join(id, copies.into_iter().map(|(b, n, ..)| (b, n)).collect())?;
+        profiled("pattern's join", t0);
         // Add with no merge scope: the copies merge with the seed parts they touch, as Onshape's
         // part pattern and mirror do, not with every part they touch (a mirrored half of a cover
         // that reaches the frame stays part of the cover); touching none, they are new parts.
@@ -915,7 +922,10 @@ impl Rebuilder {
         } else {
             merge
         };
-        self.combine(id, merge, joined, state, state.geoms.clone())
+        let t0 = web_time::Instant::now();
+        let out = self.combine(id, merge, joined, state, state.geoms.clone());
+        profiled("pattern's merge", t0);
+        out
     }
 
     /// New copies of the parts, moved by proper rigid motions (no reflection): each copy is its

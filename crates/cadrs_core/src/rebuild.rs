@@ -279,6 +279,14 @@ type WithConnectors = (
 /// each sketch on a face come between the whole list's).
 const CONNECTORS_KEPT: u64 = 8;
 
+/// With `CADRS_PROFILE` set (the kernel's profiler), reports a step of a feature's build and
+/// its time since `t0`.
+pub(crate) fn profiled(what: &str, t0: web_time::Instant) {
+    if std::env::var_os("CADRS_PROFILE").is_some() {
+        eprintln!("[profile] {what}: {:.1?}", t0.elapsed());
+    }
+}
+
 /// A placed component mesh (`Rebuilder::placed_components`): the unplaced mesh it was made from,
 /// the placed one and its volume properties.
 type PlacedComponent = (
@@ -3245,6 +3253,7 @@ mod kernel_ops {
             // touches a part), and they cost a boolean with each part near it (10 s by a
             // 265 000-facet mesh, issue #11).
             let wanted = !surface && (e.op != BooleanOp::New || self.stage_for == Some(id));
+            let t0 = web_time::Instant::now();
             let contacts = if wanted {
                 self.contacts(
                     tool.0,
@@ -3273,7 +3282,10 @@ mod kernel_ops {
                     more: Vec::new(),
                     remove: false,
                 });
+            crate::rebuild::profiled("contacts and stage", t0);
+            let t0 = web_time::Instant::now();
             let result = self.apply_extrude_op(id, e, tool, state, &contacts, geoms);
+            crate::rebuild::profiled("apply", t0);
             result.map(|mut o| {
                 let cut = removed.and_then(|mut v| {
                     let first = (!v.is_empty()).then(|| v.remove(0))?;
@@ -3480,25 +3492,43 @@ mod kernel_ops {
             geoms: Arc<crate::brep::Geoms>,
             kind: PartKind,
         ) -> Result<Output, String> {
-            let mut built = Vec::new();
-            for (pid, piece) in placed {
-                let solid =
-                    crate::brep::solid_of(&self.kernel, piece.body, &piece.names, &geoms, Some(op));
-                let mass = self
-                    .kernel
-                    .mass_properties(piece.body)
-                    .map_err(|e| e.to_string());
-                match (solid, mass) {
-                    (Ok(s), Ok(m)) => built.push((pid, piece, s, m)),
-                    (Err(err), _) | (_, Err(err)) => {
-                        self.kernel.release(piece.body);
-                        for (_, p, _, _) in built {
-                            self.kernel.release(p.body);
-                        }
-                        return Err(format!("Failed: {err}"));
+            // The pieces' meshes and mass properties side by side (a pattern's Add leaves ten
+            // rows, 100 ms of tessellation each).
+            use rayon::prelude::*;
+            let t0 = web_time::Instant::now();
+            let kernel = &self.kernel;
+            let results: Vec<Result<Prepared, (BodyId, String)>> = placed
+                .into_par_iter()
+                .map(|(pid, piece)| {
+                    let solid =
+                        crate::brep::solid_of(kernel, piece.body, &piece.names, &geoms, Some(op));
+                    let mass = kernel
+                        .mass_properties(piece.body)
+                        .map_err(|e| e.to_string());
+                    match (solid, mass) {
+                        (Ok(s), Ok(m)) => Ok((pid, piece, s, m)),
+                        (Err(err), _) | (_, Err(err)) => Err((piece.body, err)),
+                    }
+                })
+                .collect();
+            let mut built = Vec::with_capacity(results.len());
+            let mut failed: Option<String> = None;
+            for r in results {
+                match r {
+                    Ok(b) => built.push(b),
+                    Err((body, err)) => {
+                        self.kernel.release(body);
+                        failed.get_or_insert(err);
                     }
                 }
             }
+            if let Some(err) = failed {
+                for (_, p, _, _) in built {
+                    self.kernel.release(p.body);
+                }
+                return Err(format!("Failed: {err}"));
+            }
+            crate::rebuild::profiled("meshes and mass properties", t0);
             Ok(self.finish_prepared(id, built, next, kind))
         }
 
@@ -3629,10 +3659,15 @@ mod kernel_ops {
                 all.extend(&others);
                 self.kernel.sew_sheets(&all, SURFACE_JOIN)
             } else {
-                self.kernel.boolean(BoolOp::Union, first, &others)
+                let t0 = web_time::Instant::now();
+                let r = self.kernel.boolean(BoolOp::Union, first, &others);
+                crate::rebuild::profiled("add's union", t0);
+                r
             }
             .map_err(|e| format!("Add failed: {e}"))?;
+            let t0 = web_time::Instant::now();
             let pieces = self.split_result(r, id.0, &inputs)?;
+            crate::rebuild::profiled("add's split", t0);
             let mut placed: Vec<Placed> = Vec::new();
             let mut used: Vec<PartId> = Vec::new();
             for piece in pieces {
