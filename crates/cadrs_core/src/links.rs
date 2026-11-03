@@ -77,8 +77,19 @@ pub enum Curve3 {
         normal: Vec3,
         offset: f64,
     },
-    /// Any other curve (a spline edge, an arc of an ellipse), as points on it in order (a closed
-    /// curve lists each once).
+    /// An arc of an ellipse (in a plane, `major` the end of its major semi-axis): the points
+    /// `center + a cos t + b sin t` for t from `start` through `sweep` (radians, positive), `a`
+    /// and `b` its semi-axes ([`ellipse_axes`]).
+    EllipseArc {
+        center: Vec3,
+        major: Vec3,
+        minor: f64,
+        normal: Vec3,
+        start: f64,
+        sweep: f64,
+    },
+    /// Any other curve (a spline edge), as points on it in order (a closed curve lists each
+    /// once).
     Sampled {
         points: Vec<Vec3>,
         closed: bool,
@@ -233,6 +244,37 @@ pub fn edge_curve(e: &crate::solid::SolidEdge) -> Option<Curve3> {
             normal: unit(cross(el.major, el.minor)),
             offset: 0.0,
         });
+    }
+    // An arc of one (the half of an ellipse a later feature split): from its first point
+    // through its middle to its last.
+    if let (Some(el), [first, .., last]) = (e.ellipse, pts.as_slice()) {
+        let (center, normal) = (el.center, unit(cross(el.major, el.minor)));
+        let (a, b) = (
+            el.major,
+            scale(unit(cross(normal, el.major)), len(el.minor)),
+        );
+        let at = |p: Vec3| {
+            let d = sub(p, center);
+            (dot(d, b) / dot(b, b)).atan2(dot(d, a) / dot(a, a))
+        };
+        let turn = |t: f64| t.rem_euclid(std::f64::consts::TAU);
+        let (ts, tm, te) = (at(*first), at(e.midpoint()), at(*last));
+        // Counter-clockwise from whichever end runs through the middle.
+        let (start, sweep) = if turn(tm - ts) < turn(te - ts) {
+            (ts, turn(te - ts))
+        } else {
+            (te, turn(ts - te))
+        };
+        if sweep > 1e-9 {
+            return Some(Curve3::EllipseArc {
+                center,
+                major: add(center, el.major),
+                minor: len(el.minor),
+                normal,
+                start,
+                sweep,
+            });
+        }
     }
     sampled_edge_curve(e)
 }
@@ -422,6 +464,66 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
                 return None;
             }
         }
+        Curve3::EllipseArc {
+            center,
+            major,
+            minor,
+            normal,
+            start,
+            sweep,
+        } => {
+            let (a, b) = ellipse_axes(center, major, minor, normal);
+            let c = s(center);
+            let (p, q) = (s(add(center, a)) - c, s(add(center, b)) - c);
+            let at = |t: f64| c + p * t.cos() + q * t.sin();
+            match ellipse_of_conjugates(c, p, q) {
+                // Edge-on: the segment between the arc's extremes along it (its ends, or the
+                // ellipse's own extremes where the arc runs through them).
+                Projected::Line(lo, hi) => {
+                    let dir = (hi - lo).normalize();
+                    let key = |t: f64| dir.dot(at(t) - c);
+                    let peak = (dir.dot(q)).atan2(dir.dot(p));
+                    let inside =
+                        |t: f64| (t - start).rem_euclid(std::f64::consts::TAU) <= sweep + 1e-12;
+                    let ts: Vec<f64> = [start, start + sweep, peak, peak + std::f64::consts::PI]
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(i, t)| *i < 2 || inside(*t))
+                        .map(|(_, t)| t)
+                        .collect();
+                    let lo = ts
+                        .iter()
+                        .copied()
+                        .min_by(|x, y| key(*x).total_cmp(&key(*y)))?;
+                    let hi = ts
+                        .iter()
+                        .copied()
+                        .max_by(|x, y| key(*x).total_cmp(&key(*y)))?;
+                    Projected::Line(at(lo), at(hi))
+                }
+                Projected::Ellipse {
+                    center: c,
+                    major: m,
+                    minor: r,
+                } => {
+                    // Counter-clockwise in the sketch from whichever end runs through the middle.
+                    let (ps, pm, pe) = (at(start), at(start + sweep / 2.0), at(start + sweep));
+                    let e = cadrs_sketch::geom::EllipseGeom::new(c, m, r);
+                    let (ts, tm, te) = (e.param_of(ps), e.param_of(pm), e.param_of(pe));
+                    let ccw = cadrs_sketch::geom::norm_angle(tm - ts)
+                        < cadrs_sketch::geom::norm_angle(te - ts);
+                    let (start, end) = if ccw { (ps, pe) } else { (pe, ps) };
+                    Projected::EllipseArc {
+                        center: c,
+                        major: m,
+                        minor: r,
+                        start,
+                        end,
+                    }
+                }
+                _ => return None,
+            }
+        }
     };
     (!shape.degenerate()).then_some(shape)
 }
@@ -538,6 +640,27 @@ pub fn crossings(c: Curve3, frame: &PlaneFrame) -> Vec<Vec2> {
         }
         // (An offset ellipse's crossings aren't found.)
         Curve3::Ellipse { .. } => Vec::new(),
+        Curve3::EllipseArc {
+            center,
+            major,
+            minor,
+            normal,
+            start,
+            sweep,
+        } => {
+            let (a, b) = ellipse_axes(center, major, minor, normal);
+            let (ka, kb, d) = (dot(a, big_n), dot(b, big_n), dist(center));
+            let r = (ka * ka + kb * kb).sqrt();
+            if r < 1e-12 || d.abs() > r * (1.0 + 1e-12) {
+                return Vec::new();
+            }
+            let (base, off) = (kb.atan2(ka), (-d / r).clamp(-1.0, 1.0).acos());
+            [base + off, base - off]
+                .into_iter()
+                .filter(|t| (t - start).rem_euclid(std::f64::consts::TAU) <= sweep + 1e-12)
+                .map(|t| add(center, add(scale(a, t.cos()), scale(b, t.sin()))))
+                .collect()
+        }
         // Where its segments cross (sampled: about on the curve).
         Curve3::Sampled { points, closed } => {
             let n = points.len();

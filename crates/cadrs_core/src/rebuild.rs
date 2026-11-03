@@ -4384,6 +4384,7 @@ mod kernel_ops {
                         crate::links::Curve3::Circle { center, normal, .. }
                         | crate::links::Curve3::Arc { center, normal, .. } => make(center, normal),
                         crate::links::Curve3::Ellipse { .. }
+                        | crate::links::Curve3::EllipseArc { .. }
                         | crate::links::Curve3::Sampled { .. } => {
                             Err("Only a straight or circular edge can be a revolve axis".into())
                         }

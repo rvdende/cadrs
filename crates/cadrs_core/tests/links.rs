@@ -1489,3 +1489,71 @@ fn a_sketch_on_a_slanted_cut_face_imprints_its_ellipse_and_its_regions_join_the_
     assert!(build.errors.is_empty(), "{:?}", build.errors);
     assert_eq!(build.parts.len(), 1);
 }
+
+#[test]
+fn an_elliptical_arc_edge_is_exact_seen_edge_on_and_from_above() {
+    use cadrs_core::links::{Curve3, crossings, edge_curve, project};
+    use cadrs_core::solid::{EdgeEllipse, SolidEdge};
+    // Half of a slanted cut's ellipse (20 along Y, 10 across, in z = 0), as the edge a later
+    // feature splits it into: a coarse polyline whose points miss the ellipse's end at +Y.
+    let at = |t: f64| [10.0 * t.sin(), 20.0 * t.cos(), 0.0];
+    let face = cadrs_sketch::FaceName::new(
+        FeatureId::new().0,
+        FaceOrigin::Cap {
+            region: 0,
+            end: true,
+        },
+    );
+    let edge = SolidEdge {
+        name: EdgeName::new(face, face, 0),
+        points: (0..7).map(|i| at(-1.3 + 2.2 * i as f64 / 6.0)).collect(),
+        circle: None,
+        ellipse: Some(EdgeEllipse {
+            center: [0.0; 3],
+            major: [0.0, 20.0, 0.0],
+            minor: [10.0, 0.0, 0.0],
+        }),
+        tangent_group: None,
+        smooth: false,
+    };
+    let curve = edge_curve(&edge).unwrap();
+    assert!(matches!(curve, Curve3::EllipseArc { .. }), "{curve:?}");
+    // Edge-on from Right: the segment reaches the ellipse's end (y = 20), not just the polyline's
+    // nearest point to it (the outline a silhouette closes, presso df64's Sketch 5).
+    let right = PlaneRef::Right.frame();
+    let Some(Projected::Line(p, q)) = project(curve.clone(), &right) else {
+        panic!()
+    };
+    let far = |v: Vec2| right.to_world(v)[1];
+    let ys = [far(p), far(q)];
+    assert!(ys.iter().any(|y| (y - 20.0).abs() < 1e-9), "{ys:?}");
+    assert!(
+        ys.iter().any(|y| (y - 20.0 * 1.3f64.cos()).abs() < 1e-9),
+        "{ys:?}"
+    );
+    // From above: the elliptical arc itself, its ends the edge's.
+    let Some(Projected::EllipseArc {
+        center,
+        major,
+        minor,
+        start,
+        end,
+    }) = project(curve.clone(), &PlaneRef::Top.frame())
+    else {
+        panic!()
+    };
+    assert!(center.distance(Vec2::ZERO) < 1e-9 && (major.distance(center) - 20.0).abs() < 1e-9);
+    assert!((minor - 10.0).abs() < 1e-9);
+    let ends = [at(-1.3), at(0.9)].map(|w| Vec2::new(w[0], w[1]));
+    assert!(
+        ends.iter()
+            .all(|e| e.distance(start) < 1e-9 || e.distance(end) < 1e-9)
+    );
+    // It crosses y = 10 once (at t = -π/3; t = π/3 is past its end).
+    let level = cadrs_sketch::PlaneFrame {
+        origin: [0.0, 10.0, 0.0],
+        u: [1.0, 0.0, 0.0],
+        v: [0.0, 0.0, 1.0],
+    };
+    assert_eq!(crossings(curve, &level).len(), 1);
+}
