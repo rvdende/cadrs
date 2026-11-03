@@ -1,0 +1,8 @@
+{
+  "source": "analytic",
+  "description": "A 20 mm radius cylinder 60 mm up from Top, cut by a plane 40 mm up at its axis rising 1 in 4 along X; the elliptical cut face extruded 8 mm along its normal; on that end the edge used (an exact ellipse, not a spline through points on it) with a 35 mm radius circle round it, the ring between them extruded 8 mm back and joined (the presso df64 foot). The stub and the ring fill a 35 mm radius disc 8 mm thick: one body of five faces (the leg's bottom and side, the disc's top, rim and underside: the stub's elliptical side gone), volume pi 20^2 40 + pi 35^2 8 and area pi (20^2 + 2 20 40 + 35^2 + 2 35 8 + 35^2 - 20 sqrt(1.0625) 20).",
+  "body_count": 1,
+  "volume_mm3": 81053.09046261667,
+  "area_mm2": 14444.067360143343,
+  "faces": 5
+}

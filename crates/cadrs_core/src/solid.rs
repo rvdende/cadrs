@@ -60,6 +60,10 @@ pub struct SolidEdge {
     /// The exact circle it lies on, from the kernel (P3.4: Use projects the exact curve, and a
     /// circular edge can be a revolve axis). `None` for other curves and for prism meshes.
     pub circle: Option<EdgeCircle>,
+    /// The exact ellipse it lies on, from the kernel (a cylinder cut at a slant): Use projects
+    /// it as an ellipse, not as points along it. `None` for other curves and for prism meshes.
+    #[serde(default)]
+    pub ellipse: Option<EdgeEllipse>,
     /// Which tangent-connected chain of the body it belongs to (P3.7, X12: Create selection
     /// → Tangent connected): edges with the same group meet end to end with parallel tangents
     /// (the kernel's exact tangents). `None` for prism meshes.
@@ -77,6 +81,15 @@ pub struct EdgeCircle {
     pub center: Vec3,
     pub normal: Vec3,
     pub radius: f64,
+}
+
+/// An ellipse in space: `center + major·cos t + minor·sin t`, the semi-axes as vectors (the
+/// major one the longer, at right angles to the minor one).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EdgeEllipse {
+    pub center: Vec3,
+    pub major: Vec3,
+    pub minor: Vec3,
 }
 
 impl SolidEdge {
@@ -1340,6 +1353,7 @@ fn side_faces(
                     ),
                     points: vec![p, add(p, offset)],
                     circle: None,
+                    ellipse: None,
                     tangent_group: None,
                     smooth: false,
                 });
@@ -1448,6 +1462,7 @@ fn side_faces(
                 name: EdgeName::new(side_name(op, region, curve), cap_name(op, region, end), 0),
                 points: pts.iter().map(|p| add(*p, shift)).collect(),
                 circle: None,
+                ellipse: None,
                 tangent_group: None,
                 smooth: false,
             });
@@ -1470,6 +1485,7 @@ mod tests {
             name: EdgeName::new(face(0), face(1), 0),
             points: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 30.0, 0.0]],
             circle: None,
+            ellipse: None,
             tangent_group: None,
             smooth: false,
         };

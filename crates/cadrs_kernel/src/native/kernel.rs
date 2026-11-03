@@ -577,6 +577,22 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
                 }),
                 _ => None,
             };
+            let ellipse = match &e.curve {
+                Curve::Ellipse { c, x, y, a, b } if !e.degenerate => Some(if a >= b {
+                    Ellipse3 {
+                        center: *c,
+                        major: x * *a,
+                        minor: y * *b,
+                    }
+                } else {
+                    Ellipse3 {
+                        center: *c,
+                        major: y * *b,
+                        minor: x * *a,
+                    }
+                }),
+                _ => None,
+            };
             EdgeInfo {
                 id: EdgeId(ei as u64),
                 faces,
@@ -604,6 +620,7 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
                 start_tangent: tan(t0),
                 end_tangent: tan(t1),
                 circle,
+                ellipse,
                 // (Not without the lengths, for tangent chains: those ask of the edges they
                 // reach only, [`NativeKernel::tangent_chain`].)
                 smooth: !matches!(detail, Detail::Light)

@@ -1143,3 +1143,349 @@ fn a_spline_edge_projects_to_a_spline() {
         assert!(matches!(p, Projected::Line(..)), "{p:?}");
     }
 }
+
+/// Sets an extrude's whole feature (the helpers' extrudes are New with every field defaulted).
+fn add_extrude(d: &mut Doc, extrude: ExtrudeFeature) -> FeatureId {
+    let ex = FeatureId::new();
+    d.h.execute(
+        &mut d.d,
+        &AddExtrude {
+            element: d.el,
+            feature: ex,
+            extrude: ExtrudeFeature::default(),
+        },
+    )
+    .unwrap();
+    d.h.execute(
+        &mut d.d,
+        &SetExtrude {
+            element: d.el,
+            feature: ex,
+            extrude,
+            label: "Select".into(),
+        },
+    )
+    .unwrap();
+    ex
+}
+
+#[test]
+fn a_slanted_cut_cylinders_edge_is_used_as_an_ellipse_and_a_plate_round_it_joins() {
+    use cadrs_core::PartId;
+    use cadrs_core::document::{BooleanOp, FaceRef};
+    let mut d = Doc::new();
+    // A 10 mm radius cylinder cut at a slant (1 in 6), as the presso foot's leg is cut level.
+    let s1 = d.sketch(PlaneRef::Top);
+    d.edit(s1, circle(0.0, 0.0, 10.0));
+    let leg = d.extrude(s1, 60.0, |_| true);
+    let s2 = d.sketch(PlaneRef::Front);
+    d.edit(
+        s2,
+        SketchOp::AddPolyline {
+            points: vec![
+                Vec2::new(-30.0, 25.0),
+                Vec2::new(30.0, 35.0),
+                Vec2::new(30.0, 80.0),
+                Vec2::new(-30.0, 80.0),
+            ],
+            closed: true,
+            construction: false,
+            label: "Add polygon",
+        },
+    );
+    let rs = regions(d.g(s2))
+        .iter()
+        .map(|r| RegionRef::new(s2, r))
+        .collect();
+    let cut = add_extrude(
+        &mut d,
+        ExtrudeFeature {
+            regions: rs,
+            depth: 100.0,
+            symmetric: true,
+            op: BooleanOp::Remove,
+            merge_all: true,
+            ..ExtrudeFeature::default()
+        },
+    );
+    // The slanted face, extruded 5 mm along its normal (the foot's Extrude 4).
+    let solid = parts(&d.features()).remove(0).solid;
+    let i = solid.faces.iter().position(|f| f.name.op == cut.0).unwrap();
+    let stub = add_extrude(
+        &mut d,
+        ExtrudeFeature {
+            faces: vec![FaceRef {
+                part: PartId::new(leg, 0),
+                face: solid.faces[i].name,
+                seed: solid.face_point(i).unwrap(),
+            }],
+            depth: 5.0,
+            op: BooleanOp::Add,
+            ..ExtrudeFeature::default()
+        },
+    );
+    assert_eq!(parts(&d.features()).len(), 1);
+    // A sketch on the stub's end uses its edge: one exact ellipse, the cylinder's radius across
+    // and 10/cos θ along the slope (tan θ = 1/6), not a spline through points along it.
+    let features = d.features();
+    let solid = parts(&features).remove(0).solid;
+    let cap = solid
+        .faces
+        .iter()
+        .find(|f| f.name.op == stub.0 && matches!(f.name.origin, FaceOrigin::Cap { end: true, .. }))
+        .unwrap()
+        .name;
+    let plane = face_plane(&features, stub, cap).unwrap();
+    let s3 = d.sketch(plane);
+    let frame = plane.frame();
+    let ctx = cadrs_core::links::LinkContext {
+        solids: vec![(leg, &*solid)],
+        features: &features,
+    };
+    let edges = cadrs_core::links::face_edges(&solid, &cap);
+    assert_eq!(edges.len(), 1);
+    let link = Link::Edge {
+        feature: stub.0,
+        edge: edges[0],
+    };
+    let shape = ctx.shape(link, &frame).unwrap();
+    let Projected::Ellipse {
+        center,
+        major,
+        minor,
+    } = shape
+    else {
+        panic!("{shape:?}")
+    };
+    assert!((minor - 10.0).abs() < 1e-6, "{minor}");
+    let a = 10.0 * 37f64.sqrt() / 6.0;
+    assert!(
+        (major.distance(center) - a).abs() < 1e-6,
+        "{}",
+        major.distance(center)
+    );
+    d.edit(
+        s3,
+        SketchOp::Use {
+            items: vec![(shape, link)],
+        },
+    );
+    let g = d.g(s3);
+    assert!(
+        g.curves
+            .values()
+            .all(|c| matches!(c.kind, CurveKind::Ellipse { .. }))
+    );
+    assert_eq!(g.points.len(), 2, "the ellipse's centre and major point");
+    // A plate round it, back along the stub (its inner face on the stub's side): one part.
+    d.edit(s3, circle(center.x, center.y, 30.0));
+    let ring = std::f64::consts::PI * (900.0 - a * 10.0);
+    let rs: Vec<RegionRef> = regions(d.g(s3))
+        .iter()
+        .filter(|r| (r.area() - ring).abs() < 1e-3 * ring)
+        .map(|r| RegionRef::new(s3, r))
+        .collect();
+    assert_eq!(rs.len(), 1);
+    add_extrude(
+        &mut d,
+        ExtrudeFeature {
+            regions: rs,
+            depth: 5.0,
+            flip: true,
+            op: BooleanOp::Add,
+            merge_all: true,
+            ..ExtrudeFeature::default()
+        },
+    );
+    let build = cadrs_core::rebuild::build(&d.features());
+    assert!(build.errors.is_empty(), "{:?}", build.errors);
+    assert_eq!(build.parts.len(), 1, "the plate joins the leg");
+}
+
+#[test]
+fn an_ellipse_in_space_projects_onto_any_plane_and_crosses_one() {
+    use cadrs_core::links::{Curve3, crossings, project, projected_distance};
+    let n = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / l, v[1] / l, v[2] / l]
+    };
+    // An ellipse (semi-axes 12 and 5) in a plane tipped about X and Y.
+    let center = [1.0, 2.0, 3.0];
+    let a = n([0.0, 3.0, 1.0]).map(|x| x * 12.0);
+    let normal = n([1.0, -0.2, 0.6]);
+    let normal = {
+        // At right angles to the major axis.
+        let k: f64 = (0..3).map(|i| normal[i] * a[i]).sum::<f64>() / 144.0;
+        n([0, 1, 2].map(|i| normal[i] - k * a[i]))
+    };
+    let b = {
+        let c = [
+            normal[1] * a[2] - normal[2] * a[1],
+            normal[2] * a[0] - normal[0] * a[2],
+            normal[0] * a[1] - normal[1] * a[0],
+        ];
+        n(c).map(|x| x * 5.0)
+    };
+    let at = |t: f64| [0, 1, 2].map(|i| center[i] + a[i] * t.cos() + b[i] * t.sin());
+    let curve = Curve3::Ellipse {
+        center,
+        major: [0, 1, 2].map(|i| center[i] + a[i]),
+        minor: 5.0,
+        normal,
+        offset: 0.0,
+    };
+    // Seen from Top, Front and a tilted plane: an ellipse through every point's projection.
+    let tilted = cadrs_sketch::PlaneFrame {
+        origin: [0.0, 0.0, 4.0],
+        u: [1.0, 0.0, 0.0],
+        v: [0.0, (0.5f64).sqrt(), (0.5f64).sqrt()],
+    };
+    for frame in [PlaneRef::Top.frame(), PlaneRef::Front.frame(), tilted] {
+        let shape = project(curve.clone(), &frame).unwrap();
+        assert!(matches!(shape, Projected::Ellipse { .. }), "{shape:?}");
+        for i in 0..36 {
+            let p = frame.to_sketch(at(i as f64 * 10f64.to_radians()));
+            let d = projected_distance(&shape, p).unwrap();
+            assert!(d < 1e-6, "{d}");
+        }
+        // Where it crosses the plane: two points, on the ellipse.
+        let hits = crossings(curve.clone(), &frame);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for h in hits {
+            let w = frame.to_world(h);
+            let d: [f64; 3] = [0, 1, 2].map(|i| w[i] - center[i]);
+            let along = |v: [f64; 3], k: f64| (0..3).map(|i| d[i] * v[i]).sum::<f64>() / (k * k);
+            let (x, y) = (along(a, 12.0), along(b, 5.0));
+            assert!((x * x + y * y - 1.0).abs() < 1e-9, "{x} {y}");
+            assert!(along(normal, 1.0).abs() < 1e-9);
+        }
+    }
+    // Edge-on (the plane's normal in the ellipse's plane, along its minor axis): a segment
+    // across the major axis.
+    let side = cadrs_sketch::PlaneFrame {
+        origin: [0.0; 3],
+        u: n(a),
+        v: normal,
+    };
+    let Some(Projected::Line(p, q)) = project(curve, &side) else {
+        panic!()
+    };
+    assert!((p.distance(q) - 24.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_sketch_on_a_slanted_cut_face_imprints_its_ellipse_and_its_regions_join_the_part() {
+    use cadrs_core::document::BooleanOp;
+    use cadrs_sketch::ImprintShape;
+    let mut d = Doc::new();
+    // A 10 mm radius cylinder cut at a slant (1 in 6), as the presso foot's leg.
+    let s1 = d.sketch(PlaneRef::Top);
+    d.edit(s1, circle(0.0, 0.0, 10.0));
+    d.extrude(s1, 60.0, |_| true);
+    let s2 = d.sketch(PlaneRef::Front);
+    d.edit(
+        s2,
+        SketchOp::AddPolyline {
+            points: vec![
+                Vec2::new(-30.0, 25.0),
+                Vec2::new(30.0, 35.0),
+                Vec2::new(30.0, 80.0),
+                Vec2::new(-30.0, 80.0),
+            ],
+            closed: true,
+            construction: false,
+            label: "Add polygon",
+        },
+    );
+    let rs = regions(d.g(s2))
+        .iter()
+        .map(|r| RegionRef::new(s2, r))
+        .collect();
+    let cut = add_extrude(
+        &mut d,
+        ExtrudeFeature {
+            regions: rs,
+            depth: 100.0,
+            symmetric: true,
+            op: BooleanOp::Remove,
+            merge_all: true,
+            ..ExtrudeFeature::default()
+        },
+    );
+    // A sketch on the cut face: its edge is imprinted as the exact ellipse (10 across, 10/cos θ
+    // along the slope), not left out.
+    let features = d.features();
+    let solid = parts(&features).remove(0).solid;
+    let face = solid
+        .faces
+        .iter()
+        .find(|f| f.name.op == cut.0)
+        .unwrap()
+        .name;
+    let s3 = d.sketch(face_plane(&features, cut, face).unwrap());
+    let g = d.g(s3);
+    let [im] = g.imprint.as_slice() else {
+        panic!("{:?}", g.imprint)
+    };
+    let ImprintShape::Ellipse {
+        center,
+        major,
+        minor,
+    } = im.shape
+    else {
+        panic!("{:?}", im.shape)
+    };
+    let a = 10.0 * 37f64.sqrt() / 6.0;
+    assert!((minor - 10.0).abs() < 1e-6 && (major.distance(center) - a).abs() < 1e-6);
+    // Lines drawn from its minor axis's ends out to a circle beside it (the foot's outline)
+    // end on the imprint: no loose ends, and regions either side of it.
+    let across = {
+        let m = (major - center) * (1.0 / a);
+        Vec2::new(-m.y, m.x) * 10.0
+    };
+    let out = (major - center) * (40.0 / a);
+    let (p, q) = (center + across, center - across);
+    d.edit(
+        s3,
+        SketchOp::AddPolyline {
+            points: vec![p, p + out],
+            closed: false,
+            construction: false,
+            label: "Add line",
+        },
+    );
+    d.edit(
+        s3,
+        SketchOp::AddPolyline {
+            points: vec![q, q + out],
+            closed: false,
+            construction: false,
+            label: "Add line",
+        },
+    );
+    d.edit(s3, circle(center.x + out.x, center.y + out.y, 10.0));
+    let g = d.g(s3);
+    assert!(cadrs_sketch::diagnostics::loose_ends(g).is_empty());
+    let rs = regions(g);
+    let ellipse = std::f64::consts::PI * a * 10.0;
+    assert!(
+        rs.iter()
+            .any(|r| (r.area() - ellipse).abs() < 1e-3 * ellipse)
+    );
+    assert_eq!(rs.len(), 3, "the ellipse, the strip and the circle");
+    // Its regions extruded out from the face, joined: one part.
+    let picked = rs.iter().map(|r| RegionRef::new(s3, r)).collect();
+    add_extrude(
+        &mut d,
+        ExtrudeFeature {
+            regions: picked,
+            depth: 5.0,
+            op: BooleanOp::Add,
+            merge_all: true,
+            ..ExtrudeFeature::default()
+        },
+    );
+    let build = cadrs_core::rebuild::build(&d.features());
+    assert!(build.errors.is_empty(), "{:?}", build.errors);
+    assert_eq!(build.parts.len(), 1);
+}

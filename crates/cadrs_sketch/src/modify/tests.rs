@@ -595,3 +595,60 @@ fn normal_line_to_circle_and_ellipse() {
     assert!(g.tangent_at(t).normalize().dot((b - a).normalize()).abs() < 1e-6);
     assert!(analyze(&s).conflicting.is_empty());
 }
+
+/// The face a sketch lies on: its edges imprinted (a 40 × 40 square, and the ellipse of the
+/// presso df64 foot's leg cut level: 65 across, 70.8 along y, centred at (0, -13.5)).
+fn on_face(s: &mut Sketch) {
+    let c = [
+        v(-100.0, -100.0),
+        v(100.0, -100.0),
+        v(100.0, 100.0),
+        v(-100.0, 100.0),
+    ];
+    s.imprint = (0..4)
+        .map(|i| crate::Imprint {
+            id: crate::synthetic_curve(1, i as u32),
+            shape: crate::ImprintShape::Line(c[i], c[(i + 1) % 4]),
+            link: None,
+        })
+        .collect();
+    s.imprint.push(crate::Imprint {
+        id: crate::synthetic_curve(1, 4),
+        shape: crate::ImprintShape::Ellipse {
+            center: v(0.0, -13.5),
+            major: v(0.0, 57.33),
+            minor: 65.0,
+        },
+        link: None,
+    });
+}
+
+#[test]
+fn the_face_edges_cut_a_trim() {
+    let mut s = Sketch::new();
+    on_face(&mut s);
+    // A line running off the face: its piece outside goes, up to the face's edge.
+    let l = line(&mut s, v(-80.0, 80.0), v(-80.0, 130.0));
+    trim(&mut s, l, v(-80.0, 120.0)).unwrap();
+    let (a, b) = s.curve_ends(l).unwrap();
+    assert!(s.pos(a).distance(v(-80.0, 80.0)) < 1e-9);
+    assert!(s.pos(b).distance(v(-80.0, 100.0)) < 1e-9);
+    // The new end lies on the edge, held by nothing (the edge isn't in the sketch).
+    assert!(s.constraints.is_empty());
+}
+
+#[test]
+fn a_line_touching_a_face_ellipse_trims_at_the_touch() {
+    // The foot's outline: lines down the sides of a circle, past where they touch the leg's
+    // ellipse (at the ends of its minor axis); the excess below goes.
+    let mut s = Sketch::new();
+    on_face(&mut s);
+    for x in [-65.0, 65.0] {
+        let l = line(&mut s, v(x, 90.0), v(x, -95.0));
+        trim(&mut s, l, v(x, -60.0)).unwrap();
+        let (a, b) = s.curve_ends(l).unwrap();
+        assert!(s.pos(a).distance(v(x, 90.0)) < 1e-9);
+        assert!(s.pos(b).distance(v(x, -13.5)) < 1e-6, "{:?}", s.pos(b));
+    }
+    assert!(s.constraints.is_empty());
+}

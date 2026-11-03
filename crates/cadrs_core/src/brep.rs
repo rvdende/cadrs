@@ -32,7 +32,9 @@ use cadrs_sketch::{CurveId, EdgeName, FaceName, FaceOrigin, OpId, PlaneFrame, Ve
 use nalgebra::{Point2, Point3, Unit, Vector3};
 use slotmap::Key;
 
-use crate::solid::{EdgeCircle, Ruling, Solid, SolidEdge, SolidFace, SolidVertex, SurfaceGrid};
+use crate::solid::{
+    EdgeCircle, EdgeEllipse, Ruling, Solid, SolidEdge, SolidFace, SolidVertex, SurfaceGrid,
+};
 
 /// The regions of one sketch an extrude uses (with their keys, [`crate::RegionRef::key`]), and
 /// the sketch's plane.
@@ -820,8 +822,16 @@ pub fn solid_of(
         _ => false,
     };
     let mut outline: HashMap<FaceName, Vec<Vec<Vec3>>> = HashMap::default();
-    // Each kernel edge's name, points, circle, tangent group and whether it is a facet seam.
-    type Named = (EdgeName, Vec<Vec3>, Option<EdgeCircle>, u32, bool);
+    // Each kernel edge's name, points, circle, ellipse, tangent group and whether it is a facet
+    // seam.
+    type Named = (
+        EdgeName,
+        Vec<Vec3>,
+        Option<EdgeCircle>,
+        Option<EdgeEllipse>,
+        u32,
+        bool,
+    );
     let mut named_edges: Vec<Named> = Vec::with_capacity(edge_info.len());
     for (ei, (info, name)) in edge_info.iter().zip(&edge_names).enumerate() {
         let Some(name) = name else { continue };
@@ -842,7 +852,13 @@ pub fn solid_of(
                 normal: [c.normal.x, c.normal.y, c.normal.z],
                 radius: c.radius,
             });
-            named_edges.push((*name, pts, circle, groups[ei], seam(info)));
+            let v = |p: nalgebra::Vector3<f64>| [p.x, p.y, p.z];
+            let ellipse = info.ellipse.map(|e| EdgeEllipse {
+                center: [e.center.x, e.center.y, e.center.z],
+                major: v(e.major),
+                minor: v(e.minor),
+            });
+            named_edges.push((*name, pts, circle, ellipse, groups[ei], seam(info)));
         }
     }
 
@@ -1066,6 +1082,8 @@ pub fn solid_of(
     let mut edge_parts: Vec<Vec<Vec<Vec3>>> = Vec::new();
     // The exact circle of each name, if all its kernel edges lie on one.
     let mut edge_circles: Vec<Option<EdgeCircle>> = Vec::new();
+    // And of its ellipse, if all lie on one.
+    let mut edge_ellipses: Vec<Option<EdgeEllipse>> = Vec::new();
     let mut edge_groups: Vec<u32> = Vec::new();
     // Whether all its kernel edges are facet seams.
     let mut edge_smooth: Vec<bool> = Vec::new();
@@ -1074,8 +1092,16 @@ pub fn solid_of(
             && (a.radius - b.radius).abs() < tol_piece
             && dot(a.normal, b.normal).abs() > 1.0 - 1e-9
     };
+    // (An axis may point either way.)
+    let same_axis =
+        |a: Vec3, b: Vec3| dist(a, b) < tol_piece || dist(a, scale(b, -1.0)) < tol_piece;
+    let same_ellipse = |a: &EdgeEllipse, b: &EdgeEllipse| {
+        dist(a.center, b.center) < tol_piece
+            && same_axis(a.major, b.major)
+            && same_axis(a.minor, b.minor)
+    };
     let mut edge_at: HashMap<EdgeName, usize> = HashMap::default();
-    for (name, pts, circle, group, smooth) in named_edges {
+    for (name, pts, circle, ellipse, group, smooth) in named_edges {
         match edge_at.get(&name).copied() {
             Some(i) => {
                 edge_parts[i].push(pts);
@@ -1085,21 +1111,27 @@ pub fn solid_of(
                 if !keep {
                     edge_circles[i] = None;
                 }
+                let keep = matches!((&edge_ellipses[i], &ellipse), (Some(a), Some(b)) if same_ellipse(a, b));
+                if !keep {
+                    edge_ellipses[i] = None;
+                }
             }
             None => {
                 edge_at.insert(name, edge_order.len());
                 edge_order.push(name);
                 edge_parts.push(vec![pts]);
                 edge_circles.push(circle);
+                edge_ellipses.push(ellipse);
                 edge_groups.push(group);
                 edge_smooth.push(smooth);
             }
         }
     }
-    for ((((name, parts), circle), group), smooth) in edge_order
+    for (((((name, parts), circle), ellipse), group), smooth) in edge_order
         .into_iter()
         .zip(edge_parts)
         .zip(edge_circles)
+        .zip(edge_ellipses)
         .zip(edge_groups)
         .zip(edge_smooth)
     {
@@ -1108,6 +1140,7 @@ pub fn solid_of(
                 name,
                 points,
                 circle,
+                ellipse,
                 tangent_group: Some(group),
                 smooth,
             });

@@ -67,8 +67,9 @@ pub enum Curve3 {
         mid: Vec3,
         end: Vec3,
     },
-    /// An ellipse in a plane (only projected onto parallel planes), or the curve `offset` outside
-    /// it (P3.7: an offset ellipse, 0 for the ellipse itself).
+    /// An ellipse in a plane (`major` the end of its major semi-axis), or the curve `offset`
+    /// outside it (P3.7: an offset ellipse, 0 for the ellipse itself; projected only onto
+    /// parallel planes).
     Ellipse {
         center: Vec3,
         major: Vec3,
@@ -76,8 +77,8 @@ pub enum Curve3 {
         normal: Vec3,
         offset: f64,
     },
-    /// Any other curve (a spline edge, a cylinder's edge cut at a slant), as points on it in
-    /// order (a closed curve lists each once).
+    /// Any other curve (a spline edge, an arc of an ellipse), as points on it in order (a closed
+    /// curve lists each once).
     Sampled {
         points: Vec<Vec3>,
         closed: bool,
@@ -215,8 +216,30 @@ pub fn curve_of_polyline(pts: &[Vec3]) -> Option<Curve3> {
 }
 
 /// A part edge as the curve it lies on: the kernel's exact circle for a circular edge (P3.4:
-/// Use takes its edges from the kernel), else the curve its polyline samples.
+/// Use takes its edges from the kernel) and its exact ellipse for a whole elliptical one (a
+/// cylinder cut at a slant), else the curve its polyline samples.
 pub fn edge_curve(e: &crate::solid::SolidEdge) -> Option<Curve3> {
+    let pts = &e.points;
+    // (Closed to the polyline's rounding: an edge chained from pieces may end a hair from its
+    // start.)
+    if let (Some(el), [first, .., last]) = (e.ellipse, pts.as_slice())
+        && pts.len() > 2
+        && len(sub(*first, *last)) < 1e-6 * (1.0 + len(el.major))
+    {
+        return Some(Curve3::Ellipse {
+            center: el.center,
+            major: add(el.center, el.major),
+            minor: len(el.minor),
+            normal: unit(cross(el.major, el.minor)),
+            offset: 0.0,
+        });
+    }
+    sampled_edge_curve(e)
+}
+
+/// A part edge as [`edge_curve`] has it, but an elliptical one as points along it: a Use made
+/// before Use took ellipses from the kernel is a spline through them, and stays one.
+pub fn sampled_edge_curve(e: &crate::solid::SolidEdge) -> Option<Curve3> {
     let pts = &e.points;
     let (Some(c), Some(first), Some(last)) = (e.circle, pts.first(), pts.last()) else {
         return curve_of_polyline(pts).or_else(|| sampled(pts));
@@ -389,12 +412,46 @@ pub fn project(c: Curve3, frame: &PlaneFrame) -> Option<Projected> {
                         distance: offset,
                     }
                 }
+            } else if offset == 0.0 {
+                // Seen at an angle an ellipse is still one (edge-on, a segment): its semi-axes'
+                // images are conjugate semi-diameters of the projection.
+                let (a, b) = ellipse_axes(center, major, minor, normal);
+                let c = s(center);
+                ellipse_of_conjugates(c, s(add(center, a)) - c, s(add(center, b)) - c)
             } else {
                 return None;
             }
         }
     };
     (!shape.degenerate()).then_some(shape)
+}
+
+/// An ellipse's major and minor semi-axes, as vectors.
+fn ellipse_axes(center: Vec3, major: Vec3, minor: f64, normal: Vec3) -> (Vec3, Vec3) {
+    let a = sub(major, center);
+    (a, scale(unit(cross(normal, a)), minor))
+}
+
+/// The ellipse `c + p·cos t + q·sin t` (`p` and `q` conjugate semi-diameters) by its axes, or
+/// the segment it is when it is flat.
+fn ellipse_of_conjugates(c: Vec2, p: Vec2, q: Vec2) -> Projected {
+    // The axes are where |p cos t + q sin t| is longest and shortest.
+    let t = 0.5 * (2.0 * p.dot(q)).atan2(p.dot(p) - q.dot(q));
+    let a = p * t.cos() + q * t.sin();
+    let b = q * t.cos() - p * t.sin();
+    let (major, minor) = if a.length() >= b.length() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    if minor.length() <= 1e-9 * (1.0 + major.length()) {
+        return Projected::Line(c - major, c + major);
+    }
+    Projected::Ellipse {
+        center: c,
+        major: c + major,
+        minor: minor.length(),
+    }
 }
 
 /// Where a curve in space crosses a plane: every point (sketch coordinates).
@@ -459,6 +516,27 @@ pub fn crossings(c: Curve3, frame: &PlaneFrame) -> Vec<Vec2> {
                 .filter(|p| side(*p) * want >= -1e-12)
                 .collect()
         }
+        Curve3::Ellipse {
+            center,
+            major,
+            minor,
+            normal,
+            offset: 0.0,
+        } => {
+            // Points C + a cos t + b sin t with distance 0: d + r cos(t - base) = 0.
+            let (a, b) = ellipse_axes(center, major, minor, normal);
+            let (ka, kb, d) = (dot(a, big_n), dot(b, big_n), dist(center));
+            let r = (ka * ka + kb * kb).sqrt();
+            if r < 1e-12 || d.abs() > r * (1.0 + 1e-12) {
+                return Vec::new();
+            }
+            let (base, off) = (kb.atan2(ka), (-d / r).clamp(-1.0, 1.0).acos());
+            [base + off, base - off]
+                .iter()
+                .map(|t| add(center, add(scale(a, t.cos()), scale(b, t.sin()))))
+                .collect()
+        }
+        // (An offset ellipse's crossings aren't found.)
         Curve3::Ellipse { .. } => Vec::new(),
         // Where its segments cross (sampled: about on the curve).
         Curve3::Sampled { points, closed } => {
@@ -812,6 +890,18 @@ impl<'a> LinkContext<'a> {
         project(self.curve(link, frame)?, frame)
     }
 
+    /// The linked elliptical edge as a Use made before Use took ellipses from the kernel has it:
+    /// points along it ([`sampled_edge_curve`]), so that spline keeps following its edge.
+    /// `None` for other links.
+    pub fn sampled_shape(&self, link: Link, frame: &PlaneFrame) -> Option<Projected> {
+        let Link::Edge { feature, edge } = link else {
+            return None;
+        };
+        let e = self.solid_with_edge(feature, &edge)?.edge(&edge)?;
+        e.ellipse?;
+        project(sampled_edge_curve(e)?, frame)
+    }
+
     /// Where the linked curve pierces the plane: the crossing nearest `near`.
     pub fn pierce(&self, link: Link, frame: &PlaneFrame, near: Vec2) -> Option<Vec2> {
         // A part vertex: where it is seen along the normal.
@@ -840,7 +930,11 @@ pub fn projected_distance(shape: &Projected, p: Vec2) -> Option<f64> {
             g.distance(p)
         }
         Projected::Point(q) => p.distance(q),
-        Projected::Ellipse { .. } => return None,
+        Projected::Ellipse {
+            center,
+            major,
+            minor,
+        } => cadrs_sketch::geom::EllipseGeom::new(center, major, minor).distance(p),
         Projected::Spline { ref points, closed } => {
             let spans = cadrs_sketch::spline::spans(points, closed, None, None);
             cadrs_sketch::spline::nearest(&spans, p)?.2
@@ -978,6 +1072,15 @@ pub fn imprint(solids: &[(FeatureId, &Solid)], frame: &PlaneFrame) -> Vec<Imprin
                             sweep: g.sweep,
                         }
                     }
+                    Projected::Ellipse {
+                        center,
+                        major,
+                        minor,
+                    } => ImprintShape::Ellipse {
+                        center,
+                        major,
+                        minor,
+                    },
                     _ => continue,
                 };
                 out.push(Imprint {

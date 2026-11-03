@@ -916,9 +916,15 @@ fn regenerate_sketch(
         }
         let link = current;
         let ok = match target {
-            LinkTarget::Curve(c) => ctx
-                .shape(link, &frame)
-                .is_some_and(|shape| g.set_projected(c, shape)),
+            // (A spline made of an elliptical edge before Use took ellipses from the kernel
+            // stays one.)
+            LinkTarget::Curve(c) => {
+                ctx.shape(link, &frame)
+                    .is_some_and(|shape| g.set_projected(c, shape))
+                    || ctx
+                        .sampled_shape(link, &frame)
+                        .is_some_and(|shape| g.set_projected(c, shape))
+            }
             LinkTarget::Point(p) => match ctx.pierce(link, &frame, g.pos(p)) {
                 Some(at) => {
                     g.set_pierced(p, at);

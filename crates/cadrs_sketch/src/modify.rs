@@ -8,7 +8,9 @@
 //!   when one is there. Constraints on what is removed go; the kept pieces keep theirs where
 //!   they still mean the same (a line cut in two keeps its direction on both pieces; an arc
 //!   cut in two keeps one circle through an Equal). Every sketch curve cuts, construction
-//!   geometry included.
+//!   geometry included, and so do the edges of the face the sketch is on (its imprints, S21):
+//!   a new end there lies on the edge, held by nothing (the edge isn't in the sketch; Use it
+//!   to hold the end on it).
 //! - **Extend** ([`extension`], [`extend`]): a line or arc's free end grows along the line or
 //!   round the circle to the first curve in the way, or to the cursor if nothing is in the way
 //!   before it. The new end lies on that curve.
@@ -119,11 +121,36 @@ fn side(o: Full, p: Vec2) -> f64 {
 }
 
 /// Where an ellipse crosses a line or circle carrier: sign changes around the ellipse, refined
-/// by bisection.
+/// by bisection; and where the carrier only touches it (a tangent line), the dips to zero that
+/// don't change sign.
 fn ellipse_roots(g: &EllipseGeom, o: Full) -> Vec<Vec2> {
     const N: usize = 720;
     let f = |t: f64| side(o, g.point_at(t));
     let mut out = Vec::new();
+    let step = TAU / N as f64;
+    let tol = 1e-9 * (1.0 + g.center.length() + g.a.length());
+    for i in 0..N {
+        let t = i as f64 * step;
+        let (a, m, b) = (f(t - step), f(t), f(t + step));
+        if a.signum() != m.signum() || m.signum() != b.signum() || m.abs() > a.abs().min(b.abs()) {
+            continue;
+        }
+        // A dip of |f| that stays on one side: the nearest it comes, by golden section.
+        let (mut lo, mut hi) = (t - step, t + step);
+        let r = (5f64.sqrt() - 1.0) / 2.0;
+        for _ in 0..80 {
+            let (x1, x2) = (hi - r * (hi - lo), lo + r * (hi - lo));
+            if f(x1).abs() < f(x2).abs() {
+                hi = x2;
+            } else {
+                lo = x1;
+            }
+        }
+        let tm = (lo + hi) / 2.0;
+        if f(tm).abs() <= tol {
+            out.push(g.point_at(tm));
+        }
+    }
     let mut prev = f(0.0);
     for i in 1..=N {
         let (ta, tb) = ((i - 1) as f64 * TAU / N as f64, i as f64 * TAU / N as f64);
@@ -238,8 +265,14 @@ pub fn cuts(s: &Sketch, id: CurveId) -> Vec<Cut> {
         return out;
     };
     let closed = matches!(s.curves[id].kind, CurveKind::Circle { .. });
-    for k in s.curves.keys().filter(|k| *k != id) {
-        let Some(o) = shape_of(s, k) else { continue };
+    // The sketch's other curves, and the face's edges.
+    let others = s
+        .curves
+        .keys()
+        .filter(|k| *k != id)
+        .filter_map(|k| Some((k, shape_of(s, k)?)))
+        .chain(s.imprint.iter().map(|im| (im.id, imprint_shape(im.shape))));
+    for (k, o) in others {
         for p in crossings(&me, &o) {
             let Some((at, _)) = param(s, id, p) else {
                 continue;
@@ -347,17 +380,43 @@ pub fn trim_removed_path(s: &Sketch, id: CurveId, at: Vec2) -> Option<Vec<Vec2>>
 }
 
 /// The point for a new end at a crossing: the point already there (so the curves share it), or
-/// a new one on the crossing curve.
+/// a new one on the crossing curve (on a face's edge, a free one there).
 fn end_point(s: &mut Sketch, cut: Cut) -> PointId {
     if let Some(p) = s.point_at(cut.pos, MERGE_EPS * 10.0) {
         return p;
     }
     let p = s.add_point(cut.pos);
-    s.add_constraint(ConstraintOf::PointOnCurve(
-        PointRef::Point(p),
-        CurveRef::Curve(cut.by),
-    ));
+    if !crate::is_synthetic(cut.by) {
+        s.add_constraint(ConstraintOf::PointOnCurve(
+            PointRef::Point(p),
+            CurveRef::Curve(cut.by),
+        ));
+    }
     p
+}
+
+/// An imprinted face edge as a [`Shape`].
+fn imprint_shape(shape: crate::ImprintShape) -> Shape {
+    match shape {
+        crate::ImprintShape::Line(a, b) => Shape::Segment(a, b),
+        crate::ImprintShape::Circle(center, radius) => Shape::Circle { center, radius },
+        crate::ImprintShape::Arc {
+            center,
+            radius,
+            start_angle,
+            sweep,
+        } => Shape::Arc(ArcGeom {
+            center,
+            radius,
+            start_angle,
+            sweep,
+        }),
+        crate::ImprintShape::Ellipse {
+            center,
+            major,
+            minor,
+        } => Shape::Ellipse(EllipseGeom::new(center, major, minor)),
+    }
 }
 
 /// Replaces `old` with `new` in the curve's points.

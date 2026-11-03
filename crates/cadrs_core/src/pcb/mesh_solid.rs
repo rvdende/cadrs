@@ -568,6 +568,7 @@ pub fn mesh_solid(meshes: &[Mesh], op: OpId, opacity: f64) -> Solid {
                     name: EdgeName::new(na, nb, k as u32),
                     points,
                     circle: None,
+                    ellipse: None,
                     tangent_group: None,
                     smooth,
                 });

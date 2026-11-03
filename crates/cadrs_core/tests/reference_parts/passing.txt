@@ -81,3 +81,6 @@
 81-fillet-spline-radius
 82-thin-extrude-frame
 83-boundary-loop-thicken
+156-face-chamfer-fillet
+156-wall-as-thick-as-chamfer
+slanted-cut-cylinder-foot

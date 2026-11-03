@@ -1626,6 +1626,15 @@ fn flip_v(g: &mut cadrs_sketch::Sketch) {
                 start_angle: -(start_angle + sweep),
                 sweep,
             },
+            ImprintShape::Ellipse {
+                center,
+                major,
+                minor,
+            } => ImprintShape::Ellipse {
+                center: flip(center),
+                major: flip(major),
+                minor,
+            },
         };
     }
 }
