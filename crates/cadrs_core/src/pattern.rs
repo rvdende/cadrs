@@ -16,7 +16,7 @@
 //!   axis, or along the path), `j` along the second; `(0, 0)` is the seed. **Skip instances**
 //!   (PS22.5) lists the ones left out.
 
-use cadrs_sketch::Vec3;
+use cadrs_sketch::{FaceName, FaceOrigin, OpId, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::advanced::PathRef;
@@ -396,6 +396,20 @@ pub struct InstanceDot {
 /// A skipped instance as the dialog lists it: "(2, 0)".
 pub fn index_label(i: [u32; 2]) -> String {
     format!("({}, {})", i[0], i[1])
+}
+
+/// The name of the copy of face `n` in instance `k` of pattern (or mirror) `op`: renamed under
+/// the pattern's id, so the copies' faces are its, and by the original's hash, so a reference
+/// to a copy's face survives the original being renamed by a split.
+pub fn instance_face(op: OpId, n: &FaceName, k: u32) -> FaceName {
+    FaceName::new(
+        op,
+        FaceOrigin::Instance {
+            of: n.op,
+            face: cadrs_kernel::naming::face_hash(n),
+            instance: k,
+        },
+    )
 }
 
 #[cfg(test)]

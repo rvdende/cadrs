@@ -988,7 +988,98 @@ pub fn boolean_bodies_with(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) ->
 
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
+    if let Some(r) = apart_set_aside(a, b, op, opts) {
+        return r;
+    }
     ladder(a, b, op, opts)
+}
+
+/// The boolean with the solids of either input that can't reach the other (by their boxes,
+/// grown by the tolerances) set aside: the boolean of the rest, with those of `a` before it
+/// and, for a union, those of `b` after (a subtraction takes nothing away from them, an
+/// intersection takes nothing of them). None when there are none to set aside, or an input
+/// isn't solids alone. A pattern's Add joined its seed to the ten rows of copies in one run,
+/// which left an open shell and ran again row by row; the run over the one row the seed
+/// reaches is sound, and a tenth of the work.
+fn apart_set_aside(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Option<Result<BoolOut>> {
+    if a.solids.len() < 2 && b.solids.len() < 2 {
+        return None;
+    }
+    let all_solid = |x: &Body| {
+        let in_solids: usize = (0..x.solids.len()).map(|s| x.solid_faces(s).len()).sum();
+        !x.solids.is_empty() && in_solids == x.faces.len() && x.wires.is_empty()
+    };
+    if !all_solid(a) || !all_solid(b) {
+        return None;
+    }
+    let pieces_a = super::exchange::split_into_solids_mapped(a);
+    let pieces_b = super::exchange::split_into_solids_mapped(b);
+    let boxes_a: Vec<Bbox> = pieces_a
+        .iter()
+        .map(|(p, _)| reach(p, opts.tol.point))
+        .collect();
+    let boxes_b: Vec<Bbox> = pieces_b
+        .iter()
+        .map(|(p, _)| reach(p, opts.tol.point))
+        .collect();
+    let reaching = |mine: &[Bbox], theirs: &[Bbox]| -> Vec<bool> {
+        mine.iter()
+            .map(|x| theirs.iter().any(|y| x.overlaps(y)))
+            .collect()
+    };
+    let (in_a, in_b) = (reaching(&boxes_a, &boxes_b), reaching(&boxes_b, &boxes_a));
+    if in_a.iter().all(|&r| r) && in_b.iter().all(|&r| r) {
+        return None;
+    }
+    // The pieces that reach as one body each (`from` tracing their faces to the input's), and
+    // the rest side by side.
+    let gather = |pieces: &[(Body, Vec<usize>)], keep: &[bool], want: bool| {
+        let mut body = Body::default();
+        let mut faces: Vec<usize> = Vec::new();
+        for ((p, map), _) in pieces.iter().zip(keep).filter(|(_, k)| **k == want) {
+            body.append(p);
+            faces.extend(map.iter().copied());
+        }
+        (body, faces)
+    };
+    let (ra, fa) = gather(&pieces_a, &in_a, true);
+    let (rb, fb) = gather(&pieces_b, &in_b, true);
+    let (aside_a, aside_fa) = gather(&pieces_a, &in_a, false);
+    let (aside_b, aside_fb) = gather(&pieces_b, &in_b, false);
+    let mut out = match op {
+        BoolOp::Intersect => BoolOut {
+            body: Body::default(),
+            from: Vec::new(),
+        },
+        _ => BoolOut {
+            body: aside_a,
+            from: aside_fa.iter().map(|&f| vec![(0, f)]).collect(),
+        },
+    };
+    if !ra.faces.is_empty() {
+        let r = match ladder(&ra, &rb, op, opts) {
+            Ok(r) => r,
+            // (A subtraction with nothing left of what the tool reaches.)
+            Err(KernelError::EmptyResult(_)) if op == BoolOp::Subtract && !out.from.is_empty() => {
+                return Some(Ok(out));
+            }
+            Err(e) => return Some(Err(e)),
+        };
+        out.body.append(&r.body);
+        out.from.extend(r.from.iter().map(|srcs| {
+            srcs.iter()
+                .map(|&(o, f)| if o == 0 { (0, fa[f]) } else { (1, fb[f]) })
+                .collect()
+        }));
+    }
+    if op == BoolOp::Union {
+        out.body.append(&aside_b);
+        out.from.extend(aside_fb.iter().map(|&f| vec![(1, f)]));
+    }
+    if out.from.is_empty() {
+        return Some(Err(KernelError::EmptyResult("the result is empty".into())));
+    }
+    Some(Ok(out))
 }
 
 /// The runs of a boolean: at the default tolerance, then the ways round a broken result. A
@@ -4477,6 +4568,91 @@ fn shell_points_out(b: &Body, faces: &[usize], polys: &[Vec<Vec<P2>>]) -> Option
     }
 }
 
+/// A body's box grown by its tolerances (and `point`, the run's): what it may reach. Two
+/// bodies whose reaches don't overlap are apart, and a union of bodies lies within their
+/// reaches.
+fn reach(b: &Body, point: f64) -> Bbox {
+    let tol = b
+        .edges
+        .iter()
+        .map(|e| e.tol)
+        .chain(b.verts.iter().map(|v| v.tol))
+        .fold(point, f64::max);
+    b.bbox().grow(2.0 * tol)
+}
+
+/// A union's body with each face's origin (member, face).
+type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
+
+/// The union of `members` (each a body with its reach, the target or a tool, in the order
+/// given), as islands: a member apart from every island so far is an island of its own, one
+/// reaching some is unioned with them (joined side by side first, as they lie apart). The
+/// islands side by side, the first member's first, with each face's origin (member, face).
+fn union_islands(members: Vec<(BodyId, Body, Bbox)>, opts: BoolOptions) -> Result<Unioned> {
+    struct Island {
+        body: Body,
+        origin: Vec<Vec<(BodyId, usize)>>,
+        boxes: Vec<Bbox>,
+    }
+    let mut islands: Vec<Island> = Vec::new();
+    for (t, tb, b) in members {
+        let mut touched: Vec<usize> = (0..islands.len())
+            .filter(|&i| islands[i].boxes.iter().any(|x| x.overlaps(&b)))
+            .collect();
+        if touched.is_empty() && (!tb.faces.is_empty() || islands.is_empty()) {
+            islands.push(Island {
+                origin: (0..tb.faces.len()).map(|f| vec![(t, f)]).collect(),
+                body: tb,
+                boxes: vec![b],
+            });
+            continue;
+        }
+        // (An empty tool: a boolean with the first island, which says what is wrong.)
+        if touched.is_empty() {
+            touched.push(0);
+        }
+        // The islands it touches as one body (they lie apart), the first of them first.
+        let first = touched[0];
+        let mut island = islands.remove(first);
+        for &i in touched[1..].iter().rev() {
+            let other = islands.remove(i - 1);
+            island.body.append(&other.body);
+            island.origin.extend(other.origin);
+            island.boxes.extend(other.boxes);
+        }
+        let r = boolean_bodies_with(&island.body, &tb, BoolOp::Union, opts)?;
+        island.origin = r
+            .from
+            .iter()
+            .map(|srcs| {
+                srcs.iter()
+                    .flat_map(|&(o, f)| {
+                        if o == 0 {
+                            island.origin[f].clone()
+                        } else {
+                            vec![(t, f)]
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        island.body = r.body;
+        island.boxes.push(b);
+        islands.insert(first, island);
+    }
+    let mut all = islands.into_iter();
+    let Island {
+        mut body,
+        mut origin,
+        ..
+    } = all.next().expect("a member");
+    for i in all {
+        body.append(&i.body);
+        origin.extend(i.origin);
+    }
+    Ok((body, origin))
+}
+
 /// The kernel operation: the target combined with each tool in turn.
 pub fn boolean(
     k: &mut NativeKernel,
@@ -4535,52 +4711,96 @@ fn boolean_opts(
     // For each face of `cur`: where it came from (body, face).
     let mut origin: Vec<Vec<(BodyId, usize)>> =
         (0..cur.faces.len()).map(|i| vec![(target, i)]).collect();
-    // A union's inputs so far, each by a box grown by its tolerance (holding `cur` between
-    // them: a union lies within its inputs). A tool apart from them all joins `cur` as it is,
-    // no boolean: an Add of a rail onto 45 balusters unioned the balusters one by one, each a
-    // boolean over all those before it, before the rail.
-    let reach = |b: &Body| {
-        let tol = b
-            .edges
-            .iter()
-            .map(|e| e.tol)
-            .chain(b.verts.iter().map(|v| v.tol))
-            .fold(opts.tol.point, f64::max);
-        b.bbox().grow(2.0 * tol)
-    };
-    let mut boxes: Vec<Bbox> = Vec::new();
     if op == BoolOp::Union {
-        boxes.push(reach(&cur));
-    }
-    for &t in tools {
-        let tb = (**k.get(t)?).clone();
-        if op == BoolOp::Union {
-            let b = reach(&tb);
-            let apart = boxes.iter().all(|x| !x.overlaps(&b));
-            boxes.push(b);
-            if apart && !tb.faces.is_empty() {
-                cur.append(&tb);
-                origin.extend((0..tb.faces.len()).map(|f| vec![(t, f)]));
-                continue;
+        // A union's inputs in islands: groups of inputs whose boxes (grown by their
+        // tolerances) overlap, each island one body, the union of its inputs (which lies
+        // within their boxes). A tool apart from every island is an island of its own, no
+        // boolean: an Add of a rail onto 45 balusters unioned the balusters one by one, each a
+        // boolean over all those before it, before the rail. A tool reaching some islands
+        // joins them alone, side by side, and is unioned with that body: a part pattern of 100
+        // copies in 10 rows apart unioned each copy with the whole of the rows before, 50 s for
+        // 2 s of unions. The groups of inputs that can reach one another at all are unioned
+        // side by side (the rows), and set side by side after.
+        let mut members: Vec<(BodyId, Body, Bbox)> = vec![(target, cur, Bbox::empty())];
+        for &t in tools {
+            members.push((t, (**k.get(t)?).clone(), Bbox::empty()));
+        }
+        for m in &mut members {
+            m.2 = reach(&m.1, opts.tol.point);
+        }
+        // Union-find over the members' boxes.
+        let mut group: Vec<usize> = (0..members.len()).collect();
+        fn root(group: &mut [usize], i: usize) -> usize {
+            let mut r = i;
+            while group[r] != r {
+                r = group[r];
+            }
+            let mut j = i;
+            while group[j] != r {
+                let next = group[j];
+                group[j] = r;
+                j = next;
+            }
+            r
+        }
+        for i in 0..members.len() {
+            for j in 0..i {
+                if members[i].2.overlaps(&members[j].2) {
+                    let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                    if ri != rj {
+                        group[ri.max(rj)] = ri.min(rj);
+                    }
+                }
             }
         }
-        let r = boolean_bodies_with(&cur, &tb, op, opts)?;
-        origin = r
-            .from
-            .iter()
-            .map(|srcs| {
-                srcs.iter()
-                    .flat_map(|&(o, f)| {
-                        if o == 0 {
-                            origin[f].clone()
-                        } else {
-                            vec![(t, f)]
-                        }
-                    })
-                    .collect()
-            })
+        let mut groups: Vec<Vec<(BodyId, Body, Bbox)>> = Vec::new();
+        let mut index: Vec<Option<usize>> = vec![None; members.len()];
+        for (i, m) in members.into_iter().enumerate() {
+            let r = root(&mut group, i);
+            let g = match index[r] {
+                Some(g) => g,
+                None => {
+                    groups.push(Vec::new());
+                    index[r] = Some(groups.len() - 1);
+                    groups.len() - 1
+                }
+            };
+            groups[g].push(m);
+        }
+        let results: Vec<Result<Unioned>> = groups
+            .into_par_iter()
+            .map(|g| union_islands(g, opts))
             .collect();
-        cur = r.body;
+        let mut all = results.into_iter();
+        let (body, from) = all.next().expect("the target's group")?;
+        cur = body;
+        origin = from;
+        for r in all {
+            let (body, from) = r?;
+            cur.append(&body);
+            origin.extend(from);
+        }
+    } else {
+        for &t in tools {
+            let tb = (**k.get(t)?).clone();
+            let r = boolean_bodies_with(&cur, &tb, op, opts)?;
+            origin = r
+                .from
+                .iter()
+                .map(|srcs| {
+                    srcs.iter()
+                        .flat_map(|&(o, f)| {
+                            if o == 0 {
+                                origin[f].clone()
+                            } else {
+                                vec![(t, f)]
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            cur = r.body;
+        }
     }
     let mut history = History::default();
     for (i, srcs) in origin.iter().enumerate() {

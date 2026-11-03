@@ -291,6 +291,7 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
             }
             Ok(stats)
         }
+        Call::Rebuild(p) => rebuild(world, p),
         Call::AddPartStudio(p) => add_part_studio(world, p),
         Call::AddAssembly(p) => add_assembly(world, p),
         Call::AddSketch(p) => add_sketch(world, p),
@@ -1368,6 +1369,35 @@ fn outcome(world: &World, element: ElementId, feature: FeatureId) -> Result<Valu
             }
         }
         Ok(out)
+    })
+}
+
+/// The Document menu's Full rebuild, answered with the rebuild's times once it is done.
+fn rebuild(world: &mut World, p: &tools::Rebuild) -> Result<Value, String> {
+    let element = part_studio(doc(world)?, p.part_studio.as_deref())?;
+    crate::document::full_rebuild(world);
+    let d = doc(world)?;
+    let e = d.doc.element(element).ok_or("the Part Studio is gone")?;
+    let studio = e.name.clone();
+    let features = e.features().to_vec();
+    let ms = |d: std::time::Duration| (d.as_secs_f64() * 10_000.0).round() / 10.0;
+    after_build(world, e.features_to_build(), move |b| {
+        let name = |id: &FeatureId| {
+            features
+                .iter()
+                .find(|f| f.id == *id)
+                .map(|f| f.name.clone())
+                .unwrap_or_default()
+        };
+        Ok(json!({
+            "part_studio": studio,
+            "features": features.len(),
+            "computed": b.computed,
+            "parts": b.parts.len(),
+            "elapsed_ms": ms(b.elapsed),
+            "times": b.times.iter().map(|(id, t)| json!({ "feature": name(id), "ms": ms(*t) })).collect::<Vec<_>>(),
+            "errors": b.errors.iter().map(|(id, e)| json!({ "feature": name(id), "error": e })).collect::<Vec<_>>(),
+        }))
     })
 }
 

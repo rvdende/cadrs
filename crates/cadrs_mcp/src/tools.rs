@@ -191,6 +191,14 @@ pub struct SetFeatureVisible {
     pub part_studio: Option<String>,
 }
 
+/// Rebuilds a Part Studio from scratch (`rebuild`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct Rebuild {
+    /// The Part Studio tab; omitted: the active one.
+    #[serde(default)]
+    pub part_studio: Option<String>,
+}
+
 /// What `get_frame_stats` lists.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct GetFrameStats {

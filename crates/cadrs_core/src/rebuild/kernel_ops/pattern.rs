@@ -61,15 +61,58 @@ fn instance_id(pattern: FeatureId, f: FeatureId, k: u32) -> FeatureId {
 }
 
 /// The name a copy gives the face named `n`.
-fn instance_face(op: cadrs_kernel::OpId, n: &FaceName, k: u32) -> FaceName {
-    FaceName::new(
-        op,
-        FaceOrigin::Instance {
-            of: n.op,
-            face: naming::face_hash(n),
-            instance: k,
-        },
-    )
+use crate::pattern::instance_face;
+use crate::rebuild::profiled;
+
+/// A seed's names as its instance `k`'s: every face an instance of its original, the edges
+/// and vertices named from those (the copy has the seed's topology, so the names line up with
+/// the kernel's faces, edges and vertices by index as the seed's do).
+fn instance_body_names(op: cadrs_kernel::OpId, names: &BodyNames, k: u32) -> BodyNames {
+    let face = |n: &FaceName| instance_face(op, n, k);
+    BodyNames {
+        faces: names.faces.iter().map(face).collect(),
+        edges: names
+            .edges
+            .iter()
+            .map(|e| {
+                e.map(|e| {
+                    cadrs_sketch::EdgeName::new(face(&e.faces[0]), face(&e.faces[1]), e.index)
+                })
+            })
+            .collect(),
+        vertices: names
+            .vertices
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    let mut faces = v.faces.map(|f| face(&f));
+                    faces.sort();
+                    cadrs_sketch::VertexName {
+                        faces,
+                        index: v.index,
+                    }
+                })
+            })
+            .collect(),
+        aliases: names
+            .aliases
+            .iter()
+            .map(|(a, b)| (face(a), face(b)))
+            .collect(),
+    }
+}
+
+/// A rigid motion as a pose (its rotation's rows and its translation).
+fn pose_of(m: &Motion) -> crate::assembly::Pose {
+    let l = &m.linear;
+    crate::assembly::Pose {
+        rotation: [
+            [l[(0, 0)], l[(0, 1)], l[(0, 2)]],
+            [l[(1, 0)], l[(1, 1)], l[(1, 2)]],
+            [l[(2, 0)], l[(2, 1)], l[(2, 2)]],
+        ],
+        translation: [m.translation.x, m.translation.y, m.translation.z],
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -747,10 +790,12 @@ impl Rebuilder {
         }
         let first = copies[0].0;
         let rest: Vec<BodyId> = copies[1..].iter().map(|(b, _)| *b).collect();
+        let t0 = web_time::Instant::now();
         let joined = self
             .kernel
             .boolean(BoolOp::Union, first, &rest)
             .and_then(|r| {
+                profiled("pattern's union of the copies", t0);
                 let body = r.bodies[0];
                 let inputs: Vec<(BodyId, &BodyNames)> =
                     copies.iter().map(|(b, n)| (*b, n)).collect();
@@ -773,6 +818,10 @@ impl Rebuilder {
         state: &Arc<State>,
     ) -> Result<Output, String> {
         let op = id.0;
+        if merge.op == BooleanOp::New && make.iter().all(|i| i.motion.linear.determinant() > 0.0) {
+            return self.copy_parts_moved(id, seeds, make, state);
+        }
+        let t0 = web_time::Instant::now();
         let mut copies: Vec<(BodyId, BodyNames, PartId, u32)> = Vec::new();
         for seed in seeds {
             let Some(p) = state.part(*seed) else {
@@ -794,6 +843,7 @@ impl Rebuilder {
                 }
             }
         }
+        profiled("pattern's copies", t0);
         if copies.is_empty() {
             return Err("There is nothing to copy".into());
         }
@@ -825,7 +875,9 @@ impl Rebuilder {
             }
             return Ok(out);
         }
+        let t0 = web_time::Instant::now();
         let joined = self.join(id, copies.into_iter().map(|(b, n, ..)| (b, n)).collect())?;
+        profiled("pattern's join", t0);
         // Add with no merge scope: the copies merge with the seed parts they touch, as Onshape's
         // part pattern and mirror do, not with every part they touch (a mirrored half of a cover
         // that reaches the frame stays part of the cover); touching none, they are new parts.
@@ -870,7 +922,169 @@ impl Rebuilder {
         } else {
             merge
         };
-        self.combine(id, merge, joined, state, state.geoms.clone())
+        let t0 = web_time::Instant::now();
+        let out = self.combine(id, merge, joined, state, state.geoms.clone());
+        profiled("pattern's merge", t0);
+        out
+    }
+
+    /// New copies of the parts, moved by proper rigid motions (no reflection): each copy is its
+    /// seed's kernel body moved, with the seed's names, mesh and mass properties moved and
+    /// renamed along with it, so a pattern of thousands costs no tessellation or integration
+    /// past its seed's. A seed in several pieces, or with no mass properties, is copied the
+    /// long way ([`Self::copies_of`] and a split).
+    fn copy_parts_moved(
+        &mut self,
+        id: FeatureId,
+        seeds: &[PartId],
+        make: &[Instance],
+        state: &Arc<State>,
+    ) -> Result<Output, String> {
+        let op = id.0;
+        let mut next = (**state).clone();
+        let mut built: Vec<Prepared> = Vec::new();
+        let mut sources: Vec<(PartId, PartId, u32)> = Vec::new();
+        let release = |this: &mut Self, built: &[Prepared]| {
+            for (_, p, ..) in built {
+                this.kernel.release(p.body);
+            }
+        };
+        // The copies' ids in order ([`Self::new_id`] over the ones given so far would scan them
+        // all for each: slow by thousands).
+        let mut index = 0u32;
+        let mut new_id = |next: &State| loop {
+            let pid = PartId::new(id, index);
+            index += 1;
+            if next.part(pid).is_none() {
+                break pid;
+            }
+        };
+        for seed in seeds {
+            let Some(p) = state.part(*seed) else {
+                release(self, &built);
+                return Err("A selected part no longer exists".into());
+            };
+            let (Some(body), palette) = (p.body, p.part.palette) else {
+                continue;
+            };
+            // One piece, with mass properties: moved copies. (Split once, for the seed; a copy
+            // of one piece is one piece.)
+            let one_piece = p.part.mass.is_some() && {
+                let pieces = self.kernel.split_solids(body).map_err(|e| e.to_string())?;
+                for r in &pieces {
+                    for b in &r.bodies {
+                        self.kernel.release(*b);
+                    }
+                }
+                pieces.len() == 1
+            };
+            if one_piece {
+                let mass = p.part.mass.expect("checked");
+                // The kernel's copies one by one; their meshes and mass properties side by side.
+                let mut bodies = Vec::with_capacity(make.len());
+                for inst in make {
+                    match self.kernel.transform_motion(body, &inst.motion) {
+                        Ok(r) => bodies.push(r.bodies[0]),
+                        Err(e) => {
+                            for b in bodies {
+                                self.kernel.release(b);
+                            }
+                            release(self, &built);
+                            return Err(format!("Copy failed: {e}"));
+                        }
+                    }
+                }
+                use rayon::prelude::*;
+                let moved: Vec<(BodyNames, crate::solid::Solid, cadrs_kernel::MassProperties)> =
+                    make.par_iter()
+                        .map(|inst| {
+                            let pose = pose_of(&inst.motion);
+                            (
+                                instance_body_names(op, &p.names, inst.number),
+                                crate::solid::Solid::instance(
+                                    &p.part.solid,
+                                    &pose,
+                                    op,
+                                    inst.number,
+                                ),
+                                crate::assembly::transform_mass(&mass, &pose),
+                            )
+                        })
+                        .collect();
+                for (copy, (names, solid, mass_moved)) in bodies.into_iter().zip(moved) {
+                    let piece = Piece {
+                        body: copy,
+                        names,
+                        from: HashSet::new(),
+                        volume: mass.volume,
+                    };
+                    let pid = new_id(&next);
+                    built.push((pid, piece, solid, mass_moved));
+                    sources.push((pid, *seed, palette));
+                }
+            } else {
+                let names = p.names.clone();
+                let copies = match self.copies_of(id, body, &names, make) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        release(self, &built);
+                        return Err(e);
+                    }
+                };
+                for (b, names) in copies {
+                    let pieces = self.split_named(b, op, &names, &HashMap::new());
+                    self.kernel.release(b);
+                    let pieces = match pieces {
+                        Ok(pieces) => pieces,
+                        Err(e) => {
+                            release(self, &built);
+                            return Err(e);
+                        }
+                    };
+                    for piece in pieces {
+                        let geoms = state.geoms.clone();
+                        let solid = crate::brep::solid_of(
+                            &self.kernel,
+                            piece.body,
+                            &piece.names,
+                            &geoms,
+                            Some(op),
+                        );
+                        let mass = self
+                            .kernel
+                            .mass_properties(piece.body)
+                            .map_err(|e| e.to_string());
+                        match (solid, mass) {
+                            (Ok(s), Ok(m)) => {
+                                let pid = new_id(&next);
+                                sources.push((pid, *seed, palette));
+                                built.push((pid, piece, s, m));
+                            }
+                            (Err(e), _) | (_, Err(e)) => {
+                                self.kernel.release(piece.body);
+                                release(self, &built);
+                                return Err(format!("Failed: {e}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if built.is_empty() {
+            return Err("There is nothing to copy".into());
+        }
+        next.geoms = state.geoms.clone();
+        let mut out = self.finish_prepared(id, built, next, PartKind::Solid);
+        // PS9.6: a copy looks like its seed.
+        if let Some(st) = Arc::get_mut(&mut out.state) {
+            for (pid, seed, palette) in sources {
+                if let Some(p) = st.parts.iter_mut().find(|q| q.part.id == pid) {
+                    p.part_mut().source = Some(seed);
+                    p.part_mut().palette = palette;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Face pattern or mirror: the pocket or boss each part's faces bound, copied and cut from
