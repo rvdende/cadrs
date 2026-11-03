@@ -25,8 +25,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
 - Windows exe: `cargo build -r --target x86_64-pc-windows-gnu` (MinGW is installed).
 - Browser build: `tools/web/build.sh` → `target/web/` (WebAssembly, drawn with WebGPU; serve the
   folder over HTTP). Needs wasm-bindgen-cli at Cargo.lock's version. Releases attach it as
-  `cadrs-v<version>-web.tar.gz`, and the latest is the whole site, https://cadrs.net (see
-  "Project site" below). A page has one
+  `cadrs-v<version>-web.tar.gz`; main's is the whole site, https://cadrs.net (see "Project
+  site" below). A page has one
   thread and no `std::fs` or `std` clock, so code it runs (everything but `cadrs_mcp`, the
   updater and the kernel's debug dumps) reads files through `cadrs_fs` (also `cadrs_fs::exists`,
   `is_file`, `is_dir`, not `Path`'s), tells the time with `web_time`, and starts threads with
@@ -57,8 +57,8 @@ Onshape-style CAD in Rust + Bevy 0.20.1. Local notes in `docs/` (git-ignored: `P
   Chrome trace; `CADRS_SINGLE_THREADED=Update,…` runs schedules on the main thread for `perf`.
 - Cold builds take 4+ minutes. Never run two cargo builds at once.
 - Project site: https://cadrs.net is the app itself, full screen: `.github/workflows/pages.yml`
-  deploys the latest release's browser build to GitHub Pages (on a release, or by hand), so a
-  change to `tools/web/index.html` shows there after the next release. In a browser without
+  builds the browser build of every push to main and deploys it to GitHub Pages (also by hand),
+  so the site is always main's head, about 20 minutes after the push. In a browser without
   WebGPU the page offers the downloads instead; the app menu links to GitHub.
 
 ## Layout

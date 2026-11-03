@@ -1,17 +1,13 @@
 name: Pages
 
-# https://cadrs.net is the app itself, full screen: the latest release's browser build
-# (tools/web/build.sh, attached to every release as cadrs-web.tar.gz) at the site's root. In a
-# browser without WebGPU the page offers the downloads instead (tools/web/index.html). /app/,
-# where the app used to be, and any path there is no page for go to it. Deployed when a release
-# is published (the release workflow also asks for it), when this file changes, and by hand.
+# https://cadrs.net is the app itself, full screen: the browser build (tools/web/build.sh) of
+# main's head at the site's root, built and deployed on every push to main (and by hand), so
+# the site is always the latest main. In a browser without WebGPU the page offers the downloads
+# instead (tools/web/index.html). /app/, where the app used to be, and any path there is no
+# page for go to it.
 on:
   push:
     branches: [main]
-    paths:
-      - ".github/workflows/pages.yml"
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -25,17 +21,42 @@ jobs:
   build:
     name: Build the site
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 120
     steps:
-      - name: The latest release's browser build
+      - uses: actions/checkout@v4
+
+      # clang and mold link the build scripts (.cargo/config.toml's host settings).
+      - name: System packages
         env:
-          GH_TOKEN: ${{ github.token }}
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends clang mold < /dev/null
+
+      # The nightly pinned in rust-toolchain.toml, with its wasm32 target.
+      - name: Rust toolchain
+        run: rustup toolchain install && rustc -V
+
+      # wasm-bindgen's command line has to match the crate in Cargo.lock.
+      - name: wasm-bindgen version
+        id: wasm-bindgen
+        run: echo "version=$(sed -n '/^name = "wasm-bindgen"$/{n;s/^version = "\(.*\)"/\1/p}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages-web
+
+      - name: Build
+        run: tools/web/build.sh site
+
+      - name: Redirects
         run: |
           set -euo pipefail
-          gh release download --repo "${{ github.repository }}" --pattern cadrs-web.tar.gz \
-            --dir "$RUNNER_TEMP"
-          mkdir -p site
-          tar -xzf "$RUNNER_TEMP/cadrs-web.tar.gz" -C site --strip-components=1
           test -f site/index.html
           # Where the app used to be, and pages that are no more: to the app, keeping the query
           # (/app/?quick-start).
