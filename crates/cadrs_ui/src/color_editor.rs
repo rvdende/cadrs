@@ -629,10 +629,10 @@ fn sync_controls(
             }
             // Keep the hue while the colour is grey (it has none of its own).
             let hue = if sat == 0.0 || v == 0.0 { m.hue } else { h };
-            let close = (m.hue - hue).abs() < 0.6
-                && (m.saturation - sat).abs() < 0.003
-                && (m.value - v).abs() < 0.003;
-            if !close {
+            // A mixer already showing this colour keeps its knobs where they are: the 8-bit
+            // colour's saturation is coarse in the dark (1/30 at a value of 30), so putting
+            // them back on it made a drag jump in steps behind the pointer.
+            if from_hsv(m.hue, m.saturation, m.value) != rgb {
                 *m = ColorMixerState {
                     hue,
                     saturation: sat,

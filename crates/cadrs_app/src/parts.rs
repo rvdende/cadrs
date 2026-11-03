@@ -570,6 +570,10 @@ pub struct PartCache {
     pub sketch_curves: Vec<SketchCurves>,
     /// Bumped whenever the parts change (or which are shown).
     pub generation: u64,
+    /// Bumped whenever the Edit appearance dialog's live colour changes: only the part meshes
+    /// (their face colours) follow it, not everything keyed on [`Self::generation`] (a drag in
+    /// the colour mixer rebuilt the hidden edges, section caps, plane sizes… every step).
+    pub preview_generation: u64,
     /// Bumped by every rebuild taken (its errors are the current ones once `rebuilding` is
     /// false).
     pub builds: u64,
@@ -895,7 +899,7 @@ impl PartCache {
     ) {
         if self.appearance_preview != p {
             self.appearance_preview = p;
-            self.generation += 1;
+            self.preview_generation += 1;
         }
     }
 
@@ -2653,10 +2657,11 @@ struct PartMaterials {
     unclipped: [Option<Handle<PartShading>>; 4],
 }
 
-/// What the part meshes were last built for: the parts' generation, the edited extrude, the
-/// ghosted parts, the Translucent mode and the parts a section leaves whole.
+/// What the part meshes were last built for: the parts' generation and the appearance preview's,
+/// the edited extrude, the ghosted parts, the Translucent mode and the parts a section leaves
+/// whole.
 type GhostKey = (Vec<PartId>, Vec<(PartId, u32)>);
-type MeshKey = (u64, Option<FeatureId>, GhostKey, bool, Vec<PartId>);
+type MeshKey = (u64, u64, Option<FeatureId>, GhostKey, bool, Vec<PartId>);
 
 /// The part meshes of the last few tabs shown, so going back to a tab (or rebuilding with most
 /// parts unchanged) reuses their meshes, uploaded to the GPU already, instead of making them
@@ -2848,6 +2853,7 @@ fn sync_part_meshes(
     };
     let key = (
         cache.generation,
+        cache.preview_generation,
         over.editing,
         ghosts.key(),
         see_through,
