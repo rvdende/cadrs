@@ -14,10 +14,11 @@ fn debug_rebuild_document() {
     }
     let file = cadrs_core::store::Store::load_path(&p).unwrap();
     for el in &file.document.elements {
-        let features = el.features();
-        if features.is_empty() {
+        if el.features().is_empty() {
             continue;
         }
+        // As the app builds it: with the Variable Studios' variables the list names first.
+        let features = &el.active_features();
         let b = cadrs_core::rebuild::build(features);
         println!("{}: {} parts in {:?}", el.name, b.parts.len(), b.elapsed);
         if std::env::var("CADRS_DOC_FACES").is_ok() {

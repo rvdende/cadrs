@@ -823,6 +823,17 @@ pub struct Circle3 {
     pub radius: f64,
 }
 
+/// An ellipse in space: `center + major·cos t + minor·sin t`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Ellipse3 {
+    /// Centre.
+    pub center: Point3<f64>,
+    /// The major semi-axis, as a vector from the centre (mm).
+    pub major: Vector3<f64>,
+    /// The minor semi-axis, at right angles to the major one (mm).
+    pub minor: Vector3<f64>,
+}
+
 /// Where a line crosses a face of a body ([`crate::Kernel::ray_hits`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RayHit {
@@ -1172,6 +1183,10 @@ pub struct EdgeInfo {
     /// and Use projects the exact curve).
     #[serde(default)]
     pub circle: Option<Circle3>,
+    /// The exact ellipse of an elliptical edge or arc (a cylinder cut at a slant): Use projects
+    /// it as an ellipse, not as points along it.
+    #[serde(default)]
+    pub ellipse: Option<Ellipse3>,
     /// The faces either side meet tangentially along it (within [`crate::TANGENT_ANGLE`]): a
     /// smooth edge, which tangent propagation doesn't run along. (Picked on its own, an edge
     /// whose faces meet at a hair under that is still blended: only one whose faces' normals

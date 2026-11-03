@@ -2932,6 +2932,16 @@ fn drawn(shape: &cadrs_sketch::ImprintShape) -> cadrs_sketch::SketchOp {
                 construction: false,
             }
         }
+        ImprintShape::Ellipse {
+            center,
+            major,
+            minor,
+        } => SketchOp::AddEllipse {
+            center,
+            major,
+            minor,
+            construction: false,
+        },
     }
 }
 
@@ -2950,6 +2960,7 @@ fn imprint_point(shape: &cadrs_sketch::ImprintShape) -> cadrs_sketch::Vec2 {
             let t = start_angle + sweep / 2.0;
             cadrs_sketch::Vec2::new(center.x + radius * t.cos(), center.y + radius * t.sin())
         }
+        ImprintShape::Ellipse { major, .. } => major,
     }
 }
 
@@ -2979,6 +2990,11 @@ fn imprint_distance(shape: &cadrs_sketch::ImprintShape, p: cadrs_sketch::Vec2) -
             radius: r,
             ..
         } => (p.distance(c) - r).abs(),
+        ImprintShape::Ellipse {
+            center,
+            major,
+            minor,
+        } => cadrs_sketch::geom::EllipseGeom::new(center, major, minor).distance(p),
     }
 }
 

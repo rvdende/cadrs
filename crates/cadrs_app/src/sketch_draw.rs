@@ -9,7 +9,7 @@
 //! - Rubber bands and live values: `#449ccd`; values are 13 px Inter with 5 decimals.
 //! - Hover: a 4 px `#fec685` band; the snap target point gets a `#fdca33` square (a crisp UI
 //!   node, see [`crate::sketch_glyphs`]). Curves the cursor snaps onto (on-curve, midpoint,
-//!   intersection) get the hover band too; alignment guides are dotted `#ffd969` lines.
+//!   intersection) get the hover band too; alignment guides are dashed bright blue lines, 2 px.
 //! - Constraint and inference glyphs: see [`crate::sketch_glyphs`].
 //! - Dimensions (M7): black 1 px lines, 13 × 7 px filled arrowheads, extension lines from 4 px
 //!   off the geometry to 3 px past the dimension line, and the value in 15 px semibold Inter,
@@ -270,9 +270,13 @@ fn picked_band() -> Color {
 fn picked_core() -> Color {
     Color::srgb_u8(0xca, 0x87, 0x0b)
 }
-/// Dotted alignment guides (`inference/automaticinferencingexample2.png`).
+/// Dashed alignment guides: a bright blue, lighter than the sketch's own lines and clear of
+/// the red and green plane axes (Onshape's pale dotted yellow was too hard to see).
 fn guide_color() -> Color {
-    Color::srgb_u8(0xff, 0xd9, 0x69)
+    by_scheme(
+        Color::srgb_u8(0x14, 0x8c, 0xff),
+        Color::srgb_u8(0x5a, 0xb4, 0xff),
+    )
 }
 /// Glyph leaders (`screens/12a`).
 fn leader_color() -> Color {
@@ -1244,24 +1248,13 @@ fn draw_sketches(
                 } else {
                     SVec2::new(from.x, c.pos.y)
                 };
-                // A guide lying on a plane axis (from the origin) would vanish into the blue
-                // axis line: it is drawn over it, 2 px and darker (T2 judge).
-                let on_axis =
-                    (horizontal && from.y.abs() < 1e-9) || (!horizontal && from.x.abs() < 1e-9);
-                if on_axis {
-                    unnudged(|| {
-                        for d in dashes(&[from, to], 4.0 / ppm, 3.0 / ppm) {
-                            lines.linestrip(
-                                d.into_iter().map(|p| world(&frame, p)),
-                                Color::srgb_u8(0xf3, 0xa3, 0x2c),
-                            );
-                        }
-                    });
-                } else {
-                    for d in dashes(&[from, to], 2.0 / ppm, 2.0 / ppm) {
-                        thin.linestrip(d.into_iter().map(|p| world(&frame, p)), guide_color());
+                // 2 px, over what it runs along (a guide from the origin lies on a plane axis,
+                // T2 judge).
+                unnudged(|| {
+                    for d in dashes(&[from, to], 5.0 / ppm, 3.0 / ppm) {
+                        lines.linestrip(d.into_iter().map(|p| world(&frame, p)), guide_color());
                     }
-                }
+                });
             }
             // Before a tool's first click, a plain point snap shows only its square
             // (`screens/10`); other inferences keep their glyphs (the midpoint, `screens/18`).

@@ -86,6 +86,17 @@ impl Shape {
         }
     }
 
+    /// The unit tangent of a round shape at `p`, a point on it; `None` for straight ones.
+    fn tangent_at(&self, p: Vec2) -> Option<Vec2> {
+        let t = match *self {
+            Shape::Segment(..) | Shape::Line { .. } => return None,
+            Shape::Circle { center, .. } => (p - center).perp(),
+            Shape::Arc(g) => (p - g.center).perp(),
+            Shape::Ellipse(g) => g.tangent_at(g.nearest_t(p)),
+        };
+        (t.length() > 1e-300).then(|| t.normalize())
+    }
+
     /// True if `p`, a point on the carrier, lies on the existing part.
     fn contains(&self, p: Vec2) -> bool {
         match *self {
@@ -318,7 +329,8 @@ pub enum Placed {
     Parallel(CurveRef),
     /// The new line is perpendicular to this line.
     Perpendicular(CurveRef),
-    /// The new line is tangent to this arc (which ends at the anchor).
+    /// The new line is tangent to this curve: an arc ending at the anchor, or a round curve the
+    /// line ends on, running along it there.
     Tangent(CurveRef),
 }
 
@@ -412,6 +424,16 @@ pub fn infer(cursor: Vec2, px_per_mm: f64, s: &Sketch, ctx: &ToolContext) -> Vec
     let by_distance = |v: &mut Vec<Candidate>| {
         v.sort_by(|a, b| a.distance_px.total_cmp(&b.distance_px));
     };
+    // A line from the anchor ending at `pos` on round `shape`, running along it there: tangent
+    // to it (as Onshape infers).
+    let tangent_end = |shape: &Shape, pos: Vec2| {
+        ctx.hv_from_anchor
+            && ctx.anchor.is_some_and(|a| {
+                shape
+                    .tangent_at(pos)
+                    .is_some_and(|t| px((a - pos).cross(t).abs()) < GUIDE_PX)
+            })
+    };
     let mut out = Vec::new();
 
     // 1. Points.
@@ -469,10 +491,18 @@ pub fn infer(cursor: Vec2, px_per_mm: f64, s: &Sketch, ctx: &ToolContext) -> Vec
         .filter(|(_, p)| away_from_anchor(*p))
         .filter_map(|(k, p)| {
             let d = px(p.distance(cursor));
+            let r = CurveRef::Curve(k);
+            let tangent = s
+                .ellipse_geom(k)
+                .is_some_and(|g| tangent_end(&Shape::Ellipse(g), p));
             (d <= POINT_PX).then(|| Candidate {
                 pos: p,
-                kind: Kind::OnCurve(CurveRef::Curve(k)),
-                constraints: vec![Placed::OnCurve(CurveRef::Curve(k))],
+                kind: Kind::OnCurve(r),
+                constraints: if tangent {
+                    vec![Placed::OnCurve(r), Placed::Tangent(r)]
+                } else {
+                    vec![Placed::OnCurve(r)]
+                },
                 distance_px: d,
             })
         })
@@ -627,19 +657,19 @@ pub fn infer(cursor: Vec2, px_per_mm: f64, s: &Sketch, ctx: &ToolContext) -> Vec
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(p, dp)| (p, dp, g.placed))
             });
-            Some(match crossing {
-                Some((p, dp, placed)) => Candidate {
-                    pos: p,
-                    kind: Kind::OnCurve(*r),
-                    constraints: vec![Placed::OnCurve(*r), placed],
-                    distance_px: dp,
-                },
-                None => Candidate {
-                    pos: q,
-                    kind: Kind::OnCurve(*r),
-                    constraints: vec![Placed::OnCurve(*r)],
-                    distance_px: d,
-                },
+            let (pos, mut constraints, distance_px) = match crossing {
+                Some((p, dp, placed)) => (p, vec![Placed::OnCurve(*r), placed], dp),
+                None => (q, vec![Placed::OnCurve(*r)], d),
+            };
+            // (The tangent fixes the line's direction: no guide besides.)
+            if tangent_end(shape, pos) {
+                constraints = vec![Placed::OnCurve(*r), Placed::Tangent(*r)];
+            }
+            Some(Candidate {
+                pos,
+                kind: Kind::OnCurve(*r),
+                constraints,
+                distance_px,
             })
         })
         .collect();
@@ -1382,6 +1412,82 @@ mod tests {
         let t = Vec2::from_angle(0.5).perp();
         let c = best(st - t * 20.0 + t.perp() * 0.5, &s, &ctx).unwrap();
         assert_eq!(c.constraints, vec![Placed::Tangent(CurveRef::Curve(arc))]);
+    }
+
+    #[test]
+    fn a_line_ending_on_a_round_curve_along_it_is_tangent_to_it() {
+        // An ellipse 12 along y, 10 across, and a circle of radius 10 at (40, 0).
+        let mut s = Sketch::new();
+        SketchOp::AddEllipse {
+            center: Vec2::ZERO,
+            major: Vec2::new(0.0, 12.0),
+            minor: 10.0,
+            construction: false,
+        }
+        .apply(&mut s)
+        .unwrap();
+        SketchOp::AddCircle {
+            center: Vec2::new(40.0, 0.0),
+            radius: 10.0,
+            construction: false,
+        }
+        .apply(&mut s)
+        .unwrap();
+        let ellipse = s
+            .curves
+            .iter()
+            .find(|(_, c)| matches!(c.kind, CurveKind::Ellipse { .. }))
+            .map(|(k, _)| k)
+            .unwrap();
+        let circle = s
+            .curves
+            .iter()
+            .find(|(_, c)| matches!(c.kind, CurveKind::Circle { .. }))
+            .map(|(k, _)| k)
+            .unwrap();
+        // Down from (10, 30) to the end of the ellipse's minor axis: on it and tangent (not
+        // vertical as well).
+        let ctx = ToolContext {
+            anchor: Some(Vec2::new(10.0, 30.0)),
+            hv_from_anchor: true,
+            ..default_ctx()
+        };
+        let c = best(Vec2::new(10.2, 0.3), &s, &ctx).unwrap();
+        assert_eq!(
+            c.constraints,
+            vec![
+                Placed::OnCurve(CurveRef::Curve(ellipse)),
+                Placed::Tangent(CurveRef::Curve(ellipse))
+            ]
+        );
+        let specs = placed_specs(&s, c.pos, &c.constraints, ctx.anchor, true);
+        assert!(specs.contains(&ConstraintOf::Tangent(
+            CurveSpec::Id(ellipse),
+            CurveSpec::Between(Vec2::new(10.0, 30.0), c.pos)
+        )));
+        // Across to the circle's top from the left, level with it: tangent there too.
+        let ctx = ToolContext {
+            anchor: Some(Vec2::new(-20.0, 10.0)),
+            hv_from_anchor: true,
+            ..default_ctx()
+        };
+        let c = best(Vec2::new(40.3, 10.2), &s, &ctx).unwrap();
+        assert!(
+            c.constraints
+                .contains(&Placed::Tangent(CurveRef::Curve(circle)))
+        );
+        // Crossing the ellipse steeply: only on it.
+        let ctx = ToolContext {
+            anchor: Some(Vec2::new(30.0, 30.0)),
+            hv_from_anchor: true,
+            ..default_ctx()
+        };
+        let c = best(Vec2::new(10.0, 0.4), &s, &ctx).unwrap();
+        assert!(
+            !c.constraints
+                .iter()
+                .any(|p| matches!(p, Placed::Tangent(_)))
+        );
     }
 
     #[test]

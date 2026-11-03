@@ -43,6 +43,15 @@ fn projected(shape: ImprintShape) -> Projected {
                 end: at(start_angle + sweep),
             }
         }
+        ImprintShape::Ellipse {
+            center,
+            major,
+            minor,
+        } => Projected::Ellipse {
+            center,
+            major,
+            minor,
+        },
     }
 }
 
@@ -82,6 +91,16 @@ impl External {
                     start: sketch.ensure_point(start),
                     end: sketch.ensure_point(end),
                 },
+                // (Its major point is a handle of its own, not a snap target shared.)
+                Projected::Ellipse {
+                    center,
+                    major,
+                    minor,
+                } => CurveKind::Ellipse {
+                    center: sketch.ensure_point(center),
+                    major: sketch.add_point(major),
+                    minor,
+                },
                 _ => continue,
             };
             let id = sketch.curves.insert(crate::Curve {
@@ -117,6 +136,11 @@ impl External {
             Projected::Line(a, b) => CurveSpec::Between(a, b),
             Projected::Circle(c, r) => CurveSpec::Circle(c, r),
             Projected::Arc { start, end, .. } => CurveSpec::Between(start, end),
+            Projected::Ellipse {
+                center,
+                major,
+                minor,
+            } => CurveSpec::Ellipse(center, major, minor),
             _ => return None,
         })
     }
@@ -368,6 +392,66 @@ mod tests {
             .values()
             .filter(|c| matches!(c, ConstraintOf::Use(..)))
             .count()
+    }
+
+    #[test]
+    fn a_line_tangent_to_an_imprinted_ellipse_uses_it() {
+        // A face's elliptical edge (a cylinder cut at a slant): 12 along y, 10 across.
+        let mut base = Sketch::new();
+        base.imprint.push(Imprint {
+            id: synthetic_curve(1, 0),
+            shape: ImprintShape::Ellipse {
+                center: Vec2::new(0.0, 0.0),
+                major: Vec2::new(0.0, 12.0),
+                minor: 10.0,
+            },
+            link: Some(link(0)),
+        });
+        let ext = External::of(&base).unwrap();
+        let ellipse = ext
+            .curves
+            .iter()
+            .find(|(_, (p, _))| matches!(p, Projected::Ellipse { .. }))
+            .map(|(k, _)| *k)
+            .unwrap();
+        // A line up from the end of its minor axis, on it and tangent to it, without a Use.
+        let (a, b) = (Vec2::new(10.0, 0.0), Vec2::new(10.0, 30.0));
+        let op = SketchOp::Batch(vec![
+            SketchOp::AddPolyline {
+                points: vec![a, b],
+                closed: false,
+                construction: false,
+                label: "Add line",
+            },
+            SketchOp::AddConstraints(vec![
+                ConstraintOf::PointOnCurve(PointSpec::At(a), CurveSpec::Id(ellipse)),
+                ConstraintOf::Tangent(CurveSpec::Between(a, b), CurveSpec::Id(ellipse)),
+            ]),
+        ]);
+        let mut s = base.clone();
+        ext.commit(&base, op).apply(&mut s).unwrap();
+        // The ellipse is used (construction, linked) and both constraints refer to it.
+        assert_eq!(uses(&s), 1);
+        let used = s
+            .curves
+            .iter()
+            .find(|(_, c)| matches!(c.kind, CurveKind::Ellipse { .. }))
+            .map(|(k, c)| (k, c.construction))
+            .unwrap();
+        assert!(used.1);
+        let on_it = |c: &ConstraintOf<_, _>| -> bool {
+            format!("{c:?}").contains(&format!("{:?}", used.0))
+        };
+        assert_eq!(
+            s.constraints
+                .values()
+                .filter(|c| matches!(
+                    c,
+                    ConstraintOf::PointOnCurve(..) | ConstraintOf::Tangent(..)
+                ) && on_it(c))
+                .count(),
+            2
+        );
     }
 
     #[test]

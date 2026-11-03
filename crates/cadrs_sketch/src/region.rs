@@ -706,6 +706,11 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                 start_angle,
                 sweep,
             }),
+            ImprintShape::Ellipse {
+                center,
+                major,
+                minor,
+            } => Carrier::Ellipse(EllipseGeom::new(center, major, minor)),
         };
         let same = |k: &Carrier| match (*k, c) {
             (Carrier::Seg(x, y), Carrier::Seg(p, q)) => {
@@ -721,6 +726,12 @@ fn carriers(s: &Sketch) -> Vec<(CurveId, Carrier)> {
                     && ((g.start().distance(h.start()) < 1e-6 && g.end().distance(h.end()) < 1e-6)
                         || (g.start().distance(h.end()) < 1e-6
                             && g.end().distance(h.start()) < 1e-6))
+            }
+            // (Its major point at either end of the axis.)
+            (Carrier::Ellipse(g), Carrier::Ellipse(h)) => {
+                g.center.distance(h.center) < 1e-6
+                    && (g.minor - h.minor).abs() < 1e-6
+                    && (g.a.distance(h.a) < 1e-6 || g.a.distance(-h.a) < 1e-6)
             }
             _ => false,
         };

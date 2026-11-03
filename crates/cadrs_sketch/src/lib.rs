@@ -1170,6 +1170,13 @@ pub enum ImprintShape {
         start_angle: f64,
         sweep: f64,
     },
+    /// A whole ellipse: its centre, the end of its major semi-axis and its minor radius (a
+    /// cylinder's edge cut at a slant).
+    Ellipse {
+        center: Vec2,
+        major: Vec2,
+        minor: f64,
+    },
 }
 
 /// A curve id that no sketch curve has: regions use them for imprinted edges and the pieces

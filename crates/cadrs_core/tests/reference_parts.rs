@@ -3022,6 +3022,7 @@ cases! {
     case_83_boundary_loop_thicken
     issue_156_face_chamfer_fillet
     issue_156_wall_as_thick_as_chamfer
+    issue_slanted_cut_cylinder_foot
 }
 
 /// A case copied in needs its line in `cases!`, and a test its folder.

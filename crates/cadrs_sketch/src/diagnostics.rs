@@ -200,6 +200,11 @@ fn distance_to_imprint(shape: &crate::ImprintShape, p: Vec2) -> f64 {
             sweep,
         }
         .distance(p),
+        crate::ImprintShape::Ellipse {
+            center,
+            major,
+            minor,
+        } => crate::geom::EllipseGeom::new(center, major, minor).distance(p),
     }
 }
 

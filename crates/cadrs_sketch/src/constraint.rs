@@ -84,6 +84,8 @@ pub enum CurveSpec {
     Between(Vec2, Vec2),
     /// The circle with this center and radius.
     Circle(Vec2, f64),
+    /// The ellipse with this center, major point (or the one opposite) and minor radius.
+    Ellipse(Vec2, Vec2, f64),
     XAxis,
     YAxis,
 }
@@ -336,6 +338,16 @@ fn resolve_curve(s: &Sketch, c: CurveSpec) -> Option<CurveRef> {
             .find(|(_, cv)| {
                 matches!(cv.kind, CurveKind::Circle { center: c, radius: r }
                     if near(c, center) && (r - radius).abs() <= MERGE_EPS)
+            })
+            .map(|(k, _)| CurveRef::Curve(k)),
+        CurveSpec::Ellipse(center, major, minor) => s
+            .curves
+            .iter()
+            .find(|(_, cv)| {
+                matches!(cv.kind, CurveKind::Ellipse { center: c, major: m, minor: r }
+                    if near(c, center)
+                        && (r - minor).abs() <= MERGE_EPS
+                        && (near(m, major) || near(m, center * 2.0 - major)))
             })
             .map(|(k, _)| CurveRef::Curve(k)),
     }
