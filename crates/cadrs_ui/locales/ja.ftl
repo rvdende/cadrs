@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = 合致コネクタを選択
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = ツール
 model-boolean-targets = ターゲット
+model-boolean-keep-remainder = 残りのパーツを保持
 model-boolean-offset-all = すべてオフセット
 model-boolean-faces-to-offset = オフセットする面
 model-boolean-union = 結合

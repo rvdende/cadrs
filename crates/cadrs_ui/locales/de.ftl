@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Einen Verknüpfungskonnektor auswählen
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Werkzeuge
 model-boolean-targets = Ziele
+model-boolean-keep-remainder = Restteile behalten
 model-boolean-offset-all = Alle versetzen
 model-boolean-faces-to-offset = Zu versetzende Flächen
 model-boolean-union = Vereinigen

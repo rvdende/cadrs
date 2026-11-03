@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Выберите соединитель сопр
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Инструменты
 model-boolean-targets = Цели
+model-boolean-keep-remainder = Сохранить остальные детали
 model-boolean-offset-all = Сместить все
 model-boolean-faces-to-offset = Грани для смещения
 model-boolean-union = Объединение

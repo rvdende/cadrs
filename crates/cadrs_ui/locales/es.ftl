@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Seleccione un conector de relación
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Herramientas
 model-boolean-targets = Objetivos
+model-boolean-keep-remainder = Conservar las piezas restantes
 model-boolean-offset-all = Desfasar todo
 model-boolean-faces-to-offset = Caras que desfasar
 model-boolean-union = Unir

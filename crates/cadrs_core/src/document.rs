@@ -1988,17 +1988,26 @@ impl BooleanKind {
 
 /// The Boolean feature (PS5.5): Union, Subtract or Intersect of parts. The result keeps the
 /// identity (name, and later the properties) of the first tool (Union, Intersect) or of each
-/// target (Subtract). The tools are used up unless "Keep tools" is on.
+/// target (Subtract, Intersect with targets). The tools are used up unless "Keep tools" is on.
+///
+/// Intersect with targets: each target keeps only where it overlaps the tools (each tool's
+/// overlap its own pieces); with "Keep remainder parts" the rest of it stays too, so the target
+/// is split along the tools' surfaces (the remainder keeps its identity, the overlaps are new
+/// parts).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct BooleanFeature {
     pub op: BooleanKind,
     /// The tools, in the order picked.
     pub tools: Vec<PartId>,
-    /// Subtract: the parts to cut.
+    /// Subtract: the parts to cut. Intersect: the parts to keep the overlaps of (none: the
+    /// tools' common volume).
     #[serde(default)]
     pub targets: Vec<PartId>,
     #[serde(default)]
     pub keep_tools: bool,
+    /// Intersect with targets: what of each target is outside the tools stays as well.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_remainder: bool,
     /// (P3.10, PS5.5) Subtract's Offset: the tools grown (or, flipped, shrunk) before they cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<BooleanOffset>,
@@ -2065,7 +2074,18 @@ impl BooleanFeature {
                 Some("Select the parts to subtract from")
             }
             BooleanKind::Subtract if self.tools.is_empty() => Some("Select the parts to subtract"),
-            BooleanKind::Union | BooleanKind::Intersect if self.tools.len() < 2 => {
+            BooleanKind::Intersect if !self.targets.is_empty() && self.tools.is_empty() => {
+                Some("Select the parts to intersect with")
+            }
+            BooleanKind::Intersect
+                if !self.targets.is_empty()
+                    && self.tools.iter().any(|t| self.targets.contains(t)) =>
+            {
+                Some("A part can't be both a tool and a target")
+            }
+            BooleanKind::Union | BooleanKind::Intersect
+                if self.targets.is_empty() && self.tools.len() < 2 =>
+            {
                 Some("Select at least two parts")
             }
             _ => None,

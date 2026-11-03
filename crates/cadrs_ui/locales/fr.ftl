@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Sélectionnez un connecteur de liaison
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Outils
 model-boolean-targets = Cibles
+model-boolean-keep-remainder = Conserver les pièces restantes
 model-boolean-offset-all = Tout décaler
 model-boolean-faces-to-offset = Faces à décaler
 model-boolean-union = Union

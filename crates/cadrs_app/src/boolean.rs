@@ -1,7 +1,11 @@
 //! The Boolean feature (P3.3, PS5.5), like Onshape's: **Union | Subtract | Intersect** tabs, a
-//! **Tools** field (and **Targets** for Subtract) filled by clicking parts in the viewport or the
-//! Parts list, and **Keep tools**. A Union or an Intersect keeps the first tool's identity (its
-//! name, later its properties); the tools are used up unless Keep tools is on.
+//! **Tools** field (and **Targets** for Subtract and Intersect) filled by clicking parts in the
+//! viewport or the Parts list, and **Keep tools**. A Union or an Intersect keeps the first tool's
+//! identity (its name, later its properties); the tools are used up unless Keep tools is on.
+//!
+//! Intersect with Targets keeps each target only where the tools overlap it; with **Keep
+//! remainder parts** the rest of it stays too, so the targets are split along the tools (the
+//! remainder keeps the target's identity, the overlaps are new parts).
 //!
 //! P3.10 (PS5.5): the Tools list can be **reordered** (its ↑↓ button, then drag; the first tool
 //! gives a Union its identity), and Subtract has **Offset**: *Offset all* (on by default) or
@@ -77,7 +81,7 @@ pub struct BooleanSession {
     pub is_new: bool,
     pub mark: usize,
     pub before: Option<Feature>,
-    /// Picks go to the targets (Subtract) instead of the tools.
+    /// Picks go to the targets (Subtract, Intersect) instead of the tools.
     pub targets_active: bool,
     /// The dialog's Final button (P3.9): show the features after this one too.
     pub show_final: bool,
@@ -336,8 +340,10 @@ fn show_parts(
     let tools = b.tools.iter().map(|p| Pick::Part(*p));
     let mut want: Vec<Pick> = Vec::new();
     let mut ghost = crate::parts::PartGhosts::default();
-    if b.op == BooleanKind::Subtract {
+    if has_targets(b.op) {
         want.extend(b.targets.iter().map(|p| Pick::Part(*p)));
+    }
+    if b.op == BooleanKind::Subtract {
         ghost.parts = b.tools.clone();
         // P3.10: the faces to offset.
         if let Some(o) = &b.offset {
@@ -394,7 +400,7 @@ fn boolean_picks(
         let targets = s.targets_active;
         commands.queue(move |world: &mut World| {
             let Some(mut b) = params(world) else { return };
-            let list = if targets && b.op == BooleanKind::Subtract {
+            let list = if targets && has_targets(b.op) {
                 &mut b.targets
             } else {
                 &mut b.tools
@@ -466,12 +472,15 @@ fn on_tab(ev: On<TabStripSelect>, q: Query<&Name>, mut commands: Commands) {
             b.op = op;
             set(world, b, op.label());
         }
-        // The Tools take the picks again (only Subtract has Targets and faces to offset).
-        if op != BooleanKind::Subtract
-            && let Some(mut s) = world.get_resource_mut::<BooleanSession>()
-        {
-            s.targets_active = false;
-            s.offset_faces_active = false;
+        // The Tools take the picks again (only Subtract and Intersect have Targets, only
+        // Subtract faces to offset).
+        if let Some(mut s) = world.get_resource_mut::<BooleanSession>() {
+            if !has_targets(op) {
+                s.targets_active = false;
+            }
+            if op != BooleanKind::Subtract {
+                s.offset_faces_active = false;
+            }
         }
     });
 }
@@ -486,6 +495,10 @@ fn on_keep_tools(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands
             "boolean-keep-tools-checkbox" => {
                 b.keep_tools = on;
                 "Keep tools"
+            }
+            "boolean-keep-remainder-checkbox" => {
+                b.keep_remainder = on;
+                "Keep remainder parts"
             }
             // P3.10 (PS5.5): the Subtract offset.
             "boolean-offset-checkbox" => {
@@ -617,6 +630,12 @@ fn on_remove(ev: On<SelectionListRemove>, q: Query<&ListRole>, mut commands: Com
 }
 
 /// A Boolean's operation tab, in the current language (the core's label is English).
+/// Whether `op` has a Targets field (Subtract: the parts to cut; Intersect: the parts to keep the
+/// overlaps of).
+fn has_targets(op: BooleanKind) -> bool {
+    matches!(op, BooleanKind::Subtract | BooleanKind::Intersect)
+}
+
 fn boolean_kind_text(k: BooleanKind) -> String {
     tr(match k {
         BooleanKind::Union => "model-boolean-union",
@@ -767,7 +786,7 @@ fn sync_boolean_dialog(
         };
         let t = theme.clone();
         let tf = theme.clone();
-        let (op, keep) = (b.op, b.keep_tools);
+        let (op, keep, remainder) = (b.op, b.keep_tools, b.keep_remainder);
         let (tools, targets) = (names(&b.tools), names(&b.targets));
         let targets_active = s.targets_active;
         let offset = b.offset.clone();
@@ -806,14 +825,11 @@ fn sync_boolean_dialog(
                                 SelectionList::new("boolean-tools-field")
                                     .placeholder(tr("model-boolean-tools"))
                                     .items(tools.clone())
-                                    .active(
-                                        (!targets_active || op != BooleanKind::Subtract)
-                                            && !faces_active,
-                                    )
+                                    .active((!targets_active || !has_targets(op)) && !faces_active)
                                     .reorderable(true)
                                     .build(&t),
                             ));
-                            if op == BooleanKind::Subtract {
+                            if has_targets(op) {
                                 b.spawn((
                                     ListRole::Targets,
                                     SelectionList::new("boolean-targets-field")
@@ -822,6 +838,18 @@ fn sync_boolean_dialog(
                                         .active(targets_active)
                                         .build(&t),
                                 ));
+                            }
+                            if op == BooleanKind::Intersect {
+                                b.spawn(
+                                    OptionRow::new(
+                                        "boolean-keep-remainder",
+                                        tr("model-boolean-keep-remainder"),
+                                    )
+                                    .checked(remainder)
+                                    .build(&t),
+                                );
+                            }
+                            if op == BooleanKind::Subtract {
                                 // P3.10 (PS5.5): the tools offset before they cut.
                                 b.spawn(
                                     OptionRow::new("boolean-offset", tr("common-offset"))
@@ -941,8 +969,7 @@ fn sync_boolean_dialog(
         let want = match role {
             ListRole::Tools => SelectionListState {
                 items: all.clone(),
-                active: (!s.targets_active || b.op != BooleanKind::Subtract)
-                    && !s.offset_faces_active,
+                active: (!s.targets_active || !has_targets(b.op)) && !s.offset_faces_active,
                 error: !tools_red.is_empty(),
                 red_items: false,
                 red: tools_red.clone(),

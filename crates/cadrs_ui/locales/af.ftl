@@ -1750,6 +1750,7 @@ model-select-a-mate-connector = Kies 'n koppelpunt
 ## crates/cadrs_app/src/boolean.rs
 model-boolean-tools = Gereedskap
 model-boolean-targets = Teikens
+model-boolean-keep-remainder = Hou oorblywende onderdele
 model-boolean-offset-all = Verskuif alles
 model-boolean-faces-to-offset = Vlakke om te verskuif
 model-boolean-union = Verenig

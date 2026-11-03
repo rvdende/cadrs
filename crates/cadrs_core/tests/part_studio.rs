@@ -480,6 +480,7 @@ fn boolean_feature() {
             tools: vec![b, a],
             targets: vec![],
             keep_tools: false,
+            keep_remainder: false,
             offset: None,
         }),
     );
@@ -496,6 +497,7 @@ fn boolean_feature() {
             tools: vec![b],
             targets: vec![a],
             keep_tools: true,
+            keep_remainder: false,
             offset: None,
         }),
     );
@@ -512,6 +514,7 @@ fn boolean_feature() {
             tools: vec![a, b],
             targets: vec![],
             keep_tools: false,
+            keep_remainder: false,
             offset: None,
         }),
     );
@@ -722,6 +725,7 @@ fn new_commands_undo_and_documents_round_trip() {
                 tools: vec![b],
                 targets: vec![a],
                 keep_tools: true,
+                keep_remainder: false,
                 offset: None,
             },
         ),
