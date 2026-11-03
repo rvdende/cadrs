@@ -23,3 +23,7 @@ icon-rs.workspace = true
 # The browser's file chooser (`file_picker`, in a page).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures.workspace = true
+
+# Bevy's parts a desktop needs and a page doesn't (it has one thread and no X11 or Wayland).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { workspace = true, features = ["multi_threaded", "x11", "wayland"] }
