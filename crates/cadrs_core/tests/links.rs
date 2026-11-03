@@ -606,6 +606,43 @@ fn imprinting_splits_face_regions_unless_disabled() {
 }
 
 #[test]
+fn only_the_sketchs_own_face_is_imprinted() {
+    // A box (0..50 × 0..30, 25 high) with a sketch on its top, and a second box beside it, as
+    // high, its top in the sketch's plane (the presso df64 foot's "reference" box): only the
+    // first box's top is imprinted, the second's edges, shown or hidden, aren't the sketch's
+    // (they split its regions; to use that face, sketch on it).
+    let mut d = Doc::new();
+    let s1 = d.sketch(PlaneRef::Top);
+    d.edit(s1, rect(0.0, 0.0, 50.0, 30.0));
+    let ex = d.extrude(s1, 25.0, |_| true);
+    let s3 = d.sketch(PlaneRef::Top);
+    d.edit(s3, rect(60.0, 0.0, 20.0, 30.0));
+    let other = d.extrude(s3, 25.0, |_| true);
+    let top = face_plane(
+        &d.features(),
+        ex,
+        cap_name(&d.features(), ex, 0, true).unwrap(),
+    )
+    .unwrap();
+    let s2 = d.sketch(top);
+    assert_eq!(d.g(s2).imprint.len(), 4, "{:?}", d.g(s2).imprint);
+    assert!(d.g(s2).imprint.iter().all(|im| matches!(
+        im.link,
+        Some(Link::Edge { feature, .. }) if feature == ex.0
+    )));
+    d.h.execute(
+        &mut d.d,
+        &cadrs_core::commands::SetPartsHidden {
+            element: d.el,
+            parts: vec![cadrs_core::PartId::new(other, 0)],
+            hidden: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(d.g(s2).imprint.len(), 4);
+}
+
+#[test]
 fn links_and_texts_are_saved() {
     let (mut d, _s1, ex, s2) = box_with_face_sketch();
     let features = d.features();

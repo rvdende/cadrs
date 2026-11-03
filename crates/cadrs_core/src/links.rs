@@ -1160,62 +1160,57 @@ pub fn silhouettes(solid: &Solid, face: &FaceName, dir: Vec3) -> Vec<(Vec3, Vec3
     out
 }
 
-/// The edges of the part faces lying in the plane (either way round), as imprints (S21.1).
-pub fn imprint(solids: &[(FeatureId, &Solid)], frame: &PlaneFrame) -> Vec<Imprint> {
-    let n = unit(frame.normal());
+/// The edges of face `face` of `solid` (made by `feature`), the face a sketch lies on, as
+/// imprints in the sketch's plane (S21.1). Only that face's: another part's face in the same
+/// plane, shown or hidden, doesn't split the sketch's regions (its faces are picked from it).
+pub fn imprint_face(
+    feature: FeatureId,
+    solid: &Solid,
+    face: usize,
+    frame: &PlaneFrame,
+) -> Vec<Imprint> {
     let mut out = Vec::new();
-    for (feature, solid) in solids {
-        for face in &solid.faces {
-            let Some(p) = face.plane else { continue };
-            let on_plane = dot(unit(p.normal()), n).abs() > 1.0 - PARALLEL
-                && face
-                    .loops
-                    .first()
-                    .and_then(|l| l.first())
-                    .is_some_and(|q| frame.distance(*q).abs() < 1e-6);
-            if !on_plane {
-                continue;
-            }
-            for e in &solid.edges {
-                if !e.name.touches(&face.name) {
-                    continue;
-                }
-                let Some(shape) = edge_curve(e).and_then(|c| project(c, frame)) else {
-                    continue;
-                };
-                let shape = match shape {
-                    Projected::Line(a, b) => ImprintShape::Line(a, b),
-                    Projected::Circle(c, r) => ImprintShape::Circle(c, r),
-                    Projected::Arc { center, start, end } => {
-                        let g = cadrs_sketch::ArcGeom::ccw(center, start, end);
-                        ImprintShape::Arc {
-                            center,
-                            radius: g.radius,
-                            start_angle: g.start_angle,
-                            sweep: g.sweep,
-                        }
-                    }
-                    Projected::Ellipse {
-                        center,
-                        major,
-                        minor,
-                    } => ImprintShape::Ellipse {
-                        center,
-                        major,
-                        minor,
-                    },
-                    _ => continue,
-                };
-                out.push(Imprint {
-                    id: synthetic_curve(1, out.len() as u32),
-                    shape,
-                    link: Some(Link::Edge {
-                        feature: feature.0,
-                        edge: e.name,
-                    }),
-                });
-            }
+    let Some(face) = solid.faces.get(face) else {
+        return out;
+    };
+    for e in &solid.edges {
+        if !e.name.touches(&face.name) {
+            continue;
         }
+        let Some(shape) = edge_curve(e).and_then(|c| project(c, frame)) else {
+            continue;
+        };
+        let shape = match shape {
+            Projected::Line(a, b) => ImprintShape::Line(a, b),
+            Projected::Circle(c, r) => ImprintShape::Circle(c, r),
+            Projected::Arc { center, start, end } => {
+                let g = cadrs_sketch::ArcGeom::ccw(center, start, end);
+                ImprintShape::Arc {
+                    center,
+                    radius: g.radius,
+                    start_angle: g.start_angle,
+                    sweep: g.sweep,
+                }
+            }
+            Projected::Ellipse {
+                center,
+                major,
+                minor,
+            } => ImprintShape::Ellipse {
+                center,
+                major,
+                minor,
+            },
+            _ => continue,
+        };
+        out.push(Imprint {
+            id: synthetic_curve(1, out.len() as u32),
+            shape,
+            link: Some(Link::Edge {
+                feature: feature.0,
+                edge: e.name,
+            }),
+        });
     }
     out
 }

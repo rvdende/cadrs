@@ -418,6 +418,7 @@ impl PartStudio<'_> {
             tools,
             targets,
             keep_tools: Self::flag(f, "keepTools"),
+            keep_remainder: false,
             offset: None,
         };
         self.add(f, fid, "Boolean", FeatureKind::Boolean(b), fr)

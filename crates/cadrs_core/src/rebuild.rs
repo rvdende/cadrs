@@ -6376,6 +6376,7 @@ mod ahead_tests {
                 tools: vec![part(blocks[2]), part(across)],
                 targets: Vec::new(),
                 keep_tools: false,
+                keep_remainder: false,
                 offset: None,
             }),
             suppress_by: None,

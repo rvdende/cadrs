@@ -835,24 +835,19 @@ fn regenerate_sketch(
         return built;
     };
     let frame = plane.frame();
-    // Imprints.
-    // MC1.7: on a context face, the geometry of that context only (another context's ghost
-    // may lie in the same plane); else the studio's own parts.
+    // Imprints: the edges of the face it is on (only that face's: another part's face in the
+    // plane, shown or hidden, isn't the sketch's to split its regions).
     let imprint = match plane {
         PlaneRef::Face(fp) if !sk.disable_imprinting => {
-            let on = context
+            let on = refs
                 .iter()
-                .find(|(f, ..)| f.0 == fp.feature)
-                .map(|(_, c, _)| *c);
-            let own: Vec<(FeatureId, &Solid)> = refs
-                .iter()
-                .copied()
-                .filter(|(f, _)| {
-                    !crate::assembly::context::is_context(*f)
-                        || on.is_some_and(|n| context.iter().any(|(g, c, _)| g == f && *c == n))
-                })
-                .collect();
-            crate::links::imprint(&own, &frame)
+                .filter(|(id, _)| id.0 == fp.feature)
+                .chain(refs.iter().filter(|(id, _)| id.0 != fp.feature))
+                .find_map(|(id, s)| face_of(s, &fp).map(|(i, _)| (*id, *s, i)));
+            match on {
+                Some((id, solid, i)) => crate::links::imprint_face(id, solid, i, &frame),
+                None => Vec::new(),
+            }
         }
         _ => Vec::new(),
     };
