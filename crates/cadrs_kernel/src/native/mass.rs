@@ -728,6 +728,26 @@ fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
         }
         return acc;
     }
+    // A surface of revolution whose face is a rectangle of its parameters (a revolved
+    // section's side): its exact NURBS over the rectangle, by the tensor rule (each point along a
+    // boundary otherwise turned its meridian's B-spline round for every inner point).
+    if let Surface::Revolution { .. } = &f.surf
+        && let Some((r, orient)) = iso_rectangle(body, f)
+    {
+        let ns = f.surf.to_nurbs((r[0], r[1]), (r[2], r[3]));
+        let ((u0, u1), (v0, v1)) = ns.range();
+        let surf = Surface::Nurbs(std::sync::Arc::new(ns.clone()));
+        let mut acc = rect_integrals::<ALL>(&surf, &ns, [u0, u1, v0, v1], shift);
+        for q in acc.iter_mut() {
+            *q *= orient;
+        }
+        if !f.sense {
+            for q in acc.iter_mut().take(4) {
+                *q = -*q;
+            }
+        }
+        return acc;
+    }
     let mut acc = [0.0; NE];
     let mut scratch = Vec::with_capacity(64);
     // The reference u: the smallest u on the boundary keeps H small.
