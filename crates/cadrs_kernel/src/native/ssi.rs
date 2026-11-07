@@ -521,6 +521,12 @@ fn circle(c: P3, n: V3, r: f64) -> IntCurve {
     }
 }
 
+/// A cone's apex: where its radius r + v sin a is 0, at v = −r / sin a along its generators
+/// (its point o + ρ·r + v·(ρ sin a + z cos a)).
+fn cone_apex(f: &Frame, r: f64, a: f64) -> P3 {
+    f.o - f.z * (r / a.sin() * a.cos())
+}
+
 fn plane_n(f: &Frame) -> V3 {
     f.x.cross(&f.y)
 }
@@ -868,6 +874,54 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 d / l,
                 (r1 * r1 - x * x).max(0.0).sqrt(),
             )])
+        }
+        (
+            Surface::Cone {
+                f: f1,
+                r: r1,
+                a: a1,
+            },
+            Surface::Cone {
+                f: f2,
+                r: r2,
+                a: a2,
+            },
+        ) if f1.z.normalize().cross(&f2.z.normalize()).norm() > tol::ANGULAR_FINE
+            && a1.sin().abs() > tol::ANGULAR
+            && a2.sin().abs() > tol::ANGULAR
+            && (cone_apex(f1, *r1, *a1) - cone_apex(f2, *r2, *a2)).norm()
+                < tol::ROUNDOFF.max(tol::REL * bb.diagonal()) =>
+        {
+            // Two cones with one apex and different axes meet in lines through it: the
+            // directions d at the half-angle a1 to the first axis and a2 to the second (either
+            // nappe), d·z1 = ±cos a1 and d·z2 = ±cos a2 (a fit of them crowds its knots toward
+            // the apex, where marching loses its way).
+            let apex = cone_apex(f1, *r1, *a1);
+            let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
+            let (c1, c2) = (a1.cos(), a2.cos());
+            let k = z1.dot(&z2);
+            let w = z1.cross(&z2);
+            let s2 = 1.0 - k * k;
+            let mut out = Vec::new();
+            for sign in [1.0, -1.0] {
+                let (p, q) = (c1, sign * c2);
+                let (al, be) = ((p - k * q) / s2, (q - k * p) / s2);
+                let g2 = (1.0 - (al * al + be * be + 2.0 * al * be * k)) / s2;
+                if g2 < -tol::ANGULAR_FINE {
+                    continue;
+                }
+                let g = g2.max(0.0).sqrt();
+                let gs: &[f64] = if g < tol::ANGULAR_FINE {
+                    &[0.0]
+                } else {
+                    &[g, -g]
+                };
+                for &gg in gs {
+                    let d = (z1 * al + z2 * be + w * gg).normalize();
+                    out.extend(bound_line(apex, d, &bbig));
+                }
+            }
+            Some(out)
         }
         _ => {
             // Coaxial surfaces of revolution: circles where the meridians cross. A sphere is

@@ -440,3 +440,41 @@ fn a_tetrahedron_grown() {
     let g = grown(&mut k, t, 1.0);
     measures(&k, g, 249.53323018738044, 234.54759243458807);
 }
+
+/// singular/sectors-sharing-an-apex: two spherical sectors with one apex, their cones' sides
+/// meeting in two rulings through it, common to both. The rulings are lines (a fit of them
+/// crowded its knots toward the apex, where the faces either side merged their samples
+/// differently and the mesh came apart).
+#[test]
+fn sectors_sharing_an_apex() {
+    let mut k = NativeKernel::new();
+    let rim = (
+        10.0 * 45f64.to_radians().sin(),
+        10.0 * 45f64.to_radians().cos(),
+    );
+    let section = Loop {
+        curves: vec![
+            line((0.0, 0.0), rim),
+            arc((0.0, 0.0), 10.0, 45.0, 45.0),
+            line((0.0, 10.0), (0.0, 0.0)),
+        ],
+    };
+    let a = revolve_z(&mut k, &sketch(xz(), section, vec![]));
+    let axis = Axis {
+        origin: p3(0.0, 0.0, 0.0),
+        dir: Unit::new_normalize(V3::y()),
+    };
+    let b = k
+        .transform_motion(a, &Motion::rotation(&axis, 60f64.to_radians()))
+        .unwrap()
+        .bodies[0];
+    let c = k.boolean(BoolOp::Intersect, a, &[b]).unwrap().bodies[0];
+    let body = k.get(c).unwrap();
+    let lines = body
+        .edges
+        .iter()
+        .filter(|e| !e.degenerate && matches!(e.curve, cadrs_kernel::native::Curve::Line { .. }))
+        .count();
+    assert!(lines >= 2, "{lines} straight edges");
+    measures(&k, c, 146.51640605521118, 179.05709358777133);
+}
