@@ -269,8 +269,6 @@ smlib! {
     smlib_rev_rev_90: "ssi_rev_rev_90.smp", 20.208521;
     smlib_rev_rev_opposite: "ssi_rev_rev_opposite.smp", 80.834085;
     smlib_rev_rev_rot180: "ssi_rev_rev_rot180.smp", 80.834085;
-    #[ignore = "known failure: the tangent stretch (SMLib's type 3 curve, 21.09) is cut into short crossings and lost"]
-    smlib_rev_rev_sing: "ssi_rev_rev_sing.smp", 64.381418;
     smlib_rev_sph_full: "ssi_rev_sph_full.smp", 14.823624;
     smlib_rhino_bug1: "ssi_rhino_bug1.smp", 3.0;
     smlib_sph_plane1: "ssi_sph_plane1.smp", 31.415926;

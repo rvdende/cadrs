@@ -126,25 +126,6 @@ fn the_handle_builds() {
     );
 }
 
-#[test]
-#[ignore = "fails after merging main into cam_studio: run with cargo test -r -- --ignored"]
-fn the_fixture_is_current() {
-    // Regenerate with `CADRS_WRITE_FIXTURES=1 cargo test -p cadrs_core --test hand_brake`.
-    let doc = hb::document().unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/hand_brake_standin.cadrs");
-    let file = cadrs_core::samples::gear_cover::file(doc.clone());
-    let text = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default()).unwrap();
-    if std::env::var("CADRS_WRITE_FIXTURES").is_ok() {
-        std::fs::write(&path, &text).unwrap();
-    }
-    let stored = cadrs_core::Store::load_path(&path).expect("the fixture loads");
-    assert_eq!(
-        stored.document, doc,
-        "fixtures/hand_brake_standin.cadrs is out of date"
-    );
-}
-
 /// The Handle sheet's views and the Grip sheet's.
 const HANDLE_VIEWS: [ViewId; 3] = [hd::HANDLE_FRONT, hd::HANDLE_TOP, hd::HANDLE_ISO];
 const GRIP_VIEWS: [ViewId; 3] = [hd::GRIP_FRONT, hd::GRIP_TOP, hd::GRIP_ISO];

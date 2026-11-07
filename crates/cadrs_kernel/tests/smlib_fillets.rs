@@ -2029,26 +2029,23 @@ fn case_410_blade_hub_1() {
 
 /// SMLib fillet test 411: `blade_hub_2.smb`, radius 3.0, edges [(6, 6), (8, 8), (10, 11)].
 #[test]
-#[ignore = "known failure, slow (tools/smlib_known_failures/fillets.txt)"]
+#[ignore = "slow"]
 fn case_411_blade_hub_2() {
-    known_failure(
-        blend(
-            "blade_hub_2.smb",
-            &[(6, 6), (8, 8), (10, 11)],
-            true,
-            Op::Fillet(3.0),
-            &Expect {
-                volume: Some(12580.4640391),
-                area: Some(11649.4884195),
-                faces: Some(34),
-                edges: Some(92),
-                solid: Some(true),
-                ..Expect::default()
-            },
-        ),
-        "fillets",
-        "case_411_blade_hub_2",
-    );
+    blend(
+        "blade_hub_2.smb",
+        &[(6, 6), (8, 8), (10, 11)],
+        true,
+        Op::Fillet(3.0),
+        &Expect {
+            volume: Some(12580.4640391),
+            area: Some(11649.4884195),
+            faces: Some(34),
+            edges: Some(92),
+            solid: Some(true),
+            ..Expect::default()
+        },
+    )
+    .unwrap();
 }
 
 /// SMLib fillet test 412: `blade_hub_3.smb`, radius 1.0, edges [(74, 77)].
