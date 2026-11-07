@@ -472,6 +472,11 @@ pub trait Kernel {
     /// ```
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult>;
 
+    /// A primitive solid: a box, cylinder, cone, sphere or torus. Its faces are generated
+    /// (`StartCap`, `EndCap` and `ProfileCurve` origins with region 0), as a sketch's extrude or
+    /// revolve would make them.
+    fn primitive(&mut self, p: &Primitive) -> Result<OpResult>;
+
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
     /// point as it goes (`law`, in proportion to the length travelled). The path must run on
     /// from the profile without a corner.

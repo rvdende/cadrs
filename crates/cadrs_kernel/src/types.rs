@@ -674,6 +674,64 @@ pub struct SweepSpec {
     pub faces: Vec<FaceInput>,
 }
 
+/// A solid made whole, not from a sketch ([`crate::Kernel::primitive`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Primitive {
+    /// The block with opposite corners `min` and `max`, its faces square to the axes.
+    Box {
+        /// The corner of least x, y and z.
+        min: Point3<f64>,
+        /// The corner of greatest x, y and z.
+        max: Point3<f64>,
+    },
+    /// A cylinder.
+    Cylinder {
+        /// The centre of its base.
+        base: Point3<f64>,
+        /// Its axis, from the base toward the top.
+        axis: Unit<Vector3<f64>>,
+        /// Its radius.
+        radius: f64,
+        /// How far its top is along the axis from its base.
+        height: f64,
+    },
+    /// A cone, or its frustum.
+    Cone {
+        /// The centre of its base.
+        base: Point3<f64>,
+        /// Its axis, from the base toward the top.
+        axis: Unit<Vector3<f64>>,
+        /// Its radius at the base (0 for an apex there).
+        base_radius: f64,
+        /// Its radius at the top (0 for an apex there).
+        top_radius: f64,
+        /// How far its top is along the axis from its base.
+        height: f64,
+    },
+    /// A ball.
+    Sphere {
+        /// Its centre.
+        center: Point3<f64>,
+        /// Its radius.
+        radius: f64,
+        /// The direction of its poles from its centre (the north one along it).
+        axis: Unit<Vector3<f64>>,
+        /// The direction from its axis its seam lies in (made square to the axis).
+        seam: Unit<Vector3<f64>>,
+    },
+    /// A solid torus.
+    Torus {
+        /// Its centre.
+        center: Point3<f64>,
+        /// The axis it turns about, through its centre.
+        axis: Unit<Vector3<f64>>,
+        /// The radius of the circle through its tube's centres.
+        major: f64,
+        /// Its tube's radius (less than `major`).
+        minor: f64,
+    },
+}
+
 /// How a sweep's profile changes as it follows the path, beyond its control's turning: it
 /// twists about the path and grows or shrinks about the path's point, both in proportion to the
 /// length travelled (a column tapering as it twists, a duct narrowing round a bend).

@@ -573,3 +573,82 @@ fn a_duct_narrowing_round_a_bend() {
         .bodies[0];
     measures(&k, duct, 4900.88453960008, 5119.172836922541);
 }
+
+/// The primitives (brep-bench's primitives/*): each one valid solid with its exact measures.
+#[test]
+fn primitives_measure_exactly() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let one = |k: &mut NativeKernel, p: Primitive| k.primitive(&p).unwrap().bodies[0];
+    let b = one(
+        &mut k,
+        Primitive::Box {
+            min: p3(0.0, 0.0, 0.0),
+            max: p3(10.0, 20.0, 30.0),
+        },
+    );
+    measures(&k, b, 6000.0, 2200.0);
+    let c = one(
+        &mut k,
+        Primitive::Cylinder {
+            base: p3(0.0, 0.0, 0.0),
+            axis: z,
+            radius: 5.0,
+            height: 10.0,
+        },
+    );
+    measures(&k, c, PI * 250.0, 2.0 * PI * 25.0 + 2.0 * PI * 50.0);
+    // a frustum of radii 5 and 2, 6 high: π h (R² + R r + r²) / 3, its slant √(3² + 6²)
+    let f = one(
+        &mut k,
+        Primitive::Cone {
+            base: p3(0.0, 0.0, 0.0),
+            axis: z,
+            base_radius: 5.0,
+            top_radius: 2.0,
+            height: 6.0,
+        },
+    );
+    measures(
+        &k,
+        f,
+        PI * 6.0 * 39.0 / 3.0,
+        PI * (25.0 + 4.0) + PI * 7.0 * 45f64.sqrt(),
+    );
+    let x = Unit::new_normalize(V3::x());
+    let s = one(
+        &mut k,
+        Primitive::Sphere {
+            center: p3(1.0, 2.0, 3.0),
+            radius: 5.0,
+            axis: x,
+            seam: z,
+        },
+    );
+    measures(&k, s, 4.0 / 3.0 * PI * 125.0, 4.0 * PI * 25.0);
+    let t = one(
+        &mut k,
+        Primitive::Torus {
+            center: p3(0.0, 0.0, 0.0),
+            axis: z,
+            major: 10.0,
+            minor: 3.0,
+        },
+    );
+    measures(
+        &k,
+        t,
+        2.0 * PI * PI * 10.0 * 9.0,
+        4.0 * PI * PI * 10.0 * 3.0,
+    );
+    assert!(
+        k.primitive(&Primitive::Torus {
+            center: p3(0.0, 0.0, 0.0),
+            axis: z,
+            major: 3.0,
+            minor: 3.0
+        })
+        .is_err()
+    );
+}
