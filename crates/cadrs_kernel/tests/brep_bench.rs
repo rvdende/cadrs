@@ -478,3 +478,98 @@ fn sectors_sharing_an_apex() {
     assert!(lines >= 2, "{lines} straight edges");
     measures(&k, c, 146.51640605521118, 179.05709358777133);
 }
+
+/// geometry/ellipsoid: a ball of radius 1 stretched by 6, 4 and 3 along x, y and z.
+#[test]
+fn a_ball_stretched_into_an_ellipsoid() {
+    let mut k = NativeKernel::new();
+    let b = ball(&mut k, 1.0);
+    let e = k
+        .scale_axes(b, p3(0.0, 0.0, 0.0), V3::new(6.0, 4.0, 3.0))
+        .unwrap()
+        .bodies[0];
+    measures(&k, e, 96.0 * std::f64::consts::PI, 231.24821501597344);
+}
+
+/// A solid sweep of `profile` along `path` with a law.
+fn law_sweep(
+    k: &mut NativeKernel,
+    profile: &Profile,
+    path: Vec<PathCurve>,
+    twist: f64,
+    scale: f64,
+) -> BodyId {
+    let spec = SweepSpec {
+        body: BodyKind::Solid,
+        path,
+        control: SweepControl::None,
+        faces: vec![],
+    };
+    k.sweep_with_law(profile, &spec, &SweepLaw { twist, scale })
+        .unwrap()
+        .bodies[0]
+}
+
+/// loft/twisted-tapering-square: a square of side 30 swept 40 up the z axis, turning half a turn
+/// and scaled to a third.
+#[test]
+fn a_square_tapering_as_it_twists() {
+    let mut k = NativeKernel::new();
+    let foot = sketch(
+        xy(0.0),
+        polygon(&[(-15.0, -15.0), (15.0, -15.0), (15.0, 15.0), (-15.0, 15.0)]),
+        vec![],
+    );
+    let path = vec![PathCurve::Sketch {
+        plane: xz(),
+        curve: line((0.0, 0.0), (0.0, 40.0)),
+    }];
+    let c = law_sweep(&mut k, &foot, path, std::f64::consts::PI, 1.0 / 3.0);
+    measures(&k, c, 17333.333333333332, 4643.764402962483);
+}
+
+/// The square of half-width 9 − 3θ/90° − `inset` about the arc of radius 30 round the z axis,
+/// swept along it from `start` to `end` degrees.
+fn narrowing(k: &mut NativeKernel, start: f64, end: f64, inset: f64) -> BodyId {
+    let h = |deg: f64| 9.0 - 3.0 * deg / 90.0 - inset;
+    let (s, c) = start.to_radians().sin_cos();
+    let radial = V3::new(c, s, 0.0);
+    let on = plane(p3(0.0, 0.0, 0.0), radial, radial.cross(&V3::z()));
+    let hs = h(start);
+    let profile = sketch(
+        on,
+        polygon(&[
+            (30.0 - hs, -hs),
+            (30.0 + hs, -hs),
+            (30.0 + hs, hs),
+            (30.0 - hs, hs),
+        ]),
+        vec![],
+    );
+    let path = vec![PathCurve::Sketch {
+        plane: xy(0.0),
+        curve: arc((0.0, 0.0), 30.0, start, end - start),
+    }];
+    law_sweep(k, &profile, path, 0.0, h(end) / hs)
+}
+
+/// sweep/narrowing-bend: a hollow square duct narrowing round a quarter turn, its wall 2 thick.
+#[test]
+fn a_duct_narrowing_round_a_bend() {
+    let mut k = NativeKernel::new();
+    let outside = narrowing(&mut k, 0.0, 90.0, 0.0);
+    // ∫ (2h)²·30 dθ over the quarter turn, h from 9 to 6.
+    let v = 4.0 * 30.0 * 57.0 * std::f64::consts::FRAC_PI_2;
+    let m = k.mass_properties(outside).unwrap();
+    assert!(
+        (m.volume - v).abs() < 1e-6 * v,
+        "outside {} against {v}",
+        m.volume
+    );
+    let hole = narrowing(&mut k, -1.0, 91.0, 2.0);
+    let duct = k
+        .boolean(BoolOp::Subtract, outside, &[hole])
+        .unwrap()
+        .bodies[0];
+    measures(&k, duct, 4900.88453960008, 5119.172836922541);
+}

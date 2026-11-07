@@ -32,6 +32,11 @@ pub(crate) use env_flag;
 // tests and clippy gate) dead code is found as before.
 // Written out (not through a macro) so that rustfmt and other tools see the modules.
 #[cfg(feature = "testkit")]
+pub mod affine;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod affine;
+#[cfg(feature = "testkit")]
 pub mod axes;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]

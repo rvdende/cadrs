@@ -472,6 +472,22 @@ pub trait Kernel {
     /// ```
     fn sweep_with(&mut self, profile: &Profile, spec: &SweepSpec) -> Result<OpResult>;
 
+    /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
+    /// point as it goes (`law`, in proportion to the length travelled). The path must run on
+    /// from the profile without a corner.
+    fn sweep_with_law(
+        &mut self,
+        profile: &Profile,
+        spec: &SweepSpec,
+        law: &SweepLaw,
+    ) -> Result<OpResult> {
+        if law.is_identity() {
+            self.sweep_with(profile, spec)
+        } else {
+            Err(KernelError::Unsupported("sweeps that twist or scale"))
+        }
+    }
+
     /// A loft through sections (P3.7, PS20), with start and end conditions. Faces: the side of
     /// each curve of the first profile section (`ProfileCurve { region: spec.source, .. }`), and
     /// the start and end caps (`StartCap`/`EndCap { region: spec.source }`).
@@ -649,6 +665,34 @@ pub trait Kernel {
     /// (Onshape's Transform, Scale uniformly). Every face of the copy is `modified` from the same
     /// face of `body`.
     fn scale(&mut self, body: BodyId, center: Point3<f64>, factor: f64) -> Result<OpResult>;
+
+    /// A copy of the body under the affine map p ↦ `m`·p + `t`: stretched along axes (a ball
+    /// into an ellipsoid), sheared or mirrored, as well as moved. Planes stay planes and conics
+    /// conics (a circle becomes an ellipse); other curved faces become their exact NURBS forms
+    /// under the map. Every face of the copy is `modified` from the same face of `body`.
+    fn transform_affine(
+        &mut self,
+        body: BodyId,
+        m: nalgebra::Matrix3<f64>,
+        t: Vector3<f64>,
+    ) -> Result<OpResult>;
+
+    /// A copy of the body scaled about `center` by `factors` along the model's x, y and z
+    /// (each greater than zero; Onshape's Transform, Scale non-uniformly).
+    fn scale_axes(
+        &mut self,
+        body: BodyId,
+        center: Point3<f64>,
+        factors: Vector3<f64>,
+    ) -> Result<OpResult> {
+        if !factors.iter().all(|f| *f > 0.0 && f.is_finite()) {
+            return Err(KernelError::InvalidParameter(
+                "The scale must be positive".into(),
+            ));
+        }
+        let m = nalgebra::Matrix3::from_diagonal(&factors);
+        self.transform_affine(body, m, center.coords - m * center.coords)
+    }
 
     /// The solid bounded by `faces` of `body` and a flat cap across each loop of their free
     /// edges (P3.8): the pocket (or boss) the faces bound, which a face pattern or a face mirror

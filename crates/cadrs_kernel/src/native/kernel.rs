@@ -887,6 +887,15 @@ impl Kernel for NativeKernel {
         super::sweep::path::sweep_with(self, profile, spec)
     }
 
+    fn sweep_with_law(
+        &mut self,
+        profile: &Profile,
+        spec: &SweepSpec,
+        law: &SweepLaw,
+    ) -> Result<OpResult> {
+        super::sweep::path::sweep_with_law(self, profile, spec, law)
+    }
+
     fn cells(&mut self, bodies: &[BodyId], select: &[(usize, bool)]) -> Result<Vec<BodyId>> {
         for &b in bodies {
             self.get(b)?;
@@ -1188,6 +1197,35 @@ impl Kernel for NativeKernel {
             m,
             t: center.coords - m * center.coords,
         });
+        let nf = b.faces.len();
+        let id = self.insert(b);
+        let history = History {
+            modified: (0..nf)
+                .map(|i| {
+                    (
+                        FaceId(i as u64),
+                        InputFace {
+                            body,
+                            face: FaceId(i as u64),
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        self.colored(Ok(OpResult {
+            bodies: vec![id],
+            history,
+        }))
+    }
+
+    fn transform_affine(
+        &mut self,
+        body: BodyId,
+        m: nalgebra::Matrix3<f64>,
+        t: nalgebra::Vector3<f64>,
+    ) -> Result<OpResult> {
+        let b = super::affine::affine_body(self.get(body)?, &Affine { m, t })?;
         let nf = b.faces.len();
         let id = self.insert(b);
         let history = History {

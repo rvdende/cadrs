@@ -569,6 +569,22 @@ pub(super) fn swap_caps(t: &mut Tagged) {
 }
 
 pub fn sweep_with(k: &mut NativeKernel, profile: &Profile, spec: &SweepSpec) -> Result<OpResult> {
+    sweep_with_law(k, profile, spec, &SweepLaw::default())
+}
+
+/// [`sweep_with`], the profile twisting and scaling along the path by `law`
+/// ([`crate::Kernel::sweep_with_law`]).
+pub fn sweep_with_law(
+    k: &mut NativeKernel,
+    profile: &Profile,
+    spec: &SweepSpec,
+    law: &SweepLaw,
+) -> Result<OpResult> {
+    if !(law.scale > 0.0 && law.scale.is_finite() && law.twist.is_finite()) {
+        return Err(KernelError::InvalidParameter(
+            "The sweep's scale must be positive".into(),
+        ));
+    }
     let segs = path_segments(k, &spec.path)?;
     if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
         for (i, g) in segs.iter().enumerate() {
@@ -650,6 +666,33 @@ pub fn sweep_with(k: &mut NativeKernel, profile: &Profile, spec: &SweepSpec) -> 
     }
     let center = profile_center(&faces, &chains, &plane);
     let sp = spines(path, closed, &plane, &center);
+    if !law.is_identity() {
+        // One run of path from the profile, without a corner, swept with the law in its motion
+        // (lines and arcs too: their exact motions are rigid).
+        let [(spine, false)] = &sp[..] else {
+            return Err(KernelError::Unsupported(
+                "a sweep that twists or scales along a path the profile lies partway along",
+            ));
+        };
+        if spine
+            .windows(2)
+            .any(|w| w[0].dir(1.0).dot(&w[1].dir(0.0)) < 1.0 - tol::ANGULAR)
+        {
+            return Err(KernelError::Unsupported(
+                "a sweep that twists or scales round a corner of its path",
+            ));
+        }
+        let (b, _) = super::frames::sweep_seg_law(
+            &faces,
+            &chains,
+            plane,
+            spine,
+            Frames::Control(spec.control),
+            solid,
+            *law,
+        )?;
+        return Ok(Tagged::from_built(b).into_result(k));
+    }
     Ok(sweep_spines(&faces, &chains, plane, sp, spec.control, Join::Mitre, solid)?.into_result(k))
 }
 

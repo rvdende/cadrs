@@ -58,6 +58,8 @@ pub struct PathSweep {
     helix: Option<Helix>,
     /// The helix's angle at the fine steps (unwrapped along the path).
     angles: Vec<f64>,
+    /// How the profile twists and scales along the path (in proportion to s).
+    law: SweepLaw,
 }
 
 /// Frames found exactly at any s, so the profile's motion is smooth between the fine steps (a
@@ -323,6 +325,7 @@ impl PathSweep {
         frames: Frames,
         reach: f64,
         helix: Option<Helix>,
+        law: SweepLaw,
     ) -> Result<Self> {
         let control = frames.control();
         let any_spread = frames == Frames::Frenet;
@@ -353,6 +356,7 @@ impl PathSweep {
             reach,
             helix: None,
             angles: vec![],
+            law,
         };
         let pts: Vec<P3> = (0..=fine).map(|i| me.at(i as f64 / fine as f64)).collect();
         let tans: Vec<V3> = (0..=fine).map(|i| me.dir(i as f64 / fine as f64)).collect();
@@ -510,7 +514,10 @@ impl PathSweep {
             } else {
                 0.0
             };
-            let by_turn = (rots[i].angle_to(&rots[i + 1]) + bend) / (PI / 24.0);
+            // (A law's twist turns the profile too, and its scale moves the profile's far
+            // points as a turn of that many radians would.)
+            let law_turn = (me.law.twist.abs() + (me.law.scale - 1.0).abs()) / fine as f64;
+            let by_turn = (rots[i].angle_to(&rots[i + 1]) + bend + law_turn) / (PI / 24.0);
             density.push(density[i] + by_err.max(by_turn));
         }
         // Eight sections on top, spread evenly, so no stretch goes without (a straight one between
@@ -598,7 +605,9 @@ impl PathSweep {
             for (w, e) in v.windows(2).zip(worst.iter_mut()) {
                 let m = 0.5 * (w[0] + w[1]);
                 let d = rail.point(m) - self.motion(m).point(&q);
-                *e = e.max(if k == 0 {
+                // (A law twists and scales the profile as it goes: its rails' every stray
+                // counts, not only along the path.)
+                *e = e.max(if k == 0 || !self.law.is_identity() {
                     d.norm()
                 } else {
                     d.dot(&self.dir(m)).abs()
@@ -705,8 +714,30 @@ impl PathSweep {
         }
     }
 
-    /// The rigid motion of the profile from the start of the segment to s.
+    /// The motion of the profile from the start of the segment to s: rigid, then twisted and
+    /// scaled about the path's point by the law.
     fn motion(&self, s: f64) -> Affine {
+        let a = self.rigid(s);
+        if self.law.is_identity() {
+            return a;
+        }
+        let p = a.point(&self.pts[0]);
+        let s = s.clamp(0.0, 1.0);
+        let k = 1.0 + (self.law.scale - 1.0) * s;
+        let turn = nalgebra::Rotation3::from_axis_angle(
+            &nalgebra::Unit::new_normalize(self.dir(s)),
+            self.law.twist * s,
+        )
+        .into_inner();
+        let kr = turn * k;
+        Affine {
+            m: kr * a.m,
+            t: kr * a.t + p.coords - kr * p.coords,
+        }
+    }
+
+    /// The rigid motion of the profile from the start of the segment to s.
+    fn rigid(&self, s: f64) -> Affine {
         if let Some(h) = &self.helix {
             return h.screw(self.helix_angle(h, s) - h.th0);
         }
@@ -1030,6 +1061,42 @@ pub fn sweep_seg(
     solid: bool,
     helix: Option<Helix>,
 ) -> Result<(Built, Plane)> {
+    sweep_seg_with(
+        faces,
+        chains,
+        plane,
+        segs,
+        frames,
+        solid,
+        helix,
+        SweepLaw::default(),
+    )
+}
+
+/// [`sweep_seg`] twisting and scaling the profile by `law` along the segments.
+pub fn sweep_seg_law(
+    faces: &[MergedFace],
+    chains: &[Vec<Piece>],
+    plane: Plane,
+    segs: &[Seg],
+    frames: Frames,
+    solid: bool,
+    law: SweepLaw,
+) -> Result<(Built, Plane)> {
+    sweep_seg_with(faces, chains, plane, segs, frames, solid, None, law)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sweep_seg_with(
+    faces: &[MergedFace],
+    chains: &[Vec<Piece>],
+    plane: Plane,
+    segs: &[Seg],
+    frames: Frames,
+    solid: bool,
+    helix: Option<Helix>,
+    law: SweepLaw,
+) -> Result<(Built, Plane)> {
     // The profile's reach from the path's start.
     let m = crate::native::build::plane_map(&plane, &V3::zeros(), 0.0);
     let start = segs[0].start();
@@ -1046,7 +1113,7 @@ pub fn sweep_seg(
         }
     }
     let t0 = web_time::Instant::now();
-    let kind = PathSweep::new(plane, segs, frames, reach, helix)?;
+    let kind = PathSweep::new(plane, segs, frames, reach, helix, law)?;
     let t1 = t0.elapsed();
     if (kind.pts[1] - kind.pts[0]).dot(&plane.normal).abs()
         < tol::REL * (kind.pts[1] - kind.pts[0]).norm().max(tol::TINY)
@@ -1155,6 +1222,7 @@ mod tests {
             Frames::Control(SweepControl::None),
             1.0,
             None,
+            SweepLaw::default(),
         )
         .unwrap();
         let n = sweep.v.len() - 1;

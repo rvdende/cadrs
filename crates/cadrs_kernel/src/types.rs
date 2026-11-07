@@ -674,6 +674,34 @@ pub struct SweepSpec {
     pub faces: Vec<FaceInput>,
 }
 
+/// How a sweep's profile changes as it follows the path, beyond its control's turning: it
+/// twists about the path and grows or shrinks about the path's point, both in proportion to the
+/// length travelled (a column tapering as it twists, a duct narrowing round a bend).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SweepLaw {
+    /// The turn about the path's direction of travel over its whole length (radians,
+    /// right-handed about it).
+    pub twist: f64,
+    /// The profile's size at the path's end over its size at the start (greater than zero).
+    pub scale: f64,
+}
+
+impl Default for SweepLaw {
+    fn default() -> Self {
+        Self {
+            twist: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl SweepLaw {
+    /// Whether it changes nothing (no twist, no scale).
+    pub fn is_identity(&self) -> bool {
+        self.twist == 0.0 && self.scale == 1.0
+    }
+}
+
 /// One section of a loft (P3.7, PS20.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LoftSection {
