@@ -214,7 +214,35 @@ fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Opti
     let k = (0..3)
         .min_by(|&x, &y| eig.eigenvalues[x].total_cmp(&eig.eigenvalues[y]))
         .unwrap();
-    let mut a = eig.eigenvectors.column(k).into_owned().normalize();
+    // The eigenvector of the least eigenvalue, from the iteration's eigenvalue (accurate) rather
+    // than its eigenvector (which the iteration settles to only a loose margin, 10⁻⁸ of a turn
+    // one build and none the next): M − λI has rank 2, and its null vector is the largest cross
+    // product of two of its rows, polished by a step of inverse iteration.
+    let lam = eig.eigenvalues[k];
+    let shifted = m - nalgebra::Matrix3::identity() * lam;
+    let rows = [
+        shifted.row(0).transpose(),
+        shifted.row(1).transpose(),
+        shifted.row(2).transpose(),
+    ];
+    let null = [
+        rows[0].cross(&rows[1]),
+        rows[1].cross(&rows[2]),
+        rows[2].cross(&rows[0]),
+    ]
+    .into_iter()
+    .max_by(|x, y| x.norm_squared().total_cmp(&y.norm_squared()))
+    .unwrap();
+    let mut a = match null.try_normalize(tol::TINY) {
+        Some(n) => {
+            // (Shifted a hair off λ, so the solve is regular; the null direction dominates.)
+            let off = (m - nalgebra::Matrix3::identity() * (lam - 1e-9 * (1.0 + m.norm())))
+                .lu()
+                .solve(&n);
+            off.and_then(|x| x.try_normalize(tol::TINY)).unwrap_or(n)
+        }
+        None => eig.eigenvectors.column(k).into_owned().normalize(),
+    };
     // The tangents must turn round it (not a straight line or a plane curve's single direction).
     if eig
         .eigenvalues

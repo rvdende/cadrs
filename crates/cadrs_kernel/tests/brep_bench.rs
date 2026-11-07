@@ -652,3 +652,80 @@ fn primitives_measure_exactly() {
         .is_err()
     );
 }
+
+/// The analytic surfaces' patch boxes (their grid's points, each row's and column's sines and
+/// cosines taken once, grown by the bilinear error bound) hold every point of the patch and are
+/// not much bigger than its points' box.
+#[test]
+fn analytic_patch_boxes_hold_their_patches() {
+    use cadrs_kernel::native::{Frame, Surface};
+    let f = Frame::from_xz(
+        p3(1.0, -2.0, 0.5),
+        V3::new(0.3, 1.0, -0.2),
+        V3::new(1.0, 0.2, 0.7),
+    );
+    let surfs = [
+        Surface::Cylinder { f, r: 3.0 },
+        Surface::Cone { f, r: 2.0, a: 0.4 },
+        Surface::Cone { f, r: 2.0, a: -0.7 },
+        Surface::Sphere { f, r: 4.0 },
+        Surface::Torus {
+            f,
+            rmaj: 5.0,
+            rmin: 1.5,
+        },
+    ];
+    let mut seed = 7u64;
+    let mut rnd = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for s in &surfs {
+        for _ in 0..200 {
+            let u0 = rnd() * 8.0 - 2.0;
+            let u1 = u0 + rnd() * 3.0;
+            let (v0, v1) = match s {
+                Surface::Sphere { .. } => {
+                    let a = rnd() * 3.0 - 1.5;
+                    (a, (a + rnd()).min(1.57))
+                }
+                Surface::Torus { .. } => {
+                    let a = rnd() * 8.0 - 4.0;
+                    (a, a + rnd() * 2.0)
+                }
+                _ => {
+                    let a = rnd() * 6.0 - 3.0;
+                    (a, a + rnd() * 4.0)
+                }
+            };
+            let bb = s.patch_bbox((u0, u1), (v0, v1));
+            let (mut lo, mut hi) = (V3::repeat(f64::INFINITY), V3::repeat(f64::NEG_INFINITY));
+            let n = 40;
+            for i in 0..=n {
+                for j in 0..=n {
+                    let q = s.eval(
+                        u0 + (u1 - u0) * i as f64 / n as f64,
+                        v0 + (v1 - v0) * j as f64 / n as f64,
+                    );
+                    assert!(
+                        (0..3).all(|k| q[k] >= bb.min[k] - 1e-12 && q[k] <= bb.max[k] + 1e-12),
+                        "{s:?} {u0} {u1} {v0} {v1}: {q:?} outside {bb:?}"
+                    );
+                    lo = lo.inf(&q.coords);
+                    hi = hi.sup(&q.coords);
+                }
+            }
+            let size = (hi - lo).norm().max(1e-9);
+            let slack = (bb.max.coords - hi)
+                .abs()
+                .max()
+                .max((lo - bb.min.coords).abs().max());
+            assert!(
+                slack < 0.35 * size + 1e-9,
+                "{s:?}: box {slack} looser than its points' {size}"
+            );
+        }
+    }
+}

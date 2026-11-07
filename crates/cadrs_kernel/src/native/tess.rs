@@ -1989,8 +1989,20 @@ pub fn mesh(body: &Body, p: &TessParams) -> Result<(Vec<FaceMesh>, EdgeSamples)>
 /// The boundary points (edge samples) up to which a plane is meshed without [`MeshCache`].
 const PLANE_UNKEPT: usize = 16;
 
+/// Whether face meshes are kept to be used again ([`keep_meshes`]).
+static KEEP_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the tessellator keeps the faces' meshes, to give them again when the same face is
+/// meshed again with the same controls (on by default: a model rebuilt after an edit meshes
+/// most of its faces again unchanged). A program that meshes each body once, a batch converter
+/// or a benchmark's runner, turns it off and saves the keys and the copies.
+pub fn keep_meshes(on: bool) {
+    KEEP_MESHES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
+    let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed);
     let faces: Vec<FaceMesh> = body
         .faces
         .par_iter()
@@ -2006,7 +2018,7 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
                     .sum::<usize>()
                     <= PLANE_UNKEPT
             };
-            if matches!(f.surf, Surface::Plane { .. }) && few() {
+            if !keep || matches!(f.surf, Surface::Plane { .. }) && few() {
                 return mesh_face_with(body, f, &es, p);
             }
             let key = face_mesh_key(body, f, &es, p);
@@ -2034,17 +2046,29 @@ fn split_shared_sides(
     mut faces: Vec<FaceMesh>,
 ) -> Vec<FaceMesh> {
     let key = |q: &P3| [q.x.to_bits(), q.y.to_bits(), q.z.to_bits()];
-    // Each face's inner sides (used both ways in it), by their ends' points.
+    // A side two faces share runs between points of edges (a face's other points are its own):
+    // only those of each face's inner sides (used both ways in it) are looked at, by their ends'
+    // points.
+    let on_edges: FastSet<[u64; 3]> = es.iter().flat_map(|(_, ps)| ps.iter().map(key)).collect();
     let mut owners: HashMap<([u64; 3], [u64; 3]), Vec<usize>> = HashMap::default();
     for (fi, m) in faces.iter().enumerate() {
-        let mut dir: FastSet<(u32, u32)> = FastSet::default();
+        let on: Vec<bool> = m
+            .positions
+            .iter()
+            .map(|q| on_edges.contains(&key(q)))
+            .collect();
+        let mut sides: Vec<(u32, u32)> = Vec::new();
         for t in &m.indices {
             for k in 0..3 {
-                dir.insert((t[k], t[(k + 1) % 3]));
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                if on[a as usize] && on[b as usize] {
+                    sides.push((a, b));
+                }
             }
         }
-        for &(a, b) in &dir {
-            if a < b && dir.contains(&(b, a)) {
+        sides.sort_unstable();
+        for &(a, b) in &sides {
+            if a < b && sides.binary_search(&(b, a)).is_ok() {
                 let (ka, kb) = (key(&m.positions[a as usize]), key(&m.positions[b as usize]));
                 owners.entry((ka.min(kb), ka.max(kb))).or_default().push(fi);
             }

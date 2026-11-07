@@ -814,9 +814,43 @@ impl Surface {
         };
         let n = 8;
         let (hu, hv) = ((u.1 - u.0) / n as f64, (v.1 - v.0) / n as f64);
-        for i in 0..=n {
-            for j in 0..=n {
-                bb.add(&self.eval(u.0 + hu * i as f64, v.0 + hv * j as f64));
+        // The grid's points as `eval` makes them, to the bit, its sines and cosines taken once
+        // per row and column: each point is the frame's origin plus ρ(u) (cos u·x + sin u·y)
+        // times a radius of v, plus z times a height of v.
+        let us: Vec<f64> = (0..=n).map(|i| u.0 + hu * i as f64).collect();
+        let vs: Vec<f64> = (0..=n).map(|j| v.0 + hv * j as f64).collect();
+        let frame = match self {
+            Surface::Cylinder { f, .. }
+            | Surface::Cone { f, .. }
+            | Surface::Sphere { f, .. }
+            | Surface::Torus { f, .. } => Some(f),
+            _ => None,
+        };
+        if let Some(f) = frame {
+            let rho: Vec<V3> = us.iter().map(|u| f.x * u.cos() + f.y * u.sin()).collect();
+            // (radius, height) along v.
+            let rh: Vec<(f64, V3)> = vs
+                .iter()
+                .map(|&v| match self {
+                    Surface::Cylinder { r, .. } => (*r, f.z * v),
+                    Surface::Cone { r, a, .. } => (r + v * a.sin(), f.z * (v * a.cos())),
+                    Surface::Sphere { r, .. } => (r * v.cos(), f.z * (r * v.sin())),
+                    Surface::Torus { rmaj, rmin, .. } => {
+                        (rmaj + rmin * v.cos(), f.z * (rmin * v.sin()))
+                    }
+                    _ => unreachable!(),
+                })
+                .collect();
+            for p in &rho {
+                for (r, h) in &rh {
+                    bb.add(&(f.o + p * *r + h));
+                }
+            }
+        } else {
+            for &u in &us {
+                for &v in &vs {
+                    bb.add(&self.eval(u, v));
+                }
             }
         }
         let e = auu * hu * hu / 8.0 + avv * hv * hv / 8.0;
