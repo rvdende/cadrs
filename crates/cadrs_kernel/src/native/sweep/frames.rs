@@ -127,6 +127,21 @@ pub struct Helix {
 }
 
 impl Helix {
+    /// The helix about the axis through `o` along the unit `a`, of radius `r` from it, its point
+    /// at angle θ (from `e1` toward `e2`, square to `a` and each other) rising `c` θ along `a`,
+    /// starting at θ = `th0`.
+    pub fn new(o: P3, a: V3, e1: V3, e2: V3, r: f64, c: f64, th0: f64) -> Self {
+        Helix {
+            o,
+            a,
+            e1,
+            e2,
+            r,
+            c,
+            th0,
+        }
+    }
+
     fn point(&self, th: f64) -> P3 {
         self.o + (self.e1 * th.cos() + self.e2 * th.sin()) * self.r + self.a * (self.c * th)
     }

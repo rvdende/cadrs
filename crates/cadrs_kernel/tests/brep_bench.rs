@@ -878,3 +878,77 @@ fn a_frustum_far_from_its_apex_meshes_coarsely() {
         .unwrap();
     assert!(m.indices.len() < 2000, "{} triangles", m.indices.len());
 }
+
+/// A solid swept without end about an axis (`Kernel::sweep_solid`): a cylinder of radius a,
+/// height H, standing d from the axis. Turned, it fills the ring d − a ≤ r ≤ d + a (4π a d H);
+/// screwed with rise c a turn, its outline at each height is the disk swept round an arc of
+/// 2πH/c, of area πa² + 2a·d·2πH/c, and the solid that between the planes.
+#[test]
+fn a_cylinder_turned_and_screwed() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let (a, d, h) = (2.0, 10.0, 3.0);
+    let c = k
+        .primitive(&Primitive::Cylinder {
+            base: p3(d, 0.0, 0.0),
+            axis: z,
+            radius: a,
+            height: h,
+        })
+        .unwrap()
+        .bodies[0];
+    let axis = Axis {
+        origin: p3(0.0, 0.0, 0.0),
+        dir: z,
+    };
+    let turned = k
+        .sweep_solid(c, &SolidMotion::Turn { axis })
+        .unwrap()
+        .bodies[0];
+    let v = k.mass_properties(turned).unwrap().volume;
+    let want = 4.0 * PI * a * d * h;
+    assert!((v - want).abs() < 1e-6 * want, "turned {v} against {want}");
+    let rise = 60.0;
+    let screwed = k
+        .sweep_solid(
+            c,
+            &SolidMotion::Screw {
+                axis,
+                rise,
+                from: 1.0,
+                to: 6.0,
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let v = k.mass_properties(screwed).unwrap().volume;
+    let want = (PI * a * a + 2.0 * a * d * (2.0 * PI * h / rise)) * 5.0;
+    assert!((v - want).abs() < 1e-5 * want, "screwed {v} against {want}");
+}
+
+/// A torus turned about an axis it is coaxial with fills itself.
+#[test]
+fn a_torus_turned_about_its_own_axis_is_itself() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let t = k
+        .primitive(&Primitive::Torus {
+            center: p3(0.0, 0.0, 1.0),
+            axis: z,
+            major: 6.0,
+            minor: 2.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let axis = Axis {
+        origin: p3(0.0, 0.0, 0.0),
+        dir: z,
+    };
+    let s = k
+        .sweep_solid(t, &SolidMotion::Turn { axis })
+        .unwrap()
+        .bodies[0];
+    measures(&k, s, 2.0 * PI * PI * 6.0 * 4.0, 4.0 * PI * PI * 6.0 * 2.0);
+}

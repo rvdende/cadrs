@@ -887,6 +887,10 @@ impl Kernel for NativeKernel {
         super::sweep::path::sweep_with(self, profile, spec)
     }
 
+    fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+        super::sweep_solid::sweep_solid(self, body, motion)
+    }
+
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
         use nalgebra::{Point2, Unit};
         let bad = |what: &str| {

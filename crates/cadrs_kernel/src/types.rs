@@ -741,6 +741,29 @@ pub struct SweepSpec {
     pub faces: Vec<FaceInput>,
 }
 
+/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum SolidMotion {
+    /// Turned whole turns about the axis: the solid of revolution the body generates.
+    Turn {
+        /// The axis.
+        axis: Axis,
+    },
+    /// Screwed about the axis, rising `rise` along it a turn (right-handed about the axis's
+    /// direction when positive), without end: what it fills between the planes square to the
+    /// axis at `from` and `to` along it from the axis's origin.
+    Screw {
+        /// The axis.
+        axis: Axis,
+        /// The rise a whole turn (not 0).
+        rise: f64,
+        /// Where the solid starts along the axis.
+        from: f64,
+        /// Where it ends (past `from`).
+        to: f64,
+    },
+}
+
 /// A solid made whole, not from a sketch ([`crate::Kernel::primitive`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Primitive {

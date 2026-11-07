@@ -477,6 +477,18 @@ pub trait Kernel {
     /// revolve would make them.
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult>;
 
+    /// The solid `body` fills as it moves without end about an axis: turned (the solid of
+    /// revolution it generates) or screwed (between two planes square to the axis). Taken for
+    /// solids of revolution about an axis of their own with a convex section (a torus, a wheel
+    /// of cones and cylinders): their outline seen along the motion's circles or helices, traced
+    /// slice by slice and fitted by a closed cubic B-spline, revolved or swept along the screw.
+    /// A motion of a part of a turn fills the same in a region that every point of it passes
+    /// through within that part.
+    fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+        let _ = (body, motion);
+        Err(KernelError::Unsupported("sweeps of solids"))
+    }
+
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
     /// point as it goes (`law`, in proportion to the length travelled). The path must run on
     /// from the profile without a corner.
