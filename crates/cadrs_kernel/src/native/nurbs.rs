@@ -1054,6 +1054,55 @@ impl NurbsCurve {
         Ok(r.joined(&l))
     }
 
+    /// The curve's Bézier segments (Piegl and Tiller's A5.6, DecomposeCurve): for each span
+    /// between distinct knots its ends and its p + 1 homogeneous control points, in order. One
+    /// pass over the curve, where splitting it at each span's ends copies it whole each time.
+    pub fn bezier_segments(&self) -> Vec<(f64, f64, Vec<H>)> {
+        let p = self.degree;
+        let (u, pw) = (&self.knots, &self.cps);
+        let n = pw.len() - 1;
+        let m = n + p + 1;
+        let mut out: Vec<(f64, f64, Vec<H>)> = Vec::new();
+        let (mut a, mut b) = (p, p + 1);
+        let mut q: Vec<H> = pw[..=p].to_vec();
+        let mut next: Vec<H> = vec![H::zeros(); p + 1];
+        let mut alphas = vec![0.0; p + 1];
+        while b < m {
+            let i = b;
+            while b < m && u[b + 1] == u[b] {
+                b += 1;
+            }
+            let mult = b - i + 1;
+            if mult < p {
+                let numer = u[b] - u[a];
+                for j in (mult + 1..=p).rev() {
+                    alphas[j - mult - 1] = numer / (u[a + j] - u[a]);
+                }
+                let r = p - mult;
+                for j in 1..=r {
+                    let (save, s) = (r - j, mult + j);
+                    for k in (s..=p).rev() {
+                        let al = alphas[k - s];
+                        q[k] = q[k] * al + q[k - 1] * (1.0 - al);
+                    }
+                    if b < m {
+                        next[save] = q[p];
+                    }
+                }
+            }
+            out.push((u[a], u[b], q.clone()));
+            if b < m {
+                for k in p.saturating_sub(mult)..=p {
+                    next[k] = pw[b - p + k];
+                }
+                q.clone_from(&next);
+                a = b;
+                b += 1;
+            }
+        }
+        out
+    }
+
     /// Inserts the knot `u` once (A5.1).
     pub fn insert_knot(&self, u: f64) -> Self {
         let p = self.degree;
@@ -1732,6 +1781,38 @@ impl IsoV<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each span's Bézier segment from one pass (A5.6) is the span split off the curve: a
+    /// rational quartic of interior knots single and double, its ends and control points.
+    #[test]
+    fn bezier_segments_are_the_spans_split_off() {
+        let knots = vec![0.0; 5]
+            .into_iter()
+            .chain([0.7, 1.3, 1.3, 2.0, 2.4])
+            .chain(vec![3.0; 5])
+            .collect::<Vec<_>>();
+        let n = knots.len() - 5;
+        let cps: Vec<H> = (0..n)
+            .map(|i| {
+                let t = i as f64;
+                let w = 1.0 + 0.3 * (t * 1.7).sin().abs();
+                H::new((t * 0.9).cos() * w, (t * 1.3).sin() * w, t * 0.4 * w, w)
+            })
+            .collect();
+        let c = NurbsCurve::new(4, knots, cps).unwrap();
+        let segs = c.bezier_segments();
+        assert_eq!(segs.len(), 5);
+        for (a, b, q) in &segs {
+            let piece = c.restricted(*a, *b);
+            assert_eq!(q.len(), 5);
+            for (x, y) in q.iter().zip(&piece.cps) {
+                assert!((dehom(x) - dehom(y)).norm() < 1e-12 && (x.w - y.w).abs() < 1e-12);
+            }
+            let bez = NurbsCurve::new(4, [vec![*a; 5], vec![*b; 5]].concat(), q.clone()).unwrap();
+            let m = 0.37 * a + 0.63 * b;
+            assert!((bez.point(m) - c.point(m)).norm() < 1e-12);
+        }
+    }
 
     /// [`NurbsSurface::grid`] gives each point [`NurbsSurface::point`] does, to the bit: a
     /// rational surface of low degree, one past `MAXP` and one past `WIDEP`.

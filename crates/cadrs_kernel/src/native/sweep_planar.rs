@@ -103,7 +103,7 @@ fn signed_distance(poly: &[Q], q: &Q) -> f64 {
 
 /// A candidate curve of the region's boundary: its point at s in [0, 1] (None where it isn't
 /// one: an envelope's foot off its side).
-type Candidate<'a> = Box<dyn Fn(f64) -> Option<Q> + 'a>;
+type Candidate<'a> = Box<dyn Fn(f64) -> Option<Q> + Sync + 'a>;
 
 /// A piece of the region's boundary: its points, the candidate it lies on and that candidate's
 /// parameter at its first and last points, and whether it is a straight side.
@@ -114,15 +114,18 @@ struct Piece {
     straight: bool,
 }
 
+/// A run of a candidate's samples outside the region, with its parameters at its ends.
+type Run = (Vec<Q>, (f64, f64));
+
 /// The boundary pieces along one candidate: runs of its samples inside no place of the polygon,
 /// their ends cut by bisection where it enters one or stops being a candidate.
 fn pieces_of(
     c: &Candidate,
-    inside: &dyn Fn(&Q) -> bool,
+    inside: &(dyn Fn(&Q) -> bool + Sync),
     n: usize,
     closed: bool,
     shortest: f64,
-) -> Vec<(Vec<Q>, (f64, f64))> {
+) -> Vec<Run> {
     let keep = |s: f64| c(s).filter(|q| !inside(q));
     let mut flags: Vec<Option<Q>> = (0..=n).map(|i| keep(i as f64 / n as f64)).collect();
     if closed {
@@ -433,15 +436,28 @@ pub fn sweep_planar(
     let tol_join = 1e-6 * (size + t0.1.norm() + t1.1.norm());
     let len = |q: &[Q]| q.windows(2).map(|w| (w[1] - w[0]).norm()).sum::<f64>();
     let mut pieces: Vec<Piece> = Vec::new();
-    for (i, (c, cl)) in cands.iter().enumerate() {
+    // Each candidate's runs outside the region (the inside tests, most of the work), the
+    // candidates side by side, in their order.
+    let runs: Vec<Vec<Run>> = {
+        use rayon::prelude::*;
+        cands
+            .par_iter()
+            .enumerate()
+            .map(|(i, (c, cl))| {
+                let straight = i >= 2 * np;
+                pieces_of(
+                    c,
+                    &inside,
+                    if straight { 64 } else { samples },
+                    *cl,
+                    tol_join,
+                )
+            })
+            .collect()
+    };
+    for (i, runs) in runs.into_iter().enumerate() {
         let straight = i >= 2 * np;
-        for (pts, s) in pieces_of(
-            c,
-            &inside,
-            if straight { 64 } else { samples },
-            *cl,
-            tol_join,
-        ) {
+        for (pts, s) in runs {
             // Split where it turns back (an envelope's cusp, its tail past which lies inside the
             // region too thinly to tell): the stretches either side, the short ones dropped.
             let n = pts.len();
