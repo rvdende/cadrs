@@ -330,14 +330,30 @@ fn run(world: &mut World, call: &Call) -> Result<Value, String> {
         Call::RestoreVersion(p) => restore_version(world, p),
         Call::ImportStep(p) => import_step(world, &p.path),
         Call::ExportStep(p) => export_step(world, p),
+        Call::ExportFile(p) => export_file(world, p),
         Call::CreateDrawing(p) => create_drawing(world, p),
         Call::AddAnnotation(p) => add_annotation(world, p),
         Call::RenameTab(p) => rename_tab(world, p),
         Call::DeleteTab(p) => delete_tab(world, &p.name),
+        Call::OpenTab(p) => {
+            let mut d = doc_mut(world)?;
+            let id = d
+                .doc
+                .elements
+                .iter()
+                .find(|e| e.name == p.name)
+                .map(|e| e.id)
+                .ok_or_else(|| format!("no tab named {:?}", p.name))?;
+            d.set_active(id);
+            describe(world)
+        }
         Call::GetAssembly(p) => {
             describe_assembly(doc(world)?, assembly(doc(world)?, p.assembly.as_deref())?)
         }
         Call::InsertInstance(p) => insert_instance(world, p),
+        Call::ImportFile(p) => import_file(world, p),
+        Call::AddMate(p) => add_mate(world, p),
+        Call::SetMateValues(p) => set_mate_values(world, p),
         Call::GetBoard(p) => crate::mcp_board::get_board(world, p),
         Call::GetBoardFit(p) => crate::mcp_board::get_board_fit(world, p),
         Call::DeriveBoard(p) => crate::mcp_board::derive_board(world, p),
@@ -622,7 +638,7 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
                 InstanceSource::Assembly { .. } => v["kind"] = json!("subassembly"),
             }
             if i.pose.rotation != cadrs_core::assembly::Pose::IDENTITY.rotation {
-                v["rotation"] = json!(i.pose.rotation);
+                v["rotation"] = json!(i.pose.rotation.map(|r| r.map(|x| (x * 1e6).round() / 1e6)));
             }
             for (k, on) in [("fixed", i.fixed), ("hidden", i.hidden), ("suppressed", i.suppressed)] {
                 if on {
@@ -632,10 +648,30 @@ fn describe_assembly(d: &ActiveDocument, element: ElementId) -> Result<Value, St
             v
         })
         .collect();
+    // Each mate's current position (connectors on faces need their parts; fixed frames don't).
+    let flat = cadrs_core::assembly::structure::solver_model(&d.doc, asm);
+    let solids = mate_solids(&d.doc, element, &flat);
+    let own: Vec<_> = asm.mates.iter().map(|m| m.id).collect();
+    let values = cadrs_core::assembly::positions::mate_values(&flat, &solids, &own);
     let mates: Vec<Value> = asm
         .mates
         .iter()
-        .map(|m| json!({ "name": m.name, "suppressed": m.suppressed }))
+        .map(|m| {
+            let mut v = json!({ "name": m.name, "type": m.type_label() });
+            if m.suppressed {
+                v["suppressed"] = json!(true);
+            }
+            for x in values.iter().filter(|x| x.mate == m.id) {
+                let (key, value) = match x.dof {
+                    cadrs_core::assembly::mate::Dof::Angle => ("angle_deg", x.value.to_degrees()),
+                    cadrs_core::assembly::mate::Dof::X => ("x_mm", x.value),
+                    cadrs_core::assembly::mate::Dof::Y => ("y_mm", x.value),
+                    cadrs_core::assembly::mate::Dof::Z => ("z_mm", x.value),
+                };
+                v[key] = json!(round(value));
+            }
+            v
+        })
         .collect();
     Ok(json!({ "assembly": e.name, "instances": instances, "mates": mates }))
 }
@@ -692,6 +728,337 @@ fn insert_instance(world: &mut World, p: &tools::InsertInstance) -> Result<Value
             .map_err(|e| e.to_string())?;
         describe_assembly(doc(world)?, element)
     })
+}
+
+/// The source solids the mates of `flat` need for their connectors: none when every connector
+/// is a fixed frame (no Part Studio is rebuilt), else every occurrence's.
+fn mate_solids(
+    doc: &cadrs_core::Document,
+    element: ElementId,
+    flat: &cadrs_core::assembly::Assembly,
+) -> std::collections::HashMap<
+    cadrs_core::assembly::InstanceId,
+    std::sync::Arc<cadrs_core::solid::Solid>,
+> {
+    use cadrs_core::assembly::connector::ConnectorAnchor;
+    let frames_only = flat.mates.iter().all(|f| {
+        f.mate().is_none_or(|m| {
+            m.all_connectors()
+                .all(|c| matches!(c.anchor, ConnectorAnchor::Frame))
+        })
+    });
+    if frames_only {
+        return Default::default();
+    }
+    cadrs_core::assembly::document_occurrence_solids(doc, element)
+}
+
+/// An instance of an assembly by its name ("link_1 <1>") or id.
+fn instance_named(
+    d: &ActiveDocument,
+    asm: &cadrs_core::assembly::Assembly,
+    name: &str,
+) -> Result<cadrs_core::assembly::InstanceId, String> {
+    use cadrs_core::assembly::InstanceSource;
+    let mut names = Vec::new();
+    for i in &asm.instances {
+        if i.id.to_string() == name {
+            return Ok(i.id);
+        }
+        let build = matches!(i.source, InstanceSource::Part { .. })
+            .then(|| {
+                d.doc
+                    .element(i.source.element())
+                    .map(|s| cadrs_core::rebuild::build(&s.part_features()))
+            })
+            .flatten();
+        let n = i.name(&cadrs_core::assembly::source_part_name(
+            &d.doc,
+            &i.source,
+            build.as_deref(),
+        ));
+        if n == name {
+            return Ok(i.id);
+        }
+        names.push(n);
+    }
+    Err(format!(
+        "no instance named {name:?}; the instances are {}",
+        names.join(", ")
+    ))
+}
+
+/// Imports a file into the open document as a new Part Studio tab (an Import feature).
+fn import_file(world: &mut World, p: &tools::ImportFile) -> Result<Value, String> {
+    use cadrs_core::import::{AddImport, ImportFormat, ImportUnit};
+    let path = std::path::Path::new(&p.path);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("the path has no file name")?
+        .to_string();
+    if ImportFormat::of_file_name(&file_name).is_none() {
+        return Err(format!("{file_name}: not a file Import reads"));
+    }
+    let units = match p.units.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        None => None,
+        Some("mm") => Some(ImportUnit::Millimeter),
+        Some("cm") => Some(ImportUnit::Centimeter),
+        Some("m") => Some(ImportUnit::Meter),
+        Some("in") => Some(ImportUnit::Inch),
+        Some("ft") => Some(ImportUnit::Foot),
+        Some(u) => return Err(format!("unknown unit {u:?}: mm, cm, m, in or ft")),
+    };
+    let bytes = cadrs_fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let name = p.name.clone().unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Import")
+            .to_string()
+    });
+    let mut d = doc_mut(world)?;
+    let id = ElementId::new();
+    let after = d.active;
+    d.execute(&AddElement {
+        id,
+        kind: NewElementKind::PartStudio,
+        name: Some(name),
+        after,
+    })
+    .map_err(|e| e.to_string())?;
+    if let Err(e) = d.execute(&AddImport {
+        element: id,
+        feature: cadrs_core::ids::FeatureId::new(),
+        file_name,
+        bytes: std::sync::Arc::new(bytes),
+        y_axis_up: p.y_axis_up,
+        units,
+    }) {
+        d.undo();
+        return Err(e.to_string());
+    }
+    d.set_active(id);
+    describe(world)
+}
+
+fn mate_type(name: &str) -> Result<cadrs_core::assembly::mate::MateType, String> {
+    use cadrs_core::assembly::mate::MateType;
+    MateType::ALL
+        .into_iter()
+        .filter(|t| t.uses_connectors() && *t != MateType::Width && *t != MateType::PinSlot)
+        .find(|t| t.label().eq_ignore_ascii_case(name))
+        .ok_or_else(|| {
+            format!(
+                "unknown mate type {name:?}: Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel"
+            )
+        })
+}
+
+/// Adds a mate between fixed frames of two instances, placing the second connector's instance
+/// (else the first's, when the second is fixed) so it holds, then solving the assembly.
+fn add_mate(world: &mut World, p: &tools::AddMate) -> Result<Value, String> {
+    use cadrs_core::assembly::InstanceId;
+    use cadrs_core::assembly::commands::AddMateFeature;
+    use cadrs_core::assembly::connector::{ConnectorFrame, MateConnector};
+    use cadrs_core::assembly::mate::{Mate, MateFeature, MateId, MateKind, MateLimits};
+    use cadrs_core::assembly::solver::SolveOptions;
+    let d = doc(world)?;
+    let element = assembly(d, p.assembly.as_deref())?;
+    let asm = d
+        .doc
+        .element(element)
+        .and_then(|e| e.assembly_model())
+        .ok_or("not an Assembly")?
+        .clone();
+    let ty = mate_type(&p.mate_type)?;
+    // The solver sees a Part Studio instance as one occurrence per part (moving as one): a
+    // connector is on its first part's, as a pick on the part would be.
+    let occ = cadrs_core::assembly::structure::occurrences(&d.doc, &asm);
+    let connector = |f: &tools::MateFrame| -> Result<(InstanceId, MateConnector), String> {
+        let top = instance_named(d, &asm, &f.instance)?;
+        let on = occ
+            .iter()
+            .find(|o| o.top == top)
+            .map(|o| o.id)
+            .ok_or_else(|| format!("{:?} has no parts", f.instance))?;
+        let z = f.z.unwrap_or([0.0, 0.0, 1.0]);
+        let x =
+            f.x.unwrap_or_else(|| cadrs_core::assembly::connector::x_for(z));
+        Ok((
+            top,
+            MateConnector::at(on, ConnectorFrame::new(f.origin, z, x)),
+        ))
+    };
+    let ((a_top, a), (b_top, b)) = (connector(&p.a)?, connector(&p.b)?);
+    if a_top == b_top {
+        return Err("a mate needs two instances".into());
+    }
+    let mut mate = Mate::new(ty, a, b);
+    if let Some([lo, hi]) = p.limits {
+        let dof = *ty
+            .limit_dofs()
+            .first()
+            .ok_or_else(|| format!("a {} mate has no limits", ty.label()))?;
+        let k = if dof.is_angle() {
+            std::f64::consts::PI / 180.0
+        } else {
+            1.0
+        };
+        let mut l = MateLimits::default();
+        l.set(dof, Some((lo.min(hi) * k, lo.max(hi) * k)));
+        mate.limits = Some(l);
+    }
+    let name = p.name.clone().unwrap_or_else(|| {
+        let n = asm
+            .mates
+            .iter()
+            .filter(|m| m.type_label() == ty.label())
+            .count();
+        format!("{} {}", ty.label(), n + 1)
+    });
+    if asm.mates.iter().any(|m| m.name == name) {
+        return Err(format!("there is already a mate named {name:?}"));
+    }
+    let feature = MateFeature::new(MateId::new(), name, MateKind::Mate(mate.clone()));
+    // Place the mover so the connectors coincide (the mate at 0), then let the solver settle the
+    // rest with the new mate in.
+    let fixed = |id| asm.instance(id).is_some_and(|i| i.fixed);
+    let pose = |id| asm.instance(id).map(|i| i.pose).unwrap_or_default();
+    let (mover, stay, moving_frame, stay_frame) = if fixed(b_top) && !fixed(a_top) {
+        (a_top, b_top, a.frame, b.frame)
+    } else {
+        (b_top, a_top, b.frame, a.frame)
+    };
+    let world_stay = stay_frame.pose().then(&pose(stay));
+    let placed = moving_frame.pose().inverse().then(&world_stay);
+    let mut model = cadrs_core::assembly::structure::solver_model(&d.doc, &asm);
+    model.mates.push(feature.clone());
+    let moving: Vec<InstanceId> = occ
+        .iter()
+        .filter(|o| o.top == mover)
+        .map(|o| o.id)
+        .collect();
+    for id in &moving {
+        if let Some(i) = model.instance_mut(*id) {
+            i.pose = placed;
+        }
+    }
+    let solids = mate_solids(&d.doc, element, &model);
+    let sol = cadrs_core::assembly::solve(
+        &model,
+        &solids,
+        &SolveOptions {
+            movers: moving,
+            ..Default::default()
+        },
+    );
+    let mut poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
+    if !poses.iter().any(|(id, _)| *id == mover) {
+        poses.push((mover, placed));
+    }
+    doc_mut(world)?
+        .execute(&AddMateFeature {
+            element,
+            feature,
+            poses,
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = describe_assembly(doc(world)?, element)?;
+    out["solved"] = json!(sol.converged);
+    Ok(out)
+}
+
+/// Drives mates to positions and moves the instances to the solution (one undo step).
+fn set_mate_values(world: &mut World, p: &tools::SetMateValues) -> Result<Value, String> {
+    use cadrs_core::assembly::commands::MoveInstances;
+    use cadrs_core::assembly::mate::Dof;
+    use cadrs_core::assembly::positions::{MateValue, NamedPosition, NamedPositionId, solve_to};
+    let d = doc(world)?;
+    let element = assembly(d, p.assembly.as_deref())?;
+    let asm = d
+        .doc
+        .element(element)
+        .and_then(|e| e.assembly_model())
+        .ok_or("not an Assembly")?;
+    let mut values = Vec::new();
+    let mut clamped = Vec::new();
+    for v in &p.values {
+        let f = asm
+            .mates
+            .iter()
+            .find(|m| m.name == v.mate)
+            .ok_or_else(|| format!("no mate named {:?}", v.mate))?;
+        let m = f
+            .mate()
+            .ok_or_else(|| format!("{:?} is not a mate", v.mate))?;
+        let dofs = m.mate_type.dof();
+        let dof = match v.dof.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None => *dofs
+                .first()
+                .ok_or_else(|| format!("a {} mate doesn't move", m.mate_type.label()))?,
+            Some("angle") => Dof::Angle,
+            Some("x") => Dof::X,
+            Some("y") => Dof::Y,
+            Some("z") => Dof::Z,
+            Some(o) => return Err(format!("unknown dof {o:?}: angle, x, y or z")),
+        };
+        if !dofs.contains(&dof) {
+            return Err(format!("{:?} can't move along {}", v.mate, dof.label()));
+        }
+        let mut value = if dof.is_angle() {
+            v.value.to_radians()
+        } else {
+            v.value
+        };
+        // Within its limits (the solver can't hold a mate past them).
+        if let Some((lo, hi)) = m.limit(dof) {
+            if value < lo || value > hi {
+                clamped.push(json!(v.mate));
+            }
+            value = value.clamp(lo, hi);
+        }
+        values.push(MateValue {
+            mate: f.id,
+            dof,
+            value,
+        });
+    }
+    let flat = cadrs_core::assembly::structure::solver_model(&d.doc, asm);
+    let solids = mate_solids(&d.doc, element, &flat);
+    // The mates not named hold where they are.
+    let own: Vec<_> = asm.mates.iter().map(|m| m.id).collect();
+    for now in cadrs_core::assembly::positions::mate_values(&flat, &solids, &own) {
+        if !values
+            .iter()
+            .any(|v| v.mate == now.mate && v.dof == now.dof)
+        {
+            values.push(now);
+        }
+    }
+    let position = NamedPosition {
+        id: NamedPositionId::new(),
+        name: String::new(),
+        values,
+        poses: Vec::new(),
+    };
+    let sol = solve_to(&flat, &solids, &position);
+    let poses: Vec<_> = sol.poses.iter().map(|(id, p)| (*id, *p)).collect();
+    if !poses.is_empty() {
+        doc_mut(world)?
+            .execute(&MoveInstances {
+                element,
+                poses,
+                label: "Set mate values".into(),
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    let mut out = describe_assembly(doc(world)?, element)?;
+    out["solved"] = json!(sol.converged);
+    out["residual"] = json!(sol.residual);
+    if !clamped.is_empty() {
+        out["held_at_limit"] = json!(clamped);
+    }
+    Ok(out)
 }
 
 /// Turns the 3D view to a standard view and zooms to fit.
@@ -2173,6 +2540,53 @@ fn export_step(world: &mut World, p: &tools::ExportStep) -> Result<Value, String
     Ok(
         json!({ "path": p.path, "bytes": file.bytes.len(), "parts": parts.iter().map(|p| p.name.clone()).collect::<Vec<_>>() }),
     )
+}
+
+/// Exports the active tab's parts (a Part Studio's, or an Assembly's instances where they are)
+/// as the export dialog does, its format by the path's extension.
+fn export_file(world: &mut World, p: &tools::ExportFile) -> Result<Value, String> {
+    use crate::export_dialog::ExportSource;
+    use cadrs_core::rebuild::exchange::{ExportRequest, ModelFormat};
+    let path = std::path::Path::new(&p.path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let format = match ext.as_str() {
+        "step" | "stp" => ModelFormat::Step,
+        "igs" | "iges" => ModelFormat::Iges,
+        "brep" => ModelFormat::Brep,
+        "stl" => ModelFormat::Stl { binary: true },
+        "obj" => ModelFormat::Obj,
+        "glb" => ModelFormat::Glb,
+        _ => {
+            return Err(format!(
+                "unknown format {ext:?}: .step, .igs, .brep, .stl, .obj or .glb"
+            ));
+        }
+    };
+    let d = doc(world)?;
+    let e = d.active_element().ok_or("no tab is active")?;
+    let (source, assembly) = match e.kind {
+        ElementKind::PartStudio { .. } => (ExportSource::Parts(Vec::new()), false),
+        ElementKind::Assembly => (ExportSource::Assembly(Vec::new()), true),
+        _ => return Err(format!("{:?} is not a Part Studio or an Assembly", e.name)),
+    };
+    let name = e.name.clone();
+    let items = crate::export_dialog::items(world, &source)?;
+    if items.is_empty() {
+        return Err(format!("{name:?} has nothing to export"));
+    }
+    let parts: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
+    let mut req = ExportRequest::new(format, name, items);
+    req.assembly = assembly && matches!(format, ModelFormat::Step | ModelFormat::Iges);
+    let files = cadrs_core::rebuild::exchange::export_files(req)
+        .wait()
+        .ok_or("the kernel stopped")??;
+    let file = files.into_iter().next().ok_or("nothing was written")?;
+    cadrs_fs::write(path, &file.bytes).map_err(|e| format!("{}: {e}", p.path))?;
+    Ok(json!({ "path": p.path, "bytes": file.bytes.len(), "parts": parts }))
 }
 
 fn extrude(world: &mut World, p: &tools::Extrude) -> Result<Value, String> {

@@ -70,13 +70,18 @@ pub enum Call {
     RestoreVersion(VersionName),
     ImportStep(ImportStep),
     ExportStep(ExportStep),
+    ExportFile(ExportFile),
     RunScenario(RunScenario),
     CreateDrawing(CreateDrawing),
     AddAnnotation(AddAnnotation),
     RenameTab(RenameTab),
     DeleteTab(TabName),
+    OpenTab(TabName),
     GetAssembly(AssemblyName),
     InsertInstance(InsertInstance),
+    ImportFile(ImportFile),
+    AddMate(AddMate),
+    SetMateValues(SetMateValues),
     GetBoard(BoardName),
     GetBoardFit(BoardFit),
     DeriveBoard(DeriveBoard),
@@ -325,6 +330,17 @@ impl Cadrs {
     }
 
     #[tool(
+        description = "Make a tab of the open document (a Part Studio, Assembly, drawing, …) the active one, \
+        as clicking it in the tab bar does: the 3D view and screenshots show it."
+    )]
+    async fn open_tab(
+        &self,
+        Parameters(p): Parameters<TabName>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::OpenTab(p)).await
+    }
+
+    #[tool(
         description = "Delete a tab. A Part Studio or Assembly that an assembly still has instances of \
         is refused (delete those instances first)."
     )]
@@ -356,6 +372,47 @@ impl Cadrs {
         Parameters(p): Parameters<InsertInstance>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::InsertInstance(p)).await
+    }
+
+    #[tool(
+        description = "Import a file (STEP, IGES, BREP, STL or GLB) into the open document as a new Part \
+        Studio tab holding an Import feature, and make it the active tab. units sets what a mesh's numbers \
+        are (\"m\" for an STL in metres; a GLB is in metres unless told); y_axis_up turns a Y-up file \
+        Z-up (a GLB always is). One undo step."
+    )]
+    async fn import_file(
+        &self,
+        Parameters(p): Parameters<ImportFile>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ImportFile(p)).await
+    }
+
+    #[tool(
+        description = "Add a mate (Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel) between \
+        two instances of an assembly, each connector a frame in its instance's own coordinates (origin in mm, \
+        Z and X axes), optionally with limits. The solver then places the instances so the mate holds (the \
+        second connector's instance moves unless it is fixed). One undo step. Returns the assembly as \
+        get_assembly does, with each mate's current position."
+    )]
+    async fn add_mate(
+        &self,
+        Parameters(p): Parameters<AddMate>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::AddMate(p)).await
+    }
+
+    #[tool(
+        description = "Drive mates of an assembly to positions (degrees for a revolute's angle, mm for a \
+        slider) and solve: the instances move so every mate holds, as Animate or a named position moves \
+        them; mates not named stay at their positions, and a value past a mate's limits is held at the \
+        limit (listed in held_at_limit). One undo step. Returns the assembly as get_assembly does: each instance's placement \
+        (translation_mm and rotation rows) and each mate's position."
+    )]
+    async fn set_mate_values(
+        &self,
+        Parameters(p): Parameters<SetMateValues>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::SetMateValues(p)).await
     }
 
     #[tool(description = "Add a Part Studio tab to the open document and make it the active tab.")]
@@ -601,6 +658,19 @@ impl Cadrs {
         Parameters(p): Parameters<ImportStep>,
     ) -> Result<CallToolResult, ErrorData> {
         self.call(Call::ImportStep(p)).await
+    }
+
+    #[tool(
+        description = "Export the active tab (a Part Studio's parts, or an Assembly's instances where they \
+        are) to one file, its format by the path's extension: .step, .igs, .brep, .stl, .obj or .glb \
+        (glTF binary with each part's colour, in metres with +Y up). open_tab picks the tab. Returns \
+        the path, the size and the parts written."
+    )]
+    async fn export_file(
+        &self,
+        Parameters(p): Parameters<ExportFile>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.call(Call::ExportFile(p)).await
     }
 
     #[tool(description = "Write the Part Studio's parts to a STEP file.")]
