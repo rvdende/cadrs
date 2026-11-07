@@ -108,6 +108,7 @@ pub fn step(r: &mut Rebuilder) -> Result<Vec<u8>, String> {
         pose: None,
         source: (el, PART),
         source_name: "Channel".into(),
+        color: None,
     };
     let req = ExportRequest::new(ModelFormat::Step, "Channel", vec![item]);
     let files = r.export_files(&req)?;
@@ -256,6 +257,7 @@ fn case_step_of(r: &mut Rebuilder, features: Vec<Feature>) -> Result<Vec<u8>, St
         pose: None,
         source: (el, CASE_PART),
         source_name: "Case".into(),
+        color: None,
     };
     let req = ExportRequest::new(ModelFormat::Step, "Case", vec![item]);
     let files = r.export_files(&req)?;

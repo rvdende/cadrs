@@ -2474,6 +2474,7 @@ dependencies = [
  "cadrs_vars",
  "directories",
  "flate2",
+ "gltf",
  "image",
  "nalgebra",
  "rayon",

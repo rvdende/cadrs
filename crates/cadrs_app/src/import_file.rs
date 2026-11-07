@@ -114,10 +114,12 @@ fn start_dir() -> PathBuf {
 pub fn start(world: &mut World, target: ImportTarget) {
     let theme = world.resource::<Theme>().clone();
     let mut commands = world.commands();
-    // A new document also takes an STL mesh (P3E.1, TD3.1: the documents page's Import files…).
+    // A new document also takes an STL or GLB mesh (P3E.1, TD3.1: the documents page's Import
+    // files…).
     let mut exts: Vec<&str> = ImportFormat::EXCHANGE_EXTENSIONS.to_vec();
     if matches!(target, ImportTarget::NewDocument) {
         exts.push("stl");
+        exts.push("glb");
         exts.push("cadrs");
     }
     cadrs_ui::file_picker::open_file_picker(
@@ -152,11 +154,9 @@ fn on_file_picked(
             commands.queue(move |w: &mut World| crate::native_document::import(w, &path));
             continue;
         }
-        // An STL mesh as a new document: the documents page's undoable import (P3E.1).
+        // An STL or GLB mesh as a new document: the documents page's undoable import (P3E.1).
         if matches!(target, ImportTarget::NewDocument)
-            && m.path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("stl"))
+            && ImportFormat::of_path(&m.path).is_some_and(ImportFormat::is_mesh)
         {
             let path = m.path.clone();
             commands.queue(move |w: &mut World| crate::landing::import_mesh_document(w, &path));

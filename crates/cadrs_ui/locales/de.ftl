@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: exakte Volumenkörper
 io-export-tip-brep = OpenCASCADE BREP (experimentell): nur exakte Geometrie
 io-export-tip-stl = STL-Netz für den 3D-Druck
 io-export-tip-obj = Wavefront-OBJ-Netz
+io-export-tip-glb = Binäres glTF-Netz mit Farben, für Blender, Spiele und das Web
 io-export-tip-dxf = DXF in Millimetern in Originalgröße, für Schneidmaschinen
 io-export-tip-dwg = DWG über { $converter }
 io-export-tip-dwg-none = DWG: kein Konverter im PATH

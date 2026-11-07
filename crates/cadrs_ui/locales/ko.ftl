@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: 정확한 솔리드
 io-export-tip-brep = OpenCASCADE BREP (실험적): 정확한 형상만
 io-export-tip-stl = STL 메시, 3D 프린팅용
 io-export-tip-obj = Wavefront OBJ 메시
+io-export-tip-glb = 색상이 포함된 glTF 바이너리 메시 (Blender, 게임, 웹용)
 io-export-tip-dxf = 실제 크기의 밀리미터 단위 DXF, 절단기용
 io-export-tip-dwg = { $converter } 사용 DWG
 io-export-tip-dwg-none = DWG: PATH에 변환기가 없습니다

@@ -1770,6 +1770,10 @@ impl Kernel for NativeKernel {
         super::exchange::mesh_solid(self, triangles, tol)
     }
 
+    fn mesh_sheet(&mut self, triangles: &[[Point3<f64>; 3]], tol: f64) -> Result<BodyId> {
+        super::exchange::mesh_sheet(self, triangles, tol)
+    }
+
     fn write_body(&self, body: BodyId) -> Result<Vec<u8>> {
         super::exchange::write_body(self, body)
     }

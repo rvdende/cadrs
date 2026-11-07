@@ -1,12 +1,14 @@
 //! The **Import** feature's dialog (Onshape import, [`cadrs_core::import`]): parts from a STEP,
-//! IGES, BREP or STL file stored with the document. (Importing a file as new tabs or a new document,
-//! with the choice of its assembly structure, is [`crate::import_file`].)
+//! IGES, BREP, STL or GLB file stored with the document. (Importing a file as new tabs or a new
+//! document, with the choice of its assembly structure, is [`crate::import_file`].)
 //!
-//! - The toolbar's Import button opens the file picker (STEP, IGES, BREP and STL files); the file picked
-//!   is stored with the document and inserted as "Import N" ([`cadrs_core::import::AddImport`]),
-//!   and its dialog opens. Double-clicking the feature in the list edits it.
-//! - The dialog shows the file, **Choose file** to replace it, **Y axis is up**, and for STL
-//!   files **Specify units** with the unit (unitless STL numbers are read as mm otherwise).
+//! - The toolbar's Import button opens the file picker (STEP, IGES, BREP, STL and GLB files); the
+//!   file picked is stored with the document and inserted as "Import N"
+//!   ([`cadrs_core::import::AddImport`]), and its dialog opens. Double-clicking the feature in
+//!   the list edits it.
+//! - The dialog shows the file, **Choose file** to replace it, **Y axis is up** (on to start with
+//!   for GLB: glTF is +Y up), and for meshes **Specify units** with the unit (unitless STL
+//!   numbers are read as mm otherwise, GLB numbers as metres, as glTF says).
 //! - ✓ or Enter accepts (one undo step, "Insert Import 1"), ✕ or Esc removes a new Import or
 //!   reverts an edit. Every change is a command.
 
@@ -134,7 +136,7 @@ fn open_picker(world: &mut World) {
         &tr("common-import"),
         PICK_TAG,
         start_dir(),
-        &["step", "stp", "iges", "igs", "brep", "brp", "stl"],
+        &["step", "stp", "iges", "igs", "brep", "brp", "stl", "glb"],
     );
     world.flush();
 }
@@ -408,7 +410,7 @@ fn on_option(ev: On<CheckboxChange>, q: Query<&Name>, mut commands: Commands) {
                 "Y axis is up"
             }
             "import-units-checkbox" => {
-                x.units = on.then_some(ImportUnit::Millimeter);
+                x.units = on.then_some(x.format.default_unit());
                 "Specify units"
             }
             _ => return,
@@ -553,7 +555,7 @@ fn sync_import_dialog(
                                     .checked(x.y_axis_up)
                                     .build(&t),
                             );
-                            if x.format == ImportFormat::Stl {
+                            if x.format.is_mesh() {
                                 b.spawn(
                                     OptionRow::new("import-units", tr("io-import-specify-units"))
                                         .checked(x.units.is_some())

@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: точные тела
 io-export-tip-brep = OpenCASCADE BREP (экспериментально): только точная геометрия
 io-export-tip-stl = Сетка STL для 3D-печати
 io-export-tip-obj = Сетка Wavefront OBJ
+io-export-tip-glb = Двоичная сетка glTF с цветами для Blender, игр и веба
 io-export-tip-dxf = DXF в миллиметрах в натуральную величину, для режущих станков
 io-export-tip-dwg = DWG через { $converter }
 io-export-tip-dwg-none = DWG: в PATH нет конвертера

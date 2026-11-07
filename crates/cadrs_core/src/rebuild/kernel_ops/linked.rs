@@ -24,6 +24,18 @@ struct Linked {
     connectors: Vec<crate::solid::SolidConnector>,
 }
 
+/// What [`Rebuilder::mesh_parts`] made of mesh files' triangles.
+#[derive(Default)]
+struct MeshParts {
+    /// Each body, its name and the index of the mesh it came from.
+    bodies: Vec<(BodyId, String, usize)>,
+    /// The connected pieces of the meshes, those that made surfaces, and those left out.
+    pieces: usize,
+    sheets: usize,
+    failed: usize,
+    last_err: String,
+}
+
 impl Rebuilder {
     /// Edge and vertex names for a body whose faces are named `faces`.
     pub(super) fn linked_names(
@@ -85,6 +97,70 @@ impl Rebuilder {
         Ok(out)
     }
 
+    /// Bodies of mesh files' triangles (`meshes`: a name and its triangles each, in the file's
+    /// units, `scale` mm each): a solid per closed piece of each, else (with `sheets`) a surface.
+    /// Each body comes with its name ("name", "name (2)", …) and the index of its mesh.
+    fn mesh_parts(
+        &mut self,
+        meshes: &[(String, Vec<crate::import::Triangle>)],
+        scale: f64,
+        sheets: bool,
+    ) -> MeshParts {
+        let s = scale;
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for t in meshes.iter().flat_map(|m| &m.1) {
+            for p in t {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k] * s);
+                    hi[k] = hi[k].max(p[k] * s);
+                }
+            }
+        }
+        let diag = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
+        let tol = (diag * 1e-6).max(1e-6);
+        let mut out = MeshParts::default();
+        let mut used: HashMap<String, usize> = HashMap::new();
+        for (k, (stem, tris)) in meshes.iter().enumerate() {
+            for piece in crate::import::stl_pieces(tris) {
+                out.pieces += 1;
+                let pts: Vec<[Point3<f64>; 3]> = piece
+                    .iter()
+                    .map(|t| t.map(|p| Point3::new(p[0] * s, p[1] * s, p[2] * s)))
+                    .collect();
+                let body = match self.kernel.mesh_solid(&pts, tol) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        out.last_err = e.to_string();
+                        if !sheets {
+                            out.failed += 1;
+                            continue;
+                        }
+                        match self.kernel.mesh_sheet(&pts, tol) {
+                            Ok(b) => {
+                                out.sheets += 1;
+                                b
+                            }
+                            Err(e) => {
+                                out.failed += 1;
+                                out.last_err = e.to_string();
+                                continue;
+                            }
+                        }
+                    }
+                };
+                let n = used.entry(stem.clone()).or_default();
+                *n += 1;
+                let name = if *n == 1 {
+                    stem.clone()
+                } else {
+                    format!("{stem} ({n})")
+                };
+                out.bodies.push((body, name, k));
+            }
+        }
+        out
+    }
+
     /// The Import feature: a part per body of the file.
     pub(in crate::rebuild) fn import(
         &mut self,
@@ -99,6 +175,8 @@ impl Rebuilder {
             .ok_or_else(|| format!("The data of {} is missing", x.file_name))?;
         let mut warning = None;
         let mut bodies: Vec<(BodyId, String)> = Vec::new();
+        // GLB: each body's colour (in the order of `bodies`).
+        let mut colors: Vec<Option<crate::appearance::Appearance>> = Vec::new();
         let release = |k: &mut cadrs_kernel::DefaultKernel, b: &[(BodyId, String)]| {
             b.iter().for_each(|(b, _)| k.release(*b))
         };
@@ -130,49 +208,41 @@ impl Rebuilder {
             }
             ImportFormat::Stl => {
                 let tris = crate::import::parse_stl(&bytes)?;
-                let s = x.scale();
-                let pieces = crate::import::stl_pieces(&tris);
-                let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-                for t in &tris {
-                    for p in t {
-                        for k in 0..3 {
-                            lo[k] = lo[k].min(p[k] * s);
-                            hi[k] = hi[k].max(p[k] * s);
-                        }
-                    }
+                let m = self.mesh_parts(&[(x.stem(), tris)], x.scale(), false);
+                bodies = m.bodies.into_iter().map(|(b, n, _)| (b, n)).collect();
+                if bodies.is_empty() {
+                    return Err(format!("The mesh does not make a solid: {}", m.last_err));
                 }
-                let diag = (0..3).map(|k| (hi[k] - lo[k]).powi(2)).sum::<f64>().sqrt();
-                let tol = (diag * 1e-6).max(1e-6);
-                let stem = x.stem();
-                let mut failed = 0;
-                let mut last_err = String::new();
-                for piece in &pieces {
-                    let pts: Vec<[Point3<f64>; 3]> = piece
-                        .iter()
-                        .map(|t| t.map(|p| Point3::new(p[0] * s, p[1] * s, p[2] * s)))
-                        .collect();
-                    match self.kernel.mesh_solid(&pts, tol) {
-                        Ok(b) => {
-                            let name = if bodies.is_empty() {
-                                stem.clone()
-                            } else {
-                                format!("{stem} ({})", bodies.len() + 1)
-                            };
-                            bodies.push((b, name));
-                        }
-                        Err(e) => {
-                            failed += 1;
-                            last_err = e.to_string();
-                        }
-                    }
+                if m.failed > 0 {
+                    warning = Some(format!(
+                        "{} of {} pieces of the mesh are not closed solids and were left out",
+                        m.failed, m.pieces
+                    ));
+                }
+            }
+            ImportFormat::Glb => {
+                let meshes = crate::glb::read(&bytes)?;
+                // A part per closed piece of each mesh, else a surface; each named after its
+                // node, in its material's colour.
+                let named: Vec<(String, Vec<crate::import::Triangle>)> = meshes
+                    .iter()
+                    .map(|m| (m.name.clone(), m.triangles.clone()))
+                    .collect();
+                let m = self.mesh_parts(&named, x.scale(), true);
+                for (b, name, k) in m.bodies {
+                    bodies.push((b, name));
+                    colors.push(meshes[k].color.map(crate::glb::appearance_of));
                 }
                 if bodies.is_empty() {
-                    return Err(format!("The mesh does not make a solid: {last_err}"));
+                    return Err(format!(
+                        "The meshes make no solids or surfaces: {}",
+                        m.last_err
+                    ));
                 }
-                if failed > 0 {
+                if m.sheets > 0 {
                     warning = Some(format!(
-                        "{failed} of {} pieces of the mesh are not closed solids and were left out",
-                        pieces.len()
+                        "{} of {} pieces of the meshes are not closed and came in as surfaces",
+                        m.sheets, m.pieces
                     ));
                 }
             }
@@ -237,7 +307,12 @@ impl Rebuilder {
                     PartKind::Surface
                 },
                 palette: None,
-                derived: None,
+                // The file's colour, shown unless the part is given its own.
+                derived: colors.get(k).copied().flatten().map(|c| {
+                    let mut props = crate::document::PartProps::new(PartId::new(id, k as u32));
+                    props.appearance = Some(c);
+                    Arc::new(props)
+                }),
                 connectors: Vec::new(),
             });
         }

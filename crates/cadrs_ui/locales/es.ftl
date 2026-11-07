@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: sólidos exactos
 io-export-tip-brep = BREP de OpenCASCADE (experimental): solo geometría exacta
 io-export-tip-stl = Malla STL, para impresión 3D
 io-export-tip-obj = Malla OBJ de Wavefront
+io-export-tip-glb = Malla glTF binaria con colores, para Blender, juegos y la web
 io-export-tip-dxf = DXF en milímetros a tamaño real, para máquinas de corte
 io-export-tip-dwg = DWG mediante { $converter }
 io-export-tip-dwg-none = DWG: no hay convertidor en el PATH

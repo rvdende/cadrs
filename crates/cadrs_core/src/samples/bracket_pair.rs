@@ -86,6 +86,7 @@ pub fn step(r: &mut Rebuilder) -> Result<Vec<u8>, String> {
             pose: Some(pose),
             source,
             source_name: source_name.into(),
+            color: None,
         }
     };
     let items = vec![

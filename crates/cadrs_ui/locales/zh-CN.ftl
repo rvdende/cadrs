@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3：精确实体
 io-export-tip-brep = OpenCASCADE BREP（实验性）：仅精确几何
 io-export-tip-stl = STL 网格，用于 3D 打印
 io-export-tip-obj = Wavefront OBJ 网格
+io-export-tip-glb = 带颜色的 glTF 二进制网格，用于 Blender、游戏和网页
 io-export-tip-dxf = 以毫米为单位、1:1 尺寸的 DXF，用于切割机
 io-export-tip-dwg = 通过 { $converter } 生成 DWG
 io-export-tip-dwg-none = DWG：PATH 中没有转换器

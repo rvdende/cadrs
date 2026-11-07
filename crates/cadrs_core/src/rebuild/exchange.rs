@@ -24,6 +24,9 @@ pub enum ModelFormat {
         binary: bool,
     },
     Obj,
+    /// glTF binary: a node per part with its colour, in metres with +Y up (as glTF says,
+    /// whatever the request's units and orientation).
+    Glb,
 }
 
 impl ModelFormat {
@@ -34,11 +37,15 @@ impl ModelFormat {
             ModelFormat::Brep => "brep",
             ModelFormat::Stl { .. } => "stl",
             ModelFormat::Obj => "obj",
+            ModelFormat::Glb => "glb",
         }
     }
 
     pub fn is_mesh(self) -> bool {
-        matches!(self, ModelFormat::Stl { .. } | ModelFormat::Obj)
+        matches!(
+            self,
+            ModelFormat::Stl { .. } | ModelFormat::Obj | ModelFormat::Glb
+        )
     }
 }
 
@@ -54,6 +61,9 @@ pub struct ExportItem {
     /// The source (studio, part), and its name, for an assembly file.
     pub source: (crate::ids::ElementId, PartId),
     pub source_name: String,
+    /// Its colour, for formats that keep one (GLB); `None`: grey.
+    #[serde(default)]
+    pub color: Option<crate::appearance::Appearance>,
 }
 
 /// What to export.
@@ -112,7 +122,7 @@ struct ExportFileWire {
 impl<'de> serde::Deserialize<'de> for ExportFile {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let w = ExportFileWire::deserialize(d)?;
-        let extension = ["step", "igs", "brep", "stl", "obj"]
+        let extension = ["step", "igs", "brep", "stl", "obj", "glb"]
             .into_iter()
             .find(|k| *k == w.extension)
             .ok_or_else(|| {
@@ -263,7 +273,7 @@ impl Rebuilder {
         if req.items.is_empty() {
             return Err("Nothing to export".into());
         }
-        let up = req.y_up.then(y_up_pose);
+        let up = (req.y_up || req.format == ModelFormat::Glb).then(y_up_pose);
         let place = |p: Option<Pose>| -> Pose {
             let p = p.unwrap_or(Pose::IDENTITY);
             match &up {
@@ -375,7 +385,7 @@ impl Rebuilder {
                         })
                         .collect()
                 }
-                ModelFormat::Stl { .. } | ModelFormat::Obj => {
+                ModelFormat::Stl { .. } | ModelFormat::Obj | ModelFormat::Glb => {
                     let quality = cadrs_kernel::Tessellation {
                         deflection: req.deflection.max(1e-4),
                         angle: req.angle.clamp(1e-3, 1.0),
@@ -387,13 +397,24 @@ impl Rebuilder {
                             .kernel
                             .tessellate(b, quality)
                             .map_err(|e| e.to_string())?;
-                        if (req.scale - 1.0).abs() > 1e-15 {
+                        // glTF is in metres.
+                        let scale = if req.format == ModelFormat::Glb {
+                            1e-3
+                        } else {
+                            req.scale
+                        };
+                        if (scale - 1.0).abs() > 1e-15 {
                             m.positions
                                 .iter_mut()
-                                .for_each(|p| *p = nalgebra::Point3::from(p.coords * req.scale));
+                                .for_each(|p| *p = nalgebra::Point3::from(p.coords * scale));
                         }
                         meshes.push((it.name.clone(), m));
                     }
+                    let colors: std::collections::HashMap<&str, [f32; 4]> = req
+                        .items
+                        .iter()
+                        .filter_map(|it| Some((it.name.as_str(), crate::glb::color_of(it.color?))))
+                        .collect();
                     let write =
                         |group: &[(String, cadrs_kernel::TriMesh)], name: &str| -> Vec<u8> {
                             match req.format {
@@ -416,6 +437,30 @@ impl Rebuilder {
                                     } else {
                                         x::write_stl_ascii(&all, name).into_bytes()
                                     }
+                                }
+                                ModelFormat::Glb => {
+                                    let parts: Vec<crate::glb::GlbPart> = group
+                                        .iter()
+                                        .map(|(n, m)| crate::glb::GlbPart {
+                                            name: n,
+                                            positions: m
+                                                .positions
+                                                .iter()
+                                                .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                                                .collect(),
+                                            normals: m
+                                                .normals
+                                                .iter()
+                                                .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+                                                .collect(),
+                                            indices: m.indices.iter().flatten().copied().collect(),
+                                            color: colors
+                                                .get(n.as_str())
+                                                .copied()
+                                                .unwrap_or([0.6, 0.6, 0.6, 1.0]),
+                                        })
+                                        .collect();
+                                    crate::glb::write(&parts, &format!("cadrs {name}"))
                                 }
                                 _ => Vec::new(),
                             }
