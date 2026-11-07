@@ -273,6 +273,44 @@ fn shapes_are_watertight_and_within_the_chord() {
     }
 }
 
+/// A ball's cap 10⁻⁴ high round its pole (brep-bench's pole-cap-a-ten-thousandth-high): a disc
+/// 0.063 across under a dome, meshed at a chord of 2·10⁻⁷. Spaced by the sphere's radius each
+/// way in (u, v), its triangles ran long round the pole and the mesh held 5 % too little.
+#[test]
+fn a_cap_round_a_pole_meshes_within_the_chord() {
+    let (r, h) = (5.0f64, 1e-4f64);
+    let z0 = r - h;
+    let rim = (r * r - z0 * z0).sqrt();
+    let mut k = NativeKernel::new();
+    let id = revolve(
+        &mut k,
+        vec![
+            Curve2::Arc {
+                center: p(0.0, 0.0),
+                radius: r,
+                start_angle: PI / 2.0,
+                sweep: z0.atan2(rim) - PI / 2.0,
+                source: None,
+            },
+            line(p(rim, z0), p(0.0, z0)),
+            line(p(0.0, z0), p(0.0, r)),
+        ],
+    );
+    let body = k.get(id).unwrap().clone();
+    let params = TessParams::new(2e-7, 5f64.to_radians()).unwrap();
+    let (faces, _) = tess::mesh(&body, &params).unwrap();
+    assert!(tess::check_faces(&faces).is_watertight());
+    let dev = deviation(&body, &faces);
+    assert!(dev <= params.chord * (1.0 + 1e-6), "{dev} off the surfaces");
+    // A closed mesh within the chord of the surfaces: its volume within chord × area (0.8 %).
+    let exact = PI * h * h * (3.0 * r - h) / 3.0;
+    let (v, a) = volume(&faces);
+    assert!(
+        (v - exact).abs() <= params.chord * a,
+        "volume {v}, exact {exact}"
+    );
+}
+
 /// A 10 mm box shelled open at its front and top with 1 mm walls, its back face chamfered 1 mm
 /// (issue 156): the chamfer eats the back wall's rim whole, so the top rim is left one face
 /// pinched to no width along the chamfer, with two boundary edges along one line (the inner

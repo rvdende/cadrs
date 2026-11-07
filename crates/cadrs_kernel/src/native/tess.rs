@@ -1348,10 +1348,18 @@ pub fn mesh_face_with(
     // Likewise an extrusion's (its curve's parameter and its direction's length) and a surface
     // of revolution's along its meridian: unscaled, a 0.02 mm extrusion of a spline over a
     // parameter range of 0.0016 took a 14 000-point grid.
+    // (u, v) scaled to about true lengths over the face's own box. A sphere's and a torus's fixed
+    // metric (the radius each way) is far off on part of them, as on a cap round a sphere's
+    // pole, where a step in u is cos v as long: triangles spaced by it come out long round the
+    // pole and sag below it (the planes, cylinders and cones keep theirs).
     let scale = f.surf.metric();
     let scale = if matches!(
         f.surf,
-        Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        Surface::Nurbs(_)
+            | Surface::Extrusion { .. }
+            | Surface::Revolution { .. }
+            | Surface::Sphere { .. }
+            | Surface::Torus { .. }
     ) {
         mean_speeds(&dom, ubox, vbox).unwrap_or(scale)
     } else {

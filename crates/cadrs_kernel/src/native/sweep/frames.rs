@@ -174,7 +174,10 @@ pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
     pts.push(last.end());
     tans.push(last.dir(1.0));
     let size = pts.iter().map(|p| (p - pts[0]).norm()).fold(0.0, f64::max);
-    let h = fit_helix(&pts, &tans, 1e-4 * (1.0 + size));
+    // The segments' ends: a Bézier approximation of a helix passes through it there and strays
+    // between (a rational arc's height isn't linear in its angle), so its rise is fitted there.
+    let nodes: Vec<usize> = (0..=segs.len()).map(|k| k * 64).collect();
+    let h = fit_helix(&pts, &tans, Some(&nodes), 1e-4 * (1.0 + size));
     if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
         eprintln!("helix fit over {} segments: {h:?}", segs.len());
     }
@@ -182,18 +185,28 @@ pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
 }
 
 /// The helix through points of a path (with their travel fractions), when they all lie on one
-/// within `tol` (an approximated helix: Bézier pieces through points of it).
-fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
+/// within `tol` (an approximated helix: Bézier pieces through points of it). Its rise is fitted
+/// to the points `nodes` names, where the approximation meets the helix, else to them all.
+fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Option<Helix> {
     let n = pts.len();
     if n < 8 {
         return None;
     }
+    // Each point weighs the stretch of path about it (half at the two ends, as the trapezoid
+    // rule weighs them): a run of whole turns, sampled with both ends, otherwise counts its first
+    // angle twice and tilts the axis it finds (10⁻⁵ over a turn, 10⁻⁴ of radius at its top).
+    let w = |i: usize| if i == 0 || i + 1 == n { 0.5 } else { 1.0 };
+    let total: f64 = (0..n).map(w).sum();
     // The axis: the tangents make one angle with it, so it is square to their differences.
-    let mean = tans.iter().fold(V3::zeros(), |acc, t| acc + t) / n as f64;
+    let mean = tans
+        .iter()
+        .enumerate()
+        .fold(V3::zeros(), |acc, (i, t)| acc + t * w(i))
+        / total;
     let mut m = nalgebra::Matrix3::zeros();
-    for t in tans {
+    for (i, t) in tans.iter().enumerate() {
         let d = t - mean;
-        m += d * d.transpose();
+        m += d * d.transpose() * w(i);
     }
     let eig = m.symmetric_eigen();
     let k = (0..3)
@@ -217,11 +230,11 @@ fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
     let fr = Frame::from_z(P3::origin(), a);
     let mut mm = nalgebra::Matrix3::zeros();
     let mut rhs = V3::zeros();
-    for p in pts {
+    for (i, p) in pts.iter().enumerate() {
         let (x, y) = (p.coords.dot(&fr.x), p.coords.dot(&fr.y));
         let row = V3::new(x, y, 1.0);
-        mm += row * row.transpose();
-        rhs += row * (x * x + y * y);
+        mm += row * row.transpose() * w(i);
+        rhs += row * (x * x + y * y) * w(i);
     }
     let sol = mm.lu().solve(&rhs)?;
     let (cx, cy) = (sol.x / 2.0, sol.y / 2.0);
@@ -247,14 +260,22 @@ fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
         ths.push(prev);
     }
     let zs: Vec<f64> = pts.iter().map(|p| (p - o0).dot(&a)).collect();
+    let fit: Vec<(usize, f64)> = match nodes {
+        Some(k) if k.len() >= 2 && k.iter().all(|&i| i < n) => {
+            k.iter().map(|&i| (i, 1.0)).collect()
+        }
+        _ => (0..n).map(|i| (i, w(i))).collect(),
+    };
+    let wsum: f64 = fit.iter().map(|f| f.1).sum();
     let (st, sz) = (
-        ths.iter().sum::<f64>() / n as f64,
-        zs.iter().sum::<f64>() / n as f64,
+        fit.iter().map(|&(i, wi)| ths[i] * wi).sum::<f64>() / wsum,
+        fit.iter().map(|&(i, wi)| zs[i] * wi).sum::<f64>() / wsum,
     );
     let (mut num, mut den) = (0.0, 0.0);
-    for (t, z) in ths.iter().zip(&zs) {
-        num += (t - st) * (z - sz);
-        den += (t - st) * (t - st);
+    for &(i, wi) in &fit {
+        let (t, z) = (ths[i], zs[i]);
+        num += (t - st) * (z - sz) * wi;
+        den += (t - st) * (t - st) * wi;
     }
     if den < tol::DEGENERATE {
         return None;
@@ -360,7 +381,7 @@ impl PathSweep {
                 }
                 None => {
                     let size = pts.iter().map(|p| (p - pts[0]).norm()).fold(0.0, f64::max);
-                    fit_helix(&pts, &tans, 1e-4 * (1.0 + size))
+                    fit_helix(&pts, &tans, None, 1e-4 * (1.0 + size))
                 }
             };
         }
@@ -1055,6 +1076,55 @@ pub fn sweep_seg(
 mod tests {
     use super::*;
     use std::f64::consts::FRAC_PI_2;
+
+    /// A helix drawn as Helix features draw one (rational quadratic arcs, the height rising
+    /// with each arc's parameter, so it strays from the helix between their ends), one whole turn
+    /// from its start: the helix fitted to it is the true one, axis, radius and rise
+    /// (brep-bench's twisted-thin-blade, swept by a fit 10⁻⁵ off, came out 3·10⁻⁶ too big).
+    #[test]
+    fn a_turn_of_helix_arcs_fits_the_true_helix() {
+        use std::f64::consts::TAU;
+        let (r, pitch, start) = (20.0f64.hypot(0.2), 60.0, 0.2f64.atan2(20.0));
+        let n = 16;
+        let at = |t: f64, r: f64, z: f64| P3::new(r * t.cos(), r * t.sin(), z);
+        let segs: Vec<Seg> = (0..n)
+            .map(|i| {
+                let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                let (t0, t1) = (start + TAU * s0, start + TAU * s1);
+                let half = (t1 - t0) / 2.0;
+                let (z0, z1) = (pitch * s0, pitch * s1);
+                let poles = [
+                    at(t0, r, z0),
+                    at(t0 + half, r / half.cos(), (z0 + z1) / 2.0),
+                    at(t1, r, z1),
+                ];
+                let c = Curve::nurbs(crate::native::nurbs::NurbsCurve::bezier(
+                    &poles,
+                    &[1.0, half.cos(), 1.0],
+                ));
+                Seg {
+                    c,
+                    t0: 0.0,
+                    t1: 1.0,
+                    rev: false,
+                }
+            })
+            .collect();
+        let h = fit_helix_segs(&segs).expect("a helix");
+        assert!(h.a.z > 1.0 - 1e-15, "axis {:?}", h.a);
+        assert!(
+            h.o.x.abs() < 1e-12 && h.o.y.abs() < 1e-12,
+            "centre {:?}",
+            h.o
+        );
+        assert!((h.r - r).abs() < 1e-12, "radius {} against {r}", h.r);
+        let rise = pitch / TAU;
+        assert!(
+            (h.c - rise).abs() < 1e-12 * rise,
+            "rise {} against {rise}",
+            h.c
+        );
+    }
 
     /// A quarter ellipse, bending tightly at one end and hardly at the other: the sections gather
     /// where it bends (spaced by the local curvature; spaced by the tightest bend everywhere, it
