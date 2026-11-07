@@ -1006,3 +1006,42 @@ fn a_prism_slid_and_turned_in_its_plane() {
     let want = PI * (r1 * r1 - r0 * r0) * h;
     assert!((v - want).abs() < 1e-6 * want, "turned {v} against {want}");
 }
+
+/// A rigid-motion solid sweep (`SolidMotion::Rigid`, meshed): a torus turned a whole turn about
+/// its own axis fills itself, to the mesh's sag.
+#[test]
+fn a_torus_turned_by_a_rigid_motion() {
+    use std::f64::consts::{PI, TAU};
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let t = k
+        .primitive(&Primitive::Torus {
+            center: p3(0.0, 0.0, 0.0),
+            axis: z,
+            major: 3.0,
+            minor: 1.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let axis = Axis {
+        origin: p3(0.0, 0.0, 0.0),
+        dir: z,
+    };
+    let s = k
+        .sweep_solid(
+            t,
+            &SolidMotion::Rigid {
+                steps: vec![RigidStep::Turn {
+                    axis,
+                    from: 0.0,
+                    to: TAU,
+                }],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let v = k.mass_properties(s).unwrap().volume;
+    let want = 2.0 * PI * PI * 3.0;
+    assert!((v - want).abs() < 1e-2 * want, "{v} against {want}");
+    assert!(k.get(s).unwrap().check().is_empty());
+}

@@ -493,8 +493,11 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     let rev = revolved(&b).ok_or(KernelError::Unsupported(
         "sweeping solids other than a torus or a convex section revolved",
     ))?;
+    if let SolidMotion::Rigid { steps } = motion {
+        return rigid(k, &b, &rev, steps);
+    }
     let (axis, kk, span) = match *motion {
-        SolidMotion::Planar { .. } => unreachable!(),
+        SolidMotion::Planar { .. } | SolidMotion::Rigid { .. } => unreachable!(),
         SolidMotion::Turn { axis } => (axis, 0.0, None),
         SolidMotion::Screw {
             axis,
@@ -770,4 +773,224 @@ fn helix_path(o: P3, z: V3, x: V3, y: V3, r: f64, pitch: f64, turns: f64) -> Vec
             }
         })
         .collect()
+}
+
+impl Section {
+    /// The signed distance of (ρ, h) from the section (negative inside).
+    fn distance(&self, q: (f64, f64)) -> f64 {
+        match self {
+            Section::Disk { c, r } => (q.0 - c.0).hypot(q.1 - c.1) - r,
+            Section::Polygon(p) => {
+                let n = p.len();
+                let mut d = f64::INFINITY;
+                for i in 0..n {
+                    let (a, b) = (p[i], p[(i + 1) % n]);
+                    let (ab0, ab1) = (b.0 - a.0, b.1 - a.1);
+                    let t = (((q.0 - a.0) * ab0 + (q.1 - a.1) * ab1) / (ab0 * ab0 + ab1 * ab1))
+                        .clamp(0.0, 1.0);
+                    d = d.min((a.0 + ab0 * t - q.0).hypot(a.1 + ab1 * t - q.1));
+                }
+                if self.contains(q) { -d } else { d }
+            }
+        }
+    }
+}
+
+impl Revolved {
+    /// The body's signed distance at p (negative inside): its section's in the half plane
+    /// through its axis and p.
+    fn distance(&self, p: &P3) -> f64 {
+        let w = p - self.o;
+        let h = w.dot(&self.a);
+        self.section.distance(((w - self.a * h).norm(), h))
+    }
+}
+
+/// A rigid motion's place at t: the rotation and translation taking the body's points there.
+fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
+    let (mut r, mut d) = (nalgebra::Rotation3::identity(), V3::zeros());
+    for s in steps {
+        match *s {
+            RigidStep::Turn { axis, from, to } => {
+                let q = nalgebra::Rotation3::from_axis_angle(&axis.dir, from + (to - from) * t);
+                let c = axis.origin.coords;
+                // x ↦ q (x − c) + c after the steps before.
+                r = q * r;
+                d = q * (d - c) + c;
+            }
+            RigidStep::Slide { from, to } => d += from + (to - from) * t,
+        }
+    }
+    (r, d)
+}
+
+/// [`crate::Kernel::sweep_solid`] for a rigid motion: the region some instant of the body holds,
+/// meshed by marching tetrahedra and made solid.
+fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) -> Result<OpResult> {
+    use rayon::prelude::*;
+    // The places sampled, inverse (world to body).
+    let nt = 160;
+    let places: Vec<(nalgebra::Rotation3<f64>, V3)> = (0..=nt)
+        .map(|i| rigid_at(steps, i as f64 / nt as f64))
+        .collect();
+    // How deep x lies in the body's places: the best sampled instant refined by golden-section
+    // search about it.
+    let depth = |x: &P3| -> f64 {
+        let f = |t: f64| {
+            let (r, d) = rigid_at(steps, t);
+            -rev.distance(&P3::from(r.inverse() * (x.coords - d)))
+        };
+        let mut best = (f64::NEG_INFINITY, 0usize);
+        for (i, (r, d)) in places.iter().enumerate() {
+            let v = -rev.distance(&P3::from(r.inverse() * (x.coords - d)));
+            if v > best.0 {
+                best = (v, i);
+            }
+        }
+        let h = 1.0 / nt as f64;
+        let c = best.1 as f64 * h;
+        let (_, v) = golden_max(&f, (c - h).max(0.0), (c + h).min(1.0));
+        v.max(best.0)
+    };
+    // The grid over the places' boxes.
+    let bb0 = b.bbox();
+    let mut bb = Bbox::empty();
+    for (r, d) in &places {
+        for i in 0..8 {
+            let c = P3::new(
+                if i & 1 == 0 { bb0.min.x } else { bb0.max.x },
+                if i & 2 == 0 { bb0.min.y } else { bb0.max.y },
+                if i & 4 == 0 { bb0.min.z } else { bb0.max.z },
+            );
+            bb.add(&P3::from(r * c.coords + d));
+        }
+    }
+    let ext = bb.max - bb.min;
+    let h = ext.max() / 100.0;
+    let lo = bb.min - V3::repeat(2.0 * h);
+    let n = [0, 1, 2].map(|i| ((ext[i] + 4.0 * h) / h).ceil() as usize + 1);
+    let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
+    let idx = |i: usize, j: usize, l: usize| (l * n[1] + j) * n[0] + i;
+    let field: Vec<f64> = (0..n[0] * n[1] * n[2])
+        .into_par_iter()
+        .map(|g| {
+            let (i, j, l) = (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
+            depth(&at(i, j, l))
+        })
+        .collect();
+    // Marching tetrahedra: each cube cut into six about its main diagonal; a vertex on each
+    // grid edge where the depth changes sign, placed where it is 0 along the edge (secant
+    // steps), shared by the cubes about it.
+    let tets: [[usize; 4]; 6] = [
+        [0, 1, 3, 7],
+        [0, 3, 2, 7],
+        [0, 2, 6, 7],
+        [0, 6, 4, 7],
+        [0, 4, 5, 7],
+        [0, 5, 1, 7],
+    ];
+    let corner = |c: usize| (c & 1, (c >> 1) & 1, (c >> 2) & 1);
+    let mut verts: std::collections::HashMap<(usize, usize), P3> = std::collections::HashMap::new();
+    let mut tris: Vec<[(usize, usize); 3]> = Vec::new();
+    for l in 0..n[2] - 1 {
+        for j in 0..n[1] - 1 {
+            for i in 0..n[0] - 1 {
+                let g: Vec<usize> = (0..8)
+                    .map(|c| {
+                        let (a, b2, e) = corner(c);
+                        idx(i + a, j + b2, l + e)
+                    })
+                    .collect();
+                for t in &tets {
+                    let ids = t.map(|c| g[c]);
+                    let ins: Vec<usize> = (0..4).filter(|&q| field[ids[q]] > 0.0).collect();
+                    let outs: Vec<usize> = (0..4).filter(|&q| field[ids[q]] <= 0.0).collect();
+                    let e = |a: usize, b2: usize| {
+                        let (x, y) = (ids[a], ids[b2]);
+                        (x.min(y), x.max(y))
+                    };
+                    // Triangles with their corners' edges (in, out), turned outward later.
+                    match (ins.len(), outs.len()) {
+                        (1, 3) => {
+                            tris.push([e(ins[0], outs[0]), e(ins[0], outs[1]), e(ins[0], outs[2])])
+                        }
+                        (3, 1) => {
+                            tris.push([e(outs[0], ins[0]), e(outs[0], ins[1]), e(outs[0], ins[2])])
+                        }
+                        (2, 2) => {
+                            let (a, b2) = (ins[0], ins[1]);
+                            let (c, d) = (outs[0], outs[1]);
+                            tris.push([e(a, c), e(a, d), e(b2, d)]);
+                            tris.push([e(a, c), e(b2, d), e(b2, c)]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    let pos = |g: usize| {
+        let (i, j, l) = (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
+        at(i, j, l)
+    };
+    let keys: Vec<(usize, usize)> = {
+        let mut ks: Vec<(usize, usize)> = tris.iter().flatten().copied().collect();
+        ks.sort_unstable();
+        ks.dedup();
+        ks
+    };
+    let placed: Vec<((usize, usize), P3)> = keys
+        .par_iter()
+        .map(|&(a, b2)| {
+            let (pa, pb) = (pos(a), pos(b2));
+            let (mut fa, mut fb) = (field[a], field[b2]);
+            let (mut xa, mut xb) = (0.0f64, 1.0f64);
+            let mut x = fa / (fa - fb);
+            for _ in 0..6 {
+                let fx = depth(&(pa + (pb - pa) * x));
+                if fx.abs() < 1e-12 * h {
+                    break;
+                }
+                if (fx > 0.0) == (fa > 0.0) {
+                    xa = x;
+                    fa = fx;
+                } else {
+                    xb = x;
+                    fb = fx;
+                }
+                x = xa + (xb - xa) * fa / (fa - fb);
+            }
+            ((a, b2), pa + (pb - pa) * x)
+        })
+        .collect();
+    verts.extend(placed);
+    // Each triangle turned so its normal points out (from the inside corner of its edges).
+    let mut out: Vec<[P3; 3]> = Vec::with_capacity(tris.len());
+    for t in &tris {
+        let p = t.map(|e| verts[&e]);
+        let normal = (p[1] - p[0]).cross(&(p[2] - p[0]));
+        if normal.norm() < 1e-14 * h * h {
+            continue;
+        }
+        // The edge's inside end: its field is positive.
+        let (a, b2) = t[0];
+        let inside_end = if field[a] > 0.0 { pos(a) } else { pos(b2) };
+        let c = P3::from((p[0].coords + p[1].coords + p[2].coords) / 3.0);
+        out.push(if normal.dot(&(c - inside_end)) >= 0.0 {
+            p
+        } else {
+            [p[0], p[2], p[1]]
+        });
+    }
+    if out.is_empty() {
+        return Err(KernelError::InvalidResult {
+            op: "solid sweep",
+            why: "the motion fills nothing".into(),
+        });
+    }
+    let id = k.mesh_solid(&out, 1e-9 * h.max(1.0))?;
+    Ok(OpResult {
+        bodies: vec![id],
+        history: History::default(),
+    })
 }

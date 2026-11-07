@@ -764,7 +764,30 @@ pub enum PlanarStep {
     },
 }
 
-/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis, or in its planes.
+/// One step of a rigid motion ([`SolidMotion::Rigid`]), its amount running linearly with the
+/// motion's parameter from `from` to `to`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RigidStep {
+    /// A turn about the axis (radians, right-handed about its direction).
+    Turn {
+        /// The axis turned about.
+        axis: Axis,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+    },
+    /// A slide.
+    Slide {
+        /// The slide at the motion's start.
+        from: Vector3<f64>,
+        /// The slide at its end.
+        to: Vector3<f64>,
+    },
+}
+
+/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis, in its planes, or
+/// by any rigid motion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SolidMotion {
     /// Turned whole turns about the axis: the solid of revolution the body generates.
@@ -794,6 +817,17 @@ pub enum SolidMotion {
         normal: Unit<Vector3<f64>>,
         /// The steps, the first applied first.
         steps: Vec<PlanarStep>,
+    },
+    /// Moved by its steps (turns about any axes, slides) applied in order at each instant, each
+    /// by its amount at that instant, as the motion runs from start to end. For solids of
+    /// revolution of a convex section (a torus, a wheel): what they fill, found as the region
+    /// some instant of the body holds (the body's signed distance, closed in form, at the
+    /// deepest instant) and bounded by a closed mesh of it (marching tetrahedra on a grid of a
+    /// hundredth of its reach, the vertices placed on it), made solid: within about the grid's
+    /// step squared over the body's curvature radius.
+    Rigid {
+        /// The steps, the first applied first.
+        steps: Vec<RigidStep>,
     },
 }
 
