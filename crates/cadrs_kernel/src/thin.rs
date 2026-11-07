@@ -226,6 +226,7 @@ fn band(c: &Curve2, whole: bool, left: f64, right: f64, source: u64) -> Result<R
         Curve2::Ellipse { .. } | Curve2::EllipseArc { .. } | Curve2::OffsetEllipseArc { .. } => {
             Err(KernelError::Unsupported("thin walls along ellipses"))
         }
+        Curve2::Spline { .. } => Err(KernelError::Unsupported("thin walls along splines")),
         Curve2::Bezier { ref poles, .. } => {
             // A spline span's offsets aren't Béziers: each side is four cubic pieces fitted to
             // the offset curve at their ends (points and derivatives, scaled by 1 − d·κ).

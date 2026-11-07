@@ -729,3 +729,77 @@ fn analytic_patch_boxes_hold_their_patches() {
         }
     }
 }
+
+/// A sketch spline (`Curve2::Spline`) of these knots, poles and weights.
+fn spline(degree: usize, knots: Vec<f64>, poles: &[(f64, f64)], weights: Vec<f64>) -> Curve2 {
+    Curve2::Spline {
+        degree,
+        knots,
+        poles: poles.iter().map(|&(x, y)| p2(x, y)).collect(),
+        weights,
+        source: None,
+    }
+}
+
+/// geometry/periodic-bspline-prism: a periodic quadratic B-spline sketched (its poles and the
+/// first two again on even knots) and extruded.
+#[test]
+fn a_periodic_spline_extruded() {
+    let mut k = NativeKernel::new();
+    let mut poles = vec![(10.0, 10.0), (-10.0, 10.0), (-10.0, -10.0), (10.0, -10.0)];
+    poles.extend_from_within(..2);
+    let knots = (0..poles.len() + 3).map(|i| i as f64).collect();
+    let c = spline(2, knots, &poles, vec![]);
+    assert!(c.is_closed());
+    let s = sketch(xy(0.0), Loop { curves: vec![c] }, vec![]);
+    let b = extrude(&mut k, &s, 10.0);
+    measures(&k, b, 3333.3333333333335, 1315.9567627227589);
+}
+
+/// spline/rational-spheroid: a rational quadratic B-spline of two spans and the axis, revolved.
+#[test]
+fn a_rational_spline_revolved() {
+    let mut k = NativeKernel::new();
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let c = spline(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        &[
+            (0.0, -10.0),
+            (6.0, -10.0),
+            (6.0, 0.0),
+            (6.0, 10.0),
+            (0.0, 10.0),
+        ],
+        vec![1.0, w, 1.0, w, 1.0],
+    );
+    let s = sketch(
+        xz(),
+        Loop {
+            curves: vec![c, line((0.0, 10.0), (0.0, -10.0))],
+        },
+        vec![],
+    );
+    let b = revolve_z(&mut k, &s);
+    measures(&k, b, 1507.9644737231006, 663.1722477458867);
+    // Reversed, the same curve run the other way.
+    let c = spline(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        &[
+            (0.0, -10.0),
+            (6.0, -10.0),
+            (6.0, 0.0),
+            (6.0, 10.0),
+            (0.0, 10.0),
+        ],
+        vec![1.0, w, 1.0, w, 1.0],
+    );
+    let r = c.reversed();
+    for s in [0.0, 0.3, 0.5, 0.8, 1.0] {
+        assert!(
+            (r.point_at(s) - c.point_at(1.0 - s)).norm() < 1e-12,
+            "at {s}"
+        );
+    }
+}

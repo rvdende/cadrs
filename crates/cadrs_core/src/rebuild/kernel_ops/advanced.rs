@@ -1132,6 +1132,19 @@ fn grown(p: &cadrs_kernel::Profile, k: f64) -> cadrs_kernel::Profile {
             poles: poles.map(sp),
             source,
         },
+        Curve2::Spline {
+            degree,
+            knots,
+            poles,
+            weights,
+            source,
+        } => Curve2::Spline {
+            degree,
+            knots,
+            poles: poles.into_iter().map(sp).collect(),
+            weights,
+            source,
+        },
     };
     let lp = |l: &cadrs_kernel::Loop| cadrs_kernel::Loop {
         curves: l.curves.iter().map(sc).collect(),

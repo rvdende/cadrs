@@ -151,6 +151,46 @@ pub enum Curve2 {
         /// The sketch curve it came from.
         source: Option<u64>,
     },
+    /// A B-spline curve, rational or not (a sketch's spline, or a conic drawn exactly as a
+    /// rational quadratic): its `degree`, its `knots` (as many as the poles and the degree and
+    /// one more), its `poles` and their `weights` (empty for a polynomial curve). It runs over its
+    /// knots' domain, from `knots[degree]` to the knot `degree` from the end: clamped knots run
+    /// it from its first pole to its last, and a periodic curve's knots evenly spaced with its
+    /// first `degree` poles repeated at its end close it smoothly.
+    Spline {
+        /// The degree (1 or more).
+        degree: usize,
+        /// The knot vector, non-decreasing.
+        knots: Vec<f64>,
+        /// The control points.
+        poles: Vec<Point2<f64>>,
+        /// The poles' weights, or none for a polynomial curve.
+        weights: Vec<f64>,
+        /// The sketch curve it came from.
+        source: Option<u64>,
+    },
+}
+
+/// The B-spline of a [`Curve2::Spline`] (in the plane z = 0), or None when its knots, poles and
+/// weights don't make one.
+pub fn spline_nurbs(
+    degree: usize,
+    knots: &[f64],
+    poles: &[Point2<f64>],
+    weights: &[f64],
+) -> Option<crate::native::nurbs::NurbsCurve> {
+    if !(weights.is_empty() || weights.len() == poles.len()) {
+        return None;
+    }
+    let cps = poles
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let w = weights.get(i).copied().unwrap_or(1.0);
+            crate::native::nurbs::hom(&Point3::new(p.x, p.y, 0.0), w)
+        })
+        .collect();
+    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps).ok()
 }
 
 /// The point at `t` of the cubic Bézier curve with these poles.
@@ -238,6 +278,20 @@ impl Curve2 {
                 start + sweep * s,
             ),
             Curve2::Bezier { ref poles, .. } => bezier_point(poles, s),
+            Curve2::Spline {
+                degree,
+                ref knots,
+                ref poles,
+                ref weights,
+                ..
+            } => match spline_nurbs(degree, knots, poles, weights) {
+                Some(n) => {
+                    let (a, b) = n.range();
+                    let q = n.point(a + (b - a) * s);
+                    Point2::new(q.x, q.y)
+                }
+                None => poles.first().copied().unwrap_or_else(Point2::origin),
+            },
         }
     }
 
@@ -250,7 +304,8 @@ impl Curve2 {
             | Curve2::Ellipse { source, .. }
             | Curve2::EllipseArc { source, .. }
             | Curve2::OffsetEllipseArc { source, .. }
-            | Curve2::Bezier { source, .. } => source,
+            | Curve2::Bezier { source, .. }
+            | Curve2::Spline { source, .. } => source,
         }
     }
 
@@ -265,6 +320,18 @@ impl Curve2 {
                 sweep.abs() >= std::f64::consts::TAU - tol::ANGULAR
             }
             Curve2::Line { .. } | Curve2::Bezier { .. } => false,
+            // (A spline that ends where it starts: a periodic one, or a clamped loop.)
+            Curve2::Spline { .. } => {
+                let (a, b) = (self.point_at(0.0), self.point_at(1.0));
+                let size = match self {
+                    Curve2::Spline { poles, .. } => poles
+                        .iter()
+                        .map(|p| (p - poles[0]).norm())
+                        .fold(0.0, f64::max),
+                    _ => 0.0,
+                };
+                (a - b).norm() <= tol::REL * (1.0 + size)
+            }
         }
     }
 }
