@@ -212,11 +212,22 @@ pub fn edge_samples(body: &Body, defl: f64, ang: f64) -> EdgeSamples {
 
 /// Each edge's sample parameters and points: the curve's own sampling for the angle, then
 /// segments bisected until each lies within the chord of the curve (checked at its quarter
-/// points) and is no longer than the maximum edge. The ends are exactly the edge's vertices.
+/// points) and is no longer than the maximum edge, and until the normal of no face it bounds
+/// turns more than the angle along one. The ends are exactly the edge's vertices.
 pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
+    // The faces' sides of each edge: its coedges' surfaces and p-curves.
+    let mut sides: Vec<Vec<(&Surface, &super::curve::Curve)>> = vec![Vec::new(); body.edges.len()];
+    for f in &body.faces {
+        for c in f.loops.iter().flatten() {
+            if let Some(s) = sides.get_mut(c.edge) {
+                s.push((&f.surf, &c.pc));
+            }
+        }
+    }
     body.edges
         .par_iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(ei, e)| {
             if e.degenerate {
                 return (
                     vec![e.t[0], e.t[1]],
@@ -225,6 +236,7 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
             }
             let ts = e.curve.sample_params(e.t[0], e.t[1], p.chord, p.ang());
             let ts = refine_polyline(|t| e.point(t), &ts, p);
+            let ts = refine_by_faces(|t| e.point(t), &ts, &sides[ei], p);
             let mut pts: Vec<P3> = ts.iter().map(|&t| e.point(t)).collect();
             let n = pts.len();
             pts[0] = body.verts[e.v[0]].p;
@@ -282,6 +294,89 @@ fn refine_polyline(c: impl Fn(f64) -> P3, ts: &[f64], p: &TessParams) -> Vec<f64
     for &t in &ts[1..] {
         let cur = (t, c(t));
         split(&c, p, prev, cur, 0, &mut out);
+        prev = cur;
+    }
+    out
+}
+
+/// Bisects the segments of a sampled edge along which the normal of a face it bounds turns
+/// more than the angle: a straight edge of a twisted ruled face (a loft between a square and a
+/// diamond) is sampled at its ends only by its curve, and the face's triangles then need points
+/// along it, which only the edge's shared samples may give (an interior point put on it splits
+/// one face's side and not the other's). Segments under the chord are left whole.
+fn refine_by_faces(
+    c: impl Fn(f64) -> P3,
+    ts: &[f64],
+    sides: &[(&Surface, &super::curve::Curve)],
+    p: &TessParams,
+) -> Vec<f64> {
+    const MAX_SAMPLES: usize = 1 << 16;
+    let curved: Vec<&(&Surface, &super::curve::Curve)> = sides
+        .iter()
+        .filter(|(s, _)| !matches!(s, Surface::Plane { .. }))
+        .collect();
+    if curved.is_empty() || ts.len() < 2 {
+        return ts.to_vec();
+    }
+    let normals = |t: f64| -> Vec<Option<V3>> {
+        curved
+            .iter()
+            .map(|(s, pc)| {
+                // None at a pole or an apex, where the surface has no normal of its own (a
+                // derivative vanishes there, to rounding, and may point either way: a cone's
+                // normal at its apex is the other nappe's).
+                let q = pc.point(t);
+                let (_, su, sv) = s.d1(q.x, q.y);
+                let n = su.cross(&sv);
+                let (l, lu, lv) = (n.norm(), su.norm(), sv.norm());
+                (l.is_finite()
+                    && l > 1e-10 * lu * lv
+                    && l > tol::TINY
+                    && lu > 1e-9 * lv
+                    && lv > 1e-9 * lu)
+                    .then(|| n / l)
+            })
+            .collect()
+    };
+    let turns = |a: &[Option<V3>], b: &[Option<V3>]| {
+        a.iter()
+            .zip(b)
+            .any(|(x, y)| matches!((x, y), (Some(x), Some(y)) if x.angle(y) > p.ang()))
+    };
+    #[allow(clippy::too_many_arguments)]
+    fn split(
+        c: &impl Fn(f64) -> P3,
+        normals: &impl Fn(f64) -> Vec<Option<V3>>,
+        turns: &impl Fn(&[Option<V3>], &[Option<V3>]) -> bool,
+        chord: f64,
+        (a, na): (f64, &[Option<V3>]),
+        (b, nb): (f64, &[Option<V3>]),
+        depth: u32,
+        out: &mut Vec<f64>,
+    ) {
+        if depth < 16 && out.len() < MAX_SAMPLES && (c(b) - c(a)).norm() > chord && turns(na, nb) {
+            let m = 0.5 * (a + b);
+            let nm = normals(m);
+            split(c, normals, turns, chord, (a, na), (m, &nm), depth + 1, out);
+            split(c, normals, turns, chord, (m, &nm), (b, nb), depth + 1, out);
+        } else {
+            out.push(b);
+        }
+    }
+    let mut out = vec![ts[0]];
+    let mut prev = (ts[0], normals(ts[0]));
+    for &t in &ts[1..] {
+        let cur = (t, normals(t));
+        split(
+            &c,
+            &normals,
+            &turns,
+            p.chord,
+            (prev.0, &prev.1),
+            (cur.0, &cur.1),
+            0,
+            &mut out,
+        );
         prev = cur;
     }
     out

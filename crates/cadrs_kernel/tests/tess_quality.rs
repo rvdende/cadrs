@@ -273,6 +273,69 @@ fn shapes_are_watertight_and_within_the_chord() {
     }
 }
 
+/// A solid loft from a square to a diamond turned an eighth of a turn (brep-bench's
+/// twisted-duct): each side a twisted ruled face between straight edges, which their curves alone
+/// sample at their ends. The faces' triangles then needed points along the edges, and put them
+/// a hair off them each on its own (closed in f64, not in an STL file's single precision): edges
+/// are now also sampled by how far the faces' normals turn along them.
+#[test]
+fn straight_edges_of_twisted_faces_mesh_closed() {
+    let on = |y: f64| Plane {
+        origin: Point3::new(0.0, y, 0.0),
+        x_dir: Vector3::x_axis(),
+        normal: -Vector3::y_axis(),
+    };
+    let quad = |c: [(f64, f64); 4]| Region {
+        outer: Loop {
+            curves: (0..4)
+                .map(|i| line(p(c[i].0, c[i].1), p(c[(i + 1) % 4].0, c[(i + 1) % 4].1)))
+                .collect(),
+        },
+        holes: vec![],
+        source: None,
+    };
+    let square = Profile::new(
+        on(0.0),
+        vec![quad([
+            (10.0, -10.0),
+            (-10.0, -10.0),
+            (-10.0, 10.0),
+            (10.0, 10.0),
+        ])],
+    );
+    let diamond = Profile::new(
+        on(40.0),
+        vec![quad([(0.0, -12.0), (-12.0, 0.0), (0.0, 12.0), (12.0, 0.0)])],
+    );
+    let mut k = NativeKernel::new();
+    let spec = LoftSpec {
+        body: BodyKind::Solid,
+        sections: vec![LoftSection::Profile(square), LoftSection::Profile(diamond)],
+        start: LoftEnd::default(),
+        end: LoftEnd::default(),
+        source: 1,
+    };
+    let duct = k.loft_with(&spec).unwrap().bodies[0];
+    for deflection in [5.1e-3, 0.05] {
+        let quality = Tessellation {
+            deflection,
+            angle: 5f64.to_radians(),
+        };
+        // As an STL file keeps it (single precision): the points the faces put a hair off the
+        // edges on their own, closed in f64, fall onto each other there.
+        let m = k.tessellate(duct, quality).unwrap();
+        let f32 =
+            |q: &Point3<f64>| Point3::new(q.x as f32 as f64, q.y as f32 as f64, q.z as f32 as f64);
+        let check = tess::check_triangles(
+            m.indices
+                .iter()
+                .map(|t| t.map(|i| f32(&m.positions[i as usize])))
+                .filter(|[a, b, c]| a != b && b != c && c != a),
+        );
+        assert!(check.is_watertight(), "deflection {deflection}: {check:?}");
+    }
+}
+
 /// A ball of radius 10 less a cylinder of radius 5 whose wall runs through its centre
 /// (brep-bench's viviani-cut): the sphere and the wall are tangent at (10, 0, 0), where Viviani's
 /// curve crosses itself and both faces pinch to a point. Each face joined the same two points
