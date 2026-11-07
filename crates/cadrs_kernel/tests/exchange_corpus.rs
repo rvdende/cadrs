@@ -143,10 +143,6 @@ const KNOWN_BAD: &[(&str, &str)] = &[
         "read: STEP syntax error at line 12: expected '('",
     ),
     (
-        "step/bug33100_window.step",
-        "17 check errors (edge 92 is used by 4 faces (a sheet must be manifold))",
-    ),
-    (
         "step/ec_exhaust-A.stp",
         "volume 1536723.001863 vs mesh 1063280.267061",
     ),

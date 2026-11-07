@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: presiese soliede liggame
 io-export-tip-brep = OpenCASCADE BREP (eksperimenteel): slegs presiese geometrie
 io-export-tip-stl = STL-maas, vir 3D-drukwerk
 io-export-tip-obj = Wavefront OBJ-maas
+io-export-tip-glb = glTF-binêre maas met kleure, vir Blender, speletjies en die web
 io-export-tip-dxf = DXF in millimeter op volle grootte, vir snymasjiene
 io-export-tip-dwg = DWG deur die { $converter }
 io-export-tip-dwg-none = DWG: geen omskakelaar op PATH nie

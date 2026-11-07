@@ -432,6 +432,14 @@ pub struct ExportStep {
     pub part_studio: Option<String>,
 }
 
+/// Exports the active tab's parts.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ExportFile {
+    /// Where to write the file; its extension picks the format: .step, .igs, .brep, .stl, .obj
+    /// or .glb (glTF binary, with each part's colour, in metres with +Y up).
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RunScenario {
     /// The steps in the app's scenario RON: a list like `[Click(ui("extrude")), Key("Enter"),
@@ -543,6 +551,88 @@ pub struct InsertInstance {
     /// Fix the instance in place (the solver keeps it put, as ground); default false.
     #[serde(default)]
     pub fixed: bool,
+}
+
+/// Imports a file into the open document as a new Part Studio tab holding an Import feature.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ImportFile {
+    /// The file's path on this computer: STEP, IGES, BREP, STL or GLB.
+    pub path: String,
+    /// The new Part Studio tab's name; omitted: the file's name without its extension.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The unit of a unitless mesh file's numbers: "mm", "cm", "m", "in" or "ft"; omitted: mm
+    /// for STL, m for GLB (as glTF says). STEP and IGES files carry their own units.
+    #[serde(default)]
+    pub units: Option<String>,
+    /// The file's +Y is up (it becomes +Z); default false, but a GLB is always read +Y up (as
+    /// glTF says).
+    #[serde(default)]
+    pub y_axis_up: bool,
+}
+
+/// A mate connector at a fixed frame of an instance, in the instance's own coordinates (its
+/// Part Studio's, in mm).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MateFrame {
+    /// The instance's name ("link_1 <1>", as get_assembly lists it) or id.
+    pub instance: String,
+    /// The connector's origin, [x, y, z] in mm.
+    #[serde(default)]
+    pub origin: [f64; 3],
+    /// Its Z axis (the axis a revolute turns about, a slider slides along); omitted: +Z.
+    #[serde(default)]
+    pub z: Option<[f64; 3]>,
+    /// Its X axis (made square to Z; a revolute's angle is measured from it); omitted: the
+    /// model X laid square to Z, else the model Y.
+    #[serde(default)]
+    pub x: Option<[f64; 3]>,
+}
+
+/// Adds a mate between two instances' connectors.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AddMate {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// The mate's name; omitted: "<Type> N".
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Fastened, Revolute, Slider, Cylindrical, Planar, Ball or Parallel.
+    pub mate_type: String,
+    /// The first connector. A revolute's angle is how far the second connector's X is turned
+    /// from the first's, about the first's Z, right-handed.
+    pub a: MateFrame,
+    /// The second connector.
+    pub b: MateFrame,
+    /// Limits of the mate's first motion: [min, max] in degrees for an angle (Revolute), mm
+    /// for a translation (Slider); omitted: none.
+    #[serde(default)]
+    pub limits: Option<[f64; 2]>,
+}
+
+/// A mate's position to drive.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MateValueParam {
+    /// The mate's name.
+    pub mate: String,
+    /// Degrees for an angle, mm for a translation.
+    pub value: f64,
+    /// Which motion: "angle", "x", "y" or "z"; omitted: the mate's first (a revolute's
+    /// angle, a slider's Z).
+    #[serde(default)]
+    pub dof: Option<String>,
+}
+
+/// Moves an assembly's instances so its mates sit at the given positions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetMateValues {
+    /// The Assembly tab's name; omitted: the active tab.
+    #[serde(default)]
+    pub assembly: Option<String>,
+    /// The mates to drive and their positions (each held within its limits); the other mates
+    /// stay where they are.
+    pub values: Vec<MateValueParam>,
 }
 
 /// A PCB Studio board, by name.

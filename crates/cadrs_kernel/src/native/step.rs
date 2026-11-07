@@ -2502,22 +2502,7 @@ fn build_shapes(
         let b = match super::meshsolid::mesh_solid(&tris, tol) {
             Ok(b) => b,
             Err(_) => {
-                let loose = tris
-                    .iter()
-                    .filter_map(|t| {
-                        let n = (t[1] - t[0])
-                            .cross(&(t[2] - t[0]))
-                            .try_normalize(tol::DEGENERATE)?;
-                        let f = Frame::from_xz(t[0], (t[1] - t[0]).normalize(), n);
-                        let segs = (0..3).map(|k| {
-                            let (a, b) = (t[k], t[(k + 1) % 3]);
-                            let (c, _) = Curve::line(a, b);
-                            super::xbuild::LooseSeg { c, a, b }
-                        });
-                        Some((Surface::Plane { f }, vec![segs.collect()]))
-                    })
-                    .collect();
-                let (b, w) = super::xbuild::sew_loose(loose, tol, false);
+                let (b, w) = super::meshsolid::mesh_sheet(&tris, tol);
                 warnings.extend(w);
                 b
             }

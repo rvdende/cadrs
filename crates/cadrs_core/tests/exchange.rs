@@ -114,6 +114,7 @@ fn items(features: &Arc<Vec<Feature>>, r: &mut Rebuilder, studio: u128) -> Vec<E
             pose: None,
             source: (ElementId::from_u128(studio), p.id),
             source_name: p.name.clone(),
+            color: None,
         })
         .collect()
 }
@@ -190,6 +191,58 @@ fn a_box_as_stl_and_obj_is_twelve_triangles_of_150000_cubic_mm() {
         150_000.0 / 25.4f64.powi(3),
         1e-6,
     );
+}
+
+/// A box as GLB: in metres with +Y up, its colour kept; imported back, the same box (mm, +Z
+/// up) in that colour.
+#[test]
+fn a_box_as_glb_comes_back_the_same_box_in_its_colour() {
+    let f = Arc::new(rect_studio(100.0, 60.0, 25.0));
+    let mut r = Rebuilder::new();
+    let mut its = items(&f, &mut r, 1);
+    let red = cadrs_core::appearance::Appearance::rgb(200, 30, 40);
+    its[0].color = Some(red);
+    let files = r
+        .export_files(&ExportRequest::new(ModelFormat::Glb, "Box", its))
+        .unwrap();
+    assert_eq!(files[0].extension, "glb");
+    let meshes = cadrs_core::glb::read(&files[0].bytes).unwrap();
+    assert_eq!(meshes.len(), 1);
+    assert_eq!(meshes[0].triangles.len(), 12);
+    assert_eq!(meshes[0].name, its_name(&f, &mut r));
+    let tris = meshes[0]
+        .triangles
+        .iter()
+        .map(|t| t.map(nalgebra::Point3::from));
+    close(mesh_volume(tris), 150_000e-9, 1e-11);
+    // +Y up: the box's 25 mm height is along Y.
+    let ys = meshes[0].triangles.iter().flatten().map(|p| p[1]);
+    close(ys.clone().fold(f64::MAX, f64::min), 0.0, 1e-9);
+    close(ys.fold(f64::MIN, f64::max), 0.025, 1e-9);
+    assert_eq!(
+        cadrs_core::glb::appearance_of(meshes[0].color.unwrap()),
+        red
+    );
+    // Imported: mm and +Z up again, in red.
+    let import =
+        cadrs_core::import::ImportFeature::from_file("box.glb", files[0].bytes.clone()).unwrap();
+    assert_eq!(import.format, ImportFormat::Glb);
+    assert!(import.y_axis_up);
+    let feature = Feature::new(FeatureId::new(), "Import", FeatureKind::Import(import));
+    let build = Rebuilder::new().rebuild(&[feature]);
+    assert!(build.errors.is_empty(), "{:?}", build.errors);
+    assert_eq!(build.parts.len(), 1);
+    let part = &build.parts[0];
+    // (f32 coordinates in metres: a few nanometres off.)
+    close(part.mass.unwrap().volume, 150_000.0, 1e-2);
+    let zs = part.solid.positions.iter().map(|p| p[2]);
+    close(zs.clone().fold(f64::MAX, f64::min), 0.0, 1e-3);
+    close(zs.fold(f64::MIN, f64::max), 25.0, 1e-3);
+    assert_eq!(cadrs_core::appearance::part_appearance(part, &[]), red);
+}
+
+fn its_name(features: &Arc<Vec<Feature>>, r: &mut Rebuilder) -> String {
+    r.rebuild(features).parts[0].name.clone()
 }
 
 #[test]
@@ -600,6 +653,7 @@ fn step_colors_survive_flattening_document_round_trip_and_snapshot_restore() {
         }),
         source: (doc.elements[0].id, restored.parts[0].id),
         source_name: "Box".into(),
+        color: None,
     };
     assert!(
         !reopened

@@ -2787,6 +2787,7 @@ fn step_round_trip(
             pose: None,
             source: (ElementId::from_u128(1), p.id),
             source_name: p.name.clone(),
+            color: None,
         })
         .collect();
     let Ok(files) = rb.export_files(&ExportRequest::new(ModelFormat::Step, "part", items)) else {

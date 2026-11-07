@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3：正確なソリッド
 io-export-tip-brep = OpenCASCADE BREP（試験的）：正確なジオメトリのみ
 io-export-tip-stl = STL メッシュ（3D プリント用）
 io-export-tip-obj = Wavefront OBJ メッシュ
+io-export-tip-glb = 色付きの glTF バイナリメッシュ（Blender、ゲーム、Web 用）
 io-export-tip-dxf = 原寸・ミリメートル単位の DXF（切断機用）
 io-export-tip-dwg = { $converter }による DWG
 io-export-tip-dwg-none = DWG：PATH 上にコンバーターがありません

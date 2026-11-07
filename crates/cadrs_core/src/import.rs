@@ -49,6 +49,9 @@ pub enum ImportFormat {
     Iges,
     /// OpenCASCADE's BRep text format: read through the same reader, one part per solid.
     Brep,
+    /// glTF binary (`.glb`): its meshes, a part per closed piece of each (else a surface),
+    /// in metres and +Y up unless told otherwise ([`crate::glb`]).
+    Glb,
 }
 
 impl ImportFormat {
@@ -63,6 +66,7 @@ impl ImportFormat {
             "stl" => Some(Self::Stl),
             "iges" | "igs" => Some(Self::Iges),
             "brep" | "brp" => Some(Self::Brep),
+            "glb" => Some(Self::Glb),
             _ => None,
         }
     }
@@ -78,6 +82,7 @@ impl ImportFormat {
             Self::Stl => "STL",
             Self::Iges => "IGES",
             Self::Brep => "BREP",
+            Self::Glb => "GLB",
         }
     }
 
@@ -87,7 +92,7 @@ impl ImportFormat {
             Self::Step => Some(cadrs_kernel::exchange::ExchangeFormat::Step),
             Self::Iges => Some(cadrs_kernel::exchange::ExchangeFormat::Iges),
             Self::Brep => Some(cadrs_kernel::exchange::ExchangeFormat::Brep),
-            Self::Stl => None,
+            Self::Stl | Self::Glb => None,
         }
     }
 
@@ -97,8 +102,27 @@ impl ImportFormat {
         ["step", "stp", "iges", "igs", "brep", "brp"];
 
     /// The extensions of every file the Import feature reads.
-    pub const EXTENSIONS: [&'static str; 8] =
-        ["step", "stp", "iges", "igs", "brep", "brp", "stl", "p21"];
+    pub const EXTENSIONS: [&'static str; 9] = [
+        "step", "stp", "iges", "igs", "brep", "brp", "stl", "p21", "glb",
+    ];
+
+    /// A mesh (STL, GLB): its numbers have no units of their own (*Specify units*).
+    pub fn is_mesh(self) -> bool {
+        matches!(self, Self::Stl | Self::Glb)
+    }
+
+    /// The unit its numbers are in when not told: glTF says metres, an STL is taken as mm.
+    pub fn default_unit(self) -> ImportUnit {
+        match self {
+            Self::Glb => ImportUnit::Meter,
+            _ => ImportUnit::Millimeter,
+        }
+    }
+
+    /// Whether its +Y is up unless told otherwise (glTF says so).
+    pub fn y_up_by_default(self) -> bool {
+        self == Self::Glb
+    }
 }
 
 /// A length unit for unitless mesh files (*Specify units*).
@@ -195,12 +219,13 @@ impl ImportFeature {
     pub fn from_file(file_name: &str, bytes: Vec<u8>) -> Result<Self, String> {
         let format = ImportFormat::of_file_name(file_name)
             .or_else(|| sniff(&bytes))
-            .ok_or_else(|| format!("{file_name}: not a STEP, IGES or STL file"))?;
+            .ok_or_else(|| format!("{file_name}: not a STEP, IGES, STL or GLB file"))?;
         let blob = crate::blobs::insert(bytes);
         Ok(Self {
             blob,
             file_name: file_name.to_string(),
             format,
+            y_axis_up: format.y_up_by_default(),
             ..Self::default()
         })
     }
@@ -234,14 +259,17 @@ impl ImportFeature {
                 ImportFormat::Stl => "stl".into(),
                 ImportFormat::Iges => "igs".into(),
                 ImportFormat::Brep => "brep".into(),
+                ImportFormat::Glb => "glb".into(),
             })
     }
 
-    /// The factor from the file's numbers to mm (STL; STEP files carry their own units, and
-    /// BREP files are taken as mm, as OpenCASCADE applications write them).
+    /// The factor from the file's numbers to mm (STL, GLB; STEP files carry their own units,
+    /// and BREP files are taken as mm, as OpenCASCADE applications write them).
     pub fn scale(&self) -> f64 {
         match self.format {
-            ImportFormat::Stl => self.units.unwrap_or_default().mm(),
+            ImportFormat::Stl | ImportFormat::Glb => {
+                self.units.unwrap_or(self.format.default_unit()).mm()
+            }
             ImportFormat::Step | ImportFormat::Iges | ImportFormat::Brep => 1.0,
         }
     }
@@ -249,6 +277,9 @@ impl ImportFeature {
 
 /// The format of a file by its contents.
 fn sniff(bytes: &[u8]) -> Option<ImportFormat> {
+    if bytes.starts_with(b"glTF") {
+        return Some(ImportFormat::Glb);
+    }
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_ascii_uppercase();
     if head.contains("ISO-10303-21") {
         return Some(ImportFormat::Step);
@@ -280,6 +311,8 @@ pub struct AddImport {
     pub feature: FeatureId,
     pub file_name: String,
     pub bytes: Arc<Vec<u8>>,
+    /// The file's +Y is up (a format whose +Y is up anyway, GLB, starts so regardless; its
+    /// Import dialog turns it off).
     pub y_axis_up: bool,
     pub units: Option<ImportUnit>,
 }
@@ -294,7 +327,7 @@ impl Command for AddImport {
     fn apply(&self, doc: &mut Document) -> Result<(), CommandError> {
         let mut x = ImportFeature::from_file(&self.file_name, self.bytes.to_vec())
             .map_err(CommandError::Invalid)?;
-        x.y_axis_up = self.y_axis_up;
+        x.y_axis_up |= self.y_axis_up;
         x.units = self.units;
         crate::commands::AddFeature {
             element: self.element,

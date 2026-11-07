@@ -34,6 +34,7 @@ pub mod external;
 pub mod feature_list;
 pub mod flat_drawing;
 pub mod flat_export;
+pub mod glb;
 pub mod history_log;
 pub mod hole;
 pub mod identity;

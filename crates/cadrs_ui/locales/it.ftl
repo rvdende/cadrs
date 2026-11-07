@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: solidi esatti
 io-export-tip-brep = BREP OpenCASCADE (sperimentale): solo geometria esatta
 io-export-tip-stl = Mesh STL, per la stampa 3D
 io-export-tip-obj = Mesh Wavefront OBJ
+io-export-tip-glb = Mesh glTF binaria con colori, per Blender, giochi e il web
 io-export-tip-dxf = DXF in millimetri a grandezza naturale, per macchine da taglio
 io-export-tip-dwg = DWG tramite { $converter }
 io-export-tip-dwg-none = DWG: nessun convertitore nel PATH

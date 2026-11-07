@@ -5472,6 +5472,7 @@ io-export-tip-iges = IGES 5.3: exact solids
 io-export-tip-brep = OpenCASCADE BREP (experimental): exact geometry only
 io-export-tip-stl = STL mesh, for 3D printing
 io-export-tip-obj = Wavefront OBJ mesh
+io-export-tip-glb = glTF binary mesh with colours, for Blender, games and the web
 io-export-tip-dxf = DXF in millimetres at full size, for cutting machines
 # { $converter } is the converter program's name.
 io-export-tip-dwg = DWG through the { $converter }

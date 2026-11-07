@@ -224,6 +224,7 @@ fn sheet_metal_parts_are_parts_through_refolds() {
         pose: None,
         source: (td::STUDIO, enc.id),
         source_name: "Enclosure".into(),
+        color: None,
     };
     let files = Rebuilder::new()
         .export_files(&ExportRequest::new(

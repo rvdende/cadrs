@@ -361,6 +361,18 @@ pub fn mesh_solid(
     Ok(k.insert(b))
 }
 
+pub fn mesh_sheet(
+    k: &mut NativeKernel,
+    triangles: &[[nalgebra::Point3<f64>; 3]],
+    tol: f64,
+) -> Result<BodyId> {
+    let (b, _) = super::meshsolid::mesh_sheet(triangles, tol);
+    if b.faces.is_empty() {
+        return Err(failed("mesh", "no usable triangles".into()));
+    }
+    Ok(k.insert(b))
+}
+
 pub fn write_body(k: &NativeKernel, body: BodyId) -> Result<Vec<u8>> {
     Ok(super::bodyio::write(k.get(body)?))
 }

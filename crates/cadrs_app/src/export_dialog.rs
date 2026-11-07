@@ -8,11 +8,14 @@
 //!   feature list or the view) or a planar face (the view).
 //! - **File name**: the tab's name to start with; a file holding one part gets " - <part>".
 //! - **Format**: for 3D models **STEP** (AP214, exact B-rep with product names), **IGES**
-//!   (5.3, solids), experimental OpenCASCADE **BREP** (geometry only), **STL** and **OBJ** (meshes); for a sketch or a face **DXF** and **DWG**.
+//!   (5.3, solids), experimental OpenCASCADE **BREP** (geometry only), **STL**, **OBJ** and
+//!   **GLB** (meshes; GLB keeps each part's colour, in metres with +Y up as glTF says); for a
+//!   sketch or a face **DXF** and **DWG**.
 //!   Parasolid is not offered (a proprietary format). DWG goes through the drawings' external
 //!   converter and is disabled, saying what to install, without one.
-//! - **STL**: Binary or Text. **STL and OBJ**: the **Units** (Millimeter … Foot) and the
-//!   **Resolution** (Coarse, Medium, Fine, or Custom with the chord and angle tolerances).
+//! - **STL**: Binary or Text. **STL and OBJ**: the **Units** (Millimeter … Foot). **STL, OBJ and
+//!   GLB**: the **Resolution** (Coarse, Medium, Fine, or Custom with the chord and angle
+//!   tolerances).
 //! - **Export models oriented Y axis up** (3D): +Z (the Top plane's normal) becomes +Y.
 //! - **Keep assembly structure** (STEP/IGES of an assembly): each distinct part once and an
 //!   assembly of its instances; else every part where it is.
@@ -92,12 +95,20 @@ pub enum Fmt {
     Brep,
     Stl,
     Obj,
+    Glb,
     Dxf,
     Dwg,
 }
 
 impl Fmt {
-    const MODELS: [Fmt; 5] = [Fmt::Step, Fmt::Iges, Fmt::Stl, Fmt::Obj, Fmt::Brep];
+    const MODELS: [Fmt; 6] = [
+        Fmt::Step,
+        Fmt::Iges,
+        Fmt::Stl,
+        Fmt::Obj,
+        Fmt::Glb,
+        Fmt::Brep,
+    ];
     const FLAT: [Fmt; 2] = [Fmt::Dxf, Fmt::Dwg];
 
     fn label(self) -> &'static str {
@@ -107,6 +118,7 @@ impl Fmt {
             Fmt::Brep => "BREP",
             Fmt::Stl => "STL",
             Fmt::Obj => "OBJ",
+            Fmt::Glb => "GLB",
             Fmt::Dxf => "DXF",
             Fmt::Dwg => "DWG",
         }
@@ -119,6 +131,7 @@ impl Fmt {
             Fmt::Brep => "brep",
             Fmt::Stl => "stl",
             Fmt::Obj => "obj",
+            Fmt::Glb => "glb",
             Fmt::Dxf => "dxf",
             Fmt::Dwg => "dwg",
         }
@@ -133,7 +146,7 @@ impl Fmt {
     }
 
     fn is_mesh(self) -> bool {
-        matches!(self, Fmt::Stl | Fmt::Obj)
+        matches!(self, Fmt::Stl | Fmt::Obj | Fmt::Glb)
     }
 
     fn is_brep(self) -> bool {
@@ -432,6 +445,7 @@ pub fn open(world: &mut World, source: ExportSource) {
                                 Fmt::Brep => tr("io-export-tip-brep"),
                                 Fmt::Stl => tr("io-export-tip-stl"),
                                 Fmt::Obj => tr("io-export-tip-obj"),
+                                Fmt::Glb => tr("io-export-tip-glb"),
                                 Fmt::Dxf => tr("io-export-tip-dxf"),
                                 Fmt::Dwg => match &converter {
                                     Some(c) => {
@@ -543,13 +557,17 @@ pub fn open(world: &mut World, source: ExportSource) {
                         ..default()
                     })
                     .with_children(|r| {
-                        r.spawn(Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(4.0),
-                            flex_grow: 1.0,
-                            flex_basis: Val::Px(0.0),
-                            ..default()
-                        })
+                        // (Not for GLB: glTF is in metres.)
+                        r.spawn((
+                            Name::new("export-units-column"),
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(4.0),
+                                flex_grow: 1.0,
+                                flex_basis: Val::Px(0.0),
+                                ..default()
+                            },
+                        ))
                         .with_children(|c| {
                             label(c, t, "common-units");
                             let mut s = Select::new("export-units").bordered().width(full());
@@ -782,6 +800,7 @@ fn sync_rows(
             "export-version-row" => d.format.is_brep(),
             "export-stl-row" => d.format == Fmt::Stl,
             "export-mesh-row" => d.format.is_mesh(),
+            "export-units-column" => d.format != Fmt::Glb,
             "export-tolerance-row" => d.format.is_mesh() && custom,
             "export-dxf-row" => d.source.is_flat(),
             "export-options-row" => !d.source.is_flat(),
@@ -946,7 +965,7 @@ fn toast(world: &mut World, note: Notification) {
 }
 
 /// The export items of a Part Studio's or an assembly's parts.
-fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, String> {
+pub(crate) fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, String> {
     let doc = world
         .get_resource::<ActiveDocument>()
         .ok_or_else(|| tr("io-export-no-document"))?;
@@ -968,6 +987,9 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
                 .iter()
                 .filter_map(|p| {
                     let name = cache.part_name(*p)?.to_string();
+                    let color = cache
+                        .part(*p)
+                        .map(|q| cadrs_core::appearance::part_appearance(q, el.part_props()));
                     Some(ExportItem {
                         features: features.clone(),
                         part: *p,
@@ -975,6 +997,7 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
                         pose: None,
                         source: (el.id, *p),
                         source_name: name,
+                        color,
                     })
                 })
                 .collect())
@@ -1011,6 +1034,14 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
                     .find(|(p, _)| *p == o.view_part)
                     .map(|(_, n)| n.clone())
                     .unwrap_or_else(|| source_name.clone());
+                // The instance's appearance, else its part's.
+                let color = o.appearance.or_else(|| {
+                    let part = build.as_deref()?.part(o.part)?;
+                    Some(cadrs_core::appearance::part_appearance(
+                        part,
+                        studio.part_props(),
+                    ))
+                });
                 out.push(ExportItem {
                     features: Arc::new(studio.active_part_features()),
                     part: o.part,
@@ -1018,6 +1049,7 @@ fn items(world: &mut World, source: &ExportSource) -> Result<Vec<ExportItem>, St
                     pose: Some(o.pose),
                     source: (o.element, o.part),
                     source_name,
+                    color,
                 });
             }
             Ok(out)
@@ -1124,6 +1156,7 @@ fn start_export(world: &mut World) {
                 Fmt::Iges => ModelFormat::Iges,
                 Fmt::Brep => ModelFormat::Brep,
                 Fmt::Stl => ModelFormat::Stl { binary },
+                Fmt::Glb => ModelFormat::Glb,
                 _ => ModelFormat::Obj,
             };
             let name = if base.is_empty() {

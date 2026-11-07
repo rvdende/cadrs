@@ -339,6 +339,7 @@ fn the_export_dialog_path_writes_a_board_and_its_components() {
             pose: None,
             source: (pe::STUDIO, p.id),
             source_name: p.name.clone(),
+            color: None,
         })
         .collect();
     let n = items.len();
@@ -445,6 +446,7 @@ fn an_assembly_export_places_the_board_instance() {
             pose: Some(o.pose),
             source: (o.element, o.part),
             source_name: String::new(),
+            color: None,
         })
         .collect();
     let files = cadrs_core::rebuild::exchange::export_files(ExportRequest::new(
@@ -539,6 +541,7 @@ fn a_board_in_a_derived_part_studio_exports_its_components_models() {
         pose: None,
         source: (outer, j4.id),
         source_name: "J4".into(),
+        color: None,
     }];
     let files = cadrs_core::rebuild::exchange::export_files(ExportRequest::new(
         ModelFormat::Step,

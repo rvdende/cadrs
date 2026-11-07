@@ -3869,6 +3869,7 @@ io-export-tip-iges = IGES 5.3: sólidos exatos
 io-export-tip-brep = OpenCASCADE BREP (experimental): somente geometria exata
 io-export-tip-stl = Malha STL, para impressão 3D
 io-export-tip-obj = Malha Wavefront OBJ
+io-export-tip-glb = Malha glTF binária com cores, para Blender, jogos e a web
 io-export-tip-dxf = DXF em milímetros, em tamanho real, para máquinas de corte
 io-export-tip-dwg = DWG pelo { $converter }
 io-export-tip-dwg-none = DWG: nenhum conversor no PATH

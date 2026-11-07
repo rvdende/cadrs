@@ -994,6 +994,10 @@ pub trait Kernel {
     /// become planar faces, sewn within `tol` into a closed shell and made solid.
     fn mesh_solid(&mut self, triangles: &[[Point3<f64>; 3]], tol: f64) -> Result<BodyId>;
 
+    /// A surface body of triangles that don't close a solid (a mesh file's open pieces): each
+    /// triangle a planar face, sewn where they meet within `tol`.
+    fn mesh_sheet(&mut self, triangles: &[[Point3<f64>; 3]], tol: f64) -> Result<BodyId>;
+
     /// Thickens surfaces and faces into a solid (Onshape's Thicken).
     fn thicken_surfaces(&mut self, spec: &ThickenSpec) -> Result<OpResult>;
 

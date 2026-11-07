@@ -70,7 +70,7 @@ impl DropKind {
             return Some(Self::Picture);
         }
         match ImportFormat::of_path(path)? {
-            ImportFormat::Stl => Some(Self::Mesh),
+            f if f.is_mesh() => Some(Self::Mesh),
             f if f.kernel().is_some() => Some(Self::Model),
             _ => None,
         }
