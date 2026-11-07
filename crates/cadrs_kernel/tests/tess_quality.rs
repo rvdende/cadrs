@@ -273,6 +273,76 @@ fn shapes_are_watertight_and_within_the_chord() {
     }
 }
 
+/// A ball of radius 10 less a cylinder of radius 5 whose wall runs through its centre
+/// (brep-bench's viviani-cut): the sphere and the wall are tangent at (10, 0, 0), where Viviani's
+/// curve crosses itself and both faces pinch to a point. Each face joined the same two points
+/// near it by a side of its triangles, which four triangles then shared; such sides are now split.
+#[test]
+fn faces_pinched_to_a_point_share_no_side() {
+    let mut k = NativeKernel::new();
+    // Poles on the y axis, the seam through (−10, 0, 0): the half disc on the −x side of the y
+    // axis on the plane z = 0, turned about y (as the case asks, both off Viviani's curve).
+    let on = Plane {
+        origin: Point3::origin(),
+        x_dir: -Vector3::x_axis(),
+        normal: -Vector3::z_axis(),
+    };
+    let half = Region {
+        outer: Loop {
+            curves: vec![
+                Curve2::Arc {
+                    center: p(0.0, 0.0),
+                    radius: 10.0,
+                    start_angle: -PI / 2.0,
+                    sweep: PI,
+                    source: None,
+                },
+                line(p(0.0, 10.0), p(0.0, -10.0)),
+            ],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let y = Axis {
+        origin: Point3::origin(),
+        dir: Vector3::y_axis(),
+    };
+    let ball = k
+        .revolve(&Profile::new(on, vec![half]), y, TAU)
+        .unwrap()
+        .bodies[0];
+    let base = Plane {
+        origin: Point3::new(5.0, 0.0, -12.0),
+        x_dir: -Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let circle = Region {
+        outer: Loop {
+            curves: vec![Curve2::Circle {
+                center: p(0.0, 0.0),
+                radius: 5.0,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let rod = k
+        .extrude_with(
+            &Profile::new(base, vec![circle]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 24.0),
+        )
+        .unwrap()
+        .bodies[0];
+    let cut = k.boolean(BoolOp::Subtract, ball, &[rod]).unwrap().bodies[0];
+    for chord in [3.4e-3, 1e-3] {
+        let params = TessParams::new(chord, 5f64.to_radians()).unwrap();
+        let m = k.tessellate_with(cut, &params).unwrap();
+        let check = tess::check_tri_mesh(&m);
+        assert!(check.is_watertight(), "chord {chord}: {check:?}");
+    }
+}
+
 /// A ball's cap 10⁻⁴ high round its pole (brep-bench's pole-cap-a-ten-thousandth-high): a disc
 /// 0.063 across under a dome, meshed at a chord of 2·10⁻⁷. Spaced by the sphere's radius each
 /// way in (u, v), its triangles ran long round the pole and the mesh held 5 % too little.

@@ -1273,6 +1273,19 @@ pub fn mesh_face_with(
     es: &[(Vec<f64>, Vec<P3>)],
     p: &TessParams,
 ) -> FaceMesh {
+    mesh_face_split(body, f, es, p, &[])
+}
+
+/// [`mesh_face_with`], with an interior point between each pair of boundary points of `split`
+/// (at the middle of their (u, v)), so no side of a triangle joins the two: where two faces both
+/// joined them, the mesh had a side four triangles shared ([`mesh_all`]).
+fn mesh_face_split(
+    body: &Body,
+    f: &Face,
+    es: &[(Vec<f64>, Vec<P3>)],
+    p: &TessParams,
+    split: &[[P3; 2]],
+) -> FaceMesh {
     let t_start = web_time::Instant::now();
     let prof = std::env::var("CADRS_TESS_PROFILE").is_ok();
     // The face's size, for its tolerances.
@@ -1400,6 +1413,17 @@ pub fn mesh_face_with(
             .map(|&q| vx(&dom, q, None, scale))
             .filter(|v| v.at.x.is_finite() && v.at.y.is_finite()),
     );
+    // Between boundary points two faces both joined: at the middle of their (u, v) here, on the
+    // copy of the period the boundary has them on.
+    for [a, b] in split {
+        let find = |q: &P3| verts[..n_boundary].iter().find(|v| v.p == *q).map(|v| v.uv);
+        if let (Some(ua), Some(ub)) = (find(a), find(b)) {
+            let v = vx(&dom, nalgebra::center(&ua, &ub), None, scale);
+            if v.at.x.is_finite() && v.at.y.is_finite() {
+                verts.push(v);
+            }
+        }
+    }
     let mut cons: Vec<[usize; 2]> = Vec::new();
     let mut count: HashMap<(usize, usize), usize> = HashMap::default();
     for &(a, b) in &loops {
@@ -1882,7 +1906,65 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
             m
         })
         .collect();
+    let faces = split_shared_sides(body, &es, p, faces);
     (faces, es)
+}
+
+/// The faces re-meshed where two of them joined the same two boundary points by an inner side
+/// of their triangles, each with a point between the two: that side was then four triangles'
+/// (two faces pinched to a point where they meet, as a sphere and a cylinder tangent at the
+/// crossing of Viviani's curve are), which a closed mesh can't have.
+fn split_shared_sides(
+    body: &Body,
+    es: &EdgeSamples,
+    p: &TessParams,
+    mut faces: Vec<FaceMesh>,
+) -> Vec<FaceMesh> {
+    let key = |q: &P3| [q.x.to_bits(), q.y.to_bits(), q.z.to_bits()];
+    // Each face's inner sides (used both ways in it), by their ends' points.
+    let mut owners: HashMap<([u64; 3], [u64; 3]), Vec<usize>> = HashMap::default();
+    for (fi, m) in faces.iter().enumerate() {
+        let mut dir: FastSet<(u32, u32)> = FastSet::default();
+        for t in &m.indices {
+            for k in 0..3 {
+                dir.insert((t[k], t[(k + 1) % 3]));
+            }
+        }
+        for &(a, b) in &dir {
+            if a < b && dir.contains(&(b, a)) {
+                let (ka, kb) = (key(&m.positions[a as usize]), key(&m.positions[b as usize]));
+                owners.entry((ka.min(kb), ka.max(kb))).or_default().push(fi);
+            }
+        }
+    }
+    let mut splits: HashMap<usize, Vec<[P3; 2]>> = HashMap::default();
+    for ((ka, kb), fs) in owners {
+        if fs.len() < 2 {
+            continue;
+        }
+        let pt = |k: [u64; 3]| {
+            P3::new(
+                f64::from_bits(k[0]),
+                f64::from_bits(k[1]),
+                f64::from_bits(k[2]),
+            )
+        };
+        for fi in fs {
+            splits.entry(fi).or_default().push([pt(ka), pt(kb)]);
+        }
+    }
+    let mut todo: Vec<(usize, Vec<[P3; 2]>)> = splits.into_iter().collect();
+    todo.sort_by_key(|t| t.0);
+    let redone: Vec<(usize, FaceMesh)> = todo
+        .par_iter()
+        .map(|(fi, pairs)| (*fi, mesh_face_split(body, &body.faces[*fi], es, p, pairs)))
+        .collect();
+    for (fi, m) in redone {
+        if !m.indices.is_empty() {
+            faces[fi] = m;
+        }
+    }
+    faces
 }
 
 /// What a face's mesh ([`mesh_face_with`]) is made from, hashed to 128 bits
