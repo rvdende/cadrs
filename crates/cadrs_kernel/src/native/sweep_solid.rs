@@ -487,10 +487,14 @@ fn key_range(sl: &Slicer, near: f64) -> (Extreme, Extreme) {
 /// [`crate::Kernel::sweep_solid`].
 pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
+    if let SolidMotion::Planar { normal, steps } = motion {
+        return super::sweep_planar::sweep_planar(k, &b, normal.into_inner(), steps);
+    }
     let rev = revolved(&b).ok_or(KernelError::Unsupported(
         "sweeping solids other than a torus or a convex section revolved",
     ))?;
     let (axis, kk, span) = match *motion {
+        SolidMotion::Planar { .. } => unreachable!(),
         SolidMotion::Turn { axis } => (axis, 0.0, None),
         SolidMotion::Screw {
             axis,

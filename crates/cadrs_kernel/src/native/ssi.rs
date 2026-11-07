@@ -163,6 +163,8 @@ pub(crate) fn surface_surface_closed(
     let closed = coincide(a, b, tc, bb)
         || plane_extrusion(a, b, ub, bb).is_some()
         || plane_extrusion(b, a, ua, bb).is_some()
+        || extrusion_along(a, ua, b, ub, bb).is_some()
+        || extrusion_along(b, ub, a, ua, bb).is_some()
         || analytic(a, b, bb, super::boolean::VTOL).is_some()
         || analytic(b, a, bb, super::boolean::VTOL).is_some();
     closed.then(|| surface_surface(a, ua, b, ub, bb))
@@ -196,6 +198,12 @@ pub fn surface_surface_tol(
     if let Some(r) = plane_extrusion(b, a, ua, bb) {
         return closed(r);
     }
+    if let Some(r) = extrusion_along(a, ua, b, ub, bb) {
+        return closed(r);
+    }
+    if let Some(r) = extrusion_along(b, ub, a, ua, bb) {
+        return closed(r);
+    }
     if let Some(r) = analytic(a, b, bb, tol) {
         return closed(r);
     }
@@ -209,6 +217,125 @@ pub fn surface_surface_tol(
         return numeric(b, ub, a, ua, bb);
     }
     numeric(a, ua, b, ub, bb)
+}
+
+/// An extrusion and a surface unchanged along the extrusion's direction (a cylinder about a
+/// parallel axis, another extrusion along it): the rulings through the points where the
+/// extrusion's base curve meets the other surface (a swept planar region's side against a
+/// drum it is cut from).
+fn extrusion_along(
+    e: &Surface,
+    ue: ((f64, f64), (f64, f64)),
+    s: &Surface,
+    us: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Option<Vec<IntCurve>> {
+    let Surface::Extrusion { c, d } = e else {
+        return None;
+    };
+    let dn = d.normalize();
+    let parallel = match s {
+        Surface::Cylinder { f, .. } => f.z.normalize().cross(&dn).norm() < tol::ANGULAR_FINE,
+        Surface::Extrusion { d: d2, .. } => d2.normalize().cross(&dn).norm() < tol::ANGULAR_FINE,
+        _ => false,
+    };
+    if !parallel {
+        return None;
+    }
+    let (u0, u1) = ue.0;
+    let pad = (u1 - u0).abs() * tol::REL_POINT;
+    let (lo, hi) = match c.nurbs_range() {
+        Some((a, b)) => ((u0 - pad).max(a), (u1 + pad).min(b)),
+        None => (u0 - pad, u1 + pad),
+    };
+    let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);
+    let roots = curve_surface(c, lo, hi, s);
+    // (No crossing, or one where the curve only touches the surface: the numeric engine, which
+    // finds the points of contact.)
+    let touching = |t: f64| {
+        let h = 1e-6 * (hi - lo).abs().max(1e-12);
+        match (
+            s.signed_distance(&c.point(t - h)),
+            s.signed_distance(&c.point(t + h)),
+        ) {
+            (Some(a), Some(b)) => a.signum() == b.signum(),
+            _ => false,
+        }
+    };
+    if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        eprintln!(
+            "extrusion along: {} roots {:?}, touching {:?}, d {:?}, s {:?}",
+            roots.len(),
+            roots,
+            roots.iter().map(|&t| touching(t)).collect::<Vec<_>>(),
+            dn,
+            s.kind()
+        );
+    }
+    if roots.is_empty() || roots.iter().any(|&t| touching(t)) {
+        return None;
+    }
+    // Each ruling over where both patches run along it: the extrusion's v (λ = v |d|) and the
+    // other's own height along the direction.
+    let (dl, (ev0, ev1)) = (d.norm(), ue.1);
+    let span_of = |p0: &P3| -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (ev0.min(ev1) * dl, ev0.max(ev1) * dl);
+        let (w0, w1) = (us.1.0.min(us.1.1), us.1.0.max(us.1.1));
+        let (a, b) = match s {
+            Surface::Cylinder { f, .. } => {
+                let z = f.z.normalize();
+                let k = dn.dot(&z);
+                let h0 = (p0 - f.o).dot(&z);
+                ((w0 - h0) / k, (w1 - h0) / k)
+            }
+            Surface::Extrusion { c: c2, d: d2 } => {
+                let k = dn.dot(&d2.normalize()) / d2.norm();
+                // Its point c2(u) + d2 v: v from where the ruling meets its base curve's plane
+                // square to d2 (the projection of p0 on the base curve's line along d2).
+                let base = c2.point(0.5 * (us.0.0 + us.0.1));
+                let h0 = (p0 - base).dot(&d2.normalize()) / d2.norm();
+                ((w0 - h0) / k, (w1 - h0) / k)
+            }
+            _ => return None,
+        };
+        lo = lo.max(a.min(b));
+        hi = hi.min(a.max(b));
+        (hi - lo > tol::POINT).then_some((lo, hi))
+    };
+    let mut out = Vec::new();
+    for t in roots {
+        // Polished where the surface has a signed distance (a cylinder): Newton along the curve.
+        let mut t = t;
+        if s.signed_distance(&c.point(t)).is_some() {
+            for _ in 0..20 {
+                let f = s.signed_distance(&c.point(t)).unwrap_or(0.0);
+                let h = 1e-7 * (1.0 + t.abs());
+                let df = (s.signed_distance(&c.point(t + h)).unwrap_or(0.0)
+                    - s.signed_distance(&c.point(t - h)).unwrap_or(0.0))
+                    / (2.0 * h);
+                if df.abs() < 1e-300 {
+                    break;
+                }
+                let step = f / df;
+                t = (t - step).clamp(lo, hi);
+                if step.abs() < 1e-15 * (1.0 + t.abs()) {
+                    break;
+                }
+            }
+        }
+        let p0 = c.point(t);
+        // (Where the patches only touch along it, a point: the numeric engine's.)
+        let (l0, l1) = span_of(&p0)?;
+        let _ = &bbig;
+        out.push(IntCurve {
+            c: Curve::Line { o: p0, d: dn },
+            t0: l0,
+            t1: l1,
+            closed: false,
+            pcs: None,
+        });
+    }
+    Some(out)
 }
 
 /// A plane and an extrusion: rulings where the plane contains the direction, otherwise the

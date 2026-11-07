@@ -952,3 +952,57 @@ fn a_torus_turned_about_its_own_axis_is_itself() {
         .bodies[0];
     measures(&k, s, 2.0 * PI * PI * 6.0 * 4.0, 4.0 * PI * PI * 6.0 * 2.0);
 }
+
+/// A planar solid sweep (`SolidMotion::Planar`): a box slid by (vx, vy) fills its square's
+/// Minkowski sum with the slide (a² + a(vx + vy)) by h; turned a whole turn about a far line
+/// along z, the ring it covers.
+#[test]
+fn a_prism_slid_and_turned_in_its_plane() {
+    use std::f64::consts::{PI, TAU};
+    let mut k = NativeKernel::new();
+    let (a, h, l) = (2.0, 3.0, 5.0);
+    let b = k
+        .primitive(&Primitive::Box {
+            min: p3(0.0, 0.0, 0.0),
+            max: p3(a, a, h),
+        })
+        .unwrap()
+        .bodies[0];
+    let normal = Unit::new_normalize(V3::z());
+    let slid = k
+        .sweep_solid(
+            b,
+            &SolidMotion::Planar {
+                normal,
+                steps: vec![PlanarStep::Slide {
+                    from: V3::zeros(),
+                    to: V3::new(l, 0.5 * l, 0.0),
+                }],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let v = k.mass_properties(slid).unwrap().volume;
+    let want = (a * a + a * 1.5 * l) * h;
+    assert!((v - want).abs() < 1e-6 * want, "slid {v} against {want}");
+    // Turned a whole turn about the line through (−10, 1, 0): the ring between its nearest and
+    // farthest corners' circles.
+    let turned = k
+        .sweep_solid(
+            b,
+            &SolidMotion::Planar {
+                normal,
+                steps: vec![PlanarStep::Turn {
+                    about: p3(-10.0, 1.0, 0.0),
+                    from: 0.0,
+                    to: TAU,
+                }],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let (r0, r1) = (10.0f64, (12.0f64.powi(2) + 1.0).sqrt());
+    let v = k.mass_properties(turned).unwrap().volume;
+    let want = PI * (r1 * r1 - r0 * r0) * h;
+    assert!((v - want).abs() < 1e-6 * want, "turned {v} against {want}");
+}

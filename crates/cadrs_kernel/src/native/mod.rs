@@ -312,6 +312,11 @@ pub mod sweep;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep;
 #[cfg(feature = "testkit")]
+pub mod sweep_planar;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_planar;
+#[cfg(feature = "testkit")]
 pub mod sweep_solid;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]

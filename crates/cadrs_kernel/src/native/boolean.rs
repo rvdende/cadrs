@@ -2237,6 +2237,27 @@ fn uv_gap(b: &Body) -> Option<String> {
                 if off(pa.x - pb.x, f.surf.u_periodic()) * mu > tol
                     || off(pa.y - pb.y, f.surf.v_periodic()) * mv > tol
                 {
+                    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+                        eprintln!(
+                            "gap: face {fi} {:?} metric {:?}: coedge {k} edge {} {:?} ends {:?} -> next edge {} {:?} starts {:?}; 3D {:?} / {:?}",
+                            f.surf.kind(),
+                            (mu, mv),
+                            x.edge,
+                            format!("{:?}", ex.curve)
+                                .chars()
+                                .take(40)
+                                .collect::<String>(),
+                            pa,
+                            y.edge,
+                            format!("{:?}", ey.curve)
+                                .chars()
+                                .take(40)
+                                .collect::<String>(),
+                            pb,
+                            ex.point(t1),
+                            ey.point(t0)
+                        );
+                    }
                     return Some(format!(
                         "face {fi} loop {li}: p-curve gap after coedge {k} ({:.3e}, {:.3e})",
                         pa.x - pb.x,

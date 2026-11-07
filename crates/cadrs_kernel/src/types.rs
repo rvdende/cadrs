@@ -741,8 +741,31 @@ pub struct SweepSpec {
     pub faces: Vec<FaceInput>,
 }
 
-/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis.
+/// One step of a planar motion ([`SolidMotion::Planar`]), its amount running linearly with the
+/// motion's parameter from `from` to `to`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PlanarStep {
+    /// A turn about the line through `about` along the motion's normal (radians, right-handed
+    /// about the normal).
+    Turn {
+        /// A point of the line turned about.
+        about: Point3<f64>,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+    },
+    /// A slide square to the normal.
+    Slide {
+        /// The slide at the motion's start.
+        from: Vector3<f64>,
+        /// The slide at its end.
+        to: Vector3<f64>,
+    },
+}
+
+/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis, or in its planes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SolidMotion {
     /// Turned whole turns about the axis: the solid of revolution the body generates.
     Turn {
@@ -761,6 +784,16 @@ pub enum SolidMotion {
         from: f64,
         /// Where it ends (past `from`).
         to: f64,
+    },
+    /// Moved in the planes square to `normal`: its steps (turns about lines along the normal,
+    /// slides square to it) applied in order at each instant, each by its amount at that
+    /// instant, as the motion runs from start to end. For prisms along the normal (a polygon
+    /// extruded): what they fill is the region their polygon sweeps, extruded.
+    Planar {
+        /// The direction square to the motion's planes.
+        normal: Unit<Vector3<f64>>,
+        /// The steps, the first applied first.
+        steps: Vec<PlanarStep>,
     },
 }
 
