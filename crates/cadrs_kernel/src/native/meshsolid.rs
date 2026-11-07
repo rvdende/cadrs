@@ -27,6 +27,10 @@ use super::surface::Surface;
 use super::tol;
 use super::topo::*;
 
+/// Angles about an edge closer than this (radians) are one: coincident faces (an STL's float
+/// corners put coplanar faces some 1e-5 apart; no wedge of material is this thin).
+const TIE: f64 = 1e-4;
+
 /// Welds points within `tol` (looking in neighbouring grid cells).
 struct Weld {
     tol: f64,
@@ -85,7 +89,22 @@ pub fn mesh_solid(triangles: &[[P3; 3]], tol: f64) -> Result<Body, String> {
     }
     let mut pts = weld.pts;
     let tris = drop_repeats(tris);
-    let tris = orient(tris)?;
+    let mut tris = orient(tris)?;
+    // Outward first: pairing the triangles where parts touch (`split_touching`) takes the
+    // material to be inside. (The volume of a closed mesh, touching parts and all.)
+    let volume: f64 = tris
+        .iter()
+        .map(|t| {
+            pts[t[0]]
+                .coords
+                .dot(&pts[t[1]].coords.cross(&pts[t[2]].coords))
+        })
+        .sum();
+    if volume < 0.0 {
+        for t in &mut tris {
+            t.swap(1, 2);
+        }
+    }
     let tris = split_touching(tris, &mut pts)?;
     if tris.len() < 4 {
         return Err("fewer than four usable triangles".into());
@@ -323,9 +342,10 @@ fn drop_repeats(tris: Vec<[usize; 3]>) -> Vec<[usize; 3]> {
 }
 
 /// The triangles turned to agree with their neighbours across edges two triangles share, when
-/// some edge is used twice the same way; each part that hangs together is oriented from its
-/// first triangle (the volume's sign turns the whole body round later). Unchanged when already
-/// consistent.
+/// some edge is used twice the same way; each part that hangs together that way keeps the
+/// orientation most of its triangles had (a few flipped triangles in a file don't turn the
+/// part inside out against the parts it touches at edges more triangles share; the volume's
+/// sign turns the whole body round later). Unchanged when already consistent.
 fn orient(mut tris: Vec<[usize; 3]>) -> Result<Vec<[usize; 3]>, String> {
     let mut directed: HashMap<(usize, usize), u32> = HashMap::with_capacity(tris.len() * 3);
     for t in &tris {
@@ -353,6 +373,8 @@ fn orient(mut tris: Vec<[usize; 3]>) -> Result<Vec<[usize; 3]>, String> {
         }
         seen[s] = true;
         let mut stack = vec![s];
+        // The part's triangles, and whether each was turned.
+        let mut part: Vec<(usize, bool)> = vec![(s, false)];
         while let Some(i) = stack.pop() {
             let t = tris[i];
             for k in 0..3 {
@@ -372,18 +394,72 @@ fn orient(mut tris: Vec<[usize; 3]>) -> Result<Vec<[usize; 3]>, String> {
                 if runs_ab {
                     tris[j] = [u[0], u[2], u[1]];
                 }
+                part.push((j, runs_ab));
                 stack.push(j);
+            }
+        }
+        // Turned against the most: the seed was one of the few wrong ones.
+        if 2 * part.iter().filter(|p| p.1).count() > part.len() {
+            for &(i, _) in &part {
+                let u = tris[i];
+                tris[i] = [u[0], u[2], u[1]];
             }
         }
     }
     Ok(tris)
 }
 
+/// A surface of triangles that don't close a solid (an STL's or GLB's open pieces, a STEP
+/// file's tessellated shell): a planar face per triangle, sewn where they meet within `tol`.
+/// Returns the body and the problems met.
+pub fn mesh_sheet(triangles: &[[P3; 3]], tol: f64) -> (Body, Vec<String>) {
+    let loose = triangles
+        .iter()
+        .filter_map(|t| {
+            let n = (t[1] - t[0])
+                .cross(&(t[2] - t[0]))
+                .try_normalize(tol::DEGENERATE)?;
+            let f = Frame::from_xz(t[0], (t[1] - t[0]).normalize(), n);
+            let segs = (0..3).map(|k| {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                let (c, _) = Curve::line(a, b);
+                super::xbuild::LooseSeg { c, a, b }
+            });
+            Some((Surface::Plane { f }, vec![segs.collect()]))
+        })
+        .collect();
+    super::xbuild::sew_loose(loose, tol, false)
+}
+
+/// The triangles without membranes: a triangle each of whose edges more triangles run its way
+/// than back is a face with material on both sides (a wall left inside a mesh exported from
+/// touching bodies), which no surface of the solid has.
+fn drop_membranes(mut tris: Vec<[usize; 3]>) -> Vec<[usize; 3]> {
+    loop {
+        let mut directed: HashMap<(usize, usize), i32> = HashMap::with_capacity(tris.len() * 3);
+        for t in &tris {
+            for k in 0..3 {
+                *directed.entry((t[k], t[(k + 1) % 3])).or_default() += 1;
+            }
+        }
+        let over = |a: usize, b: usize| {
+            directed.get(&(a, b)).copied().unwrap_or(0)
+                > directed.get(&(b, a)).copied().unwrap_or(0)
+        };
+        let before = tris.len();
+        tris.retain(|t| !(0..3).all(|k| over(t[k], t[(k + 1) % 3])));
+        if tris.len() == before {
+            return tris;
+        }
+    }
+}
+
 /// Pairs the triangles at edges where parts of the surface touch (an edge used by several
 /// triangles each way) by their order about the edge, and gives each part its own copy of the
 /// vertices where the parts meet, so every directed edge is then used once (with `pts` grown by
 /// the copies).
-fn split_touching(mut tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[usize; 3]>, String> {
+fn split_touching(tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[usize; 3]>, String> {
+    let mut tris = drop_membranes(tris);
     // The triangles (and the corner the edge starts at) using each directed edge.
     let mut half: HashMap<(usize, usize), Vec<(usize, usize)>> =
         HashMap::with_capacity(tris.len() * 3);
@@ -421,9 +497,15 @@ fn split_touching(mut tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[u
             (c - axis * c.dot(&axis)).normalize()
         };
         let y = axis.cross(&x);
+        // (−π is π: one direction has one angle.)
         let angle = |&(i, k): &(usize, usize)| {
             let c = pts[tris[i][(k + 2) % 3]] - pa;
-            c.dot(&y).atan2(c.dot(&x))
+            let t = c.dot(&y).atan2(c.dot(&x));
+            if t <= -std::f64::consts::PI + TIE {
+                std::f64::consts::PI
+            } else {
+                t
+            }
         };
         let mut around: Vec<(f64, bool, usize)> = fwd
             .iter()
@@ -431,6 +513,15 @@ fn split_touching(mut tris: Vec<[usize; 3]>, pts: &mut Vec<P3>) -> Result<Vec<[u
             .chain(back.iter().map(|h| (angle(h), false, h.0)))
             .collect();
         around.sort_by(|p, q| p.0.total_cmp(&q.0));
+        // Two triangles at one angle are coincident faces of parts touching face to face (two
+        // bodies of one mesh sitting on each other): the one running a → b closes the part
+        // before, the other opens the part after, so it goes first (the other way round, the
+        // material between them would have no thickness).
+        for m in 1..around.len() {
+            if around[m].1 && !around[m - 1].1 && around[m].0 - around[m - 1].0 < TIE {
+                around.swap(m, m - 1);
+            }
+        }
         // A triangle running a → b has its outside turning positively about the edge, so the
         // material (and its partner) is the next one turning back.
         let n = around.len();
@@ -565,6 +656,43 @@ mod tests {
         assert!(b.check().is_empty(), "{:?}", b.check());
         assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
         assert_eq!(b.faces.len(), 12);
+    }
+
+    /// Two bodies of one STL sitting face to face (the AR4 arm's links): about the edges of the
+    /// face they share, the two coincident faces lie at one angle, and the material on each
+    /// side still pairs them up. (The shared square is split along different diagonals on the
+    /// two sides, so no triangle repeats another.)
+    #[test]
+    fn cubes_touching_face_to_face() {
+        let mut tris = cube(P3::origin(), 10.0);
+        let mut upper = cube(P3::new(0.0, 0.0, 10.0), 10.0);
+        // The upper cube's bottom (its first two triangles) along the other diagonal.
+        let c = |x: f64, y: f64| P3::new(x, y, 10.0);
+        upper[0] = [c(0.0, 0.0), c(0.0, 10.0), c(10.0, 0.0)];
+        upper[1] = [c(0.0, 10.0), c(10.0, 10.0), c(10.0, 0.0)];
+        tris.extend(upper);
+        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
+        // Turned the other way about, it still comes out the same.
+        let inv: Vec<[P3; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
+        let b = mesh_solid(&inv, tol::POINT).unwrap();
+        assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
+    }
+
+    /// A wall left inside a mesh (a triangle of the face two exported bodies shared, the AR4
+    /// arm's link_4): it has material on both sides, so it goes, and the rest is the solid.
+    #[test]
+    fn a_membrane_inside_is_dropped() {
+        let lower = cube(P3::origin(), 10.0);
+        let upper = cube(P3::new(0.0, 0.0, 10.0), 10.0);
+        // Without the shared face (the lower top, the upper bottom), but one of its triangles.
+        let mut tris: Vec<[P3; 3]> = lower[..2].iter().chain(&lower[4..]).copied().collect();
+        tris.extend_from_slice(&upper[2..]);
+        tris.push(lower[2]);
+        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        assert!(b.check().is_empty(), "{:?}", b.check());
+        assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
     }
 
     /// Triangles wound against their neighbours are turned; a repeated triangle counts once,
