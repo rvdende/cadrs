@@ -90,11 +90,35 @@ fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
 /// with flat ends.
 fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
     let ed = &b.edges[e];
+    // A B-spline edge that is straight (a loft's rails to a point): the cylinder round the line
+    // (a pipe swept along it touches the faces' slabs along seams the booleans can't settle).
+    if let Curve::Nurbs(n) = &ed.curve
+        && let Some(Curve::Line { .. }) = crate::native::recognize::curve(n)
+    {
+        let (p0, p1) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
+        if (p1 - p0).norm() > tol::POINT {
+            let mut nb = b.clone();
+            nb.edges[e].curve = Curve::Line { o: p0, d: p1 - p0 };
+            nb.edges[e].t = [0.0, 1.0];
+            return edge_tube(&nb, e, r);
+        }
+    }
     match &ed.curve {
         Curve::Line { d, .. } => {
             let p0 = ed.point(ed.t[0]);
             let t = d.normalize();
-            let fr = Frame::from_z(p0, t);
+            // The seam (the circle's start) turned into the body, away from the lines along
+            // which the tube touches its faces' slabs.
+            let mid = ed.point(0.5 * (ed.t[0] + ed.t[1]));
+            let ef = b.edge_faces();
+            let inward = -ef[e]
+                .iter()
+                .map(|&f| outward_normal(b, f, &mid))
+                .fold(V3::zeros(), |a, n| a + n.normalize());
+            let fr = match (inward - t * inward.dot(&t)).try_normalize(tol::ANGULAR) {
+                Some(x) => Frame::from_xz(p0, x, t),
+                None => Frame::from_z(p0, t),
+            };
             let plane = Plane {
                 origin: p0,
                 x_dir: nalgebra::Unit::new_normalize(fr.x),
@@ -581,12 +605,36 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             "The shell's walls would intersect themselves; reduce the thickness".into(),
         )
     };
-    if crossing && spec.sharp {
-        return Err(too_thick());
-    }
     let cur = Tracked::of(b.clone());
     let v0 = crate::native::mass::body_volume(&b);
-    let result = if !spec.outward {
+    // Walls whose surfaces the whole body lies within (a box's sides, a bore, a ball's sphere):
+    // the cavity is where the moved surfaces' insides meet in the body, as far as the openings.
+    let supported = if spec.outward || spec.hollow {
+        None
+    } else {
+        cavity_of_supports(&b, &remove, t)
+    };
+    if std::env::var("CADRS_SHELL_DEBUG").is_ok() {
+        eprintln!(
+            "shell: cavity of supporting walls: {:?}",
+            supported
+                .as_ref()
+                .map(|r| r.as_ref().map(|c| c.as_ref().map(|c| c.faces.len())))
+        );
+    }
+    let result = if let Some(Ok(cavity)) = supported {
+        match cavity {
+            // Every point of the body within t of a wall: nothing is hollowed.
+            None => cur,
+            Some(cavity) => cur.apply(
+                &cavity,
+                &vec![Vec::new(); cavity.faces.len()],
+                BoolOp::Subtract,
+            )?,
+        }
+    } else if crossing && spec.sharp {
+        return Err(too_thick());
+    } else if !spec.outward {
         // The cavity: kept faces moved in by t, removed faces moved out past the body, or,
         // failing that (a spline wall's offset doesn't reach that far), where they are (the
         // cavity opens flush with them).
@@ -1131,6 +1179,160 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
         }
     }
     false
+}
+
+/// How a wall's surface bounds the body: the body lies on one side of the whole surface (inside a
+/// sphere or a cylinder, outside one, behind a plane).
+enum Support {
+    /// The half-space behind the plane through `o` with outward normal `n`.
+    Plane(P3, V3),
+    /// Inside (true) or outside the cylinder about the axis (o, z) of radius r.
+    Cylinder(P3, V3, f64, bool),
+    /// Inside (true) or outside the sphere about c of radius r.
+    Sphere(P3, f64, bool),
+}
+
+impl Support {
+    /// How far a point is outside the region (negative inside).
+    fn outside(&self, p: &P3) -> f64 {
+        match self {
+            Support::Plane(o, n) => (p - o).dot(n),
+            Support::Cylinder(o, z, r, inside) => {
+                let w = p - o;
+                let rho = (w - z * w.dot(z)).norm();
+                if *inside { rho - r } else { r - rho }
+            }
+            Support::Sphere(c, r, inside) => {
+                let rho = (p - c).norm();
+                if *inside { rho - r } else { r - rho }
+            }
+        }
+    }
+}
+
+/// The cavity of an inward shell `t` thick open at the `remove` faces, when the surface of every
+/// wall (each face kept) bounds the whole body (the body on one side of the whole plane,
+/// cylinder or sphere): the walls moved in by t are then those surfaces moved in, extended or
+/// trimmed where they meet and run on to the openings, and the cavity is the body's points inside
+/// all of them. None when some wall's surface doesn't bound the body this way (an L-shaped
+/// block's inner walls cut across its other leg); Ok(None) when the cavity is empty, every point
+/// within t of a wall (walls moved in until they meet).
+fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Option<Body>>> {
+    let bb = b.bbox();
+    let size = bb.diagonal();
+    let close = tol::POINT.max(tol::REL * size);
+    let (meshes, _) = crate::native::tess::mesh_body(b, 1e-3 * size, 0.2);
+    let pts: Vec<P3> = meshes
+        .iter()
+        .flat_map(|m| m.positions.iter().copied())
+        .chain(b.verts.iter().map(|v| v.p))
+        .collect();
+    // A concave edge between two walls rounds a rounded shell's cavity: not this one's.
+    let ef = b.edge_faces();
+    if (0..b.edges.len()).any(|e| {
+        !b.edges[e].degenerate
+            && convex(b, e) == Some(false)
+            && ef[e].iter().all(|f| !remove.contains(f))
+    }) {
+        return None;
+    }
+    let mut walls = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        if remove.contains(&fi) {
+            continue;
+        }
+        // The face's outward normal at a point of it.
+        let (_, at) = crate::native::mass::face_area(b, fi);
+        let (u, v) = f.surf.project(&at, None);
+        let (q, n) = (
+            f.surf.eval(u, v),
+            f.surf.normal(u, v).normalize() * if f.sense { 1.0 } else { -1.0 },
+        );
+        let w = match &f.surf {
+            Surface::Plane { .. } => Support::Plane(q, n),
+            Surface::Cylinder { f: fr, r } => {
+                let z = fr.z.normalize();
+                let radial = (q - fr.o) - z * (q - fr.o).dot(&z);
+                Support::Cylinder(fr.o, z, *r, radial.dot(&n) > 0.0)
+            }
+            Surface::Sphere { f: fr, r } => Support::Sphere(fr.o, *r, (q - fr.o).dot(&n) > 0.0),
+            _ => return None,
+        };
+        if pts.iter().any(|p| w.outside(p) > close) {
+            return None;
+        }
+        walls.push(w);
+    }
+    if walls.is_empty() {
+        return None;
+    }
+    let reach = size * 2.0 + t * 2.0 + 10.0;
+    let mut grown = bb;
+    grown.add(&(bb.min - V3::repeat(reach)));
+    grown.add(&(bb.max + V3::repeat(reach)));
+    let big = |o: P3, z: V3, r: f64| -> Result<Body> {
+        let fr = Frame::from_z(o - z * reach, z);
+        let plane = Plane {
+            origin: fr.o,
+            x_dir: nalgebra::Unit::new_normalize(fr.x),
+            normal: nalgebra::Unit::new_normalize(z),
+        };
+        let disk = Region {
+            outer: Loop {
+                curves: vec![Curve2::Circle {
+                    center: nalgebra::Point2::new(0.0, 0.0),
+                    radius: r,
+                    source: None,
+                }],
+            },
+            holes: vec![],
+            source: None,
+        };
+        let regions = crate::native::profile::regions(&Profile::new(plane, vec![disk]))?;
+        let mf = crate::native::profile::merge_regions(&regions)?;
+        let kind = crate::native::sweep::Prism { plane, dir: z };
+        Ok(crate::native::sweep::sweep(&plane, &mf, &kind, 0.0, 2.0 * reach, false)?.body)
+    };
+    Some((|| {
+        let mut cavity = b.clone();
+        // The walls moved in: the regions the cavity is within, then those it is outside.
+        let mut keep: Vec<(Body, BoolOp)> = Vec::new();
+        for w in &walls {
+            keep.push(match *w {
+                Support::Plane(o, n) => (
+                    crate::native::ops::half_space_box(o - n * t, -n, &grown)?,
+                    BoolOp::Intersect,
+                ),
+                Support::Cylinder(o, z, r, true) => {
+                    if r - t <= close {
+                        return Ok(None);
+                    }
+                    (big(o, z, r - t)?, BoolOp::Intersect)
+                }
+                Support::Cylinder(o, z, r, false) => (big(o, z, r + t)?, BoolOp::Subtract),
+                Support::Sphere(c, r, true) => {
+                    if r - t <= close {
+                        return Ok(None);
+                    }
+                    (ball_body(c, r - t)?, BoolOp::Intersect)
+                }
+                Support::Sphere(c, r, false) => (ball_body(c, r + t)?, BoolOp::Subtract),
+            });
+        }
+        keep.sort_by_key(|(_, op)| *op == BoolOp::Subtract);
+        for (tool, op) in &keep {
+            cavity = match boolean_bodies(&cavity, tool, *op) {
+                Ok(r) if !r.body.faces.is_empty() => r.body,
+                Ok(_) | Err(KernelError::EmptyResult(_)) => return Ok(None),
+                Err(e) => return Err(e),
+            };
+        }
+        let v = crate::native::mass::body_volume(&cavity);
+        if v <= tol::REL * crate::native::mass::body_volume(b) {
+            return Ok(None);
+        }
+        Ok(Some(cavity))
+    })())
 }
 
 /// The body shrunk by a ball of radius `d` (every face moved in by d, the concave edges and

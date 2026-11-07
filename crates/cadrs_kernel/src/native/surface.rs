@@ -305,9 +305,11 @@ impl Surface {
                 let l = f.local(&p);
                 if l.z >= 0.0 { f.z } else { -f.z }
             }
-            Surface::Cone { .. } => {
-                // Apex: the average normal is along −z·sin a (outward-ish); use a nearby point.
-                let e = tol::DIFF_STEP;
+            Surface::Cone { a, .. } => {
+                // Apex: the limit along the generator from the nappe where the radius
+                // (r + v sin a) is positive, the one a face of the cone lies on: a point a step
+                // that way (the other nappe's normals point the opposite way).
+                let e = tol::DIFF_STEP * if a.sin() < 0.0 { -1.0 } else { 1.0 };
                 let d = self.d2(u, v + e);
                 d[1].cross(&d[2]).normalize()
             }

@@ -1,0 +1,442 @@
+//! Cases of brep-bench (https://brepbench.org, https://github.com/bmander/brep-bench) the
+//! kernel once got wrong, built as its cadrs runner builds them (sketches extruded and revolved,
+//! through the `Kernel` trait) and measured against the cases' exact answers.
+use cadrs_kernel::native::NativeKernel;
+use cadrs_kernel::*;
+use nalgebra::{Point2, Point3, Unit, Vector3};
+
+type P3 = Point3<f64>;
+type V3 = Vector3<f64>;
+
+fn p2(x: f64, y: f64) -> Point2<f64> {
+    Point2::new(x, y)
+}
+
+fn p3(x: f64, y: f64, z: f64) -> P3 {
+    P3::new(x, y, z)
+}
+
+fn plane(origin: P3, x_dir: V3, normal: V3) -> Plane {
+    let n = Unit::new_normalize(normal);
+    let x = Unit::new_normalize(x_dir - n.into_inner() * x_dir.dot(&n));
+    Plane {
+        origin,
+        x_dir: x,
+        normal: n,
+    }
+}
+
+/// The plane z = `z` (the Top plane).
+fn xy(z: f64) -> Plane {
+    plane(p3(0.0, 0.0, z), V3::x(), V3::z())
+}
+
+/// The plane y = 0 with sketch (x, y) the model's (x, z) (the Front plane).
+fn xz() -> Plane {
+    plane(p3(0.0, 0.0, 0.0), V3::x(), -V3::y())
+}
+
+fn line(a: (f64, f64), b: (f64, f64)) -> Curve2 {
+    Curve2::Line {
+        a: p2(a.0, a.1),
+        b: p2(b.0, b.1),
+        source: None,
+    }
+}
+
+/// An arc about `c`, from `start` sweeping `sweep` (degrees).
+fn arc(c: (f64, f64), r: f64, start: f64, sweep: f64) -> Curve2 {
+    Curve2::Arc {
+        center: p2(c.0, c.1),
+        radius: r,
+        start_angle: start.to_radians(),
+        sweep: sweep.to_radians(),
+        source: None,
+    }
+}
+
+fn polygon(pts: &[(f64, f64)]) -> Loop {
+    Loop {
+        curves: (0..pts.len())
+            .map(|i| line(pts[i], pts[(i + 1) % pts.len()]))
+            .collect(),
+    }
+}
+
+fn sketch(plane: Plane, outer: Loop, holes: Vec<Loop>) -> Profile {
+    Profile::new(
+        plane,
+        vec![Region {
+            outer,
+            holes,
+            source: None,
+        }],
+    )
+}
+
+fn extrude(k: &mut NativeKernel, p: &Profile, depth: f64) -> BodyId {
+    k.extrude_with(p, &ExtrudeSpec::blind(p.plane.normal, depth))
+        .unwrap()
+        .bodies[0]
+}
+
+/// `p` revolved a whole turn about the z axis.
+fn revolve_z(k: &mut NativeKernel, p: &Profile) -> BodyId {
+    let axis = Axis {
+        origin: p3(0.0, 0.0, 0.0),
+        dir: Unit::new_normalize(V3::z()),
+    };
+    k.revolve_with(p, &RevolveSpec::solid(axis, None))
+        .unwrap()
+        .bodies[0]
+}
+
+fn block(k: &mut NativeKernel, min: P3, max: P3) -> BodyId {
+    let s = sketch(
+        xy(min.z),
+        polygon(&[
+            (min.x, min.y),
+            (max.x, min.y),
+            (max.x, max.y),
+            (min.x, max.y),
+        ]),
+        vec![],
+    );
+    extrude(k, &s, max.z - min.z)
+}
+
+/// The ball of radius `r` about the origin: a half disc revolved.
+fn ball(k: &mut NativeKernel, r: f64) -> BodyId {
+    let half = Loop {
+        curves: vec![arc((0.0, 0.0), r, -90.0, 180.0), line((0.0, r), (0.0, -r))],
+    };
+    revolve_z(k, &sketch(xz(), half, vec![]))
+}
+
+/// The face of `body` through `p`.
+fn face_at(k: &NativeKernel, body: BodyId, p: P3) -> FaceId {
+    let b = k.get(body).unwrap();
+    (0..b.faces.len())
+        .map(|f| FaceId(f as u64))
+        .min_by(|a, c| {
+            let d = |f: &FaceId| b.faces[f.0 as usize].surf.distance(&p);
+            d(a).total_cmp(&d(c))
+        })
+        .unwrap()
+}
+
+/// That the body is one valid solid with this volume and area (to 1e-6), and that its mesh is
+/// closed.
+fn measures(k: &NativeKernel, body: BodyId, volume: f64, area: f64) {
+    let m = k.mass_properties(body).unwrap();
+    assert!(
+        (m.volume - volume).abs() < 1e-6 * volume && (m.surface_area - area).abs() < 1e-6 * area,
+        "volume {} against {volume}, area {} against {area}",
+        m.volume,
+        m.surface_area
+    );
+    let b = k.get(body).unwrap();
+    let issues = b.check_with(cadrs_kernel::native::CheckLevel::Full);
+    assert!(issues.is_empty(), "{issues:?}");
+    let size = k.bounding_box(body).unwrap().diagonal();
+    let defl = (1e-4 * size).min(5e-3 * volume / area);
+    let mesh = k.tessellate(
+        body,
+        Tessellation {
+            deflection: defl,
+            angle: 5f64.to_radians(),
+        },
+    );
+    let check = cadrs_kernel::native::tess::check_tri_mesh(&mesh.unwrap());
+    assert!(check.is_watertight(), "{check:?}");
+}
+
+/// The regular tetrahedron with corners (3, 3, 3), (3, −3, −3), (−3, 3, −3), (−3, −3, 3): its
+/// base triangle lofted to its apex.
+fn tetrahedron(k: &mut NativeKernel) -> BodyId {
+    let apex = p3(3.0, 3.0, 3.0);
+    let base = [
+        p3(3.0, -3.0, -3.0),
+        p3(-3.0, 3.0, -3.0),
+        p3(-3.0, -3.0, 3.0),
+    ];
+    let normal = (base[1] - base[0]).cross(&(base[2] - base[0]));
+    let normal = if normal.dot(&(apex - base[0])) < 0.0 {
+        -normal
+    } else {
+        normal
+    };
+    let on = plane(base[0], base[1] - base[0], normal);
+    let y = on.normal.cross(&on.x_dir);
+    let at = |p: P3| {
+        let d = p - on.origin;
+        (d.dot(&on.x_dir), d.dot(&y))
+    };
+    let tri = sketch(on, polygon(&base.map(at)), vec![]);
+    let spec = LoftSpec {
+        body: BodyKind::Solid,
+        sections: vec![LoftSection::Profile(tri), LoftSection::Point(apex)],
+        start: LoftEnd::default(),
+        end: LoftEnd::default(),
+        source: 1,
+    };
+    k.loft_with(&spec).unwrap().bodies[0]
+}
+
+/// A cone on the z axis, base radius 3 at z = 0, apex (0, 0, 4): its section revolved.
+fn cone(k: &mut NativeKernel) -> BodyId {
+    revolve_z(
+        k,
+        &sketch(xz(), polygon(&[(0.0, 0.0), (3.0, 0.0), (0.0, 4.0)]), vec![]),
+    )
+}
+
+fn sheet_of(k: &mut NativeKernel, p: &Profile, ext: bool) -> BodyId {
+    if ext {
+        let spec = ExtrudeSpec {
+            body: BodyKind::Surface,
+            ..ExtrudeSpec::blind(Unit::new_normalize(V3::y()), 8.0)
+        };
+        k.extrude_with(p, &spec).unwrap().bodies[0]
+    } else {
+        let axis = Axis {
+            origin: p3(0.0, 0.0, 0.0),
+            dir: Unit::new_normalize(V3::z()),
+        };
+        let spec = RevolveSpec {
+            body: BodyKind::Surface,
+            ..RevolveSpec::solid(axis, None)
+        };
+        k.revolve_with(p, &spec).unwrap().bodies[0]
+    }
+}
+
+fn open_chain(curves: Vec<Curve2>) -> Profile {
+    Profile {
+        plane: xz(),
+        regions: vec![],
+        chains: vec![Chain {
+            curves,
+            source: None,
+        }],
+    }
+}
+
+/// `sheet` thickened by `t` toward `toward` from its face at `at`.
+fn thickened(k: &mut NativeKernel, sheet: BodyId, at: P3, toward: V3, t: f64) -> BodyId {
+    let face = face_at(k, sheet, at);
+    let n = k.face_normals_at(sheet, face, &[at]).unwrap()[0];
+    let (along, against) = if n.dot(&toward) > 0.0 {
+        (t, 0.0)
+    } else {
+        (0.0, t)
+    };
+    let spec = ThickenSpec {
+        bodies: vec![sheet],
+        faces: vec![],
+        profiles: vec![],
+        along,
+        against,
+        source: 1,
+    };
+    k.thicken_surfaces(&spec).unwrap().bodies[0]
+}
+
+/// `body` shelled inward `t`, open at its faces through `openings`, its cavity rounded.
+fn shelled(k: &mut NativeKernel, body: BodyId, openings: &[P3], t: f64) -> BodyId {
+    let remove = openings.iter().map(|&p| face_at(k, body, p)).collect();
+    let spec = ShellSpec {
+        remove,
+        thickness: t,
+        outward: false,
+        hollow: false,
+        sharp: false,
+    };
+    k.shell_with(body, &spec).unwrap().bodies[0]
+}
+
+fn grown(k: &mut NativeKernel, body: BodyId, d: f64) -> BodyId {
+    k.offset(
+        body,
+        &OffsetSpec {
+            distance: d,
+            faces: vec![],
+            sharp: false,
+        },
+    )
+    .unwrap()
+    .bodies[0]
+}
+
+/// tangent/thin-lens: two balls of radius 5 overlapping 10⁻⁶ deep, their common lens, modelled
+/// a hundred times finer than the default merge distance (as thick as the lens).
+#[test]
+fn a_lens_a_millionth_thick() {
+    let mut k = NativeKernel::new();
+    k.set_tolerances(cadrs_kernel::native::tol::Tolerances {
+        confusion: 1e-9,
+        point: 1e-8,
+        retries: [1e-7, 1e-6],
+    })
+    .unwrap();
+    let a = ball(&mut k, 5.0);
+    let b = ball(&mut k, 5.0);
+    let b = k
+        .transform(b, &Transform::translation(9.999999, 0.0, 0.0))
+        .unwrap()
+        .bodies[0];
+    let lens = k.boolean(BoolOp::Intersect, a, &[b]).unwrap().bodies[0];
+    let m = k.mass_properties(lens).unwrap();
+    let (v, a) = (7.853981372175095e-12, 3.1415926535897935e-05);
+    assert!((m.volume - v).abs() < 1e-6 * v, "{}", m.volume);
+    assert!((m.surface_area - a).abs() < 1e-6 * a, "{}", m.surface_area);
+}
+
+/// thicken/hemisphere-to-its-center: a hemisphere sheet thickened by its radius toward its
+/// centre, the moved face closing to the centre: the half ball.
+#[test]
+fn a_hemisphere_thickened_to_its_centre() {
+    let mut k = NativeKernel::new();
+    let sheet = sheet_of(
+        &mut k,
+        &open_chain(vec![arc((0.0, 0.0), 5.0, 0.0, 90.0)]),
+        false,
+    );
+    let at = p3(0.0, 1.0, 1.0) * (5.0 / 2f64.sqrt());
+    let half = thickened(&mut k, sheet, at, -at.coords, 5.0);
+    measures(&k, half, 261.79938779914943, 235.61944901923448);
+}
+
+/// thicken/bent-flange-past-its-bend: a bent sheet thickened by 3 inside its bend of radius 2,
+/// the bend's face moved through its axis.
+#[test]
+fn a_bent_sheet_thickened_past_its_bend() {
+    let mut k = NativeKernel::new();
+    let profile = vec![
+        line((-10.0, 0.0), (0.0, 0.0)),
+        arc((0.0, 2.0), 2.0, -90.0, 90.0),
+        line((2.0, 2.0), (2.0, 12.0)),
+    ];
+    let sheet = sheet_of(&mut k, &open_chain(profile), true);
+    let flange = thickened(&mut k, sheet, p3(-5.0, 4.0, 0.0), V3::z(), 3.0);
+    measures(&k, flange, 497.1327412287184, 501.41592653589794);
+}
+
+/// draft/box-top-drafted-away: a box's four sides drafted 30° until they meet below its top.
+#[test]
+fn a_box_drafted_until_its_top_is_gone() {
+    let mut k = NativeKernel::new();
+    let b = block(&mut k, p3(0.0, 0.0, 0.0), p3(30.0, 10.0, 10.0));
+    let faces = [
+        p3(0.0, 5.0, 5.0),
+        p3(30.0, 5.0, 5.0),
+        p3(15.0, 0.0, 5.0),
+        p3(15.0, 10.0, 5.0),
+    ]
+    .map(|p| face_at(&k, b, p))
+    .to_vec();
+    let spec = DraftSpec {
+        faces,
+        angle: 30f64.to_radians(),
+        pull: Unit::new_normalize(V3::z()),
+        neutral: p3(0.0, 0.0, 0.0),
+        neutral_normal: None,
+        tangent_propagation: false,
+    };
+    let roof = k.draft(b, &spec).unwrap().bodies[0];
+    measures(&k, roof, 1154.7005383792516, 900.0);
+    assert_eq!(k.get(roof).unwrap().faces.len(), 5);
+}
+
+/// shell/box-walls-meeting: walls half the box's width thick meet everywhere: the box itself.
+#[test]
+fn a_box_shelled_to_half_its_width_is_the_box() {
+    let mut k = NativeKernel::new();
+    let b = block(&mut k, p3(0.0, 0.0, 0.0), p3(10.0, 8.0, 6.0));
+    let s = shelled(&mut k, b, &[p3(5.0, 4.0, 6.0)], 4.0);
+    measures(&k, s, 480.0, 376.0);
+    assert_eq!(k.get(s).unwrap().faces.len(), 6);
+}
+
+/// shell/capsule-open-at-its-dome: the side moved in runs on up into the dome it opens at.
+#[test]
+fn a_capsule_shelled_open_at_its_dome() {
+    let mut k = NativeKernel::new();
+    let section = Loop {
+        curves: vec![
+            line((0.0, 0.0), (5.0, 0.0)),
+            line((5.0, 0.0), (5.0, 10.0)),
+            arc((0.0, 10.0), 5.0, 0.0, 90.0),
+            line((0.0, 15.0), (0.0, 0.0)),
+        ],
+    };
+    let c = revolve_z(&mut k, &sketch(xz(), section, vec![]));
+    let s = shelled(&mut k, c, &[p3(0.0, 0.0, 15.0)], 1.0);
+    measures(&k, s, 389.55748904513433, 838.8052385084748);
+}
+
+/// shell/hole-skin-merging-wall: the skin round a bore near a side runs into that side's wall.
+#[test]
+fn a_bore_skin_merging_with_a_wall() {
+    let mut k = NativeKernel::new();
+    let hole = Loop {
+        curves: vec![Curve2::Circle {
+            center: p2(15.5, 10.0),
+            radius: 3.0,
+            source: None,
+        }],
+    };
+    let s = sketch(
+        xy(0.0),
+        polygon(&[(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)]),
+        vec![hole],
+    );
+    let b = extrude(&mut k, &s, 10.0);
+    let s = shelled(&mut k, b, &[p3(2.0, 2.0, 10.0)], 1.0);
+    measures(&k, s, 1241.873577515697, 2534.8987556529105);
+}
+
+/// shell/sphere-opening-sealed: the sphere moved in never reaches the opening: a closed void.
+#[test]
+fn a_ball_shelled_short_of_its_opening() {
+    let mut k = NativeKernel::new();
+    let b = ball(&mut k, 5.0);
+    let above = block(&mut k, p3(-6.0, -6.0, 4.5), p3(6.0, 6.0, 6.0));
+    let capped = k.boolean(BoolOp::Subtract, b, &[above]).unwrap().bodies[0];
+    let s = shelled(&mut k, capped, &[p3(0.5, 0.5, 4.5)], 1.0);
+    measures(&k, s, 251.7201113688822, 514.4357970253286);
+}
+
+/// offset/cone-grown: a cone grown by 1, its apex a ball's cap.
+#[test]
+fn a_cone_grown() {
+    let mut k = NativeKernel::new();
+    let c = cone(&mut k);
+    let g = grown(&mut k, c, 1.0);
+    measures(&k, g, 150.72175801789774, 154.83585886827183);
+}
+
+/// offset/torus-grown-past-its-hole: a torus's tube grown wider than its hole: an apple.
+#[test]
+fn a_torus_grown_past_its_hole() {
+    let mut k = NativeKernel::new();
+    let tube = Loop {
+        curves: vec![Curve2::Circle {
+            center: p2(4.0, 0.0),
+            radius: 2.0,
+            source: None,
+        }],
+    };
+    let t = revolve_z(&mut k, &sketch(xz(), tube, vec![]));
+    let g = grown(&mut k, t, 3.0);
+    measures(&k, g, 1984.2874392993506, 816.3344428255867);
+}
+
+/// offset/tetrahedron-grown: a lofted tetrahedron (its edges straight B-splines) grown by 1.
+#[test]
+fn a_tetrahedron_grown() {
+    let mut k = NativeKernel::new();
+    let t = tetrahedron(&mut k);
+    let g = grown(&mut k, t, 1.0);
+    measures(&k, g, 249.53323018738044, 234.54759243458807);
+}
