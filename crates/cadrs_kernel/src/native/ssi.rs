@@ -521,6 +521,65 @@ fn circle(c: P3, n: V3, r: f64) -> IntCurve {
     }
 }
 
+/// Two cylinders of one radius whose axes cross (a Steinmetz pair, a cross-drilled hole) meet
+/// in two ellipses: a point as far from both axes has w·z₁ = ±w·z₂ (w from the axes' crossing),
+/// so it lies in one of the two planes through the crossing square to z₁ ∓ z₂, and each plane cuts
+/// the first cylinder in an ellipse about the crossing, its minor axis r square to the axis and
+/// its major axis r / |n·z₁|. The two ellipses cross where the cylinders touch. None for other
+/// pairs (the quartic is marched).
+fn equal_cylinders_crossing(
+    f1: &Frame,
+    r1: f64,
+    f2: &Frame,
+    r2: f64,
+    bb: &Bbox,
+) -> Option<Vec<IntCurve>> {
+    let size = bb.diagonal().max(r1 + r2);
+    if (r1 - r2).abs() > tol::REL * (r1 + r2) {
+        return None;
+    }
+    let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
+    // The axes' nearest points; they must meet.
+    let w = f2.o - f1.o;
+    let n = z1.cross(&z2);
+    let nn = n.norm_squared();
+    if nn < tol::ANGULAR * tol::ANGULAR {
+        return None;
+    }
+    if (w.dot(&n)).abs() / nn.sqrt() > tol::REL * size {
+        return None;
+    }
+    let s = w.cross(&z2).dot(&n) / nn;
+    let o = f1.o + z1 * s;
+    let r = 0.5 * (r1 + r2);
+    let mut out = Vec::new();
+    for m in [z1 - z2, z1 + z2] {
+        let Some(nrm) = m.try_normalize(tol::ANGULAR) else {
+            continue;
+        };
+        let c = nrm.dot(&z1).abs();
+        if c < tol::ANGULAR {
+            continue;
+        }
+        let x = nrm.cross(&z1).normalize();
+        let y = nrm.cross(&x);
+        out.push(IntCurve {
+            c: Curve::Ellipse {
+                c: o,
+                x,
+                y,
+                a: r,
+                b: r / c,
+            },
+            t0: 0.0,
+            t1: TAU,
+            closed: true,
+            pcs: None,
+        });
+    }
+    Some(out)
+}
+
 /// A cone's apex: where its radius r + v sin a is 0, at v = −r / sin a along its generators
 /// (its point o + ρ·r + v·(ρ sin a + z cos a)).
 fn cone_apex(f: &Frame, r: f64, a: f64) -> P3 {
@@ -831,7 +890,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
         }
         (Surface::Cylinder { f: f1, r: r1 }, Surface::Cylinder { f: f2, r: r2 }) => {
             if f1.z.cross(&f2.z).norm() > tol::ANGULAR_FINE {
-                return None;
+                return equal_cylinders_crossing(f1, *r1, f2, *r2, bb);
             }
             // Parallel axes: lines.
             let d = f2.o - f1.o;

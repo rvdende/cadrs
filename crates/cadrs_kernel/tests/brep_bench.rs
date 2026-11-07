@@ -803,3 +803,47 @@ fn a_rational_spline_revolved() {
         );
     }
 }
+
+/// boolean/steinmetz-common: two cylinders of radius 5 whose axes cross square, in common: their
+/// walls meet in two ellipses, exactly (16r³/3 and 16r²).
+#[test]
+fn a_steinmetz_solid_is_bounded_by_ellipses() {
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let x = Unit::new_normalize(V3::x());
+    let a = k
+        .primitive(&Primitive::Cylinder {
+            base: p3(0.0, 0.0, -10.0),
+            axis: z,
+            radius: 5.0,
+            height: 20.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let b = k
+        .primitive(&Primitive::Cylinder {
+            base: p3(-10.0, 0.0, 0.0),
+            axis: x,
+            radius: 5.0,
+            height: 20.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let c = k.boolean(BoolOp::Intersect, a, &[b]).unwrap().bodies[0];
+    measures(&k, c, 16.0 * 125.0 / 3.0, 16.0 * 25.0);
+    let body = k.get(c).unwrap();
+    assert!(
+        body.edges
+            .iter()
+            .filter(|e| !e.degenerate)
+            .all(|e| matches!(e.curve, cadrs_kernel::native::Curve::Ellipse { .. })),
+        "{:?}",
+        body.edges
+            .iter()
+            .map(|e| format!("{:?}", e.curve)
+                .chars()
+                .take(12)
+                .collect::<String>())
+            .collect::<Vec<_>>()
+    );
+}

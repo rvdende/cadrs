@@ -1626,6 +1626,37 @@ pub fn merge_edges(b: &mut Body) {
     }
 }
 
+/// B-spline edges that are straight lines run at a constant speed (a loft's rails to a point, a
+/// skin's between corners) become lines on the same parameters, so their faces' p-curves hold
+/// as they are and what meets them sees a line (a chamfer's or a tube's planes and cylinders, not
+/// B-splines fitted along them). True when any changed.
+pub fn straighten(b: &mut Body) -> bool {
+    let mut changed = false;
+    for e in &mut b.edges {
+        let Curve::Nurbs(n) = &e.curve else { continue };
+        if e.degenerate {
+            continue;
+        }
+        let (t0, t1) = (e.t[0], e.t[1]);
+        let (p0, p1) = (n.point(t0), n.point(t1));
+        let len = (p1 - p0).norm();
+        if !(t1 > t0 && len > tol::POINT) {
+            continue;
+        }
+        let d = (p1 - p0) / (t1 - t0);
+        let o = p0 - d * t0;
+        let close = 1e-12 * (1.0 + len + p0.coords.norm());
+        if (1..16).all(|i| {
+            let t = t0 + (t1 - t0) * i as f64 / 16.0;
+            (n.point(t) - (o + d * t)).norm() <= close
+        }) {
+            e.curve = Curve::Line { o, d };
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// B-spline faces that are flat (all control points in one plane: a loft or skin through
 /// coplanar curves) become planes, with their p-curves recomputed, so booleans see them
 /// coincide with other planar faces. True when any changed.
