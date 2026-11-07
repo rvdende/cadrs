@@ -29,10 +29,17 @@ pub const CAMERA_FAR: f32 = 40_000.0;
 const DEPTH_PX: f32 = 4000.0;
 
 /// How far the orthographic camera sits in front of the focus at `scale` mm per pixel:
-/// [`CAMERA_DISTANCE`], or more when zoomed out past it. Close views keep the depth precision
-/// of the fixed range ([`crate::picture::SURFACE_BIAS`] is tuned to it).
+/// [`CAMERA_DISTANCE`] at the default zoom, more when zoomed out past it, and less when zoomed
+/// in past the default zoom, keeping as many pixels' worth of depth as there are at the default
+/// zoom. A fixed 20 m left a part a fraction of a millimetre across (an STL in metres read as mm)
+/// shaking as it turned, the eye's f32 position rounding to whole pixels, and its faces showing
+/// through each other, the depth steps a sizeable part of it. At the default zoom and beyond
+/// it's the fixed range [`crate::picture::SURFACE_BIAS`] is tuned to; closer in the bias
+/// shrinks with the view, the same in pixels.
 pub fn camera_distance(scale: f32) -> f32 {
-    CAMERA_DISTANCE.max(scale * DEPTH_PX)
+    (scale * (CAMERA_DISTANCE / DEFAULT_SCALE))
+        .min(CAMERA_DISTANCE)
+        .max(scale * DEPTH_PX)
 }
 
 /// The orthographic far plane at `scale`: the focus in the middle of the depth range.
@@ -990,11 +997,25 @@ mod tests {
     }
 
     /// Zoomed out over a site 60 m across, the whole of it stays between the near and far
-    /// planes; close views keep the fixed range.
+    /// planes; the default zoom keeps the fixed range, and closer views a range as many pixels
+    /// deep (so a part 0.15 mm across, an STL in metres, neither shakes nor shows through).
     #[test]
     fn the_depth_range_grows_with_the_view() {
         assert_eq!(camera_distance(DEFAULT_SCALE), CAMERA_DISTANCE);
         assert_eq!(camera_far(DEFAULT_SCALE), CAMERA_FAR);
+        assert_eq!(camera_distance(1.0), CAMERA_DISTANCE);
+        let tiny = DEFAULT_SCALE / 1000.0;
+        assert!((camera_distance(tiny) - CAMERA_DISTANCE / 1000.0).abs() < 1e-3);
+        // The eye's f32 position rounds by well under a pixel.
+        let v = ViewState {
+            scale: tiny,
+            azimuth: 37.0,
+            elevation: 23.0,
+            ..ViewState::default()
+        };
+        let eye = v.camera_position();
+        let step = eye.abs().max_element() * f32::EPSILON;
+        assert!(step / tiny < 0.01, "{} px", step / tiny);
         // 60 m on a 1500 px viewport: 40 mm per pixel.
         let v = ViewState {
             scale: 40.0,
