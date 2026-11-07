@@ -1478,7 +1478,17 @@ fn mesh_face_split(
     // metric (the radius each way) is far off on part of them, as on a cap round a sphere's
     // pole, where a step in u is cos v as long: triangles spaced by it come out long round the
     // pole and sag below it (the planes, cylinders and cones keep theirs).
-    let scale = f.surf.metric();
+    // (A cone's metric is its radius where v = 0, its apex for a cone drawn from it: over the
+    // face, its widest radius there, else the grid's steps round it shrink a thousandfold.)
+    let scale = match &f.surf {
+        Surface::Cone { r, a, .. } => {
+            let w = (r + vbox.0 * a.sin())
+                .abs()
+                .max((r + vbox.1 * a.sin()).abs());
+            (w.max(1e-3), 1.0)
+        }
+        s => s.metric(),
+    };
     let scale = if matches!(
         f.surf,
         Surface::Nurbs(_)

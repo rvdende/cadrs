@@ -847,3 +847,34 @@ fn a_steinmetz_solid_is_bounded_by_ellipses() {
             .collect::<Vec<_>>()
     );
 }
+
+/// A cone's frustum far from its apex (tangent/cone-tip-on-face's, its cone drawn from the apex):
+/// meshed in a few hundred triangles, not tens of thousands (its metric was the radius at the
+/// apex, 0).
+#[test]
+fn a_frustum_far_from_its_apex_meshes_coarsely() {
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let cone = k
+        .primitive(&Primitive::Cone {
+            base: p3(0.0, 0.0, 0.0),
+            axis: z,
+            base_radius: 0.0,
+            top_radius: 5.0,
+            height: 15.0,
+        })
+        .unwrap()
+        .bodies[0];
+    let below = block(&mut k, p3(-6.0, -6.0, -1.0), p3(6.0, 6.0, 10.0));
+    let frustum = k.boolean(BoolOp::Subtract, cone, &[below]).unwrap().bodies[0];
+    let m = k
+        .tessellate(
+            frustum,
+            Tessellation {
+                deflection: 0.032,
+                angle: 15f64.to_radians(),
+            },
+        )
+        .unwrap();
+    assert!(m.indices.len() < 2000, "{} triangles", m.indices.len());
+}
