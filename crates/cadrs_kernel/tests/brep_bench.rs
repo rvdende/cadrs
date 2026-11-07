@@ -1112,3 +1112,118 @@ fn balls_apart_cut_at_once() {
         );
     }
 }
+
+/// A block whose top is a rational B-spline barrel vault (exactly a cylinder of radius 15
+/// about y = 0, z = 1), cut by a box whose floor touches the vault along its crown: the
+/// B-spline, an extrusion along x, meets the box's floor in one ruling it only touches, so the
+/// cut takes nothing.
+#[test]
+fn a_vault_cut_by_the_plane_along_its_crown() {
+    use cadrs_kernel::native::nurbs::{H, NurbsSurface};
+    use cadrs_kernel::native::surface::Surface;
+    let mut k = NativeKernel::new();
+    let b = block(&mut k, p3(-12.0, -12.0, 0.0), p3(12.0, 12.0, 10.0));
+    let top = face_at(&k, b, p3(0.0, 0.0, 10.0));
+    let row = |x: f64| {
+        [(-12.0, 10.0, 1.0), (0.0, 26.0, 0.6), (12.0, 10.0, 1.0)]
+            .map(|(y, z, w)| H::new(x * w, y * w, z * w, w))
+            .to_vec()
+    };
+    let vault = NurbsSurface::new(
+        1,
+        2,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![row(-12.0), row(12.0)],
+    )
+    .unwrap();
+    let domed = k
+        .replace_faces(
+            b,
+            &[FaceReplacement {
+                face: top,
+                surface: Surface::Nurbs(std::sync::Arc::new(vault)),
+                domain: Some(((0.0, 1.0), (0.0, 1.0))),
+            }],
+        )
+        .unwrap()
+        .bodies[0];
+    let lid = block(&mut k, p3(-20.0, -20.0, 16.0), p3(20.0, 20.0, 30.0));
+    let cut = k.boolean(BoolOp::Subtract, domed, &[lid]).unwrap().bodies[0];
+    // The block to z = 10 and the arch's segment above it: the circular segment of radius 15
+    // whose chord, 24 long, lies 9 below its centre.
+    let (r, h): (f64, f64) = (15.0, 9.0);
+    let half = (h / r).acos();
+    let segment = r * r * half - h * (r * r - h * h).sqrt();
+    let want = 24.0 * 24.0 * 10.0 + 24.0 * segment;
+    let (v0, v1) = (
+        k.mass_properties(domed).unwrap().volume,
+        k.mass_properties(cut).unwrap().volume,
+    );
+    assert!((v0 - want).abs() < 1e-9 * want, "{v0} against {want}");
+    assert!((v1 - want).abs() < 1e-9 * want, "{v1} after the cut");
+    assert!(k.get(cut).unwrap().check().is_empty());
+}
+
+/// A torus less a ball as wide as its tube, centred on its core circle: the ball lies in the
+/// tube, touching its wall along the meridian circle through its centre only, so the cut takes
+/// the ball's volume and leaves a cavity.
+#[test]
+fn a_ball_in_a_torus_tube() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let x = Unit::new_normalize(V3::x());
+    let (major, minor) = (12.0, 3.0);
+    let ring = k
+        .primitive(&Primitive::Torus {
+            center: p3(0.0, 0.0, 0.0),
+            axis: z,
+            major,
+            minor,
+        })
+        .unwrap()
+        .bodies[0];
+    let ball = k
+        .primitive(&Primitive::Sphere {
+            center: p3(major, 0.0, 0.0),
+            radius: minor - 1e-3,
+            axis: z,
+            seam: x,
+        })
+        .unwrap()
+        .bodies[0];
+    let cut = k.boolean(BoolOp::Subtract, ring, &[ball]).unwrap().bodies[0];
+    // A ball the tube's width only touches it: no crossing, the meridian circle one of touch.
+    {
+        use cadrs_kernel::native::math::{Bbox, Frame};
+        use cadrs_kernel::native::surface::Surface;
+        let ball = Surface::Sphere {
+            f: Frame::from_z(p3(major, 0.0, 0.0), V3::z()),
+            r: minor,
+        };
+        let tube = Surface::Torus {
+            f: Frame::world(),
+            rmaj: major,
+            rmin: minor,
+        };
+        let mut bb = Bbox::empty();
+        bb.add(&p3(-16.0, -16.0, -4.0));
+        bb.add(&p3(16.0, 16.0, 4.0));
+        let full = ((0.0, 2.0 * PI), (-PI / 2.0, PI / 2.0));
+        let ssi = cadrs_kernel::native::ssi::surface_surface_full(
+            &ball,
+            full,
+            &tube,
+            ((0.0, 2.0 * PI), (0.0, 2.0 * PI)),
+            &bb,
+        );
+        assert!(ssi.curves.is_empty(), "{} crossings", ssi.curves.len());
+        assert_eq!(ssi.tangent.len(), 1);
+    }
+    let r = minor - 1e-3;
+    let want = 2.0 * PI * PI * major * minor * minor - 4.0 / 3.0 * PI * r * r * r;
+    let v = k.mass_properties(cut).unwrap().volume;
+    assert!((v - want).abs() < 1e-9 * want, "{v} against {want}");
+    assert!(k.get(cut).unwrap().check().is_empty());
+}

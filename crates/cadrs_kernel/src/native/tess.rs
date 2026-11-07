@@ -234,7 +234,7 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
                     vec![body.verts[e.v[0]].p, body.verts[e.v[1]].p],
                 );
             }
-            let ts = e.curve.sample_params(e.t[0], e.t[1], p.chord, p.ang());
+            let ts = e.curve.mesh_params(e.t[0], e.t[1], p.chord, p.ang());
             let ts = refine_polyline(|t| e.point(t), &ts, p);
             let ts = refine_by_faces(|t| e.point(t), &ts, &sides[ei], p);
             let mut pts: Vec<P3> = ts.iter().map(|&t| e.point(t)).collect();
@@ -1503,6 +1503,25 @@ fn mesh_face_split(
     };
     let pts_uv: Vec<P2> = pts.iter().map(|b| b.uv).collect();
     let grid = seed_grid(&dom, &pts_uv, &loops, ubox, vbox, scale, p);
+    // The triangulation's coordinates: the lengths scaled so the grid's cells are square (up to
+    // eight to one), where the surface bends far more one way than the other (round a tube,
+    // not along it). Delaunay of cells five times longer than wide joined points two and three
+    // columns apart, whose normals turned past the angle: the refinement then split them until
+    // the triangles were as short along as round (a helical pipe's faces 8 000 triangles each).
+    let scale = {
+        let (hu, hv) = steps(&dom, ubox, vbox, p.chord, p.ang());
+        let (cu, cv) = (hu * scale.0, hv * scale.1);
+        if cu.is_finite() && cv.is_finite() && cu > 0.0 && cv > 0.0 {
+            let r = (cv / cu).clamp(1.0 / 8.0, 8.0);
+            if r > 1.0 {
+                (scale.0, scale.1 / r)
+            } else {
+                (scale.0 * r, scale.1)
+            }
+        } else {
+            scale
+        }
+    };
     if prof {
         eprintln!(
             "tess face: boundary {nb}, grid {} in {:?}, scale {scale:?}, box {ubox:?} {vbox:?}",
