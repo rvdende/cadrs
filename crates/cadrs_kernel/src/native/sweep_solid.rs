@@ -226,11 +226,16 @@ impl Revolved {
 
 /// The greatest of f over [lo, hi] near a sampled best, by golden-section search.
 fn golden_max(f: &dyn Fn(f64) -> f64, lo: f64, hi: f64) -> (f64, f64) {
+    golden_max_in(f, lo, hi, 90)
+}
+
+/// [`golden_max`] in `steps` steps.
+fn golden_max_in(f: &dyn Fn(f64) -> f64, lo: f64, hi: f64, steps: usize) -> (f64, f64) {
     let g = (5f64.sqrt() - 1.0) / 2.0;
     let (mut lo, mut hi) = (lo, hi);
     let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
     let (mut f1, mut f2) = (f(x1), f(x2));
-    for _ in 0..90 {
+    for _ in 0..steps {
         if f1 < f2 {
             lo = x1;
             x1 = x2;
@@ -259,6 +264,9 @@ struct Slicer<'a> {
     z: V3,
     /// Radians the screw turns per unit of height (0 for a turn).
     k: f64,
+    /// Two directions square to the axis and each other, from which a screw's angles count.
+    x: V3,
+    y: V3,
 }
 
 impl Slicer<'_> {
@@ -278,9 +286,7 @@ impl Slicer<'_> {
             return self.height(p);
         }
         let w = p - self.origin;
-        let x = any_perpendicular(&self.z);
-        let y = self.z.cross(&x);
-        let a = w.dot(&y).atan2(w.dot(&x)) - self.k * w.dot(&self.z);
+        let a = w.dot(&self.y).atan2(w.dot(&self.x)) - self.k * w.dot(&self.z);
         a + ((near - a) / TAU).round() * TAU
     }
 
@@ -335,15 +341,36 @@ impl Slicer<'_> {
             let s1 = i as f64 / n as f64;
             let cur = f(s1);
             if (prev <= 0.0) != (cur <= 0.0) && (cur - prev).abs() < PI {
-                let (mut lo, mut hi, mut flo) = ((i - 1) as f64 / n as f64, s1, prev);
+                // (False position, Illinois: the end kept twice running has its value halved.)
+                let (mut lo, mut hi, mut flo, mut fhi) = ((i - 1) as f64 / n as f64, s1, prev, cur);
+                let mut side = 0i8;
                 for _ in 0..60 {
-                    let m = 0.5 * (lo + hi);
+                    let m = lo + (hi - lo) * flo / (flo - fhi);
                     let fm = f(m);
+                    if fm == 0.0 || hi - lo <= 1e-15 {
+                        lo = m;
+                        hi = m;
+                        break;
+                    }
                     if (fm <= 0.0) == (flo <= 0.0) {
                         lo = m;
                         flo = fm;
+                        if side == -1 {
+                            fhi *= 0.5;
+                        }
+                        side = -1;
                     } else {
                         hi = m;
+                        fhi = fm;
+                        if side == 1 {
+                            flo *= 0.5;
+                        }
+                        side = 1;
+                    }
+                    if fm.abs() < 1e-15 {
+                        lo = m;
+                        hi = m;
+                        break;
                     }
                 }
                 out.push(0.5 * (lo + hi));
@@ -382,7 +409,12 @@ impl Slicer<'_> {
             try_at(seed + h * 2.0 * i as f64 / 16.0, &mut best);
         }
         let (w0, v0) = best?;
-        let (w, v) = golden_max(&|w| best_at(w).unwrap_or(f64::NEG_INFINITY), w0 - h, w0 + h);
+        let (w, v) = golden_max_in(
+            &|w| best_at(w).unwrap_or(f64::NEG_INFINITY),
+            w0 - h,
+            w0 + h,
+            40,
+        );
         Some(if v > v0 {
             (sign * v, w)
         } else {
@@ -428,9 +460,13 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         out.push(b);
         Some(out)
     };
+    let (far, near) = rayon::join(
+        || side(true, lo_far, hi_far),
+        || side(false, lo_near, hi_near),
+    );
     Some(Outline {
-        far: side(true, lo_far, hi_far)?,
-        near: side(false, lo_near, hi_near)?,
+        far: far?,
+        near: near?,
     })
 }
 
@@ -519,6 +555,8 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
         origin: axis.origin,
         z,
         k: kk,
+        x: any_perpendicular(&z),
+        y: z.cross(&any_perpendicular(&z)),
     };
     // The body's centre's key, about which a screw's keys are unwrapped.
     let near = sl.key(&rev.o, 0.0);
@@ -824,63 +862,141 @@ fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
     (r, d)
 }
 
+/// How far (in grid steps) the rigid sweep's mesh may move from the planes of the triangles
+/// marching tetrahedra made.
+const DECIMATE: f64 = 0.02;
+
 /// [`crate::Kernel::sweep_solid`] for a rigid motion: the region some instant of the body holds,
 /// meshed by marching tetrahedra and made solid.
 fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) -> Result<OpResult> {
     use rayon::prelude::*;
-    // The places sampled, inverse (world to body).
+    let prof = std::env::var("CADRS_PROFILE").is_ok();
+    let t0 = web_time::Instant::now();
+    // The places sampled, and their inverses (world to body: x ↦ R x − e).
     let nt = 160;
     let places: Vec<(nalgebra::Rotation3<f64>, V3)> = (0..=nt)
         .map(|i| rigid_at(steps, i as f64 / nt as f64))
         .collect();
-    // How deep x lies in the body's places: the best sampled instant refined by golden-section
-    // search about it.
-    let depth = |x: &P3| -> f64 {
-        let f = |t: f64| {
-            let (r, d) = rigid_at(steps, t);
-            -rev.distance(&P3::from(r.inverse() * (x.coords - d)))
-        };
-        let mut best = (f64::NEG_INFINITY, 0usize);
-        for (i, (r, d)) in places.iter().enumerate() {
-            let v = -rev.distance(&P3::from(r.inverse() * (x.coords - d)));
-            if v > best.0 {
-                best = (v, i);
-            }
-        }
-        let h = 1.0 / nt as f64;
-        let c = best.1 as f64 * h;
-        let (_, v) = golden_max(&f, (c - h).max(0.0), (c + h).min(1.0));
-        v.max(best.0)
-    };
-    // The grid over the places' boxes.
+    let inverse: Vec<(nalgebra::Rotation3<f64>, V3)> = places
+        .iter()
+        .map(|(r, d)| {
+            let ri = r.inverse();
+            (ri, ri * d)
+        })
+        .collect();
+    // The grid over the places' boxes, its sides a multiple of eight steps.
     let bb0 = b.bbox();
+    let corners = |bb: &Bbox| -> [P3; 8] {
+        std::array::from_fn(|i| {
+            P3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            )
+        })
+    };
     let mut bb = Bbox::empty();
     for (r, d) in &places {
-        for i in 0..8 {
-            let c = P3::new(
-                if i & 1 == 0 { bb0.min.x } else { bb0.max.x },
-                if i & 2 == 0 { bb0.min.y } else { bb0.max.y },
-                if i & 4 == 0 { bb0.min.z } else { bb0.max.z },
-            );
+        for c in corners(&bb0) {
             bb.add(&P3::from(r * c.coords + d));
         }
     }
     let ext = bb.max - bb.min;
     let h = ext.max() / 100.0;
     let lo = bb.min - V3::repeat(2.0 * h);
-    let n = [0, 1, 2].map(|i| ((ext[i] + 4.0 * h) / h).ceil() as usize + 1);
+    let n = [0, 1, 2].map(|i| 8 * ((ext[i] + 4.0 * h) / h / 8.0).ceil() as usize + 1);
     let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
     let idx = |i: usize, j: usize, l: usize| (l * n[1] + j) * n[0] + i;
-    let field: Vec<f64> = (0..n[0] * n[1] * n[2])
-        .into_par_iter()
-        .map(|g| {
-            let (i, j, l) = (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
-            depth(&at(i, j, l))
-        })
-        .collect();
-    // Marching tetrahedra: each cube cut into six about its main diagonal; a vertex on each
-    // grid edge where the depth changes sign, placed where it is 0 along the edge (secant
-    // steps), shared by the cubes about it.
+    let ijl = |g: usize| (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
+    // How far a grid point's place in the body moves between samples, at most (its map is
+    // affine, so at a corner of the grid's box), over two: what the samples' best can miss.
+    let mut gb = Bbox::empty();
+    gb.add(&lo);
+    gb.add(&at(n[0] - 1, n[1] - 1, n[2] - 1));
+    let mut miss = 0.0f64;
+    for w in inverse.windows(2) {
+        for c in corners(&gb) {
+            miss = miss.max(((w[0].0 * c.coords - w[0].1) - (w[1].0 * c.coords - w[1].1)).norm());
+        }
+    }
+    let miss = 0.6 * miss;
+    // How deep x lies in the body's places (its signed distance from the region, positive
+    // inside): the best sampled instant, refined by golden-section search about it near the
+    // boundary. Far from it the value is a bound: of the right sign and no deeper than the
+    // point lies.
+    let depth = |x: &P3| -> f64 {
+        let mut best = (f64::NEG_INFINITY, 0usize);
+        for (i, (r, e)) in inverse.iter().enumerate() {
+            let v = -rev.distance(&P3::from(r * x.coords - e));
+            if v > best.0 {
+                best = (v, i);
+            }
+        }
+        if best.0 >= 2.0 * h {
+            return best.0;
+        }
+        if best.0 <= -miss - 2.0 * h {
+            return best.0 + miss;
+        }
+        let f = |t: f64| {
+            let (r, d) = rigid_at(steps, t);
+            -rev.distance(&P3::from(r.inverse() * (x.coords - d)))
+        };
+        let dt = 1.0 / nt as f64;
+        let c = best.1 as f64 * dt;
+        let (_, v) = golden_max_in(&f, (c - dt).max(0.0), (c + dt).min(1.0), 24);
+        v.max(best.0)
+    };
+    // The depth from coarse to fine (steps of 8, 4, 2 and 1): a point whose nearest coarser
+    // node lies deeper (or farther out) than their distance and a step more takes its sign
+    // from it (the depth changes no faster than the distance), so the depth is found only near
+    // the boundary, and every grid edge it crosses has its ends' found.
+    let mut field = vec![f64::NAN; n[0] * n[1] * n[2]];
+    for k in (0..=3).rev() {
+        let s = 1usize << k;
+        let mut pts: Vec<usize> = Vec::new();
+        for l in (0..n[2]).step_by(s) {
+            for j in (0..n[1]).step_by(s) {
+                for i in (0..n[0]).step_by(s) {
+                    let g = idx(i, j, l);
+                    if field[g].is_nan() {
+                        pts.push(g);
+                    }
+                }
+            }
+        }
+        let field_ref = &field;
+        let vals: Vec<f64> = pts
+            .par_iter()
+            .map(|&g| {
+                let (i, j, l) = ijl(g);
+                if k < 3 {
+                    let up = |x: usize| (x + s) / (2 * s) * 2 * s;
+                    let (ci, cj, cl) = (up(i), up(j), up(l));
+                    let v = field_ref[idx(ci, cj, cl)];
+                    let gap = |a: usize, c: usize| (a as f64 - c as f64).powi(2);
+                    let dist = h * (gap(i, ci) + gap(j, cj) + gap(l, cl)).sqrt();
+                    if v.abs() - dist > 1.05 * h {
+                        return v.signum() * (v.abs() - dist);
+                    }
+                }
+                depth(&at(i, j, l))
+            })
+            .collect();
+        for (&g, v) in pts.iter().zip(vals) {
+            field[g] = v;
+        }
+    }
+    if prof {
+        eprintln!(
+            "rigid sweep: field of {:?} in {:.0} ms",
+            n,
+            t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    // Marching tetrahedra: each cube cut into six about its main diagonal (so neighbouring
+    // cubes cut their shared face alike); a vertex on each grid edge where the depth changes
+    // sign, shared by the tetrahedra about it; triangles turned from the inside corners out.
     let tets: [[usize; 4]; 6] = [
         [0, 1, 3, 7],
         [0, 3, 2, 7],
@@ -890,38 +1006,53 @@ fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) ->
         [0, 5, 1, 7],
     ];
     let corner = |c: usize| (c & 1, (c >> 1) & 1, (c >> 2) & 1);
-    let mut verts: std::collections::HashMap<(usize, usize), P3> = std::collections::HashMap::new();
+    let pos = |g: usize| {
+        let (i, j, l) = ijl(g);
+        at(i, j, l)
+    };
+    // Each triangle by its corners' grid edges (inside end, outside end).
     let mut tris: Vec<[(usize, usize); 3]> = Vec::new();
+    let mut emit = |t: [(usize, usize); 3]| {
+        // (Its normal, from the edges' middles, points from inside to outside.)
+        let m = t.map(|(a, b)| P3::from((pos(a).coords + pos(b).coords) * 0.5));
+        let normal = (m[1] - m[0]).cross(&(m[2] - m[0]));
+        let (a, b) = t[0];
+        tris.push(if normal.dot(&(pos(b) - pos(a))) >= 0.0 {
+            t
+        } else {
+            [t[0], t[2], t[1]]
+        });
+    };
     for l in 0..n[2] - 1 {
         for j in 0..n[1] - 1 {
             for i in 0..n[0] - 1 {
-                let g: Vec<usize> = (0..8)
-                    .map(|c| {
-                        let (a, b2, e) = corner(c);
-                        idx(i + a, j + b2, l + e)
-                    })
-                    .collect();
+                let g: [usize; 8] = std::array::from_fn(|c| {
+                    let (a, b2, e) = corner(c);
+                    idx(i + a, j + b2, l + e)
+                });
+                let inside = g.iter().filter(|&&q| field[q] > 0.0).count();
+                if inside == 0 || inside == 8 {
+                    continue;
+                }
                 for t in &tets {
-                    let ids = t.map(|c| g[c]);
-                    let ins: Vec<usize> = (0..4).filter(|&q| field[ids[q]] > 0.0).collect();
-                    let outs: Vec<usize> = (0..4).filter(|&q| field[ids[q]] <= 0.0).collect();
-                    let e = |a: usize, b2: usize| {
-                        let (x, y) = (ids[a], ids[b2]);
-                        (x.min(y), x.max(y))
-                    };
-                    // Triangles with their corners' edges (in, out), turned outward later.
-                    match (ins.len(), outs.len()) {
-                        (1, 3) => {
-                            tris.push([e(ins[0], outs[0]), e(ins[0], outs[1]), e(ins[0], outs[2])])
+                    let (mut ins, mut outs) = ([0usize; 4], [0usize; 4]);
+                    let (mut ni, mut no) = (0, 0);
+                    for &c in t {
+                        if field[g[c]] > 0.0 {
+                            ins[ni] = g[c];
+                            ni += 1;
+                        } else {
+                            outs[no] = g[c];
+                            no += 1;
                         }
-                        (3, 1) => {
-                            tris.push([e(outs[0], ins[0]), e(outs[0], ins[1]), e(outs[0], ins[2])])
-                        }
+                    }
+                    match (ni, no) {
+                        (1, 3) => emit([(ins[0], outs[0]), (ins[0], outs[1]), (ins[0], outs[2])]),
+                        (3, 1) => emit([(ins[0], outs[0]), (ins[1], outs[0]), (ins[2], outs[0])]),
                         (2, 2) => {
-                            let (a, b2) = (ins[0], ins[1]);
-                            let (c, d) = (outs[0], outs[1]);
-                            tris.push([e(a, c), e(a, d), e(b2, d)]);
-                            tris.push([e(a, c), e(b2, d), e(b2, c)]);
+                            let (a, b2, c, d) = (ins[0], ins[1], outs[0], outs[1]);
+                            emit([(a, c), (a, d), (b2, d)]);
+                            emit([(a, c), (b2, d), (b2, c)]);
                         }
                         _ => {}
                     }
@@ -929,66 +1060,89 @@ fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) ->
             }
         }
     }
-    let pos = |g: usize| {
-        let (i, j, l) = (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
-        at(i, j, l)
-    };
+    if prof {
+        eprintln!(
+            "rigid sweep: marched in {:.0} ms",
+            t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    let key = |(a, b): (usize, usize)| (a.min(b), a.max(b));
     let keys: Vec<(usize, usize)> = {
-        let mut ks: Vec<(usize, usize)> = tris.iter().flatten().copied().collect();
+        let mut ks: Vec<(usize, usize)> = tris.iter().flatten().map(|&e| key(e)).collect();
         ks.sort_unstable();
         ks.dedup();
         ks
     };
-    let placed: Vec<((usize, usize), P3)> = keys
+    // Each vertex where the depth is 0 along its edge (false position, Illinois: the end kept
+    // twice running has its value halved).
+    let placed: Vec<P3> = keys
         .par_iter()
         .map(|&(a, b2)| {
             let (pa, pb) = (pos(a), pos(b2));
             let (mut fa, mut fb) = (field[a], field[b2]);
             let (mut xa, mut xb) = (0.0f64, 1.0f64);
             let mut x = fa / (fa - fb);
-            for _ in 0..6 {
+            let mut side = 0i8;
+            for _ in 0..12 {
                 let fx = depth(&(pa + (pb - pa) * x));
-                if fx.abs() < 1e-12 * h {
+                if fx.abs() < 1e-6 * h {
                     break;
                 }
                 if (fx > 0.0) == (fa > 0.0) {
                     xa = x;
                     fa = fx;
+                    if side == -1 {
+                        fb *= 0.5;
+                    }
+                    side = -1;
                 } else {
                     xb = x;
                     fb = fx;
+                    if side == 1 {
+                        fa *= 0.5;
+                    }
+                    side = 1;
                 }
                 x = xa + (xb - xa) * fa / (fa - fb);
             }
-            ((a, b2), pa + (pb - pa) * x)
+            pa + (pb - pa) * x
         })
         .collect();
-    verts.extend(placed);
-    // Each triangle turned so its normal points out (from the inside corner of its edges).
-    let mut out: Vec<[P3; 3]> = Vec::with_capacity(tris.len());
-    for t in &tris {
-        let p = t.map(|e| verts[&e]);
-        let normal = (p[1] - p[0]).cross(&(p[2] - p[0]));
-        if normal.norm() < 1e-14 * h * h {
-            continue;
-        }
-        // The edge's inside end: its field is positive.
-        let (a, b2) = t[0];
-        let inside_end = if field[a] > 0.0 { pos(a) } else { pos(b2) };
-        let c = P3::from((p[0].coords + p[1].coords + p[2].coords) / 3.0);
-        out.push(if normal.dot(&(c - inside_end)) >= 0.0 {
-            p
-        } else {
-            [p[0], p[2], p[1]]
-        });
+    let mesh: Vec<[u32; 3]> = tris
+        .par_iter()
+        .map(|t| t.map(|e| keys.binary_search(&key(e)).unwrap_or(0) as u32))
+        .collect();
+    if prof {
+        eprintln!(
+            "rigid sweep: {} triangles in {:.0} ms",
+            mesh.len(),
+            t0.elapsed().as_secs_f64() * 1e3
+        );
     }
+    // Coarser where the grid made more triangles than the surface needs (within `DECIMATE`
+    // steps of the planes they replace).
+    let (pts, mesh) = super::decimate::decimate(&placed, &mesh, DECIMATE * h);
+    let out: Vec<[P3; 3]> = mesh.iter().map(|t| t.map(|i| pts[i as usize])).collect();
     if out.is_empty() {
         return Err(KernelError::InvalidResult {
             op: "solid sweep",
             why: "the motion fills nothing".into(),
         });
     }
+    if prof {
+        eprintln!(
+            "rigid sweep: {} triangles kept in {:.0} ms",
+            out.len(),
+            t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let id = k.mesh_solid(&out, 1e-9 * h.max(1.0))?;
+    if prof {
+        eprintln!(
+            "rigid sweep: solid in {:.0} ms",
+            t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
     Ok(OpResult {
         bodies: vec![id],
         history: History::default(),

@@ -117,6 +117,11 @@ pub mod curve_split;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod curve_split;
 #[cfg(feature = "testkit")]
+pub mod decimate;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod decimate;
+#[cfg(feature = "testkit")]
 pub mod distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]

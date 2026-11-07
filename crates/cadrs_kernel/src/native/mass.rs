@@ -763,8 +763,9 @@ fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
     }
     let plan = Inner::of::<ALL>(&f.surf);
     let v_periodic = f.surf.v_periodic() || matches!(f.surf, Surface::Sphere { .. });
-    // B-spline faces gather their inner integrals as jobs (run on the GPU when there are many).
-    let mut jobs: Option<Vec<[f64; 4]>> = matches!(f.surf, Surface::Nurbs(_)).then(Vec::new);
+    // The inner integrals gathered as jobs (shared across the cores when there are many; a
+    // B-spline face's run on the GPU when it is on).
+    let mut jobs: Option<Vec<[f64; 4]>> = Some(Vec::new());
     for l in &f.loops {
         for c in l {
             let e = &body.edges[c.edge];
@@ -960,6 +961,28 @@ fn run_jobs<const ALL: bool>(
         };
         for r in gpu.quad_inner(q, &ctrl, &ns.ku, &ns.kv, &consts, jobs) {
             for (a, x) in acc.iter_mut().zip(r) {
+                *a += x;
+            }
+        }
+        return;
+    }
+    // (Many in chunks across the cores, the chunks' sums added in order: the same sum however
+    // they are shared out.)
+    const CHUNK: usize = 32;
+    if jobs.len() >= 2 * CHUNK {
+        let parts: Vec<QE> = jobs
+            .par_chunks(CHUNK)
+            .map(|c| {
+                let mut a = [0.0; NE];
+                let mut sc = Vec::with_capacity(64);
+                for j in c {
+                    inner::<ALL>(s, plan, j[0], j[1], j[2], shift, j[3], &mut a, &mut sc);
+                }
+                a
+            })
+            .collect();
+        for p in parts {
+            for (a, x) in acc.iter_mut().zip(p) {
                 *a += x;
             }
         }

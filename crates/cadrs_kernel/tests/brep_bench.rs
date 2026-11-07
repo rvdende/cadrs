@@ -1045,3 +1045,70 @@ fn a_torus_turned_by_a_rigid_motion() {
     assert!((v - want).abs() < 1e-2 * want, "{v} against {want}");
     assert!(k.get(s).unwrap().check().is_empty());
 }
+
+/// Balls cut from a ball at once (they are apart: united side by side, one cut) leave what they
+/// leave cut one after another: the ball less six lenses, each face from an input.
+#[test]
+fn balls_apart_cut_at_once() {
+    use std::f64::consts::PI;
+    let mut k = NativeKernel::new();
+    let z = Unit::new_normalize(V3::z());
+    let x = Unit::new_normalize(V3::x());
+    let ball_at = |k: &mut NativeKernel, c: P3, r: f64| {
+        k.primitive(&Primitive::Sphere {
+            center: c,
+            radius: r,
+            axis: z,
+            seam: x,
+        })
+        .unwrap()
+        .bodies[0]
+    };
+    let (big, small, d) = (10.0, 1.2, 10.6);
+    let golf = ball_at(&mut k, p3(0.0, 0.0, 0.0), big);
+    let dirs = [V3::x(), -V3::x(), V3::y(), -V3::y(), V3::z(), -V3::z()];
+    let tools: Vec<BodyId> = dirs
+        .iter()
+        .map(|v| ball_at(&mut k, P3::from(v * d), small))
+        .collect();
+    let at_once = k.boolean(BoolOp::Subtract, golf, &tools).unwrap();
+    let mut one_by_one = golf;
+    for &t in &tools {
+        one_by_one = k
+            .boolean(BoolOp::Subtract, one_by_one, &[t])
+            .unwrap()
+            .bodies[0];
+    }
+    // Two balls' lens: π (R + r − d)² (d² + 2dr − 3r² + 2dR + 6rR − 3R²) / 12d.
+    let lens = PI
+        * (big + small - d).powi(2)
+        * (d * d + 2.0 * d * small - 3.0 * small * small + 2.0 * d * big + 6.0 * small * big
+            - 3.0 * big * big)
+        / (12.0 * d);
+    let want = 4.0 / 3.0 * PI * big.powi(3) - 6.0 * lens;
+    let body = at_once.bodies[0];
+    let (v, v1) = (
+        k.mass_properties(body).unwrap().volume,
+        k.mass_properties(one_by_one).unwrap().volume,
+    );
+    assert!((v - want).abs() < 1e-9 * want, "{v} against {want}");
+    assert!((v - v1).abs() < 1e-9 * want, "{v} at once, {v1} one by one");
+    let b = k.get(body).unwrap();
+    assert_eq!(b.faces.len(), k.get(one_by_one).unwrap().faces.len());
+    assert!(b.check().is_empty());
+    let mut inputs = vec![golf];
+    inputs.extend(&tools);
+    for f in 0..b.faces.len() {
+        let from: Vec<&InputFace> = at_once
+            .history
+            .modified
+            .iter()
+            .filter(|(o, _)| o.0 == f as u64)
+            .map(|(_, i)| i)
+            .collect();
+        assert!(
+            !from.is_empty() && from.iter().all(|i| inputs.contains(&i.body)),
+            "face {f} from {from:?}"
+        );
+    }
+}

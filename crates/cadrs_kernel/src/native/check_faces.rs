@@ -24,6 +24,7 @@ use super::bvh::Bvh;
 use super::classify::{
     InFace, PolyBoxes, face_polygons, in_face_boxed, periodic_candidates_boxed, poly_boxes,
 };
+use super::curve::Curve;
 use super::math::*;
 use super::surface::Surface;
 use super::tol;
@@ -296,6 +297,20 @@ fn crossing(
             {
                 continue;
             }
+            // (A segment and a plane: where its ends' offsets from the plane change sign.)
+            if let (Curve::Line { o, d }, Surface::Plane { f }) = (&e.curve, &fy.surf) {
+                let n = f.x.cross(&f.y);
+                let off = |t: f64| n.dot(&(o + d * t - f.o));
+                let (d0, d1) = (off(e.t[0]), off(e.t[1]));
+                if !(d0 * d1 <= 0.0) || d0 == d1 {
+                    continue;
+                }
+                let t = e.t[0] + (e.t[1] - e.t[0]) * d0 / (d0 - d1);
+                if let Some(p) = pierces(b, polys(y), y, c.edge, t, &region, margin) {
+                    return Some(p);
+                }
+                continue;
+            }
             let Some((t0, t1)) = near_stretch(e, &region, &fy.surf) else {
                 continue;
             };
@@ -323,20 +338,7 @@ fn crossing(
                 })
             };
             for t in roots {
-                let p = e.point(t);
-                // (An edge ending on the other face touches it there, as where a wall ends
-                // on a face it doesn't split: a crossing pierces the face with the edge's
-                // middle.)
-                let at_end =
-                    e.v.iter()
-                        .any(|&v| (b.verts[v].p - p).norm() <= margin + b.verts[v].tol);
-                if at_end || !region.contains(&p) || !inside(b, polys(y), y, &p, margin) {
-                    continue;
-                }
-                // Crossing the surface, not touching it.
-                let (u, v) = fy.surf.project(&p, None);
-                let (n, d) = (fy.surf.normal(u, v), e.curve.tangent(t));
-                if n.dot(&d).abs() > 1e-3 * n.norm() * d.norm() {
+                if let Some(p) = pierces(b, polys(y), y, c.edge, t, &region, margin) {
                     return Some(p);
                 }
             }
@@ -364,6 +366,33 @@ fn crossing(
         }
     }
     None
+}
+
+/// The point at `t` on edge `ei` if it pierces face `y` there: inside the region
+/// and the face, clear of its boundary, crossing its surface, and not at the edge's end (an
+/// edge ending on the other face touches it there, as where a wall ends on a face it doesn't
+/// split: a crossing pierces the face with the edge's middle).
+fn pierces(
+    b: &Body,
+    poly: (&[Vec<P2>], &[super::classify::PolyBox]),
+    y: usize,
+    ei: usize,
+    t: f64,
+    region: &Bbox,
+    margin: f64,
+) -> Option<P3> {
+    let e = &b.edges[ei];
+    let p = e.point(t);
+    let at_end =
+        e.v.iter()
+            .any(|&v| (b.verts[v].p - p).norm() <= margin + b.verts[v].tol);
+    if at_end || !region.contains(&p) || !inside(b, poly, y, &p, margin) {
+        return None;
+    }
+    let fy = &b.faces[y];
+    let (u, v) = fy.surf.project(&p, None);
+    let (n, d) = (fy.surf.normal(u, v), e.curve.tangent(t));
+    (n.dot(&d).abs() > 1e-3 * n.norm() * d.norm()).then_some(p)
 }
 
 /// Whether `p` lies on face `fi`'s surface (within `margin`) and inside the face, farther than

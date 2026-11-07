@@ -201,6 +201,24 @@ pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
     h
 }
 
+/// The eigenvalues of a symmetric 3 × 3 matrix, least first, in closed form (Smith's: the
+/// matrix shifted by its mean eigenvalue and scaled, whose determinant gives the angle).
+fn symmetric_eigenvalues(m: &nalgebra::Matrix3<f64>) -> [f64; 3] {
+    let p1 = m[(0, 1)].powi(2) + m[(0, 2)].powi(2) + m[(1, 2)].powi(2);
+    let q = m.trace() / 3.0;
+    let p2 = (m[(0, 0)] - q).powi(2) + (m[(1, 1)] - q).powi(2) + (m[(2, 2)] - q).powi(2) + 2.0 * p1;
+    if !(p2 > 0.0) {
+        return [q; 3];
+    }
+    let p = (p2 / 6.0).sqrt();
+    let b = (m - nalgebra::Matrix3::identity() * q) / p;
+    let r = (b.determinant() / 2.0).clamp(-1.0, 1.0);
+    let phi = r.acos() / 3.0;
+    let hi = q + 2.0 * p * phi.cos();
+    let lo = q + 2.0 * p * (phi + 2.0 * PI / 3.0).cos();
+    [lo, 3.0 * q - hi - lo, hi]
+}
+
 /// The helix through points of a path (with their travel fractions), when they all lie on one
 /// within `tol` (an approximated helix: Bézier pieces through points of it). Its rise is fitted
 /// to the points `nodes` names, where the approximation meets the helix, else to them all.
@@ -225,15 +243,12 @@ fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Opti
         let d = t - mean;
         m += d * d.transpose() * w(i);
     }
-    let eig = m.symmetric_eigen();
-    let k = (0..3)
-        .min_by(|&x, &y| eig.eigenvalues[x].total_cmp(&eig.eigenvalues[y]))
-        .unwrap();
-    // The eigenvector of the least eigenvalue, from the iteration's eigenvalue (accurate) rather
-    // than its eigenvector (which the iteration settles to only a loose margin, 10⁻⁸ of a turn
-    // one build and none the next): M − λI has rank 2, and its null vector is the largest cross
+    // Its eigenvalues in closed form (not an iteration, whose result moved with the build: an
+    // axis 10⁻⁸ of a turn off one build, and a helix missed the next), and the axis the
+    // eigenvector of the least: M − λI has rank 2, and its null vector is the largest cross
     // product of two of its rows, polished by a step of inverse iteration.
-    let lam = eig.eigenvalues[k];
+    let eigen = symmetric_eigenvalues(&m);
+    let lam = eigen[0];
     let shifted = m - nalgebra::Matrix3::identity() * lam;
     let rows = [
         shifted.row(0).transpose(),
@@ -248,19 +263,15 @@ fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Opti
     .into_iter()
     .max_by(|x, y| x.norm_squared().total_cmp(&y.norm_squared()))
     .unwrap();
-    let mut a = match null.try_normalize(tol::TINY) {
-        Some(n) => {
-            // (Shifted a hair off λ, so the solve is regular; the null direction dominates.)
-            let off = (m - nalgebra::Matrix3::identity() * (lam - 1e-9 * (1.0 + m.norm())))
-                .lu()
-                .solve(&n);
-            off.and_then(|x| x.try_normalize(tol::TINY)).unwrap_or(n)
-        }
-        None => eig.eigenvectors.column(k).into_owned().normalize(),
-    };
+    let mut a = null.try_normalize(tol::TINY).map(|n| {
+        // (Shifted a hair off λ, so the solve is regular; the null direction dominates.)
+        let off = (m - nalgebra::Matrix3::identity() * (lam - 1e-9 * (1.0 + m.norm())))
+            .lu()
+            .solve(&n);
+        off.and_then(|x| x.try_normalize(tol::TINY)).unwrap_or(n)
+    })?;
     // The tangents must turn round it (not a straight line or a plane curve's single direction).
-    if eig
-        .eigenvalues
+    if eigen
         .iter()
         .filter(|e| **e > tol::REL_POINT * n as f64)
         .count()
@@ -1052,43 +1063,48 @@ fn iso_pcurve(n0: &NurbsCurve, c: &Curve, t0: f64, t1: f64, ua: f64, ub: f64, v:
         }
         u
     };
-    let u_at = |ts: &[f64]| -> Vec<f64> {
-        let n = ts.len();
-        ts.iter()
-            .enumerate()
-            .map(|(i, &t)| {
-                if i == 0 {
-                    ua
-                } else if i + 1 == n {
-                    ub
-                } else {
-                    invert(t, ua + (ub - ua) * (t - t0) / (t1 - t0))
-                }
-            })
-            .collect()
-    };
+    // The samples (t, u): the ends given, the rest inverted from a guess (the chord's at first,
+    // the fit's so far for those added), each found once.
     let mut ts: Vec<f64> = (0..=32).map(|i| t0 + (t1 - t0) * i as f64 / 32.0).collect();
-    for _ in 0..10 {
-        let us = u_at(&ts);
+    let n = ts.len();
+    let mut us: Vec<f64> = ts
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| {
+            if i == 0 {
+                ua
+            } else if i + 1 == n {
+                ub
+            } else {
+                invert(t, ua + (ub - ua) * (t - t0) / (t1 - t0))
+            }
+        })
+        .collect();
+    let fit_of = |ts: &[f64], us: &[f64]| {
         let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
-        let fit = NurbsCurve::interpolate(&pts, &ts, 3, None, None);
-        let mut ins = Vec::new();
+        NurbsCurve::interpolate(&pts, ts, 3, None, None)
+    };
+    for _ in 0..10 {
+        let fit = fit_of(&ts, &us);
+        let mut ins: Vec<(f64, f64)> = Vec::new();
         for k in 0..ts.len() - 1 {
             let tm = 0.5 * (ts[k] + ts[k + 1]);
             let q = fit.point(tm);
             if (n0.point(q.x) - c.point(tm)).norm()
                 > tol::REL_FINE * (1.0 + c.point(tm).coords.norm())
             {
-                ins.push(tm);
+                ins.push((tm, invert(tm, q.x)));
             }
         }
         if ins.is_empty() || ts.len() > 4096 {
             return Curve::Nurbs(Arc::new(fit));
         }
-        ts.extend(ins);
-        ts.sort_by(f64::total_cmp);
+        let mut both: Vec<(f64, f64)> = ts.iter().copied().zip(us.iter().copied()).collect();
+        both.extend(ins);
+        both.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ts = both.iter().map(|x| x.0).collect();
+        us = both.iter().map(|x| x.1).collect();
     }
-    let us = u_at(&ts);
     let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
     Curve::Nurbs(Arc::new(NurbsCurve::interpolate(&pts, &ts, 3, None, None)))
 }

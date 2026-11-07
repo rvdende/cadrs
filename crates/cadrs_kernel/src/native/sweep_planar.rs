@@ -145,9 +145,9 @@ fn pieces_of(
     let mut runs: Vec<(Vec<Q>, (f64, f64))> = Vec::new();
     let mut cur: Vec<Q> = Vec::new();
     let mut s0 = 0.0;
-    for i in 0..=n {
+    for (i, flag) in flags.iter().enumerate() {
         let si = i as f64 / n as f64;
-        match flags[i] {
+        match *flag {
             Some(q) => {
                 if cur.is_empty() {
                     s0 = si;
@@ -303,18 +303,35 @@ pub fn sweep_planar(
     // instants nearest to holding it (within a step's travel) refined by golden-section search.
     let centre = Q::from(poly.iter().map(|q| q.coords).sum::<W>() / poly.len() as f64);
     let radius = poly.iter().map(|q| (q - centre).norm()).fold(0.0, f64::max);
+    // The instants sampled (the turn's cosine and sine, the shift), and how far a point's place
+    // on the polygon can move between two: the turn between them times its distance from the
+    // shifts, plus a shift's change.
+    let nt = 4096;
+    let inst: Vec<(f64, f64, f64, W)> = (0..=nt)
+        .map(|i| {
+            let (th, d) = m.at(i as f64 / nt as f64);
+            let (s, c) = th.sin_cos();
+            (th, c, s, d)
+        })
+        .collect();
+    let (mut turn, mut shift, mut reach) = (0.0f64, 0.0f64, 0.0f64);
+    for w in inst.windows(2) {
+        turn = turn.max((w[1].0 - w[0].0).abs());
+        shift = shift.max((w[1].3 - w[0].3).norm());
+        reach = reach.max(w[0].3.norm()).max(w[1].3.norm());
+    }
     let inside = |q: &Q| -> bool {
-        let n = 4096;
+        // (A step's travel at most: an instant farther out than three of them is followed by
+        // as many more as can't reach two of them, passed over.)
+        let speed = 1.01 * (turn * (q.coords.norm() + reach) + shift) + f64::MIN_POSITIVE;
         let mut peaks: Vec<(f64, usize)> = Vec::new();
-        let (mut prev, mut prev2) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-        let mut prev_y: Option<Q> = None;
-        let mut step: f64 = 0.0;
-        for i in 0..=n {
-            let y = m.unapply(i as f64 / n as f64, q);
-            if let Some(py) = prev_y {
-                step = step.max((y - py).norm());
-            }
-            prev_y = Some(y);
+        let mut prev: Option<(f64, usize)> = None;
+        let mut prev2: Option<(f64, usize)> = None;
+        let mut i = 0;
+        loop {
+            let (_, c, s, d) = inst[i];
+            let w = q.coords - d;
+            let y = Q::new(c * w.x + s * w.y, -s * w.x + c * w.y);
             let off = (y - centre).norm() - radius;
             let v = if off > 0.0 {
                 -off
@@ -324,20 +341,38 @@ pub fn sweep_planar(
             if v > deep {
                 return true;
             }
-            if i >= 1 && prev >= prev2 && prev >= v {
-                peaks.push((prev, i - 1));
+            // A peak among three instants running.
+            if let Some((pv, pi)) = prev
+                && pi + 1 == i
+                && prev2.is_none_or(|(p2, i2)| i2 + 1 != pi || pv >= p2)
+                && pv >= v
+            {
+                peaks.push((pv, pi));
             }
             prev2 = prev;
-            prev = v;
+            prev = Some((v, i));
+            if i == nt {
+                break;
+            }
+            let skip = if v < -3.0 * speed {
+                ((-v - 2.0 * speed) / speed).floor() as usize
+            } else {
+                1
+            };
+            i = (i + skip.max(1)).min(nt);
         }
-        peaks.push((prev, n));
-        peaks.retain(|p| p.0 > -2.0 * step);
+        if let Some((pv, pi)) = prev
+            && !peaks.iter().any(|p| p.1 == pi)
+        {
+            peaks.push((pv, pi));
+        }
+        peaks.retain(|p| p.0 > -2.0 * speed);
         if peaks.is_empty() {
             return false;
         }
         peaks.sort_by(|a, b| b.0.total_cmp(&a.0));
         let f = |t: f64| signed_distance(&poly, &m.unapply(t, q));
-        let h = 1.0 / n as f64;
+        let h = 1.0 / nt as f64;
         let g = (5f64.sqrt() - 1.0) / 2.0;
         for &(_, i) in peaks.iter().take(3) {
             let c = i as f64 * h;
