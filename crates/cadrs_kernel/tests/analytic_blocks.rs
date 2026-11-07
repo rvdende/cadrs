@@ -156,6 +156,58 @@ fn a_box() {
     assert_eq!(k.edges(b).unwrap().len(), 12);
 }
 
+/// The cube less everything above the plane z = 10 + (y − 5)·10⁻⁶, which crosses its top along
+/// the line y = 5 at a slope of a millionth (brep-bench's wedge-a-millionth-steep): the sliver
+/// over the half y < 5 goes, 5·10⁻⁶ thick at y = 0. The two planes were taken for one (a test on
+/// the cosine of their angle) and the boolean left an open shell.
+///
+/// V = A³ − ½·5·(5·10⁻⁶)·A; the top keeps its half y > 5 (50), the slope over the other half is
+/// √(5² + (5·10⁻⁶)²)·A, each side x = 0, A loses the triangle ½·5·5·10⁻⁶, and the face y = 0
+/// loses a strip A × 5·10⁻⁶: 7 faces.
+#[test]
+fn a_cube_cut_by_a_plane_a_millionth_steep() {
+    let mut k = NativeKernel::new();
+    let cube = cube(&mut k);
+    let n = nalgebra::Vector3::new(0.0, -1e-6, 1.0);
+    let on = Plane {
+        origin: Point3::new(0.0, 5.0, A),
+        x_dir: nalgebra::Vector3::x_axis(),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let above = k
+        .extrude(
+            &Profile::new(
+                on,
+                vec![Region {
+                    outer: rect(-1.0, -6.0, A + 1.0, 6.0),
+                    holes: vec![],
+                    source: None,
+                }],
+            ),
+            Extent::Blind(5.0),
+        )
+        .unwrap()
+        .bodies[0];
+    let b = k.boolean(BoolOp::Subtract, cube, &[above]).unwrap().bodies[0];
+    let d = 5e-6;
+    check(
+        &k,
+        b,
+        Want {
+            volume: A * A * A - 0.5 * 5.0 * d * A,
+            area: 50.0
+                + (25.0f64 + d * d).sqrt() * A
+                + 2.0 * (A * A - 0.5 * 5.0 * d)
+                + A * (A - d)
+                + 2.0 * A * A,
+            faces: 7,
+            min: LO,
+            max: HI,
+            centroid: None,
+        },
+    );
+}
+
 #[test]
 fn a_cylinder() {
     // Radius 4, height 10: V = πr²h, S = 2πr² + 2πrh.

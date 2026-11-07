@@ -121,6 +121,23 @@ fn coincidence_tol(bb: &Bbox) -> f64 {
     super::tol::CONFUSION.max(tol::REL * bb.diagonal())
 }
 
+/// Whether `a` and `b` are one surface within `tc` over the box `bb` ([`Surface::same_domain`]):
+/// planes also only when they stay within `tc` of each other across the box, as two at an
+/// angle θ do when θ times its size is under it (`same_domain`'s parallel test, on the cosine,
+/// passes planes 4·10⁻⁵ apart: a plane crossing a cube's top at a slope of 10⁻⁶ isn't its top).
+fn coincide(a: &Surface, b: &Surface, tc: f64, bb: &Bbox) -> bool {
+    if a.same_domain(b, tc).is_none() {
+        return false;
+    }
+    match (a, b) {
+        (Surface::Plane { f: fa }, Surface::Plane { f: fb }) => {
+            let (na, nb) = (fa.x.cross(&fa.y), fb.x.cross(&fb.y));
+            na.cross(&nb).norm() * bb.diagonal() <= tc
+        }
+        _ => true,
+    }
+}
+
 /// [`surface_surface`] in parts.
 pub fn surface_surface_full(
     a: &Surface,
@@ -143,7 +160,7 @@ pub(crate) fn surface_surface_closed(
     bb: &Bbox,
 ) -> Option<Vec<IntCurve>> {
     let tc = coincidence_tol(bb);
-    let closed = a.same_domain(b, tc).is_some()
+    let closed = coincide(a, b, tc, bb)
         || plane_extrusion(a, b, ub, bb).is_some()
         || plane_extrusion(b, a, ua, bb).is_some()
         || analytic(a, b, bb, super::boolean::VTOL).is_some()
@@ -167,7 +184,7 @@ pub fn surface_surface_tol(
         ..Ssi::default()
     };
     let tc = coincidence_tol(bb);
-    if a.same_domain(b, tc).is_some() {
+    if coincide(a, b, tc, bb) {
         return Ssi {
             coincident: super::ssi_coincident::region_boundary(a, ua, b, ub, tc),
             ..Ssi::default()
@@ -518,16 +535,15 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
             if d.norm() < tol::DEGENERATE {
                 return Some(vec![]);
             }
+            // A point on both planes: the box centre dropped onto plane a, then moved in it,
+            // square to the line, onto plane b. (The closed form's 1 − (na·nb)² loses all its
+            // digits to cancellation for planes 10⁻⁶ from parallel and put the line 10⁻³ off;
+            // this step is the point's distance from b over sin θ, both computed directly.)
+            let c = bb.center();
+            let p0 = c - na * (c - fa.o).dot(&na);
+            let w = d.cross(&na);
+            let p = p0 + w * ((fb.o - p0).dot(&nb) / w.dot(&nb));
             let d = d.normalize();
-            // A point on both planes.
-            let (ha, hb) = (na.dot(&fa.o.coords), nb.dot(&fb.o.coords));
-            let n12 = na.dot(&nb);
-            let det = 1.0 - n12 * n12;
-            let c1 = (ha - hb * n12) / det;
-            let c2 = (hb - ha * n12) / det;
-            let p = P3::from(na * c1 + nb * c2);
-            // Start the line near the box centre for good conditioning.
-            let p = p + d * (bb.center() - p).dot(&d);
             Some(bound_line(p, d, &bbig).into_iter().collect())
         }
         (Surface::Plane { f: fp }, Surface::Cylinder { f: fc, r }) => {

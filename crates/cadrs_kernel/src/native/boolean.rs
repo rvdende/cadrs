@@ -2722,7 +2722,26 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             // Coincident within the faces' tolerances (near-coincident faces have had theirs
             // raised: `near_coincident_tolerances`).
             let ctol = run_tol.max(faces[fa].tol).max(faces[fb].tol);
-            if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some() {
+            // Two planes a hair from parallel (same_domain's test, on the cosine, takes normals
+            // 4·10⁻⁵ apart as one) are one only where each face lies on the other's plane: a
+            // plane crossing a cube's top at a slope of 10⁻⁶ leaves the top's corners 5·10⁻⁶ off.
+            let flat_apart = |x: usize, y: usize| {
+                matches!(faces[y].surf, Surface::Plane { .. })
+                    && face_edges[x].iter().any(|&e| {
+                        let ed = &pool.edges[e];
+                        [ed.t[0], ed.t[1]].iter().any(|&t| {
+                            faces[y]
+                                .surf
+                                .signed_distance(&ed.curve.point(t))
+                                .is_some_and(|d| d.abs() > ctol)
+                        })
+                    })
+            };
+            let planes = matches!(faces[fa].surf, Surface::Plane { .. })
+                && matches!(faces[fb].surf, Surface::Plane { .. });
+            if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some()
+                && !(planes && (flat_apart(fa, fb) || flat_apart(fb, fa)))
+            {
                 coincident[fa].push(fb);
                 coincident[fb].push(fa);
                 continue;

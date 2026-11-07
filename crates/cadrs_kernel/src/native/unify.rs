@@ -146,6 +146,17 @@ fn edge_mid_on(b: &Body, f: usize, e: usize, s: &Surface) -> bool {
 
 /// Whether face `f`'s edges lie on surface `s` (a few points of each, within 1e-6 of their
 /// size), where `s` is: inside a B-spline's range, not on its extension.
+/// Whether face `f`'s edges' ends lie within the merge distance of the plane `s`.
+fn flat_on(b: &Body, f: usize, s: &Surface) -> bool {
+    b.faces[f].loops.iter().flatten().all(|c| {
+        let e = &b.edges[c.edge];
+        [e.t[0], e.t[1]].iter().all(|&t| {
+            s.signed_distance(&e.point(t))
+                .is_none_or(|d| d.abs() <= tol::POINT)
+        })
+    })
+}
+
 fn boundary_on(b: &Body, f: usize, s: &Surface) -> bool {
     b.faces[f].loops.iter().flatten().all(|c| {
         let e = &b.edges[c.edge];
@@ -256,6 +267,14 @@ fn merge_faces(
         } else {
             a.surf.same_domain(&c.surf, tol::POINT)
         };
+        // Two planes a hair from parallel pass `same_domain` (its test is on the cosine of their
+        // angle): they merge only when each face lies on the other's plane too (a cube's top and
+        // the face of a cut a millionth steep across it don't).
+        let planes =
+            matches!(a.surf, Surface::Plane { .. }) && matches!(c.surf, Surface::Plane { .. });
+        if planes && a.surf != c.surf && !(flat_on(b, f, &c.surf) && flat_on(b, g, &a.surf)) {
+            return false;
+        }
         same.is_some_and(|same| same == (a.sense == c.sense))
             && (!(sampled(&a.surf) || sampled(&c.surf))
                 || a.surf == c.surf

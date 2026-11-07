@@ -1397,7 +1397,25 @@ fn mesh_face_split(
     if !extent.is_finite() {
         return FaceMesh::default();
     }
-    let tol = (tol::REL_POINT * extent).max(1e-10);
+    // Under a tenth of its shortest edge too: a face with a feature a millionth of its size (a
+    // saw cut's slit 10⁻⁶ wide in a 10 mm wall) has boundary points closer than the face's
+    // relative tolerance, which would take them for one.
+    let shortest = f
+        .loops
+        .iter()
+        .flatten()
+        .filter(|c| !body.edges[c.edge].degenerate)
+        .map(|c| {
+            let ps = &es[c.edge].1;
+            (ps[ps.len() - 1] - ps[0]).norm().max(
+                ps.windows(2)
+                    .map(|w| (w[1] - w[0]).norm())
+                    .fold(0.0, f64::max),
+            )
+        })
+        .filter(|l| *l > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let tol = (tol::REL_POINT * extent).min(0.1 * shortest).max(1e-10);
     let dom = Domain::new(&f.surf, tol);
     let mut bloops = boundary(body, f, es, &dom, p, tol);
     let whole = surface_loops(body, f, &bloops, &dom);
