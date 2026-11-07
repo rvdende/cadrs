@@ -58,6 +58,8 @@ pub struct PathSweep {
     helix: Option<Helix>,
     /// The helix's angle at the fine steps (unwrapped along the path).
     angles: Vec<f64>,
+    /// How the profile twists and scales along the path (in proportion to s).
+    law: SweepLaw,
 }
 
 /// Frames found exactly at any s, so the profile's motion is smooth between the fine steps (a
@@ -125,6 +127,21 @@ pub struct Helix {
 }
 
 impl Helix {
+    /// The helix about the axis through `o` along the unit `a`, of radius `r` from it, its point
+    /// at angle θ (from `e1` toward `e2`, square to `a` and each other) rising `c` θ along `a`,
+    /// starting at θ = `th0`.
+    pub fn new(o: P3, a: V3, e1: V3, e2: V3, r: f64, c: f64, th0: f64) -> Self {
+        Helix {
+            o,
+            a,
+            e1,
+            e2,
+            r,
+            c,
+            th0,
+        }
+    }
+
     fn point(&self, th: f64) -> P3 {
         self.o + (self.e1 * th.cos() + self.e2 * th.sin()) * self.r + self.a * (self.c * th)
     }
@@ -174,35 +191,87 @@ pub fn fit_helix_segs(segs: &[Seg]) -> Option<Helix> {
     pts.push(last.end());
     tans.push(last.dir(1.0));
     let size = pts.iter().map(|p| (p - pts[0]).norm()).fold(0.0, f64::max);
-    let h = fit_helix(&pts, &tans, 1e-4 * (1.0 + size));
+    // The segments' ends: a Bézier approximation of a helix passes through it there and strays
+    // between (a rational arc's height isn't linear in its angle), so its rise is fitted there.
+    let nodes: Vec<usize> = (0..=segs.len()).map(|k| k * 64).collect();
+    let h = fit_helix(&pts, &tans, Some(&nodes), 1e-4 * (1.0 + size));
     if std::env::var("CADRS_SWEEP_DEBUG").is_ok() {
         eprintln!("helix fit over {} segments: {h:?}", segs.len());
     }
     h
 }
 
+/// The eigenvalues of a symmetric 3 × 3 matrix, least first, in closed form (Smith's: the
+/// matrix shifted by its mean eigenvalue and scaled, whose determinant gives the angle).
+fn symmetric_eigenvalues(m: &nalgebra::Matrix3<f64>) -> [f64; 3] {
+    let p1 = m[(0, 1)].powi(2) + m[(0, 2)].powi(2) + m[(1, 2)].powi(2);
+    let q = m.trace() / 3.0;
+    let p2 = (m[(0, 0)] - q).powi(2) + (m[(1, 1)] - q).powi(2) + (m[(2, 2)] - q).powi(2) + 2.0 * p1;
+    if !(p2 > 0.0) {
+        return [q; 3];
+    }
+    let p = (p2 / 6.0).sqrt();
+    let b = (m - nalgebra::Matrix3::identity() * q) / p;
+    let r = (b.determinant() / 2.0).clamp(-1.0, 1.0);
+    let phi = r.acos() / 3.0;
+    let hi = q + 2.0 * p * phi.cos();
+    let lo = q + 2.0 * p * (phi + 2.0 * PI / 3.0).cos();
+    [lo, 3.0 * q - hi - lo, hi]
+}
+
 /// The helix through points of a path (with their travel fractions), when they all lie on one
-/// within `tol` (an approximated helix: Bézier pieces through points of it).
-fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
+/// within `tol` (an approximated helix: Bézier pieces through points of it). Its rise is fitted
+/// to the points `nodes` names, where the approximation meets the helix, else to them all.
+fn fit_helix(pts: &[P3], tans: &[V3], nodes: Option<&[usize]>, tol: f64) -> Option<Helix> {
     let n = pts.len();
     if n < 8 {
         return None;
     }
+    // Each point weighs the stretch of path about it (half at the two ends, as the trapezoid
+    // rule weighs them): a run of whole turns, sampled with both ends, otherwise counts its first
+    // angle twice and tilts the axis it finds (10⁻⁵ over a turn, 10⁻⁴ of radius at its top).
+    let w = |i: usize| if i == 0 || i + 1 == n { 0.5 } else { 1.0 };
+    let total: f64 = (0..n).map(w).sum();
     // The axis: the tangents make one angle with it, so it is square to their differences.
-    let mean = tans.iter().fold(V3::zeros(), |acc, t| acc + t) / n as f64;
+    let mean = tans
+        .iter()
+        .enumerate()
+        .fold(V3::zeros(), |acc, (i, t)| acc + t * w(i))
+        / total;
     let mut m = nalgebra::Matrix3::zeros();
-    for t in tans {
+    for (i, t) in tans.iter().enumerate() {
         let d = t - mean;
-        m += d * d.transpose();
+        m += d * d.transpose() * w(i);
     }
-    let eig = m.symmetric_eigen();
-    let k = (0..3)
-        .min_by(|&x, &y| eig.eigenvalues[x].total_cmp(&eig.eigenvalues[y]))
-        .unwrap();
-    let mut a = eig.eigenvectors.column(k).into_owned().normalize();
+    // Its eigenvalues in closed form (not an iteration, whose result moved with the build: an
+    // axis 10⁻⁸ of a turn off one build, and a helix missed the next), and the axis the
+    // eigenvector of the least: M − λI has rank 2, and its null vector is the largest cross
+    // product of two of its rows, polished by a step of inverse iteration.
+    let eigen = symmetric_eigenvalues(&m);
+    let lam = eigen[0];
+    let shifted = m - nalgebra::Matrix3::identity() * lam;
+    let rows = [
+        shifted.row(0).transpose(),
+        shifted.row(1).transpose(),
+        shifted.row(2).transpose(),
+    ];
+    let null = [
+        rows[0].cross(&rows[1]),
+        rows[1].cross(&rows[2]),
+        rows[2].cross(&rows[0]),
+    ]
+    .into_iter()
+    .max_by(|x, y| x.norm_squared().total_cmp(&y.norm_squared()))
+    .unwrap();
+    let mut a = null.try_normalize(tol::TINY).map(|n| {
+        // (Shifted a hair off λ, so the solve is regular; the null direction dominates.)
+        let off = (m - nalgebra::Matrix3::identity() * (lam - 1e-9 * (1.0 + m.norm())))
+            .lu()
+            .solve(&n);
+        off.and_then(|x| x.try_normalize(tol::TINY)).unwrap_or(n)
+    })?;
     // The tangents must turn round it (not a straight line or a plane curve's single direction).
-    if eig
-        .eigenvalues
+    if eigen
         .iter()
         .filter(|e| **e > tol::REL_POINT * n as f64)
         .count()
@@ -217,11 +286,11 @@ fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
     let fr = Frame::from_z(P3::origin(), a);
     let mut mm = nalgebra::Matrix3::zeros();
     let mut rhs = V3::zeros();
-    for p in pts {
+    for (i, p) in pts.iter().enumerate() {
         let (x, y) = (p.coords.dot(&fr.x), p.coords.dot(&fr.y));
         let row = V3::new(x, y, 1.0);
-        mm += row * row.transpose();
-        rhs += row * (x * x + y * y);
+        mm += row * row.transpose() * w(i);
+        rhs += row * (x * x + y * y) * w(i);
     }
     let sol = mm.lu().solve(&rhs)?;
     let (cx, cy) = (sol.x / 2.0, sol.y / 2.0);
@@ -247,14 +316,22 @@ fn fit_helix(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
         ths.push(prev);
     }
     let zs: Vec<f64> = pts.iter().map(|p| (p - o0).dot(&a)).collect();
+    let fit: Vec<(usize, f64)> = match nodes {
+        Some(k) if k.len() >= 2 && k.iter().all(|&i| i < n) => {
+            k.iter().map(|&i| (i, 1.0)).collect()
+        }
+        _ => (0..n).map(|i| (i, w(i))).collect(),
+    };
+    let wsum: f64 = fit.iter().map(|f| f.1).sum();
     let (st, sz) = (
-        ths.iter().sum::<f64>() / n as f64,
-        zs.iter().sum::<f64>() / n as f64,
+        fit.iter().map(|&(i, wi)| ths[i] * wi).sum::<f64>() / wsum,
+        fit.iter().map(|&(i, wi)| zs[i] * wi).sum::<f64>() / wsum,
     );
     let (mut num, mut den) = (0.0, 0.0);
-    for (t, z) in ths.iter().zip(&zs) {
-        num += (t - st) * (z - sz);
-        den += (t - st) * (t - st);
+    for &(i, wi) in &fit {
+        let (t, z) = (ths[i], zs[i]);
+        num += (t - st) * (z - sz) * wi;
+        den += (t - st) * (t - st) * wi;
     }
     if den < tol::DEGENERATE {
         return None;
@@ -302,6 +379,7 @@ impl PathSweep {
         frames: Frames,
         reach: f64,
         helix: Option<Helix>,
+        law: SweepLaw,
     ) -> Result<Self> {
         let control = frames.control();
         let any_spread = frames == Frames::Frenet;
@@ -332,6 +410,7 @@ impl PathSweep {
             reach,
             helix: None,
             angles: vec![],
+            law,
         };
         let pts: Vec<P3> = (0..=fine).map(|i| me.at(i as f64 / fine as f64)).collect();
         let tans: Vec<V3> = (0..=fine).map(|i| me.dir(i as f64 / fine as f64)).collect();
@@ -360,7 +439,7 @@ impl PathSweep {
                 }
                 None => {
                     let size = pts.iter().map(|p| (p - pts[0]).norm()).fold(0.0, f64::max);
-                    fit_helix(&pts, &tans, 1e-4 * (1.0 + size))
+                    fit_helix(&pts, &tans, None, 1e-4 * (1.0 + size))
                 }
             };
         }
@@ -489,7 +568,10 @@ impl PathSweep {
             } else {
                 0.0
             };
-            let by_turn = (rots[i].angle_to(&rots[i + 1]) + bend) / (PI / 24.0);
+            // (A law's twist turns the profile too, and its scale moves the profile's far
+            // points as a turn of that many radians would.)
+            let law_turn = (me.law.twist.abs() + (me.law.scale - 1.0).abs()) / fine as f64;
+            let by_turn = (rots[i].angle_to(&rots[i + 1]) + bend + law_turn) / (PI / 24.0);
             density.push(density[i] + by_err.max(by_turn));
         }
         // Eight sections on top, spread evenly, so no stretch goes without (a straight one between
@@ -577,7 +659,9 @@ impl PathSweep {
             for (w, e) in v.windows(2).zip(worst.iter_mut()) {
                 let m = 0.5 * (w[0] + w[1]);
                 let d = rail.point(m) - self.motion(m).point(&q);
-                *e = e.max(if k == 0 {
+                // (A law twists and scales the profile as it goes: its rails' every stray
+                // counts, not only along the path.)
+                *e = e.max(if k == 0 || !self.law.is_identity() {
                     d.norm()
                 } else {
                     d.dot(&self.dir(m)).abs()
@@ -684,8 +768,30 @@ impl PathSweep {
         }
     }
 
-    /// The rigid motion of the profile from the start of the segment to s.
+    /// The motion of the profile from the start of the segment to s: rigid, then twisted and
+    /// scaled about the path's point by the law.
     fn motion(&self, s: f64) -> Affine {
+        let a = self.rigid(s);
+        if self.law.is_identity() {
+            return a;
+        }
+        let p = a.point(&self.pts[0]);
+        let s = s.clamp(0.0, 1.0);
+        let k = 1.0 + (self.law.scale - 1.0) * s;
+        let turn = nalgebra::Rotation3::from_axis_angle(
+            &nalgebra::Unit::new_normalize(self.dir(s)),
+            self.law.twist * s,
+        )
+        .into_inner();
+        let kr = turn * k;
+        Affine {
+            m: kr * a.m,
+            t: kr * a.t + p.coords - kr * p.coords,
+        }
+    }
+
+    /// The rigid motion of the profile from the start of the segment to s.
+    fn rigid(&self, s: f64) -> Affine {
         if let Some(h) = &self.helix {
             return h.screw(self.helix_angle(h, s) - h.th0);
         }
@@ -957,43 +1063,48 @@ fn iso_pcurve(n0: &NurbsCurve, c: &Curve, t0: f64, t1: f64, ua: f64, ub: f64, v:
         }
         u
     };
-    let u_at = |ts: &[f64]| -> Vec<f64> {
-        let n = ts.len();
-        ts.iter()
-            .enumerate()
-            .map(|(i, &t)| {
-                if i == 0 {
-                    ua
-                } else if i + 1 == n {
-                    ub
-                } else {
-                    invert(t, ua + (ub - ua) * (t - t0) / (t1 - t0))
-                }
-            })
-            .collect()
-    };
+    // The samples (t, u): the ends given, the rest inverted from a guess (the chord's at first,
+    // the fit's so far for those added), each found once.
     let mut ts: Vec<f64> = (0..=32).map(|i| t0 + (t1 - t0) * i as f64 / 32.0).collect();
-    for _ in 0..10 {
-        let us = u_at(&ts);
+    let n = ts.len();
+    let mut us: Vec<f64> = ts
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| {
+            if i == 0 {
+                ua
+            } else if i + 1 == n {
+                ub
+            } else {
+                invert(t, ua + (ub - ua) * (t - t0) / (t1 - t0))
+            }
+        })
+        .collect();
+    let fit_of = |ts: &[f64], us: &[f64]| {
         let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
-        let fit = NurbsCurve::interpolate(&pts, &ts, 3, None, None);
-        let mut ins = Vec::new();
+        NurbsCurve::interpolate(&pts, ts, 3, None, None)
+    };
+    for _ in 0..10 {
+        let fit = fit_of(&ts, &us);
+        let mut ins: Vec<(f64, f64)> = Vec::new();
         for k in 0..ts.len() - 1 {
             let tm = 0.5 * (ts[k] + ts[k + 1]);
             let q = fit.point(tm);
             if (n0.point(q.x) - c.point(tm)).norm()
                 > tol::REL_FINE * (1.0 + c.point(tm).coords.norm())
             {
-                ins.push(tm);
+                ins.push((tm, invert(tm, q.x)));
             }
         }
         if ins.is_empty() || ts.len() > 4096 {
             return Curve::Nurbs(Arc::new(fit));
         }
-        ts.extend(ins);
-        ts.sort_by(f64::total_cmp);
+        let mut both: Vec<(f64, f64)> = ts.iter().copied().zip(us.iter().copied()).collect();
+        both.extend(ins);
+        both.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ts = both.iter().map(|x| x.0).collect();
+        us = both.iter().map(|x| x.1).collect();
     }
-    let us = u_at(&ts);
     let pts: Vec<P3> = us.iter().map(|&u| P3::new(u, v, 0.0)).collect();
     Curve::Nurbs(Arc::new(NurbsCurve::interpolate(&pts, &ts, 3, None, None)))
 }
@@ -1008,6 +1119,42 @@ pub fn sweep_seg(
     frames: Frames,
     solid: bool,
     helix: Option<Helix>,
+) -> Result<(Built, Plane)> {
+    sweep_seg_with(
+        faces,
+        chains,
+        plane,
+        segs,
+        frames,
+        solid,
+        helix,
+        SweepLaw::default(),
+    )
+}
+
+/// [`sweep_seg`] twisting and scaling the profile by `law` along the segments.
+pub fn sweep_seg_law(
+    faces: &[MergedFace],
+    chains: &[Vec<Piece>],
+    plane: Plane,
+    segs: &[Seg],
+    frames: Frames,
+    solid: bool,
+    law: SweepLaw,
+) -> Result<(Built, Plane)> {
+    sweep_seg_with(faces, chains, plane, segs, frames, solid, None, law)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sweep_seg_with(
+    faces: &[MergedFace],
+    chains: &[Vec<Piece>],
+    plane: Plane,
+    segs: &[Seg],
+    frames: Frames,
+    solid: bool,
+    helix: Option<Helix>,
+    law: SweepLaw,
 ) -> Result<(Built, Plane)> {
     // The profile's reach from the path's start.
     let m = crate::native::build::plane_map(&plane, &V3::zeros(), 0.0);
@@ -1025,7 +1172,7 @@ pub fn sweep_seg(
         }
     }
     let t0 = web_time::Instant::now();
-    let kind = PathSweep::new(plane, segs, frames, reach, helix)?;
+    let kind = PathSweep::new(plane, segs, frames, reach, helix, law)?;
     let t1 = t0.elapsed();
     if (kind.pts[1] - kind.pts[0]).dot(&plane.normal).abs()
         < tol::REL * (kind.pts[1] - kind.pts[0]).norm().max(tol::TINY)
@@ -1056,6 +1203,55 @@ mod tests {
     use super::*;
     use std::f64::consts::FRAC_PI_2;
 
+    /// A helix drawn as Helix features draw one (rational quadratic arcs, the height rising
+    /// with each arc's parameter, so it strays from the helix between their ends), one whole turn
+    /// from its start: the helix fitted to it is the true one, axis, radius and rise
+    /// (brep-bench's twisted-thin-blade, swept by a fit 10⁻⁵ off, came out 3·10⁻⁶ too big).
+    #[test]
+    fn a_turn_of_helix_arcs_fits_the_true_helix() {
+        use std::f64::consts::TAU;
+        let (r, pitch, start) = (20.0f64.hypot(0.2), 60.0, 0.2f64.atan2(20.0));
+        let n = 16;
+        let at = |t: f64, r: f64, z: f64| P3::new(r * t.cos(), r * t.sin(), z);
+        let segs: Vec<Seg> = (0..n)
+            .map(|i| {
+                let (s0, s1) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                let (t0, t1) = (start + TAU * s0, start + TAU * s1);
+                let half = (t1 - t0) / 2.0;
+                let (z0, z1) = (pitch * s0, pitch * s1);
+                let poles = [
+                    at(t0, r, z0),
+                    at(t0 + half, r / half.cos(), (z0 + z1) / 2.0),
+                    at(t1, r, z1),
+                ];
+                let c = Curve::nurbs(crate::native::nurbs::NurbsCurve::bezier(
+                    &poles,
+                    &[1.0, half.cos(), 1.0],
+                ));
+                Seg {
+                    c,
+                    t0: 0.0,
+                    t1: 1.0,
+                    rev: false,
+                }
+            })
+            .collect();
+        let h = fit_helix_segs(&segs).expect("a helix");
+        assert!(h.a.z > 1.0 - 1e-15, "axis {:?}", h.a);
+        assert!(
+            h.o.x.abs() < 1e-12 && h.o.y.abs() < 1e-12,
+            "centre {:?}",
+            h.o
+        );
+        assert!((h.r - r).abs() < 1e-12, "radius {} against {r}", h.r);
+        let rise = pitch / TAU;
+        assert!(
+            (h.c - rise).abs() < 1e-12 * rise,
+            "rise {} against {rise}",
+            h.c
+        );
+    }
+
     /// A quarter ellipse, bending tightly at one end and hardly at the other: the sections gather
     /// where it bends (spaced by the local curvature; spaced by the tightest bend everywhere, it
     /// took about 950), and the rails between them stay within the section tolerance.
@@ -1085,6 +1281,7 @@ mod tests {
             Frames::Control(SweepControl::None),
             1.0,
             None,
+            SweepLaw::default(),
         )
         .unwrap();
         let n = sweep.v.len() - 1;

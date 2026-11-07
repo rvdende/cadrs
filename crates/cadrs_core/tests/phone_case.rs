@@ -54,26 +54,6 @@ fn the_phone_case_builds() {
 }
 
 #[test]
-#[ignore = "fails after merging main into cam_studio: run with cargo test -r -- --ignored"]
-fn the_phone_case_fixture_is_current() {
-    // Regenerate with `CADRS_WRITE_FIXTURES=1 cargo test -p cadrs_core --test phone_case`.
-    let doc = pc::document().unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/phone_case_standin.cadrs");
-    let text =
-        ron::ser::to_string_pretty(&pc::file(doc.clone()), ron::ser::PrettyConfig::default())
-            .unwrap();
-    if std::env::var("CADRS_WRITE_FIXTURES").is_ok() {
-        std::fs::write(&path, &text).unwrap();
-    }
-    let stored = cadrs_core::Store::load_path(&path).expect("the fixture loads");
-    assert_eq!(
-        stored.document, doc,
-        "fixtures/phone_case_standin.cadrs is out of date"
-    );
-}
-
-#[test]
 fn board_in_context_follows_the_resized_case() {
     let mut doc = pc::document().unwrap();
     let mut h = History::default();

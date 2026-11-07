@@ -82,10 +82,15 @@ fn parity_orientation_with(shell: &Body, polys: Vec<Vec<Vec<P2>>>) -> Option<boo
             continue;
         }
         let (mu, mv) = f.surf.metric();
-        // The loops' segments in the metric-scaled (u, v), once for all the grid's points.
+        // The loops' segments in the metric-scaled (u, v), once for all the grid's points: of
+        // each loop's polyline, every so many points, at most 48 (a point well inside is all
+        // that is sought; the polylines are dense, and which side it lies is asked of them
+        // whole).
         let segs: Vec<(P2, V2, f64)> = ps
             .iter()
             .flat_map(|l| {
+                let step = l.len().div_ceil(48).max(1);
+                let l: Vec<P2> = l.iter().step_by(step).copied().collect();
                 (0..l.len()).map(move |k| {
                     let (a, b) = (l[k], l[(k + 1) % l.len()]);
                     let (a, b) = (P2::new(a.x * mu, a.y * mv), P2::new(b.x * mu, b.y * mv));

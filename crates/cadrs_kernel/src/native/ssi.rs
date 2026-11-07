@@ -121,6 +121,23 @@ fn coincidence_tol(bb: &Bbox) -> f64 {
     super::tol::CONFUSION.max(tol::REL * bb.diagonal())
 }
 
+/// Whether `a` and `b` are one surface within `tc` over the box `bb` ([`Surface::same_domain`]):
+/// planes also only when they stay within `tc` of each other across the box, as two at an
+/// angle θ do when θ times its size is under it (`same_domain`'s parallel test, on the cosine,
+/// passes planes 4·10⁻⁵ apart: a plane crossing a cube's top at a slope of 10⁻⁶ isn't its top).
+fn coincide(a: &Surface, b: &Surface, tc: f64, bb: &Bbox) -> bool {
+    if a.same_domain(b, tc).is_none() {
+        return false;
+    }
+    match (a, b) {
+        (Surface::Plane { f: fa }, Surface::Plane { f: fb }) => {
+            let (na, nb) = (fa.x.cross(&fa.y), fb.x.cross(&fb.y));
+            na.cross(&nb).norm() * bb.diagonal() <= tc
+        }
+        _ => true,
+    }
+}
+
 /// [`surface_surface`] in parts.
 pub fn surface_surface_full(
     a: &Surface,
@@ -143,9 +160,11 @@ pub(crate) fn surface_surface_closed(
     bb: &Bbox,
 ) -> Option<Vec<IntCurve>> {
     let tc = coincidence_tol(bb);
-    let closed = a.same_domain(b, tc).is_some()
+    let closed = coincide(a, b, tc, bb)
         || plane_extrusion(a, b, ub, bb).is_some()
         || plane_extrusion(b, a, ua, bb).is_some()
+        || extrusion_along(a, ua, b, ub, bb).is_some()
+        || extrusion_along(b, ub, a, ua, bb).is_some()
         || analytic(a, b, bb, super::boolean::VTOL).is_some()
         || analytic(b, a, bb, super::boolean::VTOL).is_some();
     closed.then(|| surface_surface(a, ua, b, ub, bb))
@@ -167,7 +186,7 @@ pub fn surface_surface_tol(
         ..Ssi::default()
     };
     let tc = coincidence_tol(bb);
-    if a.same_domain(b, tc).is_some() {
+    if coincide(a, b, tc, bb) {
         return Ssi {
             coincident: super::ssi_coincident::region_boundary(a, ua, b, ub, tc),
             ..Ssi::default()
@@ -177,6 +196,12 @@ pub fn surface_surface_tol(
         return closed(r);
     }
     if let Some(r) = plane_extrusion(b, a, ua, bb) {
+        return closed(r);
+    }
+    if let Some(r) = extrusion_along(a, ua, b, ub, bb) {
+        return closed(r);
+    }
+    if let Some(r) = extrusion_along(b, ub, a, ua, bb) {
         return closed(r);
     }
     if let Some(r) = analytic(a, b, bb, tol) {
@@ -192,6 +217,125 @@ pub fn surface_surface_tol(
         return numeric(b, ub, a, ua, bb);
     }
     numeric(a, ua, b, ub, bb)
+}
+
+/// An extrusion and a surface unchanged along the extrusion's direction (a cylinder about a
+/// parallel axis, another extrusion along it): the rulings through the points where the
+/// extrusion's base curve meets the other surface (a swept planar region's side against a
+/// drum it is cut from).
+fn extrusion_along(
+    e: &Surface,
+    ue: ((f64, f64), (f64, f64)),
+    s: &Surface,
+    us: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Option<Vec<IntCurve>> {
+    let Surface::Extrusion { c, d } = e else {
+        return None;
+    };
+    let dn = d.normalize();
+    let parallel = match s {
+        Surface::Cylinder { f, .. } => f.z.normalize().cross(&dn).norm() < tol::ANGULAR_FINE,
+        Surface::Extrusion { d: d2, .. } => d2.normalize().cross(&dn).norm() < tol::ANGULAR_FINE,
+        _ => false,
+    };
+    if !parallel {
+        return None;
+    }
+    let (u0, u1) = ue.0;
+    let pad = (u1 - u0).abs() * tol::REL_POINT;
+    let (lo, hi) = match c.nurbs_range() {
+        Some((a, b)) => ((u0 - pad).max(a), (u1 + pad).min(b)),
+        None => (u0 - pad, u1 + pad),
+    };
+    let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);
+    let roots = curve_surface(c, lo, hi, s);
+    // (No crossing, or one where the curve only touches the surface: the numeric engine, which
+    // finds the points of contact.)
+    let touching = |t: f64| {
+        let h = 1e-6 * (hi - lo).abs().max(1e-12);
+        match (
+            s.signed_distance(&c.point(t - h)),
+            s.signed_distance(&c.point(t + h)),
+        ) {
+            (Some(a), Some(b)) => a.signum() == b.signum(),
+            _ => false,
+        }
+    };
+    if std::env::var_os("CADRS_SSI_DEBUG").is_some() {
+        eprintln!(
+            "extrusion along: {} roots {:?}, touching {:?}, d {:?}, s {:?}",
+            roots.len(),
+            roots,
+            roots.iter().map(|&t| touching(t)).collect::<Vec<_>>(),
+            dn,
+            s.kind()
+        );
+    }
+    if roots.is_empty() || roots.iter().any(|&t| touching(t)) {
+        return None;
+    }
+    // Each ruling over where both patches run along it: the extrusion's v (λ = v |d|) and the
+    // other's own height along the direction.
+    let (dl, (ev0, ev1)) = (d.norm(), ue.1);
+    let span_of = |p0: &P3| -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (ev0.min(ev1) * dl, ev0.max(ev1) * dl);
+        let (w0, w1) = (us.1.0.min(us.1.1), us.1.0.max(us.1.1));
+        let (a, b) = match s {
+            Surface::Cylinder { f, .. } => {
+                let z = f.z.normalize();
+                let k = dn.dot(&z);
+                let h0 = (p0 - f.o).dot(&z);
+                ((w0 - h0) / k, (w1 - h0) / k)
+            }
+            Surface::Extrusion { c: c2, d: d2 } => {
+                let k = dn.dot(&d2.normalize()) / d2.norm();
+                // Its point c2(u) + d2 v: v from where the ruling meets its base curve's plane
+                // square to d2 (the projection of p0 on the base curve's line along d2).
+                let base = c2.point(0.5 * (us.0.0 + us.0.1));
+                let h0 = (p0 - base).dot(&d2.normalize()) / d2.norm();
+                ((w0 - h0) / k, (w1 - h0) / k)
+            }
+            _ => return None,
+        };
+        lo = lo.max(a.min(b));
+        hi = hi.min(a.max(b));
+        (hi - lo > tol::POINT).then_some((lo, hi))
+    };
+    let mut out = Vec::new();
+    for t in roots {
+        // Polished where the surface has a signed distance (a cylinder): Newton along the curve.
+        let mut t = t;
+        if s.signed_distance(&c.point(t)).is_some() {
+            for _ in 0..20 {
+                let f = s.signed_distance(&c.point(t)).unwrap_or(0.0);
+                let h = 1e-7 * (1.0 + t.abs());
+                let df = (s.signed_distance(&c.point(t + h)).unwrap_or(0.0)
+                    - s.signed_distance(&c.point(t - h)).unwrap_or(0.0))
+                    / (2.0 * h);
+                if df.abs() < 1e-300 {
+                    break;
+                }
+                let step = f / df;
+                t = (t - step).clamp(lo, hi);
+                if step.abs() < 1e-15 * (1.0 + t.abs()) {
+                    break;
+                }
+            }
+        }
+        let p0 = c.point(t);
+        // (Where the patches only touch along it, a point: the numeric engine's.)
+        let (l0, l1) = span_of(&p0)?;
+        let _ = &bbig;
+        out.push(IntCurve {
+            c: Curve::Line { o: p0, d: dn },
+            t0: l0,
+            t1: l1,
+            closed: false,
+            pcs: None,
+        });
+    }
+    Some(out)
 }
 
 /// A plane and an extrusion: rulings where the plane contains the direction, otherwise the
@@ -504,6 +648,71 @@ fn circle(c: P3, n: V3, r: f64) -> IntCurve {
     }
 }
 
+/// Two cylinders of one radius whose axes cross (a Steinmetz pair, a cross-drilled hole) meet
+/// in two ellipses: a point as far from both axes has w·z₁ = ±w·z₂ (w from the axes' crossing),
+/// so it lies in one of the two planes through the crossing square to z₁ ∓ z₂, and each plane cuts
+/// the first cylinder in an ellipse about the crossing, its minor axis r square to the axis and
+/// its major axis r / |n·z₁|. The two ellipses cross where the cylinders touch. None for other
+/// pairs (the quartic is marched).
+fn equal_cylinders_crossing(
+    f1: &Frame,
+    r1: f64,
+    f2: &Frame,
+    r2: f64,
+    bb: &Bbox,
+) -> Option<Vec<IntCurve>> {
+    let size = bb.diagonal().max(r1 + r2);
+    if (r1 - r2).abs() > tol::REL * (r1 + r2) {
+        return None;
+    }
+    let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
+    // The axes' nearest points; they must meet.
+    let w = f2.o - f1.o;
+    let n = z1.cross(&z2);
+    let nn = n.norm_squared();
+    if nn < tol::ANGULAR * tol::ANGULAR {
+        return None;
+    }
+    if (w.dot(&n)).abs() / nn.sqrt() > tol::REL * size {
+        return None;
+    }
+    let s = w.cross(&z2).dot(&n) / nn;
+    let o = f1.o + z1 * s;
+    let r = 0.5 * (r1 + r2);
+    let mut out = Vec::new();
+    for m in [z1 - z2, z1 + z2] {
+        let Some(nrm) = m.try_normalize(tol::ANGULAR) else {
+            continue;
+        };
+        let c = nrm.dot(&z1).abs();
+        if c < tol::ANGULAR {
+            continue;
+        }
+        let x = nrm.cross(&z1).normalize();
+        let y = nrm.cross(&x);
+        out.push(IntCurve {
+            c: Curve::Ellipse {
+                c: o,
+                x,
+                y,
+                a: r,
+                b: r / c,
+            },
+            t0: 0.0,
+            t1: TAU,
+            closed: true,
+            pcs: None,
+        });
+    }
+    Some(out)
+}
+
+/// A cone's apex: where its radius r + v sin a is 0, at v = −r / sin a along its generators
+/// (its point o + ρ·r + v·(ρ sin a + z cos a)).
+fn cone_apex(f: &Frame, r: f64, a: f64) -> P3 {
+    f.o - f.z * (r / a.sin() * a.cos())
+}
+
 fn plane_n(f: &Frame) -> V3 {
     f.x.cross(&f.y)
 }
@@ -518,16 +727,15 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
             if d.norm() < tol::DEGENERATE {
                 return Some(vec![]);
             }
+            // A point on both planes: the box centre dropped onto plane a, then moved in it,
+            // square to the line, onto plane b. (The closed form's 1 − (na·nb)² loses all its
+            // digits to cancellation for planes 10⁻⁶ from parallel and put the line 10⁻³ off;
+            // this step is the point's distance from b over sin θ, both computed directly.)
+            let c = bb.center();
+            let p0 = c - na * (c - fa.o).dot(&na);
+            let w = d.cross(&na);
+            let p = p0 + w * ((fb.o - p0).dot(&nb) / w.dot(&nb));
             let d = d.normalize();
-            // A point on both planes.
-            let (ha, hb) = (na.dot(&fa.o.coords), nb.dot(&fb.o.coords));
-            let n12 = na.dot(&nb);
-            let det = 1.0 - n12 * n12;
-            let c1 = (ha - hb * n12) / det;
-            let c2 = (hb - ha * n12) / det;
-            let p = P3::from(na * c1 + nb * c2);
-            // Start the line near the box centre for good conditioning.
-            let p = p + d * (bb.center() - p).dot(&d);
             Some(bound_line(p, d, &bbig).into_iter().collect())
         }
         (Surface::Plane { f: fp }, Surface::Cylinder { f: fc, r }) => {
@@ -809,7 +1017,7 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
         }
         (Surface::Cylinder { f: f1, r: r1 }, Surface::Cylinder { f: f2, r: r2 }) => {
             if f1.z.cross(&f2.z).norm() > tol::ANGULAR_FINE {
-                return None;
+                return equal_cylinders_crossing(f1, *r1, f2, *r2, bb);
             }
             // Parallel axes: lines.
             let d = f2.o - f1.o;
@@ -852,6 +1060,54 @@ fn analytic(a: &Surface, b: &Surface, bb: &Bbox, run_tol: f64) -> Option<Vec<Int
                 d / l,
                 (r1 * r1 - x * x).max(0.0).sqrt(),
             )])
+        }
+        (
+            Surface::Cone {
+                f: f1,
+                r: r1,
+                a: a1,
+            },
+            Surface::Cone {
+                f: f2,
+                r: r2,
+                a: a2,
+            },
+        ) if f1.z.normalize().cross(&f2.z.normalize()).norm() > tol::ANGULAR_FINE
+            && a1.sin().abs() > tol::ANGULAR
+            && a2.sin().abs() > tol::ANGULAR
+            && (cone_apex(f1, *r1, *a1) - cone_apex(f2, *r2, *a2)).norm()
+                < tol::ROUNDOFF.max(tol::REL * bb.diagonal()) =>
+        {
+            // Two cones with one apex and different axes meet in lines through it: the
+            // directions d at the half-angle a1 to the first axis and a2 to the second (either
+            // nappe), d·z1 = ±cos a1 and d·z2 = ±cos a2 (a fit of them crowds its knots toward
+            // the apex, where marching loses its way).
+            let apex = cone_apex(f1, *r1, *a1);
+            let (z1, z2) = (f1.z.normalize(), f2.z.normalize());
+            let (c1, c2) = (a1.cos(), a2.cos());
+            let k = z1.dot(&z2);
+            let w = z1.cross(&z2);
+            let s2 = 1.0 - k * k;
+            let mut out = Vec::new();
+            for sign in [1.0, -1.0] {
+                let (p, q) = (c1, sign * c2);
+                let (al, be) = ((p - k * q) / s2, (q - k * p) / s2);
+                let g2 = (1.0 - (al * al + be * be + 2.0 * al * be * k)) / s2;
+                if g2 < -tol::ANGULAR_FINE {
+                    continue;
+                }
+                let g = g2.max(0.0).sqrt();
+                let gs: &[f64] = if g < tol::ANGULAR_FINE {
+                    &[0.0]
+                } else {
+                    &[g, -g]
+                };
+                for &gg in gs {
+                    let d = (z1 * al + z2 * be + w * gg).normalize();
+                    out.extend(bound_line(apex, d, &bbig));
+                }
+            }
+            Some(out)
         }
         _ => {
             // Coaxial surfaces of revolution: circles where the meridians cross. A sphere is

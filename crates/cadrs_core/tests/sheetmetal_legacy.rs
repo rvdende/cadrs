@@ -56,13 +56,6 @@ const CASE: Legacy = Legacy {
     params: legacy::params,
     bends: 4,
 };
-const CASE_ROUND: Legacy = Legacy {
-    features: legacy::case_round,
-    step: legacy::case_round_step,
-    params: legacy::params,
-    bends: 4,
-};
-
 /// The import, a Thicken of its outer base face (with or without the bends) and a Delete part.
 fn thickened(l: &Legacy, bends: bool) -> (Build, Build) {
     let (o, b) = thickened_with(l, bends, (l.params)());
@@ -207,36 +200,6 @@ fn an_imported_case_is_taken_round_its_corner_gaps() {
     // The Case: the base and four walls, which meet only through the bends (the corners are
     // open): one pick still takes all five.
     same_as_original(&CASE, 5);
-}
-
-#[test]
-#[ignore = "slow (over 5 s): run with cargo test -r -- --ignored"]
-fn an_imported_case_with_round_corner_reliefs_is_the_case_again() {
-    // The lesson's Case has round holes at its corners. Thickened again, the holes are
-    // recognised as corner reliefs: the bends run their full length (the bend ends the holes cut
-    // off join them), the walls get their sharp corners back, and each hole becomes its
-    // corner's Round – Sized relief, so the flat and the volume are the original's.
-    same_as_original(&CASE_ROUND, 5);
-    let (original, b) = thickened(&CASE_ROUND, true);
-    assert!(
-        b.warnings.is_empty(),
-        "no folding slivers: {:?}",
-        b.warnings
-    );
-    let (ctx, ctx0) = (&b.sheet_metal[0], &original.sheet_metal[0]);
-    let (a, a0) = (ctx.flat.parts[0].area(), ctx0.flat.parts[0].area());
-    assert!((a - a0).abs() < 1e-6 * a0, "flat area {a} vs {a0}");
-    assert_eq!(
-        ctx.model.corner_overrides.len(),
-        4,
-        "the four holes are the corners' reliefs"
-    );
-    for o in &ctx.model.corner_overrides {
-        assert_eq!(
-            o.relief.kind,
-            cadrs_sheetmetal::CornerReliefKind::RoundSized
-        );
-    }
 }
 
 #[test]

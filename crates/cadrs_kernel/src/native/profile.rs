@@ -409,8 +409,64 @@ pub fn piece_of(c: &Curve2, src: Src) -> Result<Piece> {
                 more: vec![],
             }
         }
+        Curve2::Spline {
+            degree,
+            ref knots,
+            ref poles,
+            ref weights,
+            ..
+        } => {
+            let n = crate::types::spline_nurbs(degree, knots, poles, weights).ok_or_else(|| {
+                KernelError::InvalidProfile(
+                    "a spline's knots, poles and weights don't make a B-spline".into(),
+                )
+            })?;
+            let (t0, t1) = n.range();
+            // (An exact line or conic stays one, so its faces are planes and quadrics.)
+            let c = crate::native::recognize::curve(&n).unwrap_or(Curve::Nurbs(Arc::new(n)));
+            let (t0, t1) = match &c {
+                Curve::Nurbs(_) => (t0, t1),
+                other => {
+                    let (a, b) = (
+                        curve_point(knots, poles, weights, degree, 0.0),
+                        curve_point(knots, poles, weights, degree, 1.0),
+                    );
+                    match crate::native::xbuild::edge_range(other, &a, &b, (a - b).norm() < 1e-12) {
+                        Some(r) => r,
+                        None => (t0, t1),
+                    }
+                }
+            };
+            Piece {
+                c,
+                t0,
+                t1,
+                rev: false,
+                src,
+                more: vec![],
+            }
+        }
     };
     Ok(piece)
+}
+
+/// A spline's point at `s` in 0..=1 of its domain, in the plane z = 0.
+fn curve_point(
+    knots: &[f64],
+    poles: &[nalgebra::Point2<f64>],
+    weights: &[f64],
+    degree: usize,
+    s: f64,
+) -> P3 {
+    let q = Curve2::Spline {
+        degree,
+        knots: knots.to_vec(),
+        poles: poles.to_vec(),
+        weights: weights.to_vec(),
+        source: None,
+    }
+    .point_at(s);
+    P3::new(q.x, q.y, 0.0)
 }
 
 /// The offset ellipse as a C2 cubic B-spline interpolating the exact curve at the ellipse

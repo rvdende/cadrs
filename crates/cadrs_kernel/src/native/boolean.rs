@@ -2237,6 +2237,27 @@ fn uv_gap(b: &Body) -> Option<String> {
                 if off(pa.x - pb.x, f.surf.u_periodic()) * mu > tol
                     || off(pa.y - pb.y, f.surf.v_periodic()) * mv > tol
                 {
+                    if std::env::var_os("CADRS_BOOL_DEBUG").is_some() {
+                        eprintln!(
+                            "gap: face {fi} {:?} metric {:?}: coedge {k} edge {} {:?} ends {:?} -> next edge {} {:?} starts {:?}; 3D {:?} / {:?}",
+                            f.surf.kind(),
+                            (mu, mv),
+                            x.edge,
+                            format!("{:?}", ex.curve)
+                                .chars()
+                                .take(40)
+                                .collect::<String>(),
+                            pa,
+                            y.edge,
+                            format!("{:?}", ey.curve)
+                                .chars()
+                                .take(40)
+                                .collect::<String>(),
+                            pb,
+                            ex.point(t1),
+                            ey.point(t0)
+                        );
+                    }
                     return Some(format!(
                         "face {fi} loop {li}: p-curve gap after coedge {k} ({:.3e}, {:.3e})",
                         pa.x - pb.x,
@@ -2722,7 +2743,26 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             // Coincident within the faces' tolerances (near-coincident faces have had theirs
             // raised: `near_coincident_tolerances`).
             let ctol = run_tol.max(faces[fa].tol).max(faces[fb].tol);
-            if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some() {
+            // Two planes a hair from parallel (same_domain's test, on the cosine, takes normals
+            // 4·10⁻⁵ apart as one) are one only where each face lies on the other's plane: a
+            // plane crossing a cube's top at a slope of 10⁻⁶ leaves the top's corners 5·10⁻⁶ off.
+            let flat_apart = |x: usize, y: usize| {
+                matches!(faces[y].surf, Surface::Plane { .. })
+                    && face_edges[x].iter().any(|&e| {
+                        let ed = &pool.edges[e];
+                        [ed.t[0], ed.t[1]].iter().any(|&t| {
+                            faces[y]
+                                .surf
+                                .signed_distance(&ed.curve.point(t))
+                                .is_some_and(|d| d.abs() > ctol)
+                        })
+                    })
+            };
+            let planes = matches!(faces[fa].surf, Surface::Plane { .. })
+                && matches!(faces[fb].surf, Surface::Plane { .. });
+            if faces[fa].surf.same_domain(&faces[fb].surf, ctol).is_some()
+                && !(planes && (flat_apart(fa, fb) || flat_apart(fb, fa)))
+            {
                 coincident[fa].push(fb);
                 coincident[fb].push(fa);
                 continue;
@@ -4581,6 +4621,111 @@ fn reach(b: &Body, point: f64) -> Bbox {
     b.bbox().grow(2.0 * tol)
 }
 
+/// The union of `members` (the target first, if one), in islands: groups whose boxes (grown by
+/// their tolerances) overlap each one body, the union of its members (which lies within their
+/// boxes), the groups side by side, the first member's first; with each face's origin.
+fn united(members: Vec<(BodyId, Body)>, opts: BoolOptions) -> Result<Unioned> {
+    let mut members: Vec<(BodyId, Body, Bbox)> = members
+        .into_iter()
+        .map(|(id, b)| (id, b, Bbox::empty()))
+        .collect();
+    for m in &mut members {
+        m.2 = reach(&m.1, opts.tol.point);
+    }
+    // Union-find over the members' boxes.
+    let mut group: Vec<usize> = (0..members.len()).collect();
+    fn root(group: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while group[r] != r {
+            r = group[r];
+        }
+        let mut j = i;
+        while group[j] != r {
+            let next = group[j];
+            group[j] = r;
+            j = next;
+        }
+        r
+    }
+    for i in 0..members.len() {
+        for j in 0..i {
+            if members[i].2.overlaps(&members[j].2) {
+                let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                if ri != rj {
+                    group[ri.max(rj)] = ri.min(rj);
+                }
+            }
+        }
+    }
+    let mut groups: Vec<Vec<(BodyId, Body, Bbox)>> = Vec::new();
+    let mut index: Vec<Option<usize>> = vec![None; members.len()];
+    for (i, m) in members.into_iter().enumerate() {
+        let r = root(&mut group, i);
+        let g = match index[r] {
+            Some(g) => g,
+            None => {
+                groups.push(Vec::new());
+                index[r] = Some(groups.len() - 1);
+                groups.len() - 1
+            }
+        };
+        groups[g].push(m);
+    }
+    let results: Vec<Result<Unioned>> = groups
+        .into_par_iter()
+        .map(|g| union_islands(g, opts))
+        .collect();
+    let mut all = results.into_iter();
+    let (mut cur, mut origin) = all.next().expect("the first member's group")?;
+    for r in all {
+        let (body, from) = r?;
+        cur.append(&body);
+        origin.extend(from);
+    }
+    Ok((cur, origin))
+}
+
+/// A boolean's result put in the kernel, with its history: each face's sources, and the inputs'
+/// faces none came from, deleted.
+fn finish(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tools: &[BodyId],
+    cur: Body,
+    origin: Vec<Vec<(BodyId, usize)>>,
+) -> Result<OpResult> {
+    let mut history = History::default();
+    for (i, srcs) in origin.iter().enumerate() {
+        for (bd, f) in srcs {
+            history.modified.push((
+                FaceId(i as u64),
+                InputFace {
+                    body: *bd,
+                    face: FaceId(*f as u64),
+                },
+            ));
+        }
+    }
+    let mut inputs = vec![target];
+    inputs.extend_from_slice(tools);
+    for &ib in &inputs {
+        let n = k.get(ib)?.faces.len();
+        for f in 0..n {
+            if !origin.iter().flatten().any(|(b, g)| *b == ib && *g == f) {
+                history.deleted.push(InputFace {
+                    body: ib,
+                    face: FaceId(f as u64),
+                });
+            }
+        }
+    }
+    let id = k.insert(cur);
+    Ok(OpResult {
+        bodies: vec![id],
+        history,
+    })
+}
+
 /// A union's body with each face's origin (member, face).
 type Unioned = (Body, Vec<Vec<(BodyId, usize)>>);
 
@@ -4721,66 +4866,42 @@ fn boolean_opts(
         // copies in 10 rows apart unioned each copy with the whole of the rows before, 50 s for
         // 2 s of unions. The groups of inputs that can reach one another at all are unioned
         // side by side (the rows), and set side by side after.
-        let mut members: Vec<(BodyId, Body, Bbox)> = vec![(target, cur, Bbox::empty())];
+        let mut members: Vec<(BodyId, Body)> = vec![(target, cur)];
         for &t in tools {
-            members.push((t, (**k.get(t)?).clone(), Bbox::empty()));
+            members.push((t, (**k.get(t)?).clone()));
         }
-        for m in &mut members {
-            m.2 = reach(&m.1, opts.tol.point);
-        }
-        // Union-find over the members' boxes.
-        let mut group: Vec<usize> = (0..members.len()).collect();
-        fn root(group: &mut [usize], i: usize) -> usize {
-            let mut r = i;
-            while group[r] != r {
-                r = group[r];
-            }
-            let mut j = i;
-            while group[j] != r {
-                let next = group[j];
-                group[j] = r;
-                j = next;
-            }
-            r
-        }
-        for i in 0..members.len() {
-            for j in 0..i {
-                if members[i].2.overlaps(&members[j].2) {
-                    let (ri, rj) = (root(&mut group, i), root(&mut group, j));
-                    if ri != rj {
-                        group[ri.max(rj)] = ri.min(rj);
-                    }
-                }
-            }
-        }
-        let mut groups: Vec<Vec<(BodyId, Body, Bbox)>> = Vec::new();
-        let mut index: Vec<Option<usize>> = vec![None; members.len()];
-        for (i, m) in members.into_iter().enumerate() {
-            let r = root(&mut group, i);
-            let g = match index[r] {
-                Some(g) => g,
-                None => {
-                    groups.push(Vec::new());
-                    index[r] = Some(groups.len() - 1);
-                    groups.len() - 1
-                }
-            };
-            groups[g].push(m);
-        }
-        let results: Vec<Result<Unioned>> = groups
-            .into_par_iter()
-            .map(|g| union_islands(g, opts))
-            .collect();
-        let mut all = results.into_iter();
-        let (body, from) = all.next().expect("the target's group")?;
-        cur = body;
-        origin = from;
-        for r in all {
-            let (body, from) = r?;
-            cur.append(&body);
-            origin.extend(from);
-        }
+        (cur, origin) = united(members, opts)?;
     } else {
+        // A − (t₁ ∪ … ∪ tₙ): the tools united (those apart side by side, without a boolean)
+        // and cut at once, not one cut after another, each over all the cuts before it (a golf
+        // ball's 62 dimples: 1.35 s against 0.1 s). One by one where that fails.
+        if op == BoolOp::Subtract && tools.len() > 1 {
+            let members = tools
+                .iter()
+                .map(|&t| Ok((t, (**k.get(t)?).clone())))
+                .collect::<Result<Vec<_>>>()?;
+            if let Ok((tool, tool_from)) = united(members, opts)
+                && let Ok(r) = boolean_bodies_with(&cur, &tool, op, opts)
+            {
+                origin = r
+                    .from
+                    .iter()
+                    .map(|srcs| {
+                        srcs.iter()
+                            .flat_map(|&(o, f)| {
+                                if o == 0 {
+                                    origin[f].clone()
+                                } else {
+                                    tool_from[f].clone()
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                cur = r.body;
+                return finish(k, target, tools, cur, origin);
+            }
+        }
         for &t in tools {
             let tb = (**k.get(t)?).clone();
             let r = boolean_bodies_with(&cur, &tb, op, opts)?;
@@ -4802,36 +4923,7 @@ fn boolean_opts(
             cur = r.body;
         }
     }
-    let mut history = History::default();
-    for (i, srcs) in origin.iter().enumerate() {
-        for (bd, f) in srcs {
-            history.modified.push((
-                FaceId(i as u64),
-                InputFace {
-                    body: *bd,
-                    face: FaceId(*f as u64),
-                },
-            ));
-        }
-    }
-    let mut inputs = vec![target];
-    inputs.extend_from_slice(tools);
-    for &ib in &inputs {
-        let n = k.get(ib)?.faces.len();
-        for f in 0..n {
-            if !origin.iter().flatten().any(|(b, g)| *b == ib && *g == f) {
-                history.deleted.push(InputFace {
-                    body: ib,
-                    face: FaceId(f as u64),
-                });
-            }
-        }
-    }
-    let id = k.insert(cur);
-    Ok(OpResult {
-        bodies: vec![id],
-        history,
-    })
+    finish(k, target, tools, cur, origin)
 }
 
 #[cfg(test)]

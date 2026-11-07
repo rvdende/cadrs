@@ -242,8 +242,13 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
         },
         s => (s.clone(), f.sense),
     };
-    let top_surf = super::sharp::offset_surface(&surf, sense, d)
-        .ok_or(unsupported("slabs of this kind of face"))?;
+    if let Some(b) = spindle_slab(b, fi, &surf, sense, d) {
+        return b;
+    }
+    let Some(top_surf) = super::sharp::offset_surface(&surf, sense, d) else {
+        // A sphere moved to its centre or a cylinder to its axis, or past it.
+        return past_centre(b, fi, &surf, sense, d);
+    };
     // The outward normal along a coedge at t: from its p-curve on the face's own surface (where
     // a projection near a pole could land on any meridian), else projected on the recognised one.
     let own = !matches!(f.surf, Surface::Nurbs(_)) || matches!(surf, Surface::Nurbs(_));
@@ -609,6 +614,391 @@ pub fn face_slab(b: &Body, fi: usize, d: f64) -> Result<Body> {
             why: format!(
                 "the face's slab encloses {volume:.6e}, not about its ends' {prismoid:.6e}"
             ),
+        });
+    }
+    Ok(body)
+}
+
+/// The slab of a whole torus (a face bounded only by its seams) grown outward until its tube is
+/// wider than its hole: the offset torus crosses itself through the axis, and the part across the
+/// axis lies inside the grown solid. The points within the tube's new radius of the middle circle
+/// are the meridian disk clipped at the axis revolved (an apple, its two dimples on the axis); the
+/// slab is that less the torus's own tube. None for any other face or move.
+fn spindle_slab(b: &Body, fi: usize, surf: &Surface, sense: bool, d: f64) -> Option<Result<Body>> {
+    let Surface::Torus { f: fr, rmaj, rmin } = surf else {
+        return None;
+    };
+    let f = &b.faces[fi];
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for c in f.loops.iter().flatten() {
+        *uses.entry(c.edge).or_default() += 1;
+    }
+    if !f
+        .loops
+        .iter()
+        .flatten()
+        .all(|c| b.edges[c.edge].degenerate || uses[&c.edge] > 1)
+    {
+        return None;
+    }
+    // Outward from the tube's middle circle, and wider than the hole.
+    let grow = d * if sense == fr.right_handed() {
+        1.0
+    } else {
+        -1.0
+    };
+    let r = rmin + grow;
+    if grow <= 0.0 || r <= *rmaj * (1.0 + tol::REL) {
+        return None;
+    }
+    let (x, z) = (fr.x.normalize(), fr.z.normalize());
+    let y = z.cross(&x);
+    // The meridian plane, its sketch x out from the axis and its y up it.
+    let plane = crate::Plane {
+        origin: fr.o,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+    };
+    let th = (-rmaj / r).acos();
+    let h = r * th.sin();
+    let p2 = nalgebra::Point2::new;
+    let region = crate::Region {
+        outer: crate::Loop {
+            curves: vec![
+                crate::Curve2::Arc {
+                    center: p2(*rmaj, 0.0),
+                    radius: r,
+                    start_angle: -th,
+                    sweep: 2.0 * th,
+                    source: None,
+                },
+                crate::Curve2::Line {
+                    a: p2(0.0, h),
+                    b: p2(0.0, -h),
+                    source: None,
+                },
+            ],
+        },
+        holes: vec![crate::Loop {
+            curves: vec![crate::Curve2::Circle {
+                center: p2(*rmaj, 0.0),
+                radius: *rmin,
+                source: None,
+            }],
+        }],
+        source: None,
+    };
+    Some((|| {
+        let prof = crate::Profile::new(plane, vec![region]);
+        let regions = crate::native::profile::regions(&prof)?;
+        let mf = crate::native::profile::merge_regions(&regions)?;
+        let kind = crate::native::sweep::Revolve {
+            plane,
+            f: Frame { o: fr.o, x, y, z },
+        };
+        Ok(crate::native::sweep::sweep_full(
+            &mf,
+            &[],
+            &kind,
+            0.0,
+            std::f64::consts::TAU,
+            true,
+            true,
+        )?
+        .body)
+    })())
+}
+
+/// Where a sphere's or a cylinder's face moved toward its centre closes up: the centre, or the
+/// axis.
+#[derive(Debug, Clone, Copy)]
+enum Centre {
+    Point(P3),
+    Axis(P3, V3),
+}
+
+impl Centre {
+    /// The point of the centre a face's point moves to.
+    fn of(&self, p: &P3) -> P3 {
+        match self {
+            Centre::Point(c) => *c,
+            Centre::Axis(o, z) => o + z * (p - o).dot(z),
+        }
+    }
+}
+
+/// The slab of a sphere's face moved by `d` to its centre or past it, or a cylinder's to its
+/// axis or past it, where its offset surface vanishes or turns inside out. The face's points
+/// move along their normals into the centre, so the slab is the cone (a wedge, on a cylinder) of
+/// segments from the face to the centre: the face and sides from its edges to the centre
+/// ([`wedge_slab`]). Moved on past the centre, each point goes on out the other side of it, to
+/// as far past it as the move overshoots: the wedge again on that side, shrunk (or grown) to
+/// that radius, and the slab is both.
+fn past_centre(b: &Body, fi: usize, surf: &Surface, sense: bool, d: f64) -> Result<Body> {
+    let ds = if sense { d } else { -d };
+    let (r, beyond, centre) = match surf {
+        Surface::Sphere { f, r } => {
+            let h = if f.right_handed() { 1.0 } else { -1.0 };
+            (*r, -(r + ds * h), Centre::Point(f.o))
+        }
+        Surface::Cylinder { f, r } => {
+            let h = if f.right_handed() { 1.0 } else { -1.0 };
+            (*r, -(r + ds * h), Centre::Axis(f.o, f.z.normalize()))
+        }
+        _ => return Err(unsupported("slabs of this kind of face")),
+    };
+    // (`beyond`: how far past the centre the face is moved; the face moves toward it, as only
+    // then does the offset vanish.)
+    let wedge = wedge_slab(b, fi, surf, sense, d, &centre)?;
+    if beyond <= tol::POINT.max(tol::REL * r) {
+        return Ok(wedge);
+    }
+    let k = beyond / r;
+    let far = match centre {
+        // The wedge scaled by k through the centre: a point reflection.
+        Centre::Point(c) => wedge.transformed(&Affine {
+            m: nalgebra::Matrix3::identity() * -k,
+            t: c.coords * (1.0 + k),
+        }),
+        // On a cylinder the wedge scales across its axis only: the part of it within `beyond`
+        // of the axis (less the slab from the face in to that radius), or with the slab out to
+        // it, turned half round the axis.
+        Centre::Axis(o, z) => {
+            let near = if (k - 1.0).abs() < tol::REL {
+                wedge.clone()
+            } else {
+                // A move of the face from radius r to `beyond`, toward the axis or away.
+                let to = (r - beyond) * d.signum();
+                let ring = face_slab(b, fi, to)?;
+                let op = if k < 1.0 {
+                    crate::BoolOp::Subtract
+                } else {
+                    crate::BoolOp::Union
+                };
+                crate::native::boolean::boolean_bodies(&wedge, &ring, op)?.body
+            };
+            let m = z * z.transpose() * 2.0 - nalgebra::Matrix3::identity();
+            near.transformed(&Affine {
+                m,
+                t: o.coords - m * o.coords,
+            })
+        }
+    };
+    Ok(crate::native::boolean::boolean_bodies(&wedge, &far, crate::BoolOp::Union)?.body)
+}
+
+/// The cone of segments from face `fi` of `b` (on `surf`, a sphere or a cylinder) to its
+/// `centre`: the face, and a side between each edge and its image on the centre (the point, or
+/// the stretch of the axis beside the edge), meeting along the lines from the edge's vertices to
+/// the centre. A side is the edge's cone to the point (a plane where the edge lies in one with
+/// it), or the ruled surface between the edge and the axis (a plane by a straight edge).
+fn wedge_slab(
+    b: &Body,
+    fi: usize,
+    surf: &Surface,
+    sense: bool,
+    d: f64,
+    centre: &Centre,
+) -> Result<Body> {
+    let f = &b.faces[fi];
+    let size = b.bbox().diagonal();
+    let close = tol::POINT.max(tol::REL * size);
+    let mut xb = XBuilder::new();
+    let mut vb: HashMap<usize, usize> = HashMap::new();
+    let mut vt: HashMap<usize, usize> = HashMap::new();
+    // The builder's vertices on the centre, one per point.
+    let mut tops: Vec<(P3, usize)> = Vec::new();
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for c in f.loops.iter().flatten() {
+        *uses.entry(c.edge).or_default() += 1;
+    }
+    for c in f.loops.iter().flatten() {
+        let e = &b.edges[c.edge];
+        if e.degenerate {
+            continue;
+        }
+        for v in e.v {
+            if vb.contains_key(&v) {
+                continue;
+            }
+            let p = b.verts[v].p;
+            let q = centre.of(&p);
+            if (p - q).norm() < close {
+                return Err(unsupported("a slab of a face that reaches its centre"));
+            }
+            vb.insert(v, xb.vertex(p));
+            let t = match tops.iter().find(|(x, _)| (x - q).norm() < close) {
+                Some(&(_, t)) => t,
+                None => {
+                    let t = xb.vertex(q);
+                    tops.push((q, t));
+                    t
+                }
+            };
+            vt.insert(v, t);
+        }
+    }
+    let mut eb: HashMap<usize, usize> = HashMap::new();
+    let mut rails: HashMap<usize, usize> = HashMap::new();
+    // Stretches of the axis, by their (start, end) vertices.
+    let mut axis_edges: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut sides: Vec<XFace> = Vec::new();
+    for c in f.loops.iter().flatten() {
+        let ei = c.edge;
+        let e = &b.edges[ei];
+        if e.degenerate || eb.contains_key(&ei) {
+            continue;
+        }
+        let (v0, v1) = (e.v[0], e.v[1]);
+        let (t0, t1) = (e.t[0], e.t[1]);
+        let a = xb
+            .edge(e.curve.clone(), vb[&v0], vb[&v1])
+            .ok_or(unsupported("an empty edge in a slab"))?;
+        xb.body.edges[a].tol = e.tol;
+        eb.insert(ei, a);
+        // A seam (used twice) bounds no side.
+        if uses[&ei] > 1 {
+            continue;
+        }
+        let img = |t: f64| centre.of(&e.curve.point(t));
+        let q0 = img(t0);
+        let n = 32;
+        let spread = (0..=n)
+            .map(|i| (img(t0 + (t1 - t0) * i as f64 / n as f64) - q0).norm())
+            .fold(0.0, f64::max);
+        // The edge's image: a point, or a stretch of the axis with the edge's parameters.
+        let (image, top) = if spread < close {
+            (
+                Curve::Line {
+                    o: q0,
+                    d: V3::zeros(),
+                },
+                None,
+            )
+        } else {
+            let image = match (&e.curve, centre) {
+                (Curve::Line { o, d: dir }, Centre::Axis(_, z)) => Curve::Line {
+                    o: centre.of(o),
+                    d: z * dir.dot(z),
+                },
+                _ => {
+                    let params: Vec<f64> = (0..=n)
+                        .map(|i| t0 + (t1 - t0) * i as f64 / n as f64)
+                        .collect();
+                    let pts: Vec<P3> = params.iter().map(|&t| img(t)).collect();
+                    Curve::Nurbs(Arc::new(NurbsCurve::interpolate(
+                        &pts, &params, 3, None, None,
+                    )))
+                }
+            };
+            let (w0, w1) = (vt[&v0], vt[&v1]);
+            if w0 == w1 {
+                return Err(unsupported("a slab of an edge that winds round its axis"));
+            }
+            // The stretch of the axis, shared by the sides of the edges either side of it.
+            let top = match axis_edges.get(&(w1, w0)) {
+                Some(&t) => (t, false),
+                None => match axis_edges.get(&(w0, w1)) {
+                    Some(&t) => (t, true),
+                    None => {
+                        let (line, _) = Curve::line(xb.body.verts[w0].p, xb.body.verts[w1].p);
+                        let t = xb
+                            .edge(line, w0, w1)
+                            .ok_or(unsupported("an empty edge in a slab"))?;
+                        axis_edges.insert((w0, w1), t);
+                        (t, true)
+                    }
+                },
+            };
+            (image, Some(top))
+        };
+        let side = side_surface(&e.curve, t0, t1, &image);
+        let mut rail = |v: usize, xb: &mut XBuilder| -> Result<usize> {
+            if let Some(r) = rails.get(&v) {
+                return Ok(*r);
+            }
+            let (p, q) = (xb.body.verts[vb[&v]].p, xb.body.verts[vt[&v]].p);
+            let (line, _) = Curve::line(p, q);
+            let r = xb
+                .edge(line, vb[&v], vt[&v])
+                .ok_or(unsupported("a slab of no thickness"))?;
+            xb.body.edges[r].tol = b.verts[v].tol;
+            rails.insert(v, r);
+            Ok(r)
+        };
+        let loops = if v0 == v1 {
+            if top.is_some() {
+                return Err(unsupported("a slab of an edge that winds round its axis"));
+            }
+            if matches!(side, Surface::Plane { .. }) {
+                // A disk (a closed edge in a plane through the centre).
+                vec![vec![(a, true)]]
+            } else {
+                let r = rail(v0, &mut xb)?;
+                vec![vec![(a, true), (r, true), (r, false)]]
+            }
+        } else {
+            let (r0, r1) = (rail(v0, &mut xb)?, rail(v1, &mut xb)?);
+            let mut l = vec![(a, true), (r1, true)];
+            if let Some((t, fwd)) = top {
+                l.push((t, !fwd));
+            }
+            l.push((r0, false));
+            vec![l]
+        };
+        sides.push(XFace {
+            surf: side,
+            sense: true,
+            loops,
+        });
+    }
+    let loops: Vec<Vec<(usize, bool)>> = f
+        .loops
+        .iter()
+        .map(|l| {
+            l.iter()
+                .filter(|c| eb.contains_key(&c.edge))
+                .map(|c| (eb[&c.edge], c.fwd))
+                .collect()
+        })
+        .filter(|l: &Vec<(usize, bool)>| !l.is_empty())
+        .collect();
+    let mut ids = vec![xb.face(XFace {
+        surf: surf.clone(),
+        sense: if d > 0.0 { !sense } else { sense },
+        loops,
+    })];
+    for s in sides {
+        ids.push(xb.face(s));
+    }
+    let shell = xb.shell(ids, true);
+    xb.solid(vec![shell]);
+    let (mut body, warnings) = xb.finish();
+    body.fit_tolerances_searched(1e-5 * (1.0 + size));
+    if std::env::var_os("CADRS_SLAB_DEBUG").is_some() {
+        eprintln!(
+            "wedge of face {fi} ({:?}) by {d}: {warnings:?}",
+            f.surf.kind()
+        );
+    }
+    let mut issues = body.check();
+    if !issues.is_empty() && issues.iter().all(|s| s.contains("encloses a volume")) {
+        body.faces.iter_mut().for_each(Body::reverse_face);
+        issues = body.check();
+    }
+    if !issues.is_empty() || body.solids.is_empty() {
+        return Err(KernelError::InvalidResult {
+            op: "slab",
+            why: format!(
+                "the face's slab to its centre isn't valid: {}",
+                issues.first().map_or("no solid", |s| s.as_str())
+            ),
+        });
+    }
+    if crate::native::mass::body_volume(&body) <= 0.0 {
+        return Err(KernelError::InvalidResult {
+            op: "slab",
+            why: "the face's slab to its centre has no volume".into(),
         });
     }
     Ok(body)

@@ -1541,6 +1541,72 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
     Ok(out)
 }
 
+/// The solid bounded by the planes `surfs` of a convex polyhedron `b` (each face's, with the
+/// material on the side it is now): the half-spaces' common part, with the face of `b` each of its
+/// faces lies on. None when `b` is not a convex polyhedron (a face curved, or a vertex outside
+/// some face's plane), or the planes bound no solid within reach of `b`.
+fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, Vec<usize>)>> {
+    let bb = b.bbox();
+    let size = bb.diagonal();
+    let close = tol::POINT.max(tol::REL * size);
+    // Each face's plane: a point on it and its outward normal, before and after.
+    let plane = |s: &Surface, sense: bool| match s {
+        Surface::Plane { f } => Some((
+            f.o,
+            f.x.cross(&f.y).normalize() * if sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for (f, s) in b.faces.iter().zip(surfs) {
+        before.push(plane(&f.surf, f.sense)?);
+        after.push(plane(s, f.sense)?);
+    }
+    if b.verts
+        .iter()
+        .any(|v| before.iter().any(|(o, n)| (v.p - o).dot(n) > close))
+    {
+        return None;
+    }
+    let mut reach = bb;
+    reach.add(&(bb.min - V3::repeat(size)));
+    reach.add(&(bb.max + V3::repeat(size)));
+    Some((|| {
+        let mut acc: Option<Body> = None;
+        for (o, n) in &after {
+            let h = super::ops::half_space_box(*o, -n, &reach)?;
+            acc = Some(match acc {
+                None => h,
+                Some(a) => super::boolean::boolean_bodies(&a, &h, BoolOp::Intersect)?.body,
+            });
+        }
+        let out =
+            acc.filter(|a| !a.faces.is_empty())
+                .ok_or_else(|| KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes bound nothing".into(),
+                })?;
+        // Every face on one of the planes (none on a half-space box's far sides).
+        let mut from = Vec::new();
+        for f in &out.faces {
+            let (o, n) = plane(&f.surf, f.sense).ok_or_else(|| KernelError::InvalidResult {
+                op: "draft",
+                why: "a curved face bounding planes".into(),
+            })?;
+            let j = after
+                .iter()
+                .position(|(q, m)| m.dot(&n) > 1.0 - tol::ANGULAR && (o - q).dot(m).abs() < close)
+                .ok_or_else(|| KernelError::InvalidResult {
+                    op: "draft",
+                    why: "the drafted planes don't close round the part".into(),
+                })?;
+            from.push(j);
+        }
+        Ok((out, from))
+    })())
+}
+
 /// `Kernel::replace_faces`: faces given new surfaces, each keeping the side its material is
 /// on (SMLib's `SmBrep::LocalOperation` keeps the face's use).
 pub fn replace_faces(
@@ -2126,17 +2192,29 @@ pub fn draft(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<OpR
             }
         };
     }
-    let out = replace_surfaces(&b, &surfs)?;
-    let nf = out.faces.len();
+    let (out, from) = match replace_surfaces(&b, &surfs) {
+        Ok(out) => {
+            let n = out.faces.len();
+            (out, (0..n).collect::<Vec<_>>())
+        }
+        // Faces the draft swallows (a box's top, where its sides meet below it): of a convex
+        // polyhedron, the solid the planes bound, as they are after the draft.
+        Err(e) => match planes_bound(&b, &surfs) {
+            Some(Ok(r)) => r,
+            Some(Err(_)) | None => return Err(e),
+        },
+    };
     let id = k.insert(out);
     let history = History {
-        modified: (0..nf)
-            .map(|i| {
+        modified: from
+            .iter()
+            .enumerate()
+            .map(|(i, &j)| {
                 (
                     FaceId(i as u64),
                     InputFace {
                         body,
-                        face: FaceId(i as u64),
+                        face: FaceId(j as u64),
                     },
                 )
             })

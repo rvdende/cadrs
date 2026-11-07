@@ -52,6 +52,5 @@ case_401_extrusion_old
 case_403_fillet1019
 case_405_cyl_on_box1
 case_410_blade_hub_1 slow
-case_411_blade_hub_2 slow
 case_412_blade_hub_3 slow
 case_421_blade_fillet_fails slow

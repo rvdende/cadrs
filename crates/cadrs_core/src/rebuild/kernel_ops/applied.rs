@@ -627,7 +627,20 @@ impl Rebuilder {
                 hollow,
                 sharp: !outward,
             };
-            k.shell_with(body, &spec)
+            let r = k.shell_with(body, &spec)?;
+            // Walls so thick they meet everywhere leave nothing hollowed: the kernel's answer
+            // is the part itself, which as a feature is a mistake to point out.
+            if !outward
+                && !hollow
+                && let [b] = r.bodies[..]
+                && let (Ok(before), Ok(after)) = (k.mass_properties(body), k.mass_properties(b))
+                && after.volume >= before.volume * (1.0 - 1e-9)
+            {
+                return Err(cadrs_kernel::KernelError::InvalidParameter(
+                    "The shell's walls would intersect themselves; reduce the thickness".into(),
+                ));
+            }
+            Ok(r)
         })
         .map(|mut o| {
             if self.stage_for == Some(id) {

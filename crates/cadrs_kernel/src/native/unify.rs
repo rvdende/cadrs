@@ -146,6 +146,17 @@ fn edge_mid_on(b: &Body, f: usize, e: usize, s: &Surface) -> bool {
 
 /// Whether face `f`'s edges lie on surface `s` (a few points of each, within 1e-6 of their
 /// size), where `s` is: inside a B-spline's range, not on its extension.
+/// Whether face `f`'s edges' ends lie within the merge distance of the plane `s`.
+fn flat_on(b: &Body, f: usize, s: &Surface) -> bool {
+    b.faces[f].loops.iter().flatten().all(|c| {
+        let e = &b.edges[c.edge];
+        [e.t[0], e.t[1]].iter().all(|&t| {
+            s.signed_distance(&e.point(t))
+                .is_none_or(|d| d.abs() <= tol::POINT)
+        })
+    })
+}
+
 fn boundary_on(b: &Body, f: usize, s: &Surface) -> bool {
     b.faces[f].loops.iter().flatten().all(|c| {
         let e = &b.edges[c.edge];
@@ -256,6 +267,14 @@ fn merge_faces(
         } else {
             a.surf.same_domain(&c.surf, tol::POINT)
         };
+        // Two planes a hair from parallel pass `same_domain` (its test is on the cosine of their
+        // angle): they merge only when each face lies on the other's plane too (a cube's top and
+        // the face of a cut a millionth steep across it don't).
+        let planes =
+            matches!(a.surf, Surface::Plane { .. }) && matches!(c.surf, Surface::Plane { .. });
+        if planes && a.surf != c.surf && !(flat_on(b, f, &c.surf) && flat_on(b, g, &a.surf)) {
+            return false;
+        }
         same.is_some_and(|same| same == (a.sense == c.sense))
             && (!(sampled(&a.surf) || sampled(&c.surf))
                 || a.surf == c.surf
@@ -1605,6 +1624,37 @@ pub fn merge_edges(b: &mut Body) {
         }
         compact(b);
     }
+}
+
+/// B-spline edges that are straight lines run at a constant speed (a loft's rails to a point, a
+/// skin's between corners) become lines on the same parameters, so their faces' p-curves hold
+/// as they are and what meets them sees a line (a chamfer's or a tube's planes and cylinders, not
+/// B-splines fitted along them). True when any changed.
+pub fn straighten(b: &mut Body) -> bool {
+    let mut changed = false;
+    for e in &mut b.edges {
+        let Curve::Nurbs(n) = &e.curve else { continue };
+        if e.degenerate {
+            continue;
+        }
+        let (t0, t1) = (e.t[0], e.t[1]);
+        let (p0, p1) = (n.point(t0), n.point(t1));
+        let len = (p1 - p0).norm();
+        if !(t1 > t0 && len > tol::POINT) {
+            continue;
+        }
+        let d = (p1 - p0) / (t1 - t0);
+        let o = p0 - d * t0;
+        let close = 1e-12 * (1.0 + len + p0.coords.norm());
+        if (1..16).all(|i| {
+            let t = t0 + (t1 - t0) * i as f64 / 16.0;
+            (n.point(t) - (o + d * t)).norm() <= close
+        }) {
+            e.curve = Curve::Line { o, d };
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// B-spline faces that are flat (all control points in one plane: a loft or skin through

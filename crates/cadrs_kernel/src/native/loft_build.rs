@@ -2040,10 +2040,11 @@ pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
             }
         }
     }
-    let built = match loft_exact(k, spec, &mut secs, solid)? {
+    let mut built = match loft_exact(k, spec, &mut secs, solid)? {
         Some(b) => b,
         None => loft_sampled(k, spec, solid)?,
     };
+    crate::native::unify::straighten(&mut built.body);
     // A face section that isn't flat is the loft's own cap; a flat face section's cap lies on the
     // face (both work the same here).
     Ok(Tagged::from_built(built).into_result(k))

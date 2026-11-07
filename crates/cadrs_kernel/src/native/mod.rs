@@ -32,6 +32,11 @@ pub(crate) use env_flag;
 // tests and clippy gate) dead code is found as before.
 // Written out (not through a macro) so that rustfmt and other tools see the modules.
 #[cfg(feature = "testkit")]
+pub mod affine;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod affine;
+#[cfg(feature = "testkit")]
 pub mod axes;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -111,6 +116,11 @@ pub mod curve_split;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod curve_split;
+#[cfg(feature = "testkit")]
+pub mod decimate;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod decimate;
 #[cfg(feature = "testkit")]
 pub mod distance;
 #[cfg(not(feature = "testkit"))]
@@ -307,6 +317,16 @@ pub mod sweep;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep;
 #[cfg(feature = "testkit")]
+pub mod sweep_planar;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_planar;
+#[cfg(feature = "testkit")]
+pub mod sweep_solid;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_solid;
+#[cfg(feature = "testkit")]
 pub mod tails;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -351,4 +371,5 @@ pub use kernel::NativeKernel;
 pub use math::{Affine, Frame, P3, V3};
 pub use nurbs::{NurbsCurve, NurbsSurface};
 pub use surface::{D2, Surface};
+pub use tess::keep_meshes;
 pub use topo::{Body, BodyBuilder, CheckLevel, Coedge, Edge, Face, Shell, Solid, Vertex, Wire};

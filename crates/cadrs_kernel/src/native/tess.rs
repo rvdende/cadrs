@@ -212,11 +212,22 @@ pub fn edge_samples(body: &Body, defl: f64, ang: f64) -> EdgeSamples {
 
 /// Each edge's sample parameters and points: the curve's own sampling for the angle, then
 /// segments bisected until each lies within the chord of the curve (checked at its quarter
-/// points) and is no longer than the maximum edge. The ends are exactly the edge's vertices.
+/// points) and is no longer than the maximum edge, and until the normal of no face it bounds
+/// turns more than the angle along one. The ends are exactly the edge's vertices.
 pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
+    // The faces' sides of each edge: its coedges' surfaces and p-curves.
+    let mut sides: Vec<Vec<(&Surface, &super::curve::Curve)>> = vec![Vec::new(); body.edges.len()];
+    for f in &body.faces {
+        for c in f.loops.iter().flatten() {
+            if let Some(s) = sides.get_mut(c.edge) {
+                s.push((&f.surf, &c.pc));
+            }
+        }
+    }
     body.edges
         .par_iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(ei, e)| {
             if e.degenerate {
                 return (
                     vec![e.t[0], e.t[1]],
@@ -225,6 +236,7 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
             }
             let ts = e.curve.sample_params(e.t[0], e.t[1], p.chord, p.ang());
             let ts = refine_polyline(|t| e.point(t), &ts, p);
+            let ts = refine_by_faces(|t| e.point(t), &ts, &sides[ei], p);
             let mut pts: Vec<P3> = ts.iter().map(|&t| e.point(t)).collect();
             let n = pts.len();
             pts[0] = body.verts[e.v[0]].p;
@@ -282,6 +294,89 @@ fn refine_polyline(c: impl Fn(f64) -> P3, ts: &[f64], p: &TessParams) -> Vec<f64
     for &t in &ts[1..] {
         let cur = (t, c(t));
         split(&c, p, prev, cur, 0, &mut out);
+        prev = cur;
+    }
+    out
+}
+
+/// Bisects the segments of a sampled edge along which the normal of a face it bounds turns
+/// more than the angle: a straight edge of a twisted ruled face (a loft between a square and a
+/// diamond) is sampled at its ends only by its curve, and the face's triangles then need points
+/// along it, which only the edge's shared samples may give (an interior point put on it splits
+/// one face's side and not the other's). Segments under the chord are left whole.
+fn refine_by_faces(
+    c: impl Fn(f64) -> P3,
+    ts: &[f64],
+    sides: &[(&Surface, &super::curve::Curve)],
+    p: &TessParams,
+) -> Vec<f64> {
+    const MAX_SAMPLES: usize = 1 << 16;
+    let curved: Vec<&(&Surface, &super::curve::Curve)> = sides
+        .iter()
+        .filter(|(s, _)| !matches!(s, Surface::Plane { .. }))
+        .collect();
+    if curved.is_empty() || ts.len() < 2 {
+        return ts.to_vec();
+    }
+    let normals = |t: f64| -> Vec<Option<V3>> {
+        curved
+            .iter()
+            .map(|(s, pc)| {
+                // None at a pole or an apex, where the surface has no normal of its own (a
+                // derivative vanishes there, to rounding, and may point either way: a cone's
+                // normal at its apex is the other nappe's).
+                let q = pc.point(t);
+                let (_, su, sv) = s.d1(q.x, q.y);
+                let n = su.cross(&sv);
+                let (l, lu, lv) = (n.norm(), su.norm(), sv.norm());
+                (l.is_finite()
+                    && l > 1e-10 * lu * lv
+                    && l > tol::TINY
+                    && lu > 1e-9 * lv
+                    && lv > 1e-9 * lu)
+                    .then(|| n / l)
+            })
+            .collect()
+    };
+    let turns = |a: &[Option<V3>], b: &[Option<V3>]| {
+        a.iter()
+            .zip(b)
+            .any(|(x, y)| matches!((x, y), (Some(x), Some(y)) if x.angle(y) > p.ang()))
+    };
+    #[allow(clippy::too_many_arguments)]
+    fn split(
+        c: &impl Fn(f64) -> P3,
+        normals: &impl Fn(f64) -> Vec<Option<V3>>,
+        turns: &impl Fn(&[Option<V3>], &[Option<V3>]) -> bool,
+        chord: f64,
+        (a, na): (f64, &[Option<V3>]),
+        (b, nb): (f64, &[Option<V3>]),
+        depth: u32,
+        out: &mut Vec<f64>,
+    ) {
+        if depth < 16 && out.len() < MAX_SAMPLES && (c(b) - c(a)).norm() > chord && turns(na, nb) {
+            let m = 0.5 * (a + b);
+            let nm = normals(m);
+            split(c, normals, turns, chord, (a, na), (m, &nm), depth + 1, out);
+            split(c, normals, turns, chord, (m, &nm), (b, nb), depth + 1, out);
+        } else {
+            out.push(b);
+        }
+    }
+    let mut out = vec![ts[0]];
+    let mut prev = (ts[0], normals(ts[0]));
+    for &t in &ts[1..] {
+        let cur = (t, normals(t));
+        split(
+            &c,
+            &normals,
+            &turns,
+            p.chord,
+            (prev.0, &prev.1),
+            (cur.0, &cur.1),
+            0,
+            &mut out,
+        );
         prev = cur;
     }
     out
@@ -1273,6 +1368,19 @@ pub fn mesh_face_with(
     es: &[(Vec<f64>, Vec<P3>)],
     p: &TessParams,
 ) -> FaceMesh {
+    mesh_face_split(body, f, es, p, &[])
+}
+
+/// [`mesh_face_with`], with an interior point between each pair of boundary points of `split`
+/// (at the middle of their (u, v)), so no side of a triangle joins the two: where two faces both
+/// joined them, the mesh had a side four triangles shared ([`mesh_all`]).
+fn mesh_face_split(
+    body: &Body,
+    f: &Face,
+    es: &[(Vec<f64>, Vec<P3>)],
+    p: &TessParams,
+    split: &[[P3; 2]],
+) -> FaceMesh {
     let t_start = web_time::Instant::now();
     let prof = std::env::var("CADRS_TESS_PROFILE").is_ok();
     // The face's size, for its tolerances.
@@ -1289,7 +1397,25 @@ pub fn mesh_face_with(
     if !extent.is_finite() {
         return FaceMesh::default();
     }
-    let tol = (tol::REL_POINT * extent).max(1e-10);
+    // Under a tenth of its shortest edge too: a face with a feature a millionth of its size (a
+    // saw cut's slit 10⁻⁶ wide in a 10 mm wall) has boundary points closer than the face's
+    // relative tolerance, which would take them for one.
+    let shortest = f
+        .loops
+        .iter()
+        .flatten()
+        .filter(|c| !body.edges[c.edge].degenerate)
+        .map(|c| {
+            let ps = &es[c.edge].1;
+            (ps[ps.len() - 1] - ps[0]).norm().max(
+                ps.windows(2)
+                    .map(|w| (w[1] - w[0]).norm())
+                    .fold(0.0, f64::max),
+            )
+        })
+        .filter(|l| *l > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let tol = (tol::REL_POINT * extent).min(0.1 * shortest).max(1e-10);
     let dom = Domain::new(&f.surf, tol);
     let mut bloops = boundary(body, f, es, &dom, p, tol);
     let whole = surface_loops(body, f, &bloops, &dom);
@@ -1348,10 +1474,28 @@ pub fn mesh_face_with(
     // Likewise an extrusion's (its curve's parameter and its direction's length) and a surface
     // of revolution's along its meridian: unscaled, a 0.02 mm extrusion of a spline over a
     // parameter range of 0.0016 took a 14 000-point grid.
-    let scale = f.surf.metric();
+    // (u, v) scaled to about true lengths over the face's own box. A sphere's and a torus's fixed
+    // metric (the radius each way) is far off on part of them, as on a cap round a sphere's
+    // pole, where a step in u is cos v as long: triangles spaced by it come out long round the
+    // pole and sag below it (the planes, cylinders and cones keep theirs).
+    // (A cone's metric is its radius where v = 0, its apex for a cone drawn from it: over the
+    // face, its widest radius there, else the grid's steps round it shrink a thousandfold.)
+    let scale = match &f.surf {
+        Surface::Cone { r, a, .. } => {
+            let w = (r + vbox.0 * a.sin())
+                .abs()
+                .max((r + vbox.1 * a.sin()).abs());
+            (w.max(1e-3), 1.0)
+        }
+        s => s.metric(),
+    };
     let scale = if matches!(
         f.surf,
-        Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        Surface::Nurbs(_)
+            | Surface::Extrusion { .. }
+            | Surface::Revolution { .. }
+            | Surface::Sphere { .. }
+            | Surface::Torus { .. }
     ) {
         mean_speeds(&dom, ubox, vbox).unwrap_or(scale)
     } else {
@@ -1392,6 +1536,17 @@ pub fn mesh_face_with(
             .map(|&q| vx(&dom, q, None, scale))
             .filter(|v| v.at.x.is_finite() && v.at.y.is_finite()),
     );
+    // Between boundary points two faces both joined: at the middle of their (u, v) here, on the
+    // copy of the period the boundary has them on.
+    for [a, b] in split {
+        let find = |q: &P3| verts[..n_boundary].iter().find(|v| v.p == *q).map(|v| v.uv);
+        if let (Some(ua), Some(ub)) = (find(a), find(b)) {
+            let v = vx(&dom, nalgebra::center(&ua, &ub), None, scale);
+            if v.at.x.is_finite() && v.at.y.is_finite() {
+                verts.push(v);
+            }
+        }
+    }
     let mut cons: Vec<[usize; 2]> = Vec::new();
     let mut count: HashMap<(usize, usize), usize> = HashMap::default();
     for &(a, b) in &loops {
@@ -1844,8 +1999,20 @@ pub fn mesh(body: &Body, p: &TessParams) -> Result<(Vec<FaceMesh>, EdgeSamples)>
 /// The boundary points (edge samples) up to which a plane is meshed without [`MeshCache`].
 const PLANE_UNKEPT: usize = 16;
 
+/// Whether face meshes are kept to be used again ([`keep_meshes`]).
+static KEEP_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the tessellator keeps the faces' meshes, to give them again when the same face is
+/// meshed again with the same controls (on by default: a model rebuilt after an edit meshes
+/// most of its faces again unchanged). A program that meshes each body once, a batch converter
+/// or a benchmark's runner, turns it off and saves the keys and the copies.
+pub fn keep_meshes(on: bool) {
+    KEEP_MESHES.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
+    let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed);
     let faces: Vec<FaceMesh> = body
         .faces
         .par_iter()
@@ -1861,7 +2028,7 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
                     .sum::<usize>()
                     <= PLANE_UNKEPT
             };
-            if matches!(f.surf, Surface::Plane { .. }) && few() {
+            if !keep || matches!(f.surf, Surface::Plane { .. }) && few() {
                 return mesh_face_with(body, f, &es, p);
             }
             let key = face_mesh_key(body, f, &es, p);
@@ -1874,7 +2041,77 @@ fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
             m
         })
         .collect();
+    let faces = split_shared_sides(body, &es, p, faces);
     (faces, es)
+}
+
+/// The faces re-meshed where two of them joined the same two boundary points by an inner side
+/// of their triangles, each with a point between the two: that side was then four triangles'
+/// (two faces pinched to a point where they meet, as a sphere and a cylinder tangent at the
+/// crossing of Viviani's curve are), which a closed mesh can't have.
+fn split_shared_sides(
+    body: &Body,
+    es: &EdgeSamples,
+    p: &TessParams,
+    mut faces: Vec<FaceMesh>,
+) -> Vec<FaceMesh> {
+    let key = |q: &P3| [q.x.to_bits(), q.y.to_bits(), q.z.to_bits()];
+    // A side two faces share runs between points of edges (a face's other points are its own):
+    // only those of each face's inner sides (used both ways in it) are looked at, by their ends'
+    // points.
+    let on_edges: FastSet<[u64; 3]> = es.iter().flat_map(|(_, ps)| ps.iter().map(key)).collect();
+    let mut owners: HashMap<([u64; 3], [u64; 3]), Vec<usize>> = HashMap::default();
+    for (fi, m) in faces.iter().enumerate() {
+        let on: Vec<bool> = m
+            .positions
+            .iter()
+            .map(|q| on_edges.contains(&key(q)))
+            .collect();
+        let mut sides: Vec<(u32, u32)> = Vec::new();
+        for t in &m.indices {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                if on[a as usize] && on[b as usize] {
+                    sides.push((a, b));
+                }
+            }
+        }
+        sides.sort_unstable();
+        for &(a, b) in &sides {
+            if a < b && sides.binary_search(&(b, a)).is_ok() {
+                let (ka, kb) = (key(&m.positions[a as usize]), key(&m.positions[b as usize]));
+                owners.entry((ka.min(kb), ka.max(kb))).or_default().push(fi);
+            }
+        }
+    }
+    let mut splits: HashMap<usize, Vec<[P3; 2]>> = HashMap::default();
+    for ((ka, kb), fs) in owners {
+        if fs.len() < 2 {
+            continue;
+        }
+        let pt = |k: [u64; 3]| {
+            P3::new(
+                f64::from_bits(k[0]),
+                f64::from_bits(k[1]),
+                f64::from_bits(k[2]),
+            )
+        };
+        for fi in fs {
+            splits.entry(fi).or_default().push([pt(ka), pt(kb)]);
+        }
+    }
+    let mut todo: Vec<(usize, Vec<[P3; 2]>)> = splits.into_iter().collect();
+    todo.sort_by_key(|t| t.0);
+    let redone: Vec<(usize, FaceMesh)> = todo
+        .par_iter()
+        .map(|(fi, pairs)| (*fi, mesh_face_split(body, &body.faces[*fi], es, p, pairs)))
+        .collect();
+    for (fi, m) in redone {
+        if !m.indices.is_empty() {
+            faces[fi] = m;
+        }
+    }
+    faces
 }
 
 /// What a face's mesh ([`mesh_face_with`]) is made from, hashed to 128 bits

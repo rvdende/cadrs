@@ -887,6 +887,183 @@ impl Kernel for NativeKernel {
         super::sweep::path::sweep_with(self, profile, spec)
     }
 
+    fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
+        super::sweep_solid::sweep_solid(self, body, motion)
+    }
+
+    fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
+        use nalgebra::{Point2, Unit};
+        let bad = |what: &str| {
+            Err(KernelError::InvalidParameter(format!(
+                "The {what} must be positive"
+            )))
+        };
+        let line = |a: (f64, f64), b: (f64, f64)| Curve2::Line {
+            a: Point2::new(a.0, a.1),
+            b: Point2::new(b.0, b.1),
+            source: None,
+        };
+        let region = |curves: Vec<Curve2>| Region {
+            outer: Loop { curves },
+            holes: vec![],
+            source: None,
+        };
+        // A plane through `o` containing the axis `z`, its sketch x square to it and y along it.
+        let through = |o: Point3<f64>, z: V3| {
+            let z = z.normalize();
+            let x = any_perpendicular(&z);
+            Plane {
+                origin: o,
+                x_dir: Unit::new_normalize(x),
+                normal: Unit::new_normalize(x.cross(&z)),
+            }
+        };
+        let turned = |k: &mut Self, plane: Plane, curves: Vec<Curve2>, o: Point3<f64>, z: V3| {
+            let axis = Axis {
+                origin: o,
+                dir: Unit::new_normalize(z),
+            };
+            k.revolve_with(
+                &Profile::new(plane, vec![region(curves)]),
+                &RevolveSpec::solid(axis, None),
+            )
+        };
+        match *p {
+            Primitive::Box { min, max } => {
+                let d = max - min;
+                if !(d.x > 0.0 && d.y > 0.0 && d.z > 0.0) {
+                    return bad("box's size");
+                }
+                let plane = Plane {
+                    origin: Point3::new(0.0, 0.0, min.z),
+                    x_dir: Unit::new_normalize(V3::x()),
+                    normal: Unit::new_normalize(V3::z()),
+                };
+                let (x0, y0, x1, y1) = (min.x, min.y, max.x, max.y);
+                let r = region(vec![
+                    line((x0, y0), (x1, y0)),
+                    line((x1, y0), (x1, y1)),
+                    line((x1, y1), (x0, y1)),
+                    line((x0, y1), (x0, y0)),
+                ]);
+                self.extrude_with(
+                    &Profile::new(plane, vec![r]),
+                    &ExtrudeSpec::blind(plane.normal, d.z),
+                )
+            }
+            Primitive::Cylinder {
+                base,
+                axis,
+                radius,
+                height,
+            } => {
+                if !(radius > 0.0 && height > 0.0) {
+                    return bad("cylinder's radius and height");
+                }
+                let plane = Plane {
+                    origin: base,
+                    x_dir: Unit::new_normalize(any_perpendicular(&axis)),
+                    normal: axis,
+                };
+                let r = region(vec![Curve2::Circle {
+                    center: Point2::origin(),
+                    radius,
+                    source: None,
+                }]);
+                self.extrude_with(
+                    &Profile::new(plane, vec![r]),
+                    &ExtrudeSpec::blind(axis, height),
+                )
+            }
+            Primitive::Cone {
+                base,
+                axis,
+                base_radius: r0,
+                top_radius: r1,
+                height: h,
+            } => {
+                if !(h > 0.0 && r0 >= 0.0 && r1 >= 0.0 && r0 + r1 > 0.0) {
+                    return bad("cone's height and a radius");
+                }
+                let mut pts = vec![(0.0, 0.0)];
+                if r0 > 0.0 {
+                    pts.push((r0, 0.0));
+                }
+                if r1 > 0.0 {
+                    pts.push((r1, h));
+                }
+                pts.push((0.0, h));
+                let curves = (0..pts.len())
+                    .map(|i| line(pts[i], pts[(i + 1) % pts.len()]))
+                    .collect();
+                let plane = through(base, axis.into_inner());
+                turned(self, plane, curves, base, axis.into_inner())
+            }
+            Primitive::Sphere {
+                center,
+                radius,
+                axis,
+                seam,
+            } => {
+                if !(radius > 0.0) {
+                    return bad("sphere's radius");
+                }
+                let z = axis.into_inner();
+                let x = (seam.into_inner() - z * seam.dot(&z))
+                    .try_normalize(tol::ANGULAR)
+                    .unwrap_or_else(|| any_perpendicular(&z));
+                let b = super::blend::ball_frame(center, radius, z, x)?;
+                let n = b.faces.len();
+                let id = self.insert(b);
+                Ok(OpResult {
+                    bodies: vec![id],
+                    history: History {
+                        generated: (0..n)
+                            .map(|i| {
+                                (
+                                    FaceId(i as u64),
+                                    Origin::ProfileCurve {
+                                        region: 0,
+                                        curve: i as u64,
+                                    },
+                                )
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                })
+            }
+            Primitive::Torus {
+                center,
+                axis,
+                major,
+                minor,
+            } => {
+                if !(minor > 0.0 && major > minor) {
+                    return Err(KernelError::InvalidParameter(
+                        "The torus's tube must be thinner than its ring is wide".into(),
+                    ));
+                }
+                let plane = through(center, axis.into_inner());
+                let tube = vec![Curve2::Circle {
+                    center: Point2::new(major, 0.0),
+                    radius: minor,
+                    source: None,
+                }];
+                turned(self, plane, tube, center, axis.into_inner())
+            }
+        }
+    }
+
+    fn sweep_with_law(
+        &mut self,
+        profile: &Profile,
+        spec: &SweepSpec,
+        law: &SweepLaw,
+    ) -> Result<OpResult> {
+        super::sweep::path::sweep_with_law(self, profile, spec, law)
+    }
+
     fn cells(&mut self, bodies: &[BodyId], select: &[(usize, bool)]) -> Result<Vec<BodyId>> {
         for &b in bodies {
             self.get(b)?;
@@ -1188,6 +1365,35 @@ impl Kernel for NativeKernel {
             m,
             t: center.coords - m * center.coords,
         });
+        let nf = b.faces.len();
+        let id = self.insert(b);
+        let history = History {
+            modified: (0..nf)
+                .map(|i| {
+                    (
+                        FaceId(i as u64),
+                        InputFace {
+                            body,
+                            face: FaceId(i as u64),
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        self.colored(Ok(OpResult {
+            bodies: vec![id],
+            history,
+        }))
+    }
+
+    fn transform_affine(
+        &mut self,
+        body: BodyId,
+        m: nalgebra::Matrix3<f64>,
+        t: nalgebra::Vector3<f64>,
+    ) -> Result<OpResult> {
+        let b = super::affine::affine_body(self.get(body)?, &Affine { m, t })?;
         let nf = b.faces.len();
         let id = self.insert(b);
         let history = History {

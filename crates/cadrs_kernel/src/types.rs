@@ -151,6 +151,46 @@ pub enum Curve2 {
         /// The sketch curve it came from.
         source: Option<u64>,
     },
+    /// A B-spline curve, rational or not (a sketch's spline, or a conic drawn exactly as a
+    /// rational quadratic): its `degree`, its `knots` (as many as the poles and the degree and
+    /// one more), its `poles` and their `weights` (empty for a polynomial curve). It runs over its
+    /// knots' domain, from `knots[degree]` to the knot `degree` from the end: clamped knots run
+    /// it from its first pole to its last, and a periodic curve's knots evenly spaced with its
+    /// first `degree` poles repeated at its end close it smoothly.
+    Spline {
+        /// The degree (1 or more).
+        degree: usize,
+        /// The knot vector, non-decreasing.
+        knots: Vec<f64>,
+        /// The control points.
+        poles: Vec<Point2<f64>>,
+        /// The poles' weights, or none for a polynomial curve.
+        weights: Vec<f64>,
+        /// The sketch curve it came from.
+        source: Option<u64>,
+    },
+}
+
+/// The B-spline of a [`Curve2::Spline`] (in the plane z = 0), or None when its knots, poles and
+/// weights don't make one.
+pub fn spline_nurbs(
+    degree: usize,
+    knots: &[f64],
+    poles: &[Point2<f64>],
+    weights: &[f64],
+) -> Option<crate::native::nurbs::NurbsCurve> {
+    if !(weights.is_empty() || weights.len() == poles.len()) {
+        return None;
+    }
+    let cps = poles
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let w = weights.get(i).copied().unwrap_or(1.0);
+            crate::native::nurbs::hom(&Point3::new(p.x, p.y, 0.0), w)
+        })
+        .collect();
+    crate::native::nurbs::NurbsCurve::new(degree, knots.to_vec(), cps).ok()
 }
 
 /// The point at `t` of the cubic Bézier curve with these poles.
@@ -238,6 +278,20 @@ impl Curve2 {
                 start + sweep * s,
             ),
             Curve2::Bezier { ref poles, .. } => bezier_point(poles, s),
+            Curve2::Spline {
+                degree,
+                ref knots,
+                ref poles,
+                ref weights,
+                ..
+            } => match spline_nurbs(degree, knots, poles, weights) {
+                Some(n) => {
+                    let (a, b) = n.range();
+                    let q = n.point(a + (b - a) * s);
+                    Point2::new(q.x, q.y)
+                }
+                None => poles.first().copied().unwrap_or_else(Point2::origin),
+            },
         }
     }
 
@@ -250,7 +304,8 @@ impl Curve2 {
             | Curve2::Ellipse { source, .. }
             | Curve2::EllipseArc { source, .. }
             | Curve2::OffsetEllipseArc { source, .. }
-            | Curve2::Bezier { source, .. } => source,
+            | Curve2::Bezier { source, .. }
+            | Curve2::Spline { source, .. } => source,
         }
     }
 
@@ -265,6 +320,18 @@ impl Curve2 {
                 sweep.abs() >= std::f64::consts::TAU - tol::ANGULAR
             }
             Curve2::Line { .. } | Curve2::Bezier { .. } => false,
+            // (A spline that ends where it starts: a periodic one, or a clamped loop.)
+            Curve2::Spline { .. } => {
+                let (a, b) = (self.point_at(0.0), self.point_at(1.0));
+                let size = match self {
+                    Curve2::Spline { poles, .. } => poles
+                        .iter()
+                        .map(|p| (p - poles[0]).norm())
+                        .fold(0.0, f64::max),
+                    _ => 0.0,
+                };
+                (a - b).norm() <= tol::REL * (1.0 + size)
+            }
         }
     }
 }
@@ -672,6 +739,182 @@ pub struct SweepSpec {
     /// Planar faces swept with the profile's regions.
     #[serde(default)]
     pub faces: Vec<FaceInput>,
+}
+
+/// One step of a planar motion ([`SolidMotion::Planar`]), its amount running linearly with the
+/// motion's parameter from `from` to `to`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PlanarStep {
+    /// A turn about the line through `about` along the motion's normal (radians, right-handed
+    /// about the normal).
+    Turn {
+        /// A point of the line turned about.
+        about: Point3<f64>,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+    },
+    /// A slide square to the normal.
+    Slide {
+        /// The slide at the motion's start.
+        from: Vector3<f64>,
+        /// The slide at its end.
+        to: Vector3<f64>,
+    },
+}
+
+/// One step of a rigid motion ([`SolidMotion::Rigid`]), its amount running linearly with the
+/// motion's parameter from `from` to `to`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RigidStep {
+    /// A turn about the axis (radians, right-handed about its direction).
+    Turn {
+        /// The axis turned about.
+        axis: Axis,
+        /// The turn at the motion's start.
+        from: f64,
+        /// The turn at its end.
+        to: f64,
+    },
+    /// A slide.
+    Slide {
+        /// The slide at the motion's start.
+        from: Vector3<f64>,
+        /// The slide at its end.
+        to: Vector3<f64>,
+    },
+}
+
+/// How [`crate::Kernel::sweep_solid`] moves a body: without end about an axis, in its planes, or
+/// by any rigid motion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SolidMotion {
+    /// Turned whole turns about the axis: the solid of revolution the body generates.
+    Turn {
+        /// The axis.
+        axis: Axis,
+    },
+    /// Screwed about the axis, rising `rise` along it a turn (right-handed about the axis's
+    /// direction when positive), without end: what it fills between the planes square to the
+    /// axis at `from` and `to` along it from the axis's origin.
+    Screw {
+        /// The axis.
+        axis: Axis,
+        /// The rise a whole turn (not 0).
+        rise: f64,
+        /// Where the solid starts along the axis.
+        from: f64,
+        /// Where it ends (past `from`).
+        to: f64,
+    },
+    /// Moved in the planes square to `normal`: its steps (turns about lines along the normal,
+    /// slides square to it) applied in order at each instant, each by its amount at that
+    /// instant, as the motion runs from start to end. For prisms along the normal (a polygon
+    /// extruded): what they fill is the region their polygon sweeps, extruded.
+    Planar {
+        /// The direction square to the motion's planes.
+        normal: Unit<Vector3<f64>>,
+        /// The steps, the first applied first.
+        steps: Vec<PlanarStep>,
+    },
+    /// Moved by its steps (turns about any axes, slides) applied in order at each instant, each
+    /// by its amount at that instant, as the motion runs from start to end. For solids of
+    /// revolution of a convex section (a torus, a wheel): what they fill, found as the region
+    /// some instant of the body holds (the body's signed distance, closed in form, at the
+    /// deepest instant) and bounded by a closed mesh of it (marching tetrahedra on a grid of a
+    /// hundredth of its reach, the vertices placed on it), made solid: within about the grid's
+    /// step squared over the body's curvature radius.
+    Rigid {
+        /// The steps, the first applied first.
+        steps: Vec<RigidStep>,
+    },
+}
+
+/// A solid made whole, not from a sketch ([`crate::Kernel::primitive`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Primitive {
+    /// The block with opposite corners `min` and `max`, its faces square to the axes.
+    Box {
+        /// The corner of least x, y and z.
+        min: Point3<f64>,
+        /// The corner of greatest x, y and z.
+        max: Point3<f64>,
+    },
+    /// A cylinder.
+    Cylinder {
+        /// The centre of its base.
+        base: Point3<f64>,
+        /// Its axis, from the base toward the top.
+        axis: Unit<Vector3<f64>>,
+        /// Its radius.
+        radius: f64,
+        /// How far its top is along the axis from its base.
+        height: f64,
+    },
+    /// A cone, or its frustum.
+    Cone {
+        /// The centre of its base.
+        base: Point3<f64>,
+        /// Its axis, from the base toward the top.
+        axis: Unit<Vector3<f64>>,
+        /// Its radius at the base (0 for an apex there).
+        base_radius: f64,
+        /// Its radius at the top (0 for an apex there).
+        top_radius: f64,
+        /// How far its top is along the axis from its base.
+        height: f64,
+    },
+    /// A ball.
+    Sphere {
+        /// Its centre.
+        center: Point3<f64>,
+        /// Its radius.
+        radius: f64,
+        /// The direction of its poles from its centre (the north one along it).
+        axis: Unit<Vector3<f64>>,
+        /// The direction from its axis its seam lies in (made square to the axis).
+        seam: Unit<Vector3<f64>>,
+    },
+    /// A solid torus.
+    Torus {
+        /// Its centre.
+        center: Point3<f64>,
+        /// The axis it turns about, through its centre.
+        axis: Unit<Vector3<f64>>,
+        /// The radius of the circle through its tube's centres.
+        major: f64,
+        /// Its tube's radius (less than `major`).
+        minor: f64,
+    },
+}
+
+/// How a sweep's profile changes as it follows the path, beyond its control's turning: it
+/// twists about the path and grows or shrinks about the path's point, both in proportion to the
+/// length travelled (a column tapering as it twists, a duct narrowing round a bend).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SweepLaw {
+    /// The turn about the path's direction of travel over its whole length (radians,
+    /// right-handed about it).
+    pub twist: f64,
+    /// The profile's size at the path's end over its size at the start (greater than zero).
+    pub scale: f64,
+}
+
+impl Default for SweepLaw {
+    fn default() -> Self {
+        Self {
+            twist: 0.0,
+            scale: 1.0,
+        }
+    }
+}
+
+impl SweepLaw {
+    /// Whether it changes nothing (no twist, no scale).
+    pub fn is_identity(&self) -> bool {
+        self.twist == 0.0 && self.scale == 1.0
+    }
 }
 
 /// One section of a loft (P3.7, PS20.1).

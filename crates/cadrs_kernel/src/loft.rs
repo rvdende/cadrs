@@ -108,6 +108,24 @@ impl Curve2 {
                 poles: [d, c, b, a],
                 source,
             },
+            Curve2::Spline {
+                degree,
+                knots,
+                poles,
+                weights,
+                source,
+            } => {
+                // The same curve run the other way: its knots mirrored in their span, its poles
+                // and weights the other way round.
+                let (a, b) = (knots[0], knots[knots.len() - 1]);
+                Curve2::Spline {
+                    degree,
+                    knots: knots.iter().rev().map(|k| a + b - k).collect(),
+                    poles: poles.into_iter().rev().collect(),
+                    weights: weights.into_iter().rev().collect(),
+                    source,
+                }
+            }
         }
     }
 

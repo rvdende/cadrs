@@ -400,12 +400,31 @@ pub fn sweep_full(
             } else {
                 top_loops.iter_mut().for_each(rev_loop);
             }
-            let frame = |m: &Affine| Frame {
-                o: m.point(&P3::origin()),
-                x: m.vector(&V3::x()),
-                y: m.vector(&V3::y()),
-                z: m.vector(&V3::z()),
+            // A cap's plane has a unit frame; a placement that scales the profile (a sweep's
+            // law) scales its p-curves instead.
+            let frame = |m: &Affine| {
+                let k = m.scale();
+                Frame {
+                    o: m.point(&P3::origin()),
+                    x: m.vector(&V3::x()) / k,
+                    y: m.vector(&V3::y()) / k,
+                    z: m.vector(&V3::z()) / k,
+                }
             };
+            let scaled = |loops: &mut Vec<Vec<Coedge>>, m: &Affine| {
+                let k = m.scale();
+                if (k - 1.0).abs() > 1e-15 {
+                    let a = Affine {
+                        m: nalgebra::Matrix3::from_diagonal(&V3::new(k, k, 1.0)),
+                        t: V3::zeros(),
+                    };
+                    for c in loops.iter_mut().flatten() {
+                        c.pc = c.pc.transformed(&a);
+                    }
+                }
+            };
+            scaled(&mut bottom_loops, &m0);
+            scaled(&mut top_loops, &m1);
             b.faces.push(Face {
                 surf: Surface::Plane { f: frame(&m0) },
                 sense: !up,

@@ -37,10 +37,8 @@ jobs:
 
   # Per push and pull request: the kernel's builds without the test feature, its clippy gate and
   # a fast subset of the gate (tools/kernel_gate.sh: the unit tests, conformance, smlib_booleans,
-  # validity, determinism and every 4th runnable case of OCCT's boolean suite, generated from
-  # OCCT's test scripts without the dataset, classified as the full gate does: a regression,
-  # a stale or panicking known failure, a hang or a crash fails it); any failed step fails the
-  # job. It is the merge requirement for main and kernel-10: mark "Kernel (checks, clippy, fast
+  # validity and determinism, classified as the full gate does: a regression, a stale or
+  # panicking known failure, a hang or a crash fails it); any failed step fails the job. It is the merge requirement for main and kernel-10: mark "Kernel (checks, clippy, fast
   # gate)" as a required status check in both branches' protection rules (Settings > Branches),
   # with "Build and test (Linux)" for main.
   kernel:
@@ -71,21 +69,13 @@ jobs:
       - name: Clippy (kernel)
         run: tools/kernel_clippy.sh
 
-      - name: OCCT test scripts (7.8.1)
-        run: |
-          git clone --depth 1 --branch V7_8_1 --filter=blob:none --sparse \
-            https://github.com/Open-Cascade-SAS/OCCT "$GITHUB_WORKSPACE/../occt"
-          git -C "$GITHUB_WORKSPACE/../occt" sparse-checkout set tests/boolean
-          python3 -I tools/occt_to_rust.py "$GITHUB_WORKSPACE/../occt/tests" crates/cadrs_kernel/tests boolean
-
-      # The checks ran above (--no-checks); the slice of occt_boolean is the same cases each run.
-      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism, occt_boolean 1 in 4)
+      # The checks ran above (--no-checks).
+      - name: Fast gate (lib, conformance, smlib_booleans, validity, determinism)
         env:
           RUST_TEST_THREADS: 4
         run: |
           tools/kernel_gate.sh --tree . --commit "$GITHUB_SHA" --out "$GITHUB_WORKSPACE/kernel_gate" \
-            --no-checks --only lib,conformance,smlib_booleans,validity,determinism,occt_boolean \
-            --sample occt_boolean=4 --hang 600
+            --no-checks --only lib,conformance,smlib_booleans,validity,determinism --hang 600
 
       - uses: actions/upload-artifact@v4
         if: always()

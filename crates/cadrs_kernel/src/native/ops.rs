@@ -64,7 +64,7 @@ fn tool_plane(k: &NativeKernel, tool: &SplitTool) -> Result<(P3, V3)> {
 }
 
 /// A box on one side of a plane, covering `bb`.
-fn half_space_box(o: P3, n: V3, bb: &Bbox) -> Result<Body> {
+pub(crate) fn half_space_box(o: P3, n: V3, bb: &Bbox) -> Result<Body> {
     let size = bb.diagonal() * 2.0 + (bb.center() - o).norm() * 2.0 + 10.0;
     let f = Frame::from_z(o, n);
     let plane = Plane {

@@ -273,6 +273,177 @@ fn shapes_are_watertight_and_within_the_chord() {
     }
 }
 
+/// A solid loft from a square to a diamond turned an eighth of a turn (brep-bench's
+/// twisted-duct): each side a twisted ruled face between straight edges, which their curves alone
+/// sample at their ends. The faces' triangles then needed points along the edges, and put them
+/// a hair off them each on its own (closed in f64, not in an STL file's single precision): edges
+/// are now also sampled by how far the faces' normals turn along them.
+#[test]
+fn straight_edges_of_twisted_faces_mesh_closed() {
+    let on = |y: f64| Plane {
+        origin: Point3::new(0.0, y, 0.0),
+        x_dir: Vector3::x_axis(),
+        normal: -Vector3::y_axis(),
+    };
+    let quad = |c: [(f64, f64); 4]| Region {
+        outer: Loop {
+            curves: (0..4)
+                .map(|i| line(p(c[i].0, c[i].1), p(c[(i + 1) % 4].0, c[(i + 1) % 4].1)))
+                .collect(),
+        },
+        holes: vec![],
+        source: None,
+    };
+    let square = Profile::new(
+        on(0.0),
+        vec![quad([
+            (10.0, -10.0),
+            (-10.0, -10.0),
+            (-10.0, 10.0),
+            (10.0, 10.0),
+        ])],
+    );
+    let diamond = Profile::new(
+        on(40.0),
+        vec![quad([(0.0, -12.0), (-12.0, 0.0), (0.0, 12.0), (12.0, 0.0)])],
+    );
+    let mut k = NativeKernel::new();
+    let spec = LoftSpec {
+        body: BodyKind::Solid,
+        sections: vec![LoftSection::Profile(square), LoftSection::Profile(diamond)],
+        start: LoftEnd::default(),
+        end: LoftEnd::default(),
+        source: 1,
+    };
+    let duct = k.loft_with(&spec).unwrap().bodies[0];
+    for deflection in [5.1e-3, 0.05] {
+        let quality = Tessellation {
+            deflection,
+            angle: 5f64.to_radians(),
+        };
+        // As an STL file keeps it (single precision): the points the faces put a hair off the
+        // edges on their own, closed in f64, fall onto each other there.
+        let m = k.tessellate(duct, quality).unwrap();
+        let f32 =
+            |q: &Point3<f64>| Point3::new(q.x as f32 as f64, q.y as f32 as f64, q.z as f32 as f64);
+        let check = tess::check_triangles(
+            m.indices
+                .iter()
+                .map(|t| t.map(|i| f32(&m.positions[i as usize])))
+                .filter(|[a, b, c]| a != b && b != c && c != a),
+        );
+        assert!(check.is_watertight(), "deflection {deflection}: {check:?}");
+    }
+}
+
+/// A ball of radius 10 less a cylinder of radius 5 whose wall runs through its centre
+/// (brep-bench's viviani-cut): the sphere and the wall are tangent at (10, 0, 0), where Viviani's
+/// curve crosses itself and both faces pinch to a point. Each face joined the same two points
+/// near it by a side of its triangles, which four triangles then shared; such sides are now split.
+#[test]
+fn faces_pinched_to_a_point_share_no_side() {
+    let mut k = NativeKernel::new();
+    // Poles on the y axis, the seam through (−10, 0, 0): the half disc on the −x side of the y
+    // axis on the plane z = 0, turned about y (as the case asks, both off Viviani's curve).
+    let on = Plane {
+        origin: Point3::origin(),
+        x_dir: -Vector3::x_axis(),
+        normal: -Vector3::z_axis(),
+    };
+    let half = Region {
+        outer: Loop {
+            curves: vec![
+                Curve2::Arc {
+                    center: p(0.0, 0.0),
+                    radius: 10.0,
+                    start_angle: -PI / 2.0,
+                    sweep: PI,
+                    source: None,
+                },
+                line(p(0.0, 10.0), p(0.0, -10.0)),
+            ],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let y = Axis {
+        origin: Point3::origin(),
+        dir: Vector3::y_axis(),
+    };
+    let ball = k
+        .revolve(&Profile::new(on, vec![half]), y, TAU)
+        .unwrap()
+        .bodies[0];
+    let base = Plane {
+        origin: Point3::new(5.0, 0.0, -12.0),
+        x_dir: -Vector3::x_axis(),
+        normal: Vector3::z_axis(),
+    };
+    let circle = Region {
+        outer: Loop {
+            curves: vec![Curve2::Circle {
+                center: p(0.0, 0.0),
+                radius: 5.0,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let rod = k
+        .extrude_with(
+            &Profile::new(base, vec![circle]),
+            &ExtrudeSpec::blind(Vector3::z_axis(), 24.0),
+        )
+        .unwrap()
+        .bodies[0];
+    let cut = k.boolean(BoolOp::Subtract, ball, &[rod]).unwrap().bodies[0];
+    for chord in [3.4e-3, 1e-3] {
+        let params = TessParams::new(chord, 5f64.to_radians()).unwrap();
+        let m = k.tessellate_with(cut, &params).unwrap();
+        let check = tess::check_tri_mesh(&m);
+        assert!(check.is_watertight(), "chord {chord}: {check:?}");
+    }
+}
+
+/// A ball's cap 10⁻⁴ high round its pole (brep-bench's pole-cap-a-ten-thousandth-high): a disc
+/// 0.063 across under a dome, meshed at a chord of 2·10⁻⁷. Spaced by the sphere's radius each
+/// way in (u, v), its triangles ran long round the pole and the mesh held 5 % too little.
+#[test]
+fn a_cap_round_a_pole_meshes_within_the_chord() {
+    let (r, h) = (5.0f64, 1e-4f64);
+    let z0 = r - h;
+    let rim = (r * r - z0 * z0).sqrt();
+    let mut k = NativeKernel::new();
+    let id = revolve(
+        &mut k,
+        vec![
+            Curve2::Arc {
+                center: p(0.0, 0.0),
+                radius: r,
+                start_angle: PI / 2.0,
+                sweep: z0.atan2(rim) - PI / 2.0,
+                source: None,
+            },
+            line(p(rim, z0), p(0.0, z0)),
+            line(p(0.0, z0), p(0.0, r)),
+        ],
+    );
+    let body = k.get(id).unwrap().clone();
+    let params = TessParams::new(2e-7, 5f64.to_radians()).unwrap();
+    let (faces, _) = tess::mesh(&body, &params).unwrap();
+    assert!(tess::check_faces(&faces).is_watertight());
+    let dev = deviation(&body, &faces);
+    assert!(dev <= params.chord * (1.0 + 1e-6), "{dev} off the surfaces");
+    // A closed mesh within the chord of the surfaces: its volume within chord × area (0.8 %).
+    let exact = PI * h * h * (3.0 * r - h) / 3.0;
+    let (v, a) = volume(&faces);
+    assert!(
+        (v - exact).abs() <= params.chord * a,
+        "volume {v}, exact {exact}"
+    );
+}
+
 /// A 10 mm box shelled open at its front and top with 1 mm walls, its back face chamfered 1 mm
 /// (issue 156): the chamfer eats the back wall's rim whole, so the top rim is left one face
 /// pinched to no width along the chamfer, with two boundary edges along one line (the inner
