@@ -1106,10 +1106,13 @@ pub fn body_volume(body: &Body) -> f64 {
         bb.center().coords
     };
     let faces: Vec<usize> = (0..body.faces.len()).collect();
-    let qs: Vec<f64> = faces
-        .par_iter()
-        .map(|&i| face_integrals_of::<false>(body, &body.faces[i], &shift)[4])
-        .collect();
+    let one = |&i: &usize| face_integrals_of::<false>(body, &body.faces[i], &shift)[4];
+    let heavy = body.faces.iter().any(costly);
+    let qs: Vec<f64> = if super::par::threads_for(faces.len(), heavy) {
+        faces.par_iter().map(one).collect()
+    } else {
+        faces.iter().map(one).collect()
+    };
     let mut v = 0.0;
     for q in qs {
         v += q;
@@ -1126,17 +1129,20 @@ pub fn body_mass(body: &Body) -> crate::MassProperties {
         bb.center().coords
     };
     let faces: Vec<usize> = (0..body.faces.len()).collect();
-    let qs: Vec<Q> = faces
-        .par_iter()
-        .map(|&i| {
-            let f = &body.faces[i];
-            if gpu_active() || !costly(f) {
-                return face_integrals(body, f, &shift);
-            }
-            let (center, q) = face_integrals_about_center(body, i);
-            shifted(&q, &center, &shift)
-        })
-        .collect();
+    let one = |&i: &usize| {
+        let f = &body.faces[i];
+        if gpu_active() || !costly(f) {
+            return face_integrals(body, f, &shift);
+        }
+        let (center, q) = face_integrals_about_center(body, i);
+        shifted(&q, &center, &shift)
+    };
+    let heavy = body.faces.iter().any(costly);
+    let qs: Vec<Q> = if super::par::threads_for(faces.len(), heavy) {
+        faces.par_iter().map(one).collect()
+    } else {
+        faces.iter().map(one).collect()
+    };
     let mut q = [0.0; NQ];
     for f in &qs {
         for k in 0..NQ {

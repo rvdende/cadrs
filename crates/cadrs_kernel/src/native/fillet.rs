@@ -114,11 +114,11 @@ impl Budget {
     }
 }
 
-/// Whether `n` independent pieces of work go to rayon's threads: only with more than one piece
-/// and more than one thread (on one, the hand-over to its worker and back costs more than it
-/// saves on small fillets).
+/// Whether `n` independent pieces of fillet work (heavy each) go to rayon's threads: only with
+/// more than one piece and more than one thread (on one, the hand-over to its worker and back
+/// costs more than it saves on small fillets). See [`super::par`].
 pub(crate) fn parallel(n: usize) -> bool {
-    n > 1 && rayon::current_num_threads() > 1
+    super::par::threads_for(n, true) && rayon::current_num_threads() > 1
 }
 
 fn unsupported(why: &'static str) -> KernelError {

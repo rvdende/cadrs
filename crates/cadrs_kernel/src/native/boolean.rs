@@ -2890,24 +2890,35 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     );
     let mut ssis: Vec<Found> = Vec::with_capacity(pairs.len());
     PAIRS.fetch_add(pairs.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    // (On the threads when the pairs are many or one is numeric: see `par`.)
+    let free = |f: usize| {
+        matches!(
+            faces[f].surf,
+            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        )
+    };
+    let numeric = pairs.iter().any(|&(fa, fb)| free(fa) || free(fb));
+    let threads = super::par::threads_for(pairs.len(), numeric);
     for chunk in pairs.chunks(64) {
-        let done: Vec<(Found, u64)> = chunk
-            .par_iter()
-            .map(|&(fa, fb)| {
-                let t = web_time::Instant::now();
-                // (The curves the surfaces only touch along are left out: the faces' tangent
-                // contact is found from their boundaries, as for faces tangent along an edge.)
-                let r = ssi::surface_surface_tol(
-                    &faces[fa].surf,
-                    uvbox(&faces[fa]),
-                    &faces[fb].surf,
-                    uvbox(&faces[fb]),
-                    &overlap(fa, fb),
-                    run_tol,
-                );
-                ((r.curves, r.singular, t.elapsed(), r.coincident), r.work)
-            })
-            .collect();
+        let one = |&(fa, fb): &(usize, usize)| {
+            let t = web_time::Instant::now();
+            // (The curves the surfaces only touch along are left out: the faces' tangent
+            // contact is found from their boundaries, as for faces tangent along an edge.)
+            let r = ssi::surface_surface_tol(
+                &faces[fa].surf,
+                uvbox(&faces[fa]),
+                &faces[fb].surf,
+                uvbox(&faces[fb]),
+                &overlap(fa, fb),
+                run_tol,
+            );
+            ((r.curves, r.singular, t.elapsed(), r.coincident), r.work)
+        };
+        let done: Vec<(Found, u64)> = if threads {
+            chunk.par_iter().map(one).collect()
+        } else {
+            chunk.iter().map(one).collect()
+        };
         work.spend(done.iter().map(|d| d.1).sum(), "surface intersection")?;
         ssis.extend(done.into_iter().map(|(f, _)| f));
     }

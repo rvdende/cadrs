@@ -1695,10 +1695,15 @@ impl Kernel for NativeKernel {
         use rayon::prelude::*;
         Ok(e.faces
             .get_or_init(|| {
-                (0..e.body.faces.len())
-                    .into_par_iter()
-                    .map(|i| face_info(&e.body, i))
-                    .collect()
+                let n = e.body.faces.len();
+                if super::par::threads_for(n, false) {
+                    (0..n)
+                        .into_par_iter()
+                        .map(|i| face_info(&e.body, i))
+                        .collect()
+                } else {
+                    (0..n).map(|i| face_info(&e.body, i)).collect()
+                }
             })
             .clone())
     }

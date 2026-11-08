@@ -224,38 +224,44 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
             }
         }
     }
-    body.edges
-        .par_iter()
-        .enumerate()
-        .map(|(ei, e)| {
-            if e.degenerate {
-                return (
-                    vec![e.t[0], e.t[1]],
-                    vec![body.verts[e.v[0]].p, body.verts[e.v[1]].p],
-                );
+    let one = |(ei, e): (usize, &super::topo::Edge)| {
+        if e.degenerate {
+            return (
+                vec![e.t[0], e.t[1]],
+                vec![body.verts[e.v[0]].p, body.verts[e.v[1]].p],
+            );
+        }
+        let ts = e.curve.mesh_params(e.t[0], e.t[1], p.chord, p.ang());
+        let ts = refine_polyline(|t| e.point(t), &ts, p);
+        let ts = refine_by_faces(|t| e.point(t), &ts, &sides[ei], p);
+        let mut pts: Vec<P3> = ts.iter().map(|&t| e.point(t)).collect();
+        let n = pts.len();
+        pts[0] = body.verts[e.v[0]].p;
+        pts[n - 1] = body.verts[e.v[1]].p;
+        // Samples bunched within the edge's tolerance (a curve with knots piled up at an end,
+        // or ending a hair off its vertex) are one: they only make zero-area slivers.
+        let gap = e.tol.max(super::topo::TOL_MIN);
+        let (mut kt, mut kp) = (vec![ts[0]], vec![pts[0]]);
+        for i in 1..n - 1 {
+            if (pts[i] - kp[kp.len() - 1]).norm() > gap && (pts[i] - pts[n - 1]).norm() > gap {
+                kt.push(ts[i]);
+                kp.push(pts[i]);
             }
-            let ts = e.curve.mesh_params(e.t[0], e.t[1], p.chord, p.ang());
-            let ts = refine_polyline(|t| e.point(t), &ts, p);
-            let ts = refine_by_faces(|t| e.point(t), &ts, &sides[ei], p);
-            let mut pts: Vec<P3> = ts.iter().map(|&t| e.point(t)).collect();
-            let n = pts.len();
-            pts[0] = body.verts[e.v[0]].p;
-            pts[n - 1] = body.verts[e.v[1]].p;
-            // Samples bunched within the edge's tolerance (a curve with knots piled up at an end,
-            // or ending a hair off its vertex) are one: they only make zero-area slivers.
-            let gap = e.tol.max(super::topo::TOL_MIN);
-            let (mut kt, mut kp) = (vec![ts[0]], vec![pts[0]]);
-            for i in 1..n - 1 {
-                if (pts[i] - kp[kp.len() - 1]).norm() > gap && (pts[i] - pts[n - 1]).norm() > gap {
-                    kt.push(ts[i]);
-                    kp.push(pts[i]);
-                }
-            }
-            kt.push(ts[n - 1]);
-            kp.push(pts[n - 1]);
-            (kt, kp)
-        })
-        .collect()
+        }
+        kt.push(ts[n - 1]);
+        kp.push(pts[n - 1]);
+        (kt, kp)
+    };
+    // (On the threads when the edges are many or curved: see `par`.)
+    let curved = body
+        .edges
+        .iter()
+        .any(|e| matches!(e.curve, super::curve::Curve::Nurbs(_)));
+    if super::par::threads_for(body.edges.len(), curved) {
+        body.edges.par_iter().enumerate().map(one).collect()
+    } else {
+        body.edges.iter().enumerate().map(one).collect()
+    }
 }
 
 /// Bisects the segments of a sampled curve that stray more than the chord from it, or are
@@ -1793,10 +1799,12 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
                 Some((key, fi, vs.map(|v| *v.data()), cons))
             })
             .collect();
-        let splits: Vec<Option<P2>> = todo
-            .par_iter()
-            .map(|(_, _, v, cons)| split_point(dom, v, *cons, p, min_len))
-            .collect();
+        let split = |(_, _, v, cons): &(_, usize, _, _)| split_point(dom, v, *cons, p, min_len);
+        let splits: Vec<Option<P2>> = if super::par::threads_for(todo.len(), false) {
+            todo.par_iter().map(split).collect()
+        } else {
+            todo.iter().map(split).collect()
+        };
         let mut proposed: FastSet<(u64, u64)> = FastSet::default();
         let mut at: Vec<P2> = Vec::new();
         for ((key, fi, _, _), q) in todo.iter().zip(splits) {
@@ -1812,7 +1820,12 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
                 }
             }
         }
-        let mut adds: Vec<Vx> = at.par_iter().map(|&q| vx(dom, q, None, scale)).collect();
+        let add = |&q: &P2| vx(dom, q, None, scale);
+        let mut adds: Vec<Vx> = if super::par::threads_for(at.len(), false) {
+            at.par_iter().map(add).collect()
+        } else {
+            at.iter().map(add).collect()
+        };
         if let Some(t) = s.prof {
             eprintln!(
                 "tess face: refinement round at {} vertices, {} to add, {:?}",
@@ -2046,34 +2059,42 @@ pub fn keep_meshes(on: bool) {
 fn mesh_all(body: &Body, p: &TessParams) -> (Vec<FaceMesh>, EdgeSamples) {
     let es = edge_samples_with(body, p);
     let keep = KEEP_MESHES.load(std::sync::atomic::Ordering::Relaxed);
-    let faces: Vec<FaceMesh> = body
-        .faces
-        .par_iter()
-        .map(|f| {
-            // (A plane with few boundary points meshes in about the time its key takes: a box's
-            // side, mostly new. One with many is kept too: a box's face round a few hundred
-            // holes' rounded edges took 9 ms each time a feature elsewhere changed the body.)
-            let few = || {
-                f.loops
-                    .iter()
-                    .flatten()
-                    .map(|c| es[c.edge].1.len())
-                    .sum::<usize>()
-                    <= PLANE_UNKEPT
-            };
-            if !keep || matches!(f.surf, Surface::Plane { .. }) && few() {
-                return mesh_face_with(body, f, &es, p);
-            }
-            let key = face_mesh_key(body, f, &es, p);
-            let kept = mesh_cache().get(key);
-            if let Some(m) = kept {
-                return (*m).clone();
-            }
-            let m = mesh_face_with(body, f, &es, p);
-            mesh_cache().insert(key, std::sync::Arc::new(m.clone()));
-            m
-        })
-        .collect();
+    let one = |f: &Face| {
+        // (A plane with few boundary points meshes in about the time its key takes: a box's
+        // side, mostly new. One with many is kept too: a box's face round a few hundred
+        // holes' rounded edges took 9 ms each time a feature elsewhere changed the body.)
+        let few = || {
+            f.loops
+                .iter()
+                .flatten()
+                .map(|c| es[c.edge].1.len())
+                .sum::<usize>()
+                <= PLANE_UNKEPT
+        };
+        if !keep || matches!(f.surf, Surface::Plane { .. }) && few() {
+            return mesh_face_with(body, f, &es, p);
+        }
+        let key = face_mesh_key(body, f, &es, p);
+        let kept = mesh_cache().get(key);
+        if let Some(m) = kept {
+            return (*m).clone();
+        }
+        let m = mesh_face_with(body, f, &es, p);
+        mesh_cache().insert(key, std::sync::Arc::new(m.clone()));
+        m
+    };
+    // (On the threads when the faces are many or curved beyond the analytic: see `par`.)
+    let free = body.faces.iter().any(|f| {
+        matches!(
+            f.surf,
+            Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+        )
+    });
+    let faces: Vec<FaceMesh> = if super::par::threads_for(body.faces.len(), free) {
+        body.faces.par_iter().map(one).collect()
+    } else {
+        body.faces.iter().map(one).collect()
+    };
     let faces = split_shared_sides(body, &es, p, faces);
     (faces, es)
 }
@@ -2135,10 +2156,14 @@ fn split_shared_sides(
     }
     let mut todo: Vec<(usize, Vec<[P3; 2]>)> = splits.into_iter().collect();
     todo.sort_by_key(|t| t.0);
-    let redone: Vec<(usize, FaceMesh)> = todo
-        .par_iter()
-        .map(|(fi, pairs)| (*fi, mesh_face_split(body, &body.faces[*fi], es, p, pairs)))
-        .collect();
+    let redo = |(fi, pairs): &(usize, Vec<[P3; 2]>)| {
+        (*fi, mesh_face_split(body, &body.faces[*fi], es, p, pairs))
+    };
+    let redone: Vec<(usize, FaceMesh)> = if super::par::threads_for(todo.len(), true) {
+        todo.par_iter().map(redo).collect()
+    } else {
+        todo.iter().map(redo).collect()
+    };
     for (fi, m) in redone {
         if !m.indices.is_empty() {
             faces[fi] = m;

@@ -175,3 +175,5 @@ codegen-units = 64
 [patch.crates-io]
 # wgpu's upload staging in system memory, not the PCIe BAR (vendor/gpu-allocator/CADRS.md).
 gpu-allocator = { path = "vendor/gpu-allocator" }
+# Rayon's global pool started without waiting for a thread per core (vendor/rayon-core/CADRS.md).
+rayon-core = { path = "vendor/rayon-core" }

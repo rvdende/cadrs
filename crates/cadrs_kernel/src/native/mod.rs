@@ -246,6 +246,7 @@ pub mod ops;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod ops;
+pub(crate) mod par;
 #[cfg(feature = "testkit")]
 pub mod pcurve;
 #[cfg(not(feature = "testkit"))]
