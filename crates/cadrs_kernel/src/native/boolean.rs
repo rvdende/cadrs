@@ -2691,6 +2691,11 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     // first wanted, the edge's own box over a face's.
     let span_boxes: Vec<std::sync::OnceLock<Option<Vec<Bbox>>>> =
         (0..ne).map(|_| std::sync::OnceLock::new()).collect();
+    // Each edge against each face of the other body near it: whether it lies on the face, else
+    // where it crosses the face, each a function of the two alone, so found in parallel (on the
+    // threads when the pairs are many or one is numeric: see `par`) and used below in the pairs'
+    // order (edges in turn, faces in order), which splits the edges and makes the vertices.
+    let mut near_pairs: Vec<(usize, usize)> = Vec::new();
     for e in 0..ne {
         if pool.edges[e].degenerate {
             continue;
@@ -2702,27 +2707,64 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             if faces[fi].owner == oe || !ebox[e].overlaps(&faces[fi].bbox) {
                 continue;
             }
-            let ed = pool.edges[e].clone();
-            let surf = &faces[fi].surf;
-            if edge_on_bounded(&ed, surf, bounds[fi].as_ref(), faces[fi].tol, run_tol) {
-                if !on_face[fi].contains(&e) {
-                    on_face[fi].push(e);
-                }
-                continue;
-            }
-            // A spline edge whose spans' boxes (their control points' hulls) all keep off the
-            // face's box meets it nowhere: no search along it (each a few hundred projections).
-            if let Some(boxes) = span_boxes[e].get_or_init(|| span_boxes_of(&ed, run_tol))
-                && !boxes.iter().any(|b| b.overlaps(&faces[fi].bbox))
-            {
-                continue;
-            }
-            for t in ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], &faces[fi].surf) {
-                let p = ed.curve.point(t);
-                let et = ed.tol.max(faces[fi].tol);
-                if point_in_face(&faces[fi], &p, run_tol.max(et)) == InFace::Outside {
+            near_pairs.push((e, fi));
+        }
+    }
+    enum Meet {
+        On,
+        At(Vec<f64>),
+    }
+    let meet = |&(e, fi): &(usize, usize)| -> Meet {
+        let ed = &pool.edges[e];
+        let surf = &faces[fi].surf;
+        if edge_on_bounded(ed, surf, bounds[fi].as_ref(), faces[fi].tol, run_tol) {
+            return Meet::On;
+        }
+        // A spline edge whose spans' boxes (their control points' hulls) all keep off the
+        // face's box meets it nowhere: no search along it (each a few hundred projections).
+        if let Some(boxes) = span_boxes[e].get_or_init(|| span_boxes_of(ed, run_tol))
+            && !boxes.iter().any(|b| b.overlaps(&faces[fi].bbox))
+        {
+            return Meet::At(Vec::new());
+        }
+        let et = ed.tol.max(faces[fi].tol);
+        Meet::At(
+            ssi::curve_surface(&ed.curve, ed.t[0], ed.t[1], surf)
+                .into_iter()
+                .filter(|&t| {
+                    point_in_face(&faces[fi], &ed.curve.point(t), run_tol.max(et))
+                        != InFace::Outside
+                })
+                .collect(),
+        )
+    };
+    let numeric = near_pairs.iter().any(|&(e, fi)| {
+        matches!(pool.edges[e].curve, Curve::Nurbs(_))
+            || matches!(
+                faces[fi].surf,
+                Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+            )
+    });
+    let meets: Vec<Meet> = if super::par::threads_for(near_pairs.len(), numeric) {
+        near_pairs.par_iter().map(meet).collect()
+    } else {
+        near_pairs.iter().map(meet).collect()
+    };
+    for (&(e, fi), m) in near_pairs.iter().zip(meets) {
+        {
+            let ts = match m {
+                Meet::On => {
+                    if !on_face[fi].contains(&e) {
+                        on_face[fi].push(e);
+                    }
                     continue;
                 }
+                Meet::At(ts) => ts,
+            };
+            let ed = pool.edges[e].clone();
+            for t in ts {
+                let p = ed.curve.point(t);
+                let et = ed.tol.max(faces[fi].tol);
                 // A point of touch found again a hair from a vertex the edge already has there
                 // (an edge resting on the surface touches it along a zone where the distance is
                 // rounding noise): that vertex.
