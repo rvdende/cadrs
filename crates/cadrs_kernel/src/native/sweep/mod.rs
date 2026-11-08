@@ -49,7 +49,7 @@ pub mod frames;
 mod kinds;
 pub mod path;
 
-pub use body::{BodyMove, sweep_body};
+pub use body::{BodyMove, Screw, sweep_body};
 
 /// How a sampled sweep ([`frames::PathSweep`]) turns its profile along a path.
 #[derive(Debug, Clone, Copy, PartialEq)]

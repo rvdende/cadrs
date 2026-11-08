@@ -222,6 +222,11 @@ pub mod math;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod math;
 #[cfg(feature = "testkit")]
+pub mod mesh_distance;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod mesh_distance;
+#[cfg(feature = "testkit")]
 pub mod meshsolid;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
@@ -316,6 +321,11 @@ pub mod sweep;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep;
+#[cfg(feature = "testkit")]
+pub mod sweep_faces;
+#[cfg(not(feature = "testkit"))]
+#[allow(dead_code, reason = "items only the test kit uses")]
+pub(crate) mod sweep_faces;
 #[cfg(feature = "testkit")]
 pub mod sweep_planar;
 #[cfg(not(feature = "testkit"))]

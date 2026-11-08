@@ -991,7 +991,48 @@ fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> 
     if let Some(r) = apart_set_aside(a, b, op, opts) {
         return r;
     }
+    // B-spline faces lying exactly on an analytic face of the other body take that surface, so
+    // the two coincide as analytic faces do (a sleeve whose bore is a cylinder written as a
+    // rational B-spline, united with the cylinder's drum). The faces keep their order.
+    let (ra, rb) = (recognized_against(a, b), recognized_against(b, a));
+    if ra.is_some() || rb.is_some() {
+        return ladder(ra.as_ref().unwrap_or(a), rb.as_ref().unwrap_or(b), op, opts);
+    }
     ladder(a, b, op, opts)
+}
+
+/// `x` with its B-spline faces that are exactly an analytic surface (`recognize::surface`) on
+/// which a face of `y` lies (its box meeting theirs) given that surface, its edges and p-curves
+/// recomputed (`local::replace_surfaces`, the topology kept). None when there are none.
+fn recognized_against(x: &Body, y: &Body) -> Option<Body> {
+    if !x.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
+        return None;
+    }
+    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(1.0);
+    let tol = tol::REL * size;
+    let mut surfs: Option<Vec<Surface>> = None;
+    for (fi, f) in x.faces.iter().enumerate() {
+        let Surface::Nurbs(n) = &f.surf else { continue };
+        let fb = x.face_bbox(fi).grow(tol);
+        let near: Vec<usize> = (0..y.faces.len())
+            .filter(|&g| {
+                !matches!(y.faces[g].surf, Surface::Nurbs(_)) && y.face_bbox(g).overlaps(&fb)
+            })
+            .collect();
+        if near.is_empty() {
+            continue;
+        }
+        let Some(s) = super::recognize::surface(n) else {
+            continue;
+        };
+        if near
+            .iter()
+            .any(|&g| s.same_domain(&y.faces[g].surf, tol).is_some())
+        {
+            surfs.get_or_insert_with(|| x.faces.iter().map(|f| f.surf.clone()).collect())[fi] = s;
+        }
+    }
+    super::local::replace_surfaces(x, &surfs?).ok()
 }
 
 /// The boolean with the solids of either input that can't reach the other (by their boxes,
@@ -2430,10 +2471,15 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         work_budget,
         check_crossings,
     } = opts;
-    // The work done so far, against the budget.
+    // The work done so far, against the budget: the default one grows with the inputs (a
+    // meshed solid's thousands of faces each cost their share), a smaller one stands.
     let mut work = Work {
         done: 0,
-        budget: work_budget,
+        budget: if work_budget == DEFAULT_WORK_BUDGET {
+            work_budget.max(1500 * (a.faces.len() + b.faces.len()) as u64)
+        } else {
+            work_budget
+        },
     };
     // B-spline faces lying on an analytic face of the other body (within the tolerance:
     // approximated sweeps along helices, lofts of circles) take its exact surface, so the two
@@ -3086,7 +3132,29 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
             // found by sampling the in-face status along it and bisecting each change, and
             // the open curve's own ends, cut it too.
             let sectioning = matches!(mode, Mode::Section);
-            if sectioning {
+            // A boolean's open curve the edge–face stage left without two crossings (it missed
+            // one on a B-spline face): found as a section's are, each also splitting the
+            // boundary edge of either face it lies on there (as that stage would have).
+            let free = |f: usize| {
+                matches!(
+                    faces[f].surf,
+                    Surface::Nurbs(_) | Surface::Extrusion { .. } | Surface::Revolution { .. }
+                )
+            };
+            // (Only a crossing: surfaces that touch along the curve, nearly tangent, meet where
+            // the edge stages say.)
+            let crossing = || {
+                let m = ic.c.point(0.5 * (ic.t0 + ic.t1));
+                let n = |f: usize| {
+                    let s = &faces[f].surf;
+                    let (u, v) = s.project(&m, None);
+                    s.normal(u, v)
+                };
+                n(fa).cross(&n(fb)).norm() > 0.06
+            };
+            let missed =
+                !sectioning && !ic.closed && ps.len() < 2 && (free(fa) || free(fb)) && crossing();
+            if sectioning || missed {
                 let inside = |t: f64| {
                     let p = ic.c.point(t);
                     point_in_face(&faces[fa], &p, tf) != InFace::Outside
@@ -3108,14 +3176,67 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                                 hi = m;
                             }
                         }
-                        let tc = 0.5 * (lo + hi);
-                        let pc = ic.c.point(tc);
-                        if !ps.iter().any(|(pt, v)| {
-                            (pt - tc).abs() < tol::REL * (1.0 + span.abs())
-                                || (pool.verts[*v] - pc).norm() < tf * 10.0
-                        }) {
+                        let mut tc = 0.5 * (lo + hi);
+                        let mut pc = ic.c.point(tc);
+                        // A boolean's: the boundary edge it crosses (of either face), the
+                        // crossing refined onto it (the in-face test sees the face's sampled
+                        // outline) and the edge split there, as the edge–face stage would.
+                        let mut on_edge = None;
+                        if missed {
+                            let span_n = span / n as f64;
+                            let near = face_edges[fa]
+                                .iter()
+                                .chain(&face_edges[fb])
+                                .copied()
+                                .filter_map(|e| {
+                                    let ed = &pool.edges[e];
+                                    if ed.degenerate {
+                                        return None;
+                                    }
+                                    let (lo2, hi2) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+                                    let s = ed.curve.closest(&pc, lo2, hi2);
+                                    let d = (ed.curve.point(s) - pc).norm();
+                                    (d < (span_n * 0.5).max(tf * 10.0)).then_some((d, e, s))
+                                })
+                                .min_by(|a, b| a.0.total_cmp(&b.0));
+                            if let Some((_, e, mut s)) = near {
+                                let ed = &pool.edges[e];
+                                let (lo2, hi2) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+                                let (a0, a1) = ((tc - span_n).max(ic.t0), (tc + span_n).min(ic.t1));
+                                for _ in 0..40 {
+                                    let t2 = ic.c.closest(&ed.curve.point(s), a0, a1);
+                                    let s2 = ed.curve.closest(&ic.c.point(t2), lo2, hi2);
+                                    let done = (t2 - tc).abs() < 1e-15 * (1.0 + tc.abs())
+                                        && (s2 - s).abs() < 1e-15 * (1.0 + s.abs());
+                                    tc = t2;
+                                    s = s2;
+                                    if done {
+                                        break;
+                                    }
+                                }
+                                if (ic.c.point(tc) - ed.curve.point(s)).norm() < tf * 10.0 {
+                                    pc = ed.curve.point(s);
+                                    on_edge = Some((e, s));
+                                }
+                            }
+                        }
+                        // (A boolean's crossing only where it meets a boundary edge.)
+                        if (sectioning || on_edge.is_some())
+                            && !ps.iter().any(|(pt, v)| {
+                                (pt - tc).abs() < tol::REL * (1.0 + span.abs())
+                                    || (pool.verts[*v] - pc).norm() < tf * 10.0
+                            })
+                        {
                             let v = pool.vertex_tol(pc, ft);
                             ps.push((tc, v));
+                            if let Some((e, s)) = on_edge {
+                                if super::env_flag!("CADRS_BOOL_DEBUG") {
+                                    eprintln!(
+                                        "missed crossing of faces {fa}×{fb} at {pc:?}: edge {e} split at {s}"
+                                    );
+                                }
+                                pool.split(e, s, v);
+                            }
                         }
                     }
                     prev = cur;
@@ -3746,10 +3867,10 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
     let mut group_class: HashMap<usize, (Class, bool)> = HashMap::default();
     let mut unreliable: HashSet<usize> = HashSet::default();
     let propagate = !super::env_flag!("CADRS_DEBUG_NO_PROPAGATE");
-    work.spend(
-        subs.len() as u64 * (a.faces.len() + b.faces.len()) as u64,
-        "classification",
-    )?;
+    // (Each sub-face classified against the other body through its faces' box tree: about the
+    // tree's depth for each.)
+    let depth = ((a.faces.len() + b.faces.len() + 1) as f64).log2().ceil() as u64;
+    work.spend(subs.len() as u64 * depth * 8, "classification")?;
     for (sk, (fi, loops)) in subs.into_iter().enumerate() {
         let f = &faces[fi];
         if imprinting {
@@ -4033,7 +4154,13 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
         }
     }
     prof.mark("unify");
-    work.spend((out.faces.len() as u64).pow(2), "shell assembly")?;
+    // (Shells are found by flooding across edges, then nested by their boxes: about each face
+    // once, with a box search.)
+    let nf = out.faces.len() as u64;
+    work.spend(
+        nf * ((nf + 1) as f64).log2().ceil() as u64 * 4,
+        "shell assembly",
+    )?;
     if super::env_flag!("CADRS_BOOL_WORK") {
         eprintln!("boolean work: {}", work.done);
     }
@@ -4541,13 +4668,20 @@ pub fn assemble_shells(b: &mut Body) -> Result<()> {
                         }
                     }
                 }
-                let out = shell_points_out(b, fs, &polys).unwrap_or_else(|| {
+                let by_volume = || {
                     let shift = b.bbox().center().coords;
                     fs.iter()
                         .map(|&f| super::mass::face_integrals(b, &b.faces[f], &shift)[4])
                         .sum::<f64>()
                         >= 0.0
-                });
+                };
+                // (A small shell by its volume's sign, exactly: ray parity against curved faces
+                // swept by a turn can miscount.)
+                let out = if fs.len() <= 64 {
+                    by_volume()
+                } else {
+                    shell_points_out(b, fs, &polys).unwrap_or_else(by_volume)
+                };
                 (*si, bb.diagonal(), out)
             })
             .collect();

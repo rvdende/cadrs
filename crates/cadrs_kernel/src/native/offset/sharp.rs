@@ -329,7 +329,17 @@ pub fn offset_sharp(b: &Body, dist: &[f64]) -> Result<Body> {
     if let Some(r) = prism_offset(b, dist) {
         return r;
     }
-    let out = replace_surfaces(b, &surfs)?;
+    let out = match replace_surfaces(b, &surfs) {
+        Ok(out) => out,
+        // Faces or corners the moves swallow (a pyramid shrunk past its apex, which becomes a
+        // ridge): of a convex polyhedron, the solid its moved planes bound.
+        Err(e) => {
+            return match crate::native::local::planes_bound(b, &surfs) {
+                Some(Ok((out, _))) => Ok(out),
+                Some(Err(_)) | None => Err(e),
+            };
+        }
+    };
     // A face its moved neighbours cross over vanishes, as a prism's side does in
     // `prism_offset`: they meet instead, and the offset is made again without it (when that
     // fails, the faces as they moved).

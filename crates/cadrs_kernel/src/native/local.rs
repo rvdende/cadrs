@@ -1545,7 +1545,7 @@ pub fn replace_surfaces_in(b: &Body, surfs: &[Surface], domains: &[Option<UvBox>
 /// material on the side it is now): the half-spaces' common part, with the face of `b` each of its
 /// faces lies on. None when `b` is not a convex polyhedron (a face curved, or a vertex outside
 /// some face's plane), or the planes bound no solid within reach of `b`.
-fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, Vec<usize>)>> {
+pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, Vec<usize>)>> {
     let bb = b.bbox();
     let size = bb.diagonal();
     let close = tol::POINT.max(tol::REL * size);

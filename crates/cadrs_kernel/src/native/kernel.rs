@@ -891,6 +891,15 @@ impl Kernel for NativeKernel {
         super::sweep_solid::sweep_solid(self, body, motion)
     }
 
+    fn cut_swept(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        super::sweep_solid::cut_swept(self, target, tool, motion)
+    }
+
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult> {
         use nalgebra::{Point2, Unit};
         let bad = |what: &str| {
@@ -1178,6 +1187,10 @@ impl Kernel for NativeKernel {
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
         let r = super::offset::offset(self, body, spec);
         self.colored(r)
+    }
+
+    fn offset_meshed(&mut self, body: BodyId, distance: f64) -> Result<OpResult> {
+        super::sweep_solid::offset_meshed(self, body, distance)
     }
 
     fn draft(&mut self, body: BodyId, spec: &DraftSpec) -> Result<OpResult> {

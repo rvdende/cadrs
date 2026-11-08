@@ -1041,7 +1041,15 @@ impl SweepKind for PathSweep {
 /// The p-curve of a profile piece's iso-line v of its skin: u(t) the parameter of the piece's
 /// own B-spline `n0` (the skin's u) at the piece's point c(t), u(t0) = ua and u(t1) = ub (a whole
 /// circle's ends are its seam), interpolated until it maps onto the piece within 1e-12.
-fn iso_pcurve(n0: &NurbsCurve, c: &Curve, t0: f64, t1: f64, ua: f64, ub: f64, v: f64) -> Curve {
+pub(crate) fn iso_pcurve(
+    n0: &NurbsCurve,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    ua: f64,
+    ub: f64,
+    v: f64,
+) -> Curve {
     let invert = |t: f64, guess: f64| -> f64 {
         let p = c.point(t);
         let (lo, hi) = (ua.min(ub), ua.max(ub));

@@ -55,6 +55,37 @@ impl SweepKind for Prism {
                     across: Box::new(move |t| line2(P2::new(t, 0.0), V2::new(0.0, k))),
                 }
             }
+            // A circle or ellipse swept along its own plane sweeps a piece of that plane (a face
+            // of a solid slid along itself): the plane, in the conic's frame.
+            Curve::Circle { c, x, y, .. } | Curve::Ellipse { c, x, y, .. }
+                if x.cross(y).dot(&dir).abs() < tol::ANGULAR_FINE * dir.norm() =>
+            {
+                let (a, b) = match *c3 {
+                    Curve::Circle { r, .. } => (r, r),
+                    Curve::Ellipse { a, b, .. } => (a, b),
+                    _ => unreachable!(),
+                };
+                let d = V2::new(x.dot(&dir), y.dot(&dir));
+                SideGeo {
+                    surf: Surface::Plane {
+                        f: Frame {
+                            o: *c,
+                            x: *x,
+                            y: *y,
+                            z: x.cross(y),
+                        },
+                    },
+                    along: Box::new(move |s| {
+                        let (c, x, y) = (P3::new(d.x * s, d.y * s, 0.0), V3::x(), V3::y());
+                        if a == b {
+                            Curve::Circle { c, x, y, r: a }
+                        } else {
+                            Curve::Ellipse { c, x, y, a, b }
+                        }
+                    }),
+                    across: Box::new(move |t| line2(P2::new(a * t.cos(), b * t.sin()), d)),
+                }
+            }
             _ => SideGeo {
                 surf: Surface::Extrusion {
                     c: c3.clone(),
@@ -389,6 +420,134 @@ impl Turn {
                     }
                 }),
             });
+        }
+        // Any other curve in a plane square to the axis (a circle or ellipse there, a spline
+        // whose poles are): it turns in that plane; uv = the curve's local (x, y), turned by s.
+        let in_square_plane = match c3 {
+            Curve::Circle { x, y, .. } | Curve::Ellipse { x, y, .. } => {
+                f.z.dot(x).abs() <= tol::REL_FINE && f.z.dot(y).abs() <= tol::REL_FINE
+            }
+            Curve::Nurbs(n) => {
+                let h = f.z.dot(&(n.point(n.range().0) - f.o));
+                n.cps.iter().all(|c| {
+                    (f.z.dot(&(P3::new(c.x, c.y, c.z) / c.w - f.o)) - h).abs() <= tol::REL * scale
+                })
+            }
+            Curve::Line { .. } => false,
+        };
+        if in_square_plane {
+            let h = f.z.dot(&(c3.point(piece.t0) - f.o));
+            let plane = Frame {
+                o: f.o + f.z * h,
+                x: f.x,
+                y: f.y,
+                z: f.z,
+            };
+            // World to the plane's coordinates (z = 0 on it).
+            let m =
+                nalgebra::Matrix3::from_rows(&[f.x.transpose(), f.y.transpose(), f.z.transpose()]);
+            let local = c3.transformed(&Affine {
+                m,
+                t: -(m * plane.o.coords),
+            });
+            let turned = move |s: f64| Affine {
+                m: *nalgebra::Rotation3::from_axis_angle(&V3::z_axis(), s).matrix(),
+                t: V3::zeros(),
+            };
+            let lc = local.clone();
+            return Some(SideGeo {
+                surf: Surface::Plane { f: plane },
+                along: Box::new(move |s| local.transformed(&turned(s))),
+                across: Box::new(move |t| {
+                    let q = lc.point(t);
+                    let r = q.x.hypot(q.y);
+                    let (x, y) = if r > tol::TINY {
+                        (
+                            V3::new(q.x / r, q.y / r, 0.0),
+                            V3::new(-q.y / r, q.x / r, 0.0),
+                        )
+                    } else {
+                        (V3::x(), V3::y())
+                    };
+                    Curve::Circle {
+                        c: P3::origin(),
+                        x,
+                        y,
+                        r: r.max(tol::TINY),
+                    }
+                }),
+            });
+        }
+        // A circle whose axis meets the turn's: it lies on the sphere about that point, which its
+        // turn sweeps (uv the sphere's: its points' azimuth from f.x and latitude, the azimuth
+        // turned by s).
+        if let Curve::Circle { c, x, y, r } = c3 {
+            let n = x.cross(y);
+            // The circle's axis c + λn against the turn's f.o + μ f.z: their nearest points.
+            let w = c - f.o;
+            let b = n.dot(&f.z);
+            let den = 1.0 - b * b;
+            if den > tol::ANGULAR {
+                let (dn, dz) = (n.dot(&w), f.z.dot(&w));
+                let lam = (b * dz - dn) / den;
+                let mu = (dz - b * dn) / den;
+                let (pa, pb) = (c + n * lam, f.o + f.z * mu);
+                if (pa - pb).norm() <= tol::REL_FINE * scale {
+                    let centre = pb;
+                    let rad = (r * r + (c - centre).norm_squared()).sqrt();
+                    let sf = Frame {
+                        o: centre,
+                        x: f.x,
+                        y: f.y,
+                        z: f.z,
+                    };
+                    let uv = |p: P3| {
+                        let l = sf.local(&p);
+                        (l.y.atan2(l.x), (l.z / rad).clamp(-1.0, 1.0).asin())
+                    };
+                    // The circle's (u, v) at its points, the azimuth unwrapped along it.
+                    let (t0, t1) = (piece.t0, piece.t1);
+                    let m = 64;
+                    let mut ts = Vec::with_capacity(m + 1);
+                    let mut pts = Vec::with_capacity(m + 1);
+                    let mut prev: Option<f64> = None;
+                    for i in 0..=m {
+                        let t = t0 + (t1 - t0) * i as f64 / m as f64;
+                        let (mut u, v) = uv(c3.point(t));
+                        if let Some(p) = prev {
+                            u = unwrap_near(u, p, std::f64::consts::TAU);
+                        }
+                        prev = Some(u);
+                        ts.push(t);
+                        pts.push(P3::new(u, v, 0.0));
+                    }
+                    if pts
+                        .iter()
+                        .all(|q| q.y.abs() < std::f64::consts::FRAC_PI_2 - 1e-6)
+                    {
+                        let pc =
+                            crate::native::nurbs::NurbsCurve::interpolate(&pts, &ts, 3, None, None);
+                        let pc = Curve::Nurbs(std::sync::Arc::new(pc));
+                        let (pc2, ends) = (pc.clone(), (pts[0], pts[m]));
+                        return Some(SideGeo {
+                            surf: Surface::Sphere { f: sf, r: rad },
+                            along: Box::new(move |s| {
+                                pc.transformed(&Affine::translation(V3::new(s, 0.0, 0.0)))
+                            }),
+                            across: Box::new(move |t| {
+                                let q = if (t - t0).abs() <= (t - t1).abs() {
+                                    ends.0
+                                } else if (t - t1).abs() < (t - t0).abs() {
+                                    ends.1
+                                } else {
+                                    pc2.point(t)
+                                };
+                                line2(P2::new(q.x, q.y), V2::new(1.0, 0.0))
+                            }),
+                        });
+                    }
+                }
+            }
         }
         Some(SideGeo {
             surf: Surface::Revolution { f, m: c3.clone() },

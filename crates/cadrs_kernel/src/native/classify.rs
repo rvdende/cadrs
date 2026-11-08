@@ -676,6 +676,16 @@ fn uv_range(polys: &[Vec<P2>]) -> ((f64, f64), (f64, f64)) {
     (ub, vb)
 }
 
+/// The whole periods k (at least −2 to 2) with x + 2πk in the range `b`, or about it.
+fn periods(x: f64, b: (f64, f64)) -> (i64, i64) {
+    if !(b.0.is_finite() && b.1.is_finite() && x.is_finite()) || b.1 - b.0 > 1e4 {
+        return (-2, 2);
+    }
+    let k0 = ((b.0 - x) / TAU).floor() as i64;
+    let k1 = ((b.1 - x) / TAU).ceil() as i64;
+    (k0.min(-2), k1.max(2))
+}
+
 /// [`periodic_candidates`] with the polygons' (u, v) ranges known.
 fn periodic_candidates_in(
     s: &Surface,
@@ -685,7 +695,9 @@ fn periodic_candidates_in(
 ) -> Vec<P2> {
     let us: Vec<f64> = if s.u_periodic() {
         let mut v = Vec::new();
-        for k in -2..=2 {
+        // (Every period the face's box reaches: a face may wind round its axis several times.)
+        let (k0, k1) = periods(u, ub);
+        for k in k0..=k1 {
             let x = u + TAU * k as f64;
             if x >= ub.0 - tol::ROUNDOFF && x <= ub.1 + tol::ROUNDOFF {
                 v.push(x);
@@ -700,7 +712,8 @@ fn periodic_candidates_in(
     };
     let vs: Vec<f64> = if s.v_periodic() {
         let mut w = Vec::new();
-        for k in -2..=2 {
+        let (k0, k1) = periods(v, vb);
+        for k in k0..=k1 {
             let x = v + TAU * k as f64;
             if x >= vb.0 - tol::ROUNDOFF && x <= vb.1 + tol::ROUNDOFF {
                 w.push(x);
