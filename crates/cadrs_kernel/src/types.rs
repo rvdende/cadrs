@@ -819,15 +819,27 @@ pub enum SolidMotion {
         steps: Vec<PlanarStep>,
     },
     /// Moved by its steps (turns about any axes, slides) applied in order at each instant, each
-    /// by its amount at that instant, as the motion runs from start to end. For solids of
-    /// revolution of a convex section (a torus, a wheel): what they fill, found as the region
-    /// some instant of the body holds (the body's signed distance, closed in form, at the
-    /// deepest instant) and bounded by a closed mesh of it (marching tetrahedra on a grid of a
-    /// hundredth of its reach, the vertices placed on it), made solid: within about the grid's
-    /// step squared over the body's curvature radius.
+    /// by its amount at that instant, as the motion runs from start to end. One slide, one turn
+    /// or a screw (a turn and a slide along its axis): exactly, the start united with what its
+    /// leading faces sweep. Else what the body fills, found as the region some instant of the
+    /// body holds (its signed distance at the deepest instant: closed in form for a solid of
+    /// revolution of a convex section, else its mesh's) and bounded by a closed mesh of it
+    /// (marching tetrahedra on a grid of a hundredth of its reach, the vertices placed on it),
+    /// made solid: within about the grid's step squared over the body's curvature radius.
     Rigid {
         /// The steps, the first applied first.
         steps: Vec<RigidStep>,
+    },
+    /// Carried along a path by a frame riding it: at each point the frame's origin is the path's
+    /// point, its z axis `up` and its x axis the path's tangent made square to `up` (its y axis to
+    /// the left), the body drawn in the frame where the path starts and carried rigidly by it
+    /// (a tool run along a curve, upright). Meshed, as a rigid motion of a body that isn't a
+    /// solid of revolution is.
+    Path {
+        /// Connected curves, in order from the start.
+        path: Vec<PathCurve>,
+        /// The frame's z axis.
+        up: Unit<Vector3<f64>>,
     },
 }
 

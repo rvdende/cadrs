@@ -538,7 +538,13 @@ fn plane_extrusion(
         }
         Curve::Nurbs(nc) => Curve::Nurbs(Arc::new(nc.transformed(&aff))),
     };
-    let closed = c.is_periodic() && (hi - lo) >= TAU - tol::ANGULAR;
+    // Closed: a whole circle, or a closed B-spline over its whole range (its ends one point).
+    let whole_spline = c.nurbs_range().is_some_and(|(a, b)| {
+        lo <= a + tol::REL_POINT * (b - a).abs()
+            && hi >= b - tol::REL_POINT * (b - a).abs()
+            && (c.point(a) - c.point(b)).norm() <= tol::POINT
+    });
+    let closed = (c.is_periodic() && (hi - lo) >= TAU - tol::ANGULAR) || whole_spline;
     Some(vec![IntCurve {
         c: curve,
         t0: lo,
@@ -2123,7 +2129,10 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         }
         let mut out: Vec<f64> = Vec::new();
         for t in ts {
-            for k in -2..=2 {
+            // (Every period of the range: a curve may wind round several times.)
+            let k0 = (((t0 - t) / TAU).floor() as i64).min(-2);
+            let k1 = (((t1 - t) / TAU).ceil() as i64).max(2);
+            for k in k0..=k1 {
                 let tt = t + TAU * k as f64;
                 if tt >= t0 - tol::ROUNDOFF_FINE
                     && tt <= t1 + tol::ROUNDOFF_FINE

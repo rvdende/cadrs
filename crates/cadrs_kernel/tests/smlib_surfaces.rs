@@ -4496,18 +4496,15 @@ fn analytic_extrusion() {
 /// SMLib `my_test_analytic_surfaces`: an 11 × 11 grid of a space cubic extruded along z found again.
 #[test]
 fn analytic_extrusion_z() {
-    known_failure(
-        round_trip(
-            &Surface::Extrusion {
-                c: nurb([0.0; 3], &PROFILE, 3),
-                d: V3::z(),
-            },
-            ((0.0, 1.0), (-1.0, 3.0)),
-            11,
-        ),
-        "surfaces",
-        "analytic_extrusion_z",
-    );
+    round_trip(
+        &Surface::Extrusion {
+            c: nurb([0.0; 3], &PROFILE, 3),
+            d: V3::z(),
+        },
+        ((0.0, 1.0), (-1.0, 3.0)),
+        11,
+    )
+    .unwrap();
 }
 
 /// SMLib `my_test_drop_curve_near_seam`: a vertical line ending 2e-5 before the seam of a cylinder of radius 0.25, its p-curve lifted back within 1.01e-5.

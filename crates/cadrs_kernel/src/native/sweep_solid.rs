@@ -89,7 +89,7 @@ impl Section {
     }
 }
 
-/// The body as a solid of revolution of a convex section, if it is one: one whole torus, or
+/// The body as a solid of revolution of a convex section, if it is one: one whole torus or ball, or
 /// faces on cones, cylinders and planes about one axis whose circles' (ρ, h) are the corners of
 /// a convex polygon whose revolve has the body's volume.
 fn revolved(b: &Body) -> Option<Revolved> {
@@ -115,6 +115,23 @@ fn revolved(b: &Body) -> Option<Revolved> {
             section: Section::Disk {
                 c: (*rmaj, 0.0),
                 r: *rmin,
+            },
+        });
+    }
+    // A whole ball: a disc about its centre on any axis through it.
+    if let [f] = b.faces.as_slice()
+        && let Surface::Sphere { f: fr, r } = &f.surf
+        && super::mass::body_volume(b) > 0.0
+    {
+        let (o, a, e1, e2) = frame(fr.o, fr.z);
+        return Some(Revolved {
+            o,
+            a,
+            e1,
+            e2,
+            section: Section::Disk {
+                c: (0.0, 0.0),
+                r: *r,
             },
         });
     }
@@ -526,14 +543,37 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
     if let SolidMotion::Planar { normal, steps } = motion {
         return super::sweep_planar::sweep_planar(k, &b, normal.into_inner(), steps);
     }
+    // One slide, turn or screw of any solid: exactly, from its leading faces' sweeps (split
+    // where its faces meet the motion); else meshed.
+    if let SolidMotion::Rigid { steps } = motion {
+        let mut exact = None;
+        if (1..=2).contains(&steps.len()) {
+            match super::sweep_faces::by_faces(k, &b, steps) {
+                Ok(r) => return Ok(r),
+                Err(e) => exact = Some(e),
+            }
+        }
+        let place = |t: f64| rigid_at(steps, t);
+        return match revolved(&b) {
+            Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
+            None => meshed_body(k, &b, &place).map_err(|e| exact.unwrap_or(e)),
+        };
+    }
+    if let SolidMotion::Path { path, up } = motion {
+        let frames = PathFrames::new(k, path, up.into_inner())?;
+        let place = |t: f64| frames.place(t);
+        return match revolved(&b) {
+            Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
+            None => meshed_body(k, &b, &place),
+        };
+    }
     let rev = revolved(&b).ok_or(KernelError::Unsupported(
         "sweeping solids other than a torus or a convex section revolved",
     ))?;
-    if let SolidMotion::Rigid { steps } = motion {
-        return rigid(k, &b, &rev, steps);
-    }
     let (axis, kk, span) = match *motion {
-        SolidMotion::Planar { .. } | SolidMotion::Rigid { .. } => unreachable!(),
+        SolidMotion::Planar { .. } | SolidMotion::Rigid { .. } | SolidMotion::Path { .. } => {
+            unreachable!()
+        }
         SolidMotion::Turn { axis } => (axis, 0.0, None),
         SolidMotion::Screw {
             axis,
@@ -863,90 +903,26 @@ fn rigid_at(steps: &[RigidStep], t: f64) -> (nalgebra::Rotation3<f64>, V3) {
 }
 
 /// How far (in grid steps) the rigid sweep's mesh may move from the planes of the triangles
-/// marching tetrahedra made.
-const DECIMATE: f64 = 0.02;
+/// marching tetrahedra made: 0, none (the solid's coplanar triangles merge into faces anyway; a
+/// coarser mesh's long slivers leave booleans with it open).
+const DECIMATE: f64 = 0.0;
 
-/// [`crate::Kernel::sweep_solid`] for a rigid motion: the region some instant of the body holds,
-/// meshed by marching tetrahedra and made solid.
-fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) -> Result<OpResult> {
+/// The closed mesh, made solid, of where `depth` (positive inside, changing no faster than the
+/// distance) is positive, on the grid of `n` points `h` apart from `lo`: the depth found from
+/// coarse to fine, marching tetrahedra (see [`meshed`]).
+fn contour(
+    k: &mut NativeKernel,
+    lo: P3,
+    n: [usize; 3],
+    h: f64,
+    depth: &(dyn Fn(&P3) -> f64 + Sync),
+    t0: web_time::Instant,
+) -> Result<OpResult> {
     use rayon::prelude::*;
     let prof = std::env::var("CADRS_PROFILE").is_ok();
-    let t0 = web_time::Instant::now();
-    // The places sampled, and their inverses (world to body: x ↦ R x − e).
-    let nt = 160;
-    let places: Vec<(nalgebra::Rotation3<f64>, V3)> = (0..=nt)
-        .map(|i| rigid_at(steps, i as f64 / nt as f64))
-        .collect();
-    let inverse: Vec<(nalgebra::Rotation3<f64>, V3)> = places
-        .iter()
-        .map(|(r, d)| {
-            let ri = r.inverse();
-            (ri, ri * d)
-        })
-        .collect();
-    // The grid over the places' boxes, its sides a multiple of eight steps.
-    let bb0 = b.bbox();
-    let corners = |bb: &Bbox| -> [P3; 8] {
-        std::array::from_fn(|i| {
-            P3::new(
-                if i & 1 == 0 { bb.min.x } else { bb.max.x },
-                if i & 2 == 0 { bb.min.y } else { bb.max.y },
-                if i & 4 == 0 { bb.min.z } else { bb.max.z },
-            )
-        })
-    };
-    let mut bb = Bbox::empty();
-    for (r, d) in &places {
-        for c in corners(&bb0) {
-            bb.add(&P3::from(r * c.coords + d));
-        }
-    }
-    let ext = bb.max - bb.min;
-    let h = ext.max() / 100.0;
-    let lo = bb.min - V3::repeat(2.0 * h);
-    let n = [0, 1, 2].map(|i| 8 * ((ext[i] + 4.0 * h) / h / 8.0).ceil() as usize + 1);
     let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
     let idx = |i: usize, j: usize, l: usize| (l * n[1] + j) * n[0] + i;
     let ijl = |g: usize| (g % n[0], (g / n[0]) % n[1], g / (n[0] * n[1]));
-    // How far a grid point's place in the body moves between samples, at most (its map is
-    // affine, so at a corner of the grid's box), over two: what the samples' best can miss.
-    let mut gb = Bbox::empty();
-    gb.add(&lo);
-    gb.add(&at(n[0] - 1, n[1] - 1, n[2] - 1));
-    let mut miss = 0.0f64;
-    for w in inverse.windows(2) {
-        for c in corners(&gb) {
-            miss = miss.max(((w[0].0 * c.coords - w[0].1) - (w[1].0 * c.coords - w[1].1)).norm());
-        }
-    }
-    let miss = 0.6 * miss;
-    // How deep x lies in the body's places (its signed distance from the region, positive
-    // inside): the best sampled instant, refined by golden-section search about it near the
-    // boundary. Far from it the value is a bound: of the right sign and no deeper than the
-    // point lies.
-    let depth = |x: &P3| -> f64 {
-        let mut best = (f64::NEG_INFINITY, 0usize);
-        for (i, (r, e)) in inverse.iter().enumerate() {
-            let v = -rev.distance(&P3::from(r * x.coords - e));
-            if v > best.0 {
-                best = (v, i);
-            }
-        }
-        if best.0 >= 2.0 * h {
-            return best.0;
-        }
-        if best.0 <= -miss - 2.0 * h {
-            return best.0 + miss;
-        }
-        let f = |t: f64| {
-            let (r, d) = rigid_at(steps, t);
-            -rev.distance(&P3::from(r.inverse() * (x.coords - d)))
-        };
-        let dt = 1.0 / nt as f64;
-        let c = best.1 as f64 * dt;
-        let (_, v) = golden_max_in(&f, (c - dt).max(0.0), (c + dt).min(1.0), 24);
-        v.max(best.0)
-    };
     // The depth from coarse to fine (steps of 8, 4, 2 and 1): a point whose nearest coarser
     // node lies deeper (or farther out) than their distance and a step more takes its sign
     // from it (the depth changes no faster than the distance), so the depth is found only near
@@ -1121,7 +1097,15 @@ fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) ->
     }
     // Coarser where the grid made more triangles than the surface needs (within `DECIMATE`
     // steps of the planes they replace).
-    let (pts, mesh) = super::decimate::decimate(&placed, &mesh, DECIMATE * h);
+    let (pts, mesh) = if DECIMATE <= 0.0 {
+        (placed, mesh)
+    } else {
+        super::decimate::decimate(&placed, &mesh, DECIMATE * h)
+    };
+    // (Slivers a corner lying on the opposite side made, cut out: the triangle across that
+    // side split at the corner instead.)
+    let mut mesh = mesh;
+    unsliver(&pts, &mut mesh, 1e-4 * h);
     let out: Vec<[P3; 3]> = mesh.iter().map(|t| t.map(|i| pts[i as usize])).collect();
     if out.is_empty() {
         return Err(KernelError::InvalidResult {
@@ -1136,7 +1120,9 @@ fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) ->
             t0.elapsed().as_secs_f64() * 1e3
         );
     }
-    let id = k.mesh_solid(&out, 1e-9 * h.max(1.0))?;
+    // (Corners within a ten-thousandth of a step welded: a sliver they make would round to
+    // nothing in a single-precision mesh of the solid, or tessellate open.)
+    let id = k.mesh_solid(&out, 1e-4 * h)?;
     if prof {
         eprintln!(
             "rigid sweep: solid in {:.0} ms",
@@ -1147,4 +1133,484 @@ fn rigid(k: &mut NativeKernel, b: &Body, rev: &Revolved, steps: &[RigidStep]) ->
         bodies: vec![id],
         history: History::default(),
     })
+}
+
+/// [`crate::Kernel::offset_meshed`].
+pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Result<OpResult> {
+    if !distance.is_finite() {
+        return Err(KernelError::InvalidParameter(
+            "The offset distance isn't finite".into(),
+        ));
+    }
+    let b = (**k.get(body)?).clone();
+    let md =
+        super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
+            .ok_or(KernelError::Unsupported(
+                "offsetting a solid whose mesh doesn't close",
+            ))?;
+    let bb = b.bbox().grow(distance.max(0.0));
+    let ext = bb.max - bb.min;
+    let h = ext.max() / 100.0;
+    let lo = bb.min - V3::repeat(2.0 * h);
+    let n = [0, 1, 2].map(|i| 8 * ((ext[i] + 4.0 * h) / h / 8.0).ceil() as usize + 1);
+    // Inside the offset where the body's signed distance is below the offset's.
+    contour(
+        k,
+        lo,
+        n,
+        h,
+        &|p: &P3| distance - md.distance(p),
+        web_time::Instant::now(),
+    )
+}
+
+/// [`crate::Kernel::cut_swept`].
+pub fn cut_swept(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: BodyId,
+    motion: &SolidMotion,
+) -> Result<OpResult> {
+    let b = (**k.get(tool)?).clone();
+    // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
+    // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose
+    // groove is wider than its lead; the pieces don't), else on to the whole and the mesh.
+    if let SolidMotion::Rigid { steps } = motion
+        && (1..=2).contains(&steps.len())
+    {
+        let turn = steps
+            .iter()
+            .map(|s| match *s {
+                RigidStep::Turn { from, to, .. } => (to - from).abs(),
+                RigidStep::Slide { .. } => 0.0,
+            })
+            .fold(0.0, f64::max);
+        if turn > PI + tol::ANGULAR {
+            let n = (turn / PI).ceil() as usize;
+            let part = |i: usize| -> Vec<RigidStep> {
+                let (a, z) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                steps
+                    .iter()
+                    .map(|s| match *s {
+                        RigidStep::Turn { axis, from, to } => RigidStep::Turn {
+                            axis,
+                            from: from + (to - from) * a,
+                            to: from + (to - from) * z,
+                        },
+                        RigidStep::Slide { from, to } => RigidStep::Slide {
+                            from: from + (to - from) * a,
+                            to: from + (to - from) * z,
+                        },
+                    })
+                    .collect()
+            };
+            let mut acc = target;
+            let mut ok = true;
+            for i in 0..n {
+                let Ok(r) = super::sweep_faces::by_faces(k, &b, &part(i)) else {
+                    ok = false;
+                    break;
+                };
+                let [s] = r.bodies.as_slice() else {
+                    ok = false;
+                    break;
+                };
+                let cut = k.boolean(crate::BoolOp::Subtract, acc, &[*s]);
+                k.release(*s);
+                match cut {
+                    Ok(c)
+                        if c.bodies.len() == 1
+                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty()) =>
+                    {
+                        if acc != target {
+                            k.release(acc);
+                        }
+                        acc = c.bodies[0];
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                return Ok(OpResult {
+                    bodies: vec![acc],
+                    history: History::default(),
+                });
+            }
+            if acc != target {
+                k.release(acc);
+            }
+        }
+    }
+    // Exactly: the sweep, where it is made without meshing, cut from the target.
+    let exact = match motion {
+        SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
+            super::sweep_faces::by_faces(k, &b, steps).ok()
+        }
+        SolidMotion::Planar { .. } | SolidMotion::Turn { .. } | SolidMotion::Screw { .. } => {
+            sweep_solid(k, tool, motion).ok()
+        }
+        _ => None,
+    };
+    if let Some(r) = exact
+        && let [s] = r.bodies.as_slice()
+    {
+        let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+        k.release(*s);
+        if let Ok(c) = cut
+            && c.bodies
+                .iter()
+                .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+        {
+            return Ok(c);
+        }
+    }
+    // Else meshed: inside the target, in none of the tool's places.
+    let t = (**k.get(target)?).clone();
+    let tdist =
+        super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
+            .ok_or(KernelError::Unsupported(
+                "cutting from a target whose mesh doesn't close",
+            ))?;
+    let td = |p: &P3| -tdist.distance(p);
+    let within = Some((t.bbox(), &td as &(dyn Fn(&P3) -> f64 + Sync)));
+    let rev = revolved(&b);
+    let md;
+    let dist: &(dyn Fn(&P3) -> f64 + Sync) = match &rev {
+        Some(r) => &|p: &P3| r.distance(p),
+        None => {
+            md = super::mesh_distance::MeshDistance::new(
+                &b,
+                1e-3 * b.bbox().diagonal().max(tol::POINT),
+            )
+            .ok_or(KernelError::Unsupported(
+                "sweeping a solid whose mesh doesn't close",
+            ))?;
+            &|p: &P3| md.distance(p)
+        }
+    };
+    match motion {
+        SolidMotion::Rigid { steps } => meshed_within(k, &b, dist, &|t| rigid_at(steps, t), within),
+        SolidMotion::Path { path, up } => {
+            let frames = PathFrames::new(k, path, up.into_inner())?;
+            meshed_within(k, &b, dist, &|t| frames.place(t), within)
+        }
+        _ => Err(KernelError::Unsupported(
+            "cutting by a swept solid meshed for a motion other than a rigid one or a path",
+        )),
+    }
+}
+
+/// [`meshed`] with the body's distance from its own mesh (closed, within a thousandth of its
+/// reach).
+fn meshed_body(k: &mut NativeKernel, b: &Body, place: &Place) -> Result<OpResult> {
+    let md = super::mesh_distance::MeshDistance::new(b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
+        .ok_or(KernelError::Unsupported(
+            "sweeping a solid whose mesh doesn't close (for its distance)",
+        ))?;
+    meshed(k, b, &|p| md.distance(p), place)
+}
+
+/// The frames riding a path ([`SolidMotion::Path`]): by its length, t from 0 to 1, the path's
+/// point and its tangent made square to `up`.
+struct PathFrames {
+    segs: Vec<super::sweep::path::Seg>,
+    /// Each segment's samples (its parameter, the length from the path's start), 256 of them.
+    table: Vec<Vec<(f64, f64)>>,
+    total: f64,
+    up: V3,
+    start: (nalgebra::Matrix3<f64>, P3),
+}
+
+impl PathFrames {
+    fn new(k: &NativeKernel, path: &[crate::PathCurve], up: V3) -> Result<Self> {
+        let segs = super::sweep::path::path_segments(k, path)?;
+        if segs.is_empty() {
+            return Err(KernelError::InvalidParameter("The path is empty".into()));
+        }
+        let mut table = Vec::with_capacity(segs.len());
+        let mut at = 0.0;
+        for s in &segs {
+            let n = 256;
+            let mut row = Vec::with_capacity(n + 1);
+            // (A reversed segment runs from its end parameter back.)
+            let (ta, tb) = if s.rev { (s.t1, s.t0) } else { (s.t0, s.t1) };
+            let mut prev = s.c.point(ta);
+            for i in 0..=n {
+                let t = ta + (tb - ta) * i as f64 / n as f64;
+                let p = s.c.point(t);
+                at += (p - prev).norm();
+                prev = p;
+                row.push((t, at));
+            }
+            table.push(row);
+        }
+        let up = up.normalize();
+        let mut me = PathFrames {
+            segs,
+            table,
+            total: at.max(tol::POINT),
+            up,
+            start: (nalgebra::Matrix3::identity(), P3::origin()),
+        };
+        me.start = me.frame(0.0)?;
+        Ok(me)
+    }
+
+    /// The frame (its axes as columns) and origin at t.
+    fn frame(&self, t: f64) -> Result<(nalgebra::Matrix3<f64>, P3)> {
+        let l = t.clamp(0.0, 1.0) * self.total;
+        let si = self
+            .table
+            .iter()
+            .position(|row| row.last().is_some_and(|r| r.1 >= l))
+            .unwrap_or(self.table.len() - 1);
+        let row = &self.table[si];
+        let j = row.partition_point(|r| r.1 < l).clamp(1, row.len() - 1);
+        let (a, b) = (row[j - 1], row[j]);
+        let f = if b.1 > a.1 {
+            (l - a.1) / (b.1 - a.1)
+        } else {
+            0.0
+        };
+        let s = &self.segs[si];
+        let u = a.0 + (b.0 - a.0) * f.clamp(0.0, 1.0);
+        let (p, d1, _) = s.c.d2(u);
+        // (The way of travel: the samples' parameters' way.)
+        let d1 = d1 * (row[row.len() - 1].0 - row[0].0).signum();
+        let x = (d1 - self.up * d1.dot(&self.up))
+            .try_normalize(1e-12)
+            .ok_or_else(|| {
+                KernelError::InvalidParameter("The path runs along the frame's up direction".into())
+            })?;
+        let y = self.up.cross(&x);
+        Ok((nalgebra::Matrix3::from_columns(&[x, y, self.up]), p))
+    }
+
+    /// The place at t: the rotation and translation from the start frame to t's.
+    fn place(&self, t: f64) -> (nalgebra::Rotation3<f64>, V3) {
+        let (m0, o0) = self.start;
+        let (m, o) = self.frame(t).unwrap_or(self.start);
+        let r = nalgebra::Rotation3::from_matrix_unchecked(m * m0.transpose());
+        (r, o.coords - r * o0.coords)
+    }
+}
+
+/// A closed mesh's slivers removed: a triangle whose corner lies within `eps` of its opposite
+/// side, inside it, is dropped and the triangle across that side split at the corner (the two
+/// covered the same area; the split keeps every side matched). A few passes.
+fn unsliver(pts: &[P3], tris: &mut Vec<[u32; 3]>, eps: f64) {
+    use std::collections::HashMap;
+    for _ in 0..4 {
+        let mut half: HashMap<(u32, u32), usize> = HashMap::with_capacity(tris.len() * 3);
+        for (ti, t) in tris.iter().enumerate() {
+            for k in 0..3 {
+                half.insert((t[k], t[(k + 1) % 3]), ti);
+            }
+        }
+        let mut dead = vec![false; tris.len()];
+        let mut added: Vec<[u32; 3]> = Vec::new();
+        let mut changed = false;
+        for ti in 0..tris.len() {
+            if dead[ti] {
+                continue;
+            }
+            let t = tris[ti];
+            // The longest side and the corner opposite it.
+            let side = |k: usize| (pts[t[(k + 1) % 3] as usize] - pts[t[k] as usize]).norm();
+            let k = (0..3)
+                .max_by(|&x, &y| side(x).total_cmp(&side(y)))
+                .unwrap_or(0);
+            let (a, b, c) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+            let (pa, pb, pc) = (pts[a as usize], pts[b as usize], pts[c as usize]);
+            let ab = pb - pa;
+            let l2 = ab.norm_squared();
+            if l2 <= 0.0 {
+                continue;
+            }
+            let f = (pc - pa).dot(&ab) / l2;
+            if !(f > 0.0 && f < 1.0) || (pa + ab * f - pc).norm() > eps {
+                continue;
+            }
+            let Some(&ui) = half.get(&(b, a)) else {
+                continue;
+            };
+            if dead[ui] || ui == ti {
+                continue;
+            }
+            let u = tris[ui];
+            let d = u.iter().copied().find(|&v| v != a && v != b);
+            let Some(d) = d else { continue };
+            if d == c {
+                continue;
+            }
+            dead[ti] = true;
+            dead[ui] = true;
+            added.push([b, c, d]);
+            added.push([c, a, d]);
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        let mut next: Vec<[u32; 3]> = tris
+            .iter()
+            .zip(&dead)
+            .filter(|(_, d)| !**d)
+            .map(|(t, _)| *t)
+            .collect();
+        next.extend(added);
+        *tris = next;
+    }
+}
+
+/// How far `p` lies outside the box (0 inside it).
+fn box_distance(bb: &Bbox, p: &P3) -> f64 {
+    let d = V3::new(
+        (bb.min.x - p.x).max(p.x - bb.max.x).max(0.0),
+        (bb.min.y - p.y).max(p.y - bb.max.y).max(0.0),
+        (bb.min.z - p.z).max(p.z - bb.max.z).max(0.0),
+    );
+    d.norm()
+}
+
+/// A place of a motion at t ∈ [0, 1]: the rotation and translation taking the body's points
+/// there.
+pub(crate) type Place<'a> = dyn Fn(f64) -> (nalgebra::Rotation3<f64>, V3) + Sync + 'a;
+
+/// What body `b` fills as it moves through `place(t)`, t from 0 to 1, meshed: `dist` its signed
+/// distance (negative inside; a bound below it, of the right sign, will do). See
+/// [`crate::SolidMotion::Rigid`].
+pub(crate) fn meshed(
+    k: &mut NativeKernel,
+    b: &Body,
+    dist: &(dyn Fn(&P3) -> f64 + Sync),
+    place: &Place,
+) -> Result<OpResult> {
+    meshed_within(k, b, dist, place, None)
+}
+
+/// A target's box and its depth (positive inside), for [`meshed_within`].
+type Within<'a> = Option<(Bbox, &'a (dyn Fn(&P3) -> f64 + Sync))>;
+
+/// [`meshed`]; with `within` (a target's box and its depth, positive inside), the target less
+/// what the body fills: the grid over the target's box, the field the lesser of its depth and
+/// the negated fill's.
+fn meshed_within(
+    k: &mut NativeKernel,
+    b: &Body,
+    dist: &(dyn Fn(&P3) -> f64 + Sync),
+    place: &Place,
+    within: Within,
+) -> Result<OpResult> {
+    let t0 = web_time::Instant::now();
+    // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
+    // motion that moves the body's box farther than a fiftieth of its reach between them.
+    let bb0 = b.bbox();
+    let reach = bb0.diagonal().max(tol::POINT);
+    let mut nt = 160usize;
+    let step_of = |nt: usize| {
+        (0..nt)
+            .map(|i| {
+                let (a, b2) = (
+                    place(i as f64 / nt as f64),
+                    place((i + 1) as f64 / nt as f64),
+                );
+                [bb0.min, bb0.max, bb0.center()]
+                    .iter()
+                    .map(|c| ((a.0 * c.coords + a.1) - (b2.0 * c.coords + b2.1)).norm())
+                    .fold(0.0, f64::max)
+            })
+            .fold(0.0, f64::max)
+    };
+    while nt < 1024 && step_of(nt) > reach / 50.0 {
+        nt *= 2;
+    }
+    let places: Vec<(nalgebra::Rotation3<f64>, V3)> =
+        (0..=nt).map(|i| place(i as f64 / nt as f64)).collect();
+    let inverse: Vec<(nalgebra::Rotation3<f64>, V3)> = places
+        .iter()
+        .map(|(r, d)| {
+            let ri = r.inverse();
+            (ri, ri * d)
+        })
+        .collect();
+    // The grid over the places' boxes, its sides a multiple of eight steps.
+    let corners = |bb: &Bbox| -> [P3; 8] {
+        std::array::from_fn(|i| {
+            P3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            )
+        })
+    };
+    let mut bb = Bbox::empty();
+    for (r, d) in &places {
+        for c in corners(&bb0) {
+            bb.add(&P3::from(r * c.coords + d));
+        }
+    }
+    if let Some((tb, _)) = &within {
+        bb = *tb;
+    }
+    let ext = bb.max - bb.min;
+    let h = ext.max() / 100.0;
+    let lo = bb.min - V3::repeat(2.0 * h);
+    let n = [0, 1, 2].map(|i| 8 * ((ext[i] + 4.0 * h) / h / 8.0).ceil() as usize + 1);
+    let at = |i: usize, j: usize, l: usize| lo + V3::new(i as f64 * h, j as f64 * h, l as f64 * h);
+    // How far a grid point's place in the body moves between samples, at most (its map is
+    // affine, so at a corner of the grid's box), over two: what the samples' best can miss.
+    let mut gb = Bbox::empty();
+    gb.add(&lo);
+    gb.add(&at(n[0] - 1, n[1] - 1, n[2] - 1));
+    let mut miss = 0.0f64;
+    for w in inverse.windows(2) {
+        for c in corners(&gb) {
+            miss = miss.max(((w[0].0 * c.coords - w[0].1) - (w[1].0 * c.coords - w[1].1)).norm());
+        }
+    }
+    let miss = 0.6 * miss;
+    // How deep x lies in the body's places (its signed distance from the region, positive
+    // inside): the best sampled instant, refined by golden-section search about it near the
+    // boundary. Far from it the value is a bound: of the right sign and no deeper than the
+    // point lies.
+    let fill = |x: &P3| -> f64 {
+        let mut best = (f64::NEG_INFINITY, 0usize);
+        for (i, (r, e)) in inverse.iter().enumerate() {
+            let q = P3::from(r * x.coords - e);
+            // (Outside the body's box it lies no deeper than that box's distance.)
+            let off = box_distance(&bb0, &q);
+            if off > 0.0 && -off <= best.0 {
+                continue;
+            }
+            let v = -dist(&q);
+            if v > best.0 {
+                best = (v, i);
+            }
+        }
+        if best.0 >= 2.0 * h {
+            return best.0;
+        }
+        if best.0 <= -miss - 2.0 * h {
+            return best.0 + miss;
+        }
+        let f = |t: f64| {
+            let (r, d) = place(t);
+            -dist(&P3::from(r.inverse() * (x.coords - d)))
+        };
+        let dt = 1.0 / nt as f64;
+        let c = best.1 as f64 * dt;
+        let (_, v) = golden_max_in(&f, (c - dt).max(0.0), (c + dt).min(1.0), 24);
+        v.max(best.0)
+    };
+    let depth = |x: &P3| -> f64 {
+        match &within {
+            Some((_, td)) => td(x).min(-fill(x)),
+            None => fill(x),
+        }
+    };
+    contour(k, lo, n, h, &depth, t0)
 }

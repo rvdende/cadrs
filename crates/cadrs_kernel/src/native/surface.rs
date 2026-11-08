@@ -446,6 +446,7 @@ impl Surface {
                 let v = local.unwrap_or_else(|| m.closest(&q, a, b));
                 (u, v)
             }
+            Surface::Extrusion { c, d } if hint.is_none() => project_extrusion(c, d, p),
             Surface::Extrusion { .. } | Surface::Nurbs(_) => self.project_newton(p, hint),
         }
     }
@@ -1228,16 +1229,20 @@ impl Surface {
                 if (pa - pb).norm() > tol * 10.0 {
                     return None;
                 }
-                let da = a.z * aa.cos() + V3::zeros();
-                let _ = da;
-                let open_a = if aa.sin() > 0.0 { a.z } else { -a.z };
-                let open_b = if ab.sin() > 0.0 { b.z } else { -b.z };
+                // (The radius grows toward z where tan a > 0: a cone held with cos a < 0 runs
+                // its v down the axis.)
+                let open_a = if aa.tan() > 0.0 { a.z } else { -a.z };
+                let open_b = if ab.tan() > 0.0 { b.z } else { -b.z };
                 if open_a.dot(&open_b) < 1.0 - tol::ANGULAR
                     || (aa.sin().abs() - ab.sin().abs()).abs() > tol::ANGULAR
                 {
                     return None;
                 }
-                Some(a.right_handed() == b.right_handed())
+                // Their normals at a point of the first, off the apex.
+                let p = self.eval(0.0, if ra.abs() > tol::POINT { 0.0 } else { 1.0 });
+                let (u, v) = o.project(&p, None);
+                let (ua, va) = self.project(&p, None);
+                Some(self.normal(ua, va).dot(&o.normal(u, v)) > 0.0)
             }
             (Surface::Revolution { f: a, m: ma }, Surface::Revolution { f: b, m: mb }) => {
                 // About the same axis, each meridian on the other surface (two lines that are
@@ -1461,6 +1466,65 @@ pub fn meridian_azimuth(f: &Frame, m: &Curve, v: f64) -> f64 {
     } else {
         l.y.atan2(l.x)
     }
+}
+
+/// The closest point of the extrusion `c(u) + v·d` to `p`, unhinted: u where the curve, seen
+/// along `d`, comes nearest `p` (its samples' nearest, refined by Newton steps; a line's in closed
+/// form), v the distance along `d` from there.
+fn project_extrusion(c: &Curve, d: &V3, p: &P3) -> (f64, f64) {
+    let dn = d.norm_squared().max(1e-300);
+    let flat = |w: V3| w - d * (w.dot(d) / dn);
+    let v_at = |u: f64| (p - c.point(u)).dot(d) / dn;
+    if let Curve::Line { o, d: l } = c {
+        let (w, fl) = (flat(o - p), flat(*l));
+        let u = -w.dot(&fl) / fl.norm_squared().max(1e-300);
+        return (u, v_at(u));
+    }
+    let (a, b) = c.nurbs_range().unwrap_or(if c.is_periodic() {
+        (0.0, TAU)
+    } else {
+        (-1e4, 1e4)
+    });
+    let n = 128;
+    let dist = |u: f64| flat(c.point(u) - p).norm_squared();
+    let us: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+    let ds: Vec<f64> = us.iter().map(|&u| dist(u)).collect();
+    let newton = |mut u: f64| {
+        for _ in 0..30 {
+            let (q, d1, d2) = c.d2(u);
+            let (r, f1, f2) = (flat(q - p), flat(d1), flat(d2));
+            let g = r.dot(&f1);
+            let h = f1.norm_squared() + r.dot(&f2);
+            if h <= 1e-300 {
+                break;
+            }
+            let next = (u - g / h).clamp(a, b);
+            let done = (next - u).abs() <= 1e-15 * (1.0 + u.abs());
+            u = next;
+            if done {
+                break;
+            }
+        }
+        u
+    };
+    // Newton from each local minimum of the samples and from both ends (a closed curve's
+    // nearest point may lie just short of the end its start shares), the nearest kept: the
+    // earlier on a tie.
+    let mut starts: Vec<usize> = (0..=n)
+        .filter(|&i| (i == 0 || ds[i] <= ds[i - 1]) && (i == n || ds[i] <= ds[i + 1]))
+        .collect();
+    starts.sort_by(|&i, &j| ds[i].total_cmp(&ds[j]));
+    starts.truncate(4);
+    starts.extend([0, n]);
+    let mut best = (f64::INFINITY, a);
+    for i in starts {
+        let u = newton(us[i]);
+        let d = dist(u);
+        if d < best.0 - 1e-24 || (d <= best.0 + 1e-24 && u < best.1) {
+            best = (d, u);
+        }
+    }
+    (best.1, v_at(best.1))
 }
 
 /// [`Surface::project`] on a surface of revolution whose meridian is off its frame's xz plane:

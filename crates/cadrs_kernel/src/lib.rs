@@ -477,16 +477,33 @@ pub trait Kernel {
     /// revolve would make them.
     fn primitive(&mut self, p: &Primitive) -> Result<OpResult>;
 
-    /// The solid `body` fills as it moves without end about an axis: turned (the solid of
-    /// revolution it generates) or screwed (between two planes square to the axis). Taken for
-    /// solids of revolution about an axis of their own with a convex section (a torus, a wheel
-    /// of cones and cylinders): their outline seen along the motion's circles or helices, traced
-    /// slice by slice and fitted by a closed cubic B-spline, revolved or swept along the screw.
-    /// A motion of a part of a turn fills the same in a region that every point of it passes
-    /// through within that part.
+    /// The solid `body` fills as it moves ([`SolidMotion`]). One slide, one turn or a screw of
+    /// any solid: exactly, the solid where it starts united with what its leading faces sweep.
+    /// A planar motion of a prism: its polygon's swept region, extruded. Turned or screwed without
+    /// end about an axis, for solids of revolution about an axis of their own with a convex
+    /// section (a torus, a wheel of cones and cylinders): their outline seen along the motion's
+    /// circles or helices, traced slice by slice and fitted by a closed cubic B-spline, revolved
+    /// or swept along the screw. Any other rigid motion, or a path ([`SolidMotion::Path`]), and
+    /// those the exact ways can't make: meshed, the region some instant of the body holds.
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
         let _ = (body, motion);
         Err(KernelError::Unsupported("sweeps of solids"))
+    }
+
+    /// `target` less everything `tool` passes through as it moves (a cutter's path through
+    /// stock): [`Kernel::sweep_solid`]'s exact sweep (one slide, turn or screw by its leading
+    /// faces, a planar motion, a turn or screw without end) cut from the target; else, where
+    /// that can't be made or cut, meshed: the region inside the target and in none of the tool's
+    /// places (both distances' field contoured on a grid of a hundredth of the target's reach
+    /// and made solid), as a meshed sweep is.
+    fn cut_swept(
+        &mut self,
+        target: BodyId,
+        tool: BodyId,
+        motion: &SolidMotion,
+    ) -> Result<OpResult> {
+        let _ = (target, tool, motion);
+        Err(KernelError::Unsupported("cuts by swept solids"))
     }
 
     /// [`Kernel::sweep_with`], the profile twisting about the path and scaling about the path's
@@ -959,6 +976,16 @@ pub trait Kernel {
     /// # Ok::<(), cadrs_kernel::KernelError>(())
     /// ```
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult>;
+
+    /// The body grown by a ball of radius `distance` (shrunk where negative: the points at least
+    /// that far inside), meshed: the level set of the body's signed distance contoured on a grid
+    /// of a hundredth of its reach and made solid (within about the grid's step squared over the
+    /// surface's curvature radius). For an offset [`Kernel::offset`] can't make exactly (a
+    /// shrink past a face's curvature, its swallowtails trimmed).
+    fn offset_meshed(&mut self, body: BodyId, distance: f64) -> Result<OpResult> {
+        let _ = (body, distance);
+        Err(KernelError::Unsupported("meshed offsets"))
+    }
 
     /// The solid with faces given new surfaces (SMLib's `SmBrep::LocalOperation`, a direct
     /// edit): the edges and vertices round them recomputed where the new surfaces meet their

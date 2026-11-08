@@ -189,10 +189,6 @@ const KNOWN_BAD: &[(&str, &str)] = &[
     ("step/trj4_xr1-tc-214.stp", "read: the file holds no shapes"),
     ("step/trj4_xr1-tu-214.stp", "read: the file holds no shapes"),
     (
-        "step/trj5_k1-al-214.stp",
-        "10 check errors (face 36 loop 0 coedge 5 (edge 122): p-curve off the edge by 7.620e-1)",
-    ),
-    (
         "step/trj5_k1-md-203.stp",
         "1 faces dropped (face 17: loops wrap around the surface and no seam could be added)",
     ),
@@ -203,10 +199,6 @@ const KNOWN_BAD: &[(&str, &str)] = &[
     (
         "step/trj5_s1-in-214.stp",
         "volume 1827.979158 vs mesh -3251.840326; volume 5456.844752 vs mesh 10540.511488; 7 check errors (face 0 lo…",
-    ),
-    (
-        "step/trj6_k1-al-214.stp",
-        "2 check errors (face 1 loop 0 coedge 13 (edge 33): p-curve off the edge by 1.016e0)",
     ),
     (
         "step/trj6_k1-md-214.stp",

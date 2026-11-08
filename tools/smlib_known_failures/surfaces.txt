@@ -2,4 +2,3 @@
 
 # Surface::project on an extrusion of a space B-spline (no hint) stops at a local minimum
 # 0.24 from the point it is given (SMLib's GlobalPointSolve finds every point again).
-analytic_extrusion_z

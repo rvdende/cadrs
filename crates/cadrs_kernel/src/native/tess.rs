@@ -262,7 +262,7 @@ pub fn edge_samples_with(body: &Body, p: &TessParams) -> EdgeSamples {
 /// longer than the maximum edge.
 fn refine_polyline(c: impl Fn(f64) -> P3, ts: &[f64], p: &TessParams) -> Vec<f64> {
     // Enough for a 1 km edge at 0.1 mm segments; past it the curve's sampling stands.
-    const MAX_SAMPLES: usize = 1 << 16;
+    const MAX_SAMPLES: usize = 1 << 13;
     fn split(
         c: &impl Fn(f64) -> P3,
         p: &TessParams,
@@ -310,7 +310,7 @@ fn refine_by_faces(
     sides: &[(&Surface, &super::curve::Curve)],
     p: &TessParams,
 ) -> Vec<f64> {
-    const MAX_SAMPLES: usize = 1 << 16;
+    const MAX_SAMPLES: usize = 1 << 13;
     let curved: Vec<&(&Surface, &super::curve::Curve)> = sides
         .iter()
         .filter(|(s, _)| !matches!(s, Surface::Plane { .. }))
@@ -1648,6 +1648,20 @@ fn triangulate(s: &Setup, p: &TessParams, refine: bool) -> FaceMesh {
         ..
     } = *s;
     let mut conflicts: Vec<[usize; 2]> = Vec::new();
+    // (A point that isn't finite, or two at one place joined by a segment, can leave the
+    // triangulation's insertion walking forever: no mesh for such a face.)
+    if verts
+        .iter()
+        .any(|v| !(v.at.x.is_finite() && v.at.y.is_finite()))
+        || cons
+            .iter()
+            .any(|&[a, b]| a == b || verts[a].at == verts[b].at)
+    {
+        if s.prof.is_some() {
+            eprintln!("tess face: a point not finite or a segment of no length");
+        }
+        return FaceMesh::default();
+    }
     let Ok(mut cdt): std::result::Result<Cdt, _> =
         ConstrainedDelaunayTriangulation::try_bulk_load_cdt(verts.clone(), cons.clone(), |c| {
             conflicts.push(c)
