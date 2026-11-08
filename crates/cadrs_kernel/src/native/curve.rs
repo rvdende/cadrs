@@ -296,6 +296,84 @@ impl Curve {
         }
     }
 
+    /// [`Curve::sample_params`] for a mesh's edges, whose segments are refined to the chord and
+    /// the faces' normals afterwards: a B-spline's samples as its pieces need them by their
+    /// curvature (bounded from 16 points on each), spread along the curve between its corners
+    /// (knots as many as its degree, always samples), not two or more on every piece. A fitted
+    /// intersection curve of 450 pieces had 900 samples where a few dozen meet the chord.
+    pub fn mesh_params(&self, t0: f64, t1: f64, defl: f64, ang: f64) -> Vec<f64> {
+        let pieces = self.pieces(t0, t1);
+        // (Few pieces: each sampled as before, two or more each; a closed face's seam, one
+        // straight piece, takes a sample between its ends.)
+        let Curve::Nurbs(c) = self else {
+            return self.sample_params(t0, t1, defl, ang);
+        };
+        if pieces.len() <= 9 {
+            return self.sample_params(t0, t1, defl, ang);
+        }
+        let need: Vec<f64> = pieces
+            .windows(2)
+            .map(|w| {
+                let (a, b) = (w[0], w[1]);
+                let m = 16;
+                let mut kmax: f64 = 0.0;
+                for i in 0..=m {
+                    let t = a + (b - a) * i as f64 / m as f64;
+                    let (_, d1, d2) = self.d2(t);
+                    let s = d1.norm();
+                    if s > tol::TINY {
+                        kmax = kmax.max(d1.cross(&d2).norm() / (s * s * s));
+                    }
+                }
+                if kmax < tol::ROUNDOFF_FINE {
+                    0.0
+                } else {
+                    self.length(a, b) * kmax / arc_step(1.0 / kmax, defl, ang)
+                }
+            })
+            .collect();
+        let corner = |t: f64| {
+            c.knots
+                .iter()
+                .filter(|&&k| (k - t).abs() <= tol::ROUNDOFF_FINE)
+                .count()
+                >= c.degree
+        };
+        let mut out = vec![t0];
+        let mut start = 0;
+        for end in 1..pieces.len() {
+            if end + 1 < pieces.len() && !corner(pieces[end]) {
+                continue;
+            }
+            // The run of pieces start..end: as many segments as their needs add up to, two at
+            // least, at equal shares of the need.
+            let total: f64 = need[start..end].iter().sum();
+            let n = (total.ceil() as usize).clamp(2, 1 << 20);
+            let (mut j, mut below) = (start, 0.0);
+            for k in 1..n {
+                let target = total * k as f64 / n as f64;
+                while j + 1 < end && below + need[j] < target {
+                    below += need[j];
+                    j += 1;
+                }
+                // (A straight run: its pieces' ends evenly.)
+                let f = if total <= 0.0 {
+                    let x = (end - start) as f64 * k as f64 / n as f64;
+                    j = start + (x.floor() as usize).min(end - start - 1);
+                    x - (j - start) as f64
+                } else if need[j] > 0.0 {
+                    ((target - below) / need[j]).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                out.push(pieces[j] + (pieces[j + 1] - pieces[j]) * f);
+            }
+            out.push(pieces[end]);
+            start = end;
+        }
+        out
+    }
+
     /// The same geometry with t ↦ −t (line, circle, ellipse) or a reversed NURBS; returns the new
     /// curve and the map of the old range [t0, t1] onto the new one.
     pub fn reversed(&self, t0: f64, t1: f64) -> (Curve, f64, f64) {
@@ -437,6 +515,36 @@ pub(crate) fn conic_nurbs(c: P3, x: V3, y: V3, t0: f64, t1: f64) -> NurbsCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mesh's samples of a B-spline of many pieces (a fitted circle, 200 of them) follow its
+    /// curvature, not its pieces: far fewer than two a piece, its ends kept, the gaps even.
+    #[test]
+    fn mesh_samples_of_a_curve_of_many_pieces() {
+        let n = 200;
+        let pts: Vec<P3> = (0..=n)
+            .map(|i| {
+                let a = PI * i as f64 / n as f64;
+                P3::new(5.0 * a.cos(), 5.0 * a.sin(), 0.0)
+            })
+            .collect();
+        let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let c = Curve::Nurbs(std::sync::Arc::new(
+            super::super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
+        ));
+        let (old, new) = (
+            c.sample_params(0.0, 1.0, 0.01, 0.3),
+            c.mesh_params(0.0, 1.0, 0.01, 0.3),
+        );
+        assert!(old.len() > n, "{} samples before", old.len());
+        // (Half a turn of radius 5 within 0.01 and 0.3 rad: about 11 segments.)
+        assert!(new.len() < 40 && new.len() > 8, "{} samples", new.len());
+        assert_eq!((new[0], *new.last().unwrap()), (0.0, 1.0));
+        let gaps: Vec<f64> = new.windows(2).map(|w| w[1] - w[0]).collect();
+        let (lo, hi) = gaps
+            .iter()
+            .fold((f64::INFINITY, 0.0f64), |(a, b), &g| (a.min(g), b.max(g)));
+        assert!(hi < 1.5 * lo, "gaps {lo}..{hi}");
+    }
 
     /// Projections from samples taken once answer as [`Curve::closest`], and the chord bound
     /// of [`Curve::longer_than`] as the length, on a wavy B-spline, an ellipse and a line.

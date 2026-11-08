@@ -328,6 +328,13 @@ fn inner<const ALL: bool>(
     if (u - u0).abs() < tol::TINY {
         return;
     }
+    if matches!(
+        s,
+        Surface::Sphere { .. } | Surface::Torus { .. } | Surface::Revolution { .. }
+    ) {
+        turned_inner::<ALL>(s, u0, u, v, shift, w, acc);
+        return;
+    }
     plan.pieces(u0, u, scratch);
     let g = gauss(plan.n);
     // A B-spline surface along u at this v: its control net contracted along v once, then a
@@ -350,6 +357,98 @@ fn inner<const ALL: bool>(
         }
     }
 }
+
+/// [`inner`] on a surface turned about an axis, u its turn (a sphere, a torus, a revolved
+/// meridian): at fixed v the point and the normal are each of degree 1 in (cos u, sin u) and |N|
+/// is constant, so every quantity's integrand is a trigonometric polynomial in u of degree 4 at
+/// most (the inertia's products of four; the volume's 2). Its coefficients come exactly from 11
+/// samples round the turn (7 for the volume), and the integral over [u0, u] in closed form: 11
+/// evaluations where the Gauss rule took 8 or 16 on each eighth of a turn.
+fn turned_inner<const ALL: bool>(
+    s: &Surface,
+    u0: f64,
+    u: f64,
+    v: f64,
+    shift: &V3,
+    w: f64,
+    acc: &mut QE,
+) {
+    // The meridian at v in the frame's own coordinates, and its derivative along v: the surface
+    // there is it turned by u about the frame's z.
+    let (f, l, dl) = match s {
+        Surface::Sphere { f, r } => {
+            let (sv, cv) = v.sin_cos();
+            (
+                f,
+                V3::new(r * cv, 0.0, r * sv),
+                V3::new(-r * sv, 0.0, r * cv),
+            )
+        }
+        Surface::Torus { f, rmaj, rmin } => {
+            let (sv, cv) = v.sin_cos();
+            (
+                f,
+                V3::new(rmaj + rmin * cv, 0.0, rmin * sv),
+                V3::new(-rmin * sv, 0.0, rmin * cv),
+            )
+        }
+        Surface::Revolution { f, m } => {
+            let (p, d1, _) = m.d2(v);
+            (
+                f,
+                f.local(&p),
+                V3::new(d1.dot(&f.x), d1.dot(&f.y), d1.dot(&f.z)),
+            )
+        }
+        _ => unreachable!("a surface turned about an axis"),
+    };
+    let table = if ALL { &*TURNS_11 } else { &*TURNS_7 };
+    let m = table.len();
+    let deg = (m - 1) / 2;
+    // ∫ cos l t and ∫ sin l t over [u0, u], the differences as products (short spans keep
+    // their digits).
+    let (mid, half) = (0.5 * (u + u0), 0.5 * (u - u0));
+    let mut ic = [0.0; 6];
+    let mut is = [0.0; 6];
+    ic[0] = u - u0;
+    for l in 1..=deg {
+        let lf = l as f64;
+        let k = 2.0 * (lf * half).sin() / lf;
+        let (sm, cm) = (lf * mid).sin_cos();
+        ic[l] = cm * k;
+        is[l] = sm * k;
+    }
+    for row in table {
+        let mut wj = ic[0];
+        for l in 1..=deg {
+            let (cl, sl) = row[l];
+            wj += 2.0 * (cl * ic[l] + sl * is[l]);
+        }
+        let (c, sn) = row[1];
+        let rot = |q: &V3| V3::new(q.x * c - q.y * sn, q.x * sn + q.y * c, q.z);
+        let drot = |q: &V3| V3::new(-q.x * sn - q.y * c, q.x * c - q.y * sn, 0.0);
+        let p = f.world_point(&rot(&l));
+        let (su, sv) = (f.world_vec(&drot(&l)), f.world_vec(&rot(&dl)));
+        accumulate::<ALL>(&p, &su, &sv, shift, acc, w * wj / m as f64);
+    }
+}
+
+/// The sample turns round the circle for [`turned_inner`], `m` of them: each one's cosine and
+/// sine of l times it, l from 0 to (m − 1) / 2.
+fn turns(m: usize) -> Vec<[(f64, f64); 6]> {
+    (0..m)
+        .map(|j| {
+            let t = TAU * j as f64 / m as f64;
+            std::array::from_fn(|l| {
+                let (s, c) = (l as f64 * t).sin_cos();
+                (c, s)
+            })
+        })
+        .collect()
+}
+
+static TURNS_11: std::sync::LazyLock<Vec<[(f64, f64); 6]>> = std::sync::LazyLock::new(|| turns(11));
+static TURNS_7: std::sync::LazyLock<Vec<[(f64, f64); 6]>> = std::sync::LazyLock::new(|| turns(7));
 
 /// Surfaces whose integrand is a low-degree polynomial along v (ruled along v): their inner
 /// integral runs along v, exactly with a few points.

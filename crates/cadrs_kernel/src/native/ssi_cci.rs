@@ -143,10 +143,15 @@ pub fn curve_curve(
         size = size.max(p.size);
     }
     let small = (tol::REL_POINT * size).max(tol * 0.1);
+    // (Only the pairs whose boxes come within the tolerance, in the order they were all pushed
+    // before: two fitted curves of 450 pieces each made 200 000 pairs, nearly all apart.)
     let mut stack: Vec<(Piece, Piece)> = Vec::new();
     for x in &pa {
+        let xb = x.bb.grow(tol);
         for y in &pb {
-            stack.push((*x, *y));
+            if xb.overlaps(&y.bb) {
+                stack.push((*x, *y));
+            }
         }
     }
     let mut out: Vec<(f64, f64)> = Vec::new();

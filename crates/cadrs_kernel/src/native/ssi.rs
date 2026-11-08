@@ -165,6 +165,10 @@ pub(crate) fn surface_surface_closed(
         || plane_extrusion(b, a, ua, bb).is_some()
         || extrusion_along(a, ua, b, ub, bb).is_some()
         || extrusion_along(b, ub, a, ua, bb).is_some()
+        || plane_nurbs_extrusion(a, b, ub, bb).is_some()
+        || plane_nurbs_extrusion(b, a, ua, bb).is_some()
+        || ball_in_tube(a, b, super::boolean::VTOL).is_some()
+        || ball_in_tube(b, a, super::boolean::VTOL).is_some()
         || analytic(a, b, bb, super::boolean::VTOL).is_some()
         || analytic(b, a, bb, super::boolean::VTOL).is_some();
     closed.then(|| surface_surface(a, ua, b, ub, bb))
@@ -204,6 +208,14 @@ pub fn surface_surface_tol(
     if let Some(r) = extrusion_along(b, ub, a, ua, bb) {
         return closed(r);
     }
+    if let Some(r) =
+        plane_nurbs_extrusion(a, b, ub, bb).or_else(|| plane_nurbs_extrusion(b, a, ua, bb))
+    {
+        return r;
+    }
+    if let Some(r) = ball_in_tube(a, b, tol).or_else(|| ball_in_tube(b, a, tol)) {
+        return r;
+    }
     if let Some(r) = analytic(a, b, bb, tol) {
         return closed(r);
     }
@@ -217,6 +229,140 @@ pub fn surface_surface_tol(
         return numeric(b, ub, a, ua, bb);
     }
     numeric(a, ua, b, ub, bb)
+}
+
+/// A sphere centred on a torus's core circle, no larger than its tube: every point of it lies
+/// no farther from the core than the sphere's radius, so one as wide as the tube touches it
+/// along the meridian circle through its centre only (a ball rolled to a groove's end), and one
+/// narrower meets it nowhere. (Wider ones cross it: the numeric engine.)
+fn ball_in_tube(a: &Surface, b: &Surface, tol: f64) -> Option<Ssi> {
+    let (Surface::Sphere { f: fs, r }, Surface::Torus { f, rmaj, rmin }) = (a, b) else {
+        return None;
+    };
+    let z = f.z.normalize();
+    let w = fs.o - f.o;
+    let h = w.dot(&z);
+    let radial = w - z * h;
+    let rho = radial.norm();
+    if h.abs() > tol || (rho - rmaj).abs() > tol || *r > rmin + tol || rho <= tol {
+        return None;
+    }
+    let mut out = Ssi {
+        work: 1,
+        ..Ssi::default()
+    };
+    if *r >= rmin - tol {
+        out.tangent.push(IntCurve {
+            c: Curve::Circle {
+                c: fs.o,
+                x: radial / rho,
+                y: z,
+                r: *rmin,
+            },
+            t0: 0.0,
+            t1: TAU,
+            closed: true,
+            pcs: None,
+        });
+    }
+    Some(out)
+}
+
+/// A B-spline surface that is an extrusion: of degree 1 one way with two rows, the second the
+/// first moved by one vector with the same weights. Its base curve (the first row), the vector,
+/// and whether the extrusion runs along u (else along v), with the surface's own range that way.
+fn nurbs_extrusion(s: &Surface) -> Option<(Curve, V3, bool, (f64, f64))> {
+    use super::nurbs::{NurbsCurve, dehom};
+    let Surface::Nurbs(n) = s else {
+        return None;
+    };
+    let rows: [Vec<super::nurbs::H>; 2];
+    let (along_u, knots, degree, range);
+    if n.du == 1 && n.cps.len() == 2 {
+        rows = [n.cps[0].clone(), n.cps[1].clone()];
+        (along_u, knots, degree) = (true, n.kv.clone(), n.dv);
+        range = (n.ku[1], n.ku[2]);
+    } else if n.dv == 1 && n.cps.iter().all(|r| r.len() == 2) {
+        rows = [
+            n.cps.iter().map(|r| r[0]).collect(),
+            n.cps.iter().map(|r| r[1]).collect(),
+        ];
+        (along_u, knots, degree) = (false, n.ku.clone(), n.du);
+        range = (n.kv[1], n.kv[2]);
+    } else {
+        return None;
+    }
+    if !(range.1 > range.0) || rows[0].len() != rows[1].len() || rows[0].is_empty() {
+        return None;
+    }
+    let d = dehom(&rows[1][0]) - dehom(&rows[0][0]);
+    let size = rows[0]
+        .iter()
+        .map(|h| dehom(h).coords.norm())
+        .fold(d.norm(), f64::max);
+    let same = rows[0].iter().zip(&rows[1]).all(|(a, b)| {
+        (a.w - b.w).abs() <= 1e-14 * a.w.abs()
+            && ((dehom(b) - dehom(a)) - d).norm() <= tol::REL_FINE * (1.0 + size)
+    });
+    if !same || d.norm() <= tol::POINT {
+        return None;
+    }
+    let c = NurbsCurve::new(degree, knots, rows[0].clone()).ok()?;
+    Some((Curve::Nurbs(Arc::new(c)), d, along_u, range))
+}
+
+/// A plane and a B-spline surface that is an extrusion ([`nurbs_extrusion`]): as the plane and
+/// that extrusion ([`plane_extrusion`]), exactly, the base curve meeting the plane. A plane along
+/// the extrusion meets it in rulings; one through a point where the base curve only touches the
+/// plane (a vault's crown on the plane across its top) is a curve of touching, not crossing.
+fn plane_nurbs_extrusion(
+    p: &Surface,
+    e: &Surface,
+    ue: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Option<Ssi> {
+    let Surface::Plane { f } = p else {
+        return None;
+    };
+    let (c, d, along_u, (r0, r1)) = nurbs_extrusion(e)?;
+    // The extrusion's (curve, height) box: the surface's other parameter, and its own scaled to
+    // the vector's 0..1.
+    let (cr, er) = if along_u { (ue.1, ue.0) } else { (ue.0, ue.1) };
+    let er = ((er.0 - r0) / (r1 - r0), (er.1 - r0) / (r1 - r0));
+    let ext = Surface::Extrusion { c: c.clone(), d };
+    let n = f.x.cross(&f.y);
+    if n.dot(&d).abs() >= tol::REL_FINE * d.norm() {
+        let curves = plane_extrusion(p, &ext, (cr, er), bb)?;
+        return Some(Ssi {
+            curves,
+            work: 1,
+            ..Ssi::default()
+        });
+    }
+    let pad = (cr.1 - cr.0).abs() * tol::REL_POINT;
+    let (lo, hi) = match c.nurbs_range() {
+        Some((a, b)) => ((cr.0 - pad).max(a), (cr.1 + pad).min(b)),
+        None => (cr.0 - pad, cr.1 + pad),
+    };
+    let bbig = bb.grow(bb.diagonal() * 0.01 + tol::POINT);
+    let off = |t: f64| n.dot(&(c.point(t) - f.o));
+    let h = 1e-6 * (hi - lo).abs().max(1e-12);
+    let mut out = Ssi {
+        work: 1,
+        ..Ssi::default()
+    };
+    for t in curve_surface(&c, lo, hi, p) {
+        let Some(line) = bound_line(c.point(t), d.normalize(), &bbig) else {
+            continue;
+        };
+        let (a, b) = (off((t - h).max(lo)), off((t + h).min(hi)));
+        if a * b < 0.0 || t - h < lo || t + h > hi {
+            out.curves.push(line);
+        } else {
+            out.tangent.push(line);
+        }
+    }
+    Some(out)
 }
 
 /// An extrusion and a surface unchanged along the extrusion's direction (a cylinder about a

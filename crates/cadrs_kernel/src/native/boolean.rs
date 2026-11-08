@@ -1762,11 +1762,37 @@ fn span_boxes_of(ed: &WEdge, tol: f64) -> Option<Vec<Bbox>> {
         return None;
     }
     let ps = ed.curve.pieces(ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
-    (ps.len() > 2).then(|| {
+    if ps.len() <= 2 {
+        return None;
+    }
+    // The whole spans' boxes from the curve's Bézier segments, found in one pass (each span
+    // split off the curve copied it whole: a curve of 400 spans 400 times); a span the edge
+    // only partly covers (at its ends) split off as before.
+    let Curve::Nurbs(n) = &ed.curve else {
+        return None;
+    };
+    let segs = n.bezier_segments();
+    let grow = tol.max(ed.tol);
+    let mut k = 0;
+    Some(
         ps.windows(2)
-            .map(|w| curve_bbox(&ed.curve, w[0], w[1]).grow(tol.max(ed.tol)))
-            .collect()
-    })
+            .map(|w| {
+                while k + 1 < segs.len() && segs[k].1 <= w[0] {
+                    k += 1;
+                }
+                let (a, b, cps) = &segs[k];
+                if *a == w[0] && *b == w[1] && cps.iter().all(|h| h.w > 0.0) {
+                    let mut bb = Bbox::empty();
+                    for h in cps {
+                        bb.add(&super::nurbs::dehom(h));
+                    }
+                    bb.grow(grow)
+                } else {
+                    curve_bbox(&ed.curve, w[0], w[1]).grow(grow)
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Faces of `b` on a periodic surface whose seam edge runs across one of their holes (an
