@@ -1619,11 +1619,26 @@ impl Kernel for NativeKernel {
                 )?
             }
         };
+        let mut built = built;
         if let Some(why) = built.body.check().into_iter().next() {
-            return Err(KernelError::InvalidResult {
-                op: "sweep",
-                why: format!("the sweep made an invalid body: {why}"),
-            });
+            // P-curves a hair off their edges (a turned spline's, fitted to its points), fitted
+            // again from the edges: the faces and edges stay as they are. An edge still off its
+            // face (a fitted curve swept) has its tolerance grown to cover the gap, up to
+            // LOOP_GAP, as OCCT grows its edges'.
+            let mut b = built.body.clone();
+            super::heal::refit_pcurves(&mut b, super::tol::POINT);
+            if !b.check().is_empty() {
+                b.fit_tolerances_searched(super::tol::LOOP_GAP);
+            }
+            if !b.check().is_empty() {
+                // With CADRS_DUMP_DIR set, the body the sweep made is left there.
+                dump("sweep-invalid", &built.body, &why);
+                return Err(KernelError::InvalidResult {
+                    op: "sweep",
+                    why: format!("the sweep made an invalid body: {why}"),
+                });
+            }
+            built.body = b;
         }
         Ok(self.insert_result(built))
     }
