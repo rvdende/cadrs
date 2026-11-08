@@ -13697,6 +13697,7 @@ fn assemble(
     // Each cut face split on its own (in parallel: the faces are independent), taken in order.
     let splits: Vec<Option<Vec<Face>>> = {
         let nb = &nb;
+        super::par::start();
         (0..nb.faces.len())
             .into_par_iter()
             .map(|fi| {

@@ -440,6 +440,7 @@ pub fn sweep_planar(
     // candidates side by side, in their order.
     let runs: Vec<Vec<Run>> = {
         use rayon::prelude::*;
+        super::par::start();
         cands
             .par_iter()
             .enumerate()

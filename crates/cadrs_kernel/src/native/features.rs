@@ -803,6 +803,9 @@ fn unite_solids(t: Tagged) -> Result<Tagged> {
     // decides which region's name a merged face keeps: changing it renames those faces.
     use rayon::prelude::*;
     let mut level = parts;
+    if level.len() > 1 {
+        super::par::start();
+    }
     while level.len() > 1 {
         level = level
             .par_chunks(2)

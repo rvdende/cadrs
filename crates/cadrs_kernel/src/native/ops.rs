@@ -104,6 +104,7 @@ pub fn split(
     let bb = a.bbox();
     let hs = half_space_box(o, n, &bb)?;
     // The two sides side by side (each a boolean of the part with the half space).
+    super::par::start();
     let (inn, out) = rayon::join(
         || boolean_bodies(&a, &hs, BoolOp::Intersect),
         || boolean_bodies(&a, &hs, BoolOp::Subtract),

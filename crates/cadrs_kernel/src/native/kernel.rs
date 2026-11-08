@@ -554,6 +554,7 @@ fn edge_infos_with(b: &Body, detail: Detail) -> Vec<EdgeInfo> {
     let ef = b.edge_faces();
     // (Side by side: each edge's smoothness projects onto its faces, a part's display a
     // tenth of a second of a rebuild's own thread.)
+    super::par::start();
     b.edges
         .par_iter()
         .enumerate()
@@ -1873,6 +1874,7 @@ impl Kernel for NativeKernel {
             // thread. A box's few edges aren't worth the threads.)
             let along = |d: V3| extent_along(&e.body, &o, &d);
             let ((x0, x1), ((y0, y1), (z0, z1))) = if e.body.edges.len() > 64 {
+                super::par::start();
                 rayon::join(
                     || along(V3::x()),
                     || rayon::join(|| along(V3::y()), || along(V3::z())),

@@ -1195,6 +1195,7 @@ impl XBuilder {
     fn fit_pcurves(&mut self, dropped: &[bool]) {
         use rayon::prelude::*;
         let edges = &self.body.edges;
+        super::par::start();
         let fits: Vec<Vec<((usize, usize), Curve)>> = self
             .faces
             .par_iter()

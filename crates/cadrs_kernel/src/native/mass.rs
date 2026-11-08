@@ -1069,6 +1069,7 @@ fn run_jobs<const ALL: bool>(
     // they are shared out.)
     const CHUNK: usize = 32;
     if jobs.len() >= 2 * CHUNK {
+        super::par::start();
         let parts: Vec<QE> = jobs
             .par_chunks(CHUNK)
             .map(|c| {

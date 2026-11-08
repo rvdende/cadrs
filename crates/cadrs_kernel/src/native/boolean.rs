@@ -4842,6 +4842,7 @@ fn united(members: Vec<(BodyId, Body)>, opts: BoolOptions) -> Result<Unioned> {
         };
         groups[g].push(m);
     }
+    super::par::start();
     let results: Vec<Result<Unioned>> = groups
         .into_par_iter()
         .map(|g| union_islands(g, opts))

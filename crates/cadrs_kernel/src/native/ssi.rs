@@ -1993,6 +1993,7 @@ fn fit_curve(
         !closed && pts.first().is_some_and(is_fixed),
         !closed && pts.last().is_some_and(is_fixed),
     ];
+    super::par::start();
     for _round in 0..6 {
         let (c, t) = fit(&pts);
         let last = pts.len() - 2;

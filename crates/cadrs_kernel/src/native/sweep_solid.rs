@@ -477,6 +477,7 @@ fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
         out.push(b);
         Some(out)
     };
+    super::par::start();
     let (far, near) = rayon::join(
         || side(true, lo_far, hi_far),
         || side(false, lo_near, hi_near),
@@ -928,6 +929,7 @@ fn contour(
     // from it (the depth changes no faster than the distance), so the depth is found only near
     // the boundary, and every grid edge it crosses has its ends' found.
     let mut field = vec![f64::NAN; n[0] * n[1] * n[2]];
+    super::par::start();
     for k in (0..=3).rev() {
         let s = 1usize << k;
         let mut pts: Vec<usize> = Vec::new();
