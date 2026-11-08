@@ -1166,6 +1166,104 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
     )
 }
 
+/// Whether a screw's tool may meet its own sweep a turn on (a thread whose groove is wider than
+/// its lead): unless the motion is a turn and a slide along its axis, rising farther a turn than
+/// the tool's box reaches along the axis.
+fn turns_may_overlap(b: &Body, steps: &[RigidStep]) -> bool {
+    let (mut turn, mut slide) = (None, None);
+    for s in steps {
+        match *s {
+            RigidStep::Turn { axis, from, to } => turn = Some((axis, to - from)),
+            RigidStep::Slide { from, to } => slide = Some(to - from),
+        }
+    }
+    let (Some((axis, angle)), Some(d)) = (turn, slide) else {
+        return true;
+    };
+    let z = axis.dir.into_inner();
+    if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || angle.abs() <= tol::ANGULAR {
+        return true;
+    }
+    let lead = d.dot(&z).abs() / angle.abs() * TAU;
+    let bb = b.bbox();
+    let along: Vec<f64> = (0..8)
+        .map(|i| {
+            let c = V3::new(
+                if i & 1 == 0 { bb.min.x } else { bb.max.x },
+                if i & 2 == 0 { bb.min.y } else { bb.max.y },
+                if i & 4 == 0 { bb.min.z } else { bb.max.z },
+            );
+            c.dot(&z)
+        })
+        .collect();
+    let reach = along.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - along.iter().copied().fold(f64::INFINITY, f64::min);
+    reach >= 0.9 * lead
+}
+
+/// `target` less the tool `b` swept by `steps` (turning more than half a turn) in pieces of at
+/// most half a turn, cut one after another: None where a piece isn't swept or cut soundly.
+fn cut_in_pieces(
+    k: &mut NativeKernel,
+    target: BodyId,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<OpResult> {
+    let turn = steps
+        .iter()
+        .map(|s| match *s {
+            RigidStep::Turn { from, to, .. } => (to - from).abs(),
+            RigidStep::Slide { .. } => 0.0,
+        })
+        .fold(0.0, f64::max);
+    let n = (turn / PI).ceil() as usize;
+    let part = |i: usize| -> Vec<RigidStep> {
+        let (a, z) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+        steps
+            .iter()
+            .map(|s| match *s {
+                RigidStep::Turn { axis, from, to } => RigidStep::Turn {
+                    axis,
+                    from: from + (to - from) * a,
+                    to: from + (to - from) * z,
+                },
+                RigidStep::Slide { from, to } => RigidStep::Slide {
+                    from: from + (to - from) * a,
+                    to: from + (to - from) * z,
+                },
+            })
+            .collect()
+    };
+    let mut acc = target;
+    for i in 0..n {
+        let swept = super::sweep_faces::by_faces(k, b, &part(i)).ok();
+        let cut = match swept.as_ref().map(|r| r.bodies.as_slice()) {
+            Some([s]) => {
+                let cut = k.boolean(crate::BoolOp::Subtract, acc, &[*s]);
+                k.release(*s);
+                cut.ok().filter(|c| {
+                    c.bodies.len() == 1 && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
+                })
+            }
+            _ => None,
+        };
+        let Some(c) = cut else {
+            if acc != target {
+                k.release(acc);
+            }
+            return None;
+        };
+        if acc != target {
+            k.release(acc);
+        }
+        acc = c.bodies[0];
+    }
+    Some(OpResult {
+        bodies: vec![acc],
+        history: History::default(),
+    })
+}
+
 /// [`crate::Kernel::cut_swept`].
 pub fn cut_swept(
     k: &mut NativeKernel,
@@ -1176,75 +1274,27 @@ pub fn cut_swept(
     let b = (**k.get(tool)?).clone();
     // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
     // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose
-    // groove is wider than its lead; the pieces don't), else on to the whole and the mesh.
-    if let SolidMotion::Rigid { steps } = motion
-        && (1..=2).contains(&steps.len())
-    {
-        let turn = steps
-            .iter()
-            .map(|s| match *s {
-                RigidStep::Turn { from, to, .. } => (to - from).abs(),
-                RigidStep::Slide { .. } => 0.0,
-            })
-            .fold(0.0, f64::max);
-        if turn > PI + tol::ANGULAR {
-            let n = (turn / PI).ceil() as usize;
-            let part = |i: usize| -> Vec<RigidStep> {
-                let (a, z) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
-                steps
-                    .iter()
-                    .map(|s| match *s {
-                        RigidStep::Turn { axis, from, to } => RigidStep::Turn {
-                            axis,
-                            from: from + (to - from) * a,
-                            to: from + (to - from) * z,
-                        },
-                        RigidStep::Slide { from, to } => RigidStep::Slide {
-                            from: from + (to - from) * a,
-                            to: from + (to - from) * z,
-                        },
-                    })
-                    .collect()
-            };
-            let mut acc = target;
-            let mut ok = true;
-            for i in 0..n {
-                let Ok(r) = super::sweep_faces::by_faces(k, &b, &part(i)) else {
-                    ok = false;
-                    break;
-                };
-                let [s] = r.bodies.as_slice() else {
-                    ok = false;
-                    break;
-                };
-                let cut = k.boolean(crate::BoolOp::Subtract, acc, &[*s]);
-                k.release(*s);
-                match cut {
-                    Ok(c)
-                        if c.bodies.len() == 1
-                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty()) =>
-                    {
-                        if acc != target {
-                            k.release(acc);
-                        }
-                        acc = c.bodies[0];
-                    }
-                    _ => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                return Ok(OpResult {
-                    bodies: vec![acc],
-                    history: History::default(),
-                });
-            }
-            if acc != target {
-                k.release(acc);
-            }
+    // groove is wider than its lead; the pieces don't), and whole. The pieces first where the
+    // tool's turns may overlap; else the whole first (one sweep and one cut), the pieces after.
+    let long = match motion {
+        SolidMotion::Rigid { steps } if (1..=2).contains(&steps.len()) => {
+            let turn = steps
+                .iter()
+                .map(|s| match *s {
+                    RigidStep::Turn { from, to, .. } => (to - from).abs(),
+                    RigidStep::Slide { .. } => 0.0,
+                })
+                .fold(0.0, f64::max);
+            (turn > PI + tol::ANGULAR).then_some(steps.as_slice())
         }
+        _ => None,
+    };
+    let overlapping = long.is_some_and(|steps| turns_may_overlap(&b, steps));
+    if let Some(steps) = long
+        && overlapping
+        && let Some(r) = cut_in_pieces(k, target, &b, steps)
+    {
+        return Ok(r);
     }
     // Exactly: the sweep, where it is made without meshing, cut from the target.
     let exact = match motion {
@@ -1268,6 +1318,12 @@ pub fn cut_swept(
         {
             return Ok(c);
         }
+    }
+    if let Some(steps) = long
+        && !overlapping
+        && let Some(r) = cut_in_pieces(k, target, &b, steps)
+    {
+        return Ok(r);
     }
     // Else meshed: inside the target, in none of the tool's places.
     let t = (**k.get(target)?).clone();

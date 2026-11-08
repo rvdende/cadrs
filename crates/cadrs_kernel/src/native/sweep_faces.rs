@@ -513,33 +513,62 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
             );
         }
     }
+    // (Interpolated through the grid's crossings, then through the contact halfway between two
+    // points wherever the curve strays from it there by more than `fit`: as few poles as that
+    // takes, since the sweep's sides carry a row of them for each.)
+    let fit = CONTACT_FIT * b.bbox().diagonal().max(1.0);
     for chain in chains {
-        let mut uv: Vec<(f64, f64)> = Vec::new();
-        for w in chain.windows(2) {
-            for k in 0..16 {
-                let t = k as f64 / 16.0;
-                let q = (
-                    w[0].0 + (w[1].0 - w[0].0) * t,
-                    w[0].1 + (w[1].1 - w[0].1) * t,
-                );
-                uv.push(if k == 0 { q } else { onto(q) });
+        let mut uv = chain;
+        let mut curve = None;
+        for round in 0..=CONTACT_ROUNDS {
+            let pts: Vec<P3> = uv.iter().map(|q| s.eval(q.0, q.1)).collect();
+            let mut params = vec![0.0];
+            for w in pts.windows(2) {
+                params.push(params.last().unwrap() + (w[1] - w[0]).norm());
             }
+            if *params.last().unwrap() <= tol::POINT {
+                break;
+            }
+            let c = Curve::Nurbs(std::sync::Arc::new(super::nurbs::NurbsCurve::interpolate(
+                &pts, &params, 3, None, None,
+            )));
+            let halves: Vec<Option<(f64, f64)>> = if round == CONTACT_ROUNDS {
+                Vec::new()
+            } else {
+                (0..uv.len() - 1)
+                    .map(|i| {
+                        let q =
+                            onto((0.5 * (uv[i].0 + uv[i + 1].0), 0.5 * (uv[i].1 + uv[i + 1].1)));
+                        let p = s.eval(q.0, q.1);
+                        let t = c.closest(&p, params[i], params[i + 1]);
+                        ((c.point(t) - p).norm() > fit).then_some(q)
+                    })
+                    .collect()
+            };
+            curve = Some(c);
+            if halves.iter().all(Option::is_none) {
+                break;
+            }
+            let mut more = Vec::with_capacity(2 * uv.len());
+            for (i, q) in uv.iter().enumerate() {
+                more.push(*q);
+                if let Some(Some(h)) = halves.get(i) {
+                    more.push(*h);
+                }
+            }
+            uv = more;
         }
-        uv.push(*chain.last().unwrap());
-        let pts: Vec<P3> = uv.iter().map(|q| s.eval(q.0, q.1)).collect();
-        let mut params = vec![0.0];
-        for w in pts.windows(2) {
-            params.push(params.last().unwrap() + (w[1] - w[0]).norm());
-        }
-        if *params.last().unwrap() <= tol::POINT {
-            continue;
-        }
-        out.push(Curve::Nurbs(std::sync::Arc::new(
-            super::nurbs::NurbsCurve::interpolate(&pts, &params, 3, None, None),
-        )));
+        out.extend(curve);
     }
     out
 }
+
+/// How far (per unit of the body's size) a contact curve may stray from the contact.
+const CONTACT_FIT: f64 = 1e-9;
+
+/// The most times a contact curve's points are doubled where it strays (sixteen to a grid step,
+/// as many as it ever needs).
+const CONTACT_ROUNDS: usize = 4;
 
 /// The iso-parameter lines of face `fi` the contact runs along (a torus's meridians and its top
 /// and bottom circles slid across its axis, a revolved face's): (u values, v values), each a
@@ -1330,8 +1359,22 @@ fn glued(k: &mut NativeKernel, all: &[Body], size: f64) -> Option<OpResult> {
     }
 }
 
-/// The sewn solid `id` of [`glued`], checked and simplified.
+/// The sewn solid `id` of [`glued`], checked and simplified: first its degenerate edges' p-curves
+/// bridged (a cone's apex, where the contact curves the faces were split along arrive at their
+/// own u).
 fn glued_checked(k: &mut NativeKernel, id: BodyId, debug: bool) -> Option<OpResult> {
+    let id = match k.get(id) {
+        Ok(b) if b.edges.iter().any(|e| e.degenerate) => {
+            let mut b = (**b).clone();
+            if super::heal::bridge_degenerate(&mut b) > 0 {
+                k.release(id);
+                k.insert(b)
+            } else {
+                id
+            }
+        }
+        _ => id,
+    };
     if debug && let Ok(b) = k.get(id) {
         eprintln!(
             "sweep by faces: sewn solid {}, check {:?}, volume {}",

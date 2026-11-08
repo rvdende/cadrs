@@ -2955,3 +2955,51 @@ fn debug_smb_fillet() {
         }
     }
 }
+
+/// What a dumped body is made of (CADRS_REPRO=<file.body>): each face's surface, box, B-spline
+/// size and loops, and each edge's curve and ends.
+#[test]
+fn debug_describe_body() {
+    let Ok(path) = std::env::var("CADRS_REPRO") else {
+        return;
+    };
+    let b = cadrs_kernel::native::bodyio::read(&std::fs::read(path).unwrap()).unwrap();
+    eprintln!(
+        "{} faces, {} edges, {} vertices, {} solids; check {:?}",
+        b.faces.len(),
+        b.edges.len(),
+        b.verts.len(),
+        b.solids.len(),
+        b.check().into_iter().take(3).collect::<Vec<_>>()
+    );
+    for (fi, f) in b.faces.iter().enumerate() {
+        let bb = b.face_bbox(fi);
+        let kind = match &f.surf {
+            Surface::Nurbs(n) => format!(
+                "Nurbs {}x{} degrees, {}x{} poles",
+                n.du,
+                n.dv,
+                n.cps.len(),
+                n.cps.first().map_or(0, |r| r.len())
+            ),
+            s => format!("{s:?}").chars().take(60).collect(),
+        };
+        let loops: Vec<Vec<usize>> = f
+            .loops
+            .iter()
+            .map(|l| l.iter().map(|c| c.edge).collect())
+            .collect();
+        eprintln!(
+            "face {fi}: {kind}; box [{:.3}, {:.3}, {:.3}]..[{:.3}, {:.3}, {:.3}]; sense {}; edges {loops:?}",
+            bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z, f.sense
+        );
+    }
+    for (ei, e) in b.edges.iter().enumerate() {
+        let (p, q) = (b.verts[e.v[0]].p, b.verts[e.v[1]].p);
+        let kind: String = format!("{:?}", e.curve).chars().take(30).collect();
+        eprintln!(
+            "edge {ei}: {kind}… from [{:.4}, {:.4}, {:.4}] to [{:.4}, {:.4}, {:.4}]",
+            p.x, p.y, p.z, q.x, q.y, q.z
+        );
+    }
+}
