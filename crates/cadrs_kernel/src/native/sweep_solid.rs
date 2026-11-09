@@ -1166,6 +1166,154 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
     )
 }
 
+/// The endless motion that cuts `target` as the rigid `motion` cuts it, where its ends keep clear
+/// of the target: a turn whose missing part (from its end round to its start) never carries the
+/// tool's points at the target's distances from the axis and heights along it into the target's
+/// angles about the axis, as a whole turn; a screw (a turn and a slide along its axis, the slide
+/// through 0 at a turn of 0) that starts with the tool wholly past the target's one end along the
+/// axis and ends wholly past the other, as the screw without end between planes just past the
+/// target's ends. Measured on the bodies' meshes, with margins past their deflection.
+fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<SolidMotion> {
+    let SolidMotion::Rigid { steps } = motion else {
+        return None;
+    };
+    let (mut turn, mut slide) = (None, None);
+    for st in steps {
+        match *st {
+            RigidStep::Turn { axis, from, to } if turn.is_none() => turn = Some((axis, from, to)),
+            RigidStep::Slide { from, to } if slide.is_none() => slide = Some((from, to)),
+            _ => return None,
+        }
+    }
+    let (axis, a, z_end) = turn?;
+    if (z_end - a).abs() <= tol::ANGULAR {
+        return None;
+    }
+    let z = axis.dir.into_inner().normalize();
+    let o = axis.origin;
+    let size = target
+        .bbox()
+        .diagonal()
+        .max(tool.bbox().diagonal())
+        .max(tol::POINT);
+    let defl = 1e-3 * size;
+    let points = |b: &Body| -> Vec<P3> {
+        let (meshes, _) = super::tess::mesh_body(b, defl, 0.3);
+        meshes
+            .iter()
+            .flat_map(|m| m.positions.iter().copied())
+            .chain(b.verts.iter().map(|v| v.p))
+            .collect()
+    };
+    let pad = 4.0 * defl + tol::POINT;
+    let height = |p: &P3| (p - o).dot(&z);
+    let x = any_perpendicular(&z);
+    let y = z.cross(&x);
+    let polar = |p: &P3| {
+        let d = p - o;
+        (d.dot(&x).hypot(d.dot(&y)), d.dot(&y).atan2(d.dot(&x)))
+    };
+    let tp = points(target);
+    let (h0, h1) = tp
+        .iter()
+        .map(height)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+            (l.min(v), h.max(v))
+        });
+    match slide {
+        Some((s0, s1)) => {
+            // A screw: the slide along the axis, through 0 at a turn of 0.
+            let d = s1 - s0;
+            if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || d.norm() <= tol::POINT {
+                return None;
+            }
+            let per = d.dot(&z) / (z_end - a);
+            if (s0.dot(&z) - per * a).abs() > tol::POINT || s0.cross(&z).norm() > tol::POINT {
+                return None;
+            }
+            let wp = points(tool);
+            let (w0, w1) = wp
+                .iter()
+                .map(height)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                    (l.min(v), h.max(v))
+                });
+            // (Turning leaves heights along the axis as they are: the tool's range only rises.)
+            let (ra, rb) = (s0.dot(&z), s1.dot(&z));
+            let (lo, hi) = if rb > ra { (ra, rb) } else { (rb, ra) };
+            let clear = w1 + lo < h0 - pad && w0 + hi > h1 + pad;
+            clear.then_some(SolidMotion::Screw {
+                axis,
+                rise: per * TAU,
+                from: h0 - 2.0 * pad,
+                to: h1 + 2.0 * pad,
+            })
+        }
+        None => {
+            // A turn: angles about the axis of the target and of the tool's points at the
+            // target's distances and heights (a turn keeps both).
+            let (r0, r1) = tp
+                .iter()
+                .map(|p| polar(p).0)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                    (l.min(v), h.max(v))
+                });
+            if r0 <= pad {
+                return None;
+            }
+            let wp: Vec<(f64, f64)> = points(tool)
+                .iter()
+                .filter(|p| {
+                    let (r, _) = polar(p);
+                    let h = height(p);
+                    r >= r0 - pad && r <= r1 + pad && h >= h0 - pad && h <= h1 + pad
+                })
+                .map(polar)
+                .collect();
+            if wp.is_empty() {
+                return Some(SolidMotion::Turn { axis });
+            }
+            // An arc of angles holding all of them (the complement of the widest gap between
+            // neighbours), widened by what a mesh can miss at the least distance: (start, length).
+            let arc = |angles: &mut Vec<f64>, rmin: f64| -> Option<(f64, f64)> {
+                angles.sort_by(f64::total_cmp);
+                let n = angles.len();
+                let (mut gap, mut at) = (angles[0] + TAU - angles[n - 1], 0);
+                for k in 1..n {
+                    let g = angles[k] - angles[k - 1];
+                    if g > gap {
+                        gap = g;
+                        at = k;
+                    }
+                }
+                let widen = 4.0 * defl / rmin.max(tol::POINT) + 1e-3;
+                let len = TAU - gap + 2.0 * widen;
+                (len < TAU).then_some((angles[at] - widen, len))
+            };
+            let rmin = wp.iter().map(|q| q.0).fold(f64::INFINITY, f64::min).min(r0);
+            let mut ta: Vec<f64> = tp.iter().map(|p| polar(p).1).collect();
+            let mut wa: Vec<f64> = wp.iter().map(|q| q.1).collect();
+            let (ts, tl) = arc(&mut ta, r0)?;
+            let (ws, wl) = arc(&mut wa, rmin)?;
+            // The turn's missing part: from its end on round to its start (right-handed).
+            let (lo, hi) = if z_end > a { (a, z_end) } else { (z_end, a) };
+            let missing = TAU - (hi - lo);
+            if missing <= 0.0 {
+                return Some(SolidMotion::Turn { axis });
+            }
+            // The tool's arc over the missing turns: from ws + hi, ws + wl + hi + missing long.
+            let (ms, ml) = (ws + hi, wl + missing);
+            if ml + tl >= TAU {
+                return None;
+            }
+            // Disjoint on the circle: the target's arc starts past the swept arc's end and ends
+            // before it starts again.
+            let off = (ts - ms).rem_euclid(TAU);
+            (off > ml && off + tl < TAU).then_some(SolidMotion::Turn { axis })
+        }
+    }
+}
+
 /// Whether a screw's tool may meet its own sweep a turn on (a thread whose groove is wider than
 /// its lead): unless the motion is a turn and a slide along its axis, rising farther a turn than
 /// the tool's box reaches along the axis.
@@ -1272,6 +1420,25 @@ pub fn cut_swept(
     motion: &SolidMotion,
 ) -> Result<OpResult> {
     let b = (**k.get(tool)?).clone();
+    // A motion whose ends keep clear of the target: within it the endless motion (a whole turn,
+    // a screw without end) fills what this one does, and is made exactly as a whole (the solid
+    // of revolution, the screw's helical sweep).
+    if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
+        let swept = sweep_solid(k, tool, &endless).ok();
+        if let Some(r) = swept
+            && let [s] = r.bodies.as_slice()
+        {
+            let cut = k.boolean(crate::BoolOp::Subtract, target, &[*s]);
+            k.release(*s);
+            if let Ok(c) = cut
+                && c.bodies
+                    .iter()
+                    .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty()))
+            {
+                return Ok(c);
+            }
+        }
+    }
     // A rigid motion turning more than half a turn: exactly, in pieces of at most half a turn
     // cut one after another (a tool's sweep over a whole turn can overlap itself, a thread whose
     // groove is wider than its lead; the pieces don't), and whole. The pieces first where the
