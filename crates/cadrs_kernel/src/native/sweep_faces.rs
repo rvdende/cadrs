@@ -687,6 +687,66 @@ fn contact_isolines(b: &Body, fi: usize, mv: &Move) -> (Vec<f64>, Vec<f64>) {
     (lines(u0, u1, v0, v1, true), lines(v0, v1, u0, u1, false))
 }
 
+/// Splits `b`'s edges where they cross the axis through `o` along the unit `z` (not at their
+/// ends): where an edge's distance from the axis falls to nothing.
+fn split_at_axis(b: &mut Body, o: P3, z: V3, size: f64) {
+    let off = |p: P3| {
+        let w = p - o;
+        (w - z * w.dot(&z)).norm()
+    };
+    let near = 1e-9 * size;
+    let n = b.edges.len();
+    for e in 0..n {
+        if b.edges[e].degenerate {
+            continue;
+        }
+        let (t0, t1) = (b.edges[e].t[0], b.edges[e].t[1]);
+        let span = t1 - t0;
+        let m = 64;
+        let d: Vec<f64> = (0..=m)
+            .map(|i| off(b.edges[e].point(t0 + span * i as f64 / m as f64)))
+            .collect();
+        let mut at: Vec<f64> = Vec::new();
+        for i in 1..m {
+            if d[i] > d[i - 1] || d[i] > d[i + 1] {
+                continue;
+            }
+            // The least distance about sample i, by golden section.
+            let f = |t: f64| off(b.edges[e].point(t));
+            let (mut lo, mut hi) = (
+                t0 + span * (i - 1) as f64 / m as f64,
+                t0 + span * (i + 1) as f64 / m as f64,
+            );
+            let g = 0.5 * (5f64.sqrt() - 1.0);
+            for _ in 0..200 {
+                if hi - lo <= 1e-15 * (1.0 + lo.abs()) {
+                    break;
+                }
+                let (a, c) = (hi - g * (hi - lo), lo + g * (hi - lo));
+                if f(a) < f(c) {
+                    hi = c;
+                } else {
+                    lo = a;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            let end = 1e-6 * span.abs();
+            if f(t) <= near && (t - t0).abs() > end && (t1 - t).abs() > end {
+                at.push(t);
+            }
+        }
+        // In the edge's own direction: each cut splits off the rest of the edge, which the next
+        // cut splits again.
+        at.sort_by(|a, b| ((a - t0) * span).total_cmp(&((b - t0) * span)));
+        at.dedup_by(|a, b| (*a - *b).abs() <= 1e-9 * span.abs());
+        let mut cur = e;
+        for &t in &at {
+            super::unify::split_edge(b, cur, t);
+            cur = b.edges.len() - 1;
+        }
+    }
+}
+
 /// Face `fi`'s parameter box, from its p-curves.
 fn uv_box(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
     let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
@@ -700,8 +760,8 @@ fn uv_box(b: &Body, fi: usize) -> Option<(f64, f64, f64, f64)> {
     (u1 > u0 && v1 > v0).then_some((u0, u1, v0, v1))
 }
 
-/// [`crate::Kernel::sweep_solid`] for one slide or one turn of any solid (see the module docs).
-pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<OpResult> {
+/// The solid split along its faces' contacts with the motion, and its leading faces swept.
+fn prepared(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Prepared> {
     let clock = web_time::Instant::now();
     let lap = |what: &str| {
         if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
@@ -924,6 +984,12 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
         body = nb;
     }
     lap("split");
+    // A turn's edges cut where they cross its axis: on either side a point turns the other way
+    // round, so each piece of an edge sweeps a face of its own (a ball's meridian through the
+    // axis sweeps the apple's cap one side of it and, the other, a sheet inside the ball).
+    if let Move::Turn { o, z, .. } = mv {
+        split_at_axis(&mut body, o, z, size);
+    }
     // Each leading face swept, the pieces united with the start.
     let sweep = match mv {
         Move::Slide(v) => Some(BodySweep::Translate(v)),
@@ -1018,6 +1084,58 @@ pub(crate) fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> R
             Stand::Trails | Stand::Along => {}
         }
     }
+    Ok(Prepared {
+        start,
+        body,
+        pieces,
+        mv,
+        size,
+        clock,
+    })
+}
+
+/// What [`by_faces`] unites: the solid where it starts (its faces split along their contacts)
+/// and each of its leading faces' sweeps, with the motion and the solid's size.
+struct Prepared {
+    start: Body,
+    body: Body,
+    pieces: Vec<Body>,
+    mv: Move,
+    size: f64,
+    clock: web_time::Instant,
+}
+
+/// The solids whose union is the sweep of `b` by one slide, turn or screw ([`by_faces`]): the
+/// solid where it starts and each of its leading faces' sweeps. They overlap where a point
+/// enters the moving solid twice; what the sweep cuts from a body is the body less each of them
+/// in turn, which needs no union.
+pub fn face_sweeps(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<Vec<Body>> {
+    let p = prepared(k, b, steps)?;
+    let mut all = vec![p.body];
+    all.extend(p.pieces);
+    Ok(all)
+}
+
+/// [`crate::Kernel::sweep_solid`] for one slide or one turn of any solid (see the module docs).
+pub fn by_faces(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Result<OpResult> {
+    let Prepared {
+        start,
+        body,
+        pieces,
+        mv,
+        size,
+        clock,
+    } = prepared(k, b, steps)?;
+    let lap = |what: &str| {
+        if std::env::var_os("CADRS_SWEEP_DEBUG").is_some() {
+            eprintln!(
+                "sweep by faces: {what} at {:.0} ms",
+                clock.elapsed().as_secs_f64() * 1e3
+            );
+        }
+    };
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let over = || clock.elapsed().as_secs_f64() > EFFORT_SECONDS;
     if pieces.is_empty() {
         let first = k.insert(start);
         return Ok(OpResult {

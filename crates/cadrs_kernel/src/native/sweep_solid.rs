@@ -1395,34 +1395,109 @@ fn cut_in_pieces(
             })
             .collect()
     };
-    let mut acc = target;
+    let mut acc = vec![target];
     for i in 0..n {
         let swept = super::sweep_faces::by_faces(k, b, &part(i)).ok();
         let cut = match swept.as_ref().map(|r| r.bodies.as_slice()) {
-            Some([s]) => {
-                let cut = k.boolean(crate::BoolOp::Subtract, acc, &[*s]);
+            Some([s]) if acc.len() == 1 => {
+                let cut = k.boolean(crate::BoolOp::Subtract, acc[0], &[*s]);
                 k.release(*s);
-                cut.ok().filter(|c| {
-                    c.bodies.len() == 1 && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
-                })
+                cut.ok()
+                    .filter(|c| {
+                        c.bodies.len() == 1
+                            && k.get(c.bodies[0]).is_ok_and(|b| b.check().is_empty())
+                    })
+                    .map(|c| c.bodies)
             }
             _ => None,
         };
+        // Else the part's pieces cut one at a time (no union of them needed).
+        let cut = cut.or_else(|| cut_by_face_sweeps(k, &acc, b, &part(i)));
         let Some(c) = cut else {
-            if acc != target {
-                k.release(acc);
-            }
+            release_unless(k, &acc, target);
             return None;
         };
-        if acc != target {
-            k.release(acc);
-        }
-        acc = c.bodies[0];
+        release_unless(k, &acc, target);
+        acc = c;
     }
     Some(OpResult {
-        bodies: vec![acc],
+        bodies: acc,
         history: History::default(),
     })
+}
+
+/// Releases `ids` but `keep`.
+fn release_unless(k: &mut NativeKernel, ids: &[BodyId], keep: BodyId) {
+    for &id in ids {
+        if id != keep {
+            k.release(id);
+        }
+    }
+}
+
+/// The bodies `targets` less the sweep of `b` by one slide, turn or screw: less the solid where
+/// it starts and each of its leading faces' sweeps in turn ([`super::sweep_faces::face_sweeps`]:
+/// their union is the sweep, but where they overlap that union is a harder boolean than these
+/// cuts). None when a cut fails or leaves a body that isn't sound.
+fn cut_by_face_sweeps(
+    k: &mut NativeKernel,
+    targets: &[BodyId],
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Vec<BodyId>> {
+    let pieces = super::sweep_faces::face_sweeps(k, b, steps).ok()?;
+    let keep: Vec<BodyId> = targets.to_vec();
+    let mut acc: Vec<BodyId> = targets.to_vec();
+    for piece in pieces {
+        let pb = piece.bbox();
+        let tool = k.insert(piece);
+        let mut next = Vec::new();
+        let mut ok = true;
+        for &a in &acc {
+            let overlaps = k.get(a).is_ok_and(|t| {
+                let tb = t.bbox();
+                tb.min.x <= pb.max.x
+                    && pb.min.x <= tb.max.x
+                    && tb.min.y <= pb.max.y
+                    && pb.min.y <= tb.max.y
+                    && tb.min.z <= pb.max.z
+                    && pb.min.z <= tb.max.z
+            });
+            if !overlaps {
+                next.push(a);
+                continue;
+            }
+            match k.boolean(crate::BoolOp::Subtract, a, &[tool]) {
+                Ok(c)
+                    if c.bodies
+                        .iter()
+                        .all(|&id| k.get(id).is_ok_and(|b| b.check().is_empty())) =>
+                {
+                    next.extend(c.bodies);
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        k.release(tool);
+        for &a in &acc {
+            if !next.contains(&a) && !keep.contains(&a) {
+                k.release(a);
+            }
+        }
+        if !ok {
+            for &a in &next {
+                if !keep.contains(&a) {
+                    k.release(a);
+                }
+            }
+            return None;
+        }
+        acc = next;
+    }
+    Some(acc)
 }
 
 /// [`crate::Kernel::cut_swept`].
@@ -1501,6 +1576,17 @@ pub fn cut_swept(
         {
             return Ok(c);
         }
+    }
+    // Else, for a motion of at most half a turn, the sweep's pieces cut one at a time.
+    if long.is_none()
+        && let SolidMotion::Rigid { steps } = motion
+        && (1..=2).contains(&steps.len())
+        && let Some(bodies) = cut_by_face_sweeps(k, &[target], &b, steps)
+    {
+        return Ok(OpResult {
+            bodies,
+            history: History::default(),
+        });
     }
     if let Some(steps) = long
         && !overlapping

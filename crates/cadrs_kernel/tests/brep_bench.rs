@@ -1249,3 +1249,99 @@ fn a_ball_in_a_torus_tube() {
     assert!((v - want).abs() < 1e-9 * want, "{v} against {want}");
     assert!(k.get(cut).unwrap().check().is_empty());
 }
+
+/// A ball of radius 2 about (1, 0, 0) swung 120° about the z axis, which passes through it
+/// (swept/ball-swung-across-its-own-center-line). Its meridian crosses the axis, so the part
+/// either side sweeps a face of its own: the apple's caps, and a sheet buried in the ball. Each
+/// circle about the axis at (ρ, z) meets the ball in the arc |α| ≤ a, cos a = (ρ² + z² − 3)/2ρ,
+/// and the sweep in [−a, 120° + a]: the volume is 120° times ∫ρ over the ball's meridian
+/// section, plus the ball's, less what overlaps behind the axis (2a past 240°), integrated apart.
+#[test]
+fn a_ball_swung_about_an_axis_through_it() {
+    let mut k = NativeKernel::new();
+    let b = k
+        .primitive(&Primitive::Sphere {
+            center: p3(1.0, 0.0, 0.0),
+            radius: 2.0,
+            axis: Unit::new_normalize(V3::z()),
+            seam: Unit::new_normalize(V3::x()),
+        })
+        .unwrap()
+        .bodies[0];
+    let s = k
+        .sweep_solid(
+            b,
+            &SolidMotion::Rigid {
+                steps: vec![RigidStep::Turn {
+                    axis: Axis {
+                        origin: p3(0.0, 0.0, 0.0),
+                        dir: Unit::new_normalize(V3::z()),
+                    },
+                    from: 0.0,
+                    to: 120f64.to_radians(),
+                }],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let body = k.get(s).unwrap();
+    assert!(body.check().is_empty());
+    assert!(body.faces.len() < 10, "{} faces: meshed", body.faces.len());
+    let v = k.mass_properties(s).unwrap().volume;
+    let want = 59.333_194_348_870_75;
+    assert!((v - want).abs() < 1e-9 * want, "{v} against {want}");
+}
+
+/// A leaning bar's flat end turned from −140° to 140° about the z axis through a ring sector
+/// (swept/bar-end-turned-into-a-floor). Over that turn the bar's leading faces' sweeps overlap
+/// it where it starts; the sector less each of them in turn needs no union of them. Its ends
+/// keep clear of the sector, so it cuts every circle about the axis that meets the bar (the
+/// volume integrated over those circles, to about 1e-7).
+#[test]
+fn a_bar_end_turned_through_a_ring_sector() {
+    let mut k = NativeKernel::new();
+    let block = k
+        .cylindrical_box(&CylindricalBox {
+            frame: xy(-1.0),
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        })
+        .unwrap()
+        .bodies[0];
+    let t = 20f64.to_radians();
+    let on = plane(
+        p3(10.0, 0.0, 0.0),
+        V3::new(t.cos(), 0.0, -t.sin()),
+        V3::new(t.sin(), 0.0, t.cos()),
+    );
+    let f = 5f64.to_radians();
+    let c = |a: f64, b: f64| (a * f.cos() - b * f.sin(), a * f.sin() + b * f.cos());
+    let end = polygon(&[c(0.0, -2.0), c(3.0, -2.0), c(3.0, 2.0), c(0.0, 2.0)]);
+    let bar = extrude(&mut k, &sketch(on, end, vec![]), 3.0);
+    let cut = k
+        .cut_swept(
+            block,
+            bar,
+            &SolidMotion::Rigid {
+                steps: vec![RigidStep::Turn {
+                    axis: Axis {
+                        origin: p3(0.0, 0.0, 0.0),
+                        dir: Unit::new_normalize(V3::z()),
+                    },
+                    from: (-140f64).to_radians(),
+                    to: 140f64.to_radians(),
+                }],
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let body = k.get(cut).unwrap();
+    assert!(body.check().is_empty());
+    assert!(body.faces.len() < 20, "{} faces: meshed", body.faces.len());
+    let v = k.mass_properties(cut).unwrap().volume;
+    let want = 53.564_557;
+    assert!((v - want).abs() < 2e-7 * want, "{v} against {want}");
+}

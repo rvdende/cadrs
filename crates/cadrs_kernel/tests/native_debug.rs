@@ -3011,3 +3011,264 @@ fn debug_describe_body() {
         );
     }
 }
+
+/// The swung cases of brep-bench (`CADRS_SWUNG=ball|cone`): the exact sweep's error, if any.
+#[test]
+fn debug_swung() {
+    let Some(which) = std::env::var_os("CADRS_SWUNG") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let z = Axis {
+        origin: Point3::origin(),
+        dir: nalgebra::Unit::new_normalize(Vector3::z()),
+    };
+    let (tool, deg) = match which.to_str().unwrap() {
+        "ball" => (
+            k.primitive(&Primitive::Sphere {
+                center: Point3::new(1.0, 0.0, 0.0),
+                radius: 2.0,
+                axis: nalgebra::Unit::new_normalize(Vector3::z()),
+                seam: nalgebra::Unit::new_normalize(Vector3::x()),
+            })
+            .unwrap()
+            .bodies[0],
+            120.0f64,
+        ),
+        _ => {
+            let w = Vector3::new(30f64.to_radians().cos(), 0.0, 30f64.to_radians().sin());
+            (
+                k.primitive(&Primitive::Cone {
+                    base: Point3::from(w * -2.0),
+                    axis: nalgebra::Unit::new_normalize(w),
+                    base_radius: 0.0,
+                    top_radius: 7.0 * 25f64.to_radians().tan(),
+                    height: 7.0,
+                })
+                .unwrap()
+                .bodies[0],
+                150.0,
+            )
+        }
+    };
+    let b = (**k.get(tool).unwrap()).clone();
+    let steps = vec![RigidStep::Turn {
+        axis: z,
+        from: 0.0,
+        to: deg.to_radians(),
+    }];
+    let t = std::time::Instant::now();
+    match cadrs_kernel::native::sweep_faces::by_faces(&mut k, &b, &steps) {
+        Ok(r) => {
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "exact: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                k.get(r.bodies[0]).unwrap().faces.len(),
+                t.elapsed()
+            );
+        }
+        Err(e) => eprintln!("exact failed: {e} in {:?}", t.elapsed()),
+    }
+}
+
+/// brep-bench's bar end turned into a floor (`CADRS_BAR_END=1`): the cut's faces and volume.
+#[test]
+fn debug_bar_end() {
+    if std::env::var_os("CADRS_BAR_END").is_none() {
+        return;
+    }
+    let mut k = NativeKernel::new();
+    let block = k
+        .cylindrical_box(&CylindricalBox {
+            frame: Plane {
+                origin: Point3::new(0.0, 0.0, -1.0),
+                x_dir: Vector3::x_axis(),
+                normal: Vector3::z_axis(),
+            },
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        })
+        .unwrap()
+        .bodies[0];
+    let t = 20f64.to_radians();
+    let (u, n) = (
+        Vector3::new(t.cos(), 0.0, -t.sin()),
+        Vector3::new(t.sin(), 0.0, t.cos()),
+    );
+    let on = Plane {
+        origin: Point3::new(10.0, 0.0, 0.0),
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let f = 5f64.to_radians();
+    let c = |a: f64, b: f64| p(a * f.cos() - b * f.sin(), a * f.sin() + b * f.cos());
+    let pts = [c(0.0, -2.0), c(3.0, -2.0), c(3.0, 2.0), c(0.0, 2.0)];
+    let curves = (0..4)
+        .map(|i| Curve2::Line {
+            a: pts[i],
+            b: pts[(i + 1) % 4],
+            source: None,
+        })
+        .collect();
+    let bar = k
+        .extrude(
+            &Profile::new(on, vec![reg(Loop { curves })]),
+            Extent::Blind(3.0),
+        )
+        .unwrap()
+        .bodies[0];
+    let motion = SolidMotion::Rigid {
+        steps: vec![RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+            from: (-140f64).to_radians(),
+            to: 140f64.to_radians(),
+        }],
+    };
+    // The ends keep clear of the block: the whole turn's solid of revolution cuts the same.
+    let rev = k.sweep_solid(
+        bar,
+        &SolidMotion::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+        },
+    );
+    if let Err(e) = &rev {
+        eprintln!("revolved failed: {e}");
+    }
+    if let Ok(rev) = rev {
+        match k.boolean(BoolOp::Subtract, block, &[rev.bodies[0]]) {
+            Ok(c) => {
+                let m = k.mass_properties(c.bodies[0]).unwrap();
+                eprintln!("revolved: volume {} area {}", m.volume, m.surface_area);
+            }
+            Err(e) => eprintln!("revolved cut failed: {e}"),
+        }
+    }
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, bar, &motion) {
+        Ok(r) => {
+            let b = k.get(r.bodies[0]).unwrap();
+            let m = k.mass_properties(r.bodies[0]).unwrap();
+            eprintln!(
+                "cut: volume {} area {} faces {} in {:?}",
+                m.volume,
+                m.surface_area,
+                b.faces.len(),
+                t0.elapsed()
+            );
+        }
+        Err(e) => eprintln!("cut failed: {e}"),
+    }
+}
+
+/// brep-bench's creased bar turned through a ring sector (`CADRS_CREASED=1`): the swept solid
+/// cut from the block, and the same by `cut_swept`.
+#[test]
+fn debug_creased_bar() {
+    if std::env::var_os("CADRS_CREASED").is_none() {
+        return;
+    }
+    let mut k = NativeKernel::new();
+    let block = k
+        .cylindrical_box(&CylindricalBox {
+            frame: Plane {
+                origin: Point3::new(0.0, 0.0, -1.0),
+                x_dir: Vector3::x_axis(),
+                normal: Vector3::z_axis(),
+            },
+            length: 2.0,
+            inner_radius: 8.0,
+            outer_radius: 12.0,
+            start_angle: 0.0,
+            end_angle: 60f64.to_radians(),
+        })
+        .unwrap()
+        .bodies[0];
+    let t = 20f64.to_radians();
+    let (u, n) = (Vector3::x(), Vector3::new(0.0, t.sin(), t.cos()));
+    let at = |h: f64| Plane {
+        origin: Point3::from(n * h),
+        x_dir: nalgebra::Unit::new_normalize(u),
+        normal: nalgebra::Unit::new_normalize(n),
+    };
+    let d = 4.0 * 2f64.to_radians().tan();
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let pts = [p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)];
+        Loop {
+            curves: (0..4)
+                .map(|i| Curve2::Line {
+                    a: pts[i],
+                    b: pts[(i + 1) % 4],
+                    source: None,
+                })
+                .collect(),
+        }
+    };
+    let section = |h: f64, d: f64| {
+        LoftSection::Profile(Profile::new(
+            at(h),
+            vec![reg(rect(10.0 + d, -2.0 + d, 13.0 - d, 2.0 - d))],
+        ))
+    };
+    let loft = |k: &mut NativeKernel, a: LoftSection, b: LoftSection| {
+        k.loft_with(&LoftSpec {
+            body: BodyKind::Solid,
+            sections: vec![a, b],
+            start: LoftEnd::default(),
+            end: LoftEnd::default(),
+            source: 1,
+        })
+        .unwrap()
+        .bodies[0]
+    };
+    let up = loft(&mut k, section(0.0, 0.0), section(4.0, d));
+    let down = loft(&mut k, section(-4.0, d), section(0.0, 0.0));
+    let bar = k.boolean(BoolOp::Union, up, &[down]).unwrap().bodies[0];
+    let motion = SolidMotion::Rigid {
+        steps: vec![RigidStep::Turn {
+            axis: Axis {
+                origin: Point3::origin(),
+                dir: Vector3::z_axis(),
+            },
+            from: (-140f64).to_radians(),
+            to: 140f64.to_radians(),
+        }],
+    };
+    let report = |k: &NativeKernel, what: &str, id: BodyId, t0: std::time::Instant| {
+        let b = k.get(id).unwrap();
+        let m = k.mass_properties(id).unwrap();
+        eprintln!(
+            "{what}: volume {} area {} faces {} in {:?}",
+            m.volume,
+            m.surface_area,
+            b.faces.len(),
+            t0.elapsed()
+        );
+    };
+    let t0 = std::time::Instant::now();
+    match k.sweep_solid(bar, &motion) {
+        Ok(s) => {
+            report(&k, "swept", s.bodies[0], t0);
+            match k.boolean(BoolOp::Subtract, block, &[s.bodies[0]]) {
+                Ok(c) => report(&k, "swept, cut", c.bodies[0], t0),
+                Err(e) => eprintln!("swept, cut failed: {e}"),
+            }
+        }
+        Err(e) => eprintln!("swept failed: {e}"),
+    }
+    let t0 = std::time::Instant::now();
+    match k.cut_swept(block, bar, &motion) {
+        Ok(r) => report(&k, "cut_swept", r.bodies[0], t0),
+        Err(e) => eprintln!("cut_swept failed: {e}"),
+    }
+}
