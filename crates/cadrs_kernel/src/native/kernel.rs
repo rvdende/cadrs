@@ -1322,6 +1322,12 @@ impl Kernel for NativeKernel {
             &format!("edges {edges:?} {opts:?}"),
         );
         let r = super::blend::chamfer(self, body, edges, opts);
+        let r = match r {
+            Ok(r) if opts.corners == ChamferCorners::Flat => {
+                super::blend::flat_corners(self, body, edges, opts, r)
+            }
+            r => r,
+        };
         let r = self.dumped(&r);
         self.colored(r)
     }

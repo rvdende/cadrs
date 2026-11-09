@@ -1314,18 +1314,34 @@ pub struct ChamferOpts {
     pub flip: bool,
     /// Edges flipped on their own (Onshape's "Direction overrides"), on top of `flip`.
     pub flipped: Vec<EdgeId>,
+    /// How a corner where three or more chamfered edges meet is closed.
+    #[serde(default)]
+    pub corners: ChamferCorners,
 }
 
 impl ChamferOpts {
-    /// `spec` measured along the faces, nothing flipped.
+    /// `spec` measured along the faces, nothing flipped, the corners mitred.
     pub fn new(spec: ChamferSpec) -> Self {
         Self {
             spec,
             measurement: ChamferMeasure::Offset,
             flip: false,
             flipped: Vec::new(),
+            corners: ChamferCorners::Miter,
         }
     }
+}
+
+/// How a chamfer closes a corner where three or more of its edges meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ChamferCorners {
+    /// The chamfers run on until they meet (in a point where three meet).
+    #[default]
+    Miter,
+    /// The corner cut flat by the plane through the points where the chamfers' lines on each of
+    /// its faces meet (a triangle where three chamfers meet): where the corner's faces are flat,
+    /// its chamfers equal, and those points lie in one plane.
+    Flat,
 }
 
 /// A shell (P3.6, PS16).
