@@ -363,6 +363,7 @@ fn sweep(
         body: BodyKind::Solid,
         path,
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     let b = one(k.sweep_with(&profile, &spec).map_err(e)?)?;
@@ -492,6 +493,7 @@ fn sweep_case(case: &str) -> Result<(), String> {
                     curve: line([0.0, 0.0], [0.0, 15.0]),
                 }],
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             };
             let b = one(k.sweep_with(&profile, &spec).map_err(e)?)?;

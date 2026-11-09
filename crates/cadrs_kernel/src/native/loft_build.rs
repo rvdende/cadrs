@@ -2498,6 +2498,92 @@ fn reversed2(c: &Curve2) -> Option<Curve2> {
     })
 }
 
+/// A solid loft through sections that are each one region with holes, as many in each (a hollow
+/// tube's): the loft through their outer loops less the loft through each hole's, the holes
+/// matched in their order. None when the sections aren't so.
+fn loft_with_holes(k: &mut NativeKernel, spec: &LoftSpec) -> Option<Result<OpResult>> {
+    if spec.body != BodyKind::Solid {
+        return None;
+    }
+    let regions: Vec<&Region> = spec
+        .sections
+        .iter()
+        .map(|s| match s {
+            LoftSection::Profile(p) => match p.regions.as_slice() {
+                [r] => Some(r),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let holes = regions[0].holes.len();
+    if holes == 0 || regions.iter().any(|r| r.holes.len() != holes) {
+        return None;
+    }
+    // The spec with each section's region made of one of its loops.
+    let with = |pick: &dyn Fn(&Region) -> Loop| LoftSpec {
+        sections: spec
+            .sections
+            .iter()
+            .zip(&regions)
+            .map(|(s, r)| match s {
+                LoftSection::Profile(p) => LoftSection::Profile(Profile {
+                    regions: vec![Region {
+                        outer: pick(r),
+                        holes: vec![],
+                        source: r.source,
+                    }],
+                    ..p.clone()
+                }),
+                other => other.clone(),
+            })
+            .collect(),
+        ..spec.clone()
+    };
+    Some((|| {
+        // Each loft's faces with what they were made from.
+        let made = |k: &mut NativeKernel, spec: &LoftSpec| -> Result<(Body, Vec<Vec<Origin>>)> {
+            let r = loft_with(k, spec)?;
+            let [id] = r.bodies.as_slice() else {
+                return Err(invalid(
+                    "A loft through a section's loop made more than one body",
+                ));
+            };
+            let body = k.get(*id)?.as_ref().clone();
+            k.release(*id);
+            let mut tags = vec![Vec::new(); body.faces.len()];
+            for (f, o) in &r.history.generated {
+                if let Some(t) = tags.get_mut(f.0 as usize) {
+                    t.push(*o);
+                }
+            }
+            Ok((body, tags))
+        };
+        let (mut body, mut tags) = made(k, &with(&|r: &Region| r.outer.clone()))?;
+        for h in 0..holes {
+            let (hole, htags) = made(k, &with(&|r: &Region| r.holes[h].clone()))?;
+            let out = super::boolean::boolean_bodies(&body, &hole, BoolOp::Subtract)?;
+            tags = out
+                .from
+                .iter()
+                .map(|src| {
+                    src.iter()
+                        .flat_map(|&(o, f)| {
+                            if o == 0 {
+                                tags[f].clone()
+                            } else {
+                                htags[f].clone()
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            body = out.body;
+        }
+        Ok(Tagged { body, tags }.into_result(k))
+    })())
+}
+
 pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
     if spec.sections.len() < 2 {
         return Err(invalid("Select at least two profiles to loft"));
@@ -2517,6 +2603,9 @@ pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
     }
     if let BodyKind::Thin { left, right } = spec.body {
         return loft_thin(k, spec, left, right);
+    }
+    if let Some(r) = loft_with_holes(k, spec) {
+        return r;
     }
     let solid = spec.body == BodyKind::Solid;
     let conditioned = spec.start.condition != LoftCondition::Default

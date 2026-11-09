@@ -103,6 +103,7 @@ impl Rebuilder {
                     body: BodyKind::Solid,
                     path,
                     control: SweepControl::None,
+                    corners: Default::default(),
                     faces: Vec::new(),
                 },
             )

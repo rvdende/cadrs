@@ -504,6 +504,7 @@ fn law_sweep(
         body: BodyKind::Solid,
         path,
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     k.sweep_with_law(profile, &spec, &SweepLaw { twist, scale })

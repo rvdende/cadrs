@@ -1040,6 +1040,7 @@ fn a_thread_wound_twice_round_a_cylinder_joins_it() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )

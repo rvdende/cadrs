@@ -452,6 +452,7 @@ fn a_sweep_round_a_sharp_corner_is_mitred() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )

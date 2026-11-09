@@ -830,6 +830,7 @@ fn debug_sweep() {
             body: BodyKind::Solid,
             path,
             control: SweepControl::None,
+            corners: Default::default(),
             faces: vec![],
         };
         match k.sweep_with(&prof, &spec) {
@@ -1256,6 +1257,7 @@ fn debug_sweep_bezier() {
             body: BodyKind::Solid,
             path: path.clone(),
             control,
+            corners: Default::default(),
             faces: vec![],
         };
         let t = std::time::Instant::now();
@@ -1618,6 +1620,7 @@ fn debug_thread_sweep_mass() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )
@@ -1789,6 +1792,7 @@ fn debug_thread_union() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )
@@ -1898,6 +1902,7 @@ fn debug_helix_tube() {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )

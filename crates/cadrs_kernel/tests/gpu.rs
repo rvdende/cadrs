@@ -60,6 +60,7 @@ fn threaded_cylinder(k: &mut NativeKernel) -> BodyId {
                 body: BodyKind::Solid,
                 path,
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             },
         )

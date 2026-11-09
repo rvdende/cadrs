@@ -756,6 +756,20 @@ pub struct SweepSpec {
     /// Planar faces swept with the profile's regions.
     #[serde(default)]
     pub faces: Vec<FaceInput>,
+    /// How a solid sweep goes round a sharp corner of its path.
+    #[serde(default)]
+    pub corners: SweepCorners,
+}
+
+/// How a solid sweep goes round a sharp corner of its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SweepCorners {
+    /// Each piece run on to the plane bisecting the corner and cut there.
+    #[default]
+    Mitre,
+    /// The pieces end square to the path at the corner, its outside filled by the profile turned
+    /// about the corner (a pipe's elbow round as a ball).
+    Round,
 }
 
 /// One step of a planar motion ([`SolidMotion::Planar`]), its amount running linearly with the

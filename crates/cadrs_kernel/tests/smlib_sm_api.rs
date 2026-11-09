@@ -507,6 +507,7 @@ fn sweep_path(r: f64, path: &[[f64; 3]], capped: bool, want: f64, rel: f64) -> R
         },
         path,
         control: SweepControl::None,
+        corners: Default::default(),
         faces: vec![],
     };
     let b = one(k.sweep_with(&profile, &spec).map_err(e)?)?;

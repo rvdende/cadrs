@@ -1248,6 +1248,7 @@ mod tests {
                 },
             }],
             control: SweepControl::None,
+            corners: Default::default(),
             faces: vec![],
         };
         let b = k.sweep_with(&profile, &spec).unwrap().bodies[0];

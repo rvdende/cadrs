@@ -465,7 +465,7 @@ pub trait Kernel {
     /// let profile = Profile::new(across, vec![Region { outer: Loop { curves: vec![disc] }, holes: vec![], source: None }]);
     /// let line = Curve2::Line { a: Point2::new(0.0, 0.0), b: Point2::new(10.0, 0.0), source: None };
     /// let path = vec![PathCurve::Sketch { plane: Plane::top(), curve: line }];
-    /// let spec = SweepSpec { body: BodyKind::Solid, path, control: SweepControl::None, faces: vec![] };
+    /// let spec = SweepSpec { body: BodyKind::Solid, path, control: SweepControl::None, corners: Default::default(), faces: vec![] };
     /// let rod = k.sweep_with(&profile, &spec)?.bodies[0];
     /// assert!((k.mass_properties(rod)?.volume - 10.0 * std::f64::consts::PI).abs() < 1e-6);
     /// # Ok::<(), cadrs_kernel::KernelError>(())

@@ -276,6 +276,7 @@ fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
                     edge: EdgeId(e as u64),
                 }],
                 control: SweepControl::None,
+                corners: Default::default(),
                 faces: vec![],
             };
             let out = k.sweep_with(&prof, &spec)?;
