@@ -642,14 +642,34 @@ fn primitives_measure_exactly() {
         2.0 * PI * PI * 10.0 * 9.0,
         4.0 * PI * PI * 10.0 * 3.0,
     );
-    assert!(
-        k.primitive(&Primitive::Torus {
+    // A horn torus, its tube as wide as its ring: 2π²Rr², 4π²Rr.
+    let h = one(
+        &mut k,
+        Primitive::Torus {
             center: p3(0.0, 0.0, 0.0),
             axis: z,
             major: 3.0,
-            minor: 3.0
-        })
-        .is_err()
+            minor: 3.0,
+        },
+    );
+    measures(&k, h, 2.0 * PI * PI * 27.0, 4.0 * PI * PI * 9.0);
+    // A spindle torus (R = 3, r = 5), the solid counted once: 2π(75(π − θ) + 236/3) and
+    // 20π(3(π − θ) + 4), θ = acos(3/5).
+    let sp = one(
+        &mut k,
+        Primitive::Torus {
+            center: p3(0.0, 0.0, 0.0),
+            axis: z,
+            major: 3.0,
+            minor: 5.0,
+        },
+    );
+    let th = (3.0f64 / 5.0).acos();
+    measures(
+        &k,
+        sp,
+        2.0 * PI * (75.0 * (PI - th) + 236.0 / 3.0),
+        20.0 * PI * (3.0 * (PI - th) + 4.0),
     );
 }
 

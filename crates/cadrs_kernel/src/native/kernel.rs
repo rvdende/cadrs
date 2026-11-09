@@ -1049,17 +1049,40 @@ impl Kernel for NativeKernel {
                 major,
                 minor,
             } => {
-                if !(minor > 0.0 && major > minor) {
+                if !(minor > 0.0 && major >= 0.0) {
                     return Err(KernelError::InvalidParameter(
-                        "The torus's tube must be thinner than its ring is wide".into(),
+                        "The torus needs a tube and a ring that is no less than none".into(),
                     ));
                 }
                 let plane = through(center, axis.into_inner());
-                let tube = vec![Curve2::Circle {
-                    center: Point2::new(major, 0.0),
-                    radius: minor,
-                    source: None,
-                }];
+                // A ring torus's tube turned whole; a horn torus's (the tube as wide as the ring)
+                // touches the axis at the centre. A spindle torus's tube crosses the axis: the
+                // solid is what the tube fills counted once, the turn of the tube's part beyond
+                // the axis, bounded by its outer arc from (0, −h) to (0, h) and the axis.
+                let tube = if minor <= major * (1.0 + tol::REL) {
+                    vec![Curve2::Circle {
+                        center: Point2::new(major, 0.0),
+                        radius: minor,
+                        source: None,
+                    }]
+                } else {
+                    let end = PI - (major / minor).acos();
+                    let h = (minor * minor - major * major).sqrt();
+                    vec![
+                        Curve2::Arc {
+                            center: Point2::new(major, 0.0),
+                            radius: minor,
+                            start_angle: -end,
+                            sweep: 2.0 * end,
+                            source: None,
+                        },
+                        Curve2::Line {
+                            a: Point2::new(0.0, h),
+                            b: Point2::new(0.0, -h),
+                            source: None,
+                        },
+                    ]
+                };
                 turned(self, plane, tube, center, axis.into_inner())
             }
         }
@@ -1948,6 +1971,21 @@ impl Kernel for NativeKernel {
         domain: Option<UvRect>,
     ) -> Result<OpResult> {
         super::face_build::kernel_face_from_surface(self, body, face, domain)
+    }
+
+    fn bspline_face(
+        &mut self,
+        surface: &BsplineSurface,
+        domain: Option<UvRect>,
+    ) -> Result<OpResult> {
+        let n = super::nurbs::NurbsSurface::from_bspline(surface)?;
+        let s = super::surface::Surface::Nurbs(std::sync::Arc::new(n));
+        let id = self
+            .face_from_bare_surface(&s, domain.map(|d| ((d[0][0], d[0][1]), (d[1][0], d[1][1]))))?;
+        Ok(OpResult {
+            bodies: vec![id],
+            history: History::default(),
+        })
     }
 
     fn ray_hits(

@@ -1270,6 +1270,40 @@ impl NurbsSurface {
         Ok(s)
     }
 
+    /// The surface of a [`crate::BsplineSurface`] (its poles weighted), checked.
+    ///
+    /// # Errors
+    /// `InvalidInput` when its net isn't rectangular, or its knots, degrees and poles don't make
+    /// a B-spline.
+    pub fn from_bspline(b: &crate::BsplineSurface) -> crate::Result<Self> {
+        let cps = b
+            .poles
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(j, p)| {
+                        let w = b
+                            .weights
+                            .get(i)
+                            .and_then(|r| r.get(j))
+                            .copied()
+                            .unwrap_or(1.0);
+                        hom(p, w)
+                    })
+                    .collect()
+            })
+            .collect();
+        Self::new(
+            b.degree_u,
+            b.degree_v,
+            b.knots_u.clone(),
+            b.knots_v.clone(),
+            cps,
+        )
+    }
+
     /// Checks that the net is rectangular and each direction's knots, degree and control points
     /// make a B-spline (as [`NurbsCurve::validate`]).
     pub fn validate(&self) -> crate::Result<()> {

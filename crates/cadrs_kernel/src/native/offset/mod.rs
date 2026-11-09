@@ -21,6 +21,70 @@ use crate::native::surface::Surface;
 use crate::native::tol;
 use crate::*;
 
+/// Faces moved until they run into each other (two holes widened until they merge): the body
+/// less what the faces moved into it sweep along their normals ([`slab::face_slab`]), with what
+/// those moved out of it sweep, the material between the faces' places. That is the move where
+/// each moved face meets its neighbours square, its edges swept along its normals staying on
+/// their surfaces (as a hole's wall meets the plate's faces), so that the neighbours are trimmed
+/// or extended along their own surfaces as the sharp offset does it; else None, as when the
+/// result isn't sound or the body falls apart.
+fn moved_by_slabs(
+    b: &crate::native::topo::Body,
+    faces: &[(FaceId, f64)],
+) -> Option<crate::native::topo::Body> {
+    let ef = b.edge_faces();
+    let size = b.bbox().diagonal().max(1.0);
+    let near = tol::REL_POINT * size;
+    for &(f, d) in faces {
+        let fi = f.0 as usize;
+        let face = b.faces.get(fi)?;
+        if d == 0.0 {
+            continue;
+        }
+        let sign = if face.sense { 1.0 } else { -1.0 };
+        for c in face.loops.iter().flatten() {
+            let e = &b.edges[c.edge];
+            if e.degenerate {
+                continue;
+            }
+            // (A seam has the face on both sides: nothing to meet.)
+            let Some(&other) = ef[c.edge].iter().find(|&&g| g != fi) else {
+                continue;
+            };
+            for k in 0..=4 {
+                let p = e.curve.point(e.t[0] + (e.t[1] - e.t[0]) * k as f64 / 4.0);
+                let (u, v) = face.surf.project(&p, None);
+                let n = face.surf.normal(u, v).try_normalize(tol::TINY)? * sign;
+                for s in [0.5, 1.0] {
+                    if b.faces[other].surf.distance(&(p + n * d * s)) > near {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = b.clone();
+    let mut moved: Vec<(FaceId, f64)> = faces.iter().copied().filter(|(_, d)| *d != 0.0).collect();
+    moved.sort_by(|x, y| x.1.total_cmp(&y.1));
+    for (f, d) in moved {
+        let slab = slab::face_slab(b, f.0 as usize, d).ok()?;
+        let op = if d < 0.0 {
+            BoolOp::Subtract
+        } else {
+            BoolOp::Union
+        };
+        out = crate::native::boolean::boolean_bodies(&out, &slab, op)
+            .ok()?
+            .body;
+    }
+    // (One piece as it was: a move that breaks the body apart is no Move face.)
+    (out.solids.len() == b.solids.len()
+        && out
+            .check_with(crate::native::topo::CheckLevel::Full)
+            .is_empty())
+    .then_some(out)
+}
+
 pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
     let b = (**k.get(body)?).clone();
     let mut dist = vec![spec.distance; b.faces.len()];
@@ -59,9 +123,12 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
                 .check_with(crate::native::topo::CheckLevel::Full)
                 .is_empty()
         {
-            return Err(too_far("a face would run into another face"));
+            // (Faces run into each other: two holes widened until they merge.)
+            moved_by_slabs(&b, &spec.faces)
+                .ok_or_else(|| too_far("a face would run into another face"))?
+        } else {
+            out
         }
-        out
     } else if dist.iter().all(|d| *d <= 0.0) {
         round::inset_rounded(&b, &dist)?
     } else {

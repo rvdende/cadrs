@@ -652,6 +652,23 @@ pub struct Bspline3 {
     pub weights: Vec<f64>,
 }
 
+/// A clamped (rational) B-spline surface: `poles[i][j]`, i along u and j along v.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BsplineSurface {
+    /// Its degree along u.
+    pub degree_u: usize,
+    /// Its degree along v.
+    pub degree_v: usize,
+    /// Clamped knots along u: as many as the rows of poles plus the degree plus one.
+    pub knots_u: Vec<f64>,
+    /// Clamped knots along v: as many as each row's poles plus the degree plus one.
+    pub knots_v: Vec<f64>,
+    /// The control net, row by row along u.
+    pub poles: Vec<Vec<Point3<f64>>>,
+    /// One weight per pole, row by row, or empty for a polynomial surface.
+    pub weights: Vec<Vec<f64>>,
+}
+
 /// A sweep of curves along a path (Onshape's surface Sweep of edges or curves): a sheet. See
 /// [`Kernel::sweep_curves`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -896,7 +913,9 @@ pub enum Primitive {
         axis: Unit<Vector3<f64>>,
         /// The radius of the circle through its tube's centres.
         major: f64,
-        /// Its tube's radius (less than `major`).
+        /// Its tube's radius: less than `major` (a ring torus), equal to it (a horn torus, its
+        /// hole closed to the centre) or more (a spindle torus: the solid the tube fills, counted
+        /// once, its hole closed between the points where the tube crosses the axis).
         minor: f64,
     },
 }

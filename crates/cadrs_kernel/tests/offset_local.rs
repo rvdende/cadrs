@@ -1351,10 +1351,10 @@ fn sharp_offset_drops_a_slope_its_neighbours_cross_over() {
     close(volume(&k, off), 2460.0, 1e-9);
 }
 
-/// Move face refuses moves that would change the body's topology (main's `check_face_moves`
-/// guarded OCCT's offset, which crashed on them): a hole's wall moved onto or past its axis,
-/// a hole grown through the block's side, a side moved into the hole. Moves that keep the
-/// topology still work, to closed forms.
+/// Move face refuses moves that would wreck the body (main's `check_face_moves` guarded OCCT's
+/// offset, which crashed on them): a hole's wall moved onto or past its axis, a hole grown out
+/// through the block's sides (leaving it in pieces). A side moved into the hole opens it, as the
+/// body less the slab the side sweeps. Moves that keep the topology still work, to closed forms.
 #[test]
 fn move_face_refuses_topology_changes() {
     let mut k = NativeKernel::new();
@@ -1391,7 +1391,13 @@ fn move_face_refuses_topology_changes() {
         let out = one(moved(&mut k, f, d).unwrap());
         close(volume(&k, out), want, 1e-9);
     }
-    for (f, d) in [(wall, 3.0), (wall, 4.0), (wall, -8.0), (side, -8.0)] {
+    // The side in by 8 runs into the hole and opens it (the side square to its neighbours, the
+    // body less the slab it sweeps): the half plate x ≤ 2 less the hole's part there.
+    let opened = one(moved(&mut k, side, -8.0).unwrap());
+    let seg = 9.0 * (2.0f64 / 3.0).acos() - 2.0 * 5f64.sqrt();
+    close(volume(&k, opened), 2400.0 - 10.0 * (9.0 * PI - seg), 1e-9);
+    // The hole's radius to 0 or past it, or out past the plate's sides (the plate in four).
+    for (f, d) in [(wall, 3.0), (wall, 4.0), (wall, -8.0)] {
         let r = moved(&mut k, f, d);
         assert!(
             matches!(r, Err(KernelError::InvalidParameter(_))),

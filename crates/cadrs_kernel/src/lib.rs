@@ -1388,6 +1388,17 @@ pub trait Kernel {
         domain: Option<UvRect>,
     ) -> Result<OpResult>;
 
+    /// A sheet body of one face on a B-spline surface given by its net (one made or read
+    /// elsewhere): over its range, or `domain`, bounded as [`Kernel::face_from_surface`] bounds
+    /// a face's surface (iso-curves, poles as degenerate edges, a seam where it closes round).
+    /// A surface that closes on itself (a ball's) gives a closed sheet, which
+    /// [`Kernel::sew_solid`] makes a solid. `InvalidInput` for a net that isn't a B-spline.
+    fn bspline_face(
+        &mut self,
+        surface: &BsplineSurface,
+        domain: Option<UvRect>,
+    ) -> Result<OpResult>;
+
     /// The body's vertices. The default finds them as the distinct ends of [`Kernel::edges`]
     /// (closed edges, such as whole circles, have none); backends with a vertex list override
     /// it.
