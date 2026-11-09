@@ -342,6 +342,10 @@ pub mod sweep_solid;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep_solid;
 #[cfg(feature = "testkit")]
+pub mod sweep_tube;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_tube;
+#[cfg(feature = "testkit")]
 pub mod tails;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]

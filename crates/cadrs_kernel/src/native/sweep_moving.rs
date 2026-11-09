@@ -238,8 +238,8 @@ impl Sweep<'_> {
 /// lies behind every face's plane of the body placed then. [`Oracle::depth`] is the least over
 /// the motion of the most a point lies in front of one of those planes (negative inside).
 pub struct Oracle<'a> {
-    /// Each face's plane in the body's frame: n · p = d, n outward.
-    planes: Vec<(V3, f64)>,
+    /// How far a point (in the body's own frame) lies outside the body: positive outside.
+    measure: Box<dyn Fn(&V3) -> f64 + Send + Sync + 'a>,
     ts: Vec<f64>,
     /// The place at each sample: its rotation and translation.
     places: Vec<(nalgebra::Rotation3<f64>, V3)>,
@@ -247,11 +247,30 @@ pub struct Oracle<'a> {
 }
 
 impl<'a> Oracle<'a> {
+    /// The test of a convex polyhedron, from its faces' planes (n · p = d, n outward).
     pub fn new(planes: Vec<(V3, f64)>, place: Place<'a>, samples: usize) -> Oracle<'a> {
+        Self::with_measure(
+            Box::new(move |q: &V3| {
+                planes
+                    .iter()
+                    .map(|(n, c)| n.dot(q) - c)
+                    .fold(f64::NEG_INFINITY, f64::max)
+            }),
+            place,
+            samples,
+        )
+    }
+
+    /// The test of any body by `measure`: how far a point in its own frame lies outside it.
+    pub fn with_measure(
+        measure: Box<dyn Fn(&V3) -> f64 + Send + Sync + 'a>,
+        place: Place<'a>,
+        samples: usize,
+    ) -> Oracle<'a> {
         let ts: Vec<f64> = (0..=samples).map(|i| i as f64 / samples as f64).collect();
         let places = ts.iter().map(|&t| place(t)).collect();
         Oracle {
-            planes,
+            measure,
             ts,
             places,
             place,
@@ -259,11 +278,7 @@ impl<'a> Oracle<'a> {
     }
 
     fn at(&self, (r, d): &(nalgebra::Rotation3<f64>, V3), x: &P3) -> f64 {
-        let q = r.transpose() * (x.coords - d);
-        self.planes
-            .iter()
-            .map(|(n, c)| n.dot(&q) - c)
-            .fold(f64::NEG_INFINITY, f64::max)
+        (self.measure)(&(r.transpose() * (x.coords - d)))
     }
 
     /// The least over the motion of how far `x` lies outside the placed body (by its faces'
@@ -783,6 +798,44 @@ impl Cand {
             let (u, v) = self.surf().project(x, None);
             return P2::new(u, v);
         };
+        if ns.dv != 1 || ns.kv.len() != 4 {
+            // A B-spline patch: the nearest of a grid, then Gauss-Newton steps (kept in range).
+            let ((u0, u1), (v0, v1)) = ns.range();
+            let n = 24;
+            let mut best = (f64::INFINITY, u0, v0);
+            for i in 0..=n {
+                for j in 0..=n {
+                    let (u, v) = (
+                        u0 + (u1 - u0) * i as f64 / n as f64,
+                        v0 + (v1 - v0) * j as f64 / n as f64,
+                    );
+                    let d = (ns.point(u, v) - x).norm_squared();
+                    if d < best.0 {
+                        best = (d, u, v);
+                    }
+                }
+            }
+            let (mut u, mut v) = (best.1, best.2);
+            for _ in 0..30 {
+                let (p, su, sv) = self.surf().d1(u, v);
+                let r = p - x;
+                let (a, b, c) = (su.dot(&su), su.dot(&sv), sv.dot(&sv));
+                let (gu, gv) = (su.dot(&r), sv.dot(&r));
+                let det = a * c - b * b;
+                if det.abs() < 1e-300 {
+                    break;
+                }
+                let du = -(c * gu - b * gv) / det;
+                let dv = -(a * gv - b * gu) / det;
+                let (nu, nv) = ((u + du).clamp(u0, u1), (v + dv).clamp(v0, v1));
+                let moved = (nu - u).abs() + (nv - v).abs();
+                (u, v) = (nu, nv);
+                if moved < 1e-15 * (1.0 + u.abs() + v.abs()) {
+                    break;
+                }
+            }
+            return P2::new(u, v);
+        }
         let (u0, u1) = (ns.ku[0], ns.ku[ns.ku.len() - 1]);
         let at = |u: f64| -> (f64, f64) {
             let a = self.surf().eval(u, 0.0);
@@ -2363,16 +2416,41 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
             }
         }
     }
-    let faces: Vec<Cand> = faces.into_iter().map(Cand::new).collect();
-    let t_built = web_time::Instant::now();
-    // Each face judged at points over it: outside (a point just off it, along its outward
-    // normal, isn't swept), inside, or both.
     let planes: Vec<(V3, f64)> = sw
         .faces
         .iter()
         .map(|f| (f.n, f.n.dot(&sw.b.verts[f.corners[0]].p.coords)))
         .collect();
     let oracle = Oracle::new(planes, place, 2048);
+    if debug {
+        eprintln!(
+            "moving sweep: {} chunks, candidates in {:.0} ms",
+            chunks.len(),
+            (web_time::Instant::now() - t0).as_secs_f64() * 1e3
+        );
+    }
+    boundary_of(faces, &oracle, size, least, most)
+}
+
+/// The boundary of what a motion fills, from `faces` (sheets of one face each) that close a
+/// surface round it (running inside it where the motion passes over the same place again):
+/// each judged by `oracle` at points over it (a point just off it along its outward normal
+/// swept or not), kept whole when it is wholly on the boundary and dropped when wholly inside,
+/// the others cut along the curves the boundary crosses them by and their pieces judged again,
+/// the kept faces joined edge to edge. Refused unless that makes one sound solid whose volume is
+/// between `least` and `most`.
+pub(crate) fn boundary_of(
+    faces: Vec<Body>,
+    oracle: &Oracle,
+    size: f64,
+    least: f64,
+    most: f64,
+) -> Result<Body> {
+    use rayon::prelude::*;
+    let debug = std::env::var_os("CADRS_SWEEP_DEBUG").is_some();
+    let t0 = web_time::Instant::now();
+    let faces: Vec<Cand> = faces.into_iter().map(Cand::new).collect();
+    let t_built = web_time::Instant::now();
     let eps = 1e-7 * size;
     let judge = |c: &Body, m: usize| -> (usize, usize) {
         let (mut out, mut inn) = (0, 0);
@@ -2393,7 +2471,7 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
     // The curves the boundary crosses them along.
     let tracer = Tracer {
         cands: &faces,
-        oracle: &oracle,
+        oracle,
         size,
         eps,
     };
@@ -2459,10 +2537,9 @@ fn swept(sw: &Sweep, size: f64) -> Result<Body> {
     if debug {
         let ms = |a: web_time::Instant, b: web_time::Instant| (b - a).as_secs_f64() * 1e3;
         eprintln!(
-            "moving sweep: {} chunks, {} faces ({:.0} ms); judged ({:.0} ms): {} outside, {} \
+            "moving sweep: {} faces ({:.0} ms); judged ({:.0} ms): {} outside, {} \
              mixed; {} curves' stretches ({:.0} ms, trouble {:?}); cut ({:.0} ms) and joined \
              ({:.0} ms): {} faces, volume {volume} (between {least} and {most})",
-            chunks.len(),
             faces.len(),
             ms(t0, t_built),
             ms(t_built, t_judged),

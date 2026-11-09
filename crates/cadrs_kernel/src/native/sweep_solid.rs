@@ -562,6 +562,12 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             Some(Err(e)) => exact = exact.or(Some(e)),
             None => {}
         }
+        // A torus: exactly, from the offsets of its core circle's sweep.
+        match super::sweep_tube::torus(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => exact = exact.or(Some(e)),
+            None => {}
+        }
         return match revolved(&b) {
             Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
             None => meshed_body(k, &b, &place).map_err(|e| exact.unwrap_or(e)),
