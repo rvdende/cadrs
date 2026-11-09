@@ -555,6 +555,13 @@ pub fn sweep_solid(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> 
             }
         }
         let place = |t: f64| rigid_at(steps, t);
+        // A convex polyhedron whose contacts move over its faces: exactly, from its leading
+        // polygons' sweeps.
+        match super::sweep_moving::polyhedron(k, &b, &place) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => exact = exact.or(Some(e)),
+            None => {}
+        }
         return match revolved(&b) {
             Some(rev) => meshed(k, &b, &|p| rev.distance(p), &place),
             None => meshed_body(k, &b, &place).map_err(|e| exact.unwrap_or(e)),

@@ -328,6 +328,10 @@ pub mod sweep_faces;
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod sweep_faces;
 #[cfg(feature = "testkit")]
+pub mod sweep_moving;
+#[cfg(not(feature = "testkit"))]
+pub(crate) mod sweep_moving;
+#[cfg(feature = "testkit")]
 pub mod sweep_planar;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
