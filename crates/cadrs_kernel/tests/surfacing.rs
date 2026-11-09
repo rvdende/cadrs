@@ -115,6 +115,7 @@ fn thicken_a_face_both_ways() {
             profiles: vec![],
             along: 1.0,
             against: 0.5,
+            sharp: false,
             source: 7,
         })
         .unwrap();
@@ -128,6 +129,7 @@ fn thicken_a_face_both_ways() {
             profiles: vec![],
             along: 0.0,
             against: 0.0,
+            sharp: false,
             source: 7
         })
         .is_err()

@@ -1819,6 +1819,10 @@ pub struct ThickenSpec {
     pub along: f64,
     /// Thickness against the faces' normals (mm).
     pub against: f64,
+    /// Where the sheet bends, the moved faces extended until they meet (a mitre), not joined
+    /// by rounds (a cylinder about each crease, a ball at each corner).
+    #[serde(default)]
+    pub sharp: bool,
     /// The caller's id for the new faces.
     pub source: u64,
 }

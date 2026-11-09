@@ -2034,6 +2034,7 @@ impl NativeKernel {
                 profiles: vec![],
                 along: d.max(0.0),
                 against: (-d).max(0.0),
+                sharp: false,
                 source: 0,
             },
             _ => ThickenSpec {
@@ -2042,6 +2043,7 @@ impl NativeKernel {
                 profiles: vec![],
                 along: d.max(0.0),
                 against: (-d).max(0.0),
+                sharp: false,
                 source: 0,
             },
         };

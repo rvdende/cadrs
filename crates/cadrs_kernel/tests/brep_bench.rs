@@ -237,6 +237,7 @@ fn thickened(k: &mut NativeKernel, sheet: BodyId, at: P3, toward: V3, t: f64) ->
         profiles: vec![],
         along,
         against,
+        sharp: false,
         source: 1,
     };
     k.thicken_surfaces(&spec).unwrap().bodies[0]

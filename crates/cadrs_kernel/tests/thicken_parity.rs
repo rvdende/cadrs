@@ -94,6 +94,7 @@ fn faces_facing_different_ways_thicken_each_along_its_own_normal() {
         profiles: vec![square(lid_plane)],
         along: 0.0,
         against: WALL,
+        sharp: false,
         source: 1,
     };
     let id = k.thicken_surfaces(&spec).unwrap().bodies[0];
