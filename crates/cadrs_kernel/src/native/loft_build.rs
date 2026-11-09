@@ -1990,6 +1990,270 @@ fn face_section(k: &NativeKernel, fi: &FaceInput) -> Result<SectionCurves> {
     Ok(SectionCurves::sampled(plane, polys))
 }
 
+/// [`crate::Kernel::loft_guided`].
+pub fn loft_guided(
+    k: &mut NativeKernel,
+    spec: &LoftSpec,
+    guides: &[Vec<PathCurve>],
+) -> Result<OpResult> {
+    use super::sweep::path::{chain, path_segments};
+    if guides.is_empty() {
+        return loft_with(k, spec);
+    }
+    let bad = |why: &str| KernelError::InvalidParameter(why.into());
+    let [first, last] = spec.sections.as_slice() else {
+        return Err(bad("A loft along guides runs between two sections"));
+    };
+    if guides.len() < 2 {
+        return Err(bad("A loft along guides needs two guides or more"));
+    }
+    if matches!(spec.body, BodyKind::Thin { .. }) {
+        return Err(bad("A loft along guides makes a solid or a surface"));
+    }
+    // A section: a loop of curves on a plane, or a point.
+    enum Sec {
+        Loop(Plane, Vec<Curve2>),
+        Point(P3),
+    }
+    let sec = |s: &LoftSection| -> Result<Sec> {
+        match s {
+            LoftSection::Profile(p) => match p.regions.as_slice() {
+                [r] if r.holes.is_empty() => Ok(Sec::Loop(p.plane, r.outer.curves.clone())),
+                _ => Err(bad(
+                    "Each section of a loft along guides is one region without holes",
+                )),
+            },
+            LoftSection::Point(q) => Ok(Sec::Point(*q)),
+            LoftSection::Face(_) => Err(bad("A loft along guides goes through sketches")),
+        }
+    };
+    let (a, z) = (sec(first)?, sec(last)?);
+    if matches!((&a, &z), (Sec::Point(_), Sec::Point(_))) {
+        return Err(bad(
+            "A loft along guides needs a section that isn't a point",
+        ));
+    }
+    // Each guide's ends.
+    let mut ends: Vec<(P3, P3)> = Vec::new();
+    for g in guides {
+        let (segs, _) = chain(path_segments(k, g)?)
+            .map_err(|_| bad("A guide must be one chain of connected curves"))?;
+        let (Some(s), Some(e)) = (segs.first(), segs.last()) else {
+            return Err(bad("A guide has no curves"));
+        };
+        ends.push((s.start(), e.end()));
+    }
+    let size = ends
+        .iter()
+        .map(|(s, e)| (s - e).norm())
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let near = tol::REL_POINT * size;
+    // The corner of a section's loop each guide meets (by its start on the first section, its
+    // end on the last): None for a point section (every guide meets the point).
+    let corners = |s: &Sec, at_start: bool| -> Result<Option<Vec<usize>>> {
+        let Sec::Loop(plane, curves) = s else {
+            return Ok(None);
+        };
+        let verts: Vec<P3> = curves.iter().map(|c| plane.to_model(c.start())).collect();
+        ends.iter()
+            .map(|&(s, e)| {
+                let q = if at_start { s } else { e };
+                verts.iter().position(|v| (v - q).norm() <= near)
+            })
+            .collect::<Option<Vec<usize>>>()
+            .map(Some)
+            .ok_or_else(|| bad("Each guide must run from a corner of the first section to a corner of the last"))
+    };
+    let (ca, cz) = (corners(&a, true)?, corners(&z, false)?);
+    if let Sec::Point(q) = &a
+        && ends.iter().any(|(s, _)| (s - q).norm() > near)
+    {
+        return Err(bad("Each guide must start at the first section's point"));
+    }
+    if let Sec::Point(q) = &z
+        && ends.iter().any(|(_, e)| (e - q).norm() > near)
+    {
+        return Err(bad("Each guide must end at the last section's point"));
+    }
+    // The guides in the order of a loop section's corners (the first's, else the last's).
+    let (lead, lead_n) = match (&ca, &a, &cz, &z) {
+        (Some(c), Sec::Loop(_, curves), _, _) => (c.clone(), curves.len()),
+        (_, _, Some(c), Sec::Loop(_, curves)) => (c.clone(), curves.len()),
+        _ => unreachable!(),
+    };
+    let mut order: Vec<usize> = (0..guides.len()).collect();
+    order.sort_by_key(|&g| lead[g]);
+    if order.windows(2).any(|w| lead[w[0]] == lead[w[1]]) {
+        return Err(bad("Two guides meet one corner"));
+    }
+    let _ = lead_n;
+    // The other loop runs the same way round as the leading one, or the other way.
+    let forward = |c: &[usize], n: usize| -> Option<bool> {
+        let steps: Vec<usize> = (0..order.len())
+            .map(|i| (c[order[(i + 1) % order.len()]] + n - c[order[i]]) % n)
+            .collect();
+        let total: usize = steps.iter().sum();
+        if total == n {
+            Some(true)
+        } else {
+            let back: usize = steps.iter().map(|s| (n - s) % n).sum();
+            (back == n).then_some(false)
+        }
+    };
+    // A section's stretch from guide g's corner to guide h's, as curves on its plane.
+    let stretch = |s: &Sec, c: &Option<Vec<usize>>, g: usize, h: usize| -> Result<CurveSection> {
+        match (s, c) {
+            (Sec::Point(q), _) => Ok(CurveSection::Point(*q)),
+            (Sec::Loop(plane, curves), Some(c)) => {
+                let n = curves.len();
+                let fwd =
+                    forward(c, n).ok_or_else(|| bad("The guides cross between the sections"))?;
+                let mut out = Vec::new();
+                if fwd {
+                    let mut i = c[g];
+                    while i != c[h] || out.is_empty() {
+                        out.push(PathCurve::Sketch {
+                            plane: *plane,
+                            curve: curves[i].clone(),
+                        });
+                        i = (i + 1) % n;
+                        if out.len() > n {
+                            break;
+                        }
+                    }
+                } else {
+                    let mut i = c[g];
+                    while i != c[h] || out.is_empty() {
+                        let j = (i + n - 1) % n;
+                        let rev = reversed2(&curves[j])
+                            .ok_or_else(|| bad("A section's curve can't be run the other way"))?;
+                        out.push(PathCurve::Sketch {
+                            plane: *plane,
+                            curve: rev,
+                        });
+                        i = j;
+                        if out.len() > n {
+                            break;
+                        }
+                    }
+                }
+                Ok(CurveSection::Wire(out))
+            }
+            _ => unreachable!(),
+        }
+    };
+    let mut made: Vec<BodyId> = Vec::new();
+    let mut tags: Vec<Origin> = Vec::new();
+    let mut parts: Vec<Body> = Vec::new();
+    for i in 0..order.len() {
+        let (g, h) = (order[i], order[(i + 1) % order.len()]);
+        let cls = crate::CurveLoftSpec {
+            sections: vec![stretch(&a, &ca, g, h)?, stretch(&z, &cz, g, h)?],
+            guides: vec![guides[g].clone(), guides[h].clone()],
+            start: crate::CurveLoftEnd::default(),
+            end: crate::CurveLoftEnd::default(),
+            source: spec.source,
+        };
+        let r = super::curve_loft::loft_curves(k, &cls)?;
+        for &id in &r.bodies {
+            let wall = k.get(id)?.as_ref().clone();
+            tags.extend((0..wall.faces.len()).map(|_| Origin::ProfileCurve {
+                region: spec.source,
+                curve: lead[g] as u64,
+            }));
+            parts.push(wall);
+            made.push(id);
+        }
+    }
+    let result = if spec.body == BodyKind::Solid {
+        for (s, cap) in [(&a, true), (&z, false)] {
+            let Sec::Loop(plane, curves) = s else {
+                continue;
+            };
+            let fill = crate::FillSpec {
+                curves: curves
+                    .iter()
+                    .map(|c| crate::FillCurve::Sketch {
+                        plane: *plane,
+                        curve: c.clone(),
+                    })
+                    .collect(),
+                source: spec.source,
+            };
+            let r = super::surfacing::fill(k, &fill)?;
+            for &id in &r.bodies {
+                let face = k.get(id)?.as_ref().clone();
+                tags.extend((0..face.faces.len()).map(|_| {
+                    if cap {
+                        Origin::StartCap {
+                            region: spec.source,
+                        }
+                    } else {
+                        Origin::EndCap {
+                            region: spec.source,
+                        }
+                    }
+                }));
+                parts.push(face);
+                made.push(id);
+            }
+        }
+        let mut all = Body::default();
+        for p in &parts {
+            all.append(p);
+        }
+        super::surfacing::sewn_solid(all, tol::POINT)
+    } else {
+        let mut all = Body::default();
+        for p in &parts {
+            all.append(p);
+        }
+        super::surfacing::sew_faces(all, tol::POINT)
+    };
+    for id in made {
+        k.release(id);
+    }
+    let body = result?;
+    if body.faces.len() != tags.len() {
+        return Err(KernelError::InvalidResult {
+            op: "loft",
+            why: "the loft's walls didn't sew as they were made".into(),
+        });
+    }
+    let t = super::features::Tagged {
+        body,
+        tags: tags.into_iter().map(|o| vec![o]).collect(),
+    };
+    Ok(t.into_result(k))
+}
+
+/// A sketch curve run the other way (a line's ends swapped, an arc swept back, a Bézier's poles
+/// reversed); None for a closed curve.
+fn reversed2(c: &Curve2) -> Option<Curve2> {
+    Some(match *c {
+        Curve2::Line { a, b, source } => Curve2::Line { a: b, b: a, source },
+        Curve2::Arc {
+            center,
+            radius,
+            start_angle,
+            sweep,
+            source,
+        } => Curve2::Arc {
+            center,
+            radius,
+            start_angle: start_angle + sweep,
+            sweep: -sweep,
+            source,
+        },
+        Curve2::Bezier { poles, source } => Curve2::Bezier {
+            poles: [poles[3], poles[2], poles[1], poles[0]],
+            source,
+        },
+        _ => return None,
+    })
+}
+
 pub fn loft_with(k: &mut NativeKernel, spec: &LoftSpec) -> Result<OpResult> {
     if spec.sections.len() < 2 {
         return Err(invalid("Select at least two profiles to loft"));

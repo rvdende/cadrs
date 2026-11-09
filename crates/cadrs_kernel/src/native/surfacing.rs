@@ -653,6 +653,25 @@ pub fn sew(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult
     for id in bodies {
         b.append(k.get(*id)?);
     }
+    let b = sewn_solid(b, tol)?;
+    let n = b.faces.len();
+    let t = Tagged {
+        body: b,
+        tags: (0..n)
+            .map(|i| {
+                vec![Origin::ProfileCurve {
+                    region: u64::MAX,
+                    curve: i as u64,
+                }]
+            })
+            .collect(),
+    };
+    Ok(t.into_result(k))
+}
+
+/// The faces of `b` sewn along their coincident edges (within `tol`) into solids, kept in their
+/// order and turned to face out: [`sew`]'s body. Errors when they don't close or enclose nothing.
+pub fn sewn_solid(b: Body, tol: f64) -> Result<Body> {
     let mut b = sew_faces(b, tol)?;
     b.shells.clear();
     b.solids.clear();
@@ -670,19 +689,7 @@ pub fn sew(k: &mut NativeKernel, bodies: &[BodyId], tol: f64) -> Result<OpResult
     if v < tol::ROUNDOFF {
         return Err(invalid("The surfaces don't enclose a volume"));
     }
-    let n = b.faces.len();
-    let t = Tagged {
-        body: b,
-        tags: (0..n)
-            .map(|i| {
-                vec![Origin::ProfileCurve {
-                    region: u64::MAX,
-                    curve: i as u64,
-                }]
-            })
-            .collect(),
-    };
-    Ok(t.into_result(k))
+    Ok(b)
 }
 
 /// Sheets joined along their coincident edges into one (Onshape's Add of surfaces): each face

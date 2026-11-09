@@ -548,6 +548,15 @@ pub trait Kernel {
     /// ```
     fn loft_with(&mut self, spec: &LoftSpec) -> Result<OpResult>;
 
+    /// A loft along guide curves (Onshape's Loft with guides): `spec`'s two sections (a sketch
+    /// region of one loop, or a point at either end) joined by walls that follow `guides`, each
+    /// guide running from a corner of the first section's loop to a corner of the last's (or to
+    /// its point). Each wall, between two neighbouring guides, is the loft through curves of the
+    /// sections' stretches between them along those two guides ([`Kernel::loft_curves`]); a solid
+    /// is capped by its sections' faces. Its faces are made from the first section's curves
+    /// (walls) and its caps. No guides: [`Kernel::loft_with`].
+    fn loft_guided(&mut self, spec: &LoftSpec, guides: &[Vec<PathCurve>]) -> Result<OpResult>;
+
     /// A loft through curves (Onshape's loft of wire profiles, with guides): a sheet of one face,
     /// `ProfileCurve { region: spec.source, curve }` for the `source` of each sketch curve of its
     /// profiles and guides (else `unsourced_curve(0, 0)`), through the open

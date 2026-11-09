@@ -844,6 +844,11 @@ impl Kernel for NativeKernel {
         super::loft_build::loft_with(self, spec)
     }
 
+    fn loft_guided(&mut self, spec: &LoftSpec, guides: &[Vec<PathCurve>]) -> Result<OpResult> {
+        let r = super::loft_build::loft_guided(self, spec, guides);
+        self.colored(r)
+    }
+
     fn loft_curves(&mut self, spec: &CurveLoftSpec) -> Result<OpResult> {
         super::curve_loft::loft_curves(self, spec)
     }
