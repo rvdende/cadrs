@@ -3541,6 +3541,42 @@ fn debug_tumbling_cube() {
 
 /// Each face of the body in `CADRS_BODY` (a native body file): its surface, area, centroid,
 /// outward normal there and edges.
+/// `CADRS_STEP=<file>`: the solid in a STEP file imported and measured (volume, area, faces by
+/// surface kind, soundness), to compare another kernel's result with ours.
+#[test]
+fn debug_step_measure() {
+    let Ok(path) = std::env::var("CADRS_STEP") else {
+        return;
+    };
+    let mut k = NativeKernel::new();
+    let t0 = std::time::Instant::now();
+    let ids = k.import_step(&std::fs::read(path).unwrap()).unwrap();
+    eprintln!("imported {} bodies in {:?}", ids.len(), t0.elapsed());
+    for id in ids {
+        let m = k.mass_properties(id).unwrap();
+        let b = k.get(id).unwrap();
+        let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+        for f in &b.faces {
+            let kind = match &f.surf {
+                cadrs_kernel::native::surface::Surface::Plane { .. } => "plane",
+                cadrs_kernel::native::surface::Surface::Torus { .. } => "torus",
+                cadrs_kernel::native::surface::Surface::Nurbs(_) => "bspline",
+                _ => "other",
+            };
+            *kinds.entry(kind).or_default() += 1;
+        }
+        eprintln!(
+            "volume {} area {} faces {:?} edges {} class {:?} problems {:?}",
+            m.volume,
+            m.surface_area,
+            kinds,
+            b.edges.len(),
+            k.body_class(id),
+            b.check().first()
+        );
+    }
+}
+
 #[test]
 fn debug_body_faces() {
     let Ok(path) = std::env::var("CADRS_BODY") else {

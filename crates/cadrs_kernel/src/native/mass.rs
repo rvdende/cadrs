@@ -807,7 +807,7 @@ pub fn face_integrals(body: &Body, f: &Face, shift: &V3) -> Q {
 
 /// [`face_integrals`] with [`NE`]'s moments, or with `ALL` false only the volume's (`[4]`; the
 /// others zero).
-fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
+pub(crate) fn face_integrals_of<const ALL: bool>(body: &Body, f: &Face, shift: &V3) -> QE {
     if ruled_in_v(&f.surf) && !matches!(f.surf, Surface::Plane { .. }) {
         return face_integrals_v::<ALL>(body, f, shift);
     }
