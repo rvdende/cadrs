@@ -7,10 +7,12 @@
 //! 3. **Rounded offsets** ([`round`]): every face's slab ([`slab`], the face swept along its
 //!    normal), tubes round edges and balls round vertices, united (outward) or subtracted
 //!    (inward); shells and thick solids from those.
-//! 4. **Planar wires** ([`wire`]): DRAW's `mkoffset`, as OCCT's `BRepOffsetAPI_MakeOffset`.
+//! 4. **Planar wires** ([`wire`]): exact 2D offsets, trimmed where they cross themselves; with
+//!    them the insets of prisms with curved sides ([`prism`]), the outline's offset extruded.
 //!
 //! [`offset`] is `Kernel::offset`: sharp or rounded by the spec, with the faces' history.
 
+pub mod prism;
 pub mod round;
 pub mod sharp;
 pub mod slab;
